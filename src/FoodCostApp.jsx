@@ -1,354 +1,361 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
-// ── Icons ──────────────────────────────────────────────
-const Icon = ({ d, size = 18, color = "currentColor", fill = "none" }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-    <path d={d} />
-  </svg>
-);
-const Icons = {
-  ingredient: "M9 2h6l2 4H7L9 2z M3 6h18v2a9 9 0 01-18 0V6z M12 12v6 M8 14l4 4 4-4",
-  menu: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2",
-  sop: "M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8",
-  chart: "M18 20V10 M12 20V4 M6 20v-6",
-  history: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z",
-  plus: "M12 5v14 M5 12h14",
-  search: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z",
-  edit: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z",
-  trash: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16",
-  close: "M6 18L18 6M6 6l12 12",
-  check: "M5 13l4 4L19 7",
-  warning: "M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z",
-  food: "M18 8h1a4 4 0 010 8h-1 M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8z M6 1v3 M10 1v3 M14 1v3",
-  save: "M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z M17 21v-8H7v8 M7 3v5h8",
-  download: "M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4 M7 10l5 5 5-5 M12 15V3",
-  upload: "M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4 M17 8l-5-5-5 5 M12 3v12",
-  wifi: "M5 12.55a11 11 0 0114.08 0 M1.42 9a16 16 0 0121.16 0 M8.53 16.11a6 6 0 016.95 0 M12 20h.01",
-  image: "M21 19V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2z M8.5 10a1.5 1.5 0 100-3 1.5 1.5 0 000 3z M21 15l-5-5L5 21",
-  scale: "M12 3v18 M3 9l9-6 9 6 M3 15l9 6 9-6",
-  tag: "M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z",
-  info: "M12 16v-4 M12 8h.01 M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z",
-  arrowRight: "M5 12h14 M12 5l7 7-7 7",
-  calculator: "M4 2h16a2 2 0 012 2v16a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z M8 6h8 M8 10h2 M12 10h2 M16 10h.01 M8 14h.01 M12 14h.01 M16 14h.01 M8 18h.01 M12 18h.01 M16 18h.01",
+// ── Design Tokens ──────────────────────────────────────
+const C = {
+  brand: "#FF6B35",
+  brandDark: "#E85520",
+  brandLight: "#FFF4F0",
+  brandBorder: "#FFD4C2",
+  green: "#10B981", greenLight: "#ECFDF5", greenDark: "#065F46",
+  blue: "#3B82F6", blueLight: "#EFF6FF", blueDark: "#1E40AF",
+  yellow: "#F59E0B", yellowLight: "#FFFBEB", yellowDark: "#92400E",
+  red: "#EF4444", redLight: "#FEF2F2", redDark: "#991B1B",
+  purple: "#8B5CF6", purpleLight: "#F5F3FF",
+  ink: "#0F172A", ink2: "#334155", ink3: "#64748B", ink4: "#94A3B8",
+  line: "#E2E8F0", lineLight: "#F1F5F9", bg: "#F8FAFC",
+  white: "#FFFFFF",
 };
 
-// ── LocalStorage Hook ──────────────────────────────────
-function useLocalStorage(key, initialValue) {
-  const [storedValue, setStoredValue] = useState(() => {
-    try {
-      const item = window.localStorage.getItem(key);
-      return item ? JSON.parse(item) : initialValue;
-    } catch { return initialValue; }
-  });
-  const setValue = useCallback((value) => {
-    try {
-      const v = value instanceof Function ? value(storedValue) : value;
-      setStoredValue(v);
-      window.localStorage.setItem(key, JSON.stringify(v));
-    } catch (e) { console.error(e); }
-  }, [key, storedValue]);
-  return [storedValue, setValue];
+// ── Icons (Heroicons style) ────────────────────────────
+const Ic = ({ d, s = 18, c = "currentColor", sw = 1.75, fill = "none" }) => (
+  <svg width={s} height={s} viewBox="0 0 24 24" fill={fill} stroke={c} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    {Array.isArray(d) ? d.map((p, i) => <path key={i} d={p} />) : <path d={d} />}
+  </svg>
+);
+
+const I = {
+  leaf: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z M8 12s1-4 4-4 4 4 4 4",
+  menu2: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
+  sop: ["M9 12h6", "M9 16h6", "M9 8h2", "M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z", "M13 2v7h7"],
+  chart: ["M18 20V10", "M12 20V4", "M6 20v-6"],
+  clock: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z",
+  plus: ["M12 5v14", "M5 12h14"],
+  search: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z",
+  pencil: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z",
+  trash: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16",
+  x: ["M18 6L6 18", "M6 6l12 12"],
+  check: "M5 13l4 4L19 7",
+  img: ["M21 19V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2z", "M8.5 10a1.5 1.5 0 100-3 1.5 1.5 0 000 3z", "M21 15l-5-5L5 21"],
+  save: ["M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z", "M17 21v-8H7v8", "M7 3v5h8"],
+  dl: ["M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4", "M7 10l5 5 5-5", "M12 15V3"],
+  ul: ["M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4", "M17 8l-5-5-5 5", "M12 3v12"],
+  wifi: ["M5 12.55a11 11 0 0114.08 0", "M1.42 9a16 16 0 0121.16 0", "M8.53 16.11a6 6 0 016.95 0", "M12 20h.01"],
+  tag: "M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z",
+  bolt: "M13 2L3 14h9l-1 8 10-12h-9l1-8z",
+  eye: ["M1 12s4-8 11-8 11 8 11 8", "M1 12s4 8 11 8 11-8 11-8", "M12 9a3 3 0 100 6 3 3 0 000-6z"],
+  fire: "M12 2c0 6-6 7-6 12a6 6 0 0012 0c0-5-6-6-6-12z M9 18c0-2 3-3 3-3s3 1 3 3",
+  warning: "M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z",
+  chevD: "M19 9l-7 7-7-7",
+  drag: ["M9 5h.01", "M9 12h.01", "M9 19h.01", "M15 5h.01", "M15 12h.01", "M15 19h.01"],
+};
+
+// ── LocalStorage ───────────────────────────────────────
+function useLS(key, init) {
+  const [v, setV] = useState(() => { try { const i = localStorage.getItem(key); return i ? JSON.parse(i) : init; } catch { return init; } });
+  const set = useCallback((val) => {
+    const nv = val instanceof Function ? val(v) : val;
+    setV(nv); try { localStorage.setItem(key, JSON.stringify(nv)); } catch {}
+  }, [key, v]);
+  return [v, set];
 }
 
-// ── Initial Data ───────────────────────────────────────
-const INIT_CATEGORIES = ["เนื้อสัตว์", "ผักและผลไม้", "เครื่องปรุง", "นม/ไข่", "แป้ง/ธัญพืช", "อื่นๆ"];
-const INIT_INGREDIENTS = [
+// ── Seed Data ──────────────────────────────────────────
+const CATS = ["เนื้อสัตว์", "ผักและผลไม้", "เครื่องปรุง", "นม/ไข่", "แป้ง/ธัญพืช", "อื่นๆ"];
+const INIT_ING = [
   { id: 1, name: "ไก่หน้าอก", category: "เนื้อสัตว์", buyUnit: "กก.", buyAmount: 1, buyPrice: 120, convertToGram: 1000, pricePerGram: 0.12, stock: 5, image: null, note: "" },
-  { id: 2, name: "ไข่ไก่", category: "นม/ไข่", buyUnit: "แผง (30ฟอง)", buyAmount: 1, buyPrice: 120, convertToGram: 1800, pricePerGram: 0.067, stock: 60, image: null, note: "1 ฟอง ≈ 60 กรัม" },
-  { id: 3, name: "น้ำมันพืช", category: "เครื่องปรุง", buyUnit: "ลิตร", buyAmount: 1, buyPrice: 60, convertToGram: 920, pricePerGram: 0.065, stock: 6, image: null, note: "" },
-  { id: 4, name: "ซีอิ้วขาว", category: "เครื่องปรุง", buyUnit: "ขวด 700ml", buyAmount: 1, buyPrice: 45, convertToGram: 700, pricePerGram: 0.064, stock: 8, image: null, note: "" },
+  { id: 2, name: "ไข่ไก่", category: "นม/ไข่", buyUnit: "แผง 30 ฟอง", buyAmount: 1, buyPrice: 120, convertToGram: 1800, pricePerGram: 0.067, stock: 3, image: null, note: "1 ฟอง ≈ 60g" },
+  { id: 3, name: "น้ำมันพืช", category: "เครื่องปรุง", buyUnit: "ลิตร", buyAmount: 1, buyPrice: 55, convertToGram: 920, pricePerGram: 0.060, stock: 4, image: null, note: "" },
+  { id: 4, name: "ซีอิ้วขาว", category: "เครื่องปรุง", buyUnit: "ขวด 700ml", buyAmount: 1, buyPrice: 45, convertToGram: 700, pricePerGram: 0.064, stock: 6, image: null, note: "" },
 ];
 const INIT_MENUS = [
-  {
-    id: 1, name: "ข้าวผัดไก่", category: "อาหารจานเดียว", price: 80, image: null,
-    description: "ข้าวผัดไก่หอมอร่อย",
-    ingredients: [{ ingredientId: 1, amountGram: 150 }, { ingredientId: 2, amountGram: 60 }, { ingredientId: 3, amountGram: 20 }, { ingredientId: 4, amountGram: 15 }],
-    sop: [
-      { step: 1, title: "เตรียมวัตถุดิบ", desc: "หั่นไก่เป็นชิ้นเล็กๆ ตีไข่ใส่ชาม เตรียมข้าวสวย", image: null },
-      { step: 2, title: "ผัดไก่", desc: "ตั้งกระทะไฟแรง ใส่น้ำมัน ผัดไก่จนสุก", image: null },
-      { step: 3, title: "ใส่ข้าว", desc: "ใส่ข้าวลงผัดรวมกัน ปรุงด้วยซีอิ้วขาว", image: null },
-      { step: 4, title: "เสิร์ฟ", desc: "ตักใส่จาน ตกแต่งด้วยต้นหอม", image: null },
-    ]
-  },
+  { id: 1, name: "ข้าวผัดไก่", category: "อาหารจานเดียว", price: 80, image: null, description: "ข้าวผัดไก่หอมๆ", ingredients: [{ ingredientId: 1, amountGram: 150 }, { ingredientId: 2, amountGram: 60 }, { ingredientId: 3, amountGram: 20 }, { ingredientId: 4, amountGram: 15 }], sop: [{ step: 1, title: "เตรียมวัตถุดิบ", desc: "หั่นไก่เป็นชิ้นเล็กๆ ตีไข่ใส่ชาม เตรียมข้าวสวย", image: null }, { step: 2, title: "ผัดไก่", desc: "ตั้งกระทะไฟแรง ใส่น้ำมัน ผัดไก่จนสุก ปรุงรส", image: null }, { step: 3, title: "ใส่ข้าวและเสิร์ฟ", desc: "ใส่ข้าวผัดรวมกัน ปรุงด้วยซีอิ้ว ตักเสิร์ฟ", image: null }] },
 ];
 
 // ── Helpers ────────────────────────────────────────────
-function calcIngredientCost(ingredientId, amountGram, ingredients) {
-  const ing = ingredients.find(i => i.id === ingredientId);
-  if (!ing) return 0;
-  return ing.pricePerGram * amountGram;
-}
-function calcMenuCost(menu, ingredients) {
-  return menu.ingredients.reduce((sum, item) => sum + calcIngredientCost(item.ingredientId, item.amountGram, ingredients), 0);
-}
-function calcPricePerGram(buyPrice, convertToGram) {
-  if (!convertToGram || convertToGram === 0) return 0;
-  return buyPrice / convertToGram;
-}
+const ppg = (price, gram) => (gram > 0 ? price / gram : 0);
+const menuCost = (menu, ings) => menu.ingredients.reduce((s, x) => { const i = ings.find(g => g.id === x.ingredientId); return s + (i ? i.pricePerGram * x.amountGram : 0); }, 0);
+const marginColor = (m) => m >= 60 ? C.green : m >= 40 ? C.yellow : C.red;
+const marginBg = (m) => m >= 60 ? C.greenLight : m >= 40 ? C.yellowLight : C.redLight;
+const marginLabel = (m) => m >= 60 ? "ดี" : m >= 40 ? "พอใช้" : "ต่ำ";
 
-// ── Image Upload Helper ────────────────────────────────
-function ImageUpload({ value, onChange, size = "normal", label = "แนบรูป" }) {
+// ── Image Upload ───────────────────────────────────────
+function ImgUp({ value, onChange, label, compact }) {
   const ref = useRef();
-  const isSmall = size === "small";
-  function handleFile(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 2 * 1024 * 1024) { alert("รูปต้องไม่เกิน 2MB ครับ"); return; }
-    const reader = new FileReader();
-    reader.onload = ev => onChange(ev.target.result);
-    reader.readAsDataURL(file);
+  const handleFile = e => {
+    const f = e.target.files?.[0]; if (!f) return;
+    if (f.size > 3 * 1024 * 1024) { alert("รูปต้องไม่เกิน 3MB"); return; }
+    const r = new FileReader(); r.onload = ev => onChange(ev.target.result); r.readAsDataURL(f);
     e.target.value = "";
-  }
+  };
   return (
-    <div style={{ marginBottom: isSmall ? 0 : 14 }}>
-      {!isSmall && label && <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#475569", marginBottom: 6, fontFamily: "'Sarabun',sans-serif" }}>{label}</label>}
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <div style={{ marginBottom: compact ? 0 : 16 }}>
+      {label && !compact && <div style={{ fontSize: 13, fontWeight: 600, color: C.ink2, marginBottom: 6, fontFamily: "'Sarabun',sans-serif" }}>{label}</div>}
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         {value ? (
-          <div style={{ position: "relative", display: "inline-block" }}>
-            <img src={value} alt="" style={{ width: isSmall ? 40 : 80, height: isSmall ? 40 : 80, objectFit: "cover", borderRadius: isSmall ? 8 : 12, border: "2px solid #e2e8f0" }} />
-            <button onClick={() => onChange(null)} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: "#ef4444", border: "none", color: "#fff", cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+          <div style={{ position: "relative" }}>
+            <img src={value} alt="" style={{ width: compact ? 44 : 96, height: compact ? 44 : 96, objectFit: "cover", borderRadius: compact ? 8 : 14, border: `2px solid ${C.line}` }} />
+            <button onClick={() => onChange(null)} style={{ position: "absolute", top: -7, right: -7, width: 20, height: 20, borderRadius: "50%", background: C.red, border: `2px solid ${C.white}`, color: C.white, cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 }}>✕</button>
           </div>
         ) : (
-          <div onClick={() => ref.current?.click()} style={{ width: isSmall ? 40 : 80, height: isSmall ? 40 : 80, border: "2px dashed #e2e8f0", borderRadius: isSmall ? 8 : 12, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", background: "#f8fafc", gap: 4, transition: "all 0.15s" }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = "#f97316"}
-            onMouseLeave={e => e.currentTarget.style.borderColor = "#e2e8f0"}>
-            <Icon d={Icons.image} size={isSmall ? 14 : 22} color="#94a3b8" />
-            {!isSmall && <span style={{ fontSize: 10, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>อัปโหลด</span>}
+          <div onClick={() => ref.current?.click()} style={{ width: compact ? 44 : 96, height: compact ? 44 : 96, border: `2px dashed ${C.line}`, borderRadius: compact ? 8 : 14, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", background: C.bg, gap: 4, transition: "all .2s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = C.brand; e.currentTarget.style.background = C.brandLight; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = C.line; e.currentTarget.style.background = C.bg; }}>
+            <Ic d={I.img} s={compact ? 16 : 24} c={C.ink4} />
+            {!compact && <span style={{ fontSize: 11, color: C.ink4, fontFamily: "'Sarabun',sans-serif" }}>อัปโหลด</span>}
           </div>
         )}
+        {!compact && !value && <div style={{ fontSize: 12, color: C.ink4, fontFamily: "'Sarabun',sans-serif", lineHeight: 1.6 }}>JPG, PNG<br />ไม่เกิน 3MB</div>}
         <input ref={ref} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
-        {!value && !isSmall && <span style={{ fontSize: 12, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>JPG, PNG ไม่เกิน 2MB</span>}
       </div>
     </div>
   );
+}
+
+// ── Base UI ────────────────────────────────────────────
+const iS = { width: "100%", padding: "11px 14px", border: `1.5px solid ${C.line}`, borderRadius: 10, fontSize: 15, fontFamily: "'Sarabun',sans-serif", outline: "none", boxSizing: "border-box", color: C.ink, background: C.white, transition: "border .15s, box-shadow .15s" };
+const iSFocus = { border: `1.5px solid ${C.brand}`, boxShadow: `0 0 0 3px ${C.brandLight}` };
+
+function Field({ label, hint, children, style }) {
+  return <div style={{ marginBottom: 16, ...style }}>{(label || hint) && <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>{label && <label style={{ fontSize: 13, fontWeight: 600, color: C.ink2, fontFamily: "'Sarabun',sans-serif" }}>{label}</label>}{hint && <span style={{ fontSize: 12, color: C.ink4, fontFamily: "'Sarabun',sans-serif" }}>{hint}</span>}</div>}{children}</div>;
+}
+function Inp({ label, hint, style: s, ...p }) {
+  const [focus, setFocus] = useState(false);
+  return <Field label={label} hint={hint}><input style={{ ...iS, ...(focus ? iSFocus : {}), ...s }} {...p} onFocus={e => { setFocus(true); p.onFocus?.(e); }} onBlur={e => { setFocus(false); p.onBlur?.(e); }} /></Field>;
+}
+function TA({ label, hint, rows = 4, ...p }) {
+  const [focus, setFocus] = useState(false);
+  return <Field label={label} hint={hint}><textarea rows={rows} style={{ ...iS, ...(focus ? iSFocus : {}), resize: "vertical", lineHeight: 1.7 }} {...p} onFocus={() => setFocus(true)} onBlur={() => setFocus(false)} /></Field>;
+}
+function Sel({ label, options, ...p }) {
+  const [focus, setFocus] = useState(false);
+  return <Field label={label}><select style={{ ...iS, ...(focus ? iSFocus : {}), appearance: "none", cursor: "pointer" }} {...p} onFocus={() => setFocus(true)} onBlur={() => setFocus(false)}>{options.map(o => <option key={o.v ?? o} value={o.v ?? o}>{o.l ?? o}</option>)}</select></Field>;
+}
+function Btn({ children, v = "primary", onClick, icon, disabled, full, s }) {
+  const styles = {
+    primary: { bg: `linear-gradient(135deg,${C.brand},${C.brandDark})`, color: C.white, shadow: `0 4px 16px ${C.brand}44` },
+    success: { bg: `linear-gradient(135deg,${C.green},#059669)`, color: C.white, shadow: `0 4px 16px ${C.green}44` },
+    ghost: { bg: C.white, color: C.ink2, shadow: `0 0 0 1.5px ${C.line}`, hoverBg: C.lineLight },
+    danger: { bg: C.redLight, color: C.red, shadow: "none" },
+    info: { bg: `linear-gradient(135deg,${C.blue},#2563EB)`, color: C.white, shadow: `0 4px 16px ${C.blue}44` },
+  };
+  const st = styles[v] || styles.primary;
+  return (
+    <button onClick={disabled ? undefined : onClick} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "10px 20px", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", border: "none", fontFamily: "'Sarabun',sans-serif", transition: "all .15s", opacity: disabled ? .5 : 1, background: st.bg, color: st.color, boxShadow: st.shadow, width: full ? "100%" : undefined, whiteSpace: "nowrap", ...s }}
+      onMouseEnter={e => { if (!disabled) { e.currentTarget.style.opacity = ".88"; e.currentTarget.style.transform = "translateY(-1px)"; } }}
+      onMouseLeave={e => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.transform = ""; }}>
+      {icon && <Ic d={icon} s={15} c={st.color} />}{children}
+    </button>
+  );
+}
+function Chip({ children, color = "orange" }) {
+  const map = { orange: [C.brandLight, C.brand], blue: [C.blueLight, C.blue], green: [C.greenLight, C.green], red: [C.redLight, C.red], yellow: [C.yellowLight, C.yellow], gray: [C.lineLight, C.ink3], purple: [C.purpleLight, C.purple] };
+  const [bg, tc] = map[color] || map.gray;
+  return <span style={{ display: "inline-flex", alignItems: "center", padding: "3px 10px", background: bg, color: tc, borderRadius: 20, fontSize: 12, fontWeight: 700, fontFamily: "'Sarabun',sans-serif" }}>{children}</span>;
+}
+function Card({ children, style, onClick, hover }) {
+  const [hov, setHov] = useState(false);
+  return <div style={{ background: C.white, borderRadius: 16, border: `1px solid ${hov && hover ? C.brandBorder : C.line}`, boxShadow: hov && hover ? `0 8px 32px rgba(255,107,53,.12)` : "0 2px 8px rgba(15,23,42,.06)", transition: "all .2s", cursor: onClick ? "pointer" : undefined, ...style }} onClick={onClick} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}>{children}</div>;
 }
 
 // ── Modal ──────────────────────────────────────────────
 function Modal({ title, onClose, children, wide }) {
-  useEffect(() => {
-    const h = e => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", h);
-    return () => document.removeEventListener("keydown", h);
-  }, [onClose]);
+  useEffect(() => { const h = e => e.key === "Escape" && onClose(); document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h); }, []);
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.6)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: "#fff", borderRadius: 20, width: "100%", maxWidth: wide ? 720 : 560, boxShadow: "0 32px 80px rgba(15,23,42,0.2)", overflow: "hidden", animation: "modalIn 0.22s cubic-bezier(.34,1.56,.64,1)", maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "20px 28px 16px", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, background: "linear-gradient(135deg,#fff7ed,#fff)" }}>
-          <span style={{ fontFamily: "'Sarabun',sans-serif", fontSize: 18, fontWeight: 800, color: "#0f172a" }}>{title}</span>
-          <button onClick={onClose} style={{ background: "#f1f5f9", border: "none", cursor: "pointer", color: "#64748b", padding: 6, borderRadius: 8, display: "flex" }}><Icon d={Icons.close} size={16} /></button>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.65)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: C.white, borderRadius: 20, width: "100%", maxWidth: wide ? 760 : 560, maxHeight: "94vh", display: "flex", flexDirection: "column", boxShadow: "0 40px 100px rgba(15,23,42,.22)", animation: "mIn .22s cubic-bezier(.34,1.56,.64,1)", overflow: "hidden" }}>
+        <div style={{ padding: "20px 24px 16px", borderBottom: `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, background: C.bg }}>
+          <span style={{ fontFamily: "'Sarabun',sans-serif", fontSize: 18, fontWeight: 800, color: C.ink }}>{title}</span>
+          <button onClick={onClose} style={{ background: C.line, border: "none", cursor: "pointer", color: C.ink3, padding: 7, borderRadius: 8, display: "flex", transition: "all .15s" }} onMouseEnter={e => e.currentTarget.style.background = C.lineLight} onMouseLeave={e => e.currentTarget.style.background = C.line}><Ic d={I.x} s={15} /></button>
         </div>
-        <div style={{ padding: "20px 28px 28px", overflowY: "auto", flex: 1 }}>{children}</div>
+        <div style={{ padding: "22px 24px 24px", overflowY: "auto", flex: 1 }}>{children}</div>
       </div>
     </div>
   );
 }
 
-// ── UI Components ──────────────────────────────────────
-const inputStyle = { width: "100%", padding: "10px 14px", border: "1.5px solid #e2e8f0", borderRadius: 10, fontSize: 14, fontFamily: "'Sarabun',sans-serif", outline: "none", boxSizing: "border-box", color: "#0f172a", background: "#f8fafc", transition: "border 0.15s" };
-function Input({ label, hint, ...props }) {
+// ── Section Header ─────────────────────────────────────
+function SH({ label, icon, count, action }) {
   return (
-    <div style={{ marginBottom: 14 }}>
-      {label && <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#475569", marginBottom: 4, fontFamily: "'Sarabun',sans-serif" }}>{label}{hint && <span style={{ fontWeight: 400, color: "#94a3b8", marginLeft: 6 }}>{hint}</span>}</label>}
-      <input style={inputStyle} {...props} />
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: C.brandLight, display: "flex", alignItems: "center", justifyContent: "center" }}><Ic d={icon} s={16} c={C.brand} /></div>
+        <span style={{ fontWeight: 700, fontSize: 15, color: C.ink, fontFamily: "'Sarabun',sans-serif" }}>{label}</span>
+        {count != null && <Chip color="gray">{count}</Chip>}
+      </div>
+      {action}
     </div>
   );
 }
-function Textarea({ label, ...props }) {
+
+// ── Stat Card ──────────────────────────────────────────
+function StatCard({ label, value, unit, icon, color }) {
   return (
-    <div style={{ marginBottom: 14 }}>
-      {label && <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#475569", marginBottom: 4, fontFamily: "'Sarabun',sans-serif" }}>{label}</label>}
-      <textarea style={{ ...inputStyle, resize: "vertical", minHeight: 80 }} {...props} />
-    </div>
+    <Card style={{ padding: "18px 20px", display: "flex", alignItems: "center", gap: 14 }}>
+      <div style={{ width: 46, height: 46, borderRadius: 12, background: `${color}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+        <Ic d={icon} s={22} c={color} />
+      </div>
+      <div>
+        <div style={{ fontSize: 12, color: C.ink4, fontFamily: "'Sarabun',sans-serif", marginBottom: 2 }}>{label}</div>
+        <div style={{ fontSize: 22, fontWeight: 800, color, fontFamily: "'Sarabun',sans-serif", lineHeight: 1.1 }}>{value}<span style={{ fontSize: 13, fontWeight: 600, marginLeft: 3, color: C.ink3 }}>{unit}</span></div>
+      </div>
+    </Card>
   );
 }
-function Select({ label, options, ...props }) {
-  return (
-    <div style={{ marginBottom: 14 }}>
-      {label && <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#475569", marginBottom: 4, fontFamily: "'Sarabun',sans-serif" }}>{label}</label>}
-      <select style={{ ...inputStyle, appearance: "none" }} {...props}>
-        {options.map(o => <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>)}
-      </select>
-    </div>
-  );
-}
-function Btn({ children, variant = "primary", onClick, style = {}, icon, disabled }) {
-  const variants = {
-    primary: { background: "linear-gradient(135deg,#f97316,#ef4444)", color: "#fff", boxShadow: "0 4px 14px rgba(249,115,22,0.3)" },
-    secondary: { background: "#f1f5f9", color: "#475569" },
-    danger: { background: "#fee2e2", color: "#dc2626" },
-    ghost: { background: "transparent", color: "#64748b" },
-    success: { background: "linear-gradient(135deg,#22c55e,#16a34a)", color: "#fff", boxShadow: "0 4px 14px rgba(34,197,94,0.3)" },
-    info: { background: "linear-gradient(135deg,#0ea5e9,#6366f1)", color: "#fff", boxShadow: "0 4px 14px rgba(14,165,233,0.3)" },
+
+// ── Export/Import ──────────────────────────────────────
+function EI({ ings, menus, cats, onImport }) {
+  const ref = useRef();
+  const exp = () => {
+    const b = new Blob([JSON.stringify({ ingredients: ings, menus, categories: cats, v: "2.1", at: new Date().toISOString() }, null, 2)], { type: "application/json" });
+    const u = URL.createObjectURL(b); const a = document.createElement("a"); a.href = u; a.download = `foodcost-${new Date().toLocaleDateString("th-TH").replace(/\//g, "-")}.json`; a.click(); URL.revokeObjectURL(u);
   };
-  return <button style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: disabled ? "not-allowed" : "pointer", border: "none", fontFamily: "'Sarabun',sans-serif", transition: "all 0.15s", opacity: disabled ? 0.5 : 1, ...variants[variant], ...style }} onClick={disabled ? undefined : onClick}>{icon && <Icon d={icon} size={15} />}{children}</button>;
-}
-function Badge({ children, color = "orange" }) {
-  const colors = { orange: { bg: "#fff7ed", text: "#f97316" }, blue: { bg: "#f0f9ff", text: "#0ea5e9" }, green: { bg: "#dcfce7", text: "#16a34a" }, red: { bg: "#fee2e2", text: "#dc2626" }, yellow: { bg: "#fef9c3", text: "#a16207" }, gray: { bg: "#f1f5f9", text: "#475569" } };
-  const c = colors[color] || colors.gray;
-  return <span style={{ display: "inline-block", padding: "2px 10px", background: c.bg, color: c.text, borderRadius: 20, fontSize: 11, fontWeight: 700, fontFamily: "'Sarabun',sans-serif" }}>{children}</span>;
-}
-function SaveIndicator({ saved }) {
-  return <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: saved ? "#22c55e" : "#f97316", transition: "color 0.3s" }}><Icon d={Icons.save} size={12} color={saved ? "#22c55e" : "#f97316"} />{saved ? "บันทึกแล้ว" : "กำลังบันทึก..."}</div>;
-}
-function OfflineBanner() {
-  const [offline, setOffline] = useState(!navigator.onLine);
-  useEffect(() => {
-    const on = () => setOffline(false); const off = () => setOffline(true);
-    window.addEventListener("online", on); window.addEventListener("offline", off);
-    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
-  }, []);
-  if (!offline) return null;
-  return <div style={{ background: "#1e293b", color: "#f8fafc", padding: "8px 20px", display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontFamily: "'Sarabun',sans-serif" }}><Icon d={Icons.wifi} size={14} color="#f8fafc" /><span>ออฟไลน์อยู่ — ข้อมูลบันทึกในเครื่องครับ</span></div>;
+  const imp = e => {
+    const f = e.target.files?.[0]; if (!f) return;
+    const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target.result); if (d.ingredients && d.menus) { onImport(d); alert("✅ นำเข้าข้อมูลสำเร็จ!"); } else alert("❌ ไฟล์ไม่ถูกต้อง"); } catch { alert("❌ อ่านไฟล์ไม่ได้"); } };
+    r.readAsText(f); e.target.value = "";
+  };
+  return (
+    <div style={{ display: "flex", gap: 6 }}>
+      <Btn v="ghost" onClick={exp} icon={I.dl} s={{ padding: "7px 12px", fontSize: 12 }}>Export</Btn>
+      <Btn v="ghost" onClick={() => ref.current?.click()} icon={I.ul} s={{ padding: "7px 12px", fontSize: 12 }}>Import</Btn>
+      <input ref={ref} type="file" accept=".json" onChange={imp} style={{ display: "none" }} />
+    </div>
+  );
 }
 
-// ── Ingredient Tab ─────────────────────────────────────
-function IngredientTab({ ingredients, setIngredients, categories, addHistory }) {
-  const [search, setSearch] = useState("");
-  const [filterCat, setFilterCat] = useState("ทุกหมวด");
-  const [showAdd, setShowAdd] = useState(false);
-  const [editItem, setEditItem] = useState(null);
-  const emptyForm = { name: "", category: categories[0], buyUnit: "กก.", buyAmount: 1, buyPrice: "", convertToGram: 1000, pricePerGram: 0, stock: "", image: null, note: "" };
-  const [form, setForm] = useState(emptyForm);
-  const [page, setPage] = useState(1);
-  const PAGE_SIZE = 18;
+// ══════════════════════════════════════════════════════
+// ── INGREDIENT TAB ────────────────────────────────────
+// ══════════════════════════════════════════════════════
+function IngTab({ ings, setIngs, cats, addH }) {
+  const [q, setQ] = useState(""); const [cat, setCat] = useState("ทุกหมวด");
+  const [open, setOpen] = useState(false); const [editId, setEditId] = useState(null);
+  const [pg, setPg] = useState(1); const PG = 18;
+  const ef = { name: "", category: cats[0], buyUnit: "กก.", buyAmount: 1, buyPrice: "", convertToGram: 1000, pricePerGram: 0, stock: "", image: null, note: "" };
+  const [form, setForm] = useState(ef);
 
-  const filtered = useMemo(() => ingredients.filter(i =>
-    i.name.toLowerCase().includes(search.toLowerCase()) &&
-    (filterCat === "ทุกหมวด" || i.category === filterCat)
-  ), [ingredients, search, filterCat]);
-  const paged = useMemo(() => filtered.slice(0, page * PAGE_SIZE), [filtered, page]);
+  const filtered = useMemo(() => ings.filter(i => i.name.toLowerCase().includes(q.toLowerCase()) && (cat === "ทุกหมวด" || i.category === cat)), [ings, q, cat]);
+  const paged = useMemo(() => filtered.slice(0, pg * PG), [filtered, pg]);
 
-  function handleFormChange(field, value) {
+  function upd(k, val) {
     setForm(f => {
-      const updated = { ...f, [field]: value };
-      if (field === "buyPrice" || field === "convertToGram") {
-        updated.pricePerGram = calcPricePerGram(+updated.buyPrice || 0, +updated.convertToGram || 1);
-      }
-      return updated;
+      const n = { ...f, [k]: val };
+      if (k === "buyPrice" || k === "convertToGram") n.pricePerGram = ppg(+(k === "buyPrice" ? val : n.buyPrice) || 0, +(k === "convertToGram" ? val : n.convertToGram) || 1);
+      return n;
     });
   }
-
-  function openAdd() { setForm(emptyForm); setEditItem(null); setShowAdd(true); }
-  function openEdit(item) { setForm({ ...item }); setEditItem(item.id); setShowAdd(true); }
   function save() {
     if (!form.name || !form.buyPrice) return;
-    const item = { ...form, buyPrice: +form.buyPrice, buyAmount: +form.buyAmount, convertToGram: +form.convertToGram, pricePerGram: calcPricePerGram(+form.buyPrice, +form.convertToGram), stock: +form.stock };
-    if (editItem) { setIngredients(p => p.map(i => i.id === editItem ? { ...i, ...item } : i)); addHistory(`แก้ไขวัตถุดิบ: ${form.name}`); }
-    else { setIngredients(p => [...p, { ...item, id: Date.now() }]); addHistory(`เพิ่มวัตถุดิบ: ${form.name}`); }
-    setShowAdd(false);
+    const item = { ...form, buyPrice: +form.buyPrice, buyAmount: +form.buyAmount, convertToGram: +form.convertToGram, pricePerGram: ppg(+form.buyPrice, +form.convertToGram), stock: +form.stock };
+    if (editId) { setIngs(p => p.map(i => i.id === editId ? { ...i, ...item } : i)); addH(`แก้ไขวัตถุดิบ: ${form.name}`); }
+    else { setIngs(p => [...p, { ...item, id: Date.now() }]); addH(`เพิ่มวัตถุดิบ: ${form.name}`); }
+    setOpen(false);
   }
-  function del(id, name) {
-    if (!window.confirm(`ลบ "${name}"?`)) return;
-    setIngredients(p => p.filter(i => i.id !== id)); addHistory(`ลบวัตถุดิบ: ${name}`);
-  }
+  function del(id, name) { if (!confirm(`ลบ "${name}"?`)) return; setIngs(p => p.filter(i => i.id !== id)); addH(`ลบวัตถุดิบ: ${name}`); }
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
-          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }}><Icon d={Icons.search} size={16} /></span>
-          <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} placeholder="ค้นหาวัตถุดิบ..." style={{ ...inputStyle, paddingLeft: 38 }} />
+      {/* Toolbar */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: 1, minWidth: 220 }}>
+          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)" }}><Ic d={I.search} s={16} c={C.ink4} /></span>
+          <input value={q} onChange={e => { setQ(e.target.value); setPg(1); }} placeholder="ค้นหาวัตถุดิบ..." style={{ ...iS, paddingLeft: 40 }} />
         </div>
-        <select value={filterCat} onChange={e => { setFilterCat(e.target.value); setPage(1); }} style={{ ...inputStyle, width: "auto", minWidth: 140 }}>
-          <option>ทุกหมวด</option>
-          {categories.map(c => <option key={c}>{c}</option>)}
+        <select value={cat} onChange={e => { setCat(e.target.value); setPg(1); }} style={{ ...iS, width: "auto", minWidth: 140, appearance: "none" }}>
+          <option>ทุกหมวด</option>{cats.map(c => <option key={c}>{c}</option>)}
         </select>
-        <Btn onClick={openAdd} icon={Icons.plus}>เพิ่มวัตถุดิบ</Btn>
+        <Btn onClick={() => { setForm(ef); setEditId(null); setOpen(true); }} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>
       </div>
-      <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 12, fontFamily: "'Sarabun',sans-serif" }}>แสดง {paged.length} จาก {filtered.length} รายการ</div>
+
+      {/* Count */}
+      <div style={{ fontSize: 12, color: C.ink4, marginBottom: 14, fontFamily: "'Sarabun',sans-serif" }}>แสดง {paged.length} จาก {filtered.length} รายการ</div>
+
+      {/* Grid */}
       {paged.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8" }}><Icon d={Icons.warning} size={40} color="#cbd5e1" /><p style={{ marginTop: 12, fontFamily: "'Sarabun',sans-serif" }}>ไม่พบวัตถุดิบ</p></div>
+        <div style={{ textAlign: "center", padding: "80px 0", color: C.ink4 }}><Ic d={I.warning} s={44} c={C.line} /><p style={{ marginTop: 12, fontFamily: "'Sarabun',sans-serif", fontSize: 15 }}>ไม่พบวัตถุดิบ</p></div>
       ) : (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(310px,1fr))", gap: 14 }}>
             {paged.map(item => (
-              <div key={item.id} style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(15,23,42,0.07)", border: "1px solid #f1f5f9", transition: "all 0.2s" }}
-                onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 8px 28px rgba(15,23,42,0.12)"; }}
-                onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = "0 2px 12px rgba(15,23,42,0.07)"; }}>
-                <div style={{ display: "flex", gap: 0 }}>
-                  {item.image ? (
-                    <img src={item.image} alt={item.name} style={{ width: 80, height: 80, objectFit: "cover", flexShrink: 0 }} />
-                  ) : (
-                    <div style={{ width: 80, height: 80, background: "linear-gradient(135deg,#fff7ed,#fef3c7)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <Icon d={Icons.ingredient} size={28} color="#f97316" />
-                    </div>
-                  )}
-                  <div style={{ flex: 1, padding: "12px 14px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <Card key={item.id} hover style={{ overflow: "hidden" }}>
+                {/* Top row */}
+                <div style={{ display: "flex" }}>
+                  {item.image ? <img src={item.image} alt={item.name} style={{ width: 88, height: 88, objectFit: "cover", flexShrink: 0 }} /> :
+                    <div style={{ width: 88, height: 88, background: `linear-gradient(135deg,${C.brandLight},#FEF3C7)`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Ic d={I.leaf} s={32} c={C.brand} /></div>}
+                  <div style={{ flex: 1, padding: "12px 14px 10px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                       <div>
-                        <div style={{ fontWeight: 700, fontSize: 15, color: "#0f172a", fontFamily: "'Sarabun',sans-serif" }}>{item.name}</div>
-                        <Badge color="orange">{item.category}</Badge>
+                        <div style={{ fontWeight: 800, fontSize: 15, color: C.ink, fontFamily: "'Sarabun',sans-serif", marginBottom: 4 }}>{item.name}</div>
+                        <Chip color="orange">{item.category}</Chip>
                       </div>
                       <div style={{ display: "flex", gap: 4 }}>
-                        <button onClick={() => openEdit(item)} style={{ background: "#f0f9ff", border: "none", borderRadius: 7, padding: 5, cursor: "pointer", color: "#0ea5e9" }}><Icon d={Icons.edit} size={13} /></button>
-                        <button onClick={() => del(item.id, item.name)} style={{ background: "#fff1f2", border: "none", borderRadius: 7, padding: 5, cursor: "pointer", color: "#f43f5e" }}><Icon d={Icons.trash} size={13} /></button>
+                        <button onClick={() => { setForm({ ...item }); setEditId(item.id); setOpen(true); }} style={{ background: C.blueLight, border: "none", borderRadius: 7, padding: 6, cursor: "pointer", color: C.blue, display: "flex" }}><Ic d={I.pencil} s={13} c={C.blue} /></button>
+                        <button onClick={() => del(item.id, item.name)} style={{ background: C.redLight, border: "none", borderRadius: 7, padding: 6, cursor: "pointer", color: C.red, display: "flex" }}><Ic d={I.trash} s={13} c={C.red} /></button>
                       </div>
                     </div>
                   </div>
                 </div>
-                <div style={{ padding: "10px 14px 14px", borderTop: "1px solid #f8fafc" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                    <div style={{ background: "#f8fafc", borderRadius: 8, padding: "6px 8px" }}>
-                      <div style={{ fontSize: 10, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>ซื้อมา</div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", fontFamily: "'Sarabun',sans-serif" }}>฿{item.buyPrice}</div>
-                      <div style={{ fontSize: 10, color: "#64748b", fontFamily: "'Sarabun',sans-serif" }}>{item.buyAmount} {item.buyUnit}</div>
-                    </div>
-                    <div style={{ background: "#fff7ed", borderRadius: 8, padding: "6px 8px" }}>
-                      <div style={{ fontSize: 10, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>= กรัม</div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#f97316", fontFamily: "'Sarabun',sans-serif" }}>{item.convertToGram.toLocaleString()}g</div>
-                      <div style={{ fontSize: 10, color: "#64748b", fontFamily: "'Sarabun',sans-serif" }}>ทั้งหมด</div>
-                    </div>
-                    <div style={{ background: "#f0fdf4", borderRadius: 8, padding: "6px 8px" }}>
-                      <div style={{ fontSize: 10, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>ราคา/กรัม</div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "#16a34a", fontFamily: "'Sarabun',sans-serif" }}>฿{item.pricePerGram.toFixed(3)}</div>
-                      <div style={{ fontSize: 10, color: "#64748b", fontFamily: "'Sarabun',sans-serif" }}>ต่อ 1g</div>
-                    </div>
+                {/* Stats */}
+                <div style={{ padding: "10px 14px 14px", borderTop: `1px solid ${C.lineLight}` }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    {[
+                      { l: "ซื้อมา", v: `฿${item.buyPrice}`, sub: `${item.buyAmount} ${item.buyUnit}`, bg: C.lineLight, tc: C.ink },
+                      { l: "รวมกรัม", v: `${item.convertToGram.toLocaleString()}g`, sub: "ทั้งหมด", bg: C.brandLight, tc: C.brand },
+                      { l: "ราคา/กรัม", v: `฿${item.pricePerGram.toFixed(3)}`, sub: "ต่อ 1g", bg: C.greenLight, tc: C.green },
+                    ].map(st => (
+                      <div key={st.l} style={{ background: st.bg, borderRadius: 10, padding: "8px 10px", textAlign: "center" }}>
+                        <div style={{ fontSize: 10, color: C.ink4, fontFamily: "'Sarabun',sans-serif", marginBottom: 2 }}>{st.l}</div>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: st.tc, fontFamily: "'Sarabun',sans-serif" }}>{st.v}</div>
+                        <div style={{ fontSize: 10, color: C.ink4, fontFamily: "'Sarabun',sans-serif" }}>{st.sub}</div>
+                      </div>
+                    ))}
                   </div>
-                  {item.note && <div style={{ marginTop: 8, fontSize: 11, color: "#64748b", fontFamily: "'Sarabun',sans-serif", fontStyle: "italic" }}>📝 {item.note}</div>}
-                  <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 11, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>สต็อก</span>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: item.stock < 3 ? "#ef4444" : "#22c55e", fontFamily: "'Sarabun',sans-serif" }}>{item.stock} {item.buyUnit}</span>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 12, color: C.ink4, fontFamily: "'Sarabun',sans-serif" }}>สต็อก: <b style={{ color: item.stock < 3 ? C.red : C.green }}>{item.stock} {item.buyUnit}</b></span>
+                    {item.note && <span style={{ fontSize: 11, color: C.ink4, fontFamily: "'Sarabun',sans-serif", fontStyle: "italic" }}>📝 {item.note}</span>}
                   </div>
                 </div>
-              </div>
+              </Card>
             ))}
           </div>
-          {paged.length < filtered.length && <div style={{ textAlign: "center", marginTop: 20 }}><Btn variant="secondary" onClick={() => setPage(p => p + 1)}>โหลดเพิ่ม ({filtered.length - paged.length} รายการ)</Btn></div>}
+          {paged.length < filtered.length && <div style={{ textAlign: "center", marginTop: 20 }}><Btn v="ghost" onClick={() => setPg(p => p + 1)}>โหลดเพิ่ม ({filtered.length - paged.length} รายการ)</Btn></div>}
         </>
       )}
 
-      {showAdd && (
-        <Modal title={editItem ? "แก้ไขวัตถุดิบ" : "เพิ่มวัตถุดิบใหม่"} onClose={() => setShowAdd(false)}>
-          <ImageUpload label="รูปวัตถุดิบ" value={form.image} onChange={v => setForm(f => ({ ...f, image: v }))} />
-          <Input label="ชื่อวัตถุดิบ" value={form.name} onChange={e => handleFormChange("name", e.target.value)} placeholder="เช่น ไก่หน้าอก" autoFocus />
-          <Select label="หมวดหมู่" value={form.category} onChange={e => handleFormChange("category", e.target.value)} options={categories} />
-          <div style={{ background: "#f8fafc", borderRadius: 12, padding: "14px 16px", marginBottom: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#475569", fontFamily: "'Sarabun',sans-serif", marginBottom: 10 }}>💰 ข้อมูลการซื้อ</div>
+      {open && (
+        <Modal title={editId ? "✏️ แก้ไขวัตถุดิบ" : "➕ เพิ่มวัตถุดิบใหม่"} onClose={() => setOpen(false)}>
+          <ImgUp label="รูปวัตถุดิบ" value={form.image} onChange={v => upd("image", v)} />
+          <Inp label="ชื่อวัตถุดิบ" value={form.name} onChange={e => upd("name", e.target.value)} placeholder="เช่น ไก่หน้าอก" autoFocus />
+          <Sel label="หมวดหมู่" value={form.category} onChange={e => upd("category", e.target.value)} options={cats} />
+
+          <div style={{ background: C.lineLight, borderRadius: 12, padding: "16px", marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.ink2, fontFamily: "'Sarabun',sans-serif", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}><Ic d={I.tag} s={14} c={C.brand} />ข้อมูลการซื้อ</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <Input label="ซื้อมากี่หน่วย" type="number" value={form.buyAmount} onChange={e => handleFormChange("buyAmount", e.target.value)} placeholder="1" />
-              <Input label="หน่วยที่ซื้อ" value={form.buyUnit} onChange={e => handleFormChange("buyUnit", e.target.value)} placeholder="กก., ขวด, แผง" />
+              <Inp label="จำนวนที่ซื้อ" type="number" value={form.buyAmount} onChange={e => upd("buyAmount", e.target.value)} placeholder="1" />
+              <Inp label="หน่วยที่ซื้อ" value={form.buyUnit} onChange={e => upd("buyUnit", e.target.value)} placeholder="กก., ขวด, แผง" />
             </div>
-            <Input label="ราคาที่ซื้อมา (บาท)" type="number" value={form.buyPrice} onChange={e => handleFormChange("buyPrice", e.target.value)} placeholder="0" />
+            <Inp label="ราคาที่ซื้อมา (บาท)" type="number" value={form.buyPrice} onChange={e => upd("buyPrice", e.target.value)} placeholder="0" />
           </div>
-          <div style={{ background: "#fff7ed", borderRadius: 12, padding: "14px 16px", marginBottom: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#f97316", fontFamily: "'Sarabun',sans-serif", marginBottom: 10 }}>⚖️ แปลงเป็นกรัม</div>
-            <Input label="เท่ากับกี่กรัม" hint="(ทั้งหมดที่ซื้อ)" type="number" value={form.convertToGram} onChange={e => handleFormChange("convertToGram", e.target.value)} placeholder="1000" />
-            <div style={{ background: "#fff", borderRadius: 8, padding: "10px 12px", border: "1px solid #fed7aa" }}>
-              <div style={{ fontSize: 12, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>ราคาต่อกรัม (คำนวณอัตโนมัติ)</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: "#f97316", fontFamily: "'Sarabun',sans-serif" }}>
-                ฿{form.buyPrice && form.convertToGram ? calcPricePerGram(+form.buyPrice, +form.convertToGram).toFixed(4) : "0.0000"}
-                <span style={{ fontSize: 12, fontWeight: 500, marginLeft: 4 }}>ต่อกรัม</span>
+
+          <div style={{ background: C.brandLight, borderRadius: 12, padding: "16px", marginBottom: 16, border: `1px solid ${C.brandBorder}` }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.brand, fontFamily: "'Sarabun',sans-serif", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}><Ic d={I.bolt} s={14} c={C.brand} />แปลงเป็นกรัม</div>
+            <Inp label="รวมทั้งหมดกี่กรัม" hint="(ทุกหน่วยที่ซื้อรวมกัน)" type="number" value={form.convertToGram} onChange={e => upd("convertToGram", e.target.value)} placeholder="1000" />
+            <div style={{ background: C.white, borderRadius: 10, padding: "12px 14px", border: `1px solid ${C.brandBorder}`, textAlign: "center" }}>
+              <div style={{ fontSize: 12, color: C.ink4, fontFamily: "'Sarabun',sans-serif", marginBottom: 4 }}>ราคาต่อกรัม (คำนวณให้อัตโนมัติ)</div>
+              <div style={{ fontSize: 26, fontWeight: 900, color: C.brand, fontFamily: "'Sarabun',sans-serif" }}>
+                ฿{form.buyPrice && form.convertToGram ? ppg(+form.buyPrice, +form.convertToGram).toFixed(4) : "0.0000"}
+                <span style={{ fontSize: 13, fontWeight: 500, color: C.ink3, marginLeft: 4 }}>/ กรัม</span>
               </div>
             </div>
           </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Input label="สต็อกปัจจุบัน" type="number" value={form.stock} onChange={e => handleFormChange("stock", e.target.value)} placeholder="0" />
+            <Inp label="สต็อกปัจจุบัน" type="number" value={form.stock} onChange={e => upd("stock", e.target.value)} placeholder="0" />
           </div>
-          <Textarea label="หมายเหตุ" value={form.note} onChange={e => handleFormChange("note", e.target.value)} placeholder="เช่น 1 ฟอง ≈ 60 กรัม" style={{ minHeight: 60 }} />
-          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
-            <Btn variant="secondary" onClick={() => setShowAdd(false)}>ยกเลิก</Btn>
-            <Btn onClick={save} icon={Icons.check} disabled={!form.name || !form.buyPrice}>{editItem ? "บันทึก" : "เพิ่ม"}</Btn>
+          <TA label="หมายเหตุ" rows={2} value={form.note} onChange={e => upd("note", e.target.value)} placeholder="เช่น 1 ฟอง ≈ 60 กรัม" />
+
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", paddingTop: 8, borderTop: `1px solid ${C.line}` }}>
+            <Btn v="ghost" onClick={() => setOpen(false)}>ยกเลิก</Btn>
+            <Btn onClick={save} icon={I.check} disabled={!form.name || !form.buyPrice}>{editId ? "บันทึก" : "เพิ่มวัตถุดิบ"}</Btn>
           </div>
         </Modal>
       )}
@@ -356,150 +363,139 @@ function IngredientTab({ ingredients, setIngredients, categories, addHistory }) 
   );
 }
 
-// ── Menu Tab ───────────────────────────────────────────
-function MenuTab({ menus, setMenus, ingredients, addHistory }) {
-  const [search, setSearch] = useState("");
-  const [showAdd, setShowAdd] = useState(false);
-  const [editItem, setEditItem] = useState(null);
-  const [form, setForm] = useState({ name: "", category: "อาหารจานเดียว", price: "", description: "", image: null, ingredients: [], sop: [] });
-  const [newIng, setNewIng] = useState({ ingredientId: "", amountGram: "" });
+// ══════════════════════════════════════════════════════
+// ── MENU TAB ──────────────────────────────────────────
+// ══════════════════════════════════════════════════════
+function MenuTab({ menus, setMenus, ings, addH }) {
+  const [q, setQ] = useState(""); const [open, setOpen] = useState(false); const [editId, setEditId] = useState(null);
+  const ef = { name: "", category: "อาหารจานเดียว", price: "", description: "", image: null, ingredients: [], sop: [] };
+  const [form, setForm] = useState(ef);
+  const [ni, setNi] = useState({ ingredientId: "", amountGram: "" });
 
-  const filtered = useMemo(() => menus.filter(m => m.name.toLowerCase().includes(search.toLowerCase())), [menus, search]);
+  const filtered = useMemo(() => menus.filter(m => m.name.toLowerCase().includes(q.toLowerCase())), [menus, q]);
+  const fc = form.ingredients.reduce((s, x) => { const i = ings.find(g => g.id === x.ingredientId); return s + (i ? i.pricePerGram * x.amountGram : 0); }, 0);
+  const fm = form.price > 0 ? ((+form.price - fc) / +form.price * 100) : 0;
 
-  function openAdd() { setForm({ name: "", category: "อาหารจานเดียว", price: "", description: "", image: null, ingredients: [], sop: [] }); setEditItem(null); setShowAdd(true); }
-  function openEdit(item) { setForm({ ...item }); setEditItem(item.id); setShowAdd(true); }
-  function addIngredient() {
-    if (!newIng.ingredientId || !newIng.amountGram) return;
-    setForm(f => ({ ...f, ingredients: [...f.ingredients, { ingredientId: +newIng.ingredientId, amountGram: +newIng.amountGram }] }));
-    setNewIng({ ingredientId: "", amountGram: "" });
+  function addIng() {
+    if (!ni.ingredientId || !ni.amountGram) return;
+    setForm(f => ({ ...f, ingredients: [...f.ingredients, { ingredientId: +ni.ingredientId, amountGram: +ni.amountGram }] }));
+    setNi({ ingredientId: "", amountGram: "" });
   }
-  function removeIng(idx) { setForm(f => ({ ...f, ingredients: f.ingredients.filter((_, i) => i !== idx) })); }
   function save() {
     if (!form.name || !form.price) return;
-    if (editItem) { setMenus(p => p.map(m => m.id === editItem ? { ...m, ...form, price: +form.price } : m)); addHistory(`แก้ไขเมนู: ${form.name}`); }
-    else { setMenus(p => [...p, { ...form, id: Date.now(), price: +form.price, sop: form.sop.length ? form.sop : [{ step: 1, title: "", desc: "", image: null }] }]); addHistory(`เพิ่มเมนู: ${form.name}`); }
-    setShowAdd(false);
+    if (editId) { setMenus(p => p.map(m => m.id === editId ? { ...m, ...form, price: +form.price } : m)); addH(`แก้ไขเมนู: ${form.name}`); }
+    else { setMenus(p => [...p, { ...form, id: Date.now(), price: +form.price }]); addH(`เพิ่มเมนู: ${form.name}`); }
+    setOpen(false);
   }
-  function del(id, name) {
-    if (!window.confirm(`ลบเมนู "${name}"?`)) return;
-    setMenus(p => p.filter(m => m.id !== id)); addHistory(`ลบเมนู: ${name}`);
-  }
+  function del(id, name) { if (!confirm(`ลบเมนู "${name}"?`)) return; setMenus(p => p.filter(m => m.id !== id)); addH(`ลบเมนู: ${name}`); }
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 12, marginBottom: 20, alignItems: "center" }}>
-        <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
-          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }}><Icon d={Icons.search} size={16} /></span>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{ ...inputStyle, paddingLeft: 38 }} />
+      <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+        <div style={{ position: "relative", flex: 1 }}>
+          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)" }}><Ic d={I.search} s={16} c={C.ink4} /></span>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{ ...iS, paddingLeft: 40 }} />
         </div>
-        <Btn onClick={openAdd} icon={Icons.plus}>เพิ่มเมนู</Btn>
+        <Btn onClick={() => { setForm(ef); setEditId(null); setOpen(true); }} icon={I.plus}>เพิ่มเมนู</Btn>
       </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(320px,1fr))", gap: 16 }}>
         {filtered.map(menu => {
-          const cost = calcMenuCost(menu, ingredients);
+          const cost = menuCost(menu, ings);
           const profit = menu.price - cost;
-          const margin = menu.price > 0 ? (profit / menu.price * 100) : 0;
-          const marginColor = margin >= 60 ? "#22c55e" : margin >= 40 ? "#f59e0b" : "#ef4444";
+          const mg = menu.price > 0 ? profit / menu.price * 100 : 0;
+          const mc = marginColor(mg);
           return (
-            <div key={menu.id} style={{ background: "#fff", borderRadius: 18, overflow: "hidden", boxShadow: "0 2px 12px rgba(15,23,42,0.07)", border: "1px solid #f1f5f9", transition: "all 0.2s" }}
-              onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 12px 32px rgba(15,23,42,0.12)"; }}
-              onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = "0 2px 12px rgba(15,23,42,0.07)"; }}>
-              <div style={{ height: 5, background: `linear-gradient(90deg,${marginColor},${marginColor}88)` }} />
-              {menu.image ? (
-                <img src={menu.image} alt={menu.name} style={{ width: "100%", height: 140, objectFit: "cover" }} />
-              ) : (
-                <div style={{ height: 80, background: "linear-gradient(135deg,#fff7ed,#fef3c7)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Icon d={Icons.food} size={36} color="#f97316" />
-                </div>
-              )}
-              <div style={{ padding: "14px 16px" }}>
+            <Card key={menu.id} hover style={{ overflow: "hidden" }}>
+              <div style={{ height: 5, background: `linear-gradient(90deg,${mc},${mc}66)` }} />
+              {menu.image ? <img src={menu.image} alt={menu.name} style={{ width: "100%", height: 150, objectFit: "cover" }} /> :
+                <div style={{ height: 90, background: `linear-gradient(135deg,${C.brandLight},#FEF9C3)`, display: "flex", alignItems: "center", justifyContent: "center" }}><Ic d={I.fire} s={38} c={C.brand} /></div>}
+              <div style={{ padding: "14px 16px 16px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                  <div>
-                    <div style={{ fontWeight: 800, fontSize: 16, color: "#0f172a", fontFamily: "'Sarabun',sans-serif" }}>{menu.name}</div>
-                    <Badge color="blue">{menu.category}</Badge>
-                  </div>
+                  <div><div style={{ fontWeight: 800, fontSize: 17, color: C.ink, fontFamily: "'Sarabun',sans-serif", marginBottom: 4 }}>{menu.name}</div><Chip color="blue">{menu.category}</Chip></div>
                   <div style={{ display: "flex", gap: 4 }}>
-                    <button onClick={() => openEdit(menu)} style={{ background: "#f0f9ff", border: "none", borderRadius: 7, padding: 5, cursor: "pointer", color: "#0ea5e9" }}><Icon d={Icons.edit} size={13} /></button>
-                    <button onClick={() => del(menu.id, menu.name)} style={{ background: "#fff1f2", border: "none", borderRadius: 7, padding: 5, cursor: "pointer", color: "#f43f5e" }}><Icon d={Icons.trash} size={13} /></button>
+                    <button onClick={() => { setForm({ ...menu }); setEditId(menu.id); setOpen(true); }} style={{ background: C.blueLight, border: "none", borderRadius: 7, padding: 6, cursor: "pointer", display: "flex" }}><Ic d={I.pencil} s={13} c={C.blue} /></button>
+                    <button onClick={() => del(menu.id, menu.name)} style={{ background: C.redLight, border: "none", borderRadius: 7, padding: 6, cursor: "pointer", display: "flex" }}><Ic d={I.trash} s={13} c={C.red} /></button>
                   </div>
                 </div>
-                {menu.description && <p style={{ fontSize: 12, color: "#64748b", fontFamily: "'Sarabun',sans-serif", marginBottom: 10 }}>{menu.description}</p>}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
-                  {[
-                    { label: "ราคาขาย", value: `฿${menu.price}`, color: "#0f172a" },
-                    { label: "ต้นทุน", value: `฿${cost.toFixed(2)}`, color: "#f97316" },
-                    { label: "กำไร %", value: `${margin.toFixed(0)}%`, color: marginColor },
-                  ].map(s => (
-                    <div key={s.label} style={{ background: "#f8fafc", borderRadius: 10, padding: "8px", textAlign: "center" }}>
-                      <div style={{ fontSize: 10, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>{s.label}</div>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: s.color, fontFamily: "'Sarabun',sans-serif" }}>{s.value}</div>
+                {menu.description && <p style={{ fontSize: 13, color: C.ink3, fontFamily: "'Sarabun',sans-serif", marginBottom: 10, lineHeight: 1.5 }}>{menu.description}</p>}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  {[{ l: "ราคาขาย", v: `฿${menu.price}`, c: C.ink }, { l: "ต้นทุน", v: `฿${cost.toFixed(1)}`, c: C.brand }, { l: "กำไร %", v: `${mg.toFixed(0)}%`, c: mc }].map(s => (
+                    <div key={s.l} style={{ background: C.bg, borderRadius: 10, padding: "8px", textAlign: "center" }}>
+                      <div style={{ fontSize: 10, color: C.ink4, fontFamily: "'Sarabun',sans-serif" }}>{s.l}</div>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: s.c, fontFamily: "'Sarabun',sans-serif" }}>{s.v}</div>
                     </div>
                   ))}
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>
+                <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", fontSize: 12, color: C.ink4, fontFamily: "'Sarabun',sans-serif" }}>
                   <span>{menu.ingredients.length} วัตถุดิบ</span>
-                  <span>{menu.sop?.length || 0} ขั้นตอน SOP</span>
+                  <Chip color={mg >= 60 ? "green" : mg >= 40 ? "yellow" : "red"}>{marginLabel(mg)}</Chip>
                 </div>
               </div>
-            </div>
+            </Card>
           );
         })}
       </div>
 
-      {showAdd && (
-        <Modal title={editItem ? "แก้ไขเมนู" : "เพิ่มเมนูใหม่"} onClose={() => setShowAdd(false)} wide>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+      {open && (
+        <Modal title={editId ? "✏️ แก้ไขเมนู" : "➕ เพิ่มเมนูใหม่"} onClose={() => setOpen(false)} wide>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+            {/* Left */}
             <div>
-              <ImageUpload label="รูปเมนู" value={form.image} onChange={v => setForm(f => ({ ...f, image: v }))} />
-              <Input label="ชื่อเมนู" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="เช่น ข้าวผัดไก่" autoFocus />
+              <ImgUp label="รูปเมนู" value={form.image} onChange={v => setForm(f => ({ ...f, image: v }))} />
+              <Inp label="ชื่อเมนู" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="เช่น ข้าวผัดไก่" autoFocus />
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <Input label="หมวดหมู่" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} placeholder="อาหารจานเดียว" />
-                <Input label="ราคาขาย (฿)" type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} placeholder="0" />
+                <Inp label="หมวดหมู่" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} />
+                <Inp label="ราคาขาย (฿)" type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} placeholder="0" />
               </div>
-              <Textarea label="รายละเอียดเมนู" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="อธิบายเมนูสั้นๆ" style={{ minHeight: 60 }} />
+              <TA label="รายละเอียดเมนู" rows={3} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="อธิบายเมนูสั้นๆ" />
             </div>
+            {/* Right */}
             <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#475569", fontFamily: "'Sarabun',sans-serif", marginBottom: 8 }}>วัตถุดิบ (คำนวณจากกรัม)</div>
-              {form.ingredients.map((mi, idx) => {
-                const ing = ingredients.find(i => i.id === mi.ingredientId);
-                const cost = ing ? (ing.pricePerGram * mi.amountGram) : 0;
-                return (
-                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, background: "#f8fafc", borderRadius: 8, padding: "8px 10px" }}>
-                    <span style={{ flex: 1, fontSize: 13, fontFamily: "'Sarabun',sans-serif" }}>{ing?.name ?? "?"}</span>
-                    <span style={{ fontSize: 12, color: "#f97316", fontWeight: 600 }}>{mi.amountGram}g</span>
-                    <span style={{ fontSize: 11, color: "#64748b" }}>= ฿{cost.toFixed(2)}</span>
-                    <button onClick={() => removeIng(idx)} style={{ background: "none", border: "none", cursor: "pointer", color: "#f43f5e" }}><Icon d={Icons.close} size={13} /></button>
-                  </div>
-                );
-              })}
-              <div style={{ display: "flex", gap: 6, alignItems: "flex-end", marginBottom: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.ink2, fontFamily: "'Sarabun',sans-serif", marginBottom: 10 }}>วัตถุดิบ (คำนวณจากกรัม)</div>
+              <div style={{ maxHeight: 200, overflowY: "auto", marginBottom: 10 }}>
+                {form.ingredients.map((mi, idx) => {
+                  const ing = ings.find(i => i.id === mi.ingredientId);
+                  const c = ing ? ing.pricePerGram * mi.amountGram : 0;
+                  return (
+                    <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, background: C.bg, borderRadius: 9, padding: "8px 10px", border: `1px solid ${C.line}` }}>
+                      <span style={{ flex: 1, fontSize: 13, fontFamily: "'Sarabun',sans-serif", fontWeight: 600 }}>{ing?.name ?? "?"}</span>
+                      <span style={{ fontSize: 12, color: C.brand, fontWeight: 700 }}>{mi.amountGram}g</span>
+                      <span style={{ fontSize: 11, color: C.ink3 }}>฿{c.toFixed(2)}</span>
+                      <button onClick={() => setForm(f => ({ ...f, ingredients: f.ingredients.filter((_, i) => i !== idx) }))} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, display: "flex" }}><Ic d={I.x} s={13} c={C.red} /></button>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
                 <div style={{ flex: 2 }}>
-                  <select value={newIng.ingredientId} onChange={e => setNewIng({ ...newIng, ingredientId: e.target.value })} style={{ ...inputStyle, fontSize: 13 }}>
+                  <select value={ni.ingredientId} onChange={e => setNi({ ...ni, ingredientId: e.target.value })} style={{ ...iS, fontSize: 13 }}>
                     <option value="">-- เลือกวัตถุดิบ --</option>
-                    {ingredients.map(i => <option key={i.id} value={i.id}>{i.name} (฿{i.pricePerGram.toFixed(3)}/g)</option>)}
+                    {ings.map(i => <option key={i.id} value={i.id}>{i.name} (฿{i.pricePerGram.toFixed(3)}/g)</option>)}
                   </select>
                 </div>
-                <div style={{ flex: 1 }}>
-                  <input type="number" value={newIng.amountGram} onChange={e => setNewIng({ ...newIng, amountGram: e.target.value })} placeholder="กรัม" style={{ ...inputStyle, fontSize: 13 }} />
-                </div>
-                <Btn variant="secondary" onClick={addIngredient} icon={Icons.plus} style={{ padding: "9px 12px", marginBottom: 14 }}>เพิ่ม</Btn>
+                <div style={{ flex: 1 }}><input type="number" value={ni.amountGram} onChange={e => setNi({ ...ni, amountGram: e.target.value })} placeholder="กรัม" style={{ ...iS, fontSize: 13 }} /></div>
+                <Btn v="ghost" onClick={addIng} icon={I.plus} s={{ padding: "10px 12px" }}>เพิ่ม</Btn>
               </div>
               {form.ingredients.length > 0 && (
-                <div style={{ background: "linear-gradient(135deg,#fff7ed,#fef3c7)", borderRadius: 10, padding: "10px 14px", marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>ต้นทุนรวม</div>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: "#f97316", fontFamily: "'Sarabun',sans-serif" }}>
-                    ฿{form.ingredients.reduce((s, mi) => { const ing = ingredients.find(i => i.id === mi.ingredientId); return s + (ing ? ing.pricePerGram * mi.amountGram : 0); }, 0).toFixed(2)}
+                <div style={{ background: C.brandLight, borderRadius: 12, padding: "14px", border: `1px solid ${C.brandBorder}`, marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                    <span style={{ fontSize: 13, color: C.ink3, fontFamily: "'Sarabun',sans-serif" }}>ต้นทุนรวม</span>
+                    <span style={{ fontSize: 20, fontWeight: 900, color: C.brand, fontFamily: "'Sarabun',sans-serif" }}>฿{fc.toFixed(2)}</span>
                   </div>
-                  {form.price > 0 && <div style={{ fontSize: 12, color: "#64748b", fontFamily: "'Sarabun',sans-serif" }}>
-                    กำไร: {(((form.price - form.ingredients.reduce((s, mi) => { const ing = ingredients.find(i => i.id === mi.ingredientId); return s + (ing ? ing.pricePerGram * mi.amountGram : 0); }, 0)) / form.price) * 100).toFixed(1)}%
-                  </div>}
+                  {form.price > 0 && (
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 12, color: C.ink3, fontFamily: "'Sarabun',sans-serif" }}>กำไร</span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: marginColor(fm), fontFamily: "'Sarabun',sans-serif" }}>฿{(+form.price - fc).toFixed(2)} ({fm.toFixed(1)}%)</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8, borderTop: "1px solid #f1f5f9", paddingTop: 16 }}>
-            <Btn variant="secondary" onClick={() => setShowAdd(false)}>ยกเลิก</Btn>
-            <Btn onClick={save} icon={Icons.check} disabled={!form.name || !form.price}>{editItem ? "บันทึก" : "เพิ่มเมนู"}</Btn>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", paddingTop: 16, borderTop: `1px solid ${C.line}`, marginTop: 8 }}>
+            <Btn v="ghost" onClick={() => setOpen(false)}>ยกเลิก</Btn>
+            <Btn onClick={save} icon={I.check} disabled={!form.name || !form.price}>{editId ? "บันทึก" : "เพิ่มเมนู"}</Btn>
           </div>
         </Modal>
       )}
@@ -507,177 +503,164 @@ function MenuTab({ menus, setMenus, ingredients, addHistory }) {
   );
 }
 
-// ── SOP Tab ────────────────────────────────────────────
-function SOPTab({ menus, setMenus, ingredients }) {
-  const [selected, setSelected] = useState(menus[0]?.id ?? null);
-  const [editMode, setEditMode] = useState(false);
-  const menu = useMemo(() => menus.find(m => m.id === selected), [menus, selected]);
-  const [sopForm, setSopForm] = useState([]);
+// ══════════════════════════════════════════════════════
+// ── SOP TAB ───────────────────────────────────────────
+// ══════════════════════════════════════════════════════
+function SOPTab({ menus, setMenus, ings }) {
+  const [sel, setSel] = useState(menus[0]?.id ?? null);
+  const [edit, setEdit] = useState(false);
+  const [sop, setSop] = useState([]);
+  const menu = useMemo(() => menus.find(m => m.id === sel), [menus, sel]);
 
-  useEffect(() => {
-    if (menu) setSopForm(menu.sop ? [...menu.sop] : []);
-    setEditMode(false);
-  }, [selected, menu]);
+  useEffect(() => { if (menu) { setSop(menu.sop ? [...menu.sop.map(s => ({ ...s }))] : []); setEdit(false); } }, [sel]);
 
-  function addStep() {
-    setSopForm(f => [...f, { step: f.length + 1, title: "", desc: "", image: null }]);
-  }
-  function removeStep(idx) { setSopForm(f => f.filter((_, i) => i !== idx)); }
-  function updateStep(idx, field, value) { setSopForm(f => f.map((s, i) => i === idx ? { ...s, [field]: value } : s)); }
-  function saveSop() {
-    setMenus(p => p.map(m => m.id === selected ? { ...m, sop: sopForm } : m));
-    setEditMode(false);
-  }
+  function saveSop() { setMenus(p => p.map(m => m.id === sel ? { ...m, sop } : m)); setEdit(false); }
+  function addStep() { setSop(f => [...f, { step: f.length + 1, title: "", desc: "", image: null }]); }
+  function rmStep(i) { setSop(f => f.filter((_, j) => j !== i)); }
+  function updStep(i, k, v) { setSop(f => f.map((s, j) => j === i ? { ...s, [k]: v } : s)); }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: 16, minHeight: 500 }}>
-      <div style={{ background: "#fff", borderRadius: 16, padding: 12, boxShadow: "0 2px 12px rgba(15,23,42,0.07)", overflowY: "auto" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", padding: "4px 8px 8px", fontFamily: "'Sarabun',sans-serif", textTransform: "uppercase", letterSpacing: 1 }}>เมนูทั้งหมด</div>
-        {menus.map(m => {
-          const cost = calcMenuCost(m, ingredients);
-          const margin = m.price > 0 ? ((m.price - cost) / m.price * 100) : 0;
-          return (
-            <div key={m.id} onClick={() => setSelected(m.id)} style={{ padding: "10px 12px", borderRadius: 10, cursor: "pointer", marginBottom: 4, background: selected === m.id ? "#fff7ed" : "transparent", transition: "all 0.1s", border: selected === m.id ? "1px solid #fed7aa" : "1px solid transparent" }}>
-              <div style={{ fontFamily: "'Sarabun',sans-serif", fontSize: 14, fontWeight: selected === m.id ? 700 : 500, color: selected === m.id ? "#f97316" : "#475569" }}>{m.name}</div>
-              <div style={{ fontSize: 11, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>กำไร {margin.toFixed(0)}% · {m.sop?.length || 0} ขั้นตอน</div>
-            </div>
-          );
-        })}
+    <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 16, minHeight: 520 }}>
+      {/* Sidebar */}
+      <div style={{ background: C.white, borderRadius: 16, border: `1px solid ${C.line}`, overflow: "hidden" }}>
+        <div style={{ padding: "14px 16px 10px", borderBottom: `1px solid ${C.lineLight}`, background: C.bg }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: C.ink4, letterSpacing: 1.2, textTransform: "uppercase", fontFamily: "'Sarabun',sans-serif" }}>รายการเมนู</div>
+        </div>
+        <div style={{ padding: 8, overflowY: "auto", maxHeight: 520 }}>
+          {menus.map(m => {
+            const cost = menuCost(m, ings);
+            const mg = m.price > 0 ? ((m.price - cost) / m.price * 100) : 0;
+            const active = sel === m.id;
+            return (
+              <div key={m.id} onClick={() => setSel(m.id)} style={{ padding: "10px 12px", borderRadius: 10, cursor: "pointer", marginBottom: 4, background: active ? C.brandLight : "transparent", border: `1px solid ${active ? C.brandBorder : "transparent"}`, transition: "all .15s" }}>
+                <div style={{ fontFamily: "'Sarabun',sans-serif", fontSize: 14, fontWeight: active ? 800 : 500, color: active ? C.brand : C.ink2, marginBottom: 2 }}>{m.name}</div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: C.ink4, fontFamily: "'Sarabun',sans-serif" }}>กำไร</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: marginColor(mg), fontFamily: "'Sarabun',sans-serif" }}>{mg.toFixed(0)}%</span>
+                  <span style={{ fontSize: 11, color: C.ink4, fontFamily: "'Sarabun',sans-serif" }}>· {m.sop?.length || 0} ขั้นตอน</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
-      <div style={{ background: "#fff", borderRadius: 16, padding: "22px 24px", boxShadow: "0 2px 12px rgba(15,23,42,0.07)" }}>
+      {/* Content */}
+      <Card style={{ padding: "22px 24px", overflow: "auto" }}>
         {menu ? (
           <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+            {/* Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${C.lineLight}` }}>
               <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-                {menu.image && <img src={menu.image} alt={menu.name} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 12 }} />}
+                {menu.image && <img src={menu.image} alt={menu.name} style={{ width: 60, height: 60, objectFit: "cover", borderRadius: 12, border: `2px solid ${C.line}` }} />}
                 <div>
-                  <h2 style={{ fontFamily: "'Sarabun',sans-serif", fontSize: 22, fontWeight: 800, color: "#0f172a", marginBottom: 2 }}>{menu.name}</h2>
-                  <div style={{ fontSize: 13, color: "#64748b", fontFamily: "'Sarabun',sans-serif" }}>
-                    ราคาขาย ฿{menu.price} · ต้นทุน ฿{calcMenuCost(menu, ingredients).toFixed(2)} · กำไร {menu.price > 0 ? (((menu.price - calcMenuCost(menu, ingredients)) / menu.price) * 100).toFixed(1) : 0}%
+                  <h2 style={{ fontFamily: "'Sarabun',sans-serif", fontSize: 22, fontWeight: 900, color: C.ink, marginBottom: 4 }}>{menu.name}</h2>
+                  <div style={{ display: "flex", gap: 10, fontSize: 13, color: C.ink3, fontFamily: "'Sarabun',sans-serif" }}>
+                    <span>ราคา <b style={{ color: C.ink }}>฿{menu.price}</b></span>
+                    <span>ต้นทุน <b style={{ color: C.brand }}>฿{menuCost(menu, ings).toFixed(2)}</b></span>
+                    <span>กำไร <b style={{ color: marginColor(menu.price > 0 ? ((menu.price - menuCost(menu, ings)) / menu.price * 100) : 0) }}>{menu.price > 0 ? (((menu.price - menuCost(menu, ings)) / menu.price) * 100).toFixed(1) : 0}%</b></span>
                   </div>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                {editMode ? (
-                  <>
-                    <Btn variant="secondary" onClick={() => setEditMode(false)} style={{ padding: "7px 14px", fontSize: 13 }}>ยกเลิก</Btn>
-                    <Btn variant="success" onClick={saveSop} icon={Icons.check} style={{ padding: "7px 14px", fontSize: 13 }}>บันทึก SOP</Btn>
-                  </>
+                {edit ? (
+                  <><Btn v="ghost" onClick={() => { setSop(menu.sop ? [...menu.sop] : []); setEdit(false); }} s={{ padding: "8px 14px" }}>ยกเลิก</Btn>
+                    <Btn v="success" onClick={saveSop} icon={I.check} s={{ padding: "8px 14px" }}>บันทึก SOP</Btn></>
                 ) : (
-                  <Btn variant="info" onClick={() => setEditMode(true)} icon={Icons.edit} style={{ padding: "7px 14px", fontSize: 13 }}>แก้ไข SOP</Btn>
+                  <Btn v="info" onClick={() => setEdit(true)} icon={I.pencil} s={{ padding: "8px 14px" }}>แก้ไข SOP</Btn>
                 )}
               </div>
             </div>
 
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#475569", fontFamily: "'Sarabun',sans-serif", marginBottom: 8 }}>วัตถุดิบในเมนู</div>
+            {/* Ingredients summary */}
+            <div style={{ marginBottom: 22 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.ink3, textTransform: "uppercase", letterSpacing: 1, fontFamily: "'Sarabun',sans-serif", marginBottom: 8 }}>วัตถุดิบในเมนู</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                 {menu.ingredients.map((mi, idx) => {
-                  const ing = ingredients.find(i => i.id === mi.ingredientId);
+                  const ing = ings.find(i => i.id === mi.ingredientId);
                   return ing ? (
-                    <div key={idx} style={{ background: "#f8fafc", borderRadius: 8, padding: "6px 12px", fontSize: 13, fontFamily: "'Sarabun',sans-serif", border: "1px solid #e2e8f0" }}>
-                      <span style={{ fontWeight: 600, color: "#0f172a" }}>{ing.name}</span>
-                      <span style={{ color: "#f97316", marginLeft: 6 }}>{mi.amountGram}g</span>
-                      <span style={{ color: "#64748b", marginLeft: 4 }}>= ฿{(ing.pricePerGram * mi.amountGram).toFixed(2)}</span>
+                    <div key={idx} style={{ background: C.bg, borderRadius: 8, padding: "6px 12px", fontSize: 13, fontFamily: "'Sarabun',sans-serif", border: `1px solid ${C.line}`, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontWeight: 700, color: C.ink }}>{ing.name}</span>
+                      <span style={{ color: C.brand, fontWeight: 700 }}>{mi.amountGram}g</span>
+                      <span style={{ color: C.ink4, fontSize: 11 }}>฿{(ing.pricePerGram * mi.amountGram).toFixed(2)}</span>
                     </div>
                   ) : null;
                 })}
               </div>
             </div>
 
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#475569", fontFamily: "'Sarabun',sans-serif", marginBottom: 12 }}>ขั้นตอนการทำ (SOP)</div>
+            {/* SOP Steps */}
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.ink3, textTransform: "uppercase", letterSpacing: 1, fontFamily: "'Sarabun',sans-serif", marginBottom: 14 }}>ขั้นตอนการทำ (SOP)</div>
 
-            {editMode ? (
+            {edit ? (
               <div>
-                {sopForm.map((step, idx) => (
-                  <div key={idx} style={{ background: "#f8fafc", borderRadius: 14, padding: "16px", marginBottom: 12, border: "1px solid #e2e8f0" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: "linear-gradient(135deg,#f97316,#ef4444)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800 }}>{idx + 1}</div>
-                      <button onClick={() => removeStep(idx)} style={{ background: "#fee2e2", border: "none", borderRadius: 7, padding: "4px 8px", cursor: "pointer", color: "#dc2626", fontSize: 12, fontFamily: "'Sarabun',sans-serif" }}>ลบขั้นตอน</button>
+                {sop.map((step, idx) => (
+                  <div key={idx} style={{ background: C.bg, borderRadius: 14, padding: "18px 20px", marginBottom: 14, border: `1px solid ${C.line}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 32, height: 32, borderRadius: "50%", background: `linear-gradient(135deg,${C.brand},${C.brandDark})`, color: C.white, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 800, flexShrink: 0 }}>{idx + 1}</div>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: C.ink3, fontFamily: "'Sarabun',sans-serif" }}>ขั้นตอนที่ {idx + 1}</span>
+                      </div>
+                      <button onClick={() => rmStep(idx)} style={{ background: C.redLight, border: "none", borderRadius: 8, padding: "5px 12px", cursor: "pointer", color: C.red, fontSize: 12, fontFamily: "'Sarabun',sans-serif", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><Ic d={I.trash} s={12} c={C.red} />ลบขั้นตอน</button>
                     </div>
-                    <Input label="ชื่อขั้นตอน" value={step.title} onChange={e => updateStep(idx, "title", e.target.value)} placeholder="เช่น เตรียมวัตถุดิบ" />
-                    <Textarea label="รายละเอียด" value={step.desc} onChange={e => updateStep(idx, "desc", e.target.value)} placeholder="อธิบายวิธีทำในขั้นตอนนี้..." style={{ minHeight: 70 }} />
-                    <ImageUpload label="รูปประกอบขั้นตอน" value={step.image} onChange={v => updateStep(idx, "image", v)} />
+                    <Inp label="ชื่อขั้นตอน" value={step.title} onChange={e => updStep(idx, "title", e.target.value)} placeholder="เช่น เตรียมวัตถุดิบ" />
+                    <TA label="รายละเอียดขั้นตอน" hint="อธิบายวิธีทำให้ละเอียด" rows={5} value={step.desc} onChange={e => updStep(idx, "desc", e.target.value)} placeholder="อธิบายวิธีทำในขั้นตอนนี้อย่างละเอียด เช่น อุณหภูมิ เวลา วิธีการ..." />
+                    <ImgUp label="รูปประกอบขั้นตอนนี้" value={step.image} onChange={v => updStep(idx, "image", v)} />
                   </div>
                 ))}
-                <Btn variant="secondary" onClick={addStep} icon={Icons.plus} style={{ width: "100%", justifyContent: "center" }}>เพิ่มขั้นตอน</Btn>
+                <Btn v="ghost" onClick={addStep} icon={I.plus} full>+ เพิ่มขั้นตอน</Btn>
               </div>
             ) : (
               <div>
                 {(!menu.sop || menu.sop.length === 0) ? (
-                  <div style={{ textAlign: "center", padding: "40px 0", color: "#94a3b8" }}>
-                    <Icon d={Icons.sop} size={40} color="#cbd5e1" />
-                    <p style={{ marginTop: 12, fontFamily: "'Sarabun',sans-serif" }}>ยังไม่มี SOP กด "แก้ไข SOP" เพื่อเพิ่มครับ</p>
-                  </div>
-                ) : menu.sop.map((step, idx) => (
-                  <div key={idx} style={{ display: "flex", gap: 16, marginBottom: 20 }}>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: "50%", background: "linear-gradient(135deg,#f97316,#ef4444)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 800, boxShadow: "0 4px 12px rgba(249,115,22,0.3)" }}>{idx + 1}</div>
-                      {idx < menu.sop.length - 1 && <div style={{ width: 2, flex: 1, minHeight: 20, background: "linear-gradient(to bottom,#f97316,#f9731622)", marginTop: 4 }} />}
+                  <div style={{ textAlign: "center", padding: "60px 0", color: C.ink4 }}><Ic d={I.sop} s={44} c={C.line} /><p style={{ marginTop: 12, fontFamily: "'Sarabun',sans-serif", fontSize: 15 }}>ยังไม่มี SOP<br /><span style={{ fontSize: 13, color: C.ink4 }}>กด "แก้ไข SOP" เพื่อเพิ่มขั้นตอน</span></p></div>
+                ) : (
+                  menu.sop.map((step, idx) => (
+                    <div key={idx} style={{ display: "flex", gap: 16, marginBottom: 28 }}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, width: 36 }}>
+                        <div style={{ width: 36, height: 36, borderRadius: "50%", background: `linear-gradient(135deg,${C.brand},${C.brandDark})`, color: C.white, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 800, boxShadow: `0 4px 12px ${C.brand}44` }}>{idx + 1}</div>
+                        {idx < menu.sop.length - 1 && <div style={{ width: 2, flex: 1, minHeight: 24, background: `linear-gradient(to bottom,${C.brand},${C.brand}22)`, marginTop: 6 }} />}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 800, fontSize: 16, color: C.ink, fontFamily: "'Sarabun',sans-serif", marginBottom: 6 }}>{step.title || `ขั้นตอนที่ ${idx + 1}`}</div>
+                        {step.desc && <p style={{ fontSize: 15, color: C.ink2, fontFamily: "'Sarabun',sans-serif", lineHeight: 1.8, marginBottom: step.image ? 12 : 0, background: C.bg, padding: "12px 14px", borderRadius: 10, border: `1px solid ${C.line}` }}>{step.desc}</p>}
+                        {step.image && <img src={step.image} alt={step.title} style={{ maxWidth: 360, borderRadius: 12, border: `2px solid ${C.line}`, marginTop: 10, display: "block" }} />}
+                      </div>
                     </div>
-                    <div style={{ flex: 1, paddingBottom: 16 }}>
-                      <div style={{ fontWeight: 700, fontSize: 15, color: "#0f172a", fontFamily: "'Sarabun',sans-serif", marginBottom: 4 }}>{step.title || `ขั้นตอนที่ ${idx + 1}`}</div>
-                      {step.desc && <p style={{ fontSize: 14, color: "#475569", fontFamily: "'Sarabun',sans-serif", lineHeight: 1.7, marginBottom: step.image ? 10 : 0 }}>{step.desc}</p>}
-                      {step.image && <img src={step.image} alt={step.title} style={{ maxWidth: 320, borderRadius: 12, border: "1px solid #e2e8f0", marginTop: 8 }} />}
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             )}
           </>
         ) : (
-          <div style={{ textAlign: "center", padding: "80px 0", color: "#94a3b8" }}>
-            <Icon d={Icons.sop} size={48} color="#cbd5e1" />
-            <p style={{ marginTop: 16, fontFamily: "'Sarabun',sans-serif" }}>เลือกเมนูเพื่อดู SOP</p>
-          </div>
+          <div style={{ textAlign: "center", padding: "100px 0", color: C.ink4 }}><Ic d={I.sop} s={52} c={C.line} /><p style={{ marginTop: 16, fontFamily: "'Sarabun',sans-serif", fontSize: 16 }}>เลือกเมนูเพื่อดู SOP</p></div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }
 
-// ── Summary Tab ────────────────────────────────────────
-function SummaryTab({ menus, ingredients }) {
-  const items = useMemo(() => menus.map(m => {
-    const cost = calcMenuCost(m, ingredients);
-    const profit = m.price - cost;
-    const margin = m.price > 0 ? profit / m.price * 100 : 0;
-    return { ...m, cost, profit, margin };
-  }), [menus, ingredients]);
-  const stats = useMemo(() => ({
-    avg: items.length ? items.reduce((s, i) => s + i.margin, 0) / items.length : 0,
-    total: items.length,
-    good: items.filter(i => i.margin >= 60).length,
-    totalProfit: items.reduce((s, i) => s + i.profit, 0),
-  }), [items]);
-  const [sortBy, setSortBy] = useState("margin");
-  const sorted = useMemo(() => [...items].sort((a, b) => b[sortBy] - a[sortBy]), [items, sortBy]);
+// ══════════════════════════════════════════════════════
+// ── SUMMARY TAB ───────────────────────────────────────
+// ══════════════════════════════════════════════════════
+function SumTab({ menus, ings }) {
+  const items = useMemo(() => menus.map(m => { const c = menuCost(m, ings); const p = m.price - c; const mg = m.price > 0 ? p / m.price * 100 : 0; return { ...m, cost: c, profit: p, margin: mg }; }), [menus, ings]);
+  const stats = useMemo(() => ({ avg: items.length ? items.reduce((s, i) => s + i.margin, 0) / items.length : 0, total: items.length, good: items.filter(i => i.margin >= 60).length, profit: items.reduce((s, i) => s + i.profit, 0) }), [items]);
+  const [sort, setSort] = useState("margin");
+  const sorted = useMemo(() => [...items].sort((a, b) => b[sort] - a[sort]), [items, sort]);
 
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 14, marginBottom: 24 }}>
-        {[
-          { label: "เมนูทั้งหมด", value: stats.total, unit: "เมนู", color: "#6366f1", icon: Icons.menu },
-          { label: "กำไรเฉลี่ย", value: stats.avg.toFixed(1), unit: "%", color: "#f97316", icon: Icons.chart },
-          { label: "เมนูกำไรดี (≥60%)", value: stats.good, unit: "เมนู", color: "#22c55e", icon: Icons.check },
-          { label: "กำไรรวม", value: `฿${stats.totalProfit.toFixed(0)}`, unit: "", color: "#0ea5e9", icon: Icons.calculator },
-        ].map(card => (
-          <div key={card.label} style={{ background: "#fff", borderRadius: 16, padding: "18px 20px", boxShadow: "0 2px 12px rgba(15,23,42,0.07)", display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: `${card.color}18`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <Icon d={card.icon} size={20} color={card.color} />
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>{card.label}</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: card.color, fontFamily: "'Sarabun',sans-serif", lineHeight: 1.2 }}>{card.value}<span style={{ fontSize: 12, fontWeight: 600, marginLeft: 2 }}>{card.unit}</span></div>
-            </div>
-          </div>
-        ))}
+        <StatCard label="เมนูทั้งหมด" value={stats.total} unit="เมนู" icon={I.menu2} color={C.blue} />
+        <StatCard label="กำไรเฉลี่ย" value={stats.avg.toFixed(1)} unit="%" icon={I.chart} color={C.brand} />
+        <StatCard label="เมนูกำไรดี ≥60%" value={stats.good} unit="เมนู" icon={I.check} color={C.green} />
+        <StatCard label="กำไรรวม" value={`฿${stats.profit.toFixed(0)}`} unit="" icon={I.bolt} color={C.purple} />
       </div>
-      <div style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(15,23,42,0.07)" }}>
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontWeight: 700, fontSize: 15, fontFamily: "'Sarabun',sans-serif", color: "#0f172a" }}>ตารางต้นทุนทุกเมนู</span>
-          <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inputStyle, width: "auto", fontSize: 12, padding: "5px 10px" }}>
+      <Card>
+        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.line}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontWeight: 800, fontSize: 15, fontFamily: "'Sarabun',sans-serif", color: C.ink }}>ตารางต้นทุนทุกเมนู</div>
+          <select value={sort} onChange={e => setSort(e.target.value)} style={{ ...iS, width: "auto", fontSize: 12, padding: "6px 12px" }}>
             <option value="margin">เรียง % กำไร</option>
             <option value="profit">เรียงกำไร</option>
             <option value="price">เรียงราคาขาย</option>
@@ -686,186 +669,156 @@ function SummaryTab({ menus, ingredients }) {
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "'Sarabun',sans-serif" }}>
-            <thead>
-              <tr style={{ background: "#f8fafc" }}>
-                {["เมนู", "หมวด", "ราคาขาย", "ต้นทุน", "กำไร (฿)", "% กำไร", "สถานะ"].map(h => (
-                  <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 12, fontWeight: 700, color: "#64748b" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
+            <thead><tr style={{ background: C.bg }}>
+              {["เมนู", "หมวด", "ราคาขาย", "ต้นทุน", "กำไร (฿)", "% กำไร", "สถานะ"].map(h => <th key={h} style={{ padding: "11px 16px", textAlign: "left", fontSize: 12, fontWeight: 700, color: C.ink3, whiteSpace: "nowrap" }}>{h}</th>)}
+            </tr></thead>
             <tbody>
               {sorted.map((item, idx) => (
-                <tr key={item.id} style={{ borderTop: "1px solid #f1f5f9", background: idx % 2 === 0 ? "#fff" : "#fafafa" }}>
+                <tr key={item.id} style={{ borderTop: `1px solid ${C.lineLight}`, background: idx % 2 === 0 ? C.white : C.bg, transition: "background .1s" }} onMouseEnter={e => e.currentTarget.style.background = C.brandLight} onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? C.white : C.bg}>
                   <td style={{ padding: "12px 16px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       {item.image && <img src={item.image} alt={item.name} style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 6 }} />}
-                      <span style={{ fontWeight: 600, color: "#0f172a" }}>{item.name}</span>
+                      <span style={{ fontWeight: 700, color: C.ink, fontSize: 14 }}>{item.name}</span>
                     </div>
                   </td>
-                  <td style={{ padding: "12px 16px", color: "#64748b", fontSize: 13 }}>{item.category}</td>
-                  <td style={{ padding: "12px 16px", fontWeight: 700 }}>฿{item.price}</td>
-                  <td style={{ padding: "12px 16px", color: "#f97316", fontWeight: 600 }}>฿{item.cost.toFixed(2)}</td>
-                  <td style={{ padding: "12px 16px", color: item.profit >= 0 ? "#22c55e" : "#ef4444", fontWeight: 600 }}>฿{item.profit.toFixed(2)}</td>
+                  <td style={{ padding: "12px 16px" }}><Chip color="blue">{item.category}</Chip></td>
+                  <td style={{ padding: "12px 16px", fontWeight: 700, fontSize: 14 }}>฿{item.price}</td>
+                  <td style={{ padding: "12px 16px", color: C.brand, fontWeight: 700, fontSize: 14 }}>฿{item.cost.toFixed(2)}</td>
+                  <td style={{ padding: "12px 16px", color: item.profit >= 0 ? C.green : C.red, fontWeight: 700, fontSize: 14 }}>฿{item.profit.toFixed(2)}</td>
                   <td style={{ padding: "12px 16px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <div style={{ width: 80, height: 6, background: "#f1f5f9", borderRadius: 999 }}>
-                        <div style={{ height: "100%", width: `${Math.min(Math.max(item.margin, 0), 100)}%`, background: item.margin >= 60 ? "#22c55e" : item.margin >= 40 ? "#f59e0b" : "#ef4444", borderRadius: 999 }} />
+                      <div style={{ width: 80, height: 7, background: C.lineLight, borderRadius: 999, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${Math.min(Math.max(item.margin, 0), 100)}%`, background: marginColor(item.margin), borderRadius: 999, transition: "width .4s" }} />
                       </div>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#475569", minWidth: 36 }}>{item.margin.toFixed(0)}%</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: marginColor(item.margin), minWidth: 40 }}>{item.margin.toFixed(0)}%</span>
                     </div>
                   </td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <Badge color={item.margin >= 60 ? "green" : item.margin >= 40 ? "yellow" : "red"}>{item.margin >= 60 ? "ดี" : item.margin >= 40 ? "พอใช้" : "ต่ำ"}</Badge>
-                  </td>
+                  <td style={{ padding: "12px 16px" }}><Chip color={item.margin >= 60 ? "green" : item.margin >= 40 ? "yellow" : "red"}>{marginLabel(item.margin)}</Chip></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }
 
-// ── History Tab ────────────────────────────────────────
-function HistoryTab({ history, onClear }) {
+// ── History ────────────────────────────────────────────
+function HisTab({ history, onClear }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-        {history.length > 0 && <Btn variant="danger" onClick={() => { if (window.confirm("ลบประวัติทั้งหมด?")) onClear(); }} icon={Icons.trash} style={{ fontSize: 12, padding: "6px 12px" }}>ลบประวัติ</Btn>}
+        {history.length > 0 && <Btn v="danger" onClick={() => { if (confirm("ลบประวัติทั้งหมด?")) onClear(); }} icon={I.trash} s={{ padding: "7px 14px", fontSize: 12 }}>ลบประวัติ</Btn>}
       </div>
-      <div style={{ background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 2px 12px rgba(15,23,42,0.07)" }}>
+      <Card>
         {history.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "60px 0", color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>
-            <Icon d={Icons.history} size={40} color="#cbd5e1" />
-            <p style={{ marginTop: 12 }}>ยังไม่มีประวัติ</p>
-          </div>
+          <div style={{ textAlign: "center", padding: "60px 0", color: C.ink4 }}><Ic d={I.clock} s={40} c={C.line} /><p style={{ marginTop: 12, fontFamily: "'Sarabun',sans-serif" }}>ยังไม่มีประวัติ</p></div>
         ) : history.map((item, idx) => (
-          <div key={idx} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 20px", borderBottom: "1px solid #f1f5f9" }}>
-            <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#fff7ed", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <Icon d={Icons.check} size={16} color="#f97316" />
-            </div>
+          <div key={idx} style={{ display: "flex", alignItems: "center", gap: 14, padding: "13px 20px", borderBottom: `1px solid ${C.lineLight}` }}>
+            <div style={{ width: 34, height: 34, borderRadius: "50%", background: C.brandLight, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Ic d={I.check} s={15} c={C.brand} /></div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#0f172a", fontFamily: "'Sarabun',sans-serif" }}>{item.action}</div>
-              <div style={{ fontSize: 12, color: "#94a3b8", fontFamily: "'Sarabun',sans-serif" }}>{item.time}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: C.ink, fontFamily: "'Sarabun',sans-serif" }}>{item.action}</div>
+              <div style={{ fontSize: 12, color: C.ink4, fontFamily: "'Sarabun',sans-serif", marginTop: 1 }}>{item.time}</div>
             </div>
           </div>
         ))}
-      </div>
+      </Card>
     </div>
   );
 }
 
-// ── Export/Import ──────────────────────────────────────
-function ExportImportBar({ ingredients, menus, categories, onImport }) {
-  const fileRef = useRef();
-  function exportData() {
-    const data = { ingredients, menus, categories, exportedAt: new Date().toISOString(), version: "2.0" };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `foodcost-backup-${new Date().toLocaleDateString("th-TH").replace(/\//g, "-")}.json`; a.click();
-    URL.revokeObjectURL(url);
-  }
-  function handleImport(e) {
-    const file = e.target.files?.[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => { try { const data = JSON.parse(ev.target.result); if (data.ingredients && data.menus) { onImport(data); alert("นำเข้าข้อมูลสำเร็จ!"); } else alert("ไฟล์ไม่ถูกต้อง"); } catch { alert("อ่านไฟล์ไม่ได้"); } };
-    reader.readAsText(file); e.target.value = "";
-  }
-  return (
-    <div style={{ display: "flex", gap: 6 }}>
-      <Btn variant="secondary" onClick={exportData} icon={Icons.download} style={{ padding: "5px 10px", fontSize: 12 }}>Export</Btn>
-      <Btn variant="secondary" onClick={() => fileRef.current?.click()} icon={Icons.upload} style={{ padding: "5px 10px", fontSize: 12 }}>Import</Btn>
-      <input ref={fileRef} type="file" accept=".json" onChange={handleImport} style={{ display: "none" }} />
-    </div>
-  );
-}
-
-// ── Main App ───────────────────────────────────────────
-export default function FoodCostApp() {
-  const [activeTab, setActiveTab] = useState("ingredients");
-  const [ingredients, setIngredients] = useLocalStorage("fc2_ingredients", INIT_INGREDIENTS);
-  const [menus, setMenus] = useLocalStorage("fc2_menus", INIT_MENUS);
-  const [categories] = useLocalStorage("fc2_categories", INIT_CATEGORIES);
-  const [history, setHistory] = useLocalStorage("fc2_history", []);
+// ══════════════════════════════════════════════════════
+// ── MAIN APP ──────────────────────────────────────────
+// ══════════════════════════════════════════════════════
+export default function App() {
+  const [tab, setTab] = useState("ingredients");
+  const [ings, setIngs] = useLS("fc3_ings", INIT_ING);
+  const [menus, setMenus] = useLS("fc3_menus", INIT_MENUS);
+  const [cats] = useLS("fc3_cats", CATS);
+  const [hist, setHist] = useLS("fc3_hist", []);
   const [saved, setSaved] = useState(true);
-  const saveTimer = useRef(null);
+  const t = useRef(null);
 
-  useEffect(() => {
-    setSaved(false); clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => setSaved(true), 600);
-    return () => clearTimeout(saveTimer.current);
-  }, [ingredients, menus]);
+  useEffect(() => { setSaved(false); clearTimeout(t.current); t.current = setTimeout(() => setSaved(true), 700); return () => clearTimeout(t.current); }, [ings, menus]);
 
-  const addHistory = useCallback((action) => {
-    setHistory(p => [{ action, time: new Date().toLocaleString("th-TH") }, ...p.slice(0, 99)]);
-  }, [setHistory]);
+  const addH = useCallback((a) => setHist(p => [{ action: a, time: new Date().toLocaleString("th-TH") }, ...p.slice(0, 99)]), [setHist]);
 
-  const handleImport = useCallback((data) => {
-    setIngredients(data.ingredients); setMenus(data.menus); addHistory("นำเข้าข้อมูล backup");
-  }, [setIngredients, setMenus, addHistory]);
-
-  const tabs = [
-    { id: "ingredients", label: "วัตถุดิบ", icon: Icons.ingredient },
-    { id: "menus", label: "เมนู", icon: Icons.food },
-    { id: "sop", label: "SOP", icon: Icons.sop },
-    { id: "summary", label: "สรุปต้นทุน", icon: Icons.chart },
-    { id: "history", label: "ประวัติ", icon: Icons.history },
+  const TABS = [
+    { id: "ingredients", label: "วัตถุดิบ", icon: I.leaf },
+    { id: "menus", label: "เมนู", icon: I.fire },
+    { id: "sop", label: "SOP", icon: I.sop },
+    { id: "summary", label: "สรุปต้นทุน", icon: I.chart },
+    { id: "history", label: "ประวัติ", icon: I.clock },
   ];
 
-  const descriptions = {
-    ingredients: "จัดการวัตถุดิบ ราคาต่อกรัม และสต็อก",
-    menus: "กำหนดส่วนผสม คำนวณต้นทุนและกำไรแต่ละเมนู",
-    sop: "ขั้นตอนมาตรฐานการทำอาหาร พร้อมรูปภาพ",
-    summary: "ภาพรวมต้นทุนและกำไรทุกเมนู",
-    history: "บันทึกการเปลี่ยนแปลงข้อมูลทั้งหมด",
-  };
+  const DESC = { ingredients: "จัดการวัตถุดิบ ราคา และสต็อก", menus: "คำนวณต้นทุนและกำไรแต่ละเมนู", sop: "ขั้นตอนมาตรฐานพร้อมรูปภาพ", summary: "ภาพรวมต้นทุนและกำไรทุกเมนู", history: "บันทึกการเปลี่ยนแปลงทั้งหมด" };
 
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800&display=swap');
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: #f1f5f9; }
-        @keyframes modalIn { from { opacity: 0; transform: scale(0.94) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+        @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{background:${C.bg};font-family:'Sarabun',sans-serif}
+        @keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
+        ::-webkit-scrollbar{width:5px;height:5px}
+        ::-webkit-scrollbar-thumb{background:${C.line};border-radius:999px}
+        input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}
       `}</style>
-      <OfflineBanner />
-      <div style={{ minHeight: "100vh", background: "linear-gradient(160deg,#fef3ec 0%,#f1f5f9 50%)", fontFamily: "'Sarabun',sans-serif" }}>
-        <nav style={{ background: "rgba(255,255,255,0.95)", backdropFilter: "blur(16px)", borderBottom: "1px solid #f1f5f9", padding: "0 24px", display: "flex", alignItems: "center", position: "sticky", top: 0, zIndex: 100, height: 60, boxShadow: "0 1px 20px rgba(15,23,42,0.06)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 28 }}>
-            <div style={{ width: 34, height: 34, background: "linear-gradient(135deg,#f97316,#ef4444)", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 4px 12px rgba(249,115,22,0.3)" }}>
-              <Icon d={Icons.food} size={17} color="#fff" />
+
+      {/* Offline */}
+      {typeof navigator !== "undefined" && !navigator.onLine && (
+        <div style={{ background: C.ink, color: C.white, padding: "8px 20px", display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}><Ic d={I.wifi} s={14} c={C.white} />ออฟไลน์อยู่ — ข้อมูลบันทึกในเครื่องครับ</div>
+      )}
+
+      <div style={{ minHeight: "100vh" }}>
+        {/* Navbar */}
+        <nav style={{ background: C.white, borderBottom: `1px solid ${C.line}`, padding: "0 28px", display: "flex", alignItems: "center", position: "sticky", top: 0, zIndex: 100, height: 62, boxShadow: "0 1px 16px rgba(15,23,42,.07)" }}>
+          {/* Logo */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginRight: 32 }}>
+            <div style={{ width: 36, height: 36, background: `linear-gradient(135deg,${C.brand},${C.brandDark})`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: `0 4px 12px ${C.brand}44` }}>
+              <Ic d={I.fire} s={18} c={C.white} sw={2} />
             </div>
             <div>
-              <div style={{ fontWeight: 800, fontSize: 17, background: "linear-gradient(135deg,#f97316,#ef4444)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", lineHeight: 1 }}>FoodCost</div>
-              <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 500, letterSpacing: 1 }}>MANAGEMENT</div>
+              <div style={{ fontWeight: 900, fontSize: 18, color: C.ink, lineHeight: 1, letterSpacing: -.3 }}>FoodCost</div>
+              <div style={{ fontSize: 9, color: C.ink4, fontWeight: 600, letterSpacing: 1.5 }}>MANAGEMENT</div>
             </div>
           </div>
-          <div style={{ display: "flex", flex: 1, overflowX: "auto" }}>
-            {tabs.map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 16px", height: 60, border: "none", background: "none", cursor: "pointer", fontSize: 14, fontWeight: activeTab === tab.id ? 700 : 500, color: activeTab === tab.id ? "#f97316" : "#64748b", fontFamily: "'Sarabun',sans-serif", borderBottom: activeTab === tab.id ? "2.5px solid #f97316" : "2.5px solid transparent", transition: "all 0.15s", whiteSpace: "nowrap" }}>
-                <Icon d={tab.icon} size={15} color={activeTab === tab.id ? "#f97316" : "#94a3b8"} />{tab.label}
-              </button>
-            ))}
+
+          {/* Tabs */}
+          <div style={{ display: "flex", flex: 1, overflowX: "auto", gap: 2 }}>
+            {TABS.map(t2 => {
+              const active = tab === t2.id;
+              return (
+                <button key={t2.id} onClick={() => setTab(t2.id)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "0 16px", height: 62, border: "none", background: "none", cursor: "pointer", fontSize: 14, fontWeight: active ? 800 : 500, color: active ? C.brand : C.ink3, fontFamily: "'Sarabun',sans-serif", borderBottom: active ? `2.5px solid ${C.brand}` : "2.5px solid transparent", transition: "all .15s", whiteSpace: "nowrap" }}>
+                  <Ic d={t2.icon} s={15} c={active ? C.brand : C.ink4} />{t2.label}
+                </button>
+              );
+            })}
           </div>
+
+          {/* Right */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-            <SaveIndicator saved={saved} />
-            <ExportImportBar ingredients={ingredients} menus={menus} categories={categories} onImport={handleImport} />
-            <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>{ingredients.length} วัตถุดิบ · {menus.length} เมนู</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: saved ? C.green : C.brand, transition: "color .3s" }}>
+              <Ic d={I.save} s={12} c={saved ? C.green : C.brand} />{saved ? "บันทึกแล้ว" : "กำลังบันทึก..."}
+            </div>
+            <EI ings={ings} menus={menus} cats={cats} onImport={d => { setIngs(d.ingredients); setMenus(d.menus); addH("นำเข้าข้อมูล"); }} />
+            <div style={{ height: 28, width: 1, background: C.line }} />
+            <span style={{ fontSize: 11, color: C.ink4, whiteSpace: "nowrap" }}>{ings.length} วัตถุดิบ · {menus.length} เมนู</span>
           </div>
         </nav>
-        <div style={{ padding: "24px 28px 0" }}>
-          <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0f172a", marginBottom: 2 }}>{tabs.find(t => t.id === activeTab)?.label}</h1>
-          <p style={{ fontSize: 13, color: "#64748b", marginBottom: 20 }}>{descriptions[activeTab]}</p>
-        </div>
-        <div style={{ padding: "0 28px 48px" }}>
-          {activeTab === "ingredients" && <IngredientTab ingredients={ingredients} setIngredients={setIngredients} categories={categories} addHistory={addHistory} />}
-          {activeTab === "menus" && <MenuTab menus={menus} setMenus={setMenus} ingredients={ingredients} addHistory={addHistory} />}
-          {activeTab === "sop" && <SOPTab menus={menus} setMenus={setMenus} ingredients={ingredients} />}
-          {activeTab === "summary" && <SummaryTab menus={menus} ingredients={ingredients} />}
-          {activeTab === "history" && <HistoryTab history={history} onClear={() => setHistory([])} />}
+
+        {/* Page */}
+        <div style={{ maxWidth: 1280, margin: "0 auto", padding: "24px 28px 56px" }}>
+          <div style={{ marginBottom: 22 }}>
+            <h1 style={{ fontSize: 26, fontWeight: 900, color: C.ink, marginBottom: 4, letterSpacing: -.3 }}>{TABS.find(t2 => t2.id === tab)?.label}</h1>
+            <p style={{ fontSize: 14, color: C.ink3 }}>{DESC[tab]}</p>
+          </div>
+          {tab === "ingredients" && <IngTab ings={ings} setIngs={setIngs} cats={cats} addH={addH} />}
+          {tab === "menus" && <MenuTab menus={menus} setMenus={setMenus} ings={ings} addH={addH} />}
+          {tab === "sop" && <SOPTab menus={menus} setMenus={setMenus} ings={ings} />}
+          {tab === "summary" && <SumTab menus={menus} ings={ings} />}
+          {tab === "history" && <HisTab history={hist} onClear={() => setHist([])} />}
         </div>
       </div>
     </>
