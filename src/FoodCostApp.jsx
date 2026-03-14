@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
-// ── Design Tokens ──────────────────────────────────────
 const C = {
   brand:"#FF6B35",brandDark:"#E85520",brandLight:"#FFF4F0",brandBorder:"#FFD4C2",
   green:"#10B981",greenLight:"#ECFDF5",blue:"#3B82F6",blueLight:"#EFF6FF",
@@ -10,8 +9,7 @@ const C = {
   line:"#E2E8F0",lineLight:"#F1F5F9",bg:"#F8FAFC",white:"#FFFFFF",
 };
 
-// ── Icons ──────────────────────────────────────────────
-const Ic = ({ d, s = 18, c = "currentColor", sw = 1.75 }) => (
+const Ic = ({ d, s=18, c="currentColor", sw=1.75 }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
     {Array.isArray(d)?d.map((p,i)=><path key={i} d={p}/>):<path d={d}/>}
   </svg>
@@ -41,75 +39,72 @@ const I = {
   warning:"M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z",
   calendar:["M8 2v4","M16 2v4","M3 8h18","M5 4h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z"],
   printer:["M6 9V2h12v7","M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2","M6 14h12v8H6z"],
-  excel:"M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M8 13h2 M8 17h2 M12 13h4 M12 17h4",
-  pdf:["M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z","M14 2v6h6","M8 12h2a2 2 0 010 4H8v-4z","M16 18h-3v-6"],
-  shield:["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"],
+  sortAsc:["M3 8h8","M3 12h6","M3 16h4","M17 20V4","M13 8l4-4 4 4"],
+  sortDesc:["M3 8h8","M3 12h6","M3 16h4","M17 4v16","M13 16l4 4 4-4"],
   eye:["M1 12s4-8 11-8 11 8 11 8","M1 12s4 8 11 8 11-8 11-8","M12 9a3 3 0 100 6 3 3 0 000-6z"],
   users:["M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2","M9 11a4 4 0 100-8 4 4 0 000 8z","M23 21v-2a4 4 0 00-3-3.87","M16 3.13a4 4 0 010 7.75"],
   history:"M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z",
 };
 
-// ── LocalStorage Hook ──────────────────────────────────
-function useLS(key, init) {
-  const [v, setV] = useState(()=>{ try{const i=localStorage.getItem(key);return i?JSON.parse(i):init;}catch{return init;} });
-  const set = useCallback((val)=>{ const nv=val instanceof Function?val(v):val; setV(nv); try{localStorage.setItem(key,JSON.stringify(nv));}catch{} },[key,v]);
-  return [v, set];
+function useLS(key,init){
+  const [v,setV]=useState(()=>{try{const i=localStorage.getItem(key);return i?JSON.parse(i):init;}catch{return init;}});
+  const set=useCallback((val)=>{const nv=val instanceof Function?val(v):val;setV(nv);try{localStorage.setItem(key,JSON.stringify(nv));}catch{}},[key,v]);
+  return [v,set];
 }
 
-// ── Seed Data ──────────────────────────────────────────
-const INIT_USERS = [
-  { id: 1, username: "max", password: "max", name: "Max Admin", role: "admin", active: true },
+// ── ALL PERMISSIONS ────────────────────────────────────
+const ALL_PERMS = [
+  {id:"view_ingredients",label:"ดูวัตถุดิบ",group:"วัตถุดิบ"},
+  {id:"edit_ingredients",label:"แก้ไขวัตถุดิบ",group:"วัตถุดิบ"},
+  {id:"delete_ingredients",label:"ลบวัตถุดิบ",group:"วัตถุดิบ"},
+  {id:"view_menus",label:"ดูเมนู",group:"เมนู"},
+  {id:"edit_menus",label:"แก้ไขเมนู",group:"เมนู"},
+  {id:"delete_menus",label:"ลบเมนู",group:"เมนู"},
+  {id:"view_sop",label:"ดู SOP",group:"SOP"},
+  {id:"edit_sop",label:"แก้ไข SOP",group:"SOP"},
+  {id:"view_summary",label:"ดูสรุปต้นทุน",group:"สรุปต้นทุน"},
+  {id:"edit_summary",label:"บันทึกสรุปต้นทุน",group:"สรุปต้นทุน"},
+  {id:"view_history",label:"ดูประวัติ",group:"ประวัติ"},
+  {id:"export",label:"Export ข้อมูล",group:"ระบบ"},
+  {id:"settings",label:"ตั้งค่าระบบ",group:"ระบบ"},
 ];
-const INIT_ING_CATS = ["เนื้อสัตว์","ผักและผลไม้","เครื่องปรุง","นม/ไข่","แป้ง/ธัญพืช","อื่นๆ"];
-const INIT_MENU_CATS = ["อาหารจานเดียว","อาหารเช้า","ของหวาน","เครื่องดื่ม","อาหารทานเล่น"];
-const INIT_ING = [
+const ROLE_DEFAULT_PERMS = {
+  admin: ALL_PERMS.map(p=>p.id),
+  manager: ["view_ingredients","edit_ingredients","delete_ingredients","view_menus","edit_menus","delete_menus","view_sop","edit_sop","view_summary","edit_summary","view_history","export"],
+  staff: ["view_ingredients","edit_ingredients","view_menus","edit_menus","view_sop","edit_sop","view_summary","edit_summary","view_history"],
+  viewer: ["view_ingredients","view_menus","view_sop","view_summary","view_history"],
+};
+function hasPerm(user,perm){return user&&(user.perms||ROLE_DEFAULT_PERMS[user.role]||[]).includes(perm);}
+
+const ROLES={admin:{label:"Admin",color:"purple"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"}};
+const ppg=(price,gram)=>(gram>0?price/gram:0);
+const menuCost=(menu,ings)=>menu.ingredients.reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.pricePerGram*x.amountGram:0);},0);
+const marginColor=(m)=>m>=60?C.green:m>=40?C.yellow:C.red;
+const marginLabel=(m)=>m>=60?"ดี":m>=40?"พอใช้":"ต่ำ";
+const now=()=>new Date().toLocaleString("th-TH");
+
+const INIT_USERS=[{id:1,username:"max",password:"max",name:"Max Admin",role:"admin",active:true,perms:ALL_PERMS.map(p=>p.id)}];
+const INIT_ING_CATS=["เนื้อสัตว์","ผักและผลไม้","เครื่องปรุง","นม/ไข่","แป้ง/ธัญพืช","อื่นๆ"];
+const INIT_MENU_CATS=["อาหารจานเดียว","อาหารเช้า","ของหวาน","เครื่องดื่ม","อาหารทานเล่น"];
+const INIT_ING=[
   {id:1,name:"ไก่หน้าอก",category:"เนื้อสัตว์",buyUnit:"กก.",buyAmount:1,buyPrice:120,convertToGram:1000,pricePerGram:0.12,stock:5,image:null,note:"",editBy:"max",editAt:""},
   {id:2,name:"ไข่ไก่",category:"นม/ไข่",buyUnit:"แผง 30 ฟอง",buyAmount:1,buyPrice:120,convertToGram:1800,pricePerGram:0.067,stock:3,image:null,note:"1 ฟอง ≈ 60g",editBy:"max",editAt:""},
   {id:3,name:"น้ำมันพืช",category:"เครื่องปรุง",buyUnit:"ลิตร",buyAmount:1,buyPrice:55,convertToGram:920,pricePerGram:0.060,stock:4,image:null,note:"",editBy:"max",editAt:""},
   {id:4,name:"ซีอิ้วขาว",category:"เครื่องปรุง",buyUnit:"ขวด 700ml",buyAmount:1,buyPrice:45,convertToGram:700,pricePerGram:0.064,stock:6,image:null,note:"",editBy:"max",editAt:""},
 ];
-const INIT_MENUS = [
-  {id:1,name:"ข้าวผัดไก่",category:"อาหารจานเดียว",price:80,image:null,description:"ข้าวผัดไก่หอมๆ",ingredients:[{ingredientId:1,amountGram:150},{ingredientId:2,amountGram:60},{ingredientId:3,amountGram:20},{ingredientId:4,amountGram:15}],sop:[{step:1,title:"เตรียมวัตถุดิบ",desc:"หั่นไก่เป็นชิ้นเล็กๆ ตีไข่ใส่ชาม เตรียมข้าวสวย",image:null},{step:2,title:"ผัดไก่",desc:"ตั้งกระทะไฟแรง ใส่น้ำมัน ผัดไก่จนสุก ปรุงรส",image:null},{step:3,title:"ใส่ข้าวและเสิร์ฟ",desc:"ใส่ข้าวผัดรวมกัน ปรุงด้วยซีอิ้ว ตักเสิร์ฟ",image:null}],editBy:"max",editAt:""},
-];
+const INIT_MENUS=[{id:1,name:"ข้าวผัดไก่",category:"อาหารจานเดียว",price:80,image:null,description:"ข้าวผัดไก่หอมๆ",ingredients:[{ingredientId:1,amountGram:150},{ingredientId:2,amountGram:60},{ingredientId:3,amountGram:20},{ingredientId:4,amountGram:15}],sop:[{step:1,title:"เตรียมวัตถุดิบ",desc:"หั่นไก่เป็นชิ้นเล็กๆ ตีไข่ใส่ชาม เตรียมข้าวสวย",image:null},{step:2,title:"ผัดไก่",desc:"ตั้งกระทะไฟแรง ใส่น้ำมัน ผัดไก่จนสุก ปรุงรส",image:null}],editBy:"max",editAt:""}];
 
-// ── Permissions ────────────────────────────────────────
-const ROLES = {
-  admin:   { label:"Admin", color:"purple", perms:["view","edit","delete","settings","export","summary_edit"] },
-  manager: { label:"Manager", color:"blue", perms:["view","edit","delete","export","summary_edit"] },
-  staff:   { label:"Staff", color:"green", perms:["view","edit","summary_edit"] },
-  viewer:  { label:"Viewer", color:"gray", perms:["view"] },
-};
-function can(user, perm) { return user && (ROLES[user.role]?.perms || []).includes(perm); }
-
-// ── Helpers ────────────────────────────────────────────
-const ppg = (price,gram)=>(gram>0?price/gram:0);
-const menuCost = (menu,ings)=>menu.ingredients.reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.pricePerGram*x.amountGram:0);},0);
-const marginColor = (m)=>m>=60?C.green:m>=40?C.yellow:C.red;
-const marginLabel = (m)=>m>=60?"ดี":m>=40?"พอใช้":"ต่ำ";
-const now = ()=>new Date().toLocaleString("th-TH");
-const dateStr = (d)=>new Date(d).toLocaleDateString("th-TH",{year:"numeric",month:"short",day:"numeric"});
-
-// ── Base UI ────────────────────────────────────────────
-const iS = {width:"100%",padding:"11px 14px",border:`1.5px solid ${C.line}`,borderRadius:10,fontSize:15,fontFamily:"'Sarabun',sans-serif",outline:"none",boxSizing:"border-box",color:C.ink,background:C.white,transition:"border .15s"};
-function Field({label,hint,children,style}){ return <div style={{marginBottom:16,...style}}>{(label||hint)&&<div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>{label&&<label style={{fontSize:13,fontWeight:600,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{label}</label>}{hint&&<span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{hint}</span>}</div>}{children}</div>; }
-function Inp({label,hint,style:s,...p}){ return <Field label={label} hint={hint}><input style={{...iS,...s}} {...p}/></Field>; }
-function TA({label,hint,rows=4,...p}){ return <Field label={label} hint={hint}><textarea rows={rows} style={{...iS,resize:"vertical",lineHeight:1.8}} {...p}/></Field>; }
-function Sel({label,options,...p}){ return <Field label={label}><select style={{...iS,appearance:"none",cursor:"pointer"}} {...p}>{options.map(o=><option key={o.v??o} value={o.v??o}>{o.l??o}</option>)}</select></Field>; }
+const iS={width:"100%",padding:"11px 14px",border:`1.5px solid ${C.line}`,borderRadius:10,fontSize:15,fontFamily:"'Sarabun',sans-serif",outline:"none",boxSizing:"border-box",color:C.ink,background:C.white,transition:"border .15s"};
+function Field({label,hint,children,style}){return <div style={{marginBottom:16,...style}}>{(label||hint)&&<div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>{label&&<label style={{fontSize:13,fontWeight:600,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{label}</label>}{hint&&<span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{hint}</span>}</div>}{children}</div>;}
+function Inp({label,hint,style:s,...p}){return <Field label={label} hint={hint}><input style={{...iS,...s}} {...p}/></Field>;}
+function TA({label,hint,rows=4,...p}){return <Field label={label} hint={hint}><textarea rows={rows} style={{...iS,resize:"vertical",lineHeight:1.8}} {...p}/></Field>;}
+function Sel({label,options,...p}){return <Field label={label}><select style={{...iS,appearance:"none",cursor:"pointer"}} {...p}>{options.map(o=><option key={o.v??o} value={o.v??o}>{o.l??o}</option>)}</select></Field>;}
 function Btn({children,v="primary",onClick,icon,disabled,full,s}){
   const st={primary:{bg:`linear-gradient(135deg,${C.brand},${C.brandDark})`,c:C.white,sh:`0 4px 16px ${C.brand}44`},success:{bg:`linear-gradient(135deg,${C.green},#059669)`,c:C.white,sh:`0 4px 16px ${C.green}44`},ghost:{bg:C.white,c:C.ink2,sh:`0 0 0 1.5px ${C.line}`},danger:{bg:C.redLight,c:C.red,sh:"none"},info:{bg:`linear-gradient(135deg,${C.blue},#2563EB)`,c:C.white,sh:`0 4px 16px ${C.blue}44`},purple:{bg:`linear-gradient(135deg,${C.purple},#7C3AED)`,c:C.white,sh:`0 4px 16px ${C.purple}44`}}[v]||{bg:C.lineLight,c:C.ink2,sh:"none"};
-  return <button onClick={disabled?undefined:onClick} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",gap:7,padding:"10px 20px",borderRadius:10,fontSize:14,fontWeight:700,cursor:disabled?"not-allowed":"pointer",border:"none",fontFamily:"'Sarabun',sans-serif",transition:"all .15s",opacity:disabled?.5:1,background:st.bg,color:st.c,boxShadow:st.sh,width:full?"100%":undefined,whiteSpace:"nowrap",...s}} onMouseEnter={e=>{if(!disabled){e.currentTarget.style.opacity=".85";e.currentTarget.style.transform="translateY(-1px)";}}} onMouseLeave={e=>{e.currentTarget.style.opacity="1";e.currentTarget.style.transform="";}}>
-    {icon&&<Ic d={icon} s={15} c={st.c}/>}{children}
-  </button>;
+  return <button onClick={disabled?undefined:onClick} style={{display:"inline-flex",alignItems:"center",justifyContent:"center",gap:7,padding:"10px 20px",borderRadius:10,fontSize:14,fontWeight:700,cursor:disabled?"not-allowed":"pointer",border:"none",fontFamily:"'Sarabun',sans-serif",transition:"all .15s",opacity:disabled?.5:1,background:st.bg,color:st.c,boxShadow:st.sh,width:full?"100%":undefined,whiteSpace:"nowrap",...s}} onMouseEnter={e=>{if(!disabled){e.currentTarget.style.opacity=".85";e.currentTarget.style.transform="translateY(-1px)";}}} onMouseLeave={e=>{e.currentTarget.style.opacity="1";e.currentTarget.style.transform="";}}>{icon&&<Ic d={icon} s={15} c={st.c}/>}{children}</button>;
 }
-function Chip({children,color="orange"}){
-  const m={orange:[C.brandLight,C.brand],blue:[C.blueLight,C.blue],green:[C.greenLight,C.green],red:[C.redLight,C.red],yellow:[C.yellowLight,C.yellow],gray:[C.lineLight,C.ink3],purple:[C.purpleLight,C.purple]};
-  const [bg,tc]=m[color]||m.gray;
-  return <span style={{display:"inline-flex",alignItems:"center",padding:"2px 10px",background:bg,color:tc,borderRadius:20,fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{children}</span>;
-}
-function Card({children,style,onClick,hover}){
-  const [hov,setHov]=useState(false);
-  return <div style={{background:C.white,borderRadius:16,border:`1px solid ${hov&&hover?C.brandBorder:C.line}`,boxShadow:hov&&hover?"0 8px 32px rgba(255,107,53,.12)":"0 2px 8px rgba(15,23,42,.06)",transition:"all .2s",cursor:onClick?"pointer":undefined,...style}} onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}>{children}</div>;
-}
+function Chip({children,color="orange"}){const m={orange:[C.brandLight,C.brand],blue:[C.blueLight,C.blue],green:[C.greenLight,C.green],red:[C.redLight,C.red],yellow:[C.yellowLight,C.yellow],gray:[C.lineLight,C.ink3],purple:[C.purpleLight,C.purple]};const[bg,tc]=m[color]||m.gray;return <span style={{display:"inline-flex",alignItems:"center",padding:"2px 10px",background:bg,color:tc,borderRadius:20,fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{children}</span>;}
+function Card({children,style,onClick,hover}){const[hov,setHov]=useState(false);return <div style={{background:C.white,borderRadius:16,border:`1px solid ${hov&&hover?C.brandBorder:C.line}`,boxShadow:hov&&hover?"0 8px 32px rgba(255,107,53,.12)":"0 2px 8px rgba(15,23,42,.06)",transition:"all .2s",cursor:onClick?"pointer":undefined,...style}} onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}>{children}</div>;}
 function Modal({title,onClose,children,wide,extraWide}){
   useEffect(()=>{const h=e=>e.key==="Escape"&&onClose();document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[]);
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={e=>e.target===e.currentTarget&&onClose()}>
@@ -122,49 +117,43 @@ function Modal({title,onClose,children,wide,extraWide}){
     </div>
   </div>;
 }
-function EditedBy({username,editAt}){
-  if(!username)return null;
-  return <span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.user} s={9} c={C.ink4}/>แก้โดย {username}{editAt?` · ${editAt}`:""}</span>;
-}
+function EditedBy({username,editAt}){if(!username)return null;return <span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.user} s={9} c={C.ink4}/>แก้โดย {username}{editAt?` · ${editAt}`:""}</span>;}
 function ImgUp({value,onChange,label,compact}){
   const ref=useRef();
   const h=e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>3*1024*1024){alert("รูปต้องไม่เกิน 3MB");return;}const r=new FileReader();r.onload=ev=>onChange(ev.target.result);r.readAsDataURL(f);e.target.value="";};
-  return <div style={{marginBottom:compact?0:16}}>
-    {label&&!compact&&<div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>{label}</div>}
+  return <div style={{marginBottom:compact?0:16}}>{label&&!compact&&<div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>{label}</div>}
     <div style={{display:"flex",alignItems:"center",gap:12}}>
-      {value?(<div style={{position:"relative"}}><img src={value} alt="" style={{width:compact?44:96,height:compact?44:96,objectFit:"cover",borderRadius:compact?8:14,border:`2px solid ${C.line}`}}/><button onClick={()=>onChange(null)} style={{position:"absolute",top:-7,right:-7,width:20,height:20,borderRadius:"50%",background:C.red,border:`2px solid ${C.white}`,color:C.white,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>✕</button></div>)
-      :(<div onClick={()=>ref.current?.click()} style={{width:compact?44:96,height:compact?44:96,border:`2px dashed ${C.line}`,borderRadius:compact?8:14,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",background:C.bg,gap:4,transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.bg;}}><Ic d={I.img} s={compact?16:24} c={C.ink4}/>{!compact&&<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>อัปโหลด</span>}</div>)}
+      {value?<div style={{position:"relative"}}><img src={value} alt="" style={{width:compact?44:96,height:compact?44:96,objectFit:"cover",borderRadius:compact?8:14,border:`2px solid ${C.line}`}}/><button onClick={()=>onChange(null)} style={{position:"absolute",top:-7,right:-7,width:20,height:20,borderRadius:"50%",background:C.red,border:`2px solid ${C.white}`,color:C.white,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>✕</button></div>
+      :<div onClick={()=>ref.current?.click()} style={{width:compact?44:96,height:compact?44:96,border:`2px dashed ${C.line}`,borderRadius:compact?8:14,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",background:C.bg,gap:4,transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.bg;}}><Ic d={I.img} s={compact?16:24} c={C.ink4}/>{!compact&&<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>อัปโหลด</span>}</div>}
       {!compact&&!value&&<div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>JPG, PNG<br/>ไม่เกิน 3MB</div>}
       <input ref={ref} type="file" accept="image/*" onChange={h} style={{display:"none"}}/>
     </div>
   </div>;
 }
 
+// ── Sortable TH ────────────────────────────────────────
+function STh({label,col,sortCol,sortDir,onSort}){
+  const active=sortCol===col;
+  return <th onClick={()=>onSort(col)} style={{padding:"10px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:active?C.brand:C.ink3,cursor:"pointer",whiteSpace:"nowrap",userSelect:"none",background:active?C.brandLight:C.bg}}>
+    <div style={{display:"flex",alignItems:"center",gap:4}}>{label}<Ic d={active?(sortDir==="asc"?I.sortAsc:I.sortDesc):I.sortAsc} s={12} c={active?C.brand:C.ink4}/></div>
+  </th>;
+}
+
 // ══════════════════════════════════════════════════════
-// ── LOGIN PAGE ────────────────────────────────────────
+// ── LOGIN ─────────────────────────────────────────────
 // ══════════════════════════════════════════════════════
 function LoginPage({users,onLogin}){
   const [u,setU]=useState(""); const [p,setP]=useState(""); const [err,setErr]=useState(""); const [show,setShow]=useState(false);
-  function login(){
-    const found=users.find(x=>x.username===u&&x.password===p&&x.active);
-    if(found){onLogin(found);setErr("");}
-    else setErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
-  }
-  return <div style={{minHeight:"100vh",background:`linear-gradient(135deg,${C.brandLight} 0%,#FEF3C7 50%,${C.blueLight} 100%)`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Sarabun',sans-serif"}}>
+  function login(){const found=users.find(x=>x.username===u&&x.password===p&&x.active);if(found){onLogin(found);setErr("");}else setErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");}
+  return <div style={{minHeight:"100vh",background:`linear-gradient(135deg,${C.brandLight} 0%,#FEF3C7 50%,${C.blueLight} 100%)`,display:"flex",alignItems:"center",justifyContent:"center"}}>
     <div style={{background:C.white,borderRadius:24,padding:"44px 40px",width:"100%",maxWidth:420,boxShadow:"0 32px 80px rgba(15,23,42,.15)",animation:"mIn .4s cubic-bezier(.34,1.56,.64,1)"}}>
       <div style={{textAlign:"center",marginBottom:36}}>
-        <div style={{width:60,height:60,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px",boxShadow:`0 8px 24px ${C.brand}44`}}><Ic d={I.fire} s={28} c={C.white} sw={2}/></div>
-        <h1 style={{fontSize:26,fontWeight:900,color:C.ink,marginBottom:4}}>FoodCost</h1>
-        <p style={{fontSize:14,color:C.ink3}}>ระบบจัดการต้นทุนอาหาร</p>
+        <div style={{width:64,height:64,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px",boxShadow:`0 8px 24px ${C.brand}44`}}><Ic d={I.fire} s={30} c={C.white} sw={2}/></div>
+        <h1 style={{fontSize:22,fontWeight:900,color:C.ink,marginBottom:2,fontFamily:"'Sarabun',sans-serif"}}>NAIWANSOOK FOODCOST</h1>
+        <p style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",letterSpacing:1.5}}>BY BOSSMAX</p>
       </div>
-      <div style={{marginBottom:16}}>
-        <label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6}}>ชื่อผู้ใช้</label>
-        <div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.user} s={16} c={C.ink4}/></span><input value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} placeholder="username" style={{...iS,paddingLeft:40}} autoFocus/></div>
-      </div>
-      <div style={{marginBottom:20}}>
-        <label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6}}>รหัสผ่าน</label>
-        <div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.lock} s={16} c={C.ink4}/></span><input value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} type={show?"text":"password"} placeholder="password" style={{...iS,paddingLeft:40,paddingRight:44}}/><button onClick={()=>setShow(!show)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:C.ink4}}><Ic d={I.eye} s={16} c={C.ink4}/></button></div>
-      </div>
+      <div style={{marginBottom:16}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ชื่อผู้ใช้</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.user} s={16} c={C.ink4}/></span><input value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} placeholder="username" style={{...iS,paddingLeft:40}} autoFocus/></div></div>
+      <div style={{marginBottom:20}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>รหัสผ่าน</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.lock} s={16} c={C.ink4}/></span><input value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} type={show?"text":"password"} placeholder="password" style={{...iS,paddingLeft:40,paddingRight:44}}/><button onClick={()=>setShow(!show)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer"}}><Ic d={I.eye} s={16} c={C.ink4}/></button></div></div>
       {err&&<div style={{background:C.redLight,color:C.red,borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:600,marginBottom:16,display:"flex",alignItems:"center",gap:6}}><Ic d={I.warning} s={14} c={C.red}/>{err}</div>}
       <Btn onClick={login} full>เข้าสู่ระบบ</Btn>
     </div>
@@ -172,107 +161,109 @@ function LoginPage({users,onLogin}){
 }
 
 // ══════════════════════════════════════════════════════
-// ── SETTINGS TAB ──────────────────────────────────────
+// ── SETTINGS ──────────────────────────────────────────
 // ══════════════════════════════════════════════════════
 function SettingsTab({ingCats,setIngCats,menuCats,setMenuCats,users,setUsers,currentUser}){
   const [section,setSection]=useState("cats");
   const [newIC,setNewIC]=useState(""); const [newMC,setNewMC]=useState("");
-  const [showAddUser,setShowAddUser]=useState(false);
-  const [editUser,setEditUser]=useState(null);
-  const uForm0={username:"",password:"",name:"",role:"staff",active:true};
-  const [uForm,setUForm]=useState(uForm0);
-  const isAdmin=can(currentUser,"settings");
+  const [showUser,setShowUser]=useState(false); const [editUID,setEditUID]=useState(null);
+  const uF0={username:"",password:"",name:"",role:"staff",active:true,perms:ROLE_DEFAULT_PERMS.staff};
+  const [uF,setUF]=useState(uF0);
+  const isAdmin=hasPerm(currentUser,"settings");
+  const permGroups=useMemo(()=>{const g={};ALL_PERMS.forEach(p=>{(g[p.group]||(g[p.group]=[])).push(p);});return g;},[]);
 
-  function addIC(){ if(!newIC.trim())return; setIngCats(p=>[...p,newIC.trim()]); setNewIC(""); }
-  function delIC(c){ if(!window.confirm(`ลบหมวด "${c}"?`))return; setIngCats(p=>p.filter(x=>x!==c)); }
-  function addMC(){ if(!newMC.trim())return; setMenuCats(p=>[...p,newMC.trim()]); setNewMC(""); }
-  function delMC(c){ if(!window.confirm(`ลบหมวด "${c}"?`))return; setMenuCats(p=>p.filter(x=>x!==c)); }
   function saveUser(){
-    if(!uForm.username||!uForm.password)return;
-    if(editUser){setUsers(p=>p.map(u=>u.id===editUser?{...u,...uForm}:u));}
-    else{if(users.find(u=>u.username===uForm.username)){alert("ชื่อผู้ใช้นี้มีอยู่แล้ว");return;}setUsers(p=>[...p,{...uForm,id:Date.now()}]);}
-    setShowAddUser(false); setEditUser(null); setUForm(uForm0);
+    if(!uF.username||!uF.password)return;
+    if(editUID){setUsers(p=>p.map(u=>u.id===editUID?{...u,...uF}:u));}
+    else{if(users.find(u=>u.username===uF.username)){alert("ชื่อผู้ใช้นี้มีอยู่แล้ว");return;}setUsers(p=>[...p,{...uF,id:Date.now()}]);}
+    setShowUser(false);setEditUID(null);setUF(uF0);
   }
-  function delUser(id){ if(!window.confirm("ลบผู้ใช้นี้?"))return; setUsers(p=>p.filter(u=>u.id!==id)); }
+  function togglePerm(pid){setUF(f=>{const p=f.perms||[];return{...f,perms:p.includes(pid)?p.filter(x=>x!==pid):[...p,pid]};});}
+  function setRolePreset(role){setUF(f=>({...f,role,perms:ROLE_DEFAULT_PERMS[role]||[]}));}
 
   const sections=[{id:"cats",label:"หมวดหมู่",icon:I.tag},{id:"users",label:"จัดการผู้ใช้",icon:I.users}];
-
   return <div style={{display:"grid",gridTemplateColumns:"200px 1fr",gap:16,minHeight:480}}>
-    {/* Sidebar */}
     <Card style={{padding:8,height:"fit-content"}}>
-      {sections.map(s=><div key={s.id} onClick={()=>setSection(s.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",borderRadius:10,cursor:"pointer",marginBottom:4,background:section===s.id?C.brandLight:"transparent",color:section===s.id?C.brand:C.ink2,fontWeight:section===s.id?700:500,fontFamily:"'Sarabun',sans-serif",fontSize:14,transition:"all .15s"}}>
-        <Ic d={s.icon} s={16} c={section===s.id?C.brand:C.ink3}/>{s.label}
-      </div>)}
+      {sections.map(s=><div key={s.id} onClick={()=>setSection(s.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",borderRadius:10,cursor:"pointer",marginBottom:4,background:section===s.id?C.brandLight:"transparent",color:section===s.id?C.brand:C.ink2,fontWeight:section===s.id?700:500,fontFamily:"'Sarabun',sans-serif",fontSize:14,transition:"all .15s"}}><Ic d={s.icon} s={16} c={section===s.id?C.brand:C.ink3}/>{s.label}</div>)}
     </Card>
-
     <div>
     {section==="cats"&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-      {/* Ingredient Categories */}
-      <Card style={{padding:"20px 22px"}}>
-        <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:800,color:C.ink,marginBottom:16,display:"flex",alignItems:"center",gap:8}}><Ic d={I.leaf} s={16} c={C.brand}/>หมวดหมู่วัตถุดิบ</h3>
-        {ingCats.map(c=><div key={c} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",borderRadius:9,marginBottom:6,background:C.bg,border:`1px solid ${C.line}`}}>
-          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,color:C.ink2}}>{c}</span>
-          {isAdmin&&<button onClick={()=>delIC(c)} style={{background:C.redLight,border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",color:C.red,display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
-        </div>)}
-        {isAdmin&&<div style={{display:"flex",gap:8,marginTop:10}}><input value={newIC} onChange={e=>setNewIC(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addIC()} placeholder="หมวดหมู่ใหม่..." style={{...iS,flex:1,padding:"8px 12px",fontSize:13}}/><Btn onClick={addIC} icon={I.plus} s={{padding:"8px 12px"}}>เพิ่ม</Btn></div>}
-      </Card>
-      {/* Menu Categories */}
-      <Card style={{padding:"20px 22px"}}>
-        <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:800,color:C.ink,marginBottom:16,display:"flex",alignItems:"center",gap:8}}><Ic d={I.fire} s={16} c={C.brand}/>หมวดหมู่เมนู</h3>
-        {menuCats.map(c=><div key={c} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",borderRadius:9,marginBottom:6,background:C.bg,border:`1px solid ${C.line}`}}>
-          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,color:C.ink2}}>{c}</span>
-          {isAdmin&&<button onClick={()=>delMC(c)} style={{background:C.redLight,border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",color:C.red,display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
-        </div>)}
-        {isAdmin&&<div style={{display:"flex",gap:8,marginTop:10}}><input value={newMC} onChange={e=>setNewMC(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addMC()} placeholder="หมวดหมู่ใหม่..." style={{...iS,flex:1,padding:"8px 12px",fontSize:13}}/><Btn onClick={addMC} icon={I.plus} s={{padding:"8px 12px"}}>เพิ่ม</Btn></div>}
-      </Card>
+      {[{title:"หมวดหมู่วัตถุดิบ",icon:I.leaf,cats:ingCats,set:setIngCats,newV:newIC,setNew:setNewIC},{title:"หมวดหมู่เมนู",icon:I.fire,cats:menuCats,set:setMenuCats,newV:newMC,setNew:setNewMC}].map(({title,icon,cats,set,newV,setNew})=>(
+        <Card key={title} style={{padding:"20px 22px"}}>
+          <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:800,color:C.ink,marginBottom:16,display:"flex",alignItems:"center",gap:8}}><Ic d={icon} s={16} c={C.brand}/>{title}</h3>
+          {cats.map(c=><div key={c} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 12px",borderRadius:9,marginBottom:6,background:C.bg,border:`1px solid ${C.line}`}}>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,color:C.ink2}}>{c}</span>
+            {isAdmin&&<button onClick={()=>{if(!confirm(`ลบหมวด "${c}"?`))return;set(p=>p.filter(x=>x!==c));}} style={{background:C.redLight,border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+          </div>)}
+          {isAdmin&&<div style={{display:"flex",gap:8,marginTop:10}}><input value={newV} onChange={e=>setNew(e.target.value)} onKeyDown={e=>e.key==="Enter"&&(()=>{if(!newV.trim())return;set(p=>[...p,newV.trim()]);setNew("");})() } placeholder="หมวดใหม่..." style={{...iS,flex:1,padding:"8px 12px",fontSize:13}}/><Btn onClick={()=>{if(!newV.trim())return;set(p=>[...p,newV.trim()]);setNew("");}} icon={I.plus} s={{padding:"8px 12px"}}>เพิ่ม</Btn></div>}
+        </Card>
+      ))}
     </div>}
 
     {section==="users"&&<div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-        <div>
-          <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:800,color:C.ink}}>ผู้ใช้งานทั้งหมด</h3>
-          <p style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>กำหนดสิทธิ์การใช้งานแต่ละคน</p>
-        </div>
-        {isAdmin&&<Btn onClick={()=>{setUForm(uForm0);setEditUser(null);setShowAddUser(true);}} icon={I.plus}>เพิ่มผู้ใช้</Btn>}
-      </div>
-      {/* Role legend */}
-      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
-        {Object.entries(ROLES).map(([k,r])=><div key={k} style={{background:C.bg,borderRadius:8,padding:"6px 12px",border:`1px solid ${C.line}`,fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>
-          <Chip color={r.color}>{r.label}</Chip>
-          <span style={{color:C.ink3,marginLeft:8}}>{r.perms.includes("settings")?"ทุกสิทธิ์":r.perms.includes("delete")?"แก้ไข+ลบ":r.perms.includes("edit")?"ดู+แก้ไข":"ดูได้อย่างเดียว"}</span>
-        </div>)}
+        <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:800,color:C.ink}}>ผู้ใช้งานและสิทธิ์</h3>
+        {isAdmin&&<Btn onClick={()=>{setUF(uF0);setEditUID(null);setShowUser(true);}} icon={I.plus}>เพิ่มผู้ใช้</Btn>}
       </div>
       <Card>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
-          <thead><tr style={{background:C.bg}}>{["ชื่อผู้ใช้","ชื่อ-นามสกุล","สิทธิ์","สถานะ",""].map(h=><th key={h} style={{padding:"10px 16px",textAlign:"left",fontSize:12,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
-          <tbody>{users.map(u=><tr key={u.id} style={{borderTop:`1px solid ${C.lineLight}`}}>
+          <thead><tr style={{background:C.bg}}>{["ผู้ใช้","ชื่อ","บทบาท","สิทธิ์ที่มี","สถานะ",""].map(h=><th key={h} style={{padding:"10px 16px",textAlign:"left",fontSize:12,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+          <tbody>{users.map(u=>{const perms=u.perms||ROLE_DEFAULT_PERMS[u.role]||[];return <tr key={u.id} style={{borderTop:`1px solid ${C.lineLight}`}}>
             <td style={{padding:"12px 16px"}}><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.user} s={15} c={C.white}/></div><span style={{fontWeight:700,color:C.ink}}>{u.username}</span></div></td>
             <td style={{padding:"12px 16px",color:C.ink2,fontSize:14}}>{u.name}</td>
             <td style={{padding:"12px 16px"}}><Chip color={ROLES[u.role]?.color||"gray"}>{ROLES[u.role]?.label||u.role}</Chip></td>
+            <td style={{padding:"12px 16px"}}><span style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{perms.length} สิทธิ์</span></td>
             <td style={{padding:"12px 16px"}}><Chip color={u.active?"green":"gray"}>{u.active?"ใช้งาน":"ปิดใช้"}</Chip></td>
-            <td style={{padding:"12px 16px"}}>
-              {isAdmin&&<div style={{display:"flex",gap:6}}>
-                <button onClick={()=>{setUForm({...u});setEditUser(u.id);setShowAddUser(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
-                {u.id!==currentUser.id&&<button onClick={()=>delUser(u.id)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
-              </div>}
-            </td>
-          </tr>)}</tbody>
+            <td style={{padding:"12px 16px"}}>{isAdmin&&<div style={{display:"flex",gap:6}}>
+              <button onClick={()=>{setUF({...u,perms:u.perms||ROLE_DEFAULT_PERMS[u.role]||[]});setEditUID(u.id);setShowUser(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+              {u.id!==currentUser.id&&<button onClick={()=>{if(!confirm("ลบผู้ใช้นี้?"))return;setUsers(p=>p.filter(x=>x.id!==u.id));}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+            </div>}</td>
+          </tr>;})}
+          </tbody>
         </table>
       </Card>
     </div>}
     </div>
 
-    {showAddUser&&<Modal title={editUser?"แก้ไขผู้ใช้":"เพิ่มผู้ใช้ใหม่"} onClose={()=>setShowAddUser(false)}>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-        <Inp label="ชื่อผู้ใช้ (username)" value={uForm.username} onChange={e=>setUForm(f=>({...f,username:e.target.value}))} placeholder="username"/>
-        <Inp label="รหัสผ่าน" type="password" value={uForm.password} onChange={e=>setUForm(f=>({...f,password:e.target.value}))} placeholder="password"/>
+    {showUser&&<Modal title={editUID?"✏️ แก้ไขผู้ใช้":"➕ เพิ่มผู้ใช้ใหม่"} onClose={()=>setShowUser(false)} extraWide>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+        <div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Inp label="ชื่อผู้ใช้" value={uF.username} onChange={e=>setUF(f=>({...f,username:e.target.value}))} placeholder="username"/>
+            <Inp label="รหัสผ่าน" type="password" value={uF.password} onChange={e=>setUF(f=>({...f,password:e.target.value}))} placeholder="password"/>
+          </div>
+          <Inp label="ชื่อ-นามสกุล" value={uF.name} onChange={e=>setUF(f=>({...f,name:e.target.value}))} placeholder="ชื่อจริง"/>
+          <div style={{marginBottom:14}}>
+            <label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>บทบาท (Preset สิทธิ์)</label>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {Object.entries(ROLES).map(([k,r])=><button key={k} onClick={()=>setRolePreset(k)} style={{padding:"6px 14px",borderRadius:8,border:`2px solid ${uF.role===k?C.brand:C.line}`,background:uF.role===k?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:uF.role===k?C.brand:C.ink3,transition:"all .15s"}}>{r.label}</button>)}
+            </div>
+          </div>
+          <div style={{marginBottom:14}}>
+            <label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สถานะ</label>
+            <div style={{display:"flex",gap:8}}>
+              {[{v:true,l:"ใช้งาน"},{v:false,l:"ปิดใช้"}].map(o=><button key={String(o.v)} onClick={()=>setUF(f=>({...f,active:o.v}))} style={{padding:"7px 16px",borderRadius:8,border:`2px solid ${uF.active===o.v?C.brand:C.line}`,background:uF.active===o.v?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:uF.active===o.v?C.brand:C.ink3}}>{o.l}</button>)}
+            </div>
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>สิทธิ์การใช้งาน ({(uF.perms||[]).length}/{ALL_PERMS.length})</div>
+          <div style={{maxHeight:380,overflowY:"auto",background:C.bg,borderRadius:12,padding:"12px",border:`1px solid ${C.line}`}}>
+            {Object.entries(permGroups).map(([group,perms])=>(
+              <div key={group} style={{marginBottom:14}}>
+                <div style={{fontSize:11,fontWeight:800,color:C.ink3,textTransform:"uppercase",letterSpacing:1,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>{group}</div>
+                {perms.map(p=>{const has=(uF.perms||[]).includes(p.id);return <label key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:8,cursor:"pointer",background:has?C.brandLight:C.white,marginBottom:4,border:`1px solid ${has?C.brandBorder:C.line}`,transition:"all .15s"}}>
+                  <input type="checkbox" checked={has} onChange={()=>togglePerm(p.id)} style={{accentColor:C.brand,width:15,height:15}}/>
+                  <span style={{fontSize:13,fontFamily:"'Sarabun',sans-serif",fontWeight:has?700:400,color:has?C.brand:C.ink2}}>{p.label}</span>
+                </label>;})}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
-      <Inp label="ชื่อ-นามสกุล" value={uForm.name} onChange={e=>setUForm(f=>({...f,name:e.target.value}))} placeholder="ชื่อจริง"/>
-      <Sel label="สิทธิ์การใช้งาน" value={uForm.role} onChange={e=>setUForm(f=>({...f,role:e.target.value}))} options={Object.entries(ROLES).map(([k,r])=>({v:k,l:`${r.label} — ${r.perms.includes("settings")?"ทุกสิทธิ์":r.perms.includes("delete")?"แก้ไข+ลบ":r.perms.includes("edit")?"ดู+แก้ไข":"ดูได้อย่างเดียว"}`}))}/>
-      <Sel label="สถานะ" value={uForm.active?"true":"false"} onChange={e=>setUForm(f=>({...f,active:e.target.value==="true"}))} options={[{v:"true",l:"ใช้งาน"},{v:"false",l:"ปิดใช้งาน"}]}/>
-      <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:8,borderTop:`1px solid ${C.line}`}}>
-        <Btn v="ghost" onClick={()=>setShowAddUser(false)}>ยกเลิก</Btn>
-        <Btn onClick={saveUser} icon={I.check} disabled={!uForm.username||!uForm.password}>{editUser?"บันทึก":"เพิ่มผู้ใช้"}</Btn>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:16,borderTop:`1px solid ${C.line}`,marginTop:8}}>
+        <Btn v="ghost" onClick={()=>setShowUser(false)}>ยกเลิก</Btn>
+        <Btn onClick={saveUser} icon={I.check} disabled={!uF.username||!uF.password}>{editUID?"บันทึก":"เพิ่มผู้ใช้"}</Btn>
       </div>
     </Modal>}
   </div>;
@@ -287,23 +278,17 @@ function IngTab({ings,setIngs,cats,currentUser,addH}){
   const [pg,setPg]=useState(1); const PG=18;
   const ef={name:"",category:cats[0]||"",buyUnit:"กก.",buyAmount:1,buyPrice:"",convertToGram:1000,pricePerGram:0,stock:"",image:null,note:""};
   const [form,setForm]=useState(ef);
-  const canEdit=can(currentUser,"edit"); const canDel=can(currentUser,"delete");
+  const canE=hasPerm(currentUser,"edit_ingredients"); const canD=hasPerm(currentUser,"delete_ingredients");
   const filtered=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(q.toLowerCase())&&(cat==="ทุกหมวด"||i.category===cat)),[ings,q,cat]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buyPrice"||k==="convertToGram")n.pricePerGram=ppg(+(k==="buyPrice"?val:n.buyPrice)||0,+(k==="convertToGram"?val:n.convertToGram)||1);return n;});}
-  function save(){
-    if(!form.name||!form.buyPrice)return;
-    const item={...form,buyPrice:+form.buyPrice,buyAmount:+form.buyAmount,convertToGram:+form.convertToGram,pricePerGram:ppg(+form.buyPrice,+form.convertToGram),stock:+form.stock,editBy:currentUser.username,editAt:now()};
-    if(editId){setIngs(p=>p.map(i=>i.id===editId?{...i,...item}:i));addH(`แก้ไขวัตถุดิบ: ${form.name}`);}
-    else{setIngs(p=>[...p,{...item,id:Date.now()}]);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}
-    setOpen(false);
-  }
-  function del(id,name){if(!window.confirm(`ลบ "${name}"?`))return;setIngs(p=>p.filter(i=>i.id!==id));addH(`ลบวัตถุดิบ: ${name}`);}
+  function save(){if(!form.name||!form.buyPrice)return;const item={...form,buyPrice:+form.buyPrice,buyAmount:+form.buyAmount,convertToGram:+form.convertToGram,pricePerGram:ppg(+form.buyPrice,+form.convertToGram),stock:+form.stock,editBy:currentUser.username,editAt:now()};if(editId){setIngs(p=>p.map(i=>i.id===editId?{...i,...item}:i));addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{setIngs(p=>[...p,{...item,id:Date.now()}]);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}setOpen(false);}
+  function del(id,name){if(!confirm(`ลบ "${name}"?`))return;setIngs(p=>p.filter(i=>i.id!==id));addH(`ลบวัตถุดิบ: ${name}`);}
   return <div>
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
       <select value={cat} onChange={e=>{setCat(e.target.value);setPg(1);}} style={{...iS,width:"auto",minWidth:140,appearance:"none"}}><option>ทุกหมวด</option>{cats.map(c=><option key={c}>{c}</option>)}</select>
-      {canEdit&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
+      {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
     </div>
     <div style={{fontSize:12,color:C.ink4,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>แสดง {paged.length} จาก {filtered.length} รายการ</div>
     {paged.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.warning} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่พบวัตถุดิบ</p></div>:<>
@@ -315,8 +300,8 @@ function IngTab({ings,setIngs,cats,currentUser,addH}){
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
                 <div><div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>{item.name}</div><Chip color="orange">{item.category}</Chip></div>
                 <div style={{display:"flex",gap:4}}>
-                  {canEdit&&<button onClick={()=>{setForm({...item});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
-                  {canDel&&<button onClick={()=>del(item.id,item.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+                  {canE&&<button onClick={()=>{setForm({...item});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
+                  {canD&&<button onClick={()=>del(item.id,item.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
                 </div>
               </div>
             </div>
@@ -363,55 +348,46 @@ function IngTab({ings,setIngs,cats,currentUser,addH}){
 }
 
 // ══════════════════════════════════════════════════════
-// ── MENU TAB ──────────────────────────════════════════
+// ── MENU TAB ──────────────────────────────────────────
 // ══════════════════════════════════════════════════════
 function MenuTab({menus,setMenus,ings,menuCats,currentUser,addH}){
   const [q,setQ]=useState(""); const [open,setOpen]=useState(false); const [editId,setEditId]=useState(null);
   const ef={name:"",category:menuCats[0]||"",price:"",description:"",image:null,ingredients:[],sop:[]};
   const [form,setForm]=useState(ef);
+  const [ingQ,setIngQ]=useState(""); // ← search ingredient in menu modal
   const [ni,setNi]=useState({ingredientId:"",amountGram:""});
-  const canEdit=can(currentUser,"edit"); const canDel=can(currentUser,"delete");
+  const canE=hasPerm(currentUser,"edit_menus"); const canD=hasPerm(currentUser,"delete_menus");
   const filtered=useMemo(()=>menus.filter(m=>m.name.toLowerCase().includes(q.toLowerCase())),[menus,q]);
+  const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
   const fc=form.ingredients.reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.pricePerGram*x.amountGram:0);},0);
   const fm=form.price>0?((+form.price-fc)/+form.price*100):0;
-  function save(){
-    if(!form.name||!form.price)return;
-    const item={...form,price:+form.price,editBy:currentUser.username,editAt:now()};
-    if(editId){setMenus(p=>p.map(m=>m.id===editId?{...m,...item}:m));addH(`แก้ไขเมนู: ${form.name}`);}
-    else{setMenus(p=>[...p,{...item,id:Date.now()}]);addH(`เพิ่มเมนู: ${form.name}`);}
-    setOpen(false);
-  }
-  function del(id,name){if(!window.confirm(`ลบเมนู "${name}"?`))return;setMenus(p=>p.filter(m=>m.id!==id));addH(`ลบเมนู: ${name}`);}
+  function save(){if(!form.name||!form.price)return;const item={...form,price:+form.price,editBy:currentUser.username,editAt:now()};if(editId){setMenus(p=>p.map(m=>m.id===editId?{...m,...item}:m));addH(`แก้ไขเมนู: ${form.name}`);}else{setMenus(p=>[...p,{...item,id:Date.now()}]);addH(`เพิ่มเมนู: ${form.name}`);}setOpen(false);}
+  function del(id,name){if(!confirm(`ลบเมนู "${name}"?`))return;setMenus(p=>p.filter(m=>m.id!==id));addH(`ลบเมนู: ${name}`);}
+  function addIng(){if(!ni.ingredientId||!ni.amountGram)return;setForm(f=>({...f,ingredients:[...f.ingredients,{ingredientId:+ni.ingredientId,amountGram:+ni.amountGram}]}));setNi({ingredientId:"",amountGram:""});}
   return <div>
     <div style={{display:"flex",gap:10,marginBottom:20}}>
       <div style={{position:"relative",flex:1}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:40}}/></div>
-      {canEdit&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
+      {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setIngQ("");setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
     </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:16}}>
-      {filtered.map(menu=>{
-        const cost=menuCost(menu,ings); const profit=menu.price-cost; const mg=menu.price>0?profit/menu.price*100:0; const mc=marginColor(mg);
-        return <Card key={menu.id} hover style={{overflow:"hidden"}}>
-          <div style={{height:5,background:`linear-gradient(90deg,${mc},${mc}66)`}}/>
-          {menu.image?<img src={menu.image} alt={menu.name} style={{width:"100%",height:150,objectFit:"cover"}}/>:<div style={{height:90,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={38} c={C.brand}/></div>}
-          <div style={{padding:"14px 16px 16px"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-              <div><div style={{fontWeight:800,fontSize:17,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>{menu.name}</div><Chip color="blue">{menu.category}</Chip></div>
-              <div style={{display:"flex",gap:4}}>
-                {canEdit&&<button onClick={()=>{setForm({...menu});setEditId(menu.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
-                {canDel&&<button onClick={()=>del(menu.id,menu.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
-              </div>
-            </div>
-            {menu.description&&<p style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.5}}>{menu.description}</p>}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-              {[{l:"ราคาขาย",v:`฿${menu.price}`,c:C.ink},{l:"ต้นทุน",v:`฿${cost.toFixed(1)}`,c:C.brand},{l:"กำไร %",v:`${mg.toFixed(0)}%`,c:mc}].map(s=><div key={s.l} style={{background:C.bg,borderRadius:10,padding:8,textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:15,fontWeight:800,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div>)}
-            </div>
-            <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <Chip color={mg>=60?"green":mg>=40?"yellow":"red"}>{marginLabel(mg)}</Chip>
-              <EditedBy username={menu.editBy} editAt={menu.editAt}/>
+      {filtered.map(menu=>{const cost=menuCost(menu,ings);const profit=menu.price-cost;const mg=menu.price>0?profit/menu.price*100:0;const mc=marginColor(mg);return <Card key={menu.id} hover style={{overflow:"hidden"}}>
+        <div style={{height:5,background:`linear-gradient(90deg,${mc},${mc}66)`}}/>
+        {menu.image?<img src={menu.image} alt={menu.name} style={{width:"100%",height:150,objectFit:"cover"}}/>:<div style={{height:90,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={38} c={C.brand}/></div>}
+        <div style={{padding:"14px 16px 16px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+            <div><div style={{fontWeight:800,fontSize:17,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>{menu.name}</div><Chip color="blue">{menu.category}</Chip></div>
+            <div style={{display:"flex",gap:4}}>
+              {canE&&<button onClick={()=>{setForm({...menu});setEditId(menu.id);setIngQ("");setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
+              {canD&&<button onClick={()=>del(menu.id,menu.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
             </div>
           </div>
-        </Card>;
-      })}
+          {menu.description&&<p style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.5}}>{menu.description}</p>}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            {[{l:"ราคาขาย",v:`฿${menu.price}`,c:C.ink},{l:"ต้นทุน",v:`฿${cost.toFixed(1)}`,c:C.brand},{l:"กำไร %",v:`${mg.toFixed(0)}%`,c:mc}].map(s=><div key={s.l} style={{background:C.bg,borderRadius:10,padding:8,textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:15,fontWeight:800,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div>)}
+          </div>
+          <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}><Chip color={mg>=60?"green":mg>=40?"yellow":"red"}>{marginLabel(mg)}</Chip><EditedBy username={menu.editBy} editAt={menu.editAt}/></div>
+        </div>
+      </Card>;})}
     </div>
     {open&&<Modal title={editId?"✏️ แก้ไขเมนู":"➕ เพิ่มเมนูใหม่"} onClose={()=>setOpen(false)} wide>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
@@ -423,15 +399,27 @@ function MenuTab({menus,setMenus,ings,menuCats,currentUser,addH}){
         </div>
         <div>
           <div style={{fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>วัตถุดิบ (คำนวณจากกรัม)</div>
-          <div style={{maxHeight:200,overflowY:"auto",marginBottom:10}}>
+          <div style={{maxHeight:160,overflowY:"auto",marginBottom:10}}>
             {form.ingredients.map((mi,idx)=>{const ing=ings.find(i=>i.id===mi.ingredientId);const c=ing?ing.pricePerGram*mi.amountGram:0;return <div key={idx} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,background:C.bg,borderRadius:9,padding:"8px 10px",border:`1px solid ${C.line}`}}><span style={{flex:1,fontSize:13,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{ing?.name??"?"}</span><span style={{fontSize:12,color:C.brand,fontWeight:700}}>{mi.amountGram}g</span><span style={{fontSize:11,color:C.ink3}}>฿{c.toFixed(2)}</span><button onClick={()=>setForm(f=>({...f,ingredients:f.ingredients.filter((_,i)=>i!==idx)}))} style={{background:"none",border:"none",cursor:"pointer",display:"flex"}}><Ic d={I.x} s={13} c={C.red}/></button></div>;})}
           </div>
-          <div style={{display:"flex",gap:6,marginBottom:12}}>
-            <div style={{flex:2}}><select value={ni.ingredientId} onChange={e=>setNi({...ni,ingredientId:e.target.value})} style={{...iS,fontSize:13}}><option value="">-- เลือกวัตถุดิบ --</option>{ings.map(i=><option key={i.id} value={i.id}>{i.name} (฿{i.pricePerGram.toFixed(3)}/g)</option>)}</select></div>
-            <div style={{flex:1}}><input type="number" value={ni.amountGram} onChange={e=>setNi({...ni,amountGram:e.target.value})} placeholder="กรัม" style={{...iS,fontSize:13}}/></div>
-            <Btn v="ghost" onClick={()=>{if(!ni.ingredientId||!ni.amountGram)return;setForm(f=>({...f,ingredients:[...f.ingredients,{ingredientId:+ni.ingredientId,amountGram:+ni.amountGram}]}));setNi({ingredientId:"",amountGram:""}); }} icon={I.plus} s={{padding:"10px 12px"}}>เพิ่ม</Btn>
+          {/* ── Search ingredient input ── */}
+          <div style={{background:C.bg,borderRadius:12,padding:"12px",marginBottom:10,border:`1px solid ${C.line}`}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>ค้นหาและเพิ่มวัตถุดิบ</div>
+            <div style={{position:"relative",marginBottom:8}}><span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={13} c={C.ink4}/></span><input value={ingQ} onChange={e=>setIngQ(e.target.value)} placeholder="พิมพ์ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:32,fontSize:13,padding:"8px 12px 8px 32px"}}/></div>
+            <div style={{maxHeight:140,overflowY:"auto"}}>
+              {filteredIngs.map(ing=>{const already=form.ingredients.find(x=>x.ingredientId===ing.id);return <div key={ing.id} onClick={()=>{if(!already)setNi(n=>({...n,ingredientId:String(ing.id)}));}} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:8,marginBottom:3,background:already?C.greenLight:ni.ingredientId===String(ing.id)?C.brandLight:C.white,border:`1px solid ${already?C.green:ni.ingredientId===String(ing.id)?C.brandBorder:C.line}`,cursor:already?"default":"pointer",transition:"all .1s"}}>
+                <span style={{flex:1,fontSize:13,fontWeight:600,fontFamily:"'Sarabun',sans-serif",color:C.ink}}>{ing.name}</span>
+                <span style={{fontSize:11,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{ing.pricePerGram.toFixed(3)}/g</span>
+                {already?<Chip color="green" style={{fontSize:10}}>✓ เพิ่มแล้ว</Chip>:null}
+              </div>;})}
+            </div>
           </div>
-          {form.ingredients.length>0&&<div style={{background:C.brandLight,borderRadius:12,padding:"14px",border:`1px solid ${C.brandBorder}`,marginBottom:8}}>
+          <div style={{display:"flex",gap:6,marginBottom:10}}>
+            <div style={{flex:2}}><select value={ni.ingredientId} onChange={e=>setNi({...ni,ingredientId:e.target.value})} style={{...iS,fontSize:13}}><option value="">-- ยืนยันวัตถุดิบ --</option>{ings.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select></div>
+            <div style={{flex:1}}><input type="number" value={ni.amountGram} onChange={e=>setNi({...ni,amountGram:e.target.value})} onKeyDown={e=>e.key==="Enter"&&addIng()} placeholder="กรัม" style={{...iS,fontSize:13}}/></div>
+            <Btn v="ghost" onClick={addIng} icon={I.plus} s={{padding:"10px 12px"}}>เพิ่ม</Btn>
+          </div>
+          {form.ingredients.length>0&&<div style={{background:C.brandLight,borderRadius:12,padding:"14px",border:`1px solid ${C.brandBorder}`}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>ต้นทุนรวม</span><span style={{fontSize:20,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{fc.toFixed(2)}</span></div>
             {form.price>0&&<div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กำไร</span><span style={{fontSize:14,fontWeight:700,color:marginColor(fm),fontFamily:"'Sarabun',sans-serif"}}>฿{(+form.price-fc).toFixed(2)} ({fm.toFixed(1)}%)</span></div>}
           </div>}
@@ -446,19 +434,15 @@ function MenuTab({menus,setMenus,ings,menuCats,currentUser,addH}){
 }
 
 // ══════════════════════════════════════════════════════
-// ── SOP TAB ───────────────════════════════════════════
+// ── SOP TAB ───────────────────────────────────────────
 // ══════════════════════════════════════════════════════
 function SOPTab({menus,setMenus,ings,currentUser}){
-  const [sel,setSel]=useState(menus[0]?.id??null);
-  const [edit,setEdit]=useState(false); const [sop,setSop]=useState([]);
-  const [ingQ,setIngQ]=useState(""); // search for ingredient in SOP editor
+  const [sel,setSel]=useState(menus[0]?.id??null); const [edit,setEdit]=useState(false); const [sop,setSop]=useState([]);
+  const [ingQ,setIngQ]=useState("");
   const menu=useMemo(()=>menus.find(m=>m.id===sel),[menus,sel]);
-  const canEdit=can(currentUser,"edit");
-  useEffect(()=>{if(menu){setSop(menu.sop?[...menu.sop.map(s=>({...s}))]:[]); setEdit(false); setIngQ("");}}, [sel]);
+  const canE=hasPerm(currentUser,"edit_sop");
+  useEffect(()=>{if(menu){setSop(menu.sop?[...menu.sop.map(s=>({...s}))]:[]); setEdit(false);}}, [sel]);
   function saveSop(){setMenus(p=>p.map(m=>m.id===sel?{...m,sop,editBy:currentUser.username,editAt:now()}:m));setEdit(false);}
-  function addStep(){setSop(f=>[...f,{step:f.length+1,title:"",desc:"",image:null}]);}
-  function rmStep(i){setSop(f=>f.filter((_,j)=>j!==i));}
-  function updStep(i,k,v){setSop(f=>f.map((s,j)=>j===i?{...s,[k]:v}:s));}
   const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
   return <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16,minHeight:520}}>
     <div style={{background:C.white,borderRadius:16,border:`1px solid ${C.line}`,overflow:"hidden"}}>
@@ -475,32 +459,22 @@ function SOPTab({menus,setMenus,ings,currentUser}){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,paddingBottom:16,borderBottom:`1px solid ${C.lineLight}`}}>
           <div style={{display:"flex",gap:14,alignItems:"center"}}>
             {menu.image&&<img src={menu.image} alt={menu.name} style={{width:60,height:60,objectFit:"cover",borderRadius:12,border:`2px solid ${C.line}`}}/>}
-            <div>
-              <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:22,fontWeight:900,color:C.ink,marginBottom:4}}>{menu.name}</h2>
-              <div style={{display:"flex",gap:10,fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",flexWrap:"wrap"}}>
-                <span>ราคา <b style={{color:C.ink}}>฿{menu.price}</b></span>
-                <span>ต้นทุน <b style={{color:C.brand}}>฿{menuCost(menu,ings).toFixed(2)}</b></span>
-                <EditedBy username={menu.editBy} editAt={menu.editAt}/>
-              </div>
-            </div>
+            <div><h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:22,fontWeight:900,color:C.ink,marginBottom:4}}>{menu.name}</h2><EditedBy username={menu.editBy} editAt={menu.editAt}/></div>
           </div>
-          {canEdit&&<div style={{display:"flex",gap:8}}>
+          {canE&&<div style={{display:"flex",gap:8}}>
             {edit?<><Btn v="ghost" onClick={()=>{setSop(menu.sop?[...menu.sop]:[]); setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>
             :<Btn v="info" onClick={()=>setEdit(true)} icon={I.pencil} s={{padding:"8px 14px"}}>แก้ไข SOP</Btn>}
           </div>}
         </div>
-        {/* Ingredients */}
-        <div style={{marginBottom:22}}>
-          <div style={{fontSize:12,fontWeight:700,color:C.ink3,textTransform:"uppercase",letterSpacing:1,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>วัตถุดิบในเมนู</div>
-          {edit&&<div style={{marginBottom:12}}>
-            <div style={{position:"relative",marginBottom:10}}><span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={14} c={C.ink4}/></span><input value={ingQ} onChange={e=>setIngQ(e.target.value)} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:34,fontSize:13,padding:"8px 12px 8px 34px"}}/></div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:6,maxHeight:140,overflowY:"auto",background:C.bg,borderRadius:10,padding:10,border:`1px solid ${C.line}`}}>
-              {filteredIngs.map(ing=>{const already=menu.ingredients?.find(x=>x.ingredientId===ing.id);return <div key={ing.id} style={{background:already?C.greenLight:C.white,border:`1px solid ${already?C.green:C.line}`,borderRadius:8,padding:"5px 10px",fontSize:12,fontFamily:"'Sarabun',sans-serif",cursor:"pointer",display:"flex",alignItems:"center",gap:4}} onClick={()=>{}} title={`฿${ing.pricePerGram.toFixed(3)}/g`}>
-                <span style={{fontWeight:600,color:C.ink}}>{ing.name}</span>
-                <span style={{color:C.brand,fontSize:11}}>฿{ing.pricePerGram.toFixed(3)}/g</span>
-              </div>;})}
+        <div style={{marginBottom:20}}>
+          {edit&&<div style={{marginBottom:10}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ค้นหาวัตถุดิบ</div>
+            <div style={{position:"relative",marginBottom:8}}><span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={13} c={C.ink4}/></span><input value={ingQ} onChange={e=>setIngQ(e.target.value)} placeholder="พิมพ์ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:32,fontSize:13,padding:"8px 12px 8px 32px"}}/></div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,maxHeight:100,overflowY:"auto",background:C.bg,borderRadius:10,padding:8,border:`1px solid ${C.line}`}}>
+              {filteredIngs.map(ing=><span key={ing.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:8,padding:"4px 10px",fontSize:12,fontFamily:"'Sarabun',sans-serif",color:C.ink2}}>{ing.name} <span style={{color:C.brand}}>฿{ing.pricePerGram.toFixed(3)}/g</span></span>)}
             </div>
           </div>}
+          <div style={{fontSize:12,fontWeight:700,color:C.ink3,textTransform:"uppercase",letterSpacing:1,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>วัตถุดิบในเมนู</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
             {menu.ingredients.map((mi,idx)=>{const ing=ings.find(i=>i.id===mi.ingredientId);return ing?<div key={idx} style={{background:C.bg,borderRadius:8,padding:"6px 12px",fontSize:13,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6}}><span style={{fontWeight:700,color:C.ink}}>{ing.name}</span><span style={{color:C.brand,fontWeight:700}}>{mi.amountGram}g</span><span style={{color:C.ink4,fontSize:11}}>฿{(ing.pricePerGram*mi.amountGram).toFixed(2)}</span></div>:null;})}
           </div>
@@ -509,16 +483,16 @@ function SOPTab({menus,setMenus,ings,currentUser}){
         {edit?<div>
           {sop.map((step,idx)=><div key={idx} style={{background:C.bg,borderRadius:14,padding:"18px 20px",marginBottom:14,border:`1px solid ${C.line}`}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800,flexShrink:0}}>{idx+1}</div><span style={{fontSize:14,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>ขั้นตอนที่ {idx+1}</span></div>
-              <button onClick={()=>rmStep(idx)} style={{background:C.redLight,border:"none",borderRadius:8,padding:"5px 12px",cursor:"pointer",color:C.red,fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,display:"flex",alignItems:"center",gap:4}}><Ic d={I.trash} s={12} c={C.red}/>ลบ</button>
+              <div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800,flexShrink:0}}>{idx+1}</div></div>
+              <button onClick={()=>setSop(f=>f.filter((_,j)=>j!==idx))} style={{background:C.redLight,border:"none",borderRadius:8,padding:"5px 12px",cursor:"pointer",color:C.red,fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,display:"flex",alignItems:"center",gap:4}}><Ic d={I.trash} s={12} c={C.red}/>ลบ</button>
             </div>
-            <Inp label="ชื่อขั้นตอน" value={step.title} onChange={e=>updStep(idx,"title",e.target.value)} placeholder="เช่น เตรียมวัตถุดิบ"/>
-            <TA label="รายละเอียดขั้นตอน" hint="อธิบายให้ละเอียด" rows={5} value={step.desc} onChange={e=>updStep(idx,"desc",e.target.value)} placeholder="อธิบายวิธีทำให้ละเอียด เช่น อุณหภูมิ เวลา วิธีการ..."/>
-            <ImgUp label="รูปประกอบขั้นตอนนี้" value={step.image} onChange={v=>updStep(idx,"image",v)}/>
+            <Inp label="ชื่อขั้นตอน" value={step.title} onChange={e=>setSop(f=>f.map((s,j)=>j===idx?{...s,title:e.target.value}:s))} placeholder="เช่น เตรียมวัตถุดิบ"/>
+            <TA label="รายละเอียดขั้นตอน" hint="อธิบายให้ละเอียด" rows={5} value={step.desc} onChange={e=>setSop(f=>f.map((s,j)=>j===idx?{...s,desc:e.target.value}:s))} placeholder="อธิบายวิธีทำให้ละเอียด เช่น อุณหภูมิ เวลา วิธีการ..."/>
+            <ImgUp label="รูปประกอบขั้นตอนนี้" value={step.image} onChange={v=>setSop(f=>f.map((s,j)=>j===idx?{...s,image:v}:s))}/>
           </div>)}
-          <Btn v="ghost" onClick={addStep} icon={I.plus} full>+ เพิ่มขั้นตอน</Btn>
+          <Btn v="ghost" onClick={()=>setSop(f=>[...f,{step:f.length+1,title:"",desc:"",image:null}])} icon={I.plus} full>+ เพิ่มขั้นตอน</Btn>
         </div>:<div>
-          {(!menu.sop||menu.sop.length===0)?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.sop} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มี SOP<br/><span style={{fontSize:13}}>กด "แก้ไข SOP" เพื่อเพิ่มขั้นตอน</span></p></div>
+          {(!menu.sop||menu.sop.length===0)?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.sop} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มี SOP</p></div>
           :menu.sop.map((step,idx)=><div key={idx} style={{display:"flex",gap:16,marginBottom:28}}>
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",flexShrink:0,width:36}}>
               <div style={{width:36,height:36,borderRadius:"50%",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,fontWeight:800,boxShadow:`0 4px 12px ${C.brand}44`}}>{idx+1}</div>
@@ -542,18 +516,35 @@ function SOPTab({menus,setMenus,ings,currentUser}){
 function SumTab({menus,ings,addCostHistory,currentUser}){
   const [dateFrom,setDateFrom]=useState(()=>new Date().toISOString().slice(0,10));
   const [dateTo,setDateTo]=useState(()=>new Date().toISOString().slice(0,10));
-  const [sales,setSales]=useState({});
-  const [sort,setSort]=useState("margin");
-  const canEdit=can(currentUser,"summary_edit");
-  const items=useMemo(()=>menus.map(m=>{const c=menuCost(m,ings);const p=m.price-c;const mg=m.price>0?p/m.price*100:0;return{...m,cost:c,profit:p,margin:mg};}), [menus,ings]);
-  const stats=useMemo(()=>({avg:items.length?items.reduce((s,i)=>s+i.margin,0)/items.length:0,total:items.length,good:items.filter(i=>i.margin>=60).length,profit:items.reduce((s,i)=>s+i.profit,0)}),[items]);
-  const sorted=useMemo(()=>[...items].sort((a,b)=>b[sort]-a[sort]),[items,sort]);
+  const [q,setQ]=useState(""); // search to add menu
+  const [selected,setSelected]=useState({}); // {menuId: soldQty}
+  const [sortCol,setSortCol]=useState("margin"); const [sortDir,setSortDir]=useState("desc");
+  const canE=hasPerm(currentUser,"edit_summary");
+
+  function onSort(col){if(sortCol===col){setSortDir(d=>d==="asc"?"desc":"asc");}else{setSortCol(col);setSortDir("desc");}}
+
+  const allItems=useMemo(()=>menus.map(m=>{const c=menuCost(m,ings);const p=m.price-c;const mg=m.price>0?p/m.price*100:0;return{...m,cost:c,profit:p,margin:mg};}), [menus,ings]);
+  const searchResults=useMemo(()=>allItems.filter(m=>m.name.toLowerCase().includes(q.toLowerCase())&&!selected[m.id]),[allItems,q,selected]);
+  const selectedItems=useMemo(()=>allItems.filter(m=>selected[m.id]!==undefined),[allItems,selected]);
+  const sortedSelected=useMemo(()=>{return [...selectedItems].sort((a,b)=>{let va=a[sortCol]??0,vb=b[sortCol]??0;if(sortCol==="soldQty"){va=+(selected[a.id]||0);vb=+(selected[b.id]||0);}if(sortCol==="totalRevenue"){va=(+(selected[a.id]||0))*a.price;vb=(+(selected[b.id]||0))*b.price;}if(sortCol==="totalProfit"){va=(+(selected[a.id]||0))*(a.price-a.cost);vb=(+(selected[b.id]||0))*(b.price-b.cost);}return sortDir==="asc"?va-vb:vb-va;});},[selectedItems,sortCol,sortDir,selected]);
+
+  const stats=useMemo(()=>({
+    total:selectedItems.length,
+    avg:selectedItems.length?selectedItems.reduce((s,i)=>s+i.margin,0)/selectedItems.length:0,
+    totalRev:selectedItems.reduce((s,i)=>s+(+(selected[i.id]||0))*i.price,0),
+    totalProfit:selectedItems.reduce((s,i)=>s+(+(selected[i.id]||0))*(i.price-i.cost),0),
+  }),[selectedItems,selected]);
+
+  function addMenu(m){setSelected(p=>({...p,[m.id]:0}));setQ("");}
+  function removeMenu(id){setSelected(p=>{const n={...p};delete n[id];return n;});}
   function saveSummary(){
-    const snap=sorted.map(m=>({...m,soldQty:+(sales[m.id]||0),totalRevenue:(+(sales[m.id]||0))*m.price,totalCost:(+(sales[m.id]||0))*m.cost,totalProfit:(+(sales[m.id]||0))*(m.price-m.cost)}));
+    const snap=sortedSelected.map(m=>({...m,soldQty:+(selected[m.id]||0),totalRevenue:(+(selected[m.id]||0))*m.price,totalCost:(+(selected[m.id]||0))*m.cost,totalProfit:(+(selected[m.id]||0))*(m.price-m.cost)}));
     addCostHistory({id:Date.now(),dateFrom,dateTo,items:snap,savedBy:currentUser.username,savedAt:now()});
     alert("✅ บันทึกสรุปต้นทุนสำเร็จ!");
   }
+
   return <div>
+    {/* Date + search bar */}
     <div style={{display:"flex",gap:14,marginBottom:20,flexWrap:"wrap",alignItems:"flex-end"}}>
       <div style={{background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:6}}><Ic d={I.calendar} s={16} c={C.brand}/><span style={{fontSize:13,fontWeight:600,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>ช่วงวันที่</span></div>
@@ -563,40 +554,72 @@ function SumTab({menus,ings,addCostHistory,currentUser}){
           <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...iS,width:155,fontSize:13,padding:"7px 10px"}}/>
         </div>
       </div>
-      {canEdit&&<Btn onClick={saveSummary} icon={I.save} v="success">บันทึกสรุปต้นทุน</Btn>}
+      {canE&&<Btn onClick={saveSummary} icon={I.save} v="success" disabled={selectedItems.length===0}>บันทึกสรุปต้นทุน</Btn>}
     </div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:14,marginBottom:24}}>
-      {[{l:"เมนูทั้งหมด",v:stats.total,u:"เมนู",icon:I.fire,c:C.blue},{l:"กำไรเฉลี่ย",v:stats.avg.toFixed(1),u:"%",icon:I.chart,c:C.brand},{l:"เมนูกำไรดี ≥60%",v:stats.good,u:"เมนู",icon:I.check,c:C.green},{l:"กำไรรวม",v:`฿${stats.profit.toFixed(0)}`,u:"",icon:I.bolt,c:C.purple}].map(card=><div key={card.l} style={{background:C.white,borderRadius:16,padding:"18px 20px",boxShadow:"0 2px 8px rgba(15,23,42,.06)",display:"flex",alignItems:"center",gap:14}}>
-        <div style={{width:46,height:46,borderRadius:12,background:`${card.c}18`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={card.icon} s={22} c={card.c}/></div>
-        <div><div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>{card.l}</div><div style={{fontSize:22,fontWeight:800,color:card.c,fontFamily:"'Sarabun',sans-serif",lineHeight:1.1}}>{card.v}<span style={{fontSize:13,fontWeight:600,marginLeft:3,color:C.ink3}}>{card.u}</span></div></div>
+
+    {/* Search & add menu */}
+    <Card style={{padding:"18px 20px",marginBottom:20}}>
+      <div style={{fontSize:14,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>🔍 ค้นหาและเพิ่มเมนูที่ต้องการสรุป</div>
+      <div style={{position:"relative",marginBottom:10}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="พิมพ์ชื่อเมนูที่ต้องการสรุปต้นทุน..." style={{...iS,paddingLeft:40}}/></div>
+      {q&&<div style={{maxHeight:200,overflowY:"auto",background:C.bg,borderRadius:10,border:`1px solid ${C.line}`,padding:8}}>
+        {searchResults.length===0?<div style={{textAlign:"center",padding:"16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>ไม่พบเมนู หรือเพิ่มแล้วทั้งหมด</div>
+        :searchResults.map(m=><div key={m.id} onClick={()=>addMenu(m)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",borderRadius:8,marginBottom:4,cursor:"pointer",background:C.white,border:`1px solid ${C.line}`,transition:"all .15s"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=C.white}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            {m.image&&<img src={m.image} alt={m.name} style={{width:28,height:28,objectFit:"cover",borderRadius:5}}/>}
+            <span style={{fontWeight:600,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{m.name}</span>
+            <Chip color="blue">{m.category}</Chip>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:13,color:C.brand,fontWeight:700}}>฿{m.price}</span>
+            <span style={{fontSize:12,color:marginColor(m.margin),fontWeight:700}}>กำไร {m.margin.toFixed(0)}%</span>
+            <Btn icon={I.plus} s={{padding:"4px 10px",fontSize:12}}>เพิ่ม</Btn>
+          </div>
+        </div>)}
+      </div>}
+    </Card>
+
+    {/* Summary stats */}
+    {selectedItems.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:14,marginBottom:20}}>
+      {[{l:"เมนูที่เลือก",v:stats.total,u:"เมนู",icon:I.fire,c:C.blue},{l:"กำไรเฉลี่ย",v:stats.avg.toFixed(1),u:"%",icon:I.chart,c:C.brand},{l:"รายรับรวม",v:`฿${stats.totalRev.toFixed(0)}`,u:"",icon:I.bolt,c:C.green},{l:"กำไรสุทธิ",v:`฿${stats.totalProfit.toFixed(0)}`,u:"",icon:I.check,c:C.purple}].map(card=><div key={card.l} style={{background:C.white,borderRadius:16,padding:"16px 20px",boxShadow:"0 2px 8px rgba(15,23,42,.06)",display:"flex",alignItems:"center",gap:14}}>
+        <div style={{width:44,height:44,borderRadius:12,background:`${card.c}18`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={card.icon} s={20} c={card.c}/></div>
+        <div><div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>{card.l}</div><div style={{fontSize:20,fontWeight:800,color:card.c,fontFamily:"'Sarabun',sans-serif",lineHeight:1.1}}>{card.v}<span style={{fontSize:13,fontWeight:600,marginLeft:3,color:C.ink3}}>{card.u}</span></div></div>
       </div>)}
-    </div>
-    <Card>
-      <div style={{padding:"16px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{fontWeight:800,fontSize:15,fontFamily:"'Sarabun',sans-serif",color:C.ink}}>ตารางต้นทุนทุกเมนู</div>
-        <select value={sort} onChange={e=>setSort(e.target.value)} style={{...iS,width:"auto",fontSize:12,padding:"6px 12px"}}><option value="margin">เรียง % กำไร</option><option value="profit">เรียงกำไร</option><option value="price">เรียงราคาขาย</option><option value="cost">เรียงต้นทุน</option></select>
+    </div>}
+
+    {/* Table */}
+    {selectedItems.length>0?<Card>
+      <div style={{padding:"14px 20px 12px",borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span style={{fontWeight:800,fontSize:15,fontFamily:"'Sarabun',sans-serif",color:C.ink}}>ตารางสรุปต้นทุน ({selectedItems.length} เมนู)</span>
+        <span style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กดหัวตารางเพื่อเรียงลำดับ</span>
       </div>
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
-          <thead><tr style={{background:C.bg}}>
-            {["เมนู","หมวด","ราคาขาย","ต้นทุน","กำไร (฿)","% กำไร","ขายออกไป (จาน)","รายรับ","กำไรสุทธิ","สถานะ"].map(h=><th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}
+          <thead><tr>
+            <STh label="เมนู" col="name" sortCol={sortCol} sortDir={sortDir} onSort={onSort}/>
+            <STh label="ราคาขาย" col="price" sortCol={sortCol} sortDir={sortDir} onSort={onSort}/>
+            <STh label="ต้นทุน" col="cost" sortCol={sortCol} sortDir={sortDir} onSort={onSort}/>
+            <STh label="กำไร (฿)" col="profit" sortCol={sortCol} sortDir={sortDir} onSort={onSort}/>
+            <STh label="% กำไร" col="margin" sortCol={sortCol} sortDir={sortDir} onSort={onSort}/>
+            <STh label="ขายออก (จาน)" col="soldQty" sortCol={sortCol} sortDir={sortDir} onSort={onSort}/>
+            <STh label="รายรับ" col="totalRevenue" sortCol={sortCol} sortDir={sortDir} onSort={onSort}/>
+            <STh label="กำไรสุทธิ" col="totalProfit" sortCol={sortCol} sortDir={sortDir} onSort={onSort}/>
+            <th style={{padding:"10px 12px",background:C.bg,fontSize:11,fontWeight:700,color:C.ink3}}></th>
           </tr></thead>
-          <tbody>{sorted.map((item,idx)=>{const qty=+(sales[item.id]||0);const rev=qty*item.price;const np=qty*(item.price-item.cost);return <tr key={item.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:C.bg}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=idx%2===0?C.white:C.bg}>
+          <tbody>{sortedSelected.map((item,idx)=>{const qty=+(selected[item.id]||0);const rev=qty*item.price;const np=qty*(item.price-item.cost);return <tr key={item.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:C.bg}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=idx%2===0?C.white:C.bg}>
             <td style={{padding:"10px 12px"}}><div style={{display:"flex",alignItems:"center",gap:8}}>{item.image&&<img src={item.image} alt={item.name} style={{width:28,height:28,objectFit:"cover",borderRadius:5}}/>}<span style={{fontWeight:700,color:C.ink,fontSize:14}}>{item.name}</span></div></td>
-            <td style={{padding:"10px 12px"}}><Chip color="blue">{item.category}</Chip></td>
             <td style={{padding:"10px 12px",fontWeight:700,fontSize:14}}>฿{item.price}</td>
             <td style={{padding:"10px 12px",color:C.brand,fontWeight:700}}>฿{item.cost.toFixed(2)}</td>
             <td style={{padding:"10px 12px",color:item.profit>=0?C.green:C.red,fontWeight:700}}>฿{item.profit.toFixed(2)}</td>
-            <td style={{padding:"10px 12px"}}><div style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:60,height:6,background:C.lineLight,borderRadius:999,overflow:"hidden"}}><div style={{height:"100%",width:`${Math.min(Math.max(item.margin,0),100)}%`,background:marginColor(item.margin),borderRadius:999}}/></div><span style={{fontSize:12,fontWeight:700,color:marginColor(item.margin)}}>{item.margin.toFixed(0)}%</span></div></td>
-            <td style={{padding:"10px 12px"}}>{canEdit?<input type="number" min="0" value={sales[item.id]||""} onChange={e=>setSales(p=>({...p,[item.id]:e.target.value}))} placeholder="0" style={{...iS,width:80,padding:"5px 8px",fontSize:13,textAlign:"center"}}/>:<span style={{fontSize:14,fontWeight:700}}>{sales[item.id]||0}</span>}</td>
+            <td style={{padding:"10px 12px"}}><div style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:56,height:6,background:C.lineLight,borderRadius:999,overflow:"hidden"}}><div style={{height:"100%",width:`${Math.min(Math.max(item.margin,0),100)}%`,background:marginColor(item.margin),borderRadius:999}}/></div><span style={{fontSize:12,fontWeight:700,color:marginColor(item.margin)}}>{item.margin.toFixed(0)}%</span></div></td>
+            <td style={{padding:"10px 12px"}}>{canE?<input type="number" min="0" value={selected[item.id]||""} onChange={e=>setSelected(p=>({...p,[item.id]:e.target.value}))} placeholder="0" style={{...iS,width:80,padding:"5px 8px",fontSize:13,textAlign:"center"}}/>:<span style={{fontWeight:700}}>{selected[item.id]||0}</span>}</td>
             <td style={{padding:"10px 12px",color:C.blue,fontWeight:700}}>฿{rev.toFixed(0)}</td>
             <td style={{padding:"10px 12px",color:np>=0?C.green:C.red,fontWeight:700}}>฿{np.toFixed(0)}</td>
-            <td style={{padding:"10px 12px"}}><Chip color={item.margin>=60?"green":item.margin>=40?"yellow":"red"}>{marginLabel(item.margin)}</Chip></td>
+            <td style={{padding:"10px 12px"}}><button onClick={()=>removeMenu(item.id)} style={{background:C.redLight,border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.x} s={13} c={C.red}/></button></td>
           </tr>;})}
           </tbody>
         </table>
       </div>
-    </Card>
+    </Card>:<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.search} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ค้นหาและเพิ่มเมนูข้างบนเพื่อสรุปต้นทุน</p></div>}
   </div>;
 }
 
@@ -604,39 +627,22 @@ function SumTab({menus,ings,addCostHistory,currentUser}){
 // ── HISTORY TAB ───────────────────────────────────────
 // ══════════════════════════════════════════════════════
 function HisTab({history,costHistory,onClear,onClearCost}){
-  const [view,setView]=useState("cost");
-  const [selSnap,setSelSnap]=useState(null);
-  function exportExcel(snap){
-    const rows=[["เมนู","หมวด","ราคาขาย","ต้นทุน","กำไร %","ขายออก","รายรับ","กำไรสุทธิ"],...snap.items.map(i=>[i.name,i.category,i.price,i.cost.toFixed(2),i.margin.toFixed(1),i.soldQty,i.totalRevenue.toFixed(0),i.totalProfit.toFixed(0)])];
-    const csv=rows.map(r=>r.join(",")).join("\n");
-    const bom="\uFEFF";
-    const blob=new Blob([bom+csv],{type:"text/csv;charset=utf-8"});
-    const u=URL.createObjectURL(blob);const a=document.createElement("a");a.href=u;a.download=`foodcost-${snap.dateFrom}-${snap.dateTo}.csv`;a.click();URL.revokeObjectURL(u);
-  }
-  function printSnap(snap){
-    const w=window.open("","_blank");
-    const rows=snap.items.map(i=>`<tr><td>${i.name}</td><td>${i.category}</td><td>฿${i.price}</td><td>฿${i.cost.toFixed(2)}</td><td>${i.margin.toFixed(1)}%</td><td>${i.soldQty}</td><td>฿${i.totalRevenue.toFixed(0)}</td><td>฿${i.totalProfit.toFixed(0)}</td></tr>`).join("");
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>สรุปต้นทุน ${snap.dateFrom} - ${snap.dateTo}</title><style>body{font-family:'Sarabun',sans-serif;padding:20px}h1{font-size:20px;margin-bottom:4px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{button{display:none}}</style></head><body><h1>📊 สรุปต้นทุนอาหาร</h1><p>ช่วงวันที่: ${snap.dateFrom} ถึง ${snap.dateTo} | บันทึกโดย: ${snap.savedBy} | ${snap.savedAt}</p><table><thead><tr><th>เมนู</th><th>หมวด</th><th>ราคาขาย</th><th>ต้นทุน</th><th>กำไร%</th><th>ขายออก</th><th>รายรับ</th><th>กำไรสุทธิ</th></tr></thead><tbody>${rows}</tbody></table><br/><button onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
-    w.document.close(); setTimeout(()=>w.print(),600);
-  }
+  const [view,setView]=useState("cost"); const [selSnap,setSelSnap]=useState(null);
+  function exportCSV(snap){const rows=[["เมนู","หมวด","ราคาขาย","ต้นทุน","กำไร%","ขายออก","รายรับ","กำไรสุทธิ"],...snap.items.map(i=>[i.name,i.category,i.price,i.cost.toFixed(2),i.margin.toFixed(1),i.soldQty,i.totalRevenue.toFixed(0),i.totalProfit.toFixed(0)])];const csv=rows.map(r=>r.join(",")).join("\n");const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});const u=URL.createObjectURL(blob);const a=document.createElement("a");a.href=u;a.download=`foodcost-${snap.dateFrom}_${snap.dateTo}.csv`;a.click();URL.revokeObjectURL(u);}
+  function printSnap(snap){const w=window.open("","_blank");const rows=snap.items.map(i=>`<tr><td>${i.name}</td><td>${i.category}</td><td>฿${i.price}</td><td>฿${i.cost.toFixed(2)}</td><td>${i.margin.toFixed(1)}%</td><td>${i.soldQty}</td><td>฿${i.totalRevenue.toFixed(0)}</td><td>฿${i.totalProfit.toFixed(0)}</td></tr>`).join("");w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>สรุปต้นทุน</title><style>body{font-family:'Sarabun',sans-serif;padding:24px}h2{color:#FF6B35}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:9px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>📊 NAIWANSOOK FOODCOST — สรุปต้นทุน</h2><p>ช่วงวันที่: <b>${snap.dateFrom}</b> ถึง <b>${snap.dateTo}</b> | บันทึกโดย: <b>${snap.savedBy}</b> | ${snap.savedAt}</p><table><thead><tr><th>เมนู</th><th>หมวด</th><th>ราคาขาย</th><th>ต้นทุน</th><th>กำไร%</th><th>ขายออก</th><th>รายรับ</th><th>กำไรสุทธิ</th></tr></thead><tbody>${rows}</tbody></table><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);w.document.close();setTimeout(()=>w.print(),600);}
   return <div>
     <div style={{display:"flex",gap:8,marginBottom:16}}>
       {[{id:"cost",l:"ประวัติต้นทุน"},{id:"action",l:"ประวัติการแก้ไข"}].map(t=><button key={t.id} onClick={()=>setView(t.id)} style={{padding:"8px 20px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,background:view===t.id?C.brand:"transparent",color:view===t.id?C.white:C.ink3,transition:"all .15s"}}>{t.l}</button>)}
     </div>
     {view==="cost"&&<div>
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12}}>
-        {costHistory.length>0&&<Btn v="danger" onClick={()=>{if(window.confirm("ลบประวัติต้นทุนทั้งหมด?"))onClearCost();}} icon={I.trash} s={{padding:"7px 14px",fontSize:12}}>ลบทั้งหมด</Btn>}
-      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12}}>{costHistory.length>0&&<Btn v="danger" onClick={()=>{if(confirm("ลบประวัติต้นทุนทั้งหมด?"))onClearCost();}} icon={I.trash} s={{padding:"7px 14px",fontSize:12}}>ลบทั้งหมด</Btn>}</div>
       {costHistory.length===0?<Card><div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.history} s={40} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติต้นทุน<br/><span style={{fontSize:12}}>บันทึกจากหน้า "สรุปต้นทุน"</span></p></div></Card>
       :costHistory.map(snap=><Card key={snap.id} style={{marginBottom:12,overflow:"hidden"}}>
         <div style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",background:C.bg,borderBottom:`1px solid ${C.line}`}}>
-          <div>
-            <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📅 {snap.dateFrom} → {snap.dateTo}</div>
-            <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{snap.items.length} เมนู · บันทึกโดย {snap.savedBy} · {snap.savedAt}</div>
-          </div>
+          <div><div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📅 {snap.dateFrom} → {snap.dateTo}</div><div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{snap.items.length} เมนู · บันทึกโดย {snap.savedBy} · {snap.savedAt}</div></div>
           <div style={{display:"flex",gap:8}}>
             <Btn v="ghost" onClick={()=>setSelSnap(selSnap?.id===snap.id?null:snap)} s={{padding:"6px 12px",fontSize:12}} icon={I.eye}>ดูรายละเอียด</Btn>
-            <Btn v="success" onClick={()=>exportExcel(snap)} s={{padding:"6px 12px",fontSize:12}} icon={I.excel}>Export CSV</Btn>
+            <Btn v="success" onClick={()=>exportCSV(snap)} s={{padding:"6px 12px",fontSize:12}} icon={I.dl}>Export CSV</Btn>
             <Btn v="info" onClick={()=>printSnap(snap)} s={{padding:"6px 12px",fontSize:12}} icon={I.printer}>Print/PDF</Btn>
           </div>
         </div>
@@ -657,9 +663,7 @@ function HisTab({history,costHistory,onClear,onClearCost}){
       </Card>)}
     </div>}
     {view==="action"&&<div>
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12}}>
-        {history.length>0&&<Btn v="danger" onClick={()=>{if(window.confirm("ลบประวัติทั้งหมด?"))onClear();}} icon={I.trash} s={{padding:"7px 14px",fontSize:12}}>ลบประวัติ</Btn>}
-      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12}}>{history.length>0&&<Btn v="danger" onClick={()=>{if(confirm("ลบประวัติทั้งหมด?"))onClear();}} icon={I.trash} s={{padding:"7px 14px",fontSize:12}}>ลบประวัติ</Btn>}</div>
       <Card>{history.length===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.history} s={40} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติ</p></div>
       :history.map((item,idx)=><div key={idx} style={{display:"flex",alignItems:"center",gap:14,padding:"12px 20px",borderBottom:`1px solid ${C.lineLight}`}}>
         <div style={{width:32,height:32,borderRadius:"50%",background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.check} s={14} c={C.brand}/></div>
@@ -670,39 +674,53 @@ function HisTab({history,costHistory,onClear,onClearCost}){
 }
 
 // ══════════════════════════════════════════════════════
-// ── MAIN APP ──────────────────────────────────────────
+// ── MAIN APP ──────────────────════════════════════════
 // ══════════════════════════════════════════════════════
 export default function App(){
-  const [users,setUsers]=useLS("fc4_users",INIT_USERS);
+  const [users,setUsers]=useLS("fc5_users",INIT_USERS);
   const [currentUser,setCurrentUser]=useState(null);
-  const [ings,setIngs]=useLS("fc4_ings",INIT_ING);
-  const [menus,setMenus]=useLS("fc4_menus",INIT_MENUS);
-  const [ingCats,setIngCats]=useLS("fc4_ingcats",INIT_ING_CATS);
-  const [menuCats,setMenuCats]=useLS("fc4_menucats",INIT_MENU_CATS);
-  const [hist,setHist]=useLS("fc4_hist",[]);
-  const [costHist,setCostHist]=useLS("fc4_costhist",[]);
+  const [ings,setIngs]=useLS("fc5_ings",INIT_ING);
+  const [menus,setMenus]=useLS("fc5_menus",INIT_MENUS);
+  const [ingCats,setIngCats]=useLS("fc5_ingcats",INIT_ING_CATS);
+  const [menuCats,setMenuCats]=useLS("fc5_menucats",INIT_MENU_CATS);
+  const [hist,setHist]=useLS("fc5_hist",[]);
+  const [costHist,setCostHist]=useLS("fc5_costhist",[]);
   const [tab,setTab]=useState("ingredients");
   const [saved,setSaved]=useState(true);
-  const t=useRef(null);
-  useEffect(()=>{setSaved(false);clearTimeout(t.current);t.current=setTimeout(()=>setSaved(true),700);return()=>clearTimeout(t.current);},[ings,menus,ingCats,menuCats]);
-  const addH=useCallback(a=>setHist(p=>[{action:a,time:now()},...p.slice(0,99)]),[setHist]);
+  const tr=useRef(null);
+  useEffect(()=>{setSaved(false);clearTimeout(tr.current);tr.current=setTimeout(()=>setSaved(true),700);},[ings,menus,ingCats,menuCats]);
+  const addH=useCallback(a=>setHist(p=>[{action:a,time:new Date().toLocaleString("th-TH")},...p.slice(0,99)]),[setHist]);
   const addCostHistory=useCallback(snap=>setCostHist(p=>[snap,...p.slice(0,49)]),[setCostHist]);
-  function exportData(){const b=new Blob([JSON.stringify({ingredients:ings,menus,ingCats,menuCats,users,v:"3.0",at:new Date().toISOString()},null,2)],{type:"application/json"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=`foodcost-backup-${new Date().toLocaleDateString("th-TH").replace(/\//g,"-")}.json`;a.click();URL.revokeObjectURL(u);}
-  if(!currentUser)return <><style>{`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Sarabun',sans-serif}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}`}</style><LoginPage users={users} onLogin={u=>setCurrentUser(u)}/></>;
-  const TABS=[{id:"ingredients",l:"วัตถุดิบ",icon:I.leaf},{id:"menus",l:"เมนู",icon:I.fire},{id:"sop",l:"SOP",icon:I.sop},{id:"summary",l:"สรุปต้นทุน",icon:I.chart},{id:"history",l:"ประวัติต้นทุน",icon:I.history},{id:"settings",l:"ตั้งค่า",icon:I.settings}];
+  function exportData(){const b=new Blob([JSON.stringify({ingredients:ings,menus,ingCats,menuCats,users,v:"4.0",at:new Date().toISOString()},null,2)],{type:"application/json"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=`naiwansook-backup-${new Date().toLocaleDateString("th-TH").replace(/\//g,"-")}.json`;a.click();URL.revokeObjectURL(u);}
+
+  const TABS=[
+    {id:"ingredients",l:"วัตถุดิบ",icon:I.leaf,perm:"view_ingredients"},
+    {id:"menus",l:"เมนู",icon:I.fire,perm:"view_menus"},
+    {id:"sop",l:"SOP",icon:I.sop,perm:"view_sop"},
+    {id:"summary",l:"สรุปต้นทุน",icon:I.chart,perm:"view_summary"},
+    {id:"history",l:"ประวัติต้นทุน",icon:I.history,perm:"view_history"},
+    {id:"settings",l:"ตั้งค่า",icon:I.settings,perm:"settings"},
+  ];
+  const visibleTabs=TABS.filter(t=>currentUser&&hasPerm(currentUser,t.perm));
   const DESC={ingredients:"จัดการวัตถุดิบ ราคา และสต็อก",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนตามช่วงวันที่",history:"ประวัติต้นทุนและการแก้ไข",settings:"ตั้งค่าระบบและผู้ใช้งาน"};
+
+  if(!currentUser)return <><style>{`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Sarabun',sans-serif}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}`}</style><LoginPage users={users} onLogin={u=>setCurrentUser(u)}/></>;
+
   return <>
     <style>{`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}body{background:${C.bg};font-family:'Sarabun',sans-serif}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:${C.line};border-radius:999px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}`}</style>
     <div style={{minHeight:"100vh"}}>
-      <nav style={{background:C.white,borderBottom:`1px solid ${C.line}`,padding:"0 24px",display:"flex",alignItems:"center",position:"sticky",top:0,zIndex:100,height:62,boxShadow:"0 1px 16px rgba(15,23,42,.07)"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginRight:28}}>
+      <nav style={{background:C.white,borderBottom:`1px solid ${C.line}`,padding:"0 20px",display:"flex",alignItems:"center",position:"sticky",top:0,zIndex:100,height:62,boxShadow:"0 1px 16px rgba(15,23,42,.07)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginRight:24,flexShrink:0}}>
           <div style={{width:36,height:36,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 4px 12px ${C.brand}44`}}><Ic d={I.fire} s={18} c={C.white} sw={2}/></div>
-          <div><div style={{fontWeight:900,fontSize:18,color:C.ink,lineHeight:1,letterSpacing:-.3}}>FoodCost</div><div style={{fontSize:9,color:C.ink4,fontWeight:600,letterSpacing:1.5}}>MANAGEMENT</div></div>
+          <div>
+            <div style={{fontWeight:900,fontSize:14,color:C.ink,lineHeight:1,letterSpacing:-.2}}>NAIWANSOOK FOODCOST</div>
+            <div style={{fontSize:9,color:C.ink4,fontWeight:600,letterSpacing:1.5}}>BY BOSSMAX</div>
+          </div>
         </div>
         <div style={{display:"flex",flex:1,overflowX:"auto",gap:2}}>
-          {TABS.map(t2=>{const active=tab===t2.id;return <button key={t2.id} onClick={()=>setTab(t2.id)} style={{display:"flex",alignItems:"center",gap:7,padding:"0 14px",height:62,border:"none",background:"none",cursor:"pointer",fontSize:13,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s",whiteSpace:"nowrap"}}><Ic d={t2.icon} s={14} c={active?C.brand:C.ink4}/>{t2.l}</button>;})}
+          {visibleTabs.map(t2=>{const active=tab===t2.id;return <button key={t2.id} onClick={()=>setTab(t2.id)} style={{display:"flex",alignItems:"center",gap:7,padding:"0 14px",height:62,border:"none",background:"none",cursor:"pointer",fontSize:13,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s",whiteSpace:"nowrap"}}><Ic d={t2.icon} s={14} c={active?C.brand:C.ink4}/>{t2.l}</button>;})}
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:12,flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
           <div style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:saved?C.green:C.brand}}><Ic d={I.save} s={12} c={saved?C.green:C.brand}/>{saved?"บันทึกแล้ว":"กำลังบันทึก..."}</div>
           <div style={{height:24,width:1,background:C.line}}/>
           <div style={{display:"flex",alignItems:"center",gap:6,background:C.bg,borderRadius:8,padding:"5px 10px",border:`1px solid ${C.line}`}}>
@@ -710,13 +728,13 @@ export default function App(){
             <span style={{fontSize:12,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{currentUser.name||currentUser.username}</span>
             <Chip color={ROLES[currentUser.role]?.color||"gray"}>{ROLES[currentUser.role]?.label}</Chip>
           </div>
-          <button onClick={exportData} style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:5,fontWeight:600}}><Ic d={I.dl} s={13} c={C.ink3}/>Backup</button>
+          {hasPerm(currentUser,"export")&&<button onClick={exportData} style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:5,fontWeight:600}}><Ic d={I.dl} s={13} c={C.ink3}/>Backup</button>}
           <button onClick={()=>setCurrentUser(null)} title="ออกจากระบบ" style={{background:C.redLight,border:"none",borderRadius:8,padding:"7px",cursor:"pointer",display:"flex"}}><Ic d={I.logout} s={15} c={C.red}/></button>
         </div>
       </nav>
       <div style={{maxWidth:1300,margin:"0 auto",padding:"24px 24px 56px"}}>
         <div style={{marginBottom:20}}>
-          <h1 style={{fontSize:26,fontWeight:900,color:C.ink,marginBottom:4,letterSpacing:-.3}}>{TABS.find(t2=>t2.id===tab)?.l}</h1>
+          <h1 style={{fontSize:26,fontWeight:900,color:C.ink,marginBottom:4,letterSpacing:-.3}}>{visibleTabs.find(t2=>t2.id===tab)?.l}</h1>
           <p style={{fontSize:14,color:C.ink3}}>{DESC[tab]}</p>
         </div>
         {tab==="ingredients"&&<IngTab ings={ings} setIngs={setIngs} cats={ingCats} currentUser={currentUser} addH={addH}/>}
