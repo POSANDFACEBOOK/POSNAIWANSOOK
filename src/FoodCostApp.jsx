@@ -537,17 +537,20 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,onDone}){
 // ══════════════════════════════════════════════════════
 // ── INGREDIENT TAB ────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH}){
+function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[]}){
   const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);
   const ef={name:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",image:null,note:"",supplier_id:"",supplier_name:""};
   const[form,setForm]=useState(ef);
-  const canE=hasPerm(currentUser,"edit_ingredients");const canD=hasPerm(currentUser,"delete_ingredients");
-  const filtered=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(q.toLowerCase())&&(cat==="ทุกหมวด"||i.category===cat)),[ings,q,cat]);
+  const isCentral=currentBranch?.type==="central";
+  const canE=hasPerm(currentUser,"edit_ingredients")&&isCentral;const canD=hasPerm(currentUser,"delete_ingredients")&&isCentral;
+  const filtered=useMemo(()=>ings.filter(i=>{const vb=i.visible_branches||[];const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);return i.name.toLowerCase().includes(q.toLowerCase())&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;}),[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||1);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
   async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{const item={...form,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!confirm(`ลบ "${name}"?`))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
+  async function toggleVBIng(item,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(item.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateIng(item.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   return <div>
+    {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>วัตถุดิบจัดการโดยสาขาครัวกลางเท่านั้น • สาขานี้ดูข้อมูลได้อย่างเดียว</span></div>}
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
       <select value={cat} onChange={e=>{setCat(e.target.value);setPg(1);}} style={{...iS,width:"auto",minWidth:140,appearance:"none"}}><option>ทุกหมวด</option>{ingCats.map(c=><option key={c.id}>{c.name}</option>)}</select>
@@ -580,6 +583,13 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH}){
               <EditedBy username={item.edit_by} editAt={item.edit_at}/>
             </div>
           </div>
+          {isCentral&&<div style={{padding:"8px 14px 10px",borderTop:`1px solid ${C.lineLight}`,background:"#F8FAFC"}}>
+            <div style={{fontSize:10,color:C.ink4,marginBottom:5,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>แสดงที่สาขา:</div>
+            <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+              {branches.filter(b=>b.type!=="central").length===0?<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>
+              :branches.filter(b=>b.type!=="central").map(b=>{const vb=item.visible_branches||[];const isOn=vb.length===0||vb.includes(b.id);return <button key={b.id} onClick={()=>toggleVBIng(item,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
+            </div>
+          </div>}
         </Card>)}
       </div>
       {paged.length<filtered.length&&<div style={{textAlign:"center",marginTop:20}}><Btn v="ghost" onClick={()=>setPg(p=>p+1)}>โหลดเพิ่ม ({filtered.length-paged.length})</Btn></div>}
@@ -617,24 +627,27 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH}){
 // ══════════════════════════════════════════════════════
 // ── MENU TAB ──────────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,printers=[]}){
+function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,printers=[],branches=[]}){
   const[q,setQ]=useState("");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[showImportMenu,setShowImportMenu]=useState(false);
   const ef={name:"",category:menuCats[0]?.name||"",price:"",description:"",image:null,ingredients:[],sop:[]};
   const[form,setForm]=useState(ef);const[ingQ,setIngQ]=useState("");const[ni,setNi]=useState({ingredientId:"",amountGram:""});
-  const canE=hasPerm(currentUser,"edit_menus");const canD=hasPerm(currentUser,"delete_menus");
+  const isCentral=currentBranch?.type==="central";
+  const canE=hasPerm(currentUser,"edit_menus")&&isCentral;const canD=hasPerm(currentUser,"delete_menus")&&isCentral;
   async function toggleAvailability(menu,status){
     const avail={...(menu.availability||{})};
     if(avail[currentBranch.id]===status)delete avail[currentBranch.id];
     else avail[currentBranch.id]=status;
     try{await api.updateMenu(menu.id,{availability:avail});await reload();}catch(e){alert("บันทึกไม่สำเร็จ");}
   }
-  const filtered=useMemo(()=>menus.filter(m=>m.name.toLowerCase().includes(q.toLowerCase())),[menus,q]);
+  async function toggleVBMenu(menu,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(menu.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateMenu(menu.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
+  const filtered=useMemo(()=>menus.filter(m=>{const vb=m.visible_branches||[];const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);return m.name.toLowerCase().includes(q.toLowerCase())&&matchB;}),[menus,q,isCentral,currentBranch]);
   const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
   const fc=(form.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.price_per_gram*x.amountGram:0);},0);
   const fm=form.price>0?((+form.price-fc)/+form.price*100):0;
   async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,category:form.category,price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{await api.addMenu(item);addH(`เพิ่มเมนู: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!confirm(`ลบเมนู "${name}"?`))return;try{await api.deleteMenu(id);addH(`ลบเมนู: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   return <div>
+    {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>เมนูและ SOP จัดการโดยสาขาครัวกลางเท่านั้น • สาขานี้ตั้งค่าสถานะสินค้าได้</span></div>}
     <div style={{display:"flex",gap:10,marginBottom:20}}>
       <div style={{position:"relative",flex:1}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:40}}/></div>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setIngQ("");setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
@@ -665,7 +678,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
               </select>
             </div>
           </div>}
-          {canE&&<div style={{marginTop:10,display:"flex",gap:6,paddingTop:10,borderTop:`1px solid ${C.lineLight}`}}>
+          <div style={{marginTop:10,display:"flex",gap:6,paddingTop:10,borderTop:`1px solid ${C.lineLight}`}}>
             {(()=>{const avail=(menu.availability||{})[currentBranch.id];const isSoldOut=avail==="sold_out";const isHidden=avail==="hidden";return(<>
               <button onClick={()=>toggleAvailability(menu,"sold_out")} style={{flex:1,padding:"6px 8px",borderRadius:8,border:`1.5px solid ${isSoldOut?"#F59E0B":"#E2E8F0"}`,background:isSoldOut?"#FEF3C7":"transparent",cursor:"pointer",fontSize:11,fontWeight:700,color:isSoldOut?"#92400E":"#94A3B8",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
                 <span style={{fontSize:13}}>{isSoldOut?"🟡":"⬜"}</span>วันนี้ของหมด
@@ -674,6 +687,13 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
                 <span style={{fontSize:13}}>{isHidden?"🔴":"⬜"}</span>งดขายชั่วคราว
               </button>
             </>);})()}
+          </div>
+          {isCentral&&<div style={{marginTop:6,padding:"8px 0 2px",borderTop:`1px solid ${C.lineLight}`}}>
+            <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>แสดงที่สาขา:</div>
+            <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+              {branches.filter(b=>b.type!=="central").length===0?<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>
+              :branches.filter(b=>b.type!=="central").map(b=>{const vb=menu.visible_branches||[];const isOn=vb.length===0||vb.includes(b.id);return <button key={b.id} onClick={()=>toggleVBMenu(menu,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
+            </div>
           </div>}
         </div>
       </Card>;})}
@@ -728,10 +748,12 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
 // ══════════════════════════════════════════════════════
 // ── SOP TAB ───────────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function SOPTab({menus,reload,ings,currentUser}){
-  const[sel,setSel]=useState(menus[0]?.id??null);const[edit,setEdit]=useState(false);const[sop,setSop]=useState([]);const[saving,setSaving]=useState(false);const[ingQ,setIngQ]=useState("");
-  const menu=useMemo(()=>menus.find(m=>m.id===sel),[menus,sel]);
-  const canE=hasPerm(currentUser,"edit_sop");
+function SOPTab({menus,reload,ings,currentUser,currentBranch}){
+  const isCentral=currentBranch?.type==="central";
+  const visibleMenus=useMemo(()=>menus.filter(m=>{const vb=m.visible_branches||[];return isCentral||vb.length===0||vb.includes(currentBranch?.id);}),[menus,isCentral,currentBranch]);
+  const[sel,setSel]=useState(visibleMenus[0]?.id??null);const[edit,setEdit]=useState(false);const[sop,setSop]=useState([]);const[saving,setSaving]=useState(false);const[ingQ,setIngQ]=useState("");
+  const menu=useMemo(()=>visibleMenus.find(m=>m.id===sel),[visibleMenus,sel]);
+  const canE=hasPerm(currentUser,"edit_sop")&&isCentral;
   useEffect(()=>{if(menu){setSop(menu.sop?[...menu.sop.map(s=>({...s}))]:[]); setEdit(false);}}, [sel]);
   async function saveSop(){setSaving(true);try{await api.updateMenu(sel,{sop,edit_by:currentUser.username,edit_at:nowStr()});await reload();setEdit(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
@@ -739,7 +761,7 @@ function SOPTab({menus,reload,ings,currentUser}){
     <div style={{background:C.white,borderRadius:16,border:`1px solid ${C.line}`,overflow:"hidden"}}>
       <div style={{padding:"12px 16px 8px",borderBottom:`1px solid ${C.lineLight}`,background:C.bg}}><div style={{fontSize:11,fontWeight:800,color:C.ink4,letterSpacing:1.2,textTransform:"uppercase",fontFamily:"'Sarabun',sans-serif"}}>รายการเมนู</div></div>
       <div style={{padding:8,overflowY:"auto",maxHeight:520}}>
-        {menus.map(m=>{const cost=menuCost(m,ings);const mg=m.price>0?((m.price-cost)/m.price*100):0;const active=sel===m.id;return <div key={m.id} onClick={()=>setSel(m.id)} style={{padding:"10px 12px",borderRadius:10,cursor:"pointer",marginBottom:4,background:active?C.brandLight:"transparent",border:`1px solid ${active?C.brandBorder:"transparent"}`,transition:"all .15s"}}>
+        {visibleMenus.map(m=>{const cost=menuCost(m,ings);const mg=m.price>0?((m.price-cost)/m.price*100):0;const active=sel===m.id;return <div key={m.id} onClick={()=>setSel(m.id)} style={{padding:"10px 12px",borderRadius:10,cursor:"pointer",marginBottom:4,background:active?C.brandLight:"transparent",border:`1px solid ${active?C.brandBorder:"transparent"}`,transition:"all .15s"}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:active?800:500,color:active?C.brand:C.ink2,marginBottom:2}}>{m.name}</div>
           <div style={{display:"flex",gap:6}}><span style={{fontSize:11,color:marginColor(mg),fontWeight:700}}>กำไร {mg.toFixed(0)}%</span><span style={{fontSize:11,color:C.ink4}}>· {(m.sop||[]).length} ขั้นตอน</span></div>
         </div>;})}
@@ -1510,9 +1532,9 @@ export default function App(){
         <div style={{flex:1,padding:"24px 28px 56px"}}>
           {initErr&&<ErrBox msg={initErr} onRetry={loadAll}/>}
           {loading?<Loading text="กำลังโหลดข้อมูลจาก Cloud..."/>:<>
-            {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH}/>}
-            {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers}/>}
-            {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} ings={ings} currentUser={currentUser}/>}
+            {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches}/>}
+            {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches}/>}
+            {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
