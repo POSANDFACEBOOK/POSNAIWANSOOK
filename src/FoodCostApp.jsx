@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import * as XLSX from "xlsx";
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
@@ -831,7 +832,40 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
   const[q,setQ]=useState("");const[selected,setSelected]=useState({});
   const[sortCol,setSortCol]=useState("margin");const[sortDir,setSortDir]=useState("desc");
   const[saving,setSaving]=useState(false);const[sendingOrder,setSendingOrder]=useState(false);
+  const[xlsxResult,setXlsxResult]=useState(null); // {matched, unmatched}
+  const xlsxRef=useRef();
   const canE=hasPerm(currentUser,"edit_summary");const canOrder=hasPerm(currentUser,"edit_orders");
+
+  function handleXlsxUpload(e){
+    const file=e.target.files?.[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{
+        const wb=XLSX.read(ev.target.result,{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const rows=XLSX.utils.sheet_to_json(ws,{defval:""});
+        if(!rows.length){alert("ไฟล์ว่างเปล่า");return;}
+        // หาคอลัมน์ชื่อเมนูและจำนวนขาย (flexible matching)
+        const keys=Object.keys(rows[0]);
+        const nameKey=keys.find(k=>/ชื่อ|เมนู|menu|name/i.test(k))||keys[0];
+        const qtyKey=keys.find(k=>/จำนวน|ขาย|qty|sold|count|sell|amount/i.test(k))||keys[1];
+        const matched=[],unmatched=[];
+        const newSel={...selected};
+        rows.forEach(row=>{
+          const rawName=String(row[nameKey]||"").trim();
+          const qty=+(String(row[qtyKey]||"0").replace(/,/g,""))||0;
+          if(!rawName)return;
+          const menu=menus.find(m=>m.name.toLowerCase()===rawName.toLowerCase()||m.name.toLowerCase().includes(rawName.toLowerCase())||rawName.toLowerCase().includes(m.name.toLowerCase()));
+          if(menu){newSel[menu.id]=(+(newSel[menu.id]||0))+qty;matched.push({name:rawName,menuName:menu.name,qty});}
+          else unmatched.push({name:rawName,qty});
+        });
+        setSelected(newSel);
+        setXlsxResult({matched,unmatched});
+      }catch(err){alert("อ่านไฟล์ไม่สำเร็จ: "+err.message);}
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value="";
+  }
   function onSort(col){if(sortCol===col)setSortDir(d=>d==="asc"?"desc":"asc");else{setSortCol(col);setSortDir("desc");}}
   const allItems=useMemo(()=>menus.map(m=>{const c=menuCost(m,ings);const p=m.price-c;const mg=m.price>0?p/m.price*100:0;return{...m,cost:c,profit:p,margin:mg};}),[menus,ings]);
   const searchResults=useMemo(()=>allItems.filter(m=>m.name.toLowerCase().includes(q.toLowerCase())&&!selected[m.id]),[allItems,q,selected]);
@@ -886,11 +920,41 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
           <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...iS,width:155,fontSize:13,padding:"7px 10px"}}/>
         </div>
       </div>
-      <div style={{display:"flex",gap:8}}>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <input ref={xlsxRef} type="file" accept=".xlsx,.xls,.csv" style={{display:"none"}} onChange={handleXlsxUpload}/>
+        <Btn v="info" icon={I.ul} onClick={()=>xlsxRef.current?.click()}>แนบ Excel ยอดขาย</Btn>
         {canE&&<Btn onClick={saveSummary} icon={I.save} v="success" disabled={selectedItems.length===0} loading={saving}>บันทึกสรุป</Btn>}
         {canOrder&&<Btn onClick={sendOrderToCentral} icon={I.send} v="teal" disabled={selectedItems.length===0} loading={sendingOrder}>ส่งสั่งวัตถุดิบ</Btn>}
       </div>
     </div>
+    {xlsxResult&&<div style={{background:C.white,borderRadius:14,border:`1px solid ${C.line}`,padding:"14px 18px",marginBottom:16,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}><Ic d={I.ul} s={16} c={C.blue}/><span style={{fontWeight:800,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>ผลการอ่านไฟล์ Excel</span></div>
+        <button onClick={()=>setXlsxResult(null)} style={{background:"none",border:"none",cursor:"pointer",color:C.ink4,fontSize:18,lineHeight:1}}>×</button>
+      </div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:xlsxResult.unmatched.length>0?10:0}}>
+        <div style={{background:C.greenLight,border:`1px solid ${C.green}44`,borderRadius:10,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:20}}>✅</span>
+          <div><div style={{fontWeight:800,fontSize:15,color:C.green}}>{xlsxResult.matched.length} เมนู</div><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>จับคู่สำเร็จ</div></div>
+        </div>
+        {xlsxResult.unmatched.length>0&&<div style={{background:C.yellowLight,border:`1px solid ${C.yellow}44`,borderRadius:10,padding:"8px 14px",display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:20}}>⚠️</span>
+          <div><div style={{fontWeight:800,fontSize:15,color:C.yellow}}>{xlsxResult.unmatched.length} เมนู</div><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบในระบบ</div></div>
+        </div>}
+      </div>
+      {xlsxResult.matched.length>0&&<div style={{marginBottom:8}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.green,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>จับคู่สำเร็จ:</div>
+        <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+          {xlsxResult.matched.map((m,i)=><span key={i} style={{background:C.greenLight,border:`1px solid ${C.green}44`,borderRadius:6,padding:"2px 8px",fontSize:11,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>{m.menuName} ({m.qty} จาน)</span>)}
+        </div>
+      </div>}
+      {xlsxResult.unmatched.length>0&&<div>
+        <div style={{fontSize:11,fontWeight:700,color:C.yellow,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบในระบบ (ต้องเพิ่มเมนูก่อน):</div>
+        <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+          {xlsxResult.unmatched.map((m,i)=><span key={i} style={{background:C.yellowLight,border:`1px solid ${C.yellow}44`,borderRadius:6,padding:"2px 8px",fontSize:11,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>{m.name} ({m.qty})</span>)}
+        </div>
+      </div>}
+    </div>}
     <Card style={{padding:"16px 20px",marginBottom:20}}>
       <div style={{fontSize:14,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>ค้นหาและเพิ่มเมนูที่ต้องการสรุป</div>
       <div style={{position:"relative",marginBottom:10}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="พิมพ์ชื่อเมนู..." style={{...iS,paddingLeft:40}}/></div>
