@@ -1200,53 +1200,106 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     </div>}
     </div>
 
-    {section==="printers"&&<div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-        <div>
-          <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:3}}>เครื่องพิมพ์ใบสั่ง (Network Printer)</h3>
-          <p style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>รองรับ Xprinter / ESC-POS ขนาด 80mm เชื่อมต่อผ่าน LAN</p>
+    {section==="printers"&&<div style={{minHeight:"100%"}}>
+      {/* ── Header Bar ── */}
+      <div style={{background:"linear-gradient(135deg,#0F172A 0%,#1E293B 100%)",borderRadius:16,padding:"28px 32px",marginBottom:24,display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 4px 24px rgba(15,23,42,0.18)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:18}}>
+          <div style={{width:56,height:56,background:"linear-gradient(135deg,#6366F1,#8B5CF6)",borderRadius:16,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 8px 24px rgba(99,102,241,0.4)"}}>
+            <Ic d={I.print} s={26} c="#fff" sw={1.5}/>
+          </div>
+          <div>
+            <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:22,fontWeight:900,color:"#F8FAFC",margin:0,letterSpacing:-.3}}>เครื่องพิมพ์ใบสั่ง</h2>
+            <p style={{fontSize:13,color:"rgba(255,255,255,0.45)",margin:"3px 0 0",fontFamily:"'Sarabun',sans-serif"}}>Network Printer — Xprinter / ESC-POS 80mm (TCP Port 9100)</p>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          {[{label:"ทั้งหมด",count:printers.length,color:"#6366F1"},{label:"ครัว",count:printers.filter(p=>p.type==="kitchen").length,color:"#F59E0B"},{label:"บาร์",count:printers.filter(p=>p.type==="bar").length,color:"#10B981"},{label:"แคชเชียร์",count:printers.filter(p=>p.type==="receipt").length,color:"#3B82F6"}].map(s=><div key={s.label} style={{textAlign:"center",background:"rgba(255,255,255,0.07)",borderRadius:12,padding:"10px 18px",border:"1px solid rgba(255,255,255,0.1)"}}>
+            <div style={{fontSize:22,fontWeight:900,color:s.color,lineHeight:1}}>{s.count}</div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.45)",fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{s.label}</div>
+          </div>)}
         </div>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-        <Card style={{padding:"18px 20px"}}>
-          <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink,marginBottom:14}}>{editPID?"✏️ แก้ไข":"➕ เพิ่ม"} เครื่องปริ้น</h4>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-            <div style={{gridColumn:"span 2"}}><Inp label="ชื่อเครื่องปริ้น *" value={pForm.name} onChange={e=>setPForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัว, บาร์, แคชเชียร์"/></div>
+
+      {/* ── Add / Edit Form ── */}
+      <div style={{background:C.white,borderRadius:16,border:`1px solid ${C.line}`,marginBottom:24,overflow:"hidden",boxShadow:"0 2px 12px rgba(0,0,0,0.06)"}}>
+        <div style={{padding:"18px 28px",borderBottom:`1px solid ${C.line}`,background:editPID?"#FFF7ED":"#F8FAFF",display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:32,height:32,background:editPID?"#F59E0B22":"#6366F122",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <Ic d={editPID?I.pencil:I.plus} s={15} c={editPID?"#F59E0B":"#6366F1"}/>
+          </div>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink}}>{editPID?"แก้ไขเครื่องพิมพ์":"เพิ่มเครื่องพิมพ์ใหม่"}</span>
+          {editPID&&<Chip color="yellow">กำลังแก้ไข</Chip>}
+        </div>
+        <div style={{padding:"24px 28px"}}>
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1.2fr 0.8fr 1fr 1fr",gap:16,marginBottom:16}}>
+            <Inp label="ชื่อเครื่องพิมพ์ *" value={pForm.name} onChange={e=>setPForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัวหลัก, บาร์, แคชเชียร์"/>
             <Inp label="IP Address *" value={pForm.ip} onChange={e=>setPForm(f=>({...f,ip:e.target.value}))} placeholder="192.168.1.100"/>
             <Inp label="Port" type="number" value={pForm.port} onChange={e=>setPForm(f=>({...f,port:+e.target.value}))} placeholder="9100"/>
-            <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ประเภท</label><select value={pForm.type} onChange={e=>setPForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="kitchen">🍳 ครัว</option><option value="bar">🍹 บาร์</option><option value="receipt">🧾 แคชเชียร์</option><option value="other">📄 อื่นๆ</option></select></div>
-            <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{(currentBranch?[currentBranch]:[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
-            <div style={{gridColumn:"span 2"}}><Inp label="หมายเหตุ" value={pForm.description} onChange={e=>setPForm(f=>({...f,description:e.target.value}))} placeholder="เช่น ปริ้นใบสั่งครัวหลัก"/></div>
+            <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ประเภท</label><select value={pForm.type} onChange={e=>setPForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="kitchen">🍳 ครัว</option><option value="bar">🍹 บาร์</option><option value="receipt">🧾 แคชเชียร์</option><option value="other">📄 อื่นๆ</option></select></div>
+            <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
           </div>
-          <div style={{display:"flex",gap:8}}>
-            {editPID&&<Btn v="ghost" onClick={()=>{setPForm(pF0);setEditPID(null);}}>ยกเลิก</Btn>}
-            <Btn onClick={savePrinter} icon={I.check} disabled={!pForm.name||!pForm.ip} loading={pSaving}>{editPID?"บันทึก":"เพิ่มเครื่องปริ้น"}</Btn>
-          </div>
-        </Card>
-        <Card style={{padding:"18px 20px"}}>
-          <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink,marginBottom:14}}>เครื่องปริ้นทั้งหมด ({printers.length})</h4>
-          {printers.length===0&&<div style={{textAlign:"center",padding:"30px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>ยังไม่มีเครื่องปริ้น</div>}
-          {printers.map(p=>{const typeLabel={kitchen:"🍳 ครัว",bar:"🍹 บาร์",receipt:"🧾 แคชเชียร์",other:"📄 อื่นๆ"}[p.type]||p.type;return <div key={p.id} style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:10,padding:"10px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
-            <div style={{flex:1}}>
-              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
-                <span style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{p.name}</span>
-                <Chip color="blue">{typeLabel}</Chip>
-              </div>
-              <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",display:"flex",gap:8}}>
-                <span>🌐 {p.ip}:{p.port||9100}</span>
-                {p.description&&<span>• {p.description}</span>}
-              </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:16,alignItems:"flex-end"}}>
+            <Inp label="หมายเหตุ (ไม่บังคับ)" value={pForm.description} onChange={e=>setPForm(f=>({...f,description:e.target.value}))} placeholder="เช่น ปริ้นใบสั่งครัวหลัก ชั้น 1"/>
+            <div style={{display:"flex",gap:8,paddingBottom:1}}>
+              {editPID&&<Btn v="ghost" onClick={()=>{setPForm(pF0);setEditPID(null);}}>ยกเลิก</Btn>}
+              <Btn onClick={savePrinter} icon={I.check} disabled={!pForm.name||!pForm.ip} loading={pSaving} style={{minWidth:140}}>{editPID?"บันทึกการแก้ไข":"เพิ่มเครื่องพิมพ์"}</Btn>
             </div>
-            <div style={{display:"flex",gap:5}}>
-              <button onClick={()=>{setPForm({name:p.name,ip:p.ip,port:p.port||9100,description:p.description||"",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active});setEditPID(p.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
-              <button onClick={async()=>{if(!confirm(`ลบ "${p.name}"?`))return;try{await api.deletePrinter(p.id);await reloadPrinters();}catch{alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
-            </div>
-          </div>;})}
-          <div style={{marginTop:12,background:C.blueLight,borderRadius:10,padding:"10px 14px",fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>
-            💡 <b>วิธีใช้:</b> เพิ่มเครื่องปริ้นแล้วไปที่หน้า <b>เมนู</b> เพื่อกำหนดว่าเมนูไหนออกที่ printer ไหน
           </div>
-        </Card>
+        </div>
       </div>
+
+      {/* ── Printer Grid ── */}
+      <div style={{marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:800,color:C.ink,margin:0}}>เครื่องพิมพ์ที่เชื่อมต่อ <span style={{fontSize:13,fontWeight:600,color:C.ink4}}>({printers.length} เครื่อง)</span></h3>
+        <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",background:C.blueLight,padding:"6px 14px",borderRadius:20,border:`1px solid #BFDBFE`}}>💡 ไปที่หน้า <b>เมนู</b> เพื่อกำหนดเครื่องพิมพ์ให้แต่ละเมนู</div>
+      </div>
+
+      {printers.length===0?<div style={{background:C.white,border:`2px dashed ${C.line}`,borderRadius:16,padding:"60px 20px",textAlign:"center"}}>
+        <div style={{width:64,height:64,background:C.lineLight,borderRadius:20,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px"}}><Ic d={I.print} s={30} c={C.ink4}/></div>
+        <div style={{fontSize:16,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>ยังไม่มีเครื่องพิมพ์</div>
+        <div style={{fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มเครื่องพิมพ์แรกของคุณด้านบน</div>
+      </div>:
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:16}}>
+        {printers.map(p=>{
+          const typeConf={kitchen:{label:"ครัว",emoji:"🍳",color:"#F59E0B",bg:"#FFFBEB",border:"#FDE68A"},bar:{label:"บาร์",emoji:"🍹",color:"#10B981",bg:"#ECFDF5",border:"#A7F3D0"},receipt:{label:"แคชเชียร์",emoji:"🧾",color:"#3B82F6",bg:"#EFF6FF",border:"#BFDBFE"},other:{label:"อื่นๆ",emoji:"📄",color:"#8B5CF6",bg:"#F5F3FF",border:"#DDD6FE"}}[p.type]||{label:p.type,emoji:"🖨️",color:C.ink3,bg:C.bg,border:C.line};
+          return <div key={p.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:16,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.05)",transition:"box-shadow .2s",display:"flex",flexDirection:"column"}}>
+            <div style={{padding:"18px 20px 14px",borderBottom:`1px solid ${C.line}`,background:`linear-gradient(135deg,${typeConf.bg},${C.white})`,display:"flex",alignItems:"flex-start",gap:14}}>
+              <div style={{width:48,height:48,background:typeConf.bg,border:`2px solid ${typeConf.border}`,borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>{typeConf.emoji}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                  <span style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</span>
+                </div>
+                <div style={{display:"inline-flex",alignItems:"center",gap:5,background:typeConf.bg,border:`1px solid ${typeConf.border}`,borderRadius:20,padding:"2px 10px"}}>
+                  <span style={{fontSize:11,fontWeight:700,color:typeConf.color,fontFamily:"'Sarabun',sans-serif"}}>{typeConf.label}</span>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:6,flexShrink:0}}>
+                <button onClick={()=>{setPForm({name:p.name,ip:p.ip,port:p.port||9100,description:p.description||"",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active});setEditPID(p.id);}} title="แก้ไข" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                  <Ic d={I.pencil} s={13} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>แก้ไข</span>
+                </button>
+                <button onClick={async()=>{if(!confirm(`ลบ "${p.name}"?`))return;try{await api.deletePrinter(p.id);await reloadPrinters();}catch{alert("ลบไม่สำเร็จ");}}} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                  <Ic d={I.trash} s={13} c={C.red}/><span style={{fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ลบ</span>
+                </button>
+              </div>
+            </div>
+            <div style={{padding:"14px 20px",display:"flex",flexDirection:"column",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#F8FAFC",borderRadius:10,border:`1px solid ${C.line}`}}>
+                <div style={{width:8,height:8,borderRadius:"50%",background:C.green,boxShadow:`0 0 6px ${C.green}88`,flexShrink:0}}/>
+                <div>
+                  <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"monospace",letterSpacing:.5}}>{p.ip}<span style={{color:C.ink4,fontWeight:400}>:{p.port||9100}</span></div>
+                  <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>IP Address : Port</div>
+                </div>
+              </div>
+              {p.description&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",padding:"8px 12px",background:"#FFFBEB",borderRadius:8,border:"1px solid #FDE68A"}}>📝 {p.description}</div>}
+              {p.branch_id&&branches.find(b=>b.id===p.branch_id)&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:6}}>
+                <Ic d={I.branch} s={13} c={C.ink4}/><span>สาขา: <b>{branches.find(b=>b.id===p.branch_id)?.name}</b></span>
+              </div>}
+              {!p.branch_id&&<div style={{fontSize:12,color:C.teal,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:6}}>
+                <Ic d={I.shop} s={13} c={C.teal}/><span>ใช้งานได้ทุกสาขา</span>
+              </div>}
+            </div>
+          </div>;
+        })}
+      </div>}
     </div>}
 
     {showUser&&<Modal title={editUID?"✏️ แก้ไขผู้ใช้":"➕ เพิ่มผู้ใช้ใหม่"} onClose={()=>setShowUser(false)} extraWide>
