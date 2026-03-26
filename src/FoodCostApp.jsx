@@ -55,6 +55,12 @@ const api = {
   updatePOSTable: (id, d) => sb(`tables?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   deletePOSTable: (id) => sb(`tables?id=eq.${id}`, { method:"DELETE", headers:{"Prefer":"return=minimal"} }),
   getPOSOrders: (bid) => sb(`orders?order=created_at.desc&branch_id=eq.${bid}&limit=200`),
+  // Printers
+  getPrinters: (bid) => sb(`printers?order=id.asc${bid?`&branch_id=eq.${bid}`:"&branch_id=is.null"}`),
+  getAllPrinters: () => sb(`printers?order=id.asc`),
+  addPrinter: (d) => sb("printers", {method:"POST", body:JSON.stringify(d)}),
+  updatePrinter: (id,d) => sb(`printers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  deletePrinter: (id) => sb(`printers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   getActiveOrders: (bid) => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${bid}`),
   getOrderByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`),
   createPOSOrder: (d) => sb("orders", { method:"POST", body:JSON.stringify(d) }),
@@ -122,6 +128,7 @@ const I = {
   table:["M3 3h18v18H3z","M3 9h18","M3 15h18","M9 3v18","M15 3v18"],
   qr:["M3 3h6v6H3z","M15 3h6v6h-6z","M3 15h6v6H3z","M15 15h2v2h-2z","M19 15v2","M15 19h2","M19 19h2","M19 21v-2"],
   bill:["M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z","M14 2v6h6","M16 13H8","M16 17H8","M10 9H8"],
+  print:["M6 9V2h12v7","M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2","M6 14h12v8H6z"],
   minus:"M5 12h14",
   cash:"M12 2v20M17 5H9.5a3.5 3.5 0 100 7h5a3.5 3.5 0 110 7H6",
   food:"M18 8h1a4 4 0 010 8h-1 M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8z M6 1v3 M10 1v3 M14 1v3",
@@ -610,7 +617,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH}){
 // ══════════════════════════════════════════════════════
 // ── MENU TAB ──────────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH}){
+function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,printers=[]}){
   const[q,setQ]=useState("");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[showImportMenu,setShowImportMenu]=useState(false);
   const ef={name:"",category:menuCats[0]?.name||"",price:"",description:"",image:null,ingredients:[],sop:[]};
   const[form,setForm]=useState(ef);const[ingQ,setIngQ]=useState("");const[ni,setNi]=useState({ingredientId:"",amountGram:""});
@@ -649,6 +656,15 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH}){
             {[{l:"ราคาขาย",v:`฿${menu.price}`,c:C.ink},{l:"ต้นทุน",v:`฿${cost.toFixed(1)}`,c:C.brand},{l:"กำไร %",v:`${mg.toFixed(0)}%`,c:mc}].map(s=><div key={s.l} style={{background:C.bg,borderRadius:10,padding:8,textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:14,fontWeight:800,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div>)}
           </div>
           <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}><Chip color={mg>=60?"green":mg>=40?"yellow":"red"}>{marginLabel(mg)}</Chip><EditedBy username={menu.edit_by} editAt={menu.edit_at}/></div>
+          {canE&&printers.length>0&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.lineLight}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <Ic d={I.print} s={12} c={C.ink4}/>
+              <select value={menu.printer_id||""} onChange={async e=>{try{await api.updateMenu(menu.id,{printer_id:e.target.value?+e.target.value:null});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} style={{...iS,flex:1,padding:"4px 8px",fontSize:11,height:28}}>
+                <option value="">— ไม่ระบุ printer —</option>
+                {printers.map(p=><option key={p.id} value={p.id}>{p.name} ({p.ip})</option>)}
+              </select>
+            </div>
+          </div>}
           {canE&&<div style={{marginTop:10,display:"flex",gap:6,paddingTop:10,borderTop:`1px solid ${C.lineLight}`}}>
             {(()=>{const avail=(menu.availability||{})[currentBranch.id];const isSoldOut=avail==="sold_out";const isHidden=avail==="hidden";return(<>
               <button onClick={()=>toggleAvailability(menu,"sold_out")} style={{flex:1,padding:"6px 8px",borderRadius:8,border:`1.5px solid ${isSoldOut?"#F59E0B":"#E2E8F0"}`,background:isSoldOut?"#FEF3C7":"transparent",cursor:"pointer",fontSize:11,fontWeight:700,color:isSoldOut?"#92400E":"#94A3B8",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
@@ -1055,7 +1071,7 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
 // ══════════════════════════════════════════════════════
 // ── SETTINGS TAB ──────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,reloadBranches,suppliers,reloadSuppliers,currentUser}){
+function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,reloadBranches,suppliers,reloadSuppliers,currentUser,printers=[],reloadPrinters,currentBranch}){
   const[section,setSection]=useState("cats");
   const[newIC,setNewIC]=useState("");const[newMC,setNewMC]=useState("");
   const[showUser,setShowUser]=useState(false);const[editUID,setEditUID]=useState(null);const[saving,setSaving]=useState(false);
@@ -1063,14 +1079,17 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   const[uF,setUF]=useState(uF0);
   const[branchForm,setBranchForm]=useState({name:"",type:"branch",active:true});const[editBID,setEditBID]=useState(null);
   const[supForm,setSupForm]=useState({name:"",contact:"",phone:"",note:"",active:true});const[editSID,setEditSID]=useState(null);
+  const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true};
+  const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
   const isAdmin=hasPerm(currentUser,"settings");
   const permGroups=useMemo(()=>{const g={};ALL_PERMS.forEach(p=>{(g[p.group]||(g[p.group]=[])).push(p);});return g;},[]);
 
   async function saveUser(){if(!uF.username||!uF.password)return;setSaving(true);try{if(editUID)await api.updateUser(editUID,uF);else await api.addUser(uF);await reloadUsers();setShowUser(false);setEditUID(null);setUF(uF0);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function saveBranch(){if(!branchForm.name)return;try{if(editBID)await api.updateBranch(editBID,branchForm);else await api.addBranch(branchForm);await reloadBranches();setBranchForm({name:"",type:"branch",active:true});setEditBID(null);}catch(e){alert("บันทึกไม่สำเร็จ");};}
   async function saveSup(){if(!supForm.name)return;try{if(editSID)await api.updateSupplier(editSID,supForm);else await api.addSupplier(supForm);await reloadSuppliers();setSupForm({name:"",contact:"",phone:"",note:"",active:true});setEditSID(null);}catch(e){alert("บันทึกไม่สำเร็จ");};}
+  async function savePrinter(){if(!pForm.name||!pForm.ip)return;setPSaving(true);try{const d={...pForm,port:+pForm.port||9100,branch_id:pForm.branch_id||null};if(editPID)await api.updatePrinter(editPID,d);else await api.addPrinter(d);await reloadPrinters();setPForm(pF0);setEditPID(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setPSaving(false);}
 
-  const sections=[{id:"cats",label:"หมวดหมู่",icon:I.tag},{id:"branches",label:"สาขา",icon:I.branch},{id:"suppliers",label:"ซัพพลาย",icon:I.truck},{id:"users",label:"ผู้ใช้",icon:I.users}];
+  const sections=[{id:"cats",label:"หมวดหมู่",icon:I.tag},{id:"branches",label:"สาขา",icon:I.branch},{id:"suppliers",label:"ซัพพลาย",icon:I.truck},{id:"users",label:"ผู้ใช้",icon:I.users},{id:"printers",label:"เครื่องปริ้น",icon:I.print}];
 
   return <div style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:16,minHeight:480}}>
     <Card style={{padding:8,height:"fit-content"}}>
@@ -1181,6 +1200,55 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     </div>}
     </div>
 
+    {section==="printers"&&<div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div>
+          <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:3}}>เครื่องพิมพ์ใบสั่ง (Network Printer)</h3>
+          <p style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>รองรับ Xprinter / ESC-POS ขนาด 80mm เชื่อมต่อผ่าน LAN</p>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        <Card style={{padding:"18px 20px"}}>
+          <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink,marginBottom:14}}>{editPID?"✏️ แก้ไข":"➕ เพิ่ม"} เครื่องปริ้น</h4>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+            <div style={{gridColumn:"span 2"}}><Inp label="ชื่อเครื่องปริ้น *" value={pForm.name} onChange={e=>setPForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัว, บาร์, แคชเชียร์"/></div>
+            <Inp label="IP Address *" value={pForm.ip} onChange={e=>setPForm(f=>({...f,ip:e.target.value}))} placeholder="192.168.1.100"/>
+            <Inp label="Port" type="number" value={pForm.port} onChange={e=>setPForm(f=>({...f,port:+e.target.value}))} placeholder="9100"/>
+            <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ประเภท</label><select value={pForm.type} onChange={e=>setPForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="kitchen">🍳 ครัว</option><option value="bar">🍹 บาร์</option><option value="receipt">🧾 แคชเชียร์</option><option value="other">📄 อื่นๆ</option></select></div>
+            <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{(currentBranch?[currentBranch]:[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+            <div style={{gridColumn:"span 2"}}><Inp label="หมายเหตุ" value={pForm.description} onChange={e=>setPForm(f=>({...f,description:e.target.value}))} placeholder="เช่น ปริ้นใบสั่งครัวหลัก"/></div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            {editPID&&<Btn v="ghost" onClick={()=>{setPForm(pF0);setEditPID(null);}}>ยกเลิก</Btn>}
+            <Btn onClick={savePrinter} icon={I.check} disabled={!pForm.name||!pForm.ip} loading={pSaving}>{editPID?"บันทึก":"เพิ่มเครื่องปริ้น"}</Btn>
+          </div>
+        </Card>
+        <Card style={{padding:"18px 20px"}}>
+          <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink,marginBottom:14}}>เครื่องปริ้นทั้งหมด ({printers.length})</h4>
+          {printers.length===0&&<div style={{textAlign:"center",padding:"30px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>ยังไม่มีเครื่องปริ้น</div>}
+          {printers.map(p=>{const typeLabel={kitchen:"🍳 ครัว",bar:"🍹 บาร์",receipt:"🧾 แคชเชียร์",other:"📄 อื่นๆ"}[p.type]||p.type;return <div key={p.id} style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:10,padding:"10px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
+                <span style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{p.name}</span>
+                <Chip color="blue">{typeLabel}</Chip>
+              </div>
+              <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",display:"flex",gap:8}}>
+                <span>🌐 {p.ip}:{p.port||9100}</span>
+                {p.description&&<span>• {p.description}</span>}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:5}}>
+              <button onClick={()=>{setPForm({name:p.name,ip:p.ip,port:p.port||9100,description:p.description||"",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active});setEditPID(p.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+              <button onClick={async()=>{if(!confirm(`ลบ "${p.name}"?`))return;try{await api.deletePrinter(p.id);await reloadPrinters();}catch{alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
+            </div>
+          </div>;})}
+          <div style={{marginTop:12,background:C.blueLight,borderRadius:10,padding:"10px 14px",fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>
+            💡 <b>วิธีใช้:</b> เพิ่มเครื่องปริ้นแล้วไปที่หน้า <b>เมนู</b> เพื่อกำหนดว่าเมนูไหนออกที่ printer ไหน
+          </div>
+        </Card>
+      </div>
+    </div>}
+
     {showUser&&<Modal title={editUID?"✏️ แก้ไขผู้ใช้":"➕ เพิ่มผู้ใช้ใหม่"} onClose={()=>setShowUser(false)} extraWide>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
         <div>
@@ -1223,8 +1291,9 @@ export default function App(){
   const[branches,setBranches]=useState([]);const[suppliers,setSuppliers]=useState([]);
   const[costHistory,setCostHistory]=useState([]);const[actionHistory,setActionHistory]=useState([]);
   const[orders,setOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
+  const[printers,setPrinters]=useState([]);
   const[loading,setLoading]=useState(false);const[initErr,setInitErr]=useState("");
-  const[tab,setTab]=useState("ingredients");
+  const[tab,setTab]=useState("pos");
 
   const ingCats=useMemo(()=>allCats.filter(c=>c.type==="ingredient"),[allCats]);
   const menuCats=useMemo(()=>allCats.filter(c=>c.type==="menu"),[allCats]);
@@ -1234,16 +1303,17 @@ export default function App(){
     setLoading(true);setInitErr("");
     try{
       const isCentral=currentBranch.type==="central";
-      const[i,m,c,u,b,s,ch,ah,o]=await Promise.all([
+      const[i,m,c,u,b,s,ch,ah,o,pr]=await Promise.all([
         api.getIngs(),
         api.getMenus(),
         api.getCats(),api.getUsers(),api.getBranches(),api.getSuppliers(),
         api.getCostHist(isCentral?null:currentBranch.id),
         api.getActionHist(),
         api.getOrders(isCentral?null:currentBranch.id),
+        api.getAllPrinters(),
       ]);
       setIngs(i);setMenus(m);setAllCats(c);setUsers(u);setBranches(b);setSuppliers(s);
-      setCostHistory(ch);setActionHistory(ah);setOrders(o);
+      setCostHistory(ch);setActionHistory(ah);setOrders(o);setPrinters(pr);
       if(isCentral){const ao=await api.getAllOrders();setAllOrders(ao);}
     }catch(e){setInitErr("เชื่อมต่อ Supabase ไม่ได้: "+e.message);}
     setLoading(false);
@@ -1261,6 +1331,7 @@ export default function App(){
     history:async()=>{const isCentral=currentBranch?.type==="central";const d=await api.getCostHist(isCentral?null:currentBranch?.id);setCostHistory(d);},
     action:async()=>{const d=await api.getActionHist();setActionHistory(d);},
     orders:async()=>{const isCentral=currentBranch?.type==="central";const d=await api.getOrders(isCentral?null:currentBranch?.id);setOrders(d);if(isCentral){const ao=await api.getAllOrders();setAllOrders(ao);}},
+    printers:async()=>{const d=await api.getAllPrinters();setPrinters(d);},
   };
   const addH=useCallback(async a=>{try{await api.addActionHist({action:a,time:nowStr()});await reload.action();}catch{}},[currentBranch]);
 
@@ -1387,13 +1458,13 @@ export default function App(){
           {initErr&&<ErrBox msg={initErr} onRetry={loadAll}/>}
           {loading?<Loading text="กำลังโหลดข้อมูลจาก Cloud..."/>:<>
             {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH}/>}
-            {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH}/>}
+            {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} ings={ings} currentUser={currentUser}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
-            {tab==="pos"&&<POSTab menus={menus} currentBranch={currentBranch} currentUser={currentUser}/>}
-            {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser}/>}
+            {tab==="pos"&&<POSTab menus={menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers}/>}
+            {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} printers={printers} reloadPrinters={reload.printers} currentBranch={currentBranch}/>}
           </>}
         </div>
       </main>
@@ -1411,11 +1482,19 @@ function printReceipt(order, tableNum, branchName){
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px;font-size:13px}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2>${branchName}</h2><div style="text-align:center;font-size:12px">โต๊ะ ${tableNum} | ${new Date().toLocaleString("th-TH")}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>รวม</span><span>฿${order.subtotal?.toFixed(0)||0}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between"><span>ส่วนลด</span><span>-฿${order.discount?.toFixed(0)}</span></div>`:""}<div style="display:flex;justify-content:space-between;font-weight:700;font-size:16px;margin-top:4px"><span>รวมทั้งสิ้น</span><span>฿${order.total?.toFixed(0)||0}</span></div><div class="line"></div><div style="text-align:center;font-size:12px">ชำระโดย: ${order.payment_method==="cash"?"เงินสด":order.payment_method==="transfer"?"โอนเงิน":"บัตรเครดิต"}</div><div style="text-align:center;font-size:11px;margin-top:6px">ขอบคุณที่ใช้บริการครับ</div><br/><script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
-function printKitchen(items, tableNum){
-  const w=window.open("","_blank","width=350,height=400");
-  const rows=items.map(i=>`<div style="margin:4px 0;font-size:16px"><b>${i.qty}x ${i.name}</b>${i.note?`<div style="font-size:12px;padding-left:16px">★ ${i.note}</div>`:""}</div>`).join("");
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Kitchen</title><style>body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2 style="text-align:center;font-size:20px;margin:4px 0">🍳 ใบสั่งครัว</h2><div style="text-align:center;font-size:15px;font-weight:700">โต๊ะ ${tableNum}</div><div style="text-align:center;font-size:12px">${new Date().toLocaleString("th-TH")}</div><hr/>${rows}<hr/><div style="text-align:center;font-size:12px">--- สิ้นสุดรายการ ---</div><br/><script>window.onload=()=>window.print();<\/script></body></html>`);
-  w.document.close();
+function printKitchen(items, tableNum, printers=[]){
+  // Group items by printer_id
+  const groups={};
+  items.forEach(i=>{const pid=i.printer_id?String(i.printer_id):"default";(groups[pid]||(groups[pid]=[])).push(i);});
+  Object.entries(groups).forEach(([pid,grpItems])=>{
+    const printer=pid!=="default"?printers.find(p=>p.id===+pid):null;
+    const title=printer?`${printer.name} (${printer.ip}:${printer.port||9100})`:"ใบสั่งครัว";
+    const ipInfo=printer?`<div style="text-align:center;font-size:10px;color:#94a3b8;margin-bottom:4px">Printer: ${printer.ip}:${printer.port||9100}</div>`:"";
+    const rows=grpItems.map(i=>`<div style="margin:5px 0;font-size:16px"><b>${i.qty}x ${i.name}</b>${i.note?`<div style="font-size:12px;padding-left:16px;color:#555">★ ${i.note}</div>`:""}</div>`).join("");
+    const w=window.open("","_blank","width=350,height=420");
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2 style="text-align:center;font-size:18px;margin:4px 0">🍳 ${title}</h2><div style="text-align:center;font-size:15px;font-weight:900">โต๊ะ ${tableNum}</div><div style="text-align:center;font-size:11px;color:#64748b">${new Date().toLocaleString("th-TH")}</div>${ipInfo}<hr style="border:1px dashed #ccc"/>${rows}<hr style="border:1px dashed #ccc"/><div style="text-align:center;font-size:11px;color:#94a3b8">--- สิ้นสุดรายการ ---</div><br/><script>window.onload=()=>window.print();<\/script></body></html>`);
+    w.document.close();
+  });
 }
 
 // ══════════════════════════════════════════════════════
@@ -1582,7 +1661,7 @@ function POSTableManage({tables,branch,onDone}){
 // ══════════════════════════════════════════════════════
 // ── POS ORDER PANEL ───────────────────────────────────
 // ══════════════════════════════════════════════════════
-function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onDone}){
+function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onDone,printers=[]}){
   const[items,setItems]=useState(existingOrder?.items||[]);
   const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
@@ -1592,7 +1671,7 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
   const filtered=useMemo(()=>menus.filter(m=>(selCat==="ทั้งหมด"||m.category===selCat)&&m.name.toLowerCase().includes(search.toLowerCase())),[menus,selCat,search]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   const total=Math.max(0,subtotal-(+discount||0));
-  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:""}];});}
+  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null}];});}
   function chQty(idx,d){setItems(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmItem(idx){setItems(p=>p.filter((_,i)=>i!==idx));}
   async function saveOrder(){
@@ -1602,7 +1681,7 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
       const d={branch_id:branch.id,table_id:table.id,table_number:table.table_number,items,subtotal,discount:0,total:subtotal,status:"pending",ordered_by:currentUser.username,updated_at:new Date().toISOString()};
       if(existingOrder?.id)await api.updatePOSOrder(existingOrder.id,d);
       else await api.createPOSOrder(d);
-      printKitchen(items,table.table_number);
+      printKitchen(items,table.table_number,printers);
       onDone();onClose();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);
   }
@@ -1848,7 +1927,7 @@ function POSQRPage({branch,tables}){
 // ══════════════════════════════════════════════════════
 // ── POS TAB (Main entry) ──────────────────────────────
 // ══════════════════════════════════════════════════════
-function POSTab({menus,currentBranch,currentUser}){
+function POSTab({menus,currentBranch,currentUser,printers=[]}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -1916,7 +1995,7 @@ function POSTab({menus,currentBranch,currentUser}){
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
         <button onClick={()=>printTableQR(selTable,currentBranch)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
-      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} branch={currentBranch} currentUser={currentUser} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll}/>
+      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} branch={currentBranch} currentUser={currentUser} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
     </Modal>}
     {showManage&&<Modal title="⚙️ จัดการโต๊ะ" onClose={()=>{setShowManage(false);loadAll();}} wide>
       <POSTableManage tables={tables} branch={currentBranch} onDone={loadAll}/>
