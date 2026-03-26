@@ -14,11 +14,11 @@ async function sb(path, opts = {}) {
 }
 
 const api = {
-  getIngs: (bid) => sb(`ingredients?order=id.asc${bid ? `&branch_id=eq.${bid}` : ""}`),
+  getIngs: () => sb(`ingredients?order=id.asc`),
   addIng: (d) => sb("ingredients", { method: "POST", body: JSON.stringify(d) }),
   updateIng: (id, d) => sb(`ingredients?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteIng: (id) => sb(`ingredients?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
-  getMenus: (bid) => sb(`menus?order=id.asc${bid ? `&branch_id=eq.${bid}` : ""}`),
+  getMenus: () => sb(`menus?order=id.asc`),
   addMenu: (d) => sb("menus", { method: "POST", body: JSON.stringify(d) }),
   updateMenu: (id, d) => sb(`menus?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteMenu: (id) => sb(`menus?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
@@ -1219,8 +1219,8 @@ export default function App(){
     try{
       const isCentral=currentBranch.type==="central";
       const[i,m,c,u,b,s,ch,ah,o]=await Promise.all([
-        api.getIngs(isCentral?null:currentBranch.id),
-        api.getMenus(isCentral?null:currentBranch.id),
+        api.getIngs(),
+        api.getMenus(),
         api.getCats(),api.getUsers(),api.getBranches(),api.getSuppliers(),
         api.getCostHist(isCentral?null:currentBranch.id),
         api.getActionHist(),
@@ -1236,8 +1236,8 @@ export default function App(){
   useEffect(()=>{if(currentBranch)loadAll();},[currentBranch]);
 
   const reload={
-    ings:async()=>{const isCentral=currentBranch?.type==="central";const d=await api.getIngs(isCentral?null:currentBranch?.id);setIngs(d);},
-    menus:async()=>{const isCentral=currentBranch?.type==="central";const d=await api.getMenus(isCentral?null:currentBranch?.id);setMenus(d);},
+    ings:async()=>{const d=await api.getIngs();setIngs(d);},
+    menus:async()=>{const d=await api.getMenus();setMenus(d);},
     cats:async()=>{const d=await api.getCats();setAllCats(d);},
     users:async()=>{const d=await api.getUsers();setUsers(d);},
     branches:async()=>{const d=await api.getBranches();setBranches(d);},
