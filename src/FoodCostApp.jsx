@@ -615,6 +615,12 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH}){
   const ef={name:"",category:menuCats[0]?.name||"",price:"",description:"",image:null,ingredients:[],sop:[]};
   const[form,setForm]=useState(ef);const[ingQ,setIngQ]=useState("");const[ni,setNi]=useState({ingredientId:"",amountGram:""});
   const canE=hasPerm(currentUser,"edit_menus");const canD=hasPerm(currentUser,"delete_menus");
+  async function toggleAvailability(menu,status){
+    const avail={...(menu.availability||{})};
+    if(avail[currentBranch.id]===status)delete avail[currentBranch.id];
+    else avail[currentBranch.id]=status;
+    try{await api.updateMenu(menu.id,{availability:avail});await reload();}catch(e){alert("บันทึกไม่สำเร็จ");}
+  }
   const filtered=useMemo(()=>menus.filter(m=>m.name.toLowerCase().includes(q.toLowerCase())),[menus,q]);
   const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
   const fc=(form.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.price_per_gram*x.amountGram:0);},0);
@@ -643,6 +649,16 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH}){
             {[{l:"ราคาขาย",v:`฿${menu.price}`,c:C.ink},{l:"ต้นทุน",v:`฿${cost.toFixed(1)}`,c:C.brand},{l:"กำไร %",v:`${mg.toFixed(0)}%`,c:mc}].map(s=><div key={s.l} style={{background:C.bg,borderRadius:10,padding:8,textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:14,fontWeight:800,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div>)}
           </div>
           <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}><Chip color={mg>=60?"green":mg>=40?"yellow":"red"}>{marginLabel(mg)}</Chip><EditedBy username={menu.edit_by} editAt={menu.edit_at}/></div>
+          {canE&&<div style={{marginTop:10,display:"flex",gap:6,paddingTop:10,borderTop:`1px solid ${C.lineLight}`}}>
+            {(()=>{const avail=(menu.availability||{})[currentBranch.id];const isSoldOut=avail==="sold_out";const isHidden=avail==="hidden";return(<>
+              <button onClick={()=>toggleAvailability(menu,"sold_out")} style={{flex:1,padding:"6px 8px",borderRadius:8,border:`1.5px solid ${isSoldOut?"#F59E0B":"#E2E8F0"}`,background:isSoldOut?"#FEF3C7":"transparent",cursor:"pointer",fontSize:11,fontWeight:700,color:isSoldOut?"#92400E":"#94A3B8",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
+                <span style={{fontSize:13}}>{isSoldOut?"🟡":"⬜"}</span>วันนี้ของหมด
+              </button>
+              <button onClick={()=>toggleAvailability(menu,"hidden")} style={{flex:1,padding:"6px 8px",borderRadius:8,border:`1.5px solid ${isHidden?"#EF4444":"#E2E8F0"}`,background:isHidden?"#FEE2E2":"transparent",cursor:"pointer",fontSize:11,fontWeight:700,color:isHidden?"#991B1B":"#94A3B8",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
+                <span style={{fontSize:13}}>{isHidden?"🔴":"⬜"}</span>งดขายชั่วคราว
+              </button>
+            </>);})()}
+          </div>}
         </div>
       </Card>;})}
     </div>
@@ -1249,17 +1265,17 @@ export default function App(){
   const addH=useCallback(async a=>{try{await api.addActionHist({action:a,time:nowStr()});await reload.action();}catch{}},[currentBranch]);
 
   const TABS=[
+    {id:"pos",l:"ขายหน้าร้าน",icon:I.table,perm:"view_pos"},
     {id:"ingredients",l:"วัตถุดิบ",icon:I.leaf,perm:"view_ingredients"},
     {id:"menus",l:"เมนู",icon:I.fire,perm:"view_menus"},
     {id:"sop",l:"SOP",icon:I.sop,perm:"view_sop"},
     {id:"summary",l:"สรุปต้นทุน",icon:I.chart,perm:"view_summary"},
     {id:"orders",l:"สั่งวัตถุดิบ",icon:I.truck,perm:"view_orders"},
     {id:"history",l:"ประวัติต้นทุน",icon:I.clock,perm:"view_history"},
-    {id:"pos",l:"POS โต๊ะ",icon:I.table,perm:"view_pos"},
     {id:"settings",l:"ตั้งค่า",icon:I.settings,perm:"settings"},
   ];
   const visibleTabs=TABS.filter(t=>currentUser&&hasPerm(currentUser,t.perm));
-  const DESC={pos:"ระบบ POS รับออเดอร์ จัดการโต๊ะ และเช็คบิล",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",settings:"ตั้งค่าระบบ สาขา ซัพพลาย และผู้ใช้"};
+  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",settings:"ตั้งค่าระบบ สาขา ซัพพลาย และผู้ใช้"};
 
   // Check scan mode
   const params=typeof window!=="undefined"?new URLSearchParams(window.location.search):new URLSearchParams();
@@ -1483,26 +1499,35 @@ function POSTableMap({tables,activeOrders,onSelectTable,onEditLayout}){
 // ── POS TABLE MANAGE ──────────────────────────────────
 // ══════════════════════════════════════════════════════
 function POSTableManage({tables,branch,onDone}){
-  const[form,setForm]=useState({table_number:"",label:"",seats:4,shape:"square",w:90,h:80});
-  const[bulk,setBulk]=useState({from:1,to:10,prefix:"",seats:4});
+  const[form,setForm]=useState({table_number:"",label:"",zone:"",seats:4,shape:"square",w:90,h:80});
+  const[bulk,setBulk]=useState({from:1,to:10,prefix:"",zone:"",seats:4});
   const[saving,setSaving]=useState(false);const[tab,setTab]=useState("single");
+  const[zones,setZones]=useState(()=>[...new Set(tables.map(t=>t.zone).filter(Boolean))]);
+  const[newZone,setNewZone]=useState("");
   async function addSingle(){
     if(!form.table_number)return;setSaving(true);
-    try{const mx=tables.reduce((m,t)=>Math.max(m,t.x||0),0);await api.addPOSTable({...form,branch_id:branch.id,status:"available",active:true,x:mx+110,y:50});setForm({table_number:"",label:"",seats:4,shape:"square",w:90,h:80});onDone();}catch(e){alert("เพิ่มไม่สำเร็จ: "+e.message);}setSaving(false);
+    try{const mx=tables.reduce((m,t)=>Math.max(m,t.x||0),0);await api.addPOSTable({...form,branch_id:branch.id,status:"available",active:true,x:mx+110,y:50});setForm({table_number:"",label:"",zone:form.zone,seats:4,shape:"square",w:90,h:80});onDone();}catch(e){alert("เพิ่มไม่สำเร็จ: "+e.message);}setSaving(false);
   }
   async function addBulk(){
     setSaving(true);
-    try{let col=0,row=0;for(let i=bulk.from;i<=bulk.to;i++){const num=bulk.prefix?`${bulk.prefix}${i}`:String(i);if(!tables.find(t=>t.table_number===num)){await api.addPOSTable({table_number:num,label:"",seats:+bulk.seats,shape:"square",w:90,h:80,branch_id:branch.id,status:"available",active:true,x:col*110+20,y:row*100+20});col++;if(col>9){col=0;row++;}}}onDone();alert(`✅ เพิ่มโต๊ะสำเร็จ!`);}catch(e){alert("เพิ่มไม่สำเร็จ");}setSaving(false);
+    try{let col=0,row=0;for(let i=bulk.from;i<=bulk.to;i++){const num=bulk.prefix?`${bulk.prefix}${i}`:String(i);if(!tables.find(t=>t.table_number===num)){await api.addPOSTable({table_number:num,label:"",zone:bulk.zone,seats:+bulk.seats,shape:"square",w:90,h:80,branch_id:branch.id,status:"available",active:true,x:col*110+20,y:row*100+20});col++;if(col>9){col=0;row++;}}}onDone();alert(`✅ เพิ่มโต๊ะสำเร็จ!`);}catch(e){alert("เพิ่มไม่สำเร็จ");}setSaving(false);
   }
   async function delTable(id,num){if(!confirm(`ลบโต๊ะ ${num}?`))return;try{await api.deletePOSTable(id);onDone();}catch{alert("ลบไม่สำเร็จ");}}
+  function addZone(){if(!newZone.trim())return;setZones(z=>[...new Set([...z,newZone.trim()])]);setNewZone("");}
+
+  const allZones=[...new Set([...zones,...tables.map(t=>t.zone).filter(Boolean)])];
+  const grouped=allZones.map(z=>({zone:z,tables:tables.filter(t=>t.zone===z)}));
+  const noZone=tables.filter(t=>!t.zone);
+
   return <div>
-    <div style={{display:"flex",gap:8,marginBottom:14}}>
-      {[{id:"single",l:"เพิ่มโต๊ะเดี่ยว"},{id:"bulk",l:"เพิ่มหลายโต๊ะ"},{id:"list",l:`โต๊ะทั้งหมด (${tables.length})`}].map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"6px 14px",borderRadius:9,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,background:tab===t.id?C.brand:"transparent",color:tab===t.id?C.white:C.ink3}}>{t.l}</button>)}
+    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+      {[{id:"single",l:"เพิ่มโต๊ะเดี่ยว"},{id:"bulk",l:"เพิ่มหลายโต๊ะ"},{id:"zones",l:`จัดการโซน (${allZones.length})`},{id:"list",l:`โต๊ะทั้งหมด (${tables.length})`}].map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"6px 14px",borderRadius:9,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,background:tab===t.id?C.brand:"transparent",color:tab===t.id?C.white:C.ink3}}>{t.l}</button>)}
     </div>
     {tab==="single"&&<div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>หมายเลขโต๊ะ *</label><input value={form.table_number} onChange={e=>setForm(f=>({...f,table_number:e.target.value}))} placeholder="1, A1, VIP1" style={iS}/></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ชื่อ/Label</label><input value={form.label} onChange={e=>setForm(f=>({...f,label:e.target.value}))} placeholder="ริมหน้าต่าง" style={iS}/></div>
+        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>โซน</label><select value={form.zone} onChange={e=>setForm(f=>({...f,zone:e.target.value}))} style={{...iS,appearance:"none"}}><option value="">— ไม่ระบุ —</option>{allZones.map(z=><option key={z} value={z}>{z}</option>)}</select></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>จำนวนที่นั่ง</label><input type="number" value={form.seats} onChange={e=>setForm(f=>({...f,seats:+e.target.value}))} style={iS}/></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>รูปทรง</label><select value={form.shape} onChange={e=>setForm(f=>({...f,shape:e.target.value}))} style={{...iS,appearance:"none"}}><option value="square">สี่เหลี่ยม</option><option value="round">กลม</option></select></div>
       </div>
@@ -1510,7 +1535,8 @@ function POSTableManage({tables,branch,onDone}){
     </div>}
     {tab==="bulk"&&<div>
       <div style={{background:C.blueLight,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:13,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มหลายโต๊ะพร้อมกัน ระบบจัดตำแหน่งให้อัตโนมัติครับ</div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:12}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:12,marginBottom:12}}>
+        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>โซน</label><select value={bulk.zone} onChange={e=>setBulk(f=>({...f,zone:e.target.value}))} style={{...iS,appearance:"none"}}><option value="">— ไม่ระบุ —</option>{allZones.map(z=><option key={z} value={z}>{z}</option>)}</select></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>Prefix</label><input value={bulk.prefix} onChange={e=>setBulk(f=>({...f,prefix:e.target.value}))} placeholder="A (ไม่บังคับ)" style={iS}/></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>เริ่มที่</label><input type="number" value={bulk.from} onChange={e=>setBulk(f=>({...f,from:+e.target.value}))} style={iS}/></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ถึง</label><input type="number" value={bulk.to} onChange={e=>setBulk(f=>({...f,to:+e.target.value}))} style={iS}/></div>
@@ -1519,12 +1545,37 @@ function POSTableManage({tables,branch,onDone}){
       <div style={{marginBottom:12,fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>จะสร้าง <b>{Math.max(0,bulk.to-bulk.from+1)}</b> โต๊ะ ({bulk.prefix||""}{bulk.from} ถึง {bulk.prefix||""}{bulk.to})</div>
       <Btn onClick={addBulk} loading={saving} icon={I.plus}>สร้างโต๊ะทั้งหมด</Btn>
     </div>}
-    {tab==="list"&&<div style={{maxHeight:380,overflowY:"auto"}}><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8}}>
-      {[...tables].sort((a,b)=>a.table_number.localeCompare(b.table_number,undefined,{numeric:true})).map(t=><div key={t.id} style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:10,padding:"9px 12px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div><div style={{fontWeight:700,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {t.table_number}</div>{t.label&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{t.label}</div>}<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{t.seats} ที่นั่ง</div></div>
-        <button onClick={()=>delTable(t.id,t.table_number)} style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
+    {tab==="zones"&&<div>
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มโซนใหม่</div>
+        <div style={{display:"flex",gap:8}}>
+          <input value={newZone} onChange={e=>setNewZone(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addZone()} placeholder="เช่น Zone A, ชั้น 1, ริมสระ" style={{...iS,flex:1}}/>
+          <Btn onClick={addZone} icon={I.plus} disabled={!newZone.trim()}>เพิ่มโซน</Btn>
+        </div>
+      </div>
+      {allZones.length===0&&<div style={{textAlign:"center",padding:"30px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>ยังไม่มีโซน — เพิ่มโซนด้านบนครับ</div>}
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {grouped.map(g=><div key={g.zone} style={{background:C.bg,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.line}`}}>
+          <div style={{fontWeight:700,fontSize:14,color:C.ink,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>📍 {g.zone} <span style={{fontSize:12,fontWeight:400,color:C.ink4}}>({g.tables.length} โต๊ะ)</span></div>
+          <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{g.tables.map(t=>`โต๊ะ ${t.table_number}`).join(", ")||"ยังไม่มีโต๊ะในโซนนี้"}</div>
+        </div>)}
+        {noZone.length>0&&<div style={{background:C.bg,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.line}`}}>
+          <div style={{fontWeight:700,fontSize:14,color:C.ink3,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีโซน <span style={{fontSize:12,fontWeight:400}}>({noZone.length} โต๊ะ)</span></div>
+          <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{noZone.map(t=>`โต๊ะ ${t.table_number}`).join(", ")}</div>
+        </div>}
+      </div>
+    </div>}
+    {tab==="list"&&<div style={{maxHeight:420,overflowY:"auto"}}>
+      {[...grouped,{zone:null,tables:noZone}].filter(g=>g.tables.length>0).map(g=><div key={g.zone||"no-zone"} style={{marginBottom:14}}>
+        {g.zone&&<div style={{fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:1,textTransform:"uppercase",marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📍 {g.zone}</div>}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8}}>
+          {[...g.tables].sort((a,b)=>a.table_number.localeCompare(b.table_number,undefined,{numeric:true})).map(t=><div key={t.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"9px 12px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div><div style={{fontWeight:700,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {t.table_number}</div>{t.label&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{t.label}</div>}<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{t.seats} ที่นั่ง</div></div>
+            <button onClick={()=>delTable(t.id,t.table_number)} style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
+          </div>)}
+        </div>
       </div>)}
-    </div></div>}
+    </div>}
   </div>;
 }
 
@@ -1646,10 +1697,10 @@ function CustomerPage({branchId,tableId}){
   const[step,setStep]=useState("menu");const[sending,setSending]=useState(false);const[done,setDone]=useState(false);
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
   useEffect(()=>{
-    Promise.all([api.getBranches(),api.getPOSTables(branchId),api.getMenus(branchId)]).then(([bs,ts,ms])=>{
+    Promise.all([api.getBranches(),api.getPOSTables(branchId),api.getMenus()]).then(([bs,ts,ms])=>{
       setBranch(bs.find(b=>b.id===+branchId)||bs[0]);
       setTable(ts.find(t=>t.id===+tableId)||ts[0]);
-      setMenus(ms.filter(m=>m.price>0));
+      setMenus(ms.filter(m=>m.price>0&&(m.availability||{})[branchId]!=="hidden"));
     }).catch(e=>console.error(e));
   },[branchId,tableId]);
   const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(m=>m.category))],[menus]);
@@ -1688,14 +1739,17 @@ function CustomerPage({branchId,tableId}){
       </div>
       <div style={{padding:"8px 12px",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"9px 14px"}}/></div>
       <div style={{flex:1,overflowY:"auto",padding:10,display:"flex",flexDirection:"column",gap:8}}>
-        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);return <div key={m.id} style={{background:C.white,borderRadius:12,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",transition:"all .15s"}}>
-          {m.image?<img src={m.image} alt={m.name} style={{width:80,objectFit:"cover",flexShrink:0}}/>:<div style={{width:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.food} s={28} c={C.brand}/></div>}
+        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";return <div key={m.id} style={{background:C.white,borderRadius:12,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",transition:"all .15s",opacity:soldOut?0.6:1}}>
+          {m.image?<img src={m.image} alt={m.name} style={{width:80,objectFit:"cover",flexShrink:0,filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.food} s={28} c={soldOut?C.ink4:C.brand}/></div>}
           <div style={{flex:1,padding:"10px 12px"}}>
-            <div style={{fontWeight:700,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>{m.name}</div>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+              <div style={{fontWeight:700,fontSize:14,color:soldOut?C.ink4:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{m.name}</div>
+              {soldOut&&<span style={{fontSize:10,fontWeight:700,color:"#92400E",background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:10,padding:"1px 7px",flexShrink:0}}>วันนี้หมด</span>}
+            </div>
             {m.description&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:4,lineHeight:1.4}}>{m.description}</div>}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span style={{fontSize:16,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</span>
-              {inC?<div style={{display:"flex",alignItems:"center",gap:6}}>
+              <span style={{fontSize:16,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</span>
+              {soldOut?<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>หมดแล้ว</span>:inC?<div style={{display:"flex",alignItems:"center",gap:6}}>
                 <button onClick={()=>chQty(cart.indexOf(inC),-1)} style={{width:26,height:26,borderRadius:7,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={13} c={C.brand}/></button>
                 <span style={{fontWeight:900,fontSize:15,minWidth:18,textAlign:"center",color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{inC.qty}</span>
                 <button onClick={()=>addToCart(m)} style={{width:26,height:26,borderRadius:7,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={13} c={C.white}/></button>
@@ -1750,18 +1804,44 @@ function CustomerPage({branchId,tableId}){
 // ══════════════════════════════════════════════════════
 // ── POS QR PAGE ───────────────────────────────────────
 // ══════════════════════════════════════════════════════
+function QRImg({url,size=120}){
+  const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}&margin=8`;
+  return <img src={qrUrl} alt="QR Code" style={{width:size,height:size,borderRadius:8,border:`1px solid ${C.line}`}}/>;
+}
+function printTableQR(table,branch){
+  const baseUrl=window.location.origin+window.location.pathname;
+  const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${table.id}`;
+  const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}&margin=10`;
+  const w=window.open("","_blank","width=340,height=420");
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR โต๊ะ ${table.table_number}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;text-align:center;padding:20px;margin:0}h2{font-size:22px;margin:8px 0}p{color:#64748b;font-size:13px;margin:4px 0}.box{border:2px dashed #e2e8f0;border-radius:16px;padding:20px;display:inline-block}@media print{@page{margin:0;size:auto}}</style></head><body><div class="box"><p style="font-size:11px;font-weight:700;letter-spacing:2px;color:#94a3b8;text-transform:uppercase">${branch.name}</p><h2>โต๊ะ ${table.table_number}</h2>${table.label?`<p>${table.label}</p>`:""}<img src="${qrUrl}" style="width:200px;height:200px;margin:12px 0;border-radius:8px"/><p style="font-size:12px">สแกนเพื่อดูเมนูและสั่งอาหาร</p><p style="font-size:11px;color:#94a3b8">Scan to order</p></div><br/><script>window.onload=()=>setTimeout(()=>window.print(),500)<\/script></body></html>`);
+  w.document.close();
+}
 function POSQRPage({branch,tables}){
   const baseUrl=window.location.origin+window.location.pathname;
+  const zones=[...new Set(tables.map(t=>t.zone).filter(Boolean))];
+  const grouped=[...zones.map(z=>({zone:z,tables:tables.filter(t=>t.zone===z)})),{zone:null,tables:tables.filter(t=>!t.zone)}].filter(g=>g.tables.length>0);
   return <div style={{padding:20}}>
-    <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:800,color:C.ink,marginBottom:4}}>QR Code สั่งอาหาร</h2>
-    <p style={{fontSize:13,color:C.ink3,marginBottom:16,fontFamily:"'Sarabun',sans-serif"}}>พิมพ์ QR Code นี้วางที่โต๊ะ ลูกค้าสแกนแล้วสั่งได้เลยครับ</p>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:10}}>
-      {tables.map(t=>{const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${t.id}`;return <div key={t.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:12,padding:"12px",textAlign:"center"}}>
-        <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>โต๊ะ {t.table_number}</div>
-        <div style={{width:72,height:72,background:C.bg,border:`2px solid ${C.line}`,borderRadius:8,margin:"0 auto 8px",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.ink4,fontFamily:"monospace",padding:2,wordBreak:"break-all"}}>QR<br/>T{t.table_number}</div>
-        <Btn v="ghost" s={{padding:"5px 10px",fontSize:11}} onClick={()=>window.open(url,"_blank")} icon={I.eye}>ทดสอบ</Btn>
-      </div>;})}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+      <div>
+        <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:800,color:C.ink,marginBottom:4}}>QR Code สั่งอาหาร</h2>
+        <p style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>พิมพ์ QR Code วางที่โต๊ะ ลูกค้าสแกนแล้วสั่งได้เลย</p>
+      </div>
+      <Btn v="ghost" s={{fontSize:12}} onClick={()=>{tables.forEach(t=>printTableQR(t,branch));}} icon={I.print}>พิมพ์ทั้งหมด</Btn>
     </div>
+    {grouped.map(g=><div key={g.zone||"no-zone"} style={{marginBottom:20}}>
+      {g.zone&&<div style={{fontSize:12,fontWeight:800,color:C.ink3,letterSpacing:1,textTransform:"uppercase",marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>📍 {g.zone}</div>}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(170px,1fr))",gap:12}}>
+        {g.tables.map(t=>{const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${t.id}`;return <div key={t.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:"14px",textAlign:"center",boxShadow:"0 1px 4px rgba(0,0,0,.05)"}}>
+          <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>โต๊ะ {t.table_number}</div>
+          {t.label&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>{t.label}</div>}
+          <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><QRImg url={url} size={110}/></div>
+          <div style={{display:"flex",gap:5}}>
+            <button onClick={()=>window.open(url,"_blank")} style={{flex:1,padding:"5px 0",border:`1px solid ${C.line}`,borderRadius:7,cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink3,background:C.white}}>ทดสอบ</button>
+            <button onClick={()=>printTableQR(t,branch)} style={{flex:1,padding:"5px 0",border:"none",borderRadius:7,cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,background:C.brand}}>🖨 พิมพ์</button>
+          </div>
+        </div>;})}
+      </div>
+    </div>)}
   </div>;
 }
 
@@ -1833,6 +1913,9 @@ function POSTab({menus,currentBranch,currentUser}){
       {posTab==="qr"&&<div style={{overflowY:"auto",flex:1}}><POSQRPage branch={currentBranch} tables={tables}/></div>}
     </div>
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll();}} wide>
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
+        <button onClick={()=>printTableQR(selTable,currentBranch)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
+      </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} branch={currentBranch} currentUser={currentUser} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll}/>
     </Modal>}
     {showManage&&<Modal title="⚙️ จัดการโต๊ะ" onClose={()=>{setShowManage(false);loadAll();}} wide>
