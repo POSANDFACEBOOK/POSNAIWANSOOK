@@ -41,7 +41,8 @@ const api = {
   deleteSupplier: (id) => sb(`suppliers?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   getCostHist: (bid) => sb(`cost_history?order=id.desc&limit=50${bid ? `&branch_id=eq.${bid}` : ""}`),
   addCostHist: (d) => sb("cost_history", { method: "POST", body: JSON.stringify(d) }),
-  clearCostHist: (bid) => sb(`cost_history?${bid ? `branch_id=eq.${bid}` : "id=gt.0"}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
+  deleteCostHistItem: (id) => sb(`cost_history?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  updateCostHistItem: (id,d) => sb(`cost_history?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   getActionHist: () => sb("action_history?order=id.desc&limit=100"),
   addActionHist: (d) => sb("action_history", { method: "POST", body: JSON.stringify(d) }),
   clearActionHist: () => sb("action_history?id=gt.0", { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
@@ -1079,7 +1080,13 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentU
 // ══════════════════════════════════════════════════════
 function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,currentBranch,reloadOrders,currentUser}){
   const[view,setView]=useState("cost");const[selSnap,setSelSnap]=useState(null);const[sendingOrder,setSendingOrder]=useState(null);
-  const canOrder=hasPerm(currentUser,"edit_orders");
+  const[editSnap,setEditSnap]=useState(null); // {id, date_from, date_to, items:[...]}
+  const[editSaving,setEditSaving]=useState(false);
+  const canOrder=hasPerm(currentUser,"edit_orders");const canE=hasPerm(currentUser,"edit_summary");
+
+  function startEdit(snap){setEditSnap({id:snap.id,date_from:snap.date_from,date_to:snap.date_to,items:(snap.items||[]).map(i=>({...i}))});setSelSnap(null);}
+  async function saveEdit(){if(!editSnap)return;setEditSaving(true);try{await api.updateCostHistItem(editSnap.id,{date_from:editSnap.date_from,date_to:editSnap.date_to,items:editSnap.items});await reloadHistory();setEditSnap(null);alert("✅ แก้ไขสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setEditSaving(false);}
+  async function deleteSnap(snap){if(!confirm(`ลบรายการ "${snap.date_from} → ${snap.date_to}"?`))return;try{await api.deleteCostHistItem(snap.id);await reloadHistory();}catch(e){alert("ลบไม่สำเร็จ");}}
 
   function exportCSV(snap){const rows=[["เมนู","ราคาขาย","ต้นทุน","กำไร%","ขายออก","รายรับ","กำไรสุทธิ"],...(snap.items||[]).map(i=>[i.name,i.price,i.cost?.toFixed(2),i.margin?.toFixed(1),i.soldQty,i.totalRevenue?.toFixed(0),i.totalProfit?.toFixed(0)])];const csv=rows.map(r=>r.join(",")).join("\n");const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});const u=URL.createObjectURL(blob);const a=document.createElement("a");a.href=u;a.download=`foodcost-${snap.date_from}_${snap.date_to}.csv`;a.click();URL.revokeObjectURL(u);}
   function printSnap(snap){const w=window.open("","_blank");const rows=(snap.items||[]).map(i=>`<tr><td>${i.name}</td><td>฿${i.price}</td><td>฿${i.cost?.toFixed(2)}</td><td>${i.margin?.toFixed(1)}%</td><td>${i.soldQty}</td><td>฿${i.totalRevenue?.toFixed(0)}</td><td>฿${i.totalProfit?.toFixed(0)}</td></tr>`).join("");w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>สรุปต้นทุน</title><style>body{font-family:'Sarabun',sans-serif;padding:24px}h2{color:#FF6B35}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — สรุปต้นทุน</h2><p>สาขา: <b>${snap.branch_name||""}</b> | ${snap.date_from} ถึง ${snap.date_to} | บันทึกโดย: ${snap.saved_by}</p><table><thead><tr><th>เมนู</th><th>ราคาขาย</th><th>ต้นทุน</th><th>กำไร%</th><th>ขายออก</th><th>รายรับ</th><th>กำไรสุทธิ</th></tr></thead><tbody>${rows}</tbody></table><button class="noprint" onclick="window.print()">พิมพ์</button></body></html>`);w.document.close();setTimeout(()=>w.print(),600);}
@@ -1112,7 +1119,6 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
     {view==="cost"&&<div>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:12}}>
         <Btn v="ghost" onClick={reloadHistory} icon={I.refresh} s={{padding:"7px 14px",fontSize:12}}>รีเฟรช</Btn>
-        {costHistory.length>0&&<Btn v="danger" onClick={async()=>{if(!confirm("ลบประวัติต้นทุนทั้งหมด?"))return;try{await api.clearCostHist(currentBranch.id);await reloadHistory();}catch(e){alert("ลบไม่สำเร็จ");}}} s={{padding:"7px 14px",fontSize:12}} icon={I.trash}>ลบทั้งหมด</Btn>}
       </div>
       {costHistory.length===0?<Card><div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.clock} s={40} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติต้นทุน</p></div></Card>
       :costHistory.map(snap=><Card key={snap.id} style={{marginBottom:12,overflow:"hidden"}}>
@@ -1122,13 +1128,16 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
             <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{(snap.items||[]).length} เมนู · บันทึกโดย {snap.saved_by} · {snap.saved_at}</div>
           </div>
           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            <Btn v="ghost" onClick={()=>setSelSnap(selSnap?.id===snap.id?null:snap)} s={{padding:"5px 10px",fontSize:11}} icon={I.eye}>รายละเอียด</Btn>
+            <Btn v="ghost" onClick={()=>{setSelSnap(selSnap?.id===snap.id?null:snap);setEditSnap(null);}} s={{padding:"5px 10px",fontSize:11}} icon={I.eye}>รายละเอียด</Btn>
             <Btn v="success" onClick={()=>exportCSV(snap)} s={{padding:"5px 10px",fontSize:11}} icon={I.dl}>CSV</Btn>
             <Btn v="info" onClick={()=>printSnap(snap)} s={{padding:"5px 10px",fontSize:11}} icon={I.printer}>PDF/พิมพ์</Btn>
             {canOrder&&<Btn v="teal" onClick={()=>sendOrderFromSnap(snap)} loading={sendingOrder===snap.id} s={{padding:"5px 10px",fontSize:11}} icon={I.send}>ส่งสั่งวัตถุดิบ</Btn>}
+            {canE&&<button onClick={()=>startEdit(snap)} style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:8,padding:"5px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}><Ic d={I.pencil} s={12} c={C.blue}/>แก้ไข</button>}
+            <button onClick={()=>deleteSnap(snap)} style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:8,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontSize:11,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}><Ic d={I.trash} s={12} c={C.red}/>ลบ</button>
           </div>
         </div>
-        {selSnap?.id===snap.id&&<div style={{padding:"12px 18px",overflowX:"auto"}}>
+        {/* View mode */}
+        {selSnap?.id===snap.id&&editSnap?.id!==snap.id&&<div style={{padding:"12px 18px",overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
             <thead><tr style={{background:C.bg}}>{["เมนู","ราคาขาย","ต้นทุน","กำไร%","ขายออก","รายรับ","กำไรสุทธิ"].map(h=><th key={h} style={{padding:"7px 10px",textAlign:"left",fontWeight:700,color:C.ink3,fontSize:11}}>{h}</th>)}</tr></thead>
             <tbody>{(snap.items||[]).map((it,i)=><tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
@@ -1141,6 +1150,36 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
               <td style={{padding:"7px 10px",color:(it.totalProfit||0)>=0?C.green:C.red,fontWeight:700}}>฿{it.totalProfit?.toFixed(0)}</td>
             </tr>)}</tbody>
           </table>
+        </div>}
+        {/* Edit mode */}
+        {editSnap?.id===snap.id&&<div style={{padding:"16px 18px",background:"#FAFBFF",borderTop:`1px solid ${C.line}`}}>
+          <div style={{fontSize:13,fontWeight:800,color:C.blue,marginBottom:12,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:6}}><Ic d={I.pencil} s={14} c={C.blue}/>แก้ไขรายการ</div>
+          <div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+            <div><label style={{fontSize:12,fontWeight:600,color:C.ink3,fontFamily:"'Sarabun',sans-serif",display:"block",marginBottom:4}}>วันที่เริ่ม</label><input type="date" value={editSnap.date_from} onChange={e=>setEditSnap(s=>({...s,date_from:e.target.value}))} style={{...iS,fontSize:13,padding:"6px 10px",width:150}}/></div>
+            <div><label style={{fontSize:12,fontWeight:600,color:C.ink3,fontFamily:"'Sarabun',sans-serif",display:"block",marginBottom:4}}>วันที่สิ้นสุด</label><input type="date" value={editSnap.date_to} onChange={e=>setEditSnap(s=>({...s,date_to:e.target.value}))} style={{...iS,fontSize:13,padding:"6px 10px",width:150}}/></div>
+          </div>
+          <div style={{overflowX:"auto",marginBottom:14}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+              <thead><tr style={{background:C.bg}}>{["เมนู","ราคาขาย","ต้นทุน","กำไร%","ขายออก (จาน)","รายรับ","กำไรสุทธิ"].map(h=><th key={h} style={{padding:"7px 10px",textAlign:"left",fontWeight:700,color:C.ink3,fontSize:11}}>{h}</th>)}</tr></thead>
+              <tbody>{editSnap.items.map((it,i)=>{
+                const qty=+(it.soldQty||0);
+                const rev=qty*(it.price||0);const np=qty*((it.price||0)-(it.cost||0));
+                return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
+                  <td style={{padding:"7px 10px",fontWeight:600}}>{it.name}</td>
+                  <td style={{padding:"7px 10px"}}>฿{it.price}</td>
+                  <td style={{padding:"7px 10px",color:C.brand}}>฿{it.cost?.toFixed(2)}</td>
+                  <td style={{padding:"7px 10px",color:marginColor(it.margin||0),fontWeight:700}}>{it.margin?.toFixed(1)}%</td>
+                  <td style={{padding:"7px 10px"}}><input type="number" min="0" value={it.soldQty} onChange={e=>{const v=+e.target.value;setEditSnap(s=>({...s,items:s.items.map((x,j)=>j===i?{...x,soldQty:v,totalRevenue:v*(x.price||0),totalCost:v*(x.cost||0),totalProfit:v*((x.price||0)-(x.cost||0))}:x)}));}} style={{...iS,width:80,padding:"4px 8px",fontSize:13,textAlign:"center"}}/></td>
+                  <td style={{padding:"7px 10px",color:C.blue,fontWeight:700}}>฿{rev.toFixed(0)}</td>
+                  <td style={{padding:"7px 10px",color:np>=0?C.green:C.red,fontWeight:700}}>฿{np.toFixed(0)}</td>
+                </tr>;})}
+              </tbody>
+            </table>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <Btn v="ghost" onClick={()=>setEditSnap(null)}>ยกเลิก</Btn>
+            <Btn v="success" icon={I.check} onClick={saveEdit} loading={editSaving}>บันทึกการแก้ไข</Btn>
+          </div>
         </div>}
       </Card>)}
     </div>}
