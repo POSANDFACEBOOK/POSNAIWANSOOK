@@ -561,23 +561,25 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   async function toggleVBIng(item,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(item.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateIng(item.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   return <div>
     {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>วัตถุดิบจัดการโดยสาขาครัวกลางเท่านั้น • สาขานี้ดูข้อมูลได้อย่างเดียว</span></div>}
-    <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap",alignItems:"center",padding:"10px 12px",background:C.bg,borderRadius:14,border:`1px solid ${C.line}`}}>
-      <button onClick={()=>{setCat("ทุกหมวด");setPg(1);}} style={{padding:"6px 14px",borderRadius:20,border:`1.5px solid ${cat==="ทุกหมวด"?C.brand:C.line}`,background:cat==="ทุกหมวด"?C.brandLight:"transparent",color:cat==="ทุกหมวด"?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกหมวด</button>
-      {ingCats.map(c=>editingCatId===c.id?
-        <input key={c.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape")setEditingCatId(null);}} autoFocus style={{...iS,width:120,padding:"5px 10px",fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
-        :<div key={c.id} style={{display:"flex",alignItems:"center",gap:0}}>
-          <button onClick={()=>{setCat(c.name);setPg(1);}} style={{padding:"6px 12px",borderRadius:canE?"20px 0 0 20px":"20px",border:`1.5px solid ${cat===c.name?C.brand:C.line}`,borderRight:canE?"none":undefined,background:cat===c.name?C.brandLight:"transparent",color:cat===c.name?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{c.name}</button>
-          {canE&&<><button onClick={()=>{setEditingCatId(c.id);setEditingCatName(c.name);}} style={{padding:"6px 5px",border:`1.5px solid ${cat===c.name?C.brand:C.line}`,borderRight:"none",borderLeft:"none",background:cat===c.name?C.brandLight:"transparent",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.pencil} s={11} c={cat===c.name?C.brand:C.ink4}/></button>
-          <button onClick={()=>delCat(c)} style={{padding:"6px 6px",borderRadius:"0 20px 20px 0",border:`1.5px solid ${cat===c.name?C.brand:C.line}`,background:cat===c.name?C.brandLight:"transparent",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.trash} s={11} c={C.red}/></button></>}
-        </div>
-      )}
+    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+      <button onClick={()=>{setCat("ทุกหมวด");setPg(1);}} style={{padding:"7px 18px",borderRadius:20,border:`2px solid ${cat==="ทุกหมวด"?C.brand:C.line}`,background:cat==="ทุกหมวด"?C.brand:"transparent",color:cat==="ทุกหมวด"?C.white:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .15s"}}>ทุกหมวด</button>
+      {ingCats.map(c=>{const active=cat===c.name;return editingCatId===c.id?
+        <input key={c.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape")setEditingCatId(null);}} autoFocus style={{...iS,width:110,padding:"6px 12px",fontSize:13,borderRadius:20,border:`2px solid ${C.brand}`,fontWeight:700}}/>
+        :<div key={c.id} onClick={()=>{setCat(c.name);setPg(1);}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:20,border:`2px solid ${active?C.brand:C.line}`,background:active?C.brand:"transparent",cursor:"pointer",transition:"all .15s"}}>
+          <span style={{fontSize:13,fontWeight:700,color:active?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{c.name}</span>
+          {canE&&<div style={{display:"flex",gap:2,marginLeft:2}} onClick={e=>e.stopPropagation()}>
+            <button onClick={()=>{setEditingCatId(c.id);setEditingCatName(c.name);}} style={{background:active?"rgba(255,255,255,0.25)":"rgba(0,0,0,0.06)",border:"none",borderRadius:6,width:20,height:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.pencil} s={10} c={active?C.white:C.ink3}/></button>
+            <button onClick={()=>delCat(c)} style={{background:active?"rgba(255,255,255,0.25)":"rgba(239,68,68,0.1)",border:"none",borderRadius:6,width:20,height:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={10} c={active?C.white:C.red}/></button>
+          </div>}
+        </div>;
+      })}
       {canE&&(addingCat?
-        <div style={{display:"flex",gap:4,alignItems:"center"}}>
-          <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addCat();if(e.key==="Escape"){setAddingCat(false);setNewCatName("");}}} autoFocus placeholder="ชื่อหมวดหมู่..." style={{...iS,width:130,padding:"5px 10px",fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
-          <Btn v="success" onClick={addCat} s={{padding:"5px 12px",fontSize:12}}>ตกลง</Btn>
-          <Btn v="ghost" onClick={()=>{setAddingCat(false);setNewCatName("");}} s={{padding:"5px 10px",fontSize:12}}>ยกเลิก</Btn>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addCat();if(e.key==="Escape"){setAddingCat(false);setNewCatName("");}}} autoFocus placeholder="ชื่อหมวดหมู่..." style={{...iS,width:130,padding:"6px 14px",fontSize:13,borderRadius:20,border:`2px solid ${C.brand}`,fontWeight:600}}/>
+          <button onClick={addCat} style={{padding:"7px 14px",borderRadius:20,background:C.brand,color:C.white,border:"none",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ตกลง</button>
+          <button onClick={()=>{setAddingCat(false);setNewCatName("");}} style={{padding:"7px 12px",borderRadius:20,background:"transparent",color:C.ink3,border:`1px solid ${C.line}`,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>ยกเลิก</button>
         </div>
-        :<button onClick={()=>setAddingCat(true)} style={{padding:"6px 12px",borderRadius:20,border:`1.5px dashed ${C.line}`,background:"transparent",color:C.ink4,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.plus} s={11} c={C.ink4}/>เพิ่มหมวด</button>
+        :<button onClick={()=>setAddingCat(true)} style={{padding:"7px 14px",borderRadius:20,border:`2px dashed ${C.line}`,background:"transparent",color:C.ink3,cursor:"pointer",fontSize:13,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:5,transition:"all .15s"}}><Ic d={I.plus} s={12} c={C.ink3}/>เพิ่มหมวด</button>
       )}
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
