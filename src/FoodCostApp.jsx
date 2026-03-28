@@ -1325,7 +1325,21 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   const[branchForm,setBranchForm]=useState({name:"",type:"branch",active:true});const[editBID,setEditBID]=useState(null);
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
+  const[testResults,setTestResults]=useState({});
   const isAdmin=hasPerm(currentUser,"settings");
+  async function testPrinter(p){
+    setTestResults(r=>({...r,[p.id]:{status:"testing"}}));
+    const ctrl=new AbortController();
+    const tid=setTimeout(()=>ctrl.abort(),4000);
+    try{
+      await fetch(`http://${p.ip}:${p.port||9100}/`,{mode:"no-cors",signal:ctrl.signal,cache:"no-store"});
+      clearTimeout(tid);
+      setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"เชื่อมต่อได้ปกติ"}}));
+    }catch(e){
+      clearTimeout(tid);
+      setTestResults(r=>({...r,[p.id]:{status:"fail",msg:e.name==="AbortError"?"หมดเวลา ไม่ตอบสนอง (4s)":"เชื่อมต่อไม่ได้"}}));
+    }
+  }
 
   async function saveUser(){if(!uF.username||!uF.password)return;setSaving(true);try{if(editUID)await api.updateUser(editUID,uF);else await api.addUser(uF);await reloadUsers();setShowUser(false);setEditUID(null);setUF(uF0);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function saveBranch(){if(!branchForm.name)return;try{if(editBID)await api.updateBranch(editBID,branchForm);else await api.addBranch(branchForm);await reloadBranches();setBranchForm({name:"",type:"branch",active:true});setEditBID(null);}catch(e){alert("บันทึกไม่สำเร็จ");};}
@@ -1475,13 +1489,21 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
               </div>
             </div>
             <div style={{padding:"14px 20px",display:"flex",flexDirection:"column",gap:8}}>
-              <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#F8FAFC",borderRadius:10,border:`1px solid ${C.line}`}}>
-                <div style={{width:8,height:8,borderRadius:"50%",background:C.green,boxShadow:`0 0 6px ${C.green}88`,flexShrink:0}}/>
-                <div>
+              {(()=>{const tr=testResults[p.id];const dotColor=!tr?C.ink3:tr.status==="testing"?C.yellow:tr.status==="ok"?C.green:C.red;const dotAnim=tr?.status==="testing"?"pulse 1s infinite":"none";return<div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#F8FAFC",borderRadius:10,border:`1px solid ${tr?.status==="ok"?C.green:tr?.status==="fail"?C.red:C.line}`,transition:"border .3s"}}>
+                <div style={{width:9,height:9,borderRadius:"50%",background:dotColor,boxShadow:`0 0 6px ${dotColor}88`,flexShrink:0,animation:dotAnim}}/>
+                <div style={{flex:1}}>
                   <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"monospace",letterSpacing:.5}}>{p.ip}<span style={{color:C.ink4,fontWeight:400}}>{":"}{p.port||9100}</span></div>
-                  <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>IP Address : Port</div>
+                  <div style={{fontSize:11,color:tr?.status==="ok"?C.green:tr?.status==="fail"?C.red:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:tr?600:400}}>
+                    {!tr&&"IP Address : Port"}
+                    {tr?.status==="testing"&&"⏳ กำลังทดสอบ..."}
+                    {tr?.status==="ok"&&`✅ ${tr.msg}`}
+                    {tr?.status==="fail"&&`❌ ${tr.msg}`}
+                  </div>
                 </div>
-              </div>
+                <button onClick={()=>testPrinter(p)} disabled={testResults[p.id]?.status==="testing"} style={{padding:"6px 14px",borderRadius:8,border:`1.5px solid ${C.brand}`,background:testResults[p.id]?.status==="testing"?C.lineLight:C.brandLight,color:C.brand,cursor:testResults[p.id]?.status==="testing"?"not-allowed":"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>
+                  {testResults[p.id]?.status==="testing"?"...":"🔌 ทดสอบ"}
+                </button>
+              </div>;})()}
               {p.description&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",padding:"8px 12px",background:"#FFFBEB",borderRadius:8,border:"1px solid #FDE68A"}}>📝 {p.description}</div>}
               {p.branch_id&&branches.find(b=>b.id===p.branch_id)&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:6}}>
                 <Ic d={I.branch} s={13} c={C.ink4}/><span>สาขา: <b>{branches.find(b=>b.id===p.branch_id)?.name}</b></span>
