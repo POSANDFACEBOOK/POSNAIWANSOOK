@@ -1392,7 +1392,6 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         </table>
       </Card>
     </div>}
-    </div>
 
     {section==="printers"&&<div style={{minHeight:"100%"}}>
       {/* ── Header Bar ── */}
@@ -1495,6 +1494,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         })}
       </div>}
     </div>}
+    </div>
 
     {showUser&&<Modal title={editUID?"✏️ แก้ไขผู้ใช้":"➕ เพิ่มผู้ใช้ใหม่"} onClose={()=>setShowUser(false)} extraWide>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
