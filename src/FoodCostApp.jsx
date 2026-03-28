@@ -145,13 +145,14 @@ const ALL_PERMS=[
   {id:"view_sop",label:"ดู SOP",group:"SOP"},{id:"edit_sop",label:"แก้ไข SOP",group:"SOP"},
   {id:"view_summary",label:"ดูสรุปต้นทุน",group:"สรุปต้นทุน"},{id:"edit_summary",label:"บันทึกสรุปต้นทุน",group:"สรุปต้นทุน"},
   {id:"view_history",label:"ดูประวัติ",group:"ประวัติ"},{id:"view_orders",label:"ดูสั่งวัตถุดิบ",group:"สั่งวัตถุดิบ"},{id:"edit_orders",label:"แก้ไข/ส่งคำสั่งซื้อ",group:"สั่งวัตถุดิบ"},
+  {id:"view_suppliers",label:"ดูซัพพลาย",group:"ซัพพลาย"},{id:"edit_suppliers",label:"แก้ไขซัพพลาย",group:"ซัพพลาย"},
   {id:"view_pos",label:"ดู POS โต๊ะ",group:"POS"},{id:"edit_pos",label:"จัดการ POS โต๊ะ",group:"POS"},
   {id:"export",label:"Export ข้อมูล",group:"ระบบ"},{id:"settings",label:"ตั้งค่าระบบ",group:"ระบบ"},
 ];
 const ROLE_DEFAULT_PERMS={
   admin:ALL_PERMS.map(p=>p.id),
-  manager:["view_ingredients","edit_ingredients","delete_ingredients","view_menus","edit_menus","delete_menus","view_sop","edit_sop","view_summary","edit_summary","view_history","view_orders","edit_orders","export","view_pos","edit_pos"],
-  staff:["view_ingredients","edit_ingredients","view_menus","edit_menus","view_sop","edit_sop","view_summary","edit_summary","view_history","view_orders","view_pos","edit_pos"],
+  manager:["view_ingredients","edit_ingredients","delete_ingredients","view_menus","edit_menus","delete_menus","view_sop","edit_sop","view_summary","edit_summary","view_history","view_orders","edit_orders","export","view_pos","edit_pos","view_suppliers","edit_suppliers"],
+  staff:["view_ingredients","edit_ingredients","view_menus","edit_menus","view_sop","edit_sop","view_summary","edit_summary","view_history","view_orders","view_pos","edit_pos","view_suppliers"],
   viewer:["view_ingredients","view_menus","view_sop","view_summary","view_history"],
 };
 function hasPerm(user,perm){return user&&((user.perms&&user.perms.length>0)?user.perms:ROLE_DEFAULT_PERMS[user.role]||[]).includes(perm);}
@@ -1245,6 +1246,52 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
 // ══════════════════════════════════════════════════════
 // ── SETTINGS TAB ──────────────────────────────────────
 // ══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// ── SUPPLIER TAB ──────────────────────────────────────
+// ══════════════════════════════════════════════════════
+function SupplierTab({suppliers,reloadSuppliers,currentUser}){
+  const[supForm,setSupForm]=useState({name:"",contact:"",phone:"",note:"",active:true});
+  const[editSID,setEditSID]=useState(null);
+  const canE=hasPerm(currentUser,"edit_suppliers");
+  async function saveSup(){
+    if(!supForm.name)return;
+    try{if(editSID)await api.updateSupplier(editSID,supForm);else await api.addSupplier(supForm);await reloadSuppliers();setSupForm({name:"",contact:"",phone:"",note:"",active:true});setEditSID(null);}
+    catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+  }
+  return <div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,marginBottom:16}}>
+      {suppliers.map(s=><Card key={s.id} style={{padding:"14px 16px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>{s.name}</div>
+            {s.contact&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}><span style={{color:C.ink4}}>ผู้ติดต่อ:</span> {s.contact}</div>}
+            {s.phone&&<div style={{fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>📞 {s.phone}</div>}
+            {s.note&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontStyle:"italic",marginTop:4}}>📝 {s.note}</div>}
+          </div>
+          {canE&&<div style={{display:"flex",gap:4}}>
+            <button onClick={()=>{setSupForm({name:s.name,contact:s.contact||"",phone:s.phone||"",note:s.note||"",active:s.active});setEditSID(s.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+            <button onClick={async()=>{if(!confirm("ลบซัพพลาย?"))return;await api.deleteSupplier(s.id);await reloadSuppliers();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
+          </div>}
+        </div>
+      </Card>)}
+      {suppliers.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีซัพพลาย</p></div>}
+    </div>
+    {canE&&<Card style={{padding:"16px 18px"}}>
+      <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>{editSID?"✏️ แก้ไขซัพพลาย":"➕ เพิ่มซัพพลายใหม่"}</h4>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <Inp label="ชื่อซัพพลาย *" value={supForm.name} onChange={e=>setSupForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ตลาดสด ก."/>
+        <Inp label="ชื่อผู้ติดต่อ" value={supForm.contact} onChange={e=>setSupForm(f=>({...f,contact:e.target.value}))} placeholder="คุณสมชาย"/>
+        <Inp label="เบอร์โทร" value={supForm.phone} onChange={e=>setSupForm(f=>({...f,phone:e.target.value}))} placeholder="081-234-5678"/>
+        <Inp label="หมายเหตุ" value={supForm.note} onChange={e=>setSupForm(f=>({...f,note:e.target.value}))} placeholder="ส่งทุกเช้า..."/>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <Btn onClick={saveSup} icon={I.check} disabled={!supForm.name}>{editSID?"บันทึก":"เพิ่มซัพพลาย"}</Btn>
+        {editSID&&<Btn v="ghost" onClick={()=>{setSupForm({name:"",contact:"",phone:"",note:"",active:true});setEditSID(null);}}>ยกเลิก</Btn>}
+      </div>
+    </Card>}
+  </div>;
+}
+
 function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,reloadBranches,suppliers,reloadSuppliers,currentUser,printers=[],reloadPrinters,currentBranch}){
   const[section,setSection]=useState("cats");
   const[newIC,setNewIC]=useState("");const[newMC,setNewMC]=useState("");
@@ -1252,7 +1299,6 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   const uF0={username:"",password:"",name:"",role:"staff",active:true,perms:ROLE_DEFAULT_PERMS.staff};
   const[uF,setUF]=useState(uF0);
   const[branchForm,setBranchForm]=useState({name:"",type:"branch",active:true});const[editBID,setEditBID]=useState(null);
-  const[supForm,setSupForm]=useState({name:"",contact:"",phone:"",note:"",active:true});const[editSID,setEditSID]=useState(null);
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
   const isAdmin=hasPerm(currentUser,"settings");
@@ -1260,10 +1306,9 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
 
   async function saveUser(){if(!uF.username||!uF.password)return;setSaving(true);try{if(editUID)await api.updateUser(editUID,uF);else await api.addUser(uF);await reloadUsers();setShowUser(false);setEditUID(null);setUF(uF0);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function saveBranch(){if(!branchForm.name)return;try{if(editBID)await api.updateBranch(editBID,branchForm);else await api.addBranch(branchForm);await reloadBranches();setBranchForm({name:"",type:"branch",active:true});setEditBID(null);}catch(e){alert("บันทึกไม่สำเร็จ");};}
-  async function saveSup(){if(!supForm.name)return;try{if(editSID)await api.updateSupplier(editSID,supForm);else await api.addSupplier(supForm);await reloadSuppliers();setSupForm({name:"",contact:"",phone:"",note:"",active:true});setEditSID(null);}catch(e){alert("บันทึกไม่สำเร็จ");};}
   async function savePrinter(){if(!pForm.name||!pForm.ip)return;setPSaving(true);try{const d={...pForm,port:+pForm.port||9100,branch_id:pForm.branch_id||null};if(editPID)await api.updatePrinter(editPID,d);else await api.addPrinter(d);await reloadPrinters();setPForm(pF0);setEditPID(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setPSaving(false);}
 
-  const sections=[{id:"cats",label:"หมวดหมู่",icon:I.tag},{id:"branches",label:"สาขา",icon:I.branch},{id:"suppliers",label:"ซัพพลาย",icon:I.truck},{id:"users",label:"ผู้ใช้",icon:I.users},{id:"printers",label:"เครื่องปริ้น",icon:I.print}];
+  const sections=[{id:"cats",label:"หมวดหมู่",icon:I.tag},{id:"branches",label:"สาขา",icon:I.branch},{id:"users",label:"ผู้ใช้",icon:I.users},{id:"printers",label:"เครื่องปริ้น",icon:I.print}];
 
   return <div style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:16,minHeight:480}}>
     <Card style={{padding:8,height:"fit-content"}}>
@@ -1312,39 +1357,6 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         <div style={{display:"flex",gap:8}}>
           <Btn onClick={saveBranch} icon={I.check} disabled={!branchForm.name}>{editBID?"บันทึก":"เพิ่มสาขา"}</Btn>
           {editBID&&<Btn v="ghost" onClick={()=>{setBranchForm({name:"",type:"branch",active:true});setEditBID(null);}}>ยกเลิก</Btn>}
-        </div>
-      </Card>}
-    </div>}
-
-    {section==="suppliers"&&<div>
-      <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:14}}>จัดการซัพพลาย</h3>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,marginBottom:16}}>
-        {suppliers.map(s=><Card key={s.id} style={{padding:"14px 16px"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-            <div>
-              <div style={{fontWeight:700,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>{s.name}</div>
-              {s.contact&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{s.contact}</div>}
-              {s.phone&&<div style={{fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>{s.phone}</div>}
-              {s.note&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontStyle:"italic",marginTop:4}}>📝 {s.note}</div>}
-            </div>
-            {isAdmin&&<div style={{display:"flex",gap:4}}>
-              <button onClick={()=>{setSupForm({name:s.name,contact:s.contact||"",phone:s.phone||"",note:s.note||"",active:s.active});setEditSID(s.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
-              <button onClick={async()=>{if(!confirm("ลบซัพพลาย?"))return;await api.deleteSupplier(s.id);await reloadSuppliers();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
-            </div>}
-          </div>
-        </Card>)}
-      </div>
-      {isAdmin&&<Card style={{padding:"16px 18px"}}>
-        <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>{editSID?"แก้ไขซัพพลาย":"เพิ่มซัพพลายใหม่"}</h4>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          <Inp label="ชื่อซัพพลาย" value={supForm.name} onChange={e=>setSupForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ตลาดสด ก."/>
-          <Inp label="ชื่อผู้ติดต่อ" value={supForm.contact} onChange={e=>setSupForm(f=>({...f,contact:e.target.value}))} placeholder="คุณสมชาย"/>
-          <Inp label="เบอร์โทร" value={supForm.phone} onChange={e=>setSupForm(f=>({...f,phone:e.target.value}))} placeholder="081-234-5678"/>
-          <Inp label="หมายเหตุ" value={supForm.note} onChange={e=>setSupForm(f=>({...f,note:e.target.value}))} placeholder="ส่งทุกเช้า..."/>
-        </div>
-        <div style={{display:"flex",gap:8}}>
-          <Btn onClick={saveSup} icon={I.check} disabled={!supForm.name}>{editSID?"บันทึก":"เพิ่มซัพพลาย"}</Btn>
-          {editSID&&<Btn v="ghost" onClick={()=>{setSupForm({name:"",contact:"",phone:"",note:"",active:true});setEditSID(null);}}>ยกเลิก</Btn>}
         </div>
       </Card>}
     </div>}
@@ -1570,10 +1582,11 @@ export default function App(){
     {id:"summary",l:"สรุปต้นทุน",icon:I.chart,perm:"view_summary"},
     {id:"orders",l:"สั่งวัตถุดิบ",icon:I.truck,perm:"view_orders"},
     {id:"history",l:"ประวัติต้นทุน",icon:I.clock,perm:"view_history"},
+    {id:"suppliers",l:"ซัพพลาย",icon:I.truck,perm:"view_suppliers"},
     {id:"settings",l:"ตั้งค่า",icon:I.settings,perm:"settings"},
   ];
   const visibleTabs=TABS.filter(t=>currentUser&&hasPerm(currentUser,t.perm));
-  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",settings:"ตั้งค่าระบบ สาขา ซัพพลาย และผู้ใช้"};
+  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
 
   // Check scan mode
   const params=typeof window!=="undefined"?new URLSearchParams(window.location.search):new URLSearchParams();
@@ -1690,6 +1703,7 @@ export default function App(){
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
+            {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser}/>}
             {tab==="pos"&&<POSTab menus={menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers}/>}
             {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} printers={printers} reloadPrinters={reload.printers} currentBranch={currentBranch}/>}
           </>}
