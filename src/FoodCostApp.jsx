@@ -928,7 +928,7 @@ function SOPTab({menus,reload,ings,currentUser,currentBranch}){
             </div>
             <div style={{flex:1}}>
               <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:5}}>{step.title||`ขั้นตอนที่ ${idx+1}`}</div>
-              {step.desc&&<p style={{fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.8,background:C.bg,padding:"10px 14px",borderRadius:10,border:`1px solid ${C.line}`,marginBottom:step.image?10:0}}>{step.desc}</p>}
+              {step.desc&&<p style={{fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.8,background:C.bg,padding:"10px 14px",borderRadius:10,border:`1px solid ${C.line}`,marginBottom:step.image?10:0,whiteSpace:"pre-wrap"}}>{step.desc}</p>}
               {step.image&&<img src={step.image} alt={step.title} style={{maxWidth:340,borderRadius:12,border:`2px solid ${C.line}`,marginTop:8,display:"block"}}/>}
             </div>
           </div>)}
