@@ -890,68 +890,61 @@ function SOPTab({menus,reload,ings,currentUser,currentBranch}){
   }
   function printSOP(){
     if(!menu)return;
-    const cost=menuCost(menu,ings);
-    const mg=menu.price>0?((menu.price-cost)/menu.price*100):0;
     const ingChips=(menu.ingredients||[]).map(mi=>{const ing=ings.find(i=>i.id===mi.ingredientId);return ing?`<span class="ic"><b>${ing.name}</b>&nbsp;${mi.amountGram}&nbsp;${mi.unit||'กรัม'}</span>`:''}).join('');
+    const hasAnyImg=(menu.sop||[]).some(s=>s.image);
     const steps=(menu.sop||[]).map((s,idx)=>`
-      <div class="step">
+      <div class="step${s.image?' has-img':''}">
         <div class="num">${idx+1}</div>
         <div class="sbody">
-          ${s.title?`<div class="stitle">${s.title}</div>`:''}
-          ${s.desc?`<div class="sdesc">${s.desc.replace(/\n/g,'<br/>')}</div>`:''}
+          <div class="stext">
+            ${s.title?`<div class="stitle">${s.title}</div>`:''}
+            ${s.desc?`<div class="sdesc">${s.desc.replace(/\n/g,'<br/>')}</div>`:''}
+          </div>
           ${s.image?`<img src="${s.image}" class="simg"/>`:''}
         </div>
       </div>`).join('');
     const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>SOP - ${menu.name}</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700;800;900&display=swap');
-@page{size:A4 portrait;margin:12mm 14mm}
+@page{size:A4 portrait;margin:10mm 12mm}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 #wrap{width:100%}
-.header{display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:2.5px solid #FF6B35;margin-bottom:10px}
-.htitle{font-size:22px;font-weight:900;color:#0F172A;margin-bottom:2px}
-.hsub{font-size:11px;color:#64748B;font-weight:500}
-.badge{background:#FFF4F0;border:1px solid #FFD4C2;border-radius:8px;padding:6px 12px;text-align:right;flex-shrink:0}
-.badge .cost{font-size:18px;font-weight:900;color:#FF6B35}
-.badge .lbl{font-size:10px;color:#94A3B8;font-weight:600}
+.header{padding-bottom:10px;border-bottom:3px solid #FF6B35;margin-bottom:12px}
+.hlabel{font-size:9px;font-weight:800;color:#FF6B35;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px}
+.htitle{font-size:26px;font-weight:900;color:#0F172A;line-height:1.15}
 .sec-label{font-size:9px;font-weight:800;color:#94A3B8;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px}
-.ings{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.ings{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
 .ic{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:3px 9px;font-size:11px;color:#334155}
 .ic b{color:#0F172A}
-.steps{display:flex;flex-direction:column;gap:8px}
-.step{display:flex;gap:10px;align-items:flex-start}
-.num{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#FF6B35,#E85520);color:#fff;font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
-.sbody{flex:1;background:#F8FAFC;border-radius:8px;padding:8px 12px;border:1px solid #E2E8F0}
-.stitle{font-size:13px;font-weight:800;color:#0F172A;margin-bottom:3px}
-.sdesc{font-size:12px;color:#334155;line-height:1.6;white-space:pre-wrap}
-.simg{max-width:180px;border-radius:7px;margin-top:6px;display:block;border:1px solid #E2E8F0}
-.footer{margin-top:10px;padding-top:8px;border-top:1px solid #E2E8F0;display:flex;justify-content:space-between;font-size:9px;color:#94A3B8}
+.steps{display:flex;flex-direction:column;gap:10px}
+.step{display:flex;gap:12px;align-items:flex-start}
+.num{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#FF6B35,#E85520);color:#fff;font-size:14px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.sbody{flex:1;background:#F8FAFC;border-radius:10px;padding:10px 14px;border:1px solid #E2E8F0}
+.step.has-img .sbody{display:flex;gap:12px;align-items:flex-start}
+.stext{flex:1;min-width:0}
+.stitle{font-size:14px;font-weight:900;color:#0F172A;margin-bottom:4px}
+.sdesc{font-size:12px;color:#334155;line-height:1.65;white-space:pre-wrap}
+.simg{width:220px;min-width:220px;max-width:220px;height:160px;object-fit:cover;border-radius:9px;border:2px solid #E2E8F0;display:block;flex-shrink:0}
+.step:not(.has-img) .simg{width:100%;max-width:100%;height:auto;max-height:260px;min-width:unset}
+.footer{margin-top:12px;padding-top:8px;border-top:1px solid #E2E8F0;display:flex;justify-content:space-between;font-size:9px;color:#94A3B8}
 </style></head><body>
 <div id="wrap">
   <div class="header">
-    <div>
-      <div style="font-size:10px;font-weight:700;color:#94A3B8;letter-spacing:1px;text-transform:uppercase;margin-bottom:3px">Standard Operating Procedure</div>
-      <div class="htitle">${menu.name}</div>
-      <div class="hsub">${menu.edit_by?`แก้ไขล่าสุดโดย ${menu.edit_by}`:''}${menu.edit_at?` · ${menu.edit_at}`:''}</div>
-    </div>
-    <div class="badge">
-      <div class="lbl">กำไร</div>
-      <div class="cost">${mg.toFixed(0)}%</div>
-      ${menu.price?`<div class="lbl" style="margin-top:2px">ราคา ${menu.price} บาท</div>`:''}
-    </div>
+    <div class="hlabel">ขั้นตอนการทำ · Standard Operating Procedure</div>
+    <div class="htitle">${menu.name}</div>
   </div>
-  ${ingChips?`<div class="sec-label">วัตถุดิบในเมนู</div><div class="ings">${ingChips}</div>`:''}
-  <div class="sec-label">ขั้นตอนการทำ (${(menu.sop||[]).length} ขั้นตอน)</div>
+  ${ingChips?`<div class="sec-label">วัตถุดิบที่ใช้</div><div class="ings">${ingChips}</div>`:''}
+  <div class="sec-label">ขั้นตอนการทำ &nbsp;(${(menu.sop||[]).length} ขั้นตอน)</div>
   <div class="steps">${steps}</div>
-  <div class="footer"><span>NAIWANSOOK FOODCOST</span><span>พิมพ์วันที่ ${new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}</span></div>
+  <div class="footer"><span>NAIWANSOOK · ห้องครัว</span><span>พิมพ์วันที่ ${new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}</span></div>
 </div>
 <script>
 window.addEventListener('load',()=>{
-  const A4H=(297-24)*3.7795;
+  const A4H=(297-20)*3.7795;
   const w=document.getElementById('wrap');
   const h=w.offsetHeight;
-  if(h>A4H){const z=(A4H/h);document.body.style.zoom=z;}
+  if(h>A4H){document.body.style.zoom=(A4H/h).toFixed(4);}
   setTimeout(()=>window.print(),400);
 });
 </script></body></html>`;
