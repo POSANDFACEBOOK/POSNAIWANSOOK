@@ -188,6 +188,43 @@ function Modal({title,onClose,children,wide,extraWide}){
     </div>
   </div>;
 }
+let _confirmOpener=null;
+function confirmDlg(opts){
+  return new Promise(resolve=>{
+    if(!_confirmOpener)return resolve(typeof window!=="undefined"?window.confirm(typeof opts==="string"?opts:opts.message||"ยืนยัน?"):false);
+    _confirmOpener(typeof opts==="string"?{message:opts}:opts,resolve);
+  });
+}
+function ConfirmDlg(){
+  const[st,setSt]=useState(null);
+  useEffect(()=>{_confirmOpener=(opts,resolve)=>setSt({opts,resolve});return()=>{_confirmOpener=null;};},[]);
+  useEffect(()=>{if(!st)return;const h=e=>{if(e.key==="Escape"){e.preventDefault();const r=st.resolve;setSt(null);r(false);}else if(e.key==="Enter"){e.preventDefault();const r=st.resolve;setSt(null);r(true);}};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[st]);
+  if(!st)return null;
+  const close=v=>{const r=st.resolve;setSt(null);r(v);};
+  const o=st.opts;
+  const danger=o.danger!==false;
+  const title=o.title||(danger?"ยืนยันการลบ":"ยืนยัน");
+  const msg=o.message||"ต้องการดำเนินการนี้ใช่หรือไม่?";
+  const ok=o.confirmLabel||(danger?"ลบ":"ยืนยัน");
+  const cancel=o.cancelLabel||"ยกเลิก";
+  const accent=danger?C.red:C.brand;
+  const accentLight=danger?C.redLight:C.brandLight;
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:16}} onClick={e=>e.target===e.currentTarget&&close(false)}>
+    <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:420,boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
+      <div style={{padding:"30px 28px 20px",textAlign:"center"}}>
+        <div style={{width:68,height:68,margin:"0 auto 18px",borderRadius:"50%",background:accentLight,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 8px 24px ${accent}33`,border:`1px solid ${accent}22`}}>
+          <Ic d={danger?I.trash:I.warning} s={30} c={accent} sw={2}/>
+        </div>
+        <div style={{fontSize:20,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8,letterSpacing:-.3}}>{title}</div>
+        <div style={{fontSize:14,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.65,whiteSpace:"pre-line"}}>{msg}</div>
+      </div>
+      <div style={{display:"flex",gap:10,padding:"4px 24px 24px"}}>
+        <button onClick={()=>close(false)} style={{flex:1,padding:"12px 16px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,color:C.ink2,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.background=C.lineLight;}} onMouseLeave={e=>{e.currentTarget.style.background=C.white;}}>{cancel}</button>
+        <button onClick={()=>close(true)} autoFocus style={{flex:1,padding:"12px 16px",borderRadius:12,border:"none",background:danger?`linear-gradient(135deg,${C.red},#DC2626)`:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",boxShadow:`0 8px 20px ${accent}55`,transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.filter="brightness(1.05)";}} onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.filter="";}}>{ok}</button>
+      </div>
+    </div>
+  </div>;
+}
 function EditedBy({username,editAt}){if(!username)return null;return <span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.user} s={9} c={C.ink4}/>แก้โดย {username}{editAt?` · ${editAt}`:""}</span>;}
 function Loading({text="กำลังโหลด..."}){return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"80px 0",gap:16}}><div style={{width:44,height:44,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{text}</p></div>;}
 function ErrBox({msg,onRetry}){return <div style={{background:C.redLight,border:`1px solid ${C.red}22`,borderRadius:12,padding:"16px 20px",display:"flex",alignItems:"center",gap:12,margin:"16px 0"}}><Ic d={I.warning} s={20} c={C.red}/><span style={{flex:1,color:C.red,fontFamily:"'Sarabun',sans-serif",fontSize:14}}>{msg}</span>{onRetry&&<Btn v="danger" onClick={onRetry} s={{padding:"6px 14px",fontSize:12}}>ลองใหม่</Btn>}</div>;}
@@ -552,12 +589,12 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   const canE=hasPerm(currentUser,"ingredients")&&isCentral;const canD=hasPerm(currentUser,"ingredients")&&isCentral;
   async function addCat(){if(!newCatName.trim())return;try{await api.addCat({type:"ingredient",name:newCatName.trim()});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;try{await api.updateCat(editingCatId,{name:editingCatName.trim()});await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
-  async function delCat(c){if(!confirm(`ลบหมวด "${c.name}"?`))return;try{await api.deleteCat(c.id);await reloadCats();if(cat===c.name)setCat("ทุกหมวด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
+  async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(c.id);await reloadCats();if(cat===c.name)setCat("ทุกหมวด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
   const filtered=useMemo(()=>ings.filter(i=>{const vb=i.visible_branches||[];const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);return i.name.toLowerCase().includes(q.toLowerCase())&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;}),[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||1);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
   async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{const item={...form,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
-  async function del(id,name){if(!confirm(`ลบ "${name}"?`))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
+  async function del(id,name){if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   async function toggleVBIng(item,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(item.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateIng(item.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   return <div>
     {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>วัตถุดิบจัดการโดยสาขาครัวกลางเท่านั้น • สาขานี้ดูข้อมูลได้อย่างเดียว</span></div>}
@@ -677,7 +714,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   async function assignLocalCat(menuId,catName){const menu=menus.find(m=>m.id===menuId);const lc={...(menu.local_categories||{})};if(catName)lc[currentBranch.id]=catName;else delete lc[currentBranch.id];try{await api.updateMenu(menuId,{local_categories:lc});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   async function addCat(){if(!newCatName.trim())return;try{await api.addCat({type:"menu",name:newCatName.trim(),branch_id:isCentral?null:currentBranch?.id});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;try{await api.updateCat(editingCatId,{name:editingCatName.trim()});await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
-  async function delCat(cat){if(!confirm(`ลบหมวด "${cat.name}"?`))return;try{await api.deleteCat(cat.id);await reloadCats();if(selCat===cat.name)setSelCat("ทั้งหมด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
+  async function delCat(cat){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${cat.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(cat.id);await reloadCats();if(selCat===cat.name)setSelCat("ทั้งหมด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
   const filtered=useMemo(()=>menus.filter(m=>{
     const vb=m.visible_branches||[];
     const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);
@@ -690,7 +727,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const fc=(form.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.price_per_gram*x.amountGram:0);},0);
   const fm=form.price>0?((+form.price-fc)/+form.price*100):0;
   async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,category:form.category||selCat||"",price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{await api.addMenu(item);addH(`เพิ่มเมนู: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
-  async function del(id,name){if(!confirm(`ลบเมนู "${name}"?`))return;try{await api.deleteMenu(id);addH(`ลบเมนู: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
+  async function del(id,name){if(!await confirmDlg({title:"ลบเมนู",message:`ต้องการลบเมนู "${name}" ใช่หรือไม่?`}))return;try{await api.deleteMenu(id);addH(`ลบเมนู: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   const catTabBtn=(label,active,onClick)=><button onClick={onClick} style={{padding:"6px 14px",borderRadius:20,border:`1.5px solid ${active?C.brand:C.line}`,background:active?C.brandLight:"transparent",color:active?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{label}</button>;
   return <div>
     {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>เมนูจัดการโดยครัวกลางเท่านั้น • สาขานี้กำหนดหมวดหมู่และสถานะสินค้าได้</span></div>}
@@ -1125,7 +1162,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentU
               {order.status==="pending"&&<button onClick={async()=>{try{await api.updateOrder(order.id,{status:"approved"});await reload();}catch(e){alert("ไม่สำเร็จ");}}} style={{background:C.greenLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.check} s={12} c={C.green}/>อนุมัติ</button>}
               {order.status==="approved"&&<button onClick={async()=>{try{await api.updateOrder(order.id,{status:"delivered"});await reload();}catch(e){alert("ไม่สำเร็จ");}}} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.truck} s={12} c={C.blue}/>จัดส่งแล้ว</button>}
             </>}
-            {canOrder&&<button onClick={async()=>{if(!confirm("ลบรายการนี้?"))return;try{await api.deleteOrder(order.id);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+            {canOrder&&<button onClick={async()=>{if(!await confirmDlg({title:"ลบคำสั่งซื้อ",message:"ต้องการลบรายการสั่งวัตถุดิบนี้ใช่หรือไม่?"}))return;try{await api.deleteOrder(order.id);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
           </div>
         </div>
         <div style={{padding:"12px 18px"}}>
@@ -1162,7 +1199,7 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
 
   function startEdit(snap){setEditSnap({id:snap.id,date_from:snap.date_from,date_to:snap.date_to,items:(snap.items||[]).map(i=>({...i}))});setSelSnap(null);}
   async function saveEdit(){if(!editSnap)return;setEditSaving(true);try{await api.updateCostHistItem(editSnap.id,{date_from:editSnap.date_from,date_to:editSnap.date_to,items:editSnap.items});await reloadHistory();setEditSnap(null);alert("✅ แก้ไขสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setEditSaving(false);}
-  async function deleteSnap(snap){if(!confirm(`ลบรายการ "${snap.date_from} → ${snap.date_to}"?`))return;try{await api.deleteCostHistItem(snap.id);await reloadHistory();}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
+  async function deleteSnap(snap){if(!await confirmDlg({title:"ลบประวัติต้นทุน",message:`ต้องการลบรายการ\n"${snap.date_from} → ${snap.date_to}"\nใช่หรือไม่?`}))return;try{await api.deleteCostHistItem(snap.id);await reloadHistory();}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
 
   function exportCSV(snap){const rows=[["เมนู","ราคาขาย","ต้นทุน","กำไร%","ขายออก","รายรับ","กำไรสุทธิ"],...(snap.items||[]).map(i=>[i.name,i.price,i.cost?.toFixed(2),i.margin?.toFixed(1),i.soldQty,i.totalRevenue?.toFixed(0),i.totalProfit?.toFixed(0)])];const csv=rows.map(r=>r.join(",")).join("\n");const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});const u=URL.createObjectURL(blob);const a=document.createElement("a");a.href=u;a.download=`foodcost-${snap.date_from}_${snap.date_to}.csv`;a.click();URL.revokeObjectURL(u);}
   function printSnap(snap){const w=window.open("","_blank");const rows=(snap.items||[]).map(i=>`<tr><td>${i.name}</td><td>฿${i.price}</td><td>฿${i.cost?.toFixed(2)}</td><td>${i.margin?.toFixed(1)}%</td><td>${i.soldQty}</td><td>฿${i.totalRevenue?.toFixed(0)}</td><td>฿${i.totalProfit?.toFixed(0)}</td></tr>`).join("");w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>สรุปต้นทุน</title><style>body{font-family:'Sarabun',sans-serif;padding:24px}h2{color:#FF6B35}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — สรุปต้นทุน</h2><p>สาขา: <b>${snap.branch_name||""}</b> | ${snap.date_from} ถึง ${snap.date_to} | บันทึกโดย: ${snap.saved_by}</p><table><thead><tr><th>เมนู</th><th>ราคาขาย</th><th>ต้นทุน</th><th>กำไร%</th><th>ขายออก</th><th>รายรับ</th><th>กำไรสุทธิ</th></tr></thead><tbody>${rows}</tbody></table><button class="noprint" onclick="window.print()">พิมพ์</button></body></html>`);w.document.close();setTimeout(()=>w.print(),600);}
@@ -1262,7 +1299,7 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
     {view==="action"&&<div>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:12}}>
         <Btn v="ghost" onClick={reloadAction} icon={I.refresh} s={{padding:"7px 14px",fontSize:12}}>รีเฟรช</Btn>
-        {actionHistory.length>0&&<Btn v="danger" onClick={async()=>{if(!confirm("ลบประวัติ?"))return;try{await api.clearActionHist();await reloadAction();}catch(e){alert("ลบไม่สำเร็จ");}}} s={{padding:"7px 14px",fontSize:12}} icon={I.trash}>ลบ</Btn>}
+        {actionHistory.length>0&&<Btn v="danger" onClick={async()=>{if(!await confirmDlg({title:"ลบประวัติการใช้งาน",message:"ต้องการลบประวัติการใช้งานทั้งหมดใช่หรือไม่?"}))return;try{await api.clearActionHist();await reloadAction();}catch(e){alert("ลบไม่สำเร็จ");}}} s={{padding:"7px 14px",fontSize:12}} icon={I.trash}>ลบ</Btn>}
       </div>
       <Card>{actionHistory.length===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.clock} s={40} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติ</p></div>
       :actionHistory.map((item,idx)=><div key={idx} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 18px",borderBottom:`1px solid ${C.lineLight}`}}>
@@ -1300,7 +1337,7 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser}){
           </div>
           {canE&&<div style={{display:"flex",gap:4}}>
             <button onClick={()=>{setSupForm({name:s.name,contact:s.contact||"",phone:s.phone||"",note:s.note||"",active:s.active});setEditSID(s.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
-            <button onClick={async()=>{if(!confirm("ลบซัพพลาย?"))return;await api.deleteSupplier(s.id);await reloadSuppliers();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
+            <button onClick={async()=>{if(!await confirmDlg({title:"ลบซัพพลายเออร์",message:`ต้องการลบ "${s.name}" ใช่หรือไม่?`}))return;await api.deleteSupplier(s.id);await reloadSuppliers();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
           </div>}
         </div>
       </Card>)}
@@ -1369,7 +1406,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
             </div>
             {isAdmin&&<div style={{display:"flex",gap:4}}>
               <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active});setEditBID(b.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
-              {b.type!=="central"&&<button onClick={async()=>{if(!confirm("ลบสาขา?"))return;await api.deleteBranch(b.id);await reloadBranches();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+              {b.type!=="central"&&<button onClick={async()=>{if(!await confirmDlg({title:"ลบสาขา",message:`ต้องการลบสาขา "${b.name}" ใช่หรือไม่?`}))return;await api.deleteBranch(b.id);await reloadBranches();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
             </div>}
           </div>
         </Card>)}
@@ -1404,7 +1441,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
             <td style={{padding:"11px 14px"}}><Chip color={u.active?"green":"gray"}>{u.active?"ใช้งาน":"ปิด"}</Chip></td>
             <td style={{padding:"11px 14px"}}>{isAdmin&&<div style={{display:"flex",gap:5}}>
               <button onClick={()=>{setUF({username:u.username,password:u.password,name:u.name,role:u.role,active:u.active,perms:u.perms||[]});setEditUID(u.id);setShowUser(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
-              {u.id!==currentUser.id&&<button onClick={async()=>{if(!confirm("ลบผู้ใช้?"))return;try{await api.deleteUser(u.id);await reloadUsers();}catch(e){alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+              {u.id!==currentUser.id&&<button onClick={async()=>{if(!await confirmDlg({title:"ลบผู้ใช้",message:`ต้องการลบผู้ใช้ "${u.name||u.username}" ใช่หรือไม่?`}))return;try{await api.deleteUser(u.id);await reloadUsers();}catch(e){alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
             </div>}</td>
           </tr>;})}
           </tbody>
@@ -1488,7 +1525,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
                 <button onClick={()=>{setPForm({name:p.name,ip:p.ip,port:p.port||9100,description:p.description||"",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active});setEditPID(p.id);}} title="แก้ไข" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
                   <Ic d={I.pencil} s={13} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>แก้ไข</span>
                 </button>
-                <button onClick={async()=>{if(!confirm(`ลบ "${p.name}"?`))return;try{await api.deletePrinter(p.id);await reloadPrinters();}catch{alert("ลบไม่สำเร็จ");}}} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                <button onClick={async()=>{if(!await confirmDlg({title:"ลบเครื่องปริ้น",message:`ต้องการลบ "${p.name}" ใช่หรือไม่?`}))return;try{await api.deletePrinter(p.id);await reloadPrinters();}catch{alert("ลบไม่สำเร็จ");}}} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
                   <Ic d={I.trash} s={13} c={C.red}/><span style={{fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ลบ</span>
                 </button>
               </div>
@@ -1637,6 +1674,7 @@ export default function App(){
 
   return <>
     <style>{globalStyle}</style>
+    <ConfirmDlg/>
     <div style={{display:"flex",minHeight:"100vh",background:"#F1F5F9"}}>
 
       {/* ── SIDEBAR ── */}
@@ -1863,7 +1901,7 @@ function POSTableManage({tables,branch,onDone}){
     setSaving(true);
     try{let col=0,row=0;for(let i=bulk.from;i<=bulk.to;i++){const num=bulk.prefix?`${bulk.prefix}${i}`:String(i);if(!tables.find(t=>t.table_number===num)){await api.addPOSTable({table_number:num,label:"",zone:bulk.zone,seats:+bulk.seats,shape:"square",w:90,h:80,branch_id:branch.id,status:"available",active:true,x:col*110+20,y:row*100+20});col++;if(col>9){col=0;row++;}}}onDone();alert(`✅ เพิ่มโต๊ะสำเร็จ!`);}catch(e){alert("เพิ่มไม่สำเร็จ");}setSaving(false);
   }
-  async function delTable(id,num){if(!confirm(`ลบโต๊ะ ${num}?`))return;try{await api.deletePOSTable(id);onDone();}catch{alert("ลบไม่สำเร็จ");}}
+  async function delTable(id,num){if(!await confirmDlg({title:"ลบโต๊ะ",message:`ต้องการลบโต๊ะ ${num} ใช่หรือไม่?`}))return;try{await api.deletePOSTable(id);onDone();}catch{alert("ลบไม่สำเร็จ");}}
   function addZone(){if(!newZone.trim())return;setZones(z=>[...new Set([...z,newZone.trim()])]);setNewZone("");}
 
   const allZones=[...new Set([...zones,...tables.map(t=>t.zone).filter(Boolean)])];
