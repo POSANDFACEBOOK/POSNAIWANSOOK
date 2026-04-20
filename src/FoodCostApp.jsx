@@ -888,6 +888,76 @@ function SOPTab({menus,reload,ings,currentUser,currentBranch}){
     setCustomUnits(next);localStorage.setItem("fc_custom_units",JSON.stringify(next));
     setIngPopup(p=>({...p,unit:u}));setNewUnit("");
   }
+  function printSOP(){
+    if(!menu)return;
+    const cost=menuCost(menu,ings);
+    const mg=menu.price>0?((menu.price-cost)/menu.price*100):0;
+    const ingChips=(menu.ingredients||[]).map(mi=>{const ing=ings.find(i=>i.id===mi.ingredientId);return ing?`<span class="ic"><b>${ing.name}</b>&nbsp;${mi.amountGram}&nbsp;${mi.unit||'กรัม'}</span>`:''}).join('');
+    const steps=(menu.sop||[]).map((s,idx)=>`
+      <div class="step">
+        <div class="num">${idx+1}</div>
+        <div class="sbody">
+          ${s.title?`<div class="stitle">${s.title}</div>`:''}
+          ${s.desc?`<div class="sdesc">${s.desc.replace(/\n/g,'<br/>')}</div>`:''}
+          ${s.image?`<img src="${s.image}" class="simg"/>`:''}
+        </div>
+      </div>`).join('');
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>SOP - ${menu.name}</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700;800;900&display=swap');
+@page{size:A4 portrait;margin:12mm 14mm}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+#wrap{width:100%}
+.header{display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:2.5px solid #FF6B35;margin-bottom:10px}
+.htitle{font-size:22px;font-weight:900;color:#0F172A;margin-bottom:2px}
+.hsub{font-size:11px;color:#64748B;font-weight:500}
+.badge{background:#FFF4F0;border:1px solid #FFD4C2;border-radius:8px;padding:6px 12px;text-align:right;flex-shrink:0}
+.badge .cost{font-size:18px;font-weight:900;color:#FF6B35}
+.badge .lbl{font-size:10px;color:#94A3B8;font-weight:600}
+.sec-label{font-size:9px;font-weight:800;color:#94A3B8;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px}
+.ings{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.ic{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:3px 9px;font-size:11px;color:#334155}
+.ic b{color:#0F172A}
+.steps{display:flex;flex-direction:column;gap:8px}
+.step{display:flex;gap:10px;align-items:flex-start}
+.num{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#FF6B35,#E85520);color:#fff;font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.sbody{flex:1;background:#F8FAFC;border-radius:8px;padding:8px 12px;border:1px solid #E2E8F0}
+.stitle{font-size:13px;font-weight:800;color:#0F172A;margin-bottom:3px}
+.sdesc{font-size:12px;color:#334155;line-height:1.6;white-space:pre-wrap}
+.simg{max-width:180px;border-radius:7px;margin-top:6px;display:block;border:1px solid #E2E8F0}
+.footer{margin-top:10px;padding-top:8px;border-top:1px solid #E2E8F0;display:flex;justify-content:space-between;font-size:9px;color:#94A3B8}
+</style></head><body>
+<div id="wrap">
+  <div class="header">
+    <div>
+      <div style="font-size:10px;font-weight:700;color:#94A3B8;letter-spacing:1px;text-transform:uppercase;margin-bottom:3px">Standard Operating Procedure</div>
+      <div class="htitle">${menu.name}</div>
+      <div class="hsub">${menu.edit_by?`แก้ไขล่าสุดโดย ${menu.edit_by}`:''}${menu.edit_at?` · ${menu.edit_at}`:''}</div>
+    </div>
+    <div class="badge">
+      <div class="lbl">กำไร</div>
+      <div class="cost">${mg.toFixed(0)}%</div>
+      ${menu.price?`<div class="lbl" style="margin-top:2px">ราคา ${menu.price} บาท</div>`:''}
+    </div>
+  </div>
+  ${ingChips?`<div class="sec-label">วัตถุดิบในเมนู</div><div class="ings">${ingChips}</div>`:''}
+  <div class="sec-label">ขั้นตอนการทำ (${(menu.sop||[]).length} ขั้นตอน)</div>
+  <div class="steps">${steps}</div>
+  <div class="footer"><span>NAIWANSOOK FOODCOST</span><span>พิมพ์วันที่ ${new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}</span></div>
+</div>
+<script>
+window.addEventListener('load',()=>{
+  const A4H=(297-24)*3.7795;
+  const w=document.getElementById('wrap');
+  const h=w.offsetHeight;
+  if(h>A4H){const z=(A4H/h);document.body.style.zoom=z;}
+  setTimeout(()=>window.print(),400);
+});
+</script></body></html>`;
+    const win=window.open('','_blank','width=800,height=700');
+    win.document.write(html);win.document.close();
+  }
   return <><div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:16,minHeight:520}}>
     <div style={{background:C.white,borderRadius:16,border:`1px solid ${C.line}`,overflow:"hidden"}}>
       <div style={{padding:"12px 16px 10px",borderBottom:`1px solid ${C.lineLight}`,background:C.bg}}>
@@ -909,10 +979,11 @@ function SOPTab({menus,reload,ings,currentUser,currentBranch}){
             {menu.image&&<img src={menu.image} alt={menu.name} style={{width:52,height:52,objectFit:"cover",borderRadius:10,border:`2px solid ${C.line}`}}/>}
             <div><h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.ink,marginBottom:3}}>{menu.name}</h2><EditedBy username={menu.edit_by} editAt={menu.edit_at}/></div>
           </div>
-          {canE&&<div style={{display:"flex",gap:8}}>
-            {edit?<><Btn v="ghost" onClick={()=>{setSop(menu.sop?[...menu.sop]:[]); setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>
-            :<Btn v="info" onClick={()=>setEdit(true)} icon={I.pencil} s={{padding:"8px 14px"}}>แก้ไข SOP</Btn>}
-          </div>}
+          <div style={{display:"flex",gap:8}}>
+            {!edit&&<Btn v="ghost" onClick={printSOP} icon={I.print} s={{padding:"8px 14px"}}>พิมพ์</Btn>}
+            {canE&&<>{edit?<><Btn v="ghost" onClick={()=>{setSop(menu.sop?[...menu.sop]:[]); setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>
+            :<Btn v="info" onClick={()=>setEdit(true)} icon={I.pencil} s={{padding:"8px 14px"}}>แก้ไข SOP</Btn>}</>}
+          </div>
         </div>
         {edit&&<div style={{marginBottom:14}}>
           <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ค้นหาวัตถุดิบ</div>
