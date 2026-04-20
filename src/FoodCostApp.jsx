@@ -981,9 +981,12 @@ function SOPTab({menus,reload,ings,currentUser,currentBranch}){
           </div>
           <div>
             <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>หน่วย</div>
-            <select value={ingPopup.unit} onChange={e=>setIngPopup(p=>({...p,unit:e.target.value}))} style={{...iS,cursor:"pointer",appearance:"none"}}>
-              {allUnits.map(u=><option key={u} value={u}>{u}</option>)}
-            </select>
+            <div style={{position:"relative"}}>
+              <select value={ingPopup.unit} onChange={e=>setIngPopup(p=>({...p,unit:e.target.value}))} style={{...iS,cursor:"pointer",appearance:"none",paddingRight:36}}>
+                {allUnits.map(u=><option key={u} value={u}>{u}</option>)}
+              </select>
+              <span style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><Ic d={I.chevD} s={16} c={C.ink3}/></span>
+            </div>
           </div>
         </div>
         <div style={{background:C.bg,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`,marginBottom:16}}>
