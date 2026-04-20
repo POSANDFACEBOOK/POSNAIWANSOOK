@@ -824,7 +824,8 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
 function SOPTab({menus,reload,ings,currentUser,currentBranch}){
   const isCentral=currentBranch?.type==="central";
   const visibleMenus=useMemo(()=>menus.filter(m=>{const vb=m.visible_branches||[];return isCentral||vb.length===0||vb.includes(currentBranch?.id);}),[menus,isCentral,currentBranch]);
-  const[sel,setSel]=useState(visibleMenus[0]?.id??null);const[edit,setEdit]=useState(false);const[sop,setSop]=useState([]);const[saving,setSaving]=useState(false);const[ingQ,setIngQ]=useState("");
+  const[sel,setSel]=useState(visibleMenus[0]?.id??null);const[edit,setEdit]=useState(false);const[sop,setSop]=useState([]);const[saving,setSaving]=useState(false);const[ingQ,setIngQ]=useState("");const[menuQ,setMenuQ]=useState("");
+  const filteredMenus=useMemo(()=>visibleMenus.filter(m=>m.name.toLowerCase().includes(menuQ.toLowerCase())),[visibleMenus,menuQ]);
   const menu=useMemo(()=>visibleMenus.find(m=>m.id===sel),[visibleMenus,sel]);
   const canE=hasPerm(currentUser,"sop")&&isCentral;
   useEffect(()=>{if(menu){setSop(menu.sop?[...menu.sop.map(s=>({...s}))]:[]); setEdit(false);}}, [sel]);
@@ -832,9 +833,13 @@ function SOPTab({menus,reload,ings,currentUser,currentBranch}){
   const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
   return <div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:16,minHeight:520}}>
     <div style={{background:C.white,borderRadius:16,border:`1px solid ${C.line}`,overflow:"hidden"}}>
-      <div style={{padding:"12px 16px 8px",borderBottom:`1px solid ${C.lineLight}`,background:C.bg}}><div style={{fontSize:11,fontWeight:800,color:C.ink4,letterSpacing:1.2,textTransform:"uppercase",fontFamily:"'Sarabun',sans-serif"}}>รายการเมนู</div></div>
+      <div style={{padding:"12px 16px 10px",borderBottom:`1px solid ${C.lineLight}`,background:C.bg}}>
+        <div style={{fontSize:11,fontWeight:800,color:C.ink4,letterSpacing:1.2,textTransform:"uppercase",fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>รายการเมนู</div>
+        <div style={{position:"relative"}}><span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={13} c={C.ink4}/></span><input value={menuQ} onChange={e=>setMenuQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:32,fontSize:13,padding:"7px 10px 7px 32px",width:"100%",boxSizing:"border-box"}}/></div>
+      </div>
       <div style={{padding:8,overflowY:"auto",maxHeight:520}}>
-        {visibleMenus.map(m=>{const cost=menuCost(m,ings);const mg=m.price>0?((m.price-cost)/m.price*100):0;const active=sel===m.id;return <div key={m.id} onClick={()=>setSel(m.id)} style={{padding:"10px 12px",borderRadius:10,cursor:"pointer",marginBottom:4,background:active?C.brandLight:"transparent",border:`1px solid ${active?C.brandBorder:"transparent"}`,transition:"all .15s"}}>
+        {filteredMenus.length===0&&<div style={{padding:"20px 12px",textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>}
+        {filteredMenus.map(m=>{const cost=menuCost(m,ings);const mg=m.price>0?((m.price-cost)/m.price*100):0;const active=sel===m.id;return <div key={m.id} onClick={()=>setSel(m.id)} style={{padding:"10px 12px",borderRadius:10,cursor:"pointer",marginBottom:4,background:active?C.brandLight:"transparent",border:`1px solid ${active?C.brandBorder:"transparent"}`,transition:"all .15s"}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:active?800:500,color:active?C.brand:C.ink2,marginBottom:2}}>{m.name}</div>
           <div style={{display:"flex",gap:6}}><span style={{fontSize:11,color:marginColor(mg),fontWeight:700}}>กำไร {mg.toFixed(0)}%</span><span style={{fontSize:11,color:C.ink4}}>· {(m.sop||[]).length} ขั้นตอน</span></div>
         </div>;})}
