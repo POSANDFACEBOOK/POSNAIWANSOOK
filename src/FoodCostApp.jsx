@@ -910,9 +910,11 @@ function SOPTab({menus,reload,ings,currentUser,currentBranch}){
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 #wrap{width:100%}
-.header{padding-bottom:10px;border-bottom:3px solid #FF6B35;margin-bottom:12px}
+.header{padding-bottom:10px;border-bottom:3px solid #FF6B35;margin-bottom:12px;display:flex;gap:14px;align-items:center}
+.hmain{flex:1}
 .hlabel{font-size:9px;font-weight:800;color:#FF6B35;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px}
 .htitle{font-size:26px;font-weight:900;color:#0F172A;line-height:1.15}
+.himg{width:90px;height:90px;object-fit:cover;border-radius:12px;border:2px solid #E2E8F0;flex-shrink:0}
 .sec-label{font-size:9px;font-weight:800;color:#94A3B8;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px}
 .ings{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
 .ic{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:3px 9px;font-size:11px;color:#334155}
@@ -931,8 +933,11 @@ body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-prin
 </style></head><body>
 <div id="wrap">
   <div class="header">
-    <div class="hlabel">ขั้นตอนการทำ · Standard Operating Procedure</div>
-    <div class="htitle">${menu.name}</div>
+    ${menu.image?`<img src="${menu.image}" class="himg" crossorigin="anonymous"/>`:''}
+    <div class="hmain">
+      <div class="hlabel">ขั้นตอนการทำ · Standard Operating Procedure</div>
+      <div class="htitle">${menu.name}</div>
+    </div>
   </div>
   ${ingChips?`<div class="sec-label">วัตถุดิบที่ใช้</div><div class="ings">${ingChips}</div>`:''}
   <div class="sec-label">ขั้นตอนการทำ &nbsp;(${(menu.sop||[]).length} ขั้นตอน)</div>
@@ -940,12 +945,18 @@ body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-prin
   <div class="footer"><span>NAIWANSOOK · ห้องครัว</span><span>พิมพ์วันที่ ${new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}</span></div>
 </div>
 <script>
-window.addEventListener('load',()=>{
+async function waitImgs(){
+  const imgs=[...document.images];
+  await Promise.all(imgs.map(img=>img.complete?Promise.resolve():new Promise(r=>{img.onload=img.onerror=r;})));
+}
+window.addEventListener('load',async()=>{
+  await waitImgs();
+  await new Promise(r=>setTimeout(r,100));
   const A4H=(297-20)*3.7795;
   const w=document.getElementById('wrap');
   const h=w.offsetHeight;
   if(h>A4H){document.body.style.zoom=(A4H/h).toFixed(4);}
-  setTimeout(()=>window.print(),400);
+  setTimeout(()=>window.print(),300);
 });
 </script></body></html>`;
     const win=window.open('','_blank','width=800,height=700');
