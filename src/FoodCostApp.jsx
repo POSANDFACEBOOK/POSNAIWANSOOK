@@ -1508,27 +1508,51 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   const uF0={username:"",password:"",name:"",role:"staff",active:true,perms:ROLE_DEFAULT_PERMS.staff};
   const[uF,setUF]=useState(uF0);
   const[branchForm,setBranchForm]=useState({name:"",type:"branch",active:true});const[editBID,setEditBID]=useState(null);
-  const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true};
+  const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
-  const[testResults,setTestResults]=useState({});
+  const[testResults,setTestResults]=useState({});const[btScanning,setBtScanning]=useState(false);
   const isAdmin=hasPerm(currentUser,"settings");
   async function testPrinter(p){
+    const conn=getPConn(p);
     setTestResults(r=>({...r,[p.id]:{status:"testing"}}));
-    const ctrl=new AbortController();
-    const tid=setTimeout(()=>ctrl.abort(),4000);
-    try{
-      await fetch(`http://${p.ip}:${p.port||9100}/`,{mode:"no-cors",signal:ctrl.signal,cache:"no-store"});
-      clearTimeout(tid);
-      setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"เชื่อมต่อได้ปกติ"}}));
-    }catch(e){
-      clearTimeout(tid);
-      setTestResults(r=>({...r,[p.id]:{status:"fail",msg:e.name==="AbortError"?"หมดเวลา ไม่ตอบสนอง (4s)":"เชื่อมต่อไม่ได้"}}));
+    if(conn.type==="bluetooth"){
+      try{
+        if(!navigator.bluetooth)throw new Error("เบราว์เซอร์ไม่รองรับ Bluetooth");
+        const device=await navigator.bluetooth.requestDevice({filters:conn.btName?[{name:conn.btName}]:undefined,acceptAllDevices:!conn.btName,optionalServices:_BT_SVC});
+        const server=await device.gatt.connect();
+        await server.getPrimaryServices();
+        device.gatt.disconnect();
+        setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"เชื่อมต่อ Bluetooth สำเร็จ: "+device.name}}));
+      }catch(e){setTestResults(r=>({...r,[p.id]:{status:"fail",msg:e.message}}));}
+      return;
     }
+    const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),4000);
+    try{await fetch(`http://${p.ip}:${p.port||9100}/`,{mode:"no-cors",signal:ctrl.signal,cache:"no-store"});clearTimeout(tid);setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"เชื่อมต่อได้ปกติ"}}));}
+    catch(e){clearTimeout(tid);setTestResults(r=>({...r,[p.id]:{status:"fail",msg:e.name==="AbortError"?"หมดเวลา ไม่ตอบสนอง (4s)":"เชื่อมต่อไม่ได้"}}));}
+  }
+  async function scanBTPrinter(){
+    if(!navigator.bluetooth){alert("เบราว์เซอร์ไม่รองรับ Bluetooth ต้องใช้ Chrome/Edge");return;}
+    setBtScanning(true);
+    try{
+      const device=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:_BT_SVC});
+      setPForm(f=>({...f,btName:device.name||"",conn:"bluetooth"}));
+    }catch(e){if(e.name!=="NotFoundError"&&e.name!=="NotAllowedError")alert("เกิดข้อผิดพลาด: "+e.message);}
+    setBtScanning(false);
   }
 
   async function saveUser(){if(!uF.username||!uF.password)return;setSaving(true);try{if(editUID)await api.updateUser(editUID,uF);else await api.addUser(uF);await reloadUsers();setShowUser(false);setEditUID(null);setUF(uF0);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function saveBranch(){if(!branchForm.name)return;try{if(editBID)await api.updateBranch(editBID,branchForm);else await api.addBranch(branchForm);await reloadBranches();setBranchForm({name:"",type:"branch",active:true});setEditBID(null);}catch(e){alert("บันทึกไม่สำเร็จ");};}
-  async function savePrinter(){if(!pForm.name||!pForm.ip)return;setPSaving(true);try{const d={...pForm,port:+pForm.port||9100,branch_id:pForm.branch_id||null};if(editPID)await api.updatePrinter(editPID,d);else await api.addPrinter(d);await reloadPrinters();setPForm(pF0);setEditPID(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setPSaving(false);}
+  async function savePrinter(){
+    const isBT=pForm.conn==="bluetooth";
+    if(!pForm.name||(isBT?!pForm.btName:!pForm.ip))return;
+    setPSaving(true);
+    try{
+      const d={name:pForm.name,ip:isBT?"bluetooth":pForm.ip,port:isBT?0:+pForm.port||9100,type:pForm.type,branch_id:pForm.branch_id||null,active:true,description:isBT?JSON.stringify({c:"bt",n:pForm.btName}):pForm.description};
+      if(editPID)await api.updatePrinter(editPID,d);else await api.addPrinter(d);
+      await reloadPrinters();setPForm(pF0);setEditPID(null);
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setPSaving(false);
+  }
 
   const sections=[{id:"branches",label:"สาขา",icon:I.branch},{id:"users",label:"ผู้ใช้",icon:I.users},{id:"printers",label:"เครื่องปริ้น",icon:I.print}];
 
@@ -1622,19 +1646,39 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
           {editPID&&<Chip color="yellow">กำลังแก้ไข</Chip>}
         </div>
         <div style={{padding:"24px 28px"}}>
-          <div style={{display:"grid",gridTemplateColumns:"2fr 1.2fr 0.8fr 1fr 1fr",gap:16,marginBottom:16}}>
-            <Inp label="ชื่อเครื่องพิมพ์ *" value={pForm.name} onChange={e=>setPForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัวหลัก, บาร์, แคชเชียร์"/>
-            <Inp label="IP Address *" value={pForm.ip} onChange={e=>setPForm(f=>({...f,ip:e.target.value}))} placeholder="192.168.1.100"/>
-            <Inp label="Port" type="number" value={pForm.port} onChange={e=>setPForm(f=>({...f,port:+e.target.value}))} placeholder="9100"/>
+          {/* Row 1: name + conn type + printer type + branch */}
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1.4fr 1fr 1fr",gap:14,marginBottom:14}}>
+            <Inp label="ชื่อเครื่องพิมพ์ *" value={pForm.name} onChange={e=>setPForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัวหลัก, บาร์"/>
+            <div>
+              <label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ประเภทการเชื่อมต่อ</label>
+              <div style={{display:"flex",gap:0,borderRadius:10,overflow:"hidden",border:`1.5px solid ${C.line}`}}>
+                {[{v:"ip",label:"🌐 IP Network"},{v:"bluetooth",label:"📶 Bluetooth"}].map(o=><button key={o.v} onClick={()=>setPForm(f=>({...f,conn:o.v}))} style={{flex:1,padding:"9px 0",border:"none",background:pForm.conn===o.v?`linear-gradient(135deg,${C.brand},${C.brandDark})`:C.white,color:pForm.conn===o.v?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer",transition:"all .15s"}}>{o.label}</button>)}
+              </div>
+            </div>
             <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ประเภท</label><select value={pForm.type} onChange={e=>setPForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="kitchen">🍳 ครัว</option><option value="bar">🍹 บาร์</option><option value="receipt">🧾 แคชเชียร์</option><option value="other">📄 อื่นๆ</option></select></div>
             <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:16,alignItems:"flex-end"}}>
-            <Inp label="หมายเหตุ (ไม่บังคับ)" value={pForm.description} onChange={e=>setPForm(f=>({...f,description:e.target.value}))} placeholder="เช่น ปริ้นใบสั่งครัวหลัก ชั้น 1"/>
-            <div style={{display:"flex",gap:8,paddingBottom:1}}>
-              {editPID&&<Btn v="ghost" onClick={()=>{setPForm(pF0);setEditPID(null);}}>ยกเลิก</Btn>}
-              <Btn onClick={savePrinter} icon={I.check} disabled={!pForm.name||!pForm.ip} loading={pSaving} style={{minWidth:140}}>{editPID?"บันทึกการแก้ไข":"เพิ่มเครื่องพิมพ์"}</Btn>
-            </div>
+          {/* Row 2: IP fields OR BT scan */}
+          {pForm.conn==="ip"?<div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:14,marginBottom:14,alignItems:"flex-end"}}>
+            <Inp label="IP Address *" value={pForm.ip} onChange={e=>setPForm(f=>({...f,ip:e.target.value}))} placeholder="192.168.1.100"/>
+            <Inp label="Port" type="number" value={pForm.port} onChange={e=>setPForm(f=>({...f,port:+e.target.value}))} placeholder="9100" style={{width:90}}/>
+            <Inp label="หมายเหตุ" value={pForm.description} onChange={e=>setPForm(f=>({...f,description:e.target.value}))} placeholder="ปริ้นครัวหลัก..."/>
+          </div>:<div style={{marginBottom:14,background:C.bg,borderRadius:12,padding:"16px 18px",border:`1.5px dashed ${C.brand}44`}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>อุปกรณ์ Bluetooth</div>
+            {pForm.btName?<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+              <div style={{width:36,height:36,background:C.brandLight,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>📶</div>
+              <div><div style={{fontWeight:800,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{pForm.btName}</div><div style={{fontSize:11,color:C.green,fontWeight:600}}>✅ จับคู่แล้ว</div></div>
+              <button onClick={()=>setPForm(f=>({...f,btName:""}))} style={{marginLeft:"auto",background:C.redLight,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",color:C.red,fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
+            </div>:<div style={{color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>ยังไม่ได้จับคู่อุปกรณ์</div>}
+            <button onClick={scanBTPrinter} disabled={btScanning} style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,border:"none",borderRadius:10,padding:"9px 20px",cursor:btScanning?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,opacity:btScanning?.6:1,display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:16}}>📶</span>{btScanning?"กำลังสแกน...":"สแกนหาเครื่องปริ้น Bluetooth"}
+            </button>
+            <div style={{marginTop:8,fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>* ต้องใช้ Chrome / Edge บน Desktop หรือ Android</div>
+          </div>}
+          {/* Buttons */}
+          <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+            {editPID&&<Btn v="ghost" onClick={()=>{setPForm(pF0);setEditPID(null);}}>ยกเลิก</Btn>}
+            <Btn onClick={savePrinter} icon={I.check} disabled={!pForm.name||(pForm.conn==="bluetooth"?!pForm.btName:!pForm.ip)} loading={pSaving} s={{minWidth:160}}>{editPID?"บันทึกการแก้ไข":"เพิ่มเครื่องพิมพ์"}</Btn>
           </div>
         </div>
       </div>
@@ -1665,7 +1709,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
                 </div>
               </div>
               <div style={{display:"flex",gap:6,flexShrink:0}}>
-                <button onClick={()=>{setPForm({name:p.name,ip:p.ip,port:p.port||9100,description:p.description||"",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active});setEditPID(p.id);}} title="แก้ไข" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                <button onClick={()=>{const pc=getPConn(p);setPForm({name:p.name,ip:pc.type==="bluetooth"?"":p.ip,port:p.port||9100,description:pc.type==="bluetooth"?"":p.description||"",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active,conn:pc.type,btName:pc.btName||""});setEditPID(p.id);}} title="แก้ไข" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
                   <Ic d={I.pencil} s={13} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>แก้ไข</span>
                 </button>
                 <button onClick={async()=>{if(!await confirmDlg({title:"ลบเครื่องปริ้น",message:`ต้องการลบ "${p.name}" ใช่หรือไม่?`}))return;try{await api.deletePrinter(p.id);await reloadPrinters();}catch{alert("ลบไม่สำเร็จ");}}} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
@@ -1674,12 +1718,15 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
               </div>
             </div>
             <div style={{padding:"14px 20px",display:"flex",flexDirection:"column",gap:8}}>
-              {(()=>{const tr=testResults[p.id];const dotColor=!tr?C.ink3:tr.status==="testing"?C.yellow:tr.status==="ok"?C.green:C.red;const dotAnim=tr?.status==="testing"?"pulse 1s infinite":"none";return<div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#F8FAFC",borderRadius:10,border:`1px solid ${tr?.status==="ok"?C.green:tr?.status==="fail"?C.red:C.line}`,transition:"border .3s"}}>
+              {(()=>{const tr=testResults[p.id];const dotColor=!tr?C.ink3:tr.status==="testing"?C.yellow:tr.status==="ok"?C.green:C.red;const dotAnim=tr?.status==="testing"?"pulse 1s infinite":"none";const pc=getPConn(p);const isBT=pc.type==="bluetooth";return<div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:"#F8FAFC",borderRadius:10,border:`1px solid ${tr?.status==="ok"?C.green:tr?.status==="fail"?C.red:C.line}`,transition:"border .3s"}}>
                 <div style={{width:9,height:9,borderRadius:"50%",background:dotColor,boxShadow:`0 0 6px ${dotColor}88`,flexShrink:0,animation:dotAnim}}/>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"monospace",letterSpacing:.5}}>{p.ip}<span style={{color:C.ink4,fontWeight:400}}>{":"}{p.port||9100}</span></div>
-                  <div style={{fontSize:11,color:tr?.status==="ok"?C.green:tr?.status==="fail"?C.red:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:tr?600:400}}>
-                    {!tr&&"IP Address : Port"}
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontSize:11,background:isBT?C.brandLight:C.blueLight,color:isBT?C.brand:C.blue,border:`1px solid ${isBT?C.brandBorder:"#BFDBFE"}`,borderRadius:6,padding:"1px 7px",fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{isBT?"📶 Bluetooth":"🌐 IP"}</span>
+                    <span style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"monospace",letterSpacing:.5}}>{isBT?pc.btName||"—":`${p.ip}:${p.port||9100}`}</span>
+                  </div>
+                  <div style={{fontSize:11,color:tr?.status==="ok"?C.green:tr?.status==="fail"?C.red:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:tr?600:400,marginTop:2}}>
+                    {!tr&&(isBT?"กด ทดสอบ เพื่อจับคู่ Bluetooth":"IP Address : Port")}
                     {tr?.status==="testing"&&"⏳ กำลังทดสอบ..."}
                     {tr?.status==="ok"&&`✅ ${tr.msg}`}
                     {tr?.status==="fail"&&`❌ ${tr.msg}`}
@@ -1689,7 +1736,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
                   {testResults[p.id]?.status==="testing"?"...":"🔌 ทดสอบ"}
                 </button>
               </div>;})()}
-              {p.description&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",padding:"8px 12px",background:"#FFFBEB",borderRadius:8,border:"1px solid #FDE68A"}}>📝 {p.description}</div>}
+              {p.description&&!p.description.startsWith("{")&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",padding:"8px 12px",background:"#FFFBEB",borderRadius:8,border:"1px solid #FDE68A"}}>📝 {p.description}</div>}
               {p.branch_id&&branches.find(b=>b.id===p.branch_id)&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:6}}>
                 <Ic d={I.branch} s={13} c={C.ink4}/><span>สาขา: <b>{branches.find(b=>b.id===p.branch_id)?.name}</b></span>
               </div>}
@@ -1935,19 +1982,53 @@ function printReceipt(order, tableNum, branchName){
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px;font-size:13px}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2>${branchName}</h2><div style="text-align:center;font-size:12px">โต๊ะ ${tableNum} | ${new Date().toLocaleString("th-TH")}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>รวม</span><span>฿${order.subtotal?.toFixed(0)||0}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between"><span>ส่วนลด</span><span>-฿${order.discount?.toFixed(0)}</span></div>`:""}<div style="display:flex;justify-content:space-between;font-weight:700;font-size:16px;margin-top:4px"><span>รวมทั้งสิ้น</span><span>฿${order.total?.toFixed(0)||0}</span></div><div class="line"></div><div style="text-align:center;font-size:12px">ชำระโดย: ${order.payment_method==="cash"?"เงินสด":order.payment_method==="transfer"?"โอนเงิน":"บัตรเครดิต"}</div><div style="text-align:center;font-size:11px;margin-top:6px">ขอบคุณที่ใช้บริการครับ</div><br/><script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
-function printKitchen(items, tableNum, printers=[]){
-  // Group items by printer_id
+// ── Bluetooth ESC-POS helpers ────────────────────────────
+function getPConn(p){try{const d=JSON.parse(p.description||"{}");if(d.c==="bt")return{type:"bluetooth",btName:d.n||""};}catch{}return{type:"ip"};}
+function buildKitchenESC(items,tableNum){
+  const enc=new TextEncoder();const bufs=[];
+  const b=(...bytes)=>bufs.push(new Uint8Array(bytes));
+  const t=str=>bufs.push(enc.encode(str));
+  b(0x1b,0x40);b(0x1b,0x61,0x01);b(0x1d,0x21,0x11);t("ใบสั่งครัว\n");
+  b(0x1d,0x21,0x00);b(0x1b,0x45,0x01);t(`โต๊ะ ${tableNum}\n`);b(0x1b,0x45,0x00);
+  t(new Date().toLocaleString("th-TH")+"\n");b(0x1b,0x61,0x00);
+  t("--------------------------------\n");
+  items.forEach(i=>{t(`${i.qty}x ${i.name}\n`);if(i.note)t(`   * ${i.note}\n`);});
+  t("--------------------------------\n");b(0x1b,0x64,0x04);b(0x1d,0x56,0x41,0x00);
+  let len=0;bufs.forEach(u=>len+=u.length);const out=new Uint8Array(len);let off=0;
+  bufs.forEach(u=>{out.set(u,off);off+=u.length;});return out;
+}
+const _BT_SVC=["000018f0-0000-1000-8000-00805f9b34fb","49535343-fe7d-4ae5-8fa9-9fafd205e455","e7810a71-73ae-499d-8c15-faa9aef0c3f2","0000ff00-0000-1000-8000-00805f9b34fb"];
+const _BT_CHR=["00002af1-0000-1000-8000-00805f9b34fb","49535343-8841-881f-4a2d-13b6b6c9d39a","bef8d6c9-9c21-4c9e-b632-bd58c1009f9f","0000ff02-0000-1000-8000-00805f9b34fb"];
+async function btPrint(escData,btName){
+  if(!navigator.bluetooth)throw new Error("ต้องใช้ Chrome หรือ Edge บน Desktop/Android");
+  const device=await navigator.bluetooth.requestDevice({filters:btName?[{name:btName}]:undefined,acceptAllDevices:!btName,optionalServices:_BT_SVC});
+  const server=await device.gatt.connect();
+  let char=null;
+  outer:for(const su of _BT_SVC){try{const svc=await server.getPrimaryService(su);for(const cu of _BT_CHR){try{char=await svc.getCharacteristic(cu);break outer;}catch{}}try{const all=await svc.getCharacteristics();for(const c of all){if(c.properties.write||c.properties.writeWithoutResponse){char=c;break outer;}}}catch{}}catch{}}
+  if(!char)throw new Error("ไม่พบ characteristic สำหรับส่งข้อมูลพิมพ์");
+  for(let i=0;i<escData.length;i+=512){const s=escData.slice(i,i+512);try{if(char.properties.writeWithoutResponse)await char.writeValueWithoutResponse(s);else await char.writeValue(s);}catch{await char.writeValue(s);}await new Promise(r=>setTimeout(r,50));}
+  try{device.gatt.disconnect();}catch{}return device.name;
+}
+// ─────────────────────────────────────────────────────────
+
+function printKitchenWindow(grpItems,tableNum,printer){
+  const title=printer?printer.name:"ใบสั่งครัว";
+  const rows=grpItems.map(i=>`<div style="margin:5px 0;font-size:16px"><b>${i.qty}x ${i.name}</b>${i.note?`<div style="font-size:12px;padding-left:16px;color:#555">★ ${i.note}</div>`:""}</div>`).join("");
+  const w=window.open("","_blank","width=350,height=420");
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2 style="text-align:center;font-size:18px;margin:4px 0">🍳 ${title}</h2><div style="text-align:center;font-size:15px;font-weight:900">โต๊ะ ${tableNum}</div><div style="text-align:center;font-size:11px;color:#64748b">${new Date().toLocaleString("th-TH")}</div><hr style="border:1px dashed #ccc"/>${rows}<hr style="border:1px dashed #ccc"/><div style="text-align:center;font-size:11px;color:#94a3b8">--- สิ้นสุดรายการ ---</div><br/><script>window.onload=()=>window.print();<\/script></body></html>`);
+  w.document.close();
+}
+async function printKitchen(items,tableNum,printers=[]){
   const groups={};
   items.forEach(i=>{const pid=i.printer_id?String(i.printer_id):"default";(groups[pid]||(groups[pid]=[])).push(i);});
-  Object.entries(groups).forEach(([pid,grpItems])=>{
+  for(const[pid,grpItems]of Object.entries(groups)){
     const printer=pid!=="default"?printers.find(p=>p.id===+pid):null;
-    const title=printer?`${printer.name} (${printer.ip}:${printer.port||9100})`:"ใบสั่งครัว";
-    const ipInfo=printer?`<div style="text-align:center;font-size:10px;color:#94a3b8;margin-bottom:4px">Printer: ${printer.ip}:${printer.port||9100}</div>`:"";
-    const rows=grpItems.map(i=>`<div style="margin:5px 0;font-size:16px"><b>${i.qty}x ${i.name}</b>${i.note?`<div style="font-size:12px;padding-left:16px;color:#555">★ ${i.note}</div>`:""}</div>`).join("");
-    const w=window.open("","_blank","width=350,height=420");
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2 style="text-align:center;font-size:18px;margin:4px 0">🍳 ${title}</h2><div style="text-align:center;font-size:15px;font-weight:900">โต๊ะ ${tableNum}</div><div style="text-align:center;font-size:11px;color:#64748b">${new Date().toLocaleString("th-TH")}</div>${ipInfo}<hr style="border:1px dashed #ccc"/>${rows}<hr style="border:1px dashed #ccc"/><div style="text-align:center;font-size:11px;color:#94a3b8">--- สิ้นสุดรายการ ---</div><br/><script>window.onload=()=>window.print();<\/script></body></html>`);
-    w.document.close();
-  });
+    const conn=printer?getPConn(printer):{type:"ip"};
+    if(conn.type==="bluetooth"){
+      try{await btPrint(buildKitchenESC(grpItems,tableNum),conn.btName);}
+      catch(e){alert("Bluetooth พิมพ์ไม่สำเร็จ: "+e.message+"\nใช้การพิมพ์ปกติแทน");printKitchenWindow(grpItems,tableNum,printer);}
+    }else{printKitchenWindow(grpItems,tableNum,printer);}
+  }
 }
 
 // ══════════════════════════════════════════════════════
