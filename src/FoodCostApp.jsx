@@ -1997,24 +1997,30 @@ export default function App(){
 // ══════════════════════════════════════════════════════
 // ── PRINT HELPERS ─────────────────────────────────────
 // ══════════════════════════════════════════════════════
+const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",other:"➕ อื่นๆ"};
 function printReceipt(order, tableNum, branchName){
   const w=window.open("","_blank","width=400,height=600");
-  const rows=(order.items||[]).map(i=>`<tr><td style="padding:2px 4px;font-size:13px">${i.name}${i.note?`<br/><span style="font-size:11px;color:#666">★${i.note}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">฿${(i.price*i.qty).toFixed(0)}</td></tr>`).join("");
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px;font-size:13px}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2>${branchName}</h2><div style="text-align:center;font-size:12px">โต๊ะ ${tableNum} | ${new Date().toLocaleString("th-TH")}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>รวม</span><span>฿${order.subtotal?.toFixed(0)||0}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between"><span>ส่วนลด</span><span>-฿${order.discount?.toFixed(0)}</span></div>`:""}<div style="display:flex;justify-content:space-between;font-weight:700;font-size:16px;margin-top:4px"><span>รวมทั้งสิ้น</span><span>฿${order.total?.toFixed(0)||0}</span></div><div class="line"></div><div style="text-align:center;font-size:12px">ชำระโดย: ${order.payment_method==="cash"?"เงินสด":order.payment_method==="transfer"?"โอนเงิน":"บัตรเครดิต"}</div><div style="text-align:center;font-size:11px;margin-top:6px">ขอบคุณที่ใช้บริการครับ</div><br/><script>window.onload=()=>window.print();<\/script></body></html>`);
+  const rows=(order.items||[]).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${i.name}${i.note?`<br/><span style="font-size:11px;color:#666">★${i.note}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?i.item_discount_value+"%":"฿"+i.item_discount_value}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
+  const payLabel=PAY_LABEL[order.payment_method]||order.payment_method||"-";
+  const cashLine=order.payment_method==="cash"&&order.cash_received?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(0)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-(order.total||0)).toFixed(0)}</span></div>`:"";
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px;font-size:13px}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2>${branchName}</h2><div class="tbl-num">โต๊ะ ${tableNum}</div><div style="text-align:center;font-size:11px;color:#555">${new Date().toLocaleString("th-TH")}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${order.subtotal?.toFixed(0)||0}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626"><span>ส่วนลดรวม</span><span>-฿${order.discount?.toFixed(0)}</span></div>`:""}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>รวมทั้งสิ้น</span><span>฿${order.total?.toFixed(0)||0}</span></div>${cashLine}<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div><div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div><br/><script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
 // ── Bluetooth ESC-POS helpers ────────────────────────────
 function getPConn(p){try{const d=JSON.parse(p.description||"{}");if(d.c==="bt")return{type:"bluetooth",btName:d.n||""};}catch{}return{type:"ip"};}
-function buildKitchenESC(items,tableNum){
+function buildKitchenESC(item,tableNum){
   const enc=new TextEncoder();const bufs=[];
   const b=(...bytes)=>bufs.push(new Uint8Array(bytes));
   const t=str=>bufs.push(enc.encode(str));
-  b(0x1b,0x40);b(0x1b,0x61,0x01);b(0x1d,0x21,0x11);t("ใบสั่งครัว\n");
-  b(0x1d,0x21,0x00);b(0x1b,0x45,0x01);t(`โต๊ะ ${tableNum}\n`);b(0x1b,0x45,0x00);
-  t(new Date().toLocaleString("th-TH")+"\n");b(0x1b,0x61,0x00);
-  t("--------------------------------\n");
-  items.forEach(i=>{t(`${i.qty}x ${i.name}\n`);if(i.note)t(`   * ${i.note}\n`);});
-  t("--------------------------------\n");b(0x1b,0x64,0x04);b(0x1d,0x56,0x41,0x00);
+  b(0x1b,0x40);b(0x1b,0x61,0x01);
+  b(0x1d,0x21,0x00);t("ใบสั่งอาหาร\n");
+  b(0x1d,0x21,0x33);t(`โต๊ะ ${tableNum}\n`);
+  b(0x1d,0x21,0x00);t(new Date().toLocaleString("th-TH")+"\n");
+  t("================================\n");
+  b(0x1d,0x21,0x11);b(0x1b,0x45,0x01);t(`${item.qty}x ${item.name}\n`);b(0x1b,0x45,0x00);
+  b(0x1d,0x21,0x00);
+  if(item.note){t("\n");b(0x1b,0x45,0x01);t(`★ ${item.note}\n`);b(0x1b,0x45,0x00);}
+  t("================================\n");b(0x1b,0x64,0x05);b(0x1d,0x56,0x41,0x00);
   let len=0;bufs.forEach(u=>len+=u.length);const out=new Uint8Array(len);let off=0;
   bufs.forEach(u=>{out.set(u,off);off+=u.length;});return out;
 }
@@ -2032,23 +2038,21 @@ async function btPrint(escData,btName){
 }
 // ─────────────────────────────────────────────────────────
 
-function printKitchenWindow(grpItems,tableNum,printer){
-  const title=printer?printer.name:"ใบสั่งครัว";
-  const rows=grpItems.map(i=>`<div style="margin:5px 0;font-size:16px"><b>${i.qty}x ${i.name}</b>${i.note?`<div style="font-size:12px;padding-left:16px;color:#555">★ ${i.note}</div>`:""}</div>`).join("");
-  const w=window.open("","_blank","width=350,height=420");
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2 style="text-align:center;font-size:18px;margin:4px 0">🍳 ${title}</h2><div style="text-align:center;font-size:15px;font-weight:900">โต๊ะ ${tableNum}</div><div style="text-align:center;font-size:11px;color:#64748b">${new Date().toLocaleString("th-TH")}</div><hr style="border:1px dashed #ccc"/>${rows}<hr style="border:1px dashed #ccc"/><div style="text-align:center;font-size:11px;color:#94a3b8">--- สิ้นสุดรายการ ---</div><br/><script>window.onload=()=>window.print();<\/script></body></html>`);
+function printKitchenWindow(item,tableNum,printer){
+  const title=printer?printer.name:"ใบสั่งอาหาร";
+  const w=window.open("","_blank","width=350,height=500");
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - โต๊ะ ${tableNum}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:6px;color:#000}.hdr{text-align:center;font-size:13px;font-weight:700;margin:2px 0}.tbl{text-align:center;font-size:54px;font-weight:900;line-height:1;margin:6px 0;letter-spacing:1px;border:3px solid #000;padding:8px 0;border-radius:8px}.tm{text-align:center;font-size:11px;color:#444;margin:2px 0}.sep{border:0;border-top:2px dashed #000;margin:8px 0}.menu{text-align:center;font-size:24px;font-weight:900;line-height:1.2;margin:8px 0;padding:6px 4px}.qty{display:inline-block;background:#000;color:#fff;padding:2px 12px;border-radius:6px;font-size:24px;font-weight:900;margin-right:6px}.note{margin-top:8px;background:#FEF3C7;border:2px solid #000;border-radius:6px;padding:8px;font-size:15px;font-weight:700;text-align:center}.foot{text-align:center;font-size:10px;color:#666;margin-top:6px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><div class="hdr">🍳 ${title}</div><div class="tbl">โต๊ะ ${tableNum}</div><div class="tm">${new Date().toLocaleString("th-TH")}</div><hr class="sep"/><div class="menu"><span class="qty">${item.qty}x</span>${item.name}</div>${item.note?`<div class="note">★ ${item.note}</div>`:""}<hr class="sep"/><div class="foot">--- สิ้นสุดรายการ ---</div><script>window.onload=()=>setTimeout(()=>window.print(),200);<\/script></body></html>`);
   w.document.close();
 }
 async function printKitchen(items,tableNum,printers=[]){
-  const groups={};
-  items.forEach(i=>{const pid=i.printer_id?String(i.printer_id):"default";(groups[pid]||(groups[pid]=[])).push(i);});
-  for(const[pid,grpItems]of Object.entries(groups)){
-    const printer=pid!=="default"?printers.find(p=>p.id===+pid):null;
+  for(const item of items){
+    const printer=item.printer_id?printers.find(p=>p.id===+item.printer_id):null;
     const conn=printer?getPConn(printer):{type:"ip"};
     if(conn.type==="bluetooth"){
-      try{await btPrint(buildKitchenESC(grpItems,tableNum),conn.btName);}
-      catch(e){alert("Bluetooth พิมพ์ไม่สำเร็จ: "+e.message+"\nใช้การพิมพ์ปกติแทน");printKitchenWindow(grpItems,tableNum,printer);}
-    }else{printKitchenWindow(grpItems,tableNum,printer);}
+      try{await btPrint(buildKitchenESC(item,tableNum),conn.btName);}
+      catch(e){alert("Bluetooth พิมพ์ไม่สำเร็จ: "+e.message+"\nใช้การพิมพ์ปกติแทน");printKitchenWindow(item,tableNum,printer);}
+    }else{printKitchenWindow(item,tableNum,printer);}
+    await new Promise(r=>setTimeout(r,300));
   }
 }
 
@@ -2220,12 +2224,21 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
   const[items,setItems]=useState(existingOrder?.items||[]);
   const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
-  const[saving,setSaving]=useState(false);const[showBill,setShowBill]=useState(false);
-  const[discount,setDiscount]=useState(0);const[payMethod,setPayMethod]=useState("cash");
+  const[saving,setSaving]=useState(false);const[showPay,setShowPay]=useState(false);
+  const[payMethod,setPayMethod]=useState("cash");
+  const[discMode,setDiscMode]=useState("none");
+  const[discType,setDiscType]=useState("percent");
+  const[discValue,setDiscValue]=useState(0);
+  const[itemDisc,setItemDisc]=useState({});
+  const[cashRcv,setCashRcv]=useState("");
   const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(m=>m.category))],[menus]);
   const filtered=useMemo(()=>menus.filter(m=>(selCat==="ทั้งหมด"||m.category===selCat)&&m.name.toLowerCase().includes(search.toLowerCase())),[menus,selCat,search]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
-  const total=Math.max(0,subtotal-(+discount||0));
+  const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
+  const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
+  const totalDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0)+(discMode==="none"?0:0);
+  const total=Math.max(0,subtotal-totalDiscount);
+  const cashChange=Math.max(0,(+cashRcv||0)-total);
   function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null}];});}
   function chQty(idx,d){setItems(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmItem(idx){setItems(p=>p.filter((_,i)=>i!==idx));}
@@ -2243,8 +2256,9 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
   async function checkOut(){
     setSaving(true);
     try{
-      await api.updatePOSOrder(existingOrder.id,{status:"paid",subtotal,discount:+discount,total,payment_method:payMethod,updated_at:new Date().toISOString()});
-      printReceipt({...existingOrder,items,subtotal,discount:+discount,total,payment_method:payMethod},table.table_number,branch.name);
+      const itemsWithDisc=items.map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
+      await api.updatePOSOrder(existingOrder.id,{status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,updated_at:new Date().toISOString()});
+      printReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:payMethod==="cash"?+cashRcv||total:null},table.table_number,branch.name);
       onDone();onClose();
     }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSaving(false);
   }
@@ -2291,23 +2305,13 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
           </div>
         </div>)}
       </div>
-      {!showBill?<div style={{padding:10,borderTop:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
+      <div style={{padding:10,borderTop:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>รวม</span><span style={{fontSize:17,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>฿{subtotal.toFixed(0)}</span></div>
         <div style={{display:"flex",gap:6}}>
-          {existingOrder?.id&&<Btn v="yellow" onClick={()=>setShowBill(true)} icon={I.bill} full s={{padding:"8px 10px",fontSize:13}}>เช็คบิล</Btn>}
+          {existingOrder?.id&&<Btn v="yellow" onClick={()=>setShowPay(true)} icon={I.bill} full s={{padding:"8px 10px",fontSize:13}}>💳 เช็คบิล</Btn>}
           <Btn onClick={saveOrder} icon={I.check} loading={saving} full s={{padding:"8px 10px",fontSize:13}}>{existingOrder?.id?"อัปเดต":"สั่ง"}</Btn>
         </div>
       </div>
-      :<div style={{padding:10,borderTop:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
-        <div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>💳 ชำระเงิน</div>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><span style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>ยอดรวม</span><span style={{fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>฿{subtotal.toFixed(0)}</span></div>
-        <div style={{marginBottom:8}}><label style={{display:"block",fontSize:12,color:C.ink3,marginBottom:3,fontFamily:"'Sarabun',sans-serif"}}>ส่วนลด (฿)</label><input type="number" value={discount} onChange={e=>setDiscount(e.target.value)} style={{...iS,padding:"6px 10px",fontSize:13}}/></div>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,padding:"8px",background:C.greenLight,borderRadius:8}}><span style={{fontSize:14,fontWeight:700,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>สุทธิ</span><span style={{fontSize:17,fontWeight:900,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>฿{total.toFixed(0)}</span></div>
-        <div style={{display:"flex",gap:4,marginBottom:8}}>
-          {[{v:"cash",l:"💵 สด"},{v:"transfer",l:"📱 โอน"},{v:"credit",l:"💳 บัตร"}].map(m=><button key={m.v} onClick={()=>setPayMethod(m.v)} style={{flex:1,padding:"5px 4px",borderRadius:7,border:`2px solid ${payMethod===m.v?C.green:C.line}`,background:payMethod===m.v?C.greenLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:11,color:payMethod===m.v?C.green:C.ink3}}>{m.l}</button>)}
-        </div>
-        <div style={{display:"flex",gap:6}}><Btn v="ghost" onClick={()=>setShowBill(false)} s={{padding:"7px 10px",fontSize:12}}>← กลับ</Btn><Btn v="success" onClick={checkOut} loading={saving} full s={{padding:"7px 10px",fontSize:12}} icon={I.check}>ชำระ & พิมพ์</Btn></div>
-      </div>}
     </div>
     {noteIdx!==null&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}}>
       <div style={{background:C.white,borderRadius:14,padding:20,width:300}}>
@@ -2319,6 +2323,104 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
         </div>
       </div>
     </div>}
+    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table}/>}
+  </div>;
+}
+
+// ── PAYMENT MODAL ─────────────────────────────────────
+const PAY_METHODS=[
+  {v:"cash",l:"เงินสด",icon:"💵",c:"#10B981"},
+  {v:"promptpay",l:"พร้อมเพย์",icon:"📲",c:"#1E40AF"},
+  {v:"transfer",l:"โอนธนาคาร",icon:"🏦",c:"#3B82F6"},
+  {v:"credit",l:"บัตรเครดิต",icon:"💳",c:"#7C3AED"},
+  {v:"debit",l:"บัตรเดบิต",icon:"💳",c:"#9333EA"},
+  {v:"truemoney",l:"TrueMoney",icon:"🟠",c:"#F97316"},
+  {v:"shopeepay",l:"ShopeePay",icon:"🛒",c:"#EE4D2D"},
+  {v:"linepay",l:"LINE Pay",icon:"💚",c:"#06C755"},
+  {v:"rabbit",l:"Rabbit LINE Pay",icon:"🐰",c:"#FB923C"},
+  {v:"paotang",l:"เป๋าตัง",icon:"💰",c:"#0891B2"},
+  {v:"alipay",l:"Alipay",icon:"🅰️",c:"#1677FF"},
+  {v:"wechatpay",l:"WeChat Pay",icon:"💬",c:"#07C160"},
+  {v:"grabpay",l:"GrabPay",icon:"🟢",c:"#00B14F"},
+  {v:"airpay",l:"AirPay",icon:"✈️",c:"#FB7185"},
+  {v:"qr",l:"QR อื่นๆ",icon:"📱",c:"#64748B"},
+  {v:"voucher",l:"คูปอง/Voucher",icon:"🎫",c:"#A16207"},
+  {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
+];
+function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table}){
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}} onClick={onClose}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,width:"100%",maxWidth:680,maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
+      <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
+        <div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:900,fontSize:18}}>💳 ชำระเงิน</div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,opacity:.85}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
+        </div>
+        <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:32,height:32,cursor:"pointer",color:C.white,fontSize:18,fontFamily:"'Sarabun',sans-serif"}}>✕</button>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"14px 20px"}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>📋 รายการ ({items.length})</div>
+        <div style={{background:C.bg,borderRadius:12,padding:"8px 12px",marginBottom:14}}>
+          {items.map((it,idx)=>{const d=itemDisc[idx];const lineTotal=it.price*it.qty;const lineDisc=discMode==="item"&&d&&d.v?(d.t==="percent"?lineTotal*(+d.v||0)/100:Math.min(+d.v||0,lineTotal)):0;return <div key={idx} style={{padding:"6px 0",borderBottom:idx<items.length-1?`1px dashed ${C.line}`:"none"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:600,color:C.ink}}>{it.qty}x {it.name}</div>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink}}>฿{lineTotal.toFixed(0)}</div>
+            </div>
+            {discMode==="item"&&<div style={{display:"flex",gap:5,marginTop:4,alignItems:"center"}}>
+              <select value={d?.t||"percent"} onChange={e=>setItemDisc(p=>({...p,[idx]:{...(p[idx]||{}),t:e.target.value,v:p[idx]?.v||0}}))} style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}>
+                <option value="percent">%</option><option value="amount">฿</option>
+              </select>
+              <input type="number" value={d?.v||""} placeholder="0" onChange={e=>setItemDisc(p=>({...p,[idx]:{...(p[idx]||{t:"percent"}),v:e.target.value}}))} style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}/>
+              {lineDisc>0&&<span style={{fontSize:11,color:C.red,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>-฿{lineDisc.toFixed(0)}</span>}
+            </div>}
+          </div>;})}
+        </div>
+
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🎁 ส่วนลด</div>
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
+          {[{v:"none",l:"ไม่มี"},{v:"bill",l:"ทั้งบิล"},{v:"item",l:"แยกแต่ละเมนู"}].map(m=><button key={m.v} onClick={()=>setDiscMode(m.v)} style={{flex:1,padding:"8px",borderRadius:10,border:`2px solid ${discMode===m.v?C.brand:C.line}`,background:discMode===m.v?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,color:discMode===m.v?C.brand:C.ink3}}>{m.l}</button>)}
+        </div>
+        {discMode==="bill"&&<div style={{background:C.bg,borderRadius:10,padding:10,marginBottom:14,display:"flex",gap:8,alignItems:"center"}}>
+          <div style={{display:"flex",gap:4}}>
+            {[{v:"percent",l:"%"},{v:"amount",l:"฿"}].map(t=><button key={t.v} onClick={()=>setDiscType(t.v)} style={{padding:"6px 12px",borderRadius:8,border:`2px solid ${discType===t.v?C.brand:C.line}`,background:discType===t.v?C.brand:C.white,color:discType===t.v?C.white:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13}}>{t.l}</button>)}
+          </div>
+          <input type="number" value={discValue||""} placeholder="0" onChange={e=>setDiscValue(e.target.value)} style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:700,flex:1}}/>
+          {discType==="percent"&&<div style={{display:"flex",gap:3}}>{[5,10,15,20].map(p=><button key={p} onClick={()=>setDiscValue(p)} style={{padding:"5px 8px",border:`1px solid ${C.line}`,background:C.white,borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:600,color:C.ink3}}>{p}%</button>)}</div>}
+        </div>}
+
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>💸 วิธีชำระเงิน</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(108px,1fr))",gap:6,marginBottom:14}}>
+          {PAY_METHODS.map(m=>{const sel=payMethod===m.v;return <button key={m.v} onClick={()=>setPayMethod(m.v)} style={{padding:"10px 6px",borderRadius:10,border:`2px solid ${sel?m.c:C.line}`,background:sel?`${m.c}15`:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:11,color:sel?m.c:C.ink2,display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .15s"}}>
+            <span style={{fontSize:22}}>{m.icon}</span>
+            <span>{m.l}</span>
+          </button>;})}
+        </div>
+
+        {payMethod==="cash"&&<div style={{background:C.greenLight,border:`1.5px solid ${C.green}`,borderRadius:10,padding:10,marginBottom:14}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.green,marginBottom:6}}>💵 รับเงินสด</div>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <input type="number" value={cashRcv} placeholder={total.toFixed(0)} onChange={e=>setCashRcv(e.target.value)} style={{...iS,padding:"8px 10px",fontSize:16,fontWeight:700,flex:1}}/>
+            <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>{[100,500,1000].map(v=><button key={v} onClick={()=>setCashRcv(String((+cashRcv||0)+v))} style={{padding:"5px 8px",background:C.white,border:`1px solid ${C.green}`,borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.green}}>+{v}</button>)}
+            <button onClick={()=>setCashRcv(String(total))} style={{padding:"5px 8px",background:C.green,border:"none",borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.white}}>พอดี</button></div>
+          </div>
+          {+cashRcv>0&&<div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:`1px solid ${C.green}40`}}>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink2}}>เงินทอน</span>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:cashChange>=0?C.green:C.red}}>฿{cashChange.toFixed(0)}</span>
+          </div>}
+        </div>}
+      </div>
+      <div style={{padding:"12px 20px",borderTop:`1px solid ${C.line}`,background:C.bg,borderRadius:"0 0 18px 18px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>ยอดรวม</span><span>฿{subtotal.toFixed(0)}</span></div>
+        {totalDiscount>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.red,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>ส่วนลด</span><span>-฿{totalDiscount.toFixed(0)}</span></div>}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:`linear-gradient(135deg,${C.green},#059669)`,borderRadius:10,marginBottom:10,color:C.white}}>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:700}}>ยอดสุทธิ</span>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900}}>฿{total.toFixed(0)}</span>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn v="ghost" onClick={onClose} s={{padding:"10px 16px",fontSize:13}}>ยกเลิก</Btn>
+          <Btn v="success" onClick={onPay} loading={saving} full s={{padding:"10px",fontSize:14,fontWeight:800}} icon={I.check}>✅ ยืนยันชำระ & พิมพ์ใบเสร็จ</Btn>
+        </div>
+      </div>
+    </div>
   </div>;
 }
 
@@ -2330,18 +2432,23 @@ function CustomerPage({branchId,tableId}){
   const[cart,setCart]=useState([]);const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[step,setStep]=useState("menu");const[sending,setSending]=useState(false);const[done,setDone]=useState(false);
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
+  const[myOrder,setMyOrder]=useState(null);
+  async function loadMyOrder(){try{const ex=await api.getOrderByTable(+tableId);if(ex&&ex.length>0)setMyOrder(ex[0]);else setMyOrder(null);}catch{}}
   useEffect(()=>{
     Promise.all([api.getBranches(),api.getPOSTables(branchId),api.getMenus()]).then(([bs,ts,ms])=>{
       setBranch(bs.find(b=>b.id===+branchId)||bs[0]);
       setTable(ts.find(t=>t.id===+tableId)||ts[0]);
       setMenus(ms.filter(m=>m.price>0&&(m.availability||{})[branchId]!=="hidden"));
     }).catch(e=>console.error(e));
+    loadMyOrder();
+    const it=setInterval(loadMyOrder,15000);
+    return()=>clearInterval(it);
   },[branchId,tableId]);
   const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(m=>m.category))],[menus]);
   const filtered=useMemo(()=>menus.filter(m=>(selCat==="ทั้งหมด"||m.category===selCat)&&m.name.toLowerCase().includes(search.toLowerCase())),[menus,selCat,search]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const itemCount=cart.reduce((s,i)=>s+i.qty,0);
-  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:""}];});}
+  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null}];});}
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
   async function placeOrder(){
@@ -2352,6 +2459,7 @@ function CustomerPage({branchId,tableId}){
       if(ex&&ex.length>0){const merged=[...ex[0].items,...cart];await api.updatePOSOrder(ex[0].id,{...data,items:merged,subtotal:merged.reduce((s,i)=>s+i.price*i.qty,0),total:merged.reduce((s,i)=>s+i.price*i.qty,0)});}
       else await api.createPOSOrder(data);
       setDone(true);
+      loadMyOrder();
     }catch(e){alert("สั่งไม่สำเร็จ กรุณาลองใหม่");}setSending(false);
   }
   if(!table||!branch)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{textAlign:"center"}}><div style={{width:40,height:40,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 12px"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลดเมนู...</p></div></div>;
@@ -2360,12 +2468,22 @@ function CustomerPage({branchId,tableId}){
     <h2 style={{fontSize:22,fontWeight:900,color:C.green,fontFamily:"'Sarabun',sans-serif",marginBottom:6,marginTop:12}}>สั่งอาหารสำเร็จ!</h2>
     <p style={{fontSize:15,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>โต๊ะ {table.table_number}</p>
     <p style={{fontSize:14,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:24}}>อาหารกำลังเตรียมครับ 🍳</p>
-    <Btn onClick={()=>{setDone(false);setCart([]);setStep("menu");}}>สั่งเพิ่ม</Btn>
+    <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center"}}>
+      <Btn v="ghost" onClick={()=>{setDone(false);setStep("myorder");}}>📋 ดูออเดอร์ของฉัน</Btn>
+      <Btn onClick={()=>{setDone(false);setCart([]);setStep("menu");}}>สั่งเพิ่ม</Btn>
+    </div>
   </div>;
+  const myOrderItemCount=myOrder?(myOrder.items||[]).reduce((s,i)=>s+i.qty,0):0;
   return <div style={{minHeight:"100vh",background:C.bg,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column"}}>
-    <div style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,padding:"14px 16px",flexShrink:0}}>
-      <div style={{fontWeight:900,fontSize:17,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>{branch.name}</div>
-      <div style={{fontSize:12,color:"rgba(255,255,255,.8)",fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
+    <div style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,padding:"14px 16px",flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div>
+        <div style={{fontWeight:900,fontSize:17,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>{branch.name}</div>
+        <div style={{fontSize:12,color:"rgba(255,255,255,.8)",fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
+      </div>
+      {myOrder&&step!=="myorder"&&<button onClick={()=>{loadMyOrder();setStep("myorder");}} style={{background:"rgba(255,255,255,0.22)",border:"1px solid rgba(255,255,255,0.4)",borderRadius:10,padding:"6px 10px",cursor:"pointer",color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.1}}>
+        <span>📋 ออเดอร์</span>
+        <span style={{fontSize:10,opacity:0.9,marginTop:2}}>{myOrderItemCount} รายการ • ฿{(myOrder.total||0).toFixed(0)}</span>
+      </button>}
     </div>
     {step==="menu"&&<>
       <div style={{padding:"8px 10px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
@@ -2399,6 +2517,45 @@ function CustomerPage({branchId,tableId}){
           <span style={{fontSize:15,fontWeight:900,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>฿{total.toFixed(0)}</span>
         </button>
       </div>}
+    </>}
+    {step==="myorder"&&<>
+      <div style={{flex:1,overflowY:"auto",padding:12}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+          <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:900,color:C.ink,margin:0}}>📋 ออเดอร์ของฉัน</h3>
+          <button onClick={loadMyOrder} style={{background:C.lineLight,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:600}}>🔄 รีเฟรช</button>
+        </div>
+        {!myOrder||(myOrder.items||[]).length===0?<div style={{textAlign:"center",padding:"50px 20px",color:C.ink4}}>
+          <div style={{fontSize:48}}>🍽️</div>
+          <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,marginTop:8}}>ยังไม่มีรายการสั่งครับ</p>
+        </div>:<>
+          <div style={{background:C.white,borderRadius:12,padding:"10px 12px",marginBottom:10,border:`1px solid ${C.line}`,fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{display:"flex",justifyContent:"space-between"}}>
+              <span>สถานะ:</span>
+              <span style={{fontWeight:700,color:myOrder.status==="paid"?C.green:C.brand}}>{myOrder.status==="paid"?"✅ ชำระแล้ว":myOrder.status==="bill_requested"?"💰 รอชำระ":"🍳 กำลังเตรียม"}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
+              <span>สั่งเมื่อ:</span>
+              <span>{new Date(myOrder.created_at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"})}</span>
+            </div>
+          </div>
+          {(myOrder.items||[]).map((it,idx)=><div key={idx} style={{background:C.white,borderRadius:10,padding:"10px 12px",marginBottom:6,border:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{it.qty}x {it.name}</div>
+              {it.note&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>★ {it.note}</div>}
+            </div>
+            <div style={{fontSize:14,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(it.price*it.qty).toFixed(0)}</div>
+          </div>)}
+          <div style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:12,padding:"14px 16px",marginTop:10,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>ยอดรวม</span><span>฿{(myOrder.subtotal||0).toFixed(0)}</span></div>
+            {myOrder.discount>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>ส่วนลด</span><span>-฿{(myOrder.discount||0).toFixed(0)}</span></div>}
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:20,fontWeight:900,marginTop:6,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.3)"}}><span>รวมทั้งสิ้น</span><span>฿{(myOrder.total||0).toFixed(0)}</span></div>
+          </div>
+        </>}
+      </div>
+      <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",gap:8,flexShrink:0}}>
+        <Btn v="ghost" onClick={()=>setStep("menu")} full s={{padding:"10px"}}>← กลับหน้าเมนู</Btn>
+        {myOrder&&myOrder.status!=="paid"&&<Btn onClick={()=>setStep("menu")} full s={{padding:"10px"}}>+ สั่งเพิ่ม</Btn>}
+      </div>
     </>}
     {step==="cart"&&<>
       <div style={{flex:1,overflowY:"auto",padding:10}}>
@@ -2491,8 +2648,34 @@ function POSTab({menus,currentBranch,currentUser,printers=[]}){
   const timerRef=useRef(null);
   const canEdit=hasPerm(currentUser,"pos");
 
+  const printedRef=useRef(new Set(JSON.parse(sessionStorage.getItem("fc_printed_orders")||"[]")));
+  const lastSigRef=useRef(new Map());
+  function persistPrinted(){try{sessionStorage.setItem("fc_printed_orders",JSON.stringify([...printedRef.current]));}catch{}}
+  function autoPrintNew(orders){
+    orders.forEach(o=>{
+      if(!o||!o.items||o.items.length===0)return;
+      if(o.status==="paid"||o.status==="cancelled")return;
+      const sig=JSON.stringify(o.items.map(i=>[i.menu_id,i.qty,i.note||""]));
+      const lastSig=lastSigRef.current.get(o.id);
+      const isFirst=!printedRef.current.has(`${o.id}:init`);
+      const customerOrdered=o.ordered_by==="customer";
+      if(isFirst&&customerOrdered){
+        const newItems=lastSig?(()=>{try{const old=JSON.parse(lastSig);const oldMap=new Map(old.map(([m,q,n])=>[`${m}|${n}`,q]));return o.items.filter(i=>{const k=`${i.menu_id}|${i.note||""}`;return!oldMap.has(k)||oldMap.get(k)<i.qty;}).map(i=>{const k=`${i.menu_id}|${i.note||""}`;const oldQ=oldMap.get(k)||0;return{...i,qty:i.qty-oldQ};});}catch{return o.items;}})():o.items;
+        if(newItems.length>0){printKitchen(newItems,o.table_number,printers);}
+        printedRef.current.add(`${o.id}:init`);persistPrinted();
+      }else if(lastSig&&lastSig!==sig&&customerOrdered){
+        try{
+          const old=JSON.parse(lastSig);const oldMap=new Map(old.map(([m,q,n])=>[`${m}|${n}`,q]));
+          const newItems=o.items.filter(i=>{const k=`${i.menu_id}|${i.note||""}`;return!oldMap.has(k)||oldMap.get(k)<i.qty;}).map(i=>{const k=`${i.menu_id}|${i.note||""}`;const oldQ=oldMap.get(k)||0;return{...i,qty:i.qty-oldQ};});
+          if(newItems.length>0)printKitchen(newItems,o.table_number,printers);
+        }catch{}
+      }
+      lastSigRef.current.set(o.id,sig);
+    });
+  }
+
   async function loadTables(){const t=await api.getPOSTables(currentBranch.id);setTables(t);}
-  async function loadOrders(){const o=await api.getActiveOrders(currentBranch.id);setActiveOrders(o);}
+  async function loadOrders(){const o=await api.getActiveOrders(currentBranch.id);setActiveOrders(o);autoPrintNew(o);}
   async function loadAllOrders(){const o=await api.getPOSOrders(currentBranch.id);setAllOrders(o);}
   async function loadAll(){setLoading(true);try{await Promise.all([loadTables(),loadOrders()]);}catch(e){console.error(e);}setLoading(false);}
 
