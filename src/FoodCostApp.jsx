@@ -1530,13 +1530,29 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     try{await fetch(`http://${p.ip}:${p.port||9100}/`,{mode:"no-cors",signal:ctrl.signal,cache:"no-store"});clearTimeout(tid);setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"เชื่อมต่อได้ปกติ"}}));}
     catch(e){clearTimeout(tid);setTestResults(r=>({...r,[p.id]:{status:"fail",msg:e.name==="AbortError"?"หมดเวลา ไม่ตอบสนอง (4s)":"เชื่อมต่อไม่ได้"}}));}
   }
-  async function scanBTPrinter(){
+  async function scanBTPrinter(all=false){
     if(!navigator.bluetooth){alert("เบราว์เซอร์ไม่รองรับ Bluetooth ต้องใช้ Chrome/Edge");return;}
     setBtScanning(true);
     try{
-      const device=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:_BT_SVC});
+      const opts=all?{acceptAllDevices:true,optionalServices:_BT_SVC}:{
+        filters:[
+          {namePrefix:"XP-"},{namePrefix:"Xprinter"},{namePrefix:"MTP"},{namePrefix:"MPT"},
+          {namePrefix:"RPP"},{namePrefix:"BT Printer"},{namePrefix:"BT-Printer"},{namePrefix:"Printer"},
+          {namePrefix:"POS"},{namePrefix:"Thermal"},{namePrefix:"SPP"},{namePrefix:"GP-"},
+          {namePrefix:"Gprinter"},{namePrefix:"PT-"},{namePrefix:"MP-"},{namePrefix:"P80"},
+          {namePrefix:"P58"},{namePrefix:"HOIN"},{namePrefix:"Goojprt"},{namePrefix:"GOOJPRT"},
+          {namePrefix:"BlueTooth"},{namePrefix:"HC-"},{namePrefix:"ESC"},{namePrefix:"TP"},
+          ..._BT_SVC.map(s=>({services:[s]})),
+        ],
+        optionalServices:_BT_SVC,
+      };
+      const device=await navigator.bluetooth.requestDevice(opts);
       setPForm(f=>({...f,btName:device.name||"",conn:"bluetooth"}));
-    }catch(e){if(e.name!=="NotFoundError"&&e.name!=="NotAllowedError")alert("เกิดข้อผิดพลาด: "+e.message);}
+    }catch(e){
+      if(e.name==="NotFoundError"&&!all){
+        if(await confirmDlg({title:"ไม่พบเครื่องปริ้น",message:"ไม่พบอุปกรณ์ที่ตรงกับชื่อเครื่องปริ้น\nต้องการแสดงอุปกรณ์ Bluetooth ทั้งหมดไหม?",confirmLabel:"แสดงทั้งหมด",danger:false})){setBtScanning(false);scanBTPrinter(true);return;}
+      }else if(e.name!=="NotFoundError"&&e.name!=="NotAllowedError")alert("เกิดข้อผิดพลาด: "+e.message);
+    }
     setBtScanning(false);
   }
 
@@ -1670,10 +1686,15 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
               <div><div style={{fontWeight:800,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{pForm.btName}</div><div style={{fontSize:11,color:C.green,fontWeight:600}}>✅ จับคู่แล้ว</div></div>
               <button onClick={()=>setPForm(f=>({...f,btName:""}))} style={{marginLeft:"auto",background:C.redLight,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",color:C.red,fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
             </div>:<div style={{color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>ยังไม่ได้จับคู่อุปกรณ์</div>}
-            <button onClick={scanBTPrinter} disabled={btScanning} style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,border:"none",borderRadius:10,padding:"9px 20px",cursor:btScanning?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,opacity:btScanning?.6:1,display:"flex",alignItems:"center",gap:8}}>
-              <span style={{fontSize:16}}>📶</span>{btScanning?"กำลังสแกน...":"สแกนหาเครื่องปริ้น Bluetooth"}
-            </button>
-            <div style={{marginTop:8,fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>* ต้องใช้ Chrome / Edge บน Desktop หรือ Android</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <button onClick={()=>scanBTPrinter(false)} disabled={btScanning} style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,border:"none",borderRadius:10,padding:"9px 18px",cursor:btScanning?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,opacity:btScanning?.6:1,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:16}}>📶</span>{btScanning?"กำลังสแกน...":"สแกนเฉพาะเครื่องปริ้น"}
+              </button>
+              <button onClick={()=>scanBTPrinter(true)} disabled={btScanning} style={{background:C.white,color:C.ink2,border:`1.5px solid ${C.line}`,borderRadius:10,padding:"9px 16px",cursor:btScanning?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:600,opacity:btScanning?.6:1,display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontSize:14}}>🔍</span>แสดงทั้งหมด
+              </button>
+            </div>
+            <div style={{marginTop:8,fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>* "สแกนเฉพาะเครื่องปริ้น" จะกรองเฉพาะอุปกรณ์ที่ชื่อขึ้นต้นด้วย XP, MTP, RPP, POS, Thermal, BT Printer ฯลฯ</div>
           </div>}
           {/* Buttons */}
           <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
