@@ -2988,8 +2988,8 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
     const newItems=items.filter((_,i)=>i!==idx);
     if(existingOrder?.id){
       try{
-        const voidLog=[...(existingOrder.void_log||[]),{name:voided.name,qty:voided.qty,price:voided.price,time:new Date().toLocaleString("th-TH"),by:currentUser.username}];
-        await api.updatePOSOrder(existingOrder.id,{items:newItems,subtotal:newItems.reduce((s,i)=>s+i.price*i.qty,0),total:newItems.reduce((s,i)=>s+i.price*i.qty,0),void_log:voidLog,updated_at:new Date().toISOString()});
+        const newSub=newItems.reduce((s,i)=>s+i.price*i.qty,0);
+        await api.updatePOSOrder(existingOrder.id,{items:newItems,subtotal:newSub,total:newSub,updated_at:new Date().toISOString()});
       }catch(e){alert("ยกเลิกรายการไม่สำเร็จ: "+e.message);return;}
     }
     setItems(newItems);
