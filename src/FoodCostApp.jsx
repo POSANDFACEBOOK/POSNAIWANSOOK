@@ -69,6 +69,23 @@ const api = {
   getOrderByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`),
   createPOSOrder: (d) => sb("orders", { method:"POST", body:JSON.stringify(d) }),
   updatePOSOrder: (id, d) => sb(`orders?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
+  // CRM
+  getCRMCustomers: (bid) => sb(`crm_customers?order=id.desc${bid?`&branch_id=eq.${bid}`:""}`),
+  addCRMCustomer: (d) => sb("crm_customers", {method:"POST", body:JSON.stringify(d)}),
+  updateCRMCustomer: (id,d) => sb(`crm_customers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  deleteCRMCustomer: (id) => sb(`crm_customers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  getCRMTransactions: (bid) => sb(`crm_transactions?order=id.desc${bid?`&branch_id=eq.${bid}`:""}&limit=500`),
+  addCRMTransaction: (d) => sb("crm_transactions", {method:"POST", body:JSON.stringify(d)}),
+  getCRMVouchers: (bid) => sb(`crm_vouchers?order=id.desc${bid?`&branch_id=eq.${bid}`:""}`),
+  addCRMVoucher: (d) => sb("crm_vouchers", {method:"POST", body:JSON.stringify(d)}),
+  updateCRMVoucher: (id,d) => sb(`crm_vouchers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  deleteCRMVoucher: (id) => sb(`crm_vouchers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  getCRMFeedback: (bid) => sb(`crm_feedback?order=id.desc${bid?`&branch_id=eq.${bid}`:""}&limit=200`),
+  addCRMFeedback: (d) => sb("crm_feedback", {method:"POST", body:JSON.stringify(d)}),
+  getCRMReservations: (bid) => sb(`crm_reservations?order=reserved_at.asc${bid?`&branch_id=eq.${bid}`:""}`),
+  addCRMReservation: (d) => sb("crm_reservations", {method:"POST", body:JSON.stringify(d)}),
+  updateCRMReservation: (id,d) => sb(`crm_reservations?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  deleteCRMReservation: (id) => sb(`crm_reservations?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   uploadImage: async (file, path) => {
     const res = await fetch(`${SUPA_URL}/storage/v1/object/foodcost-images/${path}`, {
       method: "POST", headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": file.type, "x-upsert": "true" }, body: file,
@@ -141,6 +158,7 @@ const I = {
 
 const ALL_PERMS=[
   {id:"pos",label:"ขายหน้าร้าน"},
+  {id:"crm",label:"CRM ลูกค้า"},
   {id:"ingredients",label:"วัตถุดิบ"},
   {id:"menus",label:"เมนู"},
   {id:"sop",label:"SOP"},
@@ -152,8 +170,8 @@ const ALL_PERMS=[
 ];
 const ROLE_DEFAULT_PERMS={
   admin:ALL_PERMS.map(p=>p.id),
-  manager:["pos","ingredients","menus","sop","summary","orders","history","suppliers"],
-  staff:["pos","ingredients","menus","sop","summary","orders","history","suppliers"],
+  manager:["pos","crm","ingredients","menus","sop","summary","orders","history","suppliers"],
+  staff:["pos","crm","ingredients","menus","sop","summary","orders","history","suppliers"],
   viewer:["pos","menus","sop"],
 };
 function hasPerm(user,perm){if(!user)return false;if(user.role==="admin")return true;return((user.perms&&user.perms.length>0)?user.perms:ROLE_DEFAULT_PERMS[user.role]||[]).includes(perm);}
@@ -1799,6 +1817,720 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
 }
 
 // ══════════════════════════════════════════════════════
+// ── CRM TAB ───────────────────────────────────────────
+// ══════════════════════════════════════════════════════
+const CRM_TIERS=[
+  {id:"bronze",label:"Bronze",min:0,max:999,color:"#92400E",bg:"#FEF3C7"},
+  {id:"silver",label:"Silver",min:1000,max:4999,color:"#475569",bg:"#F1F5F9"},
+  {id:"gold",label:"Gold",min:5000,max:14999,color:"#B45309",bg:"#FEF9C3"},
+  {id:"platinum",label:"Platinum",min:15000,max:Infinity,color:"#7C3AED",bg:"#F5F3FF"},
+];
+function getTier(pts){return CRM_TIERS.find(t=>pts>=t.min&&pts<=t.max)||CRM_TIERS[0];}
+function getCustomerTags(cust,txns){
+  const tags=[];
+  const myTxns=txns.filter(t=>t.customer_id===cust.id);
+  const now=Date.now();
+  const createdMs=new Date(cust.created_at||0).getTime();
+  if(now-createdMs<30*24*3600*1000)tags.push({l:"ใหม่",c:C.blue,bg:C.blueLight});
+  else if(myTxns.length>=5)tags.push({l:"ประจำ",c:C.green,bg:C.greenLight});
+  if(myTxns.length>0){
+    const lastMs=Math.max(...myTxns.map(t=>new Date(t.created_at||0).getTime()));
+    if(now-lastMs>60*24*3600*1000)tags.push({l:"เสี่ยงหาย",c:C.red,bg:C.redLight});
+  }
+  return tags;
+}
+function genVoucherCode(){return"VCH-"+Math.random().toString(36).slice(2,8).toUpperCase();}
+
+function CRMTab({currentBranch,currentUser,menus}){
+  const[subTab,setSubTab]=useState("customers");
+  const[customers,setCustomers]=useState([]);
+  const[transactions,setTransactions]=useState([]);
+  const[vouchers,setVouchers]=useState([]);
+  const[feedback,setFeedback]=useState([]);
+  const[reservations,setReservations]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[err,setErr]=useState("");
+
+  // Customer sub-states
+  const[custSearch,setCustSearch]=useState("");
+  const[showCustForm,setShowCustForm]=useState(false);
+  const[editCust,setEditCust]=useState(null);
+  const[selCust,setSelCust]=useState(null);
+  const[custFilter,setCustFilter]=useState("all");
+
+  // Reservation sub-states
+  const[showResForm,setShowResForm]=useState(false);
+  const[editRes,setEditRes]=useState(null);
+  const[resFilter,setResFilter]=useState("all");
+
+  // Voucher sub-states
+  const[showVoucherForm,setShowVoucherForm]=useState(false);
+  const[voucherCustId,setVoucherCustId]=useState("");
+
+  // Feedback sub-states
+  const[showFeedForm,setShowFeedForm]=useState(false);
+
+  const canEdit=currentUser&&(currentUser.role==="admin"||currentUser.role==="manager"||currentUser.role==="staff");
+
+  async function loadAll(){
+    setLoading(true);setErr("");
+    try{
+      const[c,tx,v,fb,res]=await Promise.all([
+        api.getCRMCustomers(currentBranch.id),
+        api.getCRMTransactions(currentBranch.id),
+        api.getCRMVouchers(currentBranch.id),
+        api.getCRMFeedback(currentBranch.id),
+        api.getCRMReservations(currentBranch.id),
+      ]);
+      setCustomers(c);setTransactions(tx);setVouchers(v);setFeedback(fb);setReservations(res);
+    }catch(e){setErr(e.message);}
+    setLoading(false);
+  }
+  useEffect(()=>{loadAll();},[]);
+
+  const filteredCustomers=useMemo(()=>{
+    let list=customers;
+    if(custSearch){const q=custSearch.toLowerCase();list=list.filter(c=>(c.name||"").toLowerCase().includes(q)||(c.phone||"").includes(q));}
+    if(custFilter==="new")list=list.filter(c=>Date.now()-new Date(c.created_at||0).getTime()<30*24*3600*1000);
+    if(custFilter==="regular")list=list.filter(c=>transactions.filter(t=>t.customer_id===c.id).length>=5);
+    if(custFilter==="atrisk")list=list.filter(c=>{const myTxns=transactions.filter(t=>t.customer_id===c.id);if(!myTxns.length)return false;const lastMs=Math.max(...myTxns.map(t=>new Date(t.created_at||0).getTime()));return Date.now()-lastMs>60*24*3600*1000;});
+    if(custFilter==="silver")list=list.filter(c=>getTier(c.points||0).id==="silver");
+    if(custFilter==="gold")list=list.filter(c=>getTier(c.points||0).id==="gold");
+    if(custFilter==="platinum")list=list.filter(c=>getTier(c.points||0).id==="platinum");
+    return list;
+  },[customers,transactions,custSearch,custFilter]);
+
+  const SUB_TABS=[
+    {id:"customers",l:"ลูกค้า"},
+    {id:"loyalty",l:"ความภักดี"},
+    {id:"reservations",l:"จองโต๊ะ"},
+    {id:"feedback",l:"ความคิดเห็น"},
+    {id:"analytics",l:"วิเคราะห์"},
+  ];
+
+  if(loading)return <Loading text="กำลังโหลด CRM..."/>;
+  if(err)return <ErrBox msg={err} onRetry={loadAll}/>;
+
+  return <div>
+    {/* Sub-tab nav */}
+    <div style={{display:"flex",gap:6,marginBottom:20,background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:6,flexWrap:"wrap"}}>
+      {SUB_TABS.map(st=><button key={st.id} onClick={()=>setSubTab(st.id)} style={{padding:"7px 18px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:subTab===st.id?700:500,background:subTab===st.id?C.brand:"transparent",color:subTab===st.id?"#fff":C.ink3,transition:"all .15s"}}>{st.l}</button>)}
+    </div>
+
+    {/* ── CUSTOMERS ── */}
+    {subTab==="customers"&&<CRMCustomers customers={filteredCustomers} allCustomers={customers} transactions={transactions} vouchers={vouchers} custSearch={custSearch} setCustSearch={setCustSearch} custFilter={custFilter} setCustFilter={setCustFilter} selCust={selCust} setSelCust={setSelCust} showCustForm={showCustForm} setShowCustForm={setShowCustForm} editCust={editCust} setEditCust={setEditCust} canEdit={canEdit} currentBranch={currentBranch} reload={loadAll} menus={menus}/>}
+
+    {/* ── LOYALTY ── */}
+    {subTab==="loyalty"&&<CRMloyalty customers={customers} transactions={transactions} vouchers={vouchers} setVouchers={setVouchers} showVoucherForm={showVoucherForm} setShowVoucherForm={setShowVoucherForm} voucherCustId={voucherCustId} setVoucherCustId={setVoucherCustId} canEdit={canEdit} currentBranch={currentBranch} reload={loadAll}/>}
+
+    {/* ── RESERVATIONS ── */}
+    {subTab==="reservations"&&<CRMReservations reservations={reservations} customers={customers} showResForm={showResForm} setShowResForm={setShowResForm} editRes={editRes} setEditRes={setEditRes} resFilter={resFilter} setResFilter={setResFilter} canEdit={canEdit} currentBranch={currentBranch} reload={loadAll}/>}
+
+    {/* ── FEEDBACK ── */}
+    {subTab==="feedback"&&<CRMFeedback feedback={feedback} customers={customers} showFeedForm={showFeedForm} setShowFeedForm={setShowFeedForm} canEdit={canEdit} currentBranch={currentBranch} reload={loadAll}/>}
+
+    {/* ── ANALYTICS ── */}
+    {subTab==="analytics"&&<CRMAnalytics customers={customers} transactions={transactions} feedback={feedback} reservations={reservations}/>}
+  </div>;
+}
+
+// ── CRM Customers sub-component ──
+function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,setCustSearch,custFilter,setCustFilter,selCust,setSelCust,showCustForm,setShowCustForm,editCust,setEditCust,canEdit,currentBranch,reload,menus}){
+  const[saving,setSaving]=useState(false);
+  const[form,setForm]=useState({name:"",phone:"",birthdate:"",allergies:"",seat_pref:"",notes:""});
+  const[showPoints,setShowPoints]=useState(false);
+  const[ptForm,setPtForm]=useState({amount:"",type:"earn",note:""});
+  const[ptSaving,setPtSaving]=useState(false);
+
+  useEffect(()=>{
+    if(editCust)setForm({name:editCust.name||"",phone:editCust.phone||"",birthdate:editCust.birthdate||"",allergies:editCust.allergies||"",seat_pref:editCust.seat_pref||"",notes:editCust.notes||""});
+    else setForm({name:"",phone:"",birthdate:"",allergies:"",seat_pref:"",notes:""});
+  },[editCust,showCustForm]);
+
+  async function saveCust(){
+    if(!form.name.trim())return alert("กรุณาใส่ชื่อลูกค้า");
+    setSaving(true);
+    try{
+      const d={...form,branch_id:currentBranch.id,points:editCust?editCust.points:0};
+      if(editCust)await api.updateCRMCustomer(editCust.id,{name:form.name,phone:form.phone,birthdate:form.birthdate||null,allergies:form.allergies,seat_pref:form.seat_pref,notes:form.notes});
+      else await api.addCRMCustomer(d);
+      await reload();setShowCustForm(false);setEditCust(null);
+    }catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
+    setSaving(false);
+  }
+
+  async function delCust(c){
+    if(!await confirmDlg(`ลบลูกค้า "${c.name}"?`,"ลบ","ยกเลิก"))return;
+    try{await api.deleteCRMCustomer(c.id);await reload();if(selCust?.id===c.id)setSelCust(null);}
+    catch(e){alert("ลบไม่ได้: "+e.message);}
+  }
+
+  async function adjustPoints(){
+    if(!selCust||!ptForm.amount)return;
+    const amt=parseInt(ptForm.amount);
+    if(isNaN(amt)||amt<=0)return alert("กรุณาใส่จำนวนคะแนน");
+    const delta=ptForm.type==="earn"?amt:-amt;
+    const newPts=Math.max(0,(selCust.points||0)+delta);
+    setPtSaving(true);
+    try{
+      await api.updateCRMCustomer(selCust.id,{points:newPts});
+      await api.addCRMTransaction({customer_id:selCust.id,branch_id:currentBranch.id,amount:0,points_earned:ptForm.type==="earn"?amt:0,points_redeemed:ptForm.type==="redeem"?amt:0,note:ptForm.note,created_at:new Date().toISOString()});
+      await reload();setShowPoints(false);setPtForm({amount:"",type:"earn",note:""});
+      setSelCust(prev=>prev?{...prev,points:newPts}:prev);
+    }catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
+    setPtSaving(false);
+  }
+
+  const FILTERS=[{id:"all",l:"ทั้งหมด"},{id:"new",l:"ใหม่"},{id:"regular",l:"ประจำ"},{id:"atrisk",l:"เสี่ยงหาย"},{id:"silver",l:"Silver"},{id:"gold",l:"Gold"},{id:"platinum",l:"Platinum"}];
+
+  return <div>
+    <div style={{display:"flex",gap:10,marginBottom:16,alignItems:"center",flexWrap:"wrap"}}>
+      <div style={{position:"relative",flex:1,minWidth:200}}>
+        <Ic d={I.search} s={15} c={C.ink4} style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}/>
+        <input value={custSearch} onChange={e=>setCustSearch(e.target.value)} placeholder="ค้นหาชื่อ / เบอร์โทร..." style={{width:"100%",paddingLeft:34,paddingRight:12,height:38,border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none",boxSizing:"border-box"}}/>
+      </div>
+      <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+        {FILTERS.map(f=><button key={f.id} onClick={()=>setCustFilter(f.id)} style={{padding:"6px 12px",borderRadius:8,border:"1px solid "+(custFilter===f.id?C.brand:C.line),background:custFilter===f.id?C.brand:"#fff",color:custFilter===f.id?"#fff":C.ink3,fontSize:12,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{f.l}</button>)}
+      </div>
+      {canEdit&&<Btn icon={I.plus} onClick={()=>{setEditCust(null);setShowCustForm(true);}}>เพิ่มลูกค้า</Btn>}
+    </div>
+
+    <div style={{display:"grid",gridTemplateColumns:selCust?"1fr 360px":"1fr",gap:16}}>
+      {/* Customer list */}
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {customers.length===0&&<div style={{textAlign:"center",padding:40,color:C.ink4}}>ยังไม่มีข้อมูลลูกค้า</div>}
+        {customers.map(c=>{
+          const tier=getTier(c.points||0);
+          const tags=getCustomerTags(c,transactions);
+          const myTxns=transactions.filter(t=>t.customer_id===c.id);
+          const totalSpend=myTxns.reduce((s,t)=>s+(t.amount||0),0);
+          const active=selCust?.id===c.id;
+          return <div key={c.id} onClick={()=>setSelCust(active?null:c)} style={{background:"#fff",border:"2px solid "+(active?C.brand:C.line),borderRadius:12,padding:"12px 16px",cursor:"pointer",transition:"all .15s",display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:44,height:44,borderRadius:"50%",background:`linear-gradient(135deg,${tier.bg},${tier.color}22)`,border:`2px solid ${tier.color}44`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              <span style={{fontSize:16,fontWeight:900,color:tier.color}}>{(c.name||"?")[0]}</span>
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                <span style={{fontWeight:700,fontSize:14,color:C.ink}}>{c.name}</span>
+                <span style={{fontSize:11,padding:"1px 7px",borderRadius:20,background:tier.bg,color:tier.color,fontWeight:700}}>{tier.label}</span>
+                {tags.map((tg,i)=><span key={i} style={{fontSize:11,padding:"1px 7px",borderRadius:20,background:tg.bg,color:tg.c,fontWeight:700}}>{tg.l}</span>)}
+              </div>
+              <div style={{fontSize:12,color:C.ink3,marginTop:2}}>{c.phone||"ไม่มีเบอร์"} • {myTxns.length} ครั้ง • ยอดรวม ฿{totalSpend.toLocaleString()}</div>
+            </div>
+            <div style={{textAlign:"right",flexShrink:0}}>
+              <div style={{fontSize:18,fontWeight:900,color:C.brand}}>{(c.points||0).toLocaleString()}</div>
+              <div style={{fontSize:10,color:C.ink4}}>คะแนน</div>
+            </div>
+            {canEdit&&<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
+              <button onClick={()=>{setEditCust(c);setShowCustForm(true);}} style={{padding:"6px",border:"1px solid "+C.line,borderRadius:7,background:"#fff",cursor:"pointer"}}><Ic d={I.pencil} s={13} c={C.ink3}/></button>
+              <button onClick={()=>delCust(c)} style={{padding:"6px",border:"1px solid #FCA5A5",borderRadius:7,background:"#fff",cursor:"pointer"}}><Ic d={I.trash} s={13} c={C.red}/></button>
+            </div>}
+          </div>;
+        })}
+      </div>
+
+      {/* Customer detail panel */}
+      {selCust&&<div style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:16,position:"sticky",top:80,maxHeight:"calc(100vh - 120px)",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:16,color:C.ink}}>{selCust.name}</div>
+            <div style={{fontSize:12,color:C.ink3}}>{selCust.phone||"ไม่มีเบอร์"}</div>
+          </div>
+          <button onClick={()=>setSelCust(null)} style={{border:"none",background:"none",cursor:"pointer",padding:4}}><Ic d={I.x} s={16} c={C.ink3}/></button>
+        </div>
+        {/* Tier & points */}
+        {(()=>{const tier=getTier(selCust.points||0);const nextTier=CRM_TIERS[CRM_TIERS.indexOf(tier)+1];const prog=nextTier?Math.min(100,((selCust.points||0)-tier.min)/(nextTier.min-tier.min)*100):100;return<div style={{background:tier.bg,border:`1px solid ${tier.color}44`,borderRadius:10,padding:12,marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+            <span style={{fontWeight:800,color:tier.color,fontSize:15}}>{tier.label} ⭐</span>
+            <span style={{fontSize:18,fontWeight:900,color:tier.color}}>{(selCust.points||0).toLocaleString()} pts</span>
+          </div>
+          <div style={{height:6,background:"rgba(0,0,0,0.1)",borderRadius:3,overflow:"hidden"}}>
+            <div style={{height:"100%",width:prog+"%",background:tier.color,borderRadius:3,transition:"width .5s"}}/>
+          </div>
+          {nextTier&&<div style={{fontSize:11,color:tier.color,marginTop:4}}>อีก {(nextTier.min-(selCust.points||0)).toLocaleString()} pts → {nextTier.label}</div>}
+        </div>;})()}
+        {/* Tags */}
+        {(()=>{const tags=getCustomerTags(selCust,transactions);return tags.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>{tags.map((tg,i)=><span key={i} style={{fontSize:12,padding:"3px 10px",borderRadius:20,background:tg.bg,color:tg.c,fontWeight:700}}>{tg.l}</span>)}</div>;})()}
+        {/* Info */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+          {[["วันเกิด",selCust.birthdate?new Date(selCust.birthdate).toLocaleDateString("th-TH"):"—"],["เก้าอี้ที่ชอบ",selCust.seat_pref||"—"],["แพ้อาหาร",selCust.allergies||"—"],["หมายเหตุ",selCust.notes||"—"]].map(([k,v])=><div key={k} style={{background:C.lineLight,borderRadius:8,padding:"8px 10px"}}><div style={{fontSize:10,color:C.ink4,fontWeight:700}}>{k}</div><div style={{fontSize:12,color:C.ink,fontWeight:500,marginTop:2}}>{v}</div></div>)}
+        </div>
+        {/* Transactions */}
+        <div style={{marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:13,color:C.ink,marginBottom:6}}>ประวัติธุรกรรม</div>
+          <div style={{maxHeight:160,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+            {transactions.filter(t=>t.customer_id===selCust.id).slice(0,20).map(t=><div key={t.id} style={{display:"flex",justifyContent:"space-between",padding:"5px 8px",background:C.lineLight,borderRadius:7,fontSize:12}}>
+              <span style={{color:C.ink3}}>{new Date(t.created_at).toLocaleDateString("th-TH")}</span>
+              <span style={{color:t.points_earned?C.green:C.red,fontWeight:700}}>{t.points_earned?"+"+t.points_earned+" pts":t.points_redeemed?"-"+t.points_redeemed+" pts":"—"}</span>
+              {t.amount>0&&<span style={{color:C.ink}}>฿{t.amount.toLocaleString()}</span>}
+            </div>)}
+            {transactions.filter(t=>t.customer_id===selCust.id).length===0&&<div style={{color:C.ink4,fontSize:12,textAlign:"center",padding:8}}>ยังไม่มีธุรกรรม</div>}
+          </div>
+        </div>
+        {/* Vouchers */}
+        <div style={{marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:13,color:C.ink,marginBottom:6}}>คูปอง</div>
+          {vouchers.filter(v=>v.customer_id===selCust.id).map(v=><div key={v.id} style={{display:"flex",justifyContent:"space-between",padding:"5px 8px",background:v.status==="used"?"#F1F5F9":C.yellowLight,borderRadius:7,fontSize:12,marginBottom:4,opacity:v.status==="used"?.6:1}}>
+            <span style={{fontWeight:700,color:C.ink,fontFamily:"monospace"}}>{v.code}</span>
+            <span style={{color:C.ink3}}>{v.type==="percent"?v.value+"%":"฿"+v.value}</span>
+            <span style={{color:v.status==="active"?C.green:v.status==="used"?C.ink3:C.red,fontWeight:700}}>{v.status==="active"?"ใช้ได้":v.status==="used"?"ใช้แล้ว":"หมดอายุ"}</span>
+          </div>)}
+          {vouchers.filter(v=>v.customer_id===selCust.id).length===0&&<div style={{color:C.ink4,fontSize:12}}>ยังไม่มีคูปอง</div>}
+        </div>
+        {canEdit&&<div style={{display:"flex",gap:6}}>
+          <Btn icon={I.bolt} onClick={()=>{setShowPoints(true);}} style={{flex:1}}>ปรับคะแนน</Btn>
+        </div>}
+      </div>}
+    </div>
+
+    {/* Add/Edit Customer Modal */}
+    {showCustForm&&<Modal title={editCust?"แก้ไขลูกค้า":"เพิ่มลูกค้าใหม่"} onClose={()=>{setShowCustForm(false);setEditCust(null);}}>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <Field label="ชื่อ-นามสกุล *"><Inp value={form.name} onChange={v=>setForm(f=>({...f,name:v}))} placeholder="ชื่อลูกค้า"/></Field>
+        <Field label="เบอร์โทรศัพท์"><Inp value={form.phone} onChange={v=>setForm(f=>({...f,phone:v}))} placeholder="0812345678"/></Field>
+        <Field label="วันเกิด"><Inp type="date" value={form.birthdate} onChange={v=>setForm(f=>({...f,birthdate:v}))}/></Field>
+        <Field label="แพ้อาหาร / ข้อจำกัด"><Inp value={form.allergies} onChange={v=>setForm(f=>({...f,allergies:v}))} placeholder="เช่น แพ้ถั่ว, ไม่กินหมู"/></Field>
+        <Field label="ที่นั่งที่ชอบ"><Inp value={form.seat_pref} onChange={v=>setForm(f=>({...f,seat_pref:v}))} placeholder="เช่น โต๊ะริมหน้าต่าง"/></Field>
+        <Field label="หมายเหตุ"><TA value={form.notes} onChange={v=>setForm(f=>({...f,notes:v}))} rows={2} placeholder="ข้อมูลเพิ่มเติม"/></Field>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <Btn onClick={()=>{setShowCustForm(false);setEditCust(null);}} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
+          <Btn icon={I.save} onClick={saveCust} disabled={saving}>{saving?"กำลังบันทึก...":"บันทึก"}</Btn>
+        </div>
+      </div>
+    </Modal>}
+
+    {/* Adjust points modal */}
+    {showPoints&&selCust&&<Modal title={`ปรับคะแนน — ${selCust.name}`} onClose={()=>setShowPoints(false)}>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <div style={{display:"flex",gap:8}}>
+          {[{id:"earn",l:"บวกคะแนน"},{id:"redeem",l:"หักคะแนน"}].map(opt=><button key={opt.id} onClick={()=>setPtForm(f=>({...f,type:opt.id}))} style={{flex:1,padding:"10px 0",borderRadius:8,border:"2px solid "+(ptForm.type===opt.id?C.brand:C.line),background:ptForm.type===opt.id?C.brand:"#fff",color:ptForm.type===opt.id?"#fff":C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,cursor:"pointer"}}>{opt.l}</button>)}
+        </div>
+        <Field label="จำนวนคะแนน"><Inp type="number" value={ptForm.amount} onChange={v=>setPtForm(f=>({...f,amount:v}))} placeholder="เช่น 100"/></Field>
+        <Field label="หมายเหตุ"><Inp value={ptForm.note} onChange={v=>setPtForm(f=>({...f,note:v}))} placeholder="ซื้อสินค้า, แลกรางวัล ฯลฯ"/></Field>
+        <div style={{background:C.lineLight,borderRadius:8,padding:10,fontSize:13}}>
+          คะแนนปัจจุบัน: <b>{(selCust.points||0).toLocaleString()}</b> pts &nbsp;→&nbsp;
+          หลังปรับ: <b style={{color:ptForm.type==="earn"?C.green:C.red}}>{Math.max(0,(selCust.points||0)+(ptForm.type==="earn"?+ptForm.amount:-+ptForm.amount)).toLocaleString()}</b> pts
+        </div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <Btn onClick={()=>setShowPoints(false)} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
+          <Btn icon={I.check} onClick={adjustPoints} disabled={ptSaving}>{ptSaving?"กำลังบันทึก...":"ยืนยัน"}</Btn>
+        </div>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+// ── CRM Loyalty sub-component ──
+function CRMloyalty({customers,transactions,vouchers,setVouchers,showVoucherForm,setShowVoucherForm,voucherCustId,setVoucherCustId,canEdit,currentBranch,reload}){
+  const[vForm,setVForm]=useState({customer_id:"",type:"fixed",value:"",expires_days:"30",note:""});
+  const[saving,setSaving]=useState(false);
+
+  async function saveVoucher(){
+    if(!vForm.customer_id)return alert("กรุณาเลือกลูกค้า");
+    if(!vForm.value||+vForm.value<=0)return alert("กรุณาใส่มูลค่าคูปอง");
+    setSaving(true);
+    try{
+      const expDate=new Date();expDate.setDate(expDate.getDate()+parseInt(vForm.expires_days||30));
+      await api.addCRMVoucher({customer_id:parseInt(vForm.customer_id),branch_id:currentBranch.id,code:genVoucherCode(),type:vForm.type,value:parseFloat(vForm.value),status:"active",expires_at:expDate.toISOString(),note:vForm.note,created_at:new Date().toISOString()});
+      await reload();setShowVoucherForm(false);setVForm({customer_id:"",type:"fixed",value:"",expires_days:"30",note:""});
+    }catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
+    setSaving(false);
+  }
+
+  async function useVoucher(v){
+    if(v.status!=="active")return;
+    if(!await confirmDlg(`ทำเครื่องหมายว่าใช้คูปอง ${v.code}?`,"ยืนยัน","ยกเลิก"))return;
+    try{await api.updateCRMVoucher(v.id,{status:"used"});await reload();}
+    catch(e){alert(e.message);}
+  }
+  async function deleteVoucher(v){
+    if(!await confirmDlg(`ลบคูปอง ${v.code}?`,"ลบ","ยกเลิก"))return;
+    try{await api.deleteCRMVoucher(v.id);await reload();}
+    catch(e){alert(e.message);}
+  }
+
+  const tierStats=CRM_TIERS.map(tier=>{
+    const inTier=customers.filter(c=>getTier(c.points||0).id===tier.id);
+    return{...tier,count:inTier.length,totalPts:inTier.reduce((s,c)=>s+(c.points||0),0)};
+  });
+
+  return <div>
+    {/* Tier overview cards */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:12,marginBottom:20}}>
+      {tierStats.map(tier=><div key={tier.id} style={{background:tier.bg,border:`1px solid ${tier.color}44`,borderRadius:12,padding:"14px 16px"}}>
+        <div style={{fontWeight:800,fontSize:15,color:tier.color}}>{tier.label}</div>
+        <div style={{fontSize:26,fontWeight:900,color:tier.color,marginTop:4}}>{tier.count}</div>
+        <div style={{fontSize:11,color:tier.color,opacity:.8}}>คน • {tier.min.toLocaleString()}+ pts</div>
+      </div>)}
+    </div>
+
+    {/* Top customers by points */}
+    <div style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:16,marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div style={{fontWeight:700,fontSize:14,color:C.ink}}>ลูกค้าสะสมคะแนนสูงสุด</div>
+        {canEdit&&<Btn icon={I.plus} onClick={()=>setShowVoucherForm(true)}>ออกคูปอง</Btn>}
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {[...customers].sort((a,b)=>(b.points||0)-(a.points||0)).slice(0,10).map((c,idx)=>{
+          const tier=getTier(c.points||0);
+          return<div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:idx===0?C.yellowLight:C.lineLight,borderRadius:8}}>
+            <div style={{width:24,height:24,borderRadius:"50%",background:tier.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              <span style={{fontSize:11,fontWeight:900,color:"#fff"}}>{idx+1}</span>
+            </div>
+            <div style={{flex:1,fontWeight:600,fontSize:13,color:C.ink}}>{c.name}</div>
+            <span style={{fontSize:11,padding:"2px 8px",borderRadius:20,background:tier.bg,color:tier.color,fontWeight:700}}>{tier.label}</span>
+            <div style={{fontWeight:800,color:C.brand,fontSize:15}}>{(c.points||0).toLocaleString()} pts</div>
+          </div>;
+        })}
+        {customers.length===0&&<div style={{textAlign:"center",padding:20,color:C.ink4}}>ยังไม่มีข้อมูลลูกค้า</div>}
+      </div>
+    </div>
+
+    {/* Vouchers list */}
+    <div style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:16}}>
+      <div style={{fontWeight:700,fontSize:14,color:C.ink,marginBottom:12}}>คูปองทั้งหมด</div>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {vouchers.map(v=>{
+          const cust=customers.find(c=>c.id===v.customer_id);
+          const expired=v.status==="active"&&new Date(v.expires_at)<new Date();
+          return<div key={v.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:v.status==="used"||expired?"#F8FAFC":C.yellowLight,borderRadius:8,opacity:v.status==="used"||expired?.6:1}}>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:"monospace",fontWeight:800,color:C.ink,fontSize:14}}>{v.code}</div>
+              <div style={{fontSize:11,color:C.ink3,marginTop:1}}>{cust?.name||"ลูกค้า"} • หมดอายุ {new Date(v.expires_at).toLocaleDateString("th-TH")}</div>
+            </div>
+            <div style={{fontWeight:800,color:C.brand,fontSize:15}}>{v.type==="percent"?v.value+"%":"฿"+v.value}</div>
+            <span style={{fontSize:11,padding:"3px 9px",borderRadius:20,fontWeight:700,background:v.status==="active"&&!expired?C.greenLight:C.lineLight,color:v.status==="active"&&!expired?C.green:C.ink3}}>{v.status==="used"?"ใช้แล้ว":expired?"หมดอายุ":"ใช้ได้"}</span>
+            {canEdit&&<div style={{display:"flex",gap:4}}>
+              {v.status==="active"&&!expired&&<button onClick={()=>useVoucher(v)} title="ทำเครื่องหมายว่าใช้แล้ว" style={{padding:"5px",border:"1px solid "+C.green,borderRadius:6,background:"#fff",cursor:"pointer"}}><Ic d={I.check} s={12} c={C.green}/></button>}
+              <button onClick={()=>deleteVoucher(v)} style={{padding:"5px",border:"1px solid #FCA5A5",borderRadius:6,background:"#fff",cursor:"pointer"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+            </div>}
+          </div>;
+        })}
+        {vouchers.length===0&&<div style={{textAlign:"center",padding:20,color:C.ink4}}>ยังไม่มีคูปอง</div>}
+      </div>
+    </div>
+
+    {/* Issue Voucher Modal */}
+    {showVoucherForm&&<Modal title="ออกคูปองใหม่" onClose={()=>setShowVoucherForm(false)}>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <Field label="ลูกค้า *">
+          <select value={vForm.customer_id} onChange={e=>setVForm(f=>({...f,customer_id:e.target.value}))} style={{width:"100%",padding:"8px 10px",border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none"}}>
+            <option value="">-- เลือกลูกค้า --</option>
+            {customers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.phone||"ไม่มีเบอร์"})</option>)}
+          </select>
+        </Field>
+        <div style={{display:"flex",gap:8}}>
+          {[{id:"fixed",l:"ส่วนลด (฿)"},{id:"percent",l:"ส่วนลด (%)"}].map(opt=><button key={opt.id} onClick={()=>setVForm(f=>({...f,type:opt.id}))} style={{flex:1,padding:"9px 0",borderRadius:8,border:"2px solid "+(vForm.type===opt.id?C.brand:C.line),background:vForm.type===opt.id?C.brand:"#fff",color:vForm.type===opt.id?"#fff":C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer"}}>{opt.l}</button>)}
+        </div>
+        <Field label={vForm.type==="percent"?"ส่วนลด (%)":"มูลค่า (฿)"}><Inp type="number" value={vForm.value} onChange={v=>setVForm(f=>({...f,value:v}))} placeholder={vForm.type==="percent"?"เช่น 10":"เช่น 50"}/></Field>
+        <Field label="หมดอายุภายใน (วัน)"><Inp type="number" value={vForm.expires_days} onChange={v=>setVForm(f=>({...f,expires_days:v}))} placeholder="30"/></Field>
+        <Field label="หมายเหตุ"><Inp value={vForm.note} onChange={v=>setVForm(f=>({...f,note:v}))} placeholder="เช่น วันเกิด, ครบรอบ"/></Field>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <Btn onClick={()=>setShowVoucherForm(false)} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
+          <Btn icon={I.tag} onClick={saveVoucher} disabled={saving}>{saving?"กำลังออก...":"ออกคูปอง"}</Btn>
+        </div>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+// ── CRM Reservations sub-component ──
+function CRMReservations({reservations,customers,showResForm,setShowResForm,editRes,setEditRes,resFilter,setResFilter,canEdit,currentBranch,reload}){
+  const[form,setForm]=useState({customer_id:"",reserved_at:"",party_size:"2",table_pref:"",special_req:"",status:"pending"});
+  const[saving,setSaving]=useState(false);
+
+  useEffect(()=>{
+    if(editRes)setForm({customer_id:String(editRes.customer_id||""),reserved_at:editRes.reserved_at?editRes.reserved_at.slice(0,16):"",party_size:String(editRes.party_size||2),table_pref:editRes.table_pref||"",special_req:editRes.special_req||"",status:editRes.status||"pending"});
+    else setForm({customer_id:"",reserved_at:"",party_size:"2",table_pref:"",special_req:"",status:"pending"});
+  },[editRes,showResForm]);
+
+  async function saveRes(){
+    if(!form.reserved_at)return alert("กรุณาเลือกวันเวลาจอง");
+    setSaving(true);
+    try{
+      const d={customer_id:form.customer_id?parseInt(form.customer_id):null,branch_id:currentBranch.id,reserved_at:new Date(form.reserved_at).toISOString(),party_size:parseInt(form.party_size)||2,table_pref:form.table_pref,special_req:form.special_req,status:form.status};
+      if(editRes)await api.updateCRMReservation(editRes.id,d);
+      else await api.addCRMReservation({...d,created_at:new Date().toISOString()});
+      await reload();setShowResForm(false);setEditRes(null);
+    }catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
+    setSaving(false);
+  }
+
+  async function updateStatus(res,status){
+    try{await api.updateCRMReservation(res.id,{status});await reload();}
+    catch(e){alert(e.message);}
+  }
+  async function delRes(res){
+    if(!await confirmDlg("ลบการจองนี้?","ลบ","ยกเลิก"))return;
+    try{await api.deleteCRMReservation(res.id);await reload();}
+    catch(e){alert(e.message);}
+  }
+
+  const STATUS_MAP={pending:{l:"รอยืนยัน",c:C.yellow,bg:C.yellowLight},confirmed:{l:"ยืนยันแล้ว",c:C.green,bg:C.greenLight},cancelled:{l:"ยกเลิก",c:C.red,bg:C.redLight},done:{l:"เสร็จสิ้น",c:C.ink3,bg:C.lineLight}};
+  const FILTERS=[{id:"all",l:"ทั้งหมด"},{id:"pending",l:"รอยืนยัน"},{id:"confirmed",l:"ยืนยันแล้ว"},{id:"done",l:"เสร็จสิ้น"},{id:"cancelled",l:"ยกเลิก"}];
+  const filtered=resFilter==="all"?reservations:reservations.filter(r=>r.status===resFilter);
+
+  return<div>
+    <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center",flexWrap:"wrap"}}>
+      <div style={{display:"flex",gap:4,flexWrap:"wrap",flex:1}}>
+        {FILTERS.map(f=><button key={f.id} onClick={()=>setResFilter(f.id)} style={{padding:"6px 12px",borderRadius:8,border:"1px solid "+(resFilter===f.id?C.brand:C.line),background:resFilter===f.id?C.brand:"#fff",color:resFilter===f.id?"#fff":C.ink3,fontSize:12,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{f.l}</button>)}
+      </div>
+      {canEdit&&<Btn icon={I.plus} onClick={()=>{setEditRes(null);setShowResForm(true);}}>เพิ่มการจอง</Btn>}
+    </div>
+
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+      {filtered.map(res=>{
+        const cust=customers.find(c=>c.id===res.customer_id);
+        const st=STATUS_MAP[res.status]||STATUS_MAP.pending;
+        const resDate=new Date(res.reserved_at);
+        return<div key={res.id} style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:"12px 16px",display:"flex",alignItems:"flex-start",gap:12}}>
+          <div style={{width:44,height:44,borderRadius:10,background:st.bg,border:`1px solid ${st.c}44`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,flexDirection:"column"}}>
+            <div style={{fontSize:14,fontWeight:900,color:st.c,lineHeight:1}}>{resDate.getDate()}</div>
+            <div style={{fontSize:9,color:st.c,fontWeight:700}}>{resDate.toLocaleString("th-TH",{month:"short"})}</div>
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:700,fontSize:14,color:C.ink}}>{cust?.name||"ลูกค้าทั่วไป"} ({res.party_size} คน)</div>
+            <div style={{fontSize:12,color:C.ink3,marginTop:2}}>{resDate.toLocaleString("th-TH",{hour:"2-digit",minute:"2-digit"})} น. {res.table_pref&&`• ที่นั่ง: ${res.table_pref}`}</div>
+            {res.special_req&&<div style={{fontSize:11,color:C.ink4,marginTop:2,background:C.yellowLight,borderRadius:6,padding:"2px 8px",display:"inline-block"}}>★ {res.special_req}</div>}
+          </div>
+          <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+            <span style={{fontSize:11,padding:"3px 9px",borderRadius:20,fontWeight:700,background:st.bg,color:st.c}}>{st.l}</span>
+            {canEdit&&res.status==="pending"&&<>
+              <button onClick={()=>updateStatus(res,"confirmed")} style={{padding:"5px 10px",border:"1px solid "+C.green,borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ยืนยัน</button>
+              <button onClick={()=>updateStatus(res,"cancelled")} style={{padding:"5px 10px",border:"1px solid "+C.red,borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ยกเลิก</button>
+            </>}
+            {canEdit&&res.status==="confirmed"&&<button onClick={()=>updateStatus(res,"done")} style={{padding:"5px 10px",border:"1px solid "+C.teal,borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>เสร็จสิ้น</button>}
+            {canEdit&&<div style={{display:"flex",gap:4}}>
+              <button onClick={()=>{setEditRes(res);setShowResForm(true);}} style={{padding:"5px",border:"1px solid "+C.line,borderRadius:6,background:"#fff",cursor:"pointer"}}><Ic d={I.pencil} s={12} c={C.ink3}/></button>
+              <button onClick={()=>delRes(res)} style={{padding:"5px",border:"1px solid #FCA5A5",borderRadius:6,background:"#fff",cursor:"pointer"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+            </div>}
+          </div>
+        </div>;
+      })}
+      {filtered.length===0&&<div style={{textAlign:"center",padding:40,color:C.ink4}}>ไม่มีการจองในหมวดนี้</div>}
+    </div>
+
+    {showResForm&&<Modal title={editRes?"แก้ไขการจอง":"เพิ่มการจองใหม่"} onClose={()=>{setShowResForm(false);setEditRes(null);}}>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <Field label="ลูกค้า">
+          <select value={form.customer_id} onChange={e=>setForm(f=>({...f,customer_id:e.target.value}))} style={{width:"100%",padding:"8px 10px",border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none"}}>
+            <option value="">-- ลูกค้าทั่วไป --</option>
+            {customers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.phone||"ไม่มีเบอร์"})</option>)}
+          </select>
+        </Field>
+        <Field label="วันและเวลาจอง *"><Inp type="datetime-local" value={form.reserved_at} onChange={v=>setForm(f=>({...f,reserved_at:v}))}/></Field>
+        <Field label="จำนวนคน"><Inp type="number" value={form.party_size} onChange={v=>setForm(f=>({...f,party_size:v}))} placeholder="2"/></Field>
+        <Field label="ที่นั่งที่ต้องการ"><Inp value={form.table_pref} onChange={v=>setForm(f=>({...f,table_pref:v}))} placeholder="เช่น ริมหน้าต่าง, ห้องส่วนตัว"/></Field>
+        <Field label="คำขอพิเศษ"><TA value={form.special_req} onChange={v=>setForm(f=>({...f,special_req:v}))} rows={2} placeholder="เค้กวันเกิด, ตกแต่งพิเศษ ฯลฯ"/></Field>
+        <Field label="สถานะ">
+          <select value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))} style={{width:"100%",padding:"8px 10px",border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none"}}>
+            <option value="pending">รอยืนยัน</option><option value="confirmed">ยืนยันแล้ว</option><option value="done">เสร็จสิ้น</option><option value="cancelled">ยกเลิก</option>
+          </select>
+        </Field>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <Btn onClick={()=>{setShowResForm(false);setEditRes(null);}} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
+          <Btn icon={I.save} onClick={saveRes} disabled={saving}>{saving?"กำลังบันทึก...":"บันทึก"}</Btn>
+        </div>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+// ── CRM Feedback sub-component ──
+function CRMFeedback({feedback,customers,showFeedForm,setShowFeedForm,canEdit,currentBranch,reload}){
+  const[form,setForm]=useState({customer_id:"",score:"5",comment:"",order_ref:""});
+  const[saving,setSaving]=useState(false);
+
+  async function saveFeedback(){
+    if(!form.score)return alert("กรุณาให้คะแนน");
+    setSaving(true);
+    try{
+      await api.addCRMFeedback({customer_id:form.customer_id?parseInt(form.customer_id):null,branch_id:currentBranch.id,score:parseInt(form.score),comment:form.comment,order_ref:form.order_ref,created_at:new Date().toISOString()});
+      await reload();setShowFeedForm(false);setForm({customer_id:"",score:"5",comment:"",order_ref:""});
+    }catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
+    setSaving(false);
+  }
+
+  const avgScore=feedback.length?feedback.reduce((s,f)=>s+f.score,0)/feedback.length:0;
+  const lowScore=feedback.filter(f=>f.score<=2);
+  const scoreGroups=[5,4,3,2,1].map(s=>({score:s,count:feedback.filter(f=>f.score===s).length}));
+
+  return<div>
+    {/* Summary cards */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:12,marginBottom:20}}>
+      <div style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:"14px 16px",textAlign:"center"}}>
+        <div style={{fontSize:32,fontWeight:900,color:avgScore>=4?C.green:avgScore>=3?C.yellow:C.red}}>{avgScore.toFixed(1)}</div>
+        <div style={{fontSize:12,color:C.ink3,fontWeight:600}}>คะแนนเฉลี่ย / 5</div>
+      </div>
+      <div style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:"14px 16px",textAlign:"center"}}>
+        <div style={{fontSize:32,fontWeight:900,color:C.blue}}>{feedback.length}</div>
+        <div style={{fontSize:12,color:C.ink3,fontWeight:600}}>รีวิวทั้งหมด</div>
+      </div>
+      <div style={{background:lowScore.length>0?C.redLight:"#fff",border:"1px solid "+(lowScore.length>0?"#FCA5A5":C.line),borderRadius:12,padding:"14px 16px",textAlign:"center"}}>
+        <div style={{fontSize:32,fontWeight:900,color:lowScore.length>0?C.red:C.ink3}}>{lowScore.length}</div>
+        <div style={{fontSize:12,color:lowScore.length>0?C.red:C.ink3,fontWeight:600}}>คะแนนต่ำ (≤2) ⚠️</div>
+      </div>
+    </div>
+
+    {/* Score distribution */}
+    <div style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:16,marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div style={{fontWeight:700,fontSize:14,color:C.ink}}>การกระจายคะแนน</div>
+        {canEdit&&<Btn icon={I.plus} onClick={()=>setShowFeedForm(true)}>บันทึกรีวิว</Btn>}
+      </div>
+      {scoreGroups.map(({score,count})=><div key={score} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+        <div style={{width:16,textAlign:"right",fontWeight:700,color:C.ink3,fontSize:13}}>{score}</div>
+        <div style={{fontSize:14}}>{"⭐".repeat(score)}</div>
+        <div style={{flex:1,height:18,background:C.lineLight,borderRadius:4,overflow:"hidden"}}>
+          <div style={{height:"100%",width:feedback.length?(count/feedback.length*100)+"%":"0%",background:score>=4?C.green:score===3?C.yellow:C.red,borderRadius:4,transition:"width .5s"}}/>
+        </div>
+        <div style={{width:32,textAlign:"right",fontSize:12,color:C.ink3,fontWeight:700}}>{count}</div>
+      </div>)}
+    </div>
+
+    {/* Low score alert */}
+    {lowScore.length>0&&<div style={{background:C.redLight,border:"1px solid #FCA5A5",borderRadius:12,padding:14,marginBottom:16}}>
+      <div style={{fontWeight:700,color:C.red,fontSize:13,marginBottom:8}}>⚠️ แจ้งเตือน: ลูกค้าให้คะแนนต่ำ — ต้องติดตาม</div>
+      {lowScore.map(f=>{const cust=customers.find(c=>c.id===f.customer_id);return<div key={f.id} style={{background:"#fff",borderRadius:8,padding:"8px 12px",marginBottom:6,display:"flex",gap:10,alignItems:"flex-start"}}>
+        <div style={{fontWeight:800,fontSize:18,color:C.red}}>{"⭐".repeat(f.score)}</div>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:700,fontSize:13,color:C.ink}}>{cust?.name||"ลูกค้าทั่วไป"} <span style={{color:C.ink4,fontWeight:400,fontSize:11}}>— {new Date(f.created_at).toLocaleDateString("th-TH")}</span></div>
+          {f.comment&&<div style={{fontSize:12,color:C.ink3,marginTop:2}}>"{f.comment}"</div>}
+        </div>
+      </div>;})}
+    </div>}
+
+    {/* All feedback */}
+    <div style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:16}}>
+      <div style={{fontWeight:700,fontSize:14,color:C.ink,marginBottom:12}}>รีวิวทั้งหมด</div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {feedback.map(f=>{
+          const cust=customers.find(c=>c.id===f.customer_id);
+          return<div key={f.id} style={{padding:"10px 12px",background:f.score<=2?C.redLight:f.score>=4?C.greenLight:C.yellowLight,borderRadius:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:f.comment?6:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:16}}>{"⭐".repeat(f.score)}</span>
+                <span style={{fontWeight:700,fontSize:13,color:C.ink}}>{cust?.name||"ลูกค้าทั่วไป"}</span>
+              </div>
+              <span style={{fontSize:11,color:C.ink4}}>{new Date(f.created_at).toLocaleDateString("th-TH")}</span>
+            </div>
+            {f.comment&&<div style={{fontSize:12,color:C.ink2,fontStyle:"italic"}}>"{f.comment}"</div>}
+          </div>;
+        })}
+        {feedback.length===0&&<div style={{textAlign:"center",padding:20,color:C.ink4}}>ยังไม่มีรีวิว</div>}
+      </div>
+    </div>
+
+    {showFeedForm&&<Modal title="บันทึกรีวิวลูกค้า" onClose={()=>setShowFeedForm(false)}>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <Field label="ลูกค้า">
+          <select value={form.customer_id} onChange={e=>setForm(f=>({...f,customer_id:e.target.value}))} style={{width:"100%",padding:"8px 10px",border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none"}}>
+            <option value="">-- ลูกค้าทั่วไป --</option>
+            {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </Field>
+        <Field label="คะแนนความพึงพอใจ *">
+          <div style={{display:"flex",gap:6}}>
+            {[1,2,3,4,5].map(s=><button key={s} onClick={()=>setForm(f=>({...f,score:String(s)}))} style={{flex:1,padding:"10px 0",borderRadius:8,border:"2px solid "+(+form.score>=s?C.yellow:C.line),background:+form.score>=s?C.yellowLight:"#fff",cursor:"pointer",fontSize:18}}>⭐</button>)}
+          </div>
+          <div style={{textAlign:"center",fontSize:12,color:C.ink3,marginTop:4}}>{["","แย่มาก","แย่","ปานกลาง","ดี","ดีมาก"][+form.score]}</div>
+        </Field>
+        <Field label="ความคิดเห็น"><TA value={form.comment} onChange={v=>setForm(f=>({...f,comment:v}))} rows={3} placeholder="ความคิดเห็นของลูกค้า..."/></Field>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <Btn onClick={()=>setShowFeedForm(false)} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
+          <Btn icon={I.save} onClick={saveFeedback} disabled={saving}>{saving?"กำลังบันทึก...":"บันทึก"}</Btn>
+        </div>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+// ── CRM Analytics sub-component ──
+function CRMAnalytics({customers,transactions,feedback,reservations}){
+  const now=Date.now();
+
+  const rfm=useMemo(()=>{
+    return customers.map(cust=>{
+      const myTxns=transactions.filter(t=>t.customer_id===cust.id&&t.amount>0);
+      const lastMs=myTxns.length?Math.max(...myTxns.map(t=>new Date(t.created_at).getTime())):0;
+      const recency=lastMs?(now-lastMs)/(1000*3600*24):999;
+      const frequency=myTxns.length;
+      const monetary=myTxns.reduce((s,t)=>s+(t.amount||0),0);
+      let rScore=recency<=7?5:recency<=14?4:recency<=30?3:recency<=60?2:1;
+      let fScore=frequency>=20?5:frequency>=10?4:frequency>=5?3:frequency>=2?2:frequency>=1?1:0;
+      let mScore=monetary>=10000?5:monetary>=5000?4:monetary>=2000?3:monetary>=500?2:monetary>=1?1:0;
+      const total=rScore+fScore+mScore;
+      let segment=total>=12?"แชมป์":total>=9?"ภักดี":total>=6?"ที่มีศักยภาพ":total>=3?"เสี่ยงหาย":"หลับ";
+      return{...cust,recency:Math.round(recency),frequency,monetary,rScore,fScore,mScore,total,segment};
+    }).sort((a,b)=>b.total-a.total);
+  },[customers,transactions,now]);
+
+  const segmentColors={
+    "แชมป์":{c:"#7C3AED",bg:"#F5F3FF"},
+    "ภักดี":{c:C.green,bg:C.greenLight},
+    "ที่มีศักยภาพ":{c:C.blue,bg:C.blueLight},
+    "เสี่ยงหาย":{c:C.yellow,bg:C.yellowLight},
+    "หลับ":{c:C.ink3,bg:C.lineLight},
+  };
+  const segCounts=Object.fromEntries(Object.keys(segmentColors).map(s=>[s,rfm.filter(r=>r.segment===s).length]));
+
+  const totalRevenue=transactions.reduce((s,t)=>s+(t.amount||0),0);
+  const totalPoints=customers.reduce((s,c)=>s+(c.points||0),0);
+  const avgFeedback=feedback.length?feedback.reduce((s,f)=>s+f.score,0)/feedback.length:0;
+  const upcomingRes=reservations.filter(r=>r.status==="confirmed"&&new Date(r.reserved_at)>new Date());
+
+  return<div>
+    {/* KPI row */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:12,marginBottom:20}}>
+      {[
+        {label:"ลูกค้าทั้งหมด",value:customers.length,unit:"คน",color:C.blue},
+        {label:"รายได้จาก CRM",value:"฿"+totalRevenue.toLocaleString(),unit:"",color:C.green},
+        {label:"คะแนนสะสมรวม",value:totalPoints.toLocaleString(),unit:"pts",color:C.brand},
+        {label:"ความพึงพอใจ",value:avgFeedback.toFixed(1),unit:"/5",color:avgFeedback>=4?C.green:avgFeedback>=3?C.yellow:C.red},
+        {label:"จองล่วงหน้า",value:upcomingRes.length,unit:"รายการ",color:C.purple},
+      ].map(kpi=><div key={kpi.label} style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:"14px 16px",textAlign:"center"}}>
+        <div style={{fontSize:26,fontWeight:900,color:kpi.color}}>{kpi.value}<span style={{fontSize:14,fontWeight:500,color:C.ink4}}>{kpi.unit}</span></div>
+        <div style={{fontSize:11,color:C.ink3,fontWeight:600,marginTop:2}}>{kpi.label}</div>
+      </div>)}
+    </div>
+
+    {/* RFM segments */}
+    <div style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:16,marginBottom:16}}>
+      <div style={{fontWeight:700,fontSize:14,color:C.ink,marginBottom:12}}>RFM Segmentation</div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
+        {Object.entries(segCounts).map(([seg,count])=>{
+          const{c,bg}=segmentColors[seg];
+          return<div key={seg} style={{background:bg,border:`1px solid ${c}44`,borderRadius:10,padding:"10px 16px",textAlign:"center",minWidth:100}}>
+            <div style={{fontSize:22,fontWeight:900,color:c}}>{count}</div>
+            <div style={{fontSize:11,color:c,fontWeight:700}}>{seg}</div>
+          </div>;
+        })}
+      </div>
+      <div style={{fontSize:11,color:C.ink4,marginBottom:12}}>R=ความถี่ล่าสุด F=ความถี่ M=มูลค่า (คะแนน 1-5 แต่ละด้าน รวมสูงสุด 15)</div>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {rfm.slice(0,15).map(r=>{
+          const{c,bg}=segmentColors[r.segment]||segmentColors["หลับ"];
+          return<div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:bg,borderRadius:8,opacity:r.frequency===0?.6:1}}>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700,fontSize:13,color:C.ink}}>{r.name}</div>
+              <div style={{fontSize:11,color:C.ink3}}>{r.frequency} ครั้ง • ฿{r.monetary.toLocaleString()} • ล่าสุด {r.recency<999?r.recency+" วันที่แล้ว":"ไม่เคย"}</div>
+            </div>
+            <div style={{display:"flex",gap:4}}>
+              {[{l:"R",v:r.rScore},{l:"F",v:r.fScore},{l:"M",v:r.mScore}].map(({l,v})=><div key={l} style={{width:28,height:28,borderRadius:6,background:`rgba(0,0,0,0.06)`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+                <div style={{fontSize:8,color:c,fontWeight:700}}>{l}</div>
+                <div style={{fontSize:12,fontWeight:900,color:c,lineHeight:1}}>{v}</div>
+              </div>)}
+            </div>
+            <span style={{fontSize:11,padding:"3px 10px",borderRadius:20,fontWeight:700,background:"rgba(255,255,255,0.7)",color:c}}>{r.segment}</span>
+          </div>;
+        })}
+        {rfm.length===0&&<div style={{textAlign:"center",padding:20,color:C.ink4}}>ยังไม่มีข้อมูลลูกค้า</div>}
+      </div>
+    </div>
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
 // ── MAIN APP ──────────────────────────────────────────
 // ══════════════════════════════════════════════════════
 export default function App(){
@@ -1855,6 +2587,7 @@ export default function App(){
 
   const TABS=[
     {id:"pos",l:"ขายหน้าร้าน",icon:I.table,perm:"pos"},
+    {id:"crm",l:"CRM ลูกค้า",icon:I.users,perm:"crm"},
     {id:"ingredients",l:"วัตถุดิบ",icon:I.leaf,perm:"ingredients"},
     {id:"menus",l:"เมนู",icon:I.fire,perm:"menus"},
     {id:"sop",l:"SOP",icon:I.sop,perm:"sop"},
@@ -1865,7 +2598,7 @@ export default function App(){
     {id:"settings",l:"ตั้งค่า",icon:I.settings,perm:"settings"},
   ];
   const visibleTabs=TABS.filter(t=>currentUser&&hasPerm(currentUser,t.perm));
-  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
+  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
 
   // Check scan mode
   const params=typeof window!=="undefined"?new URLSearchParams(window.location.search):new URLSearchParams();
@@ -1977,6 +2710,7 @@ export default function App(){
         <div style={{flex:1,padding:"24px 28px 56px"}}>
           {initErr&&<ErrBox msg={initErr} onRetry={loadAll}/>}
           {loading?<Loading text="กำลังโหลดข้อมูลจาก Cloud..."/>:<>
+            {tab==="crm"&&<CRMTab currentBranch={currentBranch} currentUser={currentUser} menus={menus}/>}
             {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats}/>}
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
