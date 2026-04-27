@@ -2965,6 +2965,10 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
   const[discValue,setDiscValue]=useState(0);
   const[itemDisc,setItemDisc]=useState({});
   const[cashRcv,setCashRcv]=useState("");
+  const[voidIdx,setVoidIdx]=useState(null);
+  const[showSplitBill,setShowSplitBill]=useState(false);
+  const[splitSel,setSplitSel]=useState({});
+
   const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(m=>m.category))],[menus]);
   const filtered=useMemo(()=>menus.filter(m=>(selCat==="ทั้งหมด"||m.category===selCat)&&m.name.toLowerCase().includes(search.toLowerCase())),[menus,selCat,search]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
@@ -2973,9 +2977,40 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
   const totalDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0)+(discMode==="none"?0:0);
   const total=Math.max(0,subtotal-totalDiscount);
   const cashChange=Math.max(0,(+cashRcv||0)-total);
+
   function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null}];});}
   function chQty(idx,d){setItems(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmItem(idx){setItems(p=>p.filter((_,i)=>i!==idx));}
+
+  async function voidItem(idx){
+    if(!await confirmDlg(`ยกเลิก "${items[idx]?.name}"?`,"ยกเลิกรายการ","ไม่ยกเลิก"))return;
+    const voided={...items[idx],voided:true,qty_voided:items[idx].qty};
+    const newItems=items.filter((_,i)=>i!==idx);
+    if(existingOrder?.id){
+      try{
+        const voidLog=[...(existingOrder.void_log||[]),{name:voided.name,qty:voided.qty,price:voided.price,time:new Date().toLocaleString("th-TH"),by:currentUser.username}];
+        await api.updatePOSOrder(existingOrder.id,{items:newItems,subtotal:newItems.reduce((s,i)=>s+i.price*i.qty,0),total:newItems.reduce((s,i)=>s+i.price*i.qty,0),void_log:voidLog,updated_at:new Date().toISOString()});
+      }catch(e){alert("ยกเลิกรายการไม่สำเร็จ: "+e.message);return;}
+    }
+    setItems(newItems);
+  }
+
+  async function reprintItem(item){
+    await printKitchen([item],table.table_number,printers);
+  }
+
+  async function cancelOrder(){
+    if(!existingOrder?.id)return;
+    if(!await confirmDlg(`ยกเลิกออเดอร์ทั้งหมดของโต๊ะ ${table.table_number}?`,"ยกเลิกออเดอร์","ไม่ยกเลิก"))return;
+    try{await api.updatePOSOrder(existingOrder.id,{status:"cancelled",updated_at:new Date().toISOString()});onDone();onClose();}
+    catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
+  }
+
+  function reprintReceipt(){
+    if(!existingOrder?.id)return;
+    printReceipt({...existingOrder,items,subtotal,discount:totalDiscount,total,payment_method:payMethod},table.table_number,branch.name);
+  }
+
   async function saveOrder(){
     if(!items.length){alert("กรุณาเลือกเมนูก่อนครับ");return;}
     setSaving(true);
@@ -2991,11 +3026,16 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
     setSaving(true);
     try{
       const itemsWithDisc=items.map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
-      await api.updatePOSOrder(existingOrder.id,{status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,updated_at:new Date().toISOString()});
+      await api.updatePOSOrder(existingOrder.id,{status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:payMethod==="cash"?+cashRcv||total:null,updated_at:new Date().toISOString()});
       printReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:payMethod==="cash"?+cashRcv||total:null},table.table_number,branch.name);
       onDone();onClose();
     }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSaving(false);
   }
+
+  // Split bill: compute selected subtotal
+  const splitItems=items.filter((_,i)=>splitSel[i]);
+  const splitSubtotal=splitItems.reduce((s,i)=>s+i.price*i.qty,0);
+
   return <div style={{display:"flex",height:"100%",minHeight:"75vh"}}>
     {/* Left: menu */}
     <div style={{flex:1,display:"flex",flexDirection:"column",borderRight:`1px solid ${C.line}`,minWidth:0}}>
@@ -3013,40 +3053,73 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
         </div>)}
       </div>
     </div>
-    {/* Right: order */}
-    <div style={{width:260,display:"flex",flexDirection:"column",background:C.bg,flexShrink:0}}>
+
+    {/* Right: order panel */}
+    <div style={{width:280,display:"flex",flexDirection:"column",background:C.bg,flexShrink:0}}>
+      {/* Header */}
       <div style={{padding:"10px 12px",borderBottom:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
         <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
-        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{table.seats} ที่นั่ง</div>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{table.seats} ที่นั่ง {items.length>0&&`• ${items.length} รายการ`}</div>
       </div>
+
+      {/* Quick action bar */}
+      {existingOrder?.id&&<div style={{padding:"6px 8px",borderBottom:`1px solid ${C.line}`,background:"#FFF8F6",display:"flex",gap:4,flexWrap:"wrap"}}>
+        <button onClick={()=>printKitchen(items,table.table_number,printers)} title="พิมพ์ใบครัวซ้ำทั้งหมด" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.line}`,borderRadius:7,background:C.white,cursor:"pointer",fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
+          <Ic d={I.print} s={12} c={C.ink3}/>พิมพ์ครัว
+        </button>
+        <button onClick={reprintReceipt} title="พิมพ์ใบเสร็จซ้ำ" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.blue}`,borderRadius:7,background:C.blueLight,cursor:"pointer",fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
+          <Ic d={I.bill} s={12} c={C.blue}/>ใบเสร็จ
+        </button>
+        <button onClick={()=>setShowSplitBill(true)} title="แยกบิล" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.purple}`,borderRadius:7,background:C.purpleLight,cursor:"pointer",fontSize:11,color:C.purple,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
+          <Ic d={I.users} s={12} c={C.purple}/>แยกบิล
+        </button>
+        <button onClick={cancelOrder} title="ยกเลิกออเดอร์ทั้งโต๊ะ" style={{display:"flex",alignItems:"center",justifyContent:"center",gap:3,padding:"6px 8px",border:`1px solid #FCA5A5`,borderRadius:7,background:C.redLight,cursor:"pointer",fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
+          <Ic d={I.trash} s={12} c={C.red}/>ยกเลิก
+        </button>
+      </div>}
+
+      {/* Item list */}
       <div style={{flex:1,overflowY:"auto",padding:8}}>
-        {items.length===0?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
-        :items.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:9,padding:"8px 10px",marginBottom:5,border:`1px solid ${C.line}`}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:3}}>
-            <div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}</div>
-            <button onClick={()=>rmItem(idx)} style={{background:"none",border:"none",cursor:"pointer",padding:1}}><Ic d={I.x} s={12} c={C.red}/></button>
-          </div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div style={{display:"flex",alignItems:"center",gap:5}}>
-              <button onClick={()=>chQty(idx,-1)} style={{width:22,height:22,borderRadius:6,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={11}/></button>
-              <span style={{fontSize:13,fontWeight:700,minWidth:18,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
-              <button onClick={()=>chQty(idx,1)} style={{width:22,height:22,borderRadius:6,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={11}/></button>
+        {items.length===0
+          ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
+          :items.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:9,padding:"8px 10px",marginBottom:5,border:`1px solid ${C.line}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:3}}>
+              <div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}</div>
+              {/* Reprint & void buttons */}
+              <div style={{display:"flex",gap:2,marginLeft:4}}>
+                {existingOrder?.id&&<button onClick={()=>reprintItem(item)} title="พิมพ์ซ้ำรายการนี้ไปครัว" style={{background:C.blueLight,border:"none",borderRadius:5,padding:"3px 5px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={11} c={C.blue}/></button>}
+                <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" style={{background:C.redLight,border:"none",borderRadius:5,padding:"3px 5px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.x} s={11} c={C.red}/></button>
+              </div>
             </div>
-            <div style={{display:"flex",alignItems:"center",gap:5}}>
-              <button onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{background:C.lineLight,border:"none",borderRadius:5,padding:"2px 6px",cursor:"pointer",fontSize:10,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>หมายเหตุ</button>
-              <span style={{fontSize:12,fontWeight:700,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</span>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{display:"flex",alignItems:"center",gap:5}}>
+                <button onClick={()=>chQty(idx,-1)} style={{width:22,height:22,borderRadius:6,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={11}/></button>
+                <span style={{fontSize:13,fontWeight:700,minWidth:18,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
+                <button onClick={()=>chQty(idx,1)} style={{width:22,height:22,borderRadius:6,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={11}/></button>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:5}}>
+                <button onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{background:C.lineLight,border:"none",borderRadius:5,padding:"2px 6px",cursor:"pointer",fontSize:10,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>หมายเหตุ</button>
+                <span style={{fontSize:12,fontWeight:700,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</span>
+              </div>
             </div>
-          </div>
-        </div>)}
+          </div>)
+        }
       </div>
+
+      {/* Footer */}
       <div style={{padding:10,borderTop:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>รวม</span><span style={{fontSize:17,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>฿{subtotal.toFixed(0)}</span></div>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+          <span style={{fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>รวม</span>
+          <span style={{fontSize:17,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>฿{subtotal.toFixed(0)}</span>
+        </div>
         <div style={{display:"flex",gap:6}}>
           {existingOrder?.id&&<Btn v="yellow" onClick={()=>setShowPay(true)} icon={I.bill} full s={{padding:"8px 10px",fontSize:13}}>💳 เช็คบิล</Btn>}
           <Btn onClick={saveOrder} icon={I.check} loading={saving} full s={{padding:"8px 10px",fontSize:13}}>{existingOrder?.id?"อัปเดต":"สั่ง"}</Btn>
         </div>
       </div>
     </div>
+
+    {/* Note modal */}
     {noteIdx!==null&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}}>
       <div style={{background:C.white,borderRadius:14,padding:20,width:300}}>
         <div style={{fontWeight:700,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>หมายเหตุ: {items[noteIdx]?.name}</div>
@@ -3057,6 +3130,33 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
         </div>
       </div>
     </div>}
+
+    {/* Split bill modal */}
+    {showSplitBill&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
+      <div style={{background:C.white,borderRadius:16,width:"100%",maxWidth:380,padding:20}}>
+        <div style={{fontWeight:800,fontSize:16,color:C.ink,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>แยกบิล — โต๊ะ {table.table_number}</div>
+        <div style={{fontSize:12,color:C.ink3,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>เลือกรายการที่ต้องการแยกจ่าย</div>
+        <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:280,overflowY:"auto",marginBottom:14}}>
+          {items.map((item,idx)=><label key={idx} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:splitSel[idx]?C.brandLight:C.lineLight,borderRadius:9,border:`1.5px solid ${splitSel[idx]?C.brand:C.line}`,cursor:"pointer"}}>
+            <input type="checkbox" checked={!!splitSel[idx]} onChange={e=>setSplitSel(p=>({...p,[idx]:e.target.checked}))} style={{width:16,height:16,accentColor:C.brand}}/>
+            <div style={{flex:1,fontFamily:"'Sarabun',sans-serif"}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{item.qty}x {item.name}</div>
+              {item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}
+            </div>
+            <div style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</div>
+          </label>)}
+        </div>
+        <div style={{background:C.brandLight,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.brand}}>รวมที่เลือก</span>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.brand}}>฿{splitSubtotal.toFixed(0)}</span>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn v="ghost" onClick={()=>{setShowSplitBill(false);setSplitSel({});}} full s={{padding:"9px"}}>ปิด</Btn>
+          <Btn icon={I.print} onClick={()=>{if(splitItems.length===0){alert("กรุณาเลือกรายการ");return;}printReceipt({items:splitItems,subtotal:splitSubtotal,discount:0,total:splitSubtotal,payment_method:"-"},table.table_number,branch.name);}} full s={{padding:"9px"}}>พิมพ์บิลแยก</Btn>
+        </div>
+      </div>
+    </div>}
+
     {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table}/>}
   </div>;
 }
