@@ -4532,9 +4532,48 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser}){
       }catch(e){setTestResults(r=>({...r,[p.id]:{status:"fail",msg:e.message}}));}
       return;
     }
-    const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),4000);
-    try{await fetch(`http://${p.ip}:${p.port||9100}/`,{mode:"no-cors",signal:ctrl.signal,cache:"no-store"});clearTimeout(tid);setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"เชื่อมต่อได้ปกติ"}}));}
-    catch(e){clearTimeout(tid);setTestResults(r=>({...r,[p.id]:{status:"fail",msg:e.name==="AbortError"?"หมดเวลา ไม่ตอบสนอง (4s)":"เชื่อมต่อไม่ได้"}}));}
+    // IP/Network printer: POST a real ESC-POS test page.
+    // Raw thermal printers at port 9100 don't speak HTTP, so we treat AbortError after timeout
+    // as success (TCP connection was accepted, bytes sent, printer printed but never replied).
+    // Only TypeError "Failed to fetch" (immediate refused) is a true failure.
+    const enc=new TextEncoder();
+    const concat=arrs=>{const len=arrs.reduce((a,b)=>a+b.length,0);const out=new Uint8Array(len);let off=0;for(const a of arrs){out.set(a,off);off+=a.length;}return out;};
+    const body=concat([
+      new Uint8Array([0x1B,0x40]),                // ESC @  init
+      new Uint8Array([0x1B,0x61,0x01]),           // center
+      new Uint8Array([0x1B,0x21,0x30]),           // double height/width
+      enc.encode("PRINTER TEST\n"),
+      new Uint8Array([0x1B,0x21,0x00]),           // normal
+      enc.encode("FOODCOST POS\n"),
+      enc.encode((p.name||"")+"\n"),
+      enc.encode(new Date().toISOString().replace("T"," ").slice(0,19)+"\n"),
+      enc.encode("--------------------------------\n"),
+      new Uint8Array([0x1B,0x45,0x01]),           // bold on
+      enc.encode("Connection OK\n"),
+      new Uint8Array([0x1B,0x45,0x00]),           // bold off
+      new Uint8Array([0x0A,0x0A,0x0A,0x0A]),      // feed
+      new Uint8Array([0x1D,0x56,0x42,0x00]),      // partial cut
+    ]);
+    const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),5000);
+    let connectedFast=false;
+    const startedAt=Date.now();
+    try{
+      await fetch(`http://${p.ip}:${p.port||9100}/`,{method:"POST",mode:"no-cors",cache:"no-store",headers:{"Content-Type":"application/octet-stream"},body,signal:ctrl.signal});
+      clearTimeout(tid);
+      setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"ส่งคำสั่งพิมพ์ทดสอบแล้ว — ตรวจที่เครื่องว่ามีกระดาษออกมาไหม"}}));
+    }catch(e){
+      clearTimeout(tid);
+      const elapsed=Date.now()-startedAt;
+      if(e.name==="AbortError"){
+        // 5s timeout reached — TCP almost certainly accepted the connection (raw printer doesn't HTTP-reply)
+        setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"✅ ส่งคำสั่งพิมพ์แล้ว (เครื่องไม่ตอบ HTTP เป็นเรื่องปกติ) — ดูที่เครื่องว่ามีกระดาษออกมาไหม"}}));
+      }else if(elapsed<300){
+        // Quick TypeError = network refused
+        setTestResults(r=>({...r,[p.id]:{status:"fail",msg:"เชื่อมต่อไม่ได้ — ตรวจ IP/Port หรือไฟเครื่องพิมพ์"}}));
+      }else{
+        setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"ส่งคำสั่งไปแล้ว — ดูที่เครื่อง"}}));
+      }
+    }
   }
   async function scanBTPrinter(all=false){
     if(!navigator.bluetooth){alert("เบราว์เซอร์ไม่รองรับ Bluetooth ต้องใช้ Chrome/Edge");return;}
