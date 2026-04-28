@@ -1551,7 +1551,8 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   const[showUser,setShowUser]=useState(false);const[editUID,setEditUID]=useState(null);const[saving,setSaving]=useState(false);
   const uF0={username:"",password:"",name:"",role:"staff",active:true,perms:ROLE_DEFAULT_PERMS.staff};
   const[uF,setUF]=useState(uF0);
-  const[branchForm,setBranchForm]=useState({name:"",type:"branch",active:true});const[editBID,setEditBID]=useState(null);
+  const bF0={name:"",type:"branch",active:true,allowed_perms:null};
+  const[branchForm,setBranchForm]=useState(bF0);const[editBID,setEditBID]=useState(null);
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
   const[testResults,setTestResults]=useState({});const[btScanning,setBtScanning]=useState(false);
@@ -1601,7 +1602,23 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   }
 
   async function saveUser(){if(!uF.username||!uF.password)return;setSaving(true);try{if(editUID)await api.updateUser(editUID,uF);else await api.addUser(uF);await reloadUsers();setShowUser(false);setEditUID(null);setUF(uF0);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
-  async function saveBranch(){if(!branchForm.name)return;try{if(editBID)await api.updateBranch(editBID,branchForm);else await api.addBranch(branchForm);await reloadBranches();setBranchForm({name:"",type:"branch",active:true});setEditBID(null);}catch(e){alert("บันทึกไม่สำเร็จ");};}
+  async function saveBranch(){
+    if(!branchForm.name)return;
+    try{
+      const payload={name:branchForm.name,type:branchForm.type,active:branchForm.active,allowed_perms:branchForm.allowed_perms};
+      if(editBID)await api.updateBranch(editBID,payload);else await api.addBranch(payload);
+      await reloadBranches();
+      setBranchForm(bF0);setEditBID(null);
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+  }
+  function toggleBranchPerm(p){
+    setBranchForm(f=>{
+      // null = "ทุกแท็บ" → start from full list, then remove the one being toggled off
+      const current=f.allowed_perms===null?ALL_PERMS.map(x=>x.id):f.allowed_perms;
+      const next=current.includes(p)?current.filter(x=>x!==p):[...current,p];
+      return{...f,allowed_perms:next};
+    });
+  }
   async function savePrinter(){
     const isBT=pForm.conn==="bluetooth";
     if(!pForm.name||(isBT?!pForm.btName:!pForm.ip))return;
@@ -1624,19 +1641,26 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     {section==="branches"&&<div>
       <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:14}}>จัดการสาขา</h3>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,marginBottom:16}}>
-        {branches.map(b=><Card key={b.id} style={{padding:"14px 16px"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+        {branches.map(b=>{
+          const allowed=b.allowed_perms;
+          const allowAll=allowed===null||allowed===undefined;
+          const allowedCount=allowAll?ALL_PERMS.length:(allowed?.length||0);
+          return <Card key={b.id} style={{padding:"14px 16px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
             <div>
               <div style={{fontWeight:700,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:5}}>{b.name}</div>
               <Chip color={b.type==="central"?"teal":"orange"}>{b.type==="central"?"ครัวกลาง":"สาขา"}</Chip>
               <Chip color={b.active?"green":"gray"} style={{marginLeft:4}}>{b.active?"เปิด":"ปิด"}</Chip>
             </div>
             {isAdmin&&<div style={{display:"flex",gap:4}}>
-              <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active});setEditBID(b.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+              <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active,allowed_perms:b.allowed_perms===undefined?null:b.allowed_perms});setEditBID(b.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
               {b.type!=="central"&&<button onClick={async()=>{if(!await confirmDlg({title:"ลบสาขา",message:`ต้องการลบสาขา "${b.name}" ใช่หรือไม่?`}))return;await api.deleteBranch(b.id);await reloadBranches();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
             </div>}
           </div>
-        </Card>)}
+          <div style={{paddingTop:8,borderTop:`1px dashed ${C.lineLight}`,fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
+            🔓 เห็น <b style={{color:allowAll?C.green:allowedCount===0?C.red:C.brand}}>{allowAll?"ทุกแท็บ":allowedCount===0?"ไม่เห็นเลย":`${allowedCount}/${ALL_PERMS.length} แท็บ`}</b>
+          </div>
+        </Card>;})}
       </div>
       {isAdmin&&<Card style={{padding:"16px 18px"}}>
         <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>{editBID?"แก้ไขสาขา":"เพิ่มสาขาใหม่"}</h4>
@@ -1645,9 +1669,28 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
           <Field label="ประเภท"><select value={branchForm.type} onChange={e=>setBranchForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="branch">สาขา</option><option value="central">ครัวกลาง</option></select></Field>
           <Field label="สถานะ"><select value={branchForm.active?"true":"false"} onChange={e=>setBranchForm(f=>({...f,active:e.target.value==="true"}))} style={{...iS,appearance:"none"}}><option value="true">เปิดใช้งาน</option><option value="false">ปิดใช้งาน</option></select></Field>
         </div>
+        {/* Allowed perms */}
+        <div style={{marginTop:6,marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <label style={{fontSize:13,fontWeight:600,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>🔓 แท็บที่สาขานี้เห็นได้</label>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>setBranchForm(f=>({...f,allowed_perms:null}))} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${branchForm.allowed_perms===null?C.green:C.line}`,background:branchForm.allowed_perms===null?C.greenLight:C.white,color:branchForm.allowed_perms===null?C.green:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกแท็บ (ไม่จำกัด)</button>
+              <button onClick={()=>setBranchForm(f=>({...f,allowed_perms:ALL_PERMS.map(p=>p.id)}))} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>เลือกทั้งหมด</button>
+              <button onClick={()=>setBranchForm(f=>({...f,allowed_perms:[]}))} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
+            </div>
+          </div>
+          {branchForm.allowed_perms===null
+            ?<div style={{padding:"12px 14px",background:C.greenLight,borderRadius:10,border:`1.5px solid ${C.green}`,fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.green,fontWeight:600}}>✅ สาขานี้เห็นทุกแท็บ (ผู้ใช้เห็นได้ตามสิทธิ์ของตัวเอง)</div>
+            :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:6,background:C.bg,borderRadius:10,padding:10,border:`1px solid ${C.line}`}}>
+              {ALL_PERMS.map(p=>{const has=(branchForm.allowed_perms||[]).includes(p.id);return <label key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",borderRadius:8,cursor:"pointer",background:has?C.brandLight:C.white,border:`1.5px solid ${has?C.brandBorder:C.line}`,transition:"all .15s"}}>
+                <input type="checkbox" checked={has} onChange={()=>toggleBranchPerm(p.id)} style={{accentColor:C.brand,width:15,height:15,cursor:"pointer"}}/>
+                <span style={{fontSize:13,fontFamily:"'Sarabun',sans-serif",fontWeight:has?700:500,color:has?C.brand:C.ink2}}>{p.label}</span>
+              </label>;})}
+            </div>}
+        </div>
         <div style={{display:"flex",gap:8}}>
           <Btn onClick={saveBranch} icon={I.check} disabled={!branchForm.name}>{editBID?"บันทึก":"เพิ่มสาขา"}</Btn>
-          {editBID&&<Btn v="ghost" onClick={()=>{setBranchForm({name:"",type:"branch",active:true});setEditBID(null);}}>ยกเลิก</Btn>}
+          {editBID&&<Btn v="ghost" onClick={()=>{setBranchForm(bF0);setEditBID(null);}}>ยกเลิก</Btn>}
         </div>
       </Card>}
     </div>}
@@ -2623,7 +2666,21 @@ export default function App(){
     {id:"suppliers",l:"ซัพพลาย",icon:I.truck,perm:"suppliers"},
     {id:"settings",l:"ตั้งค่า",icon:I.settings,perm:"settings"},
   ];
-  const visibleTabs=TABS.filter(t=>currentUser&&hasPerm(currentUser,t.perm));
+  // A tab is visible only if (a) user has the permission AND (b) the branch allows it.
+  // Branch.allowed_perms === null/undefined means no branch restriction.
+  // Admins bypass branch restriction so they can always reach Settings.
+  const branchAllowed=currentBranch?.allowed_perms;
+  const visibleTabs=TABS.filter(t=>{
+    if(!currentUser)return false;
+    if(!hasPerm(currentUser,t.perm))return false;
+    if(currentUser.role==="admin")return true;
+    if(branchAllowed==null)return true;
+    return branchAllowed.includes(t.perm);
+  });
+  // If current tab is no longer visible (after branch switch / perm change), jump to first visible.
+  useEffect(()=>{
+    if(visibleTabs.length>0&&!visibleTabs.find(t=>t.id===tab))setTab(visibleTabs[0].id);
+  },[currentBranch?.id,currentUser?.id,visibleTabs.length]);
   const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
 
   // Check scan mode
