@@ -97,6 +97,11 @@ const api = {
   addExpenseCat: (d) => sb("expense_categories", {method:"POST", body:JSON.stringify(d)}),
   updateExpenseCat: (id,d) => sb(`expense_categories?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deleteExpenseCat: (id) => sb(`expense_categories?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  // Zones
+  getZones: (bid) => sb(`table_zones?branch_id=eq.${bid}&order=sort_order.asc`),
+  addZone: (d) => sb("table_zones", {method:"POST", body:JSON.stringify(d)}),
+  updateZone: (id,d) => sb(`table_zones?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  deleteZone: (id) => sb(`table_zones?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   uploadImage: async (file, path) => {
     const res = await fetch(`${SUPA_URL}/storage/v1/object/foodcost-images/${path}`, {
       method: "POST", headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": file.type, "x-upsert": "true" }, body: file,
@@ -2816,14 +2821,26 @@ const TS={
 // ══════════════════════════════════════════════════════
 // ── POS TABLE MAP ─────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function POSTableMap({tables,activeOrders,onSelectTable,onEditLayout}){
+// Compute table dimensions based on seat count and shape
+function tableDims(t){
+  const seats=+t.seats||4;
+  if(t.w&&t.h)return{w:t.w,h:t.h};
+  // auto-scale: 2 seats=70x60, 4 seats=90x80, 6 seats=110x90, 8+ seats=130x100
+  if(seats<=2)return{w:70,h:60};
+  if(seats<=4)return{w:90,h:80};
+  if(seats<=6)return{w:110,h:90};
+  return{w:130,h:100};
+}
+function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onEditLayout}){
   const[editMode,setEditMode]=useState(false);
   const[localTables,setLocalTables]=useState(tables);
   const[dragging,setDragging]=useState(null);
   const[saving,setSaving]=useState(false);
+  const[zoneFilter,setZoneFilter]=useState("all");  // "all" | zone name | "none"
   const canvasRef=useRef();
   useEffect(()=>setLocalTables(tables),[tables]);
 
+  const zoneColorMap=useMemo(()=>{const m={};zones.forEach(z=>{m[z.name]=z.color||C.brand;});return m;},[zones]);
   function getTableOrder(tid){return activeOrders.find(o=>o.table_id===tid);}
   function getStatus(t){
     const o=getTableOrder(t.id);
@@ -2834,7 +2851,7 @@ function POSTableMap({tables,activeOrders,onSelectTable,onEditLayout}){
   function onMD(e,t){
     if(!editMode)return;
     const rect=canvasRef.current.getBoundingClientRect();
-    setDragging({id:t.id,ox:e.clientX-rect.left-t.x,oy:e.clientY-rect.top-t.y});
+    setDragging({id:t.id,ox:e.clientX-rect.left-(t.x||20),oy:e.clientY-rect.top-(t.y||20)});
     e.preventDefault();
   }
   function onMM(e){
@@ -2849,8 +2866,20 @@ function POSTableMap({tables,activeOrders,onSelectTable,onEditLayout}){
     try{for(const t of localTables)await api.updatePOSTable(t.id,{x:t.x,y:t.y});}catch{}
     setSaving(false);setEditMode(false);onEditLayout();
   }
-  const summary=useMemo(()=>({free:tables.filter(t=>getStatus(t)==="available").length,busy:tables.filter(t=>getStatus(t)!=="available").length}),[tables,activeOrders]);
+
+  // Zone filter
+  const allZoneNames=[...new Set(tables.map(t=>t.zone).filter(Boolean))];
+  const filteredTables=zoneFilter==="all"?localTables:zoneFilter==="none"?localTables.filter(t=>!t.zone):localTables.filter(t=>t.zone===zoneFilter);
+
   return <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+    {/* Zone filter row */}
+    {allZoneNames.length>0&&<div style={{padding:"8px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6,overflowX:"auto",flexShrink:0}}>
+      <span style={{fontSize:11,fontWeight:700,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>โซน:</span>
+      <button onClick={()=>setZoneFilter("all")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="all"?`2px solid ${C.brand}`:`1px solid ${C.line}`,background:zoneFilter==="all"?C.brandLight:C.white,color:zoneFilter==="all"?C.brand:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ทั้งหมด ({tables.length})</button>
+      {allZoneNames.map(zn=>{const c=zoneColorMap[zn]||C.ink3;const n=tables.filter(t=>t.zone===zn).length;const active=zoneFilter===zn;return <button key={zn} onClick={()=>setZoneFilter(zn)} style={{padding:"4px 12px",borderRadius:18,border:active?`2px solid ${c}`:`1px solid ${C.line}`,background:active?`${c}22`:C.white,color:active?c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}><span style={{width:8,height:8,borderRadius:"50%",background:c}}/>{zn} ({n})</button>;})}
+      {tables.some(t=>!t.zone)&&<button onClick={()=>setZoneFilter("none")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="none"?`2px solid ${C.ink3}`:`1px solid ${C.line}`,background:zoneFilter==="none"?C.lineLight:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ไม่มีโซน ({tables.filter(t=>!t.zone).length})</button>}
+    </div>}
+    {/* Status legend + edit layout */}
     <div style={{padding:"10px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",flexShrink:0}}>
       {Object.entries(TS).map(([k,v])=>{const n=tables.filter(t=>getStatus(t)===k).length;return n>0?<div key={k} style={{display:"flex",alignItems:"center",gap:5,background:v.bg,border:`1px solid ${v.border}`,borderRadius:8,padding:"3px 10px"}}><div style={{width:8,height:8,borderRadius:"50%",background:v.border}}/><span style={{fontSize:11,fontWeight:700,color:v.text,fontFamily:"'Sarabun',sans-serif"}}>{v.label} ({n})</span></div>:null;})}
       <div style={{marginLeft:"auto",display:"flex",gap:8}}>
@@ -2860,34 +2889,134 @@ function POSTableMap({tables,activeOrders,onSelectTable,onEditLayout}){
     </div>
     <div ref={canvasRef} onMouseMove={onMM} onMouseUp={()=>setDragging(null)} onMouseLeave={()=>setDragging(null)}
       style={{flex:1,position:"relative",overflow:"auto",background:"#f0f4f8",backgroundImage:"radial-gradient(circle,#c8d0da 1px,transparent 1px)",backgroundSize:"20px 20px",minHeight:400,cursor:editMode?"crosshair":"default"}}>
-      {localTables.map(t=>{
+      {filteredTables.map(t=>{
         const st=getStatus(t);const sv=TS[st]||TS.available;
         const o=getTableOrder(t.id);
         const itemCount=(o?.items||[]).reduce((s,i)=>s+i.qty,0);
+        const dims=tableDims(t);
+        const zoneColor=t.zone?zoneColorMap[t.zone]:null;
+        const borderColor=zoneColor||sv.border;
         return <div key={t.id} onMouseDown={e=>onMD(e,t)} onClick={()=>!editMode&&onSelectTable(t,o)}
-          style={{position:"absolute",left:t.x||20,top:t.y||20,width:t.w||90,height:t.h||80,background:sv.bg,border:`2.5px solid ${sv.border}`,borderRadius:t.shape==="round"?"50%":12,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:editMode?"grab":"pointer",userSelect:"none",boxShadow:st!=="available"?`0 4px 16px ${sv.border}44`:"0 2px 8px rgba(0,0,0,.08)",transition:"box-shadow .2s",zIndex:dragging?.id===t.id?10:1}}>
+          style={{position:"absolute",left:t.x||20,top:t.y||20,width:dims.w,height:dims.h,background:sv.bg,border:`2.5px solid ${borderColor}`,borderRadius:t.shape==="round"?"50%":12,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:editMode?"grab":"pointer",userSelect:"none",boxShadow:st!=="available"?`0 4px 16px ${sv.border}44`:"0 2px 8px rgba(0,0,0,.08)",transition:"box-shadow .2s",zIndex:dragging?.id===t.id?10:1}}>
+          {zoneColor&&<div style={{position:"absolute",top:-3,right:-3,width:10,height:10,borderRadius:"50%",background:zoneColor,border:`2px solid ${C.white}`,boxShadow:`0 1px 3px ${zoneColor}88`}}/>}
           <div style={{fontWeight:900,fontSize:16,color:sv.text,fontFamily:"'Sarabun',sans-serif",lineHeight:1}}>T{t.table_number}</div>
           {t.label&&<div style={{fontSize:9,color:sv.text,fontFamily:"'Sarabun',sans-serif",opacity:.8,marginTop:1}}>{t.label}</div>}
           {st==="available"?<div style={{fontSize:10,color:C.green,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{t.seats||4} ที่นั่ง</div>
           :<><div style={{fontSize:11,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
         </div>;
       })}
-      {localTables.length===0&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10}}>
-        <Ic d={I.table} s={56} c={C.line}/><p style={{color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีโต๊ะ กดปุ่ม "จัดการโต๊ะ" เพื่อเพิ่มครับ</p>
+      {filteredTables.length===0&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10}}>
+        <Ic d={I.table} s={56} c={C.line}/><p style={{color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{zoneFilter==="all"?"ยังไม่มีโต๊ะ — เพิ่มโต๊ะในหลังบ้าน":`ไม่มีโต๊ะใน "${zoneFilter==="none"?"ไม่มีโซน":zoneFilter}"`}</p>
       </div>}
     </div>
   </div>;
 }
 
 // ══════════════════════════════════════════════════════
+// ── POS ZONE MANAGER ─────────────────────────────────
+// ══════════════════════════════════════════════════════
+const ZONE_COLORS=["#FF6B35","#10B981","#3B82F6","#8B5CF6","#F59E0B","#EF4444","#0D9488","#EC4899","#64748B","#6366F1"];
+function POSZoneManager({zones,tables,branch,reloadZones,reloadTables}){
+  const[name,setName]=useState("");const[color,setColor]=useState(ZONE_COLORS[0]);
+  const[saving,setSaving]=useState(false);const[editId,setEditId]=useState(null);
+  const dbZoneNames=zones.map(z=>z.name);
+  const legacyZones=[...new Set(tables.map(t=>t.zone).filter(Boolean).filter(z=>!dbZoneNames.includes(z)))];
+  const noZone=tables.filter(t=>!t.zone);
+  async function save(){
+    if(!name.trim())return;
+    if(!editId&&zones.find(z=>z.name===name.trim())){alert("ชื่อโซนนี้มีอยู่แล้ว");return;}
+    setSaving(true);
+    try{
+      const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);
+      if(editId){
+        const oldName=zones.find(z=>z.id===editId)?.name;
+        await api.updateZone(editId,{name:name.trim(),color});
+        if(oldName&&oldName!==name.trim()){
+          // sync tables.zone field
+          for(const t of tables.filter(t=>t.zone===oldName))await api.updatePOSTable(t.id,{zone:name.trim()});
+          await reloadTables();
+        }
+      }else{
+        await api.addZone({branch_id:branch.id,name:name.trim(),color,sort_order:sortMax+1});
+      }
+      await reloadZones();
+      setName("");setColor(ZONE_COLORS[0]);setEditId(null);
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+  async function adoptLegacy(zoneName){
+    setSaving(true);
+    try{
+      const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);
+      await api.addZone({branch_id:branch.id,name:zoneName,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});
+      await reloadZones();
+    }catch(e){alert("เพิ่มไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+  async function del(z){
+    const count=tables.filter(t=>t.zone===z.name).length;
+    if(!await confirmDlg({title:"ลบโซน",message:`ต้องการลบโซน "${z.name}"?\n${count>0?`(โต๊ะ ${count} ตัวจะถูกย้ายไป "ไม่มีโซน")`:''}`,danger:true}))return;
+    try{
+      if(count>0){for(const t of tables.filter(t=>t.zone===z.name))await api.updatePOSTable(t.id,{zone:""});}
+      await api.deleteZone(z.id);
+      await reloadZones();await reloadTables();
+    }catch(e){alert("ลบไม่สำเร็จ: "+e.message);}
+  }
+  function startEdit(z){setEditId(z.id);setName(z.name);setColor(z.color||ZONE_COLORS[0]);}
+  return <div>
+    <div style={{background:C.bg,borderRadius:12,padding:"14px 16px",marginBottom:14,border:`1px solid ${C.line}`}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>{editId?"แก้ไขโซน":"เพิ่มโซนใหม่"}</div>
+      <div style={{display:"grid",gridTemplateColumns:"2fr 3fr auto",gap:8,alignItems:"end"}}>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ชื่อโซน</div>
+          <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&save()} placeholder="เช่น Zone A, ชั้น 1, ริมสระ, VIP" style={{...iS,fontSize:13}}/>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สีประจำโซน</div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {ZONE_COLORS.map(c=><button key={c} onClick={()=>setColor(c)} style={{width:28,height:28,borderRadius:8,border:`3px solid ${color===c?C.ink:C.white}`,background:c,cursor:"pointer",boxShadow:`0 2px 6px ${c}66`}}/>)}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          {editId&&<Btn v="ghost" onClick={()=>{setEditId(null);setName("");setColor(ZONE_COLORS[0]);}} s={{padding:"9px 12px"}}>ยกเลิก</Btn>}
+          <Btn onClick={save} icon={I.check} disabled={!name.trim()} loading={saving} s={{padding:"9px 16px"}}>{editId?"บันทึก":"เพิ่มโซน"}</Btn>
+        </div>
+      </div>
+    </div>
+    {zones.length===0&&legacyZones.length===0&&<div style={{textAlign:"center",padding:"40px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
+      <Ic d={I.tag} s={42} c={C.line}/><div style={{marginTop:10,fontSize:13}}>ยังไม่มีโซน — เพิ่มโซนด้านบนครับ</div>
+    </div>}
+    {zones.length>0&&<div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:legacyZones.length>0?14:0}}>
+      {zones.map(z=>{const count=tables.filter(t=>t.zone===z.name).length;return <div key={z.id} style={{background:C.white,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.line}`,borderLeft:`4px solid ${z.color||C.brand}`,display:"flex",alignItems:"center",gap:10}}>
+        <div style={{width:14,height:14,borderRadius:"50%",background:z.color||C.brand,flexShrink:0}}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:800,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{z.name}</div>
+          <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{count} โต๊ะ {count>0&&` · ${tables.filter(t=>t.zone===z.name).map(t=>t.table_number).join(", ")}`}</div>
+        </div>
+        <button onClick={()=>startEdit(z)} title="แก้ไข" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+        <button onClick={()=>del(z)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
+      </div>;})}
+    </div>}
+    {legacyZones.length>0&&<div style={{background:C.yellowLight,borderRadius:10,padding:"10px 14px",border:`1px solid #FDE68A`,marginBottom:14}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#92400E",fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>⚠️ โซนเก่าที่ยังไม่ได้ตั้งสี — กดเพื่อ adopt</div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        {legacyZones.map(z=>{const count=tables.filter(t=>t.zone===z).length;return <button key={z} onClick={()=>adoptLegacy(z)} style={{background:C.white,border:`1px solid #FDE68A`,borderRadius:8,padding:"5px 12px",cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:"#92400E"}}>{z} ({count})</button>;})}
+      </div>
+    </div>}
+    {noZone.length>0&&<div style={{background:C.bg,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.line}`}}>
+      <div style={{fontWeight:700,fontSize:13,color:C.ink3,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีโซน <span style={{fontSize:11,fontWeight:400}}>({noZone.length} โต๊ะ)</span></div>
+      <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{noZone.map(t=>`โต๊ะ ${t.table_number}`).join(", ")}</div>
+    </div>}
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
 // ── POS TABLE MANAGE ──────────────────────────────────
 // ══════════════════════════════════════════════════════
-function POSTableManage({tables,branch,onDone}){
+function POSTableManage({tables,branch,zones=[],reloadZones,onDone}){
   const[form,setForm]=useState({table_number:"",label:"",zone:"",seats:4,shape:"square",w:90,h:80});
   const[bulk,setBulk]=useState({from:1,to:10,prefix:"",zone:"",seats:4});
   const[saving,setSaving]=useState(false);const[tab,setTab]=useState("single");
-  const[zones,setZones]=useState(()=>[...new Set(tables.map(t=>t.zone).filter(Boolean))]);
-  const[newZone,setNewZone]=useState("");
   async function addSingle(){
     if(!form.table_number)return;setSaving(true);
     try{const mx=tables.reduce((m,t)=>Math.max(m,t.x||0),0);await api.addPOSTable({...form,branch_id:branch.id,status:"available",active:true,x:mx+110,y:50});setForm({table_number:"",label:"",zone:form.zone,seats:4,shape:"square",w:90,h:80});onDone();}catch(e){alert("เพิ่มไม่สำเร็จ: "+e.message);}setSaving(false);
@@ -2897,9 +3026,11 @@ function POSTableManage({tables,branch,onDone}){
     try{let col=0,row=0;for(let i=bulk.from;i<=bulk.to;i++){const num=bulk.prefix?`${bulk.prefix}${i}`:String(i);if(!tables.find(t=>t.table_number===num)){await api.addPOSTable({table_number:num,label:"",zone:bulk.zone,seats:+bulk.seats,shape:"square",w:90,h:80,branch_id:branch.id,status:"available",active:true,x:col*110+20,y:row*100+20});col++;if(col>9){col=0;row++;}}}onDone();alert(`✅ เพิ่มโต๊ะสำเร็จ!`);}catch(e){alert("เพิ่มไม่สำเร็จ");}setSaving(false);
   }
   async function delTable(id,num){if(!await confirmDlg(`ต้องการลบโต๊ะ ${num} ใช่หรือไม่?`,"ลบโต๊ะ","ยกเลิก"))return;try{await api.deletePOSTable(id);onDone();}catch{alert("ลบไม่สำเร็จ");}}
-  function addZone(){if(!newZone.trim())return;setZones(z=>[...new Set([...z,newZone.trim()])]);setNewZone("");}
 
-  const allZones=[...new Set([...zones,...tables.map(t=>t.zone).filter(Boolean)])];
+  // Zones: from DB (zones table_zones) + legacy text values still on tables
+  const dbZoneNames=zones.map(z=>z.name);
+  const legacyZones=[...new Set(tables.map(t=>t.zone).filter(Boolean).filter(z=>!dbZoneNames.includes(z)))];
+  const allZones=[...dbZoneNames,...legacyZones];
   const grouped=allZones.map(z=>({zone:z,tables:tables.filter(t=>t.zone===z)}));
   const noZone=tables.filter(t=>!t.zone);
 
@@ -2929,26 +3060,7 @@ function POSTableManage({tables,branch,onDone}){
       <div style={{marginBottom:12,fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>จะสร้าง <b>{Math.max(0,bulk.to-bulk.from+1)}</b> โต๊ะ ({bulk.prefix||""}{bulk.from} ถึง {bulk.prefix||""}{bulk.to})</div>
       <Btn onClick={addBulk} loading={saving} icon={I.plus}>สร้างโต๊ะทั้งหมด</Btn>
     </div>}
-    {tab==="zones"&&<div>
-      <div style={{marginBottom:14}}>
-        <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มโซนใหม่</div>
-        <div style={{display:"flex",gap:8}}>
-          <input value={newZone} onChange={e=>setNewZone(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addZone()} placeholder="เช่น Zone A, ชั้น 1, ริมสระ" style={{...iS,flex:1}}/>
-          <Btn onClick={addZone} icon={I.plus} disabled={!newZone.trim()}>เพิ่มโซน</Btn>
-        </div>
-      </div>
-      {allZones.length===0&&<div style={{textAlign:"center",padding:"30px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>ยังไม่มีโซน — เพิ่มโซนด้านบนครับ</div>}
-      <div style={{display:"flex",flexDirection:"column",gap:8}}>
-        {grouped.map(g=><div key={g.zone} style={{background:C.bg,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.line}`}}>
-          <div style={{fontWeight:700,fontSize:14,color:C.ink,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>📍 {g.zone} <span style={{fontSize:12,fontWeight:400,color:C.ink4}}>({g.tables.length} โต๊ะ)</span></div>
-          <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{g.tables.map(t=>`โต๊ะ ${t.table_number}`).join(", ")||"ยังไม่มีโต๊ะในโซนนี้"}</div>
-        </div>)}
-        {noZone.length>0&&<div style={{background:C.bg,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.line}`}}>
-          <div style={{fontWeight:700,fontSize:14,color:C.ink3,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีโซน <span style={{fontSize:12,fontWeight:400}}>({noZone.length} โต๊ะ)</span></div>
-          <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{noZone.map(t=>`โต๊ะ ${t.table_number}`).join(", ")}</div>
-        </div>}
-      </div>
-    </div>}
+    {tab==="zones"&&<POSZoneManager zones={zones} tables={tables} branch={branch} reloadZones={reloadZones} reloadTables={onDone}/>}
     {tab==="list"&&<div style={{maxHeight:420,overflowY:"auto"}}>
       {[...grouped,{zone:null,tables:noZone}].filter(g=>g.tables.length>0).map(g=><div key={g.zone||"no-zone"} style={{marginBottom:14}}>
         {g.zone&&<div style={{fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:1,textTransform:"uppercase",marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📍 {g.zone}</div>}
@@ -3863,7 +3975,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
 // ══════════════════════════════════════════════════════
 // ── POS BACK OFFICE (หลังบ้าน) ─────────────────────────
 // ══════════════════════════════════════════════════════
-function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branches,onExit}){
+function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branches,zones=[],reloadZones,onExit}){
   const[section,setSection]=useState("tables");
   const[tables,setTables]=useState([]);const[loadingT,setLoadingT]=useState(true);
   const[shifts,setShifts]=useState([]);const[loadingS,setLoadingS]=useState(false);
@@ -3883,7 +3995,7 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
       {SECS.map(s=>{const active=section===s.id;return <button key={s.id} onClick={()=>setSection(s.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 14px",height:54,border:"none",background:active?"rgba(255,255,255,0.1)":"transparent",cursor:"pointer",fontSize:13,fontWeight:active?800:600,color:active?C.white:"rgba(255,255,255,0.5)",fontFamily:"'Sarabun',sans-serif",borderBottom:active?`3px solid ${s.c}`:"3px solid transparent",transition:"all .15s"}}><Ic d={s.icon} s={14} c={active?s.c:"rgba(255,255,255,0.5)"}/>{s.l}</button>;})}
     </div>
     <div style={{flex:1,overflow:"auto",padding:"20px 24px",background:C.bg}}>
-      {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} onDone={loadTables}/>)}
+      {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} zones={zones} reloadZones={reloadZones} onDone={loadTables}/>)}
       {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser}/>}
       {section==="shifts"&&<POSShiftHistory shifts={shifts} loading={loadingS} reload={loadShifts}/>}
     </div>
@@ -4084,7 +4196,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser}){
 // ══════════════════════════════════════════════════════
 // ── POS SALE MODE (โหมดขายหน้าร้าน) ────────────────────
 // ══════════════════════════════════════════════════════
-function POSSaleMode({menus,currentBranch,currentUser,printers=[],shift,onUpdateShift,onCashDrawer,onCloseShift,onExitMode}){
+function POSSaleMode({menus,currentBranch,currentUser,printers=[],shift,zones=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -4152,7 +4264,7 @@ function POSSaleMode({menus,currentBranch,currentUser,printers=[],shift,onUpdate
       </div>
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onEditLayout={loadAll}/>}
+      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onEditLayout={loadAll}/>}
       {posTab==="orders"&&<div style={{overflowY:"auto",flex:1,padding:"14px 16px"}}>
         {allOrders.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.order} s={48} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีออเดอร์</p></div>}
         {allOrders.length>0&&<>
@@ -4201,6 +4313,9 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   const[loadingShift,setLoadingShift]=useState(false);
   const[showCashDrawer,setShowCashDrawer]=useState(false);
   const[showCloseShift,setShowCloseShift]=useState(false);
+  const[zones,setZones]=useState([]);
+  async function loadZones(){try{const z=await api.getZones(currentBranch.id);setZones(z);}catch(e){console.error("loadZones",e);}}
+  useEffect(()=>{loadZones();},[currentBranch.id]);
 
   useEffect(()=>{
     if(mode!=='sale'){setShift(null);return;}
@@ -4212,12 +4327,12 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   },[mode,currentBranch.id]);
 
   if(mode===null)return <POSModeSelect onSelect={setMode}/>;
-  if(mode==='manage')return <POSBackOffice currentBranch={currentBranch} currentUser={currentUser} printers={printers} reloadPrinters={reloadPrinters} branches={branches} onExit={()=>setMode(null)}/>;
+  if(mode==='manage')return <POSBackOffice currentBranch={currentBranch} currentUser={currentUser} printers={printers} reloadPrinters={reloadPrinters} branches={branches} zones={zones} reloadZones={loadZones} onExit={()=>setMode(null)}/>;
   // mode === 'sale'
   if(loadingShift)return <Loading text="ตรวจสอบกะการขาย..."/>;
   if(!shift)return <OpenShiftModal currentBranch={currentBranch} currentUser={currentUser} onDone={s=>setShift(s)} onCancel={()=>setMode(null)}/>;
   return <>
-    <POSSaleMode menus={menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={()=>setMode(null)}/>
+    <POSSaleMode menus={menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={()=>setMode(null)}/>
     {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCashDrawer(false)}/>}
     {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShift(null);setMode(null);}}/>}
   </>;
