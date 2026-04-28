@@ -102,6 +102,14 @@ const api = {
   addZone: (d) => sb("table_zones", {method:"POST", body:JSON.stringify(d)}),
   updateZone: (id,d) => sb(`table_zones?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deleteZone: (id) => sb(`table_zones?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  // POS Settings (per-branch VAT, Service Charge, PromptPay, Receipt)
+  getPOSSettings: (bid) => sb(`pos_settings?branch_id=eq.${bid}&limit=1`),
+  upsertPOSSettings: (d) => sb("pos_settings", {method:"POST", body:JSON.stringify(d), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}}),
+  // Promotions
+  getPromotions: (bid) => sb(`promotions?or=(branch_id.eq.${bid},branch_id.is.null)&order=sort_order.asc`),
+  addPromotion: (d) => sb("promotions", {method:"POST", body:JSON.stringify(d)}),
+  updatePromotion: (id,d) => sb(`promotions?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  deletePromotion: (id) => sb(`promotions?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   uploadImage: async (file, path) => {
     const res = await fetch(`${SUPA_URL}/storage/v1/object/foodcost-images/${path}`, {
       method: "POST", headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": file.type, "x-upsert": "true" }, body: file,
@@ -799,6 +807,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
             <div><div style={{fontWeight:800,fontSize:16,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{menu.name}</div><Chip color="blue">{menu.category}</Chip></div>
             <div style={{display:"flex",gap:4}}>
+              {canE&&<button onClick={async()=>{try{const newPos=menu.quick_key_pos!=null?null:(menus.reduce((m,x)=>Math.max(m,x.quick_key_pos||0),0)+1);await api.updateMenu(menu.id,{quick_key_pos:newPos});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} title={menu.quick_key_pos!=null?"ยกเลิกปักหมุด":"ปักหมุดเป็น Quick Key"} style={{background:menu.quick_key_pos!=null?"#FEF3C7":C.lineLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><span style={{fontSize:13}}>{menu.quick_key_pos!=null?"⭐":"☆"}</span></button>}
               {canE&&<button onClick={()=>{setForm({name:menu.name,category:menu.category,price:menu.price,description:menu.description||"",image:menu.image,ingredients:menu.ingredients||[],sop:menu.sop||[]});setEditId(menu.id);setIngQ("");setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
               {canD&&<button onClick={()=>del(menu.id,menu.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
             </div>
@@ -2735,7 +2744,7 @@ export default function App(){
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser}/>}
-            {tab==="pos"&&<POSTab menus={menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
+            {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
             {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} printers={printers} reloadPrinters={reload.printers} currentBranch={currentBranch}/>}
           </>}
         </div>
@@ -2749,12 +2758,26 @@ export default function App(){
 // ── PRINT HELPERS ─────────────────────────────────────
 // ══════════════════════════════════════════════════════
 const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",other:"➕ อื่นๆ"};
-function printReceipt(order, tableNum, branchName){
-  const w=window.open("","_blank","width=400,height=600");
+function printReceipt(order, tableNum, branchName, posSettings=null){
+  const w=window.open("","_blank","width=400,height=700");
   const rows=(order.items||[]).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${i.name}${i.note?`<br/><span style="font-size:11px;color:#666">★${i.note}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?i.item_discount_value+"%":"฿"+i.item_discount_value}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
   const payLabel=PAY_LABEL[order.payment_method]||order.payment_method||"-";
-  const cashLine=order.payment_method==="cash"&&order.cash_received?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(0)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-(order.total||0)).toFixed(0)}</span></div>`:"";
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px;font-size:13px}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2>${branchName}</h2><div class="tbl-num">โต๊ะ ${tableNum}</div><div style="text-align:center;font-size:11px;color:#555">${new Date().toLocaleString("th-TH")}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${order.subtotal?.toFixed(0)||0}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626"><span>ส่วนลดรวม</span><span>-฿${order.discount?.toFixed(0)}</span></div>`:""}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>รวมทั้งสิ้น</span><span>฿${order.total?.toFixed(0)||0}</span></div>${cashLine}<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div><div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div><br/><script>window.onload=()=>window.print();<\/script></body></html>`);
+  const cashLine=order.payment_method==="cash"&&order.cash_received?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(2)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-(order.total||0)).toFixed(2)}</span></div>`:"";
+  const promoLine=order.promo_amount>0?`<div style="display:flex;justify-content:space-between;color:#7C3AED;font-size:12px"><span>🎁 ${order.promo_name||"โปรโมชั่น"}</span><span>-฿${(+order.promo_amount).toFixed(2)}</span></div>`:"";
+  const scLine=order.service_charge>0?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>Service Charge</span><span>+฿${(+order.service_charge).toFixed(2)}</span></div>`:"";
+  const vatLine=order.vat>0?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>VAT ${order.vat_rate||7}%${order.vat_included?" (รวมในราคา)":""}</span><span>${order.vat_included?"":"+"}฿${(+order.vat).toFixed(2)}</span></div>`:"";
+  // PromptPay QR (lazy load via google chart API)
+  let qrBlock="";
+  if(posSettings&&posSettings.show_qr_promptpay&&posSettings.promptpay_id&&order.payment_method!=="cash"){
+    const payload=genPromptPayPayload(posSettings.promptpay_id,order.total||0);
+    if(payload){
+      const qrSrc=`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(payload)}`;
+      qrBlock=`<div class="line"></div><div style="text-align:center"><div style="font-size:13px;font-weight:700;margin-bottom:4px">📱 สแกนพร้อมเพย์เพื่อชำระ</div><img src="${qrSrc}" style="width:160px;height:160px;margin:4px 0"/><div style="font-size:11px;color:#555">${posSettings.promptpay_name||""}</div><div style="font-size:10px;color:#888">${posSettings.promptpay_id}</div></div>`;
+    }
+  }
+  const headerExtra=posSettings?.receipt_header?`<div style="text-align:center;font-size:11px;color:#444;white-space:pre-line;margin:4px 0">${posSettings.receipt_header}</div>`:"";
+  const footerExtra=posSettings?.receipt_footer?`<div style="text-align:center;font-size:11px;color:#444;white-space:pre-line;margin-top:6px">${posSettings.receipt_footer}</div>`:"";
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px;font-size:13px}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2>${branchName}</h2>${headerExtra}<div class="tbl-num">โต๊ะ ${tableNum}</div><div style="text-align:center;font-size:11px;color:#555">${new Date().toLocaleString("th-TH")}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>ส่วนลดรวม</span><span>-฿${(+order.discount).toFixed(2)}</span></div>`:""}${promoLine}${scLine}${vatLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>รวมทั้งสิ้น</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${cashLine}<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div>${qrBlock}<div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div>${footerExtra}<br/><script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
 // ── Bluetooth ESC-POS helpers ────────────────────────────
@@ -3078,7 +3101,7 @@ function POSTableManage({tables,branch,zones=[],reloadZones,onDone}){
 // ══════════════════════════════════════════════════════
 // ── POS ORDER PANEL ───────────────────────────────────
 // ══════════════════════════════════════════════════════
-function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onDone,printers=[],shift=null}){
+function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser,onClose,onDone,printers=[],shift=null,posSettings=null,promotions=[]}){
   const[items,setItems]=useState(existingOrder?.items||[]);
   const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
@@ -3098,8 +3121,33 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
   const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
-  const totalDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0)+(discMode==="none"?0:0);
-  const total=Math.max(0,subtotal-totalDiscount);
+  const manualDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0);
+
+  // Promotions: auto-evaluate applicable, auto-pick best
+  const menusById=useMemo(()=>{const m={};menus.forEach(x=>{m[x.id]=x;});return m;},[menus]);
+  const applicablePromos=useMemo(()=>evalPromotions(promotions,{subtotal,items,menusById,now:new Date()}),[promotions,subtotal,items,menusById]);
+  const[selectedPromoId,setSelectedPromoId]=useState(null);
+  useEffect(()=>{
+    if(selectedPromoId&&!applicablePromos.find(p=>p.id===selectedPromoId)){setSelectedPromoId(null);return;}
+    if(!selectedPromoId&&applicablePromos.length>0){
+      let best=null,bestAmt=0;
+      applicablePromos.forEach(p=>{const a=calcPromoDiscount(p,{subtotal,items,menusById});if(a>bestAmt){bestAmt=a;best=p;}});
+      if(best)setSelectedPromoId(best.id);
+    }
+  },[applicablePromos,subtotal]);
+  const selectedPromo=applicablePromos.find(p=>p.id===selectedPromoId);
+  const promoDiscount=selectedPromo?calcPromoDiscount(selectedPromo,{subtotal,items,menusById}):0;
+
+  const totalDiscount=manualDiscount+promoDiscount;
+  const subAfterDisc=Math.max(0,subtotal-totalDiscount);
+  // Service Charge & VAT
+  const scRate=posSettings?.service_charge_enabled?(+posSettings.service_charge_rate||0):0;
+  const sc=subAfterDisc*scRate/100;
+  const vatRate=posSettings?.vat_enabled?(+posSettings.vat_rate||0):0;
+  const vatIncluded=posSettings?.vat_included!==false;
+  const vatBase=subAfterDisc+sc;
+  const vat=vatRate>0?(vatIncluded?vatBase*vatRate/(100+vatRate):vatBase*vatRate/100):0;
+  const total=vatIncluded?subAfterDisc+sc:subAfterDisc+sc+vat;
   const cashChange=Math.max(0,(+cashRcv||0)-total);
 
   function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null}];});}
@@ -3152,6 +3200,7 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
     try{
       const itemsWithDisc=items.map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
       const cashReceived=payMethod==="cash"?(+cashRcv||total):null;
+      const promoMeta=selectedPromo?{promo_id:selectedPromo.id,promo_name:selectedPromo.name,promo_amount:promoDiscount}:{};
       await api.updatePOSOrder(existingOrder.id,{status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,updated_at:new Date().toISOString()});
       // record cash movement if cash payment
       if(payMethod==="cash"&&shift){
@@ -3159,7 +3208,7 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
           await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"sale",amount:total,reason:`ขายโต๊ะ ${table.table_number}`,order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
         }catch(err){console.error("บันทึก cash movement ไม่สำเร็จ:",err);}
       }
-      printReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:cashReceived},table.table_number,branch.name);
+      printReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,branch.name,posSettings);
       onDone();onClose();
     }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSaving(false);
   }
@@ -3168,9 +3217,16 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
   const splitItems=items.filter((_,i)=>splitSel[i]);
   const splitSubtotal=splitItems.reduce((s,i)=>s+i.price*i.qty,0);
 
+  // Quick keys: pinned menus
+  const quickKeys=useMemo(()=>menus.filter(m=>m.quick_key_pos!=null).sort((a,b)=>(a.quick_key_pos||0)-(b.quick_key_pos||0)),[menus]);
+
   return <div style={{display:"flex",height:"100%",minHeight:"75vh"}}>
     {/* Left: menu */}
     <div style={{flex:1,display:"flex",flexDirection:"column",borderRight:`1px solid ${C.line}`,minWidth:0}}>
+      {quickKeys.length>0&&<div style={{padding:"7px 10px",background:`linear-gradient(135deg,${C.yellowLight},${C.brandLight})`,borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0,alignItems:"center"}}>
+        <span style={{fontSize:11,fontWeight:800,color:"#92400E",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",marginRight:4}}>⭐ ยอดนิยม</span>
+        {quickKeys.map(m=><button key={m.id} onClick={()=>addItem(m)} title={m.name} style={{padding:"5px 10px",border:`1.5px solid ${C.brand}`,borderRadius:8,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.brand,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:5}}>{m.name} <span style={{color:C.brandDark,fontWeight:900}}>฿{m.price}</span></button>)}
+      </div>}
       <div style={{padding:"8px 12px",borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
         {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"4px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
       </div>
@@ -3289,7 +3345,7 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
       </div>
     </div>}
 
-    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table}/>}
+    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async()=>{await checkOut();setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings}/>}
   </div>;
 }
 
@@ -3313,7 +3369,7 @@ const PAY_METHODS=[
   {v:"voucher",l:"คูปอง/Voucher",icon:"🎫",c:"#A16207"},
   {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
 ];
-function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table}){
+function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null}){
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}} onClick={onClose}>
     <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,width:"100%",maxWidth:680,maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
       <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
@@ -3341,7 +3397,15 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
           </div>;})}
         </div>
 
-        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🎁 ส่วนลด</div>
+        {applicablePromos.length>0&&<><div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🎁 โปรโมชั่นที่เข้าเงื่อนไข ({applicablePromos.length})</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+          <button onClick={()=>onSelectPromo&&onSelectPromo(null)} style={{padding:"7px 12px",borderRadius:9,border:`2px solid ${!selectedPromo?C.brand:C.line}`,background:!selectedPromo?C.brandLight:C.white,color:!selectedPromo?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12}}>ไม่ใช้</button>
+          {applicablePromos.map(p=>{const sel=selectedPromo?.id===p.id;return <button key={p.id} onClick={()=>onSelectPromo&&onSelectPromo(p.id)} style={{padding:"7px 12px",borderRadius:9,border:`2px solid ${sel?C.brand:C.line}`,background:sel?C.brandLight:C.white,color:sel?C.brand:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
+            <span>🎁 {p.name}</span>
+            <span style={{fontSize:10,color:sel?C.brand:C.ink4,fontWeight:600}}>{p.type==="percent"?`-${p.discount_value}%`:p.type==="amount"?`-฿${p.discount_value}`:`ราคาพิเศษ ฿${p.discount_value}`}</span>
+          </button>;})}
+        </div></>}
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🎁 ส่วนลด (ปรับเอง)</div>
         <div style={{display:"flex",gap:6,marginBottom:10}}>
           {[{v:"none",l:"ไม่มี"},{v:"bill",l:"ทั้งบิล"},{v:"item",l:"แยกแต่ละเมนู"}].map(m=><button key={m.v} onClick={()=>setDiscMode(m.v)} style={{flex:1,padding:"8px",borderRadius:10,border:`2px solid ${discMode===m.v?C.brand:C.line}`,background:discMode===m.v?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,color:discMode===m.v?C.brand:C.ink3}}>{m.l}</button>)}
         </div>
@@ -3375,11 +3439,14 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
         </div>}
       </div>
       <div style={{padding:"12px 20px",borderTop:`1px solid ${C.line}`,background:C.bg,borderRadius:"0 0 18px 18px"}}>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>ยอดรวม</span><span>฿{subtotal.toFixed(0)}</span></div>
-        {totalDiscount>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.red,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>ส่วนลด</span><span>-฿{totalDiscount.toFixed(0)}</span></div>}
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>ยอดรวม</span><span>฿{subtotal.toFixed(2)}</span></div>
+        {(totalDiscount-promoDiscount)>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.red,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>ส่วนลด (ปรับเอง)</span><span>-฿{(totalDiscount-promoDiscount).toFixed(2)}</span></div>}
+        {promoDiscount>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.purple,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>🎁 {selectedPromo?.name||"โปรโมชั่น"}</span><span>-฿{promoDiscount.toFixed(2)}</span></div>}
+        {sc>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>Service Charge {posSettings?.service_charge_rate||0}%</span><span>+฿{sc.toFixed(2)}</span></div>}
+        {vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>VAT {vatRate}% {vatIncluded?"(รวมในราคา)":""}</span><span>{vatIncluded?"":"+"}฿{vat.toFixed(2)}</span></div>}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:`linear-gradient(135deg,${C.green},#059669)`,borderRadius:10,marginBottom:10,color:C.white}}>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:700}}>ยอดสุทธิ</span>
-          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900}}>฿{total.toFixed(0)}</span>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900}}>฿{total.toFixed(2)}</span>
         </div>
         <div style={{display:"flex",gap:8}}>
           <Btn v="ghost" onClick={onClose} s={{padding:"10px 16px",fontSize:13}}>ยกเลิก</Btn>
@@ -3973,9 +4040,307 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
 }
 
 // ══════════════════════════════════════════════════════
+// ── POS SETTINGS PANEL ───────────────────────────────
+// ══════════════════════════════════════════════════════
+// PromptPay payload generator (anyId QR per Bank of Thailand spec)
+function genPromptPayPayload(id,amount){
+  if(!id)return"";
+  // Sanitize: keep digits only
+  const num=String(id).replace(/\D/g,"");
+  if(num.length<10)return"";
+  let target=num;
+  if(num.length===10)target="0066"+num.slice(1);     // 10-digit phone
+  else if(num.length===13)target=num;                  // 13-digit citizen ID
+  else target=num;
+  const tagPP="0016A000000677010111"+(num.length===13?"02"+String(target.length).padStart(2,'0')+target:"01"+String(target.length).padStart(2,'0')+target);
+  // Build TLV
+  function tlv(tag,val){return tag+String(val.length).padStart(2,'0')+val;}
+  let p="";
+  p+=tlv("00","01");
+  p+=tlv("01",amount?"12":"11");
+  p+=tlv("29",tagPP);
+  p+=tlv("53","764");
+  if(amount)p+=tlv("54",(+amount).toFixed(2));
+  p+=tlv("58","TH");
+  p+="6304";
+  // CRC16 CCITT-FALSE
+  let crc=0xFFFF;
+  for(let i=0;i<p.length;i++){crc^=p.charCodeAt(i)<<8;for(let j=0;j<8;j++)crc=(crc&0x8000)?((crc<<1)^0x1021)&0xFFFF:(crc<<1)&0xFFFF;}
+  return p+crc.toString(16).toUpperCase().padStart(4,'0');
+}
+function POSSettingsPanel({currentBranch}){
+  const[settings,setSettings]=useState(null);const[loading,setLoading]=useState(true);const[saving,setSaving]=useState(false);
+  async function load(){setLoading(true);try{const s=await api.getPOSSettings(currentBranch.id);setSettings((s&&s[0])||{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10,promptpay_id:"",promptpay_name:"",show_qr_promptpay:false,receipt_header:"",receipt_footer:""});}catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}setLoading(false);}
+  useEffect(()=>{load();},[currentBranch.id]);
+  async function save(){
+    setSaving(true);
+    try{
+      const d={...settings,branch_id:currentBranch.id,updated_at:new Date().toISOString()};
+      delete d.id;
+      const res=await api.upsertPOSSettings(d);
+      if(Array.isArray(res)&&res[0])setSettings(res[0]);
+      alert("บันทึกการตั้งค่าเรียบร้อย");
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+  if(loading||!settings)return <Loading text="โหลดการตั้งค่า..."/>;
+  function set(k,v){setSettings(s=>({...s,[k]:v}));}
+  const qrPreview=settings.show_qr_promptpay&&settings.promptpay_id?genPromptPayPayload(settings.promptpay_id,100):"";
+  return <div style={{maxWidth:780}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,margin:0}}>⚙️ ตั้งค่า POS — {currentBranch.name}</h3>
+      <Btn onClick={save} icon={I.save} loading={saving} s={{padding:"9px 18px"}}>บันทึก</Btn>
+    </div>
+
+    {/* VAT */}
+    <Card style={{padding:18,marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+        <div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink}}>📊 ภาษีมูลค่าเพิ่ม (VAT)</div>
+          <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>กำหนดอัตราภาษีและวิธีคิด</div>
+        </div>
+        <label style={{position:"relative",display:"inline-block",width:48,height:26}}>
+          <input type="checkbox" checked={!!settings.vat_enabled} onChange={e=>set('vat_enabled',e.target.checked)} style={{opacity:0,width:0,height:0}}/>
+          <span style={{position:"absolute",cursor:"pointer",inset:0,background:settings.vat_enabled?C.brand:"#cbd5e1",borderRadius:26,transition:".2s"}}/>
+          <span style={{position:"absolute",content:"",height:20,width:20,left:settings.vat_enabled?25:3,top:3,background:C.white,borderRadius:"50%",transition:".2s",boxShadow:"0 2px 4px rgba(0,0,0,.2)"}}/>
+        </label>
+      </div>
+      {settings.vat_enabled&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div>
+          <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>อัตรา VAT (%)</div>
+          <input type="number" step="0.01" value={settings.vat_rate} onChange={e=>set('vat_rate',+e.target.value)} style={{...iS,fontSize:15,fontWeight:700}}/>
+        </div>
+        <div>
+          <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>วิธีคิด VAT</div>
+          <div style={{display:"flex",gap:0,borderRadius:10,overflow:"hidden",border:`1.5px solid ${C.line}`}}>
+            {[{v:true,l:"รวมในราคา (Inclusive)"},{v:false,l:"บวกเพิ่ม (Exclusive)"}].map(o=><button key={String(o.v)} onClick={()=>set('vat_included',o.v)} style={{flex:1,padding:"10px 0",border:"none",background:settings.vat_included===o.v?`linear-gradient(135deg,${C.brand},${C.brandDark})`:C.white,color:settings.vat_included===o.v?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer"}}>{o.l}</button>)}
+          </div>
+        </div>
+      </div>}
+    </Card>
+
+    {/* Service Charge */}
+    <Card style={{padding:18,marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+        <div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink}}>💼 Service Charge</div>
+          <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>ค่าบริการที่จะคิดเพิ่มในบิล</div>
+        </div>
+        <label style={{position:"relative",display:"inline-block",width:48,height:26}}>
+          <input type="checkbox" checked={!!settings.service_charge_enabled} onChange={e=>set('service_charge_enabled',e.target.checked)} style={{opacity:0,width:0,height:0}}/>
+          <span style={{position:"absolute",cursor:"pointer",inset:0,background:settings.service_charge_enabled?C.brand:"#cbd5e1",borderRadius:26,transition:".2s"}}/>
+          <span style={{position:"absolute",content:"",height:20,width:20,left:settings.service_charge_enabled?25:3,top:3,background:C.white,borderRadius:"50%",transition:".2s",boxShadow:"0 2px 4px rgba(0,0,0,.2)"}}/>
+        </label>
+      </div>
+      {settings.service_charge_enabled&&<div>
+        <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>อัตรา Service Charge (%)</div>
+        <input type="number" step="0.01" value={settings.service_charge_rate} onChange={e=>set('service_charge_rate',+e.target.value)} style={{...iS,fontSize:15,fontWeight:700,maxWidth:200}}/>
+      </div>}
+    </Card>
+
+    {/* PromptPay */}
+    <Card style={{padding:18,marginBottom:14}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+        <div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink}}>📱 PromptPay QR</div>
+          <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>แสดง QR PromptPay ในใบเสร็จลูกค้าสแกนจ่ายได้เลย</div>
+        </div>
+        <label style={{position:"relative",display:"inline-block",width:48,height:26}}>
+          <input type="checkbox" checked={!!settings.show_qr_promptpay} onChange={e=>set('show_qr_promptpay',e.target.checked)} style={{opacity:0,width:0,height:0}}/>
+          <span style={{position:"absolute",cursor:"pointer",inset:0,background:settings.show_qr_promptpay?C.brand:"#cbd5e1",borderRadius:26,transition:".2s"}}/>
+          <span style={{position:"absolute",content:"",height:20,width:20,left:settings.show_qr_promptpay?25:3,top:3,background:C.white,borderRadius:"50%",transition:".2s",boxShadow:"0 2px 4px rgba(0,0,0,.2)"}}/>
+        </label>
+      </div>
+      {settings.show_qr_promptpay&&<div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:8}}>
+          <div>
+            <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>เบอร์โทร / เลขบัตร ปชช</div>
+            <input value={settings.promptpay_id||""} onChange={e=>set('promptpay_id',e.target.value)} placeholder="0812345678 หรือ 1234567890123" style={{...iS,fontSize:14,fontFamily:"monospace",letterSpacing:.5}}/>
+          </div>
+          <div>
+            <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>ชื่อบัญชี (แสดงในใบเสร็จ)</div>
+            <input value={settings.promptpay_name||""} onChange={e=>set('promptpay_name',e.target.value)} placeholder="เช่น ร้านในวันสุก" style={{...iS,fontSize:14}}/>
+          </div>
+        </div>
+        {qrPreview&&<div style={{background:C.bg,borderRadius:10,padding:12,display:"flex",alignItems:"center",gap:14}}>
+          <QRImg url={qrPreview} size={100}/>
+          <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{fontWeight:700,color:C.green,marginBottom:3}}>✅ QR ใช้งานได้</div>
+            <div>QR ตัวอย่าง (จำลองยอด ฿100)</div>
+            <div style={{fontSize:11,marginTop:3,color:C.ink4}}>QR จริงในใบเสร็จจะถูกสร้างตามยอดบิลแต่ละครั้ง</div>
+          </div>
+        </div>}
+        {!qrPreview&&settings.promptpay_id&&<div style={{background:C.redLight,borderRadius:10,padding:10,fontSize:12,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>⚠️ เบอร์/เลขบัตรไม่ถูกต้อง (ต้อง 10 หรือ 13 หลัก)</div>}
+      </div>}
+    </Card>
+
+    {/* Receipt header/footer */}
+    <Card style={{padding:18}}>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:12}}>🧾 ข้อความใบเสร็จ</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div>
+          <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>หัวใบเสร็จ (Header)</div>
+          <textarea rows={3} value={settings.receipt_header||""} onChange={e=>set('receipt_header',e.target.value)} placeholder="เช่น ที่อยู่ร้าน, เลขผู้เสียภาษี" style={{...iS,fontSize:13,resize:"none",lineHeight:1.5}}/>
+        </div>
+        <div>
+          <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>ท้ายใบเสร็จ (Footer)</div>
+          <textarea rows={3} value={settings.receipt_footer||""} onChange={e=>set('receipt_footer',e.target.value)} placeholder="เช่น ขอบคุณที่ใช้บริการ, FB/Line ID" style={{...iS,fontSize:13,resize:"none",lineHeight:1.5}}/>
+        </div>
+      </div>
+    </Card>
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── PROMOTION MANAGER ────────────────────────────────
+// ══════════════════════════════════════════════════════
+const WEEKDAYS=["อา","จ","อ","พ","พฤ","ศ","ส"];
+function POSPromotionManager({currentBranch,menus}){
+  const[promos,setPromos]=useState([]);const[loading,setLoading]=useState(true);
+  const[showForm,setShowForm]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);
+  const F0={name:"",description:"",type:"percent",discount_value:10,scope:"bill",scope_value:"",min_order:0,max_discount:"",start_date:"",end_date:"",start_time:"",end_time:"",weekdays:"",active:true};
+  const[F,setF]=useState(F0);
+  async function load(){setLoading(true);try{const p=await api.getPromotions(currentBranch.id);setPromos(p);}catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}setLoading(false);}
+  useEffect(()=>{load();},[currentBranch.id]);
+  const cats=useMemo(()=>[...new Set(menus.map(m=>m.category))],[menus]);
+  async function save(){
+    if(!F.name.trim()||!F.discount_value)return;
+    setSaving(true);
+    try{
+      const d={...F,branch_id:currentBranch.id,discount_value:+F.discount_value,min_order:+F.min_order||0,max_discount:F.max_discount?+F.max_discount:null,start_date:F.start_date||null,end_date:F.end_date||null,start_time:F.start_time||null,end_time:F.end_time||null,weekdays:F.weekdays||null,scope_value:F.scope==="bill"?null:F.scope_value};
+      if(editId)await api.updatePromotion(editId,d);else await api.addPromotion(d);
+      setF(F0);setEditId(null);setShowForm(false);await load();
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+  async function del(p){if(!await confirmDlg({title:"ลบโปรโมชั่น",message:`ต้องการลบ "${p.name}"?`,danger:true}))return;try{await api.deletePromotion(p.id);await load();}catch{alert("ลบไม่สำเร็จ");}}
+  function startEdit(p){setF({name:p.name||"",description:p.description||"",type:p.type,discount_value:p.discount_value,scope:p.scope,scope_value:p.scope_value||"",min_order:p.min_order||0,max_discount:p.max_discount||"",start_date:p.start_date||"",end_date:p.end_date||"",start_time:p.start_time||"",end_time:p.end_time||"",weekdays:p.weekdays||"",active:p.active});setEditId(p.id);setShowForm(true);}
+  async function toggle(p){try{await api.updatePromotion(p.id,{active:!p.active});await load();}catch{alert("ปรับสถานะไม่สำเร็จ");}}
+  function toggleWeekday(d){const arr=(F.weekdays||"").split(",").filter(Boolean);const s=String(d);const next=arr.includes(s)?arr.filter(x=>x!==s):[...arr,s];setF(f=>({...f,weekdays:next.sort().join(",")}));}
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,margin:0}}>🎁 โปรโมชั่น ({promos.length})</h3>
+      <Btn onClick={()=>{setF(F0);setEditId(null);setShowForm(true);}} icon={I.plus} s={{padding:"8px 16px"}}>เพิ่มโปรโมชั่น</Btn>
+    </div>
+    {loading?<Loading text="โหลด..."/>:<>
+      {promos.length===0&&!showForm&&<div style={{textAlign:"center",padding:50,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><Ic d={I.tag} s={42} c={C.line}/><p style={{marginTop:10}}>ยังไม่มีโปรโมชั่น</p></div>}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:12}}>
+        {promos.map(p=>{
+          const typeL={percent:"ส่วนลด %",amount:"ส่วนลด ฿",fixed_price:"ราคาพิเศษ"}[p.type]||p.type;
+          const valL=p.type==="percent"?`${p.discount_value}%`:`฿${p.discount_value}`;
+          return <Card key={p.id} style={{padding:0,overflow:"hidden",opacity:p.active?1:.5}}>
+            <div style={{padding:"10px 14px",background:p.active?`linear-gradient(135deg,${C.brand}11,${C.brandLight})`:C.bg,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:14,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div>
+                <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{typeL} · <b style={{color:C.brand}}>{valL}</b></div>
+              </div>
+              <div style={{display:"flex",gap:4}}>
+                <button onClick={()=>toggle(p)} title={p.active?"ปิด":"เปิด"} style={{background:p.active?C.greenLight:C.lineLight,border:"none",borderRadius:7,padding:"5px 9px",cursor:"pointer",fontSize:11,fontWeight:700,color:p.active?C.green:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{p.active?"ON":"OFF"}</button>
+                <button onClick={()=>startEdit(p)} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>
+                <button onClick={()=>del(p)} style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+              </div>
+            </div>
+            <div style={{padding:"10px 14px",fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.7}}>
+              {p.description&&<div style={{marginBottom:4}}>{p.description}</div>}
+              <div>📍 {p.scope==="bill"?"ทั้งบิล":p.scope==="category"?`หมวด: ${p.scope_value}`:`เมนู: ${menus.find(m=>m.id==p.scope_value)?.name||p.scope_value}`}</div>
+              {p.min_order>0&&<div>💵 ขั้นต่ำ ฿{p.min_order}</div>}
+              {(p.start_date||p.end_date)&&<div>📅 {p.start_date||"—"} ถึง {p.end_date||"—"}</div>}
+              {(p.start_time||p.end_time)&&<div>🕐 {p.start_time||"00:00"} - {p.end_time||"23:59"}</div>}
+              {p.weekdays&&<div>📆 {p.weekdays.split(",").map(d=>WEEKDAYS[+d]).join(", ")}</div>}
+            </div>
+          </Card>;
+        })}
+      </div>
+    </>}
+    {showForm&&<Modal title={editId?"✏️ แก้ไขโปรโมชั่น":"➕ เพิ่มโปรโมชั่น"} onClose={()=>{setShowForm(false);setEditId(null);setF(F0);}} wide>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Inp label="ชื่อโปรโมชั่น *" value={F.name} onChange={e=>setF(f=>({...f,name:e.target.value}))} placeholder="เช่น ส่วนลด Happy Hour"/>
+        <Inp label="คำอธิบาย" value={F.description} onChange={e=>setF(f=>({...f,description:e.target.value}))} placeholder="รายละเอียดเพิ่มเติม"/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+        <Field label="ประเภท">
+          <select value={F.type} onChange={e=>setF(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}>
+            <option value="percent">ส่วนลด %</option>
+            <option value="amount">ส่วนลด ฿ (จำนวนเงิน)</option>
+            <option value="fixed_price">ราคาพิเศษ ฿ (set ราคา)</option>
+          </select>
+        </Field>
+        <Inp label={F.type==="percent"?"% ส่วนลด *":"จำนวน ฿ *"} type="number" value={F.discount_value} onChange={e=>setF(f=>({...f,discount_value:e.target.value}))}/>
+        <Inp label="เพดานส่วนลด ฿ (สำหรับ %)" type="number" value={F.max_discount} onChange={e=>setF(f=>({...f,max_discount:e.target.value}))} placeholder="ไม่จำกัด"/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:12}}>
+        <Field label="ใช้กับ">
+          <select value={F.scope} onChange={e=>setF(f=>({...f,scope:e.target.value,scope_value:""}))} style={{...iS,appearance:"none"}}>
+            <option value="bill">ทั้งบิล</option>
+            <option value="category">หมวดเมนู</option>
+            <option value="menu">เมนูเฉพาะ</option>
+          </select>
+        </Field>
+        {F.scope==="category"&&<Field label="หมวด"><select value={F.scope_value} onChange={e=>setF(f=>({...f,scope_value:e.target.value}))} style={{...iS,appearance:"none"}}><option value="">— เลือกหมวด —</option>{cats.map(c=><option key={c} value={c}>{c}</option>)}</select></Field>}
+        {F.scope==="menu"&&<Field label="เมนู"><select value={F.scope_value} onChange={e=>setF(f=>({...f,scope_value:e.target.value}))} style={{...iS,appearance:"none"}}><option value="">— เลือกเมนู —</option>{menus.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></Field>}
+        {F.scope==="bill"&&<Inp label="ยอดขั้นต่ำ ฿" type="number" value={F.min_order} onChange={e=>setF(f=>({...f,min_order:e.target.value}))}/>}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12}}>
+        <Inp label="เริ่ม (วันที่)" type="date" value={F.start_date} onChange={e=>setF(f=>({...f,start_date:e.target.value}))}/>
+        <Inp label="สิ้นสุด (วันที่)" type="date" value={F.end_date} onChange={e=>setF(f=>({...f,end_date:e.target.value}))}/>
+        <Inp label="เริ่ม (เวลา)" type="time" value={F.start_time} onChange={e=>setF(f=>({...f,start_time:e.target.value}))}/>
+        <Inp label="สิ้นสุด (เวลา)" type="time" value={F.end_time} onChange={e=>setF(f=>({...f,end_time:e.target.value}))}/>
+      </div>
+      <Field label={`เฉพาะวัน (เลือกได้หลายวัน) — ${F.weekdays?F.weekdays.split(",").map(d=>WEEKDAYS[+d]).join(", "):"ทุกวัน"}`}>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {WEEKDAYS.map((w,d)=>{const sel=(F.weekdays||"").split(",").includes(String(d));return <button key={d} onClick={()=>toggleWeekday(d)} style={{padding:"7px 14px",borderRadius:8,border:`2px solid ${sel?C.brand:C.line}`,background:sel?C.brandLight:C.white,color:sel?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12}}>{w}</button>;})}
+          {F.weekdays&&<button onClick={()=>setF(f=>({...f,weekdays:""}))} style={{padding:"7px 12px",borderRadius:8,border:"none",background:"transparent",color:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12}}>ล้าง</button>}
+        </div>
+      </Field>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:8}}>
+        <Btn v="ghost" onClick={()=>{setShowForm(false);setEditId(null);setF(F0);}}>ยกเลิก</Btn>
+        <Btn onClick={save} loading={saving} disabled={!F.name.trim()||!F.discount_value} icon={I.check}>{editId?"บันทึก":"เพิ่มโปรโมชั่น"}</Btn>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+// Find applicable promotions for a given context
+function evalPromotions(promos,context){
+  const{subtotal,items,now=new Date()}=context;
+  const dow=now.getDay();
+  const hhmm=`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  const ymd=now.toISOString().slice(0,10);
+  return (promos||[]).filter(p=>{
+    if(!p.active)return false;
+    if(p.start_date&&ymd<p.start_date)return false;
+    if(p.end_date&&ymd>p.end_date)return false;
+    if(p.start_time&&hhmm<p.start_time.slice(0,5))return false;
+    if(p.end_time&&hhmm>p.end_time.slice(0,5))return false;
+    if(p.weekdays&&!p.weekdays.split(",").includes(String(dow)))return false;
+    if(p.scope==="bill"&&(+p.min_order||0)>subtotal)return false;
+    if(p.scope==="category"&&!items.some(i=>{const m=context.menusById?.[i.menu_id];return m&&m.category===p.scope_value;}))return false;
+    if(p.scope==="menu"&&!items.some(i=>String(i.menu_id)===String(p.scope_value)))return false;
+    return true;
+  });
+}
+function calcPromoDiscount(promo,context){
+  const{subtotal,items,menusById}=context;
+  if(promo.scope==="bill"){
+    let amt=promo.type==="percent"?subtotal*(+promo.discount_value)/100:promo.type==="amount"?+promo.discount_value:Math.max(0,subtotal-(+promo.discount_value));
+    if(promo.max_discount&&amt>+promo.max_discount)amt=+promo.max_discount;
+    return Math.min(amt,subtotal);
+  }
+  // category or menu scope
+  let scopeTotal=0;
+  items.forEach(i=>{
+    const m=menusById?.[i.menu_id];const include=promo.scope==="category"?(m&&m.category===promo.scope_value):String(i.menu_id)===String(promo.scope_value);
+    if(include)scopeTotal+=i.price*i.qty;
+  });
+  let amt=promo.type==="percent"?scopeTotal*(+promo.discount_value)/100:promo.type==="amount"?+promo.discount_value:Math.max(0,scopeTotal-(+promo.discount_value));
+  if(promo.max_discount&&amt>+promo.max_discount)amt=+promo.max_discount;
+  return Math.min(amt,scopeTotal);
+}
+
+// ══════════════════════════════════════════════════════
 // ── POS BACK OFFICE (หลังบ้าน) ─────────────────────────
 // ══════════════════════════════════════════════════════
-function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branches,zones=[],reloadZones,onExit}){
+function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branches,zones=[],reloadZones,menus=[],onExit}){
   const[section,setSection]=useState("tables");
   const[tables,setTables]=useState([]);const[loadingT,setLoadingT]=useState(true);
   const[shifts,setShifts]=useState([]);const[loadingS,setLoadingS]=useState(false);
@@ -3986,6 +4351,8 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
   const SECS=[
     {id:"tables",l:"ผังโต๊ะ",icon:I.table,c:C.brand},
     {id:"printers",l:"เครื่องพิมพ์",icon:I.print,c:C.purple},
+    {id:"settings",l:"ตั้งค่า POS",icon:I.settings,c:C.green},
+    {id:"promotions",l:"โปรโมชั่น",icon:I.tag,c:C.yellow},
     {id:"shifts",l:"ประวัติกะ",icon:I.clock,c:C.blue},
   ];
   return <div style={{margin:"-20px -24px",display:"flex",flexDirection:"column",height:"calc(100vh - 150px)"}}>
@@ -3997,6 +4364,8 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
     <div style={{flex:1,overflow:"auto",padding:"20px 24px",background:C.bg}}>
       {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} zones={zones} reloadZones={reloadZones} onDone={loadTables}/>)}
       {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser}/>}
+      {section==="settings"&&<POSSettingsPanel currentBranch={currentBranch}/>}
+      {section==="promotions"&&<POSPromotionManager currentBranch={currentBranch} menus={menus}/>}
       {section==="shifts"&&<POSShiftHistory shifts={shifts} loading={loadingS} reload={loadShifts}/>}
     </div>
   </div>;
@@ -4196,7 +4565,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser}){
 // ══════════════════════════════════════════════════════
 // ── POS SALE MODE (โหมดขายหน้าร้าน) ────────────────────
 // ══════════════════════════════════════════════════════
-function POSSaleMode({menus,currentBranch,currentUser,printers=[],shift,zones=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode}){
+function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -4299,7 +4668,7 @@ function POSSaleMode({menus,currentBranch,currentUser,printers=[],shift,zones=[]
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
         <button onClick={()=>printTableQR(selTable,currentBranch)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
-      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} branch={currentBranch} currentUser={currentUser} shift={shift} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
+      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
     </Modal>}
   </div>;
 }
@@ -4307,15 +4676,19 @@ function POSSaleMode({menus,currentBranch,currentUser,printers=[],shift,zones=[]
 // ══════════════════════════════════════════════════════
 // ── POS TAB (top-level wrapper: mode + shift) ────────
 // ══════════════════════════════════════════════════════
-function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadPrinters}){
+function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadPrinters,reloadMenus}){
   const[mode,setMode]=useState(null);  // null | 'sale' | 'manage'
   const[shift,setShift]=useState(null);
   const[loadingShift,setLoadingShift]=useState(false);
   const[showCashDrawer,setShowCashDrawer]=useState(false);
   const[showCloseShift,setShowCloseShift]=useState(false);
   const[zones,setZones]=useState([]);
+  const[posSettings,setPosSettings]=useState(null);
+  const[promotions,setPromotions]=useState([]);
   async function loadZones(){try{const z=await api.getZones(currentBranch.id);setZones(z);}catch(e){console.error("loadZones",e);}}
-  useEffect(()=>{loadZones();},[currentBranch.id]);
+  async function loadPosSettings(){try{const s=await api.getPOSSettings(currentBranch.id);setPosSettings(s&&s[0]?s[0]:{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10});}catch{setPosSettings({branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10});}}
+  async function loadPromotions(){try{const p=await api.getPromotions(currentBranch.id);setPromotions(p);}catch{setPromotions([]);}}
+  useEffect(()=>{loadZones();loadPosSettings();loadPromotions();},[currentBranch.id]);
 
   useEffect(()=>{
     if(mode!=='sale'){setShift(null);return;}
@@ -4327,12 +4700,12 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   },[mode,currentBranch.id]);
 
   if(mode===null)return <POSModeSelect onSelect={setMode}/>;
-  if(mode==='manage')return <POSBackOffice currentBranch={currentBranch} currentUser={currentUser} printers={printers} reloadPrinters={reloadPrinters} branches={branches} zones={zones} reloadZones={loadZones} onExit={()=>setMode(null)}/>;
+  if(mode==='manage')return <POSBackOffice currentBranch={currentBranch} currentUser={currentUser} printers={printers} reloadPrinters={reloadPrinters} branches={branches} zones={zones} reloadZones={loadZones} menus={menus} onExit={()=>{setMode(null);loadPosSettings();loadPromotions();}}/>;
   // mode === 'sale'
   if(loadingShift)return <Loading text="ตรวจสอบกะการขาย..."/>;
   if(!shift)return <OpenShiftModal currentBranch={currentBranch} currentUser={currentUser} onDone={s=>setShift(s)} onCancel={()=>setMode(null)}/>;
   return <>
-    <POSSaleMode menus={menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={()=>setMode(null)}/>
+    <POSSaleMode menus={menus} reloadMenus={reloadMenus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={()=>setMode(null)}/>
     {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCashDrawer(false)}/>}
     {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShift(null);setMode(null);}}/>}
   </>;
