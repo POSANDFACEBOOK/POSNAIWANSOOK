@@ -142,6 +142,7 @@ const I = {
   branch:["M6 3v12","M18 9a3 3 0 100-6 3 3 0 000 6z","M6 21a3 3 0 100-6 3 3 0 000 6z","M15 6a9 9 0 01-9 9"],
   truck:["M1 3h15v13H1z","M16 8h4l3 3v5h-7V8z","M5.5 21a2.5 2.5 0 100-5 2.5 2.5 0 000 5z","M18.5 21a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"],
   shop:"M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z M9 22V12h6v10",
+  order:["M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2","M9 5a2 2 0 002 2h2a2 2 0 002-2","M9 5a2 2 0 012-2h2a2 2 0 012 2","M9 12h6","M9 16h4"],
   send:["M22 2L11 13","M22 2L15 22 11 13 2 9l20-7z"],
   box:"M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z",
   arrowRight:"M5 12h14 M12 5l7 7-7 7",
@@ -2884,7 +2885,7 @@ function POSTableManage({tables,branch,onDone}){
     setSaving(true);
     try{let col=0,row=0;for(let i=bulk.from;i<=bulk.to;i++){const num=bulk.prefix?`${bulk.prefix}${i}`:String(i);if(!tables.find(t=>t.table_number===num)){await api.addPOSTable({table_number:num,label:"",zone:bulk.zone,seats:+bulk.seats,shape:"square",w:90,h:80,branch_id:branch.id,status:"available",active:true,x:col*110+20,y:row*100+20});col++;if(col>9){col=0;row++;}}}onDone();alert(`✅ เพิ่มโต๊ะสำเร็จ!`);}catch(e){alert("เพิ่มไม่สำเร็จ");}setSaving(false);
   }
-  async function delTable(id,num){if(!await confirmDlg({title:"ลบโต๊ะ",message:`ต้องการลบโต๊ะ ${num} ใช่หรือไม่?`}))return;try{await api.deletePOSTable(id);onDone();}catch{alert("ลบไม่สำเร็จ");}}
+  async function delTable(id,num){if(!await confirmDlg(`ต้องการลบโต๊ะ ${num} ใช่หรือไม่?`,"ลบโต๊ะ","ยกเลิก"))return;try{await api.deletePOSTable(id);onDone();}catch{alert("ลบไม่สำเร็จ");}}
   function addZone(){if(!newZone.trim())return;setZones(z=>[...new Set([...z,newZone.trim()])]);setNewZone("");}
 
   const allZones=[...new Set([...zones,...tables.map(t=>t.zone).filter(Boolean)])];
@@ -3008,7 +3009,8 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
 
   function reprintReceipt(){
     if(!existingOrder?.id)return;
-    printReceipt({...existingOrder,items,subtotal,discount:totalDiscount,total,payment_method:payMethod},table.table_number,branch.name);
+    const pm=existingOrder.payment_method||payMethod;
+    printReceipt({...existingOrder,items,subtotal,discount:existingOrder.discount||totalDiscount,total:existingOrder.total||total,payment_method:pm},table.table_number,branch.name);
   }
 
   async function saveOrder(){
@@ -3026,8 +3028,9 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
     setSaving(true);
     try{
       const itemsWithDisc=items.map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
-      await api.updatePOSOrder(existingOrder.id,{status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:payMethod==="cash"?+cashRcv||total:null,updated_at:new Date().toISOString()});
-      printReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:payMethod==="cash"?+cashRcv||total:null},table.table_number,branch.name);
+      const cashReceived=payMethod==="cash"?(+cashRcv||total):null;
+      await api.updatePOSOrder(existingOrder.id,{status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,updated_at:new Date().toISOString()});
+      printReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:cashReceived},table.table_number,branch.name);
       onDone();onClose();
     }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSaving(false);
   }
@@ -3386,9 +3389,11 @@ function CustomerPage({branchId,tableId}){
           </div>
         </>}
       </div>
-      <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",gap:8,flexShrink:0}}>
+      <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",gap:8,flexShrink:0,flexWrap:"wrap"}}>
         <Btn v="ghost" onClick={()=>setStep("menu")} full s={{padding:"10px"}}>← กลับหน้าเมนู</Btn>
-        {myOrder&&myOrder.status!=="paid"&&<Btn onClick={()=>setStep("menu")} full s={{padding:"10px"}}>+ สั่งเพิ่ม</Btn>}
+        {myOrder&&myOrder.status!=="paid"&&myOrder.status!=="bill_requested"&&<Btn onClick={()=>setStep("menu")} full s={{padding:"10px"}}>+ สั่งเพิ่ม</Btn>}
+        {myOrder&&myOrder.status!=="paid"&&myOrder.status!=="bill_requested"&&<button onClick={async()=>{try{await api.updatePOSOrder(myOrder.id,{status:"bill_requested",updated_at:new Date().toISOString()});await loadMyOrder();alert("✅ แจ้งพนักงานแล้ว กรุณารอสักครู่");}catch{alert("เกิดข้อผิดพลาด กรุณาแจ้งพนักงาน");}}} style={{width:"100%",padding:"12px",background:`linear-gradient(135deg,${C.yellow},#D97706)`,border:"none",borderRadius:12,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>💰 เรียกบิล / ขอชำระเงิน</button>}
+        {myOrder&&myOrder.status==="bill_requested"&&<div style={{width:"100%",padding:"12px",background:C.yellowLight,border:`1.5px solid ${C.yellow}`,borderRadius:12,textAlign:"center",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:"#92400E"}}>⏳ แจ้งพนักงานแล้ว กรุณารอสักครู่...</div>}
       </div>
     </>}
     {step==="cart"&&<>
