@@ -2875,15 +2875,42 @@ function printKitchenWindow(item,tableNum,printer){
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - โต๊ะ ${tableNum}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:6px;color:#000}.hdr{text-align:center;font-size:13px;font-weight:700;margin:2px 0}.tbl{text-align:center;font-size:54px;font-weight:900;line-height:1;margin:6px 0;letter-spacing:1px;border:3px solid #000;padding:8px 0;border-radius:8px}.tm{text-align:center;font-size:11px;color:#444;margin:2px 0}.sep{border:0;border-top:2px dashed #000;margin:8px 0}.menu{text-align:center;font-size:24px;font-weight:900;line-height:1.2;margin:8px 0;padding:6px 4px}.qty{display:inline-block;background:#000;color:#fff;padding:2px 12px;border-radius:6px;font-size:24px;font-weight:900;margin-right:6px}.note{margin-top:8px;background:#FEF3C7;border:2px solid #000;border-radius:6px;padding:8px;font-size:15px;font-weight:700;text-align:center}.foot{text-align:center;font-size:10px;color:#666;margin-top:6px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><div class="hdr">🍳 ${title}</div><div class="tbl">โต๊ะ ${tableNum}</div><div class="tm">${new Date().toLocaleString("th-TH")}</div><hr class="sep"/><div class="menu"><span class="qty">${item.qty}x</span>${item.name}</div>${item.note?`<div class="note">★ ${item.note}</div>`:""}<hr class="sep"/><div class="foot">--- สิ้นสุดรายการ ---</div><script>window.onload=()=>setTimeout(()=>window.print(),200);<\/script></body></html>`);
   w.document.close();
 }
+// Resolve which printer should handle this kitchen item.
+// Priority: 1) menu-level override (item.printer_id) → 2) category-routed printer →
+//           3) catch-all printer (categories === null) → 4) any printer (fallback)
+function resolvePrinter(item,printers){
+  if(!printers||printers.length===0)return null;
+  if(item.printer_id){const p=printers.find(x=>x.id===+item.printer_id);if(p)return p;}
+  const cat=item.category;
+  if(cat){
+    const byCat=printers.find(p=>Array.isArray(p.categories)&&p.categories.includes(cat));
+    if(byCat)return byCat;
+  }
+  // catch-all: categories is null/undefined (NOT [] which means opt-out)
+  const catchAll=printers.find(p=>p.categories===null||p.categories===undefined);
+  if(catchAll)return catchAll;
+  return null;
+}
 async function printKitchen(items,tableNum,printers=[]){
+  // Group items by resolved printer so each printer prints one batch
+  const groups=new Map();  // printer.id (or "_window") → {printer, items[]}
   for(const item of items){
-    const printer=item.printer_id?printers.find(p=>p.id===+item.printer_id):null;
+    const printer=resolvePrinter(item,printers);
+    const key=printer?printer.id:"_window";
+    if(!groups.has(key))groups.set(key,{printer,items:[]});
+    groups.get(key).items.push(item);
+  }
+  for(const{printer,items:gItems} of groups.values()){
     const conn=printer?getPConn(printer):{type:"ip"};
-    if(conn.type==="bluetooth"){
-      try{await btPrint(buildKitchenESC(item,tableNum),conn.btName);}
-      catch(e){alert("Bluetooth พิมพ์ไม่สำเร็จ: "+e.message+"\nใช้การพิมพ์ปกติแทน");printKitchenWindow(item,tableNum,printer);}
-    }else{printKitchenWindow(item,tableNum,printer);}
-    await new Promise(r=>setTimeout(r,300));
+    for(const item of gItems){
+      if(conn.type==="bluetooth"){
+        try{await btPrint(buildKitchenESC(item,tableNum),conn.btName);}
+        catch(e){alert("Bluetooth พิมพ์ไม่สำเร็จ: "+e.message+"\nใช้การพิมพ์ปกติแทน");printKitchenWindow(item,tableNum,printer);}
+      }else{
+        printKitchenWindow(item,tableNum,printer);
+      }
+      await new Promise(r=>setTimeout(r,300));
+    }
   }
 }
 
@@ -3207,7 +3234,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const total=vatIncluded?subAfterDisc+sc:subAfterDisc+sc+vat;
   const cashChange=Math.max(0,(+cashRcv||0)-total);
 
-  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null}];});}
+  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
   function chQty(idx,d){setItems(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmItem(idx){setItems(p=>p.filter((_,i)=>i!==idx));}
 
@@ -3549,7 +3576,7 @@ function CustomerPage({branchId,tableId}){
   const filtered=useMemo(()=>menus.filter(m=>(selCat==="ทั้งหมด"||m.category===selCat)&&m.name.toLowerCase().includes(search.toLowerCase())),[menus,selCat,search]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const itemCount=cart.reduce((s,i)=>s+i.qty,0);
-  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null}];});}
+  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
   async function placeOrder(){
@@ -4468,7 +4495,7 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
     </div>
     <div style={{flex:1,overflow:"auto",padding:"20px 24px",background:C.bg}}>
       {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} zones={zones} reloadZones={reloadZones} onDone={loadTables}/>)}
-      {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser}/>}
+      {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser} menus={menus}/>}
       {section==="settings"&&<POSSettingsPanel currentBranch={currentBranch}/>}
       {section==="promotions"&&<POSPromotionManager currentBranch={currentBranch} menus={menus}/>}
       {section==="shifts"&&<POSShiftHistory shifts={shifts} loading={loadingS} reload={loadShifts}/>}
@@ -4515,11 +4542,44 @@ function POSShiftHistory({shifts,loading,reload}){
 }
 
 // Printer panel (extracted from SettingsTab for back-office)
-function POSPrinterPanel({printers,reloadPrinters,branches,currentUser}){
+function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}){
   const isAdmin=hasPerm(currentUser,"settings");
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
   const[testResults,setTestResults]=useState({});const[btScanning,setBtScanning]=useState(false);
+  // Category routing state
+  const[catEditP,setCatEditP]=useState(null);  // printer object being edited
+  const[catSel,setCatSel]=useState(null);       // null=catch-all, [] or [names]=specific
+  const[catMenuOverride,setCatMenuOverride]=useState({});  // menu_id → assigned printer_id (for override view)
+  const[catSaving,setCatSaving]=useState(false);
+  const allCategories=useMemo(()=>[...new Set(menus.map(m=>m.category).filter(Boolean))].sort(),[menus]);
+  function openCatEdit(p){
+    setCatEditP(p);
+    setCatSel(p.categories===undefined||p.categories===null?null:[...p.categories]);
+    // Build menu→printer override map for the menus visible
+    const ov={};menus.forEach(m=>{if(m.printer_id)ov[m.id]=+m.printer_id;});
+    setCatMenuOverride(ov);
+  }
+  async function saveCatEdit(){
+    if(!catEditP)return;
+    setCatSaving(true);
+    try{
+      await api.updatePrinter(catEditP.id,{categories:catSel});
+      // Save menu-level overrides
+      const updates=[];
+      menus.forEach(m=>{const newPid=catMenuOverride[m.id]||null;const oldPid=m.printer_id||null;if(String(newPid)!==String(oldPid))updates.push(api.updateMenu(m.id,{printer_id:newPid}));});
+      await Promise.all(updates);
+      await reloadPrinters();
+      setCatEditP(null);
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setCatSaving(false);
+  }
+  function toggleCat(c){
+    setCatSel(prev=>{
+      const cur=prev===null?allCategories.slice():prev;
+      return cur.includes(c)?cur.filter(x=>x!==c):[...cur,c];
+    });
+  }
   async function testPrinter(p){
     const conn=getPConn(p);
     setTestResults(r=>({...r,[p.id]:{status:"testing"}}));
@@ -4676,6 +4736,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser}){
               </div>
             </div>
             {isAdmin&&<div style={{display:"flex",gap:5,flexShrink:0}}>
+              <button onClick={()=>openCatEdit(p)} title="หมวดหมู่ที่รับผิดชอบ" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:8,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><span style={{fontSize:13}}>🍳</span><span style={{fontSize:11,color:"#92400E",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>หมวด</span></button>
               <button onClick={()=>{const pc=getPConn(p);setPForm({name:p.name,ip:pc.type==="bluetooth"?"":p.ip,port:p.port||9100,description:pc.type==="bluetooth"?"":p.description||"",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active,conn:pc.type,btName:pc.btName||""});setEditPID(p.id);}} title="แก้ไข" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:8,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.pencil} s={12} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>แก้</span></button>
               <button onClick={async()=>{if(!await confirmDlg({title:"ลบเครื่องปริ้น",message:`ต้องการลบ "${p.name}" ใช่หรือไม่?`}))return;try{await api.deletePrinter(p.id);await reloadPrinters();}catch{alert("ลบไม่สำเร็จ");}}} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:8,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.trash} s={12} c={C.red}/><span style={{fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ลบ</span></button>
             </div>}
@@ -4697,12 +4758,81 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser}){
               </div>
               <button onClick={()=>testPrinter(p)} disabled={testResults[p.id]?.status==="testing"} style={{padding:"5px 12px",borderRadius:7,border:`1.5px solid ${C.brand}`,background:testResults[p.id]?.status==="testing"?C.lineLight:C.brandLight,color:C.brand,cursor:testResults[p.id]?.status==="testing"?"not-allowed":"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{testResults[p.id]?.status==="testing"?"...":"🔌 ทดสอบ"}</button>
             </div>;})()}
+            {/* Categories badge */}
+            {(()=>{const cats=p.categories;const overrideCount=menus.filter(m=>+m.printer_id===p.id).length;return <div style={{marginTop:6,padding:"7px 11px",borderRadius:8,background:cats===null||cats===undefined?C.greenLight:cats.length===0?C.lineLight:"#FEF3C7",border:`1px solid ${cats===null||cats===undefined?"#86EFAC":cats.length===0?C.line:"#FDE68A"}`,fontSize:11,fontFamily:"'Sarabun',sans-serif",color:cats===null||cats===undefined?C.green:cats.length===0?C.ink4:"#92400E",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+              <span style={{fontWeight:800}}>🍳 รับผิดชอบ:</span>
+              <span style={{fontWeight:600}}>{cats===null||cats===undefined?"ทุกหมวด (catch-all)":cats.length===0?"ไม่รับงานอัตโนมัติ":cats.join(", ")}</span>
+              {overrideCount>0&&<span style={{marginLeft:"auto",background:C.purpleLight,color:C.purple,padding:"1px 8px",borderRadius:10,fontSize:10,fontWeight:700}}>+{overrideCount} เมนู (override)</span>}
+            </div>;})()}
             {p.branch_id&&(branches||[]).find(b=>b.id===p.branch_id)&&<div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:6,display:"flex",alignItems:"center",gap:5}}><Ic d={I.branch} s={12} c={C.ink4}/>สาขา: <b>{branches.find(b=>b.id===p.branch_id)?.name}</b></div>}
             {!p.branch_id&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",marginTop:6,display:"flex",alignItems:"center",gap:5}}><Ic d={I.shop} s={12} c={C.teal}/>ใช้งานได้ทุกสาขา</div>}
           </div>
         </div>;
       })}
     </div>}
+    {/* Category routing modal */}
+    {catEditP&&<Modal title={`🍳 หมวดหมู่ที่รับผิดชอบ — ${catEditP.name}`} onClose={()=>setCatEditP(null)} extraWide>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
+        {/* Left: category checklist */}
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div style={{fontSize:13,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>📂 หมวดหมู่</div>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>setCatSel(null)} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${catSel===null?C.green:C.line}`,background:catSel===null?C.greenLight:C.white,color:catSel===null?C.green:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกหมวด (catch-all)</button>
+              <button onClick={()=>setCatSel([...allCategories])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>เลือกทั้งหมด</button>
+              <button onClick={()=>setCatSel([])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
+            </div>
+          </div>
+          {catSel===null
+            ?<div style={{padding:"14px 16px",background:C.greenLight,borderRadius:10,border:`1.5px solid ${C.green}`,fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,lineHeight:1.7}}>
+              ✅ <b>Catch-all</b> — เครื่องนี้รับงานพิมพ์ทุกหมวด<br/>
+              <span style={{fontSize:11,fontWeight:400}}>ใช้เป็น "เครื่องสำรอง" — ระบบจะส่งงานมาที่นี่ถ้าไม่มีเครื่องอื่น match หมวดของเมนู</span>
+            </div>
+            :allCategories.length===0
+              ?<div style={{padding:30,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีหมวดหมู่เมนู — เพิ่มหมวดในแท็บ "เมนู" ก่อน</div>
+              :<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxHeight:340,overflowY:"auto"}}>
+                {allCategories.map(c=>{const has=catSel.includes(c);const count=menus.filter(m=>m.category===c).length;return <label key={c} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:8,cursor:"pointer",background:has?C.brandLight:C.white,border:`1.5px solid ${has?C.brandBorder:C.line}`,transition:"all .15s"}}>
+                  <input type="checkbox" checked={has} onChange={()=>toggleCat(c)} style={{accentColor:C.brand,width:15,height:15,cursor:"pointer"}}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:has?800:600,color:has?C.brand:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c}</div>
+                    <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{count} เมนู</div>
+                  </div>
+                </label>;})}
+              </div>}
+        </div>
+        {/* Right: per-menu override */}
+        <div>
+          <div style={{fontSize:13,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>🍽 Override รายเมนู (ระบุเครื่องเฉพาะ)</div>
+          <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:8,lineHeight:1.5}}>เมนูที่ตั้ง override จะข้ามกฎหมวดหมู่ — ส่งไปเครื่องที่ระบุเสมอ</div>
+          <div style={{maxHeight:380,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
+              <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}>
+                <tr><th style={{padding:"8px 10px",textAlign:"left",fontSize:11,color:C.ink3,borderBottom:`1px solid ${C.line}`}}>เมนู</th><th style={{padding:"8px 10px",textAlign:"left",fontSize:11,color:C.ink3,borderBottom:`1px solid ${C.line}`,width:180}}>ส่งไปที่</th></tr>
+              </thead>
+              <tbody>
+                {menus.map(m=>{const assigned=catMenuOverride[m.id]||"";return <tr key={m.id} style={{borderBottom:`1px solid ${C.lineLight}`}}>
+                  <td style={{padding:"7px 10px",fontSize:12,color:C.ink2}}>
+                    <div style={{fontWeight:600}}>{m.name}</div>
+                    <div style={{fontSize:10,color:C.ink4}}>{m.category||"—"}</div>
+                  </td>
+                  <td style={{padding:"7px 10px"}}>
+                    <select value={assigned} onChange={e=>setCatMenuOverride(prev=>({...prev,[m.id]:e.target.value?+e.target.value:null}))} style={{...iS,fontSize:11,padding:"4px 8px",height:28}}>
+                      <option value="">— ตามหมวด ({m.category||"-"}) —</option>
+                      {printers.map(pr=><option key={pr.id} value={pr.id}>{pr.id===catEditP.id?"⭐ ":""}{pr.name}</option>)}
+                    </select>
+                  </td>
+                </tr>;})}
+                {menus.length===0&&<tr><td colSpan={2} style={{padding:20,textAlign:"center",color:C.ink4,fontSize:12}}>ยังไม่มีเมนู</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:14}}>
+        <Btn v="ghost" onClick={()=>setCatEditP(null)}>ยกเลิก</Btn>
+        <Btn onClick={saveCatEdit} loading={catSaving} icon={I.check}>บันทึก</Btn>
+      </div>
+    </Modal>}
   </div>;
 }
 
