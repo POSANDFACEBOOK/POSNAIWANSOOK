@@ -86,6 +86,17 @@ const api = {
   addCRMReservation: (d) => sb("crm_reservations", {method:"POST", body:JSON.stringify(d)}),
   updateCRMReservation: (id,d) => sb(`crm_reservations?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deleteCRMReservation: (id) => sb(`crm_reservations?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  // POS Shifts & Cash Drawer
+  getActiveShift: (bid) => sb(`pos_shifts?branch_id=eq.${bid}&status=eq.open&order=opened_at.desc&limit=1`),
+  getShifts: (bid,limit=50) => sb(`pos_shifts?branch_id=eq.${bid}&order=opened_at.desc&limit=${limit}`),
+  openShift: (d) => sb("pos_shifts", {method:"POST", body:JSON.stringify(d)}),
+  closeShift: (id,d) => sb(`pos_shifts?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  getCashMovements: (sid) => sb(`cash_movements?shift_id=eq.${sid}&order=created_at.desc`),
+  addCashMovement: (d) => sb("cash_movements", {method:"POST", body:JSON.stringify(d)}),
+  getExpenseCats: (bid) => sb(`expense_categories?branch_id=eq.${bid}&active=eq.true&order=sort_order.asc`),
+  addExpenseCat: (d) => sb("expense_categories", {method:"POST", body:JSON.stringify(d)}),
+  updateExpenseCat: (id,d) => sb(`expense_categories?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  deleteExpenseCat: (id) => sb(`expense_categories?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   uploadImage: async (file, path) => {
     const res = await fetch(`${SUPA_URL}/storage/v1/object/foodcost-images/${path}`, {
       method: "POST", headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": file.type, "x-upsert": "true" }, body: file,
@@ -1589,7 +1600,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     setPSaving(false);
   }
 
-  const sections=[{id:"branches",label:"สาขา",icon:I.branch},{id:"users",label:"ผู้ใช้",icon:I.users},{id:"printers",label:"เครื่องปริ้น",icon:I.print}];
+  const sections=[{id:"branches",label:"สาขา",icon:I.branch},{id:"users",label:"ผู้ใช้",icon:I.users}];
 
   return <div style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:16,minHeight:480}}>
     <Card style={{padding:8,height:"fit-content"}}>
@@ -2719,7 +2730,7 @@ export default function App(){
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser}/>}
-            {tab==="pos"&&<POSTab menus={menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers}/>}
+            {tab==="pos"&&<POSTab menus={menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
             {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} printers={printers} reloadPrinters={reload.printers} currentBranch={currentBranch}/>}
           </>}
         </div>
@@ -2955,7 +2966,7 @@ function POSTableManage({tables,branch,onDone}){
 // ══════════════════════════════════════════════════════
 // ── POS ORDER PANEL ───────────────────────────────────
 // ══════════════════════════════════════════════════════
-function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onDone,printers=[]}){
+function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onDone,printers=[],shift=null}){
   const[items,setItems]=useState(existingOrder?.items||[]);
   const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
@@ -3030,6 +3041,12 @@ function POSOrderPanel({table,existingOrder,menus,branch,currentUser,onClose,onD
       const itemsWithDisc=items.map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
       const cashReceived=payMethod==="cash"?(+cashRcv||total):null;
       await api.updatePOSOrder(existingOrder.id,{status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,updated_at:new Date().toISOString()});
+      // record cash movement if cash payment
+      if(payMethod==="cash"&&shift){
+        try{
+          await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"sale",amount:total,reason:`ขายโต๊ะ ${table.table_number}`,order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
+        }catch(err){console.error("บันทึก cash movement ไม่สำเร็จ:",err);}
+      }
       printReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:cashReceived},table.table_number,branch.name);
       onDone();onClose();
     }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSaving(false);
@@ -3478,12 +3495,600 @@ function POSQRPage({branch,tables}){
 // ══════════════════════════════════════════════════════
 // ── POS TAB (Main entry) ──────────────────────────────
 // ══════════════════════════════════════════════════════
-function POSTab({menus,currentBranch,currentUser,printers=[]}){
+// ══════════════════════════════════════════════════════
+// ── POS MODE SELECTOR ─────────────────────────────────
+// ══════════════════════════════════════════════════════
+function POSModeSelect({onSelect}){
+  return <div style={{minHeight:"calc(100vh - 140px)",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight} 0%,#FFFBEB 100%)`,margin:"-20px -24px",padding:24}}>
+    <div style={{background:C.white,borderRadius:24,padding:"40px 36px",maxWidth:620,width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
+      <div style={{textAlign:"center",marginBottom:30}}>
+        <div style={{width:68,height:68,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:20,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:14,boxShadow:`0 12px 28px ${C.brand}55`}}>
+          <Ic d={I.shop} s={34} c={C.white}/>
+        </div>
+        <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900,color:C.ink,margin:"0 0 6px"}}>ระบบขายหน้าร้าน</h2>
+        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,color:C.ink3,margin:0}}>เลือกโหมดการใช้งาน</p>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <button onClick={()=>onSelect('sale')} style={{padding:"26px 18px",border:`2px solid ${C.brandBorder}`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.brandLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.brand}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.brandBorder;e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+          <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>🛒</div>
+          <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>เข้าสู่การขายหน้าร้าน</div>
+          <div style={{fontSize:12,color:C.ink3,lineHeight:1.6}}>เปิดกะ • รับออเดอร์ • ชำระเงิน<br/>จัดการเงินในลิ้นชัก</div>
+        </button>
+        <button onClick={()=>onSelect('manage')} style={{padding:"26px 18px",border:`2px solid #DDD6FE`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.purpleLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.purple;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.purple}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#DDD6FE";e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+          <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.purple},#7C3AED)`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>⚙️</div>
+          <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>จัดการหลังบ้าน</div>
+          <div style={{fontSize:12,color:C.ink3,lineHeight:1.6}}>จัดผังโต๊ะ • ตั้งค่าเครื่องพิมพ์<br/>ประวัติกะ • รายงาน</div>
+        </button>
+      </div>
+    </div>
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── OPEN SHIFT ────────────────────────────────────────
+// ══════════════════════════════════════════════════════
+function OpenShiftModal({currentBranch,currentUser,onDone,onCancel}){
+  const[cash,setCash]=useState("");const[note,setNote]=useState("");const[saving,setSaving]=useState(false);
+  async function open(){
+    const amt=+cash;if(isNaN(amt)||amt<0){alert("กรุณาใส่จำนวนเงินที่ถูกต้อง");return;}
+    setSaving(true);
+    try{
+      const res=await api.openShift({branch_id:currentBranch.id,user_id:currentUser.id,username:currentUser.username,opening_cash:amt,opened_at:new Date().toISOString(),status:"open",notes:note||null});
+      const created=Array.isArray(res)?res[0]:res;
+      await api.addCashMovement({shift_id:created.id,branch_id:currentBranch.id,type:"opening",amount:amt,reason:"เปิดกะ - เงินทอนเริ่มต้น",user_id:currentUser.id,username:currentUser.username});
+      onDone(created);
+    }catch(e){alert("เปิดกะไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:16}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:460,boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
+      <div style={{padding:"18px 22px",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{fontSize:30}}>💵</div>
+          <div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900}}>เปิดกะการขาย</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,opacity:.85}}>{currentBranch.name} · {currentUser.name||currentUser.username}</div>
+          </div>
+        </div>
+      </div>
+      <div style={{padding:24}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8}}>เงินทอนเริ่มต้นในลิ้นชัก *</div>
+        <input type="number" autoFocus value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" style={{...iS,fontSize:26,fontWeight:900,padding:"14px 18px",textAlign:"center",letterSpacing:1}}/>
+        <div style={{display:"flex",gap:6,marginTop:8}}>
+          {[500,1000,2000,3000,5000].map(v=><button key={v} onClick={()=>setCash(String(v))} style={{flex:1,padding:"7px 0",border:`1px solid ${C.line}`,borderRadius:8,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.ink2}}>฿{v.toLocaleString()}</button>)}
+        </div>
+        <div style={{marginTop:16}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6}}>หมายเหตุ (ถ้ามี)</div>
+          <input value={note} onChange={e=>setNote(e.target.value)} placeholder="—" style={{...iS,fontSize:13}}/>
+        </div>
+        <div style={{display:"flex",gap:8,marginTop:20}}>
+          <Btn v="ghost" onClick={onCancel} full s={{padding:"11px"}}>ยกเลิก</Btn>
+          <Btn onClick={open} loading={saving} full icon={I.check} s={{padding:"11px",fontSize:14,fontWeight:800}}>เปิดกะ</Btn>
+        </div>
+      </div>
+    </div>
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── CASH DRAWER MODAL ────────────────────────────────
+// ══════════════════════════════════════════════════════
+const CASH_TYPE_INFO={
+  opening:{l:"เปิดกะ",icon:"🟢",c:"#10B981"},
+  sale:{l:"ขาย (เงินสด)",icon:"💵",c:"#10B981"},
+  refund:{l:"คืนเงิน",icon:"↩️",c:"#EF4444"},
+  pay_in:{l:"รับเงินเข้า",icon:"⬆️",c:"#10B981"},
+  pay_out:{l:"จ่ายออก",icon:"⬇️",c:"#EF4444"},
+  drop:{l:"ฝาก/ถอนเซฟ",icon:"🏦",c:"#3B82F6"},
+  closing:{l:"ปิดกะ",icon:"🔚",c:"#64748B"},
+};
+function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
+  const[movements,setMovements]=useState([]);const[expCats,setExpCats]=useState([]);
+  const[loading,setLoading]=useState(true);const[action,setAction]=useState(null);
+  const[amount,setAmount]=useState("");const[category,setCategory]=useState("");
+  const[reason,setReason]=useState("");const[note,setNote]=useState("");const[saving,setSaving]=useState(false);
+  async function load(){
+    setLoading(true);
+    try{const[m,e]=await Promise.all([api.getCashMovements(shift.id),api.getExpenseCats(currentBranch.id)]);setMovements(m);setExpCats(e);}
+    catch(err){alert("โหลดไม่สำเร็จ: "+err.message);}
+    setLoading(false);
+  }
+  useEffect(()=>{load();},[shift.id]);
+  const totals=useMemo(()=>{
+    let inCash=0,outCash=0,salesCash=0,refunds=0,drops=0;
+    movements.forEach(m=>{const a=+m.amount||0;if(m.type==='opening'||m.type==='pay_in')inCash+=a;else if(m.type==='sale')salesCash+=a;else if(m.type==='refund')refunds+=a;else if(m.type==='pay_out')outCash+=a;else if(m.type==='drop')drops+=a;});
+    return{inCash,outCash,salesCash,refunds,drops,expected:inCash+salesCash-refunds-outCash-drops};
+  },[movements]);
+  async function submit(){
+    const amt=+amount;if(isNaN(amt)||amt<=0){alert("กรุณาใส่จำนวนเงินมากกว่า 0");return;}
+    if(action==='out'&&!category){alert("กรุณาเลือกหมวดหมู่");return;}
+    if(!reason.trim()){alert("กรุณาระบุเหตุผล");return;}
+    setSaving(true);
+    try{
+      const type=action==='in'?'pay_in':action==='out'?'pay_out':'drop';
+      await api.addCashMovement({shift_id:shift.id,branch_id:currentBranch.id,type,amount:amt,category:action==='out'?category:null,reason,note:note||null,user_id:currentUser.id,username:currentUser.username});
+      setAmount("");setCategory("");setReason("");setNote("");setAction(null);await load();
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:12}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:780,maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
+      <div style={{padding:"14px 22px",background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{fontSize:26}}>💰</div>
+          <div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:900}}>เงินในลิ้นชัก</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,opacity:.85}}>กะ #{shift.id} · เปิดเมื่อ {new Date(shift.opened_at).toLocaleString("th-TH")}</div>
+          </div>
+        </div>
+        <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:32,height:32,cursor:"pointer",color:C.white,fontSize:18}}>✕</button>
+      </div>
+      <div style={{padding:"14px 22px",borderBottom:`1px solid ${C.line}`,background:C.bg,flexShrink:0}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+          {[
+            {l:"เงินเริ่มต้น+เข้า",v:totals.inCash,c:C.ink2},
+            {l:"ขายเงินสด",v:totals.salesCash,c:C.green},
+            {l:"จ่ายออก/ฝาก",v:-(totals.outCash+totals.drops+totals.refunds),c:C.red},
+            {l:"ยอดที่ควรมี",v:totals.expected,c:C.brand,bold:true},
+          ].map((s,i)=><div key={i} style={{background:C.white,padding:"9px 12px",borderRadius:10,border:`1.5px solid ${s.bold?C.brandBorder:C.line}`}}>
+            <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:600,marginBottom:3}}>{s.l}</div>
+            <div style={{fontSize:s.bold?20:15,fontWeight:s.bold?900:700,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>฿{(+s.v).toLocaleString()}</div>
+          </div>)}
+        </div>
+      </div>
+      {!action&&<div style={{padding:"14px 22px",borderBottom:`1px solid ${C.line}`,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,flexShrink:0}}>
+        {[
+          {a:'in',icon:"⬆️",l:"เงินเข้า",h:"เพิ่มทอน, ใส่เงิน",c:C.green,bg:C.greenLight},
+          {a:'out',icon:"⬇️",l:"จ่ายออก",h:"ค่าวัตถุดิบ, ค่าน้ำแข็ง",c:C.red,bg:C.redLight},
+          {a:'drop',icon:"🏦",l:"ฝาก/ถอนเซฟ",h:"นำเงินออกจากลิ้นชัก",c:C.blue,bg:C.blueLight},
+        ].map(b=><button key={b.a} onClick={()=>setAction(b.a)} style={{padding:"14px",borderRadius:12,border:`2px solid ${b.c}`,background:b.bg,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,textAlign:"center"}}>
+          <div style={{fontSize:24,marginBottom:4}}>{b.icon}</div>
+          <div style={{fontSize:13,color:b.c}}>{b.l}</div>
+          <div style={{fontSize:10,color:C.ink4,fontWeight:500,marginTop:2}}>{b.h}</div>
+        </button>)}
+      </div>}
+      {action&&<div style={{padding:"14px 22px",borderBottom:`1px solid ${C.line}`,background:action==='in'?C.greenLight:action==='out'?C.redLight:C.blueLight,flexShrink:0}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:action==='in'?C.green:action==='out'?C.red:C.blue}}>
+            {action==='in'?"⬆️ บันทึกเงินเข้า":action==='out'?"⬇️ บันทึกจ่ายออก":"🏦 บันทึกฝาก/ถอนเซฟ"}
+          </span>
+          <button onClick={()=>{setAction(null);setAmount("");setCategory("");setReason("");setNote("");}} style={{background:"none",border:"none",cursor:"pointer",color:C.ink3,fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>← กลับ</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:action==='out'?"1fr 1fr":"1fr",gap:10,marginBottom:10}}>
+          <div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5}}>จำนวนเงิน *</div>
+            <input type="number" autoFocus value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" style={{...iS,fontSize:20,fontWeight:900,padding:"10px 14px",textAlign:"center"}}/>
+          </div>
+          {action==='out'&&<div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5}}>หมวดหมู่ *</div>
+            <select value={category} onChange={e=>setCategory(e.target.value)} style={{...iS,appearance:"none",fontSize:14,padding:"11px 14px"}}>
+              <option value="">— เลือกหมวด —</option>
+              {expCats.map(c=><option key={c.id} value={c.name}>{c.icon||"•"} {c.name}</option>)}
+            </select>
+          </div>}
+        </div>
+        <div style={{marginBottom:10}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5}}>เหตุผล *</div>
+          <input value={reason} onChange={e=>setReason(e.target.value)} placeholder={action==='in'?"เช่น เพิ่มเงินทอน":action==='out'?"เช่น ซื้อมะนาว 2 กิโล":"เช่น ฝากเซฟกลางวัน"} style={{...iS,fontSize:13}}/>
+        </div>
+        <div style={{marginBottom:14}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5}}>หมายเหตุ</div>
+          <input value={note} onChange={e=>setNote(e.target.value)} placeholder="optional" style={{...iS,fontSize:13}}/>
+        </div>
+        <Btn onClick={submit} loading={saving} v={action==='in'?"success":action==='out'?"danger":"info"} full icon={I.check} s={{padding:"11px"}}>
+          {action==='in'?"บันทึกเงินเข้า":action==='out'?"บันทึกจ่ายออก":"บันทึกฝาก/ถอน"}
+        </Btn>
+      </div>}
+      <div style={{flex:1,overflowY:"auto",padding:"14px 22px"}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>📋 ประวัติเคลื่อนไหว ({movements.length})</div>
+        {loading?<div style={{padding:20,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>:movements.length===0?<div style={{textAlign:"center",padding:20,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>ยังไม่มีรายการ</div>:
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          {movements.map(m=>{
+            const ti=CASH_TYPE_INFO[m.type]||{l:m.type,icon:"•",c:C.ink3};
+            const isOut=['pay_out','drop','refund','closing'].includes(m.type);
+            return <div key={m.id} style={{background:C.bg,borderRadius:9,padding:"8px 12px",display:"flex",alignItems:"center",gap:10,borderLeft:`3px solid ${ti.c}`}}>
+              <div style={{fontSize:18}}>{ti.icon}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",gap:6,alignItems:"baseline",flexWrap:"wrap"}}>
+                  <span style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{ti.l}</span>
+                  {m.category&&<span style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>· {m.category}</span>}
+                </div>
+                {m.reason&&<div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>{m.reason}</div>}
+                <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>{m.username||'-'} · {new Date(m.created_at).toLocaleString("th-TH")}</div>
+              </div>
+              <div style={{fontSize:15,fontWeight:900,color:isOut?C.red:C.green,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{isOut?'-':'+'}฿{(+m.amount).toLocaleString()}</div>
+            </div>;
+          })}
+        </div>}
+      </div>
+    </div>
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── CLOSE SHIFT (Z-REPORT) ───────────────────────────
+// ══════════════════════════════════════════════════════
+function printZReport({shift,totals,branch,user,note}){
+  const w=window.open("","_blank","width=420,height=720");
+  if(!w){alert("กรุณาอนุญาต popup");return;}
+  const fmt=(v)=>(+v||0).toLocaleString();
+  const html=`<html><head><title>Z-Report กะ #${shift.id}</title>
+<style>body{font-family:'Sarabun',sans-serif;padding:14px;font-size:12px;line-height:1.6;color:#000}h2,h3{margin:0 0 6px}.center{text-align:center}.row{display:flex;justify-content:space-between;padding:2px 0}.div{border-top:1px dashed #000;margin:8px 0}.bold{font-weight:900}.big{font-size:16px}</style>
+</head><body>
+<div class="center">
+  <h2>${branch.name}</h2>
+  <div class="bold">═══ Z-REPORT ═══</div>
+  <div>กะ #${shift.id}</div>
+  <div>${user.name||user.username}</div>
+</div>
+<div class="div"></div>
+<div class="row"><span>เปิดกะ</span><span>${new Date(shift.opened_at).toLocaleString("th-TH")}</span></div>
+<div class="row"><span>ปิดกะ</span><span>${new Date().toLocaleString("th-TH")}</span></div>
+<div class="div"></div>
+<h3>📊 ยอดขาย</h3>
+<div class="row"><span>จำนวนบิล</span><span class="bold">${totals.orderCount} บิล</span></div>
+<div class="row"><span>ยอดขายรวม</span><span class="bold">฿${fmt(totals.totalSales)}</span></div>
+<div class="row"><span>&nbsp;&nbsp;• เงินสด</span><span>฿${fmt(totals.totalCash)}</span></div>
+<div class="row"><span>&nbsp;&nbsp;• โอน/พร้อมเพย์</span><span>฿${fmt(totals.totalTransfer)}</span></div>
+<div class="row"><span>&nbsp;&nbsp;• บัตร</span><span>฿${fmt(totals.totalCard)}</span></div>
+<div class="row"><span>&nbsp;&nbsp;• อื่นๆ</span><span>฿${fmt(totals.totalOther)}</span></div>
+<div class="div"></div>
+<h3>💰 ลิ้นชัก</h3>
+<div class="row"><span>เงินทอนเริ่มต้น</span><span>฿${fmt(totals.openingCash)}</span></div>
+<div class="row"><span>+ ขายเงินสด</span><span>฿${fmt(totals.salesCash)}</span></div>
+<div class="row"><span>+ รับเข้าเพิ่ม</span><span>฿${fmt(totals.payIn)}</span></div>
+<div class="row"><span>- จ่ายออก</span><span>฿${fmt(totals.payOut)}</span></div>
+<div class="row"><span>- ฝาก/ถอนเซฟ</span><span>฿${fmt(totals.drops)}</span></div>
+<div class="row"><span>- คืนเงิน</span><span>฿${fmt(totals.refunds)}</span></div>
+<div class="row bold"><span>= ยอดที่ควรมี</span><span>฿${fmt(totals.expected)}</span></div>
+<div class="div"></div>
+<div class="row big bold"><span>นับจริง</span><span>฿${fmt(totals.actual)}</span></div>
+<div class="row big bold" style="color:${totals.diff===0?'#10B981':totals.diff>0?'#3B82F6':'#EF4444'}"><span>${totals.diff===0?'✅ ตรงเป๊ะ':totals.diff>0?'📈 เกิน':'📉 ขาด'}</span><span>${totals.diff>0?'+':''}฿${fmt(Math.abs(totals.diff))}</span></div>
+${note?`<div class="div"></div><div><b>หมายเหตุ:</b> ${note}</div>`:''}
+<div class="div"></div>
+<div class="center" style="font-size:10px;color:#666;margin-top:10px">พิมพ์เมื่อ ${new Date().toLocaleString("th-TH")}</div>
+<script>setTimeout(()=>{window.print();},300);</script>
+</body></html>`;
+  w.document.write(html);w.document.close();
+}
+function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
+  const[movements,setMovements]=useState([]);const[orders,setOrders]=useState([]);
+  const[loading,setLoading]=useState(true);const[actualCash,setActualCash]=useState("");
+  const[note,setNote]=useState("");const[saving,setSaving]=useState(false);
+  async function load(){
+    setLoading(true);
+    try{
+      const[m,o]=await Promise.all([api.getCashMovements(shift.id),api.getPOSOrders(currentBranch.id)]);
+      setMovements(m);
+      const since=new Date(shift.opened_at).getTime();
+      setOrders((o||[]).filter(x=>x.status==='paid'&&new Date(x.updated_at||x.created_at).getTime()>=since));
+    }catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}
+    setLoading(false);
+  }
+  useEffect(()=>{load();},[shift.id]);
+  const totals=useMemo(()=>{
+    let openingCash=0,payIn=0,payOut=0,drops=0,refunds=0,salesCash=0;
+    movements.forEach(m=>{const a=+m.amount||0;if(m.type==='opening')openingCash+=a;else if(m.type==='pay_in')payIn+=a;else if(m.type==='pay_out')payOut+=a;else if(m.type==='drop')drops+=a;else if(m.type==='refund')refunds+=a;else if(m.type==='sale')salesCash+=a;});
+    let totalSales=0,totalCash=0,totalTransfer=0,totalCard=0,totalOther=0;
+    orders.forEach(o=>{const t=+o.total||0;totalSales+=t;const pm=o.payment_method;if(pm==='cash')totalCash+=t;else if(pm==='transfer'||pm==='promptpay')totalTransfer+=t;else if(pm==='credit'||pm==='debit')totalCard+=t;else totalOther+=t;});
+    const expected=openingCash+payIn+salesCash-payOut-drops-refunds;
+    const actual=+actualCash||0;
+    return{openingCash,payIn,payOut,drops,refunds,salesCash,totalSales,totalCash,totalTransfer,totalCard,totalOther,expected,actual,diff:actual-expected,orderCount:orders.length};
+  },[movements,orders,actualCash]);
+  async function closeShift(){
+    if(!await confirmDlg({title:"ยืนยันปิดกะ",message:`ยอดที่ควรมี ฿${totals.expected.toLocaleString()}\nนับจริง ฿${totals.actual.toLocaleString()}\n${totals.diff===0?'ตรงเป๊ะ':totals.diff>0?`เกิน ฿${totals.diff.toLocaleString()}`:`ขาด ฿${Math.abs(totals.diff).toLocaleString()}`}\n\nต้องการปิดกะใช่หรือไม่?`,confirmLabel:"ปิดกะ",danger:true}))return;
+    setSaving(true);
+    try{
+      await api.addCashMovement({shift_id:shift.id,branch_id:currentBranch.id,type:"closing",amount:totals.actual,reason:"ปิดกะ - นับเงินจริง",note:totals.diff!==0?`ส่วนต่าง ${totals.diff>=0?'+':''}${totals.diff}`:null,user_id:currentUser.id,username:currentUser.username});
+      await api.closeShift(shift.id,{status:"closed",closed_at:new Date().toISOString(),closing_cash:totals.actual,expected_cash:totals.expected,cash_diff:totals.diff,total_sales:totals.totalSales,total_cash:totals.totalCash,total_transfer:totals.totalTransfer,total_card:totals.totalCard,total_other:totals.totalOther,total_pay_in:totals.payIn,total_pay_out:totals.payOut,total_drop:totals.drops,order_count:totals.orderCount,notes:note||null});
+      printZReport({shift,totals,branch:currentBranch,user:currentUser,note});
+      onClosed();
+    }catch(e){alert("ปิดกะไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:12}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:680,maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
+      <div style={{padding:"14px 22px",background:"linear-gradient(135deg,#0F172A,#1E293B)",color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{fontSize:26}}>🔚</div>
+          <div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:900}}>ปิดกะการขาย</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,opacity:.85}}>{currentBranch.name} · กะ #{shift.id}</div>
+          </div>
+        </div>
+        <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:32,height:32,cursor:"pointer",color:C.white,fontSize:18}}>✕</button>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+        {loading?<div style={{padding:30,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>:<>
+        <div style={{background:C.bg,borderRadius:14,padding:14,marginBottom:14}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:10}}>📊 สรุปยอดขาย</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            {[
+              {l:"จำนวนออเดอร์",v:`${totals.orderCount} บิล`,c:C.ink2},
+              {l:"ยอดขายรวม",v:`฿${totals.totalSales.toLocaleString()}`,c:C.brand},
+              {l:"เงินสด",v:`฿${totals.totalCash.toLocaleString()}`,c:C.green},
+              {l:"โอน/พร้อมเพย์",v:`฿${totals.totalTransfer.toLocaleString()}`,c:C.blue},
+              {l:"บัตรเครดิต/เดบิต",v:`฿${totals.totalCard.toLocaleString()}`,c:C.purple},
+              {l:"อื่นๆ",v:`฿${totals.totalOther.toLocaleString()}`,c:C.ink3},
+            ].map((s,i)=><div key={i} style={{background:C.white,borderRadius:10,padding:"8px 12px",border:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{s.l}</span>
+              <span style={{fontSize:14,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</span>
+            </div>)}
+          </div>
+        </div>
+        <div style={{background:C.brandLight,borderRadius:14,padding:14,marginBottom:14,border:`1.5px solid ${C.brandBorder}`}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.brand,marginBottom:10}}>💰 เงินในลิ้นชัก</div>
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {[
+              {l:"เงินทอนเริ่มต้น",v:totals.openingCash},
+              {l:"+ ขายเงินสด",v:totals.salesCash},
+              {l:"+ รับเข้าเพิ่ม",v:totals.payIn},
+              {l:"- จ่ายออก",v:-totals.payOut},
+              {l:"- ฝาก/ถอนเซฟ",v:-totals.drops},
+              {l:"- คืนเงิน",v:-totals.refunds},
+            ].map((s,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>
+              <span style={{color:C.ink3}}>{s.l}</span>
+              <span style={{fontWeight:700,color:s.v<0?C.red:C.ink}}>฿{(+s.v).toLocaleString()}</span>
+            </div>)}
+            <div style={{display:"flex",justifyContent:"space-between",paddingTop:8,marginTop:4,borderTop:`1.5px dashed ${C.brand}55`,fontFamily:"'Sarabun',sans-serif"}}>
+              <span style={{fontWeight:800,color:C.brand,fontSize:14}}>= ยอดที่ควรมี</span>
+              <span style={{fontWeight:900,color:C.brand,fontSize:20}}>฿{totals.expected.toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+        <div style={{marginBottom:14}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🧮 นับเงินจริงในลิ้นชัก *</div>
+          <input type="number" value={actualCash} onChange={e=>setActualCash(e.target.value)} placeholder="0" style={{...iS,fontSize:24,fontWeight:900,padding:"14px 18px",textAlign:"center"}}/>
+          {actualCash!==""&&<div style={{marginTop:8,padding:"10px 14px",borderRadius:10,background:totals.diff===0?C.greenLight:totals.diff>0?C.blueLight:C.redLight,border:`1.5px solid ${totals.diff===0?C.green:totals.diff>0?C.blue:C.red}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:totals.diff===0?C.green:totals.diff>0?C.blue:C.red}}>
+              {totals.diff===0?"✅ ตรงเป๊ะ":totals.diff>0?"📈 เกิน":"📉 ขาด"}
+            </span>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:totals.diff===0?C.green:totals.diff>0?C.blue:C.red}}>{totals.diff>0?'+':''}฿{Math.abs(totals.diff).toLocaleString()}</span>
+          </div>}
+        </div>
+        <div style={{marginBottom:6}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:6}}>หมายเหตุปิดกะ</div>
+          <textarea value={note} onChange={e=>setNote(e.target.value)} rows={2} placeholder="เช่น เงินขาด 50 บาท เพราะจ่ายลูกค้าผิด..." style={{...iS,fontSize:13,resize:"none"}}/>
+        </div>
+        </>}
+      </div>
+      <div style={{padding:"12px 22px",borderTop:`1px solid ${C.line}`,background:C.bg,display:"flex",gap:8,flexShrink:0}}>
+        <Btn v="ghost" onClick={onClose} s={{padding:"11px 18px"}}>ยกเลิก</Btn>
+        <Btn onClick={closeShift} v="danger" loading={saving} disabled={actualCash===""||loading} full icon={I.print} s={{padding:"11px",fontSize:14,fontWeight:800}}>🔚 ปิดกะ & พิมพ์ Z-Report</Btn>
+      </div>
+    </div>
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── POS BACK OFFICE (หลังบ้าน) ─────────────────────────
+// ══════════════════════════════════════════════════════
+function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branches,onExit}){
+  const[section,setSection]=useState("tables");
+  const[tables,setTables]=useState([]);const[loadingT,setLoadingT]=useState(true);
+  const[shifts,setShifts]=useState([]);const[loadingS,setLoadingS]=useState(false);
+  async function loadTables(){setLoadingT(true);try{const t=await api.getPOSTables(currentBranch.id);setTables(t);}catch{}setLoadingT(false);}
+  async function loadShifts(){setLoadingS(true);try{const s=await api.getShifts(currentBranch.id,30);setShifts(s);}catch{}setLoadingS(false);}
+  useEffect(()=>{loadTables();},[]);
+  useEffect(()=>{if(section==="shifts")loadShifts();},[section]);
+  const SECS=[
+    {id:"tables",l:"ผังโต๊ะ",icon:I.table,c:C.brand},
+    {id:"printers",l:"เครื่องพิมพ์",icon:I.print,c:C.purple},
+    {id:"shifts",l:"ประวัติกะ",icon:I.clock,c:C.blue},
+  ];
+  return <div style={{margin:"-20px -24px",display:"flex",flexDirection:"column",height:"calc(100vh - 150px)"}}>
+    <div style={{padding:"0 16px",background:"linear-gradient(135deg,#0F172A,#1E293B)",borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",height:54,gap:2,flexShrink:0}}>
+      <button onClick={onExit} style={{background:"rgba(255,255,255,0.1)",border:"none",color:C.white,padding:"7px 14px",borderRadius:9,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,marginRight:14,display:"flex",alignItems:"center",gap:6}}>← กลับ</button>
+      <div style={{color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,marginRight:24}}>⚙️ จัดการหลังบ้าน</div>
+      {SECS.map(s=>{const active=section===s.id;return <button key={s.id} onClick={()=>setSection(s.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 14px",height:54,border:"none",background:active?"rgba(255,255,255,0.1)":"transparent",cursor:"pointer",fontSize:13,fontWeight:active?800:600,color:active?C.white:"rgba(255,255,255,0.5)",fontFamily:"'Sarabun',sans-serif",borderBottom:active?`3px solid ${s.c}`:"3px solid transparent",transition:"all .15s"}}><Ic d={s.icon} s={14} c={active?s.c:"rgba(255,255,255,0.5)"}/>{s.l}</button>;})}
+    </div>
+    <div style={{flex:1,overflow:"auto",padding:"20px 24px",background:C.bg}}>
+      {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} onDone={loadTables}/>)}
+      {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser}/>}
+      {section==="shifts"&&<POSShiftHistory shifts={shifts} loading={loadingS} reload={loadShifts}/>}
+    </div>
+  </div>;
+}
+
+function POSShiftHistory({shifts,loading,reload}){
+  if(loading)return <Loading text="โหลดประวัติกะ..."/>;
+  if(shifts.length===0)return <div style={{textAlign:"center",padding:60,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><Ic d={I.clock} s={48} c={C.line}/><p style={{marginTop:12}}>ยังไม่มีประวัติกะ</p></div>;
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+      <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,margin:0}}>ประวัติกะ ({shifts.length})</h3>
+      <Btn v="ghost" onClick={reload} icon={I.refresh} s={{padding:"7px 14px",fontSize:12}}>รีเฟรช</Btn>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:12}}>
+      {shifts.map(s=>{
+        const isOpen=s.status==='open';
+        return <Card key={s.id} style={{padding:0,overflow:"hidden"}}>
+          <div style={{padding:"10px 14px",background:isOpen?C.greenLight:C.bg,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:14,color:C.ink}}>กะ #{s.id}</div>
+            <Chip color={isOpen?"green":"gray"}>{isOpen?"เปิดอยู่":"ปิดแล้ว"}</Chip>
+          </div>
+          <div style={{padding:"12px 14px",fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,lineHeight:1.7}}>
+            <div>👤 {s.username||'-'}</div>
+            <div>🕐 เปิด: {new Date(s.opened_at).toLocaleString("th-TH")}</div>
+            {s.closed_at&&<div>🕔 ปิด: {new Date(s.closed_at).toLocaleString("th-TH")}</div>}
+            <div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed ${C.line}`,display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:12}}>
+              <div>เริ่มต้น: <b>฿{(+s.opening_cash||0).toLocaleString()}</b></div>
+              <div>บิล: <b>{s.order_count||0}</b></div>
+              <div>ขาย: <b style={{color:C.brand}}>฿{(+s.total_sales||0).toLocaleString()}</b></div>
+              <div>เงินสด: <b style={{color:C.green}}>฿{(+s.total_cash||0).toLocaleString()}</b></div>
+              {!isOpen&&<>
+                <div>ปิดที่: <b>฿{(+s.closing_cash||0).toLocaleString()}</b></div>
+                <div>ส่วนต่าง: <b style={{color:s.cash_diff===0?C.green:s.cash_diff>0?C.blue:C.red}}>{s.cash_diff>0?'+':''}฿{Math.abs(+s.cash_diff||0).toLocaleString()}</b></div>
+              </>}
+            </div>
+            {s.notes&&<div style={{marginTop:8,padding:"6px 10px",background:C.yellowLight,borderRadius:7,fontSize:11,color:C.ink3}}>📝 {s.notes}</div>}
+          </div>
+        </Card>;
+      })}
+    </div>
+  </div>;
+}
+
+// Printer panel (extracted from SettingsTab for back-office)
+function POSPrinterPanel({printers,reloadPrinters,branches,currentUser}){
+  const isAdmin=hasPerm(currentUser,"settings")||hasPerm(currentUser,"pos");
+  const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
+  const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
+  const[testResults,setTestResults]=useState({});const[btScanning,setBtScanning]=useState(false);
+  async function testPrinter(p){
+    const conn=getPConn(p);
+    setTestResults(r=>({...r,[p.id]:{status:"testing"}}));
+    if(conn.type==="bluetooth"){
+      try{
+        if(!navigator.bluetooth)throw new Error("เบราว์เซอร์ไม่รองรับ Bluetooth");
+        const device=await navigator.bluetooth.requestDevice({filters:conn.btName?[{name:conn.btName}]:undefined,acceptAllDevices:!conn.btName,optionalServices:_BT_SVC});
+        const server=await device.gatt.connect();await server.getPrimaryServices();device.gatt.disconnect();
+        setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"เชื่อมต่อ Bluetooth สำเร็จ: "+device.name}}));
+      }catch(e){setTestResults(r=>({...r,[p.id]:{status:"fail",msg:e.message}}));}
+      return;
+    }
+    const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),4000);
+    try{await fetch(`http://${p.ip}:${p.port||9100}/`,{mode:"no-cors",signal:ctrl.signal,cache:"no-store"});clearTimeout(tid);setTestResults(r=>({...r,[p.id]:{status:"ok",msg:"เชื่อมต่อได้ปกติ"}}));}
+    catch(e){clearTimeout(tid);setTestResults(r=>({...r,[p.id]:{status:"fail",msg:e.name==="AbortError"?"หมดเวลา ไม่ตอบสนอง (4s)":"เชื่อมต่อไม่ได้"}}));}
+  }
+  async function scanBTPrinter(all=false){
+    if(!navigator.bluetooth){alert("เบราว์เซอร์ไม่รองรับ Bluetooth ต้องใช้ Chrome/Edge");return;}
+    setBtScanning(true);
+    try{
+      const opts=all?{acceptAllDevices:true,optionalServices:_BT_SVC}:{filters:[{namePrefix:"XP-"},{namePrefix:"Xprinter"},{namePrefix:"MTP"},{namePrefix:"MPT"},{namePrefix:"RPP"},{namePrefix:"BT Printer"},{namePrefix:"BT-Printer"},{namePrefix:"Printer"},{namePrefix:"POS"},{namePrefix:"Thermal"},{namePrefix:"SPP"},{namePrefix:"GP-"},{namePrefix:"Gprinter"},{namePrefix:"PT-"},{namePrefix:"MP-"},{namePrefix:"P80"},{namePrefix:"P58"},{namePrefix:"HOIN"},{namePrefix:"Goojprt"},{namePrefix:"GOOJPRT"},{namePrefix:"BlueTooth"},{namePrefix:"HC-"},{namePrefix:"ESC"},{namePrefix:"TP"},..._BT_SVC.map(s=>({services:[s]}))],optionalServices:_BT_SVC};
+      const device=await navigator.bluetooth.requestDevice(opts);
+      setPForm(f=>({...f,btName:device.name||"",conn:"bluetooth"}));
+    }catch(e){
+      if(e.name==="NotFoundError"&&!all){if(await confirmDlg({title:"ไม่พบเครื่องปริ้น",message:"ไม่พบอุปกรณ์ที่ตรงกับชื่อเครื่องปริ้น\nต้องการแสดงอุปกรณ์ Bluetooth ทั้งหมดไหม?",confirmLabel:"แสดงทั้งหมด",danger:false})){setBtScanning(false);scanBTPrinter(true);return;}}
+      else if(e.name!=="NotFoundError"&&e.name!=="NotAllowedError")alert("เกิดข้อผิดพลาด: "+e.message);
+    }
+    setBtScanning(false);
+  }
+  async function savePrinter(){
+    const isBT=pForm.conn==="bluetooth";
+    if(!pForm.name||(isBT?!pForm.btName:!pForm.ip))return;
+    setPSaving(true);
+    try{
+      const d={name:pForm.name,ip:isBT?"bluetooth":pForm.ip,port:isBT?0:+pForm.port||9100,type:pForm.type,branch_id:pForm.branch_id||null,active:true,description:isBT?JSON.stringify({c:"bt",n:pForm.btName}):pForm.description};
+      if(editPID)await api.updatePrinter(editPID,d);else await api.addPrinter(d);
+      await reloadPrinters();setPForm(pF0);setEditPID(null);
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setPSaving(false);
+  }
+  return <div>
+    <div style={{background:"linear-gradient(135deg,#0F172A 0%,#1E293B 100%)",borderRadius:16,padding:"22px 26px",marginBottom:20,display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 4px 24px rgba(15,23,42,0.18)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:14}}>
+        <div style={{width:48,height:48,background:"linear-gradient(135deg,#6366F1,#8B5CF6)",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.print} s={22} c="#fff" sw={1.5}/></div>
+        <div>
+          <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:"#F8FAFC",margin:0}}>เครื่องพิมพ์</h2>
+          <p style={{fontSize:12,color:"rgba(255,255,255,0.45)",margin:"3px 0 0",fontFamily:"'Sarabun',sans-serif"}}>Network/Bluetooth Printer — Xprinter / ESC-POS 80mm</p>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        {[{label:"ทั้งหมด",count:printers.length,color:"#6366F1"},{label:"ครัว",count:printers.filter(p=>p.type==="kitchen").length,color:"#F59E0B"},{label:"บาร์",count:printers.filter(p=>p.type==="bar").length,color:"#10B981"},{label:"แคชเชียร์",count:printers.filter(p=>p.type==="receipt").length,color:"#3B82F6"}].map(s=><div key={s.label} style={{textAlign:"center",background:"rgba(255,255,255,0.07)",borderRadius:10,padding:"7px 14px",border:"1px solid rgba(255,255,255,0.1)"}}>
+          <div style={{fontSize:18,fontWeight:900,color:s.color,lineHeight:1}}>{s.count}</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.45)",fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{s.label}</div>
+        </div>)}
+      </div>
+    </div>
+    {isAdmin&&<div style={{background:C.white,borderRadius:14,border:`1px solid ${C.line}`,marginBottom:20,overflow:"hidden",boxShadow:"0 2px 12px rgba(0,0,0,0.05)"}}>
+      <div style={{padding:"14px 22px",borderBottom:`1px solid ${C.line}`,background:editPID?"#FFF7ED":"#F8FAFF",display:"flex",alignItems:"center",gap:10}}>
+        <div style={{width:28,height:28,background:editPID?"#F59E0B22":"#6366F122",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={editPID?I.pencil:I.plus} s={13} c={editPID?"#F59E0B":"#6366F1"}/></div>
+        <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{editPID?"แก้ไขเครื่องพิมพ์":"เพิ่มเครื่องพิมพ์ใหม่"}</span>
+        {editPID&&<Chip color="yellow">กำลังแก้ไข</Chip>}
+      </div>
+      <div style={{padding:"18px 22px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1.4fr 1fr 1fr",gap:12,marginBottom:12}}>
+          <Inp label="ชื่อเครื่องพิมพ์ *" value={pForm.name} onChange={e=>setPForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัวหลัก, บาร์"/>
+          <div>
+            <label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ประเภทการเชื่อมต่อ</label>
+            <div style={{display:"flex",gap:0,borderRadius:10,overflow:"hidden",border:`1.5px solid ${C.line}`}}>
+              {[{v:"ip",label:"🌐 IP"},{v:"bluetooth",label:"📶 BT"}].map(o=><button key={o.v} onClick={()=>setPForm(f=>({...f,conn:o.v}))} style={{flex:1,padding:"9px 0",border:"none",background:pForm.conn===o.v?`linear-gradient(135deg,${C.brand},${C.brandDark})`:C.white,color:pForm.conn===o.v?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer"}}>{o.label}</button>)}
+            </div>
+          </div>
+          <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ประเภท</label><select value={pForm.type} onChange={e=>setPForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="kitchen">🍳 ครัว</option><option value="bar">🍹 บาร์</option><option value="receipt">🧾 แคชเชียร์</option><option value="other">📄 อื่นๆ</option></select></div>
+          <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{(branches||[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+        </div>
+        {pForm.conn==="ip"?<div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:12,marginBottom:12,alignItems:"flex-end"}}>
+          <Inp label="IP Address *" value={pForm.ip} onChange={e=>setPForm(f=>({...f,ip:e.target.value}))} placeholder="192.168.1.100"/>
+          <Inp label="Port" type="number" value={pForm.port} onChange={e=>setPForm(f=>({...f,port:+e.target.value}))} placeholder="9100" style={{width:90}}/>
+          <Inp label="หมายเหตุ" value={pForm.description} onChange={e=>setPForm(f=>({...f,description:e.target.value}))} placeholder="ครัวหลัก..."/>
+        </div>:<div style={{marginBottom:12,background:C.bg,borderRadius:10,padding:"14px 16px",border:`1.5px dashed ${C.brand}44`}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>อุปกรณ์ Bluetooth</div>
+          {pForm.btName?<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+            <div style={{width:34,height:34,background:C.brandLight,borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17}}>📶</div>
+            <div><div style={{fontWeight:800,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{pForm.btName}</div><div style={{fontSize:11,color:C.green,fontWeight:600}}>✅ จับคู่แล้ว</div></div>
+            <button onClick={()=>setPForm(f=>({...f,btName:""}))} style={{marginLeft:"auto",background:C.redLight,border:"none",borderRadius:7,padding:"4px 9px",cursor:"pointer",color:C.red,fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
+          </div>:<div style={{color:C.ink4,fontSize:12,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>ยังไม่ได้จับคู่อุปกรณ์</div>}
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <button onClick={()=>scanBTPrinter(false)} disabled={btScanning} style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,border:"none",borderRadius:9,padding:"8px 16px",cursor:btScanning?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,opacity:btScanning?.6:1,display:"flex",alignItems:"center",gap:6}}>📶 {btScanning?"กำลังสแกน...":"สแกนเครื่องปริ้น"}</button>
+            <button onClick={()=>scanBTPrinter(true)} disabled={btScanning} style={{background:C.white,color:C.ink2,border:`1.5px solid ${C.line}`,borderRadius:9,padding:"8px 14px",cursor:btScanning?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:600,opacity:btScanning?.6:1}}>🔍 แสดงทั้งหมด</button>
+          </div>
+        </div>}
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          {editPID&&<Btn v="ghost" onClick={()=>{setPForm(pF0);setEditPID(null);}}>ยกเลิก</Btn>}
+          <Btn onClick={savePrinter} icon={I.check} disabled={!pForm.name||(pForm.conn==="bluetooth"?!pForm.btName:!pForm.ip)} loading={pSaving} s={{minWidth:160}}>{editPID?"บันทึกการแก้ไข":"เพิ่มเครื่องพิมพ์"}</Btn>
+        </div>
+      </div>
+    </div>}
+    <div style={{marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,margin:0}}>เครื่องพิมพ์ที่เชื่อมต่อ <span style={{fontSize:12,fontWeight:600,color:C.ink4}}>({printers.length} เครื่อง)</span></h3>
+      <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",background:C.blueLight,padding:"5px 12px",borderRadius:18,border:`1px solid #BFDBFE`}}>💡 ไปที่หน้า <b>เมนู</b> เพื่อกำหนดเครื่องพิมพ์ให้แต่ละเมนู</div>
+    </div>
+    {printers.length===0?<div style={{background:C.white,border:`2px dashed ${C.line}`,borderRadius:14,padding:"50px 20px",textAlign:"center"}}>
+      <div style={{width:56,height:56,background:C.lineLight,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}><Ic d={I.print} s={26} c={C.ink4}/></div>
+      <div style={{fontSize:15,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>ยังไม่มีเครื่องพิมพ์</div>
+      <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มเครื่องพิมพ์แรกของคุณด้านบน</div>
+    </div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:14}}>
+      {printers.map(p=>{
+        const typeConf={kitchen:{label:"ครัว",emoji:"🍳",color:"#F59E0B",bg:"#FFFBEB",border:"#FDE68A"},bar:{label:"บาร์",emoji:"🍹",color:"#10B981",bg:"#ECFDF5",border:"#A7F3D0"},receipt:{label:"แคชเชียร์",emoji:"🧾",color:"#3B82F6",bg:"#EFF6FF",border:"#BFDBFE"},other:{label:"อื่นๆ",emoji:"📄",color:"#8B5CF6",bg:"#F5F3FF",border:"#DDD6FE"}}[p.type]||{label:p.type,emoji:"🖨️",color:C.ink3,bg:C.bg,border:C.line};
+        return <div key={p.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
+          <div style={{padding:"14px 18px 12px",borderBottom:`1px solid ${C.line}`,background:`linear-gradient(135deg,${typeConf.bg},${C.white})`,display:"flex",alignItems:"flex-start",gap:12}}>
+            <div style={{width:42,height:42,background:typeConf.bg,border:`2px solid ${typeConf.border}`,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{typeConf.emoji}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:800,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginBottom:4}}>{p.name}</div>
+              <div style={{display:"inline-flex",alignItems:"center",gap:5,background:typeConf.bg,border:`1px solid ${typeConf.border}`,borderRadius:18,padding:"2px 10px"}}>
+                <span style={{fontSize:11,fontWeight:700,color:typeConf.color,fontFamily:"'Sarabun',sans-serif"}}>{typeConf.label}</span>
+              </div>
+            </div>
+            {isAdmin&&<div style={{display:"flex",gap:5,flexShrink:0}}>
+              <button onClick={()=>{const pc=getPConn(p);setPForm({name:p.name,ip:pc.type==="bluetooth"?"":p.ip,port:p.port||9100,description:pc.type==="bluetooth"?"":p.description||"",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active,conn:pc.type,btName:pc.btName||""});setEditPID(p.id);}} title="แก้ไข" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:8,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.pencil} s={12} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>แก้</span></button>
+              <button onClick={async()=>{if(!await confirmDlg({title:"ลบเครื่องปริ้น",message:`ต้องการลบ "${p.name}" ใช่หรือไม่?`}))return;try{await api.deletePrinter(p.id);await reloadPrinters();}catch{alert("ลบไม่สำเร็จ");}}} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:8,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.trash} s={12} c={C.red}/><span style={{fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ลบ</span></button>
+            </div>}
+          </div>
+          <div style={{padding:"12px 18px"}}>
+            {(()=>{const tr=testResults[p.id];const dotColor=!tr?C.ink3:tr.status==="testing"?C.yellow:tr.status==="ok"?C.green:C.red;const pc=getPConn(p);const isBT=pc.type==="bluetooth";return<div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:"#F8FAFC",borderRadius:9,border:`1px solid ${tr?.status==="ok"?C.green:tr?.status==="fail"?C.red:C.line}`}}>
+              <div style={{width:9,height:9,borderRadius:"50%",background:dotColor,boxShadow:`0 0 6px ${dotColor}88`,flexShrink:0,animation:tr?.status==="testing"?"pulse 1s infinite":"none"}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontSize:10,background:isBT?C.brandLight:C.blueLight,color:isBT?C.brand:C.blue,border:`1px solid ${isBT?C.brandBorder:"#BFDBFE"}`,borderRadius:5,padding:"1px 6px",fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{isBT?"📶 BT":"🌐 IP"}</span>
+                  <span style={{fontSize:12,fontWeight:800,color:C.ink,fontFamily:"monospace"}}>{isBT?pc.btName||"—":`${p.ip}:${p.port||9100}`}</span>
+                </div>
+                <div style={{fontSize:10,color:tr?.status==="ok"?C.green:tr?.status==="fail"?C.red:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:tr?600:400,marginTop:1}}>
+                  {!tr&&(isBT?"กดทดสอบเพื่อจับคู่":"IP : Port")}
+                  {tr?.status==="testing"&&"⏳ กำลังทดสอบ..."}
+                  {tr?.status==="ok"&&`✅ ${tr.msg}`}
+                  {tr?.status==="fail"&&`❌ ${tr.msg}`}
+                </div>
+              </div>
+              <button onClick={()=>testPrinter(p)} disabled={testResults[p.id]?.status==="testing"} style={{padding:"5px 12px",borderRadius:7,border:`1.5px solid ${C.brand}`,background:testResults[p.id]?.status==="testing"?C.lineLight:C.brandLight,color:C.brand,cursor:testResults[p.id]?.status==="testing"?"not-allowed":"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{testResults[p.id]?.status==="testing"?"...":"🔌 ทดสอบ"}</button>
+            </div>;})()}
+            {p.branch_id&&(branches||[]).find(b=>b.id===p.branch_id)&&<div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:6,display:"flex",alignItems:"center",gap:5}}><Ic d={I.branch} s={12} c={C.ink4}/>สาขา: <b>{branches.find(b=>b.id===p.branch_id)?.name}</b></div>}
+            {!p.branch_id&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",marginTop:6,display:"flex",alignItems:"center",gap:5}}><Ic d={I.shop} s={12} c={C.teal}/>ใช้งานได้ทุกสาขา</div>}
+          </div>
+        </div>;
+      })}
+    </div>}
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── POS SALE MODE (โหมดขายหน้าร้าน) ────────────────────
+// ══════════════════════════════════════════════════════
+function POSSaleMode({menus,currentBranch,currentUser,printers=[],shift,onUpdateShift,onCashDrawer,onCloseShift,onExitMode}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
   const[loading,setLoading]=useState(true);
   const[selTable,setSelTable]=useState(null);const[selOrder,setSelOrder]=useState(null);
-  const[showManage,setShowManage]=useState(false);
   const timerRef=useRef(null);
   const canEdit=hasPerm(currentUser,"pos");
 
@@ -3529,11 +4134,21 @@ function POSTab({menus,currentBranch,currentUser,printers=[]}){
   const todayRev=todayOrders.reduce((s,o)=>s+(o.total||0),0);
 
   return <div style={{margin:"-20px -24px",display:"flex",flexDirection:"column",height:"calc(100vh - 150px)"}}>
+    {/* Shift indicator strip */}
+    <div style={{padding:"6px 16px",background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,display:"flex",alignItems:"center",gap:14,fontSize:12,fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
+      <span style={{fontSize:14}}>💵</span>
+      <span style={{fontWeight:700}}>กะ #{shift.id}</span>
+      <span style={{opacity:.85}}>เปิดเมื่อ {new Date(shift.opened_at).toLocaleTimeString("th-TH",{hour:'2-digit',minute:'2-digit'})}</span>
+      <span style={{opacity:.85}}>· ทอนเริ่มต้น ฿{(+shift.opening_cash||0).toLocaleString()}</span>
+      <span style={{opacity:.85,marginLeft:"auto"}}>{shift.username}</span>
+    </div>
     <div style={{padding:"0 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",height:46,gap:2,flexShrink:0}}>
       {PTABS.map(t=>{const active=posTab===t.id;return <button key={t.id} onClick={()=>setPosTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:"none",cursor:"pointer",fontSize:12,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s"}}><Ic d={t.icon} s={13} c={active?C.brand:C.ink4}/>{t.l}</button>;})}
       <div style={{marginLeft:"auto",display:"flex",gap:6}}>
-        {canEdit&&<Btn v="ghost" onClick={()=>setShowManage(true)} icon={I.settings} s={{padding:"5px 10px",fontSize:12}}>จัดการโต๊ะ</Btn>}
+        <Btn v="success" onClick={onCashDrawer} icon={I.cash} s={{padding:"5px 12px",fontSize:12}}>💰 เงินในลิ้นชัก</Btn>
+        {canEdit&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
         <Btn v="ghost" onClick={loadAll} icon={I.refresh} s={{padding:"5px 10px",fontSize:12}}>รีเฟรช</Btn>
+        <Btn v="ghost" onClick={onExitMode} s={{padding:"5px 10px",fontSize:12}}>← โหมด</Btn>
       </div>
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
@@ -3572,12 +4187,40 @@ function POSTab({menus,currentBranch,currentUser,printers=[]}){
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
         <button onClick={()=>printTableQR(selTable,currentBranch)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
-      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} branch={currentBranch} currentUser={currentUser} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
-    </Modal>}
-    {showManage&&<Modal title="⚙️ จัดการโต๊ะ" onClose={()=>{setShowManage(false);loadAll();}} wide>
-      <POSTableManage tables={tables} branch={currentBranch} onDone={loadAll}/>
+      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} branch={currentBranch} currentUser={currentUser} shift={shift} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
     </Modal>}
   </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── POS TAB (top-level wrapper: mode + shift) ────────
+// ══════════════════════════════════════════════════════
+function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadPrinters}){
+  const[mode,setMode]=useState(null);  // null | 'sale' | 'manage'
+  const[shift,setShift]=useState(null);
+  const[loadingShift,setLoadingShift]=useState(false);
+  const[showCashDrawer,setShowCashDrawer]=useState(false);
+  const[showCloseShift,setShowCloseShift]=useState(false);
+
+  useEffect(()=>{
+    if(mode!=='sale'){setShift(null);return;}
+    setLoadingShift(true);
+    api.getActiveShift(currentBranch.id).then(s=>{
+      setShift(s&&s.length?s[0]:null);
+      setLoadingShift(false);
+    }).catch(e=>{setLoadingShift(false);alert("โหลดข้อมูลกะไม่สำเร็จ: "+e.message);});
+  },[mode,currentBranch.id]);
+
+  if(mode===null)return <POSModeSelect onSelect={setMode}/>;
+  if(mode==='manage')return <POSBackOffice currentBranch={currentBranch} currentUser={currentUser} printers={printers} reloadPrinters={reloadPrinters} branches={branches} onExit={()=>setMode(null)}/>;
+  // mode === 'sale'
+  if(loadingShift)return <Loading text="ตรวจสอบกะการขาย..."/>;
+  if(!shift)return <OpenShiftModal currentBranch={currentBranch} currentUser={currentUser} onDone={s=>setShift(s)} onCancel={()=>setMode(null)}/>;
+  return <>
+    <POSSaleMode menus={menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={()=>setMode(null)}/>
+    {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCashDrawer(false)}/>}
+    {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShift(null);setMode(null);}}/>}
+  </>;
 }
 
 
