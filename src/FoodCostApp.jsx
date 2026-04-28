@@ -252,7 +252,7 @@ function ConfirmDlg(){
   const cancel=o.cancelLabel||"ยกเลิก";
   const accent=danger?C.red:C.brand;
   const accentLight=danger?C.redLight:C.brandLight;
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:16}} onClick={e=>e.target===e.currentTarget&&close(false)}>
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}} onClick={e=>e.target===e.currentTarget&&close(false)}>
     <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:420,boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:"30px 28px 20px",textAlign:"center"}}>
         <div style={{width:68,height:68,margin:"0 auto 18px",borderRadius:"50%",background:accentLight,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 8px 24px ${accent}33`,border:`1px solid ${accent}22`}}>
@@ -2757,7 +2757,7 @@ export default function App(){
 // ══════════════════════════════════════════════════════
 // ── PRINT HELPERS ─────────────────────────────────────
 // ══════════════════════════════════════════════════════
-const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",other:"➕ อื่นๆ"};
+const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
 function printReceipt(order, tableNum, branchName, posSettings=null){
   const w=window.open("","_blank","width=400,height=700");
   const rows=(order.items||[]).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${i.name}${i.note?`<br/><span style="font-size:11px;color:#666">★${i.note}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?i.item_discount_value+"%":"฿"+i.item_discount_value}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
@@ -3155,13 +3155,13 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   function rmItem(idx){setItems(p=>p.filter((_,i)=>i!==idx));}
 
   async function voidItem(idx){
-    if(!await confirmDlg(`ยกเลิก "${items[idx]?.name}"?`,"ยกเลิกรายการ","ไม่ยกเลิก"))return;
-    const voided={...items[idx],voided:true,qty_voided:items[idx].qty};
+    if(existingOrder?.status==="paid"){alert("ไม่สามารถยกเลิกรายการของบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'รับเงินเข้า/จ่ายออก' ในเงินในลิ้นชัก");return;}
+    if(!await confirmDlg({message:`ยกเลิก "${items[idx]?.name}"?`,title:"ยกเลิกรายการ",confirmLabel:"ยกเลิกรายการ",cancelLabel:"ไม่ยกเลิก",danger:true}))return;
     const newItems=items.filter((_,i)=>i!==idx);
     if(existingOrder?.id){
       try{
         const newSub=newItems.reduce((s,i)=>s+i.price*i.qty,0);
-        await api.updatePOSOrder(existingOrder.id,{items:newItems,subtotal:newSub,total:newSub,updated_at:new Date().toISOString()});
+        await api.updatePOSOrder(existingOrder.id,{items:newItems,subtotal:newSub,total:newSub,discount:0,updated_at:new Date().toISOString()});
       }catch(e){alert("ยกเลิกรายการไม่สำเร็จ: "+e.message);return;}
     }
     setItems(newItems);
@@ -3173,7 +3173,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 
   async function cancelOrder(){
     if(!existingOrder?.id)return;
-    if(!await confirmDlg(`ยกเลิกออเดอร์ทั้งหมดของโต๊ะ ${table.table_number}?`,"ยกเลิกออเดอร์","ไม่ยกเลิก"))return;
+    if(existingOrder.status==="paid"){alert("ไม่สามารถยกเลิกบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'จ่ายออก' ในเงินในลิ้นชัก");return;}
+    if(!await confirmDlg({message:`ยกเลิกออเดอร์ทั้งหมดของโต๊ะ ${table.table_number}?`,title:"ยกเลิกออเดอร์",confirmLabel:"ยกเลิกออเดอร์",cancelLabel:"ไม่ยกเลิก",danger:true}))return;
     try{await api.updatePOSOrder(existingOrder.id,{status:"cancelled",updated_at:new Date().toISOString()});onDone();onClose();}
     catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
   }
@@ -3181,7 +3182,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   function reprintReceipt(){
     if(!existingOrder?.id)return;
     const pm=existingOrder.payment_method||payMethod;
-    printReceipt({...existingOrder,items,subtotal,discount:existingOrder.discount||totalDiscount,total:existingOrder.total||total,payment_method:pm},table.table_number,branch.name);
+    // Pull stored breakdown if available, otherwise use live computation
+    const data={...existingOrder,items,subtotal,discount:existingOrder.discount||totalDiscount,total:existingOrder.total||total,payment_method:pm,
+      service_charge:existingOrder.service_charge||sc,vat:existingOrder.vat||vat,vat_rate:existingOrder.vat_rate||vatRate,vat_included:existingOrder.vat_included!=null?existingOrder.vat_included:vatIncluded,
+      promo_amount:existingOrder.promo_amount||promoDiscount,promo_name:existingOrder.promo_name||selectedPromo?.name};
+    printReceipt(data,table.table_number,branch.name,posSettings);
   }
 
   async function saveOrder(){
@@ -3340,7 +3345,13 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         </div>
         <div style={{display:"flex",gap:8}}>
           <Btn v="ghost" onClick={()=>{setShowSplitBill(false);setSplitSel({});}} full s={{padding:"9px"}}>ปิด</Btn>
-          <Btn icon={I.print} onClick={()=>{if(splitItems.length===0){alert("กรุณาเลือกรายการ");return;}printReceipt({items:splitItems,subtotal:splitSubtotal,discount:0,total:splitSubtotal,payment_method:"-"},table.table_number,branch.name);}} full s={{padding:"9px"}}>พิมพ์บิลแยก</Btn>
+          <Btn icon={I.print} onClick={()=>{if(splitItems.length===0){alert("กรุณาเลือกรายการ");return;}
+            // Compute proportional SC/VAT for the split (relative to original subtotal)
+            const ratio=subtotal>0?splitSubtotal/subtotal:0;
+            const splitSC=sc*ratio,splitVAT=vat*ratio;
+            const splitTotal=vatIncluded?splitSubtotal+splitSC:splitSubtotal+splitSC+splitVAT;
+            printReceipt({items:splitItems,subtotal:splitSubtotal,discount:0,total:splitTotal,payment_method:"split",service_charge:splitSC,vat:splitVAT,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,branch.name,posSettings);
+          }} full s={{padding:"9px"}}>พิมพ์บิลแยก (ตัวอย่าง)</Btn>
         </div>
       </div>
     </div>}
@@ -3488,9 +3499,15 @@ function CustomerPage({branchId,tableId}){
     setSending(true);
     try{
       const ex=await api.getOrderByTable(+tableId);
-      const data={branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,items:cart,subtotal:total,discount:0,total,status:"pending",ordered_by:"customer",updated_at:new Date().toISOString()};
-      if(ex&&ex.length>0){const merged=[...ex[0].items,...cart];await api.updatePOSOrder(ex[0].id,{...data,items:merged,subtotal:merged.reduce((s,i)=>s+i.price*i.qty,0),total:merged.reduce((s,i)=>s+i.price*i.qty,0)});}
-      else await api.createPOSOrder(data);
+      if(ex&&ex.length>0){
+        // Merge into existing order — preserve status/discount/promo/sc/vat that staff may have applied
+        const merged=[...ex[0].items,...cart];
+        const newSub=merged.reduce((s,i)=>s+i.price*i.qty,0);
+        await api.updatePOSOrder(ex[0].id,{items:merged,subtotal:newSub,total:newSub,updated_at:new Date().toISOString()});
+      }else{
+        const data={branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,items:cart,subtotal:total,discount:0,total,status:"pending",ordered_by:"customer",updated_at:new Date().toISOString()};
+        await api.createPOSOrder(data);
+      }
       setDone(true);
       loadMyOrder();
     }catch(e){alert("สั่งไม่สำเร็จ กรุณาลองใหม่");}setSending(false);
@@ -3677,7 +3694,7 @@ function POSQRPage({branch,tables}){
 // ══════════════════════════════════════════════════════
 // ── POS MODE SELECTOR ─────────────────────────────────
 // ══════════════════════════════════════════════════════
-function POSModeSelect({onSelect}){
+function POSModeSelect({onSelect,canManage=true}){
   return <div style={{minHeight:"calc(100vh - 140px)",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight} 0%,#FFFBEB 100%)`,margin:"-20px -24px",padding:24}}>
     <div style={{background:C.white,borderRadius:24,padding:"40px 36px",maxWidth:620,width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
       <div style={{textAlign:"center",marginBottom:30}}>
@@ -3687,17 +3704,17 @@ function POSModeSelect({onSelect}){
         <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900,color:C.ink,margin:"0 0 6px"}}>ระบบขายหน้าร้าน</h2>
         <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,color:C.ink3,margin:0}}>เลือกโหมดการใช้งาน</p>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+      <div style={{display:"grid",gridTemplateColumns:canManage?"1fr 1fr":"1fr",gap:14,maxWidth:canManage?"none":300,margin:canManage?0:"0 auto"}}>
         <button onClick={()=>onSelect('sale')} style={{padding:"26px 18px",border:`2px solid ${C.brandBorder}`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.brandLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.brand}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.brandBorder;e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
           <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>🛒</div>
           <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>เข้าสู่การขายหน้าร้าน</div>
           <div style={{fontSize:12,color:C.ink3,lineHeight:1.6}}>เปิดกะ • รับออเดอร์ • ชำระเงิน<br/>จัดการเงินในลิ้นชัก</div>
         </button>
-        <button onClick={()=>onSelect('manage')} style={{padding:"26px 18px",border:`2px solid #DDD6FE`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.purpleLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.purple;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.purple}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#DDD6FE";e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+        {canManage&&<button onClick={()=>onSelect('manage')} style={{padding:"26px 18px",border:`2px solid #DDD6FE`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.purpleLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.purple;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.purple}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#DDD6FE";e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
           <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.purple},#7C3AED)`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>⚙️</div>
           <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>จัดการหลังบ้าน</div>
           <div style={{fontSize:12,color:C.ink3,lineHeight:1.6}}>จัดผังโต๊ะ • ตั้งค่าเครื่องพิมพ์<br/>ประวัติกะ • รายงาน</div>
-        </button>
+        </button>}
       </div>
     </div>
   </div>;
@@ -3940,7 +3957,15 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
       const[m,o]=await Promise.all([api.getCashMovements(shift.id),api.getPOSOrders(currentBranch.id)]);
       setMovements(m);
       const since=new Date(shift.opened_at).getTime();
-      setOrders((o||[]).filter(x=>x.status==='paid'&&new Date(x.updated_at||x.created_at).getTime()>=since));
+      // Source of truth: orders linked via cash_movements (sale rows) PLUS any paid orders updated in shift window
+      const linkedIds=new Set(m.filter(x=>x.type==='sale'&&x.order_id).map(x=>x.order_id));
+      const inShift=(o||[]).filter(x=>{
+        if(x.status!=='paid')return false;
+        if(linkedIds.has(x.id))return true;
+        const u=new Date(x.updated_at||x.created_at).getTime();
+        return u>=since;
+      });
+      setOrders(inShift);
     }catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}
     setLoading(false);
   }
@@ -4310,12 +4335,35 @@ function evalPromotions(promos,context){
     if(!p.active)return false;
     if(p.start_date&&ymd<p.start_date)return false;
     if(p.end_date&&ymd>p.end_date)return false;
-    if(p.start_time&&hhmm<p.start_time.slice(0,5))return false;
-    if(p.end_time&&hhmm>p.end_time.slice(0,5))return false;
-    if(p.weekdays&&!p.weekdays.split(",").includes(String(dow)))return false;
+    // Time window: support overnight wrap (e.g. 22:00-02:00)
+    if(p.start_time||p.end_time){
+      const st=p.start_time?p.start_time.slice(0,5):"00:00";
+      const et=p.end_time?p.end_time.slice(0,5):"23:59";
+      const inWindow=st<=et?(hhmm>=st&&hhmm<=et):(hhmm>=st||hhmm<=et);
+      if(!inWindow)return false;
+    }
+    if(p.weekdays&&p.weekdays.split(",").filter(Boolean).length>0&&!p.weekdays.split(",").includes(String(dow)))return false;
     if(p.scope==="bill"&&(+p.min_order||0)>subtotal)return false;
-    if(p.scope==="category"&&!items.some(i=>{const m=context.menusById?.[i.menu_id];return m&&m.category===p.scope_value;}))return false;
-    if(p.scope==="menu"&&!items.some(i=>String(i.menu_id)===String(p.scope_value)))return false;
+    if(p.scope==="category"){
+      if(!p.scope_value)return false;
+      if(!items.some(i=>{const m=context.menusById?.[i.menu_id];return m&&m.category===p.scope_value;}))return false;
+    }
+    if(p.scope==="menu"){
+      if(!p.scope_value)return false;
+      if(!items.some(i=>String(i.menu_id)===String(p.scope_value)))return false;
+    }
+    // For fixed_price ("set price"), require the relevant total to exceed the target,
+    // otherwise the discount would be 0 and the promo is misleading.
+    if(p.type==="fixed_price"){
+      const fp=+p.discount_value||0;
+      if(p.scope==="bill"){
+        if(subtotal<=fp)return false;
+      }else{
+        let scopeTotal=0;
+        items.forEach(i=>{const m=context.menusById?.[i.menu_id];const include=p.scope==="category"?(m&&m.category===p.scope_value):String(i.menu_id)===String(p.scope_value);if(include)scopeTotal+=i.price*i.qty;});
+        if(scopeTotal<=fp)return false;
+      }
+    }
     return true;
   });
 }
@@ -4411,7 +4459,7 @@ function POSShiftHistory({shifts,loading,reload}){
 
 // Printer panel (extracted from SettingsTab for back-office)
 function POSPrinterPanel({printers,reloadPrinters,branches,currentUser}){
-  const isAdmin=hasPerm(currentUser,"settings")||hasPerm(currentUser,"pos");
+  const isAdmin=hasPerm(currentUser,"settings");
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
   const[testResults,setTestResults]=useState({});const[btScanning,setBtScanning]=useState(false);
@@ -4699,15 +4747,19 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
     }).catch(e=>{setLoadingShift(false);alert("โหลดข้อมูลกะไม่สำเร็จ: "+e.message);});
   },[mode,currentBranch.id]);
 
-  if(mode===null)return <POSModeSelect onSelect={setMode}/>;
-  if(mode==='manage')return <POSBackOffice currentBranch={currentBranch} currentUser={currentUser} printers={printers} reloadPrinters={reloadPrinters} branches={branches} zones={zones} reloadZones={loadZones} menus={menus} onExit={()=>{setMode(null);loadPosSettings();loadPromotions();}}/>;
+  const canManage=hasPerm(currentUser,"settings");
+  if(mode===null)return <POSModeSelect onSelect={setMode} canManage={canManage}/>;
+  if(mode==='manage'){
+    if(!canManage){setMode(null);return null;}
+    return <POSBackOffice currentBranch={currentBranch} currentUser={currentUser} printers={printers} reloadPrinters={reloadPrinters} branches={branches} zones={zones} reloadZones={loadZones} menus={menus} onExit={()=>{setMode(null);loadZones();loadPosSettings();loadPromotions();}}/>;
+  }
   // mode === 'sale'
   if(loadingShift)return <Loading text="ตรวจสอบกะการขาย..."/>;
   if(!shift)return <OpenShiftModal currentBranch={currentBranch} currentUser={currentUser} onDone={s=>setShift(s)} onCancel={()=>setMode(null)}/>;
   return <>
     <POSSaleMode menus={menus} reloadMenus={reloadMenus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={()=>setMode(null)}/>
     {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCashDrawer(false)}/>}
-    {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShift(null);setMode(null);}}/>}
+    {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShowCashDrawer(false);setShift(null);setMode(null);}}/>}
   </>;
 }
 
