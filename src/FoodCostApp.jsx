@@ -1146,7 +1146,7 @@ function genPONumber(){
   const seq=String(Math.floor(Math.random()*9000)+1000);
   return `PO-${ym}-${seq}`;
 }
-function buildPOHTML(po,branchName,supplierName){
+function buildPOHTML(po,branchName){
   const fmt=(v)=>(+v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const rows=(po.items||[]).map((it,i)=>`<tr>
     <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${i+1}</td>
@@ -1170,7 +1170,7 @@ function buildPOHTML(po,branchName,supplierName){
 </div>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;font-size:13px">
   <div><b style="color:#475569;font-weight:600">สาขาที่สั่ง:</b> ${branchName||"-"}</div>
-  <div><b style="color:#475569;font-weight:600">ซัพพลายเออร์:</b> ${supplierName||"-"}</div>
+  <div><b style="color:#475569;font-weight:600">วันที่เปิด:</b> ${po.po_date||"-"}</div>
   ${po.notes?`<div style="grid-column:1/3"><b style="color:#475569;font-weight:600">หมายเหตุ:</b> ${po.notes}</div>`:""}
 </div>
 <table style="width:100%;border-collapse:collapse;margin:14px 0">
@@ -1195,7 +1195,7 @@ function buildPOHTML(po,branchName,supplierName){
 </div>
 </div>`;
 }
-function printPO(po,branchName,supplierName,action='print'){
+function printPO(po,branchName,action='print'){
   const w=window.open("","_blank","width=860,height=950");
   if(!w){alert("กรุณาอนุญาต popup");return;}
   const filename=(po.po_number||`PO-${po.id}`).replace(/[^\w\-]/g,"_")+".pdf";
@@ -1222,7 +1222,7 @@ function printPO(po,branchName,supplierName,action='print'){
     <button class="ghost" onclick="window.close()">✕ ปิด</button>
   </div>
 </div>
-${buildPOHTML(po,branchName,supplierName)}
+${buildPOHTML(po,branchName)}
 <script>
 function savePDF(){
   var btn=document.getElementById('pdfBtn');
@@ -1238,15 +1238,13 @@ ${action==='pdf'?"window.addEventListener('load',function(){setTimeout(savePDF,4
 }
 
 // Export PO list to Excel
-function exportPOsToExcel(pos,branchById,supplierById){
+function exportPOsToExcel(pos,branchById){
   if(!pos||pos.length===0){alert("ไม่มีข้อมูลให้ Export");return;}
   const stL={open:"เปิดอยู่",received:"รับแล้ว",cancelled:"ยกเลิก"};
-  // Sheet 1: Summary
   const summary=pos.map(po=>({
     "เลข PO":po.po_number||"",
     "วันที่":po.po_date||"",
     "สาขา":branchById[po.branch_id]?.name||"",
-    "ซัพพลายเออร์":supplierById[po.supplier_id]?.name||"",
     "สถานะ":stL[po.status]||po.status||"",
     "จำนวนรายการ":(po.items||[]).length,
     "ยอดก่อน VAT":+po.subtotal||0,
@@ -1255,7 +1253,6 @@ function exportPOsToExcel(pos,branchById,supplierById){
     "ผู้สร้าง":po.created_by||"",
     "หมายเหตุ":po.notes||"",
   }));
-  // Sheet 2: Detailed line items (one row per ingredient)
   const details=[];
   pos.forEach(po=>{
     (po.items||[]).forEach((it,idx)=>{
@@ -1263,7 +1260,6 @@ function exportPOsToExcel(pos,branchById,supplierById){
         "เลข PO":po.po_number||"",
         "วันที่":po.po_date||"",
         "สาขา":branchById[po.branch_id]?.name||"",
-        "ซัพพลายเออร์":supplierById[po.supplier_id]?.name||"",
         "ลำดับ":idx+1,
         "รายการ":it.name,
         "หน่วย":it.unit||"",
@@ -1277,16 +1273,14 @@ function exportPOsToExcel(pos,branchById,supplierById){
   const wb=XLSX.utils.book_new();
   const ws1=XLSX.utils.json_to_sheet(summary);
   const ws2=XLSX.utils.json_to_sheet(details);
-  // Set column widths for readability
-  ws1["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:20},{wch:12},{wch:8},{wch:14},{wch:10},{wch:14},{wch:14},{wch:30}];
-  ws2["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:20},{wch:6},{wch:24},{wch:10},{wch:10},{wch:14},{wch:14},{wch:24}];
+  ws1["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:12},{wch:8},{wch:14},{wch:10},{wch:14},{wch:14},{wch:30}];
+  ws2["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:6},{wch:24},{wch:10},{wch:10},{wch:14},{wch:14},{wch:24}];
   XLSX.utils.book_append_sheet(wb,ws1,"สรุป PO");
   XLSX.utils.book_append_sheet(wb,ws2,"รายการรายบรรทัด");
-  const fname=`PO_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
-  XLSX.writeFile(wb,fname);
+  XLSX.writeFile(wb,`PO_Export_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
-function POSection({branches,suppliers,ings,currentBranch,currentUser}){
+function POSection({branches,ings,currentBranch,currentUser}){
   // central is the *creator* — sees all branches' POs by default
   const today=new Date().toISOString().slice(0,10);
   const ago=(d=>new Date(Date.now()-d*86400000).toISOString().slice(0,10))(30);
@@ -1319,7 +1313,6 @@ function POSection({branches,suppliers,ings,currentBranch,currentUser}){
   async function onSaved(){setStep(null);setEditPO(null);await load();}
 
   const branchById=Object.fromEntries(branches.map(b=>[b.id,b]));
-  const supplierById=Object.fromEntries(suppliers.map(s=>[s.id,s]));
   const totalAll=pos.reduce((s,p)=>s+(+p.total||0),0);
   const branchOptions=branches.filter(b=>b.type!=="central");
 
@@ -1332,7 +1325,7 @@ function POSection({branches,suppliers,ings,currentBranch,currentUser}){
         <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,margin:"4px 0 0"}}>เปิดเอกสารสำหรับสาขาแต่ละสาขา · ปริ้น / ดาวน์โหลด PDF / Export Excel</p>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById,supplierById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
+        <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
         {canEdit&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
     </div>
@@ -1371,7 +1364,6 @@ function POSection({branches,suppliers,ings,currentBranch,currentUser}){
     </Card>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:12}}>
       {pos.map(po=>{
         const b=branchById[po.branch_id];
-        const sup=supplierById[po.supplier_id];
         const stColor={open:C.yellow,received:C.green,cancelled:C.ink4}[po.status]||C.ink3;
         const stLabel={open:"⏳ เปิดอยู่",received:"✅ รับแล้ว",cancelled:"❌ ยกเลิก"}[po.status]||po.status;
         return <Card key={po.id} hover style={{padding:0,overflow:"hidden"}}>
@@ -1382,11 +1374,10 @@ function POSection({branches,suppliers,ings,currentBranch,currentUser}){
                 <span style={{fontSize:10,fontWeight:700,color:stColor,background:`${stColor}22`,padding:"2px 8px",borderRadius:18,fontFamily:"'Sarabun',sans-serif"}}>{stLabel}</span>
               </div>
               <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>📅 {po.po_date} · 🏢 <b>{b?.name||"-"}</b></div>
-              {sup&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>🚚 {sup.name}</div>}
             </div>
             <div style={{display:"flex",gap:4}}>
-              <button onClick={()=>printPO(po,b?.name,sup?.name,'print')} title="พิมพ์" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.print} s={12} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>พิมพ์</span></button>
-              <button onClick={()=>printPO(po,b?.name,sup?.name,'pdf')} title="ดาวน์โหลด PDF" style={{background:C.greenLight,border:`1px solid #86EFAC`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><span style={{fontSize:13}}>💾</span><span style={{fontSize:11,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>PDF</span></button>
+              <button onClick={()=>printPO(po,b?.name,'print')} title="พิมพ์" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.print} s={12} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>พิมพ์</span></button>
+              <button onClick={()=>printPO(po,b?.name,'pdf')} title="ดาวน์โหลด PDF" style={{background:C.greenLight,border:`1px solid #86EFAC`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><span style={{fontSize:13}}>💾</span><span style={{fontSize:11,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>PDF</span></button>
               {canEdit&&<button onClick={()=>startEdit(po)} title="แก้ไข" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c="#92400E"/></button>}
               {canEdit&&<button onClick={()=>delPO(po)} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
             </div>
@@ -1424,15 +1415,14 @@ function POSection({branches,suppliers,ings,currentBranch,currentUser}){
     </Modal>}
 
     {/* Step 2: Form */}
-    {step==='form'&&pickedBranch&&<POFormModal branch={pickedBranch} editPO={editPO} ings={ings} suppliers={suppliers} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved}/>}
+    {step==='form'&&pickedBranch&&<POFormModal branch={pickedBranch} editPO={editPO} ings={ings} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved}/>}
   </div>;
 }
 
-function POFormModal({branch,editPO,ings,suppliers,currentUser,onClose,onSaved}){
+function POFormModal({branch,editPO,ings,currentUser,onClose,onSaved}){
   const today=new Date().toISOString().slice(0,10);
   const[items,setItems]=useState(editPO?.items||[]);
   const[poDate,setPoDate]=useState(editPO?.po_date||today);
-  const[supplierId,setSupplierId]=useState(editPO?.supplier_id||"");
   const[notes,setNotes]=useState(editPO?.notes||"");
   const[status,setStatus]=useState(editPO?.status||"open");
   const[poNumber,setPoNumber]=useState(editPO?.po_number||genPONumber());
@@ -1452,7 +1442,7 @@ function POFormModal({branch,editPO,ings,suppliers,currentUser,onClose,onSaved})
     if(!search.trim())return[];
     const q=search.toLowerCase();
     const used=new Set(items.map(it=>it.ingredient_id));
-    return branchIngs.filter(i=>!used.has(i.id)&&(i.name.toLowerCase().includes(q)||(i.category||"").toLowerCase().includes(q))).slice(0,8);
+    return branchIngs.filter(i=>!used.has(i.id)&&(i.name.toLowerCase().includes(q)||(i.category||"").toLowerCase().includes(q))).slice(0,30);
   },[search,branchIngs,items]);
 
   function addIng(ing){
@@ -1488,7 +1478,6 @@ function POFormModal({branch,editPO,ings,suppliers,currentUser,onClose,onSaved})
       const payload={
         po_number:poNumber,
         branch_id:branch.id,
-        supplier_id:supplierId?+supplierId:null,
         po_date:poDate,
         status,
         items,
@@ -1507,15 +1496,9 @@ function POFormModal({branch,editPO,ings,suppliers,currentUser,onClose,onSaved})
   }
 
   return <Modal title={`${editPO?"✏️ แก้ไข":"➕ สร้าง"}เอกสาร PO — ${branch.name}`} onClose={onClose} extraWide>
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10,marginBottom:14}}>
+    <div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:10,marginBottom:14}}>
       <Inp label="เลขที่ PO" value={poNumber} onChange={e=>setPoNumber(e.target.value)}/>
       <Inp label="วันที่" type="date" value={poDate} onChange={e=>setPoDate(e.target.value)}/>
-      <Field label="ซัพพลายเออร์">
-        <select value={supplierId} onChange={e=>setSupplierId(e.target.value)} style={{...iS,appearance:"none"}}>
-          <option value="">— ไม่ระบุ —</option>
-          {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
-      </Field>
       <Field label="สถานะ">
         <select value={status} onChange={e=>setStatus(e.target.value)} style={{...iS,appearance:"none"}}>
           <option value="open">⏳ เปิดอยู่</option>
@@ -1543,7 +1526,11 @@ function POFormModal({branch,editPO,ings,suppliers,currentUser,onClose,onSaved})
     </div>
 
     {/* Items table */}
-    <div style={{marginTop:14,marginBottom:14,maxHeight:380,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10}}>
+    <div style={{marginTop:14,marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div style={{fontSize:12,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>📋 รายการในเอกสาร <span style={{color:C.brand,fontWeight:900}}>({items.length})</span> <span style={{fontSize:11,fontWeight:500,color:C.ink4}}>เพิ่มได้ไม่จำกัด</span></div>
+      {items.length>0&&<button onClick={()=>setItems([])} style={{background:"transparent",border:"none",color:C.red,cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>ล้างทั้งหมด</button>}
+    </div>
+    <div style={{marginBottom:14,maxHeight:520,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10}}>
       <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
         <thead style={{position:"sticky",top:0,zIndex:1}}>
           <tr style={{background:C.bg}}>
@@ -3291,7 +3278,7 @@ export default function App(){
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers}/>}
-            {tab==="po"&&<POSection branches={branches} suppliers={suppliers} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
+            {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser}/>}
