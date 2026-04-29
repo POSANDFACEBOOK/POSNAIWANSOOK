@@ -110,6 +110,17 @@ const api = {
   addPromotion: (d) => sb("promotions", {method:"POST", body:JSON.stringify(d)}),
   updatePromotion: (id,d) => sb(`promotions?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deletePromotion: (id) => sb(`promotions?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  // Purchase Orders
+  getPOs: (branchId,dateFrom,dateTo) => {
+    const q=["order=po_date.desc,id.desc"];
+    if(branchId)q.push(`branch_id=eq.${branchId}`);
+    if(dateFrom)q.push(`po_date=gte.${dateFrom}`);
+    if(dateTo)q.push(`po_date=lte.${dateTo}`);
+    return sb(`purchase_orders?${q.join("&")}`);
+  },
+  addPO: (d) => sb("purchase_orders", {method:"POST", body:JSON.stringify(d)}),
+  updatePO: (id,d) => sb(`purchase_orders?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  deletePO: (id) => sb(`purchase_orders?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   uploadImage: async (file, path) => {
     const res = await fetch(`${SUPA_URL}/storage/v1/object/foodcost-images/${path}`, {
       method: "POST", headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": file.type, "x-upsert": "true" }, body: file,
@@ -1126,9 +1137,413 @@ window.addEventListener('load',async()=>{
 }
 
 // ══════════════════════════════════════════════════════
+// ── PURCHASE ORDERS (PO) ──────────────────────────────
+// ══════════════════════════════════════════════════════
+function genPONumber(){
+  const d=new Date();
+  const ym=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}`;
+  const seq=String(Math.floor(Math.random()*9000)+1000);
+  return `PO-${ym}-${seq}`;
+}
+function printPO(po,branchName,supplierName){
+  const w=window.open("","_blank","width=820,height=900");
+  if(!w){alert("กรุณาอนุญาต popup");return;}
+  const fmt=(v)=>(+v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const rows=(po.items||[]).map((it,i)=>`<tr>
+    <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${i+1}</td>
+    <td style="padding:6px 10px;border:1px solid #ddd">${it.name}${it.note?`<br/><span style="font-size:11px;color:#888">★ ${it.note}</span>`:""}</td>
+    <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${it.unit||"-"}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${fmt(it.qty)}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${fmt(it.price_per_unit)}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:700">฿${fmt(it.line_total)}</td>
+  </tr>`).join("");
+  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${po.po_number||"PO"}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;900&display=swap');
+  body{font-family:'Sarabun',sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto}
+  h1{margin:0;font-size:28px;color:#FF6B35;letter-spacing:1px}
+  .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #FF6B35;padding-bottom:14px;margin-bottom:18px}
+  .meta{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;font-size:13px}
+  .meta b{color:#475569;font-weight:600}
+  table{width:100%;border-collapse:collapse;margin:14px 0}
+  th{background:#0F172A;color:#fff;padding:8px;font-weight:700;font-size:12px;text-align:left}
+  th:nth-child(1),th:nth-child(3),th:nth-child(4){text-align:center}
+  th:nth-child(5),th:nth-child(6){text-align:right}
+  .total-row{font-size:15px;font-weight:900;background:#FFF4F0;color:#FF6B35}
+  .footer{margin-top:40px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:12px}
+  .sig{border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:50px;color:#64748B}
+  @media print{@page{size:A4;margin:14mm}}
+</style></head><body>
+<div class="head">
+  <div>
+    <h1>📄 ใบสั่งซื้อ (Purchase Order)</h1>
+    <div style="margin-top:6px;font-size:13px;color:#475569">${branchName||""}</div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:18px;font-weight:900;color:#0F172A">${po.po_number||"-"}</div>
+    <div style="font-size:13px;color:#475569;margin-top:4px">วันที่ ${po.po_date||"-"}</div>
+    <div style="font-size:11px;color:#94A3B8;margin-top:4px">สถานะ: ${po.status==='received'?'✅ รับสินค้าแล้ว':po.status==='cancelled'?'❌ ยกเลิก':'⏳ เปิดอยู่'}</div>
+  </div>
+</div>
+<div class="meta">
+  <div><b>สาขาที่สั่ง:</b> ${branchName||"-"}</div>
+  <div><b>ซัพพลายเออร์:</b> ${supplierName||"-"}</div>
+  ${po.notes?`<div style="grid-column:1/3"><b>หมายเหตุ:</b> ${po.notes}</div>`:""}
+</div>
+<table>
+  <thead><tr>
+    <th style="width:40px">#</th>
+    <th>รายการ</th>
+    <th style="width:60px">หน่วย</th>
+    <th style="width:80px">จำนวน</th>
+    <th style="width:90px">ราคา/หน่วย</th>
+    <th style="width:110px">รวม</th>
+  </tr></thead>
+  <tbody>
+    ${rows||`<tr><td colspan="6" style="text-align:center;padding:20px;color:#94A3B8">— ไม่มีรายการ —</td></tr>`}
+    ${po.subtotal?`<tr><td colspan="5" style="text-align:right;padding:8px 12px;border:1px solid #ddd;font-weight:600">ยอดรวม</td><td style="text-align:right;padding:8px;border:1px solid #ddd;font-weight:700">฿${fmt(po.subtotal)}</td></tr>`:""}
+    ${po.vat>0?`<tr><td colspan="5" style="text-align:right;padding:8px 12px;border:1px solid #ddd;font-weight:600">VAT</td><td style="text-align:right;padding:8px;border:1px solid #ddd;font-weight:700">฿${fmt(po.vat)}</td></tr>`:""}
+    <tr class="total-row"><td colspan="5" style="text-align:right;padding:10px 12px;border:1px solid #ddd">ยอดรวมทั้งสิ้น</td><td style="text-align:right;padding:10px;border:1px solid #ddd">฿${fmt(po.total)}</td></tr>
+  </tbody>
+</table>
+<div class="footer">
+  <div><div class="sig">ผู้สั่งซื้อ / วันที่</div></div>
+  <div><div class="sig">ผู้รับ-ตรวจสินค้า / วันที่</div></div>
+</div>
+<script>setTimeout(()=>{window.print();},250);<\/script>
+</body></html>`;
+  w.document.write(html);w.document.close();
+}
+
+function POSection({branches,suppliers,ings,currentBranch,currentUser}){
+  // central is the *creator* — sees all branches' POs by default
+  const today=new Date().toISOString().slice(0,10);
+  const ago=(d=>new Date(Date.now()-d*86400000).toISOString().slice(0,10))(30);
+  const[pos,setPOs]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[filterBranch,setFilterBranch]=useState("");
+  const[dateFrom,setDateFrom]=useState(ago);
+  const[dateTo,setDateTo]=useState(today);
+  const[step,setStep]=useState(null);  // null | 'pick-branch' | 'form'
+  const[pickedBranch,setPickedBranch]=useState(null);
+  const[editPO,setEditPO]=useState(null);
+  const canEdit=hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
+
+  async function load(){
+    setLoading(true);
+    try{const data=await api.getPOs(filterBranch?+filterBranch:null,dateFrom,dateTo);setPOs(data);}
+    catch(e){console.error("loadPOs",e);alert("โหลด PO ไม่สำเร็จ: "+e.message);}
+    setLoading(false);
+  }
+  useEffect(()=>{load();},[filterBranch,dateFrom,dateTo]);
+
+  async function delPO(po){
+    if(!await confirmDlg({title:"ลบเอกสาร PO",message:`ต้องการลบ ${po.po_number||"PO นี้"} ใช่หรือไม่?`,danger:true}))return;
+    try{await api.deletePO(po.id);await load();}
+    catch(e){alert("ลบไม่สำเร็จ: "+e.message);}
+  }
+  function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
+  function pickBranch(b){setPickedBranch(b);setStep('form');}
+  function startEdit(po){const b=branches.find(x=>x.id===po.branch_id);setPickedBranch(b||null);setEditPO(po);setStep('form');}
+  async function onSaved(){setStep(null);setEditPO(null);await load();}
+
+  const branchById=Object.fromEntries(branches.map(b=>[b.id,b]));
+  const supplierById=Object.fromEntries(suppliers.map(s=>[s.id,s]));
+  const totalAll=pos.reduce((s,p)=>s+(+p.total||0),0);
+  const branchOptions=branches.filter(b=>b.type!=="central");
+
+  return <div style={{marginTop:30,paddingTop:24,borderTop:`2px dashed ${C.brandBorder}`}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+      <div>
+        <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,margin:0,display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:22}}>📄</span> เอกสาร PO (ใบสั่งซื้อวัตถุดิบ)
+        </h3>
+        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,margin:"3px 0 0"}}>เปิดเอกสารสำหรับสาขาแต่ละสาขา · ปริ้น/แก้ไข/ลบ ได้</p>
+      </div>
+      {canEdit&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
+    </div>
+
+    {/* Filter row */}
+    <Card style={{padding:"12px 16px",marginBottom:14,background:C.bg}}>
+      <div style={{display:"grid",gridTemplateColumns:"1.5fr 1fr 1fr auto",gap:10,alignItems:"end"}}>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สาขา</div>
+          <select value={filterBranch} onChange={e=>setFilterBranch(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
+            <option value="">— ทุกสาขา —</option>
+            {branchOptions.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ตั้งแต่วันที่</div>
+          <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ถึง</div>
+          <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/>
+        </div>
+        <Btn v="ghost" onClick={load} icon={I.refresh} s={{padding:"8px 14px",fontSize:12}}>รีเฟรช</Btn>
+      </div>
+      {pos.length>0&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.line}`,display:"flex",justifyContent:"space-between",fontSize:12,fontFamily:"'Sarabun',sans-serif",color:C.ink3}}>
+        <span>📑 พบ <b style={{color:C.ink}}>{pos.length}</b> เอกสาร</span>
+        <span>💰 รวม <b style={{color:C.brand,fontSize:14}}>฿{totalAll.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</b></span>
+      </div>}
+    </Card>
+
+    {/* List */}
+    {loading?<Loading text="โหลดเอกสาร PO..."/>:pos.length===0?<Card style={{padding:"50px 20px",textAlign:"center"}}>
+      <div style={{fontSize:48,marginBottom:8}}>📭</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,color:C.ink3,fontWeight:600}}>ยังไม่มีเอกสาร PO ในช่วงนี้</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginTop:4}}>กดปุ่ม "สร้างเอกสาร PO" เพื่อเริ่มต้น</div>
+    </Card>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:12}}>
+      {pos.map(po=>{
+        const b=branchById[po.branch_id];
+        const sup=supplierById[po.supplier_id];
+        const stColor={open:C.yellow,received:C.green,cancelled:C.ink4}[po.status]||C.ink3;
+        const stLabel={open:"⏳ เปิดอยู่",received:"✅ รับแล้ว",cancelled:"❌ ยกเลิก"}[po.status]||po.status;
+        return <Card key={po.id} hover style={{padding:0,overflow:"hidden"}}>
+          <div style={{padding:"12px 14px",background:`linear-gradient(135deg,${C.brandLight},${C.white})`,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                <span style={{fontFamily:"'Sarabun',sans-serif",fontWeight:900,fontSize:15,color:C.ink}}>{po.po_number||`#${po.id}`}</span>
+                <span style={{fontSize:10,fontWeight:700,color:stColor,background:`${stColor}22`,padding:"2px 8px",borderRadius:18,fontFamily:"'Sarabun',sans-serif"}}>{stLabel}</span>
+              </div>
+              <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>📅 {po.po_date} · 🏢 <b>{b?.name||"-"}</b></div>
+              {sup&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>🚚 {sup.name}</div>}
+            </div>
+            <div style={{display:"flex",gap:4}}>
+              <button onClick={()=>printPO(po,b?.name,sup?.name)} title="พิมพ์" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.print} s={12} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>พิมพ์</span></button>
+              {canEdit&&<button onClick={()=>startEdit(po)} title="แก้ไข" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c="#92400E"/></button>}
+              {canEdit&&<button onClick={()=>delPO(po)} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
+            </div>
+          </div>
+          <div style={{padding:"10px 14px"}}>
+            <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>📋 รายการ ({(po.items||[]).length})</div>
+            {(po.items||[]).slice(0,4).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,fontFamily:"'Sarabun',sans-serif",padding:"2px 0"}}>
+              <span style={{color:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{it.name} <span style={{color:C.ink4}}>×{it.qty}</span></span>
+              <span style={{color:C.ink3,fontWeight:600,marginLeft:8}}>฿{(+it.line_total).toFixed(2)}</span>
+            </div>)}
+            {(po.items||[]).length>4&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>+อีก {(po.items||[]).length-4} รายการ</div>}
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:`1px dashed ${C.line}`,fontFamily:"'Sarabun',sans-serif"}}>
+              <span style={{fontSize:12,color:C.ink3,fontWeight:700}}>ยอดรวม</span>
+              <span style={{fontSize:16,fontWeight:900,color:C.brand}}>฿{(+po.total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+            </div>
+          </div>
+        </Card>;
+      })}
+    </div>}
+
+    {/* Step 1: Pick branch */}
+    {step==='pick-branch'&&<Modal title="🏢 เลือกสาขาที่ต้องการเปิดเอกสาร PO" onClose={()=>setStep(null)}>
+      {branchOptions.length===0?<div style={{padding:30,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีสาขาในระบบ — เพิ่มสาขาในแท็บ "ตั้งค่า" ก่อน</div>:
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:10}}>
+        {branchOptions.map(b=><button key={b.id} onClick={()=>pickBranch(b)} style={{padding:"18px 16px",border:`2px solid ${C.line}`,borderRadius:14,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+            <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.branch} s={16} c={C.white}/></div>
+            <div>
+              <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{b.name}</div>
+              <div style={{fontSize:11,color:C.ink4}}>{b.active?"เปิดใช้งาน":"ปิดใช้งาน"}</div>
+            </div>
+          </div>
+        </button>)}
+      </div>}
+    </Modal>}
+
+    {/* Step 2: Form */}
+    {step==='form'&&pickedBranch&&<POFormModal branch={pickedBranch} editPO={editPO} ings={ings} suppliers={suppliers} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved}/>}
+  </div>;
+}
+
+function POFormModal({branch,editPO,ings,suppliers,currentUser,onClose,onSaved}){
+  const today=new Date().toISOString().slice(0,10);
+  const[items,setItems]=useState(editPO?.items||[]);
+  const[poDate,setPoDate]=useState(editPO?.po_date||today);
+  const[supplierId,setSupplierId]=useState(editPO?.supplier_id||"");
+  const[notes,setNotes]=useState(editPO?.notes||"");
+  const[status,setStatus]=useState(editPO?.status||"open");
+  const[poNumber,setPoNumber]=useState(editPO?.po_number||genPONumber());
+  const[search,setSearch]=useState("");
+  const[saving,setSaving]=useState(false);
+  const[vatPct,setVatPct]=useState(editPO?(editPO.subtotal>0?+((editPO.vat/editPO.subtotal)*100).toFixed(2):0):0);
+
+  // Filter ingredients available for this branch (visible_branches)
+  const branchIngs=useMemo(()=>{
+    return ings.filter(i=>{
+      const vb=i.visible_branches||[];
+      return vb.length===0||vb.includes(branch.id);
+    });
+  },[ings,branch.id]);
+
+  const searchResults=useMemo(()=>{
+    if(!search.trim())return[];
+    const q=search.toLowerCase();
+    const used=new Set(items.map(it=>it.ingredient_id));
+    return branchIngs.filter(i=>!used.has(i.id)&&(i.name.toLowerCase().includes(q)||(i.category||"").toLowerCase().includes(q))).slice(0,8);
+  },[search,branchIngs,items]);
+
+  function addIng(ing){
+    setItems(prev=>[...prev,{
+      ingredient_id:ing.id,
+      name:ing.name,
+      unit:ing.buy_unit||"หน่วย",
+      qty:1,
+      price_per_unit:+ing.buy_price||0,
+      line_total:+ing.buy_price||0,
+      note:"",
+    }]);
+    setSearch("");
+  }
+  function updateItem(idx,field,value){
+    setItems(prev=>prev.map((it,i)=>{
+      if(i!==idx)return it;
+      const next={...it,[field]:value};
+      if(field==="qty"||field==="price_per_unit")next.line_total=(+next.qty||0)*(+next.price_per_unit||0);
+      return next;
+    }));
+  }
+  function removeItem(idx){setItems(prev=>prev.filter((_,i)=>i!==idx));}
+
+  const subtotal=items.reduce((s,i)=>s+(+i.line_total||0),0);
+  const vat=subtotal*(+vatPct||0)/100;
+  const total=subtotal+vat;
+
+  async function save(){
+    if(items.length===0){alert("กรุณาเพิ่มรายการอย่างน้อย 1 รายการ");return;}
+    setSaving(true);
+    try{
+      const payload={
+        po_number:poNumber,
+        branch_id:branch.id,
+        supplier_id:supplierId?+supplierId:null,
+        po_date:poDate,
+        status,
+        items,
+        subtotal,
+        vat,
+        total,
+        notes:notes||null,
+        created_by:currentUser?.username||null,
+        updated_at:new Date().toISOString(),
+      };
+      if(editPO){await api.updatePO(editPO.id,payload);}
+      else{await api.addPO(payload);}
+      await onSaved();
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+
+  return <Modal title={`${editPO?"✏️ แก้ไข":"➕ สร้าง"}เอกสาร PO — ${branch.name}`} onClose={onClose} extraWide>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10,marginBottom:14}}>
+      <Inp label="เลขที่ PO" value={poNumber} onChange={e=>setPoNumber(e.target.value)}/>
+      <Inp label="วันที่" type="date" value={poDate} onChange={e=>setPoDate(e.target.value)}/>
+      <Field label="ซัพพลายเออร์">
+        <select value={supplierId} onChange={e=>setSupplierId(e.target.value)} style={{...iS,appearance:"none"}}>
+          <option value="">— ไม่ระบุ —</option>
+          {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      </Field>
+      <Field label="สถานะ">
+        <select value={status} onChange={e=>setStatus(e.target.value)} style={{...iS,appearance:"none"}}>
+          <option value="open">⏳ เปิดอยู่</option>
+          <option value="received">✅ รับสินค้าแล้ว</option>
+          <option value="cancelled">❌ ยกเลิก</option>
+        </select>
+      </Field>
+    </div>
+
+    {/* Ingredient search */}
+    <div style={{marginBottom:8,position:"relative"}}>
+      <div style={{fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>🔍 ค้นหาวัตถุดิบเพื่อเพิ่ม</div>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="พิมพ์ชื่อวัตถุดิบ..." style={{...iS,fontSize:14,padding:"10px 14px"}}/>
+      {searchResults.length>0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:10,background:C.white,border:`1.5px solid ${C.brandBorder}`,borderRadius:10,marginTop:4,boxShadow:"0 8px 24px rgba(0,0,0,.12)",maxHeight:280,overflowY:"auto"}}>
+        {searchResults.map(ing=><button key={ing.id} onClick={()=>addIng(ing)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",width:"100%",background:"none",border:"none",borderBottom:`1px solid ${C.lineLight}`,cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif",transition:"background .1s"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+          <Ic d={I.leaf} s={16} c={C.brand}/>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{ing.name}</div>
+            <div style={{fontSize:11,color:C.ink4}}>{ing.category} · {ing.buy_unit||"หน่วย"} · ฿{(+ing.buy_price||0).toFixed(2)}/{ing.buy_unit||"หน่วย"}</div>
+          </div>
+          <Ic d={I.plus} s={14} c={C.green}/>
+        </button>)}
+      </div>}
+      {search&&searchResults.length===0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:10,background:C.white,border:`1.5px solid ${C.line}`,borderRadius:10,marginTop:4,padding:"14px 16px",fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center"}}>ไม่พบวัตถุดิบที่ตรงกัน หรือถูกเพิ่มแล้ว</div>}
+    </div>
+
+    {/* Items table */}
+    <div style={{marginTop:14,marginBottom:14,maxHeight:380,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
+        <thead style={{position:"sticky",top:0,zIndex:1}}>
+          <tr style={{background:C.bg}}>
+            <th style={{padding:"8px 10px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:40}}>#</th>
+            <th style={{padding:"8px 10px",textAlign:"left",fontSize:11,color:C.ink3,fontWeight:700}}>รายการ</th>
+            <th style={{padding:"8px 10px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:80}}>หน่วย</th>
+            <th style={{padding:"8px 10px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:90}}>จำนวน</th>
+            <th style={{padding:"8px 10px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:120}}>ราคา/หน่วย</th>
+            <th style={{padding:"8px 10px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:120}}>รวม</th>
+            <th style={{width:36}}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.length===0&&<tr><td colSpan={7} style={{padding:"30px 20px",textAlign:"center",color:C.ink4,fontSize:13}}>ยังไม่มีรายการ — ค้นหาและเพิ่มวัตถุดิบจากด้านบน</td></tr>}
+          {items.map((it,idx)=><tr key={idx} style={{borderTop:`1px solid ${C.lineLight}`}}>
+            <td style={{padding:"6px 10px",textAlign:"center",fontSize:12,color:C.ink4,fontWeight:700}}>{idx+1}</td>
+            <td style={{padding:"6px 10px"}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{it.name}</div>
+              <input value={it.note||""} onChange={e=>updateItem(idx,"note",e.target.value)} placeholder="หมายเหตุ (ถ้ามี)" style={{...iS,fontSize:11,padding:"3px 8px",height:22,marginTop:3,background:"transparent",border:`1px dashed ${C.line}`}}/>
+            </td>
+            <td style={{padding:"6px 10px"}}>
+              <input value={it.unit} onChange={e=>updateItem(idx,"unit",e.target.value)} style={{...iS,fontSize:12,padding:"5px 8px",height:30,textAlign:"center"}}/>
+            </td>
+            <td style={{padding:"6px 10px"}}>
+              <input type="number" step="0.01" value={it.qty} onChange={e=>updateItem(idx,"qty",+e.target.value)} style={{...iS,fontSize:13,padding:"5px 8px",height:30,textAlign:"center",fontWeight:700}}/>
+            </td>
+            <td style={{padding:"6px 10px"}}>
+              <input type="number" step="0.01" value={it.price_per_unit} onChange={e=>updateItem(idx,"price_per_unit",+e.target.value)} style={{...iS,fontSize:13,padding:"5px 8px",height:30,textAlign:"right"}}/>
+            </td>
+            <td style={{padding:"6px 10px",textAlign:"right",fontWeight:800,fontSize:14,color:C.brand}}>฿{(+it.line_total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+            <td style={{padding:"6px 4px",textAlign:"center"}}>
+              <button onClick={()=>removeItem(idx)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:6,padding:"4px 6px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+            </td>
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
+
+    {/* Notes + totals */}
+    <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:14}}>
+      <div>
+        <div style={{fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>หมายเหตุ</div>
+        <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={3} placeholder="—" style={{...iS,fontSize:13,resize:"none"}}/>
+      </div>
+      <div style={{background:C.bg,borderRadius:12,padding:"14px 16px",border:`1px solid ${C.line}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>
+          <span>ยอดรวม ({items.length} รายการ)</span>
+          <span style={{fontWeight:700}}>฿{subtotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:6,alignItems:"center"}}>
+          <span>VAT (%)</span>
+          <input type="number" step="0.1" value={vatPct} onChange={e=>setVatPct(+e.target.value)} style={{...iS,fontSize:12,padding:"4px 8px",height:26,width:70,textAlign:"right"}}/>
+        </div>
+        {vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>
+          <span>VAT</span>
+          <span>฿{vat.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+        </div>}
+        <div style={{paddingTop:8,marginTop:8,borderTop:`2px solid ${C.brandBorder}`,display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'Sarabun',sans-serif"}}>
+          <span style={{fontSize:14,fontWeight:800,color:C.brand}}>ยอดรวมทั้งสิ้น</span>
+          <span style={{fontSize:22,fontWeight:900,color:C.brand}}>฿{total.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+        </div>
+      </div>
+    </div>
+
+    <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:14}}>
+      <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
+      <Btn onClick={save} loading={saving} disabled={items.length===0} icon={I.check}>{editPO?"บันทึกการแก้ไข":"บันทึกเอกสาร PO"}</Btn>
+    </div>
+  </Modal>;
+}
+
+// ══════════════════════════════════════════════════════
 // ── SUMMARY TAB ───────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser}){
+function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser,branches=[],suppliers=[]}){
   const[dateFrom,setDateFrom]=useState(todayStr);const[dateTo,setDateTo]=useState(todayStr);
   const[q,setQ]=useState("");const[selected,setSelected]=useState({});
   const[sortCol,setSortCol]=useState("margin");const[sortDir,setSortDir]=useState("desc");
@@ -1299,6 +1714,8 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
       </Card>
     </>}
     {selectedItems.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.search} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ค้นหาและเพิ่มเมนูเพื่อสรุปต้นทุน</p></div>}
+    {/* Purchase Orders — central only */}
+    {currentBranch?.type==="central"&&<POSection branches={branches} suppliers={suppliers} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
   </div>;
 }
 
@@ -2797,7 +3214,7 @@ export default function App(){
             {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats}/>}
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
-            {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser}/>}
+            {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser}/>}
