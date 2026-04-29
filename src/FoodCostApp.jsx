@@ -1288,6 +1288,14 @@ function exportPOsToExcel(pos,branchById){
   XLSX.writeFile(wb,`PO_Export_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
+const PO_STATUS={
+  open:            {label:"⏳ เปิดอยู่",       short:"เปิดอยู่",    color:"#F59E0B",bg:"#FEF3C7"},
+  disputed:        {label:"⚠️ ส่งกลับ",        short:"ส่งกลับ",     color:"#EA580C",bg:"#FFEDD5"},
+  awaiting_payment:{label:"💰 รอชำระเงิน",     short:"รอชำระ",     color:"#3B82F6",bg:"#DBEAFE"},
+  paid:            {label:"✅ ยืนยันแล้ว",     short:"ยืนยันแล้ว", color:"#10B981",bg:"#D1FAE5"},
+  received:        {label:"✅ รับแล้ว (เก่า)", short:"รับแล้ว",     color:"#10B981",bg:"#D1FAE5"},
+  cancelled:       {label:"❌ ยกเลิก",          short:"ยกเลิก",      color:"#94A3B8",bg:"#F1F5F9"},
+};
 function POSection({branches,ings,currentBranch,currentUser}){
   // Every branch (central or otherwise) can issue a PO to any other branch
   // and only ever sees POs it's involved in (as sender or receiver).
@@ -1334,14 +1342,50 @@ function POSection({branches,ings,currentBranch,currentUser}){
   useEffect(()=>{load();},[direction,partnerFilter,filterStatus,dateFrom,dateTo,currentBranch?.id]);
 
   async function confirmReceive(po){
-    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\nหลังกดยืนยันจะไม่สามารถแก้ไขได้`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
+    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\nหลังยืนยันแล้ว เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
-      await api.updatePO(po.id,{status:"received",received_at:new Date().toISOString(),received_by:currentUser?.username||currentUser?.name||null,updated_at:new Date().toISOString()});
+      await api.updatePO(po.id,{status:"awaiting_payment",received_at:new Date().toISOString(),received_by:currentUser?.username||currentUser?.name||null,updated_at:new Date().toISOString()});
       await load();
     }catch(e){alert("ยืนยันไม่สำเร็จ: "+e.message);}
     setConfirming(null);
   }
+  async function submitDispute(po,updatedItems,note){
+    setConfirming(po.id);
+    try{
+      await api.updatePO(po.id,{items:updatedItems,status:"disputed",dispute_note:note||null,dispute_at:new Date().toISOString(),dispute_by:currentUser?.username||null,updated_at:new Date().toISOString()});
+      await load();
+      setViewPO(null);
+    }catch(e){alert("ส่งกลับไม่สำเร็จ: "+e.message);}
+    setConfirming(null);
+  }
+  async function acceptDispute(po){
+    if(!await confirmDlg({title:"ยอมรับการแก้ไข",message:`ยอมรับจำนวนที่ปลายทางแจ้งใน ${po.po_number||"PO นี้"}?\n\nระบบจะปรับจำนวนและยอดรวมตามที่ปลายทางแจ้ง แล้วเปลี่ยนสถานะเป็น "รอชำระเงิน"`,confirmLabel:"✅ ยอมรับการแก้ไข"}))return;
+    setConfirming(po.id);
+    try{
+      const newItems=(po.items||[]).map(it=>{const q=it.received_qty!=null?+it.received_qty:+it.qty;const lt=q*(+it.price_per_unit||0);return{...it,qty:q,line_total:lt};});
+      const subtotal=newItems.reduce((s,i)=>s+(+i.line_total||0),0);
+      const oldSub=+po.subtotal||0;
+      const vatRate=oldSub>0?(+po.vat||0)/oldSub:0;
+      const vat=subtotal*vatRate;
+      const total=subtotal+vat;
+      await api.updatePO(po.id,{items:newItems,subtotal,vat,total,status:"awaiting_payment",received_at:new Date().toISOString(),received_by:po.dispute_by||null,updated_at:new Date().toISOString()});
+      await load();
+      setViewPO(null);
+    }catch(e){alert("ยอมรับไม่สำเร็จ: "+e.message);}
+    setConfirming(null);
+  }
+  async function submitPayment(po,slipUrl,note){
+    await api.updatePO(po.id,{status:"paid",payment_slip_url:slipUrl,payment_at:new Date().toISOString(),payment_by:currentUser?.username||null,payment_note:note||null,updated_at:new Date().toISOString()});
+    await load();
+    setViewPO(null);
+  }
+  async function cancelPO(po){
+    if(!await confirmDlg({title:"ยกเลิก PO",message:`ยกเลิก ${po.po_number||"PO นี้"}?`,danger:true,confirmLabel:"ยกเลิก PO"}))return;
+    try{await api.updatePO(po.id,{status:"cancelled",updated_at:new Date().toISOString()});await load();setViewPO(null);}
+    catch(e){alert("ยกเลิกไม่สำเร็จ: "+e.message);}
+  }
+  const[payPO,setPayPO]=useState(null);
 
   async function delPO(po){
     if(!await confirmDlg({title:"ลบเอกสาร PO",message:`ต้องการลบ ${po.po_number||"PO นี้"} ใช่หรือไม่?`,danger:true}))return;
@@ -1431,8 +1475,7 @@ function POSection({branches,ings,currentBranch,currentUser}){
             {pos.map((po,idx)=>{
               const fromB=branchById[po.from_branch_id];
               const toB=branchById[po.branch_id];
-              const stColor={open:C.yellow,received:C.green,cancelled:C.ink4}[po.status]||C.ink3;
-              const stLabel={open:"⏳ เปิดอยู่",received:"✅ รับแล้ว",cancelled:"❌ ยกเลิก"}[po.status]||po.status;
+              const st=PO_STATUS[po.status]||{label:po.status,color:C.ink3,bg:C.lineLight};
               const created=po.created_at?new Date(po.created_at).toLocaleString("th-TH",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}):po.po_date;
               const recAt=po.received_at?new Date(po.received_at).toLocaleDateString("th-TH"):null;
               const iCreator=isCreator(po),iReceiver=isReceiver(po);
@@ -1452,17 +1495,20 @@ function POSection({branches,ings,currentBranch,currentUser}){
                 </td>
                 <td style={{padding:"11px 14px",fontSize:14,fontWeight:900,color:C.brand,textAlign:"right",whiteSpace:"nowrap"}}>฿{(+po.total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                 <td style={{padding:"11px 14px",textAlign:"center"}}>
-                  <span style={{fontSize:11,fontWeight:700,color:stColor,background:`${stColor}22`,padding:"3px 10px",borderRadius:18,whiteSpace:"nowrap",display:"inline-block"}}>{stLabel}</span>
-                  {po.status==="received"&&recAt&&<div style={{fontSize:10,color:C.green,fontFamily:"'Sarabun',sans-serif",marginTop:3,fontWeight:600}}>{recAt}{po.received_by?` · ${po.received_by}`:""}</div>}
+                  <span style={{fontSize:11,fontWeight:700,color:st.color,background:st.bg,padding:"3px 10px",borderRadius:18,whiteSpace:"nowrap",display:"inline-block"}}>{st.label}</span>
+                  {(po.status==="awaiting_payment"||po.status==="paid"||po.status==="received")&&recAt&&<div style={{fontSize:10,color:C.green,fontFamily:"'Sarabun',sans-serif",marginTop:3,fontWeight:600}}>รับ: {recAt}{po.received_by?` · ${po.received_by}`:""}</div>}
+                  {po.status==="paid"&&po.payment_at&&<div style={{fontSize:10,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginTop:2,fontWeight:600}}>จ่าย: {new Date(po.payment_at).toLocaleDateString("th-TH")}</div>}
                 </td>
                 <td style={{padding:"8px 12px",textAlign:"center",whiteSpace:"nowrap"}}>
                   <div style={{display:"inline-flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
                     <button onClick={()=>setViewPO(po)} title="ดูรายละเอียด" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.eye} s={13} c={C.ink2}/></button>
                     <button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>
                     <button onClick={()=>printPO(po,toB?.name,'pdf',fromB?.name)} title="ดาวน์โหลด PDF" style={{background:C.greenLight,border:`1px solid #86EFAC`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",fontSize:12,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:800}}>💾</button>
-                    {canEditPO(po)&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
-                    {canEditPO(po)&&<button onClick={()=>delPO(po)} title="ลบ (เฉพาะผู้ออก)" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
-                    {canConfirmPO(po)&&<button onClick={()=>confirmReceive(po)} disabled={confirming===po.id} title="ยืนยันรับสินค้าครบ" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>{confirming===po.id?"⏳":"✅"} ยืนยันรับ</button>}
+                    {canEditPO(po)&&po.status!=="paid"&&po.status!=="cancelled"&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
+                    {canEditPO(po)&&po.status==="open"&&<button onClick={()=>delPO(po)} title="ลบ (เฉพาะผู้ออก)" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+                    {iCreator&&po.status==="awaiting_payment"&&<button onClick={()=>setPayPO(po)} title="ชำระเงิน" style={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.blue}55`}}>💳 ชำระเงิน</button>}
+                    {iCreator&&po.status==="disputed"&&<button onClick={()=>acceptDispute(po)} disabled={confirming===po.id} title="ยอมรับการแก้ไข" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ยอมรับการแก้</button>}
+                    {canConfirmPO(po)&&<button onClick={()=>setViewPO(po)} title="ตรวจสอบ + ยืนยันรับ" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ตรวจรับ</button>}
                   </div>
                 </td>
               </tr>;
@@ -1491,65 +1537,235 @@ function POSection({branches,ings,currentBranch,currentUser}){
     {/* Step 2: Form */}
     {step==='form'&&pickedBranch&&<POFormModal branch={pickedBranch} fromBranch={editPO?branchById[editPO.from_branch_id]:currentBranch} editPO={editPO} ings={ings} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved}/>}
 
-    {/* Read-only view */}
-    {viewPO&&<POViewModal po={viewPO} fromBranch={branchById[viewPO.from_branch_id]} toBranch={branchById[viewPO.branch_id]} canConfirm={canConfirmPO(viewPO)} onConfirm={()=>{confirmReceive(viewPO);setViewPO(null);}} onClose={()=>setViewPO(null)}/>}
+    {/* Full-screen view + actions */}
+    {viewPO&&<POViewModal
+      po={viewPO}
+      fromBranch={branchById[viewPO.from_branch_id]}
+      toBranch={branchById[viewPO.branch_id]}
+      currentBranch={currentBranch}
+      currentUser={currentUser}
+      busy={confirming===viewPO.id}
+      onClose={()=>setViewPO(null)}
+      onConfirmReceive={()=>confirmReceive(viewPO)}
+      onSubmitDispute={(items,note)=>submitDispute(viewPO,items,note)}
+      onAcceptDispute={()=>acceptDispute(viewPO)}
+      onEdit={()=>{setViewPO(null);startEdit(viewPO);}}
+      onOpenPayment={()=>{setViewPO(null);setPayPO(viewPO);}}
+      onCancel={()=>cancelPO(viewPO)}
+    />}
+    {payPO&&<POPaymentModal po={payPO} fromBranch={branchById[payPO.from_branch_id]} toBranch={branchById[payPO.branch_id]} onClose={()=>setPayPO(null)} onSubmit={(url,note)=>{submitPayment(payPO,url,note);setPayPO(null);}}/>}
   </div>;
 }
 
-// Read-only PO view (for any party — sender, receiver, or admin)
-function POViewModal({po,fromBranch,toBranch,canConfirm,onConfirm,onClose}){
-  const stColor={open:C.yellow,received:C.green,cancelled:C.ink4}[po.status]||C.ink3;
-  const stLabel={open:"⏳ เปิดอยู่",received:"✅ รับแล้ว",cancelled:"❌ ยกเลิก"}[po.status]||po.status;
+// Full-screen PO view with status-aware actions
+function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,onClose,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel}){
+  const isCreator=+po.from_branch_id===currentBranch.id;
+  const isReceiver=+po.branch_id===currentBranch.id;
+  const st=PO_STATUS[po.status]||{label:po.status,color:C.ink3,bg:C.lineLight};
   const recAt=po.received_at?new Date(po.received_at).toLocaleString("th-TH"):null;
-  return <Modal title={`📄 ${po.po_number||"PO"} — ${fromBranch?.name||"-"} → ${toBranch?.name||"-"}`} onClose={onClose} extraWide>
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:18}}>
-      {[
-        {l:"จาก (ผู้ออก)",v:fromBranch?.name||"-",color:C.brand},
-        {l:"ถึง (ผู้รับ)",v:toBranch?.name||"-",color:C.green},
-        {l:"วันที่",v:po.po_date||"-"},
-        {l:"สถานะ",v:stLabel,color:stColor},
-      ].map(s=><div key={s.l} style={{background:C.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${C.line}`}}>
-        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:600,marginBottom:3}}>{s.l}</div>
-        <div style={{fontSize:14,color:s.color||C.ink,fontFamily:"'Sarabun',sans-serif",fontWeight:800}}>{s.v}</div>
-      </div>)}
+  const dispAt=po.dispute_at?new Date(po.dispute_at).toLocaleString("th-TH"):null;
+  const payAt=po.payment_at?new Date(po.payment_at).toLocaleString("th-TH"):null;
+  const[mode,setMode]=useState("view");  // view | dispute
+  const[receivedQty,setReceivedQty]=useState(()=>{const m={};(po.items||[]).forEach((it,i)=>{m[i]=it.received_qty!=null?it.received_qty:it.qty;});return m;});
+  const[disputeNote,setDisputeNote]=useState(po.dispute_note||"");
+  // Permissions for actions in this view
+  const canConfirmReceive=isReceiver&&po.status==="open";
+  const canDispute=isReceiver&&po.status==="open";
+  const canAcceptDispute=isCreator&&po.status==="disputed";
+  const canEditFromView=isCreator&&(po.status==="open"||po.status==="disputed");
+  const canPayNow=isCreator&&po.status==="awaiting_payment";
+  const canCancelPO=isCreator&&po.status!=="paid"&&po.status!=="cancelled";
+
+  function submitDisputeNow(){
+    if(!confirm("ยืนยันส่งกลับให้ต้นทาง?\nรายการที่ระบุจำนวนต่างจากเดิมจะถูกบันทึก"))return;
+    const updated=(po.items||[]).map((it,i)=>({...it,received_qty:+receivedQty[i]||0}));
+    onSubmitDispute(updated,disputeNote);
+  }
+  const allMatch=(po.items||[]).every((it,i)=>+receivedQty[i]===+it.qty);
+
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",zIndex:5000,display:"flex",flexDirection:"column"}}>
+    {/* Header */}
+    <div style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,padding:"14px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0,boxShadow:"0 4px 16px rgba(0,0,0,.18)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:14}}>
+        <div style={{fontSize:26}}>📄</div>
+        <div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,letterSpacing:.2}}>{po.po_number||`PO #${po.id}`}</div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,opacity:.92}}>{fromBranch?.name||"-"} <span style={{margin:"0 6px",opacity:.6}}>→</span> {toBranch?.name||"-"} · {po.po_date||""}</div>
+        </div>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:14}}>
+        <span style={{background:st.bg,color:st.color,padding:"5px 14px",borderRadius:20,fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:13}}>{st.label}</span>
+        <button onClick={onClose} style={{background:"rgba(255,255,255,.18)",border:"none",borderRadius:10,width:36,height:36,cursor:"pointer",color:C.white,fontSize:20,fontFamily:"'Sarabun',sans-serif"}}>✕</button>
+      </div>
     </div>
-    {recAt&&<div style={{background:C.greenLight,borderRadius:10,padding:"10px 14px",marginBottom:14,border:`1px solid ${C.green}`,fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>✅ รับสินค้าเมื่อ {recAt}{po.received_by?` โดย ${po.received_by}`:""}</div>}
-    <div style={{maxHeight:380,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10,marginBottom:14}}>
-      <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
-        <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}>
-          <tr>
-            <th style={{padding:"8px 10px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:40,borderBottom:`1px solid ${C.line}`}}>#</th>
-            <th style={{padding:"8px 10px",textAlign:"left",fontSize:11,color:C.ink3,fontWeight:700,borderBottom:`1px solid ${C.line}`}}>รายการ</th>
-            <th style={{padding:"8px 10px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:80,borderBottom:`1px solid ${C.line}`}}>หน่วย</th>
-            <th style={{padding:"8px 10px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:80,borderBottom:`1px solid ${C.line}`}}>จำนวน</th>
-            <th style={{padding:"8px 10px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:100,borderBottom:`1px solid ${C.line}`}}>ราคา/หน่วย</th>
-            <th style={{padding:"8px 10px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:110,borderBottom:`1px solid ${C.line}`}}>รวม</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(po.items||[]).map((it,i)=><tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
-            <td style={{padding:"8px 10px",textAlign:"center",fontSize:12,color:C.ink4,fontWeight:700}}>{i+1}</td>
-            <td style={{padding:"8px 10px",fontSize:13,fontWeight:600,color:C.ink}}>{it.name}{it.note?<div style={{fontSize:10,color:C.ink4,marginTop:2}}>★ {it.note}</div>:null}</td>
-            <td style={{padding:"8px 10px",textAlign:"center",fontSize:12,color:C.ink2}}>{it.unit||"-"}</td>
-            <td style={{padding:"8px 10px",textAlign:"center",fontSize:13,fontWeight:700,color:C.ink}}>{it.qty}</td>
-            <td style={{padding:"8px 10px",textAlign:"right",fontSize:13,color:C.ink2}}>฿{(+it.price_per_unit||0).toFixed(2)}</td>
-            <td style={{padding:"8px 10px",textAlign:"right",fontSize:14,fontWeight:800,color:C.brand}}>฿{(+it.line_total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
-          </tr>)}
-        </tbody>
-      </table>
+
+    {/* Body — scrollable */}
+    <div style={{flex:1,overflowY:"auto",background:"#F1F5F9",padding:"24px 32px"}}>
+      <div style={{maxWidth:1100,margin:"0 auto"}}>
+
+        {/* Status / activity timeline */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:18}}>
+          <div style={{background:C.white,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`}}>
+            <div style={{fontSize:11,color:C.ink4,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>📤 ผู้ออก</div>
+            <div style={{fontSize:14,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{fromBranch?.name||"-"}</div>
+            <div style={{fontSize:11,color:C.ink4,marginTop:2,fontFamily:"'Sarabun',sans-serif"}}>{po.created_by||""} · {po.created_at?new Date(po.created_at).toLocaleString("th-TH"):"-"}</div>
+          </div>
+          <div style={{background:C.white,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`}}>
+            <div style={{fontSize:11,color:C.ink4,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>📥 ผู้รับ</div>
+            <div style={{fontSize:14,fontWeight:800,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>{toBranch?.name||"-"}</div>
+            {recAt&&<div style={{fontSize:11,color:C.green,marginTop:2,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>✅ รับเมื่อ {recAt}{po.received_by?` · ${po.received_by}`:""}</div>}
+          </div>
+          {dispAt&&<div style={{background:"#FFEDD5",borderRadius:12,padding:"12px 14px",border:`1px solid #FB923C`}}>
+            <div style={{fontSize:11,color:"#9A3412",fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>⚠️ ส่งกลับ</div>
+            <div style={{fontSize:13,color:"#9A3412",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{dispAt}{po.dispute_by?` · ${po.dispute_by}`:""}</div>
+            {po.dispute_note&&<div style={{fontSize:11,color:"#7C2D12",marginTop:4,fontFamily:"'Sarabun',sans-serif"}}>"{po.dispute_note}"</div>}
+          </div>}
+          {payAt&&<div style={{background:C.greenLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.green}`}}>
+            <div style={{fontSize:11,color:C.green,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>💳 ชำระเงิน</div>
+            <div style={{fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{payAt}{po.payment_by?` · ${po.payment_by}`:""}</div>
+            {po.payment_slip_url&&<a href={po.payment_slip_url} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.blue,marginTop:4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,display:"inline-block"}}>📎 ดูสลิปการโอน →</a>}
+          </div>}
+        </div>
+
+        {/* Items table */}
+        <div style={{background:C.white,borderRadius:14,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.05)",marginBottom:14}}>
+          <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.line}`,background:C.bg,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:15,color:C.ink}}>📋 รายการ ({(po.items||[]).length})</div>
+            {mode==="dispute"&&<span style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#9A3412",background:"#FFEDD5",padding:"4px 10px",borderRadius:18,fontWeight:700}}>กำลังแก้ไขจำนวนที่ได้รับจริง</span>}
+          </div>
+          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
+            <thead><tr style={{background:C.bg}}>
+              <th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:40}}>#</th>
+              <th style={{padding:"10px 12px",textAlign:"left",fontSize:11,color:C.ink3,fontWeight:700}}>รายการ</th>
+              <th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:70}}>หน่วย</th>
+              <th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:90}}>สั่ง</th>
+              {mode==="dispute"&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:"#9A3412",fontWeight:800,width:120}}>ได้รับจริง *</th>}
+              {(mode==="view"&&po.status==="disputed")&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:"#9A3412",fontWeight:800,width:100}}>ได้จริง</th>}
+              <th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:100}}>ราคา/หน่วย</th>
+              <th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:110}}>รวม</th>
+            </tr></thead>
+            <tbody>
+              {(po.items||[]).map((it,i)=>{
+                const recv=mode==="dispute"?(+receivedQty[i]||0):it.received_qty;
+                const short=recv!=null&&+recv<+it.qty;
+                return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
+                  <td style={{padding:"9px 12px",textAlign:"center",fontSize:12,color:C.ink4,fontWeight:700}}>{i+1}</td>
+                  <td style={{padding:"9px 12px",fontSize:13,fontWeight:600,color:C.ink}}>{it.name}{it.note?<div style={{fontSize:11,color:C.ink4,marginTop:2}}>★ {it.note}</div>:null}</td>
+                  <td style={{padding:"9px 12px",textAlign:"center",fontSize:12,color:C.ink2}}>{it.unit||"-"}</td>
+                  <td style={{padding:"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:C.ink}}>{it.qty}</td>
+                  {mode==="dispute"&&<td style={{padding:"6px 8px",textAlign:"center"}}>
+                    <input type="number" step="0.01" min="0" max={+it.qty} value={receivedQty[i]} onChange={e=>setReceivedQty(prev=>({...prev,[i]:e.target.value}))} style={{...iS,fontSize:14,padding:"6px 8px",height:34,textAlign:"center",fontWeight:800,color:short?C.red:C.ink,background:short?"#FEF2F2":C.white,border:`2px solid ${short?C.red:C.brandBorder}`,maxWidth:90,margin:"0 auto"}}/>
+                  </td>}
+                  {(mode==="view"&&po.status==="disputed")&&<td style={{padding:"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:short?C.red:C.green}}>{recv!=null?recv:it.qty}{short&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>ขาด {(+it.qty-+recv).toFixed(2)}</div>}</td>}
+                  <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,color:C.ink2}}>฿{(+it.price_per_unit||0).toFixed(2)}</td>
+                  <td style={{padding:"9px 12px",textAlign:"right",fontSize:14,fontWeight:800,color:C.brand}}>฿{(+it.line_total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Dispute note input */}
+        {mode==="dispute"&&<div style={{background:C.white,borderRadius:14,padding:"14px 18px",marginBottom:14,border:`1px solid ${C.line}`}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:"#9A3412",marginBottom:6}}>💬 หมายเหตุที่ต้องการแจ้งต้นทาง</div>
+          <textarea value={disputeNote} onChange={e=>setDisputeNote(e.target.value)} rows={2} placeholder="เช่น มะนาว 2 กก. ได้แค่ 1.5 กก. — สินค้าขาดส่ง" style={{...iS,fontSize:13,resize:"none",lineHeight:1.6}}/>
+        </div>}
+        {mode==="view"&&po.notes&&<div style={{padding:"12px 16px",background:C.yellowLight,borderRadius:12,fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:14,border:`1px solid #FDE68A`}}>📝 หมายเหตุ: {po.notes}</div>}
+
+        {/* Total summary */}
+        <div style={{background:C.white,borderRadius:14,padding:"14px 20px",marginBottom:14,border:`2px solid ${C.brandBorder}`,boxShadow:"0 2px 8px rgba(255,107,53,.12)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}><span>ยอดรวม</span><span>฿{(+po.subtotal||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+          {(+po.vat>0)&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}><span>VAT</span><span>฿{(+po.vat).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,marginTop:6,borderTop:`2px dashed ${C.brandBorder}`}}>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.brand}}>ยอดรวมทั้งสิ้น</span>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:28,fontWeight:900,color:C.brand}}>฿{(+po.total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+          </div>
+        </div>
+
+      </div>
     </div>
-    <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10,padding:"10px 14px",background:C.brandLight,borderRadius:10,marginBottom:14}}>
-      <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.brand}}>ยอดรวมทั้งสิ้น</span>
-      <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900,color:C.brand}}>฿{(+po.total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+
+    {/* Footer — sticky action bar */}
+    <div style={{background:C.white,borderTop:`1px solid ${C.line}`,padding:"14px 24px",display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",flexShrink:0,boxShadow:"0 -4px 16px rgba(0,0,0,.08)"}}>
+      {mode==="dispute"?<>
+        <Btn v="ghost" onClick={()=>setMode("view")}>← กลับ</Btn>
+        <Btn v="success" onClick={submitDisputeNow} disabled={busy||allMatch} loading={busy} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 22px",fontWeight:900}}>{allMatch?"ไม่มีรายการที่ขาด":"📤 ส่งกลับให้ต้นทางตรวจสอบ"}</Btn>
+      </>:<>
+        <Btn v="ghost" onClick={onClose}>ปิด</Btn>
+        <Btn v="info" icon={I.print} onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์</Btn>
+        <Btn v="success" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)} s={{padding:"10px 16px"}}>💾 ดาวน์โหลด PDF</Btn>
+        {canCancelPO&&<Btn v="danger" onClick={onCancel} s={{padding:"10px 16px"}}>❌ ยกเลิก PO</Btn>}
+        {canEditFromView&&<Btn v="ghost" onClick={onEdit} icon={I.pencil} s={{padding:"10px 16px",background:"#FEF3C7",color:"#92400E"}}>✏️ แก้ไข</Btn>}
+        {canDispute&&<Btn onClick={()=>setMode("dispute")} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 20px",fontWeight:900,color:C.white,boxShadow:"0 4px 14px rgba(234,88,12,.4)"}}>⚠️ สินค้าไม่ครบ</Btn>}
+        {canConfirmReceive&&<Btn v="success" onClick={onConfirmReceive} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14,boxShadow:`0 4px 14px ${C.green}55`}}>✅ ยืนยันรับสินค้าครบ</Btn>}
+        {canAcceptDispute&&<Btn v="success" onClick={onAcceptDispute} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14}}>✅ ยอมรับการแก้ไข</Btn>}
+        {canPayNow&&<Btn onClick={onOpenPayment} s={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px ${C.blue}55`}}>💳 ชำระเงิน</Btn>}
+      </>}
     </div>
-    {po.notes&&<div style={{padding:"10px 14px",background:C.yellowLight,borderRadius:10,fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:14}}>📝 {po.notes}</div>}
-    <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,borderTop:`1px solid ${C.line}`}}>
-      <Btn v="ghost" onClick={onClose}>ปิด</Btn>
-      <Btn v="info" icon={I.print} onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)}>พิมพ์</Btn>
-      <Btn v="success" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)}>💾 ดาวน์โหลด PDF</Btn>
-      {canConfirm&&<Btn v="success" onClick={onConfirm} icon={I.check} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"10px 20px",fontWeight:900}}>✅ ยืนยันรับสินค้าครบ</Btn>}
+  </div>;
+}
+
+// Payment popup with slip upload
+function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
+  const[slipFile,setSlipFile]=useState(null);
+  const[preview,setPreview]=useState(null);
+  const[note,setNote]=useState("");
+  const[saving,setSaving]=useState(false);
+  function pickFile(e){
+    const f=e.target.files?.[0];if(!f)return;
+    if(f.size>5*1024*1024){alert("ไฟล์ใหญ่เกิน 5MB");return;}
+    setSlipFile(f);setPreview(URL.createObjectURL(f));
+  }
+  async function submit(){
+    if(!slipFile){alert("กรุณาแนบสลิปการโอนเงิน");return;}
+    setSaving(true);
+    try{
+      const ext=(slipFile.name.split(".").pop()||"png").toLowerCase();
+      const path=`po-slips/po-${po.id}-${Date.now()}.${ext}`;
+      const url=await api.uploadImage(slipFile,path);
+      await onSubmit(url,note);
+    }catch(e){alert("อัพโหลดสลิปไม่สำเร็จ: "+e.message);setSaving(false);}
+  }
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",zIndex:6000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:520,boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
+      <div style={{padding:"16px 22px",background:`linear-gradient(135deg,${C.blue},#2563EB)`,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{fontSize:28}}>💳</div>
+          <div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900}}>ชำระเงิน</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,opacity:.9}}>{po.po_number||""} · {fromBranch?.name||""} → {toBranch?.name||""}</div>
+          </div>
+        </div>
+        <button onClick={onClose} disabled={saving} style={{background:"rgba(255,255,255,.18)",border:"none",borderRadius:10,width:32,height:32,cursor:saving?"not-allowed":"pointer",color:C.white,fontSize:18}}>✕</button>
+      </div>
+      <div style={{padding:22}}>
+        <div style={{background:C.brandLight,borderRadius:12,padding:"14px 18px",marginBottom:16,border:`2px solid ${C.brandBorder}`,textAlign:"center"}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.brand,fontWeight:700,marginBottom:4}}>ยอดที่ต้องชำระ</div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:32,fontWeight:900,color:C.brand}}>฿{(+po.total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+        </div>
+        <div style={{marginBottom:14}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6}}>📎 สลิปการโอนเงิน *</div>
+          {preview?<div style={{position:"relative"}}>
+            <img src={preview} alt="slip" style={{width:"100%",maxHeight:280,objectFit:"contain",borderRadius:10,border:`2px solid ${C.green}`,background:C.bg}}/>
+            <button onClick={()=>{setSlipFile(null);setPreview(null);}} disabled={saving} style={{position:"absolute",top:6,right:6,background:C.red,color:C.white,border:"none",borderRadius:8,padding:"5px 10px",cursor:saving?"not-allowed":"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>เปลี่ยนรูป</button>
+          </div>:<label style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"30px 16px",border:`2.5px dashed ${C.brandBorder}`,borderRadius:12,cursor:"pointer",background:C.bg,textAlign:"center"}}>
+            <div style={{fontSize:36,marginBottom:6}}>📤</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.brand}}>กดเพื่อเลือกรูปสลิป</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,marginTop:3}}>JPG / PNG · ไม่เกิน 5MB</div>
+            <input type="file" accept="image/*" onChange={pickFile} style={{display:"none"}}/>
+          </label>}
+        </div>
+        <div style={{marginBottom:18}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6}}>หมายเหตุ (ไม่บังคับ)</div>
+          <input value={note} onChange={e=>setNote(e.target.value)} placeholder="เช่น โอนผ่าน SCB เลขที่อ้างอิง..." style={{...iS,fontSize:13}}/>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn v="ghost" onClick={onClose} disabled={saving} s={{padding:"11px 16px"}}>ยกเลิก</Btn>
+          <Btn onClick={submit} loading={saving} disabled={!slipFile||saving} full icon={I.check} s={{padding:"11px",fontSize:14,fontWeight:900,background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,boxShadow:`0 4px 14px ${C.green}55`}}>ยืนยันชำระเงิน</Btn>
+        </div>
+      </div>
     </div>
-  </Modal>;
+  </div>;
 }
 
 function POFormModal({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}){
@@ -1608,12 +1824,14 @@ function POFormModal({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}
     if(items.length===0){alert("กรุณาเพิ่มรายการอย่างน้อย 1 รายการ");return;}
     setSaving(true);
     try{
+      // If editing a disputed PO, the creator's confirmation pushes it to "รอชำระเงิน"
+      const finalStatus=(editPO?.status==="disputed")?"awaiting_payment":status;
       const payload={
         po_number:poNumber,
         branch_id:branch.id,
         from_branch_id:editPO?.from_branch_id||fromBranch?.id||null,
         po_date:poDate,
-        status,
+        status:finalStatus,
         items,
         subtotal,
         vat,
