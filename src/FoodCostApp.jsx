@@ -1145,9 +1145,7 @@ function genPONumber(){
   const seq=String(Math.floor(Math.random()*9000)+1000);
   return `PO-${ym}-${seq}`;
 }
-function printPO(po,branchName,supplierName){
-  const w=window.open("","_blank","width=820,height=900");
-  if(!w){alert("กรุณาอนุญาต popup");return;}
+function buildPOHTML(po,branchName,supplierName){
   const fmt=(v)=>(+v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const rows=(po.items||[]).map((it,i)=>`<tr>
     <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${i+1}</td>
@@ -1157,26 +1155,10 @@ function printPO(po,branchName,supplierName){
     <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${fmt(it.price_per_unit)}</td>
     <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:700">฿${fmt(it.line_total)}</td>
   </tr>`).join("");
-  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${po.po_number||"PO"}</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;900&display=swap');
-  body{font-family:'Sarabun',sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto}
-  h1{margin:0;font-size:28px;color:#FF6B35;letter-spacing:1px}
-  .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #FF6B35;padding-bottom:14px;margin-bottom:18px}
-  .meta{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;font-size:13px}
-  .meta b{color:#475569;font-weight:600}
-  table{width:100%;border-collapse:collapse;margin:14px 0}
-  th{background:#0F172A;color:#fff;padding:8px;font-weight:700;font-size:12px;text-align:left}
-  th:nth-child(1),th:nth-child(3),th:nth-child(4){text-align:center}
-  th:nth-child(5),th:nth-child(6){text-align:right}
-  .total-row{font-size:15px;font-weight:900;background:#FFF4F0;color:#FF6B35}
-  .footer{margin-top:40px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:12px}
-  .sig{border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:50px;color:#64748B}
-  @media print{@page{size:A4;margin:14mm}}
-</style></head><body>
-<div class="head">
+  return `<div id="po-doc" style="font-family:'Sarabun',sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto;background:#fff">
+<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #FF6B35;padding-bottom:14px;margin-bottom:18px">
   <div>
-    <h1>📄 ใบสั่งซื้อ (Purchase Order)</h1>
+    <h1 style="margin:0;font-size:28px;color:#FF6B35;letter-spacing:1px">📄 ใบสั่งซื้อ (Purchase Order)</h1>
     <div style="margin-top:6px;font-size:13px;color:#475569">${branchName||""}</div>
   </div>
   <div style="text-align:right">
@@ -1185,34 +1167,122 @@ function printPO(po,branchName,supplierName){
     <div style="font-size:11px;color:#94A3B8;margin-top:4px">สถานะ: ${po.status==='received'?'✅ รับสินค้าแล้ว':po.status==='cancelled'?'❌ ยกเลิก':'⏳ เปิดอยู่'}</div>
   </div>
 </div>
-<div class="meta">
-  <div><b>สาขาที่สั่ง:</b> ${branchName||"-"}</div>
-  <div><b>ซัพพลายเออร์:</b> ${supplierName||"-"}</div>
-  ${po.notes?`<div style="grid-column:1/3"><b>หมายเหตุ:</b> ${po.notes}</div>`:""}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;font-size:13px">
+  <div><b style="color:#475569;font-weight:600">สาขาที่สั่ง:</b> ${branchName||"-"}</div>
+  <div><b style="color:#475569;font-weight:600">ซัพพลายเออร์:</b> ${supplierName||"-"}</div>
+  ${po.notes?`<div style="grid-column:1/3"><b style="color:#475569;font-weight:600">หมายเหตุ:</b> ${po.notes}</div>`:""}
 </div>
-<table>
+<table style="width:100%;border-collapse:collapse;margin:14px 0">
   <thead><tr>
-    <th style="width:40px">#</th>
-    <th>รายการ</th>
-    <th style="width:60px">หน่วย</th>
-    <th style="width:80px">จำนวน</th>
-    <th style="width:90px">ราคา/หน่วย</th>
-    <th style="width:110px">รวม</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-weight:700;font-size:12px;text-align:center;width:40px">#</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-weight:700;font-size:12px;text-align:left">รายการ</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-weight:700;font-size:12px;text-align:center;width:60px">หน่วย</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-weight:700;font-size:12px;text-align:center;width:80px">จำนวน</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-weight:700;font-size:12px;text-align:right;width:90px">ราคา/หน่วย</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-weight:700;font-size:12px;text-align:right;width:110px">รวม</th>
   </tr></thead>
   <tbody>
     ${rows||`<tr><td colspan="6" style="text-align:center;padding:20px;color:#94A3B8">— ไม่มีรายการ —</td></tr>`}
     ${po.subtotal?`<tr><td colspan="5" style="text-align:right;padding:8px 12px;border:1px solid #ddd;font-weight:600">ยอดรวม</td><td style="text-align:right;padding:8px;border:1px solid #ddd;font-weight:700">฿${fmt(po.subtotal)}</td></tr>`:""}
     ${po.vat>0?`<tr><td colspan="5" style="text-align:right;padding:8px 12px;border:1px solid #ddd;font-weight:600">VAT</td><td style="text-align:right;padding:8px;border:1px solid #ddd;font-weight:700">฿${fmt(po.vat)}</td></tr>`:""}
-    <tr class="total-row"><td colspan="5" style="text-align:right;padding:10px 12px;border:1px solid #ddd">ยอดรวมทั้งสิ้น</td><td style="text-align:right;padding:10px;border:1px solid #ddd">฿${fmt(po.total)}</td></tr>
+    <tr style="font-size:15px;font-weight:900;background:#FFF4F0;color:#FF6B35"><td colspan="5" style="text-align:right;padding:10px 12px;border:1px solid #ddd">ยอดรวมทั้งสิ้น</td><td style="text-align:right;padding:10px;border:1px solid #ddd">฿${fmt(po.total)}</td></tr>
   </tbody>
 </table>
-<div class="footer">
-  <div><div class="sig">ผู้สั่งซื้อ / วันที่</div></div>
-  <div><div class="sig">ผู้รับ-ตรวจสินค้า / วันที่</div></div>
+<div style="margin-top:40px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:12px">
+  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:50px;color:#64748B">ผู้สั่งซื้อ / วันที่</div></div>
+  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:50px;color:#64748B">ผู้รับ-ตรวจสินค้า / วันที่</div></div>
 </div>
-<script>setTimeout(()=>{window.print();},250);<\/script>
+</div>`;
+}
+function printPO(po,branchName,supplierName,action='print'){
+  const w=window.open("","_blank","width=860,height=950");
+  if(!w){alert("กรุณาอนุญาต popup");return;}
+  const filename=(po.po_number||`PO-${po.id}`).replace(/[^\w\-]/g,"_")+".pdf";
+  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${po.po_number||"PO"}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.2/dist/html2pdf.bundle.min.js"><\/script>
+<style>
+  body{font-family:'Sarabun',sans-serif;margin:0;background:#F1F5F9}
+  .toolbar{position:sticky;top:0;background:#0F172A;color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.18)}
+  .tools{display:flex;gap:8px}
+  .tools button{background:#FF6B35;color:#fff;border:none;border-radius:8px;padding:7px 16px;cursor:pointer;font-family:'Sarabun',sans-serif;font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px}
+  .tools button.alt{background:#3B82F6}
+  .tools button.ghost{background:rgba(255,255,255,.12)}
+  .tools button:hover{opacity:.85}
+  @media print{.toolbar{display:none}body{background:#fff}@page{size:A4;margin:14mm}}
+</style>
+</head><body>
+<div class="toolbar">
+  <div style="font-weight:800;font-size:14px">📄 ${po.po_number||"PO"} — ${branchName||""}</div>
+  <div class="tools">
+    <button onclick="window.print()">🖨 พิมพ์</button>
+    <button class="alt" onclick="savePDF()" id="pdfBtn">💾 ดาวน์โหลด PDF</button>
+    <button class="ghost" onclick="window.close()">✕ ปิด</button>
+  </div>
+</div>
+${buildPOHTML(po,branchName,supplierName)}
+<script>
+function savePDF(){
+  var btn=document.getElementById('pdfBtn');
+  if(typeof html2pdf==='undefined'){btn.textContent='⏳ กำลังโหลด...';setTimeout(savePDF,300);return;}
+  btn.textContent='⏳ กำลังสร้าง PDF...';btn.disabled=true;
+  html2pdf().set({margin:[8,8,8,8],filename:'${filename}',image:{type:'jpeg',quality:.98},html2canvas:{scale:2,useCORS:true,backgroundColor:'#ffffff'},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(document.getElementById('po-doc')).save().then(function(){btn.textContent='💾 ดาวน์โหลด PDF';btn.disabled=false;}).catch(function(e){alert('สร้าง PDF ไม่สำเร็จ: '+e.message);btn.textContent='💾 ดาวน์โหลด PDF';btn.disabled=false;});
+}
+${action==='print'?"setTimeout(function(){window.print();},400);":""}
+${action==='pdf'?"window.addEventListener('load',function(){setTimeout(savePDF,400);});":""}
+<\/script>
 </body></html>`;
   w.document.write(html);w.document.close();
+}
+
+// Export PO list to Excel
+function exportPOsToExcel(pos,branchById,supplierById){
+  if(!pos||pos.length===0){alert("ไม่มีข้อมูลให้ Export");return;}
+  const stL={open:"เปิดอยู่",received:"รับแล้ว",cancelled:"ยกเลิก"};
+  // Sheet 1: Summary
+  const summary=pos.map(po=>({
+    "เลข PO":po.po_number||"",
+    "วันที่":po.po_date||"",
+    "สาขา":branchById[po.branch_id]?.name||"",
+    "ซัพพลายเออร์":supplierById[po.supplier_id]?.name||"",
+    "สถานะ":stL[po.status]||po.status||"",
+    "จำนวนรายการ":(po.items||[]).length,
+    "ยอดก่อน VAT":+po.subtotal||0,
+    "VAT":+po.vat||0,
+    "ยอดสุทธิ":+po.total||0,
+    "ผู้สร้าง":po.created_by||"",
+    "หมายเหตุ":po.notes||"",
+  }));
+  // Sheet 2: Detailed line items (one row per ingredient)
+  const details=[];
+  pos.forEach(po=>{
+    (po.items||[]).forEach((it,idx)=>{
+      details.push({
+        "เลข PO":po.po_number||"",
+        "วันที่":po.po_date||"",
+        "สาขา":branchById[po.branch_id]?.name||"",
+        "ซัพพลายเออร์":supplierById[po.supplier_id]?.name||"",
+        "ลำดับ":idx+1,
+        "รายการ":it.name,
+        "หน่วย":it.unit||"",
+        "จำนวน":+it.qty||0,
+        "ราคา/หน่วย":+it.price_per_unit||0,
+        "รวม":+it.line_total||0,
+        "หมายเหตุ":it.note||"",
+      });
+    });
+  });
+  const wb=XLSX.utils.book_new();
+  const ws1=XLSX.utils.json_to_sheet(summary);
+  const ws2=XLSX.utils.json_to_sheet(details);
+  // Set column widths for readability
+  ws1["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:20},{wch:12},{wch:8},{wch:14},{wch:10},{wch:14},{wch:14},{wch:30}];
+  ws2["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:20},{wch:6},{wch:24},{wch:10},{wch:10},{wch:14},{wch:14},{wch:24}];
+  XLSX.utils.book_append_sheet(wb,ws1,"สรุป PO");
+  XLSX.utils.book_append_sheet(wb,ws2,"รายการรายบรรทัด");
+  const fname=`PO_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
+  XLSX.writeFile(wb,fname);
 }
 
 function POSection({branches,suppliers,ings,currentBranch,currentUser}){
@@ -1260,7 +1330,10 @@ function POSection({branches,suppliers,ings,currentBranch,currentUser}){
         </h3>
         <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,margin:"3px 0 0"}}>เปิดเอกสารสำหรับสาขาแต่ละสาขา · ปริ้น/แก้ไข/ลบ ได้</p>
       </div>
-      {canEdit&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById,supplierById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
+        {canEdit&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
+      </div>
     </div>
 
     {/* Filter row */}
@@ -1311,7 +1384,8 @@ function POSection({branches,suppliers,ings,currentBranch,currentUser}){
               {sup&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>🚚 {sup.name}</div>}
             </div>
             <div style={{display:"flex",gap:4}}>
-              <button onClick={()=>printPO(po,b?.name,sup?.name)} title="พิมพ์" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.print} s={12} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>พิมพ์</span></button>
+              <button onClick={()=>printPO(po,b?.name,sup?.name,'print')} title="พิมพ์" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.print} s={12} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>พิมพ์</span></button>
+              <button onClick={()=>printPO(po,b?.name,sup?.name,'pdf')} title="ดาวน์โหลด PDF" style={{background:C.greenLight,border:`1px solid #86EFAC`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><span style={{fontSize:13}}>💾</span><span style={{fontSize:11,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>PDF</span></button>
               {canEdit&&<button onClick={()=>startEdit(po)} title="แก้ไข" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c="#92400E"/></button>}
               {canEdit&&<button onClick={()=>delPO(po)} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 7px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
             </div>
