@@ -199,6 +199,7 @@ const ALL_PERMS=[
   {id:"menus",label:"เมนู"},
   {id:"sop",label:"SOP"},
   {id:"summary",label:"สรุปต้นทุน"},
+  {id:"po",label:"เอกสาร PO"},
   {id:"orders",label:"สั่งวัตถุดิบ"},
   {id:"history",label:"ประวัติต้นทุน"},
   {id:"suppliers",label:"ซัพพลาย"},
@@ -206,8 +207,8 @@ const ALL_PERMS=[
 ];
 const ROLE_DEFAULT_PERMS={
   admin:ALL_PERMS.map(p=>p.id),
-  manager:["pos","crm","ingredients","menus","sop","summary","orders","history","suppliers"],
-  staff:["pos","crm","ingredients","menus","sop","summary","orders","history","suppliers"],
+  manager:["pos","crm","ingredients","menus","sop","summary","po","orders","history","suppliers"],
+  staff:["pos","crm","ingredients","menus","sop","summary","po","orders","history","suppliers"],
   viewer:["pos","menus","sop"],
 };
 function hasPerm(user,perm){if(!user)return false;if(user.role==="admin")return true;return((user.perms&&user.perms.length>0)?user.perms:ROLE_DEFAULT_PERMS[user.role]||[]).includes(perm);}
@@ -1322,13 +1323,13 @@ function POSection({branches,suppliers,ings,currentBranch,currentUser}){
   const totalAll=pos.reduce((s,p)=>s+(+p.total||0),0);
   const branchOptions=branches.filter(b=>b.type!=="central");
 
-  return <div style={{marginTop:30,paddingTop:24,borderTop:`2px dashed ${C.brandBorder}`}}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10}}>
       <div>
-        <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,margin:0,display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontSize:22}}>📄</span> เอกสาร PO (ใบสั่งซื้อวัตถุดิบ)
+        <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.ink,margin:0,display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:24}}>📄</span> เอกสาร PO (ใบสั่งซื้อวัตถุดิบ)
         </h3>
-        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,margin:"3px 0 0"}}>เปิดเอกสารสำหรับสาขาแต่ละสาขา · ปริ้น/แก้ไข/ลบ ได้</p>
+        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,margin:"4px 0 0"}}>เปิดเอกสารสำหรับสาขาแต่ละสาขา · ปริ้น / ดาวน์โหลด PDF / Export Excel</p>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById,supplierById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
@@ -1788,8 +1789,6 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
       </Card>
     </>}
     {selectedItems.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.search} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ค้นหาและเพิ่มเมนูเพื่อสรุปต้นทุน</p></div>}
-    {/* Purchase Orders — central only */}
-    {currentBranch?.type==="central"&&<POSection branches={branches} suppliers={suppliers} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
   </div>;
 }
 
@@ -3152,6 +3151,7 @@ export default function App(){
     {id:"menus",l:"เมนู",icon:I.fire,perm:"menus"},
     {id:"sop",l:"SOP",icon:I.sop,perm:"sop"},
     {id:"summary",l:"สรุปต้นทุน",icon:I.chart,perm:"summary"},
+    {id:"po",l:"เอกสาร PO",icon:I.bill,perm:"po"},
     {id:"orders",l:"สั่งวัตถุดิบ",icon:I.truck,perm:"orders"},
     {id:"history",l:"ประวัติต้นทุน",icon:I.clock,perm:"history"},
     {id:"suppliers",l:"ซัพพลาย",icon:I.truck,perm:"suppliers"},
@@ -3164,6 +3164,8 @@ export default function App(){
   const visibleTabs=TABS.filter(t=>{
     if(!currentUser)return false;
     if(!hasPerm(currentUser,t.perm))return false;
+    // PO is a central-only tool — hide from regular branches
+    if(t.id==="po"&&currentBranch?.type!=="central")return false;
     if(currentUser.role==="admin")return true;
     if(branchAllowed==null)return true;
     return branchAllowed.includes(t.perm);
@@ -3172,7 +3174,7 @@ export default function App(){
   useEffect(()=>{
     if(visibleTabs.length>0&&!visibleTabs.find(t=>t.id===tab))setTab(visibleTabs[0].id);
   },[currentBranch?.id,currentUser?.id,visibleTabs.length]);
-  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
+  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",po:"เปิด/แก้ไข/ปริ้น เอกสารใบสั่งซื้อวัตถุดิบ (Purchase Order)",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
 
   // Check scan mode
   const params=typeof window!=="undefined"?new URLSearchParams(window.location.search):new URLSearchParams();
@@ -3289,6 +3291,7 @@ export default function App(){
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers}/>}
+            {tab==="po"&&<POSection branches={branches} suppliers={suppliers} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser}/>}
