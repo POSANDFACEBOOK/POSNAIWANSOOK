@@ -1388,8 +1388,12 @@ function POSection({branches,ings,currentBranch,currentUser}){
   const[payPO,setPayPO]=useState(null);
 
   async function delPO(po){
-    if(!await confirmDlg({title:"ลบเอกสาร PO",message:`ต้องการลบ ${po.po_number||"PO นี้"} ใช่หรือไม่?`,danger:true}))return;
-    try{await api.deletePO(po.id);await load();}
+    const isPaid=po.status==="paid";
+    const msg=isPaid
+      ?`เอกสาร ${po.po_number||"PO นี้"} ชำระเงินแล้ว\n\n⚠️ ลบแล้วจะไม่สามารถกู้คืนได้ และประวัติการชำระเงิน + รูปสลิปจะถูกลบทิ้งด้วย\n\nต้องการลบจริงๆ?`
+      :`ต้องการลบ ${po.po_number||"PO นี้"} ใช่หรือไม่?`;
+    if(!await confirmDlg({title:isPaid?"⚠️ ลบเอกสารที่ชำระแล้ว":"ลบเอกสาร PO",message:msg,danger:true,confirmLabel:isPaid?"ลบทิ้งถาวร":"ลบ"}))return;
+    try{await api.deletePO(po.id);await load();setViewPO(null);}
     catch(e){alert("ลบไม่สำเร็จ: "+e.message);}
   }
   function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
@@ -1505,7 +1509,7 @@ function POSection({branches,ings,currentBranch,currentUser}){
                     <button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>
                     <button onClick={()=>printPO(po,toB?.name,'pdf',fromB?.name)} title="ดาวน์โหลด PDF" style={{background:C.greenLight,border:`1px solid #86EFAC`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",fontSize:12,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:800}}>💾</button>
                     {canEditPO(po)&&po.status!=="paid"&&po.status!=="cancelled"&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
-                    {canEditPO(po)&&po.status==="open"&&<button onClick={()=>delPO(po)} title="ลบ (เฉพาะผู้ออก)" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+                    {canEditPO(po)&&<button onClick={()=>delPO(po)} title={po.status==="paid"?"ลบทิ้งถาวร (ระวัง: ชำระแล้ว)":"ลบ"} style={{background:po.status==="paid"?"#7F1D1D":C.redLight,border:`1px solid ${po.status==="paid"?"#7F1D1D":"#FECACA"}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={po.status==="paid"?C.white:C.red}/></button>}
                     {iCreator&&po.status==="awaiting_payment"&&<button onClick={()=>setPayPO(po)} title="ชำระเงิน" style={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.blue}55`}}>💳 ชำระเงิน</button>}
                     {iCreator&&po.status==="disputed"&&<button onClick={()=>acceptDispute(po)} disabled={confirming===po.id} title="ยอมรับการแก้ไข" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ยอมรับการแก้</button>}
                     {canConfirmPO(po)&&<button onClick={()=>setViewPO(po)} title="ตรวจสอบ + ยืนยันรับ" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ตรวจรับ</button>}
@@ -1545,6 +1549,7 @@ function POSection({branches,ings,currentBranch,currentUser}){
       currentBranch={currentBranch}
       currentUser={currentUser}
       busy={confirming===viewPO.id}
+      canDelete={canEditPO(viewPO)}
       onClose={()=>setViewPO(null)}
       onConfirmReceive={()=>confirmReceive(viewPO)}
       onSubmitDispute={(items,note)=>submitDispute(viewPO,items,note)}
@@ -1552,13 +1557,14 @@ function POSection({branches,ings,currentBranch,currentUser}){
       onEdit={()=>{setViewPO(null);startEdit(viewPO);}}
       onOpenPayment={()=>{setViewPO(null);setPayPO(viewPO);}}
       onCancel={()=>cancelPO(viewPO)}
+      onDelete={()=>delPO(viewPO)}
     />}
     {payPO&&<POPaymentModal po={payPO} fromBranch={branchById[payPO.from_branch_id]} toBranch={branchById[payPO.branch_id]} onClose={()=>setPayPO(null)} onSubmit={(url,note)=>{submitPayment(payPO,url,note);setPayPO(null);}}/>}
   </div>;
 }
 
 // Full-screen PO view with status-aware actions
-function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,onClose,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel}){
+function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canDelete,onClose,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel,onDelete}){
   const isCreator=+po.from_branch_id===currentBranch.id;
   const isReceiver=+po.branch_id===currentBranch.id;
   const st=PO_STATUS[po.status]||{label:po.status,color:C.ink3,bg:C.lineLight};
@@ -1695,6 +1701,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,onCl
         <Btn v="info" icon={I.print} onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์</Btn>
         <Btn v="success" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)} s={{padding:"10px 16px"}}>💾 ดาวน์โหลด PDF</Btn>
         {canCancelPO&&<Btn v="danger" onClick={onCancel} s={{padding:"10px 16px"}}>❌ ยกเลิก PO</Btn>}
+        {canDelete&&<Btn onClick={onDelete} icon={I.trash} s={{padding:"10px 16px",background:po.status==="paid"?"#7F1D1D":C.redLight,color:po.status==="paid"?C.white:C.red,border:`1.5px solid ${po.status==="paid"?"#7F1D1D":"#FECACA"}`}}>🗑 ลบทิ้งถาวร</Btn>}
         {canEditFromView&&<Btn v="ghost" onClick={onEdit} icon={I.pencil} s={{padding:"10px 16px",background:"#FEF3C7",color:"#92400E"}}>✏️ แก้ไข</Btn>}
         {canDispute&&<Btn onClick={()=>setMode("dispute")} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 20px",fontWeight:900,color:C.white,boxShadow:"0 4px 14px rgba(234,88,12,.4)"}}>⚠️ สินค้าไม่ครบ</Btn>}
         {canConfirmReceive&&<Btn v="success" onClick={onConfirmReceive} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14,boxShadow:`0 4px 14px ${C.green}55`}}>✅ ยืนยันรับสินค้าครบ</Btn>}
