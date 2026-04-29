@@ -111,11 +111,14 @@ const api = {
   updatePromotion: (id,d) => sb(`promotions?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deletePromotion: (id) => sb(`promotions?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   // Purchase Orders
-  getPOs: (branchId,dateFrom,dateTo) => {
+  getPOs: (filters={}) => {
     const q=["order=po_date.desc,id.desc"];
-    if(branchId)q.push(`branch_id=eq.${branchId}`);
-    if(dateFrom)q.push(`po_date=gte.${dateFrom}`);
-    if(dateTo)q.push(`po_date=lte.${dateTo}`);
+    // viewerBranchId = branch sees POs where it is sender OR receiver
+    if(filters.viewerBranchId!=null)q.push(`or=(from_branch_id.eq.${filters.viewerBranchId},branch_id.eq.${filters.viewerBranchId})`);
+    if(filters.fromBranchId!=null)q.push(`from_branch_id=eq.${filters.fromBranchId}`);
+    if(filters.toBranchId!=null)q.push(`branch_id=eq.${filters.toBranchId}`);
+    if(filters.dateFrom)q.push(`po_date=gte.${filters.dateFrom}`);
+    if(filters.dateTo)q.push(`po_date=lte.${filters.dateTo}`);
     return sb(`purchase_orders?${q.join("&")}`);
   },
   addPO: (d) => sb("purchase_orders", {method:"POST", body:JSON.stringify(d)}),
@@ -1146,7 +1149,7 @@ function genPONumber(){
   const seq=String(Math.floor(Math.random()*9000)+1000);
   return `PO-${ym}-${seq}`;
 }
-function buildPOHTML(po,branchName){
+function buildPOHTML(po,toBranchName,fromBranchName){
   const fmt=(v)=>(+v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const rows=(po.items||[]).map((it,i)=>`<tr>
     <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${i+1}</td>
@@ -1160,7 +1163,7 @@ function buildPOHTML(po,branchName){
 <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #FF6B35;padding-bottom:14px;margin-bottom:18px">
   <div>
     <h1 style="margin:0;font-size:28px;color:#FF6B35;letter-spacing:1px">📄 ใบสั่งซื้อ (Purchase Order)</h1>
-    <div style="margin-top:6px;font-size:13px;color:#475569">${branchName||""}</div>
+    <div style="margin-top:6px;font-size:13px;color:#475569">${fromBranchName||"-"} <span style="color:#FF6B35;font-weight:700">→</span> ${toBranchName||"-"}</div>
   </div>
   <div style="text-align:right">
     <div style="font-size:18px;font-weight:900;color:#0F172A">${po.po_number||"-"}</div>
@@ -1169,8 +1172,9 @@ function buildPOHTML(po,branchName){
   </div>
 </div>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;font-size:13px">
-  <div><b style="color:#475569;font-weight:600">สาขาที่สั่ง:</b> ${branchName||"-"}</div>
-  <div><b style="color:#475569;font-weight:600">วันที่เปิด:</b> ${po.po_date||"-"}</div>
+  <div><b style="color:#475569;font-weight:600">จาก (ผู้ออก):</b> ${fromBranchName||"-"}</div>
+  <div><b style="color:#475569;font-weight:600">ถึง (ผู้รับ):</b> ${toBranchName||"-"}</div>
+  ${po.received_at?`<div><b style="color:#475569;font-weight:600">รับเมื่อ:</b> ${new Date(po.received_at).toLocaleString("th-TH")}${po.received_by?` โดย ${po.received_by}`:""}</div>`:""}
   ${po.notes?`<div style="grid-column:1/3"><b style="color:#475569;font-weight:600">หมายเหตุ:</b> ${po.notes}</div>`:""}
 </div>
 <table style="width:100%;border-collapse:collapse;margin:14px 0">
@@ -1195,7 +1199,7 @@ function buildPOHTML(po,branchName){
 </div>
 </div>`;
 }
-function printPO(po,branchName,action='print'){
+function printPO(po,toBranchName,action='print',fromBranchName){
   const w=window.open("","_blank","width=860,height=950");
   if(!w){alert("กรุณาอนุญาต popup");return;}
   const filename=(po.po_number||`PO-${po.id}`).replace(/[^\w\-]/g,"_")+".pdf";
@@ -1215,14 +1219,14 @@ function printPO(po,branchName,action='print'){
 </style>
 </head><body>
 <div class="toolbar">
-  <div style="font-weight:800;font-size:14px">📄 ${po.po_number||"PO"} — ${branchName||""}</div>
+  <div style="font-weight:800;font-size:14px">📄 ${po.po_number||"PO"} — ${fromBranchName||"-"} → ${toBranchName||"-"}</div>
   <div class="tools">
     <button onclick="window.print()">🖨 พิมพ์</button>
     <button class="alt" onclick="savePDF()" id="pdfBtn">💾 ดาวน์โหลด PDF</button>
     <button class="ghost" onclick="window.close()">✕ ปิด</button>
   </div>
 </div>
-${buildPOHTML(po,branchName)}
+${buildPOHTML(po,toBranchName,fromBranchName)}
 <script>
 function savePDF(){
   var btn=document.getElementById('pdfBtn');
@@ -1244,13 +1248,16 @@ function exportPOsToExcel(pos,branchById){
   const summary=pos.map(po=>({
     "เลข PO":po.po_number||"",
     "วันที่":po.po_date||"",
-    "สาขา":branchById[po.branch_id]?.name||"",
+    "จาก":branchById[po.from_branch_id]?.name||"",
+    "ถึง":branchById[po.branch_id]?.name||"",
     "สถานะ":stL[po.status]||po.status||"",
     "จำนวนรายการ":(po.items||[]).length,
     "ยอดก่อน VAT":+po.subtotal||0,
     "VAT":+po.vat||0,
     "ยอดสุทธิ":+po.total||0,
     "ผู้สร้าง":po.created_by||"",
+    "ผู้รับ":po.received_by||"",
+    "วันที่รับ":po.received_at?new Date(po.received_at).toLocaleString("th-TH"):"",
     "หมายเหตุ":po.notes||"",
   }));
   const details=[];
@@ -1259,7 +1266,8 @@ function exportPOsToExcel(pos,branchById){
       details.push({
         "เลข PO":po.po_number||"",
         "วันที่":po.po_date||"",
-        "สาขา":branchById[po.branch_id]?.name||"",
+        "จาก":branchById[po.from_branch_id]?.name||"",
+        "ถึง":branchById[po.branch_id]?.name||"",
         "ลำดับ":idx+1,
         "รายการ":it.name,
         "หน่วย":it.unit||"",
@@ -1273,47 +1281,60 @@ function exportPOsToExcel(pos,branchById){
   const wb=XLSX.utils.book_new();
   const ws1=XLSX.utils.json_to_sheet(summary);
   const ws2=XLSX.utils.json_to_sheet(details);
-  ws1["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:12},{wch:8},{wch:14},{wch:10},{wch:14},{wch:14},{wch:30}];
-  ws2["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:6},{wch:24},{wch:10},{wch:10},{wch:14},{wch:14},{wch:24}];
+  ws1["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:18},{wch:12},{wch:8},{wch:14},{wch:10},{wch:14},{wch:14},{wch:14},{wch:18},{wch:30}];
+  ws2["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:18},{wch:6},{wch:24},{wch:10},{wch:10},{wch:14},{wch:14},{wch:24}];
   XLSX.utils.book_append_sheet(wb,ws1,"สรุป PO");
   XLSX.utils.book_append_sheet(wb,ws2,"รายการรายบรรทัด");
   XLSX.writeFile(wb,`PO_Export_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
 function POSection({branches,ings,currentBranch,currentUser}){
-  // Mode: central (raises POs, sees all) vs branch (receives POs only for itself)
-  const isCentral=currentBranch?.type==="central";
+  // Every branch (central or otherwise) can issue a PO to any other branch
+  // and only ever sees POs it's involved in (as sender or receiver).
+  // - "from_branch_id" = creator (sender)
+  // - "branch_id"      = receiver
   const today=new Date().toISOString().slice(0,10);
   const ago=(d=>new Date(Date.now()-d*86400000).toISOString().slice(0,10))(30);
   const[pos,setPOs]=useState([]);
   const[loading,setLoading]=useState(false);
-  const[filterBranch,setFilterBranch]=useState("");
+  const[direction,setDirection]=useState("all");  // all | sent | received
+  const[partnerFilter,setPartnerFilter]=useState("");  // other party
   const[filterStatus,setFilterStatus]=useState("");
   const[dateFrom,setDateFrom]=useState(ago);
   const[dateTo,setDateTo]=useState(today);
-  const[step,setStep]=useState(null);  // null | 'pick-branch' | 'form'
+  const[step,setStep]=useState(null);
   const[pickedBranch,setPickedBranch]=useState(null);
   const[editPO,setEditPO]=useState(null);
-  const[viewPO,setViewPO]=useState(null);  // for branch readonly view
-  const[confirming,setConfirming]=useState(null);  // po being confirmed (loading state)
-  const canEdit=isCentral&&(hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders")||hasPerm(currentUser,"po"));
-  const canConfirm=!isCentral&&hasPerm(currentUser,"po");
+  const[viewPO,setViewPO]=useState(null);
+  const[confirming,setConfirming]=useState(null);
+  const hasPO=hasPerm(currentUser,"po")||hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
+  // Per-PO permissions
+  const isCreator=(po)=>+po.from_branch_id===currentBranch.id;
+  const isReceiver=(po)=>+po.branch_id===currentBranch.id;
+  const canEditPO=(po)=>hasPO&&isCreator(po);
+  const canConfirmPO=(po)=>hasPO&&isReceiver(po)&&po.status==="open";
 
   async function load(){
     setLoading(true);
     try{
-      // Branches see only their own POs; central sees all (or filtered)
-      const targetBranch=isCentral?(filterBranch?+filterBranch:null):currentBranch.id;
-      let data=await api.getPOs(targetBranch,dateFrom,dateTo);
+      const filters={dateFrom,dateTo};
+      if(direction==="sent")filters.fromBranchId=currentBranch.id;
+      else if(direction==="received")filters.toBranchId=currentBranch.id;
+      else filters.viewerBranchId=currentBranch.id;
+      let data=await api.getPOs(filters);
+      if(partnerFilter){
+        const pid=+partnerFilter;
+        data=data.filter(p=>+p.from_branch_id===pid||+p.branch_id===pid);
+      }
       if(filterStatus)data=data.filter(p=>p.status===filterStatus);
       setPOs(data);
     }catch(e){console.error("loadPOs",e);alert("โหลด PO ไม่สำเร็จ: "+e.message);}
     setLoading(false);
   }
-  useEffect(()=>{load();},[filterBranch,filterStatus,dateFrom,dateTo,currentBranch?.id]);
+  useEffect(()=>{load();},[direction,partnerFilter,filterStatus,dateFrom,dateTo,currentBranch?.id]);
 
   async function confirmReceive(po){
-    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าครัวกลางมาส่งของครบตามใบ ${po.po_number||"PO นี้"}?\n\nหลังกดยืนยันจะไม่สามารถแก้ไขได้`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
+    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\nหลังกดยืนยันจะไม่สามารถแก้ไขได้`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
       await api.updatePO(po.id,{status:"received",received_at:new Date().toISOString(),received_by:currentUser?.username||currentUser?.name||null,updated_at:new Date().toISOString()});
@@ -1334,33 +1355,40 @@ function POSection({branches,ings,currentBranch,currentUser}){
 
   const branchById=Object.fromEntries(branches.map(b=>[b.id,b]));
   const totalAll=pos.reduce((s,p)=>s+(+p.total||0),0);
-  const branchOptions=branches.filter(b=>b.type!=="central");
+  const branchOptions=branches.filter(b=>b.id!==currentBranch.id&&b.active!==false);
 
-  const centralBranch=branches.find(b=>b.type==="central");
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10}}>
       <div>
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.ink,margin:0,display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontSize:24}}>📄</span> เอกสาร PO (ใบสั่งซื้อวัตถุดิบ)
         </h3>
-        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,margin:"4px 0 0"}}>{isCentral?"เปิดเอกสารสำหรับแต่ละสาขา · ปริ้น / ดาวน์โหลด PDF / Export Excel":`รายการ PO ที่ครัวกลางส่งให้ ${currentBranch?.name||"สาขา"} · กดยืนยันรับเมื่อได้รับสินค้าครบ`}</p>
+        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,margin:"4px 0 0"}}>เปิดใบสั่งซื้อระหว่างสาขาได้ทุกทิศทาง · กดปุ่ม "+" เพื่อสร้างใหม่ · กด ✅ ยืนยันเมื่อได้รับสินค้า</p>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
-        {canEdit&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
+        {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
     </div>
 
+    {/* Direction tabs */}
+    <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+      {[
+        {v:"all",l:"📋 ทั้งหมด",c:C.brand},
+        {v:"sent",l:"📤 ที่ฉันออก",c:C.blue},
+        {v:"received",l:"📥 รอรับ / รับแล้ว",c:C.green},
+      ].map(d=>{const active=direction===d.v;return <button key={d.v} onClick={()=>setDirection(d.v)} style={{padding:"7px 16px",borderRadius:10,border:`2px solid ${active?d.c:C.line}`,background:active?`${d.c}15`:C.white,color:active?d.c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:active?800:600,fontSize:13,transition:"all .15s"}}>{d.l}</button>;})}
+    </div>
     {/* Filter row */}
     <Card style={{padding:"12px 16px",marginBottom:14,background:C.bg}}>
-      <div style={{display:"grid",gridTemplateColumns:isCentral?"1.5fr 1fr 1fr 1fr auto":"1fr 1fr 1fr auto",gap:10,alignItems:"end"}}>
-        {isCentral&&<div>
-          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สาขา</div>
-          <select value={filterBranch} onChange={e=>setFilterBranch(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
+      <div style={{display:"grid",gridTemplateColumns:"1.5fr 1fr 1fr 1fr auto",gap:10,alignItems:"end"}}>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>{direction==="sent"?"ส่งไปที่":direction==="received"?"ส่งมาจาก":"คู่ค้า (จาก/ถึง)"}</div>
+          <select value={partnerFilter} onChange={e=>setPartnerFilter(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
             <option value="">— ทุกสาขา —</option>
             {branchOptions.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
-        </div>}
+        </div>
         <div>
           <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สถานะ</div>
           <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
@@ -1389,28 +1417,39 @@ function POSection({branches,ings,currentBranch,currentUser}){
     {/* List */}
     {loading?<Loading text="โหลดเอกสาร PO..."/>:pos.length===0?<Card style={{padding:"50px 20px",textAlign:"center"}}>
       <div style={{fontSize:48,marginBottom:8}}>📭</div>
-      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,color:C.ink3,fontWeight:600}}>{isCentral?"ยังไม่มีเอกสาร PO ในช่วงนี้":"ยังไม่มี PO ที่ครัวกลางส่งให้"}</div>
-      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginTop:4}}>{isCentral?'กดปุ่ม "สร้างเอกสาร PO" เพื่อเริ่มต้น':"PO จะปรากฏที่นี่อัตโนมัติเมื่อครัวกลางสร้างให้"}</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,color:C.ink3,fontWeight:600}}>{direction==="sent"?"ยังไม่มี PO ที่คุณออก":direction==="received"?"ยังไม่มี PO ที่ส่งมาหา":"ยังไม่มีเอกสาร PO ในช่วงนี้"}</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginTop:4}}>กดปุ่ม "+ สร้างเอกสาร PO" เพื่อเริ่มต้น</div>
     </Card>:<Card style={{padding:0,overflow:"hidden"}}>
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
           <thead>
             <tr style={{background:"#0F172A"}}>
-              {["วันที่สร้าง","เลขที่ใบ PO","จากครัวกลาง","ไปสาขา","ยอดเงิน","สถานะ","จัดการ"].map((h,i)=><th key={h} style={{padding:"11px 14px",textAlign:i===4?"right":i===5||i===6?"center":"left",fontSize:12,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap",letterSpacing:.2}}>{h}</th>)}
+              {["วันที่สร้าง","เลขที่ใบ PO","จาก","ถึง","ยอดเงิน","สถานะ","จัดการ"].map((h,i)=><th key={h} style={{padding:"11px 14px",textAlign:i===4?"right":i===5||i===6?"center":"left",fontSize:12,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap",letterSpacing:.2}}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
             {pos.map((po,idx)=>{
-              const b=branchById[po.branch_id];
+              const fromB=branchById[po.from_branch_id];
+              const toB=branchById[po.branch_id];
               const stColor={open:C.yellow,received:C.green,cancelled:C.ink4}[po.status]||C.ink3;
               const stLabel={open:"⏳ เปิดอยู่",received:"✅ รับแล้ว",cancelled:"❌ ยกเลิก"}[po.status]||po.status;
               const created=po.created_at?new Date(po.created_at).toLocaleString("th-TH",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}):po.po_date;
               const recAt=po.received_at?new Date(po.received_at).toLocaleDateString("th-TH"):null;
+              const iCreator=isCreator(po),iReceiver=isReceiver(po);
               return <tr key={po.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=idx%2===0?C.white:"#FAFBFC"}>
                 <td style={{padding:"11px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{created}</td>
-                <td style={{padding:"11px 14px",fontSize:13,fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>{po.po_number||`#${po.id}`}<div style={{fontSize:10,color:C.ink4,fontWeight:500,marginTop:1}}>{(po.items||[]).length} รายการ</div></td>
-                <td style={{padding:"11px 14px",fontSize:12,color:C.ink3}}>{centralBranch?.name||"ครัวกลาง"}</td>
-                <td style={{padding:"11px 14px",fontSize:13,color:C.ink,fontWeight:700}}>{b?.name||"-"}</td>
+                <td style={{padding:"11px 14px",fontSize:13,fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>
+                  {po.po_number||`#${po.id}`}
+                  <div style={{fontSize:10,color:C.ink4,fontWeight:500,marginTop:1}}>{(po.items||[]).length} รายการ</div>
+                </td>
+                <td style={{padding:"11px 14px",fontSize:13,color:iCreator?C.brand:C.ink2,fontWeight:iCreator?800:600}}>
+                  {fromB?.name||"-"}
+                  {iCreator&&<span style={{fontSize:10,color:C.brand,marginLeft:5,background:C.brandLight,padding:"1px 6px",borderRadius:8,fontWeight:700}}>📤 ออก</span>}
+                </td>
+                <td style={{padding:"11px 14px",fontSize:13,color:iReceiver?C.green:C.ink2,fontWeight:iReceiver?800:600}}>
+                  {toB?.name||"-"}
+                  {iReceiver&&<span style={{fontSize:10,color:C.green,marginLeft:5,background:C.greenLight,padding:"1px 6px",borderRadius:8,fontWeight:700}}>📥 รับ</span>}
+                </td>
                 <td style={{padding:"11px 14px",fontSize:14,fontWeight:900,color:C.brand,textAlign:"right",whiteSpace:"nowrap"}}>฿{(+po.total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                 <td style={{padding:"11px 14px",textAlign:"center"}}>
                   <span style={{fontSize:11,fontWeight:700,color:stColor,background:`${stColor}22`,padding:"3px 10px",borderRadius:18,whiteSpace:"nowrap",display:"inline-block"}}>{stLabel}</span>
@@ -1418,12 +1457,12 @@ function POSection({branches,ings,currentBranch,currentUser}){
                 </td>
                 <td style={{padding:"8px 12px",textAlign:"center",whiteSpace:"nowrap"}}>
                   <div style={{display:"inline-flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
-                    {!isCentral&&<button onClick={()=>setViewPO(po)} title="ดูรายละเอียด" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.eye} s={13} c={C.ink2}/></button>}
-                    <button onClick={()=>printPO(po,b?.name,'print')} title="พิมพ์" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>
-                    <button onClick={()=>printPO(po,b?.name,'pdf')} title="ดาวน์โหลด PDF" style={{background:C.greenLight,border:`1px solid #86EFAC`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",fontSize:12,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:800}}>💾</button>
-                    {canEdit&&<button onClick={()=>startEdit(po)} title="แก้ไข" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
-                    {canEdit&&<button onClick={()=>delPO(po)} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
-                    {canConfirm&&po.status==="open"&&<button onClick={()=>confirmReceive(po)} disabled={confirming===po.id} title="ยืนยันรับสินค้าครบ" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>{confirming===po.id?"⏳":"✅"} ยืนยันรับ</button>}
+                    <button onClick={()=>setViewPO(po)} title="ดูรายละเอียด" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.eye} s={13} c={C.ink2}/></button>
+                    <button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>
+                    <button onClick={()=>printPO(po,toB?.name,'pdf',fromB?.name)} title="ดาวน์โหลด PDF" style={{background:C.greenLight,border:`1px solid #86EFAC`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",fontSize:12,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:800}}>💾</button>
+                    {canEditPO(po)&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
+                    {canEditPO(po)&&<button onClick={()=>delPO(po)} title="ลบ (เฉพาะผู้ออก)" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+                    {canConfirmPO(po)&&<button onClick={()=>confirmReceive(po)} disabled={confirming===po.id} title="ยืนยันรับสินค้าครบ" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>{confirming===po.id?"⏳":"✅"} ยืนยันรับ</button>}
                   </div>
                 </td>
               </tr>;
@@ -1434,8 +1473,8 @@ function POSection({branches,ings,currentBranch,currentUser}){
     </Card>}
 
     {/* Step 1: Pick branch */}
-    {step==='pick-branch'&&<Modal title="🏢 เลือกสาขาที่ต้องการเปิดเอกสาร PO" onClose={()=>setStep(null)}>
-      {branchOptions.length===0?<div style={{padding:30,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีสาขาในระบบ — เพิ่มสาขาในแท็บ "ตั้งค่า" ก่อน</div>:
+    {step==='pick-branch'&&<Modal title={`🏢 เลือกสาขาปลายทาง — ส่งจาก "${currentBranch.name}" ไปยัง...`} onClose={()=>setStep(null)}>
+      {branchOptions.length===0?<div style={{padding:30,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีสาขาอื่นในระบบ — เพิ่มสาขาในแท็บ "ตั้งค่า" ก่อน</div>:
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:10}}>
         {branchOptions.map(b=><button key={b.id} onClick={()=>pickBranch(b)} style={{padding:"18px 16px",border:`2px solid ${C.line}`,borderRadius:14,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
@@ -1450,23 +1489,23 @@ function POSection({branches,ings,currentBranch,currentUser}){
     </Modal>}
 
     {/* Step 2: Form */}
-    {step==='form'&&pickedBranch&&<POFormModal branch={pickedBranch} editPO={editPO} ings={ings} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved}/>}
+    {step==='form'&&pickedBranch&&<POFormModal branch={pickedBranch} fromBranch={editPO?branchById[editPO.from_branch_id]:currentBranch} editPO={editPO} ings={ings} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved}/>}
 
-    {/* Branch readonly view */}
-    {viewPO&&<POViewModal po={viewPO} branch={branchById[viewPO.branch_id]} central={centralBranch} canConfirm={canConfirm&&viewPO.status==="open"} onConfirm={()=>{confirmReceive(viewPO);setViewPO(null);}} onClose={()=>setViewPO(null)}/>}
+    {/* Read-only view */}
+    {viewPO&&<POViewModal po={viewPO} fromBranch={branchById[viewPO.from_branch_id]} toBranch={branchById[viewPO.branch_id]} canConfirm={canConfirmPO(viewPO)} onConfirm={()=>{confirmReceive(viewPO);setViewPO(null);}} onClose={()=>setViewPO(null)}/>}
   </div>;
 }
 
-// Read-only PO view (for branches receiving the PO)
-function POViewModal({po,branch,central,canConfirm,onConfirm,onClose}){
+// Read-only PO view (for any party — sender, receiver, or admin)
+function POViewModal({po,fromBranch,toBranch,canConfirm,onConfirm,onClose}){
   const stColor={open:C.yellow,received:C.green,cancelled:C.ink4}[po.status]||C.ink3;
   const stLabel={open:"⏳ เปิดอยู่",received:"✅ รับแล้ว",cancelled:"❌ ยกเลิก"}[po.status]||po.status;
   const recAt=po.received_at?new Date(po.received_at).toLocaleString("th-TH"):null;
-  return <Modal title={`📄 ${po.po_number||"PO"} — ${branch?.name||""}`} onClose={onClose} extraWide>
+  return <Modal title={`📄 ${po.po_number||"PO"} — ${fromBranch?.name||"-"} → ${toBranch?.name||"-"}`} onClose={onClose} extraWide>
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:18}}>
       {[
-        {l:"จาก",v:central?.name||"ครัวกลาง"},
-        {l:"ถึง",v:branch?.name||"-"},
+        {l:"จาก (ผู้ออก)",v:fromBranch?.name||"-",color:C.brand},
+        {l:"ถึง (ผู้รับ)",v:toBranch?.name||"-",color:C.green},
         {l:"วันที่",v:po.po_date||"-"},
         {l:"สถานะ",v:stLabel,color:stColor},
       ].map(s=><div key={s.l} style={{background:C.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${C.line}`}}>
@@ -1506,14 +1545,14 @@ function POViewModal({po,branch,central,canConfirm,onConfirm,onClose}){
     {po.notes&&<div style={{padding:"10px 14px",background:C.yellowLight,borderRadius:10,fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:14}}>📝 {po.notes}</div>}
     <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,borderTop:`1px solid ${C.line}`}}>
       <Btn v="ghost" onClick={onClose}>ปิด</Btn>
-      <Btn v="info" icon={I.print} onClick={()=>printPO(po,branch?.name,'print')}>พิมพ์</Btn>
-      <Btn v="success" onClick={()=>printPO(po,branch?.name,'pdf')}>💾 ดาวน์โหลด PDF</Btn>
+      <Btn v="info" icon={I.print} onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)}>พิมพ์</Btn>
+      <Btn v="success" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)}>💾 ดาวน์โหลด PDF</Btn>
       {canConfirm&&<Btn v="success" onClick={onConfirm} icon={I.check} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"10px 20px",fontWeight:900}}>✅ ยืนยันรับสินค้าครบ</Btn>}
     </div>
   </Modal>;
 }
 
-function POFormModal({branch,editPO,ings,currentUser,onClose,onSaved}){
+function POFormModal({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}){
   const today=new Date().toISOString().slice(0,10);
   const[items,setItems]=useState(editPO?.items||[]);
   const[poDate,setPoDate]=useState(editPO?.po_date||today);
@@ -1572,6 +1611,7 @@ function POFormModal({branch,editPO,ings,currentUser,onClose,onSaved}){
       const payload={
         po_number:poNumber,
         branch_id:branch.id,
+        from_branch_id:editPO?.from_branch_id||fromBranch?.id||null,
         po_date:poDate,
         status,
         items,
@@ -1589,7 +1629,7 @@ function POFormModal({branch,editPO,ings,currentUser,onClose,onSaved}){
     setSaving(false);
   }
 
-  return <Modal title={`${editPO?"✏️ แก้ไข":"➕ สร้าง"}เอกสาร PO — ${branch.name}`} onClose={onClose} extraWide>
+  return <Modal title={`${editPO?"✏️ แก้ไข":"➕ สร้าง"}เอกสาร PO — ${fromBranch?.name||""} → ${branch.name}`} onClose={onClose} extraWide>
     <div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:10,marginBottom:14}}>
       <Inp label="เลขที่ PO" value={poNumber} onChange={e=>setPoNumber(e.target.value)}/>
       <Inp label="วันที่" type="date" value={poDate} onChange={e=>setPoDate(e.target.value)}/>
