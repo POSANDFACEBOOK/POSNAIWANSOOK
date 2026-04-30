@@ -15,6 +15,46 @@ async function sb(path, opts = {}) {
   return text ? JSON.parse(text) : [];
 }
 
+// === Production-grade helpers ============================================
+// Money: round to 2 decimals using "banker's-safe" half-away-from-zero
+const round2 = (n) => Math.round((+n||0)*100)/100;
+// Currency formatter (Thai Baht, always 2 decimals)
+const fmtTHB = (n) => `฿${(+n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+// Today in Asia/Bangkok (YYYY-MM-DD) — avoids UTC off-by-one near midnight
+const todayBkk = () => new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});
+// Friendly error mapping (avoid leaking Postgres internals to cashiers)
+function friendlyError(err){
+  const raw=(err&&err.message)?err.message:String(err||"");
+  if(/duplicate key/.test(raw))return "ข้อมูลซ้ำกับที่มีอยู่ในระบบ";
+  if(/violates row-level security/.test(raw))return "ไม่มีสิทธิ์ทำรายการนี้ — กรุณาติดต่อแอดมิน";
+  if(/violates foreign key/.test(raw))return "ข้อมูลที่อ้างอิงไม่ถูกต้อง — อาจมีรายการที่เกี่ยวข้องถูกลบไปแล้ว";
+  if(/violates not-null/.test(raw))return "ข้อมูลที่จำเป็นยังไม่ครบ — ตรวจสอบฟอร์มอีกครั้ง";
+  if(/violates check constraint/.test(raw))return "ข้อมูลไม่ถูกต้องตามกติกาของระบบ";
+  if(/Failed to fetch|NetworkError/.test(raw))return "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — ตรวจสอบอินเทอร์เน็ต";
+  if(raw.length>120)return "ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง";
+  return raw||"เกิดข้อผิดพลาด";
+}
+// Show friendly error + log raw to console in dev only
+function showErr(prefix,err){console.error(prefix,err);alert(prefix+": "+friendlyError(err));}
+// Detect image MIME from magic bytes (browser File). Returns 'image/jpeg' | 'image/png' | 'image/webp' | null
+async function detectImageMime(file){
+  const buf=await file.slice(0,12).arrayBuffer();
+  const b=new Uint8Array(buf);
+  if(b[0]===0xFF&&b[1]===0xD8&&b[2]===0xFF)return "image/jpeg";
+  if(b[0]===0x89&&b[1]===0x50&&b[2]===0x4E&&b[3]===0x47)return "image/png";
+  if(b[0]===0x47&&b[1]===0x49&&b[2]===0x46)return "image/gif";
+  if(b[0]===0x52&&b[1]===0x49&&b[2]===0x46&&b[3]===0x46&&b[8]===0x57&&b[9]===0x45&&b[10]===0x42&&b[11]===0x50)return "image/webp";
+  return null;
+}
+// Open print/PDF popup with blocker detection — caller falls back if returns null
+function openPrintWindow(width=860,height=900){
+  const w=window.open("","_blank",`width=${width},height=${height}`);
+  if(!w){alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — กรุณาอนุญาต popup ในแถบที่อยู่ของเบราว์เซอร์ แล้วลองอีกครั้ง");return null;}
+  return w;
+}
+// Random suffix for filenames so they're not enumerable by sequential ID
+const randId=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
+
 const api = {
   getIngs: () => sb(`ingredients?order=id.asc`),
   addIng: (d) => sb("ingredients", { method: "POST", body: JSON.stringify(d) }),
@@ -32,7 +72,9 @@ const api = {
   addUser: (d) => sb("app_users", { method: "POST", body: JSON.stringify(d) }),
   updateUser: (id, d) => sb(`app_users?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteUser: (id) => sb(`app_users?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
-  loginUser: (u, p) => sb(`app_users?username=eq.${u}&password=eq.${p}&active=eq.true`),
+  loginUser: (u, p) => sb(`app_users?username=eq.${encodeURIComponent(u)}&password=eq.${encodeURIComponent(p)}&active=eq.true`),
+  // Re-check that the logged-in user is still active (lets admins force logout)
+  getMyUserStatus: (id) => sb(`app_users?id=eq.${+id}&select=id,active,role,perms,name,username`),
   getBranches: () => sb("branches?order=id.asc"),
   addBranch: (d) => sb("branches", { method: "POST", body: JSON.stringify(d) }),
   updateBranch: (id, d) => sb(`branches?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
@@ -123,6 +165,12 @@ const api = {
   },
   addPO: (d) => sb("purchase_orders", {method:"POST", body:JSON.stringify(d)}),
   updatePO: (id,d) => sb(`purchase_orders?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  // PATCH only when the row is in an expected status. If 0 rows return, the row was changed by someone else.
+  patchPOIfStatus: async (id,expectedStatus,d) => {
+    const res=await sb(`purchase_orders?id=eq.${id}&status=eq.${encodeURIComponent(expectedStatus)}`, {method:"PATCH", body:JSON.stringify(d)});
+    if(!Array.isArray(res)||res.length===0)throw new Error("เอกสารถูกแก้ไขโดยผู้ใช้อื่นแล้ว — กรุณารีเฟรชและลองใหม่");
+    return res;
+  },
   deletePO: (id) => sb(`purchase_orders?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   uploadImage: async (file, path) => {
     const res = await fetch(`${SUPA_URL}/storage/v1/object/foodcost-images/${path}`, {
@@ -220,7 +268,10 @@ const ppg=(price,gram)=>(gram>0?price/gram:0);
 const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.price_per_gram*x.amountGram:0);},0);
 const marginColor=(m)=>m>=60?C.green:m>=40?C.yellow:C.red;
 const marginLabel=(m)=>m>=60?"ดี":m>=40?"พอใช้":"ต่ำ";
-const nowStr=()=>new Date().toLocaleString("th-TH");
+// Format date/time in Thai locale but always Gregorian year (not Buddhist) — receipts must read 2026 not 2569
+const fmtDT=(d)=>(d?new Date(d):new Date()).toLocaleString("th-TH",{calendar:"gregory",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
+const fmtD=(d)=>(d?new Date(d):new Date()).toLocaleDateString("th-TH",{calendar:"gregory",year:"numeric",month:"2-digit",day:"2-digit"});
+const nowStr=()=>fmtDT();
 const todayStr=()=>new Date().toISOString().slice(0,10);
 
 const iS={width:"100%",padding:"11px 14px",border:`1.5px solid ${C.line}`,borderRadius:10,fontSize:15,fontFamily:"'Sarabun',sans-serif",outline:"none",boxSizing:"border-box",color:C.ink,background:C.white,transition:"border .15s"};
@@ -1143,11 +1194,13 @@ window.addEventListener('load',async()=>{
 // ══════════════════════════════════════════════════════
 // ── PURCHASE ORDERS (PO) ──────────────────────────────
 // ══════════════════════════════════════════════════════
-function genPONumber(){
+function genPONumber(branchId){
   const d=new Date();
   const ym=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}`;
-  const seq=String(Math.floor(Math.random()*9000)+1000);
-  return `PO-${ym}-${seq}`;
+  const seq=Math.random().toString(36).slice(2,7).toUpperCase();
+  // Include branch prefix so two branches creating POs in the same second don't collide
+  const bp=branchId?`B${branchId}-`:"";
+  return `PO-${ym}-${bp}${seq}`;
 }
 function buildPOHTML(po,toBranchName,fromBranchName){
   const fmt=(v)=>(+v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -1200,8 +1253,8 @@ function buildPOHTML(po,toBranchName,fromBranchName){
 </div>`;
 }
 function printPO(po,toBranchName,action='print',fromBranchName){
-  const w=window.open("","_blank","width=860,height=950");
-  if(!w){alert("กรุณาอนุญาต popup");return;}
+  const w=openPrintWindow(860,950);
+  if(!w)return;
   const filename=(po.po_number||`PO-${po.id}`).replace(/[^\w\-]/g,"_")+".pdf";
   const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${po.po_number||"PO"}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1342,48 +1395,62 @@ function POSection({branches,ings,currentBranch,currentUser}){
   useEffect(()=>{load();},[direction,partnerFilter,filterStatus,dateFrom,dateTo,currentBranch?.id]);
 
   async function confirmReceive(po){
+    if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ยืนยันรับสินค้าได้");return;}
     if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\nหลังยืนยันแล้ว เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
-      await api.updatePO(po.id,{status:"awaiting_payment",received_at:new Date().toISOString(),received_by:currentUser?.username||currentUser?.name||null,updated_at:new Date().toISOString()});
+      await api.patchPOIfStatus(po.id,"open",{status:"awaiting_payment",received_at:new Date().toISOString(),received_by:currentUser?.username||currentUser?.name||null,updated_at:new Date().toISOString()});
       await load();
-    }catch(e){alert("ยืนยันไม่สำเร็จ: "+e.message);}
+    }catch(e){showErr("ยืนยันไม่สำเร็จ",e);}
     setConfirming(null);
   }
   async function submitDispute(po,updatedItems,note){
+    if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ส่งกลับได้");return;}
     setConfirming(po.id);
     try{
-      await api.updatePO(po.id,{items:updatedItems,status:"disputed",dispute_note:note||null,dispute_at:new Date().toISOString(),dispute_by:currentUser?.username||null,updated_at:new Date().toISOString()});
-      await load();
-      setViewPO(null);
-    }catch(e){alert("ส่งกลับไม่สำเร็จ: "+e.message);}
+      // Clamp received_qty to [0, original qty] to prevent fraud
+      const safeItems=(updatedItems||[]).map(it=>{const orig=+it.qty||0;const got=Math.max(0,Math.min(orig,+it.received_qty||0));return{...it,received_qty:got};});
+      await api.patchPOIfStatus(po.id,"open",{items:safeItems,status:"disputed",dispute_note:note||null,dispute_at:new Date().toISOString(),dispute_by:currentUser?.username||null,updated_at:new Date().toISOString()});
+      await load();setViewPO(null);
+    }catch(e){showErr("ส่งกลับไม่สำเร็จ",e);}
     setConfirming(null);
   }
   async function acceptDispute(po){
+    if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่ยอมรับได้");return;}
     if(!await confirmDlg({title:"ยอมรับการแก้ไข",message:`ยอมรับจำนวนที่ปลายทางแจ้งใน ${po.po_number||"PO นี้"}?\n\nระบบจะปรับจำนวนและยอดรวมตามที่ปลายทางแจ้ง แล้วเปลี่ยนสถานะเป็น "รอชำระเงิน"`,confirmLabel:"✅ ยอมรับการแก้ไข"}))return;
     setConfirming(po.id);
     try{
-      const newItems=(po.items||[]).map(it=>{const q=it.received_qty!=null?+it.received_qty:+it.qty;const lt=q*(+it.price_per_unit||0);return{...it,qty:q,line_total:lt};});
-      const subtotal=newItems.reduce((s,i)=>s+(+i.line_total||0),0);
+      // Preserve every existing item field; only adjust qty + line_total based on (clamped) received_qty
+      const newItems=(po.items||[]).map(it=>{
+        const orig=+it.qty||0;
+        const recv=it.received_qty!=null?Math.max(0,Math.min(orig,+it.received_qty||0)):orig;
+        return{...it,qty:recv,line_total:round2(recv*(+it.price_per_unit||0))};
+      });
+      const subtotal=round2(newItems.reduce((s,i)=>s+(+i.line_total||0),0));
       const oldSub=+po.subtotal||0;
       const vatRate=oldSub>0?(+po.vat||0)/oldSub:0;
-      const vat=subtotal*vatRate;
-      const total=subtotal+vat;
-      await api.updatePO(po.id,{items:newItems,subtotal,vat,total,status:"awaiting_payment",received_at:new Date().toISOString(),received_by:po.dispute_by||null,updated_at:new Date().toISOString()});
-      await load();
-      setViewPO(null);
-    }catch(e){alert("ยอมรับไม่สำเร็จ: "+e.message);}
+      const vat=round2(subtotal*vatRate);
+      const total=round2(subtotal+vat);
+      await api.patchPOIfStatus(po.id,"disputed",{items:newItems,subtotal,vat,total,status:"awaiting_payment",received_at:new Date().toISOString(),received_by:po.dispute_by||null,updated_at:new Date().toISOString()});
+      await load();setViewPO(null);
+    }catch(e){showErr("ยอมรับไม่สำเร็จ",e);}
     setConfirming(null);
   }
   async function submitPayment(po,slipUrl,note){
-    await api.updatePO(po.id,{status:"paid",payment_slip_url:slipUrl,payment_at:new Date().toISOString(),payment_by:currentUser?.username||null,payment_note:note||null,updated_at:new Date().toISOString()});
-    await load();
-    setViewPO(null);
+    if(!isCreator(po))throw new Error("เฉพาะผู้ออกเอกสารเท่านั้นที่ชำระเงินได้");
+    try{
+      await api.patchPOIfStatus(po.id,"awaiting_payment",{status:"paid",payment_slip_url:slipUrl,payment_at:new Date().toISOString(),payment_by:currentUser?.username||null,payment_note:note||null,updated_at:new Date().toISOString()});
+      await load();setViewPO(null);
+    }catch(e){showErr("บันทึกการชำระไม่สำเร็จ",e);throw e;}
   }
   async function cancelPO(po){
+    if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่ยกเลิกได้");return;}
+    if(po.status==="paid"||po.status==="cancelled"){alert("เอกสารนี้ไม่สามารถยกเลิกในสถานะปัจจุบันได้");return;}
     if(!await confirmDlg({title:"ยกเลิก PO",message:`ยกเลิก ${po.po_number||"PO นี้"}?`,danger:true,confirmLabel:"ยกเลิก PO"}))return;
-    try{await api.updatePO(po.id,{status:"cancelled",updated_at:new Date().toISOString()});await load();setViewPO(null);}
-    catch(e){alert("ยกเลิกไม่สำเร็จ: "+e.message);}
+    try{
+      await api.updatePO(po.id,{status:"cancelled",updated_at:new Date().toISOString()});
+      await load();setViewPO(null);
+    }catch(e){showErr("ยกเลิกไม่สำเร็จ",e);}
   }
   const[payPO,setPayPO]=useState(null);
 
@@ -1582,9 +1649,9 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const canPayNow=isCreator&&po.status==="awaiting_payment";
   const canCancelPO=isCreator&&po.status!=="paid"&&po.status!=="cancelled";
 
-  function submitDisputeNow(){
-    if(!confirm("ยืนยันส่งกลับให้ต้นทาง?\nรายการที่ระบุจำนวนต่างจากเดิมจะถูกบันทึก"))return;
-    const updated=(po.items||[]).map((it,i)=>({...it,received_qty:+receivedQty[i]||0}));
+  async function submitDisputeNow(){
+    if(!await confirmDlg({title:"ยืนยันส่งกลับ",message:"ส่งกลับให้ต้นทางตรวจสอบ?\nรายการที่ระบุจำนวนต่างจากเดิมจะถูกบันทึก",confirmLabel:"📤 ส่งกลับ",danger:false}))return;
+    const updated=(po.items||[]).map((it,i)=>{const orig=+it.qty||0;const got=Math.max(0,Math.min(orig,+receivedQty[i]||0));return{...it,received_qty:got};});
     onSubmitDispute(updated,disputeNote);
   }
   const allMatch=(po.items||[]).every((it,i)=>+receivedQty[i]===+it.qty);
@@ -1718,20 +1785,27 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
   const[preview,setPreview]=useState(null);
   const[note,setNote]=useState("");
   const[saving,setSaving]=useState(false);
-  function pickFile(e){
+  async function pickFile(e){
     const f=e.target.files?.[0];if(!f)return;
     if(f.size>5*1024*1024){alert("ไฟล์ใหญ่เกิน 5MB");return;}
+    const mime=await detectImageMime(f);
+    if(!mime){alert("ไฟล์ที่เลือกไม่ใช่รูปภาพ (JPG / PNG / WebP / GIF) — กรุณาเลือกรูปสลิปจริงเท่านั้น");return;}
     setSlipFile(f);setPreview(URL.createObjectURL(f));
   }
   async function submit(){
     if(!slipFile){alert("กรุณาแนบสลิปการโอนเงิน");return;}
     setSaving(true);
     try{
-      const ext=(slipFile.name.split(".").pop()||"png").toLowerCase();
-      const path=`po-slips/po-${po.id}-${Date.now()}.${ext}`;
-      const url=await api.uploadImage(slipFile,path);
+      const mime=await detectImageMime(slipFile);
+      if(!mime)throw new Error("ไฟล์ไม่ใช่รูปภาพที่ถูกต้อง");
+      const ext=mime==="image/jpeg"?"jpg":mime==="image/png"?"png":mime==="image/webp"?"webp":"gif";
+      // Random suffix → not enumerable by sequential PO id
+      const path=`po-slips/${randId()}.${ext}`;
+      // Re-wrap as Blob with verified MIME to ignore browser's filename-based content-type
+      const safeFile=new File([slipFile],`slip.${ext}`,{type:mime});
+      const url=await api.uploadImage(safeFile,path);
       await onSubmit(url,note);
-    }catch(e){alert("อัพโหลดสลิปไม่สำเร็จ: "+e.message);setSaving(false);}
+    }catch(e){showErr("อัพโหลดสลิปไม่สำเร็จ",e);setSaving(false);}
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",zIndex:6000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:520,boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
@@ -1781,7 +1855,7 @@ function POFormModal({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}
   const[poDate,setPoDate]=useState(editPO?.po_date||today);
   const[notes,setNotes]=useState(editPO?.notes||"");
   const[status,setStatus]=useState(editPO?.status||"open");
-  const[poNumber,setPoNumber]=useState(editPO?.po_number||genPONumber());
+  const[poNumber,setPoNumber]=useState(editPO?.po_number||genPONumber(fromBranch?.id));
   const[search,setSearch]=useState("");
   const[saving,setSaving]=useState(false);
   const[vatPct,setVatPct]=useState(editPO?(editPO.subtotal>0?+((editPO.vat/editPO.subtotal)*100).toFixed(2):0):0);
@@ -2490,7 +2564,11 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
             </div>
             {isAdmin&&<div style={{display:"flex",gap:4}}>
               <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active,allowed_perms:b.allowed_perms===undefined?null:b.allowed_perms});setEditBID(b.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
-              {b.type!=="central"&&<button onClick={async()=>{if(!await confirmDlg({title:"ลบสาขา",message:`ต้องการลบสาขา "${b.name}" ใช่หรือไม่?`}))return;await api.deleteBranch(b.id);await reloadBranches();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+              {b.type!=="central"&&<button onClick={async()=>{
+                if(!await confirmDlg({title:b.active?"ปิดใช้งานสาขา":"เปิดใช้งานสาขา",message:b.active?`ปิดใช้งาน "${b.name}"?\n\nสาขาจะไม่ปรากฏใน picker, การสแกน QR ของสาขานี้จะถูกปฏิเสธ\n(ข้อมูลทั้งหมดจะยังอยู่ — ไม่ลบจริง)`:`เปิดใช้งาน "${b.name}" อีกครั้ง?`,danger:b.active,confirmLabel:b.active?"ปิดใช้งาน":"เปิดใช้งาน"}))return;
+                try{await api.updateBranch(b.id,{active:!b.active});await reloadBranches();}
+                catch(e){showErr("เปลี่ยนสถานะไม่สำเร็จ",e);}
+              }} title={b.active?"ปิดใช้งาน (Soft delete)":"เปิดใช้งาน"} style={{background:b.active?C.redLight:C.greenLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={b.active?I.trash:I.refresh} s={13} c={b.active?C.red:C.green}/></button>}
             </div>}
           </div>
           <div style={{paddingTop:8,borderTop:`1px dashed ${C.lineLight}`,fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
@@ -3476,6 +3554,24 @@ export default function App(){
 
   useEffect(()=>{if(currentBranch)loadAll();},[currentBranch]);
 
+  // Periodic re-check of the logged-in user — admin disabling = auto-logout within ~60s
+  useEffect(()=>{
+    if(!currentUser?.id)return;
+    const tick=async()=>{
+      try{
+        const rows=await api.getMyUserStatus(currentUser.id);
+        const u=Array.isArray(rows)?rows[0]:null;
+        if(!u||!u.active){alert("บัญชีของคุณถูกปิดการใช้งาน — ระบบจะออกจากระบบ");setCurrentUser(null);setCurrentBranch(null);}
+        else if(u.role!==currentUser.role||JSON.stringify(u.perms||[])!==JSON.stringify(currentUser.perms||[])){
+          // Sync new perms/role silently
+          setCurrentUser(prev=>prev?{...prev,role:u.role,perms:u.perms,name:u.name}:prev);
+        }
+      }catch{/* ignore transient network */}
+    };
+    const id=setInterval(tick,60000);
+    return()=>clearInterval(id);
+  },[currentUser?.id]);
+
   const reload={
     ings:async()=>{const d=await api.getIngs();setIngs(d);},
     menus:async()=>{const d=await api.getMenus();setMenus(d);},
@@ -3654,7 +3750,8 @@ export default function App(){
 // ══════════════════════════════════════════════════════
 const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
 function printReceipt(order, tableNum, branchName, posSettings=null){
-  const w=window.open("","_blank","width=400,height=700");
+  const w=openPrintWindow(400,700);
+  if(!w)return;
   const rows=(order.items||[]).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${i.name}${i.note?`<br/><span style="font-size:11px;color:#666">★${i.note}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?i.item_discount_value+"%":"฿"+i.item_discount_value}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
   const payLabel=PAY_LABEL[order.payment_method]||order.payment_method||"-";
   const cashLine=order.payment_method==="cash"&&order.cash_received?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(2)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-(order.total||0)).toFixed(2)}</span></div>`:"";
@@ -3709,7 +3806,8 @@ async function btPrint(escData,btName){
 
 function printKitchenWindow(item,tableNum,printer){
   const title=printer?printer.name:"ใบสั่งอาหาร";
-  const w=window.open("","_blank","width=350,height=500");
+  const w=openPrintWindow(350,500);
+  if(!w)return;
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - โต๊ะ ${tableNum}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:6px;color:#000}.hdr{text-align:center;font-size:13px;font-weight:700;margin:2px 0}.tbl{text-align:center;font-size:54px;font-weight:900;line-height:1;margin:6px 0;letter-spacing:1px;border:3px solid #000;padding:8px 0;border-radius:8px}.tm{text-align:center;font-size:11px;color:#444;margin:2px 0}.sep{border:0;border-top:2px dashed #000;margin:8px 0}.menu{text-align:center;font-size:24px;font-weight:900;line-height:1.2;margin:8px 0;padding:6px 4px}.qty{display:inline-block;background:#000;color:#fff;padding:2px 12px;border-radius:6px;font-size:24px;font-weight:900;margin-right:6px}.note{margin-top:8px;background:#FEF3C7;border:2px solid #000;border-radius:6px;padding:8px;font-size:15px;font-weight:700;text-align:center}.foot{text-align:center;font-size:10px;color:#666;margin-top:6px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><div class="hdr">🍳 ${title}</div><div class="tbl">โต๊ะ ${tableNum}</div><div class="tm">${new Date().toLocaleString("th-TH")}</div><hr class="sep"/><div class="menu"><span class="qty">${item.qty}x</span>${item.name}</div>${item.note?`<div class="note">★ ${item.note}</div>`:""}<hr class="sep"/><div class="foot">--- สิ้นสุดรายการ ---</div><script>window.onload=()=>setTimeout(()=>window.print(),200);<\/script></body></html>`);
   w.document.close();
 }
@@ -4577,7 +4675,8 @@ function printTableQR(table,branch){
   const baseUrl=window.location.origin+window.location.pathname;
   const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${table.id}`;
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}&margin=10`;
-  const w=window.open("","_blank","width=340,height=420");
+  const w=openPrintWindow(340,420);
+  if(!w)return;
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR โต๊ะ ${table.table_number}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;text-align:center;padding:20px;margin:0}h2{font-size:22px;margin:8px 0}p{color:#64748b;font-size:13px;margin:4px 0}.box{border:2px dashed #e2e8f0;border-radius:16px;padding:20px;display:inline-block}@media print{@page{margin:0;size:auto}}</style></head><body><div class="box"><p style="font-size:11px;font-weight:700;letter-spacing:2px;color:#94a3b8;text-transform:uppercase">${branch.name}</p><h2>โต๊ะ ${table.table_number}</h2>${table.label?`<p>${table.label}</p>`:""}<img src="${qrUrl}" style="width:200px;height:200px;margin:12px 0;border-radius:8px"/><p style="font-size:12px">สแกนเพื่อดูเมนูและสั่งอาหาร</p><p style="font-size:11px;color:#94a3b8">Scan to order</p></div><br/><script>window.onload=()=>setTimeout(()=>window.print(),500)<\/script></body></html>`);
   w.document.close();
 }
@@ -4827,8 +4926,8 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
 // ── CLOSE SHIFT (Z-REPORT) ───────────────────────────
 // ══════════════════════════════════════════════════════
 function printZReport({shift,totals,branch,user,note}){
-  const w=window.open("","_blank","width=420,height=720");
-  if(!w){alert("กรุณาอนุญาต popup");return;}
+  const w=openPrintWindow(420,720);
+  if(!w)return;
   const fmt=(v)=>(+v||0).toLocaleString();
   const html=`<html><head><title>Z-Report กะ #${shift.id}</title>
 <style>body{font-family:'Sarabun',sans-serif;padding:14px;font-size:12px;line-height:1.6;color:#000}h2,h3{margin:0 0 6px}.center{text-align:center}.row{display:flex;justify-content:space-between;padding:2px 0}.div{border-top:1px dashed #000;margin:8px 0}.bold{font-weight:900}.big{font-size:16px}</style>
@@ -4905,11 +5004,14 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     if(!await confirmDlg({title:"ยืนยันปิดกะ",message:`ยอดที่ควรมี ฿${totals.expected.toLocaleString()}\nนับจริง ฿${totals.actual.toLocaleString()}\n${totals.diff===0?'ตรงเป๊ะ':totals.diff>0?`เกิน ฿${totals.diff.toLocaleString()}`:`ขาด ฿${Math.abs(totals.diff).toLocaleString()}`}\n\nต้องการปิดกะใช่หรือไม่?`,confirmLabel:"ปิดกะ",danger:true}))return;
     setSaving(true);
     try{
-      await api.addCashMovement({shift_id:shift.id,branch_id:currentBranch.id,type:"closing",amount:totals.actual,reason:"ปิดกะ - นับเงินจริง",note:totals.diff!==0?`ส่วนต่าง ${totals.diff>=0?'+':''}${totals.diff}`:null,user_id:currentUser.id,username:currentUser.username});
-      await api.closeShift(shift.id,{status:"closed",closed_at:new Date().toISOString(),closing_cash:totals.actual,expected_cash:totals.expected,cash_diff:totals.diff,total_sales:totals.totalSales,total_cash:totals.totalCash,total_transfer:totals.totalTransfer,total_card:totals.totalCard,total_other:totals.totalOther,total_pay_in:totals.payIn,total_pay_out:totals.payOut,total_drop:totals.drops,order_count:totals.orderCount,notes:note||null});
+      // Print Z-report FIRST so a popup-blocker / printer issue doesn't strand the audit trail.
       printZReport({shift,totals,branch:currentBranch,user:currentUser,note});
+      await api.addCashMovement({shift_id:shift.id,branch_id:currentBranch.id,type:"closing",amount:round2(totals.actual),reason:"ปิดกะ - นับเงินจริง",note:totals.diff!==0?`ส่วนต่าง ${totals.diff>=0?'+':''}${round2(totals.diff)}`:null,user_id:currentUser.id,username:currentUser.username});
+      await api.closeShift(shift.id,{status:"closed",closed_at:new Date().toISOString(),closing_cash:round2(totals.actual),expected_cash:round2(totals.expected),cash_diff:round2(totals.diff),total_sales:round2(totals.totalSales),total_cash:round2(totals.totalCash),total_transfer:round2(totals.totalTransfer),total_card:round2(totals.totalCard),total_other:round2(totals.totalOther),total_pay_in:round2(totals.payIn),total_pay_out:round2(totals.payOut),total_drop:round2(totals.drops),order_count:totals.orderCount,notes:note||null});
+      // Clear auto-print dedup so next shift starts fresh
+      try{sessionStorage.removeItem("fc_printed_orders");}catch{}
       onClosed();
-    }catch(e){alert("ปิดกะไม่สำเร็จ: "+e.message);}
+    }catch(e){showErr("ปิดกะไม่สำเร็จ",e);}
     setSaving(false);
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:12}}>
@@ -5716,7 +5818,13 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   async function loadAllOrders(){const o=await api.getPOSOrders(currentBranch.id);setAllOrders(o);}
   async function loadAll(){setLoading(true);try{await Promise.all([loadTables(),loadOrders()]);}catch(e){console.error(e);}setLoading(false);}
 
-  useEffect(()=>{loadAll();timerRef.current=setInterval(()=>loadOrders(),15000);return()=>clearInterval(timerRef.current);},[]);
+  useEffect(()=>{
+    loadAll();
+    timerRef.current=setInterval(()=>{if(!document.hidden)loadOrders();},15000);
+    const onVis=()=>{if(!document.hidden)loadOrders();};
+    document.addEventListener("visibilitychange",onVis);
+    return()=>{clearInterval(timerRef.current);document.removeEventListener("visibilitychange",onVis);};
+  },[]);
   useEffect(()=>{if(posTab==="orders")loadAllOrders();},[posTab]);
 
   const PTABS=[{id:"tables",l:"แผนผังโต๊ะ",icon:I.table},{id:"orders",l:"ออเดอร์วันนี้",icon:I.order},{id:"qr",l:"QR สั่งอาหาร",icon:I.qr}];
