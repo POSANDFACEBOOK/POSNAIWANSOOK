@@ -74,7 +74,7 @@ const api = {
   deleteUser: (id) => sb(`app_users?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   loginUser: (u, p) => sb(`app_users?username=eq.${encodeURIComponent(u)}&password=eq.${encodeURIComponent(p)}&active=eq.true`),
   // Re-check that the logged-in user is still active (lets admins force logout)
-  getMyUserStatus: (id) => sb(`app_users?id=eq.${+id}&select=id,active,role,perms,name,username`),
+  getMyUserStatus: (id) => sb(`app_users?id=eq.${+id}&select=id,active,role,perms,name,username,allowed_branches`),
   getBranches: () => sb("branches?order=id.asc"),
   addBranch: (d) => sb("branches", { method: "POST", body: JSON.stringify(d) }),
   updateBranch: (id, d) => sb(`branches?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
@@ -411,7 +411,17 @@ function LoginPage({onLogin}){
 // ══════════════════════════════════════════════════════
 // ── BRANCH SELECTOR ───────────────────────────────────
 // ══════════════════════════════════════════════════════
-function BranchSelector({branches,onSelect,user}){
+function BranchSelector({branches,onSelect,user,onLogout}){
+  // Filter by user.allowed_branches: null = no restriction; array = whitelist
+  // Admin always bypasses the restriction (so they can fix mistakes).
+  const allowed=user?.allowed_branches;
+  const isAdmin=user?.role==="admin";
+  const visible=branches.filter(b=>{
+    if(b.active===false)return false;
+    if(isAdmin)return true;
+    if(allowed==null)return true;
+    return (allowed||[]).map(x=>+x).includes(+b.id);
+  });
   return <div style={{minHeight:"100vh",background:`linear-gradient(135deg,#f0fdf4,#eff6ff)`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Sarabun',sans-serif"}}>
     <div style={{width:"100%",maxWidth:600,padding:24}}>
       <div style={{textAlign:"center",marginBottom:32}}>
@@ -419,8 +429,13 @@ function BranchSelector({branches,onSelect,user}){
         <h2 style={{fontSize:22,fontWeight:900,color:C.ink,marginBottom:4}}>เลือกสาขา</h2>
         <p style={{fontSize:14,color:C.ink3}}>สวัสดีครับ <b>{user.name||user.username}</b> กรุณาเลือกสาขาที่ต้องการเข้าใช้งาน</p>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:14}}>
-        {branches.filter(b=>b.active).map(branch=>{
+      {visible.length===0?<div style={{background:C.white,borderRadius:16,padding:"30px 24px",textAlign:"center",border:`2px solid ${C.brandBorder}`}}>
+        <div style={{fontSize:48,marginBottom:8}}>🚫</div>
+        <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>ยังไม่ได้รับสิทธิ์เข้าสาขาใด</div>
+        <div style={{fontSize:13,color:C.ink3,lineHeight:1.7,marginBottom:18}}>กรุณาติดต่อแอดมินเพื่อขอสิทธิ์เข้าสาขา</div>
+        {onLogout&&<Btn v="ghost" onClick={onLogout}>← ออกจากระบบ</Btn>}
+      </div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:14}}>
+        {visible.map(branch=>{
           const isCentral=branch.type==="central";
           return <div key={branch.id} onClick={()=>onSelect(branch)} style={{background:C.white,borderRadius:16,padding:"22px 20px",cursor:"pointer",border:`2px solid ${isCentral?C.teal:C.line}`,boxShadow:isCentral?`0 4px 20px ${C.teal}22`:"0 2px 8px rgba(15,23,42,.06)",transition:"all .2s",display:"flex",alignItems:"center",gap:16}} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 12px 32px ${isCentral?C.teal:C.brand}22`;}} onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=isCentral?`0 4px 20px ${C.teal}22`:"0 2px 8px rgba(15,23,42,.06)";}}>
             <div style={{width:48,height:48,borderRadius:14,background:isCentral?`linear-gradient(135deg,${C.teal},#0F766E)`:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -432,7 +447,7 @@ function BranchSelector({branches,onSelect,user}){
             </div>
           </div>;
         })}
-      </div>
+      </div>}
     </div>
   </div>;
 }
@@ -2489,8 +2504,16 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser}){
 function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,reloadBranches,suppliers,reloadSuppliers,currentUser,printers=[],reloadPrinters,currentBranch}){
   const[section,setSection]=useState("branches");
   const[showUser,setShowUser]=useState(false);const[editUID,setEditUID]=useState(null);const[saving,setSaving]=useState(false);
-  const uF0={username:"",password:"",name:"",role:"staff",active:true,perms:ROLE_DEFAULT_PERMS.staff};
+  const uF0={username:"",password:"",name:"",role:"staff",active:true,perms:ROLE_DEFAULT_PERMS.staff,allowed_branches:null};
   const[uF,setUF]=useState(uF0);
+  function toggleUserBranch(bid){
+    setUF(f=>{
+      // null = "ทุกสาขา" → start from full list, then remove the toggled one
+      const current=f.allowed_branches===null?branches.map(b=>+b.id):(f.allowed_branches||[]).map(x=>+x);
+      const next=current.includes(+bid)?current.filter(x=>x!==+bid):[...current,+bid];
+      return{...f,allowed_branches:next};
+    });
+  }
   const bF0={name:"",type:"branch",active:true,allowed_perms:null};
   const[branchForm,setBranchForm]=useState(bF0);const[editBID,setEditBID]=useState(null);
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
@@ -2654,7 +2677,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
             <td style={{padding:"11px 14px"}}><span style={{fontSize:12,color:C.ink3}}>{perms.length} สิทธิ์</span></td>
             <td style={{padding:"11px 14px"}}><Chip color={u.active?"green":"gray"}>{u.active?"ใช้งาน":"ปิด"}</Chip></td>
             <td style={{padding:"11px 14px"}}>{isAdmin&&<div style={{display:"flex",gap:5}}>
-              <button onClick={()=>{setUF({username:u.username,password:u.password,name:u.name,role:u.role,active:u.active,perms:u.perms||[]});setEditUID(u.id);setShowUser(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+              <button onClick={()=>{setUF({username:u.username,password:u.password,name:u.name,role:u.role,active:u.active,perms:u.perms||[],allowed_branches:u.allowed_branches===undefined?null:u.allowed_branches});setEditUID(u.id);setShowUser(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
               {u.id!==currentUser.id&&<button onClick={async()=>{if(!await confirmDlg({title:"ลบผู้ใช้",message:`ต้องการลบผู้ใช้ "${u.name||u.username}" ใช่หรือไม่?`}))return;try{await api.deleteUser(u.id);await reloadUsers();}catch(e){alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
             </div>}</td>
           </tr>;})}
@@ -2812,13 +2835,35 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         </div>
         <div>
           <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เมนูที่เข้าถึงได้ ({(uF.perms||[]).length}/{ALL_PERMS.length})</div>
-          <div style={{background:C.bg,borderRadius:12,padding:"10px",border:`1px solid ${C.line}`}}>
+          <div style={{background:C.bg,borderRadius:12,padding:"10px",border:`1px solid ${C.line}`,marginBottom:14}}>
             {ALL_PERMS.map(p=>{const has=(uF.perms||[]).includes(p.id);return <label key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderRadius:10,cursor:"pointer",background:has?C.brandLight:C.white,marginBottom:4,border:`1.5px solid ${has?C.brandBorder:C.line}`,transition:"all .15s"}}>
               <input type="checkbox" checked={has} onChange={()=>setUF(f=>{const ps=f.perms||[];return{...f,perms:ps.includes(p.id)?ps.filter(x=>x!==p.id):[...ps,p.id]};})} style={{accentColor:C.brand,width:16,height:16}}/>
               <span style={{fontSize:14,fontFamily:"'Sarabun',sans-serif",fontWeight:has?700:400,color:has?C.brand:C.ink2}}>{p.label}</span>
               {has&&<span style={{marginLeft:"auto",fontSize:11,color:C.green,fontWeight:700}}>✓ เข้าถึงได้</span>}
             </label>;})}
           </div>
+          {/* Branch access */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>🏢 สาขาที่เข้าถึงได้ {uF.allowed_branches===null?"(ทุกสาขา)":`(${(uF.allowed_branches||[]).length}/${branches.length})`}</div>
+            <div style={{display:"flex",gap:5}}>
+              <button onClick={()=>setUF(f=>({...f,allowed_branches:null}))} style={{padding:"4px 9px",borderRadius:7,border:`1px solid ${uF.allowed_branches===null?C.green:C.line}`,background:uF.allowed_branches===null?C.greenLight:C.white,color:uF.allowed_branches===null?C.green:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกสาขา</button>
+              <button onClick={()=>setUF(f=>({...f,allowed_branches:branches.map(b=>+b.id)}))} style={{padding:"4px 9px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>เลือกทั้งหมด</button>
+              <button onClick={()=>setUF(f=>({...f,allowed_branches:[]}))} style={{padding:"4px 9px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
+            </div>
+          </div>
+          {uF.role==="admin"
+            ?<div style={{padding:"12px 14px",background:C.purpleLight,borderRadius:10,border:`1.5px solid ${C.purple}`,fontSize:12,color:C.purple,fontFamily:"'Sarabun',sans-serif",fontWeight:600,lineHeight:1.6}}>👑 <b>Admin</b> เข้าได้ทุกสาขาเสมอ — ไม่ต้องตั้งค่า</div>
+            :uF.allowed_branches===null
+              ?<div style={{padding:"12px 14px",background:C.greenLight,borderRadius:10,border:`1.5px solid ${C.green}`,fontSize:12,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,lineHeight:1.6}}>✅ ผู้ใช้นี้เข้าได้ทุกสาขา</div>
+              :<div style={{background:C.bg,borderRadius:12,padding:"10px",border:`1px solid ${C.line}`,maxHeight:200,overflowY:"auto"}}>
+                {branches.length===0&&<div style={{padding:14,textAlign:"center",color:C.ink4,fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขาในระบบ</div>}
+                {branches.map(b=>{const has=(uF.allowed_branches||[]).map(x=>+x).includes(+b.id);return <label key={b.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 12px",borderRadius:9,cursor:"pointer",background:has?C.brandLight:C.white,marginBottom:4,border:`1.5px solid ${has?C.brandBorder:C.line}`,transition:"all .15s"}}>
+                  <input type="checkbox" checked={has} onChange={()=>toggleUserBranch(b.id)} style={{accentColor:C.brand,width:15,height:15}}/>
+                  <span style={{fontSize:13,fontFamily:"'Sarabun',sans-serif",fontWeight:has?800:500,color:has?C.brand:C.ink2}}>{b.name}</span>
+                  <Chip color={b.type==="central"?"teal":"orange"}>{b.type==="central"?"ครัวกลาง":"สาขา"}</Chip>
+                  {b.active===false&&<Chip color="gray">ปิด</Chip>}
+                </label>;})}
+              </div>}
         </div>
       </div>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:8}}>
@@ -3592,9 +3637,15 @@ export default function App(){
         const rows=await api.getMyUserStatus(currentUser.id);
         const u=Array.isArray(rows)?rows[0]:null;
         if(!u||!u.active){alert("บัญชีของคุณถูกปิดการใช้งาน — ระบบจะออกจากระบบ");setCurrentUser(null);setCurrentBranch(null);}
-        else if(u.role!==currentUser.role||JSON.stringify(u.perms||[])!==JSON.stringify(currentUser.perms||[])){
-          // Sync new perms/role silently
-          setCurrentUser(prev=>prev?{...prev,role:u.role,perms:u.perms,name:u.name}:prev);
+        else{
+          // If admin removed access to current branch, kick back to branch selector
+          if(currentBranch&&u.role!=="admin"&&Array.isArray(u.allowed_branches)&&!u.allowed_branches.map(x=>+x).includes(+currentBranch.id)){
+            alert("สิทธิ์เข้าสาขานี้ถูกถอนแล้ว — กลับไปเลือกสาขาใหม่");
+            setCurrentBranch(null);
+          }
+          if(u.role!==currentUser.role||JSON.stringify(u.perms||[])!==JSON.stringify(currentUser.perms||[])||JSON.stringify(u.allowed_branches||null)!==JSON.stringify(currentUser.allowed_branches||null)){
+            setCurrentUser(prev=>prev?{...prev,role:u.role,perms:u.perms,name:u.name,allowed_branches:u.allowed_branches}:prev);
+          }
         }
       }catch{/* ignore transient network */}
     };
@@ -6024,7 +6075,7 @@ function BranchSelectorWithLoad({user,onSelect,onLogout}){
   const[branches,setBranches]=useState([]);const[loading,setLoading]=useState(true);
   useEffect(()=>{api.getBranches().then(b=>setBranches(b)).finally(()=>setLoading(false));},[]);
   if(loading)return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><Loading text="กำลังโหลดรายการสาขา..."/></div></>;
-  return <BranchSelector branches={branches} onSelect={onSelect} user={user}/>;
+  return <BranchSelector branches={branches} onSelect={onSelect} user={user} onLogout={onLogout}/>;
 }
 
 const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}body{background:${C.bg};font-family:'Sarabun',sans-serif}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:${C.line};border-radius:999px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}`;
