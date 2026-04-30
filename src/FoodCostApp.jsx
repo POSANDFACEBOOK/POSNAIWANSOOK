@@ -189,6 +189,27 @@ const api = {
     if (!res.ok) throw new Error(await res.text());
     return `${SUPA_URL}/storage/v1/object/public/foodcost-images/${path}`;
   },
+  // Private slip upload — returns the storage *path* only (not a public URL)
+  uploadSlip: async (file, path) => {
+    const res = await fetch(`${SUPA_URL}/storage/v1/object/po-slips-private/${path}`, {
+      method: "POST", headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": file.type, "x-upsert": "true" }, body: file,
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return path;  // Caller stores this path; viewing requires getSlipSignedUrl
+  },
+  // Get a short-lived signed URL to view a private slip
+  getSlipSignedUrl: async (pathOrUrl, expiresIn=3600) => {
+    if(!pathOrUrl)return null;
+    // Backward compat: legacy slips were saved as full URLs to the public bucket
+    if(/^https?:\/\//.test(pathOrUrl))return pathOrUrl;
+    const res = await fetch(`${SUPA_URL}/storage/v1/object/sign/po-slips-private/${pathOrUrl}`, {
+      method: "POST", headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({expiresIn}),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    const signed = data.signedURL || data.signedUrl;  // API spelling has varied
+    return signed.startsWith("http") ? signed : `${SUPA_URL}/storage/v1${signed}`;
+  },
 };
 
 const C = {
@@ -1706,7 +1727,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
           {payAt&&<div style={{background:C.greenLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.green}`}}>
             <div style={{fontSize:11,color:C.green,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>💳 ชำระเงิน</div>
             <div style={{fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{payAt}{po.payment_by?` · ${po.payment_by}`:""}</div>
-            {po.payment_slip_url&&<a href={po.payment_slip_url} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.blue,marginTop:4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,display:"inline-block"}}>📎 ดูสลิปการโอน →</a>}
+            {po.payment_slip_url&&<button onClick={async()=>{try{const u=await api.getSlipSignedUrl(po.payment_slip_url,300);if(u)window.open(u,"_blank","noopener");}catch(e){showErr("เปิดสลิปไม่สำเร็จ",e);}}} style={{background:"transparent",border:"none",padding:0,marginTop:4,fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700,cursor:"pointer",textDecoration:"underline"}}>📎 ดูสลิปการโอน →</button>}
           </div>}
         </div>
 
@@ -1809,12 +1830,11 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
       const mime=await detectImageMime(slipFile);
       if(!mime)throw new Error("ไฟล์ไม่ใช่รูปภาพที่ถูกต้อง");
       const ext=mime==="image/jpeg"?"jpg":mime==="image/png"?"png":mime==="image/webp"?"webp":"gif";
-      // Random suffix → not enumerable by sequential PO id
-      const path=`po-slips/${randId()}.${ext}`;
-      // Re-wrap as Blob with verified MIME to ignore browser's filename-based content-type
+      const path=`${randId()}.${ext}`;
       const safeFile=new File([slipFile],`slip.${ext}`,{type:mime});
-      const url=await api.uploadImage(safeFile,path);
-      await onSubmit(url,note);
+      // Upload to private bucket; only the storage path is returned
+      const slipPath=await api.uploadSlip(safeFile,path);
+      await onSubmit(slipPath,note);
     }catch(e){showErr("อัพโหลดสลิปไม่สำเร็จ",e);setSaving(false);}
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",zIndex:6000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
