@@ -97,6 +97,16 @@ const api = {
   getAllOrders: () => sb("order_requests?order=id.desc"),
   // POS
   getPOSTables: (bid) => sb(`tables?order=table_number.asc&branch_id=eq.${bid}&active=eq.true`),
+  // Rotate QR token for a single table (cuts off any leaked / stale QRs)
+  rotateTableToken: (id) => sb(`tables?id=eq.${id}`, {method:"PATCH", body:JSON.stringify({qr_token:crypto.randomUUID()})}),
+  // Rotate all active tables in a branch in one batch
+  rotateAllTableTokens: async (bid) => {
+    const tbls=await sb(`tables?branch_id=eq.${bid}&active=eq.true&select=id`);
+    for(const t of tbls){await sb(`tables?id=eq.${t.id}`, {method:"PATCH", body:JSON.stringify({qr_token:crypto.randomUUID()})});}
+    return tbls.length;
+  },
+  // Public scan — verify QR token + branch active before returning anything
+  scanTable: (branchId,tableId,token) => sb(`tables?id=eq.${+tableId}&branch_id=eq.${+branchId}&qr_token=eq.${encodeURIComponent(token||"")}&active=eq.true`),
   addPOSTable: (d) => sb("tables", { method:"POST", body:JSON.stringify(d) }),
   updatePOSTable: (id, d) => sb(`tables?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   deletePOSTable: (id) => sb(`tables?id=eq.${id}`, { method:"DELETE", headers:{"Prefer":"return=minimal"} }),
@@ -3621,7 +3631,8 @@ export default function App(){
   const isScan=params.get("scan")==="1";
   const scanBranch=params.get("branch");
   const scanTable=params.get("table");
-  if(isScan&&scanBranch&&scanTable){return <><style>{globalStyle}</style><CustomerPage branchId={scanBranch} tableId={scanTable}/></>;}
+  const scanToken=params.get("t");
+  if(isScan&&scanBranch&&scanTable){return <><style>{globalStyle}</style><CustomerPage branchId={scanBranch} tableId={scanTable} token={scanToken}/></>;}
 
   if(!currentUser)return <><style>{globalStyle}</style><LoginPage onLogin={u=>{setCurrentUser(u);}}/></>;
   if(!currentBranch)return <><style>{globalStyle}</style><BranchSelectorWithLoad user={currentUser} onSelect={b=>setCurrentBranch(b)} onLogout={()=>setCurrentUser(null)}/></>;
@@ -4491,23 +4502,41 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
 // ══════════════════════════════════════════════════════
 // ── POS CUSTOMER PAGE (ลูกค้าสแกน QR) ────────────────
 // ══════════════════════════════════════════════════════
-function CustomerPage({branchId,tableId}){
+function CustomerPage({branchId,tableId,token}){
   const[branch,setBranch]=useState(null);const[table,setTable]=useState(null);const[menus,setMenus]=useState([]);
   const[cart,setCart]=useState([]);const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[step,setStep]=useState("menu");const[sending,setSending]=useState(false);const[done,setDone]=useState(false);
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
   const[myOrder,setMyOrder]=useState(null);
+  const[gateError,setGateError]=useState(null);  // null | "no_token" | "bad_token" | "branch_closed"
+  const[gateLoading,setGateLoading]=useState(true);
   async function loadMyOrder(){try{const ex=await api.getOrderByTable(+tableId);if(ex&&ex.length>0)setMyOrder(ex[0]);else setMyOrder(null);}catch{}}
   useEffect(()=>{
-    Promise.all([api.getBranches(),api.getPOSTables(branchId),api.getMenus()]).then(([bs,ts,ms])=>{
-      setBranch(bs.find(b=>b.id===+branchId)||bs[0]);
-      setTable(ts.find(t=>t.id===+tableId)||ts[0]);
-      setMenus(ms.filter(m=>m.price>0&&(m.availability||{})[branchId]!=="hidden"));
-    }).catch(e=>console.error(e));
+    setGateLoading(true);
+    (async()=>{
+      try{
+        // 1) Verify branch is active
+        const bs=await api.getBranches();
+        const b=bs.find(x=>x.id===+branchId);
+        if(!b){setGateError("bad_token");setGateLoading(false);return;}
+        if(b.active===false){setGateError("branch_closed");setBranch(b);setGateLoading(false);return;}
+        // 2) Verify QR token matches the table's current token
+        if(!token){setGateError("no_token");setBranch(b);setGateLoading(false);return;}
+        const matches=await api.scanTable(branchId,tableId,token);
+        if(!Array.isArray(matches)||matches.length===0){setGateError("bad_token");setBranch(b);setGateLoading(false);return;}
+        const t=matches[0];
+        // 3) All clear — load menus
+        const ms=await api.getMenus();
+        setBranch(b);setTable(t);
+        setMenus(ms.filter(m=>m.price>0&&(m.availability||{})[branchId]!=="hidden"));
+        setGateError(null);
+      }catch(e){console.error("scan gate",e);setGateError("bad_token");}
+      setGateLoading(false);
+    })();
     loadMyOrder();
-    const it=setInterval(loadMyOrder,15000);
+    const it=setInterval(()=>{if(!document.hidden)loadMyOrder();},15000);
     return()=>clearInterval(it);
-  },[branchId,tableId]);
+  },[branchId,tableId,token]);
   const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(m=>m.category))],[menus]);
   const filtered=useMemo(()=>menus.filter(m=>(selCat==="ทั้งหมด"||m.category===selCat)&&m.name.toLowerCase().includes(search.toLowerCase())),[menus,selCat,search]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
@@ -4531,6 +4560,19 @@ function CustomerPage({branchId,tableId}){
       setDone(true);
       loadMyOrder();
     }catch(e){alert("สั่งไม่สำเร็จ กรุณาลองใหม่");}setSending(false);
+  }
+  if(gateLoading)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{textAlign:"center"}}><div style={{width:40,height:40,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 12px"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กำลังตรวจสอบ QR...</p></div></div>;
+  if(gateError){
+    const messages={
+      no_token:{icon:"🚫",title:"QR ไม่ถูกต้อง",msg:"QR Code นี้ไม่มีรหัสยืนยัน — กรุณาขอ QR ใหม่จากพนักงาน"},
+      bad_token:{icon:"⏰",title:"QR หมดอายุแล้ว",msg:"QR Code นี้ถูกยกเลิกการใช้งานแล้ว — กรุณาขอ QR ใหม่จากพนักงาน"},
+      branch_closed:{icon:"🏪",title:`${branch?.name||"สาขานี้"} ปิดอยู่`,msg:"ขออภัย ขณะนี้ร้านปิดให้บริการ — กรุณาลองใหม่ภายหลังครับ"},
+    }[gateError]||{icon:"❌",title:"เข้าระบบไม่ได้",msg:"เกิดข้อผิดพลาด — กรุณาขอ QR ใหม่จากพนักงาน"};
+    return <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.bg,padding:24,textAlign:"center"}}>
+      <div style={{fontSize:80,marginBottom:14}}>{messages.icon}</div>
+      <h2 style={{fontSize:22,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>{messages.title}</h2>
+      <p style={{fontSize:15,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,maxWidth:340}}>{messages.msg}</p>
+    </div>;
   }
   if(!table||!branch)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{textAlign:"center"}}><div style={{width:40,height:40,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 12px"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลดเมนู...</p></div></div>;
   if(done)return <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.greenLight,padding:24,textAlign:"center"}}>
@@ -4673,36 +4715,57 @@ function QRImg({url,size=120}){
 }
 function printTableQR(table,branch){
   const baseUrl=window.location.origin+window.location.pathname;
-  const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${table.id}`;
+  const tokenPart=table.qr_token?`&t=${encodeURIComponent(table.qr_token)}`:"";
+  const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${table.id}${tokenPart}`;
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}&margin=10`;
   const w=openPrintWindow(340,420);
   if(!w)return;
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR โต๊ะ ${table.table_number}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;text-align:center;padding:20px;margin:0}h2{font-size:22px;margin:8px 0}p{color:#64748b;font-size:13px;margin:4px 0}.box{border:2px dashed #e2e8f0;border-radius:16px;padding:20px;display:inline-block}@media print{@page{margin:0;size:auto}}</style></head><body><div class="box"><p style="font-size:11px;font-weight:700;letter-spacing:2px;color:#94a3b8;text-transform:uppercase">${branch.name}</p><h2>โต๊ะ ${table.table_number}</h2>${table.label?`<p>${table.label}</p>`:""}<img src="${qrUrl}" style="width:200px;height:200px;margin:12px 0;border-radius:8px"/><p style="font-size:12px">สแกนเพื่อดูเมนูและสั่งอาหาร</p><p style="font-size:11px;color:#94a3b8">Scan to order</p></div><br/><script>window.onload=()=>setTimeout(()=>window.print(),500)<\/script></body></html>`);
   w.document.close();
 }
-function POSQRPage({branch,tables}){
+function POSQRPage({branch,tables,onTablesChanged}){
   const baseUrl=window.location.origin+window.location.pathname;
   const zones=[...new Set(tables.map(t=>t.zone).filter(Boolean))];
   const grouped=[...zones.map(z=>({zone:z,tables:tables.filter(t=>t.zone===z)})),{zone:null,tables:tables.filter(t=>!t.zone)}].filter(g=>g.tables.length>0);
+  const buildUrl=(t)=>`${baseUrl}?scan=1&branch=${branch.id}&table=${t.id}${t.qr_token?`&t=${encodeURIComponent(t.qr_token)}`:""}`;
+  const[rotating,setRotating]=useState(false);
+  async function rotateOne(t){
+    if(!await confirmDlg({title:"หมุน QR ใหม่",message:`สร้าง QR ใหม่สำหรับโต๊ะ ${t.table_number}?\n\nQR เก่าจะใช้งานไม่ได้ทันที — ต้องพิมพ์ใหม่และวางที่โต๊ะ`,confirmLabel:"🔄 หมุน QR ใหม่"}))return;
+    setRotating(true);
+    try{await api.rotateTableToken(t.id);if(onTablesChanged)await onTablesChanged();}
+    catch(e){showErr("หมุน QR ไม่สำเร็จ",e);}
+    setRotating(false);
+  }
+  async function rotateAll(){
+    if(!await confirmDlg({title:"หมุน QR ทุกโต๊ะ",message:`สร้าง QR ใหม่สำหรับทุกโต๊ะของ "${branch.name}"?\n\nQR เก่าทั้งหมดจะใช้งานไม่ได้ — ต้องพิมพ์ใหม่ทั้งหมด`,confirmLabel:"🔄 หมุนทั้งหมด",danger:true}))return;
+    setRotating(true);
+    try{const n=await api.rotateAllTableTokens(branch.id);if(onTablesChanged)await onTablesChanged();alert(`✅ หมุน QR ใหม่ ${n} โต๊ะเรียบร้อย`);}
+    catch(e){showErr("หมุน QR ไม่สำเร็จ",e);}
+    setRotating(false);
+  }
   return <div style={{padding:20}}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,gap:10,flexWrap:"wrap"}}>
       <div>
         <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:800,color:C.ink,marginBottom:4}}>QR Code สั่งอาหาร</h2>
-        <p style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>พิมพ์ QR Code วางที่โต๊ะ ลูกค้าสแกนแล้วสั่งได้เลย</p>
+        <p style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>พิมพ์ QR Code วางที่โต๊ะ ลูกค้าสแกนแล้วสั่งได้เลย · QR แต่ละใบมี token เฉพาะ</p>
       </div>
-      <Btn v="ghost" s={{fontSize:12}} onClick={()=>{tables.forEach(t=>printTableQR(t,branch));}} icon={I.print}>พิมพ์ทั้งหมด</Btn>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        <Btn v="ghost" s={{fontSize:12}} onClick={rotateAll} disabled={rotating} icon={I.refresh}>หมุน QR ทั้งหมด</Btn>
+        <Btn v="ghost" s={{fontSize:12}} onClick={()=>{tables.forEach(t=>printTableQR(t,branch));}} icon={I.print}>พิมพ์ทั้งหมด</Btn>
+      </div>
     </div>
     {grouped.map(g=><div key={g.zone||"no-zone"} style={{marginBottom:20}}>
       {g.zone&&<div style={{fontSize:12,fontWeight:800,color:C.ink3,letterSpacing:1,textTransform:"uppercase",marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>📍 {g.zone}</div>}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(170px,1fr))",gap:12}}>
-        {g.tables.map(t=>{const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${t.id}`;return <div key={t.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:"14px",textAlign:"center",boxShadow:"0 1px 4px rgba(0,0,0,.05)"}}>
+        {g.tables.map(t=>{const url=buildUrl(t);return <div key={t.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:"14px",textAlign:"center",boxShadow:"0 1px 4px rgba(0,0,0,.05)"}}>
           <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>โต๊ะ {t.table_number}</div>
           {t.label&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>{t.label}</div>}
           <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><QRImg url={url} size={110}/></div>
-          <div style={{display:"flex",gap:5}}>
+          <div style={{display:"flex",gap:4,marginBottom:4}}>
             <button onClick={()=>window.open(url,"_blank")} style={{flex:1,padding:"5px 0",border:`1px solid ${C.line}`,borderRadius:7,cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink3,background:C.white}}>ทดสอบ</button>
             <button onClick={()=>printTableQR(t,branch)} style={{flex:1,padding:"5px 0",border:"none",borderRadius:7,cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,background:C.brand}}>🖨 พิมพ์</button>
           </div>
+          <button onClick={()=>rotateOne(t)} disabled={rotating} title="สร้าง QR ใหม่ — QR เก่าใช้ไม่ได้ทันที" style={{width:"100%",padding:"4px 0",border:`1px dashed ${C.line}`,borderRadius:7,cursor:rotating?"not-allowed":"pointer",fontSize:10,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.ink3,background:C.bg,opacity:rotating?.6:1}}>🔄 หมุน QR ใหม่</button>
         </div>;})}
       </div>
     </div>)}
@@ -5882,7 +5945,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
           </div>
         </>}
       </div>}
-      {posTab==="qr"&&<div style={{overflowY:"auto",flex:1}}><POSQRPage branch={currentBranch} tables={tables}/></div>}
+      {posTab==="qr"&&<div style={{overflowY:"auto",flex:1}}><POSQRPage branch={currentBranch} tables={tables} onTablesChanged={loadTables}/></div>}
     </div>
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll();}} wide>
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
