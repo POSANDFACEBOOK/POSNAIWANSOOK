@@ -293,7 +293,18 @@ const ROLE_DEFAULT_PERMS={
   staff:["pos","crm","ingredients","menus","sop","summary","po","orders","history","suppliers"],
   viewer:["pos","menus","sop"],
 };
-function hasPerm(user,perm){if(!user)return false;if(user.role==="admin")return true;return((user.perms&&user.perms.length>0)?user.perms:ROLE_DEFAULT_PERMS[user.role]||[]).includes(perm);}
+// Coerce a value to an array (handles JSON string from legacy DB rows, null = treat as null sentinel)
+function asArr(x){
+  if(Array.isArray(x))return x;
+  if(typeof x==="string"){try{const p=JSON.parse(x);return Array.isArray(p)?p:[];}catch{return [];}}
+  return null;  // null/undefined preserved as sentinel
+}
+function getUserPerms(user){const a=asArr(user?.perms);return(a&&a.length>0)?a:(ROLE_DEFAULT_PERMS[user?.role]||[]);}
+function hasPerm(user,perm){
+  if(!user)return false;
+  if(user.role==="admin")return true;
+  return getUserPerms(user).includes(perm);
+}
 const ROLES={admin:{label:"Admin",color:"purple"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"}};
 const ppg=(price,gram)=>(gram>0?price/gram:0);
 const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.price_per_gram*x.amountGram:0);},0);
@@ -2669,12 +2680,17 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
       </div>
       <Card>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
-          <thead><tr style={{background:C.bg}}>{["ผู้ใช้","ชื่อ","บทบาท","สิทธิ์","สถานะ",""].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
-          <tbody>{users.map(u=>{const perms=u.perms||[];return <tr key={u.id} style={{borderTop:`1px solid ${C.lineLight}`}}>
+          <thead><tr style={{background:C.bg}}>{["ผู้ใช้","ชื่อ","บทบาท","สิทธิ์","สาขา","สถานะ",""].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+          <tbody>{users.map(u=>{
+            const perms=getUserPerms(u);
+            const ab=asArr(u.allowed_branches);
+            const branchSummary=u.role==="admin"?"ทุกสาขา (admin)":(ab==null?"ทุกสาขา":(ab.length===0?"ไม่มี ⚠️":`${ab.length}/${branches.length} สาขา`));
+            return <tr key={u.id} style={{borderTop:`1px solid ${C.lineLight}`}}>
             <td style={{padding:"11px 14px"}}><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:30,height:30,borderRadius:"50%",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.user} s={14} c={C.white}/></div><span style={{fontWeight:700,color:C.ink,fontSize:13}}>{u.username}</span></div></td>
             <td style={{padding:"11px 14px",color:C.ink2,fontSize:13}}>{u.name}</td>
             <td style={{padding:"11px 14px"}}><Chip color={ROLES[u.role]?.color||"gray"}>{ROLES[u.role]?.label||u.role}</Chip></td>
-            <td style={{padding:"11px 14px"}}><span style={{fontSize:12,color:C.ink3}}>{perms.length} สิทธิ์</span></td>
+            <td style={{padding:"11px 14px"}} title={perms.length>0?perms.join(", "):"(ไม่มี — จะใช้สิทธิ์ default ของ role)"}><span style={{fontSize:12,color:perms.length===0?C.red:C.ink3,fontWeight:perms.length===0?700:400}}>{perms.length===0?"⚠️ ว่าง":`${perms.length}/${ALL_PERMS.length} แท็บ`}</span></td>
+            <td style={{padding:"11px 14px"}} title={ab&&ab.length>0?ab.map(id=>branches.find(b=>+b.id===+id)?.name||id).join(", "):""}><span style={{fontSize:12,color:(ab&&ab.length===0)?C.red:C.ink3,fontWeight:(ab&&ab.length===0)?700:400}}>{branchSummary}</span></td>
             <td style={{padding:"11px 14px"}}><Chip color={u.active?"green":"gray"}>{u.active?"ใช้งาน":"ปิด"}</Chip></td>
             <td style={{padding:"11px 14px"}}>{isAdmin&&<div style={{display:"flex",gap:5}}>
               <button onClick={()=>{setUF({username:u.username,password:u.password,name:u.name,role:u.role,active:u.active,perms:u.perms||[],allowed_branches:u.allowed_branches===undefined?null:u.allowed_branches});setEditUID(u.id);setShowUser(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
@@ -3683,12 +3699,12 @@ export default function App(){
   // A tab is visible only if (a) user has the permission AND (b) the branch allows it.
   // Branch.allowed_perms === null/undefined means no branch restriction.
   // Admins bypass branch restriction so they can always reach Settings.
-  const branchAllowed=currentBranch?.allowed_perms;
+  const branchAllowed=asArr(currentBranch?.allowed_perms);
   const visibleTabs=TABS.filter(t=>{
     if(!currentUser)return false;
     if(!hasPerm(currentUser,t.perm))return false;
     if(currentUser.role==="admin")return true;
-    if(branchAllowed==null)return true;
+    if(branchAllowed==null)return true;  // unrestricted branch
     return branchAllowed.includes(t.perm);
   });
   // If current tab is no longer visible (after branch switch / perm change), jump to first visible.
@@ -3707,6 +3723,42 @@ export default function App(){
 
   if(!currentUser)return <><style>{globalStyle}</style><LoginPage onLogin={u=>{setCurrentUser(u);}}/></>;
   if(!currentBranch)return <><style>{globalStyle}</style><BranchSelectorWithLoad user={currentUser} onSelect={b=>setCurrentBranch(b)} onLogout={()=>setCurrentUser(null)}/></>;
+
+  // Diagnostic: user is logged in to a branch but no tab is visible — explain why instead of showing a blank shell.
+  if(visibleTabs.length===0){
+    const userPerms=getUserPerms(currentUser);
+    const bAllowed=asArr(currentBranch.allowed_perms);
+    const reasons=[];
+    if(userPerms.length===0)reasons.push("ผู้ใช้ของคุณยังไม่ได้ตั้งสิทธิ์เมนูใดเลย");
+    if(bAllowed!=null&&bAllowed.length===0)reasons.push(`สาขา "${currentBranch.name}" ถูกตั้งค่าให้ไม่เห็นแท็บใดเลย`);
+    if(bAllowed!=null&&bAllowed.length>0&&userPerms.length>0&&!bAllowed.some(p=>userPerms.includes(p)))reasons.push("สิทธิ์ของผู้ใช้ไม่ตรงกับสิทธิ์ที่สาขาเปิดไว้");
+    if(reasons.length===0)reasons.push("ไม่พบสาเหตุชัดเจน — กรุณาแจ้งแอดมินและรีเฟรชหน้าเว็บ");
+    return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,#FEF3C7,#FFE4E6)`,padding:24,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{background:C.white,borderRadius:18,padding:"30px 28px",maxWidth:520,width:"100%",boxShadow:"0 10px 40px rgba(0,0,0,.12)"}}>
+        <div style={{textAlign:"center",marginBottom:18}}>
+          <div style={{fontSize:64,marginBottom:8}}>🚫</div>
+          <h2 style={{fontSize:20,fontWeight:900,color:C.ink,margin:0}}>ไม่มีเมนูที่เข้าถึงได้</h2>
+          <p style={{fontSize:13,color:C.ink3,marginTop:4}}>{currentUser.name||currentUser.username} · {currentBranch.name}</p>
+        </div>
+        <div style={{background:C.bg,borderRadius:12,padding:"14px 16px",marginBottom:14,border:`1px solid ${C.line}`}}>
+          <div style={{fontSize:12,fontWeight:800,color:C.ink2,marginBottom:8}}>📋 เหตุผลที่เป็นไปได้:</div>
+          <ul style={{margin:0,paddingLeft:20,fontSize:13,color:C.ink2,lineHeight:1.8}}>
+            {reasons.map((r,i)=><li key={i}>{r}</li>)}
+          </ul>
+        </div>
+        <div style={{background:C.brandLight,borderRadius:12,padding:"12px 16px",marginBottom:14,border:`1px solid ${C.brandBorder}`,fontSize:12,color:C.ink2,lineHeight:1.7}}>
+          <div style={{fontWeight:800,marginBottom:6,color:C.brand}}>🔧 รายละเอียดสำหรับแอดมิน:</div>
+          <div>• สิทธิ์เมนูของผู้ใช้: <b>{userPerms.length>0?userPerms.join(", "):"ไม่มี"}</b></div>
+          <div>• สิทธิ์เมนูของสาขา: <b>{bAllowed==null?"ไม่จำกัด (ทุกแท็บ)":(bAllowed.length>0?bAllowed.join(", "):"ว่างเปล่า — ปิดทุกแท็บ")}</b></div>
+          <div style={{marginTop:6,fontSize:11,color:C.ink3}}>ไปที่ <b>ตั้งค่า → ผู้ใช้</b> หรือ <b>ตั้งค่า → สาขา</b> เพื่อแก้ไข</div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn v="ghost" onClick={()=>setCurrentBranch(null)} full>← เลือกสาขาใหม่</Btn>
+          <Btn v="danger" onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} full>ออกจากระบบ</Btn>
+        </div>
+      </div>
+    </div></>;
+  }
 
   const isCentral=currentBranch.type==="central";
 
