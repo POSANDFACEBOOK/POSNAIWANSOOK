@@ -2579,11 +2579,20 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   async function saveBranch(){
     if(!branchForm.name)return;
     try{
-      const payload={name:branchForm.name,type:branchForm.type,active:branchForm.active,allowed_perms:branchForm.allowed_perms};
+      // Auto-collapse "ครบทุกแท็บ" → null so newly-added perms in the future are inherited automatically
+      let allowed=branchForm.allowed_perms;
+      if(Array.isArray(allowed)&&allowed.length>=ALL_PERMS.length&&ALL_PERMS.every(p=>allowed.includes(p.id)))allowed=null;
+      const payload={name:branchForm.name,type:branchForm.type,active:branchForm.active,allowed_perms:allowed};
       if(editBID)await api.updateBranch(editBID,payload);else await api.addBranch(payload);
       await reloadBranches();
       setBranchForm(bF0);setEditBID(null);
-    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    }catch(e){showErr("บันทึกไม่สำเร็จ",e);}
+  }
+  // One-click migration: open this branch's allowed_perms to include every current perm
+  async function unlockAllPerms(b){
+    if(!await confirmDlg({title:"เปิดสิทธิ์ทุกแท็บ",message:`เปิดสิทธิ์ทุกแท็บให้สาขา "${b.name}"?\n\nสาขานี้จะเห็นทุกฟีเจอร์ของระบบ (รวมที่เพิ่มในอนาคต) — ผู้ใช้แต่ละคนยังคงต้องมีสิทธิ์ตามที่กำหนด`,confirmLabel:"เปิดทุกแท็บ"}))return;
+    try{await api.updateBranch(b.id,{allowed_perms:null});await reloadBranches();}
+    catch(e){showErr("อัพเดทไม่สำเร็จ",e);}
   }
   function toggleBranchPerm(p){
     setBranchForm(f=>{
@@ -2638,6 +2647,14 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
           <div style={{paddingTop:8,borderTop:`1px dashed ${C.lineLight}`,fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
             🔓 เห็น <b style={{color:allowAll?C.green:allowedCount===0?C.red:C.brand}}>{allowAll?"ทุกแท็บ":allowedCount===0?"ไม่เห็นเลย":`${allowedCount}/${ALL_PERMS.length} แท็บ`}</b>
           </div>
+          {/* New-feature warning: branch was set up before some perms existed */}
+          {!allowAll&&allowedCount>0&&allowedCount<ALL_PERMS.length&&(()=>{
+            const missing=ALL_PERMS.filter(p=>!allowed.includes(p.id));
+            return <div style={{marginTop:8,padding:"8px 10px",background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:8,fontSize:11,color:"#92400E",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}} title={"แท็บที่ขาด: "+missing.map(p=>p.label).join(", ")}>
+              ⚠️ มี <b>{missing.length}</b> ฟีเจอร์ที่ยังไม่ได้เปิดสิทธิ์: <b>{missing.slice(0,2).map(p=>p.label).join(", ")}{missing.length>2?` +${missing.length-2}`:""}</b>
+              {isAdmin&&<button onClick={()=>unlockAllPerms(b)} style={{display:"block",marginTop:6,background:C.brand,color:C.white,border:"none",borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>🔓 เปิดสิทธิ์ทุกแท็บให้สาขานี้</button>}
+            </div>;
+          })()}
         </Card>;})}
       </div>
       {isAdmin&&<Card style={{padding:"16px 18px"}}>
