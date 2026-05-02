@@ -4819,18 +4819,23 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onEditLayout}){
     if(o.status==="bill_requested")return "bill";
     return "occupied";
   }
+  // Pointer helpers — get clientX/Y from either mouse or touch event
+  function getPt(e){const t=e.touches?.[0]||e.changedTouches?.[0];return t?{x:t.clientX,y:t.clientY}:{x:e.clientX,y:e.clientY};}
   function onMD(e,t){
     if(!editMode)return;
+    const p=getPt(e);
     const rect=canvasRef.current.getBoundingClientRect();
-    setDragging({id:t.id,ox:e.clientX-rect.left-(t.x||20),oy:e.clientY-rect.top-(t.y||20)});
-    e.preventDefault();
+    setDragging({id:t.id,ox:p.x-rect.left-(t.x||20),oy:p.y-rect.top-(t.y||20)});
+    if(e.preventDefault)e.preventDefault();
   }
   function onMM(e){
     if(!dragging)return;
+    const p=getPt(e);
     const rect=canvasRef.current.getBoundingClientRect();
-    const nx=Math.max(0,Math.round((e.clientX-rect.left-dragging.ox)/10)*10);
-    const ny=Math.max(0,Math.round((e.clientY-rect.top-dragging.oy)/10)*10);
+    const nx=Math.max(0,Math.round((p.x-rect.left-dragging.ox)/10)*10);
+    const ny=Math.max(0,Math.round((p.y-rect.top-dragging.oy)/10)*10);
     setLocalTables(ts=>ts.map(t=>t.id===dragging.id?{...t,x:nx,y:ny}:t));
+    if(e.cancelable&&e.preventDefault)e.preventDefault();
   }
   async function saveLayout(){
     setSaving(true);
@@ -4858,8 +4863,8 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onEditLayout}){
         :<Btn v="ghost" onClick={()=>setEditMode(true)} icon={I.drag} s={{padding:"6px 12px",fontSize:12}}>จัด Layout</Btn>}
       </div>
     </div>
-    <div ref={canvasRef} onMouseMove={onMM} onMouseUp={()=>setDragging(null)} onMouseLeave={()=>setDragging(null)}
-      style={{flex:1,position:"relative",overflow:"auto",background:"#f0f4f8",backgroundImage:"radial-gradient(circle,#c8d0da 1px,transparent 1px)",backgroundSize:"20px 20px",minHeight:400,cursor:editMode?"crosshair":"default"}}>
+    <div ref={canvasRef} onMouseMove={onMM} onMouseUp={()=>setDragging(null)} onMouseLeave={()=>setDragging(null)} onTouchMove={onMM} onTouchEnd={()=>setDragging(null)} onTouchCancel={()=>setDragging(null)}
+      style={{flex:1,position:"relative",overflow:"auto",background:"#f0f4f8",backgroundImage:"radial-gradient(circle,#c8d0da 1px,transparent 1px)",backgroundSize:"20px 20px",minHeight:400,cursor:editMode?"crosshair":"default",touchAction:editMode?"none":"auto",WebkitOverflowScrolling:"touch"}}>
       {filteredTables.map(t=>{
         const st=getStatus(t);const sv=TS[st]||TS.available;
         const o=getTableOrder(t.id);
@@ -4867,11 +4872,11 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onEditLayout}){
         const dims=tableDims(t);
         const zoneColor=t.zone?zoneColorMap[t.zone]:null;
         const borderColor=zoneColor||sv.border;
-        return <div key={t.id} onMouseDown={e=>onMD(e,t)} onClick={()=>!editMode&&onSelectTable(t,o)}
+        return <div key={t.id} onMouseDown={e=>onMD(e,t)} onTouchStart={e=>onMD(e,t)} onClick={()=>!editMode&&onSelectTable(t,o)}
           style={{position:"absolute",left:t.x||20,top:t.y||20,width:dims.w,height:dims.h,background:sv.bg,border:`2.5px solid ${borderColor}`,borderRadius:t.shape==="round"?"50%":12,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:editMode?"grab":"pointer",userSelect:"none",boxShadow:st!=="available"?`0 4px 16px ${sv.border}44`:"0 2px 8px rgba(0,0,0,.08)",transition:"box-shadow .2s",zIndex:dragging?.id===t.id?10:1}}>
           {zoneColor&&<div style={{position:"absolute",top:-3,right:-3,width:10,height:10,borderRadius:"50%",background:zoneColor,border:`2px solid ${C.white}`,boxShadow:`0 1px 3px ${zoneColor}88`}}/>}
           <div style={{fontWeight:900,fontSize:16,color:sv.text,fontFamily:"'Sarabun',sans-serif",lineHeight:1}}>T{t.table_number}</div>
-          {t.label&&<div style={{fontSize:9,color:sv.text,fontFamily:"'Sarabun',sans-serif",opacity:.8,marginTop:1}}>{t.label}</div>}
+          {t.label&&<div style={{fontSize:9,color:sv.text,fontFamily:"'Sarabun',sans-serif",opacity:.8,marginTop:1,maxWidth:"90%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.label}</div>}
           {st==="available"?<div style={{fontSize:10,color:C.green,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{t.seats||4} ที่นั่ง</div>
           :<><div style={{fontSize:11,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
         </div>;
@@ -5050,6 +5055,8 @@ function POSTableManage({tables,branch,zones=[],reloadZones,onDone}){
 // ── POS ORDER PANEL ───────────────────────────────────
 // ══════════════════════════════════════════════════════
 function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser,onClose,onDone,printers=[],shift=null,posSettings=null,promotions=[]}){
+  const isMobile=useIsMobile();
+  const[mobileView,setMobileView]=useState("menu"); // "menu" | "order"
   const[items,setItems]=useState(existingOrder?.items||[]);
   const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
@@ -5173,9 +5180,18 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // Quick keys: pinned menus
   const quickKeys=useMemo(()=>menus.filter(m=>m.quick_key_pos!=null).sort((a,b)=>(a.quick_key_pos||0)-(b.quick_key_pos||0)),[menus]);
 
-  return <div style={{display:"flex",height:"100%",minHeight:"75vh"}}>
+  const itemTotalQty=items.reduce((s,i)=>s+i.qty,0);
+  return <div style={{display:"flex",flexDirection:isMobile?"column":"row",height:"100%",minHeight:isMobile?"calc(100vh - 60px)":"75vh"}}>
+    {/* Mobile: tab switcher */}
+    {isMobile&&<div style={{display:"flex",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0,position:"sticky",top:0,zIndex:5}}>
+      <button onClick={()=>setMobileView("menu")} style={{flex:1,padding:"12px 10px",border:"none",background:mobileView==="menu"?C.brandLight:C.white,color:mobileView==="menu"?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:13,borderBottom:`3px solid ${mobileView==="menu"?C.brand:"transparent"}`,minHeight:48}}>🍽️ เมนู</button>
+      <button onClick={()=>setMobileView("order")} style={{flex:1,padding:"12px 10px",border:"none",background:mobileView==="order"?C.brandLight:C.white,color:mobileView==="order"?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:13,borderBottom:`3px solid ${mobileView==="order"?C.brand:"transparent"}`,minHeight:48,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+        🧾 ออเดอร์
+        {items.length>0&&<span style={{background:C.brand,color:C.white,fontSize:11,fontWeight:900,minWidth:22,height:22,padding:"0 7px",borderRadius:11,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{itemTotalQty}</span>}
+      </button>
+    </div>}
     {/* Left: menu */}
-    <div style={{flex:1,display:"flex",flexDirection:"column",borderRight:`1px solid ${C.line}`,minWidth:0}}>
+    <div style={{flex:1,display:isMobile&&mobileView!=="menu"?"none":"flex",flexDirection:"column",borderRight:isMobile?"none":`1px solid ${C.line}`,minWidth:0,minHeight:0}}>
       {quickKeys.length>0&&<div style={{padding:"7px 10px",background:`linear-gradient(135deg,${C.yellowLight},${C.brandLight})`,borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0,alignItems:"center"}}>
         <span style={{fontSize:11,fontWeight:800,color:"#92400E",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",marginRight:4}}>⭐ ยอดนิยม</span>
         {quickKeys.map(m=><button key={m.id} onClick={()=>addItem(m)} title={m.name} style={{padding:"5px 10px",border:`1.5px solid ${C.brand}`,borderRadius:8,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.brand,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:5}}>{m.name} <span style={{color:C.brandDark,fontWeight:900}}>฿{m.price}</span></button>)}
@@ -5196,7 +5212,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     </div>
 
     {/* Right: order panel */}
-    <div style={{width:280,display:"flex",flexDirection:"column",background:C.bg,flexShrink:0}}>
+    <div style={{width:isMobile?"100%":280,display:isMobile&&mobileView!=="order"?"none":"flex",flexDirection:"column",background:C.bg,flexShrink:0,minHeight:0}}>
       {/* Header */}
       <div style={{padding:"10px 12px",borderBottom:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
         <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
@@ -5223,24 +5239,24 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       <div style={{flex:1,overflowY:"auto",padding:8}}>
         {items.length===0
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
-          :items.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:9,padding:"8px 10px",marginBottom:5,border:`1px solid ${C.line}`}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:3}}>
-              <div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}</div>
+          :items.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:9,padding:"10px 12px",marginBottom:6,border:`1px solid ${C.line}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6,gap:6}}>
+              <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>}</div>
               {/* Reprint & void buttons */}
-              <div style={{display:"flex",gap:2,marginLeft:4}}>
-                {existingOrder?.id&&<button onClick={()=>reprintItem(item)} title="พิมพ์ซ้ำรายการนี้ไปครัว" style={{background:C.blueLight,border:"none",borderRadius:5,padding:"3px 5px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={11} c={C.blue}/></button>}
-                <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" style={{background:C.redLight,border:"none",borderRadius:5,padding:"3px 5px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.x} s={11} c={C.red}/></button>
+              <div style={{display:"flex",gap:4,marginLeft:4,flexShrink:0}}>
+                {existingOrder?.id&&<button onClick={()=>reprintItem(item)} title="พิมพ์ซ้ำรายการนี้ไปครัว" aria-label="พิมพ์ซ้ำ" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"7px 9px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",minWidth:32,minHeight:32}}><Ic d={I.print} s={13} c={C.blue}/></button>}
+                <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" aria-label="ลบรายการ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"7px 9px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",minWidth:32,minHeight:32}}><Ic d={I.x} s={13} c={C.red}/></button>
               </div>
             </div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{display:"flex",alignItems:"center",gap:5}}>
-                <button onClick={()=>chQty(idx,-1)} style={{width:22,height:22,borderRadius:6,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={11}/></button>
-                <span style={{fontSize:13,fontWeight:700,minWidth:18,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
-                <button onClick={()=>chQty(idx,1)} style={{width:22,height:22,borderRadius:6,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={11}/></button>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <button onClick={()=>chQty(idx,-1)} aria-label="ลดจำนวน" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={13}/></button>
+                <span style={{fontSize:14,fontWeight:800,minWidth:22,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
+                <button onClick={()=>chQty(idx,1)} aria-label="เพิ่มจำนวน" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={13}/></button>
               </div>
-              <div style={{display:"flex",alignItems:"center",gap:5}}>
-                <button onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{background:C.lineLight,border:"none",borderRadius:5,padding:"2px 6px",cursor:"pointer",fontSize:10,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>หมายเหตุ</button>
-                <span style={{fontSize:12,fontWeight:700,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</span>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <button onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{background:C.lineLight,border:"none",borderRadius:7,padding:"6px 10px",cursor:"pointer",fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600,minHeight:32}}>หมายเหตุ</button>
+                <span style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</span>
               </div>
             </div>
           </div>)
@@ -5261,8 +5277,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     </div>
 
     {/* Note modal */}
-    {noteIdx!==null&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}}>
-      <div style={{background:C.white,borderRadius:14,padding:20,width:300}}>
+    {noteIdx!==null&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
+      <div style={{background:C.white,borderRadius:14,padding:20,width:"100%",maxWidth:"min(94vw,360px)"}}>
         <div style={{fontWeight:700,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>หมายเหตุ: {items[noteIdx]?.name}</div>
         <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="เช่น ไม่เผ็ด, ไม่ใส่ผัก..." style={{...iS,height:70,resize:"none"}}/>
         <div style={{display:"flex",gap:8,marginTop:10}}>
@@ -5829,7 +5845,7 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
         <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:32,height:32,cursor:"pointer",color:C.white,fontSize:18}}>✕</button>
       </div>
       <div style={{padding:"14px 22px",borderBottom:`1px solid ${C.line}`,background:C.bg,flexShrink:0}}>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(140px,45%),1fr))",gap:8}}>
           {[
             {l:"เงินเริ่มต้น+เข้า",v:totals.inCash,c:C.ink2},
             {l:"ขายเงินสด",v:totals.salesCash,c:C.green},
@@ -5841,7 +5857,7 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
           </div>)}
         </div>
       </div>
-      {!action&&<div style={{padding:"14px 22px",borderBottom:`1px solid ${C.line}`,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,flexShrink:0}}>
+      {!action&&<div style={{padding:"14px 22px",borderBottom:`1px solid ${C.line}`,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(120px,100%),1fr))",gap:10,flexShrink:0}}>
         {[
           {a:'in',icon:"⬆️",l:"เงินเข้า",h:"เพิ่มทอน, ใส่เงิน",c:C.green,bg:C.greenLight},
           {a:'out',icon:"⬇️",l:"จ่ายออก",h:"ค่าวัตถุดิบ, ค่าน้ำแข็ง",c:C.red,bg:C.redLight},
