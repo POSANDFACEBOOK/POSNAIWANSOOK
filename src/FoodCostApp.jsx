@@ -1051,6 +1051,21 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
 // ══════════════════════════════════════════════════════
 // ── SOP TAB ───────────────────────────────────────────
 // ══════════════════════════════════════════════════════
+// Compute food cost % (cost / price * 100). Lower is better.
+// Returns null if price<=0 (can't compute meaningful %).
+function foodCostPct(menu,ings){
+  const price=+menu?.price||0;
+  if(price<=0)return null;
+  const cost=menuCost(menu,ings);
+  return Math.round(cost/price*100);
+}
+// Cost % buckets (Thai restaurant industry standard)
+const COST_BUCKETS=[
+  {id:"low",    label:"🟢 ต้นทุนต่ำ",    short:"≤25%",  range:[0,25],    color:"#10B981", bg:"#D1FAE5"},
+  {id:"normal", label:"🟡 ปกติ",         short:"26-35%",range:[26,35],   color:"#F59E0B", bg:"#FEF3C7"},
+  {id:"high",   label:"🟠 สูง",          short:"36-50%",range:[36,50],   color:"#EA580C", bg:"#FFEDD5"},
+  {id:"crit",   label:"🔴 วิกฤต",        short:">50%",  range:[51,9999], color:"#EF4444", bg:"#FEE2E2"},
+];
 function SOPTab({menus,reload,ings,currentUser,currentBranch}){
   const isCentral=currentBranch?.type==="central";
   const visibleMenus=useMemo(()=>menus.filter(m=>{const vb=m.visible_branches||[];return isCentral||vb.length===0||vb.includes(currentBranch?.id);}),[menus,isCentral,currentBranch]);
@@ -1060,7 +1075,34 @@ function SOPTab({menus,reload,ings,currentUser,currentBranch}){
   const[newUnit,setNewUnit]=useState("");
   const[customUnits,setCustomUnits]=useState(()=>{try{return JSON.parse(localStorage.getItem("fc_custom_units")||"[]");}catch{return[];}});
   const allUnits=useMemo(()=>["กรัม","มล.","ชิ้น","ช้อนโต๊ะ","ช้อนชา","ถ้วย","กก.","ลิตร",...customUnits],[customUnits]);
-  const filteredMenus=useMemo(()=>visibleMenus.filter(m=>m.name.toLowerCase().includes(menuQ.toLowerCase())),[visibleMenus,menuQ]);
+  // Filters: SOP presence + (when "has SOP") cost % bucket
+  const[sopStatus,setSopStatus]=useState("all");  // all | has | none
+  const[costBucket,setCostBucket]=useState("all");  // all | low | normal | high | crit
+  // Pre-compute "has SOP" + cost % once per menus list
+  const menuMeta=useMemo(()=>{
+    const m=new Map();
+    visibleMenus.forEach(x=>m.set(x.id,{hasSOP:Array.isArray(x.sop)&&x.sop.length>0,costPct:foodCostPct(x,ings)}));
+    return m;
+  },[visibleMenus,ings]);
+  const counts=useMemo(()=>{
+    const all=visibleMenus.length;
+    const hasArr=visibleMenus.filter(x=>menuMeta.get(x.id)?.hasSOP);
+    const noneArr=visibleMenus.filter(x=>!menuMeta.get(x.id)?.hasSOP);
+    const buckets={};
+    COST_BUCKETS.forEach(b=>{buckets[b.id]=hasArr.filter(x=>{const p=menuMeta.get(x.id)?.costPct;return p!=null&&p>=b.range[0]&&p<=b.range[1];}).length;});
+    return{all,has:hasArr.length,none:noneArr.length,buckets};
+  },[visibleMenus,menuMeta]);
+  const filteredMenus=useMemo(()=>{
+    let out=visibleMenus;
+    if(sopStatus==="has")out=out.filter(m=>menuMeta.get(m.id)?.hasSOP);
+    else if(sopStatus==="none")out=out.filter(m=>!menuMeta.get(m.id)?.hasSOP);
+    if(sopStatus==="has"&&costBucket!=="all"){
+      const b=COST_BUCKETS.find(x=>x.id===costBucket);
+      if(b)out=out.filter(m=>{const p=menuMeta.get(m.id)?.costPct;return p!=null&&p>=b.range[0]&&p<=b.range[1];});
+    }
+    if(menuQ.trim())out=out.filter(m=>m.name.toLowerCase().includes(menuQ.toLowerCase()));
+    return out;
+  },[visibleMenus,menuMeta,sopStatus,costBucket,menuQ]);
   const menu=useMemo(()=>visibleMenus.find(m=>m.id===sel),[visibleMenus,sel]);
   const canE=hasPerm(currentUser,"sop")&&isCentral;
   useEffect(()=>{if(menu){setSop(menu.sop?[...menu.sop.map(s=>({...s}))]:[]); setEditIngs(menu.ingredients?[...menu.ingredients]:[]); setEdit(false);}}, [sel]);
@@ -1157,16 +1199,44 @@ window.addEventListener('load',async()=>{
   }
   return <><div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:16,minHeight:520}}>
     <div style={{background:C.white,borderRadius:16,border:`1px solid ${C.line}`,overflow:"hidden"}}>
-      <div style={{padding:"12px 16px 10px",borderBottom:`1px solid ${C.lineLight}`,background:C.bg}}>
-        <div style={{fontSize:11,fontWeight:800,color:C.ink4,letterSpacing:1.2,textTransform:"uppercase",fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>รายการเมนู</div>
-        <div style={{position:"relative"}}><span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={13} c={C.ink4}/></span><input value={menuQ} onChange={e=>setMenuQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:32,fontSize:13,padding:"7px 10px 7px 32px",width:"100%",boxSizing:"border-box"}}/></div>
+      <div style={{padding:"12px 14px 10px",borderBottom:`1px solid ${C.lineLight}`,background:C.bg}}>
+        <div style={{fontSize:11,fontWeight:800,color:C.ink4,letterSpacing:1.2,textTransform:"uppercase",fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>รายการเมนู ({counts.all})</div>
+        <div style={{position:"relative",marginBottom:8}}><span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={13} c={C.ink4}/></span><input value={menuQ} onChange={e=>setMenuQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:32,fontSize:13,padding:"7px 10px 7px 32px",width:"100%",boxSizing:"border-box"}}/></div>
+        {/* SOP status filter */}
+        <div style={{display:"flex",gap:4,marginBottom:sopStatus==="has"?6:0}}>
+          {[
+            {v:"all",l:`ทั้งหมด (${counts.all})`,c:C.ink2},
+            {v:"has",l:`มี SOP (${counts.has})`,c:C.green},
+            {v:"none",l:`ยังไม่มี (${counts.none})`,c:C.red},
+          ].map(o=>{const sel2=sopStatus===o.v;return <button key={o.v} onClick={()=>{setSopStatus(o.v);if(o.v!=="has")setCostBucket("all");}} style={{flex:1,padding:"5px 4px",borderRadius:7,border:`1.5px solid ${sel2?o.c:C.line}`,background:sel2?`${o.c}15`:C.white,color:sel2?o.c:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:11}}>{o.l}</button>;})}
+        </div>
+        {/* Cost % bucket — only when "มี SOP" */}
+        {sopStatus==="has"&&<div>
+          <div style={{fontSize:9,fontWeight:700,color:C.ink4,letterSpacing:.8,textTransform:"uppercase",fontFamily:"'Sarabun',sans-serif",marginTop:6,marginBottom:4}}>กรอง % ต้นทุน</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+            <button onClick={()=>setCostBucket("all")} style={{padding:"3px 8px",borderRadius:6,border:`1px solid ${costBucket==="all"?C.brand:C.line}`,background:costBucket==="all"?C.brandLight:C.white,color:costBucket==="all"?C.brand:C.ink3,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกช่วง</button>
+            {COST_BUCKETS.map(b=>{const sel2=costBucket===b.id;const n=counts.buckets[b.id]||0;return <button key={b.id} onClick={()=>setCostBucket(b.id)} disabled={n===0} title={`${b.label} (${b.short})`} style={{padding:"3px 8px",borderRadius:6,border:`1px solid ${sel2?b.color:C.line}`,background:sel2?b.bg:C.white,color:sel2?b.color:(n===0?C.ink4:C.ink2),cursor:n===0?"not-allowed":"pointer",fontSize:10,fontWeight:700,fontFamily:"'Sarabun',sans-serif",opacity:n===0?.5:1}}>{b.short} ({n})</button>;})}
+          </div>
+        </div>}
       </div>
       <div style={{padding:8,overflowY:"auto",maxHeight:520}}>
-        {filteredMenus.length===0&&<div style={{padding:"20px 12px",textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>}
-        {filteredMenus.map(m=>{const cost=menuCost(m,ings);const mg=m.price>0?((m.price-cost)/m.price*100):0;const active=sel===m.id;return <div key={m.id} onClick={()=>setSel(m.id)} style={{padding:"10px 12px",borderRadius:10,cursor:"pointer",marginBottom:4,background:active?C.brandLight:"transparent",border:`1px solid ${active?C.brandBorder:"transparent"}`,transition:"all .15s"}}>
-          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:active?800:500,color:active?C.brand:C.ink2,marginBottom:2}}>{m.name}</div>
-          <div style={{display:"flex",gap:6}}><span style={{fontSize:11,color:marginColor(mg),fontWeight:700}}>กำไร {mg.toFixed(0)}%</span><span style={{fontSize:11,color:C.ink4}}>· {(m.sop||[]).length} ขั้นตอน</span></div>
-        </div>;})}
+        {filteredMenus.length===0&&<div style={{padding:"20px 12px",textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนูในเงื่อนไขนี้</div>}
+        {filteredMenus.map(m=>{
+          const meta=menuMeta.get(m.id);const cost=menuCost(m,ings);const mg=m.price>0?((m.price-cost)/m.price*100):0;
+          const cp=meta?.costPct;
+          const cb=cp!=null?COST_BUCKETS.find(b=>cp>=b.range[0]&&cp<=b.range[1]):null;
+          const active=sel===m.id;
+          return <div key={m.id} onClick={()=>setSel(m.id)} style={{padding:"10px 12px",borderRadius:10,cursor:"pointer",marginBottom:4,background:active?C.brandLight:"transparent",border:`1px solid ${active?C.brandBorder:"transparent"}`,transition:"all .15s"}}>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:active?800:500,color:active?C.brand:C.ink2,marginBottom:3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.name}</div>
+            <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+              {meta?.hasSOP
+                ?<span style={{fontSize:10,fontWeight:700,color:C.green,background:C.greenLight,padding:"1px 6px",borderRadius:6}}>✓ SOP {(m.sop||[]).length}</span>
+                :<span style={{fontSize:10,fontWeight:700,color:C.red,background:C.redLight,padding:"1px 6px",borderRadius:6}}>ยังไม่มี SOP</span>}
+              {cp!=null&&cb&&<span title={`ต้นทุน ${cp}% · ${cb.label}`} style={{fontSize:10,fontWeight:700,color:cb.color,background:cb.bg,padding:"1px 6px",borderRadius:6}}>ต้นทุน {cp}%</span>}
+              <span style={{fontSize:10,color:marginColor(mg),fontWeight:700}}>กำไร {mg.toFixed(0)}%</span>
+            </div>
+          </div>;
+        })}
       </div>
     </div>
     <Card style={{padding:"20px 24px",overflow:"auto"}}>
