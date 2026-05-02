@@ -312,7 +312,20 @@ function asArr(x){
   if(typeof x==="string"){try{const p=JSON.parse(x);return Array.isArray(p)?p:[];}catch{return [];}}
   return null;  // null/undefined preserved as sentinel
 }
-function getUserPerms(user){const a=asArr(user?.perms);return(a&&a.length>0)?a:(ROLE_DEFAULT_PERMS[user?.role]||[]);}
+// Normalize a perms array: dedupe + only keep ids that exist in ALL_PERMS today.
+// Cleans legacy/duplicate/renamed entries so we never see counts like "17/12".
+function normalizePerms(input){
+  const arr=asArr(input)||[];
+  const valid=new Set(ALL_PERMS.map(p=>p.id));
+  return [...new Set(arr.filter(p=>typeof p==="string"&&valid.has(p)))];
+}
+// Same idea for allowed_branches: dedupe + only keep numeric ids
+function normalizeBranchIds(input){
+  const arr=asArr(input);
+  if(arr==null)return null;  // sentinel preserved (null = unrestricted)
+  return [...new Set(arr.map(x=>+x).filter(x=>Number.isFinite(x)&&x>0))];
+}
+function getUserPerms(user){const a=normalizePerms(user?.perms);return(a&&a.length>0)?a:(ROLE_DEFAULT_PERMS[user?.role]||[]);}
 function hasPerm(user,perm){
   if(!user)return false;
   if(user.role==="admin")return true;
@@ -3049,7 +3062,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     });
   }
   const bF0={name:"",type:"branch",active:true};
-  const[branchForm,setBranchForm]=useState(bF0);const[editBID,setEditBID]=useState(null);
+  const[branchForm,setBranchForm]=useState(bF0);const[editBID,setEditBID]=useState(null);const[showBranch,setShowBranch]=useState(false);
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
   const[testResults,setTestResults]=useState({});const[btScanning,setBtScanning]=useState(false);
@@ -3098,7 +3111,17 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     setBtScanning(false);
   }
 
-  async function saveUser(){if(!uF.username||!uF.password)return;setSaving(true);try{if(editUID)await api.updateUser(editUID,uF);else await api.addUser(uF);await reloadUsers();setShowUser(false);setEditUID(null);setUF(uF0);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function saveUser(){
+    if(!uF.username||!uF.password)return;
+    setSaving(true);
+    try{
+      // Normalize perms + allowed_branches on every save so DB stays clean
+      const payload={...uF,perms:normalizePerms(uF.perms),allowed_branches:normalizeBranchIds(uF.allowed_branches)};
+      if(editUID)await api.updateUser(editUID,payload);else await api.addUser(payload);
+      await reloadUsers();setShowUser(false);setEditUID(null);setUF(uF0);
+    }catch(e){showErr("บันทึกไม่สำเร็จ",e);}
+    setSaving(false);
+  }
   async function saveBranch(){
     if(!branchForm.name)return;
     try{
@@ -3130,17 +3153,22 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     </Card>
     <div>
     {section==="branches"&&<div>
-      <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:14}}>จัดการสาขา</h3>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,marginBottom:16}}>
-        {branches.map(b=><Card key={b.id} style={{padding:"14px 16px"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-            <div>
-              <div style={{fontWeight:700,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:5}}>{b.name}</div>
-              <Chip color={b.type==="central"?"teal":"orange"}>{b.type==="central"?"ครัวกลาง":"สาขา"}</Chip>
-              <Chip color={b.active?"green":"gray"} style={{marginLeft:4}}>{b.active?"เปิด":"ปิด"}</Chip>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,margin:0}}>จัดการสาขา <span style={{fontSize:13,fontWeight:500,color:C.ink4}}>({branches.length})</span></h3>
+        {isAdmin&&<Btn onClick={()=>{setBranchForm(bF0);setEditBID(null);setShowBranch(true);}} icon={I.plus}>เพิ่มสาขา</Btn>}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:10}}>
+        {branches.map(b=><Card key={b.id} style={{padding:"12px 14px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+            <div style={{minWidth:0,flex:1}}>
+              <div style={{fontWeight:800,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.name}</div>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                <Chip color={b.type==="central"?"teal":"orange"}>{b.type==="central"?"ครัวกลาง":"สาขา"}</Chip>
+                <Chip color={b.active?"green":"gray"}>{b.active?"เปิด":"ปิด"}</Chip>
+              </div>
             </div>
-            {isAdmin&&<div style={{display:"flex",gap:4}}>
-              <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active});setEditBID(b.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+            {isAdmin&&<div style={{display:"flex",gap:3,flexShrink:0}}>
+              <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active});setEditBID(b.id);setShowBranch(true);}} title="แก้ไข" style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
               {b.type!=="central"&&<button onClick={async()=>{
                 if(!await confirmDlg({title:b.active?"ปิดใช้งานสาขา":"เปิดใช้งานสาขา",message:b.active?`ปิดใช้งาน "${b.name}"?\n\nสาขาจะไม่ปรากฏใน picker, การสแกน QR ของสาขานี้จะถูกปฏิเสธ\n(ข้อมูลทั้งหมดจะยังอยู่ — ไม่ลบจริง)`:`เปิดใช้งาน "${b.name}" อีกครั้ง?`,danger:b.active,confirmLabel:b.active?"ปิดใช้งาน":"เปิดใช้งาน"}))return;
                 try{await api.updateBranch(b.id,{active:!b.active});await reloadBranches();}
@@ -3150,22 +3178,23 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
           </div>
         </Card>)}
       </div>
-      {isAdmin&&<Card style={{padding:"16px 18px"}}>
-        <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>{editBID?"แก้ไขสาขา":"เพิ่มสาขาใหม่"}</h4>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:8}}>
-          <Inp label="ชื่อสาขา" value={branchForm.name} onChange={e=>setBranchForm(f=>({...f,name:e.target.value}))} placeholder="ชื่อสาขา"/>
-          <Field label="ประเภท"><select value={branchForm.type} onChange={e=>setBranchForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="branch">สาขา</option><option value="central">ครัวกลาง</option></select></Field>
-          <Field label="สถานะ"><select value={branchForm.active?"true":"false"} onChange={e=>setBranchForm(f=>({...f,active:e.target.value==="true"}))} style={{...iS,appearance:"none"}}><option value="true">เปิดใช้งาน</option><option value="false">ปิดใช้งาน</option></select></Field>
-        </div>
-        <div style={{padding:"10px 14px",background:C.blueLight,borderRadius:10,border:`1px solid #BFDBFE`,marginBottom:14,fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
-          ℹ️ การกำหนดสิทธิ์เมนูทำที่หัวข้อ <b>"ผู้ใช้"</b> เท่านั้น (รายผู้ใช้)
-        </div>
-        <div style={{display:"flex",gap:8}}>
-          <Btn onClick={saveBranch} icon={I.check} disabled={!branchForm.name}>{editBID?"บันทึก":"เพิ่มสาขา"}</Btn>
-          {editBID&&<Btn v="ghost" onClick={()=>{setBranchForm(bF0);setEditBID(null);}}>ยกเลิก</Btn>}
-        </div>
-      </Card>}
     </div>}
+
+    {/* Branch add/edit modal */}
+    {showBranch&&<Modal title={editBID?"✏️ แก้ไขสาขา":"➕ เพิ่มสาขาใหม่"} onClose={()=>{setShowBranch(false);setBranchForm(bF0);setEditBID(null);}}>
+      <Inp label="ชื่อสาขา *" value={branchForm.name} onChange={e=>setBranchForm(f=>({...f,name:e.target.value}))} placeholder="เช่น คลองสาม, สีลม, ครัวกลาง" autoFocus/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Field label="ประเภท"><select value={branchForm.type} onChange={e=>setBranchForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="branch">🏢 สาขา</option><option value="central">🏛 ครัวกลาง</option></select></Field>
+        <Field label="สถานะ"><select value={branchForm.active?"true":"false"} onChange={e=>setBranchForm(f=>({...f,active:e.target.value==="true"}))} style={{...iS,appearance:"none"}}><option value="true">✅ เปิดใช้งาน</option><option value="false">⏸ ปิดใช้งาน</option></select></Field>
+      </div>
+      <div style={{padding:"10px 14px",background:C.blueLight,borderRadius:10,border:`1px solid #BFDBFE`,marginTop:6,marginBottom:14,fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
+        ℹ️ การกำหนดสิทธิ์เมนูทำที่หัวข้อ <b>"ผู้ใช้"</b> เท่านั้น (รายผู้ใช้)
+      </div>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:10,borderTop:`1px solid ${C.line}`}}>
+        <Btn v="ghost" onClick={()=>{setShowBranch(false);setBranchForm(bF0);setEditBID(null);}}>ยกเลิก</Btn>
+        <Btn onClick={async()=>{await saveBranch();setShowBranch(false);}} icon={I.check} disabled={!branchForm.name}>{editBID?"บันทึก":"เพิ่มสาขา"}</Btn>
+      </div>
+    </Modal>}
 
     {section==="users"&&<div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -3176,18 +3205,23 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
           <thead><tr style={{background:C.bg}}>{["ผู้ใช้","ชื่อ","บทบาท","สิทธิ์","สาขา","สถานะ",""].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
           <tbody>{users.map(u=>{
-            const perms=getUserPerms(u);
-            const ab=asArr(u.allowed_branches);
+            const perms=normalizePerms(u.perms);  // raw perms (post-cleanup); 0 = use role default
+            const effective=perms.length>0?perms:(ROLE_DEFAULT_PERMS[u.role]||[]);
+            const ab=normalizeBranchIds(u.allowed_branches);
             const branchSummary=u.role==="admin"?"ทุกสาขา (admin)":(ab==null?"ทุกสาขา":(ab.length===0?"ไม่มี ⚠️":`${ab.length}/${branches.length} สาขา`));
+            const isStale=asArr(u.perms)&&asArr(u.perms).length!==perms.length;
             return <tr key={u.id} style={{borderTop:`1px solid ${C.lineLight}`}}>
             <td style={{padding:"11px 14px"}}><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:30,height:30,borderRadius:"50%",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.user} s={14} c={C.white}/></div><span style={{fontWeight:700,color:C.ink,fontSize:13}}>{u.username}</span></div></td>
             <td style={{padding:"11px 14px",color:C.ink2,fontSize:13}}>{u.name}</td>
             <td style={{padding:"11px 14px"}}><Chip color={ROLES[u.role]?.color||"gray"}>{ROLES[u.role]?.label||u.role}</Chip></td>
-            <td style={{padding:"11px 14px"}} title={perms.length>0?perms.join(", "):"(ไม่มี — จะใช้สิทธิ์ default ของ role)"}><span style={{fontSize:12,color:perms.length===0?C.red:C.ink3,fontWeight:perms.length===0?700:400}}>{perms.length===0?"⚠️ ว่าง":`${perms.length}/${ALL_PERMS.length} แท็บ`}</span></td>
+            <td style={{padding:"11px 14px"}} title={perms.length>0?perms.join(", "):"(ไม่มี — จะใช้สิทธิ์ default ของ role)"}>
+              <span style={{fontSize:12,color:perms.length===0?C.red:C.ink3,fontWeight:perms.length===0?700:400}}>{perms.length===0?"⚠️ ว่าง":`${perms.length}/${ALL_PERMS.length} แท็บ`}</span>
+              {isStale&&<div style={{fontSize:10,color:"#92400E",fontFamily:"'Sarabun',sans-serif",marginTop:2}} title="DB มีรายการที่ไม่มีอยู่หรือซ้ำ — กดแก้ไข + บันทึกเพื่อ clean">⚠ ข้อมูลเก่า กดแก้ไขเพื่อ clean</div>}
+            </td>
             <td style={{padding:"11px 14px"}} title={ab&&ab.length>0?ab.map(id=>branches.find(b=>+b.id===+id)?.name||id).join(", "):""}><span style={{fontSize:12,color:(ab&&ab.length===0)?C.red:C.ink3,fontWeight:(ab&&ab.length===0)?700:400}}>{branchSummary}</span></td>
             <td style={{padding:"11px 14px"}}><Chip color={u.active?"green":"gray"}>{u.active?"ใช้งาน":"ปิด"}</Chip></td>
             <td style={{padding:"11px 14px"}}>{isAdmin&&<div style={{display:"flex",gap:5}}>
-              <button onClick={()=>{setUF({username:u.username,password:u.password,name:u.name,role:u.role,active:u.active,perms:asArr(u.perms)||[],allowed_branches:asArr(u.allowed_branches)});setEditUID(u.id);setShowUser(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+              <button onClick={()=>{setUF({username:u.username,password:u.password,name:u.name,role:u.role,active:u.active,perms:normalizePerms(u.perms),allowed_branches:normalizeBranchIds(u.allowed_branches)});setEditUID(u.id);setShowUser(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
               {u.id!==currentUser.id&&<button onClick={async()=>{if(!await confirmDlg({title:"ลบผู้ใช้",message:`ต้องการลบผู้ใช้ "${u.name||u.username}" ใช่หรือไม่?`}))return;try{await api.deleteUser(u.id);await reloadUsers();}catch(e){alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
             </div>}</td>
           </tr>;})}
@@ -4152,17 +4186,17 @@ export default function App(){
         const rows=await api.getMyUserStatus(cu.id);
         const u=Array.isArray(rows)?rows[0]:null;
         if(!u||!u.active){alert("บัญชีของคุณถูกปิดการใช้งาน — ระบบจะออกจากระบบ");setCurrentUser(null);setCurrentBranch(null);return;}
-        const newPerms=asArr(u.perms);
-        const newAllowed=asArr(u.allowed_branches);
+        const newPerms=normalizePerms(u.perms);
+        const newAllowed=normalizeBranchIds(u.allowed_branches);
         // Live revoke: if admin removed access to current branch, kick to selector
-        if(cb&&u.role!=="admin"&&newAllowed&&!newAllowed.map(x=>+x).includes(+cb.id)){
+        if(cb&&u.role!=="admin"&&newAllowed&&!newAllowed.includes(+cb.id)){
           alert("สิทธิ์เข้าสาขานี้ถูกถอนแล้ว — กลับไปเลือกสาขาใหม่");
           setCurrentBranch(null);
         }
         // Sync role/perms/allowed_branches if changed (compare normalized forms)
-        const oldPerms=asArr(cu.perms);const oldAllowed=asArr(cu.allowed_branches);
-        if(u.role!==cu.role||JSON.stringify(newPerms||[])!==JSON.stringify(oldPerms||[])||JSON.stringify(newAllowed)!==JSON.stringify(oldAllowed)){
-          setCurrentUser(prev=>prev?{...prev,role:u.role,perms:newPerms||[],name:u.name,allowed_branches:newAllowed}:prev);
+        const oldPerms=normalizePerms(cu.perms);const oldAllowed=normalizeBranchIds(cu.allowed_branches);
+        if(u.role!==cu.role||JSON.stringify(newPerms)!==JSON.stringify(oldPerms)||JSON.stringify(newAllowed)!==JSON.stringify(oldAllowed)){
+          setCurrentUser(prev=>prev?{...prev,role:u.role,perms:newPerms,name:u.name,allowed_branches:newAllowed}:prev);
         }
         // Refresh branches too — admin may have flipped allowed_perms / active on the current branch
         if(cb){
