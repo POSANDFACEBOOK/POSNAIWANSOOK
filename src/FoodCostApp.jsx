@@ -1703,43 +1703,6 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
     }catch(e){showErr("สร้างเมนูไม่สำเร็จ",e);}
     setCreating(null);
   }
-  async function autoCreateAllUnmatched(){
-    if(unmatchedMenus.length===0)return;
-    if(!await confirmDlg({title:"สร้างเมนูทั้งหมดที่ยังไม่จับคู่",message:`สร้าง ${unmatchedMenus.length} เมนูใหม่ในระบบ?\n\nระบบจะใส่ชื่อ + หมวด + ราคาเฉลี่ยจาก FoodStory ให้\nวัตถุดิบจะว่าง — ต้องเข้าไปใส่เองที่แท็บ "เมนู" เพื่อให้คำนวณต้นทุนได้`,confirmLabel:`🪄 สร้างทั้งหมด ${unmatchedMenus.length} เมนู`}))return;
-    setCreating("__bulk__");
-    try{
-      // Create all needed categories first (de-duped)
-      const cats=new Set();
-      unmatchedMenus.forEach(n=>{const d=unmatchedDetail.get(n);if(d?.category)cats.add(d.category);});
-      const existing=await api.getCats();
-      const have=new Set(existing.filter(c=>c.type==="menu").map(c=>c.name));
-      for(const c of cats){if(!have.has(c)){try{await api.addCat({name:c,type:"menu"});}catch{}}}
-      let success=0,failed=0;
-      for(const name of unmatchedMenus){
-        const d=unmatchedDetail.get(name);
-        if(!d)continue;
-        try{
-          await api.addMenu({
-            name:d.menu_name,
-            category:d.category,
-            price:d.price||0,
-            description:"นำเข้าจาก FoodStory",
-            image:null,
-            ingredients:[],
-            sop:[],
-            edit_by:currentUser?.username||null,
-            edit_at:nowStr(),
-            branch_id:currentBranch?.id||null,
-          });
-          success++;
-        }catch(e){console.error("create",name,e);failed++;}
-      }
-      if(reloadMenus)await reloadMenus();
-      if(reloadCats)await reloadCats();
-      alert(`✅ สร้างสำเร็จ ${success} เมนู${failed>0?` (พลาด ${failed})`:""}\n\n💡 ไปที่แท็บ "เมนู" เพื่อใส่วัตถุดิบให้แต่ละเมนู ระบบจะคำนวณต้นทุน + กำไรให้อัตโนมัติ`);
-    }catch(e){showErr("สร้างเมนูไม่สำเร็จ",e);}
-    setCreating(null);
-  }
 
   function exportXlsx(){
     if(rows.length===0){alert("ไม่มีข้อมูลให้ export");return;}
@@ -1844,22 +1807,9 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
       </Card>)}
     </div>}
 
-    {/* Unmatched menus — with auto-create buttons */}
-    {unmatchedMenus.length>0&&<div style={{background:"#FEF3C7",border:`1.5px solid #FDE68A`,borderRadius:12,padding:"14px 16px",marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
-        <div>
-          <div style={{fontSize:13,fontWeight:800,color:"#92400E",marginBottom:2}}>⚠️ พบ {unmatchedMenus.length} เมนูใน FoodStory ที่ยังไม่ได้สร้างในระบบ</div>
-          <div style={{fontSize:11,color:"#7C2D12"}}>คำนวณต้นทุนไม่ได้จนกว่าจะมีในระบบ — กดปุ่ม "+ สร้าง" รายเมนู หรือสร้างทั้งหมดทีเดียว</div>
-        </div>
-        {canCreateMenu&&<Btn v="success" onClick={autoCreateAllUnmatched} loading={creating==="__bulk__"} disabled={!!creating} s={{padding:"8px 16px",fontSize:13,fontWeight:800}}>🪄 สร้างทั้งหมด ({unmatchedMenus.length})</Btn>}
-      </div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-        {unmatchedMenus.map(name=>{const d=unmatchedDetail.get(name);const busy=creating===name||creating==="__bulk__";return <div key={name} style={{display:"inline-flex",alignItems:"center",gap:6,background:C.white,border:`1px solid #FDE68A`,borderRadius:8,padding:"4px 4px 4px 10px",fontSize:11}}>
-          <span style={{color:"#92400E",fontWeight:700,whiteSpace:"nowrap"}}>{name}</span>
-          {d&&<span style={{color:"#7C2D12",fontSize:10}}>· ฿{(d.price||0).toFixed(0)} · {d.category}</span>}
-          {canCreateMenu&&<button onClick={()=>autoCreateMenu(name)} disabled={busy} title="สร้างเมนูนี้ในระบบ" style={{background:busy?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:6,padding:"3px 9px",cursor:busy?"not-allowed":"pointer",fontSize:10,fontWeight:800,color:busy?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif"}}>{creating===name?"⏳":"สร้างเมนูนี้"}</button>}
-        </div>;})}
-      </div>
+    {/* Unmatched menus — compact note (per-row buttons live inside the table) */}
+    {unmatchedMenus.length>0&&<div style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:12,color:"#92400E",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
+      <b>⚠️ พบ {unmatchedMenus.length} เมนูใน FoodStory ที่ยังไม่ได้สร้างในระบบ</b> — คำนวณต้นทุนไม่ได้จนกว่าจะมีในระบบ ใช้ปุ่ม <b>"+ สร้างเมนูนี้"</b> ที่ท้ายชื่อเมนูในตารางด้านล่างเพื่อเพิ่มทีละเมนู (กรุณาเช็คความถูกต้องก่อนกด)
     </div>}
 
     {/* Toggle view + cost columns */}
@@ -1894,8 +1844,13 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
           <tbody>
             {pivot.map((p,idx)=><tr key={p.menu_name} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC"}}>
               <td style={{padding:"9px 12px",fontSize:13,fontWeight:700,color:C.ink,position:"sticky",left:0,background:idx%2===0?C.white:"#FAFBFC",zIndex:1}}>
-                {p.menu_name}
-                {!p.matched&&<span title="เมนูนี้ยังไม่อยู่ในระบบ — คำนวณต้นทุนไม่ได้" style={{marginLeft:6,fontSize:10,background:"#FEF3C7",color:"#92400E",padding:"1px 6px",borderRadius:8,fontWeight:700}}>⚠ ยังไม่จับคู่</span>}
+                <span style={{display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <span>{p.menu_name}</span>
+                  {!p.matched&&<>
+                    <span title="เมนูนี้ยังไม่อยู่ในระบบ — คำนวณต้นทุนไม่ได้" style={{fontSize:10,background:"#FEF3C7",color:"#92400E",padding:"1px 6px",borderRadius:8,fontWeight:700}}>⚠ ยังไม่จับคู่</span>
+                    {canCreateMenu&&<button onClick={()=>autoCreateMenu(p.menu_name)} disabled={!!creating} title="สร้างเมนูนี้ในระบบ" style={{background:creating===p.menu_name?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:6,padding:"2px 9px",cursor:creating?"not-allowed":"pointer",fontSize:10,fontWeight:800,color:creating===p.menu_name?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{creating===p.menu_name?"⏳":"+ สร้างเมนูนี้"}</button>}
+                  </>}
+                </span>
               </td>
               <td style={{padding:"9px 12px",fontSize:11,color:C.ink3}}>{p.category||"—"}</td>
               {dates.map(d=>{const v=p.cells.get(d)||0;return <td key={d} style={{padding:"9px 10px",textAlign:"center",fontSize:13,fontWeight:v>0?700:400,color:v>0?C.ink:C.ink4}}>{v||"·"}</td>;})}
@@ -1936,8 +1891,13 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
                 <td style={{padding:"8px 12px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{r.sale_date}</td>
                 <td style={{padding:"8px 12px",fontSize:12,color:C.ink3}}>{branches.find(b=>+b.id===+r.branch_id)?.name||"—"}</td>
                 <td style={{padding:"8px 12px",fontSize:13,fontWeight:600,color:C.ink}}>
-                  {r.menu_name}
-                  {!matched&&<span style={{marginLeft:6,fontSize:9,background:"#FEF3C7",color:"#92400E",padding:"1px 5px",borderRadius:6,fontWeight:700}}>⚠</span>}
+                  <span style={{display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                    <span>{r.menu_name}</span>
+                    {!matched&&<>
+                      <span title="ยังไม่จับคู่กับเมนูในระบบ" style={{fontSize:10,background:"#FEF3C7",color:"#92400E",padding:"1px 6px",borderRadius:8,fontWeight:700}}>⚠ ยังไม่จับคู่</span>
+                      {canCreateMenu&&<button onClick={()=>autoCreateMenu(r.menu_name)} disabled={!!creating} title="สร้างเมนูนี้ในระบบ" style={{background:creating===r.menu_name?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:6,padding:"2px 8px",cursor:creating?"not-allowed":"pointer",fontSize:10,fontWeight:800,color:creating===r.menu_name?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{creating===r.menu_name?"⏳":"+ สร้างเมนูนี้"}</button>}
+                    </>}
+                  </span>
                 </td>
                 <td style={{padding:"8px 12px",fontSize:11,color:C.ink3}}>{r.category||"—"}</td>
                 <td style={{padding:"8px 12px",textAlign:"right",fontSize:13,fontWeight:700,color:C.brand}}>{r.qty}</td>
