@@ -164,6 +164,22 @@ const api = {
   addPromotion: (d) => sb("promotions", {method:"POST", body:JSON.stringify(d)}),
   updatePromotion: (id,d) => sb(`promotions?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deletePromotion: (id) => sb(`promotions?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  // Cost Snapshots — saved daily summaries (rolled up from external_sales)
+  getCostSnapshots: (filters={}) => {
+    const q=["order=snapshot_date.desc,id.desc","limit=2000"];
+    if(filters.branchId)q.push(`branch_id=eq.${+filters.branchId}`);
+    if(filters.dateFrom)q.push(`snapshot_date=gte.${filters.dateFrom}`);
+    if(filters.dateTo)q.push(`snapshot_date=lte.${filters.dateTo}`);
+    return sb(`cost_snapshots?${q.join("&")}`);
+  },
+  upsertCostSnapshot: async (d) => {
+    const existing=await sb(`cost_snapshots?branch_id=eq.${+d.branch_id}&snapshot_date=eq.${d.snapshot_date}&source=eq.${encodeURIComponent(d.source||'foodstory')}&select=id`);
+    if(Array.isArray(existing)&&existing.length>0){
+      return sb(`cost_snapshots?id=eq.${existing[0].id}`, {method:"PATCH", body:JSON.stringify({...d,updated_at:new Date().toISOString()})});
+    }
+    return sb("cost_snapshots", {method:"POST", body:JSON.stringify(d)});
+  },
+  deleteCostSnapshot: (id) => sb(`cost_snapshots?id=eq.${+id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   // External Sales (FoodStory imports)
   getExternalSales: (filters={}) => {
     const q=["order=sale_date.desc,menu_name.asc","limit=5000"];
@@ -1647,6 +1663,62 @@ function FSImportModal({branches,currentUser,onClose,onDone}){
   </Modal>;
 }
 
+// Build a cost snapshot from current external_sales for (branchId, date) using current menus/ings.
+// Returns the saved row (PostgREST representation). Throws on error.
+async function generateCostSnapshot({branchId,date,menus,ings,currentUser}){
+  const data=await api.getExternalSales({branchId,dateFrom:date,dateTo:date});
+  const rows=(data||[]).filter(r=>+r.branch_id===+branchId&&r.sale_date===date);
+  // Build a normalized name lookup
+  const norm=(s)=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+  const byName=new Map();
+  menus.forEach(m=>{const k=norm(m.name);if(k&&!byName.has(k))byName.set(k,m);});
+  const items=rows.map(r=>{
+    const m=byName.get(norm(r.menu_name));
+    const cu=m?round2(menuCost(m,ings)):0;
+    const qty=+r.qty||0;
+    const cost=round2(cu*qty);
+    const revenue=round2(+r.net_total||0);
+    return{menu_name:r.menu_name,category:r.category||null,qty,revenue,cost,profit:round2(revenue-cost),matched:!!m,price_avg:+r.price_avg||0};
+  });
+  const total_revenue=round2(items.reduce((s,i)=>s+i.revenue,0));
+  const total_cost=round2(items.reduce((s,i)=>s+i.cost,0));
+  const cost_pct=total_revenue>0?round2(total_cost/total_revenue*100):0;
+  const total_qty=round2(items.reduce((s,i)=>s+i.qty,0));
+  return await api.upsertCostSnapshot({
+    branch_id:+branchId,
+    snapshot_date:date,
+    source:"foodstory",
+    total_revenue,total_cost,cost_pct,
+    menu_count:items.length,total_qty,items,
+    created_by:currentUser?.username||null,
+  });
+}
+// Export a single saved snapshot's items as a 1-sheet Excel file
+function exportSnapshotXlsx(snapshot,branchName){
+  const items=Array.isArray(snapshot.items)?snapshot.items:[];
+  const rows=items.map((it,i)=>{
+    const rev=+it.revenue||0,cost=+it.cost||0;
+    return{
+      "ลำดับ":i+1,
+      "เมนู":it.menu_name||"",
+      "หมวด":it.category||"",
+      "จับคู่ระบบ":it.matched?"✅":"❌",
+      "จำนวนที่ขาย":+it.qty||0,
+      "ยอดขาย":rev,
+      "ต้นทุน":cost,
+      "กำไร":+it.profit||round2(rev-cost),
+      "% ต้นทุน":rev>0?round2(cost/rev*100):0,
+    };
+  });
+  // Append summary row
+  rows.push({"ลำดับ":"","เมนู":"รวมทั้งหมด","หมวด":"","จับคู่ระบบ":"","จำนวนที่ขาย":+snapshot.total_qty||0,"ยอดขาย":+snapshot.total_revenue||0,"ต้นทุน":+snapshot.total_cost||0,"กำไร":round2((+snapshot.total_revenue||0)-(+snapshot.total_cost||0)),"% ต้นทุน":+snapshot.cost_pct||0});
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.json_to_sheet(rows);
+  ws["!cols"]=[{wch:6},{wch:30},{wch:18},{wch:9},{wch:12},{wch:14},{wch:14},{wch:14},{wch:10}];
+  XLSX.utils.book_append_sheet(wb,ws,"สรุปต้นทุนรายเมนู");
+  XLSX.writeFile(wb,`CostSnapshot_${snapshot.snapshot_date}_${(branchName||"branch").replace(/\s+/g,"_")}.xlsx`);
+}
+
 function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadMenus,reloadCats}){
   const isCentral=currentBranch?.type==="central";
   const today=todayBkk();
@@ -1751,8 +1823,35 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
     });
     return m;
   },[pivot,filtered]);
-  const[creating,setCreating]=useState(null);  // menu_name | "__bulk__" | null
+  const[creating,setCreating]=useState(null);  // menu_name | null
+  const[savingSnap,setSavingSnap]=useState(null);  // "branchId|date" | null
   const canCreateMenu=hasPerm(currentUser,"menus");
+
+  async function saveBatchSnapshot(branchId,date){
+    const br=branches.find(x=>+x.id===+branchId);
+    // Pre-compute totals to show in the confirm dialog
+    const batchRows=rows.filter(r=>+r.branch_id===+branchId&&r.sale_date===date);
+    let prevRev=0,prevCost=0;
+    batchRows.forEach(r=>{
+      prevRev+=+r.net_total||0;
+      const m=findMenu(r.menu_name);
+      if(m)prevCost+=round2(menuCost(m,ings))*(+r.qty||0);
+    });
+    prevRev=round2(prevRev);prevCost=round2(prevCost);
+    const prevPct=prevRev>0?round2(prevCost/prevRev*100):0;
+    if(!await confirmDlg({
+      title:"💾 บันทึกสรุปต้นทุน",
+      message:`บันทึกสรุปต้นทุนของวันที่ ${date} (สาขา ${br?.name||"-"}) ไปยังแท็บ "สรุปต้นทุน"?\n\nยอดขาย: ฿${prevRev.toLocaleString(undefined,{minimumFractionDigits:2})}\nต้นทุน: ฿${prevCost.toLocaleString(undefined,{minimumFractionDigits:2})} (${prevPct}%)\n\nหากเคยบันทึกไว้แล้ว ระบบจะอัพเดททับของเดิม`,
+      confirmLabel:"บันทึกสรุป",
+    }))return;
+    const key=`${branchId}|${date}`;
+    setSavingSnap(key);
+    try{
+      await generateCostSnapshot({branchId,date,menus,ings,currentUser});
+      alert(`✅ บันทึกสรุปต้นทุนเรียบร้อย\n\nไปดูได้ที่แท็บ "สรุปต้นทุน"`);
+    }catch(e){showErr("บันทึกสรุปไม่สำเร็จ",e);}
+    setSavingSnap(null);
+  }
 
   async function ensureCategory(name){
     if(!name)return;
@@ -1868,8 +1967,9 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
     {batches.length>0&&<div style={{marginBottom:14}}>
       <div style={{fontSize:12,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>📦 รายการที่นำเข้า ({batches.length} ไฟล์):</div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-        {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);return <div key={`${b.branch_id}-${b.sale_date}`} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 10px",fontSize:11,fontFamily:"'Sarabun',sans-serif",color:C.ink2,display:"flex",alignItems:"center",gap:6}}>
+        {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <div key={`${b.branch_id}-${b.sale_date}`} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 10px",fontSize:11,fontFamily:"'Sarabun',sans-serif",color:C.ink2,display:"flex",alignItems:"center",gap:6}}>
           <span><b>{b.sale_date}</b> · {br?.name||"—"} · {b.count} เมนู / {b.qtySum} ครั้ง</span>
+          {canImport&&<button onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title="บันทึกเป็นสรุปต้นทุนของวันนี้ — ไปแสดงในแท็บ 'สรุปต้นทุน'" style={{background:busy?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:5,padding:"3px 9px",cursor:busy?"not-allowed":"pointer",color:busy?C.ink4:C.white,fontSize:10,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>{busy?"⏳":"💾 บันทึกสรุป"}</button>}
           {canImport&&<button onClick={()=>delDate(b.branch_id,b.sale_date)} title="ลบยอดของวันนี้" style={{background:C.redLight,border:"none",borderRadius:5,padding:"2px 6px",cursor:"pointer",color:C.red,fontSize:10,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>×</button>}
         </div>;})}
       </div>
@@ -2700,6 +2800,136 @@ function POFormModal({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}
 // ══════════════════════════════════════════════════════
 // ── SUMMARY TAB ───────────────────────────────────────
 // ══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// ── COST SNAPSHOT SECTION (saved daily summaries) ────
+// ══════════════════════════════════════════════════════
+function CostSummarySection({branches,currentBranch,currentUser,menus,ings}){
+  const isCentral=currentBranch?.type==="central";
+  const today=todayBkk();
+  const ago=(d=>{const t=new Date();t.setDate(t.getDate()-d);return t.toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});})(30);
+  const[snaps,setSnaps]=useState([]);const[loading,setLoading]=useState(false);
+  const[filterBranch,setFilterBranch]=useState(isCentral?"":String(currentBranch?.id||""));
+  const[dateFrom,setDateFrom]=useState(ago);const[dateTo,setDateTo]=useState(today);
+  const[busy,setBusy]=useState(null);  // snapshot id being acted on
+  const canEdit=hasPerm(currentUser,"summary")||hasPerm(currentUser,"fs_sales");
+
+  async function load(){
+    setLoading(true);
+    try{
+      const filters={dateFrom,dateTo};
+      if(filterBranch)filters.branchId=+filterBranch;
+      else if(!isCentral&&currentBranch)filters.branchId=currentBranch.id;
+      setSnaps(await api.getCostSnapshots(filters));
+    }catch(e){showErr("โหลดข้อมูลไม่สำเร็จ",e);}
+    setLoading(false);
+  }
+  useEffect(()=>{load();},[filterBranch,dateFrom,dateTo,currentBranch?.id]);
+
+  async function regenerate(s){
+    if(!await confirmDlg({title:"แก้ไข (คำนวณใหม่)",message:`คำนวณยอด/ต้นทุนใหม่จากข้อมูลขายของวันที่ ${s.snapshot_date} ?\n\nระบบจะใช้ราคาวัตถุดิบและสูตรเมนูปัจจุบัน — ผลลัพธ์จะอัพเดททับสรุปเดิมของวันนี้`,confirmLabel:"คำนวณใหม่"}))return;
+    setBusy(s.id);
+    try{
+      await generateCostSnapshot({branchId:s.branch_id,date:s.snapshot_date,menus,ings,currentUser});
+      await load();
+    }catch(e){showErr("คำนวณใหม่ไม่สำเร็จ",e);}
+    setBusy(null);
+  }
+  async function del(s){
+    if(!await confirmDlg({title:"ลบสรุปต้นทุน",message:`ลบสรุปของวันที่ ${s.snapshot_date}?\n(ข้อมูลขายดิบไม่กระทบ — ลบแค่สรุปนี้เท่านั้น)`,danger:true,confirmLabel:"ลบทิ้ง"}))return;
+    setBusy(s.id);
+    try{await api.deleteCostSnapshot(s.id);await load();}
+    catch(e){showErr("ลบไม่สำเร็จ",e);}
+    setBusy(null);
+  }
+
+  const sumRev=round2(snaps.reduce((s,x)=>s+(+x.total_revenue||0),0));
+  const sumCost=round2(snaps.reduce((s,x)=>s+(+x.total_cost||0),0));
+  const sumPct=sumRev>0?round2(sumCost/sumRev*100):0;
+  const branchById=Object.fromEntries(branches.map(b=>[b.id,b]));
+
+  return <div style={{marginTop:30,paddingTop:24,borderTop:`2px dashed ${C.brandBorder}`}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+      <div>
+        <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,margin:0,display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:22}}>📊</span> สรุปต้นทุนรายวัน (Saved Snapshots)
+        </h3>
+        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,margin:"3px 0 0"}}>บันทึกจากแท็บ "ยอดขายรายเมนูตามระบบ FOODSTORY" — กดปุ่ม 💾 บนแถบ "📦 รายการที่นำเข้า" เพื่อเพิ่มสรุปใหม่</p>
+      </div>
+    </div>
+
+    {/* Filter row */}
+    <Card style={{padding:"12px 16px",marginBottom:14,background:C.bg}}>
+      <div style={{display:"grid",gridTemplateColumns:isCentral?"1.5fr 1fr 1fr auto":"1fr 1fr auto",gap:10,alignItems:"end"}}>
+        {isCentral&&<div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สาขา</div>
+          <select value={filterBranch} onChange={e=>setFilterBranch(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
+            <option value="">— ทุกสาขา —</option>
+            {branches.filter(b=>b.active!==false).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>}
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ตั้งแต่วันที่</div>
+          <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ถึง</div>
+          <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/>
+        </div>
+        <Btn v="ghost" onClick={load} icon={I.refresh} s={{padding:"8px 14px",fontSize:12}}>รีเฟรช</Btn>
+      </div>
+      {snaps.length>0&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.line}`,display:"flex",justifyContent:"space-between",fontSize:12,fontFamily:"'Sarabun',sans-serif",color:C.ink3,flexWrap:"wrap",gap:6}}>
+        <span>📑 พบ <b style={{color:C.ink}}>{snaps.length}</b> สรุป</span>
+        <span>💰 ยอดขายรวม <b style={{color:C.brand,fontSize:14}}>฿{sumRev.toLocaleString(undefined,{minimumFractionDigits:2})}</b></span>
+        <span>📦 ต้นทุนรวม <b style={{color:C.red,fontSize:14}}>฿{sumCost.toLocaleString(undefined,{minimumFractionDigits:2})}</b></span>
+        <span>📊 % เฉลี่ย <b style={{color:sumPct<=30?C.green:sumPct<=40?C.yellow:sumPct<=50?"#EA580C":C.red,fontSize:14}}>{sumPct}%</b></span>
+      </div>}
+    </Card>
+
+    {/* Table */}
+    {loading?<Loading text="โหลดสรุปต้นทุน..."/>:snaps.length===0?<Card style={{padding:"40px 20px",textAlign:"center"}}>
+      <div style={{fontSize:42,marginBottom:6}}>📭</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,color:C.ink3,fontWeight:600}}>ยังไม่มีสรุปต้นทุนในช่วงนี้</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,marginTop:4}}>ไปแท็บ "ยอดขายรายเมนูตามระบบ FOODSTORY" → กด 💾 บันทึกสรุป บน batch ที่ต้องการ</div>
+    </Card>:<Card style={{padding:0,overflow:"hidden"}}>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
+          <thead>
+            <tr style={{background:"#0F172A"}}>
+              {["วันที่","สาขา","ยอดขาย","ต้นทุน","%","จัดการ"].map((h,i)=><th key={h} style={{padding:"11px 14px",textAlign:i>=2&&i<=4?"right":"left",fontSize:12,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap"}}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {snaps.map((s,idx)=>{
+              const br=branchById[s.branch_id];
+              const pct=+s.cost_pct||0;
+              const pctColor=pct<=30?C.green:pct<=40?C.yellow:pct<=50?"#EA580C":C.red;
+              return <tr key={s.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC"}}>
+                <td style={{padding:"11px 14px",fontSize:13,color:C.ink,fontWeight:700,whiteSpace:"nowrap"}}>
+                  {s.snapshot_date}
+                  <div style={{fontSize:10,color:C.ink4,fontWeight:500,marginTop:1}}>{s.menu_count||0} เมนู · {+s.total_qty||0} ครั้ง</div>
+                </td>
+                <td style={{padding:"11px 14px",fontSize:13,color:C.ink,fontWeight:700}}>{br?.name||"—"}</td>
+                <td style={{padding:"11px 14px",fontSize:14,fontWeight:900,color:C.brand,textAlign:"right",whiteSpace:"nowrap"}}>฿{(+s.total_revenue||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td style={{padding:"11px 14px",fontSize:14,fontWeight:800,color:C.red,textAlign:"right",whiteSpace:"nowrap"}}>฿{(+s.total_cost||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td style={{padding:"11px 14px",textAlign:"right",whiteSpace:"nowrap"}}>
+                  <span style={{fontSize:13,fontWeight:800,color:pctColor,background:`${pctColor}22`,padding:"3px 10px",borderRadius:18}}>{pct}%</span>
+                </td>
+                <td style={{padding:"8px 12px",textAlign:"center",whiteSpace:"nowrap"}}>
+                  <div style={{display:"inline-flex",gap:4}}>
+                    <button onClick={()=>exportSnapshotXlsx(s,br?.name)} title="พิมพ์เป็น Excel" style={{background:C.greenLight,border:`1px solid #86EFAC`,borderRadius:7,padding:"5px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontSize:11,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>📊 Excel</button>
+                    {canEdit&&<button onClick={()=>regenerate(s)} disabled={busy===s.id} title="คำนวณใหม่จากข้อมูลขายปัจจุบัน" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:busy===s.id?"not-allowed":"pointer",display:"flex",alignItems:"center",opacity:busy===s.id?.6:1}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
+                    {canEdit&&<button onClick={()=>del(s)} disabled={busy===s.id} title="ลบสรุปนี้" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 8px",cursor:busy===s.id?"not-allowed":"pointer",display:"flex",alignItems:"center",opacity:busy===s.id?.6:1}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+                  </div>
+                </td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>}
+  </div>;
+}
+
 function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser,branches=[],suppliers=[]}){
   const[dateFrom,setDateFrom]=useState(todayStr);const[dateTo,setDateTo]=useState(todayStr);
   const[q,setQ]=useState("");const[selected,setSelected]=useState({});
@@ -2871,6 +3101,7 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
       </Card>
     </>}
     {selectedItems.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.search} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ค้นหาและเพิ่มเมนูเพื่อสรุปต้นทุน</p></div>}
+    <CostSummarySection branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings}/>
   </div>;
 }
 
