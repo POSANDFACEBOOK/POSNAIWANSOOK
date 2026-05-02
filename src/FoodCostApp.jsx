@@ -1564,7 +1564,7 @@ function FSImportModal({branches,currentUser,onClose,onDone}){
   </Modal>;
 }
 
-function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[]}){
+function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadMenus,reloadCats}){
   const isCentral=currentBranch?.type==="central";
   const today=todayBkk();
   const ago=(d=>{const t=new Date();t.setDate(t.getDate()-d);return t.toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});})(7);
@@ -1653,6 +1653,93 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[]}){
     return{totalCost,matchedRevenue,unmatchedRevenue,matchedCount,unmatchedCount,profit,margin};
   },[pivot]);
   const unmatchedMenus=useMemo(()=>pivot.filter(r=>!r.matched).map(r=>r.menu_name),[pivot]);
+  // Map menu_name → {category, price_avg, totalQty} for quick auto-create
+  const unmatchedDetail=useMemo(()=>{
+    const m=new Map();
+    pivot.filter(r=>!r.matched).forEach(r=>{
+      // Find a representative row from raw filtered data (latest first since we order desc)
+      const sample=filtered.find(x=>x.menu_name===r.menu_name);
+      m.set(r.menu_name,{
+        menu_name:r.menu_name,
+        category:r.category||sample?.category||"อื่นๆ",
+        price:round2(+(sample?.price_avg)||0)||round2(r.totalQty>0?r.totalNet/r.totalQty:0),
+        totalQty:r.totalQty,
+      });
+    });
+    return m;
+  },[pivot,filtered]);
+  const[creating,setCreating]=useState(null);  // menu_name | "__bulk__" | null
+  const canCreateMenu=hasPerm(currentUser,"menus");
+
+  async function ensureCategory(name){
+    if(!name)return;
+    try{
+      const all=await api.getCats();
+      if(!all.some(c=>c.name===name&&c.type==="menu")){
+        try{await api.addCat({name,type:"menu"});}catch{/* duplicate ok */}
+      }
+    }catch{/* ignore */}
+  }
+  async function autoCreateMenu(menuName){
+    const d=unmatchedDetail.get(menuName);
+    if(!d)return;
+    setCreating(menuName);
+    try{
+      await ensureCategory(d.category);
+      await api.addMenu({
+        name:d.menu_name,
+        category:d.category,
+        price:d.price||0,
+        description:"นำเข้าจาก FoodStory — กรุณาใส่วัตถุดิบเพื่อคำนวณต้นทุน",
+        image:null,
+        ingredients:[],
+        sop:[],
+        edit_by:currentUser?.username||null,
+        edit_at:nowStr(),
+        branch_id:currentBranch?.id||null,
+      });
+      if(reloadMenus)await reloadMenus();
+      if(reloadCats)await reloadCats();
+    }catch(e){showErr("สร้างเมนูไม่สำเร็จ",e);}
+    setCreating(null);
+  }
+  async function autoCreateAllUnmatched(){
+    if(unmatchedMenus.length===0)return;
+    if(!await confirmDlg({title:"สร้างเมนูทั้งหมดที่ยังไม่จับคู่",message:`สร้าง ${unmatchedMenus.length} เมนูใหม่ในระบบ?\n\nระบบจะใส่ชื่อ + หมวด + ราคาเฉลี่ยจาก FoodStory ให้\nวัตถุดิบจะว่าง — ต้องเข้าไปใส่เองที่แท็บ "เมนู" เพื่อให้คำนวณต้นทุนได้`,confirmLabel:`🪄 สร้างทั้งหมด ${unmatchedMenus.length} เมนู`}))return;
+    setCreating("__bulk__");
+    try{
+      // Create all needed categories first (de-duped)
+      const cats=new Set();
+      unmatchedMenus.forEach(n=>{const d=unmatchedDetail.get(n);if(d?.category)cats.add(d.category);});
+      const existing=await api.getCats();
+      const have=new Set(existing.filter(c=>c.type==="menu").map(c=>c.name));
+      for(const c of cats){if(!have.has(c)){try{await api.addCat({name:c,type:"menu"});}catch{}}}
+      let success=0,failed=0;
+      for(const name of unmatchedMenus){
+        const d=unmatchedDetail.get(name);
+        if(!d)continue;
+        try{
+          await api.addMenu({
+            name:d.menu_name,
+            category:d.category,
+            price:d.price||0,
+            description:"นำเข้าจาก FoodStory",
+            image:null,
+            ingredients:[],
+            sop:[],
+            edit_by:currentUser?.username||null,
+            edit_at:nowStr(),
+            branch_id:currentBranch?.id||null,
+          });
+          success++;
+        }catch(e){console.error("create",name,e);failed++;}
+      }
+      if(reloadMenus)await reloadMenus();
+      if(reloadCats)await reloadCats();
+      alert(`✅ สร้างสำเร็จ ${success} เมนู${failed>0?` (พลาด ${failed})`:""}\n\n💡 ไปที่แท็บ "เมนู" เพื่อใส่วัตถุดิบให้แต่ละเมนู ระบบจะคำนวณต้นทุน + กำไรให้อัตโนมัติ`);
+    }catch(e){showErr("สร้างเมนูไม่สำเร็จ",e);}
+    setCreating(null);
+  }
 
   function exportXlsx(){
     if(rows.length===0){alert("ไม่มีข้อมูลให้ export");return;}
@@ -1757,11 +1844,22 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[]}){
       </Card>)}
     </div>}
 
-    {/* Unmatched menus warning */}
-    {unmatchedMenus.length>0&&<div style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:12,color:"#92400E",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
-      <div style={{fontWeight:800,marginBottom:4}}>⚠️ พบ {unmatchedMenus.length} เมนูใน FoodStory ที่ยังไม่ได้สร้างในระบบ — คำนวณต้นทุนไม่ได้</div>
-      <div style={{fontSize:11,color:"#7C2D12"}}>{unmatchedMenus.slice(0,8).join(" · ")}{unmatchedMenus.length>8?` · +อีก ${unmatchedMenus.length-8} เมนู`:""}</div>
-      <div style={{fontSize:11,color:"#7C2D12",marginTop:4}}>💡 ไปแท็บ "เมนู" เพื่อสร้างเมนูเหล่านี้พร้อมวัตถุดิบ — ระบบจะคำนวณต้นทุนให้อัตโนมัติ</div>
+    {/* Unmatched menus — with auto-create buttons */}
+    {unmatchedMenus.length>0&&<div style={{background:"#FEF3C7",border:`1.5px solid #FDE68A`,borderRadius:12,padding:"14px 16px",marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div>
+          <div style={{fontSize:13,fontWeight:800,color:"#92400E",marginBottom:2}}>⚠️ พบ {unmatchedMenus.length} เมนูใน FoodStory ที่ยังไม่ได้สร้างในระบบ</div>
+          <div style={{fontSize:11,color:"#7C2D12"}}>คำนวณต้นทุนไม่ได้จนกว่าจะมีในระบบ — กดปุ่ม "+ สร้าง" รายเมนู หรือสร้างทั้งหมดทีเดียว</div>
+        </div>
+        {canCreateMenu&&<Btn v="success" onClick={autoCreateAllUnmatched} loading={creating==="__bulk__"} disabled={!!creating} s={{padding:"8px 16px",fontSize:13,fontWeight:800}}>🪄 สร้างทั้งหมด ({unmatchedMenus.length})</Btn>}
+      </div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+        {unmatchedMenus.map(name=>{const d=unmatchedDetail.get(name);const busy=creating===name||creating==="__bulk__";return <div key={name} style={{display:"inline-flex",alignItems:"center",gap:6,background:C.white,border:`1px solid #FDE68A`,borderRadius:8,padding:"4px 4px 4px 10px",fontSize:11}}>
+          <span style={{color:"#92400E",fontWeight:700,whiteSpace:"nowrap"}}>{name}</span>
+          {d&&<span style={{color:"#7C2D12",fontSize:10}}>· ฿{(d.price||0).toFixed(0)} · {d.category}</span>}
+          {canCreateMenu&&<button onClick={()=>autoCreateMenu(name)} disabled={busy} title="สร้างเมนูนี้ในระบบ" style={{background:busy?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:6,padding:"3px 9px",cursor:busy?"not-allowed":"pointer",fontSize:10,fontWeight:800,color:busy?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif"}}>{creating===name?"⏳":"+ สร้าง"}</button>}
+        </div>;})}
+      </div>
     </div>}
 
     {/* Toggle view + cost columns */}
@@ -4370,7 +4468,7 @@ export default function App(){
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers}/>}
-            {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings}/>}
+            {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
