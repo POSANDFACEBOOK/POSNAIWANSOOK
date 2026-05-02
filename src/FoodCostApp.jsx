@@ -1967,9 +1967,8 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
     {batches.length>0&&<div style={{marginBottom:14}}>
       <div style={{fontSize:12,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>📦 รายการที่นำเข้า ({batches.length} ไฟล์):</div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-        {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <div key={`${b.branch_id}-${b.sale_date}`} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 10px",fontSize:11,fontFamily:"'Sarabun',sans-serif",color:C.ink2,display:"flex",alignItems:"center",gap:6}}>
+        {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);return <div key={`${b.branch_id}-${b.sale_date}`} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 10px",fontSize:11,fontFamily:"'Sarabun',sans-serif",color:C.ink2,display:"flex",alignItems:"center",gap:6}}>
           <span><b>{b.sale_date}</b> · {br?.name||"—"} · {b.count} เมนู / {b.qtySum} ครั้ง</span>
-          {canImport&&<button onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title="บันทึกเป็นสรุปต้นทุนของวันนี้ — ไปแสดงในแท็บ 'สรุปต้นทุน'" style={{background:busy?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:5,padding:"3px 9px",cursor:busy?"not-allowed":"pointer",color:busy?C.ink4:C.white,fontSize:10,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>{busy?"⏳":"💾 บันทึกสรุป"}</button>}
           {canImport&&<button onClick={()=>delDate(b.branch_id,b.sale_date)} title="ลบยอดของวันนี้" style={{background:C.redLight,border:"none",borderRadius:5,padding:"2px 6px",cursor:"pointer",color:C.red,fontSize:10,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>×</button>}
         </div>;})}
       </div>
@@ -2046,18 +2045,6 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
               </>}
             </tr>)}
           </tbody>
-          <tfoot>
-            <tr style={{background:"#0F172A",color:"#F8FAFC",fontWeight:900}}>
-              <td colSpan={2+dates.length} style={{padding:"13px 12px",fontSize:14,textAlign:"right",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>รวมทั้งหมด</td>
-              <td style={{padding:"13px 12px",textAlign:"right",fontSize:16,color:"#F8FAFC",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>{grandTotalQty}</td>
-              <td style={{padding:"13px 12px",textAlign:"right",fontSize:15,color:"#F8FAFC",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-              {showCost&&<>
-                <td style={{padding:"13px 12px",textAlign:"right",fontSize:14,color:"#FCA5A5",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-                <td style={{padding:"13px 12px",textAlign:"right",fontSize:15,color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-                <td style={{padding:"13px 12px",textAlign:"right",fontSize:14,color:"#A7F3D0",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>{costSummary.margin!=null?`${costSummary.margin.toFixed(1)}%`:"—"}</td>
-              </>}
-            </tr>
-          </tfoot>
         </table>
       </div>
     </Card>:<Card style={{padding:0,overflow:"hidden"}}>
@@ -2095,42 +2082,52 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
               </tr>;
             })}
           </tbody>
-          <tfoot>
-            <tr style={{background:"#0F172A",color:"#F8FAFC",fontWeight:900}}>
-              <td colSpan={4} style={{padding:"13px 12px",fontSize:14,textAlign:"right",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>รวมทั้งหมด</td>
-              <td style={{padding:"13px 12px",textAlign:"right",fontSize:16,color:"#F8FAFC",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>{grandTotalQty}</td>
-              <td style={{padding:"13px 12px",textAlign:"right",fontSize:13,color:"#94A3B8",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>—</td>
-              <td style={{padding:"13px 12px",textAlign:"right",fontSize:15,color:"#F8FAFC",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-              {showCost&&<>
-                <td style={{padding:"13px 12px",textAlign:"right",fontSize:14,color:"#FCA5A5",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-                <td style={{padding:"13px 12px",textAlign:"right",fontSize:15,color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-              </>}
-            </tr>
-          </tfoot>
         </table>
       </div>
     </Card>}
 
-    {/* Sticky bottom action bar — totals + big save buttons per batch */}
-    {batches.length>0&&<div style={{position:"sticky",bottom:0,zIndex:50,marginTop:14,background:"linear-gradient(135deg,#0F172A,#1E293B)",borderRadius:14,padding:"16px 20px",boxShadow:"0 -8px 24px rgba(15,23,42,0.25)",border:`2px solid ${C.brand}`,display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
-      <div style={{flex:"1 1 260px",minWidth:240}}>
-        <div style={{fontSize:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>ยอดรวมทั้งหมด</div>
-        <div style={{fontSize:24,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.2,marginTop:2}}>
-          ฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}
-          <span style={{fontSize:13,color:"#CBD5E1",fontWeight:700,marginLeft:10}}>· {grandTotalQty} ครั้ง</span>
+    {/* Spacer so the fixed bottom bar doesn't cover the last table row */}
+    {batches.length>0&&<div style={{height:showCost?140:120}}/>}
+
+    {/* FIXED bottom bar — pinned to viewport always: totals row + big save button */}
+    {batches.length>0&&<div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`3px solid ${C.brand}`,boxShadow:"0 -10px 30px rgba(15,23,42,0.35)"}}>
+      <div style={{maxWidth:1600,margin:"0 auto",padding:"14px 22px",display:"flex",alignItems:"center",gap:18,flexWrap:"wrap"}}>
+        {/* Totals as a row */}
+        <div style={{flex:"1 1 460px",minWidth:300,display:"flex",alignItems:"center",gap:18,flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,paddingRight:18,borderRight:`1px solid rgba(255,255,255,0.12)`}}>
+            <span style={{fontSize:26}}>📊</span>
+            <div>
+              <div style={{fontSize:10,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.6,textTransform:"uppercase"}}>รวมทั้งหมด</div>
+              <div style={{fontSize:11,color:"#CBD5E1",fontFamily:"'Sarabun',sans-serif",fontWeight:600,marginTop:1}}>{grandTotalQty.toLocaleString()} ครั้งขาย</div>
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>ยอดขาย</div>
+            <div style={{fontSize:20,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.1,marginTop:2}}>฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+          </div>
+          {showCost&&<>
+            <div>
+              <div style={{fontSize:10,color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>ต้นทุน</div>
+              <div style={{fontSize:18,color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.1,marginTop:2}}>฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>กำไร</div>
+              <div style={{fontSize:18,color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.1,marginTop:2}}>฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+            </div>
+            {costSummary.margin!=null&&<div>
+              <div style={{fontSize:10,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>Margin</div>
+              <div style={{fontSize:18,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.1,marginTop:2}}>{costSummary.margin.toFixed(1)}%</div>
+            </div>}
+          </>}
         </div>
-        {showCost&&<div style={{fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginTop:4,display:"flex",gap:12,flexWrap:"wrap"}}>
-          <span style={{color:"#FCA5A5"}}>ต้นทุน ฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
-          <span style={{color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5"}}>กำไร ฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
-          {costSummary.margin!=null&&<span style={{color:"#A7F3D0"}}>{costSummary.margin.toFixed(1)}% margin</span>}
+        {/* Save buttons */}
+        {canImport&&<div style={{display:"flex",gap:10,flexWrap:"wrap",justifyContent:"flex-end"}}>
+          {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <button key={`save-${b.branch_id}-${b.sale_date}`} onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title={`บันทึกสรุปต้นทุน ${b.sale_date} · ${br?.name||"—"} → ไปแสดงในแท็บ "สรุปต้นทุน"`} style={{background:busy?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:12,padding:"14px 24px",cursor:busy?"not-allowed":"pointer",color:C.white,fontSize:15,fontWeight:900,fontFamily:"'Sarabun',sans-serif",boxShadow:busy?"none":"0 6px 22px rgba(16,185,129,0.55)",display:"flex",alignItems:"center",gap:8,letterSpacing:.3,whiteSpace:"nowrap"}}>
+            <span style={{fontSize:18}}>{busy?"⏳":"💾"}</span>
+            <span>{busy?"กำลังบันทึก...":`บันทึกสรุป — ${b.sale_date}${batches.length>1?` · ${br?.name||"—"}`:""}`}</span>
+          </button>;})}
         </div>}
       </div>
-      {canImport&&<div style={{display:"flex",gap:10,flexWrap:"wrap",justifyContent:"flex-end"}}>
-        {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <button key={`save-${b.branch_id}-${b.sale_date}`} onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title={`บันทึกสรุปต้นทุน ${b.sale_date} · ${br?.name||"—"} → ไปแสดงในแท็บ "สรุปต้นทุน"`} style={{background:busy?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:12,padding:"14px 22px",cursor:busy?"not-allowed":"pointer",color:C.white,fontSize:15,fontWeight:900,fontFamily:"'Sarabun',sans-serif",boxShadow:busy?"none":"0 6px 18px rgba(16,185,129,0.45)",display:"flex",alignItems:"center",gap:8,letterSpacing:.3,whiteSpace:"nowrap"}}>
-          <span style={{fontSize:18}}>{busy?"⏳":"💾"}</span>
-          <span>{busy?"กำลังบันทึก...":`บันทึกสรุป — ${b.sale_date}${batches.length>1?` · ${br?.name||"—"}`:""}`}</span>
-        </button>;})}
-      </div>}
     </div>}
 
     {showImport&&<FSImportModal branches={branches} currentUser={currentUser} onClose={()=>setShowImport(false)} onDone={()=>{setShowImport(false);load();}}/>}
