@@ -5703,16 +5703,17 @@ function POSQRPage({branch,tables,onTablesChanged}){
 // ── POS MODE SELECTOR ─────────────────────────────────
 // ══════════════════════════════════════════════════════
 function POSModeSelect({onSelect,canManage=true}){
-  return <div style={{minHeight:"calc(100vh - 140px)",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight} 0%,#FFFBEB 100%)`,margin:"-20px -24px",padding:24}}>
-    <div style={{background:C.white,borderRadius:24,padding:"40px 36px",maxWidth:"min(95vw,620px)",width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
-      <div style={{textAlign:"center",marginBottom:30}}>
-        <div style={{width:68,height:68,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:20,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:14,boxShadow:`0 12px 28px ${C.brand}55`}}>
-          <Ic d={I.shop} s={34} c={C.white}/>
+  const isMobile=useIsMobile();
+  return <div style={{minHeight:"calc(100vh - 140px)",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight} 0%,#FFFBEB 100%)`,margin:isMobile?"-14px -12px":"-20px -24px",padding:isMobile?16:24}}>
+    <div style={{background:C.white,borderRadius:isMobile?18:24,padding:isMobile?"24px 18px":"40px 36px",maxWidth:"min(95vw,620px)",width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
+      <div style={{textAlign:"center",marginBottom:isMobile?20:30}}>
+        <div style={{width:isMobile?56:68,height:isMobile?56:68,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:isMobile?16:20,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:isMobile?10:14,boxShadow:`0 12px 28px ${C.brand}55`}}>
+          <Ic d={I.shop} s={isMobile?28:34} c={C.white}/>
         </div>
-        <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900,color:C.ink,margin:"0 0 6px"}}>ระบบขายหน้าร้าน</h2>
-        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,color:C.ink3,margin:0}}>เลือกโหมดการใช้งาน</p>
+        <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?20:24,fontWeight:900,color:C.ink,margin:"0 0 6px"}}>ระบบขายหน้าร้าน</h2>
+        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?13:14,color:C.ink3,margin:0}}>เลือกโหมดการใช้งาน</p>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:canManage?"1fr 1fr":"1fr",gap:14,maxWidth:canManage?"none":300,margin:canManage?0:"0 auto"}}>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":(canManage?"1fr 1fr":"1fr"),gap:isMobile?10:14,maxWidth:canManage&&!isMobile?"none":300,margin:canManage&&!isMobile?0:"0 auto"}}>
         <button onClick={()=>onSelect('sale')} style={{padding:"26px 18px",border:`2px solid ${C.brandBorder}`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.brandLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.brand}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.brandBorder;e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
           <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>🛒</div>
           <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>เข้าสู่การขายหน้าร้าน</div>
