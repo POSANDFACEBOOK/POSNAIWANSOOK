@@ -378,9 +378,13 @@ function Modal({title,onClose,children,wide,extraWide}){
   const mob=useIsMobile();
   // Intentional: do NOT close on Escape or backdrop click — only the × button.
   // Prevents losing in-progress form data when accidentally tapping outside the modal.
+  // Belt-and-braces: also swallow any pointer events that bubble up from the backdrop
+  // so even if a child element somewhere triggers an unintended close, we never react
+  // to a tap that lands on the backdrop itself.
   const cap=extraWide?1000:wide?760:560;
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",zIndex:1000,padding:mob?0:16}}>
-    <div style={{background:C.white,borderRadius:mob?"18px 18px 0 0":20,width:"100%",maxWidth:`min(96vw, ${cap}px)`,maxHeight:mob?"96vh":"94vh",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(15,23,42,.22)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
+  const swallow=e=>{if(e.target===e.currentTarget){e.preventDefault();e.stopPropagation();}};
+  return <div onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",zIndex:1000,padding:mob?0:16}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:mob?"18px 18px 0 0":20,width:"100%",maxWidth:`min(96vw, ${cap}px)`,maxHeight:mob?"96vh":"94vh",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(15,23,42,.22)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:mob?"14px 16px 12px":"18px 24px 14px",borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,background:C.bg,gap:10}}>
         <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:mob?16:18,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{title}</span>
         <button onClick={onClose} aria-label="ปิด" style={{background:C.line,border:"none",cursor:"pointer",color:C.ink3,padding:mob?9:7,borderRadius:8,display:"flex",flexShrink:0}}><Ic d={I.x} s={15}/></button>
@@ -411,8 +415,9 @@ function ConfirmDlg(){
   const cancel=o.cancelLabel||"ยกเลิก";
   const accent=danger?C.red:C.brand;
   const accentLight=danger?C.redLight:C.brandLight;
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}}>
-    <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
+  const swallow=e=>{if(e.target===e.currentTarget){e.preventDefault();e.stopPropagation();}};
+  return <div onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:"26px 22px 18px",textAlign:"center"}}>
         <div style={{width:64,height:64,margin:"0 auto 14px",borderRadius:"50%",background:accentLight,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 8px 24px ${accent}33`,border:`1px solid ${accent}22`}}>
           <Ic d={danger?I.trash:I.warning} s={28} c={accent} sw={2}/>
