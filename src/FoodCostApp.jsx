@@ -1857,7 +1857,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
         {unmatchedMenus.map(name=>{const d=unmatchedDetail.get(name);const busy=creating===name||creating==="__bulk__";return <div key={name} style={{display:"inline-flex",alignItems:"center",gap:6,background:C.white,border:`1px solid #FDE68A`,borderRadius:8,padding:"4px 4px 4px 10px",fontSize:11}}>
           <span style={{color:"#92400E",fontWeight:700,whiteSpace:"nowrap"}}>{name}</span>
           {d&&<span style={{color:"#7C2D12",fontSize:10}}>· ฿{(d.price||0).toFixed(0)} · {d.category}</span>}
-          {canCreateMenu&&<button onClick={()=>autoCreateMenu(name)} disabled={busy} title="สร้างเมนูนี้ในระบบ" style={{background:busy?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:6,padding:"3px 9px",cursor:busy?"not-allowed":"pointer",fontSize:10,fontWeight:800,color:busy?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif"}}>{creating===name?"⏳":"+ สร้าง"}</button>}
+          {canCreateMenu&&<button onClick={()=>autoCreateMenu(name)} disabled={busy} title="สร้างเมนูนี้ในระบบ" style={{background:busy?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:6,padding:"3px 9px",cursor:busy?"not-allowed":"pointer",fontSize:10,fontWeight:800,color:busy?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif"}}>{creating===name?"⏳":"สร้างเมนูนี้"}</button>}
         </div>;})}
       </div>
     </div>}
@@ -4290,7 +4290,7 @@ export default function App(){
     {id:"menus",l:"เมนู",icon:I.fire,perm:"menus"},
     {id:"sop",l:"SOP",icon:I.sop,perm:"sop"},
     {id:"summary",l:"สรุปต้นทุน",icon:I.chart,perm:"summary"},
-    {id:"fssales",l:"ยอดขาย FS",icon:I.chart,perm:"fs_sales"},
+    {id:"fssales",l:"ยอดขายรายเมนู\nตามระบบ FOODSTORY",icon:I.chart,perm:"fs_sales"},
     {id:"po",l:"เอกสาร PO",icon:I.bill,perm:"po"},
     {id:"orders",l:"สั่งวัตถุดิบ",icon:I.truck,perm:"orders"},
     {id:"history",l:"ประวัติต้นทุน",icon:I.clock,perm:"history"},
@@ -4414,7 +4414,7 @@ export default function App(){
               <div style={{width:30,height:30,borderRadius:8,background:active?`rgba(${isCentral?"20,184,166":"255,107,53"},0.25)`:"rgba(255,255,255,0.05)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .15s"}}>
                 <Ic d={t2.icon} s={14} c={active?accentColor:"rgba(255,255,255,0.45)"}/>
               </div>
-              <span style={{fontSize:13,fontWeight:active?700:400,color:active?"#F8FAFC":"rgba(255,255,255,0.55)",transition:"all .15s"}}>{t2.l}</span>
+              <span style={{fontSize:13,fontWeight:active?700:400,color:active?"#F8FAFC":"rgba(255,255,255,0.55)",transition:"all .15s",whiteSpace:"pre-line",lineHeight:1.25}}>{t2.l}</span>
               {active&&<div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:accentColor}}/>}
             </button>;
           })}
