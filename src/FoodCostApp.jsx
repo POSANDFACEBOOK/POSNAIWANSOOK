@@ -454,7 +454,7 @@ function LoginPage({onLogin}){
   const[u,setU]=useState("");const[p,setP]=useState("");const[err,setErr]=useState("");const[show,setShow]=useState(false);const[loading,setLoading]=useState(false);
   async function login(){if(!u||!p)return;setLoading(true);setErr("");try{const found=await api.loginUser(u,p);if(found&&found.length>0)onLogin(found[0]);else setErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");}catch(e){setErr("เชื่อมต่อ Supabase ไม่ได้");}setLoading(false);}
   return <div style={{minHeight:"100vh",background:`linear-gradient(135deg,${C.brandLight} 0%,#FEF3C7 50%,${C.blueLight} 100%)`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-    <div style={{background:C.white,borderRadius:24,padding:"44px 40px",width:"100%",maxWidth:420,boxShadow:"0 32px 80px rgba(15,23,42,.15)",animation:"mIn .4s cubic-bezier(.34,1.56,.64,1)"}}>
+    <div style={{background:C.white,borderRadius:24,padding:"44px 40px",width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 32px 80px rgba(15,23,42,.15)",animation:"mIn .4s cubic-bezier(.34,1.56,.64,1)"}}>
       <div style={{textAlign:"center",marginBottom:36}}>
         <div style={{width:64,height:64,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px",boxShadow:`0 8px 24px ${C.brand}44`}}><Ic d={I.fire} s={30} c={C.white} sw={2}/></div>
         <h1 style={{fontSize:20,fontWeight:900,color:C.ink,marginBottom:2,fontFamily:"'Sarabun',sans-serif"}}>NAIWANSOOK FOODCOST</h1>
@@ -483,7 +483,7 @@ function BranchSelector({branches,onSelect,user,onLogout}){
     return (allowed||[]).map(x=>+x).includes(+b.id);
   });
   return <div style={{minHeight:"100vh",background:`linear-gradient(135deg,#f0fdf4,#eff6ff)`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Sarabun',sans-serif"}}>
-    <div style={{width:"100%",maxWidth:600,padding:24}}>
+    <div style={{width:"100%",maxWidth:"min(95vw,600px)",padding:24}}>
       <div style={{textAlign:"center",marginBottom:32}}>
         <div style={{width:56,height:56,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:16,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}><Ic d={I.fire} s={26} c={C.white} sw={2}/></div>
         <h2 style={{fontSize:22,fontWeight:900,color:C.ink,marginBottom:4}}>เลือกสาขา</h2>
@@ -494,7 +494,7 @@ function BranchSelector({branches,onSelect,user,onLogout}){
         <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>ยังไม่ได้รับสิทธิ์เข้าสาขาใด</div>
         <div style={{fontSize:13,color:C.ink3,lineHeight:1.7,marginBottom:18}}>กรุณาติดต่อแอดมินเพื่อขอสิทธิ์เข้าสาขา</div>
         {onLogout&&<Btn v="ghost" onClick={onLogout}>← ออกจากระบบ</Btn>}
-      </div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:14}}>
+      </div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(240px,100%),1fr))",gap:14}}>
         {visible.map(branch=>{
           const isCentral=branch.type==="central";
           return <div key={branch.id} onClick={()=>onSelect(branch)} style={{background:C.white,borderRadius:16,padding:"22px 20px",cursor:"pointer",border:`2px solid ${isCentral?C.teal:C.line}`,boxShadow:isCentral?`0 4px 20px ${C.teal}22`:"0 2px 8px rgba(15,23,42,.06)",transition:"all .2s",display:"flex",alignItems:"center",gap:16}} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 12px 32px ${isCentral?C.teal:C.brand}22`;}} onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=isCentral?`0 4px 20px ${C.teal}22`:"0 2px 8px rgba(15,23,42,.06)";}}>
@@ -841,7 +841,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     </div>
     <div style={{fontSize:12,color:C.ink4,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>แสดง {paged.length} จาก {filtered.length} รายการ</div>
     {paged.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.warning} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่พบวัตถุดิบ</p></div>:<>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(310px,1fr))",gap:14}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(310px,100%),1fr))",gap:14}}>
         {paged.map(item=><Card key={item.id} hover style={{overflow:"hidden"}}>
           <div style={{display:"flex"}}>
             {item.image?<img src={item.image} alt={item.name} style={{width:88,height:88,objectFit:"cover",flexShrink:0}}/>:<div style={{width:88,height:88,background:`linear-gradient(135deg,${C.brandLight},#FEF3C7)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={32} c={C.brand}/></div>}
@@ -971,7 +971,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
       {canE&&<Btn v="info" onClick={()=>setShowImportMenu(true)} icon={I.ul}>Import</Btn>}
     </div>
     {canE&&selCat==="ทั้งหมด"&&<div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#1E40AF",fontFamily:"'Sarabun',sans-serif"}}>เลือกหมวดหมู่ก่อน จึงจะเพิ่มเมนูใหม่ได้</div>}
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:16}}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(300px,100%),1fr))",gap:16}}>
       {filtered.map(menu=>{const cost=menuCost(menu,ings);const profit=menu.price-cost;const mg=menu.price>0?profit/menu.price*100:0;const mc=marginColor(mg);return <Card key={menu.id} hover style={{overflow:"hidden"}}>
         <div style={{height:5,background:`linear-gradient(90deg,${mc},${mc}66)`}}/>
         {menu.image?<img src={menu.image} alt={menu.name} style={{width:"100%",height:130,objectFit:"cover"}}/>:<div style={{height:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/></div>}
@@ -1324,7 +1324,7 @@ window.addEventListener('load',async()=>{
     </Card>
   </div>
   {ingPopup&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1500,padding:16}} onClick={e=>e.target===e.currentTarget&&setIngPopup(null)}>
-    <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:420,boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
+    <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:"20px 24px 0",borderBottom:`1px solid ${C.lineLight}`,paddingBottom:16,background:C.bg,display:"flex",alignItems:"center",gap:10}}>
         <div style={{width:40,height:40,borderRadius:"50%",background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,border:`1px solid ${C.brandBorder}`}}>
           <Ic d={I.leaf} s={20} c={C.brand}/>
@@ -2394,7 +2394,7 @@ function POSection({branches,ings,currentBranch,currentUser}){
     {/* Step 1: Pick branch */}
     {step==='pick-branch'&&<Modal title={`🏢 เลือกสาขาปลายทาง — ส่งจาก "${currentBranch.name}" ไปยัง...`} onClose={()=>setStep(null)}>
       {branchOptions.length===0?<div style={{padding:30,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีสาขาอื่นในระบบ — เพิ่มสาขาในแท็บ "ตั้งค่า" ก่อน</div>:
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:10}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(220px,100%),1fr))",gap:10}}>
         {branchOptions.map(b=><button key={b.id} onClick={()=>pickBranch(b)} style={{padding:"18px 16px",border:`2px solid ${C.line}`,borderRadius:14,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
             <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.branch} s={16} c={C.white}/></div>
@@ -2479,7 +2479,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
       <div style={{maxWidth:1100,margin:"0 auto"}}>
 
         {/* Status / activity timeline */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:18}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(200px,100%),1fr))",gap:10,marginBottom:18}}>
           <div style={{background:C.white,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`}}>
             <div style={{fontSize:11,color:C.ink4,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>📤 ผู้ออก</div>
             <div style={{fontSize:14,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{fromBranch?.name||"-"}</div>
@@ -2612,7 +2612,7 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
     }catch(e){showErr("อัพโหลดสลิปไม่สำเร็จ",e);setSaving(false);}
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",zIndex:6000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:520,boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,520px)",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
       <div style={{padding:"16px 22px",background:`linear-gradient(135deg,${C.blue},#2563EB)`,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <div style={{fontSize:28}}>💳</div>
@@ -3257,7 +3257,7 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser}){
     catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
   }
   return <div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,marginBottom:16}}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(280px,100%),1fr))",gap:12,marginBottom:16}}>
       {suppliers.map(s=><Card key={s.id} style={{padding:"14px 16px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
           <div>
@@ -3399,7 +3399,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,margin:0}}>จัดการสาขา <span style={{fontSize:13,fontWeight:500,color:C.ink4}}>({branches.length})</span></h3>
         {isAdmin&&<Btn onClick={()=>{setBranchForm(bF0);setEditBID(null);setShowBranch(true);}} icon={I.plus}>เพิ่มสาขา</Btn>}
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:10}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(220px,100%),1fr))",gap:10}}>
         {branches.map(b=><Card key={b.id} style={{padding:"12px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
             <div style={{minWidth:0,flex:1}}>
@@ -3555,7 +3555,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         <div style={{fontSize:16,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>ยังไม่มีเครื่องพิมพ์</div>
         <div style={{fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มเครื่องพิมพ์แรกของคุณด้านบน</div>
       </div>:
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(320px,100%),1fr))",gap:16}}>
         {printers.map(p=>{
           const typeConf={kitchen:{label:"ครัว",emoji:"🍳",color:"#F59E0B",bg:"#FFFBEB",border:"#FDE68A"},bar:{label:"บาร์",emoji:"🍹",color:"#10B981",bg:"#ECFDF5",border:"#A7F3D0"},receipt:{label:"แคชเชียร์",emoji:"🧾",color:"#3B82F6",bg:"#EFF6FF",border:"#BFDBFE"},other:{label:"อื่นๆ",emoji:"📄",color:"#8B5CF6",bg:"#F5F3FF",border:"#DDD6FE"}}[p.type]||{label:p.type,emoji:"🖨️",color:C.ink3,bg:C.bg,border:C.line};
           return <div key={p.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:16,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.05)",transition:"box-shadow .2s",display:"flex",flexDirection:"column"}}>
@@ -4517,7 +4517,7 @@ export default function App(){
   if(visibleTabs.length===0){
     const userPerms=getUserPerms(currentUser);
     return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,#FEF3C7,#FFE4E6)`,padding:24,fontFamily:"'Sarabun',sans-serif"}}>
-      <div style={{background:C.white,borderRadius:18,padding:"30px 28px",maxWidth:520,width:"100%",boxShadow:"0 10px 40px rgba(0,0,0,.12)"}}>
+      <div style={{background:C.white,borderRadius:18,padding:"30px 28px",maxWidth:"min(95vw,520px)",width:"100%",boxShadow:"0 10px 40px rgba(0,0,0,.12)"}}>
         <div style={{textAlign:"center",marginBottom:18}}>
           <div style={{fontSize:64,marginBottom:8}}>🚫</div>
           <h2 style={{fontSize:20,fontWeight:900,color:C.ink,margin:0}}>ไม่มีเมนูที่เข้าถึงได้</h2>
@@ -5274,7 +5274,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 
     {/* Split bill modal */}
     {showSplitBill&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
-      <div style={{background:C.white,borderRadius:16,width:"100%",maxWidth:380,padding:20}}>
+      <div style={{background:C.white,borderRadius:16,width:"100%",maxWidth:"min(95vw,380px)",padding:20}}>
         <div style={{fontWeight:800,fontSize:16,color:C.ink,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>แยกบิล — โต๊ะ {table.table_number}</div>
         <div style={{fontSize:12,color:C.ink3,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>เลือกรายการที่ต้องการแยกจ่าย</div>
         <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:280,overflowY:"auto",marginBottom:14}}>
@@ -5330,7 +5330,7 @@ const PAY_METHODS=[
 ];
 function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null}){
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}} onClick={onClose}>
-    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,width:"100%",maxWidth:680,maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
       <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
         <div>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:900,fontSize:18}}>💳 ชำระเงิน</div>
@@ -5538,9 +5538,9 @@ function CustomerPage({branchId,tableId,token}){
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span style={{fontSize:16,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</span>
               {soldOut?<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>หมดแล้ว</span>:inC?<div style={{display:"flex",alignItems:"center",gap:6}}>
-                <button onClick={()=>chQty(cart.indexOf(inC),-1)} style={{width:26,height:26,borderRadius:7,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={13} c={C.brand}/></button>
+                <button onClick={()=>chQty(cart.indexOf(inC),-1)} style={{width:34,height:34,borderRadius:8,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={13} c={C.brand}/></button>
                 <span style={{fontWeight:900,fontSize:15,minWidth:18,textAlign:"center",color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{inC.qty}</span>
-                <button onClick={()=>addToCart(m)} style={{width:26,height:26,borderRadius:7,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={13} c={C.white}/></button>
+                <button onClick={()=>addToCart(m)} style={{width:34,height:34,borderRadius:8,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={13} c={C.white}/></button>
               </div>:<button onClick={()=>addToCart(m)} style={{width:32,height:32,borderRadius:9,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={17} c={C.white}/></button>}
             </div>
           </div>
@@ -5601,9 +5601,9 @@ function CustomerPage({branchId,tableId,token}){
         {cart.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:10,padding:"10px",marginBottom:6,border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:8}}>
           <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}<div style={{fontSize:12,color:C.brand,fontWeight:700}}>฿{item.price} × {item.qty} = ฿{(item.price*item.qty).toFixed(0)}</div></div>
           <div style={{display:"flex",alignItems:"center",gap:5}}>
-            <button onClick={()=>chQty(idx,-1)} style={{width:26,height:26,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={12}/></button>
+            <button onClick={()=>chQty(idx,-1)} style={{width:34,height:34,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={12}/></button>
             <span style={{fontWeight:900,fontSize:14,minWidth:20,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
-            <button onClick={()=>chQty(idx,1)} style={{width:26,height:26,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={12}/></button>
+            <button onClick={()=>chQty(idx,1)} style={{width:34,height:34,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={12}/></button>
           </div>
           <button onClick={()=>rmCart(idx)} style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
         </div>)}
@@ -5704,7 +5704,7 @@ function POSQRPage({branch,tables,onTablesChanged}){
 // ══════════════════════════════════════════════════════
 function POSModeSelect({onSelect,canManage=true}){
   return <div style={{minHeight:"calc(100vh - 140px)",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight} 0%,#FFFBEB 100%)`,margin:"-20px -24px",padding:24}}>
-    <div style={{background:C.white,borderRadius:24,padding:"40px 36px",maxWidth:620,width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
+    <div style={{background:C.white,borderRadius:24,padding:"40px 36px",maxWidth:"min(95vw,620px)",width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
       <div style={{textAlign:"center",marginBottom:30}}>
         <div style={{width:68,height:68,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:20,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:14,boxShadow:`0 12px 28px ${C.brand}55`}}>
           <Ic d={I.shop} s={34} c={C.white}/>
@@ -5745,7 +5745,7 @@ function OpenShiftModal({currentBranch,currentUser,onDone,onCancel}){
     setSaving(false);
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:16}}>
-    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:460,boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,460px)",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
       <div style={{padding:"18px 22px",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <div style={{fontSize:30}}>💵</div>
@@ -5816,7 +5816,7 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
     setSaving(false);
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:12}}>
-    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:780,maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,780px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
       <div style={{padding:"14px 22px",background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{fontSize:26}}>💰</div>
@@ -6002,7 +6002,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     setSaving(false);
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:12}}>
-    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:680,maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
       <div style={{padding:"14px 22px",background:"linear-gradient(135deg,#0F172A,#1E293B)",color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{fontSize:26}}>🔚</div>
@@ -6260,7 +6260,7 @@ function POSPromotionManager({currentBranch,menus}){
     </div>
     {loading?<Loading text="โหลด..."/>:<>
       {promos.length===0&&!showForm&&<div style={{textAlign:"center",padding:50,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><Ic d={I.tag} s={42} c={C.line}/><p style={{marginTop:10}}>ยังไม่มีโปรโมชั่น</p></div>}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:12}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(320px,100%),1fr))",gap:12}}>
         {promos.map(p=>{
           const typeL={percent:"ส่วนลด %",amount:"ส่วนลด ฿",fixed_price:"ราคาพิเศษ"}[p.type]||p.type;
           const valL=p.type==="percent"?`${p.discount_value}%`:`฿${p.discount_value}`;
@@ -6438,7 +6438,7 @@ function POSShiftHistory({shifts,loading,reload}){
       <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,margin:0}}>ประวัติกะ ({shifts.length})</h3>
       <Btn v="ghost" onClick={reload} icon={I.refresh} s={{padding:"7px 14px",fontSize:12}}>รีเฟรช</Btn>
     </div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:12}}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(320px,100%),1fr))",gap:12}}>
       {shifts.map(s=>{
         const isOpen=s.status==='open';
         return <Card key={s.id} style={{padding:0,overflow:"hidden"}}>
@@ -6650,7 +6650,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
       <div style={{width:56,height:56,background:C.lineLight,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}><Ic d={I.print} s={26} c={C.ink4}/></div>
       <div style={{fontSize:15,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>ยังไม่มีเครื่องพิมพ์</div>
       <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มเครื่องพิมพ์แรกของคุณด้านบน</div>
-    </div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:14}}>
+    </div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(320px,100%),1fr))",gap:14}}>
       {printers.map(p=>{
         const typeConf={kitchen:{label:"ครัว",emoji:"🍳",color:"#F59E0B",bg:"#FFFBEB",border:"#FDE68A"},bar:{label:"บาร์",emoji:"🍹",color:"#10B981",bg:"#ECFDF5",border:"#A7F3D0"},receipt:{label:"แคชเชียร์",emoji:"🧾",color:"#3B82F6",bg:"#EFF6FF",border:"#BFDBFE"},other:{label:"อื่นๆ",emoji:"📄",color:"#8B5CF6",bg:"#F5F3FF",border:"#DDD6FE"}}[p.type]||{label:p.type,emoji:"🖨️",color:C.ink3,bg:C.bg,border:C.line};
         return <div key={p.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
@@ -6847,7 +6847,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
           <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
             {[{l:"ออเดอร์วันนี้",v:todayOrders.length,c:C.blue},{l:"รายรับวันนี้",v:`฿${todayRev.toFixed(0)}`,c:C.green},{l:"รอดำเนินการ",v:activeOrders.length,c:C.yellow}].map(s=><div key={s.l} style={{background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:10}}><div><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:18,fontWeight:800,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div></div>)}
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(260px,100%),1fr))",gap:10}}>
             {allOrders.map(o=>{
               const stC={pending:C.yellow,confirmed:C.green,paid:C.green,cancelled:C.ink4};
               const stL={pending:"รอยืนยัน",confirmed:"กำลังทำ",bill_requested:"เรียกบิล",paid:"ชำระแล้ว",cancelled:"ยกเลิก"};
