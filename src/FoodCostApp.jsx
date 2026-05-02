@@ -369,15 +369,22 @@ function Btn({children,v="primary",onClick,icon,disabled,full,s,loading}){
 }
 function Chip({children,color="orange"}){const m={orange:[C.brandLight,C.brand],blue:[C.blueLight,C.blue],green:[C.greenLight,C.green],red:[C.redLight,C.red],yellow:[C.yellowLight,C.yellow],gray:[C.lineLight,C.ink3],purple:[C.purpleLight,C.purple],teal:[C.tealLight,C.teal]};const[bg,tc]=m[color]||m.gray;return <span style={{display:"inline-flex",alignItems:"center",padding:"2px 10px",background:bg,color:tc,borderRadius:20,fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{children}</span>;}
 function Card({children,style,onClick,hover}){const[hov,setHov]=useState(false);return <div style={{background:C.white,borderRadius:16,border:`1px solid ${hov&&hover?C.brandBorder:C.line}`,boxShadow:hov&&hover?"0 8px 32px rgba(255,107,53,.12)":"0 2px 8px rgba(15,23,42,.06)",transition:"all .2s",cursor:onClick?"pointer":undefined,...style}} onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}>{children}</div>;}
+function useIsMobile(breakpoint=768){
+  const[m,setM]=useState(()=>typeof window!=="undefined"&&window.innerWidth<breakpoint);
+  useEffect(()=>{const onR=()=>setM(window.innerWidth<breakpoint);window.addEventListener("resize",onR);window.addEventListener("orientationchange",onR);return()=>{window.removeEventListener("resize",onR);window.removeEventListener("orientationchange",onR);};},[breakpoint]);
+  return m;
+}
 function Modal({title,onClose,children,wide,extraWide}){
+  const mob=useIsMobile();
   useEffect(()=>{const h=e=>e.key==="Escape"&&onClose();document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[]);
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={e=>e.target===e.currentTarget&&onClose()}>
-    <div style={{background:C.white,borderRadius:20,width:"100%",maxWidth:extraWide?1000:wide?760:560,maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(15,23,42,.22)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
-      <div style={{padding:"18px 24px 14px",borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,background:C.bg}}>
-        <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:800,color:C.ink}}>{title}</span>
-        <button onClick={onClose} style={{background:C.line,border:"none",cursor:"pointer",color:C.ink3,padding:7,borderRadius:8,display:"flex"}}><Ic d={I.x} s={15}/></button>
+  const cap=extraWide?1000:wide?760:560;
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",zIndex:1000,padding:mob?0:16}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div style={{background:C.white,borderRadius:mob?"18px 18px 0 0":20,width:"100%",maxWidth:`min(96vw, ${cap}px)`,maxHeight:mob?"96vh":"94vh",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(15,23,42,.22)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
+      <div style={{padding:mob?"14px 16px 12px":"18px 24px 14px",borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,background:C.bg,gap:10}}>
+        <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:mob?16:18,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{title}</span>
+        <button onClick={onClose} aria-label="ปิด" style={{background:C.line,border:"none",cursor:"pointer",color:C.ink3,padding:mob?9:7,borderRadius:8,display:"flex",flexShrink:0}}><Ic d={I.x} s={15}/></button>
       </div>
-      <div style={{padding:"20px 24px 24px",overflowY:"auto",flex:1}}>{children}</div>
+      <div style={{padding:mob?"14px 16px 18px":"20px 24px 24px",overflowY:"auto",flex:1,WebkitOverflowScrolling:"touch"}}>{children}</div>
     </div>
   </div>;
 }
@@ -403,17 +410,17 @@ function ConfirmDlg(){
   const accent=danger?C.red:C.brand;
   const accentLight=danger?C.redLight:C.brandLight;
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}} onClick={e=>e.target===e.currentTarget&&close(false)}>
-    <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:420,boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
-      <div style={{padding:"30px 28px 20px",textAlign:"center"}}>
-        <div style={{width:68,height:68,margin:"0 auto 18px",borderRadius:"50%",background:accentLight,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 8px 24px ${accent}33`,border:`1px solid ${accent}22`}}>
-          <Ic d={danger?I.trash:I.warning} s={30} c={accent} sw={2}/>
+    <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
+      <div style={{padding:"26px 22px 18px",textAlign:"center"}}>
+        <div style={{width:64,height:64,margin:"0 auto 14px",borderRadius:"50%",background:accentLight,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 8px 24px ${accent}33`,border:`1px solid ${accent}22`}}>
+          <Ic d={danger?I.trash:I.warning} s={28} c={accent} sw={2}/>
         </div>
-        <div style={{fontSize:20,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8,letterSpacing:-.3}}>{title}</div>
-        <div style={{fontSize:14,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.65,whiteSpace:"pre-line"}}>{msg}</div>
+        <div style={{fontSize:18,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:6,letterSpacing:-.3}}>{title}</div>
+        <div style={{fontSize:13.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,whiteSpace:"pre-line"}}>{msg}</div>
       </div>
-      <div style={{display:"flex",gap:10,padding:"4px 24px 24px"}}>
-        <button onClick={()=>close(false)} style={{flex:1,padding:"12px 16px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,color:C.ink2,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.background=C.lineLight;}} onMouseLeave={e=>{e.currentTarget.style.background=C.white;}}>{cancel}</button>
-        <button onClick={()=>close(true)} autoFocus style={{flex:1,padding:"12px 16px",borderRadius:12,border:"none",background:danger?`linear-gradient(135deg,${C.red},#DC2626)`:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",boxShadow:`0 8px 20px ${accent}55`,transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.filter="brightness(1.05)";}} onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.filter="";}}>{ok}</button>
+      <div style={{display:"flex",gap:8,padding:"4px 18px 18px",flexWrap:"wrap"}}>
+        <button onClick={()=>close(false)} style={{flex:"1 1 120px",minHeight:46,padding:"12px 16px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,color:C.ink2,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.background=C.lineLight;}} onMouseLeave={e=>{e.currentTarget.style.background=C.white;}}>{cancel}</button>
+        <button onClick={()=>close(true)} autoFocus style={{flex:"1 1 120px",minHeight:46,padding:"12px 16px",borderRadius:12,border:"none",background:danger?`linear-gradient(135deg,${C.red},#DC2626)`:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",boxShadow:`0 8px 20px ${accent}55`,transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.filter="brightness(1.05)";}} onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.filter="";}}>{ok}</button>
       </div>
     </div>
   </div>;
@@ -1720,6 +1727,7 @@ function exportSnapshotXlsx(snapshot,branchName){
 }
 
 function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadMenus,reloadCats}){
+  const isMobile=useIsMobile();
   const isCentral=currentBranch?.type==="central";
   const today=todayBkk();
   const ago=(d=>{const t=new Date();t.setDate(t.getDate()-d);return t.toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});})(7);
@@ -2087,44 +2095,45 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
     </Card>}
 
     {/* Spacer so the fixed bottom bar doesn't cover the last table row */}
-    {batches.length>0&&<div style={{height:showCost?140:120}}/>}
+    {batches.length>0&&<div style={{height:isMobile?(showCost?180:140):(showCost?140:120)}}/>}
 
     {/* FIXED bottom bar — pinned to viewport always: totals row + big save button */}
-    {batches.length>0&&<div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`3px solid ${C.brand}`,boxShadow:"0 -10px 30px rgba(15,23,42,0.35)"}}>
-      <div style={{maxWidth:1600,margin:"0 auto",padding:"14px 22px",display:"flex",alignItems:"center",gap:18,flexWrap:"wrap"}}>
+    {batches.length>0&&<div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`3px solid ${C.brand}`,boxShadow:"0 -10px 30px rgba(15,23,42,0.35)",paddingBottom:"env(safe-area-inset-bottom,0)"}}>
+      <div style={{maxWidth:1600,margin:"0 auto",padding:isMobile?"10px 12px":"14px 22px",display:"flex",alignItems:isMobile?"stretch":"center",flexDirection:isMobile?"column":"row",gap:isMobile?8:18}}>
         {/* Totals as a row */}
-        <div style={{flex:"1 1 460px",minWidth:300,display:"flex",alignItems:"center",gap:18,flexWrap:"wrap"}}>
-          <div style={{display:"flex",alignItems:"center",gap:10,paddingRight:18,borderRight:`1px solid rgba(255,255,255,0.12)`}}>
+        <div style={{flex:isMobile?"none":"1 1 460px",minWidth:isMobile?0:300,display:"flex",alignItems:"center",gap:isMobile?10:18,flexWrap:"wrap",justifyContent:isMobile?"space-between":"flex-start"}}>
+          {!isMobile&&<div style={{display:"flex",alignItems:"center",gap:10,paddingRight:18,borderRight:`1px solid rgba(255,255,255,0.12)`}}>
             <span style={{fontSize:26}}>📊</span>
             <div>
               <div style={{fontSize:10,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.6,textTransform:"uppercase"}}>รวมทั้งหมด</div>
               <div style={{fontSize:11,color:"#CBD5E1",fontFamily:"'Sarabun',sans-serif",fontWeight:600,marginTop:1}}>{grandTotalQty.toLocaleString()} ครั้งขาย</div>
             </div>
-          </div>
-          <div>
-            <div style={{fontSize:10,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>ยอดขาย</div>
-            <div style={{fontSize:20,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.1,marginTop:2}}>฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+          </div>}
+          <div style={isMobile?{flex:"1 1 45%"}:undefined}>
+            <div style={{fontSize:isMobile?9:10,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>{isMobile?`ยอดขาย · ${grandTotalQty} ครั้ง`:"ยอดขาย"}</div>
+            <div style={{fontSize:isMobile?16:20,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.1,marginTop:2}}>฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
           </div>
           {showCost&&<>
-            <div>
-              <div style={{fontSize:10,color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>ต้นทุน</div>
-              <div style={{fontSize:18,color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.1,marginTop:2}}>฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+            <div style={isMobile?{flex:"1 1 45%"}:undefined}>
+              <div style={{fontSize:isMobile?9:10,color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>ต้นทุน{isMobile&&costSummary.margin!=null?` · ${costSummary.margin.toFixed(1)}%`:""}</div>
+              <div style={{fontSize:isMobile?15:18,color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.1,marginTop:2}}>฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
             </div>
-            <div>
+            {!isMobile&&<div>
               <div style={{fontSize:10,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>กำไร</div>
               <div style={{fontSize:18,color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.1,marginTop:2}}>฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
-            </div>
-            {costSummary.margin!=null&&<div>
+            </div>}
+            {!isMobile&&costSummary.margin!=null&&<div>
               <div style={{fontSize:10,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>Margin</div>
               <div style={{fontSize:18,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.1,marginTop:2}}>{costSummary.margin.toFixed(1)}%</div>
             </div>}
+            {isMobile&&<div style={{flex:"1 1 100%",fontSize:11,color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginTop:-2}}>กำไร ฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</div>}
           </>}
         </div>
         {/* Save buttons */}
-        {canImport&&<div style={{display:"flex",gap:10,flexWrap:"wrap",justifyContent:"flex-end"}}>
-          {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <button key={`save-${b.branch_id}-${b.sale_date}`} onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title={`บันทึกสรุปต้นทุน ${b.sale_date} · ${br?.name||"—"} → ไปแสดงในแท็บ "สรุปต้นทุน"`} style={{background:busy?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:12,padding:"14px 24px",cursor:busy?"not-allowed":"pointer",color:C.white,fontSize:15,fontWeight:900,fontFamily:"'Sarabun',sans-serif",boxShadow:busy?"none":"0 6px 22px rgba(16,185,129,0.55)",display:"flex",alignItems:"center",gap:8,letterSpacing:.3,whiteSpace:"nowrap"}}>
-            <span style={{fontSize:18}}>{busy?"⏳":"💾"}</span>
-            <span>{busy?"กำลังบันทึก...":`บันทึกสรุป — ${b.sale_date}${batches.length>1?` · ${br?.name||"—"}`:""}`}</span>
+        {canImport&&<div style={{display:"flex",gap:isMobile?6:10,flexWrap:"wrap",justifyContent:isMobile?"stretch":"flex-end"}}>
+          {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <button key={`save-${b.branch_id}-${b.sale_date}`} onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title={`บันทึกสรุปต้นทุน ${b.sale_date} · ${br?.name||"—"} → ไปแสดงในแท็บ "สรุปต้นทุน"`} style={{background:busy?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:isMobile?10:12,padding:isMobile?"12px 14px":"14px 24px",cursor:busy?"not-allowed":"pointer",color:C.white,fontSize:isMobile?13:15,fontWeight:900,fontFamily:"'Sarabun',sans-serif",boxShadow:busy?"none":"0 6px 22px rgba(16,185,129,0.55)",display:"flex",alignItems:"center",justifyContent:"center",gap:8,letterSpacing:.3,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:44}}>
+            <span style={{fontSize:isMobile?15:18}}>{busy?"⏳":"💾"}</span>
+            <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{busy?"กำลังบันทึก...":`บันทึกสรุป — ${b.sale_date}${batches.length>1?` · ${br?.name||"—"}`:""}`}</span>
           </button>;})}
         </div>}
       </div>
@@ -4533,6 +4542,10 @@ export default function App(){
   }
 
   const isCentral=currentBranch.type==="central";
+  const isMobile=useIsMobile();
+  const[mobileNavOpen,setMobileNavOpen]=useState(false);
+  // Auto-close mobile drawer when tab changes
+  useEffect(()=>{if(isMobile)setMobileNavOpen(false);},[tab,isMobile]);
 
   const sidebarW=240;
   const accentColor=isCentral?C.teal:C.brand;
@@ -4543,8 +4556,11 @@ export default function App(){
     <ConfirmDlg/>
     <div style={{display:"flex",minHeight:"100vh",background:"#F1F5F9"}}>
 
+      {/* ── MOBILE DRAWER OVERLAY ── */}
+      {isMobile&&mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",backdropFilter:"blur(3px)",zIndex:199,animation:"mIn .2s ease"}}/>}
+
       {/* ── SIDEBAR ── */}
-      <aside style={{width:sidebarW,background:"#0F172A",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto"}}>
+      <aside style={{width:sidebarW,background:"#0F172A",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
 
         {/* Logo */}
         <div style={{padding:"22px 18px 16px",borderBottom:"1px solid rgba(255,255,255,0.07)"}}>
@@ -4612,24 +4628,29 @@ export default function App(){
       </aside>
 
       {/* ── MAIN CONTENT ── */}
-      <main style={{marginLeft:sidebarW,flex:1,minWidth:0,display:"flex",flexDirection:"column"}}>
+      <main style={{marginLeft:isMobile?0:sidebarW,flex:1,minWidth:0,display:"flex",flexDirection:"column",width:isMobile?"100%":undefined}}>
 
         {/* Top bar */}
-        <div style={{background:"#fff",borderBottom:"1px solid #E2E8F0",padding:"0 28px",height:58,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,boxShadow:"0 1px 3px rgba(15,23,42,0.05)"}}>
-          <div>
-            <h1 style={{fontSize:18,fontWeight:800,color:"#0F172A",margin:0,letterSpacing:-.3}}>{visibleTabs.find(t2=>t2.id===tab)?.l}</h1>
-            <p style={{fontSize:12,color:"#94A3B8",margin:0}}>{DESC[tab]}</p>
+        <div style={{background:"#fff",borderBottom:"1px solid #E2E8F0",padding:isMobile?"0 12px":"0 28px",height:isMobile?52:58,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,position:"sticky",top:0,zIndex:100,boxShadow:"0 1px 3px rgba(15,23,42,0.05)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0,flex:1}}>
+            {isMobile&&<button onClick={()=>setMobileNavOpen(true)} aria-label="เปิดเมนู" style={{background:`${accentColor}14`,border:`1px solid ${accentColor}33`,borderRadius:10,padding:"8px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,minWidth:40,minHeight:40}}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={accentColor} strokeWidth="2.4" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>}
+            <div style={{minWidth:0,flex:1}}>
+              <h1 style={{fontSize:isMobile?15:18,fontWeight:800,color:"#0F172A",margin:0,letterSpacing:-.3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{visibleTabs.find(t2=>t2.id===tab)?.l}</h1>
+              {!isMobile&&<p style={{fontSize:12,color:"#94A3B8",margin:0}}>{DESC[tab]}</p>}
+            </div>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:6}}>
-            <div style={{background:`linear-gradient(135deg,${accentColor}18,${accentColor}0a)`,border:`1px solid ${accentColor}30`,borderRadius:8,padding:"5px 12px",display:"flex",alignItems:"center",gap:5}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+            <div style={{background:`linear-gradient(135deg,${accentColor}18,${accentColor}0a)`,border:`1px solid ${accentColor}30`,borderRadius:8,padding:isMobile?"4px 8px":"5px 12px",display:"flex",alignItems:"center",gap:5}}>
               <div style={{width:7,height:7,borderRadius:"50%",background:accentColor}}/>
-              <span style={{fontSize:11,fontWeight:700,color:accentColor,fontFamily:"'Sarabun',sans-serif"}}>BY BOSSMAX</span>
+              <span style={{fontSize:isMobile?10:11,fontWeight:700,color:accentColor,fontFamily:"'Sarabun',sans-serif"}}>{isMobile?"BOSSMAX":"BY BOSSMAX"}</span>
             </div>
           </div>
         </div>
 
         {/* Page content */}
-        <div style={{flex:1,padding:"24px 28px 56px"}}>
+        <div style={{flex:1,padding:isMobile?"14px 12px 56px":"24px 28px 56px",minWidth:0}}>
           {initErr&&<ErrBox msg={initErr} onRetry={loadAll}/>}
           {loading?<Loading text="กำลังโหลดข้อมูลจาก Cloud..."/>:<>
             {tab==="crm"&&<CRMTab currentBranch={currentBranch} currentUser={currentUser} menus={menus}/>}
@@ -6910,4 +6931,4 @@ function BranchSelectorWithLoad({user,onSelect,onLogout}){
   return <BranchSelector branches={branches} onSelect={onSelect} user={user} onLogout={onLogout}/>;
 }
 
-const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}body{background:${C.bg};font-family:'Sarabun',sans-serif}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:${C.line};border-radius:999px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}`;
+const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html,body{max-width:100vw;overflow-x:hidden}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:${C.line};border-radius:999px}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input[type=date],input[type=number],input[type=text],input[type=tel],input[type=email],input[type=password],select,textarea{min-height:40px;font-size:16px!important}table{font-size:12px}::-webkit-scrollbar{width:3px;height:3px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}`;
