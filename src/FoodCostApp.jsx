@@ -2282,7 +2282,7 @@ function POSection({branches,ings,currentBranch,currentUser}){
   const branchOptions=branches.filter(b=>b.id!==currentBranch.id&&b.active!==false);
 
   return <div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10}}>
+    {step===null&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10}}>
       <div>
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.ink,margin:0,display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontSize:24}}>📄</span> เอกสาร PO (ใบสั่งซื้อวัตถุดิบ)
@@ -2293,19 +2293,18 @@ function POSection({branches,ings,currentBranch,currentUser}){
         <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
-    </div>
+    </div>}
 
-    {/* Direction tabs */}
-    <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+    {step===null&&<div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
       {[
         {v:"all",l:"📋 ทั้งหมด",c:C.brand},
         {v:"sent",l:"📤 ที่ฉันออก",c:C.blue},
         {v:"received",l:"📥 รอรับ / รับแล้ว",c:C.green},
       ].map(d=>{const active=direction===d.v;return <button key={d.v} onClick={()=>setDirection(d.v)} style={{padding:"7px 16px",borderRadius:10,border:`2px solid ${active?d.c:C.line}`,background:active?`${d.c}15`:C.white,color:active?d.c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:active?800:600,fontSize:13,transition:"all .15s"}}>{d.l}</button>;})}
-    </div>
+    </div>}
     {/* Filter row */}
-    <Card style={{padding:"12px 16px",marginBottom:14,background:C.bg}}>
-      <div style={{display:"grid",gridTemplateColumns:"1.5fr 1fr 1fr 1fr auto",gap:10,alignItems:"end"}}>
+    {step===null&&<><Card style={{padding:"12px 16px",marginBottom:14,background:C.bg}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(160px,100%),1fr))",gap:10,alignItems:"end"}}>
         <div>
           <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>{direction==="sent"?"ส่งไปที่":direction==="received"?"ส่งมาจาก":"คู่ค้า (จาก/ถึง)"}</div>
           <select value={partnerFilter} onChange={e=>setPartnerFilter(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
@@ -2396,26 +2395,37 @@ function POSection({branches,ings,currentBranch,currentUser}){
           </tbody>
         </table>
       </div>
-    </Card>}
+    </Card>}</>}
 
-    {/* Step 1: Pick branch */}
-    {step==='pick-branch'&&<Modal title={`🏢 เลือกสาขาปลายทาง — ส่งจาก "${currentBranch.name}" ไปยัง...`} onClose={()=>setStep(null)}>
-      {branchOptions.length===0?<div style={{padding:30,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีสาขาอื่นในระบบ — เพิ่มสาขาในแท็บ "ตั้งค่า" ก่อน</div>:
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(220px,100%),1fr))",gap:10}}>
-        {branchOptions.map(b=><button key={b.id} onClick={()=>pickBranch(b)} style={{padding:"18px 16px",border:`2px solid ${C.line}`,borderRadius:14,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
-            <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.branch} s={16} c={C.white}/></div>
-            <div>
-              <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{b.name}</div>
-              <div style={{fontSize:11,color:C.ink4}}>{b.active?"เปิดใช้งาน":"ปิดใช้งาน"}</div>
-            </div>
+    {/* Step 1: Pick branch — INLINE (was popup) */}
+    {step==='pick-branch'&&<div>
+      <div style={{background:C.white,borderRadius:14,border:`1px solid ${C.line}`,padding:"14px 18px",marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",boxShadow:"0 2px 8px rgba(15,23,42,0.04)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0,flex:1}}>
+          <button onClick={()=>setStep(null)} aria-label="ย้อนกลับ" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:6,fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:C.ink2,flexShrink:0,minHeight:40}}>← ย้อนกลับ</button>
+          <div style={{minWidth:0,flex:1}}>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,letterSpacing:-.2}}>🏢 เลือกสาขาปลายทาง</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>ส่งจาก <b style={{color:C.brand}}>"{currentBranch.name}"</b> ไปยัง...</div>
           </div>
-        </button>)}
-      </div>}
-    </Modal>}
+        </div>
+      </div>
+      <Card style={{padding:"18px 20px"}}>
+        {branchOptions.length===0?<div style={{padding:30,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีสาขาอื่นในระบบ — เพิ่มสาขาในแท็บ "ตั้งค่า" ก่อน</div>:
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(220px,100%),1fr))",gap:10}}>
+          {branchOptions.map(b=><button key={b.id} onClick={()=>pickBranch(b)} style={{padding:"18px 16px",border:`2px solid ${C.line}`,borderRadius:14,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .15s",minHeight:64}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+              <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.branch} s={16} c={C.white}/></div>
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{fontSize:14,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}</div>
+                <div style={{fontSize:11,color:C.ink4}}>{b.active?"เปิดใช้งาน":"ปิดใช้งาน"}</div>
+              </div>
+            </div>
+          </button>)}
+        </div>}
+      </Card>
+    </div>}
 
     {/* Step 2: Form */}
-    {step==='form'&&pickedBranch&&<POFormModal branch={pickedBranch} fromBranch={editPO?branchById[editPO.from_branch_id]:currentBranch} editPO={editPO} ings={ings} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved}/>}
+    {step==='form'&&pickedBranch&&<POFormPage branch={pickedBranch} fromBranch={editPO?branchById[editPO.from_branch_id]:currentBranch} editPO={editPO} ings={ings} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved}/>}
 
     {/* Full-screen view + actions */}
     {viewPO&&<POViewModal
@@ -2660,7 +2670,7 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
   </div>;
 }
 
-function POFormModal({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}){
+function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}){
   const today=todayBkk();
   const[items,setItems]=useState(editPO?.items||[]);
   const[poDate,setPoDate]=useState(editPO?.po_date||today);
@@ -2739,8 +2749,19 @@ function POFormModal({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}
     setSaving(false);
   }
 
-  return <Modal title={`${editPO?"✏️ แก้ไข":"➕ สร้าง"}เอกสาร PO — ${fromBranch?.name||""} → ${branch.name}`} onClose={onClose} extraWide>
-    <div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:10,marginBottom:14}}>
+  return <div>
+    {/* Inline page header (replaces the old popup) */}
+    <div style={{background:C.white,borderRadius:14,border:`1px solid ${C.line}`,padding:"14px 18px",marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",boxShadow:"0 2px 8px rgba(15,23,42,0.04)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0,flex:1}}>
+        <button onClick={onClose} aria-label="ย้อนกลับ" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:6,fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:C.ink2,flexShrink:0,minHeight:40}}>← ย้อนกลับ</button>
+        <div style={{minWidth:0,flex:1}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:C.ink,letterSpacing:-.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{editPO?"✏️ แก้ไขเอกสาร PO":"➕ สร้างเอกสาร PO"}</div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📤 {fromBranch?.name||"—"}  →  📥 {branch.name}</div>
+        </div>
+      </div>
+    </div>
+    <Card style={{padding:"18px 20px"}}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(180px,100%),1fr))",gap:10,marginBottom:14}}>
       <Inp label="เลขที่ PO" value={poNumber} onChange={e=>setPoNumber(e.target.value)}/>
       <Inp label="วันที่" type="date" value={poDate} onChange={e=>setPoDate(e.target.value)}/>
       <Field label="สถานะ">
@@ -2814,7 +2835,7 @@ function POFormModal({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}
     </div>
 
     {/* Notes + totals */}
-    <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:14}}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(280px,100%),1fr))",gap:14}}>
       <div>
         <div style={{fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>หมายเหตุ</div>
         <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={3} placeholder="—" style={{...iS,fontSize:13,resize:"none"}}/>
@@ -2839,11 +2860,12 @@ function POFormModal({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}
       </div>
     </div>
 
-    <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:14}}>
+    <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:14,flexWrap:"wrap"}}>
       <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
       <Btn onClick={save} loading={saving} disabled={items.length===0} icon={I.check}>{editPO?"บันทึกการแก้ไข":"บันทึกเอกสาร PO"}</Btn>
     </div>
-  </Modal>;
+    </Card>
+  </div>;
 }
 
 // ══════════════════════════════════════════════════════
