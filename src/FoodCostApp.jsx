@@ -1564,7 +1564,7 @@ function FSImportModal({branches,currentUser,onClose,onDone}){
   </Modal>;
 }
 
-function FSSalesTab({branches,currentBranch,currentUser}){
+function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[]}){
   const isCentral=currentBranch?.type==="central";
   const today=todayBkk();
   const ago=(d=>{const t=new Date();t.setDate(t.getDate()-d);return t.toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});})(7);
@@ -1573,10 +1573,27 @@ function FSSalesTab({branches,currentBranch,currentUser}){
   const[filterBranch,setFilterBranch]=useState(isCentral?"":String(currentBranch.id));
   const[dateFrom,setDateFrom]=useState(ago);
   const[dateTo,setDateTo]=useState(today);
-  const[viewMode,setViewMode]=useState("pivot");  // pivot | flat
+  const[viewMode,setViewMode]=useState("pivot");
   const[showImport,setShowImport]=useState(false);
   const[search,setSearch]=useState("");
+  const[showCost,setShowCost]=useState(true);
   const canImport=hasPerm(currentUser,"fs_sales");
+
+  // Build menu lookup by normalized name (trim + lowercase, also strip parenthesized tails)
+  const menusByName=useMemo(()=>{
+    const m=new Map();
+    const norm=(s)=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+    menus.forEach(mn=>{
+      const k=norm(mn.name);
+      if(k&&!m.has(k))m.set(k,mn);
+    });
+    return m;
+  },[menus]);
+  function findMenu(saleName){
+    const k=String(saleName||"").trim().toLowerCase().replace(/\s+/g," ");
+    if(!k)return null;
+    return menusByName.get(k)||null;
+  }
 
   async function load(){
     setLoading(true);
@@ -1591,31 +1608,71 @@ function FSSalesTab({branches,currentBranch,currentUser}){
   }
   useEffect(()=>{load();},[filterBranch,dateFrom,dateTo,currentBranch?.id]);
 
-  // Distinct dates and menus for pivot
   const filtered=useMemo(()=>{
     const q=search.trim().toLowerCase();
     return q?rows.filter(r=>r.menu_name.toLowerCase().includes(q)||(r.category||"").toLowerCase().includes(q)):rows;
   },[rows,search]);
   const dates=useMemo(()=>[...new Set(filtered.map(r=>r.sale_date))].sort(),[filtered]);
+  // Pivot rows + cost calculation
   const pivot=useMemo(()=>{
-    const m=new Map();  // menu_name → {category, totals: Map(date→qty), totalQty, totalNet}
+    const m=new Map();
     filtered.forEach(r=>{
       let row=m.get(r.menu_name);
-      if(!row){row={menu_name:r.menu_name,category:r.category||"",cells:new Map(),totalQty:0,totalNet:0};m.set(r.menu_name,row);}
+      if(!row){
+        const matched=findMenu(r.menu_name);
+        const costPerUnit=matched?round2(menuCost(matched,ings)):null;
+        row={menu_name:r.menu_name,category:r.category||"",cells:new Map(),totalQty:0,totalNet:0,matched,costPerUnit};
+        m.set(r.menu_name,row);
+      }
       row.cells.set(r.sale_date,(row.cells.get(r.sale_date)||0)+(+r.qty||0));
       row.totalQty+=+r.qty||0;
       row.totalNet+=+r.net_total||0;
     });
-    return [...m.values()].sort((a,b)=>b.totalQty-a.totalQty);
-  },[filtered]);
+    // Compute cost/profit/margin per row
+    const out=[...m.values()].map(row=>{
+      const totalCost=row.costPerUnit!=null?round2(row.costPerUnit*row.totalQty):null;
+      const profit=totalCost!=null?round2(row.totalNet-totalCost):null;
+      const margin=totalCost!=null&&row.totalNet>0?round2(profit/row.totalNet*100):null;
+      return{...row,totalCost,profit,margin};
+    });
+    return out.sort((a,b)=>b.totalQty-a.totalQty);
+  },[filtered,menusByName,ings]);
 
   const grandTotalQty=pivot.reduce((s,r)=>s+r.totalQty,0);
   const grandTotalNet=round2(pivot.reduce((s,r)=>s+r.totalNet,0));
+  // Costs only for matched menus
+  const costSummary=useMemo(()=>{
+    let totalCost=0,matchedRevenue=0,unmatchedRevenue=0,matchedCount=0,unmatchedCount=0;
+    pivot.forEach(r=>{
+      if(r.matched){matchedCount++;totalCost+=r.totalCost||0;matchedRevenue+=r.totalNet||0;}
+      else{unmatchedCount++;unmatchedRevenue+=r.totalNet||0;}
+    });
+    totalCost=round2(totalCost);matchedRevenue=round2(matchedRevenue);unmatchedRevenue=round2(unmatchedRevenue);
+    const profit=round2(matchedRevenue-totalCost);
+    const margin=matchedRevenue>0?round2(profit/matchedRevenue*100):null;
+    return{totalCost,matchedRevenue,unmatchedRevenue,matchedCount,unmatchedCount,profit,margin};
+  },[pivot]);
+  const unmatchedMenus=useMemo(()=>pivot.filter(r=>!r.matched).map(r=>r.menu_name),[pivot]);
 
   function exportXlsx(){
     if(rows.length===0){alert("ไม่มีข้อมูลให้ export");return;}
-    const sheet1=pivot.map(p=>{const o={"เมนู":p.menu_name,"หมวด":p.category||""};dates.forEach(d=>{o[d]=p.cells.get(d)||0;});o["รวม (จำนวน)"]=p.totalQty;o["รวม (฿)"]=p.totalNet;return o;});
-    const sheet2=filtered.map(r=>({"วันที่":r.sale_date,"สาขา":branches.find(b=>+b.id===+r.branch_id)?.name||"","เมนู":r.menu_name,"หมวด":r.category||"","จำนวน":+r.qty||0,"ราคาเฉลี่ย":+r.price_avg||0,"ยอดสุทธิ":+r.net_total||0}));
+    const sheet1=pivot.map(p=>{
+      const o={"เมนู":p.menu_name,"หมวด":p.category||"","จับคู่ระบบ":p.matched?"✅":"❌"};
+      dates.forEach(d=>{o[d]=p.cells.get(d)||0;});
+      o["รวม (จำนวน)"]=p.totalQty;
+      o["ยอดขาย (฿)"]=p.totalNet;
+      o["ต้นทุน/หน่วย"]=p.costPerUnit==null?"":p.costPerUnit;
+      o["ต้นทุนรวม"]=p.totalCost==null?"":p.totalCost;
+      o["กำไร"]=p.profit==null?"":p.profit;
+      o["% กำไร"]=p.margin==null?"":p.margin;
+      return o;
+    });
+    const sheet2=filtered.map(r=>{
+      const m=findMenu(r.menu_name);
+      const cu=m?round2(menuCost(m,ings)):null;
+      const cost=cu!=null?round2(cu*(+r.qty||0)):null;
+      return{"วันที่":r.sale_date,"สาขา":branches.find(b=>+b.id===+r.branch_id)?.name||"","เมนู":r.menu_name,"จับคู่ระบบ":m?"✅":"❌","หมวด":r.category||"","จำนวน":+r.qty||0,"ราคาเฉลี่ย":+r.price_avg||0,"ยอดสุทธิ":+r.net_total||0,"ต้นทุน/หน่วย":cu??"","ต้นทุนรวม":cost??"","กำไร":cost!=null?round2((+r.net_total||0)-cost):""};
+    });
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(sheet1),"Pivot");
     XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(sheet2),"รายการรายวัน");
@@ -1685,9 +1742,35 @@ function FSSalesTab({branches,currentBranch,currentUser}){
       </div>
     </div>}
 
-    {/* Toggle view */}
-    <div style={{display:"flex",gap:6,marginBottom:10}}>
+    {/* Cost summary cards */}
+    {rows.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:14}}>
+      {[
+        {l:"💰 ยอดขายรวม",v:`฿${grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}`,c:C.brand,sub:`${grandTotalQty} ครั้ง`},
+        {l:"📦 ต้นทุนรวม",v:`฿${costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}`,c:C.red,sub:`เฉพาะเมนูที่จับคู่`},
+        {l:"📈 กำไรรวม",v:`฿${costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}`,c:costSummary.profit>=0?C.green:C.red,sub:costSummary.margin!=null?`${costSummary.margin.toFixed(1)}% margin`:"—"},
+        {l:"✅ จับคู่ระบบได้",v:`${costSummary.matchedCount}/${pivot.length}`,c:C.green,sub:`฿${costSummary.matchedRevenue.toLocaleString(undefined,{minimumFractionDigits:2})}`},
+        ...(costSummary.unmatchedCount>0?[{l:"⚠️ ยังไม่จับคู่",v:`${costSummary.unmatchedCount} เมนู`,c:"#EA580C",sub:`฿${costSummary.unmatchedRevenue.toLocaleString(undefined,{minimumFractionDigits:2})}`}]:[]),
+      ].map(s=><Card key={s.l} style={{padding:"12px 14px"}}>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginBottom:4}}>{s.l}</div>
+        <div style={{fontSize:18,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif",lineHeight:1.2}}>{s.v}</div>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{s.sub}</div>
+      </Card>)}
+    </div>}
+
+    {/* Unmatched menus warning */}
+    {unmatchedMenus.length>0&&<div style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:12,color:"#92400E",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
+      <div style={{fontWeight:800,marginBottom:4}}>⚠️ พบ {unmatchedMenus.length} เมนูใน FoodStory ที่ยังไม่ได้สร้างในระบบ — คำนวณต้นทุนไม่ได้</div>
+      <div style={{fontSize:11,color:"#7C2D12"}}>{unmatchedMenus.slice(0,8).join(" · ")}{unmatchedMenus.length>8?` · +อีก ${unmatchedMenus.length-8} เมนู`:""}</div>
+      <div style={{fontSize:11,color:"#7C2D12",marginTop:4}}>💡 ไปแท็บ "เมนู" เพื่อสร้างเมนูเหล่านี้พร้อมวัตถุดิบ — ระบบจะคำนวณต้นทุนให้อัตโนมัติ</div>
+    </div>}
+
+    {/* Toggle view + cost columns */}
+    <div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center",flexWrap:"wrap"}}>
       {[{v:"pivot",l:"📈 Pivot (เมนู × วันที่)"},{v:"flat",l:"📋 รายการรายวัน"}].map(o=>{const sel=viewMode===o.v;return <button key={o.v} onClick={()=>setViewMode(o.v)} style={{padding:"6px 14px",borderRadius:9,border:`2px solid ${sel?C.brand:C.line}`,background:sel?C.brandLight:C.white,color:sel?C.brand:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12}}>{o.l}</button>;})}
+      <label style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,fontWeight:600}}>
+        <input type="checkbox" checked={showCost} onChange={e=>setShowCost(e.target.checked)} style={{accentColor:C.brand,width:14,height:14}}/>
+        แสดงคอลัมน์ต้นทุน/กำไร
+      </label>
     </div>
 
     {/* Table */}
@@ -1702,21 +1785,39 @@ function FSSalesTab({branches,currentBranch,currentUser}){
             <th style={{padding:"11px 12px",textAlign:"left",fontSize:11,color:"#F8FAFC",fontWeight:700,whiteSpace:"nowrap",position:"sticky",left:0,background:"#0F172A",zIndex:3,minWidth:200}}>เมนู</th>
             <th style={{padding:"11px 12px",textAlign:"left",fontSize:11,color:"#F8FAFC",fontWeight:700,whiteSpace:"nowrap"}}>หมวด</th>
             {dates.map(d=><th key={d} style={{padding:"11px 10px",textAlign:"center",fontSize:11,color:"#F8FAFC",fontWeight:700,whiteSpace:"nowrap"}}>{d.slice(5)}</th>)}
-            <th style={{padding:"11px 12px",textAlign:"right",fontSize:11,color:"#F8FAFC",fontWeight:800,background:"#1E293B",whiteSpace:"nowrap"}}>รวม (จำนวน)</th>
-            <th style={{padding:"11px 12px",textAlign:"right",fontSize:11,color:"#F8FAFC",fontWeight:800,background:"#1E293B",whiteSpace:"nowrap"}}>รวม (฿)</th>
+            <th style={{padding:"11px 12px",textAlign:"right",fontSize:11,color:"#F8FAFC",fontWeight:800,background:"#1E293B",whiteSpace:"nowrap"}}>จำนวน</th>
+            <th style={{padding:"11px 12px",textAlign:"right",fontSize:11,color:"#F8FAFC",fontWeight:800,background:"#1E293B",whiteSpace:"nowrap"}}>ยอดขาย (฿)</th>
+            {showCost&&<>
+              <th style={{padding:"11px 12px",textAlign:"right",fontSize:11,color:"#FCA5A5",fontWeight:800,background:"#7F1D1D",whiteSpace:"nowrap"}}>ต้นทุน</th>
+              <th style={{padding:"11px 12px",textAlign:"right",fontSize:11,color:"#A7F3D0",fontWeight:800,background:"#064E3B",whiteSpace:"nowrap"}}>กำไร</th>
+              <th style={{padding:"11px 12px",textAlign:"right",fontSize:11,color:"#A7F3D0",fontWeight:800,background:"#064E3B",whiteSpace:"nowrap"}}>%</th>
+            </>}
           </tr></thead>
           <tbody>
             {pivot.map((p,idx)=><tr key={p.menu_name} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC"}}>
-              <td style={{padding:"9px 12px",fontSize:13,fontWeight:700,color:C.ink,position:"sticky",left:0,background:idx%2===0?C.white:"#FAFBFC",zIndex:1}}>{p.menu_name}</td>
+              <td style={{padding:"9px 12px",fontSize:13,fontWeight:700,color:C.ink,position:"sticky",left:0,background:idx%2===0?C.white:"#FAFBFC",zIndex:1}}>
+                {p.menu_name}
+                {!p.matched&&<span title="เมนูนี้ยังไม่อยู่ในระบบ — คำนวณต้นทุนไม่ได้" style={{marginLeft:6,fontSize:10,background:"#FEF3C7",color:"#92400E",padding:"1px 6px",borderRadius:8,fontWeight:700}}>⚠ ยังไม่จับคู่</span>}
+              </td>
               <td style={{padding:"9px 12px",fontSize:11,color:C.ink3}}>{p.category||"—"}</td>
               {dates.map(d=>{const v=p.cells.get(d)||0;return <td key={d} style={{padding:"9px 10px",textAlign:"center",fontSize:13,fontWeight:v>0?700:400,color:v>0?C.ink:C.ink4}}>{v||"·"}</td>;})}
               <td style={{padding:"9px 12px",textAlign:"right",fontSize:14,fontWeight:900,color:C.brand,background:C.brandLight}}>{p.totalQty}</td>
               <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,fontWeight:700,color:C.ink,background:C.brandLight}}>฿{round2(p.totalNet).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+              {showCost&&<>
+                <td style={{padding:"9px 12px",textAlign:"right",fontSize:12,fontWeight:700,color:p.totalCost!=null?C.red:C.ink4,background:"#FEF2F2"}}>{p.totalCost!=null?`฿${p.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}`:"—"}</td>
+                <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,fontWeight:800,color:p.profit!=null?(p.profit>=0?C.green:C.red):C.ink4,background:C.greenLight}}>{p.profit!=null?`฿${p.profit.toLocaleString(undefined,{minimumFractionDigits:2})}`:"—"}</td>
+                <td style={{padding:"9px 12px",textAlign:"right",fontSize:12,fontWeight:700,color:p.margin!=null?(p.margin>=60?C.green:p.margin>=40?C.yellow:C.red):C.ink4,background:C.greenLight}}>{p.margin!=null?`${p.margin.toFixed(1)}%`:"—"}</td>
+              </>}
             </tr>)}
             <tr style={{background:"#0F172A",color:"#F8FAFC",fontWeight:900}}>
               <td colSpan={2+dates.length} style={{padding:"11px 12px",fontSize:13,textAlign:"right"}}>รวมทั้งหมด</td>
               <td style={{padding:"11px 12px",textAlign:"right",fontSize:15,color:"#F8FAFC"}}>{grandTotalQty}</td>
               <td style={{padding:"11px 12px",textAlign:"right",fontSize:14,color:"#F8FAFC"}}>฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+              {showCost&&<>
+                <td style={{padding:"11px 12px",textAlign:"right",fontSize:13,color:"#FCA5A5"}}>฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td style={{padding:"11px 12px",textAlign:"right",fontSize:14,color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5"}}>฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td style={{padding:"11px 12px",textAlign:"right",fontSize:13,color:"#A7F3D0"}}>{costSummary.margin!=null?`${costSummary.margin.toFixed(1)}%`:"—"}</td>
+              </>}
             </tr>
           </tbody>
         </table>
@@ -1725,18 +1826,31 @@ function FSSalesTab({branches,currentBranch,currentUser}){
       <div style={{overflowX:"auto",maxHeight:560}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
           <thead style={{position:"sticky",top:0,zIndex:1}}><tr style={{background:"#0F172A"}}>
-            {["วันที่","สาขา","เมนู","หมวด","จำนวน","ราคา/หน่วย","ยอดสุทธิ"].map((h,i)=><th key={h} style={{padding:"11px 12px",textAlign:i>=4?"right":"left",fontSize:11,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap"}}>{h}</th>)}
+            {(showCost?["วันที่","สาขา","เมนู","หมวด","จำนวน","ราคา/หน่วย","ยอดสุทธิ","ต้นทุน","กำไร"]:["วันที่","สาขา","เมนู","หมวด","จำนวน","ราคา/หน่วย","ยอดสุทธิ"]).map((h,i)=><th key={h} style={{padding:"11px 12px",textAlign:i>=4?"right":"left",fontSize:11,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap"}}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {filtered.map((r,i)=><tr key={i} style={{borderTop:`1px solid ${C.lineLight}`,background:i%2===0?C.white:"#FAFBFC"}}>
-              <td style={{padding:"8px 12px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{r.sale_date}</td>
-              <td style={{padding:"8px 12px",fontSize:12,color:C.ink3}}>{branches.find(b=>+b.id===+r.branch_id)?.name||"—"}</td>
-              <td style={{padding:"8px 12px",fontSize:13,fontWeight:600,color:C.ink}}>{r.menu_name}</td>
-              <td style={{padding:"8px 12px",fontSize:11,color:C.ink3}}>{r.category||"—"}</td>
-              <td style={{padding:"8px 12px",textAlign:"right",fontSize:13,fontWeight:700,color:C.brand}}>{r.qty}</td>
-              <td style={{padding:"8px 12px",textAlign:"right",fontSize:12,color:C.ink3}}>฿{(+r.price_avg||0).toFixed(2)}</td>
-              <td style={{padding:"8px 12px",textAlign:"right",fontSize:13,fontWeight:700,color:C.ink}}>฿{(+r.net_total||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-            </tr>)}
+            {filtered.map((r,i)=>{
+              const matched=findMenu(r.menu_name);
+              const cu=matched?round2(menuCost(matched,ings)):null;
+              const cost=cu!=null?round2(cu*(+r.qty||0)):null;
+              const profit=cost!=null?round2((+r.net_total||0)-cost):null;
+              return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`,background:i%2===0?C.white:"#FAFBFC"}}>
+                <td style={{padding:"8px 12px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{r.sale_date}</td>
+                <td style={{padding:"8px 12px",fontSize:12,color:C.ink3}}>{branches.find(b=>+b.id===+r.branch_id)?.name||"—"}</td>
+                <td style={{padding:"8px 12px",fontSize:13,fontWeight:600,color:C.ink}}>
+                  {r.menu_name}
+                  {!matched&&<span style={{marginLeft:6,fontSize:9,background:"#FEF3C7",color:"#92400E",padding:"1px 5px",borderRadius:6,fontWeight:700}}>⚠</span>}
+                </td>
+                <td style={{padding:"8px 12px",fontSize:11,color:C.ink3}}>{r.category||"—"}</td>
+                <td style={{padding:"8px 12px",textAlign:"right",fontSize:13,fontWeight:700,color:C.brand}}>{r.qty}</td>
+                <td style={{padding:"8px 12px",textAlign:"right",fontSize:12,color:C.ink3}}>฿{(+r.price_avg||0).toFixed(2)}</td>
+                <td style={{padding:"8px 12px",textAlign:"right",fontSize:13,fontWeight:700,color:C.ink}}>฿{(+r.net_total||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                {showCost&&<>
+                  <td style={{padding:"8px 12px",textAlign:"right",fontSize:12,fontWeight:700,color:cost!=null?C.red:C.ink4}}>{cost!=null?`฿${cost.toLocaleString(undefined,{minimumFractionDigits:2})}`:"—"}</td>
+                  <td style={{padding:"8px 12px",textAlign:"right",fontSize:13,fontWeight:800,color:profit!=null?(profit>=0?C.green:C.red):C.ink4}}>{profit!=null?`฿${profit.toLocaleString(undefined,{minimumFractionDigits:2})}`:"—"}</td>
+                </>}
+              </tr>;
+            })}
           </tbody>
         </table>
       </div>
@@ -4256,7 +4370,7 @@ export default function App(){
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers}/>}
-            {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser}/>}
+            {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings}/>}
             {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
