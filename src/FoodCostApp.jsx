@@ -4417,6 +4417,10 @@ export default function App(){
   const[printers,setPrinters]=useState([]);
   const[loading,setLoading]=useState(false);const[initErr,setInitErr]=useState("");
   const[tab,setTab]=useState("pos");
+  const isMobile=useIsMobile();
+  const[mobileNavOpen,setMobileNavOpen]=useState(false);
+  // Auto-close mobile drawer when tab changes
+  useEffect(()=>{if(isMobile)setMobileNavOpen(false);},[tab,isMobile]);
 
   const ingCats=useMemo(()=>allCats.filter(c=>c.type==="ingredient"),[allCats]);
   const menuCats=useMemo(()=>allCats.filter(c=>c.type==="menu"),[allCats]);
@@ -4571,10 +4575,6 @@ export default function App(){
   }
 
   const isCentral=currentBranch.type==="central";
-  const isMobile=useIsMobile();
-  const[mobileNavOpen,setMobileNavOpen]=useState(false);
-  // Auto-close mobile drawer when tab changes
-  useEffect(()=>{if(isMobile)setMobileNavOpen(false);},[tab,isMobile]);
 
   const sidebarW=240;
   const accentColor=isCentral?C.teal:C.brand;
