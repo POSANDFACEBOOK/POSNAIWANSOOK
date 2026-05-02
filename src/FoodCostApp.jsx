@@ -1061,9 +1061,9 @@ function foodCostPct(menu,ings){
 }
 // Cost % buckets (Thai restaurant industry standard)
 const COST_BUCKETS=[
-  {id:"low",    label:"🟢 ต้นทุนต่ำ",    short:"≤25%",  range:[0,25],    color:"#10B981", bg:"#D1FAE5"},
-  {id:"normal", label:"🟡 ปกติ",         short:"26-35%",range:[26,35],   color:"#F59E0B", bg:"#FEF3C7"},
-  {id:"high",   label:"🟠 สูง",          short:"36-50%",range:[36,50],   color:"#EA580C", bg:"#FFEDD5"},
+  {id:"low",    label:"🟢 ต้นทุนต่ำ",    short:"≤30%",  range:[0,30],    color:"#10B981", bg:"#D1FAE5"},
+  {id:"normal", label:"🟡 ปกติ",         short:"31-40%",range:[31,40],   color:"#F59E0B", bg:"#FEF3C7"},
+  {id:"high",   label:"🟠 สูง",          short:"41-50%",range:[41,50],   color:"#EA580C", bg:"#FFEDD5"},
   {id:"crit",   label:"🔴 วิกฤต",        short:">50%",  range:[51,9999], color:"#EF4444", bg:"#FEE2E2"},
 ];
 function SOPTab({menus,reload,ings,currentUser,currentBranch}){
