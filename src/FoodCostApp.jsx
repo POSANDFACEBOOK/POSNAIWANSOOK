@@ -376,9 +376,10 @@ function useIsMobile(breakpoint=768){
 }
 function Modal({title,onClose,children,wide,extraWide}){
   const mob=useIsMobile();
-  useEffect(()=>{const h=e=>e.key==="Escape"&&onClose();document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[]);
+  // Intentional: do NOT close on Escape or backdrop click — only the × button.
+  // Prevents losing in-progress form data when accidentally tapping outside the modal.
   const cap=extraWide?1000:wide?760:560;
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",zIndex:1000,padding:mob?0:16}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",zIndex:1000,padding:mob?0:16}}>
     <div style={{background:C.white,borderRadius:mob?"18px 18px 0 0":20,width:"100%",maxWidth:`min(96vw, ${cap}px)`,maxHeight:mob?"96vh":"94vh",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(15,23,42,.22)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:mob?"14px 16px 12px":"18px 24px 14px",borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,background:C.bg,gap:10}}>
         <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:mob?16:18,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{title}</span>
@@ -398,7 +399,8 @@ function confirmDlg(opts){
 function ConfirmDlg(){
   const[st,setSt]=useState(null);
   useEffect(()=>{_confirmOpener=(opts,resolve)=>setSt({opts,resolve});return()=>{_confirmOpener=null;};},[]);
-  useEffect(()=>{if(!st)return;const h=e=>{if(e.key==="Escape"){e.preventDefault();const r=st.resolve;setSt(null);r(false);}else if(e.key==="Enter"){e.preventDefault();const r=st.resolve;setSt(null);r(true);}};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[st]);
+  // No keyboard shortcuts — user must explicitly press a button.
+  useEffect(()=>{if(!st)return;const h=e=>{if(e.key==="Enter"){e.preventDefault();const r=st.resolve;setSt(null);r(true);}};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[st]);
   if(!st)return null;
   const close=v=>{const r=st.resolve;setSt(null);r(v);};
   const o=st.opts;
@@ -409,7 +411,7 @@ function ConfirmDlg(){
   const cancel=o.cancelLabel||"ยกเลิก";
   const accent=danger?C.red:C.brand;
   const accentLight=danger?C.redLight:C.brandLight;
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}} onClick={e=>e.target===e.currentTarget&&close(false)}>
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}}>
     <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:"26px 22px 18px",textAlign:"center"}}>
         <div style={{width:64,height:64,margin:"0 auto 14px",borderRadius:"50%",background:accentLight,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 8px 24px ${accent}33`,border:`1px solid ${accent}22`}}>
@@ -1323,7 +1325,7 @@ window.addEventListener('load',async()=>{
       </>:<div style={{textAlign:"center",padding:"100px 0",color:C.ink4}}><Ic d={I.sop} s={52} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:16}}>เลือกเมนูเพื่อดู SOP</p></div>}
     </Card>
   </div>
-  {ingPopup&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1500,padding:16}} onClick={e=>e.target===e.currentTarget&&setIngPopup(null)}>
+  {ingPopup&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1500,padding:16}}>
     <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:"20px 24px 0",borderBottom:`1px solid ${C.lineLight}`,paddingBottom:16,background:C.bg,display:"flex",alignItems:"center",gap:10}}>
         <div style={{width:40,height:40,borderRadius:"50%",background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,border:`1px solid ${C.brandBorder}`}}>
@@ -5345,8 +5347,8 @@ const PAY_METHODS=[
   {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
 ];
 function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null}){
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}} onClick={onClose}>
-    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
       <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
         <div>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:900,fontSize:18}}>💳 ชำระเงิน</div>
