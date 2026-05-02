@@ -2045,17 +2045,19 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
                 <td style={{padding:"9px 12px",textAlign:"right",fontSize:12,fontWeight:700,color:p.margin!=null?(p.margin>=60?C.green:p.margin>=40?C.yellow:C.red):C.ink4,background:C.greenLight}}>{p.margin!=null?`${p.margin.toFixed(1)}%`:"—"}</td>
               </>}
             </tr>)}
+          </tbody>
+          <tfoot>
             <tr style={{background:"#0F172A",color:"#F8FAFC",fontWeight:900}}>
-              <td colSpan={2+dates.length} style={{padding:"11px 12px",fontSize:13,textAlign:"right"}}>รวมทั้งหมด</td>
-              <td style={{padding:"11px 12px",textAlign:"right",fontSize:15,color:"#F8FAFC"}}>{grandTotalQty}</td>
-              <td style={{padding:"11px 12px",textAlign:"right",fontSize:14,color:"#F8FAFC"}}>฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+              <td colSpan={2+dates.length} style={{padding:"13px 12px",fontSize:14,textAlign:"right",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>รวมทั้งหมด</td>
+              <td style={{padding:"13px 12px",textAlign:"right",fontSize:16,color:"#F8FAFC",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>{grandTotalQty}</td>
+              <td style={{padding:"13px 12px",textAlign:"right",fontSize:15,color:"#F8FAFC",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
               {showCost&&<>
-                <td style={{padding:"11px 12px",textAlign:"right",fontSize:13,color:"#FCA5A5"}}>฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-                <td style={{padding:"11px 12px",textAlign:"right",fontSize:14,color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5"}}>฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-                <td style={{padding:"11px 12px",textAlign:"right",fontSize:13,color:"#A7F3D0"}}>{costSummary.margin!=null?`${costSummary.margin.toFixed(1)}%`:"—"}</td>
+                <td style={{padding:"13px 12px",textAlign:"right",fontSize:14,color:"#FCA5A5",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td style={{padding:"13px 12px",textAlign:"right",fontSize:15,color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td style={{padding:"13px 12px",textAlign:"right",fontSize:14,color:"#A7F3D0",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>{costSummary.margin!=null?`${costSummary.margin.toFixed(1)}%`:"—"}</td>
               </>}
             </tr>
-          </tbody>
+          </tfoot>
         </table>
       </div>
     </Card>:<Card style={{padding:0,overflow:"hidden"}}>
@@ -2093,9 +2095,43 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
               </tr>;
             })}
           </tbody>
+          <tfoot>
+            <tr style={{background:"#0F172A",color:"#F8FAFC",fontWeight:900}}>
+              <td colSpan={4} style={{padding:"13px 12px",fontSize:14,textAlign:"right",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>รวมทั้งหมด</td>
+              <td style={{padding:"13px 12px",textAlign:"right",fontSize:16,color:"#F8FAFC",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>{grandTotalQty}</td>
+              <td style={{padding:"13px 12px",textAlign:"right",fontSize:13,color:"#94A3B8",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>—</td>
+              <td style={{padding:"13px 12px",textAlign:"right",fontSize:15,color:"#F8FAFC",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+              {showCost&&<>
+                <td style={{padding:"13px 12px",textAlign:"right",fontSize:14,color:"#FCA5A5",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td style={{padding:"13px 12px",textAlign:"right",fontSize:15,color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5",position:"sticky",bottom:0,background:"#0F172A",zIndex:3,boxShadow:"0 -2px 8px rgba(0,0,0,0.25)"}}>฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+              </>}
+            </tr>
+          </tfoot>
         </table>
       </div>
     </Card>}
+
+    {/* Sticky bottom action bar — totals + big save buttons per batch */}
+    {batches.length>0&&<div style={{position:"sticky",bottom:0,zIndex:50,marginTop:14,background:"linear-gradient(135deg,#0F172A,#1E293B)",borderRadius:14,padding:"16px 20px",boxShadow:"0 -8px 24px rgba(15,23,42,0.25)",border:`2px solid ${C.brand}`,display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+      <div style={{flex:"1 1 260px",minWidth:240}}>
+        <div style={{fontSize:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:800,letterSpacing:.5,textTransform:"uppercase"}}>ยอดรวมทั้งหมด</div>
+        <div style={{fontSize:24,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:900,lineHeight:1.2,marginTop:2}}>
+          ฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}
+          <span style={{fontSize:13,color:"#CBD5E1",fontWeight:700,marginLeft:10}}>· {grandTotalQty} ครั้ง</span>
+        </div>
+        {showCost&&<div style={{fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginTop:4,display:"flex",gap:12,flexWrap:"wrap"}}>
+          <span style={{color:"#FCA5A5"}}>ต้นทุน ฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+          <span style={{color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5"}}>กำไร ฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+          {costSummary.margin!=null&&<span style={{color:"#A7F3D0"}}>{costSummary.margin.toFixed(1)}% margin</span>}
+        </div>}
+      </div>
+      {canImport&&<div style={{display:"flex",gap:10,flexWrap:"wrap",justifyContent:"flex-end"}}>
+        {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <button key={`save-${b.branch_id}-${b.sale_date}`} onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title={`บันทึกสรุปต้นทุน ${b.sale_date} · ${br?.name||"—"} → ไปแสดงในแท็บ "สรุปต้นทุน"`} style={{background:busy?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:12,padding:"14px 22px",cursor:busy?"not-allowed":"pointer",color:C.white,fontSize:15,fontWeight:900,fontFamily:"'Sarabun',sans-serif",boxShadow:busy?"none":"0 6px 18px rgba(16,185,129,0.45)",display:"flex",alignItems:"center",gap:8,letterSpacing:.3,whiteSpace:"nowrap"}}>
+          <span style={{fontSize:18}}>{busy?"⏳":"💾"}</span>
+          <span>{busy?"กำลังบันทึก...":`บันทึกสรุป — ${b.sale_date}${batches.length>1?` · ${br?.name||"—"}`:""}`}</span>
+        </button>;})}
+      </div>}
+    </div>}
 
     {showImport&&<FSImportModal branches={branches} currentUser={currentUser} onClose={()=>setShowImport(false)} onDone={()=>{setShowImport(false);load();}}/>}
   </div>;
