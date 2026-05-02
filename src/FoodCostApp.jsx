@@ -3088,7 +3088,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
       return{...f,allowed_branches:next};
     });
   }
-  const bF0={name:"",type:"branch",active:true,allowed_perms:null};
+  const bF0={name:"",type:"branch",active:true};
   const[branchForm,setBranchForm]=useState(bF0);const[editBID,setEditBID]=useState(null);
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
@@ -3142,28 +3142,13 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   async function saveBranch(){
     if(!branchForm.name)return;
     try{
-      // Auto-collapse "ครบทุกแท็บ" → null so newly-added perms in the future are inherited automatically
-      let allowed=branchForm.allowed_perms;
-      if(Array.isArray(allowed)&&allowed.length>=ALL_PERMS.length&&ALL_PERMS.every(p=>allowed.includes(p.id)))allowed=null;
-      const payload={name:branchForm.name,type:branchForm.type,active:branchForm.active,allowed_perms:allowed};
+      // Branch-level perm gating removed — permissions are managed per-user only.
+      // Send allowed_perms:null to clear any legacy data so the column doesn't gate visibility anymore.
+      const payload={name:branchForm.name,type:branchForm.type,active:branchForm.active,allowed_perms:null};
       if(editBID)await api.updateBranch(editBID,payload);else await api.addBranch(payload);
       await reloadBranches();
       setBranchForm(bF0);setEditBID(null);
     }catch(e){showErr("บันทึกไม่สำเร็จ",e);}
-  }
-  // One-click migration: open this branch's allowed_perms to include every current perm
-  async function unlockAllPerms(b){
-    if(!await confirmDlg({title:"เปิดสิทธิ์ทุกแท็บ",message:`เปิดสิทธิ์ทุกแท็บให้สาขา "${b.name}"?\n\nสาขานี้จะเห็นทุกฟีเจอร์ของระบบ (รวมที่เพิ่มในอนาคต) — ผู้ใช้แต่ละคนยังคงต้องมีสิทธิ์ตามที่กำหนด`,confirmLabel:"เปิดทุกแท็บ"}))return;
-    try{await api.updateBranch(b.id,{allowed_perms:null});await reloadBranches();}
-    catch(e){showErr("อัพเดทไม่สำเร็จ",e);}
-  }
-  function toggleBranchPerm(p){
-    setBranchForm(f=>{
-      // null = "ทุกแท็บ" → start from full list, then remove the one being toggled off
-      const current=f.allowed_perms===null?ALL_PERMS.map(x=>x.id):f.allowed_perms;
-      const next=current.includes(p)?current.filter(x=>x!==p):[...current,p];
-      return{...f,allowed_perms:next};
-    });
   }
   async function savePrinter(){
     const isBT=pForm.conn==="bluetooth";
@@ -3187,19 +3172,15 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     {section==="branches"&&<div>
       <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:14}}>จัดการสาขา</h3>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12,marginBottom:16}}>
-        {branches.map(b=>{
-          const allowed=b.allowed_perms;
-          const allowAll=allowed===null||allowed===undefined;
-          const allowedCount=allowAll?ALL_PERMS.length:(allowed?.length||0);
-          return <Card key={b.id} style={{padding:"14px 16px"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+        {branches.map(b=><Card key={b.id} style={{padding:"14px 16px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
             <div>
               <div style={{fontWeight:700,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:5}}>{b.name}</div>
               <Chip color={b.type==="central"?"teal":"orange"}>{b.type==="central"?"ครัวกลาง":"สาขา"}</Chip>
               <Chip color={b.active?"green":"gray"} style={{marginLeft:4}}>{b.active?"เปิด":"ปิด"}</Chip>
             </div>
             {isAdmin&&<div style={{display:"flex",gap:4}}>
-              <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active,allowed_perms:b.allowed_perms===undefined?null:b.allowed_perms});setEditBID(b.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+              <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active});setEditBID(b.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
               {b.type!=="central"&&<button onClick={async()=>{
                 if(!await confirmDlg({title:b.active?"ปิดใช้งานสาขา":"เปิดใช้งานสาขา",message:b.active?`ปิดใช้งาน "${b.name}"?\n\nสาขาจะไม่ปรากฏใน picker, การสแกน QR ของสาขานี้จะถูกปฏิเสธ\n(ข้อมูลทั้งหมดจะยังอยู่ — ไม่ลบจริง)`:`เปิดใช้งาน "${b.name}" อีกครั้ง?`,danger:b.active,confirmLabel:b.active?"ปิดใช้งาน":"เปิดใช้งาน"}))return;
                 try{await api.updateBranch(b.id,{active:!b.active});await reloadBranches();}
@@ -3207,44 +3188,17 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
               }} title={b.active?"ปิดใช้งาน (Soft delete)":"เปิดใช้งาน"} style={{background:b.active?C.redLight:C.greenLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={b.active?I.trash:I.refresh} s={13} c={b.active?C.red:C.green}/></button>}
             </div>}
           </div>
-          <div style={{paddingTop:8,borderTop:`1px dashed ${C.lineLight}`,fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
-            🔓 เห็น <b style={{color:allowAll?C.green:allowedCount===0?C.red:C.brand}}>{allowAll?"ทุกแท็บ":allowedCount===0?"ไม่เห็นเลย":`${allowedCount}/${ALL_PERMS.length} แท็บ`}</b>
-          </div>
-          {/* New-feature warning: branch was set up before some perms existed */}
-          {!allowAll&&allowedCount>0&&allowedCount<ALL_PERMS.length&&(()=>{
-            const missing=ALL_PERMS.filter(p=>!allowed.includes(p.id));
-            return <div style={{marginTop:8,padding:"8px 10px",background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:8,fontSize:11,color:"#92400E",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}} title={"แท็บที่ขาด: "+missing.map(p=>p.label).join(", ")}>
-              ⚠️ มี <b>{missing.length}</b> ฟีเจอร์ที่ยังไม่ได้เปิดสิทธิ์: <b>{missing.slice(0,2).map(p=>p.label).join(", ")}{missing.length>2?` +${missing.length-2}`:""}</b>
-              {isAdmin&&<button onClick={()=>unlockAllPerms(b)} style={{display:"block",marginTop:6,background:C.brand,color:C.white,border:"none",borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>🔓 เปิดสิทธิ์ทุกแท็บให้สาขานี้</button>}
-            </div>;
-          })()}
-        </Card>;})}
+        </Card>)}
       </div>
       {isAdmin&&<Card style={{padding:"16px 18px"}}>
         <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>{editBID?"แก้ไขสาขา":"เพิ่มสาขาใหม่"}</h4>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:8}}>
           <Inp label="ชื่อสาขา" value={branchForm.name} onChange={e=>setBranchForm(f=>({...f,name:e.target.value}))} placeholder="ชื่อสาขา"/>
           <Field label="ประเภท"><select value={branchForm.type} onChange={e=>setBranchForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="branch">สาขา</option><option value="central">ครัวกลาง</option></select></Field>
           <Field label="สถานะ"><select value={branchForm.active?"true":"false"} onChange={e=>setBranchForm(f=>({...f,active:e.target.value==="true"}))} style={{...iS,appearance:"none"}}><option value="true">เปิดใช้งาน</option><option value="false">ปิดใช้งาน</option></select></Field>
         </div>
-        {/* Allowed perms */}
-        <div style={{marginTop:6,marginBottom:12}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-            <label style={{fontSize:13,fontWeight:600,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>🔓 แท็บที่สาขานี้เห็นได้</label>
-            <div style={{display:"flex",gap:6}}>
-              <button onClick={()=>setBranchForm(f=>({...f,allowed_perms:null}))} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${branchForm.allowed_perms===null?C.green:C.line}`,background:branchForm.allowed_perms===null?C.greenLight:C.white,color:branchForm.allowed_perms===null?C.green:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกแท็บ (ไม่จำกัด)</button>
-              <button onClick={()=>setBranchForm(f=>({...f,allowed_perms:ALL_PERMS.map(p=>p.id)}))} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>เลือกทั้งหมด</button>
-              <button onClick={()=>setBranchForm(f=>({...f,allowed_perms:[]}))} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
-            </div>
-          </div>
-          {branchForm.allowed_perms===null
-            ?<div style={{padding:"12px 14px",background:C.greenLight,borderRadius:10,border:`1.5px solid ${C.green}`,fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.green,fontWeight:600}}>✅ สาขานี้เห็นทุกแท็บ (ผู้ใช้เห็นได้ตามสิทธิ์ของตัวเอง)</div>
-            :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:6,background:C.bg,borderRadius:10,padding:10,border:`1px solid ${C.line}`}}>
-              {ALL_PERMS.map(p=>{const has=(branchForm.allowed_perms||[]).includes(p.id);return <label key={p.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",borderRadius:8,cursor:"pointer",background:has?C.brandLight:C.white,border:`1.5px solid ${has?C.brandBorder:C.line}`,transition:"all .15s"}}>
-                <input type="checkbox" checked={has} onChange={()=>toggleBranchPerm(p.id)} style={{accentColor:C.brand,width:15,height:15,cursor:"pointer"}}/>
-                <span style={{fontSize:13,fontFamily:"'Sarabun',sans-serif",fontWeight:has?700:500,color:has?C.brand:C.ink2}}>{p.label}</span>
-              </label>;})}
-            </div>}
+        <div style={{padding:"10px 14px",background:C.blueLight,borderRadius:10,border:`1px solid #BFDBFE`,marginBottom:14,fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
+          ℹ️ การกำหนดสิทธิ์เมนูทำที่หัวข้อ <b>"ผู้ใช้"</b> เท่านั้น (รายผู้ใช้)
         </div>
         <div style={{display:"flex",gap:8}}>
           <Btn onClick={saveBranch} icon={I.check} disabled={!branchForm.name}>{editBID?"บันทึก":"เพิ่มสาขา"}</Btn>
@@ -4297,16 +4251,12 @@ export default function App(){
     {id:"suppliers",l:"ซัพพลาย",icon:I.truck,perm:"suppliers"},
     {id:"settings",l:"ตั้งค่า",icon:I.settings,perm:"settings"},
   ];
-  // A tab is visible only if (a) user has the permission AND (b) the branch allows it.
-  // Branch.allowed_perms === null/undefined means no branch restriction.
-  // Admins bypass branch restriction so they can always reach Settings.
-  const branchAllowed=asArr(currentBranch?.allowed_perms);
+  // A tab is visible only if the user has the permission. Admin role sees everything.
+  // Branch-level perm gating was removed — permissions are now configured per-user only.
   const visibleTabs=TABS.filter(t=>{
     if(!currentUser)return false;
-    if(!hasPerm(currentUser,t.perm))return false;
     if(currentUser.role==="admin")return true;
-    if(branchAllowed==null)return true;  // unrestricted branch
-    return branchAllowed.includes(t.perm);
+    return hasPerm(currentUser,t.perm);
   });
   // If current tab is no longer visible (after branch switch / perm change / role swap), jump to first visible.
   // Watch the content of visibleTabs (not just length) so a like-for-like perm swap also retargets.
@@ -4330,12 +4280,6 @@ export default function App(){
   // Diagnostic: user is logged in to a branch but no tab is visible — explain why instead of showing a blank shell.
   if(visibleTabs.length===0){
     const userPerms=getUserPerms(currentUser);
-    const bAllowed=asArr(currentBranch.allowed_perms);
-    const reasons=[];
-    if(userPerms.length===0)reasons.push("ผู้ใช้ของคุณยังไม่ได้ตั้งสิทธิ์เมนูใดเลย");
-    if(bAllowed!=null&&bAllowed.length===0)reasons.push(`สาขา "${currentBranch.name}" ถูกตั้งค่าให้ไม่เห็นแท็บใดเลย`);
-    if(bAllowed!=null&&bAllowed.length>0&&userPerms.length>0&&!bAllowed.some(p=>userPerms.includes(p)))reasons.push("สิทธิ์ของผู้ใช้ไม่ตรงกับสิทธิ์ที่สาขาเปิดไว้");
-    if(reasons.length===0)reasons.push("ไม่พบสาเหตุชัดเจน — กรุณาแจ้งแอดมินและรีเฟรชหน้าเว็บ");
     return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,#FEF3C7,#FFE4E6)`,padding:24,fontFamily:"'Sarabun',sans-serif"}}>
       <div style={{background:C.white,borderRadius:18,padding:"30px 28px",maxWidth:520,width:"100%",boxShadow:"0 10px 40px rgba(0,0,0,.12)"}}>
         <div style={{textAlign:"center",marginBottom:18}}>
@@ -4344,16 +4288,14 @@ export default function App(){
           <p style={{fontSize:13,color:C.ink3,marginTop:4}}>{currentUser.name||currentUser.username} · {currentBranch.name}</p>
         </div>
         <div style={{background:C.bg,borderRadius:12,padding:"14px 16px",marginBottom:14,border:`1px solid ${C.line}`}}>
-          <div style={{fontSize:12,fontWeight:800,color:C.ink2,marginBottom:8}}>📋 เหตุผลที่เป็นไปได้:</div>
-          <ul style={{margin:0,paddingLeft:20,fontSize:13,color:C.ink2,lineHeight:1.8}}>
-            {reasons.map((r,i)=><li key={i}>{r}</li>)}
-          </ul>
+          <div style={{fontSize:13,color:C.ink2,lineHeight:1.8}}>
+            ผู้ใช้ของคุณยังไม่ได้ตั้งสิทธิ์เมนูใดเลย — กรุณาติดต่อแอดมินให้กำหนดสิทธิ์ในหัวข้อ <b>ตั้งค่า → ผู้ใช้</b>
+          </div>
         </div>
         <div style={{background:C.brandLight,borderRadius:12,padding:"12px 16px",marginBottom:14,border:`1px solid ${C.brandBorder}`,fontSize:12,color:C.ink2,lineHeight:1.7}}>
           <div style={{fontWeight:800,marginBottom:6,color:C.brand}}>🔧 รายละเอียดสำหรับแอดมิน:</div>
-          <div>• สิทธิ์เมนูของผู้ใช้: <b>{userPerms.length>0?userPerms.join(", "):"ไม่มี"}</b></div>
-          <div>• สิทธิ์เมนูของสาขา: <b>{bAllowed==null?"ไม่จำกัด (ทุกแท็บ)":(bAllowed.length>0?bAllowed.join(", "):"ว่างเปล่า — ปิดทุกแท็บ")}</b></div>
-          <div style={{marginTop:6,fontSize:11,color:C.ink3}}>ไปที่ <b>ตั้งค่า → ผู้ใช้</b> หรือ <b>ตั้งค่า → สาขา</b> เพื่อแก้ไข</div>
+          <div>• สิทธิ์ปัจจุบัน: <b>{userPerms.length>0?userPerms.join(", "):"ไม่มี"}</b></div>
+          <div style={{marginTop:6,fontSize:11,color:C.ink3}}>ติ๊กแท็บที่ต้องการให้ผู้ใช้คนนี้เข้าถึงได้ในฟอร์มแก้ไขผู้ใช้</div>
         </div>
         <div style={{display:"flex",gap:8}}>
           <Btn v="ghost" onClick={()=>setCurrentBranch(null)} full>← เลือกสาขาใหม่</Btn>
