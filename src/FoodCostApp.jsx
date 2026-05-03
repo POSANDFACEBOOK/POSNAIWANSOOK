@@ -361,6 +361,26 @@ function branchStock(ing,branchId){
 function setBranchStockInJson(existing,branchId,value){
   return {...(existing||{}),[String(branchId)]:+value||0};
 }
+// Per-branch supplier mapping — each branch can pick one of THEIR suppliers for each ingredient.
+function branchSupplierId(ing,branchId){
+  if(!ing||branchId==null)return null;
+  const map=ing.supplier_by_branch||{};
+  const v=map[String(branchId)];
+  if(v!=null&&v!=="")return +v||null;
+  return ing.supplier_id?+ing.supplier_id:null;
+}
+function branchSupplierName(ing,branchId,suppliers){
+  const sid=branchSupplierId(ing,branchId);
+  if(!sid)return ing.supplier_name||"";
+  const s=(suppliers||[]).find(x=>+x.id===+sid);
+  return s?s.name:(ing.supplier_name||"");
+}
+function setBranchSupplierInJson(existing,branchId,supplierId){
+  const next={...(existing||{})};
+  if(supplierId)next[String(branchId)]=+supplierId;
+  else delete next[String(branchId)];
+  return next;
+}
 const marginColor=(m)=>m>=60?C.green:m>=40?C.yellow:C.red;
 const marginLabel=(m)=>m>=60?"ดี":m>=40?"พอใช้":"ต่ำ";
 // Format date/time in Thai locale but always Gregorian year (not Buddhist) — receipts must read 2026 not 2569
@@ -829,6 +849,14 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{const item={...form,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,safety_stock:+form.safety_stock||0,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   async function toggleVBIng(item,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(item.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateIng(item.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
+  // Assign a branch-specific supplier to an ingredient (non-central branches pick from their own list)
+  async function assignBranchSupplier(item,supplierId){
+    const next=setBranchSupplierInJson(item.supplier_by_branch,currentBranch.id,supplierId);
+    try{await api.updateIng(item.id,{supplier_by_branch:next});await reload();}
+    catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+  }
+  // Suppliers for current branch (own list)
+  const myBranchSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
   return <div>
     {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>วัตถุดิบจัดการโดยสาขาครัวกลางเท่านั้น • สาขานี้ดูข้อมูลได้อย่างเดียว</span></div>}
     <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
@@ -872,7 +900,15 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
                   {canD&&<button onClick={()=>del(item.id,item.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
                 </div>
               </div>
-              {item.supplier_name&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.truck} s={10} c={C.teal}/>ซัพพลาย: {item.supplier_name}</div>}
+              {isCentral
+                ?(item.supplier_name&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.truck} s={10} c={C.teal}/>ซัพพลาย: {item.supplier_name}</div>)
+                :<div style={{display:"flex",alignItems:"center",gap:5,marginTop:4}}>
+                  <Ic d={I.truck} s={11} c={C.teal}/>
+                  <select value={branchSupplierId(item,currentBranch?.id)||""} onChange={e=>assignBranchSupplier(item,e.target.value||null)} style={{...iS,fontSize:11,padding:"4px 8px",height:26,appearance:"none",flex:1,minWidth:0,background:branchSupplierId(item,currentBranch?.id)?C.tealLight:C.white,color:branchSupplierId(item,currentBranch?.id)?C.teal:C.ink4,fontWeight:700,border:`1px solid ${branchSupplierId(item,currentBranch?.id)?C.teal+"55":C.line}`}}>
+                    <option value="">— เลือกซัพพลาย —</option>
+                    {myBranchSuppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>}
             </div>
           </div>
           <div style={{padding:"10px 14px 14px",borderTop:`1px solid ${C.lineLight}`}}>
@@ -3839,17 +3875,18 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
     return true;
   }),[ings,isCentral,currentBranch,q,supFilter,supFilterName]);
 
-  // Group by supplier (for display)
+  // Group by supplier (per-branch supplier mapping when set, fallback to ingredient.supplier)
   const grouped=useMemo(()=>{
     const groups=new Map();
     visibleIngs.forEach(i=>{
-      const supKey=i.supplier_id?`s_${i.supplier_id}`:"none";
-      const supName=i.supplier_name||(i.supplier_id?(suppliers.find(s=>+s.id===+i.supplier_id)?.name||"—"):"ไม่ระบุซัพพลาย");
-      if(!groups.has(supKey))groups.set(supKey,{key:supKey,name:supName,supplier_id:i.supplier_id||null,items:[]});
+      const sid=branchSupplierId(i,currentBranch?.id);
+      const supKey=sid?`s_${sid}`:"none";
+      const supName=sid?(suppliers.find(s=>+s.id===+sid)?.name||"—"):(isCentral?(i.supplier_name||"ไม่ระบุซัพพลาย"):"ยังไม่กำหนดซัพพลาย");
+      if(!groups.has(supKey))groups.set(supKey,{key:supKey,name:supName,supplier_id:sid||null,items:[]});
       groups.get(supKey).items.push(i);
     });
     return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name,"th"));
-  },[visibleIngs,suppliers]);
+  },[visibleIngs,suppliers,currentBranch,isCentral]);
 
   // Compute order qty for an ingredient (auto unless overridden) — uses per-branch stock
   function autoOrderQty(ing){
@@ -3898,17 +3935,19 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
     if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\nระบบจะแยกใบสั่งซื้อตามซัพพลายเออร์`,confirmLabel:"ส่งคำสั่งซื้อ"}))return;
     setSaving(true);
     try{
-      // Group items by supplier
+      // Group items by per-branch supplier (falls back to ingredient.supplier when none set)
       const supMap={};
       items.forEach(({ing,qty})=>{
-        const k=ing.supplier_id||"none";
-        if(!supMap[k])supMap[k]={supplierId:ing.supplier_id||null,supplierName:ing.supplier_name||"ไม่ระบุ",items:[]};
+        const sid=branchSupplierId(ing,currentBranch?.id);
+        const sname=sid?(suppliers.find(s=>+s.id===+sid)?.name||ing.supplier_name||"ไม่ระบุ"):(ing.supplier_name||"ไม่ระบุ");
+        const k=sid||"none";
+        if(!supMap[k])supMap[k]={supplierId:sid||null,supplierName:sname,items:[]};
         supMap[k].items.push({
           ingId:ing.id,name:ing.name,unit:ing.buy_unit,
           qtyNeeded:round2(qty),
           pricePerUnit:+ing.buy_price||0,
           estimatedCost:round2(qty*(+ing.buy_price||0)),
-          supplierId:ing.supplier_id||null,supplierName:ing.supplier_name||"ไม่ระบุ",
+          supplierId:sid||null,supplierName:sname,
         });
       });
       for(const sup of Object.values(supMap)){
