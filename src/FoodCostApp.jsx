@@ -3705,24 +3705,23 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
   const[saving,setSaving]=useState(false);
   const[savingStock,setSavingStock]=useState(false);
 
-  // Suppliers visible to the current branch (central sees all; others skip central_only)
-  const visibleSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&(isCentral||!s.central_only)),[suppliers,isCentral]);
-  const visibleSupplierIds=useMemo(()=>new Set(visibleSuppliers.map(s=>+s.id)),[visibleSuppliers]);
+  // Suppliers visible to the current branch — each branch has its own supplier list.
+  const visibleSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
+  const visibleSupplierNames=useMemo(()=>new Set(visibleSuppliers.map(s=>s.name)),[visibleSuppliers]);
 
-  // Filter visible ingredients (branch + supplier visibility + search + supplier filter)
+  // Filter visible ingredients. With branch-isolated suppliers, we can't match by
+  // supplier_id across branches, so the supplier filter compares ingredient
+  // supplier_name to the picked supplier's name.
+  const supFilterName=useMemo(()=>supFilter&&supFilter!=="none"?(visibleSuppliers.find(s=>String(s.id)===String(supFilter))?.name||""):"",[supFilter,visibleSuppliers]);
   const visibleIngs=useMemo(()=>ings.filter(i=>{
     const vb=i.visible_branches||[];
     const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);
     if(!matchB)return false;
-    // Supplier visibility: if ingredient has a supplier and that supplier isn't in the
-    // visible set for this branch, hide the ingredient (e.g. "central-only" suppliers
-    // don't appear on a branch-side stock check).
-    if(i.supplier_id&&!visibleSupplierIds.has(+i.supplier_id))return false;
     if(q.trim()&&!i.name.toLowerCase().includes(q.toLowerCase())&&!(i.category||"").toLowerCase().includes(q.toLowerCase()))return false;
-    if(supFilter==="none"){if(i.supplier_id)return false;}
-    else if(supFilter){if(String(i.supplier_id||"")!==String(supFilter))return false;}
+    if(supFilter==="none"){if(i.supplier_name||i.supplier_id)return false;}
+    else if(supFilter&&supFilterName){if(String(i.supplier_name||"")!==supFilterName)return false;}
     return true;
-  }),[ings,isCentral,currentBranch,q,supFilter,visibleSupplierIds]);
+  }),[ings,isCentral,currentBranch,q,supFilter,supFilterName]);
 
   // Group by supplier (for display)
   const grouped=useMemo(()=>{
@@ -4073,23 +4072,38 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
 // ══════════════════════════════════════════════════════
 // ── SUPPLIER TAB ──────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function SupplierTab({suppliers,reloadSuppliers,currentUser}){
+function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch}){
   const supF0={name:"",contact:"",phone:"",note:"",active:true,central_only:false};
   const[supForm,setSupForm]=useState(supF0);
   const[editSID,setEditSID]=useState(null);
   const canE=hasPerm(currentUser,"suppliers");
+  const isCentral=currentBranch?.type==="central";
+  // Each branch has its own supplier list — central_only suppliers are still kept
+  // on the central branch row and are visible to other branches via the StockCheck
+  // filter, but the SupplierTab itself only ever shows the *current branch's* rows.
+  const myList=useMemo(()=>suppliers.filter(s=>+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
   async function saveSup(){
     if(!supForm.name)return;
-    try{if(editSID)await api.updateSupplier(editSID,supForm);else await api.addSupplier(supForm);await reloadSuppliers();setSupForm(supF0);setEditSID(null);}
-    catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    try{
+      if(editSID)await api.updateSupplier(editSID,supForm);
+      else await api.addSupplier({...supForm,branch_id:currentBranch.id});
+      await reloadSuppliers();setSupForm(supF0);setEditSID(null);
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
   }
   async function toggleVisibility(s){
     try{await api.updateSupplier(s.id,{central_only:!s.central_only});await reloadSuppliers();}
     catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
   }
   return <div>
+    <div style={{background:isCentral?C.greenLight:C.brandLight,border:`1px solid ${isCentral?C.green+"33":C.brandBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+      <span style={{fontSize:18}}>{isCentral?"🏢":"🏪"}</span>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>ซัพพลายของสาขา: {currentBranch?.name||"—"}</div>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>แต่ละสาขามีซัพพลายของตัวเอง — เปลี่ยนสาขาจะเห็นรายการคนละชุด {isCentral?'· "เฉพาะครัวกลาง" = ซัพพลายของครัวกลางที่ไม่แชร์ให้สาขาอื่น':""}</div>
+      </div>
+    </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(280px,100%),1fr))",gap:12,marginBottom:16}}>
-      {suppliers.map(s=><Card key={s.id} style={{padding:"14px 16px"}}>
+      {myList.map(s=><Card key={s.id} style={{padding:"14px 16px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
           <div style={{minWidth:0,flex:1}}>
             <div style={{fontWeight:700,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>{s.name}</div>
@@ -4111,7 +4125,7 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser}){
           </div>
         </div>
       </Card>)}
-      {suppliers.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีซัพพลาย</p></div>}
+      {myList.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีซัพพลายของสาขานี้</p>{canE&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>เพิ่มซัพพลายใหม่ที่ฟอร์มด้านล่าง</p>}</div>}
     </div>
     {canE&&<Card style={{padding:"16px 18px"}}>
       <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>{editSID?"✏️ แก้ไขซัพพลาย":"➕ เพิ่มซัพพลายใหม่"}</h4>
@@ -5509,7 +5523,7 @@ export default function App(){
             {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
-            {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser}/>}
+            {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
             {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} printers={printers} reloadPrinters={reload.printers} currentBranch={currentBranch}/>}
           </>}
