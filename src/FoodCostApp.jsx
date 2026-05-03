@@ -4097,8 +4097,8 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
                       <span style={{fontSize:13,fontWeight:800,color:curLow?C.red:C.ink}}>{curStock}</span>
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder?<NumStepper value={safetyEdit[ing.id]!==undefined?safetyEdit[ing.id]:(safety||"")} onChange={v=>setSafetyEdit(s=>({...s,[ing.id]:v}))} onBlur={e=>saveSafety(ing,e.target.value)} placeholder="0" btnColor={C.yellow} btnBg="#FFFBEB" inputStyle={{border:`2px solid ${C.yellow}55`,background:"#FFFBEB",color:C.ink}} width={62}/>
-                      :<span style={{fontSize:12,fontWeight:800,color:safety>0?C.yellow:C.ink4}}>{safety||"—"}</span>}
+                      {canOrder&&!isMobile?<NumStepper value={safetyEdit[ing.id]!==undefined?safetyEdit[ing.id]:(safety||"")} onChange={v=>setSafetyEdit(s=>({...s,[ing.id]:v}))} onBlur={e=>saveSafety(ing,e.target.value)} placeholder="0" btnColor={C.yellow} btnBg="#FFFBEB" inputStyle={{border:`2px solid ${C.yellow}55`,background:"#FFFBEB",color:C.ink}} width={62}/>
+                      :<span style={{fontSize:13,fontWeight:800,color:safety>0?"#92400E":C.ink4,background:safety>0?"#FFFBEB":"transparent",border:safety>0?`1px solid ${C.yellow}55`:"none",padding:safety>0?"3px 10px":0,borderRadius:8,display:"inline-block",minWidth:34,textAlign:"center"}}>{safety||"—"}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
                       {canOrder?<NumStepper value={onHand[ing.id]??""} onChange={v=>{setOnHand(o=>({...o,[ing.id]:v}));setOrderQty(q2=>{const n={...q2};delete n[ing.id];return n;});}} placeholder={String(branchStock(ing,currentBranch?.id))} btnColor={lowStock?"#92400E":C.brand} btnBg={lowStock?"#FFFBEB":C.brandLight} inputStyle={{border:`2px solid ${lowStock?"#F59E0B":C.brandBorder}`,background:lowStock?"#FFFBEB":C.brandLight}} width={62}/>
