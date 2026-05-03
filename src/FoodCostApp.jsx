@@ -3870,34 +3870,45 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
   const visibleSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
   const visibleSupplierNames=useMemo(()=>new Set(visibleSuppliers.map(s=>s.name)),[visibleSuppliers]);
 
-  // Filter visible ingredients — branch-visibility + only ingredients with a
-  // per-branch supplier set are shown here (the stock-check view is for
-  // ordering, so an ingredient with no supplier picked has nowhere to send
-  // its order). Also honour search + supplier dropdown filter.
+  // Strict per-branch supplier resolver — NO fallback to central's
+  // ingredient.supplier_id. Each branch has to explicitly pick a supplier
+  // (in the ingredient card dropdown) before that ingredient is orderable.
+  // Central kitchen still uses its own supplier_id since central manages
+  // the master record.
+  function strictBranchSupplierId(ing){
+    if(isCentral)return ing.supplier_id?+ing.supplier_id:null;
+    const map=ing.supplier_by_branch||{};
+    const v=map[String(currentBranch?.id)];
+    return v!=null&&v!==""?(+v||null):null;
+  }
+  // Filter visible ingredients — only ones with a per-branch supplier set
+  // (the stock-check view is for ordering, so no supplier = nowhere to send).
   const visibleIngs=useMemo(()=>ings.filter(i=>{
     const vb=i.visible_branches||[];
     const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);
     if(!matchB)return false;
-    const sid=branchSupplierId(i,currentBranch?.id);
-    if(!sid)return false;  // hide ingredients without a supplier mapping for this branch
+    const sid=strictBranchSupplierId(i);
+    if(!sid)return false;
     if(q.trim()&&!i.name.toLowerCase().includes(q.toLowerCase())&&!(i.category||"").toLowerCase().includes(q.toLowerCase()))return false;
-    if(supFilter==="none")return false;  // "ไม่ระบุ" group doesn't exist here anymore
+    if(supFilter==="none")return false;
     else if(supFilter){if(String(sid)!==String(supFilter))return false;}
     return true;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }),[ings,isCentral,currentBranch,q,supFilter]);
 
-  // Group by per-branch supplier (always set since the filter above guarantees it)
+  // Group by strict per-branch supplier
   const grouped=useMemo(()=>{
     const groups=new Map();
     visibleIngs.forEach(i=>{
-      const sid=branchSupplierId(i,currentBranch?.id);
+      const sid=strictBranchSupplierId(i);
       const supKey=`s_${sid}`;
       const supName=suppliers.find(s=>+s.id===+sid)?.name||"—";
       if(!groups.has(supKey))groups.set(supKey,{key:supKey,name:supName,supplier_id:sid,items:[]});
       groups.get(supKey).items.push(i);
     });
     return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name,"th"));
-  },[visibleIngs,suppliers,currentBranch]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[visibleIngs,suppliers,currentBranch,isCentral]);
 
   // Compute order qty for an ingredient (auto unless overridden) — uses per-branch stock
   function autoOrderQty(ing){
