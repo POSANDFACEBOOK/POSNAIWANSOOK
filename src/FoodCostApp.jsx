@@ -465,6 +465,29 @@ function ConfirmDlg(){
 }
 function EditedBy({username,editAt}){if(!username)return null;return <span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.user} s={9} c={C.ink4}/>แก้โดย {username}{editAt?` · ${editAt}`:""}</span>;}
 function Loading({text="กำลังโหลด..."}){return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"80px 0",gap:16}}><div style={{width:44,height:44,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{text}</p></div>;}
+
+// Number stepper — left = decrement, right = increment, center = direct input.
+// Mobile-friendly tap targets (≥34 px). All callbacks treat values as strings so the
+// caller can preserve "" for empty state. Pass `step` (default 1) to override increment.
+function NumStepper({value,onChange,onBlur,step=1,min=0,max,placeholder,inputStyle={},btnColor=C.brand,btnBg=C.bg,width=72,disabled=false}){
+  const v=value===null||value===undefined?"":String(value);
+  function bump(delta){
+    if(disabled)return;
+    const cur=v===""?0:+v||0;
+    let next=cur+delta;
+    if(min!=null&&next<min)next=min;
+    if(max!=null&&next>max)next=max;
+    // Avoid floating-point dust (e.g. 0.1+0.2)
+    next=Math.round(next*1000)/1000;
+    onChange(String(next));
+  }
+  const btn={minWidth:34,minHeight:34,padding:0,background:btnBg,border:`1.5px solid ${C.line}`,borderRadius:8,cursor:disabled?"not-allowed":"pointer",fontSize:18,fontWeight:900,color:disabled?C.ink4:btnColor,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,userSelect:"none",lineHeight:1,touchAction:"manipulation"};
+  return <div style={{display:"inline-flex",alignItems:"center",gap:3}}>
+    <button type="button" tabIndex={-1} onMouseDown={e=>e.preventDefault()} onClick={()=>bump(-step)} disabled={disabled} aria-label="ลด" style={btn}>−</button>
+    <input type="number" inputMode="decimal" min={min} max={max} step={step} value={v} onChange={e=>onChange(e.target.value)} onBlur={onBlur} placeholder={placeholder} disabled={disabled} style={{...iS,padding:"6px 6px",fontSize:13,fontWeight:800,textAlign:"center",width,minHeight:34,...inputStyle}}/>
+    <button type="button" tabIndex={-1} onMouseDown={e=>e.preventDefault()} onClick={()=>bump(step)} disabled={disabled} aria-label="เพิ่ม" style={btn}>+</button>
+  </div>;
+}
 function ErrBox({msg,onRetry}){return <div style={{background:C.redLight,border:`1px solid ${C.red}22`,borderRadius:12,padding:"16px 20px",display:"flex",alignItems:"center",gap:12,margin:"16px 0"}}><Ic d={I.warning} s={20} c={C.red}/><span style={{flex:1,color:C.red,fontFamily:"'Sarabun',sans-serif",fontSize:14}}>{msg}</span>{onRetry&&<Btn v="danger" onClick={onRetry} s={{padding:"6px 14px",fontSize:12}}>ลองใหม่</Btn>}</div>;}
 function STh({label,col,sortCol,sortDir,onSort}){const active=sortCol===col;return <th onClick={()=>onSort(col)} style={{padding:"10px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:active?C.brand:C.ink3,cursor:"pointer",whiteSpace:"nowrap",userSelect:"none",background:active?C.brandLight:C.bg}}><div style={{display:"flex",alignItems:"center",gap:4}}>{label}<Ic d={active?(sortDir==="asc"?I.sortAsc:I.sortDesc):I.sortAsc} s={12} c={active?C.brand:C.ink4}/></div></th>;}
 
@@ -1072,7 +1095,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
             </div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-            <input type="number" inputMode="decimal" min="0" step="any" placeholder={String(cur)} value={editVal??""} onChange={e=>setEdits(o=>({...o,[ing.id]:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&saveOne(ing)} style={{...iS,width:isMobile?70:80,padding:"8px 10px",fontSize:15,fontWeight:800,textAlign:"right",border:`2px solid ${dirty?C.brand:C.line}`,background:dirty?C.white:C.bg}}/>
+            <NumStepper value={editVal??""} onChange={v=>setEdits(o=>({...o,[ing.id]:v}))} placeholder={String(cur)} width={isMobile?64:74} inputStyle={{fontSize:15,border:`2px solid ${dirty?C.brand:C.line}`,background:dirty?C.white:C.bg}}/>
             <span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,minWidth:24}}>{ing.buy_unit}</span>
             <button onClick={()=>saveOne(ing)} disabled={isSaving||!dirty} style={{background:dirty&&!isSaving?`linear-gradient(135deg,${C.green},#059669)`:C.lineLight,border:"none",borderRadius:9,padding:"8px 12px",cursor:dirty&&!isSaving?"pointer":"not-allowed",color:dirty&&!isSaving?C.white:C.ink4,fontSize:12,fontWeight:800,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4,minHeight:38,minWidth:isMobile?44:60,whiteSpace:"nowrap"}}>{isSaving?"⏳":<><Ic d={I.check} s={13} c={dirty?C.white:C.ink4}/>{!isMobile&&<span>บันทึก</span>}</>}</button>
           </div>
@@ -1599,7 +1622,7 @@ window.addEventListener('load',async()=>{
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
             <div>
               <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>จำนวน</div>
-              <input autoFocus type="number" min="0" step="any" value={ingPopup.amount} onChange={e=>setIngPopup(p=>({...p,amount:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&confirmIngPick()} placeholder="0" style={{...iS,fontSize:16,fontWeight:700,textAlign:"center"}}/>
+              <div onKeyDown={e=>e.key==="Enter"&&confirmIngPick()}><NumStepper value={ingPopup.amount} onChange={v=>setIngPopup(p=>({...p,amount:v}))} step={1} width="100%" inputStyle={{fontSize:16,fontWeight:700}}/></div>
             </div>
             <div>
               <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>หน่วย</div>
@@ -1891,7 +1914,7 @@ window.addEventListener('load',async()=>{
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
           <div>
             <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>จำนวน</div>
-            <input autoFocus type="number" min="0" step="any" value={ingPopup.amount} onChange={e=>setIngPopup(p=>({...p,amount:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&confirmIngPick()} placeholder="0" style={{...iS,fontSize:16,fontWeight:700,textAlign:"center"}}/>
+            <div onKeyDown={e=>e.key==="Enter"&&confirmIngPick()}><NumStepper value={ingPopup.amount} onChange={v=>setIngPopup(p=>({...p,amount:v}))} step={1} width="100%" inputStyle={{fontSize:16,fontWeight:700}}/></div>
           </div>
           <div>
             <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>หน่วย</div>
@@ -3098,7 +3121,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
                   <td style={{padding:"9px 12px",textAlign:"center",fontSize:12,color:C.ink2}}>{it.unit||"-"}</td>
                   <td style={{padding:"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:C.ink}}>{it.qty}</td>
                   {mode==="dispute"&&<td style={{padding:"6px 8px",textAlign:"center"}}>
-                    <input type="number" step="0.01" min="0" max={+it.qty} value={receivedQty[i]} onChange={e=>setReceivedQty(prev=>({...prev,[i]:e.target.value}))} style={{...iS,fontSize:14,padding:"6px 8px",height:34,textAlign:"center",fontWeight:800,color:short?C.red:C.ink,background:short?"#FEF2F2":C.white,border:`2px solid ${short?C.red:C.brandBorder}`,maxWidth:90,margin:"0 auto"}}/>
+                    <NumStepper value={receivedQty[i]} onChange={v=>setReceivedQty(prev=>({...prev,[i]:v}))} max={+it.qty} step={1} width={64} btnColor={short?C.red:C.brand} btnBg={short?"#FEF2F2":C.bg} inputStyle={{fontSize:14,fontWeight:800,color:short?C.red:C.ink,background:short?"#FEF2F2":C.white,border:`2px solid ${short?C.red:C.brandBorder}`}}/>
                   </td>}
                   {(mode==="view"&&po.status==="disputed")&&<td style={{padding:"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:short?C.red:C.green}}>{recv!=null?recv:it.qty}{short&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>ขาด {(+it.qty-+recv).toFixed(2)}</div>}</td>}
                   <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,color:C.ink2}}>฿{(+it.price_per_unit||0).toFixed(2)}</td>
@@ -3361,7 +3384,7 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved})
               <input value={it.unit} onChange={e=>updateItem(idx,"unit",e.target.value)} style={{...iS,fontSize:12,padding:"5px 8px",height:30,textAlign:"center"}}/>
             </td>
             <td style={{padding:"6px 10px"}}>
-              <input type="number" step="0.01" value={it.qty} onChange={e=>updateItem(idx,"qty",+e.target.value)} style={{...iS,fontSize:13,padding:"5px 8px",height:30,textAlign:"center",fontWeight:700}}/>
+              <NumStepper value={it.qty} onChange={v=>updateItem(idx,"qty",+v||0)} step={1} width={64} inputStyle={{fontSize:13,fontWeight:700}}/>
             </td>
             <td style={{padding:"6px 10px"}}>
               <input type="number" step="0.01" value={it.price_per_unit} onChange={e=>updateItem(idx,"price_per_unit",+e.target.value)} style={{...iS,fontSize:13,padding:"5px 8px",height:30,textAlign:"right"}}/>
@@ -3715,7 +3738,7 @@ function EditSnapshotModal({snapshot,branches,menus,ings,currentUser,reloadMenus
                   </div>
                 </td>
                 <td style={{padding:"9px 12px",textAlign:"right"}}>
-                  <input type="number" min="0" step="any" value={it.qty} onChange={e=>updateQty(idx,e.target.value)} style={{...iS,width:90,padding:"6px 10px",fontSize:14,fontWeight:800,textAlign:"right",border:`2px solid ${C.brandBorder}`,background:C.brandLight}}/>
+                  <NumStepper value={it.qty} onChange={v=>updateQty(idx,v)} step={1} width={68} inputStyle={{fontSize:14,fontWeight:800,border:`2px solid ${C.brandBorder}`,background:C.brandLight}}/>
                 </td>
                 <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,fontWeight:800,color:C.ink}}>฿{(+it.revenue||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
                 <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,fontWeight:700,color:it.matched?C.red:C.ink4}}>{it.matched?`฿${(+it.cost||0).toLocaleString(undefined,{minimumFractionDigits:2})}`:"—"}</td>
@@ -4073,15 +4096,15 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
                       <span style={{fontSize:13,fontWeight:800,color:curLow?C.red:C.ink}}>{curStock}</span>
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder?<input type="number" min="0" step="any" value={safetyEdit[ing.id]!==undefined?safetyEdit[ing.id]:(safety||"")} onChange={e=>setSafetyEdit(s=>({...s,[ing.id]:e.target.value}))} onBlur={e=>saveSafety(ing,e.target.value)} onKeyDown={e=>{if(e.key==="Enter")e.target.blur();}} placeholder="0" style={{...iS,width:70,padding:"6px 8px",fontSize:13,fontWeight:800,textAlign:"right",border:`2px solid ${C.yellow}55`,background:"#FFFBEB",color:C.ink}}/>
+                      {canOrder?<NumStepper value={safetyEdit[ing.id]!==undefined?safetyEdit[ing.id]:(safety||"")} onChange={v=>setSafetyEdit(s=>({...s,[ing.id]:v}))} onBlur={e=>saveSafety(ing,e.target.value)} placeholder="0" btnColor={C.yellow} btnBg="#FFFBEB" inputStyle={{border:`2px solid ${C.yellow}55`,background:"#FFFBEB",color:C.ink}} width={62}/>
                       :<span style={{fontSize:12,fontWeight:800,color:safety>0?C.yellow:C.ink4}}>{safety||"—"}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder?<input type="number" min="0" step="any" placeholder={String(branchStock(ing,currentBranch?.id))} value={onHand[ing.id]??""} onChange={e=>{setOnHand(o=>({...o,[ing.id]:e.target.value}));setOrderQty(q2=>{const n={...q2};delete n[ing.id];return n;});}} style={{...iS,width:78,padding:"6px 8px",fontSize:13,fontWeight:800,textAlign:"right",border:`2px solid ${lowStock?"#F59E0B":C.brandBorder}`,background:lowStock?"#FFFBEB":C.brandLight}}/>
+                      {canOrder?<NumStepper value={onHand[ing.id]??""} onChange={v=>{setOnHand(o=>({...o,[ing.id]:v}));setOrderQty(q2=>{const n={...q2};delete n[ing.id];return n;});}} placeholder={String(branchStock(ing,currentBranch?.id))} btnColor={lowStock?"#92400E":C.brand} btnBg={lowStock?"#FFFBEB":C.brandLight} inputStyle={{border:`2px solid ${lowStock?"#F59E0B":C.brandBorder}`,background:lowStock?"#FFFBEB":C.brandLight}} width={62}/>
                       :<span style={{fontSize:13,fontWeight:700,color:C.ink}}>{have}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder?<input type="number" min="0" step="any" value={orderQty[ing.id]??(auto>0?auto:"")} onChange={e=>setOrderQty(q2=>({...q2,[ing.id]:e.target.value}))} placeholder="0" style={{...iS,width:78,padding:"6px 8px",fontSize:13,fontWeight:900,textAlign:"right",border:`2px solid ${order>0?C.green+"55":C.line}`,background:order>0?C.greenLight:C.white,color:order>0?C.green:C.ink}}/>
+                      {canOrder?<NumStepper value={orderQty[ing.id]??(auto>0?auto:"")} onChange={v=>setOrderQty(q2=>({...q2,[ing.id]:v}))} placeholder="0" btnColor={order>0?C.green:C.brand} btnBg={order>0?C.greenLight:C.bg} inputStyle={{border:`2px solid ${order>0?C.green+"55":C.line}`,background:order>0?C.greenLight:C.white,color:order>0?C.green:C.ink}} width={62}/>
                       :<span style={{fontSize:13,fontWeight:900,color:order>0?C.green:C.ink4}}>{order||"—"}</span>}
                       {overridden&&<div style={{fontSize:9,color:C.ink4,marginTop:2}}>(แก้จาก {auto})</div>}
                     </td>
@@ -4222,7 +4245,7 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
                   <td style={{padding:"7px 10px"}}>฿{it.price}</td>
                   <td style={{padding:"7px 10px",color:C.brand}}>฿{it.cost?.toFixed(2)}</td>
                   <td style={{padding:"7px 10px",color:marginColor(it.margin||0),fontWeight:700}}>{it.margin?.toFixed(1)}%</td>
-                  <td style={{padding:"7px 10px"}}><input type="number" min="0" value={it.soldQty} onChange={e=>{const v=+e.target.value;setEditSnap(s=>({...s,items:s.items.map((x,j)=>j===i?{...x,soldQty:v,totalRevenue:v*(x.price||0),totalCost:v*(x.cost||0),totalProfit:v*((x.price||0)-(x.cost||0))}:x)}));}} style={{...iS,width:80,padding:"4px 8px",fontSize:13,textAlign:"center"}}/></td>
+                  <td style={{padding:"7px 10px"}}><NumStepper value={it.soldQty} onChange={raw=>{const v=+raw||0;setEditSnap(s=>({...s,items:s.items.map((x,j)=>j===i?{...x,soldQty:v,totalRevenue:v*(x.price||0),totalCost:v*(x.cost||0),totalProfit:v*((x.price||0)-(x.cost||0))}:x)}));}} step={1} width={64}/></td>
                   <td style={{padding:"7px 10px",color:C.blue,fontWeight:700}}>฿{rev.toFixed(0)}</td>
                   <td style={{padding:"7px 10px",color:np>=0?C.green:C.red,fontWeight:700}}>฿{np.toFixed(0)}</td>
                 </tr>;})}
