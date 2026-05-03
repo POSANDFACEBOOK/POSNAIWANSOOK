@@ -2493,24 +2493,52 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
     </Card>}
 
     {/* Spacer so the fixed bottom bar doesn't cover the last table row */}
-    {batches.length>0&&<div style={{height:isMobile?(showCost?92:72):60}}/>}
+    {batches.length>0&&<div style={{height:isMobile?(showCost?120:96):64}}/>}
 
     {/* FIXED bottom bar — slim status strip + save button */}
-    {batches.length>0&&<div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`2px solid ${C.brand}`,boxShadow:"0 -6px 18px rgba(15,23,42,0.30)",paddingBottom:"env(safe-area-inset-bottom,0)"}}>
+    {batches.length>0&&(()=>{
+      // Pick a representative batch (first) for date/branch display.
+      // When multiple batches share data, show count summary instead.
+      const firstBatch=batches[0];
+      const firstBranch=firstBatch?branches.find(x=>+x.id===+firstBatch.branch_id):null;
+      const dateLabel=batches.length===1?firstBatch.sale_date:`${batches.length} รายการ`;
+      const branchLabel=batches.length===1?(firstBranch?.name||"—"):"หลายสาขา";
+      const sameBranch=batches.every(b=>+b.branch_id===+(firstBatch?.branch_id||0));
+      const finalBranchLabel=batches.length>1&&sameBranch?(firstBranch?.name||"—"):branchLabel;
+      return <div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`2px solid ${C.brand}`,boxShadow:"0 -6px 18px rgba(15,23,42,0.30)",paddingBottom:"env(safe-area-inset-bottom,0)"}}>
       <div style={{maxWidth:1600,margin:"0 auto",padding:isMobile?"7px 12px":"8px 18px",display:"flex",alignItems:"center",flexDirection:isMobile?"column":"row",gap:isMobile?6:14}}>
         {/* Totals — inline label+value cells, single line */}
-        <div style={{flex:isMobile?"none":"1 1 0",width:isMobile?"100%":"auto",display:"flex",alignItems:"center",gap:isMobile?10:18,flexWrap:"wrap",justifyContent:isMobile?"space-between":"flex-start"}}>
-          {!isMobile&&<span style={{fontSize:18,marginRight:-4}}>📊</span>}
+        <div style={{flex:isMobile?"none":"1 1 0",width:isMobile?"100%":"auto",display:"flex",alignItems:"center",gap:isMobile?8:14,flexWrap:"wrap",justifyContent:isMobile?"flex-start":"flex-start"}}>
+          {/* วันที่ */}
+          <div style={{display:"inline-flex",alignItems:"baseline",gap:5,whiteSpace:"nowrap"}}>
+            <span style={{fontSize:isMobile?10:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>📅</span>
+            <span style={{fontSize:isMobile?12:13,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:800}}>{dateLabel}</span>
+          </div>
+          {/* สาขา */}
+          <div style={{display:"inline-flex",alignItems:"baseline",gap:5,whiteSpace:"nowrap"}}>
+            <span style={{fontSize:isMobile?10:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>🏪</span>
+            <span style={{fontSize:isMobile?12:13,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:800,maxWidth:isMobile?120:200,overflow:"hidden",textOverflow:"ellipsis"}}>{finalBranchLabel}</span>
+          </div>
+          {/* divider */}
+          {!isMobile&&<span style={{height:18,width:1,background:"rgba(255,255,255,0.12)"}}/>}
+          {/* จำนวนรวม */}
+          <div style={{display:"inline-flex",alignItems:"baseline",gap:6,whiteSpace:"nowrap"}}>
+            <span style={{fontSize:isMobile?10:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:700,letterSpacing:.3}}>จำนวน</span>
+            <span style={{fontSize:isMobile?14:16,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:900}}>{grandTotalQty.toLocaleString()}</span>
+            <span style={{fontSize:isMobile?9:10,color:"#64748B",fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>ครั้ง</span>
+          </div>
+          {/* ยอดขาย */}
           <div style={{display:"inline-flex",alignItems:"baseline",gap:6,whiteSpace:"nowrap"}}>
             <span style={{fontSize:isMobile?10:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:700,letterSpacing:.3}}>ยอดขาย</span>
             <span style={{fontSize:isMobile?14:16,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:900}}>฿{grandTotalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
-            <span style={{fontSize:isMobile?9:10,color:"#64748B",fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>· {grandTotalQty} ครั้ง</span>
           </div>
           {showCost&&<>
+            {/* ต้นทุน */}
             <div style={{display:"inline-flex",alignItems:"baseline",gap:6,whiteSpace:"nowrap"}}>
               <span style={{fontSize:isMobile?10:11,color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:700,letterSpacing:.3}}>ต้นทุน</span>
               <span style={{fontSize:isMobile?14:16,color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:900}}>฿{costSummary.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
             </div>
+            {/* กำไร + % */}
             <div style={{display:"inline-flex",alignItems:"baseline",gap:6,whiteSpace:"nowrap"}}>
               <span style={{fontSize:isMobile?10:11,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:700,letterSpacing:.3}}>กำไร</span>
               <span style={{fontSize:isMobile?14:16,color:costSummary.profit>=0?"#A7F3D0":"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontWeight:900}}>฿{costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
@@ -2526,7 +2554,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
           </button>;})}
         </div>}
       </div>
-    </div>}
+    </div>;})()}
 
     {showImport&&<FSImportModal branches={branches} currentUser={currentUser} onClose={()=>setShowImport(false)} onDone={()=>{setShowImport(false);load();}}/>}
   </div>;
