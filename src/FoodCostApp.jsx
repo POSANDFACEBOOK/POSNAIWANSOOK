@@ -999,11 +999,12 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
   }
 
   return <Modal title={`📦 เช็คสต็อก — ${currentBranch?.name||"—"}`} onClose={onClose} wide>
-    <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,padding:"8px 12px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:9,lineHeight:1.6}}>
-      ℹ️ จำนวนสต็อก<b style={{color:C.brand}}>แยกตามสาขา</b> · ค้นหาวัตถุดิบ → ใส่จำนวนใหม่ → กดบันทึก
+    {/* Info chip */}
+    <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,padding:"7px 11px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:9,lineHeight:1.5}}>
+      ℹ️ จำนวนสต็อก<b style={{color:C.brand}}>แยกตามสาขา</b> · ค้นหา → ใส่จำนวนใหม่ → กดบันทึก
     </div>
-    {/* Sticky search bar */}
-    <div style={{position:"sticky",top:0,background:C.white,zIndex:2,paddingBottom:10,marginBottom:6,borderBottom:`1px solid ${C.lineLight}`}}>
+    {/* Search bar */}
+    <div style={{marginBottom:8}}>
       <div style={{position:"relative"}}>
         <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span>
         <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อวัตถุดิบ / หมวด / ซัพพลาย..." style={{...iS,paddingLeft:40,fontSize:15,padding:"11px 14px 11px 40px"}}/>
@@ -1044,7 +1045,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
       {filtered.length>200&&<div style={{textAlign:"center",padding:10,color:C.ink4,fontSize:11,fontFamily:"'Sarabun',sans-serif"}}>+ อีก {filtered.length-200} รายการ — กรุณาค้นหาเฉพาะเจาะจง</div>}
     </div>
     {/* Footer actions */}
-    <div style={{display:"flex",gap:8,paddingTop:10,borderTop:`1px solid ${C.line}`,position:"sticky",bottom:-18,background:C.white,paddingBottom:0}}>
+    <div style={{display:"flex",gap:8,paddingTop:10,borderTop:`1px solid ${C.line}`,background:C.white}}>
       <Btn v="ghost" onClick={onClose} full s={{padding:"11px"}}>ปิด</Btn>
       {Object.keys(edits).length>0&&<Btn v="success" onClick={saveAll} icon={I.check} full s={{padding:"11px"}}>บันทึกทั้งหมด ({Object.keys(edits).length})</Btn>}
     </div>
