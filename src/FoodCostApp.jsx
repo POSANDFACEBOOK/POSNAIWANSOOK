@@ -2247,14 +2247,17 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
     const prevPct=prevRev>0?round2(prevCost/prevRev*100):0;
     if(!await confirmDlg({
       title:"💾 บันทึกสรุปต้นทุน",
-      message:`บันทึกสรุปต้นทุนของวันที่ ${date} (สาขา ${br?.name||"-"}) ไปยังแท็บ "สรุปต้นทุน"?\n\nยอดขาย: ฿${prevRev.toLocaleString(undefined,{minimumFractionDigits:2})}\nต้นทุน: ฿${prevCost.toLocaleString(undefined,{minimumFractionDigits:2})} (${prevPct}%)\n\nหากเคยบันทึกไว้แล้ว ระบบจะอัพเดททับของเดิม`,
+      message:`บันทึกสรุปต้นทุนของวันที่ ${date} (สาขา ${br?.name||"-"}) ไปยังแท็บ "สรุปต้นทุน"?\n\nยอดขาย: ฿${prevRev.toLocaleString(undefined,{minimumFractionDigits:2})}\nต้นทุน: ฿${prevCost.toLocaleString(undefined,{minimumFractionDigits:2})} (${prevPct}%)\n\n• หากเคยบันทึกไว้แล้ว ระบบจะอัพเดททับของเดิม\n• หลังบันทึก หน้านี้จะเคลียร์เพื่อรอรับไฟล์ใหม่`,
       confirmLabel:"บันทึกสรุป",
     }))return;
     const key=`${branchId}|${date}`;
     setSavingSnap(key);
     try{
       await generateCostSnapshot({branchId,date,menus,ings,currentUser});
-      alert(`✅ บันทึกสรุปต้นทุนเรียบร้อย\n\nไปดูได้ที่แท็บ "สรุปต้นทุน"`);
+      // Clear the imported sales for this batch so the page resets and is ready for the next file
+      try{await api.deleteExternalSalesBy(branchId,date);}catch{/* non-fatal */}
+      await load();
+      alert(`✅ บันทึกสรุปต้นทุนเรียบร้อย — ไปดูได้ที่แท็บ "สรุปต้นทุน"\n\n📭 หน้านี้พร้อมรับไฟล์ใหม่แล้ว`);
     }catch(e){showErr("บันทึกสรุปไม่สำเร็จ",e);}
     setSavingSnap(null);
   }
