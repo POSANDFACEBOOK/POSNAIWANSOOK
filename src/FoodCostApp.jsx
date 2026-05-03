@@ -350,6 +350,17 @@ function hasPerm(user,perm){
 const ROLES={admin:{label:"Admin",color:"purple"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"}};
 const ppg=(price,gram)=>(gram>0?price/gram:0);
 const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.price_per_gram*x.amountGram:0);},0);
+// Per-branch stock helpers — falls back to legacy ingredient.stock when no branch entry exists
+function branchStock(ing,branchId){
+  if(!ing||branchId==null)return 0;
+  const map=ing.stock_by_branch||{};
+  const k=String(branchId);
+  if(map[k]!=null&&map[k]!=="")return +map[k]||0;
+  return +ing.stock||0;
+}
+function setBranchStockInJson(existing,branchId,value){
+  return {...(existing||{}),[String(branchId)]:+value||0};
+}
 const marginColor=(m)=>m>=60?C.green:m>=40?C.yellow:C.red;
 const marginLabel=(m)=>m>=60?"ดี":m>=40?"พอใช้":"ต่ำ";
 // Format date/time in Thai locale but always Gregorian year (not Buddhist) — receipts must read 2026 not 2569
@@ -803,7 +814,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,onDone}){
 // ── INGREDIENT TAB ────────────────────────────────────
 // ══════════════════════════════════════════════════════
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats}){
-  const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);
+  const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
   const ef={name:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
   const[form,setForm]=useState(ef);
@@ -843,6 +854,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
+      <Btn v="success" onClick={()=>setShowStockCheck(true)} icon={I.box}>📦 เช็คสต็อก</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
     </div>
@@ -868,7 +880,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
               {[{l:"ซื้อมา",v:`฿${item.buy_price}`,sub:`${item.buy_amount} ${item.buy_unit}`,bg:C.lineLight,tc:C.ink},{l:"รวมกรัม",v:`${(+item.convert_to_gram).toLocaleString()}g`,sub:"ทั้งหมด",bg:C.brandLight,tc:C.brand},{l:"ราคา/กรัม",v:`฿${(+item.price_per_gram).toFixed(3)}`,sub:"ต่อ 1g",bg:C.greenLight,tc:C.green}].map(st=><div key={st.l} style={{background:st.bg,borderRadius:10,padding:"8px 10px",textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>{st.l}</div><div style={{fontSize:13,fontWeight:800,color:st.tc,fontFamily:"'Sarabun',sans-serif"}}>{st.v}</div><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{st.sub}</div></div>)}
             </div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>สต็อก: <b style={{color:+item.stock<3?C.red:C.green}}>{item.stock} {item.buy_unit}</b></span>
+              {(()=>{const bs=branchStock(item,currentBranch?.id);const safety=+item.safety_stock||0;const low=safety>0&&bs<safety;return <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>สต็อก ({currentBranch?.name||"—"}): <b style={{color:low?C.red:C.green}}>{bs} {item.buy_unit}</b>{safety>0&&<span style={{fontSize:10,color:C.ink4,marginLeft:4}}>· safety {safety}</span>}</span>;})()}
               <EditedBy username={item.edit_by} editAt={item.edit_at}/>
             </div>
           </div>
@@ -933,7 +945,110 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
         <Btn onClick={save} icon={I.check} disabled={!form.name||!form.buy_price} loading={saving}>{editId?"บันทึก":"เพิ่มวัตถุดิบ"}</Btn>
       </div>
     </Modal>}
+    {showStockCheck&&<StockCheckPopup ings={filtered} currentBranch={currentBranch} currentUser={currentUser} reload={reload} onClose={()=>setShowStockCheck(false)}/>}
   </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── STOCK CHECK POPUP (used from IngTab) ──────────────
+// ══════════════════════════════════════════════════════
+function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
+  const isMobile=useIsMobile();
+  const[q,setQ]=useState("");
+  const[edits,setEdits]=useState({});  // {ingId: stringValue}
+  const[saving,setSaving]=useState({});  // {ingId: bool}
+  const inputRef=useRef();
+  useEffect(()=>{const t=setTimeout(()=>inputRef.current?.focus(),100);return()=>clearTimeout(t);},[]);
+
+  const filtered=useMemo(()=>{
+    if(!q.trim())return ings;
+    const ql=q.toLowerCase();
+    return ings.filter(i=>i.name.toLowerCase().includes(ql)||(i.category||"").toLowerCase().includes(ql)||(i.supplier_name||"").toLowerCase().includes(ql));
+  },[ings,q]);
+
+  async function saveOne(ing){
+    const raw=edits[ing.id];
+    if(raw===undefined||raw===""){alert("ใส่จำนวนก่อน");return;}
+    const v=+raw;
+    if(isNaN(v)||v<0){alert("จำนวนไม่ถูกต้อง");return;}
+    setSaving(s=>({...s,[ing.id]:true}));
+    try{
+      const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,v);
+      await api.updateIng(ing.id,{stock_by_branch:next,edit_by:currentUser.username,edit_at:nowStr()});
+      if(reload)await reload();
+      setEdits(e=>{const n={...e};delete n[ing.id];return n;});
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setSaving(s=>{const n={...s};delete n[ing.id];return n;});
+  }
+  async function saveAll(){
+    const entries=Object.entries(edits).filter(([id,v])=>v!==""&&v!=null);
+    if(entries.length===0){alert("ยังไม่มีการเปลี่ยนแปลง");return;}
+    if(!await confirmDlg({title:"บันทึกสต็อก",message:`บันทึก ${entries.length} รายการ?`,confirmLabel:"บันทึก"}))return;
+    const ok=[];
+    for(const[id,v]of entries){
+      const ing=ings.find(x=>+x.id===+id);if(!ing)continue;
+      try{
+        const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0);
+        await api.updateIng(+id,{stock_by_branch:next,edit_by:currentUser.username,edit_at:nowStr()});
+        ok.push(id);
+      }catch(e){alert(`บันทึก ${ing.name} ไม่สำเร็จ: ${e.message}`);}
+    }
+    if(reload)await reload();
+    setEdits({});
+    alert(`✅ บันทึกสต็อก ${ok.length} รายการสำเร็จ`);
+  }
+
+  return <Modal title={`📦 เช็คสต็อก — ${currentBranch?.name||"—"}`} onClose={onClose} wide>
+    <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,padding:"8px 12px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:9,lineHeight:1.6}}>
+      ℹ️ จำนวนสต็อก<b style={{color:C.brand}}>แยกตามสาขา</b> · ค้นหาวัตถุดิบ → ใส่จำนวนใหม่ → กดบันทึก
+    </div>
+    {/* Sticky search bar */}
+    <div style={{position:"sticky",top:0,background:C.white,zIndex:2,paddingBottom:10,marginBottom:6,borderBottom:`1px solid ${C.lineLight}`}}>
+      <div style={{position:"relative"}}>
+        <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span>
+        <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อวัตถุดิบ / หมวด / ซัพพลาย..." style={{...iS,paddingLeft:40,fontSize:15,padding:"11px 14px 11px 40px"}}/>
+      </div>
+      <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:6}}>พบ <b style={{color:C.brand}}>{filtered.length}</b> รายการ {Object.keys(edits).length>0&&<span style={{color:C.green,marginLeft:8}}>· แก้ไขค้างไว้ {Object.keys(edits).length} รายการ</span>}</div>
+    </div>
+    {/* Result list — card per ingredient (mobile-friendly) */}
+    <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+      {filtered.length===0&&<div style={{textAlign:"center",padding:"40px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:36,marginBottom:6,opacity:.5}}>🔍</div>
+        <div style={{fontSize:13}}>ไม่พบวัตถุดิบ</div>
+      </div>}
+      {filtered.slice(0,200).map(ing=>{
+        const cur=branchStock(ing,currentBranch.id);
+        const editVal=edits[ing.id];
+        const newVal=editVal!==undefined&&editVal!==""?+editVal||0:cur;
+        const dirty=editVal!==undefined&&editVal!==""&&newVal!==cur;
+        const safety=+ing.safety_stock||0;
+        const lowStock=safety>0&&newVal<safety;
+        const isSaving=!!saving[ing.id];
+        return <div key={ing.id} style={{background:dirty?C.brandLight:C.white,border:`1.5px solid ${dirty?C.brandBorder:C.line}`,borderRadius:12,padding:"10px 12px",display:"flex",gap:10,alignItems:"center",transition:"all .15s"}}>
+          {ing.image?<img src={ing.image} alt={ing.name} style={{width:isMobile?44:48,height:isMobile?44:48,objectFit:"cover",borderRadius:8,flexShrink:0}}/>:<div style={{width:isMobile?44:48,height:isMobile?44:48,borderRadius:8,background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={22} c={C.brand}/></div>}
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.name}</div>
+            <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",gap:6,flexWrap:"wrap",marginTop:2}}>
+              {ing.category&&<span>{ing.category}</span>}
+              <span>· เดิม {cur} {ing.buy_unit}</span>
+              {safety>0&&<span style={{color:lowStock?"#92400E":C.ink4}}>· safety {safety}</span>}
+            </div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+            <input type="number" inputMode="decimal" min="0" step="any" placeholder={String(cur)} value={editVal??""} onChange={e=>setEdits(o=>({...o,[ing.id]:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&saveOne(ing)} style={{...iS,width:isMobile?70:80,padding:"8px 10px",fontSize:15,fontWeight:800,textAlign:"right",border:`2px solid ${dirty?C.brand:C.line}`,background:dirty?C.white:C.bg}}/>
+            <span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,minWidth:24}}>{ing.buy_unit}</span>
+            <button onClick={()=>saveOne(ing)} disabled={isSaving||!dirty} style={{background:dirty&&!isSaving?`linear-gradient(135deg,${C.green},#059669)`:C.lineLight,border:"none",borderRadius:9,padding:"8px 12px",cursor:dirty&&!isSaving?"pointer":"not-allowed",color:dirty&&!isSaving?C.white:C.ink4,fontSize:12,fontWeight:800,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4,minHeight:38,minWidth:isMobile?44:60,whiteSpace:"nowrap"}}>{isSaving?"⏳":<><Ic d={I.check} s={13} c={dirty?C.white:C.ink4}/>{!isMobile&&<span>บันทึก</span>}</>}</button>
+          </div>
+        </div>;
+      })}
+      {filtered.length>200&&<div style={{textAlign:"center",padding:10,color:C.ink4,fontSize:11,fontFamily:"'Sarabun',sans-serif"}}>+ อีก {filtered.length-200} รายการ — กรุณาค้นหาเฉพาะเจาะจง</div>}
+    </div>
+    {/* Footer actions */}
+    <div style={{display:"flex",gap:8,paddingTop:10,borderTop:`1px solid ${C.line}`,position:"sticky",bottom:-18,background:C.white,paddingBottom:0}}>
+      <Btn v="ghost" onClick={onClose} full s={{padding:"11px"}}>ปิด</Btn>
+      {Object.keys(edits).length>0&&<Btn v="success" onClick={saveAll} icon={I.check} full s={{padding:"11px"}}>บันทึกทั้งหมด ({Object.keys(edits).length})</Btn>}
+    </div>
+  </Modal>;
 }
 
 // ══════════════════════════════════════════════════════
@@ -3735,9 +3850,9 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
     return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name,"th"));
   },[visibleIngs,suppliers]);
 
-  // Compute order qty for an ingredient (auto unless overridden)
+  // Compute order qty for an ingredient (auto unless overridden) — uses per-branch stock
   function autoOrderQty(ing){
-    const have=onHand[ing.id]!=null?+onHand[ing.id]:(+ing.stock||0);
+    const have=onHand[ing.id]!=null?+onHand[ing.id]:branchStock(ing,currentBranch?.id);
     const safety=+ing.safety_stock||0;
     return Math.max(0,round2(safety-have));
   }
@@ -3756,19 +3871,21 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[visibleIngs,onHand,orderQty]);
 
-  // Save updated stock counts back to ingredients (optional helper)
+  // Save updated stock counts back to ingredients (per-branch)
   async function saveStockCounts(){
     const entries=Object.entries(onHand).filter(([id,v])=>v!==""&&v!=null);
     if(entries.length===0){alert("ยังไม่ได้ใส่จำนวน");return;}
-    if(!await confirmDlg({title:"บันทึกสต็อกที่นับ",message:`อัปเดตสต็อกของ ${entries.length} รายการในระบบ?`,confirmLabel:"อัปเดต"}))return;
+    if(!await confirmDlg({title:"บันทึกสต็อกที่นับ",message:`อัปเดตสต็อกของ ${entries.length} รายการในสาขา "${currentBranch?.name}"?`,confirmLabel:"อัปเดต"}))return;
     setSavingStock(true);
     try{
       for(const[id,v]of entries){
-        await api.updateIng(+id,{stock:+v});
+        const ing=ings.find(x=>+x.id===+id);if(!ing)continue;
+        const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0);
+        await api.updateIng(+id,{stock_by_branch:next});
       }
       if(reloadIngs)await reloadIngs();
       setOnHand({});
-      alert("✅ อัปเดตสต็อกในระบบเรียบร้อย");
+      alert(`✅ อัปเดตสต็อกของสาขา "${currentBranch?.name}" เรียบร้อย`);
     }catch(e){alert("ไม่สำเร็จ: "+e.message);}
     setSavingStock(false);
   }
@@ -3871,7 +3988,7 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
               <tbody>
                 {g.items.map((ing,idx)=>{
                   const safety=+ing.safety_stock||0;
-                  const have=onHand[ing.id]!=null&&onHand[ing.id]!==""?+onHand[ing.id]:(+ing.stock||0);
+                  const have=onHand[ing.id]!=null&&onHand[ing.id]!==""?+onHand[ing.id]:branchStock(ing,currentBranch?.id);
                   const order=getOrderQty(ing);
                   const cost=lineCost(ing);
                   const auto=autoOrderQty(ing);
@@ -3893,7 +4010,7 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
                       <span style={{fontSize:12,fontWeight:800,color:safety>0?C.yellow:C.ink4}}>{safety||"—"}</span>
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder?<input type="number" min="0" step="any" placeholder={String(+ing.stock||0)} value={onHand[ing.id]??""} onChange={e=>{setOnHand(o=>({...o,[ing.id]:e.target.value}));setOrderQty(q2=>{const n={...q2};delete n[ing.id];return n;});}} style={{...iS,width:78,padding:"6px 8px",fontSize:13,fontWeight:800,textAlign:"right",border:`2px solid ${lowStock?"#F59E0B":C.brandBorder}`,background:lowStock?"#FFFBEB":C.brandLight}}/>
+                      {canOrder?<input type="number" min="0" step="any" placeholder={String(branchStock(ing,currentBranch?.id))} value={onHand[ing.id]??""} onChange={e=>{setOnHand(o=>({...o,[ing.id]:e.target.value}));setOrderQty(q2=>{const n={...q2};delete n[ing.id];return n;});}} style={{...iS,width:78,padding:"6px 8px",fontSize:13,fontWeight:800,textAlign:"right",border:`2px solid ${lowStock?"#F59E0B":C.brandBorder}`,background:lowStock?"#FFFBEB":C.brandLight}}/>
                       :<span style={{fontSize:13,fontWeight:700,color:C.ink}}>{have}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
