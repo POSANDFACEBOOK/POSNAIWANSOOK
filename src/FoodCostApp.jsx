@@ -1174,6 +1174,97 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
   useEffect(()=>{if(ing){setSop(Array.isArray(ing.sop)?[...ing.sop.map(s=>({...s}))]:[]);setEditIngs(Array.isArray(ing.ingredients)?[...ing.ingredients]:[]);setEdit(false);}},[sel]);
   useEffect(()=>{if(sel!=null&&!sopIngs.find(i=>i.id===sel))setSel(sopIngs[0]?.id??null);},[sopIngs,sel]);
   async function saveSop(){setSaving(true);try{await api.updateIng(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr()});if(reloadIngs)await reloadIngs();else if(reload)await reload();setEdit(false);alert("✅ บันทึก SOP วัตถุดิบสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  function printSOP(){
+    if(!ing)return;
+    const ingChips=(ing.ingredients||[]).map(mi=>{const i2=ings.find(g=>g.id===mi.ingredientId);return i2?`<span class="ic"><b>${i2.name}</b>&nbsp;${mi.amountGram}&nbsp;${mi.unit||'กรัม'}</span>`:''}).join('');
+    const subTotal=(ing.ingredients||[]).reduce((s,x)=>{const i2=ings.find(g=>g.id===x.ingredientId);return s+(i2?(+i2.price_per_gram||0)*(+x.amountGram||0):0);},0);
+    const steps=(ing.sop||[]).map((s,idx)=>`
+      <div class="step${s.image?' has-img':''}">
+        <div class="num">${idx+1}</div>
+        <div class="sbody">
+          <div class="stext">
+            ${s.title?`<div class="stitle">${s.title}</div>`:''}
+            ${s.desc?`<div class="sdesc">${s.desc.replace(/\n/g,'<br/>')}</div>`:''}
+          </div>
+          ${s.image?`<img src="${s.image}" class="simg"/>`:''}
+        </div>
+      </div>`).join('');
+    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>SOP วัตถุดิบ - ${ing.name}</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700;800;900&display=swap');
+@page{size:A4 portrait;margin:10mm 12mm}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+#wrap{width:100%}
+.header{padding-bottom:10px;border-bottom:3px solid #10B981;margin-bottom:12px;display:flex;gap:14px;align-items:center}
+.hmain{flex:1}
+.hlabel{font-size:9px;font-weight:800;color:#10B981;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px}
+.htitle{font-size:26px;font-weight:900;color:#0F172A;line-height:1.15}
+.hsub{font-size:11px;color:#64748B;margin-top:3px;font-weight:600}
+.himg{width:90px;height:90px;object-fit:cover;border-radius:12px;border:2px solid #E2E8F0;flex-shrink:0}
+.sec-label{font-size:9px;font-weight:800;color:#94A3B8;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px}
+.ings{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
+.ic{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:3px 9px;font-size:11px;color:#334155}
+.ic b{color:#0F172A}
+.cost-row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.cost-card{flex:1;min-width:120px;background:#F0FDF4;border:1px solid #10B98144;border-radius:8px;padding:8px 12px}
+.cost-card .lbl{font-size:9px;font-weight:800;color:#10B981;letter-spacing:.6px;text-transform:uppercase;margin-bottom:2px}
+.cost-card .val{font-size:15px;font-weight:900;color:#10B981}
+.cost-card.brand{background:#FFF7ED;border-color:#FFD3BC}
+.cost-card.brand .lbl{color:#FF6B35}
+.cost-card.brand .val{color:#FF6B35}
+.cost-card.gray{background:#F8FAFC;border-color:#E2E8F0}
+.cost-card.gray .lbl{color:#64748B}
+.cost-card.gray .val{color:#0F172A}
+.steps{display:flex;flex-direction:column;gap:10px}
+.step{display:flex;gap:12px;align-items:flex-start}
+.num{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#10B981,#059669);color:#fff;font-size:14px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.sbody{flex:1;background:#F8FAFC;border-radius:10px;padding:10px 14px;border:1px solid #E2E8F0}
+.step.has-img .sbody{display:flex;gap:12px;align-items:flex-start}
+.stext{flex:1;min-width:0}
+.stitle{font-size:14px;font-weight:900;color:#0F172A;margin-bottom:4px}
+.sdesc{font-size:12px;color:#334155;line-height:1.65;white-space:pre-wrap}
+.simg{width:220px;min-width:220px;max-width:220px;height:160px;object-fit:cover;border-radius:9px;border:2px solid #E2E8F0;display:block;flex-shrink:0}
+.step:not(.has-img) .simg{width:100%;max-width:100%;height:auto;max-height:260px;min-width:unset}
+.footer{margin-top:12px;padding-top:8px;border-top:1px solid #E2E8F0;display:flex;justify-content:space-between;font-size:9px;color:#94A3B8}
+</style></head><body>
+<div id="wrap">
+  <div class="header">
+    ${ing.image?`<img src="${ing.image}" class="himg" crossorigin="anonymous"/>`:''}
+    <div class="hmain">
+      <div class="hlabel">SOP วัตถุดิบ · Ingredient Standard Operating Procedure</div>
+      <div class="htitle">${ing.name}</div>
+      <div class="hsub">${ing.category||''}${ing.buy_unit?` · ${ing.buy_unit}`:''}</div>
+    </div>
+  </div>
+  <div class="cost-row">
+    <div class="cost-card"><div class="lbl">ต้นทุนรวมส่วนผสม</div><div class="val">฿${subTotal.toFixed(2)}</div></div>
+    <div class="cost-card brand"><div class="lbl">ราคา/กรัม (กำหนดเอง)</div><div class="val">฿${(+ing.price_per_gram||0).toFixed(4)}</div></div>
+    <div class="cost-card gray"><div class="lbl">มูลค่าทั้งล็อต (${(+ing.convert_to_gram||0).toLocaleString()}g)</div><div class="val">฿${((+ing.price_per_gram||0)*(+ing.convert_to_gram||0)).toFixed(2)}</div></div>
+  </div>
+  ${ingChips?`<div class="sec-label">ส่วนผสมที่ใช้</div><div class="ings">${ingChips}</div>`:''}
+  <div class="sec-label">ขั้นตอนการเตรียม / จัดการ &nbsp;(${(ing.sop||[]).length} ขั้นตอน)</div>
+  <div class="steps">${steps}</div>
+  <div class="footer"><span>NAIWANSOOK · ห้องครัว</span><span>พิมพ์วันที่ ${new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}</span></div>
+</div>
+<script>
+async function waitImgs(){
+  const imgs=[...document.images];
+  await Promise.all(imgs.map(img=>img.complete?Promise.resolve():new Promise(r=>{img.onload=img.onerror=r;})));
+}
+window.addEventListener('load',async()=>{
+  await waitImgs();
+  await new Promise(r=>setTimeout(r,100));
+  const A4H=(297-20)*3.7795;
+  const w=document.getElementById('wrap');
+  const h=w.offsetHeight;
+  if(h>A4H){document.body.style.zoom=(A4H/h).toFixed(4);}
+  setTimeout(()=>window.print(),300);
+});
+</script></body></html>`;
+    const win=window.open('','_blank','width=800,height=700');
+    win.document.write(html);win.document.close();
+  }
   const filtered=useMemo(()=>q.trim()?sopIngs.filter(i=>i.name.toLowerCase().includes(q.toLowerCase())):sopIngs,[sopIngs,q]);
   // Pickable ingredients = all ingredients except SELF (prevent self-reference)
   const pickableIngs=useMemo(()=>ings.filter(i=>i.id!==sel),[ings,sel]);
@@ -1259,6 +1350,7 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
               </div>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {!edit&&<Btn v="ghost" onClick={printSOP} icon={I.print} s={{padding:"8px 14px"}}>พิมพ์</Btn>}
               {canE&&<>{edit?<><Btn v="ghost" onClick={()=>{setSop(Array.isArray(ing.sop)?[...ing.sop]:[]);setEditIngs(Array.isArray(ing.ingredients)?[...ing.ingredients]:[]);setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>:<Btn v="info" onClick={()=>setEdit(true)} icon={I.pencil} s={{padding:"8px 14px"}}>แก้ไข SOP</Btn>}</>}
             </div>
           </div>
