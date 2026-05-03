@@ -3437,18 +3437,6 @@ function CostSummarySection({branches,currentBranch,currentUser,menus,ings,stand
               </tr>;
             })}
           </tbody>
-          {snaps.length>0&&<tfoot>
-            <tr style={{background:"#0F172A",color:"#F8FAFC",fontWeight:900}}>
-              <td colSpan={2} style={{padding:"13px 14px",fontSize:13,textAlign:"right",letterSpacing:.3}}>รวมทั้งหมด</td>
-              <td style={{padding:"13px 14px",textAlign:"right",fontSize:15}}>฿{sumRev.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-              <td style={{padding:"13px 14px",textAlign:"right"}}>
-                <div style={{fontSize:15,color:"#FCA5A5"}}>฿{sumCost.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
-                <div style={{fontSize:11,color:sumProfit>=0?"#A7F3D0":"#FCA5A5",fontWeight:800,marginTop:1}}>กำไร ฿{sumProfit.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
-              </td>
-              <td style={{padding:"13px 14px",textAlign:"right",fontSize:14,color:sumPct<=30?"#A7F3D0":sumPct<=40?"#FCD34D":sumPct<=50?"#FDBA74":"#FCA5A5"}}>{sumPct}%</td>
-              <td/>
-            </tr>
-          </tfoot>}
         </table>
       </div>
     </Card>}
