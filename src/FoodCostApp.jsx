@@ -381,6 +381,15 @@ function setBranchSupplierInJson(existing,branchId,supplierId){
   else delete next[String(branchId)];
   return next;
 }
+// Per-branch safety stock — each branch sets and sees its own number; never shared.
+function branchSafety(ing,branchId){
+  if(!ing||branchId==null)return 0;
+  const map=ing.safety_by_branch||{};
+  return +map[String(branchId)]||0;
+}
+function setBranchSafetyInJson(existing,branchId,value){
+  return {...(existing||{}),[String(branchId)]:+value||0};
+}
 const marginColor=(m)=>m>=60?C.green:m>=40?C.yellow:C.red;
 const marginLabel=(m)=>m>=60?"ดี":m>=40?"พอใช้":"ต่ำ";
 // Format date/time in Thai locale but always Gregorian year (not Buddhist) — receipts must read 2026 not 2569
@@ -869,7 +878,16 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   const filtered=useMemo(()=>ings.filter(i=>{const vb=i.visible_branches||[];const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);return i.name.toLowerCase().includes(q.toLowerCase())&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;}),[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||1);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
-  async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{const item={...form,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,safety_stock:+form.safety_stock||0,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{
+    // Pull existing safety_by_branch from the row being edited (if any) so we
+    // only mutate the current branch's slot — safety is per-branch.
+    const existingIng=editId?ings.find(x=>+x.id===+editId):null;
+    const nextSafety=setBranchSafetyInJson(existingIng?.safety_by_branch,currentBranch.id,+form.safety_stock||0);
+    const item={...form,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,safety_by_branch:nextSafety,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};
+    delete item.safety_stock; // legacy column — no longer touched from the form
+    if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}
+    await reload();setOpen(false);
+  }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   async function toggleVBIng(item,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(item.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateIng(item.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   // Assign a branch-specific supplier to an ingredient (non-central branches pick from their own list)
@@ -919,7 +937,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div><div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{item.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}><Chip color="orange">{item.category}</Chip>{item.has_sop&&<span style={{fontSize:10,fontWeight:800,color:Array.isArray(item.sop)&&item.sop.length>0?C.green:"#92400E",background:Array.isArray(item.sop)&&item.sop.length>0?C.greenLight:"#FEF3C7",border:`1px solid ${Array.isArray(item.sop)&&item.sop.length>0?C.green+"55":"#FDE68A"}`,padding:"1px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{Array.isArray(item.sop)&&item.sop.length>0?`📋 SOP ${item.sop.length}`:"📋 รอ SOP"}</span>}</div></div>
                 <div style={{display:"flex",gap:4}}>
-                  {canE&&<button onClick={()=>{setForm({name:item.name,category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,safety_stock:item.safety_stock||"",image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
+                  {canE&&<button onClick={()=>{setForm({name:item.name,category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,safety_stock:branchSafety(item,currentBranch?.id)||"",image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
                   {canD&&<button onClick={()=>del(item.id,item.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
                 </div>
               </div>
@@ -939,7 +957,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
               {[{l:"ซื้อมา",v:`฿${item.buy_price}`,sub:`${item.buy_amount} ${item.buy_unit}`,bg:C.lineLight,tc:C.ink},{l:"รวมกรัม",v:`${(+item.convert_to_gram).toLocaleString()}g`,sub:"ทั้งหมด",bg:C.brandLight,tc:C.brand},{l:"ราคา/กรัม",v:`฿${(+item.price_per_gram).toFixed(3)}`,sub:"ต่อ 1g",bg:C.greenLight,tc:C.green}].map(st=><div key={st.l} style={{background:st.bg,borderRadius:10,padding:"8px 10px",textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>{st.l}</div><div style={{fontSize:13,fontWeight:800,color:st.tc,fontFamily:"'Sarabun',sans-serif"}}>{st.v}</div><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{st.sub}</div></div>)}
             </div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              {(()=>{const bs=branchStock(item,currentBranch?.id);const safety=+item.safety_stock||0;const low=safety>0&&bs<safety;return <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>สต็อก ({currentBranch?.name||"—"}): <b style={{color:low?C.red:C.green}}>{bs} {item.buy_unit}</b>{safety>0&&<span style={{fontSize:10,color:C.ink4,marginLeft:4}}>· safety {safety}</span>}</span>;})()}
+              {(()=>{const bs=branchStock(item,currentBranch?.id);const safety=branchSafety(item,currentBranch?.id);const low=safety>0&&bs<safety;return <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>สต็อก ({currentBranch?.name||"—"}): <b style={{color:low?C.red:C.green}}>{bs} {item.buy_unit}</b>{safety>0&&<span style={{fontSize:10,color:C.ink4,marginLeft:4}}>· safety {safety}</span>}</span>;})()}
               <EditedBy username={item.edit_by} editAt={item.edit_at}/>
             </div>
           </div>
@@ -949,6 +967,13 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
               {branches.filter(b=>b.type!=="central").length===0?<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>
               :branches.filter(b=>b.type!=="central").map(b=>{const vb=item.visible_branches||[];const isOn=vb.length===0||vb.includes(b.id);return <button key={b.id} onClick={()=>toggleVBIng(item,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
             </div>
+            {/* Per-branch stock readout — shows current stock for every branch that can see this ingredient */}
+            {(()=>{const vb=item.visible_branches||[];const visBranches=branches.filter(b=>b.type!=="central"&&(vb.length===0||vb.includes(b.id)));if(visBranches.length===0)return null;return <div style={{marginTop:7,paddingTop:7,borderTop:`1px dashed ${C.line}`}}>
+              <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.box} s={10} c={C.ink4}/>สต็อกตามสาขา:</div>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                {visBranches.map(b=>{const bs=branchStock(item,b.id);const sf=branchSafety(item,b.id);const low=sf>0&&bs<sf;return <span key={b.id} title={sf>0?`safety ${sf}`:""} style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:6,background:low?"#FEF2F2":C.bg,color:low?C.red:C.ink2,border:`1px solid ${low?"#FECACA":C.line}`,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{b.name}: {bs}{item.buy_unit?` ${item.buy_unit}`:""}</span>;})}
+              </div>
+            </div>;})()}
           </div>}
         </Card>)}
       </div>
@@ -976,7 +1001,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <Inp label="สต็อกปัจจุบัน" type="number" value={form.stock} onChange={e=>upd("stock",e.target.value)} placeholder="0"/>
-        <Inp label="🛡️ Safety Stock" hint={`เตือนเมื่อต่ำกว่านี้ — ใช้คำนวณจำนวนที่ต้องสั่ง (${form.buy_unit||"หน่วย"})`} type="number" value={form.safety_stock} onChange={e=>upd("safety_stock",e.target.value)} placeholder="0"/>
+        <Inp label={`🛡️ Safety Stock (${currentBranch?.name||"—"})`} hint={`เฉพาะสาขานี้ · เตือนเมื่อต่ำกว่านี้ (${form.buy_unit||"หน่วย"})`} type="number" value={form.safety_stock} onChange={e=>upd("safety_stock",e.target.value)} placeholder="0"/>
       </div>
 
       {/* SOP toggle */}
@@ -1081,7 +1106,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
         const editVal=edits[ing.id];
         const newVal=editVal!==undefined&&editVal!==""?+editVal||0:cur;
         const dirty=editVal!==undefined&&editVal!==""&&newVal!==cur;
-        const safety=+ing.safety_stock||0;
+        const safety=branchSafety(ing,currentBranch.id);
         const lowStock=safety>0&&newVal<safety;
         const isSaving=!!saving[ing.id];
         return <div key={ing.id} style={{background:dirty?C.brandLight:C.white,border:`1.5px solid ${dirty?C.brandBorder:C.line}`,borderRadius:12,padding:"10px 12px",display:"flex",gap:10,alignItems:"center",transition:"all .15s"}}>
@@ -3883,9 +3908,12 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
   async function saveSafety(ing,raw){
     const v=raw===""||raw==null?0:+raw;
     if(isNaN(v)||v<0)return;
-    if(+ing.safety_stock===v){setSafetyEdit(s=>{const n={...s};delete n[ing.id];return n;});return;}
-    try{await api.updateIng(ing.id,{safety_stock:v});if(reloadIngs)await reloadIngs();}
-    catch(e){alert("บันทึก safety ไม่สำเร็จ: "+e.message);}
+    if(branchSafety(ing,currentBranch?.id)===v){setSafetyEdit(s=>{const n={...s};delete n[ing.id];return n;});return;}
+    try{
+      const next=setBranchSafetyInJson(ing.safety_by_branch,currentBranch.id,v);
+      await api.updateIng(ing.id,{safety_by_branch:next});
+      if(reloadIngs)await reloadIngs();
+    }catch(e){alert("บันทึก safety ไม่สำเร็จ: "+e.message);}
     setSafetyEdit(s=>{const n={...s};delete n[ing.id];return n;});
   }
 
@@ -3933,10 +3961,10 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[visibleIngs,suppliers,currentBranch,isCentral]);
 
-  // Compute order qty for an ingredient (auto unless overridden) — uses per-branch stock
+  // Compute order qty for an ingredient (auto unless overridden) — uses per-branch stock + per-branch safety
   function autoOrderQty(ing){
     const have=onHand[ing.id]!=null?+onHand[ing.id]:branchStock(ing,currentBranch?.id);
-    const safety=+ing.safety_stock||0;
+    const safety=branchSafety(ing,currentBranch?.id);
     return Math.max(0,round2(safety-have));
   }
   function getOrderQty(ing){
@@ -4071,7 +4099,7 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
               </thead>
               <tbody>
                 {g.items.map((ing,idx)=>{
-                  const safety=+ing.safety_stock||0;
+                  const safety=branchSafety(ing,currentBranch?.id);
                   const curStock=branchStock(ing,currentBranch?.id);
                   const have=onHand[ing.id]!=null&&onHand[ing.id]!==""?+onHand[ing.id]:curStock;
                   const order=getOrderQty(ing);
