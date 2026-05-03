@@ -1151,7 +1151,7 @@ function SOPChooser({onPick}){
   </div>;
 }
 
-function IngredientSOPView({ings,reload,currentUser,currentBranch,onSwitch}){
+function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onSwitch}){
   const isCentral=currentBranch?.type==="central";
   const sopIngs=useMemo(()=>ings.filter(i=>{
     const vb=i.visible_branches||[];
@@ -1173,7 +1173,7 @@ function IngredientSOPView({ings,reload,currentUser,currentBranch,onSwitch}){
   const canE=hasPerm(currentUser,"sop")&&isCentral;
   useEffect(()=>{if(ing){setSop(Array.isArray(ing.sop)?[...ing.sop.map(s=>({...s}))]:[]);setEditIngs(Array.isArray(ing.ingredients)?[...ing.ingredients]:[]);setEdit(false);}},[sel]);
   useEffect(()=>{if(sel!=null&&!sopIngs.find(i=>i.id===sel))setSel(sopIngs[0]?.id??null);},[sopIngs,sel]);
-  async function saveSop(){setSaving(true);try{await api.updateIng(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr()});await reload();setEdit(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function saveSop(){setSaving(true);try{await api.updateIng(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr()});if(reloadIngs)await reloadIngs();else if(reload)await reload();setEdit(false);alert("✅ บันทึก SOP วัตถุดิบสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   const filtered=useMemo(()=>q.trim()?sopIngs.filter(i=>i.name.toLowerCase().includes(q.toLowerCase())):sopIngs,[sopIngs,q]);
   // Pickable ingredients = all ingredients except SELF (prevent self-reference)
   const pickableIngs=useMemo(()=>ings.filter(i=>i.id!==sel),[ings,sel]);
@@ -1421,7 +1421,7 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
   const menu=useMemo(()=>visibleMenus.find(m=>m.id===sel),[visibleMenus,sel]);
   const canE=hasPerm(currentUser,"sop")&&isCentral;
   useEffect(()=>{if(menu){setSop(menu.sop?[...menu.sop.map(s=>({...s}))]:[]); setEditIngs(menu.ingredients?[...menu.ingredients]:[]); setEdit(false);}}, [sel]);
-  async function saveSop(){setSaving(true);try{await api.updateMenu(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr()});await reload();setEdit(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function saveSop(){setSaving(true);try{await api.updateMenu(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr()});await reload();setEdit(false);alert("✅ บันทึก SOP เมนูสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
   function pickIng(ing){setIngPopup({ing,amount:"",unit:"กรัม"});}
   function confirmIngPick(){
@@ -4961,7 +4961,7 @@ export default function App(){
             {tab==="crm"&&<CRMTab currentBranch={currentBranch} currentUser={currentUser} menus={menus}/>}
             {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats}/>}
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
-            {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
+            {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
