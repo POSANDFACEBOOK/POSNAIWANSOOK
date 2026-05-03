@@ -3705,16 +3705,24 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
   const[saving,setSaving]=useState(false);
   const[savingStock,setSavingStock]=useState(false);
 
-  // Filter visible ingredients (branch visibility + search + supplier filter)
+  // Suppliers visible to the current branch (central sees all; others skip central_only)
+  const visibleSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&(isCentral||!s.central_only)),[suppliers,isCentral]);
+  const visibleSupplierIds=useMemo(()=>new Set(visibleSuppliers.map(s=>+s.id)),[visibleSuppliers]);
+
+  // Filter visible ingredients (branch + supplier visibility + search + supplier filter)
   const visibleIngs=useMemo(()=>ings.filter(i=>{
     const vb=i.visible_branches||[];
     const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);
     if(!matchB)return false;
+    // Supplier visibility: if ingredient has a supplier and that supplier isn't in the
+    // visible set for this branch, hide the ingredient (e.g. "central-only" suppliers
+    // don't appear on a branch-side stock check).
+    if(i.supplier_id&&!visibleSupplierIds.has(+i.supplier_id))return false;
     if(q.trim()&&!i.name.toLowerCase().includes(q.toLowerCase())&&!(i.category||"").toLowerCase().includes(q.toLowerCase()))return false;
     if(supFilter==="none"){if(i.supplier_id)return false;}
     else if(supFilter){if(String(i.supplier_id||"")!==String(supFilter))return false;}
     return true;
-  }),[ings,isCentral,currentBranch,q,supFilter]);
+  }),[ings,isCentral,currentBranch,q,supFilter,visibleSupplierIds]);
 
   // Group by supplier (for display)
   const grouped=useMemo(()=>{
@@ -3827,7 +3835,7 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
           <div style={{fontSize:11,color:C.ink4,fontWeight:800,marginBottom:5,fontFamily:"'Sarabun',sans-serif",letterSpacing:.3,textTransform:"uppercase"}}>ซัพพลายเออร์</div>
           <select value={supFilter} onChange={e=>setSupFilter(e.target.value)} style={{...iS,fontSize:13,padding:"9px 12px",appearance:"none"}}>
             <option value="">— ทุกซัพพลาย —</option>
-            {suppliers.filter(s=>s.active!==false).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            {visibleSuppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
             <option value="none">— ไม่ระบุซัพพลาย —</option>
           </select>
         </div>
@@ -4066,28 +4074,41 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
 // ── SUPPLIER TAB ──────────────────────────────────────
 // ══════════════════════════════════════════════════════
 function SupplierTab({suppliers,reloadSuppliers,currentUser}){
-  const[supForm,setSupForm]=useState({name:"",contact:"",phone:"",note:"",active:true});
+  const supF0={name:"",contact:"",phone:"",note:"",active:true,central_only:false};
+  const[supForm,setSupForm]=useState(supF0);
   const[editSID,setEditSID]=useState(null);
   const canE=hasPerm(currentUser,"suppliers");
   async function saveSup(){
     if(!supForm.name)return;
-    try{if(editSID)await api.updateSupplier(editSID,supForm);else await api.addSupplier(supForm);await reloadSuppliers();setSupForm({name:"",contact:"",phone:"",note:"",active:true});setEditSID(null);}
+    try{if(editSID)await api.updateSupplier(editSID,supForm);else await api.addSupplier(supForm);await reloadSuppliers();setSupForm(supF0);setEditSID(null);}
+    catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+  }
+  async function toggleVisibility(s){
+    try{await api.updateSupplier(s.id,{central_only:!s.central_only});await reloadSuppliers();}
     catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
   }
   return <div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(280px,100%),1fr))",gap:12,marginBottom:16}}>
       {suppliers.map(s=><Card key={s.id} style={{padding:"14px 16px"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-          <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+          <div style={{minWidth:0,flex:1}}>
             <div style={{fontWeight:700,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>{s.name}</div>
             {s.contact&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}><span style={{color:C.ink4}}>ผู้ติดต่อ:</span> {s.contact}</div>}
             {s.phone&&<div style={{fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>📞 {s.phone}</div>}
             {s.note&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontStyle:"italic",marginTop:4}}>📝 {s.note}</div>}
           </div>
-          {canE&&<div style={{display:"flex",gap:4}}>
-            <button onClick={()=>{setSupForm({name:s.name,contact:s.contact||"",phone:s.phone||"",note:s.note||"",active:s.active});setEditSID(s.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+          {canE&&<div style={{display:"flex",gap:4,flexShrink:0}}>
+            <button onClick={()=>{setSupForm({name:s.name,contact:s.contact||"",phone:s.phone||"",note:s.note||"",active:s.active!==false,central_only:!!s.central_only});setEditSID(s.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
             <button onClick={async()=>{if(!await confirmDlg({title:"ลบซัพพลายเออร์",message:`ต้องการลบ "${s.name}" ใช่หรือไม่?`}))return;await api.deleteSupplier(s.id);await reloadSuppliers();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
           </div>}
+        </div>
+        {/* Visibility toggle */}
+        <div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.lineLight}`}}>
+          <div style={{fontSize:10,fontWeight:800,color:C.ink4,letterSpacing:.4,textTransform:"uppercase",marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>👁 การแสดงผล</div>
+          <div style={{display:"flex",gap:5}}>
+            <button onClick={()=>canE&&!s.central_only?null:canE&&toggleVisibility(s)} disabled={!canE} style={{flex:1,padding:"7px 10px",borderRadius:8,border:`2px solid ${!s.central_only?C.green:C.line}`,background:!s.central_only?C.greenLight:C.white,color:!s.central_only?C.green:C.ink3,cursor:canE?"pointer":"default",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:11,opacity:canE?1:.7,minHeight:34}}>🌐 ทุกสาขา</button>
+            <button onClick={()=>canE&&s.central_only?null:canE&&toggleVisibility(s)} disabled={!canE} style={{flex:1,padding:"7px 10px",borderRadius:8,border:`2px solid ${s.central_only?C.brand:C.line}`,background:s.central_only?C.brandLight:C.white,color:s.central_only?C.brand:C.ink3,cursor:canE?"pointer":"default",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:11,opacity:canE?1:.7,minHeight:34}}>🏢 เฉพาะครัวกลาง</button>
+          </div>
         </div>
       </Card>)}
       {suppliers.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีซัพพลาย</p></div>}
@@ -4100,9 +4121,17 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser}){
         <Inp label="เบอร์โทร" value={supForm.phone} onChange={e=>setSupForm(f=>({...f,phone:e.target.value}))} placeholder="081-234-5678"/>
         <Inp label="หมายเหตุ" value={supForm.note} onChange={e=>setSupForm(f=>({...f,note:e.target.value}))} placeholder="ส่งทุกเช้า..."/>
       </div>
+      {/* Visibility selector in form */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:11,fontWeight:800,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif",letterSpacing:.4,textTransform:"uppercase"}}>👁 ใครเห็นได้บ้าง</div>
+        <div style={{display:"flex",gap:8}}>
+          <button type="button" onClick={()=>setSupForm(f=>({...f,central_only:false}))} style={{flex:1,padding:"10px 14px",borderRadius:10,border:`2px solid ${!supForm.central_only?C.green:C.line}`,background:!supForm.central_only?C.greenLight:C.white,color:!supForm.central_only?C.green:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:12,minHeight:42}}>🌐 ทุกสาขา</button>
+          <button type="button" onClick={()=>setSupForm(f=>({...f,central_only:true}))} style={{flex:1,padding:"10px 14px",borderRadius:10,border:`2px solid ${supForm.central_only?C.brand:C.line}`,background:supForm.central_only?C.brandLight:C.white,color:supForm.central_only?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:12,minHeight:42}}>🏢 เฉพาะครัวกลาง</button>
+        </div>
+      </div>
       <div style={{display:"flex",gap:8}}>
         <Btn onClick={saveSup} icon={I.check} disabled={!supForm.name}>{editSID?"บันทึก":"เพิ่มซัพพลาย"}</Btn>
-        {editSID&&<Btn v="ghost" onClick={()=>{setSupForm({name:"",contact:"",phone:"",note:"",active:true});setEditSID(null);}}>ยกเลิก</Btn>}
+        {editSID&&<Btn v="ghost" onClick={()=>{setSupForm(supF0);setEditSID(null);}}>ยกเลิก</Btn>}
       </div>
     </Card>}
   </div>;
