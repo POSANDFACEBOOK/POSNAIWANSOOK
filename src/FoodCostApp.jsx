@@ -3856,37 +3856,48 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
   const[orderQty,setOrderQty]=useState({});  // {ingId: number} — manually overridden order qty
   const[saving,setSaving]=useState(false);
   const[savingStock,setSavingStock]=useState(false);
+  const[safetyEdit,setSafetyEdit]=useState({});  // { ingId: stringValue } — local edit before commit
+  async function saveSafety(ing,raw){
+    const v=raw===""||raw==null?0:+raw;
+    if(isNaN(v)||v<0)return;
+    if(+ing.safety_stock===v){setSafetyEdit(s=>{const n={...s};delete n[ing.id];return n;});return;}
+    try{await api.updateIng(ing.id,{safety_stock:v});if(reloadIngs)await reloadIngs();}
+    catch(e){alert("บันทึก safety ไม่สำเร็จ: "+e.message);}
+    setSafetyEdit(s=>{const n={...s};delete n[ing.id];return n;});
+  }
 
   // Suppliers visible to the current branch — each branch has its own supplier list.
   const visibleSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
   const visibleSupplierNames=useMemo(()=>new Set(visibleSuppliers.map(s=>s.name)),[visibleSuppliers]);
 
-  // Filter visible ingredients. With branch-isolated suppliers, we can't match by
-  // supplier_id across branches, so the supplier filter compares ingredient
-  // supplier_name to the picked supplier's name.
-  const supFilterName=useMemo(()=>supFilter&&supFilter!=="none"?(visibleSuppliers.find(s=>String(s.id)===String(supFilter))?.name||""):"",[supFilter,visibleSuppliers]);
+  // Filter visible ingredients — branch-visibility + only ingredients with a
+  // per-branch supplier set are shown here (the stock-check view is for
+  // ordering, so an ingredient with no supplier picked has nowhere to send
+  // its order). Also honour search + supplier dropdown filter.
   const visibleIngs=useMemo(()=>ings.filter(i=>{
     const vb=i.visible_branches||[];
     const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);
     if(!matchB)return false;
+    const sid=branchSupplierId(i,currentBranch?.id);
+    if(!sid)return false;  // hide ingredients without a supplier mapping for this branch
     if(q.trim()&&!i.name.toLowerCase().includes(q.toLowerCase())&&!(i.category||"").toLowerCase().includes(q.toLowerCase()))return false;
-    if(supFilter==="none"){if(i.supplier_name||i.supplier_id)return false;}
-    else if(supFilter&&supFilterName){if(String(i.supplier_name||"")!==supFilterName)return false;}
+    if(supFilter==="none")return false;  // "ไม่ระบุ" group doesn't exist here anymore
+    else if(supFilter){if(String(sid)!==String(supFilter))return false;}
     return true;
-  }),[ings,isCentral,currentBranch,q,supFilter,supFilterName]);
+  }),[ings,isCentral,currentBranch,q,supFilter]);
 
-  // Group by supplier (per-branch supplier mapping when set, fallback to ingredient.supplier)
+  // Group by per-branch supplier (always set since the filter above guarantees it)
   const grouped=useMemo(()=>{
     const groups=new Map();
     visibleIngs.forEach(i=>{
       const sid=branchSupplierId(i,currentBranch?.id);
-      const supKey=sid?`s_${sid}`:"none";
-      const supName=sid?(suppliers.find(s=>+s.id===+sid)?.name||"—"):(isCentral?(i.supplier_name||"ไม่ระบุซัพพลาย"):"ยังไม่กำหนดซัพพลาย");
-      if(!groups.has(supKey))groups.set(supKey,{key:supKey,name:supName,supplier_id:sid||null,items:[]});
+      const supKey=`s_${sid}`;
+      const supName=suppliers.find(s=>+s.id===+sid)?.name||"—";
+      if(!groups.has(supKey))groups.set(supKey,{key:supKey,name:supName,supplier_id:sid,items:[]});
       groups.get(supKey).items.push(i);
     });
     return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name,"th"));
-  },[visibleIngs,suppliers,currentBranch,isCentral]);
+  },[visibleIngs,suppliers,currentBranch]);
 
   // Compute order qty for an ingredient (auto unless overridden) — uses per-branch stock
   function autoOrderQty(ing){
@@ -3992,7 +4003,6 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
           <select value={supFilter} onChange={e=>setSupFilter(e.target.value)} style={{...iS,fontSize:13,padding:"9px 12px",appearance:"none"}}>
             <option value="">— ทุกซัพพลาย —</option>
             {visibleSuppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-            <option value="none">— ไม่ระบุซัพพลาย —</option>
           </select>
         </div>
       </div>
@@ -4019,20 +4029,22 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
             </div>
           </div>
           <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:isMobile?640:undefined}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:isMobile?760:undefined}}>
               <thead>
                 <tr style={{background:C.bg}}>
-                  {["#","วัตถุดิบ","หน่วย","🛡 safety","📦 เหลือ (นับ)","✏ สั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:i>=3?"right":"left",letterSpacing:.2,borderBottom:`1px solid ${C.line}`}}>{h}</th>)}
+                  {["#","วัตถุดิบ","หน่วย","📦 สต็อกปัจจุบัน","🛡 safety","📋 เหลือ (นับ)","✏ สั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:i>=3?"right":"left",letterSpacing:.2,borderBottom:`1px solid ${C.line}`}}>{h}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {g.items.map((ing,idx)=>{
                   const safety=+ing.safety_stock||0;
-                  const have=onHand[ing.id]!=null&&onHand[ing.id]!==""?+onHand[ing.id]:branchStock(ing,currentBranch?.id);
+                  const curStock=branchStock(ing,currentBranch?.id);
+                  const have=onHand[ing.id]!=null&&onHand[ing.id]!==""?+onHand[ing.id]:curStock;
                   const order=getOrderQty(ing);
                   const cost=lineCost(ing);
                   const auto=autoOrderQty(ing);
                   const lowStock=have<safety&&safety>0;
+                  const curLow=safety>0&&curStock<safety;
                   const overridden=orderQty[ing.id]!=null&&+orderQty[ing.id]!==auto;
                   return <tr key={ing.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC"}}>
                     <td style={{padding:"9px 10px",fontSize:11,color:C.ink4,fontWeight:700}}>{idx+1}</td>
@@ -4047,7 +4059,11 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
                     </td>
                     <td style={{padding:"9px 10px",fontSize:12,color:C.ink3,fontWeight:600,whiteSpace:"nowrap"}}>{ing.buy_unit}</td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      <span style={{fontSize:12,fontWeight:800,color:safety>0?C.yellow:C.ink4}}>{safety||"—"}</span>
+                      <span style={{fontSize:13,fontWeight:800,color:curLow?C.red:C.ink}}>{curStock}</span>
+                    </td>
+                    <td style={{padding:"9px 10px",textAlign:"right"}}>
+                      {canOrder?<input type="number" min="0" step="any" value={safetyEdit[ing.id]!==undefined?safetyEdit[ing.id]:(safety||"")} onChange={e=>setSafetyEdit(s=>({...s,[ing.id]:e.target.value}))} onBlur={e=>saveSafety(ing,e.target.value)} onKeyDown={e=>{if(e.key==="Enter")e.target.blur();}} placeholder="0" style={{...iS,width:70,padding:"6px 8px",fontSize:13,fontWeight:800,textAlign:"right",border:`2px solid ${C.yellow}55`,background:"#FFFBEB",color:C.ink}}/>
+                      :<span style={{fontSize:12,fontWeight:800,color:safety>0?C.yellow:C.ink4}}>{safety||"—"}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
                       {canOrder?<input type="number" min="0" step="any" placeholder={String(branchStock(ing,currentBranch?.id))} value={onHand[ing.id]??""} onChange={e=>{setOnHand(o=>({...o,[ing.id]:e.target.value}));setOrderQty(q2=>{const n={...q2};delete n[ing.id];return n;});}} style={{...iS,width:78,padding:"6px 8px",fontSize:13,fontWeight:800,textAlign:"right",border:`2px solid ${lowStock?"#F59E0B":C.brandBorder}`,background:lowStock?"#FFFBEB":C.brandLight}}/>
