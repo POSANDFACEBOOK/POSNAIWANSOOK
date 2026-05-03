@@ -4090,16 +4090,12 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch}){
       await reloadSuppliers();setSupForm(supF0);setEditSID(null);
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
   }
-  async function toggleVisibility(s){
-    try{await api.updateSupplier(s.id,{central_only:!s.central_only});await reloadSuppliers();}
-    catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
-  }
   return <div>
     <div style={{background:isCentral?C.greenLight:C.brandLight,border:`1px solid ${isCentral?C.green+"33":C.brandBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
       <span style={{fontSize:18}}>{isCentral?"🏢":"🏪"}</span>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>ซัพพลายของสาขา: {currentBranch?.name||"—"}</div>
-        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>แต่ละสาขามีซัพพลายของตัวเอง — เปลี่ยนสาขาจะเห็นรายการคนละชุด {isCentral?'· "เฉพาะครัวกลาง" = ซัพพลายของครัวกลางที่ไม่แชร์ให้สาขาอื่น':""}</div>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>แต่ละสาขามีซัพพลายของตัวเอง — เปลี่ยนสาขาจะเห็นรายการคนละชุด</div>
       </div>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(280px,100%),1fr))",gap:12,marginBottom:16}}>
@@ -4116,14 +4112,6 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch}){
             <button onClick={async()=>{if(!await confirmDlg({title:"ลบซัพพลายเออร์",message:`ต้องการลบ "${s.name}" ใช่หรือไม่?`}))return;await api.deleteSupplier(s.id);await reloadSuppliers();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
           </div>}
         </div>
-        {/* Visibility toggle */}
-        <div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.lineLight}`}}>
-          <div style={{fontSize:10,fontWeight:800,color:C.ink4,letterSpacing:.4,textTransform:"uppercase",marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>👁 การแสดงผล</div>
-          <div style={{display:"flex",gap:5}}>
-            <button onClick={()=>canE&&!s.central_only?null:canE&&toggleVisibility(s)} disabled={!canE} style={{flex:1,padding:"7px 10px",borderRadius:8,border:`2px solid ${!s.central_only?C.green:C.line}`,background:!s.central_only?C.greenLight:C.white,color:!s.central_only?C.green:C.ink3,cursor:canE?"pointer":"default",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:11,opacity:canE?1:.7,minHeight:34}}>🌐 ทุกสาขา</button>
-            <button onClick={()=>canE&&s.central_only?null:canE&&toggleVisibility(s)} disabled={!canE} style={{flex:1,padding:"7px 10px",borderRadius:8,border:`2px solid ${s.central_only?C.brand:C.line}`,background:s.central_only?C.brandLight:C.white,color:s.central_only?C.brand:C.ink3,cursor:canE?"pointer":"default",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:11,opacity:canE?1:.7,minHeight:34}}>🏢 เฉพาะครัวกลาง</button>
-          </div>
-        </div>
       </Card>)}
       {myList.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีซัพพลายของสาขานี้</p>{canE&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>เพิ่มซัพพลายใหม่ที่ฟอร์มด้านล่าง</p>}</div>}
     </div>
@@ -4134,14 +4122,6 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch}){
         <Inp label="ชื่อผู้ติดต่อ" value={supForm.contact} onChange={e=>setSupForm(f=>({...f,contact:e.target.value}))} placeholder="คุณสมชาย"/>
         <Inp label="เบอร์โทร" value={supForm.phone} onChange={e=>setSupForm(f=>({...f,phone:e.target.value}))} placeholder="081-234-5678"/>
         <Inp label="หมายเหตุ" value={supForm.note} onChange={e=>setSupForm(f=>({...f,note:e.target.value}))} placeholder="ส่งทุกเช้า..."/>
-      </div>
-      {/* Visibility selector in form */}
-      <div style={{marginBottom:14}}>
-        <div style={{fontSize:11,fontWeight:800,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif",letterSpacing:.4,textTransform:"uppercase"}}>👁 ใครเห็นได้บ้าง</div>
-        <div style={{display:"flex",gap:8}}>
-          <button type="button" onClick={()=>setSupForm(f=>({...f,central_only:false}))} style={{flex:1,padding:"10px 14px",borderRadius:10,border:`2px solid ${!supForm.central_only?C.green:C.line}`,background:!supForm.central_only?C.greenLight:C.white,color:!supForm.central_only?C.green:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:12,minHeight:42}}>🌐 ทุกสาขา</button>
-          <button type="button" onClick={()=>setSupForm(f=>({...f,central_only:true}))} style={{flex:1,padding:"10px 14px",borderRadius:10,border:`2px solid ${supForm.central_only?C.brand:C.line}`,background:supForm.central_only?C.brandLight:C.white,color:supForm.central_only?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:12,minHeight:42}}>🏢 เฉพาะครัวกลาง</button>
-        </div>
       </div>
       <div style={{display:"flex",gap:8}}>
         <Btn onClick={saveSup} icon={I.check} disabled={!supForm.name}>{editSID?"บันทึก":"เพิ่มซัพพลาย"}</Btn>
