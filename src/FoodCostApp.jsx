@@ -3261,7 +3261,7 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved})
 // ══════════════════════════════════════════════════════
 // ── COST SNAPSHOT SECTION (saved daily summaries) ────
 // ══════════════════════════════════════════════════════
-function CostSummarySection({branches,currentBranch,currentUser,menus,ings,standalone=false}){
+function CostSummarySection({branches,currentBranch,currentUser,menus,ings,reloadMenus,reloadCats,standalone=false}){
   const isCentral=currentBranch?.type==="central";
   const today=todayBkk();
   const ago=(d=>{const t=new Date();t.setDate(t.getDate()-d);return t.toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});})(30);
@@ -3269,6 +3269,7 @@ function CostSummarySection({branches,currentBranch,currentUser,menus,ings,stand
   const[filterBranch,setFilterBranch]=useState(isCentral?"":String(currentBranch?.id||""));
   const[dateFrom,setDateFrom]=useState(ago);const[dateTo,setDateTo]=useState(today);
   const[busy,setBusy]=useState(null);  // snapshot id being acted on
+  const[editSnap,setEditSnap]=useState(null);  // snapshot being edited in popup
   const canEdit=hasPerm(currentUser,"summary")||hasPerm(currentUser,"fs_sales");
 
   async function load(){
@@ -3283,15 +3284,6 @@ function CostSummarySection({branches,currentBranch,currentUser,menus,ings,stand
   }
   useEffect(()=>{load();},[filterBranch,dateFrom,dateTo,currentBranch?.id]);
 
-  async function regenerate(s){
-    if(!await confirmDlg({title:"แก้ไข (คำนวณใหม่)",message:`คำนวณยอด/ต้นทุนใหม่จากข้อมูลขายของวันที่ ${s.snapshot_date} ?\n\nระบบจะใช้ราคาวัตถุดิบและสูตรเมนูปัจจุบัน — ผลลัพธ์จะอัพเดททับสรุปเดิมของวันนี้`,confirmLabel:"คำนวณใหม่"}))return;
-    setBusy(s.id);
-    try{
-      await generateCostSnapshot({branchId:s.branch_id,date:s.snapshot_date,menus,ings,currentUser});
-      await load();
-    }catch(e){showErr("คำนวณใหม่ไม่สำเร็จ",e);}
-    setBusy(null);
-  }
   async function del(s){
     if(!await confirmDlg({title:"ลบสรุปต้นทุน",message:`ลบสรุปของวันที่ ${s.snapshot_date}?\n(ข้อมูลขายดิบไม่กระทบ — ลบแค่สรุปนี้เท่านั้น)`,danger:true,confirmLabel:"ลบทิ้ง"}))return;
     setBusy(s.id);
@@ -3430,7 +3422,7 @@ function CostSummarySection({branches,currentBranch,currentUser,menus,ings,stand
                 <td style={{padding:"10px 14px",textAlign:"center",whiteSpace:"nowrap"}}>
                   <div style={{display:"inline-flex",gap:5}}>
                     <button onClick={()=>exportSnapshotXlsx(s,br?.name)} title="พิมพ์เป็น Excel" style={{background:C.greenLight,border:`1px solid #86EFAC`,borderRadius:8,padding:"6px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:800,transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.background=C.green;e.currentTarget.style.color=C.white;}} onMouseLeave={e=>{e.currentTarget.style.background=C.greenLight;e.currentTarget.style.color=C.green;}}>📊 Excel</button>
-                    {canEdit&&<button onClick={()=>regenerate(s)} disabled={busy===s.id} title="คำนวณใหม่จากข้อมูลขายปัจจุบัน" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:8,padding:"6px 9px",cursor:busy===s.id?"not-allowed":"pointer",display:"flex",alignItems:"center",opacity:busy===s.id?.5:1,transition:"all .15s"}}><Ic d={I.pencil} s={14} c="#92400E"/></button>}
+                    {canEdit&&<button onClick={()=>setEditSnap(s)} disabled={busy===s.id} title="แก้ไขจำนวน / ดูรายการ" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:8,padding:"6px 9px",cursor:busy===s.id?"not-allowed":"pointer",display:"flex",alignItems:"center",opacity:busy===s.id?.5:1,transition:"all .15s"}}><Ic d={I.pencil} s={14} c="#92400E"/></button>}
                     {canEdit&&<button onClick={()=>del(s)} disabled={busy===s.id} title="ลบสรุปนี้" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:8,padding:"6px 9px",cursor:busy===s.id?"not-allowed":"pointer",display:"flex",alignItems:"center",opacity:busy===s.id?.5:1,transition:"all .15s"}}><Ic d={I.trash} s={14} c={C.red}/></button>}
                   </div>
                 </td>
@@ -3440,12 +3432,174 @@ function CostSummarySection({branches,currentBranch,currentUser,menus,ings,stand
         </table>
       </div>
     </Card>}
+
+    {/* Edit popup — view items + edit qty only */}
+    {editSnap&&<EditSnapshotModal snapshot={editSnap} branches={branches} menus={menus} ings={ings} currentUser={currentUser} reloadMenus={reloadMenus} reloadCats={reloadCats} onClose={()=>setEditSnap(null)} onSaved={async()=>{setEditSnap(null);await load();}}/>}
   </div>;
 }
 
-function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser,branches=[],suppliers=[]}){
+function EditSnapshotModal({snapshot,branches,menus,ings,currentUser,reloadMenus,reloadCats,onClose,onSaved}){
+  const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+  const menuByName=useMemo(()=>{const m=new Map();menus.forEach(x=>{const k=norm(x.name);if(k&&!m.has(k))m.set(k,x);});return m;},[menus]);
+  // Initial items from snapshot — preserve original price_avg/cost_per_unit
+  const[items,setItems]=useState(()=>{
+    return (Array.isArray(snapshot.items)?snapshot.items:[]).map(it=>{
+      const oldQty=+it.qty||0;
+      const oldRev=+it.revenue||0;
+      const oldCost=+it.cost||0;
+      const m=menuByName.get(norm(it.menu_name));
+      // Prefer current menu price/cost if matched; fall back to snapshot data
+      const pricePerUnit=m?(+m.price||0):(+it.price_avg||(oldQty>0?oldRev/oldQty:0));
+      const costPerUnit=m?round2(menuCost(m,ings)):(oldQty>0?oldCost/oldQty:0);
+      return{...it,price_per_unit:pricePerUnit,cost_per_unit:costPerUnit,matched:!!m};
+    });
+  });
+  const[saving,setSaving]=useState(false);
+  const[creating,setCreating]=useState(null);
+  const br=branches.find(x=>+x.id===+snapshot.branch_id);
+  const canCreate=hasPerm(currentUser,"menus");
+
+  function updateQty(idx,raw){
+    const qty=Math.max(0,+raw||0);
+    setItems(arr=>arr.map((it,i)=>{
+      if(i!==idx)return it;
+      const revenue=round2((+it.price_per_unit||0)*qty);
+      const cost=round2((+it.cost_per_unit||0)*qty);
+      return{...it,qty,revenue,cost,profit:round2(revenue-cost)};
+    }));
+  }
+
+  async function autoCreate(menuName){
+    const it=items.find(x=>x.menu_name===menuName);
+    if(!it)return;
+    setCreating(menuName);
+    try{
+      // Ensure category exists if any
+      if(it.category){
+        const cats=await api.getCats();
+        const exists=cats.some(c=>c.type==="menu"&&c.name===it.category);
+        if(!exists)await api.addCat({type:"menu",name:it.category});
+        if(reloadCats)await reloadCats();
+      }
+      await api.addMenu({
+        name:it.menu_name,
+        category:it.category||"",
+        price:+it.price_per_unit||0,
+        description:"นำเข้าจาก FoodStory — กรุณาใส่วัตถุดิบเพื่อคำนวณต้นทุน",
+        image:null,ingredients:[],sop:[],
+        edit_by:currentUser?.username||null,edit_at:nowStr(),
+        branch_id:snapshot.branch_id||null,
+      });
+      if(reloadMenus)await reloadMenus();
+      // Mark as matched in local items (cost stays 0 until ingredients added)
+      setItems(arr=>arr.map(x=>x.menu_name===menuName?{...x,matched:true}:x));
+      alert("✅ สร้างเมนูเรียบร้อย — ไปแท็บ \"เมนู\" เพื่อใส่วัตถุดิบ");
+    }catch(e){alert("สร้างเมนูไม่สำเร็จ: "+e.message);}
+    setCreating(null);
+  }
+
+  // Totals
+  const totRev=round2(items.reduce((s,i)=>s+(+i.revenue||0),0));
+  const totCost=round2(items.reduce((s,i)=>s+(+i.cost||0),0));
+  const totQty=round2(items.reduce((s,i)=>s+(+i.qty||0),0));
+  const totProfit=round2(totRev-totCost);
+  const totPct=totRev>0?round2(totCost/totRev*100):0;
+  const pctColor=totPct<=30?C.green:totPct<=40?C.yellow:totPct<=50?"#EA580C":C.red;
+
+  async function save(){
+    setSaving(true);
+    try{
+      // Strip helper fields before saving
+      const cleanItems=items.map(it=>({
+        menu_name:it.menu_name,category:it.category||null,
+        qty:+it.qty||0,revenue:+it.revenue||0,cost:+it.cost||0,
+        profit:+it.profit||0,matched:!!it.matched,price_avg:+it.price_per_unit||0,
+      }));
+      await api.upsertCostSnapshot({
+        branch_id:snapshot.branch_id,
+        snapshot_date:snapshot.snapshot_date,
+        source:snapshot.source||"foodstory",
+        total_revenue:totRev,total_cost:totCost,cost_pct:totPct,
+        menu_count:cleanItems.length,total_qty:totQty,
+        items:cleanItems,
+        created_by:currentUser?.username||null,
+      });
+      alert("✅ บันทึกการแก้ไขสำเร็จ");
+      await onSaved();
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+
+  return <Modal title={`✏️ แก้ไขสรุป — ${snapshot.snapshot_date} · ${br?.name||"—"}`} onClose={onClose} extraWide>
+    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:14,padding:"10px 14px",background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:10,lineHeight:1.6}}>
+      ℹ️ แก้ไขได้เฉพาะ <b style={{color:"#92400E"}}>"จำนวน"</b> เท่านั้น — ระบบจะคำนวณต้นทุน/กำไร/% ใหม่อัตโนมัติเมื่อเปลี่ยนจำนวน
+    </div>
+
+    {/* Items table */}
+    <div style={{background:C.white,borderRadius:12,border:`1px solid ${C.line}`,overflow:"hidden",marginBottom:14}}>
+      <div style={{maxHeight:520,overflow:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
+          <thead style={{position:"sticky",top:0,zIndex:1}}>
+            <tr style={{background:"#0F172A"}}>
+              {["เมนู","จำนวน","ยอดขาย","ต้นทุน","กำไร","%"].map((h,i)=><th key={h} style={{padding:"11px 12px",textAlign:i===0?"left":"right",fontSize:11,fontWeight:800,color:"#F8FAFC",letterSpacing:.3,whiteSpace:"nowrap"}}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {items.length===0&&<tr><td colSpan={6} style={{padding:30,textAlign:"center",color:C.ink4,fontSize:13}}>ไม่มีรายการ</td></tr>}
+            {items.map((it,idx)=>{
+              const pct=(+it.revenue>0)?round2((+it.cost/+it.revenue)*100):0;
+              const pc=pct<=30?C.green:pct<=40?C.yellow:pct<=50?"#EA580C":C.red;
+              const busyCreate=creating===it.menu_name;
+              return <tr key={idx} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC"}}>
+                <td style={{padding:"9px 12px",fontSize:13,color:C.ink}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                    <span style={{fontWeight:700}}>{it.menu_name}</span>
+                    {!it.matched&&<>
+                      <span title="เมนูยังไม่อยู่ในระบบ" style={{fontSize:10,fontWeight:700,color:"#92400E",background:"#FEF3C7",border:"1px solid #FDE68A",padding:"1px 6px",borderRadius:6}}>⚠ ยังไม่จับคู่</span>
+                      {canCreate&&<button onClick={()=>autoCreate(it.menu_name)} disabled={busyCreate} title="สร้างเมนูนี้ในระบบ" style={{background:busyCreate?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:6,padding:"3px 9px",cursor:busyCreate?"not-allowed":"pointer",fontSize:10,fontWeight:800,color:busyCreate?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{busyCreate?"⏳":"+ สร้างเมนู"}</button>}
+                    </>}
+                    {it.category&&<span style={{fontSize:10,color:C.ink4}}>· {it.category}</span>}
+                  </div>
+                </td>
+                <td style={{padding:"9px 12px",textAlign:"right"}}>
+                  <input type="number" min="0" step="any" value={it.qty} onChange={e=>updateQty(idx,e.target.value)} style={{...iS,width:90,padding:"6px 10px",fontSize:14,fontWeight:800,textAlign:"right",border:`2px solid ${C.brandBorder}`,background:C.brandLight}}/>
+                </td>
+                <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,fontWeight:800,color:C.ink}}>฿{(+it.revenue||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,fontWeight:700,color:it.matched?C.red:C.ink4}}>{it.matched?`฿${(+it.cost||0).toLocaleString(undefined,{minimumFractionDigits:2})}`:"—"}</td>
+                <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,fontWeight:800,color:it.matched?(it.profit>=0?C.green:C.red):C.ink4}}>{it.matched?`฿${(+it.profit||0).toLocaleString(undefined,{minimumFractionDigits:2})}`:"—"}</td>
+                <td style={{padding:"9px 12px",textAlign:"right",whiteSpace:"nowrap"}}>{it.matched?<span style={{fontSize:11,fontWeight:800,color:pc,background:`${pc}22`,border:`1px solid ${pc}55`,padding:"2px 8px",borderRadius:12}}>{pct}%</span>:<span style={{fontSize:11,color:C.ink4}}>—</span>}</td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {/* Totals summary */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(140px,100%),1fr))",gap:10,marginBottom:14}}>
+      {[
+        {l:"จำนวนรวม",v:totQty.toLocaleString(),sub:"ครั้ง",c:C.ink2,bg:C.bg},
+        {l:"ยอดขาย",v:`฿${totRev.toLocaleString(undefined,{minimumFractionDigits:2})}`,sub:`${items.length} เมนู`,c:C.brand,bg:C.brandLight},
+        {l:"ต้นทุน",v:`฿${totCost.toLocaleString(undefined,{minimumFractionDigits:2})}`,sub:"เฉพาะที่จับคู่",c:C.red,bg:"#FEF2F2"},
+        {l:"กำไร",v:`฿${totProfit.toLocaleString(undefined,{minimumFractionDigits:2})}`,sub:`${totPct}% cost`,c:totProfit>=0?C.green:C.red,bg:totProfit>=0?C.greenLight:"#FEF2F2"},
+        {l:"% ต้นทุน",v:`${totPct}%`,sub:totPct<=30?"ดีเยี่ยม":totPct<=40?"ดี":totPct<=50?"ระวัง":"สูง",c:pctColor,bg:`${pctColor}15`},
+      ].map(k=><div key={k.l} style={{background:k.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${k.c}33`}}>
+        <div style={{fontSize:10,fontWeight:800,color:C.ink4,letterSpacing:.4,textTransform:"uppercase",marginBottom:3,fontFamily:"'Sarabun',sans-serif"}}>{k.l}</div>
+        <div style={{fontSize:17,fontWeight:900,color:k.c,fontFamily:"'Sarabun',sans-serif",lineHeight:1.1}}>{k.v}</div>
+        <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{k.sub}</div>
+      </div>)}
+    </div>
+
+    <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:12,borderTop:`1px solid ${C.line}`,flexWrap:"wrap"}}>
+      <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
+      <Btn v="success" onClick={save} loading={saving} icon={I.check}>บันทึกการแก้ไข</Btn>
+    </div>
+  </Modal>;
+}
+
+function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser,branches=[],suppliers=[],reloadMenus,reloadCats}){
   return <div>
-    <CostSummarySection branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} standalone/>
+    <CostSummarySection branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reloadMenus} reloadCats={reloadCats} standalone/>
   </div>;
 }
 
@@ -5061,7 +5215,7 @@ export default function App(){
             {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats}/>}
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
-            {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers}/>}
+            {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
