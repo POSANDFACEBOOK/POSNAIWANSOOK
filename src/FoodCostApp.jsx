@@ -1957,7 +1957,8 @@ function FSImportModal({branches,currentUser,onClose,onDone}){
       const firstRaw=rows.find(r=>r.branch_name_raw)?.branch_name_raw||"";
       const hint=branches.find(b=>b.active!==false&&firstRaw&&(firstRaw.includes(b.name)||b.name.includes(firstRaw)));
       setParsed({rows,branchHint:hint,fileName:f.name,headers});
-      if(hint)setBranchId(String(hint.id));
+      // Don't auto-select — force the user to pick the branch every time.
+      setBranchId("");
       setStep("preview");
     }catch(e){showErr("อ่านไฟล์ไม่สำเร็จ",e);}
   }
@@ -2011,7 +2012,7 @@ function FSImportModal({branches,currentUser,onClose,onDone}){
       </label>
     </div>}
     {step==="preview"&&parsed&&<div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:14}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(220px,100%),1fr))",gap:10,marginBottom:14}}>
         <div style={{background:C.bg,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.line}`}}>
           <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginBottom:3}}>📁 ไฟล์</div>
           <div style={{fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif",fontWeight:700,wordBreak:"break-all"}}>{parsed.fileName}</div>
@@ -2019,10 +2020,6 @@ function FSImportModal({branches,currentUser,onClose,onDone}){
         <div style={{background:C.bg,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.line}`}}>
           <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginBottom:3}}>📊 รายการ</div>
           <div style={{fontSize:13,color:C.brand,fontFamily:"'Sarabun',sans-serif",fontWeight:800}}>{parsed.rows.length} เมนู · ขาย {totalQty} ครั้ง · ฿{totalNet.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
-        </div>
-        <div style={{background:parsed.branchHint?C.greenLight:"#FEF3C7",borderRadius:10,padding:"10px 14px",border:`1px solid ${parsed.branchHint?C.green:"#FDE68A"}`}}>
-          <div style={{fontSize:11,color:parsed.branchHint?C.green:"#92400E",fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginBottom:3}}>🏢 สาขาในไฟล์</div>
-          <div style={{fontSize:12,color:parsed.branchHint?C.green:"#92400E",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{parsed.rows[0]?.branch_name_raw||"—"}{parsed.branchHint?` ✅ จับคู่ ${parsed.branchHint.name}`:" ⚠️ เลือกสาขาเอง"}</div>
         </div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
