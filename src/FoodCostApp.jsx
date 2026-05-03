@@ -805,7 +805,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,onDone}){
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats}){
   const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
-  const ef={name:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[]};
+  const ef={name:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
   const[form,setForm]=useState(ef);
   const isCentral=currentBranch?.type==="central";
   const canE=hasPerm(currentUser,"ingredients")&&isCentral;const canD=hasPerm(currentUser,"ingredients")&&isCentral;
@@ -815,7 +815,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   const filtered=useMemo(()=>ings.filter(i=>{const vb=i.visible_branches||[];const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);return i.name.toLowerCase().includes(q.toLowerCase())&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;}),[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||1);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
-  async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{const item={...form,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{const item={...form,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   async function toggleVBIng(item,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(item.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateIng(item.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   return <div>
@@ -856,7 +856,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div><div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{item.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}><Chip color="orange">{item.category}</Chip>{item.has_sop&&<span style={{fontSize:10,fontWeight:800,color:Array.isArray(item.sop)&&item.sop.length>0?C.green:"#92400E",background:Array.isArray(item.sop)&&item.sop.length>0?C.greenLight:"#FEF3C7",border:`1px solid ${Array.isArray(item.sop)&&item.sop.length>0?C.green+"55":"#FDE68A"}`,padding:"1px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{Array.isArray(item.sop)&&item.sop.length>0?`📋 SOP ${item.sop.length}`:"📋 รอ SOP"}</span>}</div></div>
                 <div style={{display:"flex",gap:4}}>
-                  {canE&&<button onClick={()=>{setForm({name:item.name,category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[]});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
+                  {canE&&<button onClick={()=>{setForm({name:item.name,category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
                   {canD&&<button onClick={()=>del(item.id,item.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
                 </div>
               </div>
@@ -1161,17 +1161,46 @@ function IngredientSOPView({ings,reload,currentUser,currentBranch,onSwitch}){
   const[sel,setSel]=useState(sopIngs[0]?.id??null);
   const[edit,setEdit]=useState(false);
   const[sop,setSop]=useState([]);
+  const[editIngs,setEditIngs]=useState([]);
   const[saving,setSaving]=useState(false);
   const[q,setQ]=useState("");
+  const[ingQ,setIngQ]=useState("");
+  const[ingPopup,setIngPopup]=useState(null);
+  const[newUnit,setNewUnit]=useState("");
+  const[customUnits,setCustomUnits]=useState(()=>{try{return JSON.parse(localStorage.getItem("fc_custom_units")||"[]");}catch{return[];}});
+  const allUnits=useMemo(()=>["กรัม","มล.","ชิ้น","ช้อนโต๊ะ","ช้อนชา","ถ้วย","กก.","ลิตร",...customUnits],[customUnits]);
   const ing=useMemo(()=>sopIngs.find(i=>i.id===sel),[sopIngs,sel]);
   const canE=hasPerm(currentUser,"sop")&&isCentral;
-  useEffect(()=>{if(ing){setSop(Array.isArray(ing.sop)?[...ing.sop.map(s=>({...s}))]:[]);setEdit(false);}},[sel]);
-  // If selected ingredient was removed/has_sop unchecked, pick next
+  useEffect(()=>{if(ing){setSop(Array.isArray(ing.sop)?[...ing.sop.map(s=>({...s}))]:[]);setEditIngs(Array.isArray(ing.ingredients)?[...ing.ingredients]:[]);setEdit(false);}},[sel]);
   useEffect(()=>{if(sel!=null&&!sopIngs.find(i=>i.id===sel))setSel(sopIngs[0]?.id??null);},[sopIngs,sel]);
-  async function saveSop(){setSaving(true);try{await api.updateIng(sel,{sop,edit_by:currentUser.username,edit_at:nowStr()});await reload();setEdit(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function saveSop(){setSaving(true);try{await api.updateIng(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr()});await reload();setEdit(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   const filtered=useMemo(()=>q.trim()?sopIngs.filter(i=>i.name.toLowerCase().includes(q.toLowerCase())):sopIngs,[sopIngs,q]);
+  // Pickable ingredients = all ingredients except SELF (prevent self-reference)
+  const pickableIngs=useMemo(()=>ings.filter(i=>i.id!==sel),[ings,sel]);
+  const filteredIngs=useMemo(()=>pickableIngs.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[pickableIngs,ingQ]);
+  function pickIng(target){setIngPopup({ing:target,amount:"",unit:"กรัม"});}
+  function confirmIngPick(){
+    if(!ingPopup||!String(ingPopup.amount).trim())return;
+    const amt=parseFloat(ingPopup.amount);
+    if(isNaN(amt)||amt<=0)return;
+    setEditIngs(f=>{const idx=f.findIndex(x=>x.ingredientId===ingPopup.ing.id);return idx>=0?f.map((x,i)=>i===idx?{...x,amountGram:amt,unit:ingPopup.unit||"กรัม"}:x):[...f,{ingredientId:ingPopup.ing.id,amountGram:amt,unit:ingPopup.unit||"กรัม"}];});
+    setIngPopup(null);
+  }
+  function addCustomUnit(){
+    if(!newUnit.trim())return;
+    const u=newUnit.trim();
+    const next=customUnits.includes(u)?customUnits:[...customUnits,u];
+    setCustomUnits(next);localStorage.setItem("fc_custom_units",JSON.stringify(next));
+    setIngPopup(p=>({...p,unit:u}));setNewUnit("");
+  }
+  // Cost from sub-ingredients (uses ingredients[].price_per_gram × amountGram)
+  const totalCost=useMemo(()=>{
+    const list=edit?editIngs:(ing?.ingredients||[]);
+    return list.reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?(+i.price_per_gram||0)*(+x.amountGram||0):0);},0);
+  },[edit,editIngs,ing,ings]);
+  const ownPrice=ing?(+ing.price_per_gram||0)*(+ing.convert_to_gram||0):0;
 
-  return <div>
+  return <>
     {/* Header bar */}
     <div style={{background:C.white,borderRadius:14,border:`1px solid ${C.line}`,padding:"12px 16px",marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",boxShadow:"0 2px 8px rgba(15,23,42,0.04)"}}>
       <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0,flex:1}}>
@@ -1192,7 +1221,7 @@ function IngredientSOPView({ings,reload,currentUser,currentBranch,onSwitch}){
       <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,maxWidth:480,margin:"0 auto",lineHeight:1.6}}>
         ไปที่แท็บ <b style={{color:C.brand}}>"วัตถุดิบ"</b> → แก้ไขวัตถุดิบที่ต้องการ → กดปุ่ม <b style={{color:C.green}}>"✓ มี SOP"</b> → กลับมาที่นี่เพื่อสร้างขั้นตอน
       </div>
-    </Card>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(260px,100%),1fr) minmax(min(420px,100%),2fr))",gap:16,minHeight:520}}>
+    </Card>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(240px,100%),1fr) minmax(min(420px,100%),3fr))",gap:16,minHeight:520}}>
       {/* Ingredient list */}
       <div style={{background:C.white,borderRadius:16,border:`1px solid ${C.line}`,overflow:"hidden",alignSelf:"start"}}>
         <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.lineLight}`,background:C.bg}}>
@@ -1203,12 +1232,16 @@ function IngredientSOPView({ings,reload,currentUser,currentBranch,onSwitch}){
           {filtered.length===0&&<div style={{padding:"20px 12px",textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบวัตถุดิบ</div>}
           {filtered.map(i=>{
             const has=Array.isArray(i.sop)&&i.sop.length>0;
+            const subCount=Array.isArray(i.ingredients)?i.ingredients.length:0;
             const active=sel===i.id;
             return <div key={i.id} onClick={()=>setSel(i.id)} style={{padding:"10px 12px",borderRadius:10,cursor:"pointer",marginBottom:4,background:active?C.brandLight:"transparent",border:`1px solid ${active?C.brandBorder:"transparent"}`,transition:"all .15s",display:"flex",alignItems:"center",gap:10}}>
               {i.image?<img src={i.image} alt={i.name} style={{width:32,height:32,objectFit:"cover",borderRadius:7,flexShrink:0}}/>:<div style={{width:32,height:32,borderRadius:7,background:C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={16} c={C.green}/></div>}
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:active?800:600,color:active?C.brand:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",marginBottom:2}}>{i.name}</div>
-                <span style={{fontSize:10,fontWeight:700,color:has?C.green:C.red,background:has?C.greenLight:C.redLight,padding:"1px 6px",borderRadius:5}}>{has?`✓ ${i.sop.length} ขั้น`:"ยังไม่มี SOP"}</span>
+                <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:active?800:600,color:active?C.brand:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",marginBottom:3}}>{i.name}</div>
+                <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                  <span style={{fontSize:10,fontWeight:700,color:has?C.green:C.red,background:has?C.greenLight:C.redLight,padding:"1px 6px",borderRadius:5}}>{has?`✓ ${i.sop.length} ขั้น`:"ยังไม่มี SOP"}</span>
+                  {subCount>0&&<span style={{fontSize:10,fontWeight:700,color:C.brand,background:C.brandLight,padding:"1px 6px",borderRadius:5}}>{subCount} ส่วนผสม</span>}
+                </div>
               </div>
             </div>;
           })}
@@ -1222,13 +1255,57 @@ function IngredientSOPView({ings,reload,currentUser,currentBranch,onSwitch}){
               {ing.image?<img src={ing.image} alt={ing.name} style={{width:52,height:52,objectFit:"cover",borderRadius:10,border:`2px solid ${C.line}`,flexShrink:0}}/>:<div style={{width:52,height:52,borderRadius:10,background:C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={24} c={C.green}/></div>}
               <div style={{minWidth:0}}>
                 <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.ink,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.name}</h2>
-                <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{ing.category} · {ing.buy_unit}</div>
+                <EditedBy username={ing.edit_by} editAt={ing.edit_at}/>
               </div>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {canE&&<>{edit?<><Btn v="ghost" onClick={()=>{setSop(Array.isArray(ing.sop)?[...ing.sop]:[]);setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>:<Btn v="info" onClick={()=>setEdit(true)} icon={I.pencil} s={{padding:"8px 14px"}}>แก้ไข SOP</Btn>}</>}
+              {canE&&<>{edit?<><Btn v="ghost" onClick={()=>{setSop(Array.isArray(ing.sop)?[...ing.sop]:[]);setEditIngs(Array.isArray(ing.ingredients)?[...ing.ingredients]:[]);setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>:<Btn v="info" onClick={()=>setEdit(true)} icon={I.pencil} s={{padding:"8px 14px"}}>แก้ไข SOP</Btn>}</>}
             </div>
           </div>
+
+          {/* Cost summary */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(160px,100%),1fr))",gap:10,marginBottom:18}}>
+            <div style={{background:C.greenLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.green}33`}}>
+              <div style={{fontSize:10,fontWeight:800,color:C.green,letterSpacing:.5,textTransform:"uppercase",marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ต้นทุนรวมส่วนผสม</div>
+              <div style={{fontSize:20,fontWeight:900,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>฿{totalCost.toFixed(2)}</div>
+              <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{(edit?editIngs:(ing.ingredients||[])).length} ส่วนผสม</div>
+            </div>
+            <div style={{background:C.brandLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.brandBorder}`}}>
+              <div style={{fontSize:10,fontWeight:800,color:C.brand,letterSpacing:.5,textTransform:"uppercase",marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ราคา/กรัม (กำหนดเอง)</div>
+              <div style={{fontSize:20,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(+ing.price_per_gram||0).toFixed(4)}</div>
+              <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>ใช้คำนวณต้นทุนเมนู</div>
+            </div>
+            <div style={{background:C.bg,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`}}>
+              <div style={{fontSize:10,fontWeight:800,color:C.ink3,letterSpacing:.5,textTransform:"uppercase",marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>มูลค่าทั้งล็อต</div>
+              <div style={{fontSize:20,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>฿{ownPrice.toFixed(2)}</div>
+              <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{(+ing.convert_to_gram||0).toLocaleString()}g · ฿{(+ing.buy_price||0).toFixed(2)} ที่ซื้อ</div>
+            </div>
+          </div>
+
+          {/* Ingredient picker (edit mode) */}
+          {edit&&<div style={{marginBottom:14}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ค้นหาวัตถุดิบเพื่อเพิ่มเป็นส่วนผสม</div>
+            <div style={{position:"relative",marginBottom:8}}><span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={13} c={C.ink4}/></span><input value={ingQ} onChange={e=>setIngQ(e.target.value)} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:32,fontSize:13,padding:"8px 12px 8px 32px"}}/></div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,maxHeight:90,overflowY:"auto",background:C.bg,borderRadius:10,padding:8,border:`1px solid ${C.line}`}}>
+              {filteredIngs.map(it=>{const already=editIngs.some(x=>x.ingredientId===it.id);return <span key={it.id} onClick={()=>pickIng(it)} style={{background:already?C.brandLight:C.white,border:`1px solid ${already?C.brandBorder:C.line}`,borderRadius:8,padding:"4px 10px",fontSize:12,fontFamily:"'Sarabun',sans-serif",color:already?C.brand:C.ink2,cursor:"pointer",transition:"all .15s",userSelect:"none"}}>{it.name}{already&&<span style={{color:C.green,marginLeft:3}}>✓</span>}{it.has_sop&&<span style={{color:"#92400E",marginLeft:4,fontSize:9,background:"#FEF3C7",padding:"0 4px",borderRadius:4}}>SOP</span>}</span>;})}
+              {filteredIngs.length===0&&<div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",padding:4}}>ไม่พบวัตถุดิบ</div>}
+            </div>
+          </div>}
+
+          {/* Selected ingredients chips */}
+          <div style={{marginBottom:18}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.ink3,textTransform:"uppercase",letterSpacing:1,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>ส่วนผสมที่ใช้</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {(edit?editIngs:ing.ingredients||[]).map((mi,idx)=>{const it=ings.find(i=>i.id===mi.ingredientId);return it?<div key={idx} style={{background:C.bg,borderRadius:8,padding:"5px 10px 5px 12px",fontSize:13,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontWeight:700,color:C.ink}}>{it.name}</span>
+                <span style={{color:C.green,fontWeight:700}}>{mi.amountGram} {mi.unit||"กรัม"}</span>
+                {edit&&<button onClick={()=>setEditIngs(f=>f.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",display:"flex",lineHeight:1}}><Ic d={I.x} s={12} c={C.red}/></button>}
+              </div>:null;})}
+              {edit&&editIngs.length===0&&<div style={{fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif",padding:"8px 12px",background:C.bg,borderRadius:8,border:`1px dashed ${C.line}`}}>ยังไม่มีส่วนผสม — กดเลือกวัตถุดิบจากรายการด้านบน</div>}
+              {!edit&&(!ing.ingredients||ing.ingredients.length===0)&&<div style={{fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif",padding:"8px 12px",background:C.bg,borderRadius:8,border:`1px dashed ${C.line}`}}>ยังไม่ระบุส่วนผสม</div>}
+            </div>
+          </div>
+
           <div style={{fontSize:12,fontWeight:700,color:C.ink3,textTransform:"uppercase",letterSpacing:1,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>ขั้นตอนการเตรียม / จัดการ</div>
           {edit?<div>
             {sop.map((step,idx)=><div key={idx} style={{background:C.bg,borderRadius:14,padding:"16px 18px",marginBottom:12,border:`1px solid ${C.line}`}}>
@@ -1258,7 +1335,50 @@ function IngredientSOPView({ings,reload,currentUser,currentBranch,onSwitch}){
         </>:<div style={{textAlign:"center",padding:"100px 0",color:C.ink4}}><Ic d={I.sop} s={52} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:16}}>เลือกวัตถุดิบเพื่อดู SOP</p></div>}
       </Card>
     </div>}
-  </div>;
+
+    {/* Ingredient amount popup (same look as MenuSOPView) */}
+    {ingPopup&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1500,padding:16}}>
+      <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
+        <div style={{padding:"20px 24px 0",borderBottom:`1px solid ${C.lineLight}`,paddingBottom:16,background:C.bg,display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:40,height:40,borderRadius:"50%",background:C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,border:`1px solid ${C.green}33`}}>
+            <Ic d={I.leaf} s={20} c={C.green}/>
+          </div>
+          <div>
+            <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>เพิ่มเป็นส่วนผสม</div>
+            <div style={{fontSize:17,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{ingPopup.ing.name}</div>
+          </div>
+        </div>
+        <div style={{padding:"18px 24px"}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>จำนวน</div>
+              <input autoFocus type="number" min="0" step="any" value={ingPopup.amount} onChange={e=>setIngPopup(p=>({...p,amount:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&confirmIngPick()} placeholder="0" style={{...iS,fontSize:16,fontWeight:700,textAlign:"center"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>หน่วย</div>
+              <div style={{position:"relative"}}>
+                <select value={ingPopup.unit} onChange={e=>setIngPopup(p=>({...p,unit:e.target.value}))} style={{...iS,cursor:"pointer",appearance:"none",paddingRight:36}}>
+                  {allUnits.map(u=><option key={u} value={u}>{u}</option>)}
+                </select>
+                <span style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><Ic d={I.chevD} s={16} c={C.ink3}/></span>
+              </div>
+            </div>
+          </div>
+          <div style={{background:C.bg,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`,marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.ink4,marginBottom:8,fontFamily:"'Sarabun',sans-serif",letterSpacing:.5}}>+ เพิ่มหน่วยใหม่</div>
+            <div style={{display:"flex",gap:8}}>
+              <input value={newUnit} onChange={e=>setNewUnit(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCustomUnit()} placeholder="เช่น แผง / หัว..." style={{...iS,fontSize:13,padding:"7px 10px",flex:1}}/>
+              <Btn v="ghost" onClick={addCustomUnit} disabled={!newUnit.trim()} s={{padding:"7px 14px",fontSize:12}}>เพิ่ม</Btn>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+            <Btn v="ghost" onClick={()=>setIngPopup(null)}>ยกเลิก</Btn>
+            <Btn v="success" onClick={confirmIngPick} icon={I.check} disabled={!String(ingPopup.amount).trim()||+ingPopup.amount<=0}>เพิ่ม</Btn>
+          </div>
+        </div>
+      </div>
+    </div>}
+  </>;
 }
 
 function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
