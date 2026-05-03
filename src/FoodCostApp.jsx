@@ -4062,11 +4062,11 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
               <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.brand}}>฿{round2(supTotal).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
             </div>
           </div>
-          <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:isMobile?760:undefined}}>
+          <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:isMobile?880:undefined}}>
               <thead>
                 <tr style={{background:C.bg}}>
-                  {["#","วัตถุดิบ","หน่วย","📦 สต็อกปัจจุบัน","🛡 safety","📋 เหลือ (นับ)","✏ สั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:i>=3?"right":"left",letterSpacing:.2,borderBottom:`1px solid ${C.line}`}}>{h}</th>)}
+                  {["#","วัตถุดิบ","หน่วย","📦 สต็อกปัจจุบัน","🛡 safety","📋 เหลือ (นับ)","✏ สั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:i>=3?"right":"left",letterSpacing:.2,borderBottom:`1px solid ${C.line}`,...(i===1?{position:"sticky",left:0,background:C.bg,zIndex:2,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)"}:{})}}>{h}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -4080,9 +4080,10 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
                   const lowStock=have<safety&&safety>0;
                   const curLow=safety>0&&curStock<safety;
                   const overridden=orderQty[ing.id]!=null&&+orderQty[ing.id]!==auto;
-                  return <tr key={ing.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC"}}>
+                  const rowBg=idx%2===0?C.white:"#FAFBFC";
+                  return <tr key={ing.id} style={{borderTop:`1px solid ${C.lineLight}`,background:rowBg}}>
                     <td style={{padding:"9px 10px",fontSize:11,color:C.ink4,fontWeight:700}}>{idx+1}</td>
-                    <td style={{padding:"9px 10px"}}>
+                    <td style={{padding:"9px 10px",position:"sticky",left:0,background:rowBg,zIndex:1,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)",maxWidth:isMobile?180:undefined}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
                         {ing.image?<img src={ing.image} alt={ing.name} style={{width:28,height:28,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:28,height:28,borderRadius:6,background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={14} c={C.brand}/></div>}
                         <div style={{minWidth:0}}>
@@ -7996,4 +7997,4 @@ function BranchSelectorWithLoad({user,onSelect,onLogout}){
   return <BranchSelector branches={branches} onSelect={onSelect} user={user} onLogout={onLogout}/>;
 }
 
-const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html,body{max-width:100vw;overflow-x:hidden}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:${C.line};border-radius:999px}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input[type=date],input[type=number],input[type=text],input[type=tel],input[type=email],input[type=password],select,textarea{min-height:40px;font-size:16px!important}table{font-size:12px}::-webkit-scrollbar{width:3px;height:3px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}`;
+const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html,body{max-width:100vw;overflow-x:hidden}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:${C.line};border-radius:999px}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input,select,textarea{min-height:40px;font-size:16px!important}input[type=checkbox],input[type=radio]{min-height:auto}table{font-size:12px}::-webkit-scrollbar{width:3px;height:3px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}`;
