@@ -2341,7 +2341,6 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
         <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,margin:"4px 0 0"}}>นำเข้าจากไฟล์ Export ของ FoodStory · ดูเมนูที่ขายไปเท่าไรในแต่ละวัน</p>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        <Btn v="success" onClick={exportXlsx} disabled={rows.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
         {canImport&&<Btn onClick={()=>setShowImport(true)} icon={I.plus}>นำเข้าไฟล์ใหม่</Btn>}
       </div>
     </div>
