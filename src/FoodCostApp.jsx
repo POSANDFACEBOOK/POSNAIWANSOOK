@@ -805,7 +805,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,onDone}){
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats}){
   const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
-  const ef={name:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
+  const ef={name:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
   const[form,setForm]=useState(ef);
   const isCentral=currentBranch?.type==="central";
   const canE=hasPerm(currentUser,"ingredients")&&isCentral;const canD=hasPerm(currentUser,"ingredients")&&isCentral;
@@ -815,7 +815,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   const filtered=useMemo(()=>ings.filter(i=>{const vb=i.visible_branches||[];const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);return i.name.toLowerCase().includes(q.toLowerCase())&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;}),[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||1);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
-  async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{const item={...form,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{const item={...form,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,safety_stock:+form.safety_stock||0,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   async function toggleVBIng(item,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(item.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateIng(item.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   return <div>
@@ -856,7 +856,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div><div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{item.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}><Chip color="orange">{item.category}</Chip>{item.has_sop&&<span style={{fontSize:10,fontWeight:800,color:Array.isArray(item.sop)&&item.sop.length>0?C.green:"#92400E",background:Array.isArray(item.sop)&&item.sop.length>0?C.greenLight:"#FEF3C7",border:`1px solid ${Array.isArray(item.sop)&&item.sop.length>0?C.green+"55":"#FDE68A"}`,padding:"1px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{Array.isArray(item.sop)&&item.sop.length>0?`📋 SOP ${item.sop.length}`:"📋 รอ SOP"}</span>}</div></div>
                 <div style={{display:"flex",gap:4}}>
-                  {canE&&<button onClick={()=>{setForm({name:item.name,category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
+                  {canE&&<button onClick={()=>{setForm({name:item.name,category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,safety_stock:item.safety_stock||"",image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
                   {canD&&<button onClick={()=>del(item.id,item.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
                 </div>
               </div>
@@ -903,7 +903,10 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
           <div style={{fontSize:24,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{form.buy_price&&form.convert_to_gram?ppg(+form.buy_price,+form.convert_to_gram).toFixed(4):"0.0000"}<span style={{fontSize:12,fontWeight:500,color:C.ink3,marginLeft:4}}>/ กรัม</span></div>
         </div>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Inp label="สต็อกปัจจุบัน" type="number" value={form.stock} onChange={e=>upd("stock",e.target.value)} placeholder="0"/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Inp label="สต็อกปัจจุบัน" type="number" value={form.stock} onChange={e=>upd("stock",e.target.value)} placeholder="0"/>
+        <Inp label="🛡️ Safety Stock" hint={`เตือนเมื่อต่ำกว่านี้ — ใช้คำนวณจำนวนที่ต้องสั่ง (${form.buy_unit||"หน่วย"})`} type="number" value={form.safety_stock} onChange={e=>upd("safety_stock",e.target.value)} placeholder="0"/>
+      </div>
 
       {/* SOP toggle */}
       <div style={{background:form.has_sop?C.brandLight:C.bg,borderRadius:12,padding:"14px 16px",marginBottom:14,border:`2px solid ${form.has_sop?C.brandBorder:C.line}`,transition:"all .2s"}}>
@@ -3605,8 +3608,9 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
 // ══════════════════════════════════════════════════════
 // ── ORDER TAB ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentUser}){
+function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentUser,reloadIngs}){
   const isCentral=currentBranch.type==="central";
+  const[mode,setMode]=useState("check");  // "check" = stock check / new order; "list" = existing orders
   const[view,setView]=useState(isCentral?"all":"mine");
   const[editOrder,setEditOrder]=useState(null);
   const[saving,setSaving]=useState(false);
@@ -3625,12 +3629,23 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentU
   const statusLabel={pending:"รอดำเนินการ",approved:"อนุมัติ",rejected:"ปฏิเสธ",delivered:"จัดส่งแล้ว"};
 
   return <div>
+    {/* Mode toggle: stock check vs orders list */}
+    <div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:480}}>
+      {[
+        {id:"check",l:"📋 เช็คสต็อก & สั่งซื้อ",c:C.brand},
+        {id:"list",l:"📦 คำสั่งซื้อที่ส่ง",c:C.teal},
+      ].map(t=>{const sel=mode===t.id;return <button key={t.id} onClick={()=>setMode(t.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:sel?t.c:"transparent",color:sel?C.white:C.ink3,transition:"all .15s"}}>{t.l}</button>;})}
+    </div>
+
+    {mode==="check"&&<StockCheckView ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reload={reload} reloadIngs={reloadIngs}/>}
+
+    {mode==="list"&&<>
     {isCentral&&<div style={{display:"flex",gap:8,marginBottom:16}}>
       {[{id:"all",l:"ทุกสาขา"},{id:"mine",l:"ครัวกลาง"}].map(t=><button key={t.id} onClick={()=>setView(t.id)} style={{padding:"8px 18px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,background:view===t.id?C.teal:"transparent",color:view===t.id?C.white:C.ink3,transition:"all .15s"}}>{t.l}</button>)}
       <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6,background:C.tealLight,borderRadius:8,padding:"6px 12px"}}><Ic d={I.shop} s={14} c={C.teal}/><span style={{fontSize:12,fontWeight:700,color:C.teal,fontFamily:"'Sarabun',sans-serif"}}>ครัวกลาง — รับคำสั่งซื้อจากทุกสาขา</span></div>
     </div>}
 
-    {displayOrders.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.box} s={48} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีรายการสั่งวัตถุดิบ<br/><span style={{fontSize:13}}>กด "ส่งสั่งวัตถุดิบ" จากหน้าสรุปต้นทุน</span></p></div>
+    {displayOrders.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.box} s={48} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีรายการสั่งวัตถุดิบ<br/><span style={{fontSize:13}}>กดที่แท็บ "เช็คสต็อก & สั่งซื้อ" เพื่อเริ่ม</span></p></div>
     :<div style={{display:"flex",flexDirection:"column",gap:12}}>
       {displayOrders.map(order=><Card key={order.id} style={{overflow:"hidden"}}>
         <div style={{padding:"14px 18px",background:C.bg,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
@@ -3672,6 +3687,253 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentU
         </div>
       </Card>)}
     </div>}
+    </>}
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── STOCK CHECK VIEW ──────────────────────────────────
+// ══════════════════════════════════════════════════════
+function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadIngs}){
+  const isMobile=useIsMobile();
+  const isCentral=currentBranch?.type==="central";
+  const canOrder=hasPerm(currentUser,"orders");
+  const[q,setQ]=useState("");
+  const[supFilter,setSupFilter]=useState("");  // "" = ทุกซัพพลาย, "none" = ไม่ระบุ, else supplier id
+  const[onHand,setOnHand]=useState({});  // {ingId: number} — staff's count
+  const[orderQty,setOrderQty]=useState({});  // {ingId: number} — manually overridden order qty
+  const[saving,setSaving]=useState(false);
+  const[savingStock,setSavingStock]=useState(false);
+
+  // Filter visible ingredients (branch visibility + search + supplier filter)
+  const visibleIngs=useMemo(()=>ings.filter(i=>{
+    const vb=i.visible_branches||[];
+    const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);
+    if(!matchB)return false;
+    if(q.trim()&&!i.name.toLowerCase().includes(q.toLowerCase())&&!(i.category||"").toLowerCase().includes(q.toLowerCase()))return false;
+    if(supFilter==="none"){if(i.supplier_id)return false;}
+    else if(supFilter){if(String(i.supplier_id||"")!==String(supFilter))return false;}
+    return true;
+  }),[ings,isCentral,currentBranch,q,supFilter]);
+
+  // Group by supplier (for display)
+  const grouped=useMemo(()=>{
+    const groups=new Map();
+    visibleIngs.forEach(i=>{
+      const supKey=i.supplier_id?`s_${i.supplier_id}`:"none";
+      const supName=i.supplier_name||(i.supplier_id?(suppliers.find(s=>+s.id===+i.supplier_id)?.name||"—"):"ไม่ระบุซัพพลาย");
+      if(!groups.has(supKey))groups.set(supKey,{key:supKey,name:supName,supplier_id:i.supplier_id||null,items:[]});
+      groups.get(supKey).items.push(i);
+    });
+    return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name,"th"));
+  },[visibleIngs,suppliers]);
+
+  // Compute order qty for an ingredient (auto unless overridden)
+  function autoOrderQty(ing){
+    const have=onHand[ing.id]!=null?+onHand[ing.id]:(+ing.stock||0);
+    const safety=+ing.safety_stock||0;
+    return Math.max(0,round2(safety-have));
+  }
+  function getOrderQty(ing){
+    return orderQty[ing.id]!=null?+orderQty[ing.id]:autoOrderQty(ing);
+  }
+  function lineCost(ing){
+    return round2(getOrderQty(ing)*(+ing.buy_price||0));
+  }
+
+  // Totals across all visible items that need ordering
+  const totals=useMemo(()=>{
+    let totalCost=0,itemCount=0;
+    visibleIngs.forEach(i=>{const q2=getOrderQty(i);if(q2>0){itemCount++;totalCost+=q2*(+i.buy_price||0);}});
+    return{totalCost:round2(totalCost),itemCount};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[visibleIngs,onHand,orderQty]);
+
+  // Save updated stock counts back to ingredients (optional helper)
+  async function saveStockCounts(){
+    const entries=Object.entries(onHand).filter(([id,v])=>v!==""&&v!=null);
+    if(entries.length===0){alert("ยังไม่ได้ใส่จำนวน");return;}
+    if(!await confirmDlg({title:"บันทึกสต็อกที่นับ",message:`อัปเดตสต็อกของ ${entries.length} รายการในระบบ?`,confirmLabel:"อัปเดต"}))return;
+    setSavingStock(true);
+    try{
+      for(const[id,v]of entries){
+        await api.updateIng(+id,{stock:+v});
+      }
+      if(reloadIngs)await reloadIngs();
+      setOnHand({});
+      alert("✅ อัปเดตสต็อกในระบบเรียบร้อย");
+    }catch(e){alert("ไม่สำเร็จ: "+e.message);}
+    setSavingStock(false);
+  }
+
+  // Submit orders — group by supplier, create one order request per supplier
+  async function submitOrder(){
+    const items=visibleIngs.map(i=>{const q2=getOrderQty(i);return{ing:i,qty:q2};}).filter(x=>x.qty>0);
+    if(items.length===0){alert("ไม่มีรายการที่ต้องสั่ง");return;}
+    if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\nระบบจะแยกใบสั่งซื้อตามซัพพลายเออร์`,confirmLabel:"ส่งคำสั่งซื้อ"}))return;
+    setSaving(true);
+    try{
+      // Group items by supplier
+      const supMap={};
+      items.forEach(({ing,qty})=>{
+        const k=ing.supplier_id||"none";
+        if(!supMap[k])supMap[k]={supplierId:ing.supplier_id||null,supplierName:ing.supplier_name||"ไม่ระบุ",items:[]};
+        supMap[k].items.push({
+          ingId:ing.id,name:ing.name,unit:ing.buy_unit,
+          qtyNeeded:round2(qty),
+          pricePerUnit:+ing.buy_price||0,
+          estimatedCost:round2(qty*(+ing.buy_price||0)),
+          supplierId:ing.supplier_id||null,supplierName:ing.supplier_name||"ไม่ระบุ",
+        });
+      });
+      for(const sup of Object.values(supMap)){
+        await api.addOrder({
+          branch_id:currentBranch.id,branch_name:currentBranch.name,
+          supplier_id:sup.supplierId,supplier_name:sup.supplierName,
+          items:sup.items,status:"pending",
+          requested_by:currentUser.username,requested_at:nowStr(),
+          note:`เช็คสต็อก ${todayStr()}`,
+        });
+      }
+      // Reset overrides
+      setOrderQty({});
+      if(reload)await reload();
+      alert(`✅ ส่งคำสั่งซื้อสำเร็จ ${Object.keys(supMap).length} ใบ\nไปดูได้ที่แท็บ "📦 คำสั่งซื้อที่ส่ง"`);
+    }catch(e){alert("ส่งไม่สำเร็จ: "+e.message);}
+    setSaving(false);
+  }
+
+  return <div>
+    {/* Hero header */}
+    <div style={{background:`linear-gradient(135deg,#0F172A 0%,#1E293B 60%,${C.brand} 140%)`,borderRadius:16,padding:"18px 22px",marginBottom:14,color:"#F8FAFC",boxShadow:"0 6px 20px rgba(15,23,42,0.18)",position:"relative",overflow:"hidden"}}>
+      <div style={{position:"absolute",right:-20,top:-30,fontSize:140,opacity:0.07,pointerEvents:"none"}}>📋</div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4,position:"relative",flexWrap:"wrap"}}>
+        <span style={{fontSize:26}}>📋</span>
+        <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,margin:0,letterSpacing:.2}}>เช็คสต็อก & สร้างคำสั่งซื้อ</h2>
+      </div>
+      <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,margin:0,opacity:0.85,position:"relative"}}>
+        นับสต็อกที่เหลือจริง → ระบบคำนวณจำนวนที่ต้องสั่งจาก <b style={{color:"#FCD34D"}}>safety stock</b> ที่ตั้งไว้ → ส่งคำสั่งซื้อแบบแยกตามซัพพลายเออร์อัตโนมัติ
+      </p>
+    </div>
+
+    {/* Filter row */}
+    <Card style={{padding:"12px 14px",marginBottom:14}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(220px,100%),1fr))",gap:10,alignItems:"end"}}>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:800,marginBottom:5,fontFamily:"'Sarabun',sans-serif",letterSpacing:.3,textTransform:"uppercase"}}>ค้นหา</div>
+          <div style={{position:"relative"}}><span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={14} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ชื่อวัตถุดิบ / หมวด..." style={{...iS,paddingLeft:34,fontSize:13,padding:"8px 12px 8px 34px"}}/></div>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:800,marginBottom:5,fontFamily:"'Sarabun',sans-serif",letterSpacing:.3,textTransform:"uppercase"}}>ซัพพลายเออร์</div>
+          <select value={supFilter} onChange={e=>setSupFilter(e.target.value)} style={{...iS,fontSize:13,padding:"9px 12px",appearance:"none"}}>
+            <option value="">— ทุกซัพพลาย —</option>
+            {suppliers.filter(s=>s.active!==false).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+            <option value="none">— ไม่ระบุซัพพลาย —</option>
+          </select>
+        </div>
+      </div>
+    </Card>
+
+    {/* Stock check tables grouped by supplier */}
+    {grouped.length===0?<Card style={{padding:"50px 20px",textAlign:"center"}}>
+      <div style={{fontSize:48,marginBottom:8,opacity:.6}}>📭</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,color:C.ink3,fontWeight:700}}>ไม่พบวัตถุดิบในเงื่อนไขนี้</div>
+    </Card>:<div style={{display:"flex",flexDirection:"column",gap:12,paddingBottom:80}}>
+      {grouped.map(g=>{
+        const supTotal=g.items.reduce((s,i)=>s+lineCost(i),0);
+        const orderCount=g.items.filter(i=>getOrderQty(i)>0).length;
+        return <Card key={g.key} style={{padding:0,overflow:"hidden"}}>
+          <div style={{padding:"10px 16px",background:`linear-gradient(135deg,${C.tealLight},${C.brandLight})`,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <Ic d={I.truck} s={16} c={C.teal}/>
+              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>{g.name}</span>
+              <span style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>· {g.items.length} รายการ</span>
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              {orderCount>0&&<span style={{fontSize:11,color:C.brand,fontFamily:"'Sarabun',sans-serif",fontWeight:800,background:C.brandLight,padding:"3px 9px",borderRadius:10,border:`1px solid ${C.brandBorder}`}}>{orderCount} ต้องสั่ง</span>}
+              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.brand}}>฿{round2(supTotal).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+            </div>
+          </div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:isMobile?640:undefined}}>
+              <thead>
+                <tr style={{background:C.bg}}>
+                  {["#","วัตถุดิบ","หน่วย","🛡 safety","📦 เหลือ (นับ)","✏ สั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:i>=3?"right":"left",letterSpacing:.2,borderBottom:`1px solid ${C.line}`}}>{h}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {g.items.map((ing,idx)=>{
+                  const safety=+ing.safety_stock||0;
+                  const have=onHand[ing.id]!=null&&onHand[ing.id]!==""?+onHand[ing.id]:(+ing.stock||0);
+                  const order=getOrderQty(ing);
+                  const cost=lineCost(ing);
+                  const auto=autoOrderQty(ing);
+                  const lowStock=have<safety&&safety>0;
+                  const overridden=orderQty[ing.id]!=null&&+orderQty[ing.id]!==auto;
+                  return <tr key={ing.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC"}}>
+                    <td style={{padding:"9px 10px",fontSize:11,color:C.ink4,fontWeight:700}}>{idx+1}</td>
+                    <td style={{padding:"9px 10px"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        {ing.image?<img src={ing.image} alt={ing.name} style={{width:28,height:28,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:28,height:28,borderRadius:6,background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={14} c={C.brand}/></div>}
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:13,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.name}</div>
+                          {ing.category&&<div style={{fontSize:10,color:C.ink4}}>{ing.category}</div>}
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{padding:"9px 10px",fontSize:12,color:C.ink3,fontWeight:600,whiteSpace:"nowrap"}}>{ing.buy_unit}</td>
+                    <td style={{padding:"9px 10px",textAlign:"right"}}>
+                      <span style={{fontSize:12,fontWeight:800,color:safety>0?C.yellow:C.ink4}}>{safety||"—"}</span>
+                    </td>
+                    <td style={{padding:"9px 10px",textAlign:"right"}}>
+                      {canOrder?<input type="number" min="0" step="any" placeholder={String(+ing.stock||0)} value={onHand[ing.id]??""} onChange={e=>{setOnHand(o=>({...o,[ing.id]:e.target.value}));setOrderQty(q2=>{const n={...q2};delete n[ing.id];return n;});}} style={{...iS,width:78,padding:"6px 8px",fontSize:13,fontWeight:800,textAlign:"right",border:`2px solid ${lowStock?"#F59E0B":C.brandBorder}`,background:lowStock?"#FFFBEB":C.brandLight}}/>
+                      :<span style={{fontSize:13,fontWeight:700,color:C.ink}}>{have}</span>}
+                    </td>
+                    <td style={{padding:"9px 10px",textAlign:"right"}}>
+                      {canOrder?<input type="number" min="0" step="any" value={orderQty[ing.id]??(auto>0?auto:"")} onChange={e=>setOrderQty(q2=>({...q2,[ing.id]:e.target.value}))} placeholder="0" style={{...iS,width:78,padding:"6px 8px",fontSize:13,fontWeight:900,textAlign:"right",border:`2px solid ${order>0?C.green+"55":C.line}`,background:order>0?C.greenLight:C.white,color:order>0?C.green:C.ink}}/>
+                      :<span style={{fontSize:13,fontWeight:900,color:order>0?C.green:C.ink4}}>{order||"—"}</span>}
+                      {overridden&&<div style={{fontSize:9,color:C.ink4,marginTop:2}}>(แก้จาก {auto})</div>}
+                    </td>
+                    <td style={{padding:"9px 10px",textAlign:"right",fontSize:12,color:C.ink3,whiteSpace:"nowrap"}}>฿{(+ing.buy_price||0).toFixed(2)}</td>
+                    <td style={{padding:"9px 10px",textAlign:"right",fontSize:13,fontWeight:800,color:cost>0?C.brand:C.ink4,whiteSpace:"nowrap"}}>{cost>0?`฿${cost.toLocaleString(undefined,{minimumFractionDigits:2})}`:"—"}</td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>;
+      })}
+    </div>}
+
+    {/* FIXED bottom action bar */}
+    {canOrder&&grouped.length>0&&<>
+      <div style={{height:isMobile?92:60}}/>
+      <div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`2px solid ${C.brand}`,boxShadow:"0 -6px 18px rgba(15,23,42,0.30)",paddingBottom:"env(safe-area-inset-bottom,0)"}}>
+        <div style={{maxWidth:1600,margin:"0 auto",padding:isMobile?"8px 12px":"10px 18px",display:"flex",alignItems:"center",flexDirection:isMobile?"column":"row",gap:isMobile?8:14}}>
+          <div style={{flex:isMobile?"none":"1 1 0",width:isMobile?"100%":"auto",display:"flex",alignItems:"center",gap:isMobile?8:14,flexWrap:"wrap"}}>
+            <span style={{fontSize:18}}>📋</span>
+            <div style={{display:"inline-flex",alignItems:"baseline",gap:6,whiteSpace:"nowrap"}}>
+              <span style={{fontSize:isMobile?10:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>รายการต้องสั่ง</span>
+              <span style={{fontSize:isMobile?14:16,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:900}}>{totals.itemCount}</span>
+              <span style={{fontSize:isMobile?9:10,color:"#64748B",fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>รายการ</span>
+            </div>
+            <div style={{display:"inline-flex",alignItems:"baseline",gap:6,whiteSpace:"nowrap"}}>
+              <span style={{fontSize:isMobile?10:11,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ประมาณการ</span>
+              <span style={{fontSize:isMobile?14:16,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:900}}>฿{totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:isMobile?6:8,flexWrap:"wrap",justifyContent:isMobile?"stretch":"flex-end",width:isMobile?"100%":"auto"}}>
+            <button onClick={saveStockCounts} disabled={savingStock||Object.keys(onHand).length===0} title="อัปเดตสต็อกในระบบจากที่นับมา" style={{background:savingStock?"#475569":"#1E293B",border:`1px solid rgba(255,255,255,0.2)`,borderRadius:9,padding:isMobile?"9px 14px":"9px 16px",cursor:savingStock||Object.keys(onHand).length===0?"not-allowed":"pointer",color:"#F8FAFC",fontSize:isMobile?12:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:38,opacity:Object.keys(onHand).length===0?.5:1}}>
+              💾 อัปเดตสต็อก
+            </button>
+            <button onClick={submitOrder} disabled={saving||totals.itemCount===0} style={{background:saving?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:9,padding:isMobile?"9px 14px":"9px 18px",cursor:saving||totals.itemCount===0?"not-allowed":"pointer",color:C.white,fontSize:isMobile?12:13,fontWeight:900,fontFamily:"'Sarabun',sans-serif",boxShadow:saving||totals.itemCount===0?"none":"0 4px 14px rgba(16,185,129,0.42)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:38,opacity:totals.itemCount===0?.5:1}}>
+              <span style={{fontSize:isMobile?13:14}}>{saving?"⏳":"📤"}</span>
+              <span>{saving?"กำลังส่ง...":`ส่งคำสั่งซื้อ (${totals.itemCount})`}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </>}
   </div>;
 }
 
@@ -5216,7 +5478,7 @@ export default function App(){
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
-            {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
+            {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
