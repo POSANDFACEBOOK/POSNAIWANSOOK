@@ -922,6 +922,19 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     try{await api.updateIng(item.id,{visible_branches:next});await reload();}
     catch{alert("บันทึกไม่สำเร็จ");}
   }
+  const[clearingAll,setClearingAll]=useState(false);
+  async function clearAllVisibility(){
+    if(!await confirmDlg({title:"ติ๊กออกทุกสาขา (ทุกวัตถุดิบ)",message:`ปิดสิทธิการแสดงวัตถุดิบทุกตัว (${ings.length} รายการ) ออกจากทุกสาขา?\n\nหลังจากนั้นต้องเข้ามาเปิดสิทธิ์ใหม่ทีละตัวเอง\n(ครัวกลางยังเห็นทุกวัตถุดิบเหมือนเดิม)`,danger:true,confirmLabel:"ติ๊กออกทั้งหมด"}))return;
+    setClearingAll(true);
+    let ok=0,fail=0;
+    for(const ing of ings){
+      try{await api.updateIng(ing.id,{visible_branches:[]});ok++;}
+      catch{fail++;}
+    }
+    await reload();
+    setClearingAll(false);
+    alert(`✅ ติ๊กออกเรียบร้อย ${ok} รายการ${fail>0?` · ล้มเหลว ${fail} รายการ`:""}`);
+  }
   // Assign a branch-specific supplier to an ingredient (non-central branches pick from their own list)
   async function assignBranchSupplier(item,supplierId){
     const next=setBranchSupplierInJson(item.supplier_by_branch,currentBranch.id,supplierId);
@@ -958,6 +971,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       <Btn v="success" onClick={()=>setShowStockCheck(true)} icon={I.box}>📦 เช็คสต็อก</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
+      {canE&&<Btn v="danger" onClick={clearAllVisibility} loading={clearingAll} disabled={ings.length===0}>❌ ติ๊กออกทุกสาขา</Btn>}
     </div>
     <div style={{fontSize:12,color:C.ink4,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>แสดง {paged.length} จาก {filtered.length} รายการ</div>
     {paged.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.warning} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่พบวัตถุดิบ</p></div>:<>
