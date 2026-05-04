@@ -3297,7 +3297,8 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved})
   },[search,branchIngs,items]);
 
   function addIng(ing){
-    setItems(prev=>[...prev,{
+    // Insert newest at the TOP so the user can fill the qty without scrolling.
+    setItems(prev=>[{
       ingredient_id:ing.id,
       name:ing.name,
       unit:ing.buy_unit||"หน่วย",
@@ -3305,7 +3306,7 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved})
       price_per_unit:+ing.buy_price||0,
       line_total:+ing.buy_price||0,
       note:"",
-    }]);
+    },...prev]);
     setSearch("");
   }
   function updateItem(idx,field,value){
