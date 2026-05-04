@@ -390,6 +390,19 @@ function branchSafety(ing,branchId){
 function setBranchSafetyInJson(existing,branchId,value){
   return {...(existing||{}),[String(branchId)]:+value||0};
 }
+// Ingredient visibility resolver:
+//   visible_branches = null/undefined → visible to all branches (legacy default)
+//   visible_branches = []              → explicitly visible to NO branch (user "untick all")
+//   visible_branches = [ids]           → visible to those branches only
+// Central kitchen always sees every ingredient regardless of this setting.
+function ingVisibleAt(ing,branchId,isCentral){
+  if(isCentral)return true;
+  const vb=ing?.visible_branches;
+  if(vb==null)return true;
+  if(!Array.isArray(vb))return true;
+  if(vb.length===0)return false;
+  return vb.includes(branchId);
+}
 const marginColor=(m)=>m>=60?C.green:m>=40?C.yellow:C.red;
 const marginLabel=(m)=>m>=60?"ดี":m>=40?"พอใช้":"ต่ำ";
 // Format date/time in Thai locale but always Gregorian year (not Buddhist) — receipts must read 2026 not 2569
@@ -876,7 +889,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   async function addCat(){if(!newCatName.trim())return;try{await api.addCat({type:"ingredient",name:newCatName.trim()});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;try{await api.updateCat(editingCatId,{name:editingCatName.trim()});await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(c.id);await reloadCats();if(cat===c.name)setCat("ทุกหมวด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
-  const filtered=useMemo(()=>ings.filter(i=>{const vb=i.visible_branches||[];const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);return i.name.toLowerCase().includes(q.toLowerCase())&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;}),[ings,q,cat,isCentral,currentBranch]);
+  const filtered=useMemo(()=>ings.filter(i=>{const matchB=ingVisibleAt(i,currentBranch?.id,isCentral);return i.name.toLowerCase().includes(q.toLowerCase())&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;}),[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||1);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
   async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{
@@ -890,7 +903,25 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     await reload();setOpen(false);
   }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
-  async function toggleVBIng(item,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(item.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateIng(item.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
+  async function toggleVBIng(item,branchId){
+    // null = all visible (legacy default) · [] = none visible · [ids] = explicit list
+    const nonCB=branches.filter(b=>b.type!=="central").map(b=>b.id);
+    const cur=item.visible_branches;
+    let next;
+    if(cur==null){
+      // Currently "all" — clicking unticks this branch → list of all-except-clicked
+      next=nonCB.filter(id=>id!==branchId);
+    }else{
+      const arr=[...cur];
+      const idx=arr.indexOf(branchId);
+      if(idx===-1)arr.push(branchId);else arr.splice(idx,1);
+      // If it ends up containing every non-central branch → normalize to null ("all")
+      if(arr.length===nonCB.length&&nonCB.every(id=>arr.includes(id)))next=null;
+      else next=arr;  // could be [] (none) or [ids]
+    }
+    try{await api.updateIng(item.id,{visible_branches:next});await reload();}
+    catch{alert("บันทึกไม่สำเร็จ");}
+  }
   // Assign a branch-specific supplier to an ingredient (non-central branches pick from their own list)
   async function assignBranchSupplier(item,supplierId){
     const next=setBranchSupplierInJson(item.supplier_by_branch,currentBranch.id,supplierId);
@@ -966,10 +997,10 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
             <div style={{fontSize:10,color:C.ink4,marginBottom:5,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>แสดงที่สาขา:</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
               {branches.filter(b=>b.type!=="central").length===0?<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>
-              :branches.filter(b=>b.type!=="central").map(b=>{const vb=item.visible_branches||[];const isOn=vb.length===0||vb.includes(b.id);return <button key={b.id} onClick={()=>toggleVBIng(item,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
+              :branches.filter(b=>b.type!=="central").map(b=>{const isOn=ingVisibleAt(item,b.id,false);return <button key={b.id} onClick={()=>toggleVBIng(item,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
             </div>
             {/* Per-branch stock readout — shows current stock for every branch that can see this ingredient */}
-            {(()=>{const vb=item.visible_branches||[];const visBranches=branches.filter(b=>b.type!=="central"&&(vb.length===0||vb.includes(b.id)));if(visBranches.length===0)return null;return <div style={{marginTop:7,paddingTop:7,borderTop:`1px dashed ${C.line}`}}>
+            {(()=>{const visBranches=branches.filter(b=>b.type!=="central"&&ingVisibleAt(item,b.id,false));if(visBranches.length===0)return null;return <div style={{marginTop:7,paddingTop:7,borderTop:`1px dashed ${C.line}`}}>
               <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.box} s={10} c={C.ink4}/>สต็อกตามสาขา:</div>
               <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
                 {visBranches.map(b=>{const bs=branchStock(item,b.id);const sf=branchSafety(item,b.id);const low=sf>0&&bs<sf;return <span key={b.id} title={sf>0?`safety ${sf}`:""} style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:6,background:low?"#FEF2F2":C.bg,color:low?C.red:C.ink2,border:`1px solid ${low?"#FECACA":C.line}`,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{b.name}: {bs}{item.buy_unit?` ${item.buy_unit}`:""}</span>;})}
@@ -1357,11 +1388,7 @@ function SOPChooser({onPick}){
 
 function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onSwitch}){
   const isCentral=currentBranch?.type==="central";
-  const sopIngs=useMemo(()=>ings.filter(i=>{
-    const vb=i.visible_branches||[];
-    const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);
-    return i.has_sop&&matchB;
-  }),[ings,isCentral,currentBranch]);
+  const sopIngs=useMemo(()=>ings.filter(i=>i.has_sop&&ingVisibleAt(i,currentBranch?.id,isCentral)),[ings,isCentral,currentBranch]);
   const[sel,setSel]=useState(sopIngs[0]?.id??null);
   const[edit,setEdit]=useState(false);
   const[sop,setSop]=useState([]);
@@ -3282,13 +3309,8 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved})
   const[saving,setSaving]=useState(false);
   const[vatPct,setVatPct]=useState(editPO?(editPO.subtotal>0?+((editPO.vat/editPO.subtotal)*100).toFixed(2):0):0);
 
-  // Filter ingredients available for this branch (visible_branches)
-  const branchIngs=useMemo(()=>{
-    return ings.filter(i=>{
-      const vb=i.visible_branches||[];
-      return vb.length===0||vb.includes(branch.id);
-    });
-  },[ings,branch.id]);
+  // Filter ingredients available for the receiving branch (per visible_branches setting)
+  const branchIngs=useMemo(()=>ings.filter(i=>ingVisibleAt(i,branch.id,branch.type==="central")),[ings,branch.id,branch.type]);
 
   const searchResults=useMemo(()=>{
     if(!search.trim())return[];
@@ -3945,9 +3967,7 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
   // Filter visible ingredients — only ones with a per-branch supplier set
   // (the stock-check view is for ordering, so no supplier = nowhere to send).
   const visibleIngs=useMemo(()=>ings.filter(i=>{
-    const vb=i.visible_branches||[];
-    const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);
-    if(!matchB)return false;
+    if(!ingVisibleAt(i,currentBranch?.id,isCentral))return false;
     const sid=strictBranchSupplierId(i);
     if(!sid)return false;
     if(q.trim()&&!i.name.toLowerCase().includes(q.toLowerCase())&&!(i.category||"").toLowerCase().includes(q.toLowerCase()))return false;
