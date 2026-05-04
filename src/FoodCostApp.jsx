@@ -414,22 +414,23 @@ function useIsMobile(breakpoint=768){
   useEffect(()=>{const onR=()=>setM(window.innerWidth<breakpoint);window.addEventListener("resize",onR);window.addEventListener("orientationchange",onR);return()=>{window.removeEventListener("resize",onR);window.removeEventListener("orientationchange",onR);};},[breakpoint]);
   return m;
 }
-function Modal({title,onClose,children,wide,extraWide}){
+function Modal({title,onClose,children,wide,extraWide,noScroll}){
   const mob=useIsMobile();
   // Intentional: do NOT close on Escape or backdrop click — only the × button.
-  // Prevents losing in-progress form data when accidentally tapping outside the modal.
-  // Belt-and-braces: also swallow any pointer events that bubble up from the backdrop
-  // so even if a child element somewhere triggers an unintended close, we never react
-  // to a tap that lands on the backdrop itself.
   const cap=extraWide?1000:wide?760:560;
   const swallow=e=>{if(e.target===e.currentTarget){e.preventDefault();e.stopPropagation();}};
+  // noScroll = body div doesn't scroll itself. Used by forms that have a
+  // fixed top + a single scrollable inner section + a fixed bottom (e.g. PO form).
+  const bodyStyle=noScroll
+    ?{padding:mob?"14px 16px 18px":"20px 24px 24px",overflow:"hidden",flex:1,minHeight:0,display:"flex",flexDirection:"column"}
+    :{padding:mob?"14px 16px 18px":"20px 24px 24px",overflowY:"auto",flex:1,WebkitOverflowScrolling:"touch"};
   return <div onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",zIndex:1000,padding:mob?0:16}}>
-    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:mob?"18px 18px 0 0":20,width:"100%",maxWidth:`min(96vw, ${cap}px)`,maxHeight:mob?"96vh":"94vh",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(15,23,42,.22)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:mob?"18px 18px 0 0":20,width:"100%",maxWidth:`min(96vw, ${cap}px)`,height:noScroll?(mob?"96vh":"94vh"):undefined,maxHeight:mob?"96vh":"94vh",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(15,23,42,.22)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:mob?"14px 16px 12px":"18px 24px 14px",borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,background:C.bg,gap:10}}>
         <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:mob?16:18,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{title}</span>
         <button onClick={onClose} aria-label="ปิด" style={{background:C.line,border:"none",cursor:"pointer",color:C.ink3,padding:mob?9:7,borderRadius:8,display:"flex",flexShrink:0}}><Ic d={I.x} s={15}/></button>
       </div>
-      <div style={{padding:mob?"14px 16px 18px":"20px 24px 24px",overflowY:"auto",flex:1,WebkitOverflowScrolling:"touch"}}>{children}</div>
+      <div style={bodyStyle}>{children}</div>
     </div>
   </div>;
 }
@@ -3350,42 +3351,47 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved})
     setSaving(false);
   }
 
-  return <Modal title={`${editPO?"✏️ แก้ไข":"➕ สร้าง"}เอกสาร PO — ${fromBranch?.name||""} → ${branch.name}`} onClose={onClose} extraWide>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(180px,100%),1fr))",gap:10,marginBottom:14}}>
-      <Inp label="เลขที่ PO" value={poNumber} onChange={e=>setPoNumber(e.target.value)}/>
-      <Inp label="วันที่" type="date" value={poDate} onChange={e=>setPoDate(e.target.value)}/>
-      <Field label="สถานะ">
-        <select value={status} onChange={e=>setStatus(e.target.value)} style={{...iS,appearance:"none"}}>
-          <option value="open">⏳ เปิดอยู่</option>
-          <option value="received">✅ รับสินค้าแล้ว</option>
-          <option value="cancelled">❌ ยกเลิก</option>
-        </select>
-      </Field>
+  return <Modal title={`${editPO?"✏️ แก้ไข":"➕ สร้าง"}เอกสาร PO — ${fromBranch?.name||""} → ${branch.name}`} onClose={onClose} extraWide noScroll>
+    {/* Top section — fixed */}
+    <div style={{flexShrink:0}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(180px,100%),1fr))",gap:10,marginBottom:14}}>
+        <Inp label="เลขที่ PO" value={poNumber} onChange={e=>setPoNumber(e.target.value)}/>
+        <Inp label="วันที่" type="date" value={poDate} onChange={e=>setPoDate(e.target.value)}/>
+        <Field label="สถานะ">
+          <select value={status} onChange={e=>setStatus(e.target.value)} style={{...iS,appearance:"none"}}>
+            <option value="open">⏳ เปิดอยู่</option>
+            <option value="received">✅ รับสินค้าแล้ว</option>
+            <option value="cancelled">❌ ยกเลิก</option>
+          </select>
+        </Field>
+      </div>
+
+      {/* Ingredient search */}
+      <div style={{marginBottom:8,position:"relative"}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>🔍 ค้นหาวัตถุดิบเพื่อเพิ่ม</div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="พิมพ์ชื่อวัตถุดิบ..." style={{...iS,fontSize:14,padding:"10px 14px"}}/>
+        {searchResults.length>0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:10,background:C.white,border:`1.5px solid ${C.brandBorder}`,borderRadius:10,marginTop:4,boxShadow:"0 8px 24px rgba(0,0,0,.12)",maxHeight:280,overflowY:"auto"}}>
+          {searchResults.map(ing=><button key={ing.id} onClick={()=>addIng(ing)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",width:"100%",background:"none",border:"none",borderBottom:`1px solid ${C.lineLight}`,cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif",transition:"background .1s"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+            <Ic d={I.leaf} s={16} c={C.brand}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{ing.name}</div>
+              <div style={{fontSize:11,color:C.ink4}}>{ing.category} · {ing.buy_unit||"หน่วย"} · ฿{(+ing.buy_price||0).toFixed(2)}/{ing.buy_unit||"หน่วย"}</div>
+            </div>
+            <Ic d={I.plus} s={14} c={C.green}/>
+          </button>)}
+        </div>}
+        {search&&searchResults.length===0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:10,background:C.white,border:`1.5px solid ${C.line}`,borderRadius:10,marginTop:4,padding:"14px 16px",fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center"}}>ไม่พบวัตถุดิบที่ตรงกัน หรือถูกเพิ่มแล้ว</div>}
+      </div>
+
+      {/* Items header */}
+      <div style={{marginTop:14,marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>📋 รายการในเอกสาร <span style={{color:C.brand,fontWeight:900}}>({items.length})</span> <span style={{fontSize:11,fontWeight:500,color:C.ink4}}>เพิ่มได้ไม่จำกัด · เลื่อนในกรอบเท่านั้น</span></div>
+        {items.length>0&&<button onClick={()=>setItems([])} style={{background:"transparent",border:"none",color:C.red,cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>ล้างทั้งหมด</button>}
+      </div>
     </div>
 
-    {/* Ingredient search */}
-    <div style={{marginBottom:8,position:"relative"}}>
-      <div style={{fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>🔍 ค้นหาวัตถุดิบเพื่อเพิ่ม</div>
-      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="พิมพ์ชื่อวัตถุดิบ..." style={{...iS,fontSize:14,padding:"10px 14px"}}/>
-      {searchResults.length>0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:10,background:C.white,border:`1.5px solid ${C.brandBorder}`,borderRadius:10,marginTop:4,boxShadow:"0 8px 24px rgba(0,0,0,.12)",maxHeight:280,overflowY:"auto"}}>
-        {searchResults.map(ing=><button key={ing.id} onClick={()=>addIng(ing)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",width:"100%",background:"none",border:"none",borderBottom:`1px solid ${C.lineLight}`,cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif",transition:"background .1s"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-          <Ic d={I.leaf} s={16} c={C.brand}/>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{ing.name}</div>
-            <div style={{fontSize:11,color:C.ink4}}>{ing.category} · {ing.buy_unit||"หน่วย"} · ฿{(+ing.buy_price||0).toFixed(2)}/{ing.buy_unit||"หน่วย"}</div>
-          </div>
-          <Ic d={I.plus} s={14} c={C.green}/>
-        </button>)}
-      </div>}
-      {search&&searchResults.length===0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:10,background:C.white,border:`1.5px solid ${C.line}`,borderRadius:10,marginTop:4,padding:"14px 16px",fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center"}}>ไม่พบวัตถุดิบที่ตรงกัน หรือถูกเพิ่มแล้ว</div>}
-    </div>
-
-    {/* Items table */}
-    <div style={{marginTop:14,marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-      <div style={{fontSize:12,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>📋 รายการในเอกสาร <span style={{color:C.brand,fontWeight:900}}>({items.length})</span> <span style={{fontSize:11,fontWeight:500,color:C.ink4}}>เพิ่มได้ไม่จำกัด</span></div>
-      {items.length>0&&<button onClick={()=>setItems([])} style={{background:"transparent",border:"none",color:C.red,cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>ล้างทั้งหมด</button>}
-    </div>
-    <div style={{marginBottom:14,maxHeight:520,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10}}>
+    {/* Scrollable items table — the ONLY scrollable area inside the modal */}
+    <div style={{flex:1,minHeight:120,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10,WebkitOverflowScrolling:"touch"}}>
       <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
         <thead style={{position:"sticky",top:0,zIndex:1}}>
           <tr style={{background:C.bg}}>
@@ -3424,35 +3430,38 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved})
       </table>
     </div>
 
-    {/* Notes + totals */}
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(280px,100%),1fr))",gap:14}}>
-      <div>
-        <div style={{fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>หมายเหตุ</div>
-        <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={3} placeholder="—" style={{...iS,fontSize:13,resize:"none"}}/>
+    {/* Bottom section — fixed */}
+    <div style={{flexShrink:0,marginTop:14}}>
+      {/* Notes + totals */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(280px,100%),1fr))",gap:14}}>
+        <div>
+          <div style={{fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>หมายเหตุ</div>
+          <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} placeholder="—" style={{...iS,fontSize:13,resize:"none"}}/>
+        </div>
+        <div style={{background:C.bg,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>
+            <span>ยอดรวม ({items.length} รายการ)</span>
+            <span style={{fontWeight:700}}>฿{subtotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:6,alignItems:"center"}}>
+            <span>VAT (%)</span>
+            <input type="number" step="0.1" value={vatPct} onChange={e=>setVatPct(+e.target.value)} style={{...iS,fontSize:12,padding:"4px 8px",height:26,width:70,textAlign:"right"}}/>
+          </div>
+          {vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>
+            <span>VAT</span>
+            <span>฿{vat.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+          </div>}
+          <div style={{paddingTop:6,marginTop:6,borderTop:`2px solid ${C.brandBorder}`,display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'Sarabun',sans-serif"}}>
+            <span style={{fontSize:13,fontWeight:800,color:C.brand}}>ยอดรวมทั้งสิ้น</span>
+            <span style={{fontSize:20,fontWeight:900,color:C.brand}}>฿{total.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+          </div>
+        </div>
       </div>
-      <div style={{background:C.bg,borderRadius:12,padding:"14px 16px",border:`1px solid ${C.line}`}}>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>
-          <span>ยอดรวม ({items.length} รายการ)</span>
-          <span style={{fontWeight:700}}>฿{subtotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-        </div>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:6,alignItems:"center"}}>
-          <span>VAT (%)</span>
-          <input type="number" step="0.1" value={vatPct} onChange={e=>setVatPct(+e.target.value)} style={{...iS,fontSize:12,padding:"4px 8px",height:26,width:70,textAlign:"right"}}/>
-        </div>
-        {vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>
-          <span>VAT</span>
-          <span>฿{vat.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-        </div>}
-        <div style={{paddingTop:8,marginTop:8,borderTop:`2px solid ${C.brandBorder}`,display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'Sarabun',sans-serif"}}>
-          <span style={{fontSize:14,fontWeight:800,color:C.brand}}>ยอดรวมทั้งสิ้น</span>
-          <span style={{fontSize:22,fontWeight:900,color:C.brand}}>฿{total.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-        </div>
-      </div>
-    </div>
 
-    <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:14,flexWrap:"wrap"}}>
-      <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
-      <Btn onClick={save} loading={saving} disabled={items.length===0} icon={I.check}>{editPO?"บันทึกการแก้ไข":"บันทึกเอกสาร PO"}</Btn>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:12,borderTop:`1px solid ${C.line}`,marginTop:12,flexWrap:"wrap"}}>
+        <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
+        <Btn onClick={save} loading={saving} disabled={items.length===0} icon={I.check}>{editPO?"บันทึกการแก้ไข":"บันทึกเอกสาร PO"}</Btn>
+      </div>
     </div>
   </Modal>;
 }
