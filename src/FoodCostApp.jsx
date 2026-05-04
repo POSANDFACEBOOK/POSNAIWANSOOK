@@ -489,6 +489,17 @@ function ConfirmDlg(){
 function EditedBy({username,editAt}){if(!username)return null;return <span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.user} s={9} c={C.ink4}/>แก้โดย {username}{editAt?` · ${editAt}`:""}</span>;}
 function Loading({text="กำลังโหลด..."}){return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"80px 0",gap:16}}><div style={{width:44,height:44,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{text}</p></div>;}
 
+// Thumbnail with broken-image fallback. If the src URL fails to load (or is empty),
+// the placeholder div with the leaf/fire icon shows up instead of the browser's
+// default broken-image alt-text rendering.
+function Thumb({src,alt="",w,h,size=32,radius=7,iconBg,iconColor,icon,iconSize,style,imgStyle}){
+  const W=w??size,H=h??size;
+  const[err,setErr]=useState(false);
+  const ph=<div style={{width:W,height:H,borderRadius:radius,background:iconBg||C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,...style}}><Ic d={icon||I.leaf} s={iconSize||Math.max(12,Math.round(Math.min(W,H)*0.5))} c={iconColor||C.green}/></div>;
+  if(!src||err)return ph;
+  return <img src={src} alt={alt} onError={()=>setErr(true)} style={{width:W,height:H,objectFit:"cover",borderRadius:radius,flexShrink:0,...imgStyle}}/>;
+}
+
 // Number stepper — left = decrement, right = increment, center = direct input.
 // Mobile-friendly tap targets (≥34 px). All callbacks treat values as strings so the
 // caller can preserve "" for empty state. Pass `step` (default 1) to override increment.
@@ -964,7 +975,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(310px,100%),1fr))",gap:14}}>
         {paged.map(item=><Card key={item.id} hover style={{overflow:"hidden"}}>
           <div style={{display:"flex"}}>
-            {item.image?<img src={item.image} alt={item.name} style={{width:88,height:88,objectFit:"cover",flexShrink:0}}/>:<div style={{width:88,height:88,background:`linear-gradient(135deg,${C.brandLight},#FEF3C7)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={32} c={C.brand}/></div>}
+            <Thumb src={item.image} alt={item.name} size={88} radius={0} iconBg={`linear-gradient(135deg,${C.brandLight},#FEF3C7)`} iconColor={C.brand} iconSize={32}/>
             <div style={{flex:1,padding:"12px 14px 10px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div><div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{item.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}><Chip color="orange">{item.category}</Chip>{item.has_sop&&<span style={{fontSize:10,fontWeight:800,color:Array.isArray(item.sop)&&item.sop.length>0?C.green:"#92400E",background:Array.isArray(item.sop)&&item.sop.length>0?C.greenLight:"#FEF3C7",border:`1px solid ${Array.isArray(item.sop)&&item.sop.length>0?C.green+"55":"#FDE68A"}`,padding:"1px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{Array.isArray(item.sop)&&item.sop.length>0?`📋 SOP ${item.sop.length}`:"📋 รอ SOP"}</span>}</div></div>
@@ -1142,7 +1153,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
         const lowStock=safety>0&&newVal<safety;
         const isSaving=!!saving[ing.id];
         return <div key={ing.id} style={{background:dirty?C.brandLight:C.white,border:`1.5px solid ${dirty?C.brandBorder:C.line}`,borderRadius:12,padding:"10px 12px",display:"flex",gap:10,alignItems:"center",transition:"all .15s"}}>
-          {ing.image?<img src={ing.image} alt={ing.name} style={{width:isMobile?44:48,height:isMobile?44:48,objectFit:"cover",borderRadius:8,flexShrink:0}}/>:<div style={{width:isMobile?44:48,height:isMobile?44:48,borderRadius:8,background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={22} c={C.brand}/></div>}
+          <Thumb src={ing.image} alt={ing.name} size={isMobile?44:48} radius={8} iconBg={C.brandLight} iconColor={C.brand} iconSize={22}/>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:14,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.name}</div>
             <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",gap:6,flexWrap:"wrap",marginTop:2}}>
@@ -1557,7 +1568,7 @@ window.addEventListener('load',async()=>{
             const subCount=Array.isArray(i.ingredients)?i.ingredients.length:0;
             const active=sel===i.id;
             return <div key={i.id} onClick={()=>setSel(i.id)} style={{padding:"10px 12px",borderRadius:10,cursor:"pointer",marginBottom:4,background:active?C.brandLight:"transparent",border:`1px solid ${active?C.brandBorder:"transparent"}`,transition:"all .15s",display:"flex",alignItems:"center",gap:10}}>
-              {i.image?<img src={i.image} alt={i.name} style={{width:32,height:32,objectFit:"cover",borderRadius:7,flexShrink:0}}/>:<div style={{width:32,height:32,borderRadius:7,background:C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={16} c={C.green}/></div>}
+              <Thumb src={i.image} alt={i.name} size={32} radius={7} iconBg={C.greenLight} iconColor={C.green} iconSize={16}/>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:active?800:600,color:active?C.brand:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",marginBottom:3}}>{i.name}</div>
                 <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
@@ -1574,7 +1585,7 @@ window.addEventListener('load',async()=>{
         {ing?<>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18,paddingBottom:14,borderBottom:`1px solid ${C.lineLight}`,gap:10,flexWrap:"wrap"}}>
             <div style={{display:"flex",gap:12,alignItems:"center",minWidth:0,flex:1}}>
-              {ing.image?<img src={ing.image} alt={ing.name} style={{width:52,height:52,objectFit:"cover",borderRadius:10,border:`2px solid ${C.line}`,flexShrink:0}}/>:<div style={{width:52,height:52,borderRadius:10,background:C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={24} c={C.green}/></div>}
+              <Thumb src={ing.image} alt={ing.name} size={52} radius={10} iconBg={C.greenLight} iconColor={C.green} iconSize={24} imgStyle={{border:`2px solid ${C.line}`}}/>
               <div style={{minWidth:0}}>
                 <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.ink,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.name}</h2>
                 <EditedBy username={ing.edit_by} editAt={ing.edit_at}/>
@@ -4143,7 +4154,7 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
                     <td style={{padding:"9px 10px",fontSize:11,color:C.ink4,fontWeight:700}}>{idx+1}</td>
                     <td style={{padding:"9px 10px",position:"sticky",left:0,background:rowBg,zIndex:1,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)",maxWidth:isMobile?180:undefined}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        {ing.image?<img src={ing.image} alt={ing.name} style={{width:28,height:28,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:28,height:28,borderRadius:6,background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.leaf} s={14} c={C.brand}/></div>}
+                        <Thumb src={ing.image} alt={ing.name} size={28} radius={6} iconBg={C.brandLight} iconColor={C.brand} iconSize={14}/>
                         <div style={{minWidth:0}}>
                           <div style={{fontSize:13,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.name}</div>
                           {ing.category&&<div style={{fontSize:10,color:C.ink4}}>{ing.category}</div>}
