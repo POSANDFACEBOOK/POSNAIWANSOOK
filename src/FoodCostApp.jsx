@@ -3362,8 +3362,17 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved})
   const[saving,setSaving]=useState(false);
   const[vatPct,setVatPct]=useState(editPO?(editPO.subtotal>0?+((editPO.vat/editPO.subtotal)*100).toFixed(2):0):0);
 
-  // Filter ingredients available for the receiving branch (per visible_branches setting)
-  const branchIngs=useMemo(()=>ings.filter(i=>ingVisibleAt(i,branch.id,branch.type==="central")),[ings,branch.id,branch.type]);
+  // Filter ingredients available for the PO author.
+  // - When central kitchen issues the PO, it can pick from EVERY ingredient
+  //   (visibility on the receiving branch is auto-ticked when the receiver
+  //   confirms — see depositPOItemsToBranch).
+  // - When a non-central branch issues the PO, restrict to ingredients
+  //   visible to the *destination* branch.
+  const fromIsCentral=fromBranch?.type==="central";
+  const branchIngs=useMemo(()=>{
+    if(fromIsCentral)return ings;
+    return ings.filter(i=>ingVisibleAt(i,branch.id,branch.type==="central"));
+  },[ings,branch.id,branch.type,fromIsCentral]);
 
   const searchResults=useMemo(()=>{
     if(!search.trim())return[];
