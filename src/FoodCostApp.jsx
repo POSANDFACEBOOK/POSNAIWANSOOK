@@ -2809,7 +2809,7 @@ const PO_STATUS={
   received:        {label:"✅ รับแล้ว (เก่า)", short:"รับแล้ว",     color:"#10B981",bg:"#D1FAE5"},
   cancelled:       {label:"❌ ยกเลิก",          short:"ยกเลิก",      color:"#94A3B8",bg:"#F1F5F9"},
 };
-function POSection({branches,ings,currentBranch,currentUser}){
+function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
   // Every branch (central or otherwise) can issue a PO to any other branch
   // and only ever sees POs it's involved in (as sender or receiver).
   // - "from_branch_id" = creator (sender)
@@ -2854,12 +2854,52 @@ function POSection({branches,ings,currentBranch,currentUser}){
   }
   useEffect(()=>{load();},[direction,partnerFilter,filterStatus,dateFrom,dateTo,currentBranch?.id]);
 
+  // Push received qty into the branch's stock + auto-tick the branch on each
+  // ingredient's visible_branches list. Called after the receiver confirms.
+  async function depositPOItemsToBranch(po,itemsToDeposit){
+    const branchId=+po.branch_id;
+    if(!branchId)return;
+    // Aggregate addQty per ingredient (in case the same ingredient appears twice)
+    const agg=new Map();
+    for(const it of (itemsToDeposit||po.items||[])){
+      const ingId=+it.ingredient_id;
+      if(!ingId)continue;
+      const qty=it.received_qty!=null?+it.received_qty:+it.qty;
+      if(!qty||qty<=0)continue;
+      const row=ings.find(x=>+x.id===ingId);
+      if(!row)continue;
+      const e=agg.get(ingId)||{add:0,row};
+      e.add+=qty;agg.set(ingId,e);
+    }
+    for(const[ingId,{add,row}]of agg.entries()){
+      // visible_branches: null=all (no change), [] or [...]=add branchId if missing
+      const cur=row.visible_branches;
+      let nextVB;
+      if(cur==null)nextVB=undefined;  // skip — already visible to all
+      else{
+        const arr=Array.isArray(cur)?[...cur]:[];
+        if(!arr.includes(branchId))arr.push(branchId);
+        nextVB=arr;
+      }
+      // stock_by_branch: increment branch slot
+      const curStock=branchStock(row,branchId);
+      const nextStock=round2(curStock+add);
+      const stockMap=setBranchStockInJson(row.stock_by_branch,branchId,nextStock);
+      const patch={stock_by_branch:stockMap};
+      if(nextVB!==undefined)patch.visible_branches=nextVB;
+      try{await api.updateIng(ingId,patch);}
+      catch(err){console.error("ingredient PATCH failed",ingId,err);}
+    }
+    if(reloadIngs)await reloadIngs();
+  }
+
   async function confirmReceive(po){
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ยืนยันรับสินค้าได้");return;}
-    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\nหลังยืนยันแล้ว เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
+    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• สต็อกของสาขาจะถูกเพิ่มอัตโนมัติ\n• วัตถุดิบที่ได้รับจะถูกติ๊กให้สาขานี้เห็น\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
       await api.patchPOIfStatus(po.id,"open",{status:"awaiting_payment",received_at:new Date().toISOString(),received_by:currentUser?.username||currentUser?.name||null,updated_at:new Date().toISOString()});
+      await depositPOItemsToBranch(po,po.items);
       await load();
     }catch(e){showErr("ยืนยันไม่สำเร็จ",e);}
     setConfirming(null);
@@ -2877,7 +2917,7 @@ function POSection({branches,ings,currentBranch,currentUser}){
   }
   async function acceptDispute(po){
     if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่ยอมรับได้");return;}
-    if(!await confirmDlg({title:"ยอมรับการแก้ไข",message:`ยอมรับจำนวนที่ปลายทางแจ้งใน ${po.po_number||"PO นี้"}?\n\nระบบจะปรับจำนวนและยอดรวมตามที่ปลายทางแจ้ง แล้วเปลี่ยนสถานะเป็น "รอชำระเงิน"`,confirmLabel:"✅ ยอมรับการแก้ไข"}))return;
+    if(!await confirmDlg({title:"ยอมรับการแก้ไข",message:`ยอมรับจำนวนที่ปลายทางแจ้งใน ${po.po_number||"PO นี้"}?\n\n• ระบบจะปรับจำนวนและยอดรวมตามที่ปลายทางแจ้ง\n• สต็อกสาขาปลายทางจะถูกเพิ่มตามจำนวนที่รับจริง\n• เปลี่ยนสถานะเป็น "รอชำระเงิน"`,confirmLabel:"✅ ยอมรับการแก้ไข"}))return;
     setConfirming(po.id);
     try{
       // Preserve every existing item field; only adjust qty + line_total based on (clamped) received_qty
@@ -2892,6 +2932,8 @@ function POSection({branches,ings,currentBranch,currentUser}){
       const vat=round2(subtotal*vatRate);
       const total=round2(subtotal+vat);
       await api.patchPOIfStatus(po.id,"disputed",{items:newItems,subtotal,vat,total,status:"awaiting_payment",received_at:new Date().toISOString(),received_by:po.dispute_by||null,updated_at:new Date().toISOString()});
+      // After accepting the disputed (clamped) qty, deposit those qty into the receiving branch
+      await depositPOItemsToBranch({...po,branch_id:po.branch_id},newItems.map(it=>({...it,received_qty:it.qty})));
       await load();setViewPO(null);
     }catch(e){showErr("ยอมรับไม่สำเร็จ",e);}
     setConfirming(null);
@@ -5777,7 +5819,7 @@ export default function App(){
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
-            {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser}/>}
+            {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch}/>}
