@@ -849,11 +849,41 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
 // ══════════════════════════════════════════════════════
 // ── IMPORT MENU MODAL ─────────────────────────────────
 // ══════════════════════════════════════════════════════
-function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,onDone}){
+function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],onDone}){
   const[step,setStep]=useState(1);const[rows,setRows]=useState([]);const[saving,setSaving]=useState(false);const[progress,setProgress]=useState(0);
   const fileRef=useRef();
+  const xlsxRef=useRef();
   const defaultCat=menuCats[0]?.name||"อาหารจานเดียว";
   const allMenuCatList=menuCats.map(c=>c.name);
+  // Code/name → existing menu (for upsert match)
+  const codeIdx=useMemo(()=>{const m=new Map();menus.forEach(x=>{if(x.code)m.set(String(x.code).trim().toLowerCase(),x);});return m;},[menus]);
+  const nameIdx=useMemo(()=>{const m=new Map();menus.forEach(x=>{if(x.name)m.set(String(x.name).trim().toLowerCase(),x);});return m;},[menus]);
+
+  function handleXlsxFile(e){
+    const f=e.target.files?.[0];if(!f)return;
+    const r=new FileReader();
+    r.onload=ev=>{
+      try{
+        const wb=XLSX.read(ev.target.result,{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const json=XLSX.utils.sheet_to_json(ws,{defval:""});
+        if(json.length===0){alert("ไฟล์ว่างเปล่า");return;}
+        const pickKey=(row,...keys)=>{for(const k of keys){if(row[k]!==undefined&&row[k]!=="")return row[k];}return undefined;};
+        const parsed=json.map(row=>{
+          const code=String(pickKey(row,"🔖 รหัส","รหัส","code","Code","SKU")||"").trim();
+          const name=String(pickKey(row,"ชื่อเมนู","ชื่อ","name","Name")||"").trim();
+          const category=String(pickKey(row,"หมวดหมู่","หมวด","category")||"").trim()||defaultCat;
+          const price=+pickKey(row,"ราคาขาย","ราคา","price")||0;
+          const description=String(pickKey(row,"รายละเอียด","description","desc")||"").trim();
+          return{code,name,category:allMenuCatList.includes(category)?category:defaultCat,price,description,selected:!!name};
+        }).filter(r=>r.name);
+        if(parsed.length===0){alert("ไม่พบรายการในไฟล์ — กรุณาตรวจสอบหัวคอลัมน์");return;}
+        setRows(parsed);setStep(2);
+      }catch(err){alert("อ่านไฟล์ไม่สำเร็จ: "+err.message);}
+    };
+    r.readAsArrayBuffer(f);
+    e.target.value="";
+  }
 
   function parseMenuText(text){
     const lines=text.split("\n").map(l=>l.trim()).filter(l=>l);
@@ -877,39 +907,62 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,onDone}){
 
   async function doImport(){
     const selected=rows.filter(r=>r.selected);if(!selected.length)return;
-    setSaving(true);setProgress(0);let done=0;
+    setSaving(true);setProgress(0);
+    let done=0,added=0,updated=0,failed=0;
     for(const row of selected){
-      try{await api.addMenu({name:row.name,category:row.category,price:+row.price,description:row.description,image:null,ingredients:[],sop:[],edit_by:currentUser.username,edit_at:new Date().toLocaleString("th-TH"),branch_id:currentBranch.id});}
-      catch(e){console.error("skip:",row.name);}
+      try{
+        const codeKey=row.code?String(row.code).trim().toLowerCase():"";
+        const nameKey=row.name?String(row.name).trim().toLowerCase():"";
+        const existing=(codeKey&&codeIdx.get(codeKey))||(nameKey&&nameIdx.get(nameKey))||null;
+        const item={
+          name:row.name,
+          code:row.code?String(row.code).trim()||null:null,
+          category:row.category,
+          price:+row.price||0,
+          description:row.description||"",
+          edit_by:currentUser.username,edit_at:new Date().toLocaleString("th-TH"),
+          branch_id:currentBranch.id,
+        };
+        if(existing){
+          await api.updateMenu(existing.id,item);updated++;
+        }else{
+          await api.addMenu({...item,image:null,ingredients:[],sop:[]});added++;
+        }
+      }catch(e){console.error("skip:",row.name,e.message);failed++;}
       done++;setProgress(Math.round(done/selected.length*100));
     }
-    setSaving(false);setStep(3);onDone();
+    setSaving(false);setStep(3);
+    setTimeout(()=>alert(`✅ Import เรียบร้อย\n• เพิ่มใหม่ ${added} รายการ\n• อัพเดท ${updated} รายการ${failed?`\n• ล้มเหลว ${failed} รายการ`:""}`),100);
+    onDone();
   }
 
   return <Modal title="📥 Import เมนูอาหาร" onClose={onClose} wide>
     {step===1&&<div>
-      <div style={{background:C.blueLight,borderRadius:12,padding:"14px 16px",marginBottom:20,border:`1px solid ${C.blue}22`}}>
-        <div style={{fontSize:13,fontWeight:700,color:C.blue,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>รูปแบบข้อมูลที่รองรับ</div>
-        <div style={{fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.8}}>
-          ✅ ไฟล์ <b>.txt</b> หรือ <b>.csv</b><br/>
-          ✅ คอลัมน์: <b>ชื่อเมนู | ราคา | หมวดหมู่ | รายละเอียด</b><br/>
-          ✅ วางข้อความจาก Excel ได้เลย
+      <div style={{background:C.greenLight,borderRadius:12,padding:"14px 16px",marginBottom:14,border:`1px solid ${C.green}33`}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.green,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📊 Excel (.xlsx) — แนะนำ</div>
+        <div style={{fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.7}}>
+          Export → แก้ราคา/หมวด → Import กลับ<br/>
+          🔖 มีรหัส/ชื่อตรง → <b style={{color:C.green}}>อัพเดท</b> · ไม่ตรง → <b style={{color:C.brand}}>เพิ่มใหม่</b>
         </div>
       </div>
-      <div style={{background:C.bg,borderRadius:12,padding:"12px 14px",marginBottom:16,border:`1px solid ${C.line}`}}>
-        <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ตัวอย่างรูปแบบ</div>
-        <pre style={{fontSize:12,color:C.ink2,fontFamily:"monospace",lineHeight:1.6}}>{"ข้าวผัดไก่\t80\tอาหารจานเดียว\tข้าวผัดหอมๆ\nผัดกะเพราหมู\t70\tอาหารจานเดียว"}</pre>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(220px,100%),1fr))",gap:12,marginBottom:14}}>
+        <div onClick={()=>xlsxRef.current?.click()} style={{border:`2px dashed ${C.green}`,borderRadius:14,padding:"28px 18px",textAlign:"center",cursor:"pointer",transition:"all .2s",background:C.greenLight+"55"}} onMouseEnter={e=>{e.currentTarget.style.background=C.greenLight;}} onMouseLeave={e=>{e.currentTarget.style.background=C.greenLight+"55";}}>
+          <div style={{fontSize:36}}>📊</div>
+          <div style={{fontWeight:800,fontSize:15,color:C.green,marginTop:8,fontFamily:"'Sarabun',sans-serif"}}>อัปโหลด Excel (.xlsx)</div>
+          <div style={{fontSize:12,color:C.ink4,marginTop:4,fontFamily:"'Sarabun',sans-serif"}}>เพิ่ม + อัพเดทตามรหัส/ชื่อ</div>
+        </div>
+        <div onClick={()=>fileRef.current?.click()} style={{border:`2px dashed ${C.line}`,borderRadius:14,padding:"28px 18px",textAlign:"center",cursor:"pointer",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background="transparent";}}>
+          <Ic d={I.ul} s={32} c={C.brand}/>
+          <div style={{fontWeight:700,fontSize:14,color:C.ink,marginTop:8,fontFamily:"'Sarabun',sans-serif"}}>.txt / .csv (เพิ่มอย่างเดียว)</div>
+          <div style={{fontSize:11,color:C.ink4,marginTop:3,fontFamily:"'Sarabun',sans-serif"}}>คอลัมน์: ชื่อเมนู ราคา หมวด</div>
+        </div>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-        <div onClick={()=>fileRef.current?.click()} style={{border:`2px dashed ${C.line}`,borderRadius:14,padding:"32px 20px",textAlign:"center",cursor:"pointer",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background="transparent";}}>
-          <Ic d={I.ul} s={36} c={C.brand}/><div style={{fontWeight:700,fontSize:15,color:C.ink,marginTop:10,fontFamily:"'Sarabun',sans-serif"}}>อัปโหลดไฟล์</div><div style={{fontSize:12,color:C.ink4,marginTop:4,fontFamily:"'Sarabun',sans-serif"}}>.txt หรือ .csv</div>
-        </div>
-        <div style={{border:`2px dashed ${C.line}`,borderRadius:14,padding:"16px"}}>
-          <div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>หรือวางข้อความ</div>
-          <textarea onChange={handlePaste} placeholder={"ชื่อเมนู\tราคา\tหมวดหมู่\nข้าวผัดไก่\t80\tอาหารจานเดียว"} style={{...iS,height:130,fontSize:12,resize:"none"}}/>
-        </div>
+      <div style={{border:`2px dashed ${C.line}`,borderRadius:14,padding:"14px"}}>
+        <div style={{fontSize:12,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>หรือวางข้อความ</div>
+        <textarea onChange={handlePaste} placeholder={"ชื่อเมนู\tราคา\tหมวดหมู่\nข้าวผัดไก่\t80\tอาหารจานเดียว"} style={{...iS,height:100,fontSize:12,resize:"none"}}/>
       </div>
       <input ref={fileRef} type="file" accept=".txt,.csv" onChange={handleFile} style={{display:"none"}}/>
+      <input ref={xlsxRef} type="file" accept=".xlsx,.xls" onChange={handleXlsxFile} style={{display:"none"}}/>
     </div>}
 
     {step===2&&<div>
@@ -1309,6 +1362,25 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const fm=form.price>0?((+form.price-fc)/+form.price*100):0;
   async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,code:(form.code||"").trim()||null,category:form.category||selCat||"",price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{await api.addMenu(item);addH(`เพิ่มเมนู: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบเมนู",message:`ต้องการลบเมนู "${name}" ใช่หรือไม่?`}))return;try{await api.deleteMenu(id);addH(`ลบเมนู: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
+  function exportXlsx(){
+    if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
+    const rows=filtered.map((m,i)=>{const cost=menuCost(m,ings);const profit=(+m.price||0)-cost;const mg=m.price>0?profit/m.price*100:0;return{
+      "ลำดับ":i+1,
+      "🔖 รหัส":m.code||"",
+      "ชื่อเมนู":m.name||"",
+      "หมวดหมู่":m.category||"",
+      "ราคาขาย":+m.price||0,
+      "ต้นทุน":+cost.toFixed(2),
+      "กำไร":+profit.toFixed(2),
+      "% กำไร":+mg.toFixed(1),
+      "รายละเอียด":m.description||"",
+    };});
+    const wb=XLSX.utils.book_new();
+    const ws=XLSX.utils.json_to_sheet(rows);
+    ws["!cols"]=[{wch:6},{wch:14},{wch:32},{wch:18},{wch:11},{wch:11},{wch:11},{wch:9},{wch:30}];
+    XLSX.utils.book_append_sheet(wb,ws,"เมนู");
+    XLSX.writeFile(wb,`Menus_${todayStr()}.xlsx`);
+  }
   const catTabBtn=(label,active,onClick)=><button onClick={onClick} style={{padding:"6px 14px",borderRadius:20,border:`1.5px solid ${active?C.brand:C.line}`,background:active?C.brandLight:"transparent",color:active?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{label}</button>;
   return <div>
     {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>เมนูจัดการโดยครัวกลางเท่านั้น • สาขานี้กำหนดหมวดหมู่และสถานะสินค้าได้</span></div>}
@@ -1334,6 +1406,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     <div style={{display:"flex",gap:10,marginBottom:20}}>
       <div style={{position:"relative",flex:1}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:40}}/></div>
       {canE&&selCat!=="ทั้งหมด"&&<Btn onClick={()=>{setForm({name:"",code:"",category:selCat,price:"",description:"",image:null,ingredients:[],sop:[]});setEditId(null);setIngQ("");setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
+      {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImportMenu(true)} icon={I.ul}>Import</Btn>}
     </div>
     {canE&&selCat==="ทั้งหมด"&&<div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#1E40AF",fontFamily:"'Sarabun',sans-serif"}}>เลือกหมวดหมู่ก่อน จึงจะเพิ่มเมนูใหม่ได้</div>}
@@ -1390,7 +1463,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
         </div>
       </Card>;})}
     </div>
-    {showImportMenu&&<ImportMenuModal onClose={()=>setShowImportMenu(false)} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} onDone={async()=>{await reload();setShowImportMenu(false);}}/>}
+    {showImportMenu&&<ImportMenuModal onClose={()=>setShowImportMenu(false)} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} menus={menus} onDone={async()=>{await reload();setShowImportMenu(false);}}/>}
     {open&&<Modal title={editId?"✏️ แก้ไขเมนู":"➕ เพิ่มเมนูใหม่"} onClose={()=>setOpen(false)} wide>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
         <div>
