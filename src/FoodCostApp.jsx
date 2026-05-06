@@ -617,8 +617,10 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
   const[progress,setProgress]=useState(0);
   const fileRef=useRef();
   const xlsxRef=useRef();
-  // Code → existing ingredient row (for upsert match)
+  // Code → existing ingredient row (primary upsert match)
   const codeIdx=useMemo(()=>{const m=new Map();ings.forEach(i=>{if(i.code)m.set(String(i.code).trim().toLowerCase(),i);});return m;},[ings]);
+  // Name → existing ingredient row (fallback when code is missing — prevents duplicate creates)
+  const nameIdx=useMemo(()=>{const m=new Map();ings.forEach(i=>{if(i.name)m.set(String(i.name).trim().toLowerCase(),i);});return m;},[ings]);
 
   // Parse xlsx with the same column shape exportXlsx produces (or close to it).
   function handleXlsxFile(e){
@@ -721,7 +723,10 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
       try{
         const sup=row.supplier_name?suppliers.find(s=>s.name===row.supplier_name||(row.supplier_name&&s.name.includes(row.supplier_name))||(row.supplier_name&&row.supplier_name.includes(s.name))):null;
         const codeKey=row.code?String(row.code).trim().toLowerCase():"";
-        const existing=codeKey?codeIdx.get(codeKey):null;
+        const nameKey=row.name?String(row.name).trim().toLowerCase():"";
+        // Match by code first, fall back to name (case-insensitive, trimmed) so
+        // re-imports without a code column don't create duplicate ingredients.
+        const existing=(codeKey&&codeIdx.get(codeKey))||(nameKey&&nameIdx.get(nameKey))||null;
         const item={
           name:row.name,
           code:row.code?String(row.code).trim()||null:null,
