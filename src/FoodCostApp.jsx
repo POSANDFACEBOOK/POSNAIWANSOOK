@@ -610,12 +610,48 @@ function BranchSelector({branches,onSelect,user,onLogout}){
 // ══════════════════════════════════════════════════════
 // ── IMPORT INGREDIENTS MODAL ──────────────────────────
 // ══════════════════════════════════════════════════════
-function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,onDone}){
+function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ings=[],onDone}){
   const[step,setStep]=useState(1); // 1=upload, 2=preview, 3=done
   const[rows,setRows]=useState([]);
   const[saving,setSaving]=useState(false);
   const[progress,setProgress]=useState(0);
   const fileRef=useRef();
+  const xlsxRef=useRef();
+  // Code → existing ingredient row (for upsert match)
+  const codeIdx=useMemo(()=>{const m=new Map();ings.forEach(i=>{if(i.code)m.set(String(i.code).trim().toLowerCase(),i);});return m;},[ings]);
+
+  // Parse xlsx with the same column shape exportXlsx produces (or close to it).
+  function handleXlsxFile(e){
+    const f=e.target.files?.[0];if(!f)return;
+    const r=new FileReader();
+    r.onload=ev=>{
+      try{
+        const wb=XLSX.read(ev.target.result,{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const json=XLSX.utils.sheet_to_json(ws,{defval:""});
+        if(json.length===0){alert("ไฟล์ว่างเปล่า");return;}
+        // Tolerant column resolution — match by Thai header but accept variants
+        const pickKey=(row,...keys)=>{for(const k of keys){if(row[k]!==undefined&&row[k]!=="")return row[k];}return undefined;};
+        const parsed=json.map(row=>{
+          const code=String(pickKey(row,"🔖 รหัส","รหัส","code","Code","SKU")||"").trim();
+          const name=String(pickKey(row,"ชื่อวัตถุดิบ","ชื่อ","name","Name")||"").trim();
+          const category=String(pickKey(row,"หมวดหมู่","หมวด","category")||"").trim();
+          const buy_unit=String(pickKey(row,"หน่วยที่ซื้อ","หน่วย","unit")||"").trim()||"กก.";
+          const buy_amount=+pickKey(row,"จำนวนที่ซื้อ","จำนวน","buy_amount")||1;
+          const buy_price=+pickKey(row,"ราคาที่ซื้อ","ราคา","price","buy_price")||0;
+          const convert_to_gram=+pickKey(row,"รวมทั้งหมด (กรัม)","กรัม","convert_to_gram","gram")||1000;
+          const price_per_gram=+pickKey(row,"ราคา/กรัม","price_per_gram")||(buy_price>0?+(buy_price/(convert_to_gram||1)).toFixed(4):0);
+          const supplier_name=String(pickKey(row,"ซัพพลายเออร์","ซัพพลาย","supplier","supplier_name")||"").trim();
+          const note=String(pickKey(row,"หมายเหตุ","note")||"").trim();
+          return{code,name,category,buy_unit,buy_amount,buy_price,convert_to_gram,price_per_gram,supplier_name,note,selected:!!name};
+        }).filter(r=>r.name);
+        if(parsed.length===0){alert("ไม่พบรายการในไฟล์ — กรุณาตรวจสอบหัวคอลัมน์");return;}
+        setRows(parsed);setStep(2);
+      }catch(err){alert("อ่านไฟล์ไม่สำเร็จ: "+err.message);}
+    };
+    r.readAsArrayBuffer(f);
+    e.target.value="";
+  }
 
   // parse text/csv file
   function parseFile(text){
@@ -680,17 +716,38 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,onD
     const selected=rows.filter(r=>r.selected);
     if(!selected.length)return;
     setSaving(true);setProgress(0);
-    let done=0;
+    let done=0,added=0,updated=0,failed=0;
     for(const row of selected){
       try{
-        // find supplier id
-        const sup=suppliers.find(s=>s.name===row.supplier_name||s.name.includes(row.supplier_name)||row.supplier_name.includes(s.name));
-        const item={name:row.name,category:row.category,buy_unit:row.buy_unit,buy_amount:row.buy_amount,buy_price:row.buy_price,convert_to_gram:row.convert_to_gram,price_per_gram:row.buy_price>0?row.buy_price/row.convert_to_gram:0,stock:row.stock,image:null,note:row.note,edit_by:currentUser.username,edit_at:new Date().toLocaleString("th-TH"),branch_id:currentBranch.id,supplier_id:sup?.id||null,supplier_name:sup?.name||row.supplier_name||""};
-        await api.addIng(item);
-      }catch(e){console.error("skip:",row.name,e.message);}
+        const sup=row.supplier_name?suppliers.find(s=>s.name===row.supplier_name||(row.supplier_name&&s.name.includes(row.supplier_name))||(row.supplier_name&&row.supplier_name.includes(s.name))):null;
+        const codeKey=row.code?String(row.code).trim().toLowerCase():"";
+        const existing=codeKey?codeIdx.get(codeKey):null;
+        const item={
+          name:row.name,
+          code:row.code?String(row.code).trim()||null:null,
+          category:row.category||"อื่นๆ",
+          buy_unit:row.buy_unit||"กก.",
+          buy_amount:+row.buy_amount||1,
+          buy_price:+row.buy_price||0,
+          convert_to_gram:+row.convert_to_gram||1000,
+          price_per_gram:+row.buy_price>0?(+row.buy_price/(+row.convert_to_gram||1)):0,
+          stock:+row.stock||0,
+          note:row.note||"",
+          edit_by:currentUser.username,edit_at:new Date().toLocaleString("th-TH"),
+          branch_id:currentBranch.id,
+          supplier_id:sup?.id||null,supplier_name:sup?.name||row.supplier_name||"",
+        };
+        if(existing){
+          await api.updateIng(existing.id,item);updated++;
+        }else{
+          await api.addIng({...item,image:null});added++;
+        }
+      }catch(e){console.error("skip:",row.name,e.message);failed++;}
       done++;setProgress(Math.round(done/selected.length*100));
     }
-    setSaving(false);setStep(3);onDone();
+    setSaving(false);setStep(3);
+    setTimeout(()=>alert(`✅ Import เรียบร้อย\n• เพิ่มใหม่ ${added} รายการ\n• อัพเดท ${updated} รายการ${failed?`\n• ล้มเหลว ${failed} รายการ`:""}`),100);
+    onDone();
   }
 
   const catColors={"เนื้อสัตว์":"orange","ผักและผลไม้":"green","เครื่องปรุง":"blue","แป้ง/ธัญพืช":"purple","นม/ไข่":"yellow","อื่นๆ":"gray"};
@@ -698,26 +755,32 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,onD
 
   return <Modal title="📥 Import วัตถุดิบ" onClose={onClose} extraWide>
     {step===1&&<div>
-      <div style={{background:C.blueLight,borderRadius:12,padding:"14px 16px",marginBottom:20,border:`1px solid ${C.blue}22`}}>
-        <div style={{fontSize:13,fontWeight:700,color:C.blue,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>รองรับไฟล์ประเภทไหนบ้าง?</div>
-        <div style={{fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.8}}>
-          ✅ ไฟล์ <b>.txt</b> จาก Google Docs (ดาวน์โหลด → ข้อความธรรมดา)<br/>
-          ✅ ไฟล์ <b>.csv</b> จาก Excel<br/>
-          ✅ <b>วางข้อความ</b> ตรงๆ จาก Google Sheet/Excel
+      <div style={{background:C.greenLight,borderRadius:12,padding:"14px 16px",marginBottom:14,border:`1px solid ${C.green}33`}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.green,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📊 Excel (.xlsx) — แนะนำ</div>
+        <div style={{fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.7}}>
+          ใช้ไฟล์ที่ Export ออกมา → แก้ไขราคา/หมวด/ฯลฯ → Import กลับ<br/>
+          🔖 ถ้ามีคอลัมน์ <b>"รหัส"</b> ตรงกับวัตถุดิบในระบบ → ระบบจะ <b style={{color:C.green}}>อัพเดท</b> รายการเดิม<br/>
+          ถ้ายังไม่มีรหัส → จะ <b style={{color:C.brand}}>เพิ่มเป็นรายการใหม่</b>
         </div>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-        <div onClick={()=>fileRef.current?.click()} style={{border:`2px dashed ${C.line}`,borderRadius:14,padding:"32px 20px",textAlign:"center",cursor:"pointer",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background="transparent";}}>
-          <Ic d={I.ul} s={36} c={C.brand}/>
-          <div style={{fontWeight:700,fontSize:15,color:C.ink,marginTop:10,fontFamily:"'Sarabun',sans-serif"}}>อัปโหลดไฟล์</div>
-          <div style={{fontSize:12,color:C.ink4,marginTop:4,fontFamily:"'Sarabun',sans-serif"}}>.txt หรือ .csv</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(220px,100%),1fr))",gap:12,marginBottom:14}}>
+        <div onClick={()=>xlsxRef.current?.click()} style={{border:`2px dashed ${C.green}`,borderRadius:14,padding:"28px 18px",textAlign:"center",cursor:"pointer",transition:"all .2s",background:C.greenLight+"55"}} onMouseEnter={e=>{e.currentTarget.style.background=C.greenLight;}} onMouseLeave={e=>{e.currentTarget.style.background=C.greenLight+"55";}}>
+          <div style={{fontSize:36}}>📊</div>
+          <div style={{fontWeight:800,fontSize:15,color:C.green,marginTop:8,fontFamily:"'Sarabun',sans-serif"}}>อัปโหลด Excel (.xlsx)</div>
+          <div style={{fontSize:12,color:C.ink4,marginTop:4,fontFamily:"'Sarabun',sans-serif"}}>เพิ่ม + อัพเดทตามรหัส</div>
         </div>
-        <div style={{border:`2px dashed ${C.line}`,borderRadius:14,padding:"16px"}}>
-          <div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>หรือวางข้อความโดยตรง</div>
-          <textarea onChange={handlePaste} placeholder={"วางข้อมูลจาก Excel/Google Sheet ที่นี่...\nตัวอย่าง:\nสันคอแลป\t143\t\tปนัดดา"} style={{...iS,height:130,fontSize:12,resize:"none"}}/>
+        <div onClick={()=>fileRef.current?.click()} style={{border:`2px dashed ${C.line}`,borderRadius:14,padding:"28px 18px",textAlign:"center",cursor:"pointer",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background="transparent";}}>
+          <Ic d={I.ul} s={32} c={C.brand}/>
+          <div style={{fontWeight:700,fontSize:14,color:C.ink,marginTop:8,fontFamily:"'Sarabun',sans-serif"}}>.txt / .csv (เพิ่มอย่างเดียว)</div>
+          <div style={{fontSize:11,color:C.ink4,marginTop:3,fontFamily:"'Sarabun',sans-serif"}}>รูปแบบเดิมจาก Google Docs</div>
         </div>
+      </div>
+      <div style={{border:`2px dashed ${C.line}`,borderRadius:14,padding:"14px"}}>
+        <div style={{fontSize:12,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>หรือวางข้อความโดยตรง</div>
+        <textarea onChange={handlePaste} placeholder={"วางข้อมูลจาก Excel/Google Sheet ที่นี่...\nตัวอย่าง:\nสันคอแลป\t143\t\tปนัดดา"} style={{...iS,height:100,fontSize:12,resize:"none"}}/>
       </div>
       <input ref={fileRef} type="file" accept=".txt,.csv" onChange={handleFile} style={{display:"none"}}/>
+      <input ref={xlsxRef} type="file" accept=".xlsx,.xls" onChange={handleXlsxFile} style={{display:"none"}}/>
     </div>}
 
     {step===2&&<div>
@@ -893,14 +956,14 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,onDone}){
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats}){
   const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
-  const ef={name:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
+  const ef={name:"",code:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
   const[form,setForm]=useState(ef);
   const isCentral=currentBranch?.type==="central";
   const canE=hasPerm(currentUser,"ingredients")&&isCentral;const canD=hasPerm(currentUser,"ingredients")&&isCentral;
   async function addCat(){if(!newCatName.trim())return;try{await api.addCat({type:"ingredient",name:newCatName.trim()});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;try{await api.updateCat(editingCatId,{name:editingCatName.trim()});await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(c.id);await reloadCats();if(cat===c.name)setCat("ทุกหมวด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
-  const filtered=useMemo(()=>ings.filter(i=>{const matchB=ingVisibleAt(i,currentBranch?.id,isCentral);return i.name.toLowerCase().includes(q.toLowerCase())&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;}),[ings,q,cat,isCentral,currentBranch]);
+  const filtered=useMemo(()=>ings.filter(i=>{const matchB=ingVisibleAt(i,currentBranch?.id,isCentral);const ql=q.toLowerCase();const matchQ=!q||i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql);return matchQ&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;}),[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||1);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
   async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{
@@ -908,12 +971,33 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     // only mutate the current branch's slot — safety is per-branch.
     const existingIng=editId?ings.find(x=>+x.id===+editId):null;
     const nextSafety=setBranchSafetyInJson(existingIng?.safety_by_branch,currentBranch.id,+form.safety_stock||0);
-    const item={...form,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,safety_by_branch:nextSafety,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};
+    const item={...form,code:(form.code||"").trim()||null,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,safety_by_branch:nextSafety,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};
     delete item.safety_stock; // legacy column — no longer touched from the form
     if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}
     await reload();setOpen(false);
   }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
+  function exportXlsx(){
+    if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
+    const rows=filtered.map((it,i)=>({
+      "ลำดับ":i+1,
+      "🔖 รหัส":it.code||"",
+      "ชื่อวัตถุดิบ":it.name||"",
+      "หมวดหมู่":it.category||"",
+      "หน่วยที่ซื้อ":it.buy_unit||"",
+      "จำนวนที่ซื้อ":+it.buy_amount||0,
+      "ราคาที่ซื้อ":+it.buy_price||0,
+      "รวมทั้งหมด (กรัม)":+it.convert_to_gram||0,
+      "ราคา/กรัม":+(+it.price_per_gram||0).toFixed(4),
+      "ซัพพลายเออร์":it.supplier_name||"",
+      "หมายเหตุ":it.note||"",
+    }));
+    const wb=XLSX.utils.book_new();
+    const ws=XLSX.utils.json_to_sheet(rows);
+    ws["!cols"]=[{wch:6},{wch:14},{wch:32},{wch:18},{wch:10},{wch:11},{wch:12},{wch:14},{wch:12},{wch:20},{wch:25}];
+    XLSX.utils.book_append_sheet(wb,ws,"วัตถุดิบ");
+    XLSX.writeFile(wb,`Ingredients_${todayStr()}.xlsx`);
+  }
   async function toggleVBIng(item,branchId){
     // null = all visible (legacy default) · [] = none visible · [ids] = explicit list
     const nonCB=branches.filter(b=>b.type!=="central").map(b=>b.id);
@@ -968,6 +1052,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
       <Btn v="success" onClick={()=>setShowStockCheck(true)} icon={I.box}>📦 เช็คสต็อก</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
+      {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
     </div>
     <div style={{fontSize:12,color:C.ink4,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>แสดง {paged.length} จาก {filtered.length} รายการ</div>
@@ -978,9 +1063,9 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
             <Thumb src={item.image} alt={item.name} size={88} radius={0} iconBg={`linear-gradient(135deg,${C.brandLight},#FEF3C7)`} iconColor={C.brand} iconSize={32}/>
             <div style={{flex:1,padding:"12px 14px 10px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
-                <div><div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{item.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}><Chip color="orange">{item.category}</Chip>{item.has_sop&&<span style={{fontSize:10,fontWeight:800,color:Array.isArray(item.sop)&&item.sop.length>0?C.green:"#92400E",background:Array.isArray(item.sop)&&item.sop.length>0?C.greenLight:"#FEF3C7",border:`1px solid ${Array.isArray(item.sop)&&item.sop.length>0?C.green+"55":"#FDE68A"}`,padding:"1px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{Array.isArray(item.sop)&&item.sop.length>0?`📋 SOP ${item.sop.length}`:"📋 รอ SOP"}</span>}</div></div>
+                <div><div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{item.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}><Chip color="orange">{item.category}</Chip>{item.code&&<span style={{fontSize:10,fontWeight:800,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"1px 7px",borderRadius:8,fontFamily:"monospace",whiteSpace:"nowrap"}}>🔖 {item.code}</span>}{item.has_sop&&<span style={{fontSize:10,fontWeight:800,color:Array.isArray(item.sop)&&item.sop.length>0?C.green:"#92400E",background:Array.isArray(item.sop)&&item.sop.length>0?C.greenLight:"#FEF3C7",border:`1px solid ${Array.isArray(item.sop)&&item.sop.length>0?C.green+"55":"#FDE68A"}`,padding:"1px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{Array.isArray(item.sop)&&item.sop.length>0?`📋 SOP ${item.sop.length}`:"📋 รอ SOP"}</span>}</div></div>
                 <div style={{display:"flex",gap:4}}>
-                  {canE&&<button onClick={()=>{setForm({name:item.name,category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,safety_stock:branchSafety(item,currentBranch?.id)||"",image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
+                  {canE&&<button onClick={()=>{setForm({name:item.name,code:item.code||"",category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,safety_stock:branchSafety(item,currentBranch?.id)||"",image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
                   {canD&&<button onClick={()=>del(item.id,item.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
                 </div>
               </div>
@@ -1022,10 +1107,13 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       </div>
       {paged.length<filtered.length&&<div style={{textAlign:"center",marginTop:20}}><Btn v="ghost" onClick={()=>setPg(p=>p+1)}>โหลดเพิ่ม ({filtered.length-paged.length})</Btn></div>}
     </>}
-    {showImport&&<ImportIngModal onClose={()=>setShowImport(false)} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} onDone={async()=>{await reload();setShowImport(false);}}/>}
+    {showImport&&<ImportIngModal onClose={()=>setShowImport(false)} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} ings={ings} onDone={async()=>{await reload();setShowImport(false);}}/>}
     {open&&<Modal title={editId?"✏️ แก้ไขวัตถุดิบ":"➕ เพิ่มวัตถุดิบใหม่"} onClose={()=>setOpen(false)}>
       <ImgUp label="รูปวัตถุดิบ" value={form.image} onChange={v=>upd("image",v)}/>
-      <Inp label="ชื่อวัตถุดิบ" value={form.name} onChange={e=>upd("name",e.target.value)} placeholder="เช่น ไก่หน้าอก" autoFocus/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:12}}>
+        <Inp label="🔖 รหัส" hint="ใช้ตอน Import เพื่ออัพเดท" value={form.code} onChange={e=>upd("code",e.target.value)} placeholder="เช่น ING-001"/>
+        <Inp label="ชื่อวัตถุดิบ" value={form.name} onChange={e=>upd("name",e.target.value)} placeholder="เช่น ไก่หน้าอก" autoFocus/>
+      </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <Field label="หมวดหมู่"><select value={form.category} onChange={e=>upd("category",e.target.value)} style={{...iS,appearance:"none"}}>{ingCats.map(c=><option key={c.id}>{c.name}</option>)}</select></Field>
         <Field label="ซัพพลาย"><select value={form.supplier_id} onChange={e=>upd("supplier_id",e.target.value)} style={{...iS,appearance:"none"}}><option value="">-- ไม่ระบุ --</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
@@ -1187,7 +1275,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const[selCat,setSelCat]=useState("ทั้งหมด");
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");
   const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
-  const[form,setForm]=useState({name:"",category:"",price:"",description:"",image:null,ingredients:[],sop:[]});
+  const[form,setForm]=useState({name:"",code:"",category:"",price:"",description:"",image:null,ingredients:[],sop:[]});
   const[ingQ,setIngQ]=useState("");const[ni,setNi]=useState({ingredientId:"",amountGram:""});
   const isCentral=currentBranch?.type==="central";
   const canE=hasPerm(currentUser,"menus")&&isCentral;const canD=hasPerm(currentUser,"menus")&&isCentral;
@@ -1214,7 +1302,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
   const fc=(form.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.price_per_gram*x.amountGram:0);},0);
   const fm=form.price>0?((+form.price-fc)/+form.price*100):0;
-  async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,category:form.category||selCat||"",price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{await api.addMenu(item);addH(`เพิ่มเมนู: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,code:(form.code||"").trim()||null,category:form.category||selCat||"",price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{await api.addMenu(item);addH(`เพิ่มเมนู: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบเมนู",message:`ต้องการลบเมนู "${name}" ใช่หรือไม่?`}))return;try{await api.deleteMenu(id);addH(`ลบเมนู: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   const catTabBtn=(label,active,onClick)=><button onClick={onClick} style={{padding:"6px 14px",borderRadius:20,border:`1.5px solid ${active?C.brand:C.line}`,background:active?C.brandLight:"transparent",color:active?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{label}</button>;
   return <div>
@@ -1240,7 +1328,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20}}>
       <div style={{position:"relative",flex:1}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:40}}/></div>
-      {canE&&selCat!=="ทั้งหมด"&&<Btn onClick={()=>{setForm({name:"",category:selCat,price:"",description:"",image:null,ingredients:[],sop:[]});setEditId(null);setIngQ("");setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
+      {canE&&selCat!=="ทั้งหมด"&&<Btn onClick={()=>{setForm({name:"",code:"",category:selCat,price:"",description:"",image:null,ingredients:[],sop:[]});setEditId(null);setIngQ("");setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImportMenu(true)} icon={I.ul}>Import</Btn>}
     </div>
     {canE&&selCat==="ทั้งหมด"&&<div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#1E40AF",fontFamily:"'Sarabun',sans-serif"}}>เลือกหมวดหมู่ก่อน จึงจะเพิ่มเมนูใหม่ได้</div>}
@@ -1250,10 +1338,10 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
         {menu.image?<img src={menu.image} alt={menu.name} style={{width:"100%",height:130,objectFit:"cover"}}/>:<div style={{height:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/></div>}
         <div style={{padding:"12px 16px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-            <div><div style={{fontWeight:800,fontSize:16,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{menu.name}</div><Chip color="blue">{menu.category}</Chip></div>
+            <div><div style={{fontWeight:800,fontSize:16,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{menu.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}><Chip color="blue">{menu.category}</Chip>{menu.code&&<span style={{fontSize:10,fontWeight:800,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"1px 7px",borderRadius:8,fontFamily:"monospace",whiteSpace:"nowrap"}}>🔖 {menu.code}</span>}</div></div>
             <div style={{display:"flex",gap:4}}>
               {canE&&<button onClick={async()=>{try{const newPos=menu.quick_key_pos!=null?null:(menus.reduce((m,x)=>Math.max(m,x.quick_key_pos||0),0)+1);await api.updateMenu(menu.id,{quick_key_pos:newPos});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} title={menu.quick_key_pos!=null?"ยกเลิกปักหมุด":"ปักหมุดเป็น Quick Key"} style={{background:menu.quick_key_pos!=null?"#FEF3C7":C.lineLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><span style={{fontSize:13}}>{menu.quick_key_pos!=null?"⭐":"☆"}</span></button>}
-              {canE&&<button onClick={()=>{setForm({name:menu.name,category:menu.category,price:menu.price,description:menu.description||"",image:menu.image,ingredients:menu.ingredients||[],sop:menu.sop||[]});setEditId(menu.id);setIngQ("");setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
+              {canE&&<button onClick={()=>{setForm({name:menu.name,code:menu.code||"",category:menu.category,price:menu.price,description:menu.description||"",image:menu.image,ingredients:menu.ingredients||[],sop:menu.sop||[]});setEditId(menu.id);setIngQ("");setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
               {canD&&<button onClick={()=>del(menu.id,menu.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
             </div>
           </div>
@@ -1302,7 +1390,10 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
         <div>
           <ImgUp label="รูปเมนู" value={form.image} onChange={v=>setForm(f=>({...f,image:v}))}/>
-          <Inp label="ชื่อเมนู" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ข้าวผัดไก่" autoFocus/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:12}}>
+            <Inp label="🔖 รหัส" hint="ใช้ตอน Import เพื่ออัพเดท" value={form.code} onChange={e=>setForm(f=>({...f,code:e.target.value}))} placeholder="เช่น MN-001"/>
+            <Inp label="ชื่อเมนู" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ข้าวผัดไก่" autoFocus/>
+          </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Field label="หมวดหมู่"><select value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} style={{...iS,appearance:"none"}}>{localCats.map(c=><option key={c.id}>{c.name}</option>)}</select></Field>
             <Inp label="ราคาขาย (฿)" type="number" value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value}))} placeholder="0"/>
