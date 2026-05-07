@@ -2398,7 +2398,7 @@ ${action==='pdf'?"window.addEventListener('load',function(){setTimeout(savePDF,4
 // Export PO list to Excel
 function exportPOsToExcel(pos,branchById){
   if(!pos||pos.length===0){alert("ไม่มีข้อมูลให้ Export");return;}
-  const stL={open:"เปิดอยู่",received:"รับแล้ว",cancelled:"ยกเลิก"};
+  const stL={open:"เปิดอยู่",awaiting_payment:"รอชำระเงิน",paid:"จ่ายแล้ว",received:"จ่ายแล้ว",disputed:"ส่งกลับ",cancelled:"ยกเลิก"};
   const summary=pos.map(po=>({
     "เลข PO":po.po_number||"",
     "วันที่":po.po_date||"",
@@ -3088,9 +3088,9 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
 const PO_STATUS={
   open:            {label:"⏳ เปิดอยู่",       short:"เปิดอยู่",    color:"#F59E0B",bg:"#FEF3C7"},
   disputed:        {label:"⚠️ ส่งกลับ",        short:"ส่งกลับ",     color:"#EA580C",bg:"#FFEDD5"},
-  awaiting_payment:{label:"💰 รอชำระเงิน",     short:"รอชำระ",     color:"#3B82F6",bg:"#DBEAFE"},
-  paid:            {label:"✅ ยืนยันแล้ว",     short:"ยืนยันแล้ว", color:"#10B981",bg:"#D1FAE5"},
-  received:        {label:"✅ รับแล้ว (เก่า)", short:"รับแล้ว",     color:"#10B981",bg:"#D1FAE5"},
+  awaiting_payment:{label:"💰 รอชำระเงิน",     short:"รอชำระเงิน",  color:"#3B82F6",bg:"#DBEAFE"},
+  paid:            {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#10B981",bg:"#D1FAE5"},
+  received:        {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#10B981",bg:"#D1FAE5"}, // legacy alias
   cancelled:       {label:"❌ ยกเลิก",          short:"ยกเลิก",      color:"#94A3B8",bg:"#F1F5F9"},
 };
 function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
@@ -3357,8 +3357,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
           <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
             <option value="">— ทุกสถานะ —</option>
             <option value="open">⏳ เปิดอยู่</option>
-            <option value="received">✅ รับแล้ว</option>
-            <option value="cancelled">❌ ยกเลิก</option>
+            <option value="awaiting_payment">💰 รอชำระเงิน</option>
+            <option value="paid">✅ จ่ายแล้ว</option>
           </select>
         </div>
         <div>
