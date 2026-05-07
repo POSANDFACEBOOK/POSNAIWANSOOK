@@ -3265,23 +3265,50 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
   }
   function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
   function pickBranch(b){setPickedBranch(b);setStep('form');}
-  // Backfill: push every awaiting_payment PO to SlipTrack as Stage-1 (ค้างจ่าย).
+  // Backfill: push every awaiting_payment + paid PO to SlipTrack.
+  //   • awaiting_payment → Stage 1 only (paid:false, ค้างจ่าย)
+  //   • paid             → Stage 1 first (creates row with items), then Stage 2 with signed slip URL
   // Idempotent — server matches by external_id, repeat clicks are safe.
   async function syncAllPendingToSlipTrack(){
-    const targets=pos.filter(p=>p.status==="awaiting_payment");
-    if(targets.length===0){alert("ไม่มีรายการ \"รอชำระเงิน\" ให้ส่ง");return;}
+    const pendingTargets=pos.filter(p=>p.status==="awaiting_payment");
+    const paidTargets=pos.filter(p=>p.status==="paid"&&p.received_at);
+    const total=pendingTargets.length+paidTargets.length;
+    if(total===0){alert("ไม่มี PO ที่จะส่งให้ SlipTrack");return;}
+    const lines=[
+      pendingTargets.length>0?`• ${pendingTargets.length} รายการ "รอชำระเงิน" → ค้างจ่าย`:null,
+      paidTargets.length>0?`• ${paidTargets.length} รายการ "จ่ายแล้ว" → ค้างจ่าย + ยืนยันชำระ + ส่งสลิป`:null,
+    ].filter(Boolean).join("\n");
     if(!await confirmDlg({
-      title:"ส่งค้างจ่ายเข้าระบบบัญชี",
-      message:`จะส่ง ${targets.length} รายการที่ \"รอชำระเงิน\" เข้า SlipTrack เป็นรายการค้างจ่าย\n\n• ระบบ idempotent — กดได้หลายครั้งโดยไม่สร้างซ้ำ\n• รายการที่เคยส่งแล้วจะถูก update ค่าใหม่`,
+      title:"ส่งรายการ PO เข้าระบบบัญชี",
+      message:`จะส่งทั้งหมด ${total} รายการเข้า SlipTrack:\n\n${lines}\n\n• ระบบ idempotent — กดได้หลายครั้งโดยไม่สร้างซ้ำ\n• สลิปที่เคยอัปโหลดจะถูก sign ใหม่อายุ 1 ปีก่อนส่ง`,
       confirmLabel:"📤 ส่งทั้งหมด",
     }))return;
-    setSyncing({done:0,total:targets.length,ok:0,fail:0});
+    setSyncing({done:0,total,ok:0,fail:0});
     let ok=0,fail=0;
-    for(let i=0;i<targets.length;i++){
-      const po=targets[i];
+    // Stage 1 — pending POs first (single push each)
+    for(const po of pendingTargets){
       const res=await pushPOToSlipTrack({...po},branches);
       if(res&&res.ok)ok++;else fail++;
-      setSyncing({done:i+1,total:targets.length,ok,fail});
+      setSyncing(s=>({...s,done:s.done+1,ok,fail}));
+    }
+    // Paid POs — Stage 1 (create with items), then Stage 2 (flip + slip)
+    for(const po of paidTargets){
+      // Stage 1
+      const r1=await pushPOToSlipTrack({...po},branches);
+      // Sign the slip path so SlipTrack can render the image directly
+      let signedSlipUrl=null;
+      if(po.payment_slip_url){
+        try{signedSlipUrl=await api.getSlipSignedUrl(po.payment_slip_url,31536000);}catch{}
+      }
+      // Stage 2 — only counts as success if Stage 2 succeeds (Stage 1 may have been duplicate)
+      const r2=await pushPOToSlipTrack({...po},branches,{
+        paid:true,
+        paidAt:po.payment_at||new Date().toISOString(),
+        slipUrl:signedSlipUrl,
+        paymentNote:po.payment_note,
+      });
+      if(r2&&r2.ok)ok++;else fail++;
+      setSyncing(s=>({...s,done:s.done+1,ok,fail}));
     }
     setSyncing(null);
     alert(`ส่งเสร็จสิ้น\n\n✅ สำเร็จ ${ok} รายการ${fail?`\n⚠️ ล้มเหลว ${fail} รายการ (ดู Console สำหรับรายละเอียด)`:""}`);
@@ -3303,7 +3330,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
-        {hasPO&&<Btn v="info" onClick={syncAllPendingToSlipTrack} disabled={!!syncing||pos.filter(p=>p.status==="awaiting_payment").length===0} s={{padding:"8px 14px",fontSize:13}}>{syncing?`📤 กำลังส่ง... ${syncing.done}/${syncing.total}`:"📤 ส่งค้างจ่าย→บัญชี"}</Btn>}
+        {hasPO&&<Btn v="info" onClick={syncAllPendingToSlipTrack} disabled={!!syncing||pos.filter(p=>p.status==="awaiting_payment"||p.status==="paid").length===0} s={{padding:"8px 14px",fontSize:13}}>{syncing?`📤 กำลังส่ง... ${syncing.done}/${syncing.total}`:"📤 Sync บัญชี"}</Btn>}
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
     </div>
