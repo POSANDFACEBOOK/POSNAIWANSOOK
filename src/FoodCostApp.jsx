@@ -250,16 +250,18 @@ const api = {
 // so a SlipTrack outage never blocks the user.
 // ───────────────────────────────────────────────────────────────────────
 async function pushPOToSlipTrack(po, branches, opts={}){
+  // Returns {ok, status?, error?, skipped?}; existing callers ignore the value
+  // (fire-and-forget). Bulk-sync uses the return value to count successes.
   try{
-    if(!po)return;
+    if(!po)return{ok:false,skipped:"no-po"};
     const fromB=branches.find(b=>+b.id===+po.from_branch_id);
     const toB=branches.find(b=>+b.id===+po.branch_id);
-    if(!fromB||!toB)return;                      // unknown branch → skip silently
+    if(!fromB||!toB)return{ok:false,skipped:"unknown-branch"};
     const fromName=String(fromB.name||"").trim();
     const toName=String(toB.name||"").trim();
-    if(!fromName||!toName||fromName===toName)return;
+    if(!fromName||!toName||fromName===toName)return{ok:false,skipped:"same-branch"};
     const amount=Number(po.total||0);
-    if(!(amount>0))return;                       // SlipTrack requires amount > 0
+    if(!(amount>0))return{ok:false,skipped:"zero-amount"};
     const externalId=`PO-${po.po_number||po.id}`;
     const isPaid=opts.paid===true;
     // datetime is identical in both stages — use received_at so server can match
@@ -297,10 +299,13 @@ async function pushPOToSlipTrack(po, branches, opts={}){
     if(!r.ok){
       const data=await r.json().catch(()=>({}));
       console.error("SlipTrack sync failed",r.status,data);
+      return{ok:false,status:r.status,error:data&&data.error};
     }
+    return{ok:true,status:r.status};
   }catch(err){
     // Network failure — never throws to the caller (idempotent retry on next event).
     console.error("SlipTrack sync error",err);
+    return{ok:false,error:err&&err.message};
   }
 }
 
@@ -3107,6 +3112,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
   const[editPO,setEditPO]=useState(null);
   const[viewPO,setViewPO]=useState(null);
   const[confirming,setConfirming]=useState(null);
+  const[syncing,setSyncing]=useState(null); // null | {done,total,ok,fail}
   const hasPO=hasPerm(currentUser,"po")||hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
   // Per-PO permissions
   const isCreator=(po)=>+po.from_branch_id===currentBranch.id;
@@ -3259,6 +3265,27 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
   }
   function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
   function pickBranch(b){setPickedBranch(b);setStep('form');}
+  // Backfill: push every awaiting_payment PO to SlipTrack as Stage-1 (ค้างจ่าย).
+  // Idempotent — server matches by external_id, repeat clicks are safe.
+  async function syncAllPendingToSlipTrack(){
+    const targets=pos.filter(p=>p.status==="awaiting_payment");
+    if(targets.length===0){alert("ไม่มีรายการ \"รอชำระเงิน\" ให้ส่ง");return;}
+    if(!await confirmDlg({
+      title:"ส่งค้างจ่ายเข้าระบบบัญชี",
+      message:`จะส่ง ${targets.length} รายการที่ \"รอชำระเงิน\" เข้า SlipTrack เป็นรายการค้างจ่าย\n\n• ระบบ idempotent — กดได้หลายครั้งโดยไม่สร้างซ้ำ\n• รายการที่เคยส่งแล้วจะถูก update ค่าใหม่`,
+      confirmLabel:"📤 ส่งทั้งหมด",
+    }))return;
+    setSyncing({done:0,total:targets.length,ok:0,fail:0});
+    let ok=0,fail=0;
+    for(let i=0;i<targets.length;i++){
+      const po=targets[i];
+      const res=await pushPOToSlipTrack({...po},branches);
+      if(res&&res.ok)ok++;else fail++;
+      setSyncing({done:i+1,total:targets.length,ok,fail});
+    }
+    setSyncing(null);
+    alert(`ส่งเสร็จสิ้น\n\n✅ สำเร็จ ${ok} รายการ${fail?`\n⚠️ ล้มเหลว ${fail} รายการ (ดู Console สำหรับรายละเอียด)`:""}`);
+  }
   function startEdit(po){const b=branches.find(x=>x.id===po.branch_id);setPickedBranch(b||null);setEditPO(po);setStep('form');}
   async function onSaved(){setStep(null);setEditPO(null);await load();}
 
@@ -3276,6 +3303,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
+        {hasPO&&<Btn v="info" onClick={syncAllPendingToSlipTrack} disabled={!!syncing||pos.filter(p=>p.status==="awaiting_payment").length===0} s={{padding:"8px 14px",fontSize:13}}>{syncing?`📤 กำลังส่ง... ${syncing.done}/${syncing.total}`:"📤 ส่งค้างจ่าย→บัญชี"}</Btn>}
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
     </div>
