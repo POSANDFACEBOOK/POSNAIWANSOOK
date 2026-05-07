@@ -41,6 +41,11 @@ export default async function handler(req, res) {
   const upsert = req.query && req.query.upsert === "1";
   const url = `${SLIPTRACK_URL}${upsert ? "?upsert=1" : ""}`;
 
+  // Two-stage payment_status: "pending" (PO ยืนยันรับ — ค้างจ่าย) | "paid" (แนบสลิปแล้ว)
+  // SlipTrack stores unknown fields in metadata, so this extra context is preserved
+  // even if its primary schema only reads a subset.
+  const paymentStatus =
+    body.payment_status === "paid" ? "paid" : "pending";
   const payload = {
     source: "food_cost",
     kind: "food_cost_po",
@@ -53,6 +58,11 @@ export default async function handler(req, res) {
     category: body.category || "ต้นทุนอาหาร",
     reference_no: body.reference_no || String(body.external_id),
     items: Array.isArray(body.items) ? body.items : undefined,
+    payment_status: paymentStatus,
+    received_at: body.received_at || undefined,
+    paid_at: body.paid_at || undefined,
+    payment_slip_url: body.payment_slip_url || undefined,
+    payment_note: body.payment_note || undefined,
   };
 
   try {
