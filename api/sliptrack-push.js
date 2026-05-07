@@ -1,11 +1,14 @@
-// Vercel Serverless Function — proxies PO confirm events to SlipTrack ingest API.
+// Vercel Serverless Function — proxies PO sync events to SlipTrack ingest API.
 // Keeps SLIPTRACK_API_KEY server-side only (never shipped to the browser bundle).
 //
 // Required env var (set in Vercel → Settings → Environment Variables):
 //   SLIPTRACK_API_KEY = <bearer token>
 //
-// Client calls:  POST /api/sliptrack-push?upsert=1   (upsert flag optional)
-// Body shape: same as SlipTrack /api/ingest body, minus source/kind (we add them).
+// Two-stage flow per the SlipTrack INTEGRATION_FOOD_COST spec:
+//   • Stage 1 (รับของ):    paid omitted/false → server creates pending_payment rows
+//   • Stage 2 (ชำระเงิน):  paid:true + paid_at + slip_url → server flips to confirmed
+// The same external_id MUST be used in both stages — server updates by external_id,
+// no ?upsert=1 query parameter is needed.
 
 const SLIPTRACK_URL = "https://sliptrack-pro.vercel.app/api/ingest";
 
@@ -24,7 +27,7 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
 
-  // Hard-required fields per SlipTrack spec
+  // Hard-required fields per SlipTrack spec (both stages)
   const required = ["external_id", "datetime", "amount", "from_branch", "to_branch"];
   for (const k of required) {
     if (body[k] === undefined || body[k] === null || body[k] === "") {
@@ -38,14 +41,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "from_branch must differ from to_branch" });
   }
 
-  const upsert = req.query && req.query.upsert === "1";
-  const url = `${SLIPTRACK_URL}${upsert ? "?upsert=1" : ""}`;
-
-  // Two-stage payment_status: "pending" (PO ยืนยันรับ — ค้างจ่าย) | "paid" (แนบสลิปแล้ว)
-  // SlipTrack stores unknown fields in metadata, so this extra context is preserved
-  // even if its primary schema only reads a subset.
-  const paymentStatus =
-    body.payment_status === "paid" ? "paid" : "pending";
+  const isPaid = body.paid === true;
   const payload = {
     source: "food_cost",
     kind: "food_cost_po",
@@ -54,19 +50,21 @@ export default async function handler(req, res) {
     amount: Number(body.amount),
     from_branch: String(body.from_branch).trim(),
     to_branch: String(body.to_branch).trim(),
-    description: body.description || undefined,
-    category: body.category || "ต้นทุนอาหาร",
-    reference_no: body.reference_no || String(body.external_id),
-    items: Array.isArray(body.items) ? body.items : undefined,
-    payment_status: paymentStatus,
-    received_at: body.received_at || undefined,
-    paid_at: body.paid_at || undefined,
-    payment_slip_url: body.payment_slip_url || undefined,
-    payment_note: body.payment_note || undefined,
+    paid: isPaid,
   };
+  if (isPaid) {
+    if (body.paid_at) payload.paid_at = String(body.paid_at);
+    if (body.slip_url) payload.slip_url = String(body.slip_url);
+    if (body.payment_note) payload.payment_note = String(body.payment_note);
+  } else {
+    if (body.description) payload.description = String(body.description);
+    if (body.category) payload.category = String(body.category);
+    if (body.reference_no) payload.reference_no = String(body.reference_no);
+    if (Array.isArray(body.items) && body.items.length) payload.items = body.items;
+  }
 
   try {
-    const r = await fetch(url, {
+    const r = await fetch(SLIPTRACK_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,

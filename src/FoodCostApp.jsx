@@ -242,9 +242,10 @@ const api = {
 
 // ───────────────────────────────────────────────────────────────────────
 // SlipTrack integration — two-stage PO sync to the accounting backend.
-// Stage 1 (confirmReceive): payment_status="pending" — เจ้าหนี้/ลูกหนี้ค้างจ่าย
-// Stage 2 (submitPayment):  payment_status="paid"   — รายการจ่ายเรียบร้อย
-//                           uses upsert=1 to update the same external_id
+//   Stage 1  (confirmReceive)  → paid:false  → ค้างจ่าย (pending_payment)
+//   Stage 2  (submitPayment)   → paid:true   → confirmed (จ่ายแล้ว)
+// Stage 2 MUST send the same `datetime` as Stage 1 (= po.received_at) and the
+// same `external_id` so SlipTrack updates the existing rows in place.
 // The Bearer token lives only in /api/sliptrack-push; helper fires-and-forgets
 // so a SlipTrack outage never blocks the user.
 // ───────────────────────────────────────────────────────────────────────
@@ -260,35 +261,35 @@ async function pushPOToSlipTrack(po, branches, opts={}){
     const amount=Number(po.total||0);
     if(!(amount>0))return;                       // SlipTrack requires amount > 0
     const externalId=`PO-${po.po_number||po.id}`;
-    const items=(po.items||[]).map(it=>({
-      name:String(it.name||"").trim(),
-      qty:+it.qty||0,
-      unit:String(it.unit||"หน่วย"),
-      unit_price:+it.price_per_unit||0,
-    })).filter(x=>x.name);
-    const paymentStatus=opts.paymentStatus||"pending";
-    const isPaid=paymentStatus==="paid";
+    const isPaid=opts.paid===true;
+    // datetime is identical in both stages — use received_at so server can match
+    const datetime=po.received_at||new Date().toISOString();
     const payload={
       external_id:externalId,
-      datetime:isPaid?(opts.paidAt||new Date().toISOString()):(po.received_at||new Date().toISOString()),
+      datetime,
       amount,
       from_branch:fromName,
       to_branch:toName,
-      description:po.notes
-        ?`ซื้อวัตถุดิบ — ${po.notes}${isPaid?" (ชำระแล้ว)":" (ค้างจ่าย)"}`
-        :`ซื้อวัตถุดิบ ${externalId}${isPaid?" (ชำระแล้ว)":" (ค้างจ่าย)"}`,
-      reference_no:po.po_number||externalId,
-      items,
-      payment_status:paymentStatus,                       // "pending" | "paid"
-      received_at:po.received_at||null,
-      paid_at:isPaid?(opts.paidAt||new Date().toISOString()):null,
-      payment_slip_url:isPaid?(opts.slipUrl||null):null,
-      payment_note:isPaid?(opts.paymentNote||null):null,
+      paid:isPaid,
     };
-    // Always upsert when marking paid (record was created at pending stage).
-    const useUpsert=opts.upsert||isPaid;
-    const url=`/api/sliptrack-push${useUpsert?"?upsert=1":""}`;
-    const r=await fetch(url,{
+    if(isPaid){
+      // Stage 2: send the minimum needed to flip pending → confirmed
+      payload.paid_at=opts.paidAt||new Date().toISOString();
+      if(opts.slipUrl)payload.slip_url=opts.slipUrl;
+      if(opts.paymentNote)payload.payment_note=opts.paymentNote;
+    }else{
+      // Stage 1: include description + items so the new rows are descriptive
+      payload.description=po.notes?`ซื้อวัตถุดิบ — ${po.notes}`:`ซื้อวัตถุดิบ ${externalId}`;
+      payload.reference_no=po.po_number||externalId;
+      const items=(po.items||[]).map(it=>({
+        name:String(it.name||"").trim(),
+        qty:+it.qty||0,
+        unit:String(it.unit||"หน่วย"),
+        unit_price:+it.price_per_unit||0,
+      })).filter(x=>x.name);
+      if(items.length)payload.items=items;
+    }
+    const r=await fetch("/api/sliptrack-push",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify(payload),
@@ -3179,8 +3180,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
       const receivedAt=new Date().toISOString();
       await api.patchPOIfStatus(po.id,"open",{status:"awaiting_payment",received_at:receivedAt,received_by:currentUser?.username||currentUser?.name||null,updated_at:receivedAt});
       await depositPOItemsToBranch(po,po.items);
-      // Stage 1 → SlipTrack: create as ค้างจ่าย (pending). Fire-and-forget.
-      pushPOToSlipTrack({...po,status:"awaiting_payment",received_at:receivedAt},branches,{paymentStatus:"pending"});
+      // Stage 1 → SlipTrack: create รายการค้างจ่าย (paid:false). Fire-and-forget.
+      pushPOToSlipTrack({...po,status:"awaiting_payment",received_at:receivedAt},branches);
       await load();
     }catch(e){showErr("ยืนยันไม่สำเร็จ",e);}
     setConfirming(null);
@@ -3216,8 +3217,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
       await api.patchPOIfStatus(po.id,"disputed",{items:newItems,subtotal,vat,total,status:"awaiting_payment",received_at:receivedAt,received_by:po.dispute_by||null,updated_at:receivedAt});
       // After accepting the disputed (clamped) qty, deposit those qty into the receiving branch
       await depositPOItemsToBranch({...po,branch_id:po.branch_id},newItems.map(it=>({...it,received_qty:it.qty})));
-      // Stage 1 (revised) → SlipTrack: ค้างจ่าย with upsert=1 because amount/items may differ
-      pushPOToSlipTrack({...po,status:"awaiting_payment",items:newItems,subtotal,vat,total,received_at:receivedAt},branches,{paymentStatus:"pending",upsert:true});
+      // Stage 1 (revised) → SlipTrack: re-POST with same external_id; server updates the pending row's amount/items
+      pushPOToSlipTrack({...po,status:"awaiting_payment",items:newItems,subtotal,vat,total,received_at:receivedAt},branches);
       await load();setViewPO(null);
     }catch(e){showErr("ยอมรับไม่สำเร็จ",e);}
     setConfirming(null);
@@ -3227,8 +3228,12 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
     try{
       const paidAt=new Date().toISOString();
       await api.patchPOIfStatus(po.id,"awaiting_payment",{status:"paid",payment_slip_url:slipUrl,payment_at:paidAt,payment_by:currentUser?.username||null,payment_note:note||null,updated_at:paidAt});
-      // Stage 2 → SlipTrack: flip the existing record from pending → paid (upsert=1 forced inside helper)
-      pushPOToSlipTrack(po,branches,{paymentStatus:"paid",paidAt,slipUrl,paymentNote:note});
+      // Sign the slip path with a 1-year expiry so SlipTrack can render the image.
+      // The user can re-sign from FoodCost if it ever expires.
+      let signedSlipUrl=null;
+      try{signedSlipUrl=await api.getSlipSignedUrl(slipUrl,31536000);}catch{}
+      // Stage 2 → SlipTrack: flip the same external_id from pending → confirmed (จ่ายแล้ว)
+      pushPOToSlipTrack(po,branches,{paid:true,paidAt,slipUrl:signedSlipUrl,paymentNote:note});
       await load();setViewPO(null);
     }catch(e){showErr("บันทึกการชำระไม่สำเร็จ",e);throw e;}
   }
