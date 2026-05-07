@@ -240,6 +240,56 @@ const api = {
   },
 };
 
+// ───────────────────────────────────────────────────────────────────────
+// SlipTrack integration — push confirmed POs to the accounting backend.
+// The Bearer token lives only in the serverless proxy at /api/sliptrack-push;
+// this helper fires-and-forgets so a SlipTrack outage never blocks the user.
+// `upsert=true` is used after the PO amount/items are revised.
+// ───────────────────────────────────────────────────────────────────────
+async function pushPOToSlipTrack(po, branches, opts={}){
+  try{
+    if(!po)return;
+    const fromB=branches.find(b=>+b.id===+po.from_branch_id);
+    const toB=branches.find(b=>+b.id===+po.branch_id);
+    if(!fromB||!toB)return;                      // unknown branch → skip silently
+    const fromName=String(fromB.name||"").trim();
+    const toName=String(toB.name||"").trim();
+    if(!fromName||!toName||fromName===toName)return;
+    const amount=Number(po.total||0);
+    if(!(amount>0))return;                       // SlipTrack requires amount > 0
+    const externalId=`PO-${po.po_number||po.id}`;
+    const items=(po.items||[]).map(it=>({
+      name:String(it.name||"").trim(),
+      qty:+it.qty||0,
+      unit:String(it.unit||"หน่วย"),
+      unit_price:+it.price_per_unit||0,
+    })).filter(x=>x.name);
+    const payload={
+      external_id:externalId,
+      datetime:po.received_at||new Date().toISOString(),
+      amount,
+      from_branch:fromName,
+      to_branch:toName,
+      description:po.notes?`ซื้อวัตถุดิบ — ${po.notes}`:`ซื้อวัตถุดิบ ${externalId}`,
+      reference_no:po.po_number||externalId,
+      items,
+    };
+    const url=`/api/sliptrack-push${opts.upsert?"?upsert=1":""}`;
+    const r=await fetch(url,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload),
+    });
+    if(!r.ok){
+      const data=await r.json().catch(()=>({}));
+      console.error("SlipTrack sync failed",r.status,data);
+    }
+  }catch(err){
+    // Network failure — never throws to the caller (idempotent retry on next event).
+    console.error("SlipTrack sync error",err);
+  }
+}
+
 const C = {
   brand:"#FF6B35",brandDark:"#E85520",brandLight:"#FFF4F0",brandBorder:"#FFD4C2",
   green:"#10B981",greenLight:"#ECFDF5",blue:"#3B82F6",blueLight:"#EFF6FF",
@@ -3113,8 +3163,11 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
     if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• สต็อกของสาขาจะถูกเพิ่มอัตโนมัติ\n• วัตถุดิบที่ได้รับจะถูกติ๊กให้สาขานี้เห็น\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
-      await api.patchPOIfStatus(po.id,"open",{status:"awaiting_payment",received_at:new Date().toISOString(),received_by:currentUser?.username||currentUser?.name||null,updated_at:new Date().toISOString()});
+      const receivedAt=new Date().toISOString();
+      await api.patchPOIfStatus(po.id,"open",{status:"awaiting_payment",received_at:receivedAt,received_by:currentUser?.username||currentUser?.name||null,updated_at:receivedAt});
       await depositPOItemsToBranch(po,po.items);
+      // Fire-and-forget push to SlipTrack — first confirm, no upsert needed
+      pushPOToSlipTrack({...po,status:"awaiting_payment",received_at:receivedAt},branches);
       await load();
     }catch(e){showErr("ยืนยันไม่สำเร็จ",e);}
     setConfirming(null);
@@ -3146,9 +3199,12 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
       const vatRate=oldSub>0?(+po.vat||0)/oldSub:0;
       const vat=round2(subtotal*vatRate);
       const total=round2(subtotal+vat);
-      await api.patchPOIfStatus(po.id,"disputed",{items:newItems,subtotal,vat,total,status:"awaiting_payment",received_at:new Date().toISOString(),received_by:po.dispute_by||null,updated_at:new Date().toISOString()});
+      const receivedAt=new Date().toISOString();
+      await api.patchPOIfStatus(po.id,"disputed",{items:newItems,subtotal,vat,total,status:"awaiting_payment",received_at:receivedAt,received_by:po.dispute_by||null,updated_at:receivedAt});
       // After accepting the disputed (clamped) qty, deposit those qty into the receiving branch
       await depositPOItemsToBranch({...po,branch_id:po.branch_id},newItems.map(it=>({...it,received_qty:it.qty})));
+      // Push revised amount/items to SlipTrack with upsert=1 (PO may have been pushed at first dispute)
+      pushPOToSlipTrack({...po,status:"awaiting_payment",items:newItems,subtotal,vat,total,received_at:receivedAt},branches,{upsert:true});
       await load();setViewPO(null);
     }catch(e){showErr("ยอมรับไม่สำเร็จ",e);}
     setConfirming(null);
