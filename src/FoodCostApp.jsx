@@ -4925,7 +4925,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     setPSaving(false);
   }
 
-  const sections=[{id:"branches",label:"สาขา",icon:I.branch},{id:"users",label:"ผู้ใช้",icon:I.users}];
+  const sections=[{id:"branches",label:"สาขา",icon:I.branch},{id:"users",label:"ผู้ใช้",icon:I.users},{id:"integrations",label:"การเชื่อมต่อ",icon:I.refresh}];
 
   return <div style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:16,minHeight:480}}>
     <Card style={{padding:8,height:"fit-content"}}>
@@ -5146,6 +5146,47 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
           </div>;
         })}
       </div>}
+    </div>}
+
+    {section==="integrations"&&<div>
+      <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,margin:"0 0 14px"}}>การเชื่อมต่อ <span style={{fontSize:13,fontWeight:500,color:C.ink4}}>(2)</span></h3>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(320px,100%),1fr))",gap:14}}>
+        {/* FoodStory — ขาเข้า: import ยอดขาย */}
+        <Card style={{padding:"16px 18px",border:`1.5px solid ${C.line}`}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,gap:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
+              <div style={{fontSize:28,lineHeight:1}}>📊</div>
+              <div style={{minWidth:0}}>
+                <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:15,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>FoodStory</div>
+                <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4}}>ระบบ POS หน้าร้าน</div>
+              </div>
+            </div>
+            <Chip color="green">เชื่อมแล้ว</Chip>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"8px 10px",background:C.blueLight,borderRadius:8,marginBottom:8,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.blue,fontWeight:700}}>
+            <span>📥 รับเข้า</span><span style={{color:C.ink3,fontWeight:400}}>·</span><span style={{color:C.ink2,fontWeight:600}}>ยอดขายเมนูรายวัน</span>
+          </div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink3,lineHeight:1.6}}>Manual: Export .xlsx จาก FoodStory แล้ว Import ที่หน้า "ยอดขายรายเมนู"</div>
+        </Card>
+
+        {/* SlipTrack — ขาออก: push PO */}
+        <Card style={{padding:"16px 18px",border:`1.5px solid ${C.line}`}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,gap:8}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
+              <div style={{fontSize:28,lineHeight:1}}>💰</div>
+              <div style={{minWidth:0}}>
+                <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:15,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>SlipTrack</div>
+                <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4}}>ระบบบัญชีรายรับ-รายจ่าย</div>
+              </div>
+            </div>
+            <Chip color="green">เชื่อมแล้ว</Chip>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"8px 10px",background:C.greenLight,borderRadius:8,marginBottom:8,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.green,fontWeight:700}}>
+            <span>📤 ส่งออก</span><span style={{color:C.ink3,fontWeight:400}}>·</span><span style={{color:C.ink2,fontWeight:600}}>PO + สลิปชำระเงิน</span>
+          </div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink3,lineHeight:1.6}}>Auto: เมื่อ "ยืนยันรับสินค้า" → ค้างจ่าย · เมื่อ "แนบสลิปชำระ" → จ่ายแล้ว</div>
+        </Card>
+      </div>
     </div>}
     </div>
 
