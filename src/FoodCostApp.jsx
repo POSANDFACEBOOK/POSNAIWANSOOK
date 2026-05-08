@@ -4416,13 +4416,19 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
   },[visibleIngs,suppliers,currentBranch,isCentral]);
 
   // Compute order qty for an ingredient (auto unless overridden) — uses per-branch stock + per-branch safety
+  // Both `have` and `safety` honor IN-PROGRESS edits (typed but not yet blurred/saved)
+  // so the "สั่ง" column updates live as the user types into เหลือ(นับ) or safety.
   function autoOrderQty(ing){
-    const have=onHand[ing.id]!=null?+onHand[ing.id]:branchStock(ing,currentBranch?.id);
-    const safety=branchSafety(ing,currentBranch?.id);
+    const haveEdit=onHand[ing.id];
+    const have=(haveEdit!=null&&haveEdit!=="")?+haveEdit||0:branchStock(ing,currentBranch?.id);
+    const safetyDraft=safetyEdit[ing.id];
+    const safety=(safetyDraft!=null&&safetyDraft!=="")?+safetyDraft||0:branchSafety(ing,currentBranch?.id);
     return Math.max(0,round2(safety-have));
   }
   function getOrderQty(ing){
-    return orderQty[ing.id]!=null?+orderQty[ing.id]:autoOrderQty(ing);
+    // If the user explicitly typed something into "สั่ง" (even ""), respect it.
+    // "" means "do not order this row" — keep that semantic.
+    return orderQty[ing.id]!=null?+orderQty[ing.id]||0:autoOrderQty(ing);
   }
   function lineCost(ing){
     return round2(getOrderQty(ing)*(+ing.buy_price||0));
@@ -4434,7 +4440,7 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
     visibleIngs.forEach(i=>{const q2=getOrderQty(i);if(q2>0){itemCount++;totalCost+=q2*(+i.buy_price||0);}});
     return{totalCost:round2(totalCost),itemCount};
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[visibleIngs,onHand,orderQty]);
+  },[visibleIngs,onHand,orderQty,safetyEdit]);
 
   // Save updated stock counts back to ingredients (per-branch)
   async function saveStockCounts(){
