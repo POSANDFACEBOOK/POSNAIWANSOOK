@@ -3777,7 +3777,9 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved})
         items:items.map(it=>({...it,line_total:round2((+it.qty||0)*(+it.price_per_unit||0))})),
         subtotal:round2(subtotal),
         vat:round2(vat),
-        vat_rate:+vatPct||0,
+        // vat_rate column intentionally not sent — back-computed from vat/subtotal on read.
+        // (Adding vat_rate column requires a migration; the back-compute path with
+        //  Number.isFinite() guards covers the edit round-trip safely.)
         total:round2(total),
         notes:notes||null,
         created_by:editPO?.created_by||currentUser?.username||null,
