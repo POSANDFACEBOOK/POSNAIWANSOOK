@@ -4404,7 +4404,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     <div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:480}}>
       {[
         {id:"check",l:"📋 เช็คสต็อก & สั่งซื้อ",c:C.brand},
-        {id:"list",l:"📦 คำสั่งซื้อที่ส่ง",c:C.teal},
+        {id:"list",l:"📦 สั่งซัพพลายนอก",c:C.teal},
       ].map(t=>{const sel=mode===t.id;return <button key={t.id} onClick={()=>setMode(t.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:sel?t.c:"transparent",color:sel?C.white:C.ink3,transition:"all .15s"}}>{t.l}</button>;})}
     </div>
 
@@ -4685,7 +4685,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       if(reload)await reload();
       const lines=[];
       if(poCount>0)lines.push(`📨 ส่งคำขอไปครัวกลาง ${poCount} ใบ — รอครัวกลางกด "รับเอกสาร" (ดูที่ "เอกสาร PO / สั่งของ")`);
-      if(orderCount>0)lines.push(`📦 คำสั่งซื้อภายนอก ${orderCount} ใบ → ดูที่ "📦 คำสั่งซื้อที่ส่ง" (กดพิมพ์ PDF ส่งซัพพลาย)`);
+      if(orderCount>0)lines.push(`📦 คำสั่งซื้อภายนอก ${orderCount} ใบ → ดูที่ "📦 สั่งซัพพลายนอก" (กดพิมพ์ PDF ส่งซัพพลาย)`);
       if(skippedSelfPO>0)lines.push(`⚠️ ${skippedSelfPO} กลุ่มข้าม (ครัวกลางสั่งจากตัวเอง — กรุณาตั้งซัพพลายภายนอก)`);
       if(lines.length===0)lines.push("ไม่มีรายการถูกบันทึก");
       alert(`✅ ส่งคำสั่งซื้อสำเร็จ\n\n${lines.join("\n")}`);
