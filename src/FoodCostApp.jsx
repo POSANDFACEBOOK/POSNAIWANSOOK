@@ -4476,6 +4476,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   const[saving,setSaving]=useState(false);
   const[savingStock,setSavingStock]=useState(false);
   const[safetyEdit,setSafetyEdit]=useState({});  // { ingId: stringValue } — local edit before commit
+  const safetyTimers=useRef({});                  // { ingId: timeoutId } — debounce per-row
   async function saveSafety(ing,raw){
     const v=raw===""||raw==null?0:+raw;
     if(isNaN(v)||v<0)return;
@@ -4487,6 +4488,23 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     }catch(e){alert("บันทึก safety ไม่สำเร็จ: "+e.message);}
     setSafetyEdit(s=>{const n={...s};delete n[ing.id];return n;});
   }
+  // Schedule a save 600ms after the last edit. Catches the +/− buttons on the
+  // NumStepper which only fire onChange (no native blur), and coalesces rapid
+  // clicks into a single PATCH.
+  function scheduleSaveSafety(ing,raw){
+    const t=safetyTimers.current;
+    if(t[ing.id])clearTimeout(t[ing.id]);
+    t[ing.id]=setTimeout(()=>{delete t[ing.id];saveSafety(ing,raw);},600);
+  }
+  function flushSaveSafety(ing,raw){
+    const t=safetyTimers.current;
+    if(t[ing.id]){clearTimeout(t[ing.id]);delete t[ing.id];}
+    saveSafety(ing,raw);
+  }
+  useEffect(()=>()=>{
+    // Flush any pending debounced saves on unmount (best-effort; uses last edit value)
+    const t=safetyTimers.current;Object.keys(t).forEach(k=>clearTimeout(t[k]));safetyTimers.current={};
+  },[]);
 
   // Suppliers visible to the current branch — each branch has its own supplier list.
   const visibleSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
@@ -4760,7 +4778,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
                       <span style={{fontSize:13,fontWeight:800,color:curLow?C.red:C.ink}}>{curStock}</span>
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder&&!isMobile?<NumStepper value={safetyEdit[ing.id]!==undefined?safetyEdit[ing.id]:(safety||"")} onChange={v=>setSafetyEdit(s=>({...s,[ing.id]:v}))} onBlur={e=>saveSafety(ing,e.target.value)} placeholder="0" btnColor={C.yellow} btnBg="#FFFBEB" inputStyle={{border:`2px solid ${C.yellow}55`,background:"#FFFBEB",color:C.ink}} width={62}/>
+                      {canOrder&&!isMobile?<NumStepper value={safetyEdit[ing.id]!==undefined?safetyEdit[ing.id]:(safety||"")} onChange={v=>{setSafetyEdit(s=>({...s,[ing.id]:v}));scheduleSaveSafety(ing,v);}} onBlur={e=>flushSaveSafety(ing,e.target.value)} placeholder="0" btnColor={C.yellow} btnBg="#FFFBEB" inputStyle={{border:`2px solid ${C.yellow}55`,background:"#FFFBEB",color:C.ink}} width={62}/>
                       :<span style={{fontSize:13,fontWeight:800,color:safety>0?"#92400E":C.ink4,background:safety>0?"#FFFBEB":"transparent",border:safety>0?`1px solid ${C.yellow}55`:"none",padding:safety>0?"3px 10px":0,borderRadius:8,display:"inline-block",minWidth:34,textAlign:"center"}}>{safety||"—"}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
