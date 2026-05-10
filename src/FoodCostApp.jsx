@@ -3138,6 +3138,9 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
 }
 
 const PO_STATUS={
+  // Branch sent a stock-check order to central (จาก=สาขา → ถึง=ครัวกลาง).
+  // Central must press "รับเอกสาร" to swap from/to and move it into "open".
+  requested:       {label:"📨 รอครัวกลางรับ",  short:"รอครัวกลางรับ",color:"#A855F7",bg:"#F5F3FF"},
   open:            {label:"⏳ เปิดอยู่",       short:"เปิดอยู่",    color:"#F59E0B",bg:"#FEF3C7"},
   disputed:        {label:"⚠️ ส่งกลับ",        short:"ส่งกลับ",     color:"#EA580C",bg:"#FFEDD5"},
   awaiting_payment:{label:"💰 รอชำระเงิน",     short:"รอชำระเงิน",  color:"#3B82F6",bg:"#DBEAFE"},
@@ -3217,6 +3220,33 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       autoVisible:false,                     // visibility was already granted; leave it
     });
     if(reloadIngs)await reloadIngs();
+  }
+
+  // Central accepts the branch's stock-check order (status=requested).
+  // Swaps from_branch_id ↔ branch_id so from now on the document reads
+  //   จาก = ครัวกลาง  ถึง = สาขา
+  // …and the rest of the PO flow (open → awaiting_payment → paid) takes over.
+  async function acceptRequest(po){
+    if(!isReceiver(po)){alert("เฉพาะปลายทางเท่านั้นที่รับเอกสารได้");return;}
+    if(po.status!=="requested"){alert("เอกสารนี้ไม่ได้อยู่ในสถานะรอรับ");return;}
+    const requesterName=(branchById[po.from_branch_id]||{}).name||"สาขา";
+    if(!await confirmDlg({
+      title:"รับเอกสารคำสั่งซื้อ",
+      message:`รับเอกสารจาก "${requesterName}"?\n\n• ระบบจะสลับ จาก/ถึง: เอกสารนี้จะกลายเป็น ${currentBranch.name} → ${requesterName}\n• ปุ่มพิมพ์ใบจัดของจะปรากฏหลังรับ\n• ปลายทางจะกดยืนยันรับสินค้าตามขั้นตอนปกติ`,
+      confirmLabel:"📨 รับเอกสาร",
+    }))return;
+    setConfirming(po.id);
+    try{
+      // Swap from/to + flip status to open. patchPOIfStatus is race-safe.
+      await api.patchPOIfStatus(po.id,"requested",{
+        status:"open",
+        from_branch_id:po.branch_id,            // central was branch_id → becomes new from
+        branch_id:po.from_branch_id,            // requester was from → becomes new to
+        updated_at:new Date().toISOString(),
+      });
+      await load();
+    }catch(e){showErr("รับเอกสารไม่สำเร็จ",e);}
+    setConfirming(null);
   }
 
   async function confirmReceive(po){
@@ -3366,6 +3396,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
           <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สถานะ</div>
           <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
             <option value="">— ทุกสถานะ —</option>
+            <option value="requested">📨 รอครัวกลางรับ</option>
             <option value="open">⏳ เปิดอยู่</option>
             <option value="awaiting_payment">💰 รอชำระเงิน</option>
             <option value="paid">✅ จ่ายแล้ว</option>
@@ -3431,9 +3462,10 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                 <td style={{padding:"8px 12px",textAlign:"center",whiteSpace:"nowrap"}}>
                   <div style={{display:"inline-flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
                     <button onClick={()=>setViewPO(po)} title="ดูรายละเอียด" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.eye} s={13} c={C.ink2}/></button>
-                    <button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์ (มีปุ่มดาวน์โหลด PDF ในหน้าพิมพ์)" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>
+                    {po.status!=="requested"&&<button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์ (มีปุ่มดาวน์โหลด PDF ในหน้าพิมพ์)" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>}
                     {canEditPO(po)&&po.status!=="paid"&&po.status!=="cancelled"&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
                     {canEditPO(po)&&<button onClick={()=>delPO(po)} title={po.status==="paid"?"ลบทิ้งถาวร (ระวัง: ชำระแล้ว)":"ลบ"} style={{background:po.status==="paid"?"#7F1D1D":C.redLight,border:`1px solid ${po.status==="paid"?"#7F1D1D":"#FECACA"}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={po.status==="paid"?C.white:C.red}/></button>}
+                    {isReceiver(po)&&po.status==="requested"&&<button onClick={()=>acceptRequest(po)} disabled={confirming===po.id} title="รับเอกสารคำขอจากสาขา" style={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.purple}55`}}>📨 รับเอกสาร</button>}
                     {iCreator&&po.status==="awaiting_payment"&&<button onClick={()=>setPayPO(po)} title="ชำระเงิน" style={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.blue}55`}}>💳 ชำระเงิน</button>}
                     {iCreator&&po.status==="disputed"&&<button onClick={()=>acceptDispute(po)} disabled={confirming===po.id} title="ยอมรับการแก้ไข" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ยอมรับการแก้</button>}
                     {canConfirmPO(po)&&<button onClick={()=>setViewPO(po)} title="ตรวจสอบ + ยืนยันรับ" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ตรวจรับ</button>}
@@ -3475,6 +3507,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       busy={confirming===viewPO.id}
       canDelete={canEditPO(viewPO)}
       onClose={()=>setViewPO(null)}
+      onAcceptRequest={()=>acceptRequest(viewPO)}
       onConfirmReceive={()=>confirmReceive(viewPO)}
       onSubmitDispute={(items,note)=>submitDispute(viewPO,items,note)}
       onAcceptDispute={()=>acceptDispute(viewPO)}
@@ -3488,7 +3521,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 }
 
 // Full-screen PO view with status-aware actions
-function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canDelete,onClose,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel,onDelete}){
+function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canDelete,onClose,onAcceptRequest,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel,onDelete}){
   const isCreator=+po.from_branch_id===currentBranch.id;
   const isReceiver=+po.branch_id===currentBranch.id;
   const st=PO_STATUS[po.status]||{label:po.status,color:C.ink3,bg:C.lineLight};
@@ -3499,10 +3532,11 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const[receivedQty,setReceivedQty]=useState(()=>{const m={};(po.items||[]).forEach((it,i)=>{m[i]=it.received_qty!=null?it.received_qty:it.qty;});return m;});
   const[disputeNote,setDisputeNote]=useState(po.dispute_note||"");
   // Permissions for actions in this view
+  const canAcceptReq=isReceiver&&po.status==="requested";
   const canConfirmReceive=isReceiver&&po.status==="open";
   const canDispute=isReceiver&&po.status==="open";
   const canAcceptDispute=isCreator&&po.status==="disputed";
-  const canEditFromView=isCreator&&(po.status==="open"||po.status==="disputed");
+  const canEditFromView=isCreator&&(po.status==="open"||po.status==="disputed"||po.status==="requested");
   const canPayNow=isCreator&&po.status==="awaiting_payment";
   const canCancelPO=isCreator&&po.status!=="paid"&&po.status!=="cancelled";
 
@@ -3622,11 +3656,12 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         <Btn v="success" onClick={submitDisputeNow} disabled={busy||allMatch} loading={busy} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 22px",fontWeight:900}}>{allMatch?"ไม่มีรายการที่ขาด":"📤 ส่งกลับให้ต้นทางตรวจสอบ"}</Btn>
       </>:<>
         <Btn v="ghost" onClick={onClose}>ปิด</Btn>
-        <Btn v="info" icon={I.print} onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์</Btn>
-        <Btn v="success" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)} s={{padding:"10px 16px"}}>💾 ดาวน์โหลด PDF</Btn>
+        {po.status!=="requested"&&<Btn v="info" icon={I.print} onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์</Btn>}
+        {po.status!=="requested"&&<Btn v="success" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)} s={{padding:"10px 16px"}}>💾 ดาวน์โหลด PDF</Btn>}
         {canCancelPO&&<Btn v="danger" onClick={onCancel} s={{padding:"10px 16px"}}>❌ ยกเลิก PO</Btn>}
         {canDelete&&<Btn onClick={onDelete} icon={I.trash} s={{padding:"10px 16px",background:po.status==="paid"?"#7F1D1D":C.redLight,color:po.status==="paid"?C.white:C.red,border:`1.5px solid ${po.status==="paid"?"#7F1D1D":"#FECACA"}`}}>🗑 ลบทิ้งถาวร</Btn>}
         {canEditFromView&&<Btn v="ghost" onClick={onEdit} icon={I.pencil} s={{padding:"10px 16px",background:"#FEF3C7",color:"#92400E"}}>✏️ แก้ไข</Btn>}
+        {canAcceptReq&&onAcceptRequest&&<Btn onClick={onAcceptRequest} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px ${C.purple}55`}}>📨 รับเอกสาร</Btn>}
         {canDispute&&<Btn onClick={()=>setMode("dispute")} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 20px",fontWeight:900,color:C.white,boxShadow:"0 4px 14px rgba(234,88,12,.4)"}}>⚠️ สินค้าไม่ครบ</Btn>}
         {canConfirmReceive&&<Btn v="success" onClick={onConfirmReceive} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14,boxShadow:`0 4px 14px ${C.green}55`}}>✅ ยืนยันรับสินค้าครบ</Btn>}
         {canAcceptDispute&&<Btn v="success" onClick={onAcceptDispute} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14}}>✅ ยอมรับการแก้ไข</Btn>}
@@ -4578,14 +4613,17 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         const central=matchCentralSupplier(sup.supplierName);
         const isCentralOrderingFromItself=central&&+central.id===+currentBranch.id;
         if(central&&!isCentralOrderingFromItself){
-          // → PO from central → this branch
+          // → PO REQUEST: branch is asking central for goods.
+          //   from = สาขา (creator of the request), to = ครัวกลาง (waits to accept)
+          //   status = "requested" — central will press "รับเอกสาร" which swaps
+          //   from/to and flips to "open" before the normal PO flow takes over.
           const subtotal=round2(sup.items.reduce((s,it)=>s+(+it.estimatedCost||0),0));
           await api.addPO({
-            po_number:genPONumber(central.id),
-            branch_id:currentBranch.id,
-            from_branch_id:central.id,
+            po_number:genPONumber(currentBranch.id),
+            branch_id:central.id,
+            from_branch_id:currentBranch.id,
             po_date:todayStr(),
-            status:"open",
+            status:"requested",
             items:sup.items.map(it=>({
               ingredient_id:it.ingId,
               name:it.name,
@@ -4598,7 +4636,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             subtotal,
             vat:0,
             total:subtotal,
-            notes:`สร้างจากเช็คสต็อก ${todayStr()} โดย ${currentUser.username}`,
+            notes:`สั่งจากเช็คสต็อก ${todayStr()} โดย ${currentUser.username}`,
             created_by:currentUser.username,
             updated_at:new Date().toISOString(),
           });
@@ -4623,7 +4661,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       setOrderQty({});
       if(reload)await reload();
       const lines=[];
-      if(poCount>0)lines.push(`📄 เอกสาร PO ${poCount} ใบ → ดูที่ "เอกสาร PO / สั่งของ"`);
+      if(poCount>0)lines.push(`📨 ส่งคำขอไปครัวกลาง ${poCount} ใบ — รอครัวกลางกด "รับเอกสาร" (ดูที่ "เอกสาร PO / สั่งของ")`);
       if(orderCount>0)lines.push(`📦 คำสั่งซื้อภายนอก ${orderCount} ใบ → ดูที่ "📦 คำสั่งซื้อที่ส่ง" (กดพิมพ์ PDF ส่งซัพพลาย)`);
       if(skippedSelfPO>0)lines.push(`⚠️ ${skippedSelfPO} กลุ่มข้าม (ครัวกลางสั่งจากตัวเอง — กรุณาตั้งซัพพลายภายนอก)`);
       if(lines.length===0)lines.push("ไม่มีรายการถูกบันทึก");
