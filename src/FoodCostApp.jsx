@@ -4368,7 +4368,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       ].map(t=>{const sel=mode===t.id;return <button key={t.id} onClick={()=>setMode(t.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:sel?t.c:"transparent",color:sel?C.white:C.ink3,transition:"all .15s"}}>{t.l}</button>;})}
     </div>
 
-    {mode==="check"&&<StockCheckView ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reload={reload} reloadIngs={reloadIngs}/>}
+    {mode==="check"&&<StockCheckView ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} reload={reload} reloadIngs={reloadIngs}/>}
 
     {mode==="list"&&<>
     {isCentral&&<div style={{display:"flex",gap:8,marginBottom:16}}>
@@ -4425,7 +4425,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
 // ══════════════════════════════════════════════════════
 // ── STOCK CHECK VIEW ──────────────────────────────────
 // ══════════════════════════════════════════════════════
-function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadIngs}){
+function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,reload,reloadIngs}){
   const isMobile=useIsMobile();
   const isCentral=currentBranch?.type==="central";
   const canOrder=hasPerm(currentUser,"orders");
@@ -4536,14 +4536,18 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
     setSavingStock(false);
   }
 
-  // Submit orders — group by supplier, create one order request per supplier
+  // Submit orders — group by supplier, then route each group:
+  //   • supplier name matches a central branch → create a PO (from central → this branch)
+  //     so it shows up in "เอกสาร PO / สั่งของ" alongside manually-created POs
+  //   • external supplier → create an order_request (one per supplier) so the PDF
+  //     can be exported and sent out to the vendor
   async function submitOrder(){
     const items=visibleIngs.map(i=>{const q2=getOrderQty(i);return{ing:i,qty:q2};}).filter(x=>x.qty>0);
     if(items.length===0){alert("ไม่มีรายการที่ต้องสั่ง");return;}
-    if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\nระบบจะแยกใบสั่งซื้อตามซัพพลายเออร์`,confirmLabel:"ส่งคำสั่งซื้อ"}))return;
+    if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\n• ของจากครัวกลาง → จะสร้างเป็น "เอกสาร PO"\n• ของจากซัพพลายภายนอก → จะแยกเป็นใบสั่งตามซัพพลาย (พิมพ์ PDF ส่งได้)`,confirmLabel:"ส่งคำสั่งซื้อ"}))return;
     setSaving(true);
     try{
-      // Group items by per-branch supplier (falls back to ingredient.supplier when none set)
+      // Group items by per-branch supplier
       const supMap={};
       items.forEach(({ing,qty})=>{
         const sid=branchSupplierId(ing,currentBranch?.id);
@@ -4558,19 +4562,72 @@ function StockCheckView({ings,suppliers,currentBranch,currentUser,reload,reloadI
           supplierId:sid||null,supplierName:sname,
         });
       });
+
+      // A supplier counts as "central kitchen" if its name matches a branch with type=central.
+      // Re-using branch name for the supplier record is the simplest convention without
+      // needing a schema flag.
+      const centralBranches=(branches||[]).filter(b=>b&&b.type==="central");
+      const matchCentralSupplier=(supName)=>{
+        const t=(supName||"").trim();
+        if(!t)return null;
+        return centralBranches.find(b=>(b.name||"").trim()===t)||null;
+      };
+
+      let poCount=0,orderCount=0,skippedSelfPO=0;
       for(const sup of Object.values(supMap)){
-        await api.addOrder({
-          branch_id:currentBranch.id,branch_name:currentBranch.name,
-          supplier_id:sup.supplierId,supplier_name:sup.supplierName,
-          items:sup.items,status:"pending",
-          requested_by:currentUser.username,requested_at:nowStr(),
-          note:`เช็คสต็อก ${todayStr()}`,
-        });
+        const central=matchCentralSupplier(sup.supplierName);
+        const isCentralOrderingFromItself=central&&+central.id===+currentBranch.id;
+        if(central&&!isCentralOrderingFromItself){
+          // → PO from central → this branch
+          const subtotal=round2(sup.items.reduce((s,it)=>s+(+it.estimatedCost||0),0));
+          await api.addPO({
+            po_number:genPONumber(central.id),
+            branch_id:currentBranch.id,
+            from_branch_id:central.id,
+            po_date:todayStr(),
+            status:"open",
+            items:sup.items.map(it=>({
+              ingredient_id:it.ingId,
+              name:it.name,
+              unit:it.unit,
+              qty:+it.qtyNeeded||0,
+              price_per_unit:+it.pricePerUnit||0,
+              line_total:+it.estimatedCost||0,
+              note:"",
+            })),
+            subtotal,
+            vat:0,
+            total:subtotal,
+            notes:`สร้างจากเช็คสต็อก ${todayStr()} โดย ${currentUser.username}`,
+            created_by:currentUser.username,
+            updated_at:new Date().toISOString(),
+          });
+          poCount++;
+        }else if(isCentralOrderingFromItself){
+          // Central trying to order from itself — silently skip; user picks an external
+          // supplier when central restocks its own inventory
+          skippedSelfPO++;
+        }else{
+          // → order_request grouped by external supplier
+          await api.addOrder({
+            branch_id:currentBranch.id,branch_name:currentBranch.name,
+            supplier_id:sup.supplierId,supplier_name:sup.supplierName,
+            items:sup.items,status:"pending",
+            requested_by:currentUser.username,requested_at:nowStr(),
+            note:`เช็คสต็อก ${todayStr()}`,
+          });
+          orderCount++;
+        }
       }
       // Reset overrides
       setOrderQty({});
       if(reload)await reload();
-      alert(`✅ ส่งคำสั่งซื้อสำเร็จ ${Object.keys(supMap).length} ใบ\nไปดูได้ที่แท็บ "📦 คำสั่งซื้อที่ส่ง"`);
+      const lines=[];
+      if(poCount>0)lines.push(`📄 เอกสาร PO ${poCount} ใบ → ดูที่ "เอกสาร PO / สั่งของ"`);
+      if(orderCount>0)lines.push(`📦 คำสั่งซื้อภายนอก ${orderCount} ใบ → ดูที่ "📦 คำสั่งซื้อที่ส่ง" (กดพิมพ์ PDF ส่งซัพพลาย)`);
+      if(skippedSelfPO>0)lines.push(`⚠️ ${skippedSelfPO} กลุ่มข้าม (ครัวกลางสั่งจากตัวเอง — กรุณาตั้งซัพพลายภายนอก)`);
+      if(lines.length===0)lines.push("ไม่มีรายการถูกบันทึก");
+      alert(`✅ ส่งคำสั่งซื้อสำเร็จ\n\n${lines.join("\n")}`);
     }catch(e){alert("ส่งไม่สำเร็จ: "+e.message);}
     setSaving(false);
   }
