@@ -459,6 +459,51 @@ function branchSafety(ing,branchId){
 function setBranchSafetyInJson(existing,branchId,value){
   return {...(existing||{}),[String(branchId)]:+value||0};
 }
+// Atomic stock transfer between two branches.
+// Single PATCH per ingredient flips both slots in stock_by_branch + ticks
+// the receiver into visible_branches when autoVisible=true.
+//
+// items: array with { ingredient_id|ingId, qty|qtyNeeded, received_qty? }
+// fromBranchId omitted → deposit-only (no sender deduction; for legacy data)
+async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible}){
+  const toId=+toBranchId;
+  if(!toId)return;
+  const fromId=fromBranchId!=null?(+fromBranchId||null):null;
+  if(fromId===toId)return;  // same-branch transfer is a no-op
+  const agg=new Map();
+  for(const it of (items||[])){
+    const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
+    if(!ingId)continue;
+    const qty=it.received_qty!=null?+it.received_qty:+(it.qty!=null?it.qty:it.qtyNeeded);
+    if(!qty||qty<=0)continue;
+    const row=(ings||[]).find(x=>+x.id===ingId);
+    if(!row)continue;
+    const e=agg.get(ingId)||{add:0,row};
+    e.add+=qty;agg.set(ingId,e);
+  }
+  for(const[ingId,{add,row}]of agg.entries()){
+    let stockMap=row.stock_by_branch;
+    // Receiver: increment slot
+    const curRecv=branchStock(row,toId);
+    stockMap=setBranchStockInJson(stockMap,toId,Math.round((curRecv+add)*1000)/1000);
+    // Sender: decrement slot (allow negative for visibility into oversold conditions)
+    if(fromId){
+      const curSender=branchStock(row,fromId);
+      stockMap=setBranchStockInJson(stockMap,fromId,Math.round((curSender-add)*1000)/1000);
+    }
+    const patch={stock_by_branch:stockMap};
+    if(autoVisible){
+      const cur=row.visible_branches;
+      if(cur!=null){  // null = visible to all → no change
+        const arr=Array.isArray(cur)?[...cur]:[];
+        if(!arr.includes(toId))arr.push(toId);
+        patch.visible_branches=arr;
+      }
+    }
+    try{await api.updateIng(ingId,patch);}
+    catch(err){console.error("transferStock failed",ingId,err);}
+  }
+}
 // Ingredient visibility resolver:
 //   visible_branches = null/undefined → visible to all branches (legacy default)
 //   visible_branches = []              → explicitly visible to NO branch (user "untick all")
@@ -3138,42 +3183,17 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   }
   useEffect(()=>{load();},[direction,partnerFilter,filterStatus,dateFrom,dateTo,currentBranch?.id]);
 
-  // Push received qty into the branch's stock + auto-tick the branch on each
-  // ingredient's visible_branches list. Called after the receiver confirms.
+  // Push received qty into the receiver's stock AND deduct from the sender,
+  // auto-ticking the receiver on each ingredient's visible_branches list.
+  // Called after the receiver confirms a PO (open → awaiting_payment).
   async function depositPOItemsToBranch(po,itemsToDeposit){
-    const branchId=+po.branch_id;
-    if(!branchId)return;
-    // Aggregate addQty per ingredient (in case the same ingredient appears twice)
-    const agg=new Map();
-    for(const it of (itemsToDeposit||po.items||[])){
-      const ingId=+it.ingredient_id;
-      if(!ingId)continue;
-      const qty=it.received_qty!=null?+it.received_qty:+it.qty;
-      if(!qty||qty<=0)continue;
-      const row=ings.find(x=>+x.id===ingId);
-      if(!row)continue;
-      const e=agg.get(ingId)||{add:0,row};
-      e.add+=qty;agg.set(ingId,e);
-    }
-    for(const[ingId,{add,row}]of agg.entries()){
-      // visible_branches: null=all (no change), [] or [...]=add branchId if missing
-      const cur=row.visible_branches;
-      let nextVB;
-      if(cur==null)nextVB=undefined;  // skip — already visible to all
-      else{
-        const arr=Array.isArray(cur)?[...cur]:[];
-        if(!arr.includes(branchId))arr.push(branchId);
-        nextVB=arr;
-      }
-      // stock_by_branch: increment branch slot
-      const curStock=branchStock(row,branchId);
-      const nextStock=round2(curStock+add);
-      const stockMap=setBranchStockInJson(row.stock_by_branch,branchId,nextStock);
-      const patch={stock_by_branch:stockMap};
-      if(nextVB!==undefined)patch.visible_branches=nextVB;
-      try{await api.updateIng(ingId,patch);}
-      catch(err){console.error("ingredient PATCH failed",ingId,err);}
-    }
+    await transferStockBetweenBranches({
+      fromBranchId:po.from_branch_id,
+      toBranchId:po.branch_id,
+      items:itemsToDeposit||po.items||[],
+      ings,
+      autoVisible:true,
+    });
     if(reloadIngs)await reloadIngs();
   }
 
@@ -4210,7 +4230,7 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
 // ══════════════════════════════════════════════════════
 // ── ORDER TAB ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentUser,reloadIngs,onBack}){
+function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBranch,currentUser,reloadIngs,onBack}){
   const isCentral=currentBranch.type==="central";
   const[mode,setMode]=useState("check");  // "check" = stock check / new order; "list" = existing orders
   const[view,setView]=useState(isCentral?"all":"mine");
@@ -4230,6 +4250,42 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentU
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการสั่งวัตถุดิบ</title><style>body{font-family:'Sarabun',sans-serif;padding:24px}h2{color:#FF6B35}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}.status{display:inline-block;padding:2px 10px;border-radius:20px;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — รายการสั่งวัตถุดิบ</h2><p>สาขา: <b>${esc(order.branch_name)}</b> | ซัพพลาย: <b>${esc(order.supplier_name)}</b></p><p>สั่งโดย: <b>${esc(order.requested_by)}</b> | วันที่: ${esc(order.requested_at)}</p><p>ช่วงวันที่: ${esc(order.note||"-")}</p><table><thead><tr><th>ซัพพลาย</th><th>วัตถุดิบ</th><th>จำนวน</th><th>ราคาประมาณ</th></tr></thead><tbody>${rows}</tbody></table><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
     w.document.close();
     setTimeout(()=>{try{w.print();}catch{}setPrintingId(null);},600);
+  }
+
+  // Status transition that ALSO moves stock from central → requesting branch
+  // when going TO `delivered` (and only when the previous status was NOT
+  // already delivered, so cycling back-and-forth via the edit modal is safe).
+  async function changeOrderStatus(order,nextStatus){
+    if(order.status===nextStatus)return;
+    const willTransfer=nextStatus==="delivered"&&order.status!=="delivered";
+    if(willTransfer){
+      const central=branches.find(b=>b&&b.type==="central");
+      const fromId=central?.id||null;
+      if(!fromId){
+        alert("ไม่พบครัวกลาง — เพิ่มสาขาประเภทครัวกลางก่อน");
+        return;
+      }
+      if(!await confirmDlg({
+        title:"ยืนยันจัดส่งคำสั่งซื้อ",
+        message:`จะหักสต็อกของครัวกลางและเพิ่มเข้าสาขา "${order.branch_name}" ตามจำนวนในคำสั่งซื้อ\n\nดำเนินการต่อใช่หรือไม่?`,
+        confirmLabel:"✅ จัดส่งและตัดสต็อก",
+      }))return;
+      try{
+        await transferStockBetweenBranches({
+          fromBranchId:fromId,
+          toBranchId:order.branch_id,
+          items:order.items||[],
+          ings,
+          autoVisible:true,
+        });
+        await api.updateOrder(order.id,{status:"delivered"});
+        if(reloadIngs)await reloadIngs();
+      }catch(e){alert("จัดส่งไม่สำเร็จ: "+(e.message||e));return;}
+    }else{
+      try{await api.updateOrder(order.id,{status:nextStatus});}
+      catch{alert("ไม่สำเร็จ");return;}
+    }
+    await reload();
   }
 
   const statusColor={pending:"yellow",approved:"green",rejected:"red",delivered:"blue"};
@@ -4270,8 +4326,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentU
             {canOrder&&<button onClick={()=>setEditOrder(editOrder?.id===order.id?null:order)} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.pencil} s={12} c={C.blue}/>แก้ไข</button>}
             <button onClick={()=>printOrder(order)} disabled={printingId===order.id} style={{background:C.lineLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:printingId===order.id?"not-allowed":"pointer",color:C.ink2,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5,opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/>{printingId===order.id?"กำลังพิมพ์...":"PDF/พิมพ์"}</button>
             {isCentral&&canOrder&&<>
-              {order.status==="pending"&&<button onClick={async()=>{try{await api.updateOrder(order.id,{status:"approved"});await reload();}catch(e){alert("ไม่สำเร็จ");}}} style={{background:C.greenLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.check} s={12} c={C.green}/>อนุมัติ</button>}
-              {order.status==="approved"&&<button onClick={async()=>{try{await api.updateOrder(order.id,{status:"delivered"});await reload();}catch(e){alert("ไม่สำเร็จ");}}} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.truck} s={12} c={C.blue}/>จัดส่งแล้ว</button>}
+              {order.status==="pending"&&<button onClick={()=>changeOrderStatus(order,"approved")} style={{background:C.greenLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.check} s={12} c={C.green}/>อนุมัติ</button>}
+              {order.status==="approved"&&<button onClick={()=>changeOrderStatus(order,"delivered")} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.truck} s={12} c={C.blue}/>จัดส่ง + ตัดสต็อก</button>}
             </>}
             {canOrder&&<button onClick={async()=>{if(!await confirmDlg({title:"ลบคำสั่งซื้อ",message:"ต้องการลบรายการสั่งวัตถุดิบนี้ใช่หรือไม่?"}))return;try{await api.deleteOrder(order.id);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
           </div>
@@ -4290,7 +4346,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentU
           {editOrder?.id===order.id&&<div style={{marginTop:12,padding:"12px",background:C.bg,borderRadius:10}}>
             <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เปลี่ยนสถานะ</div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {["pending","approved","rejected","delivered"].map(s=><button key={s} onClick={async()=>{try{await api.updateOrder(order.id,{status:s});await reload();setEditOrder(null);}catch(e){alert("ไม่สำเร็จ");}}} style={{padding:"6px 14px",borderRadius:8,border:`2px solid ${order.status===s?C.brand:C.line}`,background:order.status===s?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:order.status===s?C.brand:C.ink3}}>{statusLabel[s]}</button>)}
+              {["pending","approved","rejected","delivered"].map(s=><button key={s} onClick={async()=>{await changeOrderStatus(order,s);setEditOrder(null);}} style={{padding:"6px 14px",borderRadius:8,border:`2px solid ${order.status===s?C.brand:C.line}`,background:order.status===s?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:order.status===s?C.brand:C.ink3}}>{statusLabel[s]}</button>)}
             </div>
           </div>}
         </div>
@@ -6251,7 +6307,7 @@ export default function App(){
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setTab("orders")}/>}
-            {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
+            {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
