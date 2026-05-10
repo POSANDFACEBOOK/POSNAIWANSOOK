@@ -3204,6 +3204,21 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     if(reloadIngs)await reloadIngs();
   }
 
+  // Reverse the deposit when an already-received PO is cancelled or deleted:
+  // pull stock back out of the receiver and credit it back to the sender.
+  // Uses po.items (which acceptDispute has already clamped to actual received qty).
+  async function rollbackPOStock(po){
+    if(!po||!po.received_at)return;          // never moved stock → nothing to undo
+    await transferStockBetweenBranches({
+      fromBranchId:po.branch_id,             // ← receiver gives back
+      toBranchId:po.from_branch_id,          // ← sender gets credited
+      items:po.items||[],
+      ings,
+      autoVisible:false,                     // visibility was already granted; leave it
+    });
+    if(reloadIngs)await reloadIngs();
+  }
+
   async function confirmReceive(po){
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ยืนยันรับสินค้าได้");return;}
     if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• สต็อกของสาขาจะถูกเพิ่มอัตโนมัติ\n• วัตถุดิบที่ได้รับจะถูกติ๊กให้สาขานี้เห็น\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
@@ -3272,9 +3287,14 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   async function cancelPO(po){
     if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่ยกเลิกได้");return;}
     if(po.status==="paid"||po.status==="cancelled"){alert("เอกสารนี้ไม่สามารถยกเลิกในสถานะปัจจุบันได้");return;}
-    if(!await confirmDlg({title:"ยกเลิก PO",message:`ยกเลิก ${po.po_number||"PO นี้"}?`,danger:true,confirmLabel:"ยกเลิก PO"}))return;
+    const wasReceived=!!po.received_at;
+    const msg=wasReceived
+      ?`ยกเลิก ${po.po_number||"PO นี้"}?\n\n⚠️ เอกสารนี้ถูกยืนยันรับสินค้าแล้ว — ระบบจะคืนสต็อก:\n• สาขา "${(branchById[po.branch_id]||{}).name||po.branch_id}" จะถูกหักออก\n• ครัวกลางจะถูกคืนเข้า`
+      :`ยกเลิก ${po.po_number||"PO นี้"}?`;
+    if(!await confirmDlg({title:"ยกเลิก PO",message:msg,danger:true,confirmLabel:wasReceived?"ยกเลิก + คืนสต็อก":"ยกเลิก PO"}))return;
     try{
       await api.updatePO(po.id,{status:"cancelled",updated_at:new Date().toISOString()});
+      if(wasReceived)await rollbackPOStock(po);   // after status flip so the row is locked
       await load();setViewPO(null);
     }catch(e){showErr("ยกเลิกไม่สำเร็จ",e);}
   }
@@ -3282,12 +3302,24 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 
   async function delPO(po){
     const isPaid=po.status==="paid";
-    const msg=isPaid
-      ?`เอกสาร ${po.po_number||"PO นี้"} ชำระเงินแล้ว\n\n⚠️ ลบแล้วจะไม่สามารถกู้คืนได้ และประวัติการชำระเงิน + รูปสลิปจะถูกลบทิ้งด้วย\n\nต้องการลบจริงๆ?`
-      :`ต้องการลบ ${po.po_number||"PO นี้"} ใช่หรือไม่?`;
-    if(!await confirmDlg({title:isPaid?"⚠️ ลบเอกสารที่ชำระแล้ว":"ลบเอกสาร PO",message:msg,danger:true,confirmLabel:isPaid?"ลบทิ้งถาวร":"ลบ"}))return;
-    try{await api.deletePO(po.id);await load();setViewPO(null);}
-    catch(e){alert("ลบไม่สำเร็จ: "+e.message);}
+    const wasReceived=!!po.received_at;
+    let msg;
+    if(isPaid){
+      msg=`เอกสาร ${po.po_number||"PO นี้"} ชำระเงินแล้ว\n\n⚠️ ลบแล้วจะไม่สามารถกู้คืนได้ และประวัติการชำระเงิน + รูปสลิปจะถูกลบทิ้งด้วย`;
+      if(wasReceived)msg+=`\n\n📦 ระบบจะคืนสต็อก:\n• สาขาจะถูกหักออก\n• ครัวกลางจะถูกคืนเข้า`;
+      msg+=`\n\nต้องการลบจริงๆ?`;
+    }else if(wasReceived){
+      msg=`ต้องการลบ ${po.po_number||"PO นี้"} ใช่หรือไม่?\n\n⚠️ เอกสารนี้ถูกยืนยันรับสินค้าแล้ว — ระบบจะคืนสต็อก:\n• สาขาจะถูกหักออก\n• ครัวกลางจะถูกคืนเข้า`;
+    }else{
+      msg=`ต้องการลบ ${po.po_number||"PO นี้"} ใช่หรือไม่?`;
+    }
+    if(!await confirmDlg({title:isPaid?"⚠️ ลบเอกสารที่ชำระแล้ว":"ลบเอกสาร PO",message:msg,danger:true,confirmLabel:isPaid?"ลบทิ้งถาวร":(wasReceived?"ลบ + คืนสต็อก":"ลบ")}))return;
+    try{
+      // Rollback BEFORE delete so we still have the row to read items/branch_ids from
+      if(wasReceived)await rollbackPOStock(po);
+      await api.deletePO(po.id);
+      await load();setViewPO(null);
+    }catch(e){alert("ลบไม่สำเร็จ: "+e.message);}
   }
   function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
   function pickBranch(b){setPickedBranch(b);setStep('form');}
@@ -4259,42 +4291,67 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     setTimeout(()=>{try{w.print();}catch{}setPrintingId(null);},600);
   }
 
-  // Status transition that ALSO moves stock from central → requesting branch
-  // when going TO `delivered`. Race-safe: uses updateOrderIfStatus so the DB
-  // refuses the second concurrent click instead of double-transferring.
+  // Status transition that moves stock central ↔ branch.
+  //   • approved/pending/rejected → delivered  : transfer central → branch (deduct + credit)
+  //   • delivered → approved/pending/rejected  : ROLLBACK — credit central / deduct branch
+  // Race-safe: uses updateOrderIfStatus so the DB refuses concurrent flips
+  // instead of double-moving stock.
   async function changeOrderStatus(order,nextStatus){
     if(order.status===nextStatus)return;
     const willTransfer=nextStatus==="delivered"&&order.status!=="delivered";
+    const willRollback=order.status==="delivered"&&nextStatus!=="delivered";
+    const central=branches.find(b=>b&&b.type==="central");
+    const centralId=central?.id||null;
+
     if(willTransfer){
-      const central=branches.find(b=>b&&b.type==="central");
-      const fromId=central?.id||null;
-      if(!fromId){
-        alert("ไม่พบครัวกลาง — เพิ่มสาขาประเภทครัวกลางก่อน");
-        return;
-      }
+      if(!centralId){alert("ไม่พบครัวกลาง — เพิ่มสาขาประเภทครัวกลางก่อน");return;}
       if(!await confirmDlg({
         title:"ยืนยันจัดส่งคำสั่งซื้อ",
         message:`จะหักสต็อกของครัวกลางและเพิ่มเข้าสาขา "${order.branch_name}" ตามจำนวนในคำสั่งซื้อ\n\nดำเนินการต่อใช่หรือไม่?`,
         confirmLabel:"✅ จัดส่งและตัดสต็อก",
       }))return;
       try{
-        // Lock first — DB throws if another tab/user already moved this row to delivered
         await api.updateOrderIfStatus(order.id,order.status,{status:"delivered"});
-        // Lock acquired → safe to move stock exactly once
-        await transferStockBetweenBranches({
-          fromBranchId:fromId,
-          toBranchId:order.branch_id,
-          items:order.items||[],
-          ings,
-          autoVisible:true,
-        });
+        await transferStockBetweenBranches({fromBranchId:centralId,toBranchId:order.branch_id,items:order.items||[],ings,autoVisible:true});
         if(reloadIngs)await reloadIngs();
       }catch(e){alert("จัดส่งไม่สำเร็จ: "+(e.message||e));return;}
+    }else if(willRollback){
+      if(!centralId){alert("ไม่พบครัวกลาง");return;}
+      if(!await confirmDlg({
+        title:"ย้อนสถานะ + คืนสต็อก",
+        message:`เปลี่ยนสถานะจาก "จัดส่งแล้ว" → ระบบจะคืนสต็อก:\n• สาขา "${order.branch_name}" จะถูกหักออก\n• ครัวกลางจะถูกคืนเข้า\n\nดำเนินการต่อใช่หรือไม่?`,
+        danger:true,
+        confirmLabel:"✅ ย้อนสถานะ + คืนสต็อก",
+      }))return;
+      try{
+        await api.updateOrderIfStatus(order.id,"delivered",{status:nextStatus});
+        await transferStockBetweenBranches({fromBranchId:order.branch_id,toBranchId:centralId,items:order.items||[],ings,autoVisible:false});
+        if(reloadIngs)await reloadIngs();
+      }catch(e){alert("ย้อนสถานะไม่สำเร็จ: "+(e.message||e));return;}
     }else{
       try{await api.updateOrder(order.id,{status:nextStatus});}
       catch{alert("ไม่สำเร็จ");return;}
     }
     await reload();
+  }
+
+  // Delete with stock rollback when the order had already moved stock
+  async function deleteOrder(order){
+    const wasDelivered=order.status==="delivered";
+    const central=branches.find(b=>b&&b.type==="central");
+    const centralId=central?.id||null;
+    const msg=wasDelivered
+      ?`ต้องการลบรายการสั่งวัตถุดิบนี้?\n\n⚠️ คำสั่งซื้อนี้ถูก "จัดส่งแล้ว" — ระบบจะคืนสต็อก:\n• สาขา "${order.branch_name}" จะถูกหักออก\n• ครัวกลางจะถูกคืนเข้า`
+      :"ต้องการลบรายการสั่งวัตถุดิบนี้ใช่หรือไม่?";
+    if(!await confirmDlg({title:"ลบคำสั่งซื้อ",message:msg,danger:wasDelivered,confirmLabel:wasDelivered?"ลบ + คืนสต็อก":"ลบ"}))return;
+    try{
+      if(wasDelivered&&centralId){
+        await transferStockBetweenBranches({fromBranchId:order.branch_id,toBranchId:centralId,items:order.items||[],ings,autoVisible:false});
+      }
+      await api.deleteOrder(order.id);
+      if(reloadIngs)await reloadIngs();
+      await reload();
+    }catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}
   }
 
   const statusColor={pending:"yellow",approved:"green",rejected:"red",delivered:"blue"};
@@ -4338,7 +4395,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               {order.status==="pending"&&<button onClick={()=>changeOrderStatus(order,"approved")} style={{background:C.greenLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.check} s={12} c={C.green}/>อนุมัติ</button>}
               {order.status==="approved"&&<button onClick={()=>changeOrderStatus(order,"delivered")} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.truck} s={12} c={C.blue}/>จัดส่ง + ตัดสต็อก</button>}
             </>}
-            {canOrder&&<button onClick={async()=>{if(!await confirmDlg({title:"ลบคำสั่งซื้อ",message:"ต้องการลบรายการสั่งวัตถุดิบนี้ใช่หรือไม่?"}))return;try{await api.deleteOrder(order.id);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+            {canOrder&&<button onClick={()=>deleteOrder(order)} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
           </div>
         </div>
         <div style={{padding:"12px 18px"}}>
