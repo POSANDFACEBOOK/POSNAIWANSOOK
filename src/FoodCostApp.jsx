@@ -386,7 +386,7 @@ const ALL_PERMS=[
   {id:"sop",label:"SOP"},
   {id:"summary",label:"สรุปต้นทุน"},
   {id:"fs_sales",label:"ยอดขาย FoodStory"},
-  {id:"po",label:"เอกสาร PO"},
+  {id:"po",label:"เอกสาร PO / สั่งของ"},
   {id:"orders",label:"สั่งวัตถุดิบ"},
   {id:"history",label:"ประวัติต้นทุน"},
   {id:"suppliers",label:"ซัพพลาย"},
@@ -6196,7 +6196,7 @@ export default function App(){
     {id:"sop",l:"SOP",icon:I.sop,perm:"sop"},
     {id:"summary",l:"สรุปต้นทุน",icon:I.chart,perm:"summary"},
     {id:"fssales",l:"ยอดขายรายเมนู\nตามระบบ FOODSTORY",icon:I.chart,perm:"fs_sales"},
-    {id:"po",l:"เอกสาร PO",icon:I.bill,perm:"po"},
+    {id:"po",l:"เอกสาร PO / สั่งของ",icon:I.bill,perm:"po"},
     // "สั่งวัตถุดิบ" tab moved → button inside POSection toolbar (still routed via tab="orders").
     // Fallback: if user has orders perm but NOT po perm, surface the tab so they aren't locked out.
     ...(currentUser&&currentUser.role!=="admin"&&hasPerm(currentUser,"orders")&&!hasPerm(currentUser,"po")?[{id:"orders",l:"สั่งวัตถุดิบ",icon:I.truck,perm:"orders"}]:[]),
