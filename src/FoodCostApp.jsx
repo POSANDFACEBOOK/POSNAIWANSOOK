@@ -95,6 +95,13 @@ const api = {
   getOrders: (bid) => sb(`order_requests?order=id.desc${bid ? `&branch_id=eq.${bid}` : ""}`),
   addOrder: (d) => sb("order_requests", { method: "POST", body: JSON.stringify(d) }),
   updateOrder: (id, d) => sb(`order_requests?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
+  // Optimistic concurrency: PATCH only when the row is in an expected status.
+  // Throws on 0 rows so callers can catch the race instead of silently double-acting.
+  updateOrderIfStatus: async (id,expectedStatus,d) => {
+    const res=await sb(`order_requests?id=eq.${id}&status=eq.${encodeURIComponent(expectedStatus)}`, {method:"PATCH", body:JSON.stringify(d)});
+    if(!Array.isArray(res)||res.length===0)throw new Error("คำสั่งซื้อถูกอัปเดตโดยผู้ใช้อื่นแล้ว — กรุณารีเฟรชและลองใหม่");
+    return res;
+  },
   deleteOrder: (id) => sb(`order_requests?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   getAllOrders: () => sb("order_requests?order=id.desc"),
   // POS
@@ -4253,8 +4260,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   }
 
   // Status transition that ALSO moves stock from central → requesting branch
-  // when going TO `delivered` (and only when the previous status was NOT
-  // already delivered, so cycling back-and-forth via the edit modal is safe).
+  // when going TO `delivered`. Race-safe: uses updateOrderIfStatus so the DB
+  // refuses the second concurrent click instead of double-transferring.
   async function changeOrderStatus(order,nextStatus){
     if(order.status===nextStatus)return;
     const willTransfer=nextStatus==="delivered"&&order.status!=="delivered";
@@ -4271,6 +4278,9 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         confirmLabel:"✅ จัดส่งและตัดสต็อก",
       }))return;
       try{
+        // Lock first — DB throws if another tab/user already moved this row to delivered
+        await api.updateOrderIfStatus(order.id,order.status,{status:"delivered"});
+        // Lock acquired → safe to move stock exactly once
         await transferStockBetweenBranches({
           fromBranchId:fromId,
           toBranchId:order.branch_id,
@@ -4278,7 +4288,6 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           ings,
           autoVisible:true,
         });
-        await api.updateOrder(order.id,{status:"delivered"});
         if(reloadIngs)await reloadIngs();
       }catch(e){alert("จัดส่งไม่สำเร็จ: "+(e.message||e));return;}
     }else{
