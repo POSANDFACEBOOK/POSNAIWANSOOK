@@ -4764,7 +4764,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
                       :<span style={{fontSize:13,fontWeight:800,color:safety>0?"#92400E":C.ink4,background:safety>0?"#FFFBEB":"transparent",border:safety>0?`1px solid ${C.yellow}55`:"none",padding:safety>0?"3px 10px":0,borderRadius:8,display:"inline-block",minWidth:34,textAlign:"center"}}>{safety||"—"}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder?<NumStepper value={onHand[ing.id]??""} onChange={v=>{setOnHand(o=>({...o,[ing.id]:v}));setOrderQty(q2=>{const n={...q2};delete n[ing.id];return n;});}} placeholder={String(branchStock(ing,currentBranch?.id))} btnColor={lowStock?"#92400E":C.brand} btnBg={lowStock?"#FFFBEB":C.brandLight} inputStyle={{border:`2px solid ${lowStock?"#F59E0B":C.brandBorder}`,background:lowStock?"#FFFBEB":C.brandLight}} width={62}/>
+                      {canOrder?<NumStepper value={onHand[ing.id]??branchStock(ing,currentBranch?.id)} onChange={v=>{setOnHand(o=>({...o,[ing.id]:v}));setOrderQty(q2=>{const n={...q2};delete n[ing.id];return n;});}} btnColor={lowStock?"#92400E":C.brand} btnBg={lowStock?"#FFFBEB":C.brandLight} inputStyle={{border:`2px solid ${lowStock?"#F59E0B":C.brandBorder}`,background:lowStock?"#FFFBEB":C.brandLight}} width={62}/>
                       :<span style={{fontSize:13,fontWeight:700,color:C.ink}}>{have}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
