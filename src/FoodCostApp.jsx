@@ -3112,7 +3112,6 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[editPO,setEditPO]=useState(null);
   const[viewPO,setViewPO]=useState(null);
   const[confirming,setConfirming]=useState(null);
-  const[syncing,setSyncing]=useState(null); // null | {done,total,ok,fail}
   const hasPO=hasPerm(currentUser,"po")||hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
   // Per-PO permissions
   const isCreator=(po)=>+po.from_branch_id===currentBranch.id;
@@ -3265,54 +3264,6 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   }
   function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
   function pickBranch(b){setPickedBranch(b);setStep('form');}
-  // Backfill: push every awaiting_payment + paid PO to SlipTrack.
-  //   • awaiting_payment → Stage 1 only (paid:false, ค้างจ่าย)
-  //   • paid             → Stage 1 first (creates row with items), then Stage 2 with signed slip URL
-  // Idempotent — server matches by external_id, repeat clicks are safe.
-  async function syncAllPendingToSlipTrack(){
-    const pendingTargets=pos.filter(p=>p.status==="awaiting_payment");
-    const paidTargets=pos.filter(p=>p.status==="paid"&&p.received_at);
-    const total=pendingTargets.length+paidTargets.length;
-    if(total===0){alert("ไม่มี PO ที่จะส่งให้ SlipTrack");return;}
-    const lines=[
-      pendingTargets.length>0?`• ${pendingTargets.length} รายการ "รอชำระเงิน" → ค้างจ่าย`:null,
-      paidTargets.length>0?`• ${paidTargets.length} รายการ "จ่ายแล้ว" → ค้างจ่าย + ยืนยันชำระ + ส่งสลิป`:null,
-    ].filter(Boolean).join("\n");
-    if(!await confirmDlg({
-      title:"ส่งรายการ PO เข้าระบบบัญชี",
-      message:`จะส่งทั้งหมด ${total} รายการเข้า SlipTrack:\n\n${lines}\n\n• ระบบ idempotent — กดได้หลายครั้งโดยไม่สร้างซ้ำ\n• สลิปที่เคยอัปโหลดจะถูก sign ใหม่อายุ 1 ปีก่อนส่ง`,
-      confirmLabel:"📤 ส่งทั้งหมด",
-    }))return;
-    setSyncing({done:0,total,ok:0,fail:0});
-    let ok=0,fail=0;
-    // Stage 1 — pending POs first (single push each)
-    for(const po of pendingTargets){
-      const res=await pushPOToSlipTrack({...po},branches);
-      if(res&&res.ok)ok++;else fail++;
-      setSyncing(s=>({...s,done:s.done+1,ok,fail}));
-    }
-    // Paid POs — Stage 1 (create with items), then Stage 2 (flip + slip)
-    for(const po of paidTargets){
-      // Stage 1
-      const r1=await pushPOToSlipTrack({...po},branches);
-      // Sign the slip path so SlipTrack can render the image directly
-      let signedSlipUrl=null;
-      if(po.payment_slip_url){
-        try{signedSlipUrl=await api.getSlipSignedUrl(po.payment_slip_url,31536000);}catch{}
-      }
-      // Stage 2 — only counts as success if Stage 2 succeeds (Stage 1 may have been duplicate)
-      const r2=await pushPOToSlipTrack({...po},branches,{
-        paid:true,
-        paidAt:po.payment_at||new Date().toISOString(),
-        slipUrl:signedSlipUrl,
-        paymentNote:po.payment_note,
-      });
-      if(r2&&r2.ok)ok++;else fail++;
-      setSyncing(s=>({...s,done:s.done+1,ok,fail}));
-    }
-    setSyncing(null);
-    alert(`ส่งเสร็จสิ้น\n\n✅ สำเร็จ ${ok} รายการ${fail?`\n⚠️ ล้มเหลว ${fail} รายการ (ดู Console สำหรับรายละเอียด)`:""}`);
-  }
   function startEdit(po){const b=branches.find(x=>x.id===po.branch_id);setPickedBranch(b||null);setEditPO(po);setStep('form');}
   async function onSaved(){setStep(null);setEditPO(null);await load();}
 
@@ -3330,7 +3281,6 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
-        {hasPO&&<Btn v="info" onClick={syncAllPendingToSlipTrack} disabled={!!syncing||pos.filter(p=>p.status==="awaiting_payment"||p.status==="paid").length===0} s={{padding:"8px 14px",fontSize:13}}>{syncing?`📤 กำลังส่ง... ${syncing.done}/${syncing.total}`:"📤 Sync บัญชี"}</Btn>}
         {onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
@@ -4855,7 +4805,53 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
   const[testResults,setTestResults]=useState({});const[btScanning,setBtScanning]=useState(false);
+  const[slipSyncing,setSlipSyncing]=useState(null); // null | {done,total,ok,fail}
   const isAdmin=hasPerm(currentUser,"settings");
+
+  // Bulk sync every awaiting_payment + paid PO into SlipTrack.
+  // Lives in Settings (admin-only via "settings" perm) so floor staff
+  // can't accidentally fire batch syncs from the PO page.
+  async function syncAllToSlipTrack(){
+    let allPos=[];
+    try{allPos=await api.getPOs({});}catch(e){alert("โหลด PO ไม่สำเร็จ: "+(e&&e.message||e));return;}
+    const pendingTargets=allPos.filter(p=>p.status==="awaiting_payment");
+    const paidTargets=allPos.filter(p=>p.status==="paid"&&p.received_at);
+    const total=pendingTargets.length+paidTargets.length;
+    if(total===0){alert("ไม่มี PO ที่ต้องส่งให้ SlipTrack");return;}
+    const lines=[
+      pendingTargets.length>0?`• ${pendingTargets.length} รายการ "รอชำระเงิน" → ค้างจ่าย`:null,
+      paidTargets.length>0?`• ${paidTargets.length} รายการ "จ่ายแล้ว" → ค้างจ่าย + ยืนยันชำระ + ส่งสลิป`:null,
+    ].filter(Boolean).join("\n");
+    if(!await confirmDlg({
+      title:"ส่งรายการ PO เข้าระบบบัญชี (SlipTrack)",
+      message:`จะส่งทั้งหมด ${total} รายการ:\n\n${lines}\n\n• ระบบ idempotent — กดซ้ำได้โดยไม่สร้างซ้ำ\n• สลิปจะถูก sign อายุ 1 ปีก่อนส่ง`,
+      confirmLabel:"📤 ส่งทั้งหมด",
+    }))return;
+    setSlipSyncing({done:0,total,ok:0,fail:0});
+    let ok=0,fail=0;
+    for(const po of pendingTargets){
+      const res=await pushPOToSlipTrack({...po},branches);
+      if(res&&res.ok)ok++;else fail++;
+      setSlipSyncing(s=>({...s,done:s.done+1,ok,fail}));
+    }
+    for(const po of paidTargets){
+      await pushPOToSlipTrack({...po},branches);            // Stage 1
+      let signedSlipUrl=null;
+      if(po.payment_slip_url){
+        try{signedSlipUrl=await api.getSlipSignedUrl(po.payment_slip_url,31536000);}catch{}
+      }
+      const r2=await pushPOToSlipTrack({...po},branches,{   // Stage 2
+        paid:true,
+        paidAt:po.payment_at||new Date().toISOString(),
+        slipUrl:signedSlipUrl,
+        paymentNote:po.payment_note,
+      });
+      if(r2&&r2.ok)ok++;else fail++;
+      setSlipSyncing(s=>({...s,done:s.done+1,ok,fail}));
+    }
+    setSlipSyncing(null);
+    alert(`ส่งเสร็จสิ้น\n\n✅ สำเร็จ ${ok} รายการ${fail?`\n⚠️ ล้มเหลว ${fail} รายการ (ดู Console)`:""}`);
+  }
   async function testPrinter(p){
     const conn=getPConn(p);
     setTestResults(r=>({...r,[p.id]:{status:"testing"}}));
@@ -5193,7 +5189,12 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
           <div style={{display:"flex",alignItems:"center",gap:6,padding:"8px 10px",background:C.greenLight,borderRadius:8,marginBottom:8,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.green,fontWeight:700}}>
             <span>📤 ส่งออก</span><span style={{color:C.ink3,fontWeight:400}}>·</span><span style={{color:C.ink2,fontWeight:600}}>PO + สลิปชำระเงิน</span>
           </div>
-          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink3,lineHeight:1.6}}>Auto: เมื่อ "ยืนยันรับสินค้า" → ค้างจ่าย · เมื่อ "แนบสลิปชำระ" → จ่ายแล้ว</div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink3,lineHeight:1.6,marginBottom:12}}>Auto: เมื่อ "ยืนยันรับสินค้า" → ค้างจ่าย · เมื่อ "แนบสลิปชำระ" → จ่ายแล้ว</div>
+          {isAdmin&&<div style={{paddingTop:10,borderTop:`1px dashed ${C.line}`}}>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,marginBottom:6,fontWeight:700}}>🔧 Admin · Sync ย้อนหลัง</div>
+            <button onClick={syncAllToSlipTrack} disabled={!!slipSyncing} style={{width:"100%",padding:"10px 14px",borderRadius:9,border:`1.5px solid ${C.brand}`,background:slipSyncing?C.lineLight:C.brandLight,color:slipSyncing?C.ink3:C.brand,cursor:slipSyncing?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,transition:"all .15s"}}>{slipSyncing?`📤 กำลังส่ง... ${slipSyncing.done}/${slipSyncing.total}`:"📤 ส่ง PO ค้างจ่าย/จ่ายแล้วทั้งหมด"}</button>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,marginTop:6,lineHeight:1.5}}>ใช้ครั้งเดียวสำหรับ backfill ข้อมูลเก่า — รายการใหม่หลังจากนี้ระบบส่งให้อัตโนมัติ ไม่ต้องกดซ้ำ</div>
+          </div>}
         </Card>
       </div>
     </div>}
