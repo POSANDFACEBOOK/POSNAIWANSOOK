@@ -3093,7 +3093,7 @@ const PO_STATUS={
   received:        {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#10B981",bg:"#D1FAE5"}, // legacy alias
   cancelled:       {label:"❌ ยกเลิก",          short:"ยกเลิก",      color:"#94A3B8",bg:"#F1F5F9"},
 };
-function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
+function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders}){
   // Every branch (central or otherwise) can issue a PO to any other branch
   // and only ever sees POs it's involved in (as sender or receiver).
   // - "from_branch_id" = creator (sender)
@@ -3331,6 +3331,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs}){
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
         {hasPO&&<Btn v="info" onClick={syncAllPendingToSlipTrack} disabled={!!syncing||pos.filter(p=>p.status==="awaiting_payment"||p.status==="paid").length===0} s={{padding:"8px 14px",fontSize:13}}>{syncing?`📤 กำลังส่ง... ${syncing.done}/${syncing.total}`:"📤 Sync บัญชี"}</Btn>}
+        {onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
     </div>
@@ -4259,7 +4260,7 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
 // ══════════════════════════════════════════════════════
 // ── ORDER TAB ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentUser,reloadIngs}){
+function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentUser,reloadIngs,onBack}){
   const isCentral=currentBranch.type==="central";
   const[mode,setMode]=useState("check");  // "check" = stock check / new order; "list" = existing orders
   const[view,setView]=useState(isCentral?"all":"mine");
@@ -4285,6 +4286,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,currentBranch,currentU
   const statusLabel={pending:"รอดำเนินการ",approved:"อนุมัติ",rejected:"ปฏิเสธ",delivered:"จัดส่งแล้ว"};
 
   return <div>
+    {/* Back link to PO documents (this tab is reached via the button on POSection) */}
+    {onBack&&<button onClick={onBack} style={{background:"transparent",border:"none",cursor:"pointer",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,padding:"6px 0",marginBottom:8,display:"inline-flex",alignItems:"center",gap:6}}>← กลับไปเอกสาร PO</button>}
     {/* Mode toggle: stock check vs orders list */}
     <div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:480}}>
       {[
@@ -6071,7 +6074,9 @@ export default function App(){
     {id:"summary",l:"สรุปต้นทุน",icon:I.chart,perm:"summary"},
     {id:"fssales",l:"ยอดขายรายเมนู\nตามระบบ FOODSTORY",icon:I.chart,perm:"fs_sales"},
     {id:"po",l:"เอกสาร PO",icon:I.bill,perm:"po"},
-    {id:"orders",l:"สั่งวัตถุดิบ",icon:I.truck,perm:"orders"},
+    // "สั่งวัตถุดิบ" tab moved → button inside POSection toolbar (still routed via tab="orders").
+    // Fallback: if user has orders perm but NOT po perm, surface the tab so they aren't locked out.
+    ...(currentUser&&currentUser.role!=="admin"&&hasPerm(currentUser,"orders")&&!hasPerm(currentUser,"po")?[{id:"orders",l:"สั่งวัตถุดิบ",icon:I.truck,perm:"orders"}]:[]),
     {id:"history",l:"ประวัติต้นทุน",icon:I.clock,perm:"history"},
     {id:"suppliers",l:"ซัพพลาย",icon:I.truck,perm:"suppliers"},
     {id:"settings",l:"ตั้งค่า",icon:I.settings,perm:"settings"},
@@ -6244,8 +6249,8 @@ export default function App(){
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
-            {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings}/>}
-            {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser}/>}
+            {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setTab("orders")}/>}
+            {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
