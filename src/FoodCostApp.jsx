@@ -4312,6 +4312,11 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const[saving,setSaving]=useState(false);
   const[printingId,setPrintingId]=useState(null);
   const canOrder=hasPerm(currentUser,"orders");
+  // Edit + delete are restricted to the BRANCH that submitted the order — staff at
+  // central can't accidentally wipe a branch's request (they still get อนุมัติ /
+  // จัดส่ง buttons gated by isCentral for the workflow side).
+  const isOrderCreator=(order)=>+order.branch_id===+currentBranch?.id;
+  const canEditOrder=(order)=>canOrder&&isOrderCreator(order);
 
   const displayOrders=isCentral?(view==="all"?allOrders:orders):orders;
 
@@ -4424,13 +4429,13 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
             <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>สั่งโดย {order.requested_by} · {order.requested_at} · ช่วง: {order.note||"-"}</div>
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            {canOrder&&<button onClick={()=>setEditOrder(editOrder?.id===order.id?null:order)} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.pencil} s={12} c={C.blue}/>แก้ไข</button>}
+            {canEditOrder(order)&&<button onClick={()=>setEditOrder(editOrder?.id===order.id?null:order)} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.pencil} s={12} c={C.blue}/>แก้ไข</button>}
             <button onClick={()=>printOrder(order)} disabled={printingId===order.id} style={{background:C.lineLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:printingId===order.id?"not-allowed":"pointer",color:C.ink2,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5,opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/>{printingId===order.id?"กำลังพิมพ์...":"PDF/พิมพ์"}</button>
             {isCentral&&canOrder&&<>
               {order.status==="pending"&&<button onClick={()=>changeOrderStatus(order,"approved")} style={{background:C.greenLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.check} s={12} c={C.green}/>อนุมัติ</button>}
               {order.status==="approved"&&<button onClick={()=>changeOrderStatus(order,"delivered")} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.truck} s={12} c={C.blue}/>จัดส่ง + ตัดสต็อก</button>}
             </>}
-            {canOrder&&<button onClick={()=>deleteOrder(order)} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
+            {canEditOrder(order)&&<button onClick={()=>deleteOrder(order)} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
           </div>
         </div>
         <div style={{padding:"12px 18px"}}>
