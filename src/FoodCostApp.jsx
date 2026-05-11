@@ -466,17 +466,20 @@ function branchSafety(ing,branchId){
 function setBranchSafetyInJson(existing,branchId,value){
   return {...(existing||{}),[String(branchId)]:+value||0};
 }
-// Atomic stock transfer between two branches.
-// Single PATCH per ingredient flips both slots in stock_by_branch + ticks
+// Atomic stock mutation per ingredient.
+// Pass any combination of from/to:
+//   { fromBranchId: X, toBranchId: Y } → transfer X→Y (debit X, credit Y)
+//   { fromBranchId: null, toBranchId: Y } → external supplier delivery: credit Y only
+//   { fromBranchId: X, toBranchId: null } → write-off / rollback: debit X only
+// Single PATCH per ingredient flips the relevant slots in stock_by_branch + ticks
 // the receiver into visible_branches when autoVisible=true.
 //
 // items: array with { ingredient_id|ingId, qty|qtyNeeded, received_qty? }
-// fromBranchId omitted → deposit-only (no sender deduction; for legacy data)
 async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible}){
-  const toId=+toBranchId;
-  if(!toId)return;
+  const toId=toBranchId!=null?(+toBranchId||null):null;
   const fromId=fromBranchId!=null?(+fromBranchId||null):null;
-  if(fromId===toId)return;  // same-branch transfer is a no-op
+  if(!toId&&!fromId)return;            // no movement specified
+  if(toId&&fromId&&toId===fromId)return; // same-branch transfer is a no-op
   const agg=new Map();
   for(const it of (items||[])){
     const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
@@ -490,16 +493,16 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
   }
   for(const[ingId,{add,row}]of agg.entries()){
     let stockMap=row.stock_by_branch;
-    // Receiver: increment slot
-    const curRecv=branchStock(row,toId);
-    stockMap=setBranchStockInJson(stockMap,toId,Math.round((curRecv+add)*1000)/1000);
-    // Sender: decrement slot (allow negative for visibility into oversold conditions)
+    if(toId){
+      const curRecv=branchStock(row,toId);
+      stockMap=setBranchStockInJson(stockMap,toId,Math.round((curRecv+add)*1000)/1000);
+    }
     if(fromId){
       const curSender=branchStock(row,fromId);
       stockMap=setBranchStockInJson(stockMap,fromId,Math.round((curSender-add)*1000)/1000);
     }
     const patch={stock_by_branch:stockMap};
-    if(autoVisible){
+    if(autoVisible&&toId){
       const cur=row.visible_branches;
       if(cur!=null){  // null = visible to all → no change
         const arr=Array.isArray(cur)?[...cur]:[];
@@ -4308,7 +4311,6 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const isCentral=currentBranch.type==="central";
   const[mode,setMode]=useState("check");  // "check" = stock check / new order; "list" = existing orders
   const[view,setView]=useState(isCentral?"all":"mine");
-  const[editOrder,setEditOrder]=useState(null);
   const[saving,setSaving]=useState(false);
   const[printingId,setPrintingId]=useState(null);
   const canOrder=hasPerm(currentUser,"orders");
@@ -4319,6 +4321,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const canEditOrder=(order)=>canOrder&&isOrderCreator(order);
   const[expandedOrders,setExpandedOrders]=useState({});
   const toggleExpand=(id)=>setExpandedOrders(e=>({...e,[id]:!e[id]}));
+  const[editingQty,setEditingQty]=useState(null);    // { order, items:[mutable copies] }
+  const[receivingOrder,setReceivingOrder]=useState(null); // { order, items:[copies with receivedQty] }
 
   const displayOrders=isCentral?(view==="all"?allOrders:orders):orders;
 
@@ -4333,62 +4337,113 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     setTimeout(()=>{try{w.print();}catch{}setPrintingId(null);},600);
   }
 
-  // Status transition that moves stock central ↔ branch.
-  //   • approved/pending/rejected → delivered  : transfer central → branch (deduct + credit)
-  //   • delivered → approved/pending/rejected  : ROLLBACK — credit central / deduct branch
-  // Race-safe: uses updateOrderIfStatus so the DB refuses concurrent flips
-  // instead of double-moving stock.
-  async function changeOrderStatus(order,nextStatus){
-    if(order.status===nextStatus)return;
-    const willTransfer=nextStatus==="delivered"&&order.status!=="delivered";
-    const willRollback=order.status==="delivered"&&nextStatus!=="delivered";
-    const central=branches.find(b=>b&&b.type==="central");
-    const centralId=central?.id||null;
+  // ─── External-supplier order workflow ────────────────────────────────────
+  // pending  ── กด ✎ แก้จำนวน + กด 🖨 พิมพ์ส่งซัพพลาย → flip "approved"
+  // approved ── ✅ ยืนยันรับ + ใส่จำนวนจริง → flip "delivered" + เพิ่มสต็อกสาขา
+  // delivered ── reprint or delete (rollback deducts the credit)
+  // Race-safe via api.updateOrderIfStatus.
+  // ─────────────────────────────────────────────────────────────────────────
 
-    if(willTransfer){
-      if(!centralId){alert("ไม่พบครัวกลาง — เพิ่มสาขาประเภทครัวกลางก่อน");return;}
-      if(!await confirmDlg({
-        title:"ยืนยันจัดส่งคำสั่งซื้อ",
-        message:`จะหักสต็อกของครัวกลางและเพิ่มเข้าสาขา "${order.branch_name}" ตามจำนวนในคำสั่งซื้อ\n\nดำเนินการต่อใช่หรือไม่?`,
-        confirmLabel:"✅ จัดส่งและตัดสต็อก",
-      }))return;
-      try{
-        await api.updateOrderIfStatus(order.id,order.status,{status:"delivered"});
-        await transferStockBetweenBranches({fromBranchId:centralId,toBranchId:order.branch_id,items:order.items||[],ings,autoVisible:true});
-        if(reloadIngs)await reloadIngs();
-      }catch(e){alert("จัดส่งไม่สำเร็จ: "+(e.message||e));return;}
-    }else if(willRollback){
-      if(!centralId){alert("ไม่พบครัวกลาง");return;}
-      if(!await confirmDlg({
-        title:"ย้อนสถานะ + คืนสต็อก",
-        message:`เปลี่ยนสถานะจาก "จัดส่งแล้ว" → ระบบจะคืนสต็อก:\n• สาขา "${order.branch_name}" จะถูกหักออก\n• ครัวกลางจะถูกคืนเข้า\n\nดำเนินการต่อใช่หรือไม่?`,
-        danger:true,
-        confirmLabel:"✅ ย้อนสถานะ + คืนสต็อก",
-      }))return;
-      try{
-        await api.updateOrderIfStatus(order.id,"delivered",{status:nextStatus});
-        await transferStockBetweenBranches({fromBranchId:order.branch_id,toBranchId:centralId,items:order.items||[],ings,autoVisible:false});
-        if(reloadIngs)await reloadIngs();
-      }catch(e){alert("ย้อนสถานะไม่สำเร็จ: "+(e.message||e));return;}
-    }else{
-      try{await api.updateOrder(order.id,{status:nextStatus});}
-      catch{alert("ไม่สำเร็จ");return;}
-    }
-    await reload();
+  // ─ Edit qty
+  function startEditQty(order){
+    setEditingQty({
+      orderId:order.id,
+      orderStatus:order.status,
+      items:(order.items||[]).map((it,i)=>({...it,_key:i})),
+    });
+  }
+  async function saveEditQty(){
+    if(!editingQty)return;
+    const cleaned=editingQty.items
+      .map(it=>{
+        const qty=Math.max(0,+it.qtyNeeded||0);
+        const price=+it.pricePerUnit||0;
+        return{...it,qtyNeeded:Math.round(qty*1000)/1000,estimatedCost:Math.round(qty*price*100)/100};
+      })
+      .filter(it=>+it.qtyNeeded>0)
+      .map(({_key,...rest})=>rest);
+    if(cleaned.length===0){alert("ต้องมีรายการอย่างน้อย 1 รายการ");return;}
+    try{
+      await api.updateOrder(editingQty.orderId,{items:cleaned});
+      setEditingQty(null);
+      await reload();
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
   }
 
-  // Delete with stock rollback when the order had already moved stock
+  // ─ Print + flip status to "sent" (only on first print at pending)
+  async function printAndMarkSent(order){
+    printOrder(order);                              // open PDF window first
+    if(order.status!=="pending")return;             // already sent/delivered → reprint only
+    try{
+      await api.updateOrderIfStatus(order.id,"pending",{status:"approved"});
+      await reload();
+    }catch(e){console.error("status flip after print failed",e);}
+  }
+
+  // ─ Receive confirmation
+  function startReceive(order){
+    setReceivingOrder({
+      orderId:order.id,
+      orderStatus:order.status,
+      branchId:order.branch_id,
+      branchName:order.branch_name,
+      supplierName:order.supplier_name,
+      items:(order.items||[]).map((it,i)=>({
+        ...it,
+        _key:i,
+        receivedQty:it.receivedQty!=null?+it.receivedQty:(+it.qtyNeeded||0),
+      })),
+    });
+  }
+  async function confirmReceiveExternal(){
+    if(!receivingOrder)return;
+    const itemsWithReceived=receivingOrder.items.map(it=>({
+      ...it,
+      receivedQty:Math.max(0,Math.round((+it.receivedQty||0)*1000)/1000),
+    }));
+    if(!itemsWithReceived.some(it=>+it.receivedQty>0)){
+      alert("ยังไม่ได้ระบุจำนวนที่รับเข้าจริง");
+      return;
+    }
+    if(!await confirmDlg({
+      title:"ยืนยันรับสินค้า",
+      message:`ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต็อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?`,
+      confirmLabel:"✅ ยืนยัน + เพิ่มสต็อก",
+    }))return;
+    try{
+      // Lock first; only proceed if status matches what we read
+      const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
+      await api.updateOrderIfStatus(receivingOrder.orderId,receivingOrder.orderStatus,{items:payloadItems,status:"delivered"});
+      // External supplier → credit-only (no source deduction)
+      await transferStockBetweenBranches({
+        fromBranchId:null,
+        toBranchId:receivingOrder.branchId,
+        items:payloadItems.map(it=>({...it,ingredient_id:it.ingId,received_qty:it.receivedQty})),
+        ings,
+        autoVisible:true,
+      });
+      if(reloadIngs)await reloadIngs();
+      setReceivingOrder(null);
+      await reload();
+    }catch(e){alert("ยืนยันไม่สำเร็จ: "+(e.message||e));}
+  }
+
+  // ─ Delete (handles delivered rollback: deduct branch only — supplier was external)
   async function deleteOrder(order){
     const wasDelivered=order.status==="delivered";
-    const central=branches.find(b=>b&&b.type==="central");
-    const centralId=central?.id||null;
     const msg=wasDelivered
-      ?`ต้องการลบรายการสั่งวัตถุดิบนี้?\n\n⚠️ คำสั่งซื้อนี้ถูก "จัดส่งแล้ว" — ระบบจะคืนสต็อก:\n• สาขา "${order.branch_name}" จะถูกหักออก\n• ครัวกลางจะถูกคืนเข้า`
+      ?`ต้องการลบรายการสั่งวัตถุดิบนี้?\n\n⚠️ รับสินค้าแล้ว — ระบบจะหักสต็อกสาขา "${order.branch_name}" ที่เคยเพิ่มไว้`
       :"ต้องการลบรายการสั่งวัตถุดิบนี้ใช่หรือไม่?";
     if(!await confirmDlg({title:"ลบคำสั่งซื้อ",message:msg,danger:wasDelivered,confirmLabel:wasDelivered?"ลบ + คืนสต็อก":"ลบ"}))return;
     try{
-      if(wasDelivered&&centralId){
-        await transferStockBetweenBranches({fromBranchId:order.branch_id,toBranchId:centralId,items:order.items||[],ings,autoVisible:false});
+      if(wasDelivered){
+        await transferStockBetweenBranches({
+          fromBranchId:order.branch_id,
+          toBranchId:null,
+          items:(order.items||[]).map(it=>({...it,ingredient_id:it.ingId,received_qty:it.receivedQty!=null?it.receivedQty:it.qtyNeeded})),
+          ings,
+          autoVisible:false,
+        });
       }
       await api.deleteOrder(order.id);
       if(reloadIngs)await reloadIngs();
@@ -4397,7 +4452,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   }
 
   const statusColor={pending:"yellow",approved:"green",rejected:"red",delivered:"blue"};
-  const statusLabel={pending:"รอดำเนินการ",approved:"อนุมัติ",rejected:"ปฏิเสธ",delivered:"จัดส่งแล้ว"};
+  // External-supplier flow: pending → (กดพิมพ์ = ส่งให้ซัพ) approved → (ยืนยันรับ + บวกสต็อก) delivered
+  const statusLabel={pending:"รอส่งซัพพลาย",approved:"ส่งให้ซัพพลายแล้ว",rejected:"ปฏิเสธ",delivered:"รับสินค้าแล้ว"};
 
   return <div>
     {/* Back link to PO documents (this tab is reached via the button on POSection) */}
@@ -4455,14 +4511,15 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           <div style={{minWidth:100,display:"flex",justifyContent:"center"}}>
             <span style={{fontSize:11,fontWeight:800,color:stColor,background:stBg,padding:"4px 10px",borderRadius:18,whiteSpace:"nowrap",border:`1px solid ${stColor}33`,fontFamily:"'Sarabun',sans-serif"}}>{statusLabel[order.status]||order.status}</span>
           </div>
-          {/* 6. จัดการ (แก้ไข / ปริ้น / อนุมัติ-จัดส่ง / ลบ) */}
+          {/* 6. จัดการ — flow ใหม่:
+                  pending  ✎ แก้จำนวน · 🖨 พิมพ์ (= ส่งซัพพลาย) · 🗑 ลบ
+                  approved (ส่งแล้ว) ✅ ยืนยันรับ · 🖨 พิมพ์ซ้ำ · 🗑 ลบ
+                  delivered (รับแล้ว) 🖨 พิมพ์ซ้ำ · 🗑 ลบ (rollback)
+                  rejected  🗑 ลบ */}
           <div onClick={stopBubble} style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
-            {canEditOrder(order)&&<button onClick={()=>setEditOrder(editOrder?.id===order.id?null:order)} title="แก้ไขสถานะ" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
-            <button onClick={()=>printOrder(order)} disabled={printingId===order.id} title="พิมพ์ / PDF" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>
-            {isCentral&&canOrder&&<>
-              {order.status==="pending"&&<button onClick={()=>changeOrderStatus(order,"approved")} title="อนุมัติ" style={{background:C.greenLight,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.green,display:"flex",alignItems:"center",gap:4}}><Ic d={I.check} s={11} c={C.green}/>อนุมัติ</button>}
-              {order.status==="approved"&&<button onClick={()=>changeOrderStatus(order,"delivered")} title="จัดส่ง + ตัดสต็อก" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.blue,display:"flex",alignItems:"center",gap:4}}><Ic d={I.truck} s={11} c={C.blue}/>จัดส่ง</button>}
-            </>}
+            {canEditOrder(order)&&order.status==="pending"&&<button onClick={()=>startEditQty(order)} title="แก้ไขจำนวน" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
+            {(order.status==="pending"||order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title={order.status==="pending"?"พิมพ์ + ส่งซัพพลาย":"พิมพ์ซ้ำ"} style={{background:order.status==="pending"?"#FEF3C7":C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={order.status==="pending"?"#92400E":C.ink3}/></button>}
+            {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} disabled={confirming===order.id} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
             {canEditOrder(order)&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
           </div>
         </div>
@@ -4479,17 +4536,72 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
             </tbody>
           </table>
           {order.note&&<div style={{fontSize:11,color:C.ink4,marginTop:8,fontFamily:"'Sarabun',sans-serif"}}>หมายเหตุ: {order.note}</div>}
-          {editOrder?.id===order.id&&<div style={{marginTop:12,padding:"12px",background:C.bg,borderRadius:10}}>
-            <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เปลี่ยนสถานะ</div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {["pending","approved","rejected","delivered"].map(s=><button key={s} onClick={async()=>{await changeOrderStatus(order,s);setEditOrder(null);}} style={{padding:"6px 14px",borderRadius:8,border:`2px solid ${order.status===s?C.brand:C.line}`,background:order.status===s?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:order.status===s?C.brand:C.ink3}}>{statusLabel[s]}</button>)}
-            </div>
-          </div>}
         </div>}
       </Card>;
       })}
     </div>}
     </>}
+
+    {/* Edit qty modal */}
+    {editingQty&&<Modal title="✏️ แก้ไขจำนวนวัตถุดิบ" onClose={()=>setEditingQty(null)} wide>
+      <div style={{maxHeight:"50vh",overflowY:"auto",marginBottom:14}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","หน่วย","จำนวน","ราคา/หน่วย","รวม","ลบ"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+          <tbody>{editingQty.items.map((it,idx)=>{
+            const total=(+it.qtyNeeded||0)*(+it.pricePerUnit||0);
+            return <tr key={it._key} style={{borderTop:`1px solid ${C.lineLight}`}}>
+              <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>{it.name}</td>
+              <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{it.unit||"หน่วย"}</td>
+              <td style={{padding:"7px 10px"}}>
+                <NumStepper value={it.qtyNeeded} onChange={v=>setEditingQty(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,qtyNeeded:v}:x)}))} width={70}/>
+              </td>
+              <td style={{padding:"7px 10px",color:C.ink3}}>฿{(+it.pricePerUnit||0).toFixed(2)}</td>
+              <td style={{padding:"7px 10px",color:C.green,fontWeight:700}}>฿{total.toFixed(2)}</td>
+              <td style={{padding:"7px 10px",textAlign:"center"}}>
+                <button onClick={()=>setEditingQty(s=>({...s,items:s.items.filter((_,i)=>i!==idx)}))} style={{background:C.redLight,border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",display:"inline-flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+              </td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
+        <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>ยอดรวม</span>
+        <span style={{fontSize:16,fontWeight:900,color:C.green}}>฿{editingQty.items.reduce((s,it)=>s+((+it.qtyNeeded||0)*(+it.pricePerUnit||0)),0).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <Btn v="ghost" onClick={()=>setEditingQty(null)}>ยกเลิก</Btn>
+        <Btn onClick={saveEditQty} icon={I.check}>บันทึก</Btn>
+      </div>
+    </Modal>}
+
+    {/* Receive confirmation modal */}
+    {receivingOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingOrder.supplierName}`} onClose={()=>setReceivingOrder(null)} wide>
+      <div style={{background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
+        💡 ใส่จำนวนที่ <b>รับเข้าจริง</b> ในแต่ละรายการ — ระบบจะเพิ่มจำนวนเข้าสต็อกของสาขา "{receivingOrder.branchName}" ตามที่ใส่
+      </div>
+      <div style={{maxHeight:"45vh",overflowY:"auto",marginBottom:14}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","หน่วย"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+          <tbody>{receivingOrder.items.map((it,idx)=>{
+            const ordered=+it.qtyNeeded||0;
+            const got=+it.receivedQty||0;
+            const short=got<ordered;
+            return <tr key={it._key} style={{borderTop:`1px solid ${C.lineLight}`,background:short?"#FFFBEB":"transparent"}}>
+              <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>{it.name}</td>
+              <td style={{padding:"7px 10px",color:C.ink3}}>{ordered} {it.unit||""}</td>
+              <td style={{padding:"7px 10px"}}>
+                <NumStepper value={it.receivedQty} onChange={v=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={ordered}/>
+              </td>
+              <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{it.unit||"-"}{short&&<span style={{marginLeft:8,fontSize:10,color:"#92400E",fontWeight:800}}>ขาด {(ordered-got).toFixed(2)}</span>}</td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <Btn v="ghost" onClick={()=>setReceivingOrder(null)}>ยกเลิก</Btn>
+        <Btn v="success" onClick={confirmReceiveExternal} icon={I.check}>ยืนยันรับ + เพิ่มสต็อก</Btn>
+      </div>
+    </Modal>}
   </div>;
 }
 
