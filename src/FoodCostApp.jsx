@@ -4317,6 +4317,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   // จัดส่ง buttons gated by isCentral for the workflow side).
   const isOrderCreator=(order)=>+order.branch_id===+currentBranch?.id;
   const canEditOrder=(order)=>canOrder&&isOrderCreator(order);
+  const[expandedOrders,setExpandedOrders]=useState({});
+  const toggleExpand=(id)=>setExpandedOrders(e=>({...e,[id]:!e[id]}));
 
   const displayOrders=isCentral?(view==="all"?allOrders:orders):orders;
 
@@ -4417,35 +4419,48 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     </div>}
 
     {displayOrders.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.box} s={48} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีรายการสั่งวัตถุดิบ<br/><span style={{fontSize:13}}>กดที่แท็บ "เช็คสต็อก & สั่งซื้อ" เพื่อเริ่ม</span></p></div>
-    :<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    :<div style={{display:"flex",flexDirection:"column",gap:8}}>
       {displayOrders.map(order=>{
         const itemsTotal=(order.items||[]).reduce((s,it)=>s+(+it.estimatedCost||0),0);
         const itemsCount=(order.items||[]).length;
         const stColor={pending:"#F59E0B",approved:"#10B981",rejected:"#EF4444",delivered:"#3B82F6"}[order.status]||C.ink3;
         const stBg={pending:"#FEF3C7",approved:"#D1FAE5",rejected:"#FEE2E2",delivered:"#DBEAFE"}[order.status]||C.lineLight;
+        const isExpanded=!!expandedOrders[order.id];
+        const stopBubble=e=>e.stopPropagation();
         return <Card key={order.id} style={{overflow:"hidden"}}>
-        {/* Header — PO-like row: order no · branch → supplier · meta · status badge */}
-        <div style={{padding:"14px 18px",background:C.bg,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5,flexWrap:"wrap"}}>
-              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>📦 ORD-{order.id}</span>
-              <span style={{color:C.ink4,fontSize:12}}>·</span>
-              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.teal}}>{order.branch_name}</span>
-              <span style={{color:C.ink4,fontSize:13}}>→</span>
-              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.brand}}>{order.supplier_name}</span>
-            </div>
-            <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>
-              สั่งโดย {order.requested_by} · {order.requested_at} · {itemsCount} รายการ · <b style={{color:C.green}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</b>
-              {order.note?` · ${order.note}`:""}
-            </div>
+        {/* Single compact row — click leading area to expand items.
+            Status badge + every action button live inline so the row stays one line. */}
+        <div style={{padding:"10px 14px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          {/* Clickable info zone */}
+          <div onClick={()=>toggleExpand(order.id)} style={{flex:1,minWidth:240,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",cursor:"pointer",userSelect:"none"}}>
+            <span style={{fontSize:11,color:C.ink4,minWidth:14,textAlign:"center"}}>{isExpanded?"▼":"▶"}</span>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.ink}}>📦 ORD-{order.id}</span>
+            <span style={{color:C.ink4,fontSize:11}}>·</span>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,color:C.teal,whiteSpace:"nowrap"}}>{order.branch_name}</span>
+            <span style={{color:C.ink4,fontSize:12}}>→</span>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,color:C.brand,whiteSpace:"nowrap"}}>{order.supplier_name}</span>
+            <span style={{color:C.ink4,fontSize:11}}>·</span>
+            <span style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{itemsCount} รายการ</span>
+            <span style={{color:C.ink4,fontSize:11}}>·</span>
+            <span style={{fontSize:12,fontWeight:800,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+            <span style={{color:C.ink4,fontSize:11}}>·</span>
+            <span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{order.requested_by} · {order.requested_at}</span>
           </div>
-          <div>
-            <span style={{fontSize:13,fontWeight:800,color:stColor,background:stBg,padding:"6px 14px",borderRadius:20,whiteSpace:"nowrap",border:`1px solid ${stColor}33`,fontFamily:"'Sarabun',sans-serif"}}>{statusLabel[order.status]||order.status}</span>
+          {/* Status + actions — stopPropagation so clicks don't toggle expand */}
+          <div onClick={stopBubble} style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <span style={{fontSize:11,fontWeight:800,color:stColor,background:stBg,padding:"4px 10px",borderRadius:18,whiteSpace:"nowrap",border:`1px solid ${stColor}33`,fontFamily:"'Sarabun',sans-serif"}}>{statusLabel[order.status]||order.status}</span>
+            {canEditOrder(order)&&<button onClick={()=>setEditOrder(editOrder?.id===order.id?null:order)} title="แก้ไขสถานะ" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
+            <button onClick={()=>printOrder(order)} disabled={printingId===order.id} title="พิมพ์ / PDF" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>
+            {isCentral&&canOrder&&<>
+              {order.status==="pending"&&<button onClick={()=>changeOrderStatus(order,"approved")} title="อนุมัติ" style={{background:C.greenLight,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.green,display:"flex",alignItems:"center",gap:4}}><Ic d={I.check} s={11} c={C.green}/>อนุมัติ</button>}
+              {order.status==="approved"&&<button onClick={()=>changeOrderStatus(order,"delivered")} title="จัดส่ง + ตัดสต็อก" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.blue,display:"flex",alignItems:"center",gap:4}}><Ic d={I.truck} s={11} c={C.blue}/>จัดส่ง</button>}
+            </>}
+            {canEditOrder(order)&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
           </div>
         </div>
-        {/* Items table */}
-        <div style={{padding:"12px 18px 0"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+        {/* Items table — only when expanded */}
+        {isExpanded&&<div style={{padding:"4px 14px 12px",borderTop:`1px solid ${C.lineLight}`}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,marginTop:8}}>
             <thead><tr style={{background:C.bg}}>{["ซัพพลาย","วัตถุดิบ","จำนวนที่ต้องสั่ง","ราคาประมาณ"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:C.ink3,fontSize:11}}>{h}</th>)}</tr></thead>
             <tbody>{(order.items||[]).map((it,i)=><tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
               <td style={{padding:"7px 10px"}}><Chip color="teal">{it.supplierName||it.supplier_name||"ไม่ระบุ"}</Chip></td>
@@ -4455,23 +4470,14 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
             </tr>)}
             </tbody>
           </table>
+          {order.note&&<div style={{fontSize:11,color:C.ink4,marginTop:8,fontFamily:"'Sarabun',sans-serif"}}>หมายเหตุ: {order.note}</div>}
           {editOrder?.id===order.id&&<div style={{marginTop:12,padding:"12px",background:C.bg,borderRadius:10}}>
             <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เปลี่ยนสถานะ</div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {["pending","approved","rejected","delivered"].map(s=><button key={s} onClick={async()=>{await changeOrderStatus(order,s);setEditOrder(null);}} style={{padding:"6px 14px",borderRadius:8,border:`2px solid ${order.status===s?C.brand:C.line}`,background:order.status===s?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:order.status===s?C.brand:C.ink3}}>{statusLabel[s]}</button>)}
             </div>
           </div>}
-        </div>
-        {/* Footer — action buttons (moved here so each row's controls sit together at the end) */}
-        <div style={{padding:"10px 18px 14px",borderTop:`1px solid ${C.lineLight}`,display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end",marginTop:12}}>
-          {canEditOrder(order)&&<button onClick={()=>setEditOrder(editOrder?.id===order.id?null:order)} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.pencil} s={12} c={C.blue}/>แก้ไข</button>}
-          <button onClick={()=>printOrder(order)} disabled={printingId===order.id} style={{background:C.lineLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:printingId===order.id?"not-allowed":"pointer",color:C.ink2,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5,opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/>{printingId===order.id?"กำลังพิมพ์...":"PDF/พิมพ์"}</button>
-          {isCentral&&canOrder&&<>
-            {order.status==="pending"&&<button onClick={()=>changeOrderStatus(order,"approved")} style={{background:C.greenLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.check} s={12} c={C.green}/>อนุมัติ</button>}
-            {order.status==="approved"&&<button onClick={()=>changeOrderStatus(order,"delivered")} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.truck} s={12} c={C.blue}/>จัดส่ง + ตัดสต็อก</button>}
-          </>}
-          {canEditOrder(order)&&<button onClick={()=>deleteOrder(order)} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
-        </div>
+        </div>}
       </Card>;
       })}
     </div>}
