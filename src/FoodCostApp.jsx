@@ -4419,26 +4419,17 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     {displayOrders.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.box} s={48} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีรายการสั่งวัตถุดิบ<br/><span style={{fontSize:13}}>กดที่แท็บ "เช็คสต็อก & สั่งซื้อ" เพื่อเริ่ม</span></p></div>
     :<div style={{display:"flex",flexDirection:"column",gap:12}}>
       {displayOrders.map(order=><Card key={order.id} style={{overflow:"hidden"}}>
-        <div style={{padding:"14px 18px",background:C.bg,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
-          <div>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-              <Chip color="teal">{order.branch_name}</Chip>
-              <Chip color="orange">{order.supplier_name}</Chip>
-              <Chip color={statusColor[order.status]||"gray"}>{statusLabel[order.status]||order.status}</Chip>
-            </div>
-            <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>สั่งโดย {order.requested_by} · {order.requested_at} · ช่วง: {order.note||"-"}</div>
+        {/* Header — info only, action buttons live in the footer below the items */}
+        <div style={{padding:"14px 18px",background:C.bg,borderBottom:`1px solid ${C.line}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+            <Chip color="teal">{order.branch_name}</Chip>
+            <Chip color="orange">{order.supplier_name}</Chip>
+            <Chip color={statusColor[order.status]||"gray"}>{statusLabel[order.status]||order.status}</Chip>
           </div>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            {canEditOrder(order)&&<button onClick={()=>setEditOrder(editOrder?.id===order.id?null:order)} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.pencil} s={12} c={C.blue}/>แก้ไข</button>}
-            <button onClick={()=>printOrder(order)} disabled={printingId===order.id} style={{background:C.lineLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:printingId===order.id?"not-allowed":"pointer",color:C.ink2,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5,opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/>{printingId===order.id?"กำลังพิมพ์...":"PDF/พิมพ์"}</button>
-            {isCentral&&canOrder&&<>
-              {order.status==="pending"&&<button onClick={()=>changeOrderStatus(order,"approved")} style={{background:C.greenLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.check} s={12} c={C.green}/>อนุมัติ</button>}
-              {order.status==="approved"&&<button onClick={()=>changeOrderStatus(order,"delivered")} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.truck} s={12} c={C.blue}/>จัดส่ง + ตัดสต็อก</button>}
-            </>}
-            {canEditOrder(order)&&<button onClick={()=>deleteOrder(order)} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
-          </div>
+          <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>สั่งโดย {order.requested_by} · {order.requested_at} · ช่วง: {order.note||"-"}</div>
         </div>
-        <div style={{padding:"12px 18px"}}>
+        {/* Items table */}
+        <div style={{padding:"12px 18px 0"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
             <thead><tr style={{background:C.bg}}>{["ซัพพลาย","วัตถุดิบ","จำนวนที่ต้องสั่ง","ราคาประมาณ"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:C.ink3,fontSize:11}}>{h}</th>)}</tr></thead>
             <tbody>{(order.items||[]).map((it,i)=><tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
@@ -4455,6 +4446,16 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               {["pending","approved","rejected","delivered"].map(s=><button key={s} onClick={async()=>{await changeOrderStatus(order,s);setEditOrder(null);}} style={{padding:"6px 14px",borderRadius:8,border:`2px solid ${order.status===s?C.brand:C.line}`,background:order.status===s?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:order.status===s?C.brand:C.ink3}}>{statusLabel[s]}</button>)}
             </div>
           </div>}
+        </div>
+        {/* Footer — action buttons (moved here so each row's controls sit together at the end) */}
+        <div style={{padding:"10px 18px 14px",borderTop:`1px solid ${C.lineLight}`,display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end",marginTop:12}}>
+          {canEditOrder(order)&&<button onClick={()=>setEditOrder(editOrder?.id===order.id?null:order)} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.pencil} s={12} c={C.blue}/>แก้ไข</button>}
+          <button onClick={()=>printOrder(order)} disabled={printingId===order.id} style={{background:C.lineLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:printingId===order.id?"not-allowed":"pointer",color:C.ink2,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5,opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/>{printingId===order.id?"กำลังพิมพ์...":"PDF/พิมพ์"}</button>
+          {isCentral&&canOrder&&<>
+            {order.status==="pending"&&<button onClick={()=>changeOrderStatus(order,"approved")} style={{background:C.greenLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.check} s={12} c={C.green}/>อนุมัติ</button>}
+            {order.status==="approved"&&<button onClick={()=>changeOrderStatus(order,"delivered")} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:5}}><Ic d={I.truck} s={12} c={C.blue}/>จัดส่ง + ตัดสต็อก</button>}
+          </>}
+          {canEditOrder(order)&&<button onClick={()=>deleteOrder(order)} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
         </div>
       </Card>)}
     </div>}
