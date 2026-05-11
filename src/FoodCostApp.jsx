@@ -4428,27 +4428,35 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         const isExpanded=!!expandedOrders[order.id];
         const stopBubble=e=>e.stopPropagation();
         return <Card key={order.id} style={{overflow:"hidden"}}>
-        {/* Single compact row — click leading area to expand items.
-            Status badge + every action button live inline so the row stays one line. */}
-        <div style={{padding:"10px 14px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-          {/* Clickable info zone */}
-          <div onClick={()=>toggleExpand(order.id)} style={{flex:1,minWidth:240,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",cursor:"pointer",userSelect:"none"}}>
-            <span style={{fontSize:11,color:C.ink4,minWidth:14,textAlign:"center"}}>{isExpanded?"▼":"▶"}</span>
-            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.ink}}>📦 ORD-{order.id}</span>
-            <span style={{color:C.ink4,fontSize:11}}>·</span>
-            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,color:C.teal,whiteSpace:"nowrap"}}>{order.branch_name}</span>
-            <span style={{color:C.ink4,fontSize:12}}>→</span>
-            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,color:C.brand,whiteSpace:"nowrap"}}>{order.supplier_name}</span>
-            <span style={{color:C.ink4,fontSize:11}}>·</span>
-            <span style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{itemsCount} รายการ</span>
-            <span style={{color:C.ink4,fontSize:11}}>·</span>
-            <span style={{fontSize:12,fontWeight:800,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
-            <span style={{color:C.ink4,fontSize:11}}>·</span>
-            <span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{order.requested_by} · {order.requested_at}</span>
+        {/* Compact row — column layout matching the user-requested order:
+            เลขเอกสาร | วันที่+สร้างโดย | ซัพพลาย | รวม | สถานะ | จัดการ */}
+        <div style={{padding:"8px 14px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+          {/* 1. เลขเอกสาร (clickable expand) */}
+          <div onClick={()=>toggleExpand(order.id)} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",userSelect:"none",minWidth:140}}>
+            <span style={{fontSize:11,color:C.ink4,width:14,textAlign:"center"}}>{isExpanded?"▼":"▶"}</span>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.ink,whiteSpace:"nowrap"}}>📦 ORD-{order.id}</span>
           </div>
-          {/* Status + actions — stopPropagation so clicks don't toggle expand */}
-          <div onClick={stopBubble} style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+          {/* 2. วันที่+สร้างโดย (2 lines) */}
+          <div style={{minWidth:130,fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{fontSize:12,color:C.ink2,fontWeight:600,whiteSpace:"nowrap"}}>{order.requested_at}</div>
+            <div style={{fontSize:11,color:C.ink4,whiteSpace:"nowrap"}}>สร้างโดย {order.requested_by}</div>
+          </div>
+          {/* 3. ซัพพลาย */}
+          <div style={{flex:1,minWidth:140,fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{fontSize:13,fontWeight:800,color:C.brand,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{order.supplier_name}</div>
+            {isCentral&&<div style={{fontSize:11,color:C.ink4,whiteSpace:"nowrap"}}>สาขา: {order.branch_name}</div>}
+          </div>
+          {/* 4. จำนวนเงินรวม */}
+          <div style={{minWidth:90,textAlign:"right",fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{fontSize:14,fontWeight:900,color:C.green,whiteSpace:"nowrap"}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+            <div style={{fontSize:10,color:C.ink4,whiteSpace:"nowrap"}}>{itemsCount} รายการ</div>
+          </div>
+          {/* 5. สถานะ */}
+          <div style={{minWidth:100,display:"flex",justifyContent:"center"}}>
             <span style={{fontSize:11,fontWeight:800,color:stColor,background:stBg,padding:"4px 10px",borderRadius:18,whiteSpace:"nowrap",border:`1px solid ${stColor}33`,fontFamily:"'Sarabun',sans-serif"}}>{statusLabel[order.status]||order.status}</span>
+          </div>
+          {/* 6. จัดการ (แก้ไข / ปริ้น / อนุมัติ-จัดส่ง / ลบ) */}
+          <div onClick={stopBubble} style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
             {canEditOrder(order)&&<button onClick={()=>setEditOrder(editOrder?.id===order.id?null:order)} title="แก้ไขสถานะ" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
             <button onClick={()=>printOrder(order)} disabled={printingId===order.id} title="พิมพ์ / PDF" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>
             {isCentral&&canOrder&&<>
