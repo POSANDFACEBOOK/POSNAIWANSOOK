@@ -4418,15 +4418,30 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
 
     {displayOrders.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.box} s={48} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีรายการสั่งวัตถุดิบ<br/><span style={{fontSize:13}}>กดที่แท็บ "เช็คสต็อก & สั่งซื้อ" เพื่อเริ่ม</span></p></div>
     :<div style={{display:"flex",flexDirection:"column",gap:12}}>
-      {displayOrders.map(order=><Card key={order.id} style={{overflow:"hidden"}}>
-        {/* Header — info only, action buttons live in the footer below the items */}
-        <div style={{padding:"14px 18px",background:C.bg,borderBottom:`1px solid ${C.line}`}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
-            <Chip color="teal">{order.branch_name}</Chip>
-            <Chip color="orange">{order.supplier_name}</Chip>
-            <Chip color={statusColor[order.status]||"gray"}>{statusLabel[order.status]||order.status}</Chip>
+      {displayOrders.map(order=>{
+        const itemsTotal=(order.items||[]).reduce((s,it)=>s+(+it.estimatedCost||0),0);
+        const itemsCount=(order.items||[]).length;
+        const stColor={pending:"#F59E0B",approved:"#10B981",rejected:"#EF4444",delivered:"#3B82F6"}[order.status]||C.ink3;
+        const stBg={pending:"#FEF3C7",approved:"#D1FAE5",rejected:"#FEE2E2",delivered:"#DBEAFE"}[order.status]||C.lineLight;
+        return <Card key={order.id} style={{overflow:"hidden"}}>
+        {/* Header — PO-like row: order no · branch → supplier · meta · status badge */}
+        <div style={{padding:"14px 18px",background:C.bg,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5,flexWrap:"wrap"}}>
+              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>📦 ORD-{order.id}</span>
+              <span style={{color:C.ink4,fontSize:12}}>·</span>
+              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.teal}}>{order.branch_name}</span>
+              <span style={{color:C.ink4,fontSize:13}}>→</span>
+              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.brand}}>{order.supplier_name}</span>
+            </div>
+            <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>
+              สั่งโดย {order.requested_by} · {order.requested_at} · {itemsCount} รายการ · <b style={{color:C.green}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</b>
+              {order.note?` · ${order.note}`:""}
+            </div>
           </div>
-          <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>สั่งโดย {order.requested_by} · {order.requested_at} · ช่วง: {order.note||"-"}</div>
+          <div>
+            <span style={{fontSize:13,fontWeight:800,color:stColor,background:stBg,padding:"6px 14px",borderRadius:20,whiteSpace:"nowrap",border:`1px solid ${stColor}33`,fontFamily:"'Sarabun',sans-serif"}}>{statusLabel[order.status]||order.status}</span>
+          </div>
         </div>
         {/* Items table */}
         <div style={{padding:"12px 18px 0"}}>
@@ -4457,7 +4472,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           </>}
           {canEditOrder(order)&&<button onClick={()=>deleteOrder(order)} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
         </div>
-      </Card>)}
+      </Card>;
+      })}
     </div>}
     </>}
   </div>;
