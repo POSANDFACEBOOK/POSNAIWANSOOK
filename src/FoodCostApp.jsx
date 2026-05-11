@@ -4331,8 +4331,11 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     setPrintingId(order.id);
     const w=openPrintWindow(820,720);
     if(!w){setPrintingId(null);return;}
-    const rows=(order.items||[]).map(i=>`<tr><td>${esc(i.supplierName||i.supplier_name||"-")}</td><td>${esc(i.name)}</td><td>${esc(i.qtyNeeded||0)} ${esc(i.unit||"")}</td><td>฿${(+(i.estimatedCost||0)).toFixed(2)}</td></tr>`).join("");
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการสั่งวัตถุดิบ</title><style>body{font-family:'Sarabun',sans-serif;padding:24px}h2{color:#FF6B35}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}.status{display:inline-block;padding:2px 10px;border-radius:20px;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — รายการสั่งวัตถุดิบ</h2><p>สาขา: <b>${esc(order.branch_name)}</b> | ซัพพลาย: <b>${esc(order.supplier_name)}</b></p><p>สั่งโดย: <b>${esc(order.requested_by)}</b> | วันที่: ${esc(order.requested_at)}</p><p>ช่วงวันที่: ${esc(order.note||"-")}</p><table><thead><tr><th>ซัพพลาย</th><th>วัตถุดิบ</th><th>จำนวน</th><th>ราคาประมาณ</th></tr></thead><tbody>${rows}</tbody></table><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
+    // No price column — this document is handed to the external supplier
+    // who quotes their own price. The user records the actual price during
+    // "ยืนยันรับ".
+    const rows=(order.items||[]).map((i,n)=>`<tr><td style="text-align:center;color:#64748B">${n+1}</td><td>${esc(i.name)}</td><td>${esc(i.qtyNeeded||0)}</td><td>${esc(i.unit||"")}</td></tr>`).join("");
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการสั่งวัตถุดิบ</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 6px}.meta{font-size:13px;margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — รายการสั่งวัตถุดิบ</h2><p class="meta">ซัพพลายเออร์: <b>${esc(order.supplier_name)}</b></p><p class="meta">สาขาผู้สั่ง: <b>${esc(order.branch_name)}</b></p><p class="meta">สั่งโดย: <b>${esc(order.requested_by)}</b> · วันที่: ${esc(order.requested_at)}</p>${order.note?`<p class="meta">หมายเหตุ: ${esc(order.note)}</p>`:""}<table><thead><tr><th style="width:48px">ลำดับ</th><th>วัตถุดิบ</th><th style="width:120px">จำนวน</th><th style="width:90px">หน่วย</th></tr></thead><tbody>${rows}</tbody></table><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
     w.document.close();
     setTimeout(()=>{try{w.print();}catch{}setPrintingId(null);},600);
   }
@@ -4397,10 +4400,18 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   }
   async function confirmReceiveExternal(){
     if(!receivingOrder)return;
-    const itemsWithReceived=receivingOrder.items.map(it=>({
-      ...it,
-      receivedQty:Math.max(0,Math.round((+it.receivedQty||0)*1000)/1000),
-    }));
+    const itemsWithReceived=receivingOrder.items.map(it=>{
+      const qty=Math.max(0,Math.round((+it.receivedQty||0)*1000)/1000);
+      const price=Math.max(0,+it.pricePerUnit||0);
+      return{
+        ...it,
+        receivedQty:qty,
+        pricePerUnit:price,
+        // Update estimatedCost to reflect actual received qty × actual price
+        // (so the row's "ยอดรวม" reads as paid, not as initially estimated).
+        estimatedCost:Math.round(qty*price*100)/100,
+      };
+    });
     if(!itemsWithReceived.some(it=>+it.receivedQty>0)){
       alert("ยังไม่ได้ระบุจำนวนที่รับเข้าจริง");
       return;
@@ -4577,24 +4588,36 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     {/* Receive confirmation modal */}
     {receivingOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingOrder.supplierName}`} onClose={()=>setReceivingOrder(null)} wide>
       <div style={{background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
-        💡 ใส่จำนวนที่ <b>รับเข้าจริง</b> ในแต่ละรายการ — ระบบจะเพิ่มจำนวนเข้าสต็อกของสาขา "{receivingOrder.branchName}" ตามที่ใส่
+        💡 ใส่ <b>จำนวนที่รับจริง</b> และ <b>ราคา/หน่วย</b> ที่ซัพพลายเรียกเก็บ — ระบบจะเพิ่มสต็อกของสาขา "{receivingOrder.branchName}" และอัพเดทต้นทุนตามนี้
       </div>
       <div style={{maxHeight:"45vh",overflowY:"auto",marginBottom:14}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
-          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","หน่วย"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","ราคา/หน่วย","รวม"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:h==="รวม"?"right":"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
           <tbody>{receivingOrder.items.map((it,idx)=>{
             const ordered=+it.qtyNeeded||0;
             const got=+it.receivedQty||0;
+            const price=+it.pricePerUnit||0;
+            const lineTotal=got*price;
             const short=got<ordered;
             return <tr key={it._key} style={{borderTop:`1px solid ${C.lineLight}`,background:short?"#FFFBEB":"transparent"}}>
-              <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>{it.name}</td>
-              <td style={{padding:"7px 10px",color:C.ink3}}>{ordered} {it.unit||""}</td>
+              <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>
+                <div>{it.name}</div>
+                <div style={{fontSize:10,color:C.ink4,fontWeight:500}}>{it.unit||""}</div>
+              </td>
+              <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{ordered} {it.unit||""}{short&&<div style={{fontSize:10,color:"#92400E",fontWeight:800,marginTop:2}}>ขาด {(ordered-got).toFixed(2)}</div>}</td>
               <td style={{padding:"7px 10px"}}>
                 <NumStepper value={it.receivedQty} onChange={v=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={ordered}/>
               </td>
-              <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{it.unit||"-"}{short&&<span style={{marginLeft:8,fontSize:10,color:"#92400E",fontWeight:800}}>ขาด {(ordered-got).toFixed(2)}</span>}</td>
+              <td style={{padding:"7px 10px"}}>
+                <input type="number" min={0} step="0.01" value={it.pricePerUnit==null||it.pricePerUnit===""?"":it.pricePerUnit} onChange={e=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,pricePerUnit:e.target.value}:x)}))} placeholder="0.00" style={{...iS,padding:"6px 8px",fontSize:13,fontWeight:700,textAlign:"right",width:90,minHeight:34}}/>
+              </td>
+              <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:lineTotal>0?C.green:C.ink4,whiteSpace:"nowrap"}}>฿{lineTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
             </tr>;
           })}</tbody>
+          <tfoot><tr style={{background:C.bg,borderTop:`2px solid ${C.line}`}}>
+            <td colSpan={4} style={{padding:"10px 10px",textAlign:"right",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2}}>ยอดรวมทั้งสิ้น</td>
+            <td style={{padding:"10px 10px",textAlign:"right",fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:900,color:C.green,whiteSpace:"nowrap"}}>฿{receivingOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+          </tr></tfoot>
         </table>
       </div>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
