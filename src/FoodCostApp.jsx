@@ -514,6 +514,34 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     catch(err){console.error("transferStock failed",ingId,err);}
   }
 }
+
+// Reconcile stock that was already moved (at create time) against actual received.
+// For each item: delta = received_qty − qty
+//   delta > 0 (got more) → debit sender extra, credit receiver extra
+//   delta < 0 (got less) → credit sender back, debit receiver back
+// Items array shape: same as transfer; reads received_qty/receivedQty per row.
+async function applyReceiveDelta({senderId,receiverId,items,ings}){
+  if(!senderId||!receiverId)return;
+  const pos=[],neg=[];
+  for(const it of (items||[])){
+    const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
+    if(!ingId)continue;
+    const orig=+(it.qty!=null?it.qty:it.qtyNeeded)||0;
+    const recvRaw=it.received_qty!=null?it.received_qty:it.receivedQty;
+    const recv=recvRaw!=null?+recvRaw||0:orig;
+    const delta=recv-orig;
+    if(delta>0)pos.push({ingredient_id:ingId,qty:delta});
+    else if(delta<0)neg.push({ingredient_id:ingId,qty:Math.abs(delta)});
+  }
+  // received more → extra needs to leave sender and arrive at receiver
+  if(pos.length>0){
+    await transferStockBetweenBranches({fromBranchId:senderId,toBranchId:receiverId,items:pos,ings,autoVisible:false});
+  }
+  // received less → undo the surplus that was credited at create time
+  if(neg.length>0){
+    await transferStockBetweenBranches({fromBranchId:receiverId,toBranchId:senderId,items:neg,ings,autoVisible:false});
+  }
+}
 // Ingredient visibility resolver:
 //   visible_branches = null/undefined → visible to all branches (legacy default)
 //   visible_branches = []              → explicitly visible to NO branch (user "untick all")
@@ -3221,14 +3249,20 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   // Reverse the deposit when an already-received PO is cancelled or deleted:
   // pull stock back out of the receiver and credit it back to the sender.
   // Uses po.items (which acceptDispute has already clamped to actual received qty).
+  // New flow: stock moves at create/acceptRequest, not at receive. So rollback is
+  // triggered by status, not by received_at. We undo whatever the row currently
+  // represents — qty if items have no received_qty yet, otherwise received_qty.
   async function rollbackPOStock(po){
-    if(!po||!po.received_at)return;          // never moved stock → nothing to undo
+    if(!po)return;
+    // Statuses where stock has NOT been moved yet → nothing to roll back
+    const NOT_MOVED=new Set(["requested","cancelled"]);
+    if(NOT_MOVED.has(po.status))return;
     await transferStockBetweenBranches({
-      fromBranchId:po.branch_id,             // ← receiver gives back
-      toBranchId:po.from_branch_id,          // ← sender gets credited
+      fromBranchId:po.branch_id,             // receiver gives back
+      toBranchId:po.from_branch_id,          // sender gets credited
       items:po.items||[],
       ings,
-      autoVisible:false,                     // visibility was already granted; leave it
+      autoVisible:false,
     });
     if(reloadIngs)await reloadIngs();
   }
@@ -3243,8 +3277,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     const requesterName=(branchById[po.from_branch_id]||{}).name||"สาขา";
     if(!await confirmDlg({
       title:"รับเอกสารคำสั่งซื้อ",
-      message:`รับเอกสารจาก "${requesterName}"?\n\n• ระบบจะสลับ จาก/ถึง: เอกสารนี้จะกลายเป็น ${currentBranch.name} → ${requesterName}\n• ปุ่มพิมพ์ใบจัดของจะปรากฏหลังรับ\n• ปลายทางจะกดยืนยันรับสินค้าตามขั้นตอนปกติ`,
-      confirmLabel:"📨 รับเอกสาร",
+      message:`รับเอกสารจาก "${requesterName}"?\n\n• ระบบจะสลับ จาก/ถึง: ${currentBranch.name} → ${requesterName}\n• 💸 สต๊อกของครัวกลางจะถูกหักทันที + เพิ่มเข้าสาขาทันที\n• ปุ่มพิมพ์ใบจัดของจะปรากฏ\n• ปลายทางจะกดยืนยันรับสินค้าตามขั้นตอนปกติ`,
+      confirmLabel:"📨 รับเอกสาร + ย้ายสต๊อก",
     }))return;
     setConfirming(po.id);
     try{
@@ -3255,6 +3289,16 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         branch_id:po.from_branch_id,            // requester was from → becomes new to
         updated_at:new Date().toISOString(),
       });
+      // New flow: move stock immediately when central accepts (the moment the PO
+      // is "confirmed real"). Direction reflects the post-swap document.
+      await transferStockBetweenBranches({
+        fromBranchId:po.branch_id,              // = new from (central)
+        toBranchId:po.from_branch_id,           // = new to (requesting branch)
+        items:po.items||[],
+        ings,
+        autoVisible:true,
+      });
+      if(reloadIngs)await reloadIngs();
       await load();
     }catch(e){showErr("รับเอกสารไม่สำเร็จ",e);}
     setConfirming(null);
@@ -3262,12 +3306,12 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 
   async function confirmReceive(po){
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ยืนยันรับสินค้าได้");return;}
-    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• สต็อกของสาขาจะถูกเพิ่มอัตโนมัติ\n• วัตถุดิบที่ได้รับจะถูกติ๊กให้สาขานี้เห็น\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
+    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• สต๊อกถูกย้ายไปแล้วตอนสร้างเอกสาร — ไม่มีการเปลี่ยนแปลงสต๊อกเพิ่ม\n• ถ้ารับไม่ครบ ให้กด "สินค้าไม่ครบ" แทน\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
       const receivedAt=new Date().toISOString();
+      // New flow: stock already moved at create/acceptRequest — just flip status.
       await api.patchPOIfStatus(po.id,"open",{status:"awaiting_payment",received_at:receivedAt,received_by:currentUser?.username||currentUser?.name||null,updated_at:receivedAt});
-      await depositPOItemsToBranch(po,po.items);
       // Stage 1 → SlipTrack: create รายการค้างจ่าย (paid:false). Fire-and-forget.
       pushPOToSlipTrack({...po,status:"awaiting_payment",received_at:receivedAt},branches);
       await load();
@@ -3287,24 +3331,34 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   }
   async function acceptDispute(po){
     if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่ยอมรับได้");return;}
-    if(!await confirmDlg({title:"ยอมรับการแก้ไข",message:`ยอมรับจำนวนที่ปลายทางแจ้งใน ${po.po_number||"PO นี้"}?\n\n• ระบบจะปรับจำนวนและยอดรวมตามที่ปลายทางแจ้ง\n• สต็อกสาขาปลายทางจะถูกเพิ่มตามจำนวนที่รับจริง\n• เปลี่ยนสถานะเป็น "รอชำระเงิน"`,confirmLabel:"✅ ยอมรับการแก้ไข"}))return;
+    if(!await confirmDlg({title:"ยอมรับการแก้ไข",message:`ยอมรับจำนวนที่ปลายทางแจ้งใน ${po.po_number||"PO นี้"}?\n\n• ระบบจะปรับ delta สต็อก: คืนของส่วนที่ขาดให้ผู้ส่ง / หรือตัดเพิ่มถ้ารับเกิน\n• ยอดรวมจะถูกปรับตามจำนวนที่รับจริง\n• เปลี่ยนสถานะเป็น "รอชำระเงิน"`,confirmLabel:"✅ ยอมรับการแก้ไข"}))return;
     setConfirming(po.id);
     try{
-      // Preserve every existing item field; only adjust qty + line_total based on (clamped) received_qty
-      const newItems=(po.items||[]).map(it=>{
+      // Compute delta BEFORE mutating items so applyReceiveDelta sees both original
+      // qty and the receiver-reported received_qty per row.
+      const originalItems=po.items||[];
+      // Pricing recompute uses received qty (clamped to original)
+      const subtotal=round2(originalItems.reduce((s,it)=>{
         const orig=+it.qty||0;
         const recv=it.received_qty!=null?Math.max(0,Math.min(orig,+it.received_qty||0)):orig;
-        return{...it,qty:recv,line_total:round2(recv*(+it.price_per_unit||0))};
-      });
-      const subtotal=round2(newItems.reduce((s,i)=>s+(+i.line_total||0),0));
+        return s+recv*(+it.price_per_unit||0);
+      },0));
       const oldSub=+po.subtotal||0;
       const vatRate=oldSub>0?(+po.vat||0)/oldSub:0;
       const vat=round2(subtotal*vatRate);
       const total=round2(subtotal+vat);
+      // Persist items WITH received_qty (don't overwrite qty so we keep the
+      // original-vs-received split for future rollback / audit).
+      const newItems=originalItems.map(it=>{
+        const orig=+it.qty||0;
+        const recv=it.received_qty!=null?Math.max(0,Math.min(orig,+it.received_qty||0)):orig;
+        return{...it,received_qty:recv,line_total:round2(recv*(+it.price_per_unit||0))};
+      });
       const receivedAt=new Date().toISOString();
       await api.patchPOIfStatus(po.id,"disputed",{items:newItems,subtotal,vat,total,status:"awaiting_payment",received_at:receivedAt,received_by:po.dispute_by||null,updated_at:receivedAt});
-      // After accepting the disputed (clamped) qty, deposit those qty into the receiving branch
-      await depositPOItemsToBranch({...po,branch_id:po.branch_id},newItems.map(it=>({...it,received_qty:it.qty})));
+      // Delta-only reconcile against stock that was already moved at create/acceptRequest
+      await applyReceiveDelta({senderId:po.from_branch_id,receiverId:po.branch_id,items:newItems,ings});
+      if(reloadIngs)await reloadIngs();
       // Stage 1 (revised) → SlipTrack: re-POST with same external_id; server updates the pending row's amount/items
       pushPOToSlipTrack({...po,status:"awaiting_payment",items:newItems,subtotal,vat,total,received_at:receivedAt},branches);
       await load();setViewPO(null);
@@ -3364,7 +3418,17 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   }
   function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
   function pickBranch(b){setPickedBranch(b);setStep('form');}
-  function startEdit(po){const b=branches.find(x=>x.id===po.branch_id);setPickedBranch(b||null);setEditPO(po);setStep('form');}
+  function startEdit(po){
+    // Under the "stock moves at create" flow, editing items on a row whose stock
+    // has already been moved would silently desync (delta math is not yet wired
+    // through edit). Allow edit only on rows where stock has NOT been moved yet.
+    const STILL_EDITABLE=new Set(["requested"]);
+    if(!STILL_EDITABLE.has(po.status)){
+      alert(`เอกสารนี้สต๊อกถูกย้ายแล้ว — แก้ไขจำนวนไม่ได้\n\nถ้าจะเปลี่ยนรายการ ให้ลบใบนี้แล้วสร้างใหม่ครับ`);
+      return;
+    }
+    const b=branches.find(x=>x.id===po.branch_id);setPickedBranch(b||null);setEditPO(po);setStep('form');
+  }
   async function onSaved(){setStep(null);setEditPO(null);await load();}
 
   // ─── Stock transfer (no payment) ─────────────────────────────────────────
@@ -3380,26 +3444,36 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     const valid=transferForm.items.filter(it=>+it.qty>0);
     if(valid.length===0){alert("กรุณาเพิ่มวัตถุดิบและใส่จำนวน");return;}
     try{
+      const itemsPayload=valid.map(it=>({
+        ingredient_id:it.ingredient_id,
+        name:it.name,
+        unit:it.unit||"หน่วย",
+        qty:+it.qty||0,
+        price_per_unit:0,
+        line_total:0,
+        note:"",
+      }));
       await api.addPO({
         po_number:genPONumber(currentBranch.id).replace(/^PO-/,"TR-"),
         branch_id:toId,
         from_branch_id:currentBranch.id,
         po_date:todayBkk(),
         status:"transfer_pending",
-        items:valid.map(it=>({
-          ingredient_id:it.ingredient_id,
-          name:it.name,
-          unit:it.unit||"หน่วย",
-          qty:+it.qty||0,
-          price_per_unit:0,
-          line_total:0,
-          note:"",
-        })),
+        items:itemsPayload,
         subtotal:0,vat:0,total:0,
         notes:transferForm.notes||null,
         created_by:currentUser?.username||null,
         updated_at:new Date().toISOString(),
       });
+      // New flow: move stock IMMEDIATELY at create. Receive button adjusts delta.
+      await transferStockBetweenBranches({
+        fromBranchId:currentBranch.id,
+        toBranchId:toId,
+        items:itemsPayload,
+        ings,
+        autoVisible:true,
+      });
+      if(reloadIngs)await reloadIngs();
       setTransferForm(null);
       await load();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
@@ -3427,8 +3501,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     }
     if(!await confirmDlg({
       title:"ยืนยันรับโอน",
-      message:`รับโอนจาก "${(branchById[po.from_branch_id]||{}).name||"-"}"\n• สต็อกของต้นทางจะถูกหักออก\n• สต็อกของสาขา "${currentBranch.name}" จะถูกเพิ่มเข้า\n\nดำเนินการต่อ?`,
-      confirmLabel:"✅ รับโอน + ย้ายสต็อก",
+      message:`รับโอนจาก "${(branchById[po.from_branch_id]||{}).name||"-"}"\n\n• สต๊อกถูกย้ายไปแล้วตอนสร้างใบโอน\n• ถ้ามีรายการรับน้อยลง ระบบจะคืนของให้ต้นทาง\n• ถ้ารับมากกว่าที่ส่ง ระบบจะตัดจากต้นทางเพิ่ม\n\nดำเนินการต่อ?`,
+      confirmLabel:"✅ รับโอน + ปรับสต๊อก",
     }))return;
     setConfirming(po.id);
     try{
@@ -3440,13 +3514,12 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         received_by:currentUser?.username||currentUser?.name||null,
         updated_at:receivedAt,
       });
-      // 2-side stock move (debit source, credit destination)
-      await transferStockBetweenBranches({
-        fromBranchId:po.from_branch_id,
-        toBranchId:po.branch_id,
+      // Delta-only: stock was already moved at transfer create. Only adjust diff.
+      await applyReceiveDelta({
+        senderId:po.from_branch_id,
+        receiverId:po.branch_id,
         items:itemsWithReceived,
         ings,
-        autoVisible:true,
       });
       if(reloadIngs)await reloadIngs();
       setReceivingTransfer(null);
@@ -3597,7 +3670,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     </Modal>}
 
     {/* Step 2: Form */}
-    {step==='form'&&pickedBranch&&<POFormPage branch={pickedBranch} fromBranch={editPO?branchById[editPO.from_branch_id]:currentBranch} editPO={editPO} ings={ings} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved}/>}
+    {step==='form'&&pickedBranch&&<POFormPage branch={pickedBranch} fromBranch={editPO?branchById[editPO.from_branch_id]:currentBranch} editPO={editPO} ings={ings} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved} reloadIngs={reloadIngs}/>}
 
     {/* Full-screen view + actions */}
     {viewPO&&<POViewModal
@@ -3938,7 +4011,7 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
   </div>;
 }
 
-function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved}){
+function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,reloadIngs}){
   const today=todayBkk();
   const[items,setItems]=useState(editPO?.items||[]);
   const[poDate,setPoDate]=useState(editPO?.po_date||today);
@@ -4025,8 +4098,26 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved})
         created_by:editPO?.created_by||currentUser?.username||null,
         updated_at:new Date().toISOString(),
       };
-      if(editPO){await api.updatePO(editPO.id,payload);}
-      else{await api.addPO(payload);}
+      if(editPO){
+        await api.updatePO(editPO.id,payload);
+        // Edit path — items changed on a moved PO requires delta math; out of scope
+        // for now. Force user to cancel+recreate at "open"/"transfer_pending"/"disputed"
+        // by blocking edit at those statuses upstream.
+      }else{
+        await api.addPO(payload);
+        // New PO at status=open → move stock immediately (debit from, credit to).
+        // Other statuses (requested) wait for acceptRequest to move.
+        if(payload.status==="open"&&payload.from_branch_id&&payload.branch_id){
+          await transferStockBetweenBranches({
+            fromBranchId:payload.from_branch_id,
+            toBranchId:payload.branch_id,
+            items:payload.items,
+            ings,
+            autoVisible:true,
+          });
+          if(reloadIngs)await reloadIngs();
+        }
+      }
       await onSaved();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
     setSaving(false);
