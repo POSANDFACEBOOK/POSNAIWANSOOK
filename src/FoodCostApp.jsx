@@ -3150,6 +3150,10 @@ const PO_STATUS={
   paid:            {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#10B981",bg:"#D1FAE5"},
   received:        {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#10B981",bg:"#D1FAE5"}, // legacy alias
   cancelled:       {label:"❌ ยกเลิก",          short:"ยกเลิก",      color:"#94A3B8",bg:"#F1F5F9"},
+  // Free stock transfer between branches (no payment). Receiver presses
+  // "รับโอน" to move stock and flip to transfer_done.
+  transfer_pending:{label:"🔄 รอรับโอน",       short:"รอรับโอน",    color:"#0EA5E9",bg:"#E0F2FE"},
+  transfer_done:   {label:"✅ โอนเสร็จสิ้น",   short:"โอนเสร็จ",    color:"#10B981",bg:"#D1FAE5"},
 };
 function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders}){
   // Every branch (central or otherwise) can issue a PO to any other branch
@@ -3170,6 +3174,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[editPO,setEditPO]=useState(null);
   const[viewPO,setViewPO]=useState(null);
   const[confirming,setConfirming]=useState(null);
+  const[transferForm,setTransferForm]=useState(null);     // null | { toBranchId, items, notes }
+  const[receivingTransfer,setReceivingTransfer]=useState(null); // null | { po, items[receivedQty] }
   const hasPO=hasPerm(currentUser,"po")||hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
   // Per-PO permissions
   const isCreator=(po)=>+po.from_branch_id===currentBranch.id;
@@ -3359,6 +3365,94 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   function startEdit(po){const b=branches.find(x=>x.id===po.branch_id);setPickedBranch(b||null);setEditPO(po);setStep('form');}
   async function onSaved(){setStep(null);setEditPO(null);await load();}
 
+  // ─── Stock transfer (no payment) ─────────────────────────────────────────
+  // Source picks destination + items, then transfer sits in transfer_pending
+  // until destination presses "รับโอน". On receive: branch→branch stock move.
+  // ─────────────────────────────────────────────────────────────────────────
+  function startTransfer(){setTransferForm({toBranchId:"",items:[],notes:"",search:""});}
+  async function saveTransfer(){
+    if(!transferForm)return;
+    const toId=+transferForm.toBranchId;
+    if(!toId){alert("เลือกสาขาปลายทาง");return;}
+    if(+toId===+currentBranch.id){alert("สาขาปลายทางต้องไม่ใช่สาขาตัวเอง");return;}
+    const valid=transferForm.items.filter(it=>+it.qty>0);
+    if(valid.length===0){alert("กรุณาเพิ่มวัตถุดิบและใส่จำนวน");return;}
+    try{
+      await api.addPO({
+        po_number:genPONumber(currentBranch.id).replace(/^PO-/,"TR-"),
+        branch_id:toId,
+        from_branch_id:currentBranch.id,
+        po_date:todayBkk(),
+        status:"transfer_pending",
+        items:valid.map(it=>({
+          ingredient_id:it.ingredient_id,
+          name:it.name,
+          unit:it.unit||"หน่วย",
+          qty:+it.qty||0,
+          price_per_unit:0,
+          line_total:0,
+          note:"",
+        })),
+        subtotal:0,vat:0,total:0,
+        notes:transferForm.notes||null,
+        created_by:currentUser?.username||null,
+        updated_at:new Date().toISOString(),
+      });
+      setTransferForm(null);
+      await load();
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
+  }
+  function startReceiveTransfer(po){
+    setReceivingTransfer({
+      po,
+      items:(po.items||[]).map((it,i)=>({
+        ...it,
+        _key:i,
+        receivedQty:it.received_qty!=null?+it.received_qty:(+it.qty||0),
+      })),
+    });
+  }
+  async function confirmReceiveTransfer(){
+    if(!receivingTransfer)return;
+    const po=receivingTransfer.po;
+    const itemsWithReceived=receivingTransfer.items.map(({_key,...rest})=>{
+      const qty=Math.max(0,Math.round((+rest.receivedQty||0)*1000)/1000);
+      return{...rest,received_qty:qty,receivedQty:qty};
+    });
+    if(!itemsWithReceived.some(it=>+it.received_qty>0)){
+      alert("ยังไม่ได้ระบุจำนวนที่รับเข้าจริง");
+      return;
+    }
+    if(!await confirmDlg({
+      title:"ยืนยันรับโอน",
+      message:`รับโอนจาก "${(branchById[po.from_branch_id]||{}).name||"-"}"\n• สต็อกของต้นทางจะถูกหักออก\n• สต็อกของสาขา "${currentBranch.name}" จะถูกเพิ่มเข้า\n\nดำเนินการต่อ?`,
+      confirmLabel:"✅ รับโอน + ย้ายสต็อก",
+    }))return;
+    setConfirming(po.id);
+    try{
+      const receivedAt=new Date().toISOString();
+      await api.patchPOIfStatus(po.id,"transfer_pending",{
+        items:itemsWithReceived,
+        status:"transfer_done",
+        received_at:receivedAt,
+        received_by:currentUser?.username||currentUser?.name||null,
+        updated_at:receivedAt,
+      });
+      // 2-side stock move (debit source, credit destination)
+      await transferStockBetweenBranches({
+        fromBranchId:po.from_branch_id,
+        toBranchId:po.branch_id,
+        items:itemsWithReceived,
+        ings,
+        autoVisible:true,
+      });
+      if(reloadIngs)await reloadIngs();
+      setReceivingTransfer(null);
+      await load();
+    }catch(e){showErr("รับโอนไม่สำเร็จ",e);}
+    setConfirming(null);
+  }
+
   const branchById=Object.fromEntries(branches.map(b=>[b.id,b]));
   const totalAll=pos.reduce((s,p)=>s+(+p.total||0),0);
   const branchOptions=branches.filter(b=>b.id!==currentBranch.id&&b.active!==false);
@@ -3374,6 +3468,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
         {onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
+        {hasPO&&<Btn v="purple" onClick={startTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
     </div>
@@ -3465,10 +3560,11 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                 <td style={{padding:"8px 12px",textAlign:"center",whiteSpace:"nowrap"}}>
                   <div style={{display:"inline-flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
                     <button onClick={()=>setViewPO(po)} title="ดูรายละเอียด" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.eye} s={13} c={C.ink2}/></button>
-                    {po.status!=="requested"&&<button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์ (มีปุ่มดาวน์โหลด PDF ในหน้าพิมพ์)" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>}
-                    {canEditPO(po)&&po.status!=="paid"&&po.status!=="cancelled"&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
+                    {!["requested","transfer_pending","transfer_done"].includes(po.status)&&<button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์ (มีปุ่มดาวน์โหลด PDF ในหน้าพิมพ์)" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>}
+                    {canEditPO(po)&&po.status!=="paid"&&po.status!=="cancelled"&&po.status!=="transfer_done"&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
                     {canEditPO(po)&&<button onClick={()=>delPO(po)} title={po.status==="paid"?"ลบทิ้งถาวร (ระวัง: ชำระแล้ว)":"ลบ"} style={{background:po.status==="paid"?"#7F1D1D":C.redLight,border:`1px solid ${po.status==="paid"?"#7F1D1D":"#FECACA"}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={po.status==="paid"?C.white:C.red}/></button>}
                     {isReceiver(po)&&po.status==="requested"&&<button onClick={()=>acceptRequest(po)} disabled={confirming===po.id} title="รับเอกสารคำขอจากสาขา" style={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.purple}55`}}>📨 รับเอกสาร</button>}
+                    {isReceiver(po)&&po.status==="transfer_pending"&&<button onClick={()=>startReceiveTransfer(po)} disabled={confirming===po.id} title="รับโอนวัตถุดิบ" style={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px rgba(14,165,233,.35)`}}>🔄 รับโอน</button>}
                     {iCreator&&po.status==="awaiting_payment"&&<button onClick={()=>setPayPO(po)} title="ชำระเงิน" style={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.blue}55`}}>💳 ชำระเงิน</button>}
                     {iCreator&&po.status==="disputed"&&<button onClick={()=>acceptDispute(po)} disabled={confirming===po.id} title="ยอมรับการแก้ไข" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ยอมรับการแก้</button>}
                     {canConfirmPO(po)&&<button onClick={()=>setViewPO(po)} title="ตรวจสอบ + ยืนยันรับ" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ตรวจรับ</button>}
@@ -3520,6 +3616,99 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       onDelete={()=>delPO(viewPO)}
     />}
     {payPO&&<POPaymentModal po={payPO} fromBranch={branchById[payPO.from_branch_id]} toBranch={branchById[payPO.branch_id]} onClose={()=>setPayPO(null)} onSubmit={(url,note)=>{submitPayment(payPO,url,note);setPayPO(null);}}/>}
+
+    {/* Transfer creation — pick destination + items + qty, no price */}
+    {transferForm&&(()=>{
+      const branchIngs=ings.filter(i=>{
+        if(!ingVisibleAt(i,currentBranch?.id,currentBranch?.type==="central"))return false;
+        return branchStock(i,currentBranch?.id)>0;
+      });
+      const used=new Set(transferForm.items.map(it=>+it.ingredient_id));
+      const q=(transferForm.search||"").trim().toLowerCase();
+      const matches=branchIngs.filter(i=>!used.has(+i.id)&&(i.name.toLowerCase().includes(q)||(i.category||"").toLowerCase().includes(q))).slice(0,30);
+      const branchOpts=branches.filter(b=>+b.id!==+currentBranch.id&&b.active!==false);
+      return <Modal title={`🔄 โอนวัตถุดิบ — จากสาขา "${currentBranch.name}"`} onClose={()=>setTransferForm(null)} extraWide>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+          <Sel label="สาขาปลายทาง *" value={transferForm.toBranchId} onChange={e=>setTransferForm(s=>({...s,toBranchId:e.target.value}))} options={[{v:"",l:"— เลือกสาขา —"},...branchOpts.map(b=>({v:b.id,l:b.name}))]}/>
+          <Inp label="หมายเหตุ (ถ้ามี)" value={transferForm.notes} onChange={e=>setTransferForm(s=>({...s,notes:e.target.value}))} placeholder="เช่น โอนเพื่อช่วยสาขา..."/>
+        </div>
+        <div style={{marginBottom:12}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6}}>🔍 ค้นหาวัตถุดิบเพื่อเพิ่ม (เฉพาะที่มีสต๊อกในสาขานี้)</div>
+          <div style={{position:"relative"}}>
+            <input value={transferForm.search} onChange={e=>setTransferForm(s=>({...s,search:e.target.value}))} placeholder="พิมพ์ชื่อวัตถุดิบ..." style={{...iS,paddingLeft:36}}/>
+            <span style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={15} c={C.ink4}/></span>
+          </div>
+          {q&&matches.length>0&&<div style={{marginTop:6,border:`1px solid ${C.line}`,borderRadius:10,maxHeight:200,overflowY:"auto"}}>
+            {matches.map(ing=><div key={ing.id} onClick={()=>setTransferForm(s=>({
+              ...s,
+              search:"",
+              items:[{ingredient_id:ing.id,name:ing.name,unit:ing.buy_unit||"หน่วย",qty:1,max_qty:branchStock(ing,currentBranch?.id),_key:Math.random()},...s.items],
+            }))} style={{padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.lineLight}`,fontFamily:"'Sarabun',sans-serif",fontSize:13,display:"flex",justifyContent:"space-between",alignItems:"center"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=C.white}>
+              <span><b>{ing.name}</b> {ing.category&&<span style={{color:C.ink4,fontSize:11,marginLeft:6}}>({ing.category})</span>}</span>
+              <span style={{fontSize:11,color:C.green,fontWeight:700}}>มี {branchStock(ing,currentBranch?.id)} {ing.buy_unit}</span>
+            </div>)}
+          </div>}
+          {q&&matches.length===0&&<div style={{padding:"10px 12px",color:C.ink4,fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบ — หรืออาจไม่มีสต๊อกในสาขานี้</div>}
+        </div>
+        {transferForm.items.length===0?<div style={{padding:"30px 20px",textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif",background:C.bg,borderRadius:10,marginBottom:14}}>ยังไม่มีรายการ — ค้นหาแล้วคลิกเพื่อเพิ่ม</div>
+        :<div style={{maxHeight:"40vh",overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10,marginBottom:14}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+            <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สต๊อกในสาขา","จำนวนโอน","หน่วย","ลบ"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+            <tbody>{transferForm.items.map((it,idx)=>{
+              const overStock=(+it.qty||0)>(+it.max_qty||0);
+              return <tr key={it._key||idx} style={{borderTop:`1px solid ${C.lineLight}`,background:overStock?"#FEE2E2":"transparent"}}>
+                <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>{it.name}</td>
+                <td style={{padding:"7px 10px",color:C.ink3,fontSize:12,whiteSpace:"nowrap"}}>{it.max_qty} {it.unit}</td>
+                <td style={{padding:"7px 10px"}}>
+                  <NumStepper value={it.qty} onChange={v=>setTransferForm(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,qty:v}:x)}))} max={+it.max_qty||999999} width={70}/>
+                  {overStock&&<div style={{fontSize:10,color:C.red,fontWeight:800,marginTop:2}}>เกินสต๊อก!</div>}
+                </td>
+                <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{it.unit||"-"}</td>
+                <td style={{padding:"7px 10px",textAlign:"center"}}>
+                  <button onClick={()=>setTransferForm(s=>({...s,items:s.items.filter((_,i)=>i!==idx)}))} style={{background:C.redLight,border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",display:"inline-flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+                </td>
+              </tr>;
+            })}</tbody>
+          </table>
+        </div>}
+        <div style={{background:"#E0F2FE",border:`1px solid #0EA5E933`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
+          💡 การโอน <b>ไม่มีการคิดเงิน</b> — สต็อกจะถูกตัดที่ต้นทางและเพิ่มที่ปลายทาง <b>เมื่อปลายทางกดยืนยันรับโอนเท่านั้น</b>
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <Btn v="ghost" onClick={()=>setTransferForm(null)}>ยกเลิก</Btn>
+          <Btn onClick={saveTransfer} icon={I.check} disabled={!transferForm.toBranchId||transferForm.items.length===0}>ส่งคำสั่งโอน</Btn>
+        </div>
+      </Modal>;
+    })()}
+
+    {/* Receive transfer — destination confirms received qty per item */}
+    {receivingTransfer&&<Modal title={`🔄 รับโอนวัตถุดิบจาก "${(branchById[receivingTransfer.po.from_branch_id]||{}).name||"-"}"`} onClose={()=>setReceivingTransfer(null)} wide>
+      <div style={{background:"#E0F2FE",border:`1px solid #0EA5E933`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
+        💡 ใส่จำนวนที่ <b>รับเข้าจริง</b> — ระบบจะ <b>หักสต็อกต้นทาง</b> และ <b>เพิ่มสต็อกสาขา "{currentBranch.name}"</b> ตามจำนวนนี้
+      </div>
+      <div style={{maxHeight:"45vh",overflowY:"auto",marginBottom:14}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","ส่งมา","รับจริง","หน่วย"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+          <tbody>{receivingTransfer.items.map((it,idx)=>{
+            const sent=+it.qty||0;
+            const got=+it.receivedQty||0;
+            const short=got<sent;
+            return <tr key={it._key} style={{borderTop:`1px solid ${C.lineLight}`,background:short?"#FFFBEB":"transparent"}}>
+              <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>{it.name}</td>
+              <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{sent} {it.unit||""}</td>
+              <td style={{padding:"7px 10px"}}>
+                <NumStepper value={it.receivedQty} onChange={v=>setReceivingTransfer(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={sent}/>
+              </td>
+              <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{it.unit||"-"}{short&&<span style={{marginLeft:8,fontSize:10,color:"#92400E",fontWeight:800}}>ขาด {(sent-got).toFixed(2)}</span>}</td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <Btn v="ghost" onClick={()=>setReceivingTransfer(null)}>ยกเลิก</Btn>
+        <Btn v="success" onClick={confirmReceiveTransfer} icon={I.check}>✅ รับโอน + ย้ายสต็อก</Btn>
+      </div>
+    </Modal>}
   </div>;
 }
 
