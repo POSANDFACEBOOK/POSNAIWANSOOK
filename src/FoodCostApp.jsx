@@ -3174,7 +3174,11 @@ const PO_STATUS={
   // Branch sent a stock-check order to central (จาก=สาขา → ถึง=ครัวกลาง).
   // Central must press "รับเอกสาร" to swap from/to and move it into "open".
   requested:       {label:"📨 รอครัวกลางรับ",  short:"รอครัวกลางรับ",color:"#A855F7",bg:"#F5F3FF"},
-  open:            {label:"⏳ เปิดอยู่",       short:"เปิดอยู่",    color:"#F59E0B",bg:"#FEF3C7"},
+  // Central accepted the request; document direction is correct (central → branch)
+  // but stock has NOT moved yet. Central can print and then press "🚚 จัดส่ง".
+  open:            {label:"📋 รอจัดส่ง",       short:"รอจัดส่ง",    color:"#F59E0B",bg:"#FEF3C7"},
+  // Stock has moved from central → branch. Branch can press "ตรวจรับ".
+  shipped:         {label:"🚚 จัดส่งแล้ว",     short:"จัดส่งแล้ว",  color:"#0EA5E9",bg:"#E0F2FE"},
   disputed:        {label:"⚠️ ส่งกลับ",        short:"ส่งกลับ",     color:"#EA580C",bg:"#FFEDD5"},
   awaiting_payment:{label:"💰 รอชำระเงิน",     short:"รอชำระเงิน",  color:"#3B82F6",bg:"#DBEAFE"},
   paid:            {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#10B981",bg:"#D1FAE5"},
@@ -3211,7 +3215,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const isCreator=(po)=>+po.from_branch_id===currentBranch.id;
   const isReceiver=(po)=>+po.branch_id===currentBranch.id;
   const canEditPO=(po)=>hasPO&&isCreator(po);
-  const canConfirmPO=(po)=>hasPO&&isReceiver(po)&&po.status==="open";
+  const canConfirmPO=(po)=>hasPO&&isReceiver(po)&&po.status==="shipped";
 
   async function load(){
     setLoading(true);
@@ -3277,41 +3281,59 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     const requesterName=(branchById[po.from_branch_id]||{}).name||"สาขา";
     if(!await confirmDlg({
       title:"รับเอกสารคำสั่งซื้อ",
-      message:`รับเอกสารจาก "${requesterName}"?\n\n• ระบบจะสลับ จาก/ถึง: ${currentBranch.name} → ${requesterName}\n• 💸 สต๊อกของครัวกลางจะถูกหักทันที + เพิ่มเข้าสาขาทันที\n• ปุ่มพิมพ์ใบจัดของจะปรากฏ\n• ปลายทางจะกดยืนยันรับสินค้าตามขั้นตอนปกติ`,
-      confirmLabel:"📨 รับเอกสาร + ย้ายสต๊อก",
+      message:`รับเอกสารจาก "${requesterName}"?\n\n• ระบบจะสลับ จาก/ถึง: ${currentBranch.name} → ${requesterName}\n• เอกสารจะอยู่ในสถานะ "📋 รอจัดส่ง" — ยังไม่ตัดสต๊อก\n• ครัวกลางพิมพ์ใบ → กด "🚚 จัดส่ง" ตอนพร้อมส่งของ\n• ตอนกด จัดส่ง สต๊อกจะถูกตัดและเพิ่มเข้าสาขาทันที`,
+      confirmLabel:"📨 รับเอกสาร",
     }))return;
     setConfirming(po.id);
     try{
-      // Swap from/to + flip status to open. patchPOIfStatus is race-safe.
+      // Swap from/to + flip status to open. NO stock move yet — wait for "🚚 จัดส่ง".
       await api.patchPOIfStatus(po.id,"requested",{
         status:"open",
         from_branch_id:po.branch_id,            // central was branch_id → becomes new from
         branch_id:po.from_branch_id,            // requester was from → becomes new to
         updated_at:new Date().toISOString(),
       });
-      // New flow: move stock immediately when central accepts (the moment the PO
-      // is "confirmed real"). Direction reflects the post-swap document.
+      await load();
+    }catch(e){showErr("รับเอกสารไม่สำเร็จ",e);}
+    setConfirming(null);
+  }
+
+  // Creator (central) clicks "🚚 จัดส่ง" — moves stock + flips status to "shipped".
+  // Race-safe via patchPOIfStatus.
+  async function shipPO(po){
+    if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่จัดส่งได้");return;}
+    if(po.status!=="open"){alert("เอกสารนี้ไม่ได้อยู่ในสถานะรอจัดส่ง");return;}
+    const recipient=(branchById[po.branch_id]||{}).name||"ปลายทาง";
+    if(!await confirmDlg({
+      title:"ยืนยันจัดส่ง + ตัดสต๊อก",
+      message:`จัดส่ง ${po.po_number||"PO นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 📦 สต๊อกของ ${recipient} จะถูกเพิ่มเข้าทันที\n• สถานะเปลี่ยนเป็น "🚚 จัดส่งแล้ว"\n• สาขาปลายทางจะกด "ตรวจรับ" ตามขั้นตอนปกติ`,
+      confirmLabel:"🚚 จัดส่ง + ตัดสต๊อก",
+    }))return;
+    setConfirming(po.id);
+    try{
+      const shippedAt=new Date().toISOString();
+      await api.patchPOIfStatus(po.id,"open",{status:"shipped",updated_at:shippedAt});
       await transferStockBetweenBranches({
-        fromBranchId:po.branch_id,              // = new from (central)
-        toBranchId:po.from_branch_id,           // = new to (requesting branch)
+        fromBranchId:po.from_branch_id,
+        toBranchId:po.branch_id,
         items:po.items||[],
         ings,
         autoVisible:true,
       });
       if(reloadIngs)await reloadIngs();
       await load();
-    }catch(e){showErr("รับเอกสารไม่สำเร็จ",e);}
+    }catch(e){showErr("จัดส่งไม่สำเร็จ",e);}
     setConfirming(null);
   }
 
   async function confirmReceive(po){
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ยืนยันรับสินค้าได้");return;}
-    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• สต๊อกถูกย้ายไปแล้วตอนสร้างเอกสาร — ไม่มีการเปลี่ยนแปลงสต๊อกเพิ่ม\n• ถ้ารับไม่ครบ ให้กด "สินค้าไม่ครบ" แทน\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
+    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• สต๊อกถูกย้ายไปแล้วตอนจัดส่ง — ไม่มีการเปลี่ยนแปลงสต๊อกเพิ่ม\n• ถ้ารับไม่ครบ ให้กด "สินค้าไม่ครบ" แทน\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
       const receivedAt=new Date().toISOString();
-      // New flow: stock already moved at create/acceptRequest — just flip status.
-      await api.patchPOIfStatus(po.id,"open",{status:"awaiting_payment",received_at:receivedAt,received_by:currentUser?.username||currentUser?.name||null,updated_at:receivedAt});
+      // New flow: stock already moved at จัดส่ง — just flip status.
+      await api.patchPOIfStatus(po.id,"shipped",{status:"awaiting_payment",received_at:receivedAt,received_by:currentUser?.username||currentUser?.name||null,updated_at:receivedAt});
       // Stage 1 → SlipTrack: create รายการค้างจ่าย (paid:false). Fire-and-forget.
       pushPOToSlipTrack({...po,status:"awaiting_payment",received_at:receivedAt},branches);
       await load();
@@ -3324,7 +3346,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     try{
       // Clamp received_qty to [0, original qty] to prevent fraud
       const safeItems=(updatedItems||[]).map(it=>{const orig=+it.qty||0;const got=Math.max(0,Math.min(orig,+it.received_qty||0));return{...it,received_qty:got};});
-      await api.patchPOIfStatus(po.id,"open",{items:safeItems,status:"disputed",dispute_note:note||null,dispute_at:new Date().toISOString(),dispute_by:currentUser?.username||null,updated_at:new Date().toISOString()});
+      await api.patchPOIfStatus(po.id,"shipped",{items:safeItems,status:"disputed",dispute_note:note||null,dispute_at:new Date().toISOString(),dispute_by:currentUser?.username||null,updated_at:new Date().toISOString()});
       await load();setViewPO(null);
     }catch(e){showErr("ส่งกลับไม่สำเร็จ",e);}
     setConfirming(null);
@@ -3419,10 +3441,12 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
   function pickBranch(b){setPickedBranch(b);setStep('form');}
   function startEdit(po){
-    // Under the "stock moves at create" flow, editing items on a row whose stock
-    // has already been moved would silently desync (delta math is not yet wired
-    // through edit). Allow edit only on rows where stock has NOT been moved yet.
-    const STILL_EDITABLE=new Set(["requested"]);
+    // Editing items is safe only when stock hasn't moved yet:
+    //   • "requested" — central hasn't accepted
+    //   • "open" — central accepted but hasn't pressed "🚚 จัดส่ง"
+    // Once status is "shipped" or beyond, stock is in the system and item-edits
+    // would silently desync (delta math at edit is not yet wired).
+    const STILL_EDITABLE=new Set(["requested","open"]);
     if(!STILL_EDITABLE.has(po.status)){
       alert(`เอกสารนี้สต๊อกถูกย้ายแล้ว — แก้ไขจำนวนไม่ได้\n\nถ้าจะเปลี่ยนรายการ ให้ลบใบนี้แล้วสร้างใหม่ครับ`);
       return;
@@ -3571,7 +3595,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
           <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
             <option value="">— ทุกสถานะ —</option>
             <option value="requested">📨 รอครัวกลางรับ</option>
-            <option value="open">⏳ เปิดอยู่</option>
+            <option value="open">📋 รอจัดส่ง</option>
+            <option value="shipped">🚚 จัดส่งแล้ว</option>
             <option value="awaiting_payment">💰 รอชำระเงิน</option>
             <option value="paid">✅ จ่ายแล้ว</option>
           </select>
@@ -3640,6 +3665,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                     {canEditPO(po)&&po.status!=="paid"&&po.status!=="cancelled"&&po.status!=="transfer_done"&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
                     {canEditPO(po)&&<button onClick={()=>delPO(po)} title={po.status==="paid"?"ลบทิ้งถาวร (ระวัง: ชำระแล้ว)":"ลบ"} style={{background:po.status==="paid"?"#7F1D1D":C.redLight,border:`1px solid ${po.status==="paid"?"#7F1D1D":"#FECACA"}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={po.status==="paid"?C.white:C.red}/></button>}
                     {isReceiver(po)&&po.status==="requested"&&<button onClick={()=>acceptRequest(po)} disabled={confirming===po.id} title="รับเอกสารคำขอจากสาขา" style={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.purple}55`}}>📨 รับเอกสาร</button>}
+                    {iCreator&&po.status==="open"&&<button onClick={()=>shipPO(po)} disabled={confirming===po.id} title="จัดส่ง + ตัดสต๊อกครัวกลาง" style={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px rgba(14,165,233,.35)`}}>🚚 จัดส่ง</button>}
                     {isReceiver(po)&&po.status==="transfer_pending"&&<button onClick={()=>startReceiveTransfer(po)} disabled={confirming===po.id} title="รับโอนวัตถุดิบ" style={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px rgba(14,165,233,.35)`}}>🔄 รับโอน</button>}
                     {iCreator&&po.status==="awaiting_payment"&&<button onClick={()=>setPayPO(po)} title="ชำระเงิน" style={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.blue}55`}}>💳 ชำระเงิน</button>}
                     {iCreator&&po.status==="disputed"&&<button onClick={()=>acceptDispute(po)} disabled={confirming===po.id} title="ยอมรับการแก้ไข" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ยอมรับการแก้</button>}
@@ -3683,6 +3709,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       canDelete={canEditPO(viewPO)}
       onClose={()=>setViewPO(null)}
       onAcceptRequest={()=>acceptRequest(viewPO)}
+      onShip={()=>shipPO(viewPO)}
       onConfirmReceive={()=>confirmReceive(viewPO)}
       onSubmitDispute={(items,note)=>submitDispute(viewPO,items,note)}
       onAcceptDispute={()=>acceptDispute(viewPO)}
@@ -3789,7 +3816,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 }
 
 // Full-screen PO view with status-aware actions
-function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canDelete,onClose,onAcceptRequest,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel,onDelete}){
+function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canDelete,onClose,onAcceptRequest,onShip,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel,onDelete}){
   const isCreator=+po.from_branch_id===currentBranch.id;
   const isReceiver=+po.branch_id===currentBranch.id;
   const st=PO_STATUS[po.status]||{label:po.status,color:C.ink3,bg:C.lineLight};
@@ -3801,10 +3828,12 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const[disputeNote,setDisputeNote]=useState(po.dispute_note||"");
   // Permissions for actions in this view
   const canAcceptReq=isReceiver&&po.status==="requested";
-  const canConfirmReceive=isReceiver&&po.status==="open";
-  const canDispute=isReceiver&&po.status==="open";
+  const canShipPO=isCreator&&po.status==="open";
+  const canConfirmReceive=isReceiver&&po.status==="shipped";
+  const canDispute=isReceiver&&po.status==="shipped";
   const canAcceptDispute=isCreator&&po.status==="disputed";
-  const canEditFromView=isCreator&&(po.status==="open"||po.status==="disputed"||po.status==="requested");
+  // Items can only be edited where stock hasn't moved yet (requested, open).
+  const canEditFromView=isCreator&&(po.status==="open"||po.status==="requested");
   const canPayNow=isCreator&&po.status==="awaiting_payment";
   const canCancelPO=isCreator&&po.status!=="paid"&&po.status!=="cancelled";
 
@@ -3930,6 +3959,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         {canDelete&&<Btn onClick={onDelete} icon={I.trash} s={{padding:"10px 16px",background:po.status==="paid"?"#7F1D1D":C.redLight,color:po.status==="paid"?C.white:C.red,border:`1.5px solid ${po.status==="paid"?"#7F1D1D":"#FECACA"}`}}>🗑 ลบทิ้งถาวร</Btn>}
         {canEditFromView&&<Btn v="ghost" onClick={onEdit} icon={I.pencil} s={{padding:"10px 16px",background:"#FEF3C7",color:"#92400E"}}>✏️ แก้ไข</Btn>}
         {canAcceptReq&&onAcceptRequest&&<Btn onClick={onAcceptRequest} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px ${C.purple}55`}}>📨 รับเอกสาร</Btn>}
+        {canShipPO&&onShip&&<Btn onClick={onShip} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px rgba(14,165,233,.45)`}}>🚚 จัดส่ง + ตัดสต๊อก</Btn>}
         {canDispute&&<Btn onClick={()=>setMode("dispute")} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 20px",fontWeight:900,color:C.white,boxShadow:"0 4px 14px rgba(234,88,12,.4)"}}>⚠️ สินค้าไม่ครบ</Btn>}
         {canConfirmReceive&&<Btn v="success" onClick={onConfirmReceive} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14,boxShadow:`0 4px 14px ${C.green}55`}}>✅ ยืนยันรับสินค้าครบ</Btn>}
         {canAcceptDispute&&<Btn v="success" onClick={onAcceptDispute} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14}}>✅ ยอมรับการแก้ไข</Btn>}
@@ -4016,7 +4046,9 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
   const[items,setItems]=useState(editPO?.items||[]);
   const[poDate,setPoDate]=useState(editPO?.po_date||today);
   const[notes,setNotes]=useState(editPO?.notes||"");
-  const[status,setStatus]=useState(editPO?.status||"open");
+  // New PO defaults to "shipped" (stock moves at create — per user spec).
+  // Pick "open" to defer shipping (no stock move until "🚚 จัดส่ง" is clicked).
+  const[status,setStatus]=useState(editPO?.status||"shipped");
   const[poNumber,setPoNumber]=useState(editPO?.po_number||genPONumber(fromBranch?.id));
   const[search,setSearch]=useState("");
   const[saving,setSaving]=useState(false);
@@ -4101,13 +4133,14 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
       if(editPO){
         await api.updatePO(editPO.id,payload);
         // Edit path — items changed on a moved PO requires delta math; out of scope
-        // for now. Force user to cancel+recreate at "open"/"transfer_pending"/"disputed"
-        // by blocking edit at those statuses upstream.
+        // for now. Force user to cancel+recreate at moved statuses by blocking edit
+        // upstream (startEdit only allows "requested" / "open").
       }else{
         await api.addPO(payload);
-        // New PO at status=open → move stock immediately (debit from, credit to).
-        // Other statuses (requested) wait for acceptRequest to move.
-        if(payload.status==="open"&&payload.from_branch_id&&payload.branch_id){
+        // New PO at status="shipped" → move stock immediately (debit from, credit to).
+        // status="open" leaves stock untouched until the "🚚 จัดส่ง" button is pressed.
+        // Other statuses (requested, cancelled) skip movement entirely.
+        if(payload.status==="shipped"&&payload.from_branch_id&&payload.branch_id){
           await transferStockBetweenBranches({
             fromBranchId:payload.from_branch_id,
             toBranchId:payload.branch_id,
@@ -4131,8 +4164,8 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
         <Inp label="วันที่" type="date" value={poDate} onChange={e=>setPoDate(e.target.value)}/>
         <Field label="สถานะ">
           <select value={status} onChange={e=>setStatus(e.target.value)} style={{...iS,appearance:"none"}}>
-            <option value="open">⏳ เปิดอยู่</option>
-            <option value="received">✅ รับสินค้าแล้ว</option>
+            <option value="shipped">🚚 จัดส่งแล้ว (ตัดสต๊อกทันที)</option>
+            <option value="open">📋 รอจัดส่ง (ยังไม่ตัดสต๊อก)</option>
             <option value="cancelled">❌ ยกเลิก</option>
           </select>
         </Field>
