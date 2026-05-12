@@ -2453,17 +2453,19 @@ ${action==='pdf'?"window.addEventListener('load',function(){setTimeout(savePDF,4
 // Export PO list to Excel
 function exportPOsToExcel(pos,branchById){
   if(!pos||pos.length===0){alert("ไม่มีข้อมูลให้ Export");return;}
-  const stL={open:"เปิดอยู่",awaiting_payment:"รอชำระเงิน",paid:"จ่ายแล้ว",received:"จ่ายแล้ว",disputed:"ส่งกลับ",cancelled:"ยกเลิก"};
+  const stL={open:"เปิดอยู่",requested:"รอครัวกลางรับ",awaiting_payment:"รอชำระเงิน",paid:"จ่ายแล้ว",received:"จ่ายแล้ว",disputed:"ส่งกลับ",cancelled:"ยกเลิก",transfer_pending:"รอรับโอน",transfer_done:"โอนเสร็จสิ้น"};
+  const isTransfer=po=>po.status==="transfer_pending"||po.status==="transfer_done";
   const summary=pos.map(po=>({
     "เลข PO":po.po_number||"",
+    "ประเภท":isTransfer(po)?"โอนระหว่างสาขา":"จัดซื้อ",
     "วันที่":po.po_date||"",
     "จาก":branchById[po.from_branch_id]?.name||"",
     "ถึง":branchById[po.branch_id]?.name||"",
     "สถานะ":stL[po.status]||po.status||"",
     "จำนวนรายการ":(po.items||[]).length,
-    "ยอดก่อน VAT":+po.subtotal||0,
-    "VAT":+po.vat||0,
-    "ยอดสุทธิ":+po.total||0,
+    "ยอดก่อน VAT":isTransfer(po)?"การโอน":(+po.subtotal||0),
+    "VAT":isTransfer(po)?"-":(+po.vat||0),
+    "ยอดสุทธิ":isTransfer(po)?"การโอน":(+po.total||0),
     "ผู้สร้าง":po.created_by||"",
     "ผู้รับ":po.received_by||"",
     "วันที่รับ":po.received_at?new Date(po.received_at).toLocaleString("th-TH"):"",
@@ -3454,7 +3456,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   }
 
   const branchById=Object.fromEntries(branches.map(b=>[b.id,b]));
-  const totalAll=pos.reduce((s,p)=>s+(+p.total||0),0);
+  // Transfers don't have a money value — exclude them from the running total
+  const totalAll=pos.reduce((s,p)=>p.status==="transfer_pending"||p.status==="transfer_done"?s:s+(+p.total||0),0);
   const branchOptions=branches.filter(b=>b.id!==currentBranch.id&&b.active!==false);
 
   return <div>
@@ -3551,7 +3554,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                   {toB?.name||"-"}
                   {iReceiver&&<span style={{fontSize:10,color:C.green,marginLeft:5,background:C.greenLight,padding:"1px 6px",borderRadius:8,fontWeight:700}}>📥 รับ</span>}
                 </td>
-                <td style={{padding:"11px 14px",fontSize:14,fontWeight:900,color:C.brand,textAlign:"right",whiteSpace:"nowrap"}}>฿{(+po.total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+                <td style={{padding:"11px 14px",fontSize:14,fontWeight:900,textAlign:"right",whiteSpace:"nowrap",color:po.status==="transfer_pending"||po.status==="transfer_done"?"#0EA5E9":C.brand}}>{po.status==="transfer_pending"||po.status==="transfer_done"?<span style={{fontSize:12,fontWeight:800,background:"#E0F2FE",color:"#0369A1",padding:"3px 10px",borderRadius:14,border:"1px solid #BAE6FD"}}>🔄 การโอน</span>:`฿${(+po.total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td>
                 <td style={{padding:"11px 14px",textAlign:"center"}}>
                   <span style={{fontSize:11,fontWeight:700,color:st.color,background:st.bg,padding:"3px 10px",borderRadius:18,whiteSpace:"nowrap",display:"inline-block"}}>{st.label}</span>
                   {(po.status==="awaiting_payment"||po.status==="paid"||po.status==="received")&&recAt&&<div style={{fontSize:10,color:C.green,fontFamily:"'Sarabun',sans-serif",marginTop:3,fontWeight:600}}>รับ: {recAt}{po.received_by?` · ${po.received_by}`:""}</div>}
