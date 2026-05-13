@@ -3707,10 +3707,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,margin:"4px 0 0"}}>เปิดใบสั่งซื้อระหว่างสาขาได้ทุกทิศทาง · กดปุ่ม "+" เพื่อสร้างใหม่ · กด ✅ ยืนยันเมื่อได้รับสินค้า</p>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        {isCentralBranch
-          ?<Btn v="success" onClick={()=>setShowPurchaseSummary(true)} s={{padding:"8px 14px",fontSize:13}}>📋 สรุปต้องซื้อวันนี้</Btn>
-          :<Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
-        }
+        {isCentralBranch&&<Btn v="success" onClick={()=>setShowPurchaseSummary(true)} s={{padding:"8px 14px",fontSize:13}}>📋 สรุปต้องซื้อวันนี้</Btn>}
         {onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
         {hasPO&&<Btn v="purple" onClick={startTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
