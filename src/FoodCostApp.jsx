@@ -840,8 +840,20 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
     r.onload=ev=>{
       try{
         const wb=XLSX.read(ev.target.result,{type:"array"});
-        const ws=wb.Sheets[wb.SheetNames[0]];
-        const json=XLSX.utils.sheet_to_json(ws,{defval:""});
+        // Read EVERY sheet — export splits by หมวดหมู่ into one sheet per category.
+        // Concatenate row arrays and, if a row's category cell is blank, use the
+        // sheet name as the category (since the sheet itself is named for the cat).
+        const json=[];
+        for(const sheetName of (wb.SheetNames||[])){
+          const ws=wb.Sheets[sheetName];if(!ws)continue;
+          const sheetJson=XLSX.utils.sheet_to_json(ws,{defval:""});
+          for(const r of sheetJson){
+            if(!r["หมวดหมู่"]&&!r["หมวด"]&&!r["category"]){
+              r["หมวดหมู่"]=sheetName;
+            }
+            json.push(r);
+          }
+        }
         if(json.length===0){alert("ไฟล์ว่างเปล่า");return;}
         // Tolerant column resolution — match by Thai header but accept variants
         const pickKey=(row,...keys)=>{for(const k of keys){if(row[k]!==undefined&&row[k]!=="")return row[k];}return undefined;};
@@ -1305,7 +1317,8 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
     const branchName=currentBranch?.name||"";
     const stockCol=`📦 สต๊อก${branchName?` (${branchName})`:""}`;
-    const rows=filtered.map((it,i)=>({
+    const colWidths=[{wch:6},{wch:14},{wch:32},{wch:18},{wch:10},{wch:11},{wch:12},{wch:14},{wch:12},{wch:18},{wch:20},{wch:25}];
+    const buildRows=arr=>arr.map((it,i)=>({
       "ลำดับ":i+1,
       "🔖 รหัส":it.code||"",
       "ชื่อวัตถุดิบ":it.name||"",
@@ -1319,10 +1332,31 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       "ซัพพลายเออร์":it.supplier_name||"",
       "หมายเหตุ":it.note||"",
     }));
+    // Group by category — one sheet per category. Empty/missing category falls
+    // into a "ไม่ระบุหมวดหมู่" bucket.
+    const groups=new Map();
+    filtered.forEach(it=>{
+      const cat=(it.category||"").trim()||"ไม่ระบุหมวดหมู่";
+      if(!groups.has(cat))groups.set(cat,[]);
+      groups.get(cat).push(it);
+    });
+    const sortedCats=[...groups.keys()].sort((a,b)=>a.localeCompare(b,"th"));
     const wb=XLSX.utils.book_new();
-    const ws=XLSX.utils.json_to_sheet(rows);
-    ws["!cols"]=[{wch:6},{wch:14},{wch:32},{wch:18},{wch:10},{wch:11},{wch:12},{wch:14},{wch:12},{wch:18},{wch:20},{wch:25}];
-    XLSX.utils.book_append_sheet(wb,ws,"วัตถุดิบ");
+    const usedNames=new Set();
+    // Excel sheet name: max 31 chars; cannot contain \ / ? * [ ] :
+    const sanitize=(name)=>{
+      let safe=String(name).replace(/[\\/?*\[\]:]/g,"_").slice(0,31)||"_";
+      let final=safe,n=1;
+      while(usedNames.has(final)){final=safe.slice(0,28)+"_"+(++n);}
+      usedNames.add(final);
+      return final;
+    };
+    for(const cat of sortedCats){
+      const items=groups.get(cat);
+      const ws=XLSX.utils.json_to_sheet(buildRows(items));
+      ws["!cols"]=colWidths;
+      XLSX.utils.book_append_sheet(wb,ws,sanitize(cat));
+    }
     XLSX.writeFile(wb,`Ingredients_${(currentBranch?.name||"all").replace(/[^\w]+/g,"_")}_${todayStr()}.xlsx`);
   }
   async function toggleVBIng(item,branchId){
