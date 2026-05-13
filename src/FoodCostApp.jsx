@@ -868,23 +868,23 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
           }
           return undefined;
         };
+        // Wrap pickKey so empty/missing cells return undefined (= "do not touch").
+        const strOrUndef=(v)=>{if(v==null)return undefined;const s=String(v).trim();return s===""?undefined:s;};
+        const numOrUndef=(v)=>{if(v==null||v==="")return undefined;const n=+v;return Number.isFinite(n)?n:undefined;};
         const parsed=json.map(row=>{
-          const code=String(pickKey(row,"🔖 รหัส","รหัส","code","Code","SKU")||"").trim();
-          const name=String(pickKey(row,"ชื่อวัตถุดิบ","ชื่อ","name","Name")||"").trim();
-          const category=String(pickKey(row,"หมวดหมู่","หมวด","category")||"").trim();
-          const buy_unit=String(pickKey(row,"หน่วยที่ซื้อ","หน่วย","unit")||"").trim()||"กก.";
-          const buy_amount=+pickKey(row,"จำนวนที่ซื้อ","จำนวน","buy_amount")||1;
-          const buy_price=+pickKey(row,"ราคาที่ซื้อ","ราคา","price","buy_price")||0;
-          const convert_to_gram=+pickKey(row,"รวมทั้งหมด (กรัม)","กรัม","convert_to_gram","gram")||1000;
-          const price_per_gram=+pickKey(row,"ราคา/กรัม","price_per_gram")||(buy_price>0?+(buy_price/(convert_to_gram||1)).toFixed(4):0);
-          const supplier_name=String(pickKey(row,"ซัพพลายเออร์","ซัพพลาย","supplier","supplier_name")||"").trim();
-          const note=String(pickKey(row,"หมายเหตุ","note")||"").trim();
+          const code=strOrUndef(pickKey(row,"🔖 รหัส","รหัส","code","Code","SKU"));
+          const name=strOrUndef(pickKey(row,"ชื่อวัตถุดิบ","ชื่อ","name","Name"));
+          const category=strOrUndef(pickKey(row,"หมวดหมู่","หมวด","category"));
+          const buy_unit=strOrUndef(pickKey(row,"หน่วยที่ซื้อ","หน่วย","unit"));
+          const buy_amount=numOrUndef(pickKey(row,"จำนวนที่ซื้อ","จำนวน","buy_amount"));
+          const buy_price=numOrUndef(pickKey(row,"ราคาที่ซื้อ","ราคา","price","buy_price"));
+          const convert_to_gram=numOrUndef(pickKey(row,"รวมทั้งหมด (กรัม)","กรัม","convert_to_gram","gram"));
+          const supplier_name=strOrUndef(pickKey(row,"ซัพพลายเออร์","ซัพพลาย","supplier","supplier_name"));
+          const note=strOrUndef(pickKey(row,"หมายเหตุ","note"));
           const stockRaw=pickStock(row);
-          // Track whether the column was present so we don't accidentally zero out
-          // stocks for files that exclude the column.
           const stockProvided=stockRaw!==undefined&&stockRaw!=="";
           const stock=stockProvided?+stockRaw||0:undefined;
-          return{_kid:randId(),code,name,category,buy_unit,buy_amount,buy_price,convert_to_gram,price_per_gram,supplier_name,note,stock,stockProvided,selected:!!name};
+          return{_kid:randId(),code,name,category,buy_unit,buy_amount,buy_price,convert_to_gram,supplier_name,note,stock,stockProvided,selected:!!name};
         }).filter(r=>r.name);
         if(parsed.length===0){alert("ไม่พบรายการในไฟล์ — กรุณาตรวจสอบหัวคอลัมน์");return;}
         setRows(parsed);setStep(2);
@@ -966,24 +966,32 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
         // Match by code first, fall back to name (case-insensitive, trimmed) so
         // re-imports without a code column don't create duplicate ingredients.
         const existing=(codeKey&&codeIdx.get(codeKey))||(nameKey&&nameIdx.get(nameKey))||null;
+        // Partial update — only PATCH fields that the import actually carries.
+        // Blank cell in the file = "leave existing value untouched".
         const item={
-          name:row.name,
-          code:row.code?String(row.code).trim()||null:null,
-          category:row.category||"อื่นๆ",
-          buy_unit:row.buy_unit||"กก.",
-          buy_amount:+row.buy_amount||1,
-          buy_price:+row.buy_price||0,
-          convert_to_gram:+row.convert_to_gram||1000,
-          price_per_gram:+row.buy_price>0?(+row.buy_price/(+row.convert_to_gram||1)):0,
-          // NB: per-branch stock goes via stock_by_branch below — the legacy "stock"
-          // field is intentionally NOT overwritten so older data stays intact.
-          note:row.note||"",
-          edit_by:currentUser.username,edit_at:new Date().toLocaleString("th-TH"),
+          edit_by:currentUser.username,
+          edit_at:new Date().toLocaleString("th-TH"),
           branch_id:currentBranch.id,
-          supplier_id:sup?.id||null,supplier_name:sup?.name||row.supplier_name||"",
         };
-        // Build the per-branch stock JSON patch only if the user actually filled
-        // a stock value in this row (empty cell = leave existing untouched).
+        if(row.name!==undefined)item.name=row.name;
+        if(row.code!==undefined)item.code=row.code;
+        if(row.category!==undefined)item.category=row.category;
+        if(row.buy_unit!==undefined)item.buy_unit=row.buy_unit;
+        if(row.buy_amount!==undefined)item.buy_amount=row.buy_amount;
+        if(row.buy_price!==undefined)item.buy_price=row.buy_price;
+        if(row.convert_to_gram!==undefined)item.convert_to_gram=row.convert_to_gram;
+        if(row.note!==undefined)item.note=row.note;
+        // Recompute price_per_gram whenever price OR convert_to_gram is being updated
+        // (always wins over whatever the user might have typed in the file).
+        if(row.buy_price!==undefined||row.convert_to_gram!==undefined){
+          const bp=row.buy_price!==undefined?+row.buy_price:+(existing?.buy_price||0);
+          const ctg=row.convert_to_gram!==undefined?+row.convert_to_gram:+(existing?.convert_to_gram||1000);
+          item.price_per_gram=bp>0?+(bp/(ctg||1)).toFixed(4):0;
+        }
+        if(row.supplier_name!==undefined){
+          item.supplier_id=sup?.id||null;
+          item.supplier_name=sup?.name||row.supplier_name;
+        }
         if(row.stockProvided&&currentBranch?.id){
           const base=existing?.stock_by_branch||null;
           item.stock_by_branch=setBranchStockInJson(base,currentBranch.id,+row.stock||0);
@@ -991,6 +999,18 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
         if(existing){
           await api.updateIng(existing.id,item);updated++;
         }else{
+          // New ingredient — fill in required defaults for fields the file didn't supply
+          if(!item.name)continue;
+          if(!item.category)item.category="อื่นๆ";
+          if(!item.buy_unit)item.buy_unit="กก.";
+          if(item.buy_amount==null)item.buy_amount=1;
+          if(item.buy_price==null)item.buy_price=0;
+          if(item.convert_to_gram==null)item.convert_to_gram=1000;
+          if(item.price_per_gram==null){
+            item.price_per_gram=item.buy_price>0?+(item.buy_price/(item.convert_to_gram||1)).toFixed(4):0;
+          }
+          if(!("note" in item))item.note="";
+          if(!("supplier_id" in item)){item.supplier_id=null;item.supplier_name="";}
           await api.addIng({...item,image:null});added++;
         }
       }catch(e){console.error("skip:",row.name,e.message);failed++;}
@@ -1056,23 +1076,24 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
             {rows.map((row,idx)=><tr key={row._kid||idx} style={{borderTop:`1px solid ${C.lineLight}`,background:row.selected?C.white:"#f8f9fa",opacity:row.selected?1:.5}}>
               <td style={{padding:"8px 12px",textAlign:"center"}}><input type="checkbox" checked={!!row.selected} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,selected:e.target.checked}:x))} style={{accentColor:C.brand,width:15,height:15}}/></td>
               <td style={{padding:"8px 12px"}}>
-                <input value={row.name} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,name:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13}}/>
+                <input value={row.name??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,name:e.target.value===""?undefined:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13}}/>
               </td>
               <td style={{padding:"8px 12px"}}>
-                <input type="number" value={row.buy_price} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,buy_price:+e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13,width:80}}/>
+                <input type="number" value={row.buy_price??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,buy_price:e.target.value===""?undefined:+e.target.value}:x))} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตราคา" style={{...iS,padding:"4px 8px",fontSize:13,width:80,color:row.buy_price!==undefined?C.ink:C.ink4}}/>
               </td>
               <td style={{padding:"8px 12px"}}>
                 <input type="number" value={row.stock??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,stock:e.target.value===""?undefined:+e.target.value,stockProvided:e.target.value!==""}:x))} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตสต๊อก" style={{...iS,padding:"4px 8px",fontSize:13,width:90,fontWeight:700,color:row.stockProvided?C.green:C.ink4}}/>
               </td>
               <td style={{padding:"8px 12px"}}>
-                <select value={row.category} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,category:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:12,appearance:"none"}}>
-                  {allCatList.map(c=><option key={c}>{c}</option>)}
+                <select value={row.category??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,category:e.target.value===""?undefined:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:12,appearance:"none",color:row.category?C.ink:C.ink4}}>
+                  <option value="">— ใช้ค่าเดิม —</option>
+                  {allCatList.map(c=><option key={c} value={c}>{c}</option>)}
                 </select>
               </td>
               <td style={{padding:"8px 12px"}}>
-                <div style={{fontSize:12,color:C.teal,fontWeight:600}}>{row.supplier_name||"-"}</div>
+                <div style={{fontSize:12,color:row.supplier_name?C.teal:C.ink4,fontWeight:600}}>{row.supplier_name||"— ใช้ค่าเดิม —"}</div>
               </td>
-              <td style={{padding:"8px 12px",fontSize:11,color:C.ink4}}>{row.note||"-"}</td>
+              <td style={{padding:"8px 12px",fontSize:11,color:C.ink4}}>{row.note||"—"}</td>
             </tr>)}
           </tbody>
         </table>
