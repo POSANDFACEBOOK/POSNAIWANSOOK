@@ -3342,6 +3342,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[confirming,setConfirming]=useState(null);
   const[transferForm,setTransferForm]=useState(null);     // null | { toBranchId, items, notes }
   const[receivingTransfer,setReceivingTransfer]=useState(null); // null | { po, items[receivedQty] }
+  const[showPurchaseSummary,setShowPurchaseSummary]=useState(false);
+  const isCentralBranch=currentBranch?.type==="central";
   const hasPO=hasPerm(currentUser,"po")||hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
   // Per-PO permissions
   const isCreator=(po)=>+po.from_branch_id===currentBranch.id;
@@ -3705,7 +3707,10 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,margin:"4px 0 0"}}>เปิดใบสั่งซื้อระหว่างสาขาได้ทุกทิศทาง · กดปุ่ม "+" เพื่อสร้างใหม่ · กด ✅ ยืนยันเมื่อได้รับสินค้า</p>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        <Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
+        {isCentralBranch
+          ?<Btn v="success" onClick={()=>setShowPurchaseSummary(true)} s={{padding:"8px 14px",fontSize:13}}>📋 สรุปต้องซื้อวันนี้</Btn>
+          :<Btn v="success" onClick={()=>exportPOsToExcel(pos,branchById)} disabled={pos.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export Excel</Btn>
+        }
         {onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
         {hasPO&&<Btn v="purple" onClick={startTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
@@ -3951,7 +3956,208 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         <Btn v="success" onClick={confirmReceiveTransfer} icon={I.check}>✅ รับโอน + ย้ายสต็อก</Btn>
       </div>
     </Modal>}
+
+    {showPurchaseSummary&&<PurchaseSummaryModal pos={pos} ings={ings} branchById={branchById} currentBranch={currentBranch} onClose={()=>setShowPurchaseSummary(false)}/>}
   </div>;
+}
+
+// Central-only summary: how much of each ingredient central needs to BUY today
+// based on pending branch orders (status requested/open) vs central's own stock.
+// SOP cascade is applied so if a branch ordered a compound ingredient that
+// central has to produce, the sub-ingredients are counted toward the need.
+function PurchaseSummaryModal({pos,ings,branchById,currentBranch,onClose}){
+  const PENDING=new Set(["requested","open"]);
+  const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
+  const summary=useMemo(()=>{
+    // Aggregate "needed" qty per ingredient across all pending POs +
+    // recurse into SOP sub-ingredients (depth ≤ 3 to defend against cycles).
+    const need=new Map();
+    function addNeed(ingId,qty,depth){
+      if(depth>3||!ingId||!(qty>0))return;
+      const cur=need.get(+ingId)||{qty:0,fromOrders:0};
+      cur.qty+=qty;
+      if(depth===0)cur.fromOrders+=qty;        // direct ask vs cascaded
+      need.set(+ingId,cur);
+      const parent=ingById.get(+ingId);
+      if(!parent||!parent.has_sop)return;
+      for(const sub of (parent.ingredients||[])){
+        const subIng=ingById.get(+sub.ingredientId);
+        if(!subIng)continue;
+        const subQty=qty*(+sub.amountGram||0)/(+subIng.convert_to_gram||1000);
+        addNeed(+sub.ingredientId,subQty,depth+1);
+      }
+    }
+    const pendingOrders=[];
+    (pos||[]).forEach(po=>{
+      if(!PENDING.has(po.status))return;
+      pendingOrders.push(po);
+      (po.items||[]).forEach(it=>{
+        addNeed(+(it.ingredient_id||it.ingId),+it.qty||0,0);
+      });
+    });
+    // Build rows: only ingredients short of stock
+    const rows=[];
+    for(const[ingId,info]of need.entries()){
+      const ing=ingById.get(+ingId);
+      if(!ing)continue;
+      const onHand=branchStock(ing,currentBranch?.id);
+      const totalNeed=Math.round(info.qty*1000)/1000;
+      const shortBy=Math.max(0,Math.round((info.qty-onHand)*1000)/1000);
+      if(shortBy<=0)continue;
+      const buyQty=Math.round(shortBy*1000)/1000;
+      const buyUnits=Math.ceil(shortBy/(+ing.buy_amount||1));   // pieces/packs to buy
+      const estCost=Math.round(buyUnits*(+ing.buy_price||0)*100)/100;
+      rows.push({
+        ingId:+ingId,
+        name:ing.name,
+        category:ing.category||"ไม่ระบุ",
+        unit:ing.buy_unit||"หน่วย",
+        buy_amount:+ing.buy_amount||1,
+        buy_price:+ing.buy_price||0,
+        supplier:ing.supplier_name||"ไม่ระบุ",
+        totalNeed,
+        onHand:Math.round(onHand*1000)/1000,
+        shortBy:buyQty,
+        buyUnits,
+        estCost,
+        cascaded:info.fromOrders<info.qty-1e-9,
+      });
+    }
+    // Sort: by supplier → by category → by name
+    rows.sort((a,b)=>(
+      (a.supplier||"").localeCompare(b.supplier||"","th")||
+      (a.category||"").localeCompare(b.category||"","th")||
+      (a.name||"").localeCompare(b.name||"","th")
+    ));
+    return{rows,pendingOrders};
+  },[pos,ingById,currentBranch]);
+
+  // Group by supplier for the card layout
+  const groups=useMemo(()=>{
+    const g=new Map();
+    for(const r of summary.rows){
+      if(!g.has(r.supplier))g.set(r.supplier,[]);
+      g.get(r.supplier).push(r);
+    }
+    return [...g.entries()].map(([name,rows])=>({
+      name,
+      rows,
+      subtotal:Math.round(rows.reduce((s,r)=>s+r.estCost,0)*100)/100,
+    }));
+  },[summary.rows]);
+
+  const totalCost=Math.round(summary.rows.reduce((s,r)=>s+r.estCost,0)*100)/100;
+  const distinctIngs=summary.rows.length;
+  const orderCount=summary.pendingOrders.length;
+
+  function printShoppingList(){
+    const w=openPrintWindow(900,900);
+    if(!w)return;
+    const groupHtml=groups.map(g=>`
+      <h3 style="margin:18px 0 6px;color:#0F172A;border-bottom:2px solid #FF6B35;padding-bottom:4px">${esc(g.name)}</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#F1F5F9">
+        <th style="border:1px solid #ddd;padding:6px;text-align:center;width:36px">#</th>
+        <th style="border:1px solid #ddd;padding:6px;text-align:left">วัตถุดิบ</th>
+        <th style="border:1px solid #ddd;padding:6px;text-align:right;width:90px">ต้องซื้อ</th>
+        <th style="border:1px solid #ddd;padding:6px;text-align:right;width:80px">หน่วย</th>
+        <th style="border:1px solid #ddd;padding:6px;text-align:right;width:90px">ราคา/หน่วย</th>
+        <th style="border:1px solid #ddd;padding:6px;text-align:right;width:100px">ประมาณ</th>
+      </tr></thead><tbody>
+      ${g.rows.map((r,i)=>`<tr>
+        <td style="border:1px solid #ddd;padding:6px;text-align:center;color:#64748B">${i+1}</td>
+        <td style="border:1px solid #ddd;padding:6px;font-weight:700">${esc(r.name)}${r.cascaded?' <span style="font-size:10px;color:#A855F7">(จาก SOP)</span>':''}</td>
+        <td style="border:1px solid #ddd;padding:6px;text-align:right;color:#FF6B35;font-weight:700">${r.shortBy}</td>
+        <td style="border:1px solid #ddd;padding:6px;text-align:center">${esc(r.unit)}</td>
+        <td style="border:1px solid #ddd;padding:6px;text-align:right">฿${r.buy_price.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+        <td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">฿${r.estCost.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+      </tr>`).join("")}
+      <tr style="background:#FFF7ED"><td colspan="5" style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:700">รวม (${esc(g.name)})</td>
+      <td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:900;color:#FF6B35">฿${g.subtotal.toLocaleString(undefined,{minimumFractionDigits:2})}</td></tr>
+      </tbody></table>
+    `).join("");
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการต้องซื้อ ${todayStr()}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 4px}.meta{font-size:12px;color:#64748B;margin:2px 0}@media print{.noprint{display:none}}</style></head><body><h2>📋 รายการที่ครัวกลางต้องไปซื้อวันนี้</h2><p class="meta">วันที่: <b>${esc(todayStr())}</b> · สาขา: <b>${esc(currentBranch?.name||"ครัวกลาง")}</b> · คำสั่งซื้อค้าง: <b>${orderCount}</b> ใบ</p>${groupHtml}<div style="margin-top:18px;padding:12px;background:#FEF3C7;border:2px solid #F59E0B;border-radius:10px;font-size:14px"><b>รวมทั้งสิ้นประมาณ: <span style="color:#FF6B35;font-size:18px">฿${totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span></b></div><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
+    w.document.close();
+    setTimeout(()=>{try{w.print();}catch{}},600);
+  }
+
+  return <Modal title={`📋 สรุปวัตถุดิบที่ต้องซื้อวันนี้ (${todayStr()})`} onClose={onClose} extraWide>
+    {/* Summary stats */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(160px,100%),1fr))",gap:10,marginBottom:14}}>
+      <div style={{padding:"12px 14px",background:"#FEF3C7",border:`1px solid #F59E0B33`,borderRadius:10}}>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>คำสั่งซื้อค้าง</div>
+        <div style={{fontSize:22,fontWeight:900,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>{orderCount}<span style={{fontSize:13,fontWeight:600,marginLeft:4}}>ใบ</span></div>
+      </div>
+      <div style={{padding:"12px 14px",background:C.redLight,border:`1px solid ${C.red}33`,borderRadius:10}}>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ต้องซื้อเพิ่ม</div>
+        <div style={{fontSize:22,fontWeight:900,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>{distinctIngs}<span style={{fontSize:13,fontWeight:600,marginLeft:4}}>รายการ</span></div>
+      </div>
+      <div style={{padding:"12px 14px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:10}}>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ยอดประมาณการ</div>
+        <div style={{fontSize:22,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+      </div>
+      <div style={{padding:"12px 14px",background:C.tealLight,border:`1px solid ${C.teal}33`,borderRadius:10}}>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ซัพพลายที่ต้องไป</div>
+        <div style={{fontSize:22,fontWeight:900,color:C.teal,fontFamily:"'Sarabun',sans-serif"}}>{groups.length}<span style={{fontSize:13,fontWeight:600,marginLeft:4}}>เจ้า</span></div>
+      </div>
+    </div>
+
+    {summary.rows.length===0?<div style={{padding:"40px 20px",textAlign:"center",background:C.greenLight,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{fontSize:48,marginBottom:8}}>✅</div>
+      <div style={{fontSize:16,fontWeight:800,color:C.green}}>สต๊อกพอแล้ว — ไม่ต้องซื้อเพิ่ม</div>
+      <div style={{fontSize:12,color:C.ink3,marginTop:6}}>{orderCount===0?"ยังไม่มีคำสั่งซื้อค้าง":"ทุกรายการมีสต๊อกครัวกลางพอจัดส่ง"}</div>
+    </div>:<>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>💡 เปรียบเทียบจาก <b>คำสั่งซื้อที่สาขาส่งมา</b> (รวม SOP) <b>ลบด้วย สต๊อกครัวกลาง</b></div>
+        <Btn v="info" onClick={printShoppingList} icon={I.print} s={{padding:"8px 14px",fontSize:12}}>🖨 พิมพ์รายการ</Btn>
+      </div>
+
+      {/* Group by supplier — one card per vendor */}
+      <div style={{display:"flex",flexDirection:"column",gap:12,maxHeight:"60vh",overflowY:"auto"}}>
+        {groups.map(g=><Card key={g.name} style={{padding:0,overflow:"hidden"}}>
+          <div style={{padding:"10px 16px",background:`linear-gradient(135deg,${C.tealLight},${C.brandLight})`,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,fontFamily:"'Sarabun',sans-serif"}}>
+              <Ic d={I.truck} s={16} c={C.teal}/>
+              <span style={{fontSize:14,fontWeight:900,color:C.ink}}>{g.name}</span>
+              <span style={{fontSize:11,color:C.ink3,fontWeight:600}}>· {g.rows.length} รายการ</span>
+            </div>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.brand}}>฿{g.subtotal.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+          </div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+              <thead><tr style={{background:C.bg}}>{[
+                "#","วัตถุดิบ","ที่สาขาขอ","สต๊อกครัวกลาง","ต้องซื้อ","หน่วย","ราคา/หน่วย","ประมาณ"
+              ].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i>=2?"right":(i===0?"center":"left"),fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+              <tbody>{g.rows.map((r,i)=><tr key={r.ingId} style={{borderTop:`1px solid ${C.lineLight}`}}>
+                <td style={{padding:"7px 10px",textAlign:"center",color:C.ink4,fontSize:11,fontWeight:700}}>{i+1}</td>
+                <td style={{padding:"7px 10px"}}>
+                  <div style={{fontWeight:700,color:C.ink}}>{r.name}</div>
+                  <div style={{fontSize:10,color:C.ink4,display:"flex",gap:6,alignItems:"center",marginTop:1}}>
+                    <span>{r.category}</span>
+                    {r.cascaded&&<span style={{background:"#F5F3FF",color:"#7C3AED",padding:"1px 6px",borderRadius:6,fontWeight:700}}>📋 จาก SOP</span>}
+                  </div>
+                </td>
+                <td style={{padding:"7px 10px",textAlign:"right",color:C.ink2}}>{r.totalNeed}</td>
+                <td style={{padding:"7px 10px",textAlign:"right",color:r.onHand>0?C.green:C.ink4,fontWeight:600}}>{r.onHand}</td>
+                <td style={{padding:"7px 10px",textAlign:"right",color:C.red,fontWeight:900,fontSize:14}}>{r.shortBy}</td>
+                <td style={{padding:"7px 10px",textAlign:"center",color:C.ink3,fontSize:12}}>{r.unit}</td>
+                <td style={{padding:"7px 10px",textAlign:"right",color:C.ink3}}>฿{r.buy_price.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:C.brand,whiteSpace:"nowrap"}}>฿{r.estCost.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+        </Card>)}
+      </div>
+
+      {/* Grand total */}
+      <div style={{marginTop:14,padding:"12px 16px",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:12,display:"flex",justifyContent:"space-between",alignItems:"center",color:C.white}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{fontSize:11,opacity:.85,fontWeight:700}}>รวมทั้งสิ้นประมาณการ</div>
+          <div style={{fontSize:13,opacity:.92}}>{distinctIngs} รายการ · {groups.length} ซัพพลาย</div>
+        </div>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:28,fontWeight:900}}>฿{totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+      </div>
+    </>}
+  </Modal>;
 }
 
 // Full-screen PO view with status-aware actions
