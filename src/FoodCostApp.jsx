@@ -2558,7 +2558,7 @@ ${action==='pdf'?"window.addEventListener('load',function(){setTimeout(savePDF,4
 // Export PO list to Excel
 function exportPOsToExcel(pos,branchById){
   if(!pos||pos.length===0){alert("ไม่มีข้อมูลให้ Export");return;}
-  const stL={open:"เปิดอยู่",requested:"รอครัวกลางรับ",awaiting_payment:"รอชำระเงิน",paid:"จ่ายแล้ว",received:"จ่ายแล้ว",disputed:"ส่งกลับ",cancelled:"ยกเลิก",transfer_pending:"รอรับโอน",transfer_done:"โอนเสร็จสิ้น"};
+  const stL={open:"รอจัดส่ง",requested:"รอครัวกลางรับ",shipped:"จัดส่งแล้ว",awaiting_payment:"รอชำระเงิน",paid:"จ่ายแล้ว",received:"จ่ายแล้ว",disputed:"ส่งกลับ",cancelled:"ยกเลิก",transfer_pending:"รอรับโอน",transfer_done:"โอนเสร็จสิ้น"};
   const isTransfer=po=>po.status==="transfer_pending"||po.status==="transfer_done";
   const summary=pos.map(po=>({
     "เลข PO":po.po_number||"",
