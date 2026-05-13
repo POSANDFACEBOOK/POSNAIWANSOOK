@@ -475,7 +475,14 @@ function setBranchSafetyInJson(existing,branchId,value){
 // the receiver into visible_branches when autoVisible=true.
 //
 // items: array with { ingredient_id|ingId, qty|qtyNeeded, received_qty? }
-async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible}){
+//
+// SOP cascade: if an item's parent ingredient has has_sop + a non-empty
+// `ingredients` array (the SOP recipe), the helper RECURSIVELY moves each
+// sub-ingredient in the same direction. The sub-quantity is computed from
+//   subStock = parentQty × sub.amountGram / parentIng.convert_to_gram
+// — i.e. how many sub-stock units are consumed/produced per one parent stock unit.
+// Recursion is capped at 3 levels to defend against cycles in mis-configured SOPs.
+async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible,_depth=0}){
   const toId=toBranchId!=null?(+toBranchId||null):null;
   const fromId=fromBranchId!=null?(+fromBranchId||null):null;
   if(!toId&&!fromId)return;            // no movement specified
@@ -512,6 +519,47 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     }
     try{await api.updateIng(ingId,patch);}
     catch(err){console.error("transferStock failed",ingId,err);}
+  }
+
+  // ── SOP cascade ──────────────────────────────────────────────────────────
+  // For each parent ingredient that has SOP sub-ingredients, recursively move
+  // the proportional sub-quantities in the same direction. _depth caps at 3
+  // levels so a circular SOP (X uses Y, Y uses X) can't melt the API.
+  if(_depth>=3)return;
+  const cascadeItems=[];
+  for(const it of (items||[])){
+    const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
+    if(!ingId)continue;
+    const parent=(ings||[]).find(x=>+x.id===ingId);
+    if(!parent||!parent.has_sop)continue;
+    const subs=Array.isArray(parent.ingredients)?parent.ingredients:[];
+    if(subs.length===0)continue;
+    const parentQty=it.received_qty!=null?+it.received_qty:+(it.qty!=null?it.qty:it.qtyNeeded);
+    if(!parentQty||parentQty<=0)continue;
+    const parentGramsPerUnit=+parent.convert_to_gram||1000;
+    for(const sub of subs){
+      const subIngId=+sub.ingredientId;
+      if(!subIngId)continue;
+      const subIng=(ings||[]).find(x=>+x.id===subIngId);
+      if(!subIng)continue;
+      // sub.amountGram is grams of sub used to produce ONE parent's buy_unit
+      // (e.g. "500g tomato per 1 kg of sauce"). Scale by however many parent
+      // stock-units are moving. Translate grams → sub's own stock unit via
+      // subIng.convert_to_gram (e.g. 500g / 1000g per kg = 0.5 kg of tomato).
+      const gramsTotal=parentQty*(+sub.amountGram||0);
+      const subStockUnits=gramsTotal/(+subIng.convert_to_gram||1000);
+      if(!subStockUnits||subStockUnits<=0)continue;
+      cascadeItems.push({ingredient_id:subIngId,qty:subStockUnits});
+    }
+  }
+  if(cascadeItems.length>0){
+    await transferStockBetweenBranches({
+      fromBranchId,toBranchId,
+      items:cascadeItems,
+      ings,
+      autoVisible:false,                 // sub-ingredient visibility doesn't auto-toggle
+      _depth:_depth+1,
+    });
   }
 }
 
