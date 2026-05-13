@@ -797,6 +797,17 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
         if(json.length===0){alert("ไฟล์ว่างเปล่า");return;}
         // Tolerant column resolution — match by Thai header but accept variants
         const pickKey=(row,...keys)=>{for(const k of keys){if(row[k]!==undefined&&row[k]!=="")return row[k];}return undefined;};
+        // Stock column header carries the branch name in parens (e.g.
+        // "📦 สต๊อก (ครัวกลาง)"), so do a substring match on "สต๊อก"/"stock"
+        // to find whatever column the user kept.
+        const pickStock=row=>{
+          for(const k of Object.keys(row)){
+            if(/สต๊อก|stock/i.test(k)&&row[k]!==undefined&&row[k]!==""){
+              return row[k];
+            }
+          }
+          return undefined;
+        };
         const parsed=json.map(row=>{
           const code=String(pickKey(row,"🔖 รหัส","รหัส","code","Code","SKU")||"").trim();
           const name=String(pickKey(row,"ชื่อวัตถุดิบ","ชื่อ","name","Name")||"").trim();
@@ -808,7 +819,12 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
           const price_per_gram=+pickKey(row,"ราคา/กรัม","price_per_gram")||(buy_price>0?+(buy_price/(convert_to_gram||1)).toFixed(4):0);
           const supplier_name=String(pickKey(row,"ซัพพลายเออร์","ซัพพลาย","supplier","supplier_name")||"").trim();
           const note=String(pickKey(row,"หมายเหตุ","note")||"").trim();
-          return{_kid:randId(),code,name,category,buy_unit,buy_amount,buy_price,convert_to_gram,price_per_gram,supplier_name,note,selected:!!name};
+          const stockRaw=pickStock(row);
+          // Track whether the column was present so we don't accidentally zero out
+          // stocks for files that exclude the column.
+          const stockProvided=stockRaw!==undefined&&stockRaw!=="";
+          const stock=stockProvided?+stockRaw||0:undefined;
+          return{_kid:randId(),code,name,category,buy_unit,buy_amount,buy_price,convert_to_gram,price_per_gram,supplier_name,note,stock,stockProvided,selected:!!name};
         }).filter(r=>r.name);
         if(parsed.length===0){alert("ไม่พบรายการในไฟล์ — กรุณาตรวจสอบหัวคอลัมน์");return;}
         setRows(parsed);setStep(2);
@@ -899,12 +915,19 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
           buy_price:+row.buy_price||0,
           convert_to_gram:+row.convert_to_gram||1000,
           price_per_gram:+row.buy_price>0?(+row.buy_price/(+row.convert_to_gram||1)):0,
-          stock:+row.stock||0,
+          // NB: per-branch stock goes via stock_by_branch below — the legacy "stock"
+          // field is intentionally NOT overwritten so older data stays intact.
           note:row.note||"",
           edit_by:currentUser.username,edit_at:new Date().toLocaleString("th-TH"),
           branch_id:currentBranch.id,
           supplier_id:sup?.id||null,supplier_name:sup?.name||row.supplier_name||"",
         };
+        // Build the per-branch stock JSON patch only if the user actually filled
+        // a stock value in this row (empty cell = leave existing untouched).
+        if(row.stockProvided&&currentBranch?.id){
+          const base=existing?.stock_by_branch||null;
+          item.stock_by_branch=setBranchStockInJson(base,currentBranch.id,+row.stock||0);
+        }
         if(existing){
           await api.updateIng(existing.id,item);updated++;
         }else{
@@ -967,7 +990,7 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
           <thead><tr style={{background:C.bg,position:"sticky",top:0}}>
             <th style={{padding:"8px 12px",textAlign:"center",width:40}}><input type="checkbox" checked={rows.every(r=>r.selected)} onChange={e=>setRows(r=>r.map(x=>({...x,selected:e.target.checked})))} style={{accentColor:C.brand,width:15,height:15}}/></th>
-            {["ชื่อวัตถุดิบ","ราคา (฿)","หมวดหมู่","ซัพพลาย","หมายเหตุ"].map(h=><th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}
+            {["ชื่อวัตถุดิบ","ราคา (฿)","สต๊อก","หมวดหมู่","ซัพพลาย","หมายเหตุ"].map(h=><th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}
           </tr></thead>
           <tbody>
             {rows.map((row,idx)=><tr key={row._kid||idx} style={{borderTop:`1px solid ${C.lineLight}`,background:row.selected?C.white:"#f8f9fa",opacity:row.selected?1:.5}}>
@@ -977,6 +1000,9 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
               </td>
               <td style={{padding:"8px 12px"}}>
                 <input type="number" value={row.buy_price} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,buy_price:+e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13,width:80}}/>
+              </td>
+              <td style={{padding:"8px 12px"}}>
+                <input type="number" value={row.stock??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,stock:e.target.value===""?undefined:+e.target.value,stockProvided:e.target.value!==""}:x))} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตสต๊อก" style={{...iS,padding:"4px 8px",fontSize:13,width:90,fontWeight:700,color:row.stockProvided?C.green:C.ink4}}/>
               </td>
               <td style={{padding:"8px 12px"}}>
                 <select value={row.category} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,category:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:12,appearance:"none"}}>
@@ -1229,6 +1255,8 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   async function del(id,name){if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   function exportXlsx(){
     if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
+    const branchName=currentBranch?.name||"";
+    const stockCol=`📦 สต๊อก${branchName?` (${branchName})`:""}`;
     const rows=filtered.map((it,i)=>({
       "ลำดับ":i+1,
       "🔖 รหัส":it.code||"",
@@ -1239,14 +1267,15 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       "ราคาที่ซื้อ":+it.buy_price||0,
       "รวมทั้งหมด (กรัม)":+it.convert_to_gram||0,
       "ราคา/กรัม":+(+it.price_per_gram||0).toFixed(4),
+      [stockCol]:+branchStock(it,currentBranch?.id)||0,
       "ซัพพลายเออร์":it.supplier_name||"",
       "หมายเหตุ":it.note||"",
     }));
     const wb=XLSX.utils.book_new();
     const ws=XLSX.utils.json_to_sheet(rows);
-    ws["!cols"]=[{wch:6},{wch:14},{wch:32},{wch:18},{wch:10},{wch:11},{wch:12},{wch:14},{wch:12},{wch:20},{wch:25}];
+    ws["!cols"]=[{wch:6},{wch:14},{wch:32},{wch:18},{wch:10},{wch:11},{wch:12},{wch:14},{wch:12},{wch:18},{wch:20},{wch:25}];
     XLSX.utils.book_append_sheet(wb,ws,"วัตถุดิบ");
-    XLSX.writeFile(wb,`Ingredients_${todayStr()}.xlsx`);
+    XLSX.writeFile(wb,`Ingredients_${(currentBranch?.name||"all").replace(/[^\w]+/g,"_")}_${todayStr()}.xlsx`);
   }
   async function toggleVBIng(item,branchId){
     // null = all visible (legacy default) · [] = none visible · [ids] = explicit list
