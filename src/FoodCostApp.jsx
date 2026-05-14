@@ -5529,9 +5529,16 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     }catch(e){alert("ยืนยันไม่สำเร็จ: "+(e.message||e));}
   }
 
-  // ─ Delete (handles delivered rollback: deduct branch only — supplier was external)
+  // ─ Delete — blocked outright once status hits "delivered" because the
+  //   stock has already been credited to the branch and we don't want a
+  //   stray click to corrupt inventory. (Older versions rolled back
+  //   stock here; that path is now disabled per user spec.)
   async function deleteOrder(order){
-    const wasDelivered=order.status==="delivered";
+    if(order.status==="delivered"){
+      alert("ไม่สามารถลบรายการนี้ได้\n\nสถานะ: รับสินค้าแล้ว — สต๊อกถูกเพิ่มเข้าไปในวัตถุดิบของสาขาแล้ว ลบรายการนี้จะทำให้สต๊อกผิดเพี้ยน");
+      return;
+    }
+    const wasDelivered=false;
     const msg=wasDelivered
       ?`ต้องการลบรายการสั่งวัตถุดิบนี้?\n\n⚠️ รับสินค้าแล้ว — ระบบจะหักสต็อกสาขา "${order.branch_name}" ที่เคยเพิ่มไว้`
       :"ต้องการลบรายการสั่งวัตถุดิบนี้ใช่หรือไม่?";
@@ -5627,7 +5634,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
             {canEditOrder(order)&&order.status==="pending"&&<button onClick={()=>startEditQty(order)} title="แก้ไขจำนวน" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
             {(order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="พิมพ์ซ้ำ" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>}
             {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
-            {canEditOrder(order)&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
+            {canEditOrder(order)&&order.status!=="delivered"&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
           </div>
         </div>
         {/* Items table — only when expanded */}
