@@ -5609,8 +5609,10 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
             <div style={{fontSize:10,color:C.ink4,whiteSpace:"nowrap"}}>{itemsCount} รายการ</div>
           </div>
           {/* 5. สถานะ */}
-          <div style={{minWidth:100,display:"flex",justifyContent:"center"}}>
-            <span style={{fontSize:11,fontWeight:800,color:stColor,background:stBg,padding:"4px 10px",borderRadius:18,whiteSpace:"nowrap",border:`1px solid ${stColor}33`,fontFamily:"'Sarabun',sans-serif"}}>{statusLabel[order.status]||order.status}</span>
+          <div style={{minWidth:100,display:"flex",justifyContent:"center"}} onClick={stopBubble}>
+            {order.status==="pending"&&canEditOrder(order)
+              ?<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="ส่งใบสั่งซื้อให้ซัพพลาย (พิมพ์ + เปลี่ยนสถานะ)" style={{padding:"6px 14px",borderRadius:18,border:"none",cursor:printingId===order.id?"not-allowed":"pointer",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,fontSize:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5,boxShadow:`0 2px 6px ${C.brand}55`,opacity:printingId===order.id?0.6:1,transition:"transform .12s"}} onMouseEnter={e=>{if(printingId!==order.id)e.currentTarget.style.transform="translateY(-1px)";}} onMouseLeave={e=>{e.currentTarget.style.transform="";}}>🛒 สั่งของ</button>
+              :<span style={{fontSize:11,fontWeight:800,color:stColor,background:stBg,padding:"4px 10px",borderRadius:18,whiteSpace:"nowrap",border:`1px solid ${stColor}33`,fontFamily:"'Sarabun',sans-serif"}}>{statusLabel[order.status]||order.status}</span>}
           </div>
           {/* 6. จัดการ — flow ใหม่:
                   pending  ✎ แก้จำนวน · 🖨 พิมพ์ (= ส่งซัพพลาย) · 🗑 ลบ
@@ -5623,7 +5625,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               {copiedId===order.id?"คัดลอกแล้ว":"คัดลอก"}
             </button>
             {canEditOrder(order)&&order.status==="pending"&&<button onClick={()=>startEditQty(order)} title="แก้ไขจำนวน" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
-            {(order.status==="pending"||order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title={order.status==="pending"?"พิมพ์ + ส่งซัพพลาย":"พิมพ์ซ้ำ"} style={{background:order.status==="pending"?"#FEF3C7":C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={order.status==="pending"?"#92400E":C.ink3}/></button>}
+            {(order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="พิมพ์ซ้ำ" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>}
             {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
             {canEditOrder(order)&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
           </div>
