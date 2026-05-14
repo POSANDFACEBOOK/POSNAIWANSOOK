@@ -6277,6 +6277,9 @@ function SupplierStatsModal({supplier,orders,onClose}){
   const supName=(supplier.name||"").toLowerCase().trim();
   const filtered=useMemo(()=>{
     return (orders||[]).filter(o=>{
+      // Only consider orders that have been received — prices come from the
+      // "ใส่ราคาตอนรับสินค้า" step, so anything before that is just an estimate.
+      if(o.status!=="delivered")return false;
       const idMatch=o.supplier_id!=null&&supplier.id!=null&&+o.supplier_id===+supplier.id;
       const nameMatch=!idMatch&&supName&&String(o.supplier_name||"").toLowerCase().trim()===supName;
       if(!idMatch&&!nameMatch)return false;
@@ -6332,7 +6335,8 @@ function SupplierStatsModal({supplier,orders,onClose}){
       <Inp label="ตั้งแต่" type="date" value={from} onChange={e=>setFrom(e.target.value)}/>
       <Inp label="ถึง" type="date" value={to} onChange={e=>setTo(e.target.value)}/>
     </div>}
-    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:14}}>📌 ช่วงที่กำลังดู: <b style={{color:C.ink2}}>{period.label}</b></div>
+    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:8}}>📌 ช่วงที่กำลังดู: <b style={{color:C.ink2}}>{period.label}</b></div>
+    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,background:C.tealLight,border:`1px solid ${C.teal}33`,borderRadius:8,padding:"8px 12px",marginBottom:14,lineHeight:1.5}}>ℹ️ แสดงเฉพาะรายการที่ <b>รับสินค้าแล้ว</b> (กรอกราคาจริงผ่านปุ่ม ✅ ยืนยันรับ) เพราะรายการที่ยังไม่ได้รับสินค้ายังไม่มีราคาที่จ่ายจริง</div>
 
     {/* Top stats cards */}
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(160px,100%),1fr))",gap:10,marginBottom:14}}>
@@ -6341,7 +6345,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
         <div style={{fontSize:24,fontWeight:900,color:C.brand}}>{filtered.length}<span style={{fontSize:13,fontWeight:600,marginLeft:4}}>ใบ</span></div>
       </div>
       <div style={{padding:"12px 14px",background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
-        <div style={{fontSize:11,color:C.green,fontWeight:700}}>ยอดสั่งซื้อรวม</div>
+        <div style={{fontSize:11,color:C.green,fontWeight:700}}>ยอดที่จ่ายจริงรวม</div>
         <div style={{fontSize:22,fontWeight:900,color:C.green}}>฿{fmtMoney(totals.amount)}</div>
       </div>
       <div style={{padding:"12px 14px",background:C.tealLight,border:`1px solid ${C.teal}33`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
@@ -6354,15 +6358,13 @@ function SupplierStatsModal({supplier,orders,onClose}){
       </div>
     </div>
 
-    {/* Status breakdown */}
-    {filtered.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
-      {Object.entries(totals.byStatus).filter(([,n])=>n>0).map(([k,n])=><span key={k} style={{fontSize:11,fontWeight:800,color:stColor[k]||C.ink3,background:(stColor[k]||C.ink3)+"22",padding:"3px 10px",borderRadius:18,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${(stColor[k]||C.ink3)}55`}}>{stLabel[k]||k}: {n}</span>)}
-    </div>}
+
 
     {filtered.length===0
       ?<div style={{padding:"40px 20px",textAlign:"center",background:C.bg,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:42,marginBottom:8}}>📭</div>
-        <div style={{fontSize:14,fontWeight:800,color:C.ink3}}>ยังไม่มีรายการสั่งซื้อจากซัพพลายนี้ในช่วงที่เลือก</div>
+        <div style={{fontSize:14,fontWeight:800,color:C.ink3}}>ยังไม่มีรายการที่ <b>รับสินค้าแล้ว</b> จากซัพพลายนี้ในช่วงที่เลือก</div>
+        <div style={{fontSize:11,color:C.ink4,marginTop:4}}>ราคาจะถูกบันทึกเมื่อกดปุ่ม ✅ ยืนยันรับสินค้า + กรอกราคาจริง</div>
       </div>
       :<>
         {/* Top ingredients */}
