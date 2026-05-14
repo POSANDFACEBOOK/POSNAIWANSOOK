@@ -4103,46 +4103,66 @@ function PurchaseSummaryModal({pos,ings,branchById,currentBranch,onClose}){
       <div style={{fontSize:16,fontWeight:800,color:C.green}}>สต๊อกพอแล้ว — ไม่ต้องซื้อเพิ่ม</div>
       <div style={{fontSize:12,color:C.ink3,marginTop:6}}>{orderCount===0?"ยังไม่มีคำสั่งซื้อค้าง":"ทุกรายการมีสต๊อกครัวกลางพอจัดส่ง"}</div>
     </div>:<>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>💡 เปรียบเทียบจาก <b>คำสั่งซื้อที่สาขาส่งมา</b> (รวม SOP) <b>ลบด้วย สต๊อกครัวกลาง</b></div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3,flex:1,minWidth:200}}>💡 เปรียบเทียบจาก <b>คำสั่งซื้อที่สาขาส่งมา</b> (รวม SOP) <b>ลบด้วย สต๊อกครัวกลาง</b></div>
         <Btn v="info" onClick={printShoppingList} icon={I.print} s={{padding:"8px 14px",fontSize:12}}>🖨 พิมพ์รายการ</Btn>
       </div>
 
-      {/* Group by supplier — one card per vendor */}
-      <div style={{display:"flex",flexDirection:"column",gap:12,maxHeight:"60vh",overflowY:"auto"}}>
-        {groups.map(g=><Card key={g.name} style={{padding:0,overflow:"hidden"}}>
-          <div style={{padding:"10px 16px",background:`linear-gradient(135deg,${C.tealLight},${C.brandLight})`,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}}>
-            <div style={{display:"flex",alignItems:"center",gap:8,fontFamily:"'Sarabun',sans-serif"}}>
-              <Ic d={I.truck} s={16} c={C.teal}/>
-              <span style={{fontSize:14,fontWeight:900,color:C.ink}}>{g.name}</span>
-              <span style={{fontSize:11,color:C.ink3,fontWeight:600}}>· {g.rows.length} รายการ</span>
+      {/* One supplier per card — item name on its own full-width line, stats in a grid below, never overlap */}
+      <div style={{display:"flex",flexDirection:"column",gap:18}}>
+        {groups.map((g,gIdx)=><div key={g.name} style={{borderRadius:14,overflow:"hidden",border:`2px solid ${C.teal}33`,boxShadow:"0 2px 10px rgba(13,148,136,0.08)",background:C.white}}>
+          {/* Supplier header — teal gradient, numbered, big subtotal */}
+          <div style={{padding:"14px 18px",background:`linear-gradient(135deg,${C.teal} 0%,#0F766E 100%)`,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0,flex:1}}>
+              <div style={{width:34,height:34,borderRadius:10,background:"rgba(255,255,255,0.2)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                <Ic d={I.truck} s={18} c={C.white}/>
+              </div>
+              <div style={{minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
+                <div style={{fontSize:16,fontWeight:900,wordBreak:"break-word",lineHeight:1.3}}>{gIdx+1}. {g.name}</div>
+                <div style={{fontSize:11,opacity:.9,marginTop:2}}>{g.rows.length} รายการที่ต้องซื้อ</div>
+              </div>
             </div>
-            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.brand}}>฿{g.subtotal.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+            <div style={{textAlign:"right",fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
+              <div style={{fontSize:11,opacity:.85,fontWeight:600}}>ยอดประมาณ</div>
+              <div style={{fontSize:22,fontWeight:900,letterSpacing:.5}}>฿{g.subtotal.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+            </div>
           </div>
-          <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
-              <thead><tr style={{background:C.bg}}>{[
-                "#","วัตถุดิบ","ที่สาขาขอ","สต๊อกครัวกลาง","ต้องซื้อ","หน่วย","ราคา/หน่วย","ประมาณ"
-              ].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i>=2?"right":(i===0?"center":"left"),fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
-              <tbody>{g.rows.map((r,i)=><tr key={r.ingId} style={{borderTop:`1px solid ${C.lineLight}`}}>
-                <td style={{padding:"7px 10px",textAlign:"center",color:C.ink4,fontSize:11,fontWeight:700}}>{i+1}</td>
-                <td style={{padding:"7px 10px"}}>
-                  <div style={{fontWeight:700,color:C.ink}}>{r.name}</div>
-                  <div style={{fontSize:10,color:C.ink4,display:"flex",gap:6,alignItems:"center",marginTop:1}}>
+
+          {/* Each item: number + full-width name on top line, four stats in a wrapping grid below */}
+          <div>
+            {g.rows.map((r,i)=><div key={r.ingId} style={{padding:"14px 16px",borderTop:i>0?`1px solid ${C.lineLight}`:"none",background:i%2===0?C.white:"#FAFBFC"}}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:10}}>
+                <div style={{minWidth:28,height:28,borderRadius:14,background:C.brandLight,color:C.brand,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:900,fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>{i+1}</div>
+                <div style={{flex:1,minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
+                  <div style={{fontSize:15,fontWeight:800,color:C.ink,wordBreak:"break-word",lineHeight:1.35}}>{r.name}</div>
+                  <div style={{fontSize:11,color:C.ink4,display:"flex",gap:6,alignItems:"center",marginTop:3,flexWrap:"wrap"}}>
                     <span>{r.category}</span>
-                    {r.cascaded&&<span style={{background:"#F5F3FF",color:"#7C3AED",padding:"1px 6px",borderRadius:6,fontWeight:700}}>📋 จาก SOP</span>}
+                    {r.cascaded&&<span style={{background:"#F5F3FF",color:"#7C3AED",padding:"1px 8px",borderRadius:6,fontWeight:800}}>📋 จาก SOP</span>}
                   </div>
-                </td>
-                <td style={{padding:"7px 10px",textAlign:"right",color:C.ink2}}>{r.totalNeed}</td>
-                <td style={{padding:"7px 10px",textAlign:"right",color:r.onHand>0?C.green:C.ink4,fontWeight:600}}>{r.onHand}</td>
-                <td style={{padding:"7px 10px",textAlign:"right",color:C.red,fontWeight:900,fontSize:14}}>{r.shortBy}</td>
-                <td style={{padding:"7px 10px",textAlign:"center",color:C.ink3,fontSize:12}}>{r.unit}</td>
-                <td style={{padding:"7px 10px",textAlign:"right",color:C.ink3}}>฿{r.buy_price.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-                <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:C.brand,whiteSpace:"nowrap"}}>฿{r.estCost.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-              </tr>)}</tbody>
-            </table>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(120px,100%),1fr))",gap:8,fontFamily:"'Sarabun',sans-serif"}}>
+                <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
+                  <div style={{fontSize:10,color:C.ink4,fontWeight:700,letterSpacing:.3}}>สั่งมา</div>
+                  <div style={{fontSize:14,fontWeight:700,color:C.ink2,marginTop:2}}>{r.totalNeed} <span style={{fontSize:10,color:C.ink4,fontWeight:600}}>{r.unit}</span></div>
+                </div>
+                <div style={{padding:"6px 10px",background:r.onHand>0?C.greenLight:C.bg,borderRadius:8,border:`1px solid ${r.onHand>0?C.green+"33":C.line}`}}>
+                  <div style={{fontSize:10,color:r.onHand>0?C.green:C.ink4,fontWeight:700,letterSpacing:.3}}>มีอยู่</div>
+                  <div style={{fontSize:14,fontWeight:700,color:r.onHand>0?C.green:C.ink4,marginTop:2}}>{r.onHand} <span style={{fontSize:10,opacity:.8,fontWeight:600}}>{r.unit}</span></div>
+                </div>
+                <div style={{padding:"6px 12px",background:`linear-gradient(135deg,${C.redLight},#FEE2E2)`,borderRadius:8,border:`2px solid ${C.red}55`}}>
+                  <div style={{fontSize:10,color:"#7F1D1D",fontWeight:900,letterSpacing:.3}}>ต้องซื้อ</div>
+                  <div style={{fontSize:18,fontWeight:900,color:C.red,lineHeight:1.1,marginTop:2}}>{r.shortBy} <span style={{fontSize:11,color:"#7F1D1D",fontWeight:700}}>{r.unit}</span></div>
+                </div>
+                <div style={{padding:"6px 10px",background:C.brandLight,borderRadius:8,border:`1px solid ${C.brandBorder}`}}>
+                  <div style={{fontSize:10,color:C.brand,fontWeight:700,letterSpacing:.3}}>ราคาประมาณ</div>
+                  <div style={{fontSize:14,fontWeight:900,color:C.brand,marginTop:2}}>฿{r.estCost.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+                  <div style={{fontSize:9,color:C.ink4,marginTop:1}}>฿{r.buy_price.toLocaleString(undefined,{minimumFractionDigits:2})}/{r.unit}</div>
+                </div>
+              </div>
+            </div>)}
           </div>
-        </Card>)}
+        </div>)}
       </div>
 
       {/* Grand total */}
