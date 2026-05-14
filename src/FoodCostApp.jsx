@@ -427,7 +427,7 @@ function hasPerm(user,perm){
 }
 const ROLES={admin:{label:"Admin",color:"purple"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"}};
 const ppg=(price,gram)=>(gram>0?price/gram:0);
-const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.price_per_gram*x.amountGram:0);},0);
+const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);if(!i)return s;const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;return s+ppg*x.amountGram;},0);
 // Per-branch stock helpers — falls back to legacy ingredient.stock when no branch entry exists
 function branchStock(ing,branchId){
   if(!ing||branchId==null)return 0;
@@ -1845,7 +1845,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     return (m.local_categories||{})[currentBranch?.id]===selCat;
   });},[menus,q,isCentral,currentBranch,selCat]);
   const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
-  const fc=(form.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?i.price_per_gram*x.amountGram:0);},0);
+  const fc=(form.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);if(!i)return s;const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;return s+ppg*x.amountGram;},0);
   const fm=form.price>0?((+form.price-fc)/+form.price*100):0;
   async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,code:(form.code||"").trim()||null,category:form.category||selCat||"",price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{await api.addMenu(item);addH(`เพิ่มเมนู: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบเมนู",message:`ต้องการลบเมนู "${name}" ใช่หรือไม่?`}))return;try{await api.deleteMenu(id);addH(`ลบเมนู: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
@@ -1972,7 +1972,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
         <div>
           <div style={{fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>วัตถุดิบ</div>
           <div style={{maxHeight:140,overflowY:"auto",marginBottom:10}}>
-            {(form.ingredients||[]).map((mi,idx)=>{const ing=ings.find(i=>i.id===mi.ingredientId);const c=ing?ing.price_per_gram*mi.amountGram:0;return <div key={idx} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,background:C.bg,borderRadius:9,padding:"8px 10px",border:`1px solid ${C.line}`}}><span style={{flex:1,fontSize:13,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{ing?.name??"?"}</span><span style={{fontSize:12,color:C.brand,fontWeight:700}}>{mi.amountGram}g</span><span style={{fontSize:11,color:C.ink3}}>฿{c.toFixed(2)}</span><button onClick={()=>setForm(f=>({...f,ingredients:f.ingredients.filter((_,i)=>i!==idx)}))} style={{background:"none",border:"none",cursor:"pointer",display:"flex"}}><Ic d={I.x} s={13} c={C.red}/></button></div>;})}
+            {(form.ingredients||[]).map((mi,idx)=>{const ing=ings.find(i=>i.id===mi.ingredientId);const ppg=ing?(+ing.avg_price_per_gram>0?+ing.avg_price_per_gram:+ing.price_per_gram)||0:0;const c=ppg*mi.amountGram;return <div key={idx} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,background:C.bg,borderRadius:9,padding:"8px 10px",border:`1px solid ${C.line}`}}><span style={{flex:1,fontSize:13,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{ing?.name??"?"}</span><span style={{fontSize:12,color:C.brand,fontWeight:700}}>{mi.amountGram}g</span><span style={{fontSize:11,color:C.ink3}}>฿{c.toFixed(2)}</span><button onClick={()=>setForm(f=>({...f,ingredients:f.ingredients.filter((_,i)=>i!==idx)}))} style={{background:"none",border:"none",cursor:"pointer",display:"flex"}}><Ic d={I.x} s={13} c={C.red}/></button></div>;})}
           </div>
           <div style={{background:C.bg,borderRadius:12,padding:"12px",marginBottom:10,border:`1px solid ${C.line}`}}>
             <div style={{position:"relative",marginBottom:8}}><span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={13} c={C.ink4}/></span><input value={ingQ} onChange={e=>setIngQ(e.target.value)} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:32,fontSize:13,padding:"8px 12px 8px 32px"}}/></div>
@@ -8607,7 +8607,12 @@ function AddOpeningModal({wallId,wallLen,initialType,onSave,onClose}){
 export default function App(){
   const[currentUser,setCurrentUser]=useState(null);
   const[currentBranch,setCurrentBranch]=useState(null);
-  const[ings,setIngs]=useState([]);const[menus,setMenus]=useState([]);
+  const[rawIngs,setIngs]=useState([]);const[menus,setMenus]=useState([]);
+  // Derived: every ingredient gains avg_price + avg_price_per_gram computed
+  // from the mean of its delivered external-supplier order prices. Falls
+  // back transparently (no avg fields) when an ingredient has never been
+  // received via an order. Central kitchen averages across all branches;
+  // branch users average within their own scope.
   const[allCats,setAllCats]=useState([]);const[users,setUsers]=useState([]);
   const[branches,setBranches]=useState([]);const[suppliers,setSuppliers]=useState([]);
   const[costHistory,setCostHistory]=useState([]);const[actionHistory,setActionHistory]=useState([]);
@@ -8702,6 +8707,30 @@ export default function App(){
     orders:async()=>{const isCentral=currentBranch?.type==="central";const d=await api.getOrders(isCentral?null:currentBranch?.id);setOrders(d);if(isCentral){const ao=await api.getAllOrders();setAllOrders(ao);}},
     printers:async()=>{const d=await api.getAllPrinters();setPrinters(d);},
   };
+  const ings=useMemo(()=>{
+    const isCentral=currentBranch?.type==="central";
+    const scope=isCentral&&(allOrders||[]).length?allOrders:orders;
+    const stats=new Map();
+    (scope||[]).forEach(o=>{
+      if(o.status!=="delivered")return;
+      (o.items||[]).forEach(it=>{
+        const id=+(it.ingId||it.ingredient_id);
+        const price=+it.pricePerUnit||+it.buyPrice||0;
+        if(!id||price<=0)return;
+        const s=stats.get(id)||{sum:0,count:0};
+        s.sum+=price;s.count+=1;
+        stats.set(id,s);
+      });
+    });
+    return (rawIngs||[]).map(ing=>{
+      const s=stats.get(+ing.id);
+      if(!s||!s.count)return ing;
+      const avgPrice=s.sum/s.count;
+      const ctg=+ing.convert_to_gram||1;
+      return{...ing,avg_price:+avgPrice.toFixed(4),avg_price_per_gram:+(avgPrice/ctg).toFixed(6),avg_price_count:s.count};
+    });
+  },[rawIngs,orders,allOrders,currentBranch?.type]);
+
   const addH=useCallback(async a=>{try{await api.addActionHist({action:a,time:nowStr()});await reload.action();}catch{}},[currentBranch]);
 
   const TABS=[
