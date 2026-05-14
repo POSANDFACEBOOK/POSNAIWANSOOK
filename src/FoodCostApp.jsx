@@ -489,13 +489,16 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
   if(!toId&&!fromId)return;            // no movement specified
   if(toId&&fromId&&toId===fromId)return; // same-branch transfer is a no-op
   const agg=new Map();
+  const notFound=[];      // items whose ingredient_id wasn't in `ings`
+  const zeroQty=[];       // items with qty <= 0 (informational only)
+  const failedUpdates=[]; // API patch errors
   for(const it of (items||[])){
     const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
-    if(!ingId)continue;
+    if(!ingId){notFound.push({ingId:0,name:it.name||"(ไม่มีชื่อ)",reason:"ไม่มี ingredient_id"});continue;}
     const qty=it.received_qty!=null?+it.received_qty:+(it.qty!=null?it.qty:it.qtyNeeded);
-    if(!qty||qty<=0)continue;
+    if(!qty||qty<=0){zeroQty.push({ingId,name:it.name||"#"+ingId});continue;}
     const row=(ings||[]).find(x=>+x.id===ingId);
-    if(!row)continue;
+    if(!row){notFound.push({ingId,name:it.name||"#"+ingId,reason:"ไม่พบในรายการวัตถุดิบ"});continue;}
     const e=agg.get(ingId)||{add:0,row};
     e.add+=qty;agg.set(ingId,e);
   }
@@ -519,7 +522,28 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
       }
     }
     try{await api.updateIng(ingId,patch);}
-    catch(err){console.error("transferStock failed",ingId,err);}
+    catch(err){
+      console.error("transferStock failed",ingId,err);
+      failedUpdates.push({ingId,name:row.name||"#"+ingId,reason:err&&err.message||String(err)});
+    }
+  }
+  // Top-level callers only: surface anything that silently fell through so
+  // the user doesn't end up with a PO marked "จัดส่งแล้ว" but no stock move.
+  if(_depth===0&&(notFound.length>0||failedUpdates.length>0)){
+    const lines=[];
+    if(notFound.length>0){
+      lines.push(`⚠️ ตัดสต๊อกไม่ได้ ${notFound.length} รายการ (วัตถุดิบไม่อยู่ในระบบ):`);
+      notFound.slice(0,8).forEach(x=>lines.push(`   • ${x.name} — ${x.reason}`));
+      if(notFound.length>8)lines.push(`   • ... และอีก ${notFound.length-8} รายการ`);
+    }
+    if(failedUpdates.length>0){
+      lines.push(`❌ บันทึกสต๊อก ${failedUpdates.length} รายการล้มเหลว:`);
+      failedUpdates.slice(0,5).forEach(x=>lines.push(`   • ${x.name}: ${x.reason}`));
+      if(failedUpdates.length>5)lines.push(`   • ... และอีก ${failedUpdates.length-5} รายการ`);
+    }
+    lines.push("");
+    lines.push("กรุณาตรวจสอบใน \"วัตถุดิบ\" แล้วลองทำรายการใหม่อีกครั้ง");
+    setTimeout(()=>alert(lines.join("\n")),200);
   }
 
   // ── SOP cascade ──────────────────────────────────────────────────────────
