@@ -391,6 +391,7 @@ const ALL_PERMS=[
   {id:"orders",label:"สั่งวัตถุดิบ"},
   {id:"history",label:"ประวัติต้นทุน"},
   {id:"suppliers",label:"ซัพพลาย"},
+  {id:"kitchen_3d",label:"ครัว 3D"},
   {id:"settings",label:"ตั้งค่า"},
 ];
 const ROLE_DEFAULT_PERMS={
@@ -7462,6 +7463,532 @@ function CRMAnalytics({customers,transactions,feedback,reservations}){
   </div>;
 }
 
+// 16 preset equipment items for the 3D kitchen designer.
+// size = [width, height, depth] in meters. color = THREE.Color hex.
+const KITCHEN_3D_EQUIPMENT=[
+  // ── Kitchen zone ──
+  {type:"fridge_large",   name:"ตู้แช่ใหญ่",         icon:"❄️", size:[1.2,1.8,0.7], color:0x94A3B8, zone:"kitchen"},
+  {type:"fridge_small",   name:"ตู้แช่เล็ก",         icon:"🧊", size:[0.8,1.4,0.6], color:0xB6C2D1, zone:"kitchen"},
+  {type:"freezer",        name:"ตู้แช่แข็ง",          icon:"🥶", size:[1.5,1.0,0.7], color:0x60A5FA, zone:"kitchen"},
+  {type:"gas_stove",      name:"เตาแก๊ส",            icon:"🔥", size:[1.0,0.9,0.7], color:0x1F2937, zone:"kitchen"},
+  {type:"fryer",          name:"เตาทอด",            icon:"🍟", size:[0.6,0.9,0.6], color:0x7F1D1D, zone:"kitchen"},
+  {type:"wok",            name:"เตาผัด",            icon:"🍳", size:[1.2,0.9,0.7], color:0x111827, zone:"kitchen"},
+  {type:"oven",           name:"เตาอบ",              icon:"♨️", size:[0.7,0.7,0.6], color:0x374151, zone:"kitchen"},
+  {type:"sink",           name:"อ่างล้างจาน",         icon:"🚰", size:[1.0,0.9,0.6], color:0xCBD5E1, zone:"kitchen"},
+  {type:"prep_table",     name:"โต๊ะเตรียมอาหาร",     icon:"🪵", size:[1.5,0.9,0.7], color:0xE5E7EB, zone:"kitchen"},
+  {type:"shelf",          name:"ชั้นวาง",             icon:"🗄", size:[1.0,1.8,0.4], color:0xA8A29E, zone:"kitchen"},
+  // ── Bar zone ──
+  {type:"beverage_fridge",name:"ตู้แช่เครื่องดื่ม",     icon:"🥤", size:[0.9,1.8,0.6], color:0x3B82F6, zone:"bar"},
+  {type:"ice_machine",    name:"เครื่องทำน้ำแข็ง",     icon:"🧊", size:[0.6,1.0,0.6], color:0xBFDBFE, zone:"bar"},
+  {type:"coffee_machine", name:"เครื่องชง",          icon:"☕", size:[0.6,0.6,0.5], color:0x7C2D12, zone:"bar"},
+  {type:"bar_counter",    name:"เคาน์เตอร์บาร์",      icon:"🍻", size:[2.0,1.1,0.6], color:0x92400E, zone:"bar"},
+  {type:"blender",        name:"เครื่องปั่น",          icon:"🥃", size:[0.3,0.6,0.3], color:0xF8FAFC, zone:"bar"},
+  {type:"shelf_bar",      name:"ชั้นวางขวด",         icon:"🍾", size:[1.5,1.8,0.3], color:0xA8A29E, zone:"bar"},
+];
+
+// Builds a sprite that floats above an equipment box and reads its label.
+function makeKitchen3DLabel(THREE,text){
+  const canvas=document.createElement("canvas");
+  const ctx=canvas.getContext("2d");
+  canvas.width=384;canvas.height=80;
+  // Pill background
+  ctx.fillStyle="rgba(15,23,42,0.88)";
+  const r=18;
+  ctx.beginPath();
+  ctx.moveTo(r,0);
+  ctx.arcTo(canvas.width,0,canvas.width,canvas.height,r);
+  ctx.arcTo(canvas.width,canvas.height,0,canvas.height,r);
+  ctx.arcTo(0,canvas.height,0,0,r);
+  ctx.arcTo(0,0,canvas.width,0,r);
+  ctx.closePath();
+  ctx.fill();
+  // Text
+  ctx.fillStyle="#FFFFFF";
+  ctx.font="bold 36px 'Sarabun', sans-serif";
+  ctx.textAlign="center";
+  ctx.textBaseline="middle";
+  const display=String(text||"").slice(0,24);
+  ctx.fillText(display,canvas.width/2,canvas.height/2+2);
+  const texture=new THREE.CanvasTexture(canvas);
+  texture.minFilter=THREE.LinearFilter;
+  texture.magFilter=THREE.LinearFilter;
+  const material=new THREE.SpriteMaterial({map:texture,transparent:true,depthWrite:false,depthTest:false});
+  const sprite=new THREE.Sprite(material);
+  sprite.scale.set(1.6,0.34,1);
+  sprite.renderOrder=999;
+  return sprite;
+}
+
+function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
+  const mountRef=useRef(null);
+  const sceneRef=useRef(null);
+  const cameraRef=useRef(null);
+  const rendererRef=useRef(null);
+  const controlsRef=useRef(null);
+  const THREEref=useRef(null);
+  const equipmentMeshesRef=useRef({});
+  const animateRafRef=useRef(0);
+  const dragStateRef=useRef({id:null});
+
+  const [zone,setZone]=useState("kitchen");
+  const [layout,setLayout]=useState(()=>{
+    const init=currentBranch?.kitchen_3d_layout||{kitchen:[],bar:[]};
+    return{kitchen:Array.isArray(init.kitchen)?init.kitchen:[],bar:Array.isArray(init.bar)?init.bar:[]};
+  });
+  const [selectedId,setSelectedId]=useState(null);
+  const [dirty,setDirty]=useState(false);
+  const [loaded,setLoaded]=useState(false);
+  const [loadErr,setLoadErr]=useState(null);
+  const [saving,setSaving]=useState(false);
+  const [paletteOpen,setPaletteOpen]=useState(false);
+
+  const isCentralAdmin=currentBranch?.type==="central"&&currentUser?.role==="admin";
+  const canEdit=isCentralAdmin;
+  const items=layout[zone]||[];
+
+  // Re-read layout when currentBranch changes
+  useEffect(()=>{
+    const init=currentBranch?.kitchen_3d_layout||{kitchen:[],bar:[]};
+    setLayout({
+      kitchen:Array.isArray(init.kitchen)?init.kitchen:[],
+      bar:Array.isArray(init.bar)?init.bar:[],
+    });
+    setDirty(false);
+    setSelectedId(null);
+  },[currentBranch?.id]);
+
+  // ── Three.js bootstrap (one-time) ──────────────────────────────────────
+  useEffect(()=>{
+    let mounted=true;
+    let cleanup=()=>{};
+    (async()=>{
+      try{
+        const THREE=await import("three");
+        const oc=await import("three/addons/controls/OrbitControls.js");
+        if(!mounted||!mountRef.current)return;
+        THREEref.current=THREE;
+        const container=mountRef.current;
+        const W=container.clientWidth||600;
+        const H=container.clientHeight||520;
+
+        const scene=new THREE.Scene();
+        scene.background=new THREE.Color(0xF1F5F9);
+        sceneRef.current=scene;
+
+        const camera=new THREE.PerspectiveCamera(45,W/H,0.1,200);
+        camera.position.set(9,9,13);
+        cameraRef.current=camera;
+
+        const renderer=new THREE.WebGLRenderer({antialias:true});
+        renderer.setSize(W,H);
+        renderer.setPixelRatio(Math.min(2,window.devicePixelRatio||1));
+        renderer.shadowMap.enabled=true;
+        container.appendChild(renderer.domElement);
+        rendererRef.current=renderer;
+
+        const controls=new oc.OrbitControls(camera,renderer.domElement);
+        controls.target.set(0,0.5,0);
+        controls.minDistance=3;
+        controls.maxDistance=30;
+        controls.maxPolarAngle=Math.PI/2.1;
+        controls.enableDamping=true;
+        controls.dampingFactor=0.1;
+        controlsRef.current=controls;
+
+        scene.add(new THREE.AmbientLight(0xffffff,0.55));
+        const dir=new THREE.DirectionalLight(0xffffff,0.85);
+        dir.position.set(8,12,6);
+        dir.castShadow=true;
+        dir.shadow.mapSize.set(1024,1024);
+        const s=10;
+        dir.shadow.camera.left=-s;dir.shadow.camera.right=s;
+        dir.shadow.camera.top=s;dir.shadow.camera.bottom=-s;
+        scene.add(dir);
+
+        // Floor
+        const floor=new THREE.Mesh(
+          new THREE.PlaneGeometry(10,10),
+          new THREE.MeshStandardMaterial({color:0xE2E8F0,roughness:0.9})
+        );
+        floor.rotation.x=-Math.PI/2;
+        floor.receiveShadow=true;
+        floor.userData.isFloor=true;
+        scene.add(floor);
+
+        const grid=new THREE.GridHelper(10,10,0x94A3B8,0xCBD5E1);
+        grid.position.y=0.005;
+        grid.material.opacity=0.6;
+        grid.material.transparent=true;
+        scene.add(grid);
+
+        // Animation loop
+        function animate(){
+          animateRafRef.current=requestAnimationFrame(animate);
+          controls.update();
+          renderer.render(scene,camera);
+        }
+        animate();
+
+        const onResize=()=>{
+          if(!mountRef.current)return;
+          const w=mountRef.current.clientWidth||600;
+          const h=mountRef.current.clientHeight||520;
+          renderer.setSize(w,h);
+          camera.aspect=w/h;
+          camera.updateProjectionMatrix();
+        };
+        window.addEventListener("resize",onResize);
+
+        cleanup=()=>{
+          window.removeEventListener("resize",onResize);
+          cancelAnimationFrame(animateRafRef.current);
+          scene.traverse(obj=>{
+            if(obj.geometry&&obj.geometry.dispose)obj.geometry.dispose();
+            if(obj.material){
+              const mats=Array.isArray(obj.material)?obj.material:[obj.material];
+              mats.forEach(m=>{
+                if(m.map&&m.map.dispose)m.map.dispose();
+                m.dispose&&m.dispose();
+              });
+            }
+          });
+          renderer.dispose();
+          if(container.contains(renderer.domElement))container.removeChild(renderer.domElement);
+        };
+
+        setLoaded(true);
+      }catch(e){
+        console.error("3D init failed",e);
+        setLoadErr((e&&e.message)||String(e));
+      }
+    })();
+    return()=>{mounted=false;cleanup();};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  // ── Rebuild equipment meshes whenever items/zone/selection change ───────
+  useEffect(()=>{
+    if(!loaded||!sceneRef.current||!THREEref.current)return;
+    const THREE=THREEref.current;
+    const scene=sceneRef.current;
+    // remove existing
+    Object.values(equipmentMeshesRef.current).forEach(mesh=>{
+      scene.remove(mesh);
+      mesh.traverse(o=>{
+        if(o.geometry&&o.geometry.dispose)o.geometry.dispose();
+        if(o.material){
+          const mats=Array.isArray(o.material)?o.material:[o.material];
+          mats.forEach(m=>{
+            if(m.map&&m.map.dispose)m.map.dispose();
+            m.dispose&&m.dispose();
+          });
+        }
+      });
+    });
+    equipmentMeshesRef.current={};
+    // add new
+    items.forEach(item=>{
+      const eq=KITCHEN_3D_EQUIPMENT.find(e=>e.type===item.type);
+      if(!eq)return;
+      const [w,h,d]=eq.size;
+      const geom=new THREE.BoxGeometry(w,h,d);
+      const mat=new THREE.MeshStandardMaterial({color:eq.color,roughness:0.55,metalness:0.15});
+      const mesh=new THREE.Mesh(geom,mat);
+      mesh.position.set(+item.x||0,h/2,+item.z||0);
+      mesh.rotation.y=((+item.rotation||0)*Math.PI)/180;
+      mesh.castShadow=true;mesh.receiveShadow=true;
+      mesh.userData.id=item.id;mesh.userData.eq=eq;
+
+      // Edge outline (highlights when selected)
+      const edges=new THREE.EdgesGeometry(geom);
+      const isSel=selectedId===item.id;
+      const edgeMat=new THREE.LineBasicMaterial({color:isSel?0xFF6B35:0x0F172A,linewidth:isSel?3:1});
+      const edgeMesh=new THREE.LineSegments(edges,edgeMat);
+      mesh.add(edgeMesh);
+
+      // Selected: add a glow ring on the floor below
+      if(isSel){
+        const ringGeom=new THREE.RingGeometry(Math.max(w,d)*0.55,Math.max(w,d)*0.7,32);
+        const ringMat=new THREE.MeshBasicMaterial({color:0xFF6B35,side:THREE.DoubleSide,transparent:true,opacity:0.6,depthWrite:false});
+        const ring=new THREE.Mesh(ringGeom,ringMat);
+        ring.rotation.x=-Math.PI/2;
+        ring.position.y=-h/2+0.01;
+        mesh.add(ring);
+      }
+
+      // Floating label
+      const label=makeKitchen3DLabel(THREE,item.label||eq.name);
+      label.position.y=h/2+0.32;
+      mesh.add(label);
+
+      scene.add(mesh);
+      equipmentMeshesRef.current[item.id]=mesh;
+    });
+  },[items,zone,selectedId,loaded]);
+
+  // ── Pointer events: click select + drag on floor plane ──────────────────
+  useEffect(()=>{
+    if(!loaded||!rendererRef.current)return;
+    const THREE=THREEref.current;
+    const renderer=rendererRef.current;
+    const camera=cameraRef.current;
+    const controls=controlsRef.current;
+    const dom=renderer.domElement;
+    const raycaster=new THREE.Raycaster();
+    const mouse=new THREE.Vector2();
+    const dragPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0);
+    let downAt=0,downX=0,downY=0;
+
+    function ndc(ev){
+      const rect=dom.getBoundingClientRect();
+      mouse.x=((ev.clientX-rect.left)/rect.width)*2-1;
+      mouse.y=-((ev.clientY-rect.top)/rect.height)*2+1;
+    }
+
+    function onPointerDown(ev){
+      downAt=Date.now();downX=ev.clientX;downY=ev.clientY;
+      ndc(ev);
+      raycaster.setFromCamera(mouse,camera);
+      const meshes=Object.values(equipmentMeshesRef.current);
+      const hits=raycaster.intersectObjects(meshes,true);
+      if(hits.length>0){
+        let o=hits[0].object;
+        while(o&&!o.userData?.id)o=o.parent;
+        if(o&&o.userData.id){
+          setSelectedId(o.userData.id);
+          if(canEdit){
+            dragStateRef.current.id=o.userData.id;
+            controls.enabled=false;
+            try{dom.setPointerCapture(ev.pointerId);}catch{}
+          }
+        }
+      }
+    }
+
+    function onPointerMove(ev){
+      const dragId=dragStateRef.current.id;
+      if(!dragId)return;
+      ndc(ev);
+      raycaster.setFromCamera(mouse,camera);
+      const intersection=new THREE.Vector3();
+      raycaster.ray.intersectPlane(dragPlane,intersection);
+      const mesh=equipmentMeshesRef.current[dragId];
+      if(!mesh)return;
+      const half=4.5;
+      mesh.position.x=Math.max(-half,Math.min(half,intersection.x));
+      mesh.position.z=Math.max(-half,Math.min(half,intersection.z));
+    }
+
+    function onPointerUp(ev){
+      const dragId=dragStateRef.current.id;
+      const dt=Date.now()-downAt;
+      const dx=Math.abs(ev.clientX-downX);
+      const dy=Math.abs(ev.clientY-downY);
+      // Treat as a tap (no real drag) if barely moved + quick — deselect when on empty space
+      if(!dragId&&dt<260&&dx<4&&dy<4){
+        // (already handled in down: selected if hit anything; otherwise deselect)
+        ndc(ev);
+        raycaster.setFromCamera(mouse,camera);
+        const meshes=Object.values(equipmentMeshesRef.current);
+        if(raycaster.intersectObjects(meshes,true).length===0){
+          setSelectedId(null);
+        }
+      }
+      if(dragId){
+        const mesh=equipmentMeshesRef.current[dragId];
+        const movedId=dragId;
+        dragStateRef.current.id=null;
+        controls.enabled=true;
+        try{dom.releasePointerCapture(ev.pointerId);}catch{}
+        if(mesh){
+          setLayout(L=>({
+            ...L,
+            [zone]:L[zone].map(it=>it.id===movedId?{...it,x:+mesh.position.x.toFixed(2),z:+mesh.position.z.toFixed(2)}:it),
+          }));
+          setDirty(true);
+        }
+      }
+    }
+
+    dom.addEventListener("pointerdown",onPointerDown);
+    dom.addEventListener("pointermove",onPointerMove);
+    dom.addEventListener("pointerup",onPointerUp);
+    dom.addEventListener("pointercancel",onPointerUp);
+    return()=>{
+      dom.removeEventListener("pointerdown",onPointerDown);
+      dom.removeEventListener("pointermove",onPointerMove);
+      dom.removeEventListener("pointerup",onPointerUp);
+      dom.removeEventListener("pointercancel",onPointerUp);
+    };
+  },[loaded,canEdit,zone]);
+
+  function addItem(eq){
+    if(!canEdit)return;
+    const id="eq_"+Math.random().toString(36).slice(2,9);
+    const newItem={id,type:eq.type,x:0,z:0,rotation:0,label:eq.name};
+    setLayout(L=>({...L,[zone]:[...L[zone],newItem]}));
+    setSelectedId(id);
+    setDirty(true);
+    setPaletteOpen(false);
+  }
+
+  function rotateSelected(){
+    if(!selectedId||!canEdit)return;
+    setLayout(L=>({
+      ...L,
+      [zone]:L[zone].map(it=>it.id===selectedId?{...it,rotation:((+it.rotation||0)+90)%360}:it),
+    }));
+    setDirty(true);
+  }
+
+  async function deleteSelected(){
+    if(!selectedId||!canEdit)return;
+    if(!await confirmDlg({title:"ลบอุปกรณ์",message:"ต้องการลบอุปกรณ์ชิ้นนี้ออกจากแบบครัว?",confirmLabel:"🗑 ลบ",danger:true}))return;
+    setLayout(L=>({...L,[zone]:L[zone].filter(it=>it.id!==selectedId)}));
+    setSelectedId(null);
+    setDirty(true);
+  }
+
+  function renameSelected(label){
+    if(!selectedId||!canEdit)return;
+    setLayout(L=>({...L,[zone]:L[zone].map(it=>it.id===selectedId?{...it,label}:it)}));
+    setDirty(true);
+  }
+
+  async function save(){
+    if(!canEdit||!currentBranch)return;
+    setSaving(true);
+    try{
+      await api.updateBranch(currentBranch.id,{kitchen_3d_layout:layout});
+      setDirty(false);
+      if(reloadBranches)await reloadBranches();
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+((e&&e.message)||e));}
+    setSaving(false);
+  }
+
+  function resetCamera(){
+    const cam=cameraRef.current,ct=controlsRef.current;
+    if(!cam||!ct)return;
+    cam.position.set(9,9,13);
+    ct.target.set(0,0.5,0);
+    ct.update();
+  }
+
+  const selected=selectedId?items.find(it=>it.id===selectedId):null;
+  const selectedEq=selected?KITCHEN_3D_EQUIPMENT.find(e=>e.type===selected.type):null;
+  const paletteItems=KITCHEN_3D_EQUIPMENT.filter(e=>e.zone===zone);
+  const kCount=(layout.kitchen||[]).length;
+  const bCount=(layout.bar||[]).length;
+
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    {/* Header */}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
+      <div>
+        <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.ink,margin:0,display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:24}}>🍳</span> ออกแบบครัว 3D — {currentBranch?.name||"—"}
+        </h3>
+        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,margin:"4px 0 0"}}>
+          จัดวางตู้แช่ เตา อ่างล้าง และอุปกรณ์อื่นๆ ของสาขา · ลากเม้าส์เพื่อหมุนกล้อง · กล้องล้อ scroll = ซูม{canEdit?" · คลิกอุปกรณ์เพื่อเลือก แล้วลากย้าย":""}
+        </p>
+      </div>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        {!canEdit&&<span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:600,background:C.bg,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.line}`}}>👁 ดูได้อย่างเดียว — เฉพาะแอดมินครัวกลางแก้ได้</span>}
+        <Btn v="ghost" onClick={resetCamera} s={{padding:"8px 12px",fontSize:12}}>🎥 รีเซ็ตมุมกล้อง</Btn>
+        {canEdit&&<Btn v={dirty?"success":"ghost"} onClick={save} loading={saving} disabled={!dirty} icon={I.save} s={{padding:"8px 14px",fontSize:13}}>{dirty?"💾 บันทึก":"💾 บันทึกแล้ว"}</Btn>}
+      </div>
+    </div>
+
+    {/* Zone toggle */}
+    <div style={{display:"flex",gap:6,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:420}}>
+      {[
+        {id:"kitchen",l:"🍳 โซนครัว",c:C.brand,n:kCount},
+        {id:"bar",l:"🍻 โซนบาร์น้ำ",c:C.teal,n:bCount},
+      ].map(t=>{
+        const sel=zone===t.id;
+        return <button key={t.id} onClick={()=>{setZone(t.id);setSelectedId(null);}} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:sel?t.c:"transparent",color:sel?C.white:C.ink3,transition:"all .15s",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+          <span>{t.l}</span>
+          <span style={{fontSize:11,fontWeight:900,background:sel?"rgba(255,255,255,0.22)":C.lineLight,color:sel?C.white:C.ink3,padding:"1px 8px",borderRadius:10}}>{t.n}</span>
+        </button>;
+      })}
+    </div>
+
+    {/* Action toolbar */}
+    {canEdit&&<div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+      <Btn v="success" onClick={()=>setPaletteOpen(true)} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มอุปกรณ์</Btn>
+      {selected&&<>
+        <Btn v="info" onClick={rotateSelected} s={{padding:"8px 12px",fontSize:12}}>↻ หมุน 90°</Btn>
+        <Btn onClick={deleteSelected} icon={I.trash} s={{padding:"8px 12px",fontSize:12,background:C.redLight,color:C.red,border:`1px solid #FECACA`}}>ลบ</Btn>
+      </>}
+    </div>}
+
+    {/* Canvas + side panel */}
+    <div style={{display:"grid",gridTemplateColumns:selected?"1fr 280px":"1fr",gap:14,alignItems:"start"}}>
+      <Card style={{padding:0,overflow:"hidden",position:"relative"}}>
+        <div ref={mountRef} style={{width:"100%",height:560,background:"#F1F5F9",position:"relative",cursor:canEdit?"crosshair":"grab"}}>
+          {!loaded&&!loadErr&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Sarabun',sans-serif",color:C.ink3,fontSize:13}}>
+            <div style={{textAlign:"center"}}>
+              <div style={{width:36,height:36,border:`3px solid ${C.brandLight}`,borderTop:`3px solid ${C.brand}`,borderRadius:"50%",margin:"0 auto 8px",animation:"spin .8s linear infinite"}}/>
+              กำลังโหลด 3D engine...
+            </div>
+          </div>}
+          {loadErr&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'Sarabun',sans-serif",color:C.red,fontSize:13,textAlign:"center"}}>
+            ❌ โหลด 3D engine ไม่สำเร็จ: {loadErr}
+          </div>}
+        </div>
+      </Card>
+
+      {/* Side panel — only when something is selected */}
+      {selected&&<Card style={{padding:14}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,paddingBottom:10,borderBottom:`1px solid ${C.lineLight}`}}>
+          <span style={{fontSize:30}}>{selectedEq?.icon||"📦"}</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,fontWeight:700}}>อุปกรณ์ที่เลือก</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>{selectedEq?.name}</div>
+          </div>
+        </div>
+        {canEdit?<Inp label="ป้ายชื่อ" value={selected.label||""} onChange={e=>renameSelected(e.target.value)} placeholder={selectedEq?.name}/>
+        :<div style={{marginBottom:10}}><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginBottom:3}}>ป้ายชื่อ</div><div style={{fontSize:14,fontWeight:700,color:C.ink}}>{selected.label||selectedEq?.name}</div></div>}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
+            <div style={{fontSize:10,color:C.ink4,fontWeight:700}}>ตำแหน่ง X</div>
+            <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{(+selected.x||0).toFixed(2)} m</div>
+          </div>
+          <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
+            <div style={{fontSize:10,color:C.ink4,fontWeight:700}}>ตำแหน่ง Z</div>
+            <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{(+selected.z||0).toFixed(2)} m</div>
+          </div>
+          <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
+            <div style={{fontSize:10,color:C.ink4,fontWeight:700}}>หมุน</div>
+            <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{+selected.rotation||0}°</div>
+          </div>
+          <div style={{padding:"6px 10px",background:C.brandLight,borderRadius:8,border:`1px solid ${C.brandBorder}`}}>
+            <div style={{fontSize:10,color:C.brand,fontWeight:700}}>ขนาด (w×h×d)</div>
+            <div style={{fontSize:12,fontWeight:800,color:C.brand}}>{selectedEq?.size?.join("×")||"—"} m</div>
+          </div>
+        </div>
+        {canEdit&&<div style={{marginTop:12,display:"flex",gap:6,flexWrap:"wrap"}}>
+          <Btn v="info" onClick={rotateSelected} s={{flex:1,padding:"8px 10px",fontSize:12}}>↻ หมุน 90°</Btn>
+          <Btn onClick={deleteSelected} icon={I.trash} s={{padding:"8px 10px",fontSize:12,background:C.redLight,color:C.red,border:`1px solid #FECACA`}}>ลบ</Btn>
+        </div>}
+      </Card>}
+    </div>
+
+    {/* Equipment palette modal */}
+    {paletteOpen&&<Modal title={`➕ เพิ่มอุปกรณ์ — ${zone==="kitchen"?"โซนครัว":"โซนบาร์"}`} onClose={()=>setPaletteOpen(false)} wide>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:14}}>
+        คลิกอุปกรณ์ที่ต้องการเพิ่มลงในแบบครัว — อุปกรณ์ใหม่จะวางที่จุดกลางห้อง คุณสามารถลากย้ายภายหลังได้
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(140px,100%),1fr))",gap:10}}>
+        {paletteItems.map(eq=><button key={eq.type} onClick={()=>addItem(eq)} style={{padding:"14px 12px",border:`2px solid ${C.line}`,borderRadius:12,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"center",transition:"all .15s",display:"flex",flexDirection:"column",alignItems:"center",gap:6}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
+          <span style={{fontSize:34}}>{eq.icon}</span>
+          <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{eq.name}</div>
+          <div style={{fontSize:10,color:C.ink4}}>{eq.size.join("×")} m</div>
+        </button>)}
+      </div>
+    </Modal>}
+  </div>;
+}
+
 // ══════════════════════════════════════════════════════
 // ── MAIN APP ──────────────────────────────────────────
 // ══════════════════════════════════════════════════════
@@ -7579,6 +8106,7 @@ export default function App(){
     ...(currentUser&&currentUser.role!=="admin"&&hasPerm(currentUser,"orders")&&!hasPerm(currentUser,"po")?[{id:"orders",l:"สั่งวัตถุดิบ",icon:I.truck,perm:"orders"}]:[]),
     {id:"history",l:"ประวัติต้นทุน",icon:I.clock,perm:"history"},
     {id:"suppliers",l:"ซัพพลาย",icon:I.truck,perm:"suppliers"},
+    {id:"kitchen3d",l:"ครัว 3D",icon:I.shop,perm:"kitchen_3d"},
     {id:"settings",l:"ตั้งค่า",icon:I.settings,perm:"settings"},
   ];
   // A tab is visible only if the user has the permission. Admin role sees everything.
@@ -7754,6 +8282,7 @@ export default function App(){
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
+            {tab==="kitchen3d"&&<Kitchen3DView currentBranch={currentBranch} currentUser={currentUser} branches={branches} reloadBranches={reload.branches}/>}
             {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} printers={printers} reloadPrinters={reload.printers} currentBranch={currentBranch}/>}
           </>}
         </div>
