@@ -1584,7 +1584,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
-      <Btn v="success" onClick={()=>setShowStockCheck(true)} icon={I.box}>📦 เช็คสต็อก</Btn>
+      <Btn v="success" onClick={()=>setShowStockCheck(true)} icon={I.box}>📦 นับสต็อก</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
@@ -1757,7 +1757,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
     alert(`✅ บันทึกสต็อก ${ok.length} รายการสำเร็จ`);
   }
 
-  return <Modal title={`📦 เช็คสต็อก — ${currentBranch?.name||"—"}`} onClose={onClose} wide>
+  return <Modal title={`📦 นับสต็อก — ${currentBranch?.name||"—"}`} onClose={onClose} wide>
     {/* Info chip */}
     <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,padding:"7px 11px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:9,lineHeight:1.5}}>
       ℹ️ จำนวนสต็อก<b style={{color:C.brand}}>แยกตามสาขา</b> · ค้นหา → ใส่จำนวนใหม่ → กดบันทึก
@@ -5561,7 +5561,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     {/* Mode toggle: stock check vs orders list */}
     <div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:480}}>
       {[
-        {id:"check",l:"📋 เช็คสต็อก & สั่งซื้อ",c:C.brand},
+        {id:"check",l:"📋 นับสต็อก & สั่งซื้อ",c:C.brand},
         {id:"list",l:"📦 สั่งซัพพลายนอก",c:C.teal},
       ].map(t=>{const sel=mode===t.id;return <button key={t.id} onClick={()=>setMode(t.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:sel?t.c:"transparent",color:sel?C.white:C.ink3,transition:"all .15s"}}>{t.l}</button>;})}
     </div>
@@ -5574,7 +5574,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6,background:C.tealLight,borderRadius:8,padding:"6px 12px"}}><Ic d={I.shop} s={14} c={C.teal}/><span style={{fontSize:12,fontWeight:700,color:C.teal,fontFamily:"'Sarabun',sans-serif"}}>ครัวกลาง — รับคำสั่งซื้อจากทุกสาขา</span></div>
     </div>}
 
-    {displayOrders.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.box} s={48} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีรายการสั่งวัตถุดิบ<br/><span style={{fontSize:13}}>กดที่แท็บ "เช็คสต็อก & สั่งซื้อ" เพื่อเริ่ม</span></p></div>
+    {displayOrders.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.box} s={48} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีรายการสั่งวัตถุดิบ<br/><span style={{fontSize:13}}>กดที่แท็บ "นับสต็อก & สั่งซื้อ" เพื่อเริ่ม</span></p></div>
     :<div style={{display:"flex",flexDirection:"column",gap:8}}>
       {displayOrders.map(order=>{
         const itemsTotal=(order.items||[]).reduce((s,it)=>s+(+it.estimatedCost||0),0);
@@ -5918,7 +5918,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             subtotal,
             vat:0,
             total:subtotal,
-            notes:`สั่งจากเช็คสต็อก ${todayStr()} โดย ${currentUser.username}`,
+            notes:`สั่งจากนับสต็อก ${todayStr()} โดย ${currentUser.username}`,
             created_by:currentUser.username,
             updated_at:new Date().toISOString(),
           });
@@ -5934,7 +5934,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             supplier_id:sup.supplierId,supplier_name:sup.supplierName,
             items:sup.items,status:"pending",
             requested_by:currentUser.username,requested_at:nowStr(),
-            note:`เช็คสต็อก ${todayStr()}`,
+            note:`นับสต็อก ${todayStr()}`,
           });
           orderCount++;
         }
@@ -5958,7 +5958,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       <div style={{position:"absolute",right:-20,top:-30,fontSize:140,opacity:0.07,pointerEvents:"none"}}>📋</div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4,position:"relative",flexWrap:"wrap"}}>
         <span style={{fontSize:26}}>📋</span>
-        <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,margin:0,letterSpacing:.2}}>เช็คสต็อก & สร้างคำสั่งซื้อ</h2>
+        <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,margin:0,letterSpacing:.2}}>นับสต็อก & สร้างคำสั่งซื้อ</h2>
       </div>
       <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,margin:0,opacity:0.85,position:"relative"}}>
         นับสต็อกที่เหลือจริง → ระบบคำนวณจำนวนที่ต้องสั่งจาก <b style={{color:"#FCD34D"}}>safety stock</b> ที่ตั้งไว้ → ส่งคำสั่งซื้อแบบแยกตามซัพพลายเออร์อัตโนมัติ
