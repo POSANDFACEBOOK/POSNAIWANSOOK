@@ -3410,7 +3410,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
       const branchLabel=batches.length===1?(firstBranch?.name||"—"):"หลายสาขา";
       const sameBranch=batches.every(b=>+b.branch_id===+(firstBatch?.branch_id||0));
       const finalBranchLabel=batches.length>1&&sameBranch?(firstBranch?.name||"—"):branchLabel;
-      return <div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`2px solid ${C.brand}`,boxShadow:"0 -6px 18px rgba(15,23,42,0.30)",paddingBottom:"env(safe-area-inset-bottom,0)"}}>
+      return <div style={{position:"fixed",left:isMobile?0:240,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`2px solid ${C.brand}`,boxShadow:"0 -6px 18px rgba(15,23,42,0.30)",paddingBottom:"env(safe-area-inset-bottom,0)"}}>
       <div style={{maxWidth:1600,margin:"0 auto",padding:isMobile?"7px 12px":"8px 18px",display:"flex",alignItems:"center",flexDirection:isMobile?"column":"row",gap:isMobile?6:14}}>
         {/* Totals — inline label+value cells, single line */}
         <div style={{flex:isMobile?"none":"1 1 0",width:isMobile?"100%":"auto",display:"flex",alignItems:"center",gap:isMobile?8:14,flexWrap:"wrap",justifyContent:isMobile?"flex-start":"flex-start"}}>
@@ -6064,7 +6064,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     {/* FIXED bottom action bar */}
     {canOrder&&grouped.length>0&&<>
       <div style={{height:isMobile?92:60}}/>
-      <div style={{position:"fixed",left:0,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`2px solid ${C.brand}`,boxShadow:"0 -6px 18px rgba(15,23,42,0.30)",paddingBottom:"env(safe-area-inset-bottom,0)"}}>
+      <div style={{position:"fixed",left:isMobile?0:240,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`2px solid ${C.brand}`,boxShadow:"0 -6px 18px rgba(15,23,42,0.30)",paddingBottom:"env(safe-area-inset-bottom,0)"}}>
         <div style={{maxWidth:1600,margin:"0 auto",padding:isMobile?"8px 12px":"10px 18px",display:"flex",alignItems:"center",flexDirection:isMobile?"column":"row",gap:isMobile?8:14}}>
           <div style={{flex:isMobile?"none":"1 1 0",width:isMobile?"100%":"auto",display:"flex",alignItems:"center",gap:isMobile?8:14,flexWrap:"wrap"}}>
             <span style={{fontSize:18}}>📋</span>
