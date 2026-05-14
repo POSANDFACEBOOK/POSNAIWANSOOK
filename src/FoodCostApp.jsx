@@ -376,6 +376,7 @@ const I = {
   cash:"M12 2v20M17 5H9.5a3.5 3.5 0 100 7h5a3.5 3.5 0 110 7H6",
   food:"M18 8h1a4 4 0 010 8h-1 M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8z M6 1v3 M10 1v3 M14 1v3",
   drag:"M9 3h.01M15 3h.01M9 9h.01M15 9h.01M9 15h.01M15 15h.01",
+  copy:["M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-2","M16 3h2a2 2 0 012 2v10a2 2 0 01-2 2H10a2 2 0 01-2-2V5a2 2 0 012-2h2"],
 };
 
 const ALL_PERMS=[
@@ -5053,6 +5054,32 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const toggleExpand=(id)=>setExpandedOrders(e=>({...e,[id]:!e[id]}));
   const[editingQty,setEditingQty]=useState(null);    // { order, items:[mutable copies] }
   const[receivingOrder,setReceivingOrder]=useState(null); // { order, items:[copies with receivedQty] }
+  const[copiedId,setCopiedId]=useState(null);          // shows ✓ briefly after copy succeeds
+
+  // Plain-text list for LINE chat: "1. name qty unit"
+  async function copyOrderText(order){
+    const lines=(order.items||[]).map((it,i)=>{
+      const qty=+it.qtyNeeded||0;
+      const unit=it.unit||"";
+      return `${i+1}. ${it.name} ${qty} ${unit}`.trim();
+    }).join("\n");
+    const header=`รายการสั่งซื้อ — ${order.supplier_name||""}\nสาขา: ${order.branch_name||""}\n`;
+    const text=header+"\n"+lines;
+    try{
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        await navigator.clipboard.writeText(text);
+      }else{
+        const ta=document.createElement("textarea");
+        ta.value=text;ta.style.position="fixed";ta.style.opacity="0";
+        document.body.appendChild(ta);ta.select();
+        try{document.execCommand("copy");}finally{document.body.removeChild(ta);}
+      }
+      setCopiedId(order.id);
+      setTimeout(()=>setCopiedId(prev=>prev===order.id?null:prev),1500);
+    }catch(e){
+      alert("คัดลอกไม่สำเร็จ: "+(e&&e.message||e));
+    }
+  }
 
   const displayOrders=isCentral?(view==="all"?allOrders:orders):orders;
 
@@ -5258,6 +5285,10 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
                   delivered (รับแล้ว) 🖨 พิมพ์ซ้ำ · 🗑 ลบ (rollback)
                   rejected  🗑 ลบ */}
           <div onClick={stopBubble} style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+            <button onClick={()=>copyOrderText(order)} title="คัดลอกข้อความ (สำหรับวางในไลน์ซัพพลาย)" style={{background:copiedId===order.id?C.greenLight:C.tealLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:copiedId===order.id?C.green:C.teal,transition:"background .15s"}}>
+              <Ic d={copiedId===order.id?I.check:I.copy} s={12} c={copiedId===order.id?C.green:C.teal}/>
+              {copiedId===order.id?"คัดลอกแล้ว":"คัดลอก"}
+            </button>
             {canEditOrder(order)&&order.status==="pending"&&<button onClick={()=>startEditQty(order)} title="แก้ไขจำนวน" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
             {(order.status==="pending"||order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title={order.status==="pending"?"พิมพ์ + ส่งซัพพลาย":"พิมพ์ซ้ำ"} style={{background:order.status==="pending"?"#FEF3C7":C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={order.status==="pending"?"#92400E":C.ink3}/></button>}
             {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
