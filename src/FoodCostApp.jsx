@@ -1311,9 +1311,112 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
 // ══════════════════════════════════════════════════════
 // ── INGREDIENT TAB ────────────────────────────────────
 // ══════════════════════════════════════════════════════
+function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
+  // Build chronological history rows from delivered external-supplier orders.
+  const rows=(()=>{
+    const src=isCentral&&allOrders&&allOrders.length?allOrders:(orders||[]);
+    const out=[];
+    for(const o of src){
+      if(o.status!=="delivered")continue;
+      for(const it of (o.items||[])){
+        const ingId=+(it.ingId||it.ingredient_id);
+        if(ingId!==+ing.id)continue;
+        const price=+it.pricePerUnit||+it.buyPrice||0;
+        const qty=+it.receivedQty||+it.qtyNeeded||0;
+        if(price<=0)continue;
+        out.push({
+          orderId:o.id,
+          date:o.requested_at||"",
+          supplier:o.supplier_name||it.supplierName||it.supplier_name||"ไม่ระบุ",
+          branch:o.branch_name||"",
+          qty,
+          unit:it.unit||ing.buy_unit||"หน่วย",
+          price,
+          total:Math.round(qty*price*100)/100,
+        });
+      }
+    }
+    // Newest first. Falls back to orderId when date strings tie.
+    out.sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.orderId-a.orderId));
+    return out;
+  })();
+
+  const prices=rows.map(r=>r.price);
+  const minP=prices.length?Math.min(...prices):0;
+  const maxP=prices.length?Math.max(...prices):0;
+  const avgP=prices.length?prices.reduce((s,n)=>s+n,0)/prices.length:0;
+  const totalQty=rows.reduce((s,r)=>s+r.qty,0);
+  const totalSpent=rows.reduce((s,r)=>s+r.total,0);
+  const fmtMoney=n=>(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const fmtQty=n=>{const v=+n;return v%1===0?String(v):v.toFixed(3).replace(/0+$/,"").replace(/\.$/,"");};
+
+  return <Modal title={`📈 ประวัติราคาซื้อ — ${ing.name}`} onClose={onClose} extraWide>
+    {/* Summary cards */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(140px,100%),1fr))",gap:8,marginBottom:14}}>
+      <div style={{padding:"10px 12px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:10,color:"#92400E",fontWeight:700}}>ช่วงราคา</div>
+        <div style={{fontSize:14,fontWeight:900,color:"#92400E"}}>{rows.length?(`฿${fmtMoney(minP)} – ฿${fmtMoney(maxP)}`):"—"}</div>
+      </div>
+      <div style={{padding:"10px 12px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:10,color:C.brand,fontWeight:700}}>ราคาเฉลี่ย</div>
+        <div style={{fontSize:14,fontWeight:900,color:C.brand}}>{rows.length?`฿${fmtMoney(avgP)}`:"—"}</div>
+      </div>
+      <div style={{padding:"10px 12px",background:C.tealLight,border:`1px solid ${C.teal}33`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:10,color:C.teal,fontWeight:700}}>จำนวนครั้ง</div>
+        <div style={{fontSize:14,fontWeight:900,color:C.teal}}>{rows.length} ครั้ง</div>
+      </div>
+      <div style={{padding:"10px 12px",background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:10,color:C.green,fontWeight:700}}>รวมที่จ่ายไป</div>
+        <div style={{fontSize:14,fontWeight:900,color:C.green}}>฿{fmtMoney(totalSpent)}</div>
+        <div style={{fontSize:9,color:C.ink4,marginTop:1}}>{fmtQty(totalQty)} {ing.buy_unit||""}</div>
+      </div>
+    </div>
+
+    {rows.length===0
+      ?<div style={{padding:"40px 20px",textAlign:"center",background:C.bg,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:36,marginBottom:6}}>📭</div>
+        <div style={{fontSize:14,fontWeight:800,color:C.ink3}}>ยังไม่มีประวัติการซื้อ</div>
+        <div style={{fontSize:11,color:C.ink4,marginTop:4}}>ราคาจะเริ่มเก็บเมื่อมีการกด "✅ ยืนยันรับสินค้า" ที่หน้ารับสินค้าจากซัพพลาย</div>
+      </div>
+      :<div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",border:`1px solid ${C.lineLight}`,borderRadius:10}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,minWidth:560}}>
+          <thead>
+            <tr style={{background:C.bg,borderBottom:`2px solid ${C.lineLight}`}}>
+              <th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,width:140}}>วันที่</th>
+              <th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3}}>ซัพพลาย</th>
+              {isCentral&&<th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,width:130}}>สาขา</th>}
+              <th style={{padding:"8px 10px",textAlign:"right",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,width:90}}>รับเข้า</th>
+              <th style={{padding:"8px 10px",textAlign:"right",fontSize:11,fontWeight:900,color:"#92400E",letterSpacing:.3,width:110,background:"#FFFBEB"}}>ราคา/หน่วย</th>
+              <th style={{padding:"8px 10px",textAlign:"right",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,width:110}}>รวม</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r,i)=>{
+              const isMin=Math.abs(r.price-minP)<0.005&&minP!==maxP;
+              const isMax=Math.abs(r.price-maxP)<0.005&&minP!==maxP;
+              return <tr key={r.orderId+":"+i} style={{borderTop:i>0?`1px solid ${C.lineLight}`:"none",background:i%2===0?C.white:"#FAFBFC"}}>
+                <td style={{padding:"10px",color:C.ink2,whiteSpace:"nowrap"}}>{r.date||"—"}</td>
+                <td style={{padding:"10px",fontWeight:700,color:C.brand,wordBreak:"break-word"}}>{r.supplier}</td>
+                {isCentral&&<td style={{padding:"10px",color:C.ink3,fontSize:12,wordBreak:"break-word"}}>{r.branch||"—"}</td>}
+                <td style={{padding:"10px",textAlign:"right",color:C.ink2,whiteSpace:"nowrap"}}>{fmtQty(r.qty)} <span style={{fontSize:10,color:C.ink4}}>{r.unit}</span></td>
+                <td style={{padding:"10px",textAlign:"right",whiteSpace:"nowrap"}}>
+                  <span style={{fontWeight:900,color:isMin?C.green:isMax?C.red:"#92400E",fontSize:14}}>฿{fmtMoney(r.price)}</span>
+                  {isMin&&<div style={{fontSize:9,color:C.green,fontWeight:800}}>ต่ำสุด</div>}
+                  {isMax&&<div style={{fontSize:9,color:C.red,fontWeight:800}}>สูงสุด</div>}
+                </td>
+                <td style={{padding:"10px",textAlign:"right",fontWeight:800,color:C.green,whiteSpace:"nowrap"}}>฿{fmtMoney(r.total)}</td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>}
+  </Modal>;
+}
+
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[]}){
   const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
+  const[priceHistoryItem,setPriceHistoryItem]=useState(null);
   const ef={name:"",code:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
   const[form,setForm]=useState(ef);
   const isCentral=currentBranch?.type==="central";
@@ -1491,13 +1594,13 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:6}}>
               {[{l:"ซื้อมา",v:`฿${item.buy_price}`,sub:`${item.buy_amount} ${item.buy_unit}`,bg:C.lineLight,tc:C.ink},{l:"รวมกรัม",v:`${(+item.convert_to_gram).toLocaleString()}g`,sub:"ทั้งหมด",bg:C.brandLight,tc:C.brand},{l:"ราคา/กรัม",v:`฿${(+item.price_per_gram).toFixed(3)}`,sub:"ต่อ 1g",bg:C.greenLight,tc:C.green}].map(st=><div key={st.l} style={{background:st.bg,borderRadius:10,padding:"8px 10px",textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>{st.l}</div><div style={{fontSize:13,fontWeight:800,color:st.tc,fontFamily:"'Sarabun',sans-serif"}}>{st.v}</div><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{st.sub}</div></div>)}
             </div>
-            {(()=>{const r=priceRangeByIng.get(+item.id);if(!r)return null;const fmt=n=>(+n).toLocaleString(undefined,{minimumFractionDigits:n%1===0?0:2,maximumFractionDigits:2});const same=Math.abs(r.min-r.max)<0.005;return <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,marginBottom:6,padding:"4px 9px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8,fontFamily:"'Sarabun',sans-serif",flexWrap:"wrap"}}>
+            {(()=>{const r=priceRangeByIng.get(+item.id);if(!r)return null;const fmt=n=>(+n).toLocaleString(undefined,{minimumFractionDigits:n%1===0?0:2,maximumFractionDigits:2});const same=Math.abs(r.min-r.max)<0.005;return <button type="button" onClick={()=>setPriceHistoryItem(item)} title="กดเพื่อดูประวัติราคา" style={{display:"flex",alignItems:"center",gap:6,fontSize:11,marginBottom:6,padding:"4px 9px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8,fontFamily:"'Sarabun',sans-serif",flexWrap:"wrap",cursor:"pointer",width:"100%",textAlign:"left",transition:"box-shadow .15s"}} onMouseEnter={e=>e.currentTarget.style.boxShadow="0 0 0 2px #FDE68A66"} onMouseLeave={e=>e.currentTarget.style.boxShadow="none"}>
               <span style={{color:"#92400E",fontWeight:700}}>💰 ราคาซื้อจริง</span>
               {same
                 ?<b style={{color:"#92400E",fontSize:13}}>฿{fmt(r.min)}/{item.buy_unit||"หน่วย"}</b>
                 :<><b style={{color:"#92400E",fontSize:13}}>฿{fmt(r.min)}</b><span style={{color:"#92400E"}}>–</span><b style={{color:"#92400E",fontSize:13}}>฿{fmt(r.max)}</b><span style={{color:"#92400E",fontSize:11}}>/{item.buy_unit||"หน่วย"}</span></>}
-              <span style={{marginLeft:"auto",color:C.ink4,fontSize:10,fontWeight:700}}>เคยซื้อ {r.count} ครั้ง</span>
-            </div>;})()}
+              <span style={{marginLeft:"auto",color:C.ink4,fontSize:10,fontWeight:700}}>เคยซื้อ {r.count} ครั้ง <span style={{color:"#92400E"}}>›</span></span>
+            </button>;})()}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               {(()=>{const bs=branchStock(item,currentBranch?.id);const safety=branchSafety(item,currentBranch?.id);const low=safety>0&&bs<safety;return <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>สต็อก ({currentBranch?.name||"—"}): <b style={{color:low?C.red:C.green}}>{bs} {item.buy_unit}</b>{safety>0&&<span style={{fontSize:10,color:C.ink4,marginLeft:4}}>· safety {safety}</span>}</span>;})()}
               <EditedBy username={item.edit_by} editAt={item.edit_at}/>
@@ -1522,6 +1625,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       {paged.length<filtered.length&&<div style={{textAlign:"center",marginTop:20}}><Btn v="ghost" onClick={()=>setPg(p=>p+1)}>โหลดเพิ่ม ({filtered.length-paged.length})</Btn></div>}
     </>}
     {showImport&&<ImportIngModal onClose={()=>setShowImport(false)} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} ings={ings} onDone={async()=>{await reload();setShowImport(false);}}/>}
+    {priceHistoryItem&&<PriceHistoryModal ing={priceHistoryItem} orders={orders} allOrders={allOrders} isCentral={isCentral} onClose={()=>setPriceHistoryItem(null)}/>}
     {open&&<Modal title={editId?"✏️ แก้ไขวัตถุดิบ":"➕ เพิ่มวัตถุดิบใหม่"} onClose={()=>setOpen(false)}>
       <ImgUp label="รูปวัตถุดิบ" value={form.image} onChange={v=>upd("image",v)}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:12}}>
