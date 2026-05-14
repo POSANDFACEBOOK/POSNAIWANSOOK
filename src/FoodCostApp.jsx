@@ -7537,6 +7537,25 @@ function makeKitchen3DLabel(THREE,text){
 
 // Build an ExtrudeGeometry for a wall segment with door/window holes cut out.
 // Returns null when the wall is too short to bother with.
+// Point-to-segment distance — used by the wall-collision check below.
+function kitchen3DDistToSegment(px,py,x1,y1,x2,y2){
+  const dx=x2-x1,dy=y2-y1;
+  const len2=dx*dx+dy*dy;
+  if(len2<1e-9)return Math.hypot(px-x1,py-y1);
+  let t=((px-x1)*dx+(py-y1)*dy)/len2;
+  t=Math.max(0,Math.min(1,t));
+  return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+}
+// Returns true if a circle of `radius` centred at (x,z) would
+// touch any wall in `walls`. Wall thickness 0.12 m + 0.02 m buffer.
+function kitchen3DIsBlocked(x,z,radius,walls){
+  const margin=0.08;
+  for(const w of (walls||[])){
+    if(kitchen3DDistToSegment(x,z,w.x1,w.z1,w.x2,w.z2)<radius+margin)return true;
+  }
+  return false;
+}
+
 function buildKitchen3DWallGeom(THREE,wall,openings){
   const dx=wall.x2-wall.x1;
   const dz=wall.z2-wall.z1;
@@ -7584,6 +7603,9 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
   const meshRegistryRef=useRef({equipment:{},walls:{},openings:{}});  // id -> mesh
   const animateRafRef=useRef(0);
   const dragStateRef=useRef({kind:null,id:null});
+  // Refs that mirror the latest walls/equipment so pointermove (closure-captured) reads them fresh.
+  const wallsRef=useRef([]);
+  const equipmentRef=useRef([]);
 
   const [zone,setZone]=useState("kitchen");
   const [layout,setLayout]=useState(()=>normalizeKitchenLayout(currentBranch?.kitchen_3d_layout));
@@ -7619,6 +7641,8 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
     ];
   },[room.width,room.depth,room.height]);
   const allWalls=useMemo(()=>[...outerWalls,...userWalls],[outerWalls,userWalls]);
+  useEffect(()=>{wallsRef.current=allWalls;},[allWalls]);
+  useEffect(()=>{equipmentRef.current=equipment;},[equipment]);
 
   // Re-read layout when currentBranch changes
   useEffect(()=>{
@@ -7925,8 +7949,30 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
       if(!mesh)return;
       const halfW=room.width/2-0.1;
       const halfD=room.depth/2-0.1;
-      mesh.position.x=Math.max(-halfW,Math.min(halfW,ip.x));
-      mesh.position.z=Math.max(-halfD,Math.min(halfD,ip.z));
+      const nx=Math.max(-halfW,Math.min(halfW,ip.x));
+      const nz=Math.max(-halfD,Math.min(halfD,ip.z));
+      // Wall collision: treat the equipment footprint as a circle of
+      // half-diagonal radius so any rotation is safe. Try the full
+      // (X,Z) move first; if blocked, slide along whichever axis
+      // doesn't collide. If both are blocked, drop the update.
+      const item=equipmentRef.current.find(it=>it.id===dragStateRef.current.id);
+      const eq=item?KITCHEN_3D_EQUIPMENT.find(e=>e.type===item.type):null;
+      if(item&&eq){
+        const w=+item.w||eq.size[0];
+        const d=+item.d||eq.size[2];
+        const radius=Math.sqrt(w*w+d*d)/2;
+        const walls=wallsRef.current||[];
+        const cx=mesh.position.x,cz=mesh.position.z;
+        if(!kitchen3DIsBlocked(nx,nz,radius,walls)){
+          mesh.position.x=nx;mesh.position.z=nz;
+        }else if(!kitchen3DIsBlocked(nx,cz,radius,walls)){
+          mesh.position.x=nx;
+        }else if(!kitchen3DIsBlocked(cx,nz,radius,walls)){
+          mesh.position.z=nz;
+        }
+      }else{
+        mesh.position.x=nx;mesh.position.z=nz;
+      }
     }
     function onPointerUp(ev){
       const dragKind=dragStateRef.current.kind;
