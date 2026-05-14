@@ -7609,7 +7609,7 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
   const equipment=zoneData.equipment;
 
   // Auto outer walls based on room dimensions
-  const outerWalls=React.useMemo(()=>{
+  const outerWalls=useMemo(()=>{
     const w=room.width/2,d=room.depth/2,h=room.height;
     return[
       {id:"outer_n",x1:-w,z1:-d,x2:w,z2:-d,height:h,outer:true,label:"ผนังด้านบน (เหนือ)"},
@@ -7618,7 +7618,7 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
       {id:"outer_e",x1:w,z1:-d,x2:w,z2:d,height:h,outer:true,label:"ผนังด้านขวา (ตะวันออก)"},
     ];
   },[room.width,room.depth,room.height]);
-  const allWalls=React.useMemo(()=>[...outerWalls,...userWalls],[outerWalls,userWalls]);
+  const allWalls=useMemo(()=>[...outerWalls,...userWalls],[outerWalls,userWalls]);
 
   // Re-read layout when currentBranch changes
   useEffect(()=>{
