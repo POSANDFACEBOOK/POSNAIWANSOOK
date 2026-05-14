@@ -3514,6 +3514,12 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const isReceiver=(po)=>+po.branch_id===currentBranch.id;
   const canEditPO=(po)=>hasPO&&isCreator(po);
   const canConfirmPO=(po)=>hasPO&&isReceiver(po)&&po.status==="shipped";
+  // Stock-safety: only allow delete on statuses where stock has NEVER been
+  // moved (requested, open, transfer_pending) or has been rolled back already
+  // (cancelled). Once we hit shipped/awaiting_payment/paid/disputed/
+  // transfer_shipped/transfer_done, force the user to กดยกเลิก first.
+  const DELETABLE_PO_STATUSES=new Set(["requested","open","cancelled","transfer_pending"]);
+  const canDeletePO=(po)=>canEditPO(po)&&DELETABLE_PO_STATUSES.has(po.status);
 
   async function load(){
     setLoading(true);
@@ -3802,6 +3808,13 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[payPO,setPayPO]=useState(null);
 
   async function delPO(po){
+    // Hard stop: never let a moved-stock PO be deleted, even if the button
+    // somehow re-appears (race, stale DOM, scripted click).
+    if(!DELETABLE_PO_STATUSES.has(po.status)){
+      const st=PO_STATUS[po.status]||{label:po.status};
+      alert(`ไม่สามารถลบเอกสารนี้ได้\n\nสถานะปัจจุบัน: ${st.label}\nสต๊อกถูกตัดไปแล้ว — ถ้าต้องการลบจริงๆ ให้กด "❌ ยกเลิก" ก่อน ระบบจะคืนสต๊อกอัตโนมัติ แล้วจะลบได้`);
+      return;
+    }
     const isPaid=po.status==="paid";
     const wasReceived=!!po.received_at;
     let msg;
@@ -4071,7 +4084,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                     <button onClick={()=>setViewPO(po)} title="ดูรายละเอียด" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.eye} s={13} c={C.ink2}/></button>
                     {!["requested","transfer_pending","transfer_shipped","transfer_done"].includes(po.status)&&<button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์ (มีปุ่มดาวน์โหลด PDF ในหน้าพิมพ์)" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>}
                     {canEditPO(po)&&po.status!=="paid"&&po.status!=="cancelled"&&po.status!=="transfer_done"&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
-                    {canEditPO(po)&&<button onClick={()=>delPO(po)} title={po.status==="paid"?"ลบทิ้งถาวร (ระวัง: ชำระแล้ว)":"ลบ"} style={{background:po.status==="paid"?"#7F1D1D":C.redLight,border:`1px solid ${po.status==="paid"?"#7F1D1D":"#FECACA"}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={po.status==="paid"?C.white:C.red}/></button>}
+                    {canDeletePO(po)&&<button onClick={()=>delPO(po)} title="ลบ (สต๊อกยังไม่ขยับ)" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
                     {isReceiver(po)&&po.status==="requested"&&<button onClick={()=>acceptRequest(po)} disabled={confirming===po.id} title="ปริ้นใบจัดของ + รับเอกสาร" style={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.purple}55`}}>🖨 ปริ้นเอกสาร</button>}
                     {iCreator&&po.status==="open"&&<button onClick={()=>shipPO(po)} disabled={confirming===po.id} title="จัดส่ง + ตัดสต๊อกครัวกลาง" style={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px rgba(14,165,233,.35)`}}>🚚 จัดส่ง</button>}
                     {iCreator&&po.status==="transfer_pending"&&<button onClick={()=>shipTransfer(po)} disabled={confirming===po.id} title="จัดส่ง + ตัดสต๊อก" style={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px rgba(14,165,233,.35)`}}>🚚 จัดส่ง</button>}
@@ -4210,7 +4223,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       currentBranch={currentBranch}
       currentUser={currentUser}
       busy={confirming===viewPO.id}
-      canDelete={canEditPO(viewPO)}
+      canDelete={canDeletePO(viewPO)}
       onClose={()=>setViewPO(null)}
       onAcceptRequest={()=>acceptRequest(viewPO)}
       onShip={()=>shipPO(viewPO)}
@@ -4702,7 +4715,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         {po.status!=="requested"&&<Btn v="info" icon={I.print} onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์</Btn>}
         {po.status!=="requested"&&<Btn v="success" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)} s={{padding:"10px 16px"}}>💾 ดาวน์โหลด PDF</Btn>}
         {canCancelPO&&<Btn v="danger" onClick={onCancel} s={{padding:"10px 16px"}}>❌ ยกเลิก PO</Btn>}
-        {canDelete&&<Btn onClick={onDelete} icon={I.trash} s={{padding:"10px 16px",background:po.status==="paid"?"#7F1D1D":C.redLight,color:po.status==="paid"?C.white:C.red,border:`1.5px solid ${po.status==="paid"?"#7F1D1D":"#FECACA"}`}}>🗑 ลบทิ้งถาวร</Btn>}
+        {canDelete&&<Btn onClick={onDelete} icon={I.trash} s={{padding:"10px 16px",background:C.redLight,color:C.red,border:`1.5px solid #FECACA`}}>🗑 ลบทิ้งถาวร</Btn>}
         {canEditFromView&&<Btn v="ghost" onClick={onEdit} icon={I.pencil} s={{padding:"10px 16px",background:"#FEF3C7",color:"#92400E"}}>✏️ แก้ไข</Btn>}
         {canAcceptReq&&onAcceptRequest&&<Btn onClick={onAcceptRequest} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px ${C.purple}55`}}>🖨 ปริ้นเอกสาร</Btn>}
         {canShipPO&&onShip&&<Btn onClick={onShip} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px rgba(14,165,233,.45)`}}>🚚 จัดส่ง + ตัดสต๊อก</Btn>}
