@@ -7643,6 +7643,8 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
   const allWalls=useMemo(()=>[...outerWalls,...userWalls],[outerWalls,userWalls]);
   useEffect(()=>{wallsRef.current=allWalls;},[allWalls]);
   useEffect(()=>{equipmentRef.current=equipment;},[equipment]);
+  const openingsRef=useRef([]);
+  useEffect(()=>{openingsRef.current=openings;},[openings]);
 
   // Re-read layout when currentBranch changes
   useEffect(()=>{
@@ -7821,7 +7823,8 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
         mesh.add(edge);
       }
 
-      // Render openings as small framed sprites so they're discoverable
+      // Render openings as a Group (frame + optional pane) so we can
+      // drag the whole opening along the wall by translating one node.
       wallOpenings.forEach(o=>{
         const cx=(+o.positionRatio||0.5)*length;
         const halfW=Math.min((+o.width||0.9)/2,length/2-0.05);
@@ -7829,28 +7832,40 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
         const oH=Math.max(0.4,+o.height||(o.type==="door"?2:1.2));
         const baseY=o.type==="door"?0:(+o.sillHeight||0.9);
         const isOSel=selected&&selected.kind==="opening"&&selected.id===o.id;
-        // Frame outline
+        const group=new THREE.Group();
+        group.position.set(cx,baseY+oH/2,0);
+        group.userData.kind="opening";
+        group.userData.id=o.id;
+        // Frame outline (cuboid edges)
         const frameGeom=new THREE.BoxGeometry(oW,oH,0.18);
-        const frameEdges=new THREE.EdgesGeometry(frameGeom);
-        const frameMat=new THREE.LineBasicMaterial({color:isOSel?0xFF6B35:(o.type==="door"?0x7C2D12:0x0EA5E9),linewidth:2});
-        const frame=new THREE.LineSegments(frameEdges,frameMat);
-        // Position along wall + at proper height. Local to mesh's coord system.
-        frame.position.set(cx,baseY+oH/2,0);
-        // Glass-ish fill for windows (a faint pane)
+        const frame=new THREE.LineSegments(
+          new THREE.EdgesGeometry(frameGeom),
+          new THREE.LineBasicMaterial({color:isOSel?0xFF6B35:(o.type==="door"?0x7C2D12:0x0EA5E9)})
+        );
+        frame.userData.kind="opening";
+        frame.userData.id=o.id;
+        group.add(frame);
+        // Window pane
         if(o.type==="window"){
           const pane=new THREE.Mesh(
             new THREE.PlaneGeometry(oW*0.92,oH*0.92),
             new THREE.MeshStandardMaterial({color:0xBAE6FD,transparent:true,opacity:0.32,side:THREE.DoubleSide})
           );
-          pane.position.set(cx,baseY+oH/2,0);
           pane.userData.kind="opening";
           pane.userData.id=o.id;
-          mesh.add(pane);
+          group.add(pane);
         }
-        frame.userData.kind="opening";
-        frame.userData.id=o.id;
-        mesh.add(frame);
-        meshRegistryRef.current.openings[o.id]=frame;
+        // Invisible hit-box so click detection is forgiving along the entire opening footprint
+        const hit=new THREE.Mesh(
+          new THREE.BoxGeometry(oW,oH,0.3),
+          new THREE.MeshBasicMaterial({visible:false,transparent:true,opacity:0,depthWrite:false})
+        );
+        hit.userData.kind="opening";
+        hit.userData.id=o.id;
+        group.add(hit);
+        frameGeom.dispose();
+        mesh.add(group);
+        meshRegistryRef.current.openings[o.id]=group;
       });
     });
 
@@ -7931,8 +7946,8 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
         while(o&&!o.userData?.kind)o=o.parent;
         if(o){
           setSelected({kind:o.userData.kind,id:o.userData.id});
-          if(canEdit&&o.userData.kind==="equipment"){
-            dragStateRef.current={kind:"equipment",id:o.userData.id};
+          if(canEdit&&(o.userData.kind==="equipment"||o.userData.kind==="opening")){
+            dragStateRef.current={kind:o.userData.kind,id:o.userData.id,tmpRatio:null};
             controls.enabled=false;
             try{dom.setPointerCapture(ev.pointerId);}catch{}
           }
@@ -7940,38 +7955,66 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
       }
     }
     function onPointerMove(ev){
-      if(dragStateRef.current.kind!=="equipment")return;
+      const dk=dragStateRef.current.kind;
+      if(dk!=="equipment"&&dk!=="opening")return;
       ndc(ev);
       raycaster.setFromCamera(mouse,camera);
       const ip=new THREE.Vector3();
       raycaster.ray.intersectPlane(dragPlane,ip);
-      const mesh=meshRegistryRef.current.equipment[dragStateRef.current.id];
-      if(!mesh)return;
-      const halfW=room.width/2-0.1;
-      const halfD=room.depth/2-0.1;
-      const nx=Math.max(-halfW,Math.min(halfW,ip.x));
-      const nz=Math.max(-halfD,Math.min(halfD,ip.z));
-      // Wall collision: treat the equipment footprint as a circle of
-      // half-diagonal radius so any rotation is safe. Try the full
-      // (X,Z) move first; if blocked, slide along whichever axis
-      // doesn't collide. If both are blocked, drop the update.
-      const item=equipmentRef.current.find(it=>it.id===dragStateRef.current.id);
-      const eq=item?KITCHEN_3D_EQUIPMENT.find(e=>e.type===item.type):null;
-      if(item&&eq){
-        const w=+item.w||eq.size[0];
-        const d=+item.d||eq.size[2];
-        const radius=Math.sqrt(w*w+d*d)/2;
-        const walls=wallsRef.current||[];
-        const cx=mesh.position.x,cz=mesh.position.z;
-        if(!kitchen3DIsBlocked(nx,nz,radius,walls)){
+      if(dk==="equipment"){
+        const mesh=meshRegistryRef.current.equipment[dragStateRef.current.id];
+        if(!mesh)return;
+        const halfW=room.width/2-0.1;
+        const halfD=room.depth/2-0.1;
+        const nx=Math.max(-halfW,Math.min(halfW,ip.x));
+        const nz=Math.max(-halfD,Math.min(halfD,ip.z));
+        const item=equipmentRef.current.find(it=>it.id===dragStateRef.current.id);
+        const eq=item?KITCHEN_3D_EQUIPMENT.find(e=>e.type===item.type):null;
+        if(item&&eq){
+          const w=+item.w||eq.size[0];
+          const d=+item.d||eq.size[2];
+          const radius=Math.sqrt(w*w+d*d)/2;
+          const walls=wallsRef.current||[];
+          const cx=mesh.position.x,cz=mesh.position.z;
+          if(!kitchen3DIsBlocked(nx,nz,radius,walls)){
+            mesh.position.x=nx;mesh.position.z=nz;
+          }else if(!kitchen3DIsBlocked(nx,cz,radius,walls)){
+            mesh.position.x=nx;
+          }else if(!kitchen3DIsBlocked(cx,nz,radius,walls)){
+            mesh.position.z=nz;
+          }
+        }else{
           mesh.position.x=nx;mesh.position.z=nz;
-        }else if(!kitchen3DIsBlocked(nx,cz,radius,walls)){
-          mesh.position.x=nx;
-        }else if(!kitchen3DIsBlocked(cx,nz,radius,walls)){
-          mesh.position.z=nz;
         }
-      }else{
-        mesh.position.x=nx;mesh.position.z=nz;
+      }else if(dk==="opening"){
+        // Drag an opening along its parent wall: project cursor onto
+        // the wall line → get t∈[0,1] → clamp so the opening stays inside.
+        const opId=dragStateRef.current.id;
+        const op=openingsRef.current.find(o=>o.id===opId);
+        if(!op)return;
+        const wall=wallsRef.current.find(w=>w.id===op.wallId);
+        if(!wall)return;
+        const wdx=wall.x2-wall.x1,wdz=wall.z2-wall.z1;
+        const wlen2=wdx*wdx+wdz*wdz;
+        if(wlen2<1e-9)return;
+        const wallLen=Math.sqrt(wlen2);
+        let t=((ip.x-wall.x1)*wdx+(ip.z-wall.z1)*wdz)/wlen2;
+        const halfRatio=((+op.width||0.9)/2+0.05)/wallLen;
+        t=Math.max(halfRatio,Math.min(1-halfRatio,t));
+        dragStateRef.current.tmpRatio=t;
+        // Update opening group's local x
+        const group=meshRegistryRef.current.openings[opId];
+        if(group)group.position.x=t*wallLen;
+        // Rebuild the parent wall's geometry so the cut-through hole follows the frame in real time
+        const wallMesh=meshRegistryRef.current.walls[wall.id];
+        if(wallMesh&&buildKitchen3DWallGeom){
+          const liveOpenings=openingsRef.current.filter(o=>o.wallId===wall.id).map(o=>o.id===opId?{...o,positionRatio:t}:o);
+          const built=buildKitchen3DWallGeom(THREE,wall,liveOpenings);
+          if(built){
+            if(wallMesh.geometry)wallMesh.geometry.dispose();
+            wallMesh.geometry=built.geom;
+          }
+        }
       }
     }
     function onPointerUp(ev){
@@ -7980,7 +8023,7 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
       const dt=Date.now()-downAt;
       const dx=Math.abs(ev.clientX-downX);
       const dy=Math.abs(ev.clientY-downY);
-      if(dragKind!=="equipment"&&dt<260&&dx<4&&dy<4){
+      if(!dragKind&&dt<260&&dx<4&&dy<4){
         ndc(ev);
         raycaster.setFromCamera(mouse,camera);
         if(raycaster.intersectObjects(pickSelectables(),true).length===0)setSelected(null);
@@ -7996,6 +8039,21 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
             [zone]:{
               ...L[zone],
               equipment:L[zone].equipment.map(it=>it.id===dragId?{...it,x:+mesh.position.x.toFixed(2),z:+mesh.position.z.toFixed(2)}:it),
+            },
+          }));
+          setDirty(true);
+        }
+      }else if(dragKind==="opening"&&dragId){
+        const newRatio=dragStateRef.current.tmpRatio;
+        dragStateRef.current={kind:null,id:null};
+        controls.enabled=true;
+        try{dom.releasePointerCapture(ev.pointerId);}catch{}
+        if(newRatio!=null){
+          setLayout(L=>({
+            ...L,
+            [zone]:{
+              ...L[zone],
+              openings:L[zone].openings.map(o=>o.id===dragId?{...o,positionRatio:+newRatio.toFixed(4)}:o),
             },
           }));
           setDirty(true);
