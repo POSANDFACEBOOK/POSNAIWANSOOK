@@ -6428,6 +6428,14 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
   // filter, but the SupplierTab itself only ever shows the *current branch's* rows.
   const myList=useMemo(()=>suppliers.filter(s=>+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
   const [statsFor,setStatsFor]=useState(null);
+  const [showForm,setShowForm]=useState(false);  // controls the SupplierFormModal
+  function openAdd(){setSupForm(supF0);setEditSID(null);setShowForm(true);}
+  function openEdit(s){
+    setSupForm({name:s.name,contact:s.contact||"",phone:s.phone||"",note:s.note||"",active:s.active!==false,central_only:!!s.central_only});
+    setEditSID(s.id);
+    setShowForm(true);
+  }
+  function closeForm(){setShowForm(false);setSupForm(supF0);setEditSID(null);}
   // Central kitchen sees the cross-branch view; branches use their own scoped orders.
   const ordersScope=isCentral&&allOrders&&allOrders.length?allOrders:(orders||[]);
   async function saveSup(){
@@ -6435,16 +6443,18 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
     try{
       if(editSID)await api.updateSupplier(editSID,supForm);
       else await api.addSupplier({...supForm,branch_id:currentBranch.id});
-      await reloadSuppliers();setSupForm(supF0);setEditSID(null);
+      await reloadSuppliers();
+      closeForm();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
   }
   return <div>
     <div style={{background:isCentral?C.greenLight:C.brandLight,border:`1px solid ${isCentral?C.green+"33":C.brandBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
       <span style={{fontSize:18}}>{isCentral?"🏢":"🏪"}</span>
       <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>ซัพพลายของสาขา: {currentBranch?.name||"—"}</div>
+        <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>ซัพพลายของสาขา: {currentBranch?.name||"—"} <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>({myList.length})</span></div>
         <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>แต่ละสาขามีซัพพลายของตัวเอง — เปลี่ยนสาขาจะเห็นรายการคนละชุด</div>
       </div>
+      {canE&&<Btn onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มซัพพลาย</Btn>}
     </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(280px,100%),1fr))",gap:12,marginBottom:16}}>
       {myList.map(s=><Card key={s.id} hover onClick={()=>setStatsFor(s)} style={{padding:"14px 16px"}}>
@@ -6456,27 +6466,26 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
             {s.note&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontStyle:"italic",marginTop:4}}>📝 {s.note}</div>}
           </div>
           {canE&&<div style={{display:"flex",gap:4,flexShrink:0}} onClick={e=>e.stopPropagation()}>
-            <button onClick={()=>{setSupForm({name:s.name,contact:s.contact||"",phone:s.phone||"",note:s.note||"",active:s.active!==false,central_only:!!s.central_only});setEditSID(s.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+            <button onClick={()=>openEdit(s)} title="แก้ไขซัพพลาย" style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
             <button onClick={async()=>{if(!await confirmDlg({title:"ลบซัพพลายเออร์",message:`ต้องการลบ "${s.name}" ใช่หรือไม่?`}))return;await api.deleteSupplier(s.id);await reloadSuppliers();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
           </div>}
         </div>
       </Card>)}
-      {myList.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีซัพพลายของสาขานี้</p>{canE&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>เพิ่มซัพพลายใหม่ที่ฟอร์มด้านล่าง</p>}</div>}
+      {myList.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีซัพพลายของสาขานี้</p>{canE&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.brand}}>"+ เพิ่มซัพพลาย"</b> ด้านบนเพื่อเริ่ม</p>}</div>}
     </div>
     {statsFor&&<SupplierStatsModal supplier={statsFor} orders={ordersScope} onClose={()=>setStatsFor(null)}/>}
-    {canE&&<Card style={{padding:"16px 18px"}}>
-      <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>{editSID?"✏️ แก้ไขซัพพลาย":"➕ เพิ่มซัพพลายใหม่"}</h4>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        <Inp label="ชื่อซัพพลาย *" value={supForm.name} onChange={e=>setSupForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ตลาดสด ก."/>
+    {showForm&&<Modal title={editSID?"✏️ แก้ไขซัพพลาย":"➕ เพิ่มซัพพลายใหม่"} onClose={closeForm}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
+        <Inp label="ชื่อซัพพลาย *" value={supForm.name} onChange={e=>setSupForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ตลาดสด ก." autoFocus/>
         <Inp label="ชื่อผู้ติดต่อ" value={supForm.contact} onChange={e=>setSupForm(f=>({...f,contact:e.target.value}))} placeholder="คุณสมชาย"/>
         <Inp label="เบอร์โทร" value={supForm.phone} onChange={e=>setSupForm(f=>({...f,phone:e.target.value}))} placeholder="081-234-5678"/>
         <Inp label="หมายเหตุ" value={supForm.note} onChange={e=>setSupForm(f=>({...f,note:e.target.value}))} placeholder="ส่งทุกเช้า..."/>
       </div>
-      <div style={{display:"flex",gap:8}}>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:12,borderTop:`1px solid ${C.line}`}}>
+        <Btn v="ghost" onClick={closeForm}>ยกเลิก</Btn>
         <Btn onClick={saveSup} icon={I.check} disabled={!supForm.name}>{editSID?"บันทึก":"เพิ่มซัพพลาย"}</Btn>
-        {editSID&&<Btn v="ghost" onClick={()=>{setSupForm(supF0);setEditSID(null);}}>ยกเลิก</Btn>}
       </div>
-    </Card>}
+    </Modal>}
   </div>;
 }
 
