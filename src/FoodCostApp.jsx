@@ -6006,7 +6006,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:isMobile?880:undefined}}>
               <thead>
                 <tr style={{background:C.bg}}>
-                  {["#","วัตถุดิบ","หน่วย","📦 สต็อกปัจจุบัน","🛡 safety","📋 เหลือ (นับ)","✏ สั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:i>=3?"right":"left",letterSpacing:.2,borderBottom:`1px solid ${C.line}`,...(i===1?{position:"sticky",left:0,background:C.bg,zIndex:2,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)"}:{})}}>{h}</th>)}
+                  {["#","วัตถุดิบ","📦 สต็อกปัจจุบัน","หน่วย","🛡 safety","📋 เหลือ (นับ)","✏ สั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:(i<=1||i===3)?"left":"right",letterSpacing:.2,borderBottom:`1px solid ${C.line}`,...(i===1?{position:"sticky",left:0,background:C.bg,zIndex:2,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)"}:{})}}>{h}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -6032,10 +6032,10 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
                         </div>
                       </div>
                     </td>
-                    <td style={{padding:"9px 10px",fontSize:12,color:C.ink3,fontWeight:600,whiteSpace:"nowrap"}}>{ing.buy_unit}</td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
                       <span style={{fontSize:13,fontWeight:800,color:curLow?C.red:C.ink}}>{curStock}</span>
                     </td>
+                    <td style={{padding:"9px 10px",fontSize:12,color:C.ink3,fontWeight:600,whiteSpace:"nowrap"}}>{ing.buy_unit}</td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
                       {canOrder&&!isMobile?<NumStepper value={safetyEdit[ing.id]!==undefined?safetyEdit[ing.id]:(safety||"")} onChange={v=>{setSafetyEdit(s=>({...s,[ing.id]:v}));scheduleSaveSafety(ing,v);}} onBlur={e=>flushSaveSafety(ing,e.target.value)} placeholder="0" btnColor={C.yellow} btnBg="#FFFBEB" inputStyle={{border:`2px solid ${C.yellow}55`,background:"#FFFBEB",color:C.ink}} width={62}/>
                       :<span style={{fontSize:13,fontWeight:800,color:safety>0?"#92400E":C.ink4,background:safety>0?"#FFFBEB":"transparent",border:safety>0?`1px solid ${C.yellow}55`:"none",padding:safety>0?"3px 10px":0,borderRadius:8,display:"inline-block",minWidth:34,textAlign:"center"}}>{safety||"—"}</span>}
