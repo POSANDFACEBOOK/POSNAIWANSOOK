@@ -3698,6 +3698,37 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const totalAll=pos.reduce((s,p)=>p.status==="transfer_pending"||p.status==="transfer_done"?s:s+(+p.total||0),0);
   const branchOptions=branches.filter(b=>b.id!==currentBranch.id&&b.active!==false);
 
+  // Central kitchen flow: turn the PurchaseSummary into one external-supplier
+  // order per vendor, then OrderTab handles ยืนยันรับ + actual price + stock+.
+  async function createPurchaseOrdersFromSummary(groups){
+    if(!groups||!groups.length)return;
+    for(const g of groups){
+      const supplierId=g.rows[0]?.supplier_id||null;
+      const items=g.rows.map(r=>({
+        ingId:r.ingId,
+        name:r.name,
+        unit:r.unit,
+        qtyNeeded:r.shortBy,
+        pricePerUnit:r.buy_price,
+        buyPrice:r.buy_price,
+        estimatedCost:r.estCost,
+        supplierId:supplierId,
+        supplierName:g.name,
+      }));
+      await api.addOrder({
+        branch_id:currentBranch.id,
+        branch_name:currentBranch.name,
+        supplier_id:supplierId,
+        supplier_name:g.name,
+        items,
+        status:"pending",
+        requested_by:currentUser.username,
+        requested_at:nowStr(),
+        note:`สรุปต้องซื้อวันนี้ (${todayStr()})`,
+      });
+    }
+  }
+
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10}}>
       <div>
@@ -3708,7 +3739,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {isCentralBranch&&<Btn v="success" onClick={()=>setShowPurchaseSummary(true)} s={{padding:"8px 14px",fontSize:13}}>📋 สรุปต้องซื้อวันนี้</Btn>}
-        {!isCentralBranch&&onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
+        {onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>{isCentralBranch?"📦 รับสินค้าจากซัพพลาย":"สั่งวัตถุดิบ"}</Btn>}
         {hasPO&&<Btn v="purple" onClick={startTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
@@ -3954,7 +3985,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       </div>
     </Modal>}
 
-    {showPurchaseSummary&&<PurchaseSummaryModal pos={pos} ings={ings} branchById={branchById} currentBranch={currentBranch} onClose={()=>setShowPurchaseSummary(false)}/>}
+    {showPurchaseSummary&&<PurchaseSummaryModal pos={pos} ings={ings} branchById={branchById} currentBranch={currentBranch} currentUser={currentUser} onCreateOrders={isCentralBranch?createPurchaseOrdersFromSummary:null} onClose={()=>setShowPurchaseSummary(false)}/>}
   </div>;
 }
 
@@ -3962,7 +3993,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 // based on pending branch orders (status requested/open) vs central's own stock.
 // SOP cascade is applied so if a branch ordered a compound ingredient that
 // central has to produce, the sub-ingredients are counted toward the need.
-function PurchaseSummaryModal({pos,ings,branchById,currentBranch,onClose}){
+function PurchaseSummaryModal({pos,ings,branchById,currentBranch,currentUser,onCreateOrders,onClose}){
   const PENDING=new Set(["requested","open"]);
   const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
   const summary=useMemo(()=>{
@@ -4012,6 +4043,7 @@ function PurchaseSummaryModal({pos,ings,branchById,currentBranch,onClose}){
         buy_amount:+ing.buy_amount||1,
         buy_price:+ing.buy_price||0,
         supplier:ing.supplier_name||"ไม่ระบุ",
+        supplier_id:branchSupplierId(ing,currentBranch?.id)||(ing.supplier_id?+ing.supplier_id:null),
         totalNeed,
         onHand:Math.round(onHand*1000)/1000,
         shortBy:buyQty,
@@ -4046,6 +4078,23 @@ function PurchaseSummaryModal({pos,ings,branchById,currentBranch,onClose}){
   const totalCost=Math.round(summary.rows.reduce((s,r)=>s+r.estCost,0)*100)/100;
   const distinctIngs=summary.rows.length;
   const orderCount=summary.pendingOrders.length;
+
+  async function createAndPrint(){
+    if(!onCreateOrders){printShoppingList();return;}
+    if(!await confirmDlg({
+      title:"สร้างรายการสั่งซื้อ + พิมพ์",
+      message:`สร้างรายการสั่งซื้อ ${distinctIngs} วัตถุดิบ จาก ${groups.length} ซัพพลาย สำหรับ "${currentBranch?.name||"ครัวกลาง"}" และพิมพ์ใบนำส่ง?
+\nหลังจากนั้นกด "📦 รับสินค้าจากซัพพลาย" เพื่อยืนยันรับเข้า + กรอกราคาจริง`,
+      confirmLabel:"🛒 สร้าง + พิมพ์",
+    }))return;
+    try{
+      await onCreateOrders(groups);
+      printShoppingList();
+      if(onClose)onClose();
+    }catch(e){
+      alert("สร้างรายการไม่สำเร็จ: "+(e&&e.message||e));
+    }
+  }
 
   function printShoppingList(){
     const w=openPrintWindow(900,900);
@@ -4105,7 +4154,10 @@ function PurchaseSummaryModal({pos,ings,branchById,currentBranch,onClose}){
     </div>:<>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3,flex:1,minWidth:200}}>💡 เปรียบเทียบจาก <b>คำสั่งซื้อที่สาขาส่งมา</b> (รวม SOP) <b>ลบด้วย สต๊อกครัวกลาง</b></div>
-        <Btn v="info" onClick={printShoppingList} icon={I.print} s={{padding:"8px 14px",fontSize:12}}>🖨 พิมพ์รายการ</Btn>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <Btn v="ghost" onClick={printShoppingList} icon={I.print} s={{padding:"8px 12px",fontSize:12}}>🖨 พิมพ์เฉยๆ</Btn>
+          {onCreateOrders&&<Btn v="success" onClick={createAndPrint} s={{padding:"8px 14px",fontSize:12}}>🛒 สร้างรายการ + พิมพ์</Btn>}
+        </div>
       </div>
 
       {/* One supplier per card — item name on its own full-width line, stats in a grid below, never overlap */}
