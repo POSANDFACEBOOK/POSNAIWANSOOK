@@ -7464,7 +7464,8 @@ function CRMAnalytics({customers,transactions,feedback,reservations}){
 }
 
 // 16 preset equipment items for the 3D kitchen designer.
-// size = [width, height, depth] in meters. color = THREE.Color hex.
+// size = default [width, height, depth] in meters. Each placed item can override
+// these per-instance via item.w / item.h / item.d.
 const KITCHEN_3D_EQUIPMENT=[
   // ── Kitchen zone ──
   {type:"fridge_large",   name:"ตู้แช่ใหญ่",         icon:"❄️", size:[1.2,1.8,0.7], color:0x94A3B8, zone:"kitchen"},
@@ -7486,12 +7487,30 @@ const KITCHEN_3D_EQUIPMENT=[
   {type:"shelf_bar",      name:"ชั้นวางขวด",         icon:"🍾", size:[1.5,1.8,0.3], color:0xA8A29E, zone:"bar"},
 ];
 
-// Builds a sprite that floats above an equipment box and reads its label.
+const KITCHEN_DEFAULT_ROOM={width:8,depth:6,height:2.8};
+
+// Backwards-compat: legacy layouts stored `kitchen` / `bar` as a flat array of
+// equipment (no room / walls / openings). Wrap them into the new schema.
+function normalizeKitchenLayout(raw){
+  function defZone(){return{room:{...KITCHEN_DEFAULT_ROOM},walls:[],openings:[],equipment:[]};}
+  function normZone(z){
+    if(!z)return defZone();
+    if(Array.isArray(z))return{room:{...KITCHEN_DEFAULT_ROOM},walls:[],openings:[],equipment:z};
+    return{
+      room:{...KITCHEN_DEFAULT_ROOM,...(z.room||{})},
+      walls:Array.isArray(z.walls)?z.walls:[],
+      openings:Array.isArray(z.openings)?z.openings:[],
+      equipment:Array.isArray(z.equipment)?z.equipment:[],
+    };
+  }
+  if(!raw)return{kitchen:defZone(),bar:defZone()};
+  return{kitchen:normZone(raw.kitchen),bar:normZone(raw.bar)};
+}
+
 function makeKitchen3DLabel(THREE,text){
   const canvas=document.createElement("canvas");
   const ctx=canvas.getContext("2d");
   canvas.width=384;canvas.height=80;
-  // Pill background
   ctx.fillStyle="rgba(15,23,42,0.88)";
   const r=18;
   ctx.beginPath();
@@ -7502,21 +7521,57 @@ function makeKitchen3DLabel(THREE,text){
   ctx.arcTo(0,0,canvas.width,0,r);
   ctx.closePath();
   ctx.fill();
-  // Text
   ctx.fillStyle="#FFFFFF";
   ctx.font="bold 36px 'Sarabun', sans-serif";
   ctx.textAlign="center";
   ctx.textBaseline="middle";
-  const display=String(text||"").slice(0,24);
-  ctx.fillText(display,canvas.width/2,canvas.height/2+2);
+  ctx.fillText(String(text||"").slice(0,24),canvas.width/2,canvas.height/2+2);
   const texture=new THREE.CanvasTexture(canvas);
-  texture.minFilter=THREE.LinearFilter;
-  texture.magFilter=THREE.LinearFilter;
+  texture.minFilter=THREE.LinearFilter;texture.magFilter=THREE.LinearFilter;
   const material=new THREE.SpriteMaterial({map:texture,transparent:true,depthWrite:false,depthTest:false});
   const sprite=new THREE.Sprite(material);
   sprite.scale.set(1.6,0.34,1);
   sprite.renderOrder=999;
   return sprite;
+}
+
+// Build an ExtrudeGeometry for a wall segment with door/window holes cut out.
+// Returns null when the wall is too short to bother with.
+function buildKitchen3DWallGeom(THREE,wall,openings){
+  const dx=wall.x2-wall.x1;
+  const dz=wall.z2-wall.z1;
+  const length=Math.sqrt(dx*dx+dz*dz);
+  if(length<0.05)return null;
+  const wallH=+wall.height||KITCHEN_DEFAULT_ROOM.height;
+  const shape=new THREE.Shape();
+  shape.moveTo(0,0);
+  shape.lineTo(length,0);
+  shape.lineTo(length,wallH);
+  shape.lineTo(0,wallH);
+  shape.closePath();
+  // Holes for openings
+  (openings||[]).forEach(o=>{
+    const cx=(+o.positionRatio||0.5)*length;
+    const halfW=Math.min((+o.width||0.9)/2,length/2-0.05);
+    const x1=Math.max(0.05,cx-halfW);
+    const x2=Math.min(length-0.05,cx+halfW);
+    if(x2<=x1)return;
+    const y1=o.type==="door"?0:(Math.max(0,+o.sillHeight||0.9));
+    const oH=+o.height||(o.type==="door"?2.0:1.2);
+    const y2=Math.min(wallH-0.05,y1+oH);
+    if(y2<=y1+0.05)return;
+    const hole=new THREE.Path();
+    hole.moveTo(x1,y1);
+    hole.lineTo(x2,y1);
+    hole.lineTo(x2,y2);
+    hole.lineTo(x1,y2);
+    hole.closePath();
+    shape.holes.push(hole);
+  });
+  const thickness=0.12;
+  const geom=new THREE.ExtrudeGeometry(shape,{depth:thickness,bevelEnabled:false,curveSegments:1});
+  geom.translate(0,0,-thickness/2);
+  return{geom,length,angle:Math.atan2(dz,dx),wallH};
 }
 
 function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
@@ -7526,38 +7581,53 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
   const rendererRef=useRef(null);
   const controlsRef=useRef(null);
   const THREEref=useRef(null);
-  const equipmentMeshesRef=useRef({});
+  const meshRegistryRef=useRef({equipment:{},walls:{},openings:{}});  // id -> mesh
   const animateRafRef=useRef(0);
-  const dragStateRef=useRef({id:null});
+  const dragStateRef=useRef({kind:null,id:null});
 
   const [zone,setZone]=useState("kitchen");
-  const [layout,setLayout]=useState(()=>{
-    const init=currentBranch?.kitchen_3d_layout||{kitchen:[],bar:[]};
-    return{kitchen:Array.isArray(init.kitchen)?init.kitchen:[],bar:Array.isArray(init.bar)?init.bar:[]};
-  });
-  const [selectedId,setSelectedId]=useState(null);
+  const [layout,setLayout]=useState(()=>normalizeKitchenLayout(currentBranch?.kitchen_3d_layout));
+  // Selection model: {kind:"equipment"|"wall"|"opening", id} or null
+  const [selected,setSelected]=useState(null);
   const [dirty,setDirty]=useState(false);
   const [loaded,setLoaded]=useState(false);
   const [loadErr,setLoadErr]=useState(null);
   const [saving,setSaving]=useState(false);
   const [paletteOpen,setPaletteOpen]=useState(false);
+  const [roomModalOpen,setRoomModalOpen]=useState(false);
+  const [addWallOpen,setAddWallOpen]=useState(false);
+  const [addOpeningOpen,setAddOpeningOpen]=useState(null); // null | {wallId}
+  const [editOpeningOpen,setEditOpeningOpen]=useState(null);
 
   const isCentralAdmin=currentBranch?.type==="central"&&currentUser?.role==="admin";
   const canEdit=isCentralAdmin;
-  const items=layout[zone]||[];
+
+  const zoneData=layout[zone]||{room:{...KITCHEN_DEFAULT_ROOM},walls:[],openings:[],equipment:[]};
+  const room=zoneData.room;
+  const userWalls=zoneData.walls;
+  const openings=zoneData.openings;
+  const equipment=zoneData.equipment;
+
+  // Auto outer walls based on room dimensions
+  const outerWalls=React.useMemo(()=>{
+    const w=room.width/2,d=room.depth/2,h=room.height;
+    return[
+      {id:"outer_n",x1:-w,z1:-d,x2:w,z2:-d,height:h,outer:true,label:"ผนังด้านบน (เหนือ)"},
+      {id:"outer_s",x1:-w,z1:d,x2:w,z2:d,height:h,outer:true,label:"ผนังด้านล่าง (ใต้)"},
+      {id:"outer_w",x1:-w,z1:-d,x2:-w,z2:d,height:h,outer:true,label:"ผนังด้านซ้าย (ตะวันตก)"},
+      {id:"outer_e",x1:w,z1:-d,x2:w,z2:d,height:h,outer:true,label:"ผนังด้านขวา (ตะวันออก)"},
+    ];
+  },[room.width,room.depth,room.height]);
+  const allWalls=React.useMemo(()=>[...outerWalls,...userWalls],[outerWalls,userWalls]);
 
   // Re-read layout when currentBranch changes
   useEffect(()=>{
-    const init=currentBranch?.kitchen_3d_layout||{kitchen:[],bar:[]};
-    setLayout({
-      kitchen:Array.isArray(init.kitchen)?init.kitchen:[],
-      bar:Array.isArray(init.bar)?init.bar:[],
-    });
+    setLayout(normalizeKitchenLayout(currentBranch?.kitchen_3d_layout));
     setDirty(false);
-    setSelectedId(null);
+    setSelected(null);
   },[currentBranch?.id]);
 
-  // ── Three.js bootstrap (one-time) ──────────────────────────────────────
+  // ── Three.js bootstrap ──────────────────────────────────────────────────
   useEffect(()=>{
     let mounted=true;
     let cleanup=()=>{};
@@ -7569,7 +7639,7 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
         THREEref.current=THREE;
         const container=mountRef.current;
         const W=container.clientWidth||600;
-        const H=container.clientHeight||520;
+        const H=container.clientHeight||560;
 
         const scene=new THREE.Scene();
         scene.background=new THREE.Color(0xF1F5F9);
@@ -7588,8 +7658,8 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
 
         const controls=new oc.OrbitControls(camera,renderer.domElement);
         controls.target.set(0,0.5,0);
-        controls.minDistance=3;
-        controls.maxDistance=30;
+        controls.minDistance=2;
+        controls.maxDistance=40;
         controls.maxPolarAngle=Math.PI/2.1;
         controls.enableDamping=true;
         controls.dampingFactor=0.1;
@@ -7600,28 +7670,11 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
         dir.position.set(8,12,6);
         dir.castShadow=true;
         dir.shadow.mapSize.set(1024,1024);
-        const s=10;
+        const s=12;
         dir.shadow.camera.left=-s;dir.shadow.camera.right=s;
         dir.shadow.camera.top=s;dir.shadow.camera.bottom=-s;
         scene.add(dir);
 
-        // Floor
-        const floor=new THREE.Mesh(
-          new THREE.PlaneGeometry(10,10),
-          new THREE.MeshStandardMaterial({color:0xE2E8F0,roughness:0.9})
-        );
-        floor.rotation.x=-Math.PI/2;
-        floor.receiveShadow=true;
-        floor.userData.isFloor=true;
-        scene.add(floor);
-
-        const grid=new THREE.GridHelper(10,10,0x94A3B8,0xCBD5E1);
-        grid.position.y=0.005;
-        grid.material.opacity=0.6;
-        grid.material.transparent=true;
-        scene.add(grid);
-
-        // Animation loop
         function animate(){
           animateRafRef.current=requestAnimationFrame(animate);
           controls.update();
@@ -7632,7 +7685,7 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
         const onResize=()=>{
           if(!mountRef.current)return;
           const w=mountRef.current.clientWidth||600;
-          const h=mountRef.current.clientHeight||520;
+          const h=mountRef.current.clientHeight||560;
           renderer.setSize(w,h);
           camera.aspect=w/h;
           camera.updateProjectionMatrix();
@@ -7655,7 +7708,6 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
           renderer.dispose();
           if(container.contains(renderer.domElement))container.removeChild(renderer.domElement);
         };
-
         setLoaded(true);
       }catch(e){
         console.error("3D init failed",e);
@@ -7666,18 +7718,25 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  // ── Rebuild equipment meshes whenever items/zone/selection change ───────
+  // ── Rebuild everything (floor, grid, walls, equipment) on data change ───
   useEffect(()=>{
     if(!loaded||!sceneRef.current||!THREEref.current)return;
     const THREE=THREEref.current;
     const scene=sceneRef.current;
-    // remove existing
-    Object.values(equipmentMeshesRef.current).forEach(mesh=>{
-      scene.remove(mesh);
-      mesh.traverse(o=>{
-        if(o.geometry&&o.geometry.dispose)o.geometry.dispose();
-        if(o.material){
-          const mats=Array.isArray(o.material)?o.material:[o.material];
+
+    // Remove everything except lights (lights persist)
+    const toRemove=[];
+    scene.traverse(o=>{
+      if(o.isLight||o===scene)return;
+      if(o.parent!==scene)return;
+      toRemove.push(o);
+    });
+    toRemove.forEach(o=>{
+      scene.remove(o);
+      o.traverse(c=>{
+        if(c.geometry&&c.geometry.dispose)c.geometry.dispose();
+        if(c.material){
+          const mats=Array.isArray(c.material)?c.material:[c.material];
           mats.forEach(m=>{
             if(m.map&&m.map.dispose)m.map.dispose();
             m.dispose&&m.dispose();
@@ -7685,28 +7744,113 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
         }
       });
     });
-    equipmentMeshesRef.current={};
-    // add new
-    items.forEach(item=>{
+    meshRegistryRef.current={equipment:{},walls:{},openings:{}};
+
+    // ── Floor (sized to room) ──
+    const floor=new THREE.Mesh(
+      new THREE.PlaneGeometry(room.width,room.depth),
+      new THREE.MeshStandardMaterial({color:0xE2E8F0,roughness:0.92})
+    );
+    floor.rotation.x=-Math.PI/2;
+    floor.receiveShadow=true;
+    floor.userData.isFloor=true;
+    scene.add(floor);
+
+    // ── Grid ──
+    const longSide=Math.max(room.width,room.depth);
+    const grid=new THREE.GridHelper(longSide,Math.round(longSide),0x94A3B8,0xCBD5E1);
+    grid.position.y=0.005;
+    grid.material.opacity=0.55;
+    grid.material.transparent=true;
+    scene.add(grid);
+
+    // ── Walls (outer + user) ──
+    allWalls.forEach(wall=>{
+      const wallOpenings=openings.filter(o=>o.wallId===wall.id);
+      const built=buildKitchen3DWallGeom(THREE,wall,wallOpenings);
+      if(!built)return;
+      const {geom,length,angle,wallH}=built;
+      const isSel=selected&&selected.kind==="wall"&&selected.id===wall.id;
+      const mat=new THREE.MeshStandardMaterial({
+        color:wall.outer?(isSel?0xFB923C:0xF8FAFC):(isSel?0xFB923C:0xCBD5E1),
+        roughness:0.85,
+        side:THREE.DoubleSide,
+        transparent:wall.outer,
+        opacity:wall.outer?0.55:1,
+      });
+      const mesh=new THREE.Mesh(geom,mat);
+      mesh.castShadow=true;
+      mesh.receiveShadow=true;
+      mesh.position.set(wall.x1,0,wall.z1);
+      mesh.rotation.y=-angle;
+      mesh.userData.kind="wall";
+      mesh.userData.id=wall.id;
+      scene.add(mesh);
+      meshRegistryRef.current.walls[wall.id]=mesh;
+
+      // Highlight outline if selected
+      if(isSel){
+        const edge=new THREE.LineSegments(
+          new THREE.EdgesGeometry(geom),
+          new THREE.LineBasicMaterial({color:0xFF6B35})
+        );
+        mesh.add(edge);
+      }
+
+      // Render openings as small framed sprites so they're discoverable
+      wallOpenings.forEach(o=>{
+        const cx=(+o.positionRatio||0.5)*length;
+        const halfW=Math.min((+o.width||0.9)/2,length/2-0.05);
+        const oW=halfW*2;
+        const oH=Math.max(0.4,+o.height||(o.type==="door"?2:1.2));
+        const baseY=o.type==="door"?0:(+o.sillHeight||0.9);
+        const isOSel=selected&&selected.kind==="opening"&&selected.id===o.id;
+        // Frame outline
+        const frameGeom=new THREE.BoxGeometry(oW,oH,0.18);
+        const frameEdges=new THREE.EdgesGeometry(frameGeom);
+        const frameMat=new THREE.LineBasicMaterial({color:isOSel?0xFF6B35:(o.type==="door"?0x7C2D12:0x0EA5E9),linewidth:2});
+        const frame=new THREE.LineSegments(frameEdges,frameMat);
+        // Position along wall + at proper height. Local to mesh's coord system.
+        frame.position.set(cx,baseY+oH/2,0);
+        // Glass-ish fill for windows (a faint pane)
+        if(o.type==="window"){
+          const pane=new THREE.Mesh(
+            new THREE.PlaneGeometry(oW*0.92,oH*0.92),
+            new THREE.MeshStandardMaterial({color:0xBAE6FD,transparent:true,opacity:0.32,side:THREE.DoubleSide})
+          );
+          pane.position.set(cx,baseY+oH/2,0);
+          pane.userData.kind="opening";
+          pane.userData.id=o.id;
+          mesh.add(pane);
+        }
+        frame.userData.kind="opening";
+        frame.userData.id=o.id;
+        mesh.add(frame);
+        meshRegistryRef.current.openings[o.id]=frame;
+      });
+    });
+
+    // ── Equipment ──
+    equipment.forEach(item=>{
       const eq=KITCHEN_3D_EQUIPMENT.find(e=>e.type===item.type);
       if(!eq)return;
-      const [w,h,d]=eq.size;
+      const [defW,defH,defD]=eq.size;
+      const w=Math.max(0.1,+item.w||defW);
+      const h=Math.max(0.1,+item.h||defH);
+      const d=Math.max(0.1,+item.d||defD);
       const geom=new THREE.BoxGeometry(w,h,d);
-      const mat=new THREE.MeshStandardMaterial({color:eq.color,roughness:0.55,metalness:0.15});
+      const mat=new THREE.MeshStandardMaterial({color:eq.color,roughness:0.55,metalness:0.12});
       const mesh=new THREE.Mesh(geom,mat);
       mesh.position.set(+item.x||0,h/2,+item.z||0);
       mesh.rotation.y=((+item.rotation||0)*Math.PI)/180;
       mesh.castShadow=true;mesh.receiveShadow=true;
-      mesh.userData.id=item.id;mesh.userData.eq=eq;
-
-      // Edge outline (highlights when selected)
+      mesh.userData.kind="equipment";
+      mesh.userData.id=item.id;
+      // Outline
+      const isSel=selected&&selected.kind==="equipment"&&selected.id===item.id;
       const edges=new THREE.EdgesGeometry(geom);
-      const isSel=selectedId===item.id;
       const edgeMat=new THREE.LineBasicMaterial({color:isSel?0xFF6B35:0x0F172A,linewidth:isSel?3:1});
-      const edgeMesh=new THREE.LineSegments(edges,edgeMat);
-      mesh.add(edgeMesh);
-
-      // Selected: add a glow ring on the floor below
+      mesh.add(new THREE.LineSegments(edges,edgeMat));
       if(isSel){
         const ringGeom=new THREE.RingGeometry(Math.max(w,d)*0.55,Math.max(w,d)*0.7,32);
         const ringMat=new THREE.MeshBasicMaterial({color:0xFF6B35,side:THREE.DoubleSide,transparent:true,opacity:0.6,depthWrite:false});
@@ -7715,18 +7859,18 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
         ring.position.y=-h/2+0.01;
         mesh.add(ring);
       }
-
-      // Floating label
       const label=makeKitchen3DLabel(THREE,item.label||eq.name);
       label.position.y=h/2+0.32;
       mesh.add(label);
-
       scene.add(mesh);
-      equipmentMeshesRef.current[item.id]=mesh;
+      meshRegistryRef.current.equipment[item.id]=mesh;
     });
-  },[items,zone,selectedId,loaded]);
 
-  // ── Pointer events: click select + drag on floor plane ──────────────────
+    // Re-add lighting after the cleanup (lights weren't preserved if user reset)
+    // (no-op since we excluded lights from removal)
+  },[loaded,zone,room.width,room.depth,room.height,userWalls,openings,equipment,selected]);
+
+  // ── Pointer events ──────────────────────────────────────────────────────
   useEffect(()=>{
     if(!loaded||!rendererRef.current)return;
     const THREE=THREEref.current;
@@ -7744,72 +7888,74 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
       mouse.x=((ev.clientX-rect.left)/rect.width)*2-1;
       mouse.y=-((ev.clientY-rect.top)/rect.height)*2+1;
     }
+    function pickSelectables(){
+      // Order: equipment > openings > walls (smaller things first so clicks hit them)
+      const eqMeshes=Object.values(meshRegistryRef.current.equipment);
+      const opMeshes=Object.values(meshRegistryRef.current.openings);
+      const wallMeshes=Object.values(meshRegistryRef.current.walls);
+      return[...eqMeshes,...opMeshes,...wallMeshes];
+    }
 
     function onPointerDown(ev){
       downAt=Date.now();downX=ev.clientX;downY=ev.clientY;
       ndc(ev);
       raycaster.setFromCamera(mouse,camera);
-      const meshes=Object.values(equipmentMeshesRef.current);
-      const hits=raycaster.intersectObjects(meshes,true);
+      const candidates=pickSelectables();
+      const hits=raycaster.intersectObjects(candidates,true);
       if(hits.length>0){
         let o=hits[0].object;
-        while(o&&!o.userData?.id)o=o.parent;
-        if(o&&o.userData.id){
-          setSelectedId(o.userData.id);
-          if(canEdit){
-            dragStateRef.current.id=o.userData.id;
+        while(o&&!o.userData?.kind)o=o.parent;
+        if(o){
+          setSelected({kind:o.userData.kind,id:o.userData.id});
+          if(canEdit&&o.userData.kind==="equipment"){
+            dragStateRef.current={kind:"equipment",id:o.userData.id};
             controls.enabled=false;
             try{dom.setPointerCapture(ev.pointerId);}catch{}
           }
         }
       }
     }
-
     function onPointerMove(ev){
-      const dragId=dragStateRef.current.id;
-      if(!dragId)return;
+      if(dragStateRef.current.kind!=="equipment")return;
       ndc(ev);
       raycaster.setFromCamera(mouse,camera);
-      const intersection=new THREE.Vector3();
-      raycaster.ray.intersectPlane(dragPlane,intersection);
-      const mesh=equipmentMeshesRef.current[dragId];
+      const ip=new THREE.Vector3();
+      raycaster.ray.intersectPlane(dragPlane,ip);
+      const mesh=meshRegistryRef.current.equipment[dragStateRef.current.id];
       if(!mesh)return;
-      const half=4.5;
-      mesh.position.x=Math.max(-half,Math.min(half,intersection.x));
-      mesh.position.z=Math.max(-half,Math.min(half,intersection.z));
+      const halfW=room.width/2-0.1;
+      const halfD=room.depth/2-0.1;
+      mesh.position.x=Math.max(-halfW,Math.min(halfW,ip.x));
+      mesh.position.z=Math.max(-halfD,Math.min(halfD,ip.z));
     }
-
     function onPointerUp(ev){
+      const dragKind=dragStateRef.current.kind;
       const dragId=dragStateRef.current.id;
       const dt=Date.now()-downAt;
       const dx=Math.abs(ev.clientX-downX);
       const dy=Math.abs(ev.clientY-downY);
-      // Treat as a tap (no real drag) if barely moved + quick — deselect when on empty space
-      if(!dragId&&dt<260&&dx<4&&dy<4){
-        // (already handled in down: selected if hit anything; otherwise deselect)
+      if(dragKind!=="equipment"&&dt<260&&dx<4&&dy<4){
         ndc(ev);
         raycaster.setFromCamera(mouse,camera);
-        const meshes=Object.values(equipmentMeshesRef.current);
-        if(raycaster.intersectObjects(meshes,true).length===0){
-          setSelectedId(null);
-        }
+        if(raycaster.intersectObjects(pickSelectables(),true).length===0)setSelected(null);
       }
-      if(dragId){
-        const mesh=equipmentMeshesRef.current[dragId];
-        const movedId=dragId;
-        dragStateRef.current.id=null;
+      if(dragKind==="equipment"&&dragId){
+        const mesh=meshRegistryRef.current.equipment[dragId];
+        dragStateRef.current={kind:null,id:null};
         controls.enabled=true;
         try{dom.releasePointerCapture(ev.pointerId);}catch{}
         if(mesh){
           setLayout(L=>({
             ...L,
-            [zone]:L[zone].map(it=>it.id===movedId?{...it,x:+mesh.position.x.toFixed(2),z:+mesh.position.z.toFixed(2)}:it),
+            [zone]:{
+              ...L[zone],
+              equipment:L[zone].equipment.map(it=>it.id===dragId?{...it,x:+mesh.position.x.toFixed(2),z:+mesh.position.z.toFixed(2)}:it),
+            },
           }));
           setDirty(true);
         }
       }
     }
-
     dom.addEventListener("pointerdown",onPointerDown);
     dom.addEventListener("pointermove",onPointerMove);
     dom.addEventListener("pointerup",onPointerUp);
@@ -7820,39 +7966,64 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
       dom.removeEventListener("pointerup",onPointerUp);
       dom.removeEventListener("pointercancel",onPointerUp);
     };
-  },[loaded,canEdit,zone]);
+  },[loaded,canEdit,zone,room.width,room.depth]);
 
-  function addItem(eq){
+  // ── Mutators ────────────────────────────────────────────────────────────
+  function patchZone(fn){
+    setLayout(L=>({...L,[zone]:fn(L[zone])}));
+    setDirty(true);
+  }
+
+  function addEquipment(eq){
     if(!canEdit)return;
     const id="eq_"+Math.random().toString(36).slice(2,9);
-    const newItem={id,type:eq.type,x:0,z:0,rotation:0,label:eq.name};
-    setLayout(L=>({...L,[zone]:[...L[zone],newItem]}));
-    setSelectedId(id);
-    setDirty(true);
+    const item={id,type:eq.type,x:0,z:0,rotation:0,label:eq.name};
+    patchZone(z=>({...z,equipment:[...z.equipment,item]}));
+    setSelected({kind:"equipment",id});
     setPaletteOpen(false);
   }
-
-  function rotateSelected(){
-    if(!selectedId||!canEdit)return;
-    setLayout(L=>({
-      ...L,
-      [zone]:L[zone].map(it=>it.id===selectedId?{...it,rotation:((+it.rotation||0)+90)%360}:it),
-    }));
-    setDirty(true);
+  function updateEquipment(id,patch){
+    patchZone(z=>({...z,equipment:z.equipment.map(it=>it.id===id?{...it,...patch}:it)}));
+  }
+  async function deleteEquipment(id){
+    if(!await confirmDlg({title:"ลบอุปกรณ์",message:"ต้องการลบอุปกรณ์ชิ้นนี้?",confirmLabel:"🗑 ลบ",danger:true}))return;
+    patchZone(z=>({...z,equipment:z.equipment.filter(it=>it.id!==id)}));
+    setSelected(null);
   }
 
-  async function deleteSelected(){
-    if(!selectedId||!canEdit)return;
-    if(!await confirmDlg({title:"ลบอุปกรณ์",message:"ต้องการลบอุปกรณ์ชิ้นนี้ออกจากแบบครัว?",confirmLabel:"🗑 ลบ",danger:true}))return;
-    setLayout(L=>({...L,[zone]:L[zone].filter(it=>it.id!==selectedId)}));
-    setSelectedId(null);
-    setDirty(true);
+  function updateRoom(patch){
+    patchZone(z=>({...z,room:{...z.room,...patch}}));
   }
 
-  function renameSelected(label){
-    if(!selectedId||!canEdit)return;
-    setLayout(L=>({...L,[zone]:L[zone].map(it=>it.id===selectedId?{...it,label}:it)}));
-    setDirty(true);
+  function addWall(wall){
+    const id="wall_"+Math.random().toString(36).slice(2,9);
+    patchZone(z=>({...z,walls:[...z.walls,{...wall,id}]}));
+    setSelected({kind:"wall",id});
+    setAddWallOpen(false);
+  }
+  function updateWall(id,patch){
+    patchZone(z=>({...z,walls:z.walls.map(w=>w.id===id?{...w,...patch}:w)}));
+  }
+  async function deleteWall(id){
+    if(id.startsWith("outer_"))return alert("ผนังด้านนอกถูกสร้างจากขนาดห้องโดยอัตโนมัติ — แก้ขนาดห้องแทน");
+    if(!await confirmDlg({title:"ลบกำแพง",message:"ลบกำแพง + ประตู/หน้าต่างที่อยู่บนกำแพงนี้ทั้งหมด?",confirmLabel:"🗑 ลบ",danger:true}))return;
+    patchZone(z=>({...z,walls:z.walls.filter(w=>w.id!==id),openings:z.openings.filter(o=>o.wallId!==id)}));
+    setSelected(null);
+  }
+
+  function addOpening(opening){
+    const id="op_"+Math.random().toString(36).slice(2,9);
+    patchZone(z=>({...z,openings:[...z.openings,{...opening,id}]}));
+    setSelected({kind:"opening",id});
+    setAddOpeningOpen(null);
+  }
+  function updateOpening(id,patch){
+    patchZone(z=>({...z,openings:z.openings.map(o=>o.id===id?{...o,...patch}:o)}));
+  }
+  async function deleteOpening(id){
+    if(!await confirmDlg({title:"ลบช่องเปิด",message:"ต้องการลบประตู/หน้าต่างนี้?",confirmLabel:"🗑 ลบ",danger:true}))return;
+    patchZone(z=>({...z,openings:z.openings.filter(o=>o.id!==id)}));
+    setSelected(null);
   }
 
   async function save(){
@@ -7865,7 +8036,6 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
     }catch(e){alert("บันทึกไม่สำเร็จ: "+((e&&e.message)||e));}
     setSaving(false);
   }
-
   function resetCamera(){
     const cam=cameraRef.current,ct=controlsRef.current;
     if(!cam||!ct)return;
@@ -7874,11 +8044,15 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
     ct.update();
   }
 
-  const selected=selectedId?items.find(it=>it.id===selectedId):null;
-  const selectedEq=selected?KITCHEN_3D_EQUIPMENT.find(e=>e.type===selected.type):null;
+  // Derived: the currently selected object (for the side panel)
+  const selectedEquipment=selected?.kind==="equipment"?equipment.find(e=>e.id===selected.id):null;
+  const selectedWall=selected?.kind==="wall"?allWalls.find(w=>w.id===selected.id):null;
+  const selectedOpening=selected?.kind==="opening"?openings.find(o=>o.id===selected.id):null;
+  const selectedEqPreset=selectedEquipment?KITCHEN_3D_EQUIPMENT.find(e=>e.type===selectedEquipment.type):null;
+
   const paletteItems=KITCHEN_3D_EQUIPMENT.filter(e=>e.zone===zone);
-  const kCount=(layout.kitchen||[]).length;
-  const bCount=(layout.bar||[]).length;
+  const kCount=(layout.kitchen?.equipment||[]).length;
+  const bCount=(layout.bar?.equipment||[]).length;
 
   return <div style={{display:"flex",flexDirection:"column",gap:14}}>
     {/* Header */}
@@ -7888,12 +8062,12 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
           <span style={{fontSize:24}}>🍳</span> ออกแบบครัว 3D — {currentBranch?.name||"—"}
         </h3>
         <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,margin:"4px 0 0"}}>
-          จัดวางตู้แช่ เตา อ่างล้าง และอุปกรณ์อื่นๆ ของสาขา · ลากเม้าส์เพื่อหมุนกล้อง · กล้องล้อ scroll = ซูม{canEdit?" · คลิกอุปกรณ์เพื่อเลือก แล้วลากย้าย":""}
+          ลากเม้าส์ = หมุนกล้อง · scroll = ซูม{canEdit?" · คลิกอุปกรณ์/กำแพง/ประตูเพื่อเลือก แล้วแก้ในแผงด้านขวา":""}
         </p>
       </div>
       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-        {!canEdit&&<span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:600,background:C.bg,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.line}`}}>👁 ดูได้อย่างเดียว — เฉพาะแอดมินครัวกลางแก้ได้</span>}
-        <Btn v="ghost" onClick={resetCamera} s={{padding:"8px 12px",fontSize:12}}>🎥 รีเซ็ตมุมกล้อง</Btn>
+        {!canEdit&&<span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:600,background:C.bg,padding:"6px 12px",borderRadius:8,border:`1px solid ${C.line}`}}>👁 ดูได้อย่างเดียว</span>}
+        <Btn v="ghost" onClick={resetCamera} s={{padding:"8px 12px",fontSize:12}}>🎥 รีเซ็ตมุม</Btn>
         {canEdit&&<Btn v={dirty?"success":"ghost"} onClick={save} loading={saving} disabled={!dirty} icon={I.save} s={{padding:"8px 14px",fontSize:13}}>{dirty?"💾 บันทึก":"💾 บันทึกแล้ว"}</Btn>}
       </div>
     </div>
@@ -7905,7 +8079,7 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
         {id:"bar",l:"🍻 โซนบาร์น้ำ",c:C.teal,n:bCount},
       ].map(t=>{
         const sel=zone===t.id;
-        return <button key={t.id} onClick={()=>{setZone(t.id);setSelectedId(null);}} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:sel?t.c:"transparent",color:sel?C.white:C.ink3,transition:"all .15s",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+        return <button key={t.id} onClick={()=>{setZone(t.id);setSelected(null);}} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:sel?t.c:"transparent",color:sel?C.white:C.ink3,transition:"all .15s",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
           <span>{t.l}</span>
           <span style={{fontSize:11,fontWeight:900,background:sel?"rgba(255,255,255,0.22)":C.lineLight,color:sel?C.white:C.ink3,padding:"1px 8px",borderRadius:10}}>{t.n}</span>
         </button>;
@@ -7914,15 +8088,13 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
 
     {/* Action toolbar */}
     {canEdit&&<div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+      <Btn v="info" onClick={()=>setRoomModalOpen(true)} s={{padding:"8px 14px",fontSize:13}}>🏠 ขนาดห้อง ({room.width}×{room.depth}×{room.height} m)</Btn>
       <Btn v="success" onClick={()=>setPaletteOpen(true)} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มอุปกรณ์</Btn>
-      {selected&&<>
-        <Btn v="info" onClick={rotateSelected} s={{padding:"8px 12px",fontSize:12}}>↻ หมุน 90°</Btn>
-        <Btn onClick={deleteSelected} icon={I.trash} s={{padding:"8px 12px",fontSize:12,background:C.redLight,color:C.red,border:`1px solid #FECACA`}}>ลบ</Btn>
-      </>}
+      <Btn v="purple" onClick={()=>setAddWallOpen(true)} s={{padding:"8px 14px",fontSize:13}}>🧱 เพิ่มกำแพง</Btn>
     </div>}
 
     {/* Canvas + side panel */}
-    <div style={{display:"grid",gridTemplateColumns:selected?"1fr 280px":"1fr",gap:14,alignItems:"start"}}>
+    <div style={{display:"grid",gridTemplateColumns:selected?"1fr 320px":"1fr",gap:14,alignItems:"start"}}>
       <Card style={{padding:0,overflow:"hidden",position:"relative"}}>
         <div ref={mountRef} style={{width:"100%",height:560,background:"#F1F5F9",position:"relative",cursor:canEdit?"crosshair":"grab"}}>
           {!loaded&&!loadErr&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Sarabun',sans-serif",color:C.ink3,fontSize:13}}>
@@ -7931,62 +8103,207 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
               กำลังโหลด 3D engine...
             </div>
           </div>}
-          {loadErr&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'Sarabun',sans-serif",color:C.red,fontSize:13,textAlign:"center"}}>
-            ❌ โหลด 3D engine ไม่สำเร็จ: {loadErr}
-          </div>}
+          {loadErr&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'Sarabun',sans-serif",color:C.red,fontSize:13,textAlign:"center"}}>❌ โหลด 3D engine ไม่สำเร็จ: {loadErr}</div>}
         </div>
       </Card>
 
-      {/* Side panel — only when something is selected */}
+      {/* Side panel — shape depends on what's selected */}
       {selected&&<Card style={{padding:14}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,paddingBottom:10,borderBottom:`1px solid ${C.lineLight}`}}>
-          <span style={{fontSize:30}}>{selectedEq?.icon||"📦"}</span>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,fontWeight:700}}>อุปกรณ์ที่เลือก</div>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>{selectedEq?.name}</div>
+        {selectedEquipment&&selectedEqPreset&&<>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,paddingBottom:10,borderBottom:`1px solid ${C.lineLight}`}}>
+            <span style={{fontSize:30}}>{selectedEqPreset.icon}</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,fontWeight:700}}>อุปกรณ์ที่เลือก</div>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>{selectedEqPreset.name}</div>
+            </div>
           </div>
-        </div>
-        {canEdit?<Inp label="ป้ายชื่อ" value={selected.label||""} onChange={e=>renameSelected(e.target.value)} placeholder={selectedEq?.name}/>
-        :<div style={{marginBottom:10}}><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginBottom:3}}>ป้ายชื่อ</div><div style={{fontSize:14,fontWeight:700,color:C.ink}}>{selected.label||selectedEq?.name}</div></div>}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,fontFamily:"'Sarabun',sans-serif"}}>
-          <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
-            <div style={{fontSize:10,color:C.ink4,fontWeight:700}}>ตำแหน่ง X</div>
-            <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{(+selected.x||0).toFixed(2)} m</div>
+          {canEdit?<Inp label="ป้ายชื่อ" value={selectedEquipment.label||""} onChange={e=>updateEquipment(selectedEquipment.id,{label:e.target.value})} placeholder={selectedEqPreset.name}/>
+          :<div style={{marginBottom:10}}><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginBottom:3}}>ป้ายชื่อ</div><div style={{fontSize:14,fontWeight:700,color:C.ink}}>{selectedEquipment.label||selectedEqPreset.name}</div></div>}
+          <div style={{fontSize:11,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:6,marginTop:6}}>ขนาดอุปกรณ์ (ค่าเริ่มต้น {selectedEqPreset.size.join("×")} m)</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:10}}>
+            <Inp label="กว้าง (W)" type="number" value={selectedEquipment.w??selectedEqPreset.size[0]} onChange={e=>canEdit&&updateEquipment(selectedEquipment.id,{w:+e.target.value||undefined})} step="0.1"/>
+            <Inp label="สูง (H)" type="number" value={selectedEquipment.h??selectedEqPreset.size[1]} onChange={e=>canEdit&&updateEquipment(selectedEquipment.id,{h:+e.target.value||undefined})} step="0.1"/>
+            <Inp label="ลึก (D)" type="number" value={selectedEquipment.d??selectedEqPreset.size[2]} onChange={e=>canEdit&&updateEquipment(selectedEquipment.id,{d:+e.target.value||undefined})} step="0.1"/>
           </div>
-          <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
-            <div style={{fontSize:10,color:C.ink4,fontWeight:700}}>ตำแหน่ง Z</div>
-            <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{(+selected.z||0).toFixed(2)} m</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>
+            <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
+              <div style={{fontSize:10,color:C.ink4,fontWeight:700}}>X</div><div style={{fontSize:13,fontWeight:800,color:C.ink}}>{(+selectedEquipment.x||0).toFixed(2)} m</div>
+            </div>
+            <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
+              <div style={{fontSize:10,color:C.ink4,fontWeight:700}}>Z</div><div style={{fontSize:13,fontWeight:800,color:C.ink}}>{(+selectedEquipment.z||0).toFixed(2)} m</div>
+            </div>
+            <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
+              <div style={{fontSize:10,color:C.ink4,fontWeight:700}}>หมุน</div><div style={{fontSize:13,fontWeight:800,color:C.ink}}>{+selectedEquipment.rotation||0}°</div>
+            </div>
           </div>
-          <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
-            <div style={{fontSize:10,color:C.ink4,fontWeight:700}}>หมุน</div>
-            <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{+selected.rotation||0}°</div>
+          {canEdit&&<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            <Btn v="info" onClick={()=>updateEquipment(selectedEquipment.id,{rotation:((+selectedEquipment.rotation||0)+90)%360})} s={{flex:1,padding:"8px 10px",fontSize:12}}>↻ หมุน 90°</Btn>
+            <Btn onClick={()=>deleteEquipment(selectedEquipment.id)} icon={I.trash} s={{padding:"8px 10px",fontSize:12,background:C.redLight,color:C.red,border:`1px solid #FECACA`}}>ลบ</Btn>
+          </div>}
+        </>}
+
+        {selectedWall&&<>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,paddingBottom:10,borderBottom:`1px solid ${C.lineLight}`}}>
+            <span style={{fontSize:30}}>🧱</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,fontWeight:700}}>{selectedWall.outer?"ผนังด้านนอก":"กำแพงภายใน"}</div>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>{selectedWall.label||selectedWall.id}</div>
+            </div>
           </div>
-          <div style={{padding:"6px 10px",background:C.brandLight,borderRadius:8,border:`1px solid ${C.brandBorder}`}}>
-            <div style={{fontSize:10,color:C.brand,fontWeight:700}}>ขนาด (w×h×d)</div>
-            <div style={{fontSize:12,fontWeight:800,color:C.brand}}>{selectedEq?.size?.join("×")||"—"} m</div>
+          {selectedWall.outer
+            ?<div style={{padding:"8px 10px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:8,fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.5}}>
+              ℹ️ ผนังด้านนอกถูกสร้างอัตโนมัติจากขนาดห้อง — กด <b>"🏠 ขนาดห้อง"</b> เพื่อปรับ
+            </div>
+            :canEdit?<>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+                <Inp label="X1" type="number" value={selectedWall.x1} onChange={e=>updateWall(selectedWall.id,{x1:+e.target.value||0})} step="0.1"/>
+                <Inp label="Z1" type="number" value={selectedWall.z1} onChange={e=>updateWall(selectedWall.id,{z1:+e.target.value||0})} step="0.1"/>
+                <Inp label="X2" type="number" value={selectedWall.x2} onChange={e=>updateWall(selectedWall.id,{x2:+e.target.value||0})} step="0.1"/>
+                <Inp label="Z2" type="number" value={selectedWall.z2} onChange={e=>updateWall(selectedWall.id,{z2:+e.target.value||0})} step="0.1"/>
+              </div>
+              <Inp label="ความสูงกำแพง (m)" type="number" value={selectedWall.height||room.height} onChange={e=>updateWall(selectedWall.id,{height:+e.target.value||room.height})} step="0.1"/>
+            </>:null}
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8,marginBottom:10}}>
+            {canEdit&&<>
+              <Btn v="success" onClick={()=>setAddOpeningOpen({wallId:selectedWall.id,type:"door"})} s={{flex:1,padding:"8px 10px",fontSize:12}}>🚪 + ประตู</Btn>
+              <Btn v="info" onClick={()=>setAddOpeningOpen({wallId:selectedWall.id,type:"window"})} s={{flex:1,padding:"8px 10px",fontSize:12}}>🪟 + หน้าต่าง</Btn>
+            </>}
           </div>
-        </div>
-        {canEdit&&<div style={{marginTop:12,display:"flex",gap:6,flexWrap:"wrap"}}>
-          <Btn v="info" onClick={rotateSelected} s={{flex:1,padding:"8px 10px",fontSize:12}}>↻ หมุน 90°</Btn>
-          <Btn onClick={deleteSelected} icon={I.trash} s={{padding:"8px 10px",fontSize:12,background:C.redLight,color:C.red,border:`1px solid #FECACA`}}>ลบ</Btn>
-        </div>}
+          {/* List of openings on this wall */}
+          {(()=>{const wallOps=openings.filter(o=>o.wallId===selectedWall.id);return wallOps.length>0&&<div style={{borderTop:`1px solid ${C.lineLight}`,paddingTop:10,marginTop:6}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>ช่องเปิดบนกำแพงนี้ ({wallOps.length})</div>
+            {wallOps.map(o=><div key={o.id} onClick={()=>setSelected({kind:"opening",id:o.id})} style={{padding:"6px 10px",border:`1px solid ${C.line}`,borderRadius:8,marginBottom:4,cursor:"pointer",background:C.white,fontFamily:"'Sarabun',sans-serif",display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12}}>
+              <span>{o.type==="door"?"🚪 ประตู":"🪟 หน้าต่าง"} · {o.width||"-"}×{o.height||"-"} m</span>
+              <span style={{color:C.ink4,fontSize:10}}>ตำแหน่ง {Math.round((+o.positionRatio||0.5)*100)}%</span>
+            </div>)}
+          </div>;})()}
+          {canEdit&&!selectedWall.outer&&<div style={{marginTop:6}}>
+            <Btn onClick={()=>deleteWall(selectedWall.id)} icon={I.trash} s={{width:"100%",padding:"8px 10px",fontSize:12,background:C.redLight,color:C.red,border:`1px solid #FECACA`}}>ลบกำแพง + ช่องเปิดทั้งหมด</Btn>
+          </div>}
+        </>}
+
+        {selectedOpening&&(()=>{
+          const op=selectedOpening;
+          const wall=allWalls.find(w=>w.id===op.wallId);
+          const wallLen=wall?Math.sqrt((wall.x2-wall.x1)**2+(wall.z2-wall.z1)**2):1;
+          return <>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,paddingBottom:10,borderBottom:`1px solid ${C.lineLight}`}}>
+              <span style={{fontSize:30}}>{op.type==="door"?"🚪":"🪟"}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,fontWeight:700}}>ช่องเปิด</div>
+                <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>{op.type==="door"?"ประตู":"หน้าต่าง"} บน{wall?.outer?"ผนังนอก":"กำแพง"}</div>
+              </div>
+            </div>
+            {canEdit?<>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+                <Inp label="กว้าง (m)" type="number" value={op.width||0.9} onChange={e=>updateOpening(op.id,{width:+e.target.value||0.9})} step="0.05"/>
+                <Inp label="สูง (m)" type="number" value={op.height||(op.type==="door"?2:1.2)} onChange={e=>updateOpening(op.id,{height:+e.target.value||(op.type==="door"?2:1.2)})} step="0.05"/>
+                {op.type==="window"&&<Inp label="ความสูงธรณีหน้าต่าง (m)" type="number" value={op.sillHeight||0.9} onChange={e=>updateOpening(op.id,{sillHeight:+e.target.value||0.9})} step="0.05"/>}
+                <Inp label={`ตำแหน่งจากต้นกำแพง (0–${wallLen.toFixed(1)} m)`} type="number" value={(+op.positionRatio||0.5)*wallLen} onChange={e=>{const v=+e.target.value||0;const r=Math.max(0,Math.min(1,v/wallLen));updateOpening(op.id,{positionRatio:r});}} step="0.1"/>
+              </div>
+            </>:null}
+            {canEdit&&<Btn onClick={()=>deleteOpening(op.id)} icon={I.trash} s={{width:"100%",padding:"8px 10px",fontSize:12,background:C.redLight,color:C.red,border:`1px solid #FECACA`,marginTop:8}}>ลบช่องเปิดนี้</Btn>}
+          </>;
+        })()}
       </Card>}
     </div>
 
     {/* Equipment palette modal */}
     {paletteOpen&&<Modal title={`➕ เพิ่มอุปกรณ์ — ${zone==="kitchen"?"โซนครัว":"โซนบาร์"}`} onClose={()=>setPaletteOpen(false)} wide>
       <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:14}}>
-        คลิกอุปกรณ์ที่ต้องการเพิ่มลงในแบบครัว — อุปกรณ์ใหม่จะวางที่จุดกลางห้อง คุณสามารถลากย้ายภายหลังได้
+        คลิกอุปกรณ์ที่ต้องการเพิ่ม — อุปกรณ์ใหม่จะวางที่จุดกลางห้อง คุณสามารถลากย้าย + ปรับขนาดในแผงด้านขวาได้
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(140px,100%),1fr))",gap:10}}>
-        {paletteItems.map(eq=><button key={eq.type} onClick={()=>addItem(eq)} style={{padding:"14px 12px",border:`2px solid ${C.line}`,borderRadius:12,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"center",transition:"all .15s",display:"flex",flexDirection:"column",alignItems:"center",gap:6}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
+        {paletteItems.map(eq=><button key={eq.type} onClick={()=>addEquipment(eq)} style={{padding:"14px 12px",border:`2px solid ${C.line}`,borderRadius:12,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"center",transition:"all .15s",display:"flex",flexDirection:"column",alignItems:"center",gap:6}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
           <span style={{fontSize:34}}>{eq.icon}</span>
           <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{eq.name}</div>
           <div style={{fontSize:10,color:C.ink4}}>{eq.size.join("×")} m</div>
         </button>)}
       </div>
     </Modal>}
+
+    {/* Room dimension modal */}
+    {roomModalOpen&&<Modal title="🏠 ขนาดห้อง" onClose={()=>setRoomModalOpen(false)}>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:12,lineHeight:1.5}}>
+        ปรับขนาดห้อง — ผนังด้านนอกจะถูกสร้างใหม่ตามค่าที่กำหนด หน่วยเป็นเมตร
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+        <Inp label="กว้าง (W)" type="number" value={room.width} onChange={e=>updateRoom({width:Math.max(2,Math.min(30,+e.target.value||room.width))})} step="0.5"/>
+        <Inp label="ลึก (D)" type="number" value={room.depth} onChange={e=>updateRoom({depth:Math.max(2,Math.min(30,+e.target.value||room.depth))})} step="0.5"/>
+        <Inp label="สูง (H)" type="number" value={room.height} onChange={e=>updateRoom({height:Math.max(2,Math.min(6,+e.target.value||room.height))})} step="0.1"/>
+      </div>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:14}}>
+        <Btn v="ghost" onClick={()=>setRoomModalOpen(false)}>เสร็จ</Btn>
+      </div>
+    </Modal>}
+
+    {/* Add wall modal */}
+    {addWallOpen&&<AddWallModal room={room} onSave={addWall} onClose={()=>setAddWallOpen(false)}/>}
+
+    {/* Add opening modal (door or window) */}
+    {addOpeningOpen&&(()=>{
+      const wall=allWalls.find(w=>w.id===addOpeningOpen.wallId);
+      const wallLen=wall?Math.sqrt((wall.x2-wall.x1)**2+(wall.z2-wall.z1)**2):4;
+      return <AddOpeningModal wallId={addOpeningOpen.wallId} wallLen={wallLen} initialType={addOpeningOpen.type} onSave={addOpening} onClose={()=>setAddOpeningOpen(null)}/>;
+    })()}
   </div>;
+}
+
+// Modal: add a new internal wall by typing in endpoints + height.
+function AddWallModal({room,onSave,onClose}){
+  const [x1,setX1]=useState(-1);
+  const [z1,setZ1]=useState(0);
+  const [x2,setX2]=useState(1);
+  const [z2,setZ2]=useState(0);
+  const [height,setHeight]=useState(room.height);
+  const len=Math.sqrt((x2-x1)**2+(z2-z1)**2);
+  const valid=len>=0.3;
+  return <Modal title="🧱 เพิ่มกำแพงภายใน" onClose={onClose}>
+    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:12,lineHeight:1.5}}>
+      ระบุจุดเริ่มต้น (X1, Z1) และจุดปลาย (X2, Z2) ของกำแพง บนพื้น (หน่วยเมตร) — ห้องอยู่ในช่วง -{(room.width/2).toFixed(1)} ถึง {(room.width/2).toFixed(1)} (X) และ -{(room.depth/2).toFixed(1)} ถึง {(room.depth/2).toFixed(1)} (Z)
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+      <Inp label="จุด A — X1" type="number" value={x1} onChange={e=>setX1(+e.target.value||0)} step="0.1"/>
+      <Inp label="จุด A — Z1" type="number" value={z1} onChange={e=>setZ1(+e.target.value||0)} step="0.1"/>
+      <Inp label="จุด B — X2" type="number" value={x2} onChange={e=>setX2(+e.target.value||0)} step="0.1"/>
+      <Inp label="จุด B — Z2" type="number" value={z2} onChange={e=>setZ2(+e.target.value||0)} step="0.1"/>
+    </div>
+    <Inp label={`ความสูง (m) — ห้องสูง ${room.height} m`} type="number" value={height} onChange={e=>setHeight(+e.target.value||room.height)} step="0.1"/>
+    <div style={{padding:"8px 12px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,marginBottom:14}}>ความยาวกำแพง: <b>{len.toFixed(2)} m</b>{!valid&&<span style={{color:C.red,marginLeft:6}}>(สั้นเกินไป)</span>}</div>
+    <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+      <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
+      <Btn onClick={()=>onSave({x1,z1,x2,z2,height})} icon={I.plus} disabled={!valid}>เพิ่ม</Btn>
+    </div>
+  </Modal>;
+}
+
+// Modal: add a door / window onto a given wall.
+function AddOpeningModal({wallId,wallLen,initialType,onSave,onClose}){
+  const [type,setType]=useState(initialType||"door");
+  const [width,setWidth]=useState(type==="door"?0.9:1.2);
+  const [height,setHeight]=useState(type==="door"?2.0:1.2);
+  const [sillHeight,setSillHeight]=useState(0.9);
+  const [position,setPosition]=useState(wallLen/2);
+  const positionRatio=Math.max(0,Math.min(1,position/wallLen));
+  return <Modal title={`${type==="door"?"🚪 เพิ่มประตู":"🪟 เพิ่มหน้าต่าง"}`} onClose={onClose}>
+    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:12}}>กำแพงนี้ยาว <b>{wallLen.toFixed(2)} m</b> — กำหนดตำแหน่ง + ขนาด</div>
+    <div style={{display:"flex",gap:6,marginBottom:10,background:C.bg,padding:5,borderRadius:10,border:`1px solid ${C.line}`}}>
+      {[{id:"door",l:"🚪 ประตู"},{id:"window",l:"🪟 หน้าต่าง"}].map(t=>{
+        const sel=type===t.id;
+        return <button key={t.id} onClick={()=>{setType(t.id);if(t.id==="door"){setHeight(2.0);setWidth(0.9);}else{setHeight(1.2);setWidth(1.2);}}} style={{flex:1,padding:"8px 12px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:sel?C.brand:"transparent",color:sel?C.white:C.ink3,transition:"all .15s"}}>{t.l}</button>;
+      })}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+      <Inp label="กว้าง (m)" type="number" value={width} onChange={e=>setWidth(+e.target.value||0.9)} step="0.05"/>
+      <Inp label="สูง (m)" type="number" value={height} onChange={e=>setHeight(+e.target.value||1)} step="0.05"/>
+      {type==="window"&&<Inp label="ความสูงธรณีหน้าต่าง (m)" type="number" value={sillHeight} onChange={e=>setSillHeight(+e.target.value||0.9)} step="0.05"/>}
+      <Inp label={`ตำแหน่ง (0 = ต้นกำแพง, ${wallLen.toFixed(1)} = ปลาย)`} type="number" value={position} onChange={e=>setPosition(+e.target.value||0)} step="0.1"/>
+    </div>
+    <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:10,borderTop:`1px solid ${C.line}`,marginTop:10}}>
+      <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
+      <Btn onClick={()=>onSave({wallId,type,width,height,positionRatio,...(type==="window"?{sillHeight}:{})})} icon={I.plus}>เพิ่ม</Btn>
+    </div>
+  </Modal>;
 }
 
 // ══════════════════════════════════════════════════════
