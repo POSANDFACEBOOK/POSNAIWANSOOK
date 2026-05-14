@@ -1311,13 +1311,37 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
 // ══════════════════════════════════════════════════════
 // ── INGREDIENT TAB ────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats}){
+function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[]}){
   const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
   const ef={name:"",code:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
   const[form,setForm]=useState(ef);
   const isCentral=currentBranch?.type==="central";
   const canE=hasPerm(currentUser,"ingredients")&&isCentral;const canD=hasPerm(currentUser,"ingredients")&&isCentral;
+  // Aggregate actual purchase prices from delivered external-supplier orders.
+  // Central kitchen sees the cross-branch view via allOrders; branches use
+  // their own scoped orders. Each entry: {min,max,count,latest}.
+  const priceRangeByIng=useMemo(()=>{
+    const src=isCentral&&allOrders&&allOrders.length?allOrders:(orders||[]);
+    const map=new Map();
+    for(const o of src){
+      if(o.status!=="delivered")continue;
+      for(const it of (o.items||[])){
+        const ingId=+(it.ingId||it.ingredient_id);
+        const price=+it.pricePerUnit||+it.buyPrice||0;
+        if(!ingId||price<=0)continue;
+        const cur=map.get(ingId);
+        if(!cur)map.set(ingId,{min:price,max:price,count:1,latest:price});
+        else{
+          cur.min=Math.min(cur.min,price);
+          cur.max=Math.max(cur.max,price);
+          cur.count+=1;
+          cur.latest=price; // last one wins; iteration order ~ chronological
+        }
+      }
+    }
+    return map;
+  },[orders,allOrders,isCentral]);
   async function addCat(){if(!newCatName.trim())return;try{await api.addCat({type:"ingredient",name:newCatName.trim()});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;try{await api.updateCat(editingCatId,{name:editingCatName.trim()});await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(c.id);await reloadCats();if(cat===c.name)setCat("ทุกหมวด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
@@ -1467,6 +1491,13 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:6}}>
               {[{l:"ซื้อมา",v:`฿${item.buy_price}`,sub:`${item.buy_amount} ${item.buy_unit}`,bg:C.lineLight,tc:C.ink},{l:"รวมกรัม",v:`${(+item.convert_to_gram).toLocaleString()}g`,sub:"ทั้งหมด",bg:C.brandLight,tc:C.brand},{l:"ราคา/กรัม",v:`฿${(+item.price_per_gram).toFixed(3)}`,sub:"ต่อ 1g",bg:C.greenLight,tc:C.green}].map(st=><div key={st.l} style={{background:st.bg,borderRadius:10,padding:"8px 10px",textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>{st.l}</div><div style={{fontSize:13,fontWeight:800,color:st.tc,fontFamily:"'Sarabun',sans-serif"}}>{st.v}</div><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{st.sub}</div></div>)}
             </div>
+            {(()=>{const r=priceRangeByIng.get(+item.id);if(!r)return null;const fmt=n=>(+n).toLocaleString(undefined,{minimumFractionDigits:n%1===0?0:2,maximumFractionDigits:2});const same=Math.abs(r.min-r.max)<0.005;return <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,marginBottom:6,padding:"4px 9px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8,fontFamily:"'Sarabun',sans-serif",flexWrap:"wrap"}}>
+              <span style={{color:"#92400E",fontWeight:700}}>💰 ราคาซื้อจริง</span>
+              {same
+                ?<b style={{color:"#92400E",fontSize:13}}>฿{fmt(r.min)}/{item.buy_unit||"หน่วย"}</b>
+                :<><b style={{color:"#92400E",fontSize:13}}>฿{fmt(r.min)}</b><span style={{color:"#92400E"}}>–</span><b style={{color:"#92400E",fontSize:13}}>฿{fmt(r.max)}</b><span style={{color:"#92400E",fontSize:11}}>/{item.buy_unit||"หน่วย"}</span></>}
+              <span style={{marginLeft:"auto",color:C.ink4,fontSize:10,fontWeight:700}}>เคยซื้อ {r.count} ครั้ง</span>
+            </div>;})()}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               {(()=>{const bs=branchStock(item,currentBranch?.id);const safety=branchSafety(item,currentBranch?.id);const low=safety>0&&bs<safety;return <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>สต็อก ({currentBranch?.name||"—"}): <b style={{color:low?C.red:C.green}}>{bs} {item.buy_unit}</b>{safety>0&&<span style={{fontSize:10,color:C.ink4,marginLeft:4}}>· safety {safety}</span>}</span>;})()}
               <EditedBy username={item.edit_by} editAt={item.edit_at}/>
@@ -7412,7 +7443,7 @@ export default function App(){
           {initErr&&<ErrBox msg={initErr} onRetry={loadAll}/>}
           {loading?<Loading text="กำลังโหลดข้อมูลจาก Cloud..."/>:<>
             {tab==="crm"&&<CRMTab currentBranch={currentBranch} currentUser={currentUser} menus={menus}/>}
-            {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats}/>}
+            {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats} orders={orders} allOrders={allOrders}/>}
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
