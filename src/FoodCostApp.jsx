@@ -3708,7 +3708,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {isCentralBranch&&<Btn v="success" onClick={()=>setShowPurchaseSummary(true)} s={{padding:"8px 14px",fontSize:13}}>📋 สรุปต้องซื้อวันนี้</Btn>}
-        {onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
+        {!isCentralBranch&&onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
         {hasPO&&<Btn v="purple" onClick={startTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
