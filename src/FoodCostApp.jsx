@@ -6228,7 +6228,185 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
 // ══════════════════════════════════════════════════════
 // ── SUPPLIER TAB ──────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch}){
+// Parse the Thai-locale timestamps that nowStr() writes ("DD/MM/YYYY[, HH:MM]")
+// back into a Date object so we can date-range filter supplier orders.
+function parseSupplierOrderDate(str){
+  if(!str)return null;
+  const m=String(str).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if(!m)return null;
+  const [_,dd,mm,yyyy,hh,mi,ss]=m;
+  const d=new Date(+yyyy,+mm-1,+dd,+(hh||0),+(mi||0),+(ss||0));
+  return isNaN(d.getTime())?null:d;
+}
+
+function SupplierStatsModal({supplier,orders,onClose}){
+  const todayBkkLocal=todayBkk();
+  // Filter chip: "this" | "last" | "custom"
+  const [range,setRange]=useState("this");
+  const [from,setFrom]=useState(()=>{const d=new Date();d.setDate(1);return d.toISOString().slice(0,10);});
+  const [to,setTo]=useState(todayBkkLocal);
+
+  const period=useMemo(()=>{
+    const now=new Date();
+    if(range==="this"){
+      const s=new Date(now.getFullYear(),now.getMonth(),1);
+      const e=new Date(now.getFullYear(),now.getMonth()+1,1);
+      return{start:s,end:e,label:`เดือนนี้ (${s.toLocaleDateString("th-TH",{month:"short",year:"numeric",calendar:"gregory"})})`};
+    }
+    if(range==="last"){
+      const s=new Date(now.getFullYear(),now.getMonth()-1,1);
+      const e=new Date(now.getFullYear(),now.getMonth(),1);
+      return{start:s,end:e,label:`เดือนที่แล้ว (${s.toLocaleDateString("th-TH",{month:"short",year:"numeric",calendar:"gregory"})})`};
+    }
+    const s=from?new Date(from+"T00:00:00"):new Date(0);
+    const e=to?new Date(to+"T23:59:59"):new Date();
+    return{start:s,end:e,label:`${from} → ${to}`};
+  },[range,from,to]);
+
+  // Match by supplier_id first; if the order has no supplier_id (legacy),
+  // fall back to a case-insensitive name match against this supplier.
+  const supName=(supplier.name||"").toLowerCase().trim();
+  const filtered=useMemo(()=>{
+    return (orders||[]).filter(o=>{
+      const idMatch=o.supplier_id!=null&&supplier.id!=null&&+o.supplier_id===+supplier.id;
+      const nameMatch=!idMatch&&supName&&String(o.supplier_name||"").toLowerCase().trim()===supName;
+      if(!idMatch&&!nameMatch)return false;
+      const d=parseSupplierOrderDate(o.requested_at);
+      if(!d)return true; // keep undated rows visible
+      return d>=period.start&&d<period.end;
+    });
+  },[orders,supplier,supName,period]);
+
+  // Aggregate totals
+  const totals=useMemo(()=>{
+    let amount=0,items=0;
+    const byStatus={pending:0,approved:0,delivered:0,rejected:0};
+    const byIng=new Map();
+    let latestDate=null;
+    filtered.forEach(o=>{
+      byStatus[o.status]=(byStatus[o.status]||0)+1;
+      const d=parseSupplierOrderDate(o.requested_at);
+      if(d&&(!latestDate||d>latestDate))latestDate=d;
+      (o.items||[]).forEach(it=>{
+        const cost=+it.estimatedCost||((+it.qtyNeeded||0)*(+it.pricePerUnit||+it.buyPrice||0));
+        amount+=cost;
+        items++;
+        const key=it.ingId||it.name;
+        const cur=byIng.get(key)||{name:it.name||"-",unit:it.unit||"",qty:0,cost:0,times:0};
+        cur.qty+=(+it.qtyNeeded||0);
+        cur.cost+=cost;
+        cur.times+=1;
+        byIng.set(key,cur);
+      });
+    });
+    const topIngs=[...byIng.values()].sort((a,b)=>b.cost-a.cost).slice(0,8);
+    return{amount,items,byStatus,topIngs,latestDate};
+  },[filtered]);
+
+  const stColor={pending:"#F59E0B",approved:"#10B981",rejected:"#EF4444",delivered:"#3B82F6"};
+  const stLabel={pending:"รอส่งซัพ",approved:"ส่งแล้ว",rejected:"ปฏิเสธ",delivered:"รับสินค้าแล้ว"};
+  const fmtMoney=n=>(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  return <Modal title={`📊 สถิติการสั่งซื้อ — ${supplier.name}`} onClose={onClose} extraWide>
+    {/* Filter chips */}
+    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+      {[
+        {id:"this",l:"📅 เดือนนี้"},
+        {id:"last",l:"⏮ เดือนที่แล้ว"},
+        {id:"custom",l:"🗓 ระบุช่วงเวลา"},
+      ].map(t=>{
+        const sel=range===t.id;
+        return <button key={t.id} onClick={()=>setRange(t.id)} style={{padding:"8px 14px",borderRadius:10,border:`2px solid ${sel?C.brand:C.line}`,background:sel?C.brandLight:C.white,color:sel?C.brand:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,transition:"all .15s"}}>{t.l}</button>;
+      })}
+    </div>
+    {range==="custom"&&<div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+      <Inp label="ตั้งแต่" type="date" value={from} onChange={e=>setFrom(e.target.value)}/>
+      <Inp label="ถึง" type="date" value={to} onChange={e=>setTo(e.target.value)}/>
+    </div>}
+    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:14}}>📌 ช่วงที่กำลังดู: <b style={{color:C.ink2}}>{period.label}</b></div>
+
+    {/* Top stats cards */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(160px,100%),1fr))",gap:10,marginBottom:14}}>
+      <div style={{padding:"12px 14px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:11,color:C.brand,fontWeight:700}}>จำนวนใบสั่งซื้อ</div>
+        <div style={{fontSize:24,fontWeight:900,color:C.brand}}>{filtered.length}<span style={{fontSize:13,fontWeight:600,marginLeft:4}}>ใบ</span></div>
+      </div>
+      <div style={{padding:"12px 14px",background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:11,color:C.green,fontWeight:700}}>ยอดสั่งซื้อรวม</div>
+        <div style={{fontSize:22,fontWeight:900,color:C.green}}>฿{fmtMoney(totals.amount)}</div>
+      </div>
+      <div style={{padding:"12px 14px",background:C.tealLight,border:`1px solid ${C.teal}33`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:11,color:C.teal,fontWeight:700}}>จำนวนรายการ</div>
+        <div style={{fontSize:24,fontWeight:900,color:C.teal}}>{totals.items}<span style={{fontSize:13,fontWeight:600,marginLeft:4}}>รายการ</span></div>
+      </div>
+      <div style={{padding:"12px 14px",background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:11,color:"#92400E",fontWeight:700}}>สั่งครั้งล่าสุด</div>
+        <div style={{fontSize:14,fontWeight:900,color:"#92400E",marginTop:4}}>{totals.latestDate?totals.latestDate.toLocaleDateString("th-TH",{calendar:"gregory",day:"2-digit",month:"short",year:"numeric"}):"—"}</div>
+      </div>
+    </div>
+
+    {/* Status breakdown */}
+    {filtered.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+      {Object.entries(totals.byStatus).filter(([,n])=>n>0).map(([k,n])=><span key={k} style={{fontSize:11,fontWeight:800,color:stColor[k]||C.ink3,background:(stColor[k]||C.ink3)+"22",padding:"3px 10px",borderRadius:18,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${(stColor[k]||C.ink3)}55`}}>{stLabel[k]||k}: {n}</span>)}
+    </div>}
+
+    {filtered.length===0
+      ?<div style={{padding:"40px 20px",textAlign:"center",background:C.bg,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:42,marginBottom:8}}>📭</div>
+        <div style={{fontSize:14,fontWeight:800,color:C.ink3}}>ยังไม่มีรายการสั่งซื้อจากซัพพลายนี้ในช่วงที่เลือก</div>
+      </div>
+      :<>
+        {/* Top ingredients */}
+        {totals.topIngs.length>0&&<Card style={{padding:0,overflow:"hidden",marginBottom:14}}>
+          <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.line}`,background:C.bg,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink}}>🏆 วัตถุดิบที่สั่งบ่อย / ยอดสูงสุด (Top {totals.topIngs.length})</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+              <thead><tr style={{background:C.bg}}>
+                {["#","วัตถุดิบ","ครั้ง","จำนวนรวม","ยอดรวม"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i>=2?"right":"left",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}
+              </tr></thead>
+              <tbody>{totals.topIngs.map((r,i)=><tr key={i} style={{borderTop:`1px solid ${C.lineLight}`,background:i%2===0?C.white:"#FAFBFC"}}>
+                <td style={{padding:"8px 10px",color:C.ink4,fontWeight:700}}>{i+1}</td>
+                <td style={{padding:"8px 10px",fontWeight:700,color:C.ink}}>{r.name}</td>
+                <td style={{padding:"8px 10px",textAlign:"right",color:C.ink3}}>{r.times}</td>
+                <td style={{padding:"8px 10px",textAlign:"right",color:C.ink2,whiteSpace:"nowrap"}}>{r.qty.toLocaleString(undefined,{maximumFractionDigits:2})} <span style={{fontSize:10,color:C.ink4}}>{r.unit}</span></td>
+                <td style={{padding:"8px 10px",textAlign:"right",fontWeight:800,color:C.green,whiteSpace:"nowrap"}}>฿{fmtMoney(r.cost)}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+        </Card>}
+
+        {/* Order list */}
+        <Card style={{padding:0,overflow:"hidden"}}>
+          <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.line}`,background:C.bg,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink}}>📋 รายการสั่งซื้อ ({filtered.length})</div>
+          <div style={{overflowX:"auto",maxHeight:"40vh"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+              <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>
+                {["เลขที่","วันที่","สาขา","รายการ","ยอดประมาณ","สถานะ"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}
+              </tr></thead>
+              <tbody>{[...filtered].sort((a,b)=>{
+                const da=parseSupplierOrderDate(a.requested_at),db=parseSupplierOrderDate(b.requested_at);
+                return (db?db.getTime():0)-(da?da.getTime():0);
+              }).map((o,i)=>{
+                const itemsTotal=(o.items||[]).reduce((s,it)=>s+(+it.estimatedCost||0),0);
+                return <tr key={o.id} style={{borderTop:`1px solid ${C.lineLight}`,background:i%2===0?C.white:"#FAFBFC"}}>
+                  <td style={{padding:"7px 10px",fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>ORD-{o.id}</td>
+                  <td style={{padding:"7px 10px",color:C.ink2,whiteSpace:"nowrap",fontSize:12}}>{o.requested_at||"—"}</td>
+                  <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{o.branch_name||"—"}</td>
+                  <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{(o.items||[]).length} รายการ</td>
+                  <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:C.green,whiteSpace:"nowrap"}}>฿{fmtMoney(itemsTotal)}</td>
+                  <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>
+                    <span style={{fontSize:11,fontWeight:800,color:stColor[o.status]||C.ink3,background:(stColor[o.status]||C.ink3)+"22",padding:"3px 9px",borderRadius:14,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${(stColor[o.status]||C.ink3)}55`}}>{stLabel[o.status]||o.status}</span>
+                  </td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>
+        </Card>
+      </>}
+  </Modal>;
+}
+
+function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders=[],allOrders=[]}){
   const supF0={name:"",contact:"",phone:"",note:"",active:true,central_only:false};
   const[supForm,setSupForm]=useState(supF0);
   const[editSID,setEditSID]=useState(null);
@@ -6238,6 +6416,9 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch}){
   // on the central branch row and are visible to other branches via the StockCheck
   // filter, but the SupplierTab itself only ever shows the *current branch's* rows.
   const myList=useMemo(()=>suppliers.filter(s=>+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
+  const [statsFor,setStatsFor]=useState(null);
+  // Central kitchen sees the cross-branch view; branches use their own scoped orders.
+  const ordersScope=isCentral&&allOrders&&allOrders.length?allOrders:(orders||[]);
   async function saveSup(){
     if(!supForm.name)return;
     try{
@@ -6255,15 +6436,15 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch}){
       </div>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(280px,100%),1fr))",gap:12,marginBottom:16}}>
-      {myList.map(s=><Card key={s.id} style={{padding:"14px 16px"}}>
+      {myList.map(s=><Card key={s.id} hover onClick={()=>setStatsFor(s)} style={{padding:"14px 16px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
           <div style={{minWidth:0,flex:1}}>
-            <div style={{fontWeight:700,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>{s.name}</div>
+            <div style={{fontWeight:700,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4,display:"flex",alignItems:"center",gap:6}}>{s.name}<span style={{fontSize:10,color:C.ink4,fontWeight:600}}>📊 กดดูสถิติ</span></div>
             {s.contact&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}><span style={{color:C.ink4}}>ผู้ติดต่อ:</span> {s.contact}</div>}
             {s.phone&&<div style={{fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>📞 {s.phone}</div>}
             {s.note&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontStyle:"italic",marginTop:4}}>📝 {s.note}</div>}
           </div>
-          {canE&&<div style={{display:"flex",gap:4,flexShrink:0}}>
+          {canE&&<div style={{display:"flex",gap:4,flexShrink:0}} onClick={e=>e.stopPropagation()}>
             <button onClick={()=>{setSupForm({name:s.name,contact:s.contact||"",phone:s.phone||"",note:s.note||"",active:s.active!==false,central_only:!!s.central_only});setEditSID(s.id);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
             <button onClick={async()=>{if(!await confirmDlg({title:"ลบซัพพลายเออร์",message:`ต้องการลบ "${s.name}" ใช่หรือไม่?`}))return;await api.deleteSupplier(s.id);await reloadSuppliers();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
           </div>}
@@ -6271,6 +6452,7 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch}){
       </Card>)}
       {myList.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีซัพพลายของสาขานี้</p>{canE&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>เพิ่มซัพพลายใหม่ที่ฟอร์มด้านล่าง</p>}</div>}
     </div>
+    {statsFor&&<SupplierStatsModal supplier={statsFor} orders={ordersScope} onClose={()=>setStatsFor(null)}/>}
     {canE&&<Card style={{padding:"16px 18px"}}>
       <h4 style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>{editSID?"✏️ แก้ไขซัพพลาย":"➕ เพิ่มซัพพลายใหม่"}</h4>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
@@ -8701,7 +8883,7 @@ export default function App(){
             {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setTab("orders")} orders={orders} reloadOrders={reload.orders}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
-            {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch}/>}
+            {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
             {tab==="kitchen3d"&&<Kitchen3DView currentBranch={currentBranch} currentUser={currentUser} branches={branches} reloadBranches={reload.branches}/>}
             {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} printers={printers} reloadPrinters={reload.printers} currentBranch={currentBranch}/>}
