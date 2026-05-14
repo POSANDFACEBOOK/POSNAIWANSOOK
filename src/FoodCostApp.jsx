@@ -3459,7 +3459,7 @@ const PO_STATUS={
   transfer_pending:{label:"🔄 รอรับโอน",       short:"รอรับโอน",    color:"#0EA5E9",bg:"#E0F2FE"},
   transfer_done:   {label:"✅ โอนเสร็จสิ้น",   short:"โอนเสร็จ",    color:"#10B981",bg:"#D1FAE5"},
 };
-function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders}){
+function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders,orders=[],reloadOrders}){
   // Every branch (central or otherwise) can issue a PO to any other branch
   // and only ever sees POs it's involved in (as sender or receiver).
   // - "from_branch_id" = creator (sender)
@@ -3480,6 +3480,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[confirming,setConfirming]=useState(null);
   const[transferForm,setTransferForm]=useState(null);     // null | { toBranchId, items, notes }
   const[receivingTransfer,setReceivingTransfer]=useState(null); // null | { po, items[receivedQty] }
+  const[receivingExtOrder,setReceivingExtOrder]=useState(null);  // null | { orderId, supplierName, items[receivedQty,pricePerUnit] }
   const[showPurchaseSummary,setShowPurchaseSummary]=useState(false);
   const isCentralBranch=currentBranch?.type==="central";
   const hasPO=hasPerm(currentUser,"po")||hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
@@ -3520,6 +3521,54 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       autoVisible:true,
     });
     if(reloadIngs)await reloadIngs();
+  }
+
+  // Open the receive modal for an external-supplier order (central kitchen).
+  function startReceiveExt(order){
+    setReceivingExtOrder({
+      orderId:order.id,
+      orderStatus:order.status,
+      supplierName:order.supplier_name||"",
+      items:(order.items||[]).map((it,i)=>({
+        ...it,
+        _key:i,
+        receivedQty:it.receivedQty!=null?+it.receivedQty:(+it.qtyNeeded||0),
+        pricePerUnit:it.pricePerUnit!=null?+it.pricePerUnit:(+it.buyPrice||+it.pricePerUnit||0),
+      })),
+    });
+  }
+  // Confirm receipt: write actual qty + actual price back, flip to delivered,
+  // and credit central stock via transferStockBetweenBranches(fromBranchId:null).
+  async function confirmReceiveExt(){
+    if(!receivingExtOrder)return;
+    const itemsWithReceived=receivingExtOrder.items.map(it=>{
+      const qty=Math.max(0,Math.round((+it.receivedQty||0)*1000)/1000);
+      const price=Math.max(0,+it.pricePerUnit||0);
+      return{...it,receivedQty:qty,pricePerUnit:price,estimatedCost:Math.round(qty*price*100)/100};
+    });
+    if(!itemsWithReceived.some(it=>+it.receivedQty>0)){
+      alert("ยังไม่ได้ระบุจำนวนที่รับเข้าจริง");
+      return;
+    }
+    if(!await confirmDlg({
+      title:"ยืนยันรับสินค้า",
+      message:`ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?`,
+      confirmLabel:"✅ ยืนยัน + เพิ่มสต๊อก",
+    }))return;
+    try{
+      const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
+      await api.updateOrderIfStatus(receivingExtOrder.orderId,receivingExtOrder.orderStatus,{items:payloadItems,status:"delivered"});
+      await transferStockBetweenBranches({
+        fromBranchId:null,
+        toBranchId:currentBranch.id,
+        items:payloadItems.map(it=>({...it,ingredient_id:it.ingId,received_qty:it.receivedQty})),
+        ings,
+        autoVisible:true,
+      });
+      if(reloadIngs)await reloadIngs();
+      if(reloadOrders)await reloadOrders();
+      setReceivingExtOrder(null);
+    }catch(e){alert("ยืนยันไม่สำเร็จ: "+(e&&e.message||e));}
   }
 
   // Reverse the deposit when an already-received PO is cancelled or deleted:
@@ -3865,6 +3914,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         note:`สรุปต้องซื้อวันนี้ (${todayStr()})`,
       });
     }
+    if(reloadOrders)await reloadOrders();
   }
 
   return <div>
@@ -3877,7 +3927,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {isCentralBranch&&<Btn v="success" onClick={()=>setShowPurchaseSummary(true)} s={{padding:"8px 14px",fontSize:13}}>📋 สรุปต้องซื้อวันนี้</Btn>}
-        {onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>{isCentralBranch?"📦 รับสินค้าจากซัพพลาย":"สั่งวัตถุดิบ"}</Btn>}
+        {!isCentralBranch&&onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
         {hasPO&&<Btn v="purple" onClick={startTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
       </div>
@@ -3988,6 +4038,101 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         </table>
       </div>
     </Card>}
+
+    {/* External-supplier orders that central created from PurchaseSummary.
+        Pending / approved rows live here until ✅ ยืนยันรับ flips them to
+        delivered. Hidden for non-central branches and when no rows match. */}
+    {isCentralBranch&&(()=>{
+      const myExt=(orders||[]).filter(o=>+o.branch_id===+currentBranch.id&&(o.status==="pending"||o.status==="approved"));
+      if(myExt.length===0)return null;
+      const fmtMoney=n=>(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+      return <Card style={{padding:0,overflow:"hidden",marginTop:14,border:`2px solid ${C.teal}33`}}>
+        <div style={{padding:"10px 16px",background:`linear-gradient(135deg,${C.tealLight},#CCFBF1)`,borderBottom:`1px solid ${C.teal}33`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:8}}>
+            <Ic d={I.truck} s={16} c={C.teal}/>
+            <span style={{fontSize:14,fontWeight:900,color:C.teal}}>🛒 ใบสั่งซื้อจากซัพพลายภายนอก</span>
+            <span style={{fontSize:11,color:C.ink3,fontWeight:600}}>· รอรับเข้า {myExt.length} ใบ</span>
+          </div>
+        </div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
+            <thead>
+              <tr style={{background:"#0F172A"}}>
+                {["วันที่","เลขที่ใบสั่ง","ซัพพลาย","รายการ","ยอดประมาณ","สถานะ","จัดการ"].map((h,i)=><th key={h} style={{padding:"11px 14px",textAlign:i===4?"right":(i===5||i===6?"center":"left"),fontSize:12,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap",letterSpacing:.2}}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {myExt.map((o,idx)=>{
+                const itemsTotal=(o.items||[]).reduce((s,it)=>s+(+it.estimatedCost||0),0);
+                const itemsCount=(o.items||[]).length;
+                const stColor=o.status==="pending"?"#F59E0B":"#10B981";
+                const stBg=o.status==="pending"?"#FEF3C7":"#D1FAE5";
+                const stLabel=o.status==="pending"?"รอซื้อ":"ซื้อแล้ว รอรับเข้า";
+                return <tr key={o.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=C.tealLight} onMouseLeave={e=>e.currentTarget.style.background=idx%2===0?C.white:"#FAFBFC"}>
+                  <td style={{padding:"11px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{o.requested_at||"—"}</td>
+                  <td style={{padding:"11px 14px",fontSize:13,fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>
+                    EXT-{o.id}
+                    <div style={{fontSize:10,color:C.ink4,fontWeight:500,marginTop:1}}>สร้างโดย {o.requested_by||"—"}</div>
+                  </td>
+                  <td style={{padding:"11px 14px",fontSize:13,fontWeight:800,color:C.brand,wordBreak:"break-word",minWidth:140}}>{o.supplier_name||"ไม่ระบุ"}</td>
+                  <td style={{padding:"11px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{itemsCount} รายการ</td>
+                  <td style={{padding:"11px 14px",fontSize:14,fontWeight:900,textAlign:"right",whiteSpace:"nowrap",color:C.green}}>฿{fmtMoney(itemsTotal)}</td>
+                  <td style={{padding:"11px 14px",textAlign:"center"}}>
+                    <span style={{fontSize:11,fontWeight:800,color:stColor,background:stBg,padding:"3px 10px",borderRadius:18,whiteSpace:"nowrap",border:`1px solid ${stColor}33`}}>{stLabel}</span>
+                  </td>
+                  <td style={{padding:"8px 12px",textAlign:"center",whiteSpace:"nowrap"}}>
+                    <div style={{display:"inline-flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
+                      <button onClick={()=>startReceiveExt(o)} title="ยืนยันรับสินค้า + กรอกราคาจริง" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"6px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={12} c={C.white}/>รับเข้า</button>
+                    </div>
+                  </td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>;
+    })()}
+
+    {/* Receive modal for external-supplier orders — actual qty + actual price */}
+    {receivingExtOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingExtOrder.supplierName}`} onClose={()=>setReceivingExtOrder(null)} wide>
+      <div style={{background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
+        💡 ใส่ <b>จำนวนที่รับจริง</b> และ <b>ราคา/หน่วยที่จ่ายจริง</b> ของแต่ละรายการ — ระบบจะเพิ่มสต๊อก "{currentBranch.name}" และบันทึกราคาเพื่อเก็บประวัติ
+      </div>
+      <div style={{maxHeight:"45vh",overflowY:"auto",marginBottom:14}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","ราคา/หน่วย","รวม"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:h==="รวม"?"right":"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+          <tbody>{receivingExtOrder.items.map((it,idx)=>{
+            const ordered=+it.qtyNeeded||0;
+            const got=+it.receivedQty||0;
+            const price=+it.pricePerUnit||0;
+            const lineTotal=got*price;
+            const short=got<ordered;
+            return <tr key={it._key} style={{borderTop:`1px solid ${C.lineLight}`,background:short?"#FFFBEB":"transparent"}}>
+              <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>
+                <div>{it.name}</div>
+                <div style={{fontSize:10,color:C.ink4,fontWeight:500}}>{it.unit||""}</div>
+              </td>
+              <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{ordered} {it.unit||""}{short&&<div style={{fontSize:10,color:"#92400E",fontWeight:800,marginTop:2}}>ขาด {(ordered-got).toFixed(2)}</div>}</td>
+              <td style={{padding:"7px 10px"}}>
+                <NumStepper value={it.receivedQty} onChange={v=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={ordered}/>
+              </td>
+              <td style={{padding:"7px 10px"}}>
+                <input type="number" min={0} step="0.01" value={it.pricePerUnit==null||it.pricePerUnit===""?"":it.pricePerUnit} onChange={e=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,pricePerUnit:e.target.value}:x)}))} placeholder="0.00" style={{...iS,padding:"6px 8px",fontSize:13,fontWeight:700,textAlign:"right",width:90,minHeight:34}}/>
+              </td>
+              <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:lineTotal>0?C.green:C.ink4,whiteSpace:"nowrap"}}>฿{lineTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
+        <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>ยอดรวมที่จ่ายจริง</span>
+        <span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{receivingExtOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <Btn v="ghost" onClick={()=>setReceivingExtOrder(null)}>ยกเลิก</Btn>
+        <Btn v="success" onClick={confirmReceiveExt} icon={I.check}>✅ ยืนยันรับ + เพิ่มสต๊อก</Btn>
+      </div>
+    </Modal>}
 
     {/* Step 1: Pick branch */}
     {step==='pick-branch'&&<Modal title={`🏢 เลือกสาขาปลายทาง — ส่งจาก "${currentBranch.name}" ไปยัง...`} onClose={()=>setStep(null)}>
@@ -7554,7 +7699,7 @@ export default function App(){
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
-            {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setTab("orders")}/>}
+            {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setTab("orders")} orders={orders} reloadOrders={reload.orders}/>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch}/>}
