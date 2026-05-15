@@ -4060,11 +4060,29 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   // Duplicate a PO: creates a new doc at "open" with the same items + branches.
   // Stock NEVER moves at create (per the new ship-only flow); the user presses
   // ✎ to tweak, then "🚚 จัดส่ง" to commit the inventory move.
+  //
+  // Permission:
+  //   • Creator can always duplicate their own PO.
+  //   • Central kitchen can duplicate ANY PO (including branch-originated
+  //     requests). In that case the new doc puts central on the from side
+  //     and uses the original's "other party" as the destination, so the
+  //     copy is central's to manage.
   async function duplicatePO(po){
-    if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่คัดลอกได้");return;}
+    const canCopy=isCreator(po)||isCentralBranch;
+    if(!canCopy){alert("ไม่มีสิทธิ์คัดลอกเอกสารนี้");return;}
+    // Resolve the new from/to. Creator-owned copies keep the original
+    // direction; for central-cross-branch copies, central becomes the new
+    // creator and the destination is whichever party wasn't central.
+    let newFromId=po.from_branch_id,newToId=po.branch_id;
+    if(!isCreator(po)&&isCentralBranch){
+      newFromId=currentBranch.id;
+      newToId=(+po.from_branch_id===+currentBranch.id)?po.branch_id:po.from_branch_id;
+    }
+    const fromName=(branchById[newFromId]||{}).name||"—";
+    const toName=(branchById[newToId]||{}).name||"—";
     if(!await confirmDlg({
       title:"คัดลอกเอกสาร PO",
-      message:`สร้าง PO ใหม่จาก ${po.po_number||"เอกสารนี้"}?\n\n• คัดลอกรายการวัตถุดิบทั้งหมด + ผู้รับ/ผู้ส่ง\n• สถานะตั้งต้น: "📋 รอจัดส่ง" (ยังไม่ตัดสต๊อก)\n• แก้ไขจำนวน/เพิ่ม-ลบรายการได้ก่อนกดจัดส่ง`,
+      message:`สร้าง PO ใหม่จาก ${po.po_number||"เอกสารนี้"}?\n\n• คัดลอกรายการวัตถุดิบทั้งหมด\n• ผู้ส่ง: ${fromName} → ผู้รับ: ${toName}\n• สถานะตั้งต้น: "📋 รอจัดส่ง" (ยังไม่ตัดสต๊อก)\n• แก้ไขจำนวน/เพิ่ม-ลบรายการได้ก่อนกดจัดส่ง`,
       confirmLabel:"📋 คัดลอก",
     }))return;
     try{
@@ -4074,9 +4092,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         return{...rest};
       });
       const newPO={
-        po_number:genPONumber(po.from_branch_id),
-        branch_id:po.branch_id,
-        from_branch_id:po.from_branch_id,
+        po_number:genPONumber(newFromId),
+        branch_id:newToId,
+        from_branch_id:newFromId,
         po_date:todayBkk(),
         status:"open",
         items:cleanItems,
@@ -4341,7 +4359,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                   <div style={{display:"inline-flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
                     <button onClick={()=>setViewPO(po)} title="ดูรายละเอียด" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.eye} s={13} c={C.ink2}/></button>
                     {!["requested","transfer_pending","transfer_shipped","transfer_done"].includes(po.status)&&<button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์ (มีปุ่มดาวน์โหลด PDF ในหน้าพิมพ์)" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>}
-                    {canEditPO(po)&&<button onClick={()=>duplicatePO(po)} title="คัดลอก — สร้าง PO ใหม่จากเอกสารนี้" style={{background:"#EDE9FE",border:`1px solid #DDD6FE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.copy} s={13} c="#7C3AED"/></button>}
+                    {(isCreator(po)||isCentralBranch)&&hasPO&&<button onClick={()=>duplicatePO(po)} title={isCreator(po)?"คัดลอก — สร้าง PO ใหม่จากเอกสารนี้":"คัดลอก (ครัวกลาง) — สร้าง PO ใหม่จากเอกสารนี้"} style={{background:"#EDE9FE",border:`1px solid #DDD6FE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.copy} s={13} c="#7C3AED"/></button>}
                     {canEditPO(po)&&po.status!=="paid"&&po.status!=="cancelled"&&po.status!=="transfer_done"&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
                     {canDeletePO(po)&&<button onClick={()=>delPO(po)} title="ลบ (สต๊อกยังไม่ขยับ)" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
                     {isReceiver(po)&&po.status==="requested"&&<button onClick={()=>acceptRequest(po)} disabled={confirming===po.id} title="ปริ้นใบจัดของ + รับเอกสาร" style={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.purple}55`}}>🖨 ปริ้นเอกสาร</button>}
