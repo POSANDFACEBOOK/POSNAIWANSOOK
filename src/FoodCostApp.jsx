@@ -4057,6 +4057,42 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       await load();setViewPO(null);
     }catch(e){alert("ลบไม่สำเร็จ: "+e.message);}
   }
+  // Duplicate a PO: creates a new doc at "open" with the same items + branches.
+  // Stock NEVER moves at create (per the new ship-only flow); the user presses
+  // ✎ to tweak, then "🚚 จัดส่ง" to commit the inventory move.
+  async function duplicatePO(po){
+    if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่คัดลอกได้");return;}
+    if(!await confirmDlg({
+      title:"คัดลอกเอกสาร PO",
+      message:`สร้าง PO ใหม่จาก ${po.po_number||"เอกสารนี้"}?\n\n• คัดลอกรายการวัตถุดิบทั้งหมด + ผู้รับ/ผู้ส่ง\n• สถานะตั้งต้น: "📋 รอจัดส่ง" (ยังไม่ตัดสต๊อก)\n• แก้ไขจำนวน/เพิ่ม-ลบรายการได้ก่อนกดจัดส่ง`,
+      confirmLabel:"📋 คัดลอก",
+    }))return;
+    try{
+      const cleanItems=(po.items||[]).map(it=>{
+        // Strip per-receipt fields so the copy starts fresh.
+        const{received_qty,received_at,...rest}=it||{};
+        return{...rest};
+      });
+      const newPO={
+        po_number:genPONumber(po.from_branch_id),
+        branch_id:po.branch_id,
+        from_branch_id:po.from_branch_id,
+        po_date:todayBkk(),
+        status:"open",
+        items:cleanItems,
+        subtotal:+po.subtotal||0,
+        vat:+po.vat||0,
+        total:+po.total||0,
+        notes:po.notes?`${po.notes} (คัดลอกจาก ${po.po_number||"PO"})`:`คัดลอกจาก ${po.po_number||"PO"}`,
+        created_by:currentUser?.username||null,
+        updated_at:new Date().toISOString(),
+      };
+      await api.addPO(newPO);
+      await load();
+      alert(`✅ คัดลอกสำเร็จ — เอกสารใหม่: ${newPO.po_number}\n\nกด ✎ แก้ไข เพื่อปรับรายการก่อนจัดส่ง`);
+    }catch(e){showErr("คัดลอกไม่สำเร็จ",e);}
+  }
+
   function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
   function pickBranch(b){setPickedBranch(b);setStep('form');}
   function startEdit(po){
@@ -4305,6 +4341,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                   <div style={{display:"inline-flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
                     <button onClick={()=>setViewPO(po)} title="ดูรายละเอียด" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.eye} s={13} c={C.ink2}/></button>
                     {!["requested","transfer_pending","transfer_shipped","transfer_done"].includes(po.status)&&<button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์ (มีปุ่มดาวน์โหลด PDF ในหน้าพิมพ์)" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>}
+                    {canEditPO(po)&&<button onClick={()=>duplicatePO(po)} title="คัดลอก — สร้าง PO ใหม่จากเอกสารนี้" style={{background:"#EDE9FE",border:`1px solid #DDD6FE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.copy} s={13} c="#7C3AED"/></button>}
                     {canEditPO(po)&&po.status!=="paid"&&po.status!=="cancelled"&&po.status!=="transfer_done"&&<button onClick={()=>startEdit(po)} title="แก้ไข (เฉพาะผู้ออก)" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c="#92400E"/></button>}
                     {canDeletePO(po)&&<button onClick={()=>delPO(po)} title="ลบ (สต๊อกยังไม่ขยับ)" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
                     {isReceiver(po)&&po.status==="requested"&&<button onClick={()=>acceptRequest(po)} disabled={confirming===po.id} title="ปริ้นใบจัดของ + รับเอกสาร" style={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.purple}55`}}>🖨 ปริ้นเอกสาร</button>}
