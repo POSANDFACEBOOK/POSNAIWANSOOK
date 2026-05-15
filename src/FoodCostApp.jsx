@@ -1878,7 +1878,9 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
     setSaving(s=>({...s,[ing.id]:true}));
     try{
       const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,v);
-      await api.updateIng(ing.id,{stock_by_branch:next,edit_by:currentUser.username,edit_at:nowStr()});
+      // Per-branch count only updates the stock map; do NOT touch edit_by/
+      // edit_at — those should reflect catalog edits (price/name/...) only.
+      await api.updateIng(ing.id,{stock_by_branch:next});
       if(reload)await reload();
       setEdits(e=>{const n={...e};delete n[ing.id];return n;});
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -1893,7 +1895,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
       const ing=ings.find(x=>+x.id===+id);if(!ing)continue;
       try{
         const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0);
-        await api.updateIng(+id,{stock_by_branch:next,edit_by:currentUser.username,edit_at:nowStr()});
+        await api.updateIng(+id,{stock_by_branch:next});
         ok.push(id);
       }catch(e){alert(`บันทึก ${ing.name} ไม่สำเร็จ: ${e.message}`);}
     }
