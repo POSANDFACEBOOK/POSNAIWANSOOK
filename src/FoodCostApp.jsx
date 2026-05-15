@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } from "react";
 import * as XLSX from "xlsx";
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
@@ -378,6 +378,150 @@ const I = {
   drag:"M9 3h.01M15 3h.01M9 9h.01M15 9h.01M9 15h.01M15 15h.01",
   copy:["M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-2","M16 3h2a2 2 0 012 2v10a2 2 0 01-2 2H10a2 2 0 01-2-2V5a2 2 0 012-2h2"],
 };
+
+// ═════════════════ i18n ═════════════════════════════════════════════
+// Add new strings under TRANSLATIONS.th first, then fill the other 3.
+// useT() returns t(key, fallback?). Lookup order is selected lang →
+// Thai → fallback → key (raw). Persisted in localStorage("foodcost.lang").
+const TRANSLATIONS={
+  th:{
+    "tab.pos":"ขายหน้าร้าน",
+    "tab.crm":"CRM ลูกค้า",
+    "tab.ingredients":"วัตถุดิบ",
+    "tab.menus":"เมนู",
+    "tab.sop":"SOP",
+    "tab.summary":"สรุปต้นทุน",
+    "tab.fssales":"ยอดขายรายเมนู\nตามระบบ FOODSTORY",
+    "tab.po":"เอกสาร PO / สั่งของ",
+    "tab.orders":"สั่งวัตถุดิบ",
+    "tab.history":"ประวัติต้นทุน",
+    "tab.suppliers":"ซัพพลาย",
+    "tab.kitchen3d":"ครัว 3D",
+    "tab.settings":"ตั้งค่า",
+    "branch.central":"ครัวกลาง",
+    "branch.shop":"สาขา",
+    "branch.current":"สาขาปัจจุบัน",
+    "branch.switch":"เปลี่ยนสาขา",
+    "nav.menu":"เมนูหลัก",
+    "lang.label":"ภาษา",
+    "auth.logout":"ออกจากระบบ",
+    "common.save":"บันทึก",
+    "common.cancel":"ยกเลิก",
+    "common.delete":"ลบ",
+    "common.edit":"แก้ไข",
+    "common.add":"เพิ่ม",
+    "common.close":"ปิด",
+    "common.search":"ค้นหา",
+    "common.confirm":"ยืนยัน",
+  },
+  en:{
+    "tab.pos":"POS",
+    "tab.crm":"CRM",
+    "tab.ingredients":"Ingredients",
+    "tab.menus":"Menus",
+    "tab.sop":"SOP",
+    "tab.summary":"Cost Summary",
+    "tab.fssales":"Menu Sales\n(FoodStory)",
+    "tab.po":"PO / Orders",
+    "tab.orders":"Order Ingredients",
+    "tab.history":"Cost History",
+    "tab.suppliers":"Suppliers",
+    "tab.kitchen3d":"Kitchen 3D",
+    "tab.settings":"Settings",
+    "branch.central":"Central Kitchen",
+    "branch.shop":"Branch",
+    "branch.current":"Current Branch",
+    "branch.switch":"Switch Branch",
+    "nav.menu":"Main Menu",
+    "lang.label":"Language",
+    "auth.logout":"Sign out",
+    "common.save":"Save",
+    "common.cancel":"Cancel",
+    "common.delete":"Delete",
+    "common.edit":"Edit",
+    "common.add":"Add",
+    "common.close":"Close",
+    "common.search":"Search",
+    "common.confirm":"Confirm",
+  },
+  lo:{
+    "tab.pos":"ຂາຍຫນ້າຮ້ານ",
+    "tab.crm":"CRM ລູກຄ້າ",
+    "tab.ingredients":"ວັດຖຸດິບ",
+    "tab.menus":"ເມນູ",
+    "tab.sop":"SOP",
+    "tab.summary":"ສະຫຼຸບຕົ້ນທຶນ",
+    "tab.fssales":"ຍອດຂາຍແຕ່ລະເມນູ\n(FoodStory)",
+    "tab.po":"ເອກະສານ PO / ສັ່ງຂອງ",
+    "tab.orders":"ສັ່ງວັດຖຸດິບ",
+    "tab.history":"ປະຫວັດຕົ້ນທຶນ",
+    "tab.suppliers":"ຜູ້ສະໜອງ",
+    "tab.kitchen3d":"ຄົວ 3D",
+    "tab.settings":"ການຕັ້ງຄ່າ",
+    "branch.central":"ຄົວກາງ",
+    "branch.shop":"ສາຂາ",
+    "branch.current":"ສາຂາປັດຈຸບັນ",
+    "branch.switch":"ປ່ຽນສາຂາ",
+    "nav.menu":"ເມນູຫຼັກ",
+    "lang.label":"ພາສາ",
+    "auth.logout":"ອອກຈາກລະບົບ",
+    "common.save":"ບັນທຶກ",
+    "common.cancel":"ຍົກເລີກ",
+    "common.delete":"ລຶບ",
+    "common.edit":"ແກ້ໄຂ",
+    "common.add":"ເພີ່ມ",
+    "common.close":"ປິດ",
+    "common.search":"ຄົ້ນຫາ",
+    "common.confirm":"ຢືນຢັນ",
+  },
+  my:{
+    "tab.pos":"ရောင်းချမှု POS",
+    "tab.crm":"CRM ဖောက်သည်",
+    "tab.ingredients":"ပါဝင်ပစ္စည်း",
+    "tab.menus":"မီနူး",
+    "tab.sop":"SOP",
+    "tab.summary":"ကုန်ကျစရိတ်အကျဉ်းချုပ်",
+    "tab.fssales":"မီနူးအလိုက်ရောင်းအား\n(FoodStory)",
+    "tab.po":"PO စာရွက်စာတမ်း",
+    "tab.orders":"ပစ္စည်းမှာယူ",
+    "tab.history":"ကုန်ကျစရိတ်မှတ်တမ်း",
+    "tab.suppliers":"ပစ္စည်းပေးသွင်းသူ",
+    "tab.kitchen3d":"မီးဖို 3D",
+    "tab.settings":"ဆက်တင်များ",
+    "branch.central":"အလယ်တန်းမီးဖို",
+    "branch.shop":"ဌာနခွဲ",
+    "branch.current":"လက်ရှိဌာနခွဲ",
+    "branch.switch":"ဌာနခွဲပြောင်း",
+    "nav.menu":"ပင်မမီနူး",
+    "lang.label":"ဘာသာစကား",
+    "auth.logout":"ထွက်ရန်",
+    "common.save":"သိမ်းဆည်းပါ",
+    "common.cancel":"ပယ်ဖျက်ပါ",
+    "common.delete":"ဖျက်ပါ",
+    "common.edit":"ပြုပြင်ပါ",
+    "common.add":"ထည့်ပါ",
+    "common.close":"ပိတ်ပါ",
+    "common.search":"ရှာဖွေပါ",
+    "common.confirm":"အတည်ပြုပါ",
+  },
+};
+const LANG_OPTIONS=[
+  {id:"th",l:"ไทย"},
+  {id:"en",l:"EN"},
+  {id:"lo",l:"ລາວ"},
+  {id:"my",l:"မြန်မာ"},
+];
+const LangContext=createContext("th");
+function useT(){
+  const lang=useContext(LangContext);
+  return useCallback((key,fallback)=>{
+    const cur=TRANSLATIONS[lang]&&TRANSLATIONS[lang][key];
+    if(cur!=null&&cur!=="")return cur;
+    const th=TRANSLATIONS.th[key];
+    if(th!=null&&th!=="")return th;
+    return fallback!=null?fallback:key;
+  },[lang]);
+}
 
 const ALL_PERMS=[
   {id:"pos",label:"ขายหน้าร้าน"},
@@ -8618,6 +8762,17 @@ function AddOpeningModal({wallId,wallLen,initialType,onSave,onClose}){
 export default function App(){
   const[currentUser,setCurrentUser]=useState(null);
   const[currentBranch,setCurrentBranch]=useState(null);
+  // System-wide UI language. Persisted in localStorage so the choice
+  // survives reload. Defaults to Thai.
+  const[lang,setLang]=useState(()=>{try{return localStorage.getItem("foodcost.lang")||"th";}catch{return "th";}});
+  useEffect(()=>{try{localStorage.setItem("foodcost.lang",lang);}catch{}},[lang]);
+  const t=useCallback((key,fallback)=>{
+    const cur=TRANSLATIONS[lang]&&TRANSLATIONS[lang][key];
+    if(cur!=null&&cur!=="")return cur;
+    const th=TRANSLATIONS.th[key];
+    if(th!=null&&th!=="")return th;
+    return fallback!=null?fallback:key;
+  },[lang]);
   const[rawIngs,setIngs]=useState([]);const[menus,setMenus]=useState([]);
   // Derived: every ingredient gains avg_price + avg_price_per_gram computed
   // from the mean of its delivered external-supplier order prices. Falls
@@ -8745,21 +8900,20 @@ export default function App(){
   const addH=useCallback(async a=>{try{await api.addActionHist({action:a,time:nowStr()});await reload.action();}catch{}},[currentBranch]);
 
   const TABS=[
-    {id:"pos",l:"ขายหน้าร้าน",icon:I.table,perm:"pos"},
-    {id:"crm",l:"CRM ลูกค้า",icon:I.users,perm:"crm"},
-    {id:"ingredients",l:"วัตถุดิบ",icon:I.leaf,perm:"ingredients"},
-    {id:"menus",l:"เมนู",icon:I.fire,perm:"menus"},
-    {id:"sop",l:"SOP",icon:I.sop,perm:"sop"},
-    {id:"summary",l:"สรุปต้นทุน",icon:I.chart,perm:"summary"},
-    {id:"fssales",l:"ยอดขายรายเมนู\nตามระบบ FOODSTORY",icon:I.chart,perm:"fs_sales"},
-    {id:"po",l:"เอกสาร PO / สั่งของ",icon:I.bill,perm:"po"},
-    // "สั่งวัตถุดิบ" tab moved → button inside POSection toolbar (still routed via tab="orders").
-    // Fallback: if user has orders perm but NOT po perm, surface the tab so they aren't locked out.
-    ...(currentUser&&currentUser.role!=="admin"&&hasPerm(currentUser,"orders")&&!hasPerm(currentUser,"po")?[{id:"orders",l:"สั่งวัตถุดิบ",icon:I.truck,perm:"orders"}]:[]),
-    {id:"history",l:"ประวัติต้นทุน",icon:I.clock,perm:"history"},
-    {id:"suppliers",l:"ซัพพลาย",icon:I.truck,perm:"suppliers"},
-    {id:"kitchen3d",l:"ครัว 3D",icon:I.shop,perm:"kitchen_3d"},
-    {id:"settings",l:"ตั้งค่า",icon:I.settings,perm:"settings"},
+    {id:"pos",l:t("tab.pos"),icon:I.table,perm:"pos"},
+    {id:"crm",l:t("tab.crm"),icon:I.users,perm:"crm"},
+    {id:"ingredients",l:t("tab.ingredients"),icon:I.leaf,perm:"ingredients"},
+    {id:"menus",l:t("tab.menus"),icon:I.fire,perm:"menus"},
+    {id:"sop",l:t("tab.sop"),icon:I.sop,perm:"sop"},
+    {id:"summary",l:t("tab.summary"),icon:I.chart,perm:"summary"},
+    {id:"fssales",l:t("tab.fssales"),icon:I.chart,perm:"fs_sales"},
+    {id:"po",l:t("tab.po"),icon:I.bill,perm:"po"},
+    // Orders tab is surfaced for non-admin users who have orders perm but NOT po perm so they aren't locked out.
+    ...(currentUser&&currentUser.role!=="admin"&&hasPerm(currentUser,"orders")&&!hasPerm(currentUser,"po")?[{id:"orders",l:t("tab.orders"),icon:I.truck,perm:"orders"}]:[]),
+    {id:"history",l:t("tab.history"),icon:I.clock,perm:"history"},
+    {id:"suppliers",l:t("tab.suppliers"),icon:I.truck,perm:"suppliers"},
+    {id:"kitchen3d",l:t("tab.kitchen3d"),icon:I.shop,perm:"kitchen_3d"},
+    {id:"settings",l:t("tab.settings"),icon:I.settings,perm:"settings"},
   ];
   // A tab is visible only if the user has the permission. Admin role sees everything.
   // Branch-level perm gating was removed — permissions are now configured per-user only.
@@ -8824,6 +8978,7 @@ export default function App(){
   return <>
     <style>{globalStyle}</style>
     <ConfirmDlg/>
+    <LangContext.Provider value={lang}>
     <div style={{display:"flex",minHeight:"100vh",background:"#F1F5F9"}}>
 
       {/* ── MOBILE DRAWER OVERLAY ── */}
@@ -8848,7 +9003,7 @@ export default function App(){
         {/* Branch badge */}
         <div style={{padding:"12px 14px 8px"}}>
           <div style={{background:"rgba(255,255,255,0.06)",borderRadius:10,padding:"9px 12px",border:"1px solid rgba(255,255,255,0.08)"}}>
-            <div style={{fontSize:9,color:"rgba(255,255,255,0.35)",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:2}}>สาขาปัจจุบัน</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.35)",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:2}}>{t("branch.current")}</div>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
               <Ic d={isCentral?I.shop:I.branch} s={13} c={accentColor}/>
               <span style={{fontSize:13,fontWeight:800,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif"}}>{currentBranch.name}</span>
@@ -8858,7 +9013,7 @@ export default function App(){
 
         {/* Nav label */}
         <div style={{padding:"10px 18px 5px"}}>
-          <span style={{fontSize:9,fontWeight:700,color:"rgba(255,255,255,0.25)",letterSpacing:1.5,textTransform:"uppercase"}}>เมนูหลัก</span>
+          <span style={{fontSize:9,fontWeight:700,color:"rgba(255,255,255,0.25)",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
         </div>
 
         {/* Nav items */}
@@ -8875,6 +9030,14 @@ export default function App(){
           })}
         </nav>
 
+        {/* Language switcher */}
+        <div style={{padding:"4px 14px 8px"}}>
+          <div style={{fontSize:9,fontWeight:700,color:"rgba(255,255,255,0.35)",letterSpacing:1.2,textTransform:"uppercase",marginBottom:5}}>{t("lang.label")}</div>
+          <div style={{display:"flex",gap:4}}>
+            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:6,border:sel?`1px solid ${accentColor}`:"1px solid rgba(255,255,255,0.08)",cursor:"pointer",background:sel?accentColor:"rgba(255,255,255,0.05)",color:sel?"#fff":"rgba(255,255,255,0.55)",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"background .15s"}}>{L.l}</button>;})}
+          </div>
+        </div>
+
         {/* User section */}
         <div style={{padding:"12px 14px 20px",borderTop:"1px solid rgba(255,255,255,0.07)"}}>
           <div style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"rgba(255,255,255,0.05)",borderRadius:10,marginBottom:8}}>
@@ -8888,7 +9051,7 @@ export default function App(){
           </div>
           <div style={{display:"flex",gap:6}}>
             <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:8,padding:"7px 0",cursor:"pointer",fontSize:11,color:"rgba(255,255,255,0.6)",fontFamily:"'Sarabun',sans-serif",fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .15s"}}>
-              <Ic d={I.branch} s={11} c="rgba(255,255,255,0.5)"/>เปลี่ยนสาขา
+              <Ic d={I.branch} s={11} c="rgba(255,255,255,0.5)"/>{t("branch.switch")}
             </button>
             <button onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} title="ออกจากระบบ" style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:8,padding:"7px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .15s"}}>
               <Ic d={I.logout} s={13} c="#F87171"/>
@@ -8941,6 +9104,7 @@ export default function App(){
       </main>
 
     </div>
+    </LangContext.Provider>
   </>;
 }
 
