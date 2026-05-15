@@ -2253,7 +2253,6 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
   function printSOP(){
     if(!ing)return;
     const ingChips=(ing.ingredients||[]).map(mi=>{const i2=ings.find(g=>g.id===mi.ingredientId);return i2?`<span class="ic"><b>${i2.name}</b>&nbsp;${mi.amountGram}&nbsp;${mi.unit||'กรัม'}</span>`:''}).join('');
-    const subTotal=(ing.ingredients||[]).reduce((s,x)=>{const i2=ings.find(g=>g.id===x.ingredientId);return s+(i2?(+i2.price_per_gram||0)*(+x.amountGram||0):0);},0);
     const steps=(ing.sop||[]).map((s,idx)=>`
       <div class="step${s.image?' has-img':''}">
         <div class="num">${idx+1}</div>
@@ -2313,11 +2312,7 @@ body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-prin
       <div class="hsub">${ing.category||''}${ing.buy_unit?` · ${ing.buy_unit}`:''}</div>
     </div>
   </div>
-  <div class="cost-row">
-    <div class="cost-card"><div class="lbl">ต้นทุนรวมส่วนผสม</div><div class="val">฿${subTotal.toFixed(2)}</div></div>
-    <div class="cost-card brand"><div class="lbl">ราคา/กรัม (กำหนดเอง)</div><div class="val">฿${(+ing.price_per_gram||0).toFixed(4)}</div></div>
-    <div class="cost-card gray"><div class="lbl">มูลค่าทั้งล็อต (${(+ing.convert_to_gram||0).toLocaleString()}g)</div><div class="val">฿${((+ing.price_per_gram||0)*(+ing.convert_to_gram||0)).toFixed(2)}</div></div>
-  </div>
+  ${/* Cost row removed from print — prices live in the on-screen view only */""}
   ${ingChips?`<div class="sec-label">ส่วนผสมที่ใช้</div><div class="ings">${ingChips}</div>`:''}
   <div class="sec-label">ขั้นตอนการเตรียม / จัดการ &nbsp;(${(ing.sop||[]).length} ขั้นตอน)</div>
   <div class="steps">${steps}</div>
