@@ -2361,10 +2361,17 @@ window.addEventListener('load',async()=>{
     setCustomUnits(next);localStorage.setItem("fc_custom_units",JSON.stringify(next));
     setIngPopup(p=>({...p,unit:u}));setNewUnit("");
   }
-  // Cost from sub-ingredients (uses ingredients[].price_per_gram × amountGram)
+  // Cost from sub-ingredients — uses avg_price_per_gram (computed from
+  // delivered receive prices) when available, falls back to the catalog
+  // price_per_gram if the ingredient has never been received.
   const totalCost=useMemo(()=>{
     const list=edit?editIngs:(ing?.ingredients||[]);
-    return list.reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);return s+(i?(+i.price_per_gram||0)*(+x.amountGram||0):0);},0);
+    return list.reduce((s,x)=>{
+      const i=ings.find(g=>g.id===x.ingredientId);
+      if(!i)return s;
+      const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;
+      return s+ppg*(+x.amountGram||0);
+    },0);
   },[edit,editIngs,ing,ings]);
   const ownPrice=ing?(+ing.price_per_gram||0)*(+ing.convert_to_gram||0):0;
 
@@ -2465,11 +2472,18 @@ window.addEventListener('load',async()=>{
           <div style={{marginBottom:18}}>
             <div style={{fontSize:12,fontWeight:700,color:C.ink3,textTransform:"uppercase",letterSpacing:1,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>ส่วนผสมที่ใช้</div>
             <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-              {(edit?editIngs:ing.ingredients||[]).map((mi,idx)=>{const it=ings.find(i=>i.id===mi.ingredientId);return it?<div key={idx} style={{background:C.bg,borderRadius:8,padding:"5px 10px 5px 12px",fontSize:13,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6}}>
-                <span style={{fontWeight:700,color:C.ink}}>{it.name}</span>
-                <span style={{color:C.green,fontWeight:700}}>{mi.amountGram} {mi.unit||"กรัม"}</span>
-                {edit&&<button onClick={()=>setEditIngs(f=>f.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",display:"flex",lineHeight:1}}><Ic d={I.x} s={12} c={C.red}/></button>}
-              </div>:null;})}
+              {(edit?editIngs:ing.ingredients||[]).map((mi,idx)=>{
+                const it=ings.find(i=>i.id===mi.ingredientId);
+                if(!it)return null;
+                const ppg=(+it.avg_price_per_gram>0?+it.avg_price_per_gram:+it.price_per_gram)||0;
+                const cost=ppg*(+mi.amountGram||0);
+                return <div key={idx} style={{background:C.bg,borderRadius:8,padding:"5px 10px 5px 12px",fontSize:13,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontWeight:700,color:C.ink}}>{it.name}</span>
+                  <span style={{color:C.green,fontWeight:700}}>{mi.amountGram} {mi.unit||"กรัม"}</span>
+                  <span style={{color:C.brand,fontWeight:800,background:C.brandLight,padding:"1px 7px",borderRadius:6,fontSize:11}}>฿{cost.toFixed(2)}</span>
+                  {edit&&<button onClick={()=>setEditIngs(f=>f.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",display:"flex",lineHeight:1}}><Ic d={I.x} s={12} c={C.red}/></button>}
+                </div>;
+              })}
               {edit&&editIngs.length===0&&<div style={{fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif",padding:"8px 12px",background:C.bg,borderRadius:8,border:`1px dashed ${C.line}`}}>ยังไม่มีส่วนผสม — กดเลือกวัตถุดิบจากรายการด้านบน</div>}
               {!edit&&(!ing.ingredients||ing.ingredients.length===0)&&<div style={{fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif",padding:"8px 12px",background:C.bg,borderRadius:8,border:`1px dashed ${C.line}`}}>ยังไม่ระบุส่วนผสม</div>}
             </div>
@@ -2591,6 +2605,17 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
   const canE=hasPerm(currentUser,"sop")&&isCentral;
   useEffect(()=>{if(menu){setSop(menu.sop?[...menu.sop.map(s=>({...s}))]:[]); setEditIngs(menu.ingredients?[...menu.ingredients]:[]); setEdit(false);}}, [sel]);
   async function saveSop(){setSaving(true);try{await api.updateMenu(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr()});await reload();setEdit(false);alert("✅ บันทึก SOP เมนูสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  // Total ingredient cost for the menu — averaged purchase price when
+  // available, catalog price otherwise. Mirrors menuCost / IngSOPView.
+  const totalCost=useMemo(()=>{
+    const list=edit?editIngs:(menu?.ingredients||[]);
+    return list.reduce((s,x)=>{
+      const i=ings.find(g=>g.id===x.ingredientId);
+      if(!i)return s;
+      const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;
+      return s+ppg*(+x.amountGram||0);
+    },0);
+  },[edit,editIngs,menu,ings]);
   const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
   function pickIng(ing){setIngPopup({ing,amount:"",unit:"กรัม"});}
   function confirmIngPick(){
@@ -2759,14 +2784,39 @@ window.addEventListener('load',async()=>{
             {filteredIngs.length===0&&<div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",padding:4}}>ไม่พบวัตถุดิบ</div>}
           </div>
         </div>}
+        {/* Cost summary card */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(160px,100%),1fr))",gap:10,marginBottom:14}}>
+          <div style={{background:C.greenLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.green}33`}}>
+            <div style={{fontSize:10,fontWeight:800,color:C.green,letterSpacing:.5,textTransform:"uppercase",marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ต้นทุนรวมวัตถุดิบ</div>
+            <div style={{fontSize:20,fontWeight:900,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>฿{totalCost.toFixed(2)}</div>
+            <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{(edit?editIngs:(menu.ingredients||[])).length} ส่วนผสม</div>
+          </div>
+          <div style={{background:C.brandLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.brandBorder}`}}>
+            <div style={{fontSize:10,fontWeight:800,color:C.brand,letterSpacing:.5,textTransform:"uppercase",marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ราคาขาย</div>
+            <div style={{fontSize:20,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(+menu.price||0).toFixed(2)}</div>
+          </div>
+          {(+menu.price||0)>0&&(()=>{const profit=(+menu.price||0)-totalCost;const margin=profit/(+menu.price||1)*100;const mc=marginColor?marginColor(margin):C.green;return <div style={{background:"#FFFBEB",borderRadius:12,padding:"12px 14px",border:`1px solid #FDE68A`}}>
+            <div style={{fontSize:10,fontWeight:800,color:"#92400E",letterSpacing:.5,textTransform:"uppercase",marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>กำไร</div>
+            <div style={{fontSize:20,fontWeight:900,color:mc,fontFamily:"'Sarabun',sans-serif"}}>฿{profit.toFixed(2)}</div>
+            <div style={{fontSize:10,fontWeight:700,color:mc,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{margin.toFixed(1)}%</div>
+          </div>;})()}
+        </div>
+
         <div style={{marginBottom:18}}>
           <div style={{fontSize:12,fontWeight:700,color:C.ink3,textTransform:"uppercase",letterSpacing:1,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>วัตถุดิบในเมนู</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-            {(edit?editIngs:menu.ingredients||[]).map((mi,idx)=>{const ing=ings.find(i=>i.id===mi.ingredientId);return ing?<div key={idx} style={{background:C.bg,borderRadius:8,padding:"5px 10px 5px 12px",fontSize:13,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6}}>
-              <span style={{fontWeight:700,color:C.ink}}>{ing.name}</span>
-              <span style={{color:C.brand,fontWeight:700}}>{mi.amountGram} {mi.unit||"กรัม"}</span>
-              {edit&&<button onClick={()=>setEditIngs(f=>f.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",display:"flex",lineHeight:1}}><Ic d={I.x} s={12} c={C.red}/></button>}
-            </div>:null;})}
+            {(edit?editIngs:menu.ingredients||[]).map((mi,idx)=>{
+              const ing=ings.find(i=>i.id===mi.ingredientId);
+              if(!ing)return null;
+              const ppg=(+ing.avg_price_per_gram>0?+ing.avg_price_per_gram:+ing.price_per_gram)||0;
+              const cost=ppg*(+mi.amountGram||0);
+              return <div key={idx} style={{background:C.bg,borderRadius:8,padding:"5px 10px 5px 12px",fontSize:13,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontWeight:700,color:C.ink}}>{ing.name}</span>
+                <span style={{color:C.brand,fontWeight:700}}>{mi.amountGram} {mi.unit||"กรัม"}</span>
+                <span style={{color:C.green,fontWeight:800,background:C.greenLight,padding:"1px 7px",borderRadius:6,fontSize:11}}>฿{cost.toFixed(2)}</span>
+                {edit&&<button onClick={()=>setEditIngs(f=>f.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",display:"flex",lineHeight:1}}><Ic d={I.x} s={12} c={C.red}/></button>}
+              </div>;
+            })}
             {edit&&editIngs.length===0&&<div style={{fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif",padding:"8px 12px",background:C.bg,borderRadius:8,border:`1px dashed ${C.line}`}}>กดเลือกวัตถุดิบจากรายการด้านบน</div>}
           </div>
         </div>
