@@ -631,8 +631,14 @@ function setBranchSafetyInJson(existing,branchId,value){
 async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible,_depth=0}){
   const toId=toBranchId!=null?(+toBranchId||null):null;
   const fromId=fromBranchId!=null?(+fromBranchId||null):null;
-  if(!toId&&!fromId)return;            // no movement specified
-  if(toId&&fromId&&toId===fromId)return; // same-branch transfer is a no-op
+  if(!toId&&!fromId){
+    if(_depth===0)setTimeout(()=>alert("⚠️ ไม่ได้ตัดสต๊อก — ไม่ระบุสาขาต้นทาง/ปลายทาง (ดู console)"),200);
+    return;
+  }
+  if(toId&&fromId&&toId===fromId){
+    if(_depth===0)setTimeout(()=>alert("⚠️ ไม่ได้ตัดสต๊อก — สาขาต้นทางและปลายทางเป็นสาขาเดียวกัน"),200);
+    return;
+  }
   const agg=new Map();
   const notFound=[];      // items whose ingredient_id wasn't in `ings`
   const zeroQty=[];       // items with qty <= 0 (informational only)
@@ -674,8 +680,13 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
   }
   // Top-level callers only: surface anything that silently fell through so
   // the user doesn't end up with a PO marked "จัดส่งแล้ว" but no stock move.
-  if(_depth===0&&(notFound.length>0||failedUpdates.length>0)){
+  if(_depth===0&&(notFound.length>0||failedUpdates.length>0||zeroQty.length>0)){
     const lines=[];
+    if(zeroQty.length>0){
+      lines.push(`⚠️ ข้าม ${zeroQty.length} รายการที่จำนวน = 0 (ไม่ตัดสต๊อก):`);
+      zeroQty.slice(0,6).forEach(x=>lines.push(`   • ${x.name}`));
+      if(zeroQty.length>6)lines.push(`   • ... และอีก ${zeroQty.length-6} รายการ`);
+    }
     if(notFound.length>0){
       lines.push(`⚠️ ตัดสต๊อกไม่ได้ ${notFound.length} รายการ (วัตถุดิบไม่อยู่ในระบบ):`);
       notFound.slice(0,8).forEach(x=>lines.push(`   • ${x.name} — ${x.reason}`));
@@ -3886,6 +3897,31 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   async function shipPO(po){
     if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่จัดส่งได้");return;}
     if(po.status!=="open"){alert("เอกสารนี้ไม่ได้อยู่ในสถานะรอจัดส่ง");return;}
+    // Pre-flight: guarantee at least one shippable item so we don't flip
+    // status to "shipped" and leave the stock untouched.
+    if(+po.from_branch_id===+po.branch_id){
+      alert("จัดส่งไม่ได้ — เอกสารนี้มีสาขาต้นทาง/ปลายทางเป็นสาขาเดียวกัน");
+      return;
+    }
+    const allItems=po.items||[];
+    const validItems=allItems.filter(it=>{
+      const id=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id)||0);
+      const qty=+it.qty||+it.qtyNeeded||0;
+      return id>0&&qty>0;
+    });
+    if(validItems.length===0){
+      alert("จัดส่งไม่ได้ — เอกสารนี้ไม่มีรายการที่ตัดสต๊อกได้ (ต้องมีวัตถุดิบและจำนวน > 0)\n\nกด ✎ แก้ไข เพื่อตรวจรายการก่อนจัดส่ง");
+      return;
+    }
+    if(validItems.length<allItems.length){
+      const bad=allItems.filter(it=>!validItems.includes(it)).map(it=>it.name||"(ไม่มีชื่อ)");
+      if(!await confirmDlg({
+        title:"⚠️ มีรายการที่ตัดสต๊อกไม่ได้",
+        message:`${allItems.length-validItems.length} จาก ${allItems.length} รายการขาดข้อมูล (วัตถุดิบหรือจำนวน) จะถูกข้ามตอนตัดสต๊อก:\n\n${bad.slice(0,6).map(n=>"• "+n).join("\n")}${bad.length>6?"\n• ... และอีก "+(bad.length-6)+" รายการ":""}\n\nต้องการดำเนินการจัดส่งโดยข้ามรายการเหล่านี้?`,
+        danger:true,
+        confirmLabel:"จัดส่งต่อ (ข้ามรายการเสีย)",
+      }))return;
+    }
     const recipient=(branchById[po.branch_id]||{}).name||"ปลายทาง";
     if(!await confirmDlg({
       title:"ยืนยันจัดส่ง + ตัดสต๊อก",
@@ -3915,6 +3951,29 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   async function shipTransfer(po){
     if(!isCreator(po)){alert("เฉพาะผู้ออกใบโอนเท่านั้นที่จัดส่งได้");return;}
     if(po.status!=="transfer_pending"){alert("ใบโอนนี้ไม่ได้อยู่ในสถานะรอจัดส่ง");return;}
+    if(+po.from_branch_id===+po.branch_id){
+      alert("จัดส่งไม่ได้ — ใบโอนนี้มีสาขาต้นทาง/ปลายทางเป็นสาขาเดียวกัน");
+      return;
+    }
+    const allItems=po.items||[];
+    const validItems=allItems.filter(it=>{
+      const id=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id)||0);
+      const qty=+it.qty||+it.qtyNeeded||0;
+      return id>0&&qty>0;
+    });
+    if(validItems.length===0){
+      alert("จัดส่งไม่ได้ — ใบโอนนี้ไม่มีรายการที่ตัดสต๊อกได้ (ต้องมีวัตถุดิบและจำนวน > 0)");
+      return;
+    }
+    if(validItems.length<allItems.length){
+      const bad=allItems.filter(it=>!validItems.includes(it)).map(it=>it.name||"(ไม่มีชื่อ)");
+      if(!await confirmDlg({
+        title:"⚠️ มีรายการที่ตัดสต๊อกไม่ได้",
+        message:`${allItems.length-validItems.length} จาก ${allItems.length} รายการขาดข้อมูล จะถูกข้าม:\n\n${bad.slice(0,6).map(n=>"• "+n).join("\n")}${bad.length>6?"\n• ... และอีก "+(bad.length-6)+" รายการ":""}\n\nต้องการดำเนินการจัดส่งโดยข้ามรายการเหล่านี้?`,
+        danger:true,
+        confirmLabel:"จัดส่งต่อ (ข้ามรายการเสีย)",
+      }))return;
+    }
     const recipient=(branchById[po.branch_id]||{}).name||"ปลายทาง";
     if(!await confirmDlg({
       title:"ยืนยันจัดส่ง + ตัดสต๊อก",
