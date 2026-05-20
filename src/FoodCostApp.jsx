@@ -4086,11 +4086,25 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       confirmLabel:"📋 คัดลอก",
     }))return;
     try{
+      // Normalise + sanitise every item so the new PO deducts stock cleanly on ship.
       const cleanItems=(po.items||[]).map(it=>{
-        // Strip per-receipt fields so the copy starts fresh.
-        const{received_qty,received_at,...rest}=it||{};
-        return{...rest};
-      });
+        if(!it)return null;
+        const{received_qty,received_at,...rest}=it;
+        // Canonical ingredient_id (handle legacy camelCase aliases too).
+        const ingredient_id=+(rest.ingredient_id||rest.ingId||(rest.ingredient&&rest.ingredient.id)||0);
+        if(!ingredient_id)return null;
+        // Resolve qty — prefer the original ordered qty, but if the source
+        // row had qty=0 with a positive received_qty (legacy edge case),
+        // adopt the receive amount so the line isn't silently skipped.
+        let qty=+rest.qty||+rest.qtyNeeded||0;
+        if(qty<=0&&+received_qty>0)qty=+received_qty;
+        if(!(qty>0))return null;
+        return{...rest,ingredient_id,qty};
+      }).filter(Boolean);
+      if(cleanItems.length===0){
+        alert("ไม่สามารถคัดลอกได้ — รายการในเอกสารต้นฉบับไม่มีจำนวนหรือไม่ผูกวัตถุดิบ");
+        return;
+      }
       const newPO={
         po_number:genPONumber(newFromId),
         branch_id:newToId,
