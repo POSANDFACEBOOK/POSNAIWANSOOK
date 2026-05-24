@@ -6194,9 +6194,8 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     return Math.max(0,round2(safety-have));
   }
   function getOrderQty(ing){
-    // If the user explicitly typed something into "สั่ง" (even ""), respect it.
-    // "" means "do not order this row" — keep that semantic.
-    return orderQty[ing.id]!=null?+orderQty[ing.id]||0:autoOrderQty(ing);
+    // Manual entry only — return whatever staff typed, defaulting to 0.
+    return +orderQty[ing.id]||0;
   }
   function lineCost(ing){
     return round2(getOrderQty(ing)*(+ing.buy_price||0));
@@ -6334,10 +6333,10 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       <div style={{position:"absolute",right:-20,top:-30,fontSize:140,opacity:0.07,pointerEvents:"none"}}>📋</div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4,position:"relative",flexWrap:"wrap"}}>
         <span style={{fontSize:26}}>📋</span>
-        <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,margin:0,letterSpacing:.2}}>นับสต็อก & สร้างคำสั่งซื้อ</h2>
+        <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,margin:0,letterSpacing:.2}}>สร้างคำสั่งซื้อ</h2>
       </div>
       <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,margin:0,opacity:0.85,position:"relative"}}>
-        นับสต็อกที่เหลือจริง → ระบบคำนวณจำนวนที่ต้องสั่งจาก <b style={{color:"#FCD34D"}}>safety stock</b> ที่ตั้งไว้ → ส่งคำสั่งซื้อแบบแยกตามซัพพลายเออร์อัตโนมัติ
+        กรอกจำนวนที่ต้องสั่งในคอลัมน์ <b style={{color:"#FCD34D"}}>"✏ สั่ง"</b> → ระบบจะส่งคำสั่งซื้อแยกตามซัพพลายเออร์อัตโนมัติ
       </p>
     </div>
 
@@ -6382,20 +6381,16 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:isMobile?880:undefined}}>
               <thead>
                 <tr style={{background:C.bg}}>
-                  {["#","วัตถุดิบ","📦 สต็อกปัจจุบัน","หน่วย","🛡 safety","📋 เหลือ (นับ)","✏ สั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:(i<=1||i===3)?"left":"right",letterSpacing:.2,borderBottom:`1px solid ${C.line}`,...(i===1?{position:"sticky",left:0,background:C.bg,zIndex:2,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)"}:{})}}>{h}</th>)}
+                  {["#","วัตถุดิบ","📦 สต็อกปัจจุบัน","หน่วย","🛡 safety","✏ สั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:(i<=1||i===3)?"left":"right",letterSpacing:.2,borderBottom:`1px solid ${C.line}`,...(i===1?{position:"sticky",left:0,background:C.bg,zIndex:2,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)"}:{})}}>{h}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {g.items.map((ing,idx)=>{
                   const safety=branchSafety(ing,currentBranch?.id);
                   const curStock=branchStock(ing,currentBranch?.id);
-                  const have=onHand[ing.id]!=null&&onHand[ing.id]!==""?+onHand[ing.id]:curStock;
                   const order=getOrderQty(ing);
                   const cost=lineCost(ing);
-                  const auto=autoOrderQty(ing);
-                  const lowStock=have<safety&&safety>0;
                   const curLow=safety>0&&curStock<safety;
-                  const overridden=orderQty[ing.id]!=null&&+orderQty[ing.id]!==auto;
                   const rowBg=idx%2===0?C.white:"#FAFBFC";
                   return <tr key={ing.id} style={{borderTop:`1px solid ${C.lineLight}`,background:rowBg}}>
                     <td style={{padding:"9px 10px",fontSize:11,color:C.ink4,fontWeight:700}}>{idx+1}</td>
@@ -6417,13 +6412,8 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
                       :<span style={{fontSize:13,fontWeight:800,color:safety>0?"#92400E":C.ink4,background:safety>0?"#FFFBEB":"transparent",border:safety>0?`1px solid ${C.yellow}55`:"none",padding:safety>0?"3px 10px":0,borderRadius:8,display:"inline-block",minWidth:34,textAlign:"center"}}>{safety||"—"}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder?<NumStepper value={onHand[ing.id]??branchStock(ing,currentBranch?.id)} onChange={v=>{setOnHand(o=>({...o,[ing.id]:v}));setOrderQty(q2=>{const n={...q2};delete n[ing.id];return n;});}} btnColor={lowStock?"#92400E":C.brand} btnBg={lowStock?"#FFFBEB":C.brandLight} inputStyle={{border:`2px solid ${lowStock?"#F59E0B":C.brandBorder}`,background:lowStock?"#FFFBEB":C.brandLight}} width={62}/>
-                      :<span style={{fontSize:13,fontWeight:700,color:C.ink}}>{have}</span>}
-                    </td>
-                    <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder?<NumStepper value={orderQty[ing.id]??(auto>0?auto:"")} onChange={v=>setOrderQty(q2=>({...q2,[ing.id]:v}))} placeholder="0" btnColor={order>0?C.green:C.brand} btnBg={order>0?C.greenLight:C.bg} inputStyle={{border:`2px solid ${order>0?C.green+"55":C.line}`,background:order>0?C.greenLight:C.white,color:order>0?C.green:C.ink}} width={62}/>
+                      {canOrder?<NumStepper value={orderQty[ing.id]??""} onChange={v=>setOrderQty(q2=>({...q2,[ing.id]:v}))} placeholder="0" btnColor={order>0?C.green:C.brand} btnBg={order>0?C.greenLight:C.bg} inputStyle={{border:`2px solid ${order>0?C.green+"55":C.line}`,background:order>0?C.greenLight:C.white,color:order>0?C.green:C.ink}} width={62}/>
                       :<span style={{fontSize:13,fontWeight:900,color:order>0?C.green:C.ink4}}>{order||"—"}</span>}
-                      {overridden&&<div style={{fontSize:9,color:C.ink4,marginTop:2}}>(แก้จาก {auto})</div>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right",fontSize:12,color:C.ink3,whiteSpace:"nowrap"}}>฿{(+ing.buy_price||0).toFixed(2)}</td>
                     <td style={{padding:"9px 10px",textAlign:"right",fontSize:13,fontWeight:800,color:cost>0?C.brand:C.ink4,whiteSpace:"nowrap"}}>{cost>0?`฿${cost.toLocaleString(undefined,{minimumFractionDigits:2})}`:"—"}</td>
@@ -6454,10 +6444,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             </div>
           </div>
           <div style={{display:"flex",gap:isMobile?6:8,flexWrap:"wrap",justifyContent:isMobile?"stretch":"flex-end",width:isMobile?"100%":"auto"}}>
-            <button onClick={saveStockCounts} disabled={savingStock||Object.keys(onHand).length===0} title="อัปเดตสต็อกในระบบจากที่นับมา" style={{background:savingStock?"#475569":"#1E293B",border:`1px solid rgba(255,255,255,0.2)`,borderRadius:9,padding:isMobile?"9px 14px":"9px 16px",cursor:savingStock||Object.keys(onHand).length===0?"not-allowed":"pointer",color:"#F8FAFC",fontSize:isMobile?12:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:38,opacity:Object.keys(onHand).length===0?.5:1}}>
-              💾 อัปเดตสต็อก
-            </button>
-            <button onClick={submitOrder} disabled={saving||totals.itemCount===0} style={{background:saving?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:9,padding:isMobile?"9px 14px":"9px 18px",cursor:saving||totals.itemCount===0?"not-allowed":"pointer",color:C.white,fontSize:isMobile?12:13,fontWeight:900,fontFamily:"'Sarabun',sans-serif",boxShadow:saving||totals.itemCount===0?"none":"0 4px 14px rgba(16,185,129,0.42)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:38,opacity:totals.itemCount===0?.5:1}}>
+<button onClick={submitOrder} disabled={saving||totals.itemCount===0} style={{background:saving?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:9,padding:isMobile?"9px 14px":"9px 18px",cursor:saving||totals.itemCount===0?"not-allowed":"pointer",color:C.white,fontSize:isMobile?12:13,fontWeight:900,fontFamily:"'Sarabun',sans-serif",boxShadow:saving||totals.itemCount===0?"none":"0 4px 14px rgba(16,185,129,0.42)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:38,opacity:totals.itemCount===0?.5:1}}>
               <span style={{fontSize:isMobile?13:14}}>{saving?"⏳":"📤"}</span>
               <span>{saving?"กำลังส่ง...":`ส่งคำสั่งซื้อ (${totals.itemCount})`}</span>
             </button>
