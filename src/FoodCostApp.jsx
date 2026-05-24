@@ -4293,11 +4293,20 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const branchById=Object.fromEntries(branches.map(b=>[b.id,b]));
   // Transfers don't have a money value — exclude them from the running total
   const totalAll=pos.reduce((s,p)=>p.status==="transfer_pending"||p.status==="transfer_shipped"||p.status==="transfer_done"?s:s+(+p.total||0),0);
-  // PO filter dropdown — show EVERY branch (active + inactive + self) so the
-  // user can filter by any party that may appear in an old PO. Picking self
-  // is a no-op semantically (every visible PO already involves currentBranch),
-  // but harmless and lets the dropdown read "complete".
-  const branchOptions=branches.slice().sort((a,b)=>(a.type==="central"?-1:b.type==="central"?1:0));
+  // PO filter dropdown — restricted to the branches THIS user has access to
+  // (currentUser.allowed_branches). Admin and "all-branch" users see every
+  // branch; inactive branches stay visible so old POs can still be filtered.
+  // Central is sorted to the top for quick spotting.
+  const branchOptions=(()=>{
+    const allowed=currentUser?.allowed_branches;
+    const isAdmin=currentUser?.role==="admin";
+    const list=branches.filter(b=>{
+      if(isAdmin)return true;
+      if(allowed==null)return true;
+      return (allowed||[]).map(x=>+x).includes(+b.id);
+    });
+    return list.slice().sort((a,b)=>(a.type==="central"?-1:b.type==="central"?1:0));
+  })();
 
   // Central kitchen flow: turn the PurchaseSummary into one external-supplier
   // order per vendor, then OrderTab handles ยืนยันรับ + actual price + stock+.
