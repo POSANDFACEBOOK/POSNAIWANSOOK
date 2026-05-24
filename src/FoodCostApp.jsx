@@ -4293,7 +4293,11 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const branchById=Object.fromEntries(branches.map(b=>[b.id,b]));
   // Transfers don't have a money value — exclude them from the running total
   const totalAll=pos.reduce((s,p)=>p.status==="transfer_pending"||p.status==="transfer_shipped"||p.status==="transfer_done"?s:s+(+p.total||0),0);
-  const branchOptions=branches.filter(b=>b.id!==currentBranch.id&&b.active!==false);
+  // PO filter dropdown — show EVERY branch (active + inactive + self) so the
+  // user can filter by any party that may appear in an old PO. Picking self
+  // is a no-op semantically (every visible PO already involves currentBranch),
+  // but harmless and lets the dropdown read "complete".
+  const branchOptions=branches.slice().sort((a,b)=>(a.type==="central"?-1:b.type==="central"?1:0));
 
   // Central kitchen flow: turn the PurchaseSummary into one external-supplier
   // order per vendor, then OrderTab handles ยืนยันรับ + actual price + stock+.
