@@ -4429,13 +4429,11 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                   {po.po_number||`#${po.id}`}
                   <div style={{fontSize:10,color:C.ink4,fontWeight:500,marginTop:1}}>{(po.items||[]).length} รายการ</div>
                 </td>
-                <td style={{padding:"11px 14px",fontSize:13,color:iCreator?C.brand:C.ink2,fontWeight:iCreator?800:600}}>
+                <td style={{padding:"11px 14px",fontSize:13,color:C.ink,fontWeight:700,whiteSpace:"nowrap"}}>
                   {fromB?.name||"-"}
-                  {iCreator&&<span style={{fontSize:10,color:C.brand,marginLeft:5,background:C.brandLight,padding:"1px 6px",borderRadius:8,fontWeight:700}}>📤 ออก</span>}
                 </td>
-                <td style={{padding:"11px 14px",fontSize:13,color:iReceiver?C.green:C.ink2,fontWeight:iReceiver?800:600}}>
+                <td style={{padding:"11px 14px",fontSize:13,color:C.ink,fontWeight:700,whiteSpace:"nowrap"}}>
                   {toB?.name||"-"}
-                  {iReceiver&&<span style={{fontSize:10,color:C.green,marginLeft:5,background:C.greenLight,padding:"1px 6px",borderRadius:8,fontWeight:700}}>📥 รับ</span>}
                 </td>
                 <td style={{padding:"11px 14px",fontSize:14,fontWeight:900,textAlign:"right",whiteSpace:"nowrap",color:po.status==="transfer_pending"||po.status==="transfer_shipped"||po.status==="transfer_done"?"#0EA5E9":C.brand}}>{po.status==="transfer_pending"||po.status==="transfer_shipped"||po.status==="transfer_done"?<span style={{fontSize:12,fontWeight:800,background:"#E0F2FE",color:"#0369A1",padding:"3px 10px",borderRadius:14,border:"1px solid #BAE6FD"}}>🔄 การโอน</span>:`฿${(+po.total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td>
                 <td style={{padding:"11px 14px",textAlign:"center"}}>
