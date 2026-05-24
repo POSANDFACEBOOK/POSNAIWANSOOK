@@ -4300,8 +4300,10 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const branchOptions=(()=>{
     const allowed=currentUser?.allowed_branches;
     const isAdmin=currentUser?.role==="admin";
+    // Central kitchen has cross-branch visibility — always show every branch.
+    const isOnCentral=currentBranch?.type==="central";
     const list=branches.filter(b=>{
-      if(isAdmin)return true;
+      if(isAdmin||isOnCentral)return true;
       if(allowed==null)return true;
       return (allowed||[]).map(x=>+x).includes(+b.id);
     });
