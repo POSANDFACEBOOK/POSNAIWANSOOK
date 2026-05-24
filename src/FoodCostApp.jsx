@@ -3745,7 +3745,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   // Per-PO permissions
   const isCreator=(po)=>+po.from_branch_id===currentBranch.id;
   const isReceiver=(po)=>+po.branch_id===currentBranch.id;
-  const canEditPO=(po)=>hasPO&&isCreator(po);
+  const canEditPO=(po)=>hasPO&&(isCreator(po)||isCentralBranch);
   const canConfirmPO=(po)=>hasPO&&isReceiver(po)&&po.status==="shipped";
   // Stock-safety: only allow delete on statuses where stock has NEVER been
   // moved (requested, open, transfer_pending) or has been rolled back already
@@ -3895,7 +3895,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   // Creator (central) clicks "🚚 จัดส่ง" — moves stock + flips status to "shipped".
   // Race-safe via patchPOIfStatus.
   async function shipPO(po){
-    if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่จัดส่งได้");return;}
+    if(!isCreator(po)&&!isCentralBranch){alert("เฉพาะผู้ออกเอกสารหรือครัวกลางเท่านั้นที่จัดส่งได้");return;}
     if(po.status!=="open"){alert("เอกสารนี้ไม่ได้อยู่ในสถานะรอจัดส่ง");return;}
     // Pre-flight: guarantee at least one shippable item so we don't flip
     // status to "shipped" and leave the stock untouched.
@@ -3949,7 +3949,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   // to receiver and flips transfer_pending → transfer_shipped. Race-safe via
   // patchPOIfStatus. Mirrors shipPO for the regular PO flow.
   async function shipTransfer(po){
-    if(!isCreator(po)){alert("เฉพาะผู้ออกใบโอนเท่านั้นที่จัดส่งได้");return;}
+    if(!isCreator(po)&&!isCentralBranch){alert("เฉพาะผู้ออกใบโอนหรือครัวกลางเท่านั้นที่จัดส่งได้");return;}
     if(po.status!=="transfer_pending"){alert("ใบโอนนี้ไม่ได้อยู่ในสถานะรอจัดส่ง");return;}
     if(+po.from_branch_id===+po.branch_id){
       alert("จัดส่งไม่ได้ — ใบโอนนี้มีสาขาต้นทาง/ปลายทางเป็นสาขาเดียวกัน");
@@ -4023,7 +4023,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     setConfirming(null);
   }
   async function acceptDispute(po){
-    if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่ยอมรับได้");return;}
+    if(!isCreator(po)&&!isCentralBranch){alert("เฉพาะผู้ออกเอกสารหรือครัวกลางเท่านั้นที่ยอมรับได้");return;}
     if(!await confirmDlg({title:"ยอมรับการแก้ไข",message:`ยอมรับจำนวนที่ปลายทางแจ้งใน ${po.po_number||"PO นี้"}?\n\n• ระบบจะปรับ delta สต็อก: คืนของส่วนที่ขาดให้ผู้ส่ง / หรือตัดเพิ่มถ้ารับเกิน\n• ยอดรวมจะถูกปรับตามจำนวนที่รับจริง\n• เปลี่ยนสถานะเป็น "รอชำระเงิน"`,confirmLabel:"✅ ยอมรับการแก้ไข"}))return;
     setConfirming(po.id);
     try{
@@ -4073,7 +4073,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     }catch(e){showErr("บันทึกการชำระไม่สำเร็จ",e);throw e;}
   }
   async function cancelPO(po){
-    if(!isCreator(po)){alert("เฉพาะผู้ออกเอกสารเท่านั้นที่ยกเลิกได้");return;}
+    if(!isCreator(po)&&!isCentralBranch){alert("เฉพาะผู้ออกเอกสารหรือครัวกลางเท่านั้นที่ยกเลิกได้");return;}
     if(po.status==="paid"||po.status==="cancelled"){alert("เอกสารนี้ไม่สามารถยกเลิกในสถานะปัจจุบันได้");return;}
     const wasReceived=!!po.received_at;
     const msg=wasReceived
@@ -4941,6 +4941,10 @@ function PurchaseSummaryModal({pos,ings,branchById,currentBranch,currentUser,onC
 function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canDelete,onClose,onAcceptRequest,onShip,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel,onDelete}){
   const isCreator=+po.from_branch_id===currentBranch.id;
   const isReceiver=+po.branch_id===currentBranch.id;
+  // Central kitchen has manager-level access: it can act on any PO,
+  // not just ones it created. Matches the same relaxation in POSection.
+  const isCentralBranch=currentBranch?.type==="central";
+  const canManage=isCreator||isCentralBranch;
   const st=PO_STATUS[po.status]||{label:po.status,color:C.ink3,bg:C.lineLight};
   const recAt=po.received_at?new Date(po.received_at).toLocaleString("th-TH"):null;
   const dispAt=po.dispute_at?new Date(po.dispute_at).toLocaleString("th-TH"):null;
@@ -4950,14 +4954,14 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const[disputeNote,setDisputeNote]=useState(po.dispute_note||"");
   // Permissions for actions in this view
   const canAcceptReq=isReceiver&&po.status==="requested";
-  const canShipPO=isCreator&&po.status==="open";
+  const canShipPO=canManage&&po.status==="open";
   const canConfirmReceive=isReceiver&&po.status==="shipped";
   const canDispute=isReceiver&&po.status==="shipped";
-  const canAcceptDispute=isCreator&&po.status==="disputed";
+  const canAcceptDispute=canManage&&po.status==="disputed";
   // Items can only be edited where stock hasn't moved yet (requested, open).
-  const canEditFromView=isCreator&&(po.status==="open"||po.status==="requested");
-  const canPayNow=isCreator&&po.status==="awaiting_payment";
-  const canCancelPO=isCreator&&po.status!=="paid"&&po.status!=="cancelled";
+  const canEditFromView=canManage&&(po.status==="open"||po.status==="requested");
+  const canPayNow=canManage&&po.status==="awaiting_payment";
+  const canCancelPO=canManage&&po.status!=="paid"&&po.status!=="cancelled";
 
   async function submitDisputeNow(){
     if(!await confirmDlg({title:"ยืนยันส่งกลับ",message:"ส่งกลับให้ต้นทางตรวจสอบ?\nรายการที่ระบุจำนวนต่างจากเดิมจะถูกบันทึก",confirmLabel:"📤 ส่งกลับ",danger:false}))return;
