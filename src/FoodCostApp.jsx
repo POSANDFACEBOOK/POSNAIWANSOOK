@@ -5995,7 +5995,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     {/* Mode toggle: stock check vs orders list */}
     <div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:480}}>
       {[
-        {id:"check",l:"📋 นับสต็อก & สั่งซื้อ",c:C.brand},
+        {id:"check",l:"📋 สร้างคำสั่งซื้อ",c:C.brand},
         {id:"list",l:"📦 สั่งซัพพลายนอก",c:C.teal},
       ].map(t=>{const sel=mode===t.id;return <button key={t.id} onClick={()=>setMode(t.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:sel?t.c:"transparent",color:sel?C.white:C.ink3,transition:"all .15s"}}>{t.l}</button>;})}
     </div>
