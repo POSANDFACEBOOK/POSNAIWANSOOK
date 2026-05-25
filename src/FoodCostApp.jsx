@@ -9098,7 +9098,13 @@ export default function App(){
         if(!cu?.id)return;
         const rows=await api.getMyUserStatus(cu.id);
         const u=Array.isArray(rows)?rows[0]:null;
-        if(!u||!u.active){alert("บัญชีของคุณถูกปิดการใช้งาน — ระบบจะออกจากระบบ");setCurrentUser(null);setCurrentBranch(null);return;}
+        // Only force a logout when we have a DEFINITIVE answer: the row exists
+        // and active is explicitly false. An empty / malformed response is
+        // treated as a transient network blip — we skip this tick and try
+        // again on the next 60s heartbeat. (Old code booted on !u too, which
+        // logged users out mid-action whenever PostgREST hiccupped.)
+        if(u&&u.active===false){alert("บัญชีของคุณถูกปิดการใช้งาน — ระบบจะออกจากระบบ");setCurrentUser(null);setCurrentBranch(null);return;}
+        if(!u){console.warn("[heartbeat] getMyUserStatus returned empty — skipping this tick");return;}
         const newPerms=normalizePerms(u.perms);
         const newAllowed=normalizeBranchIds(u.allowed_branches);
         // Live revoke: if admin removed access to current branch, kick to selector
