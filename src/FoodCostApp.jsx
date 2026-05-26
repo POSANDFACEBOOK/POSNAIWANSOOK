@@ -3875,17 +3875,32 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   async function rollbackPOStock(po){
     if(!po)return;
     // Statuses where stock has NOT been moved yet → nothing to roll back.
-    // Note: transfer_pending sits here under the new spec — stock only moves
-    // once the creator presses "🚚 จัดส่ง" (transfer_shipped).
-    const NOT_MOVED=new Set(["requested","cancelled","transfer_pending"]);
+    const NOT_MOVED=new Set(["requested","open","cancelled","transfer_pending"]);
     if(NOT_MOVED.has(po.status))return;
-    await transferStockBetweenBranches({
-      fromBranchId:po.branch_id,             // receiver gives back
-      toBranchId:po.from_branch_id,          // sender gets credited
-      items:po.items||[],
-      ings,
-      autoVisible:false,
-    });
+    // In-transit: only sender was deducted; receiver was never credited.
+    // → Return ordered_qty to sender (use qty, not received_qty).
+    const IN_TRANSIT=new Set(["shipped","disputed","transfer_shipped"]);
+    if(IN_TRANSIT.has(po.status)){
+      // Strip received_qty so transferStockBetweenBranches falls back to qty.
+      const itemsByOrdered=(po.items||[]).map(it=>{const{received_qty,...rest}=it||{};return rest;});
+      await transferStockBetweenBranches({
+        fromBranchId:null,
+        toBranchId:po.from_branch_id,
+        items:itemsByOrdered,
+        ings,
+        autoVisible:false,
+      });
+    }else{
+      // Both sides moved (awaiting_payment, paid, received, transfer_done):
+      // reverse with whatever quantity is recorded (received_qty if set, else qty).
+      await transferStockBetweenBranches({
+        fromBranchId:po.branch_id,
+        toBranchId:po.from_branch_id,
+        items:po.items||[],
+        ings,
+        autoVisible:false,
+      });
+    }
     if(reloadIngs)await reloadIngs();
   }
 
@@ -3969,19 +3984,20 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     const recipient=(branchById[po.branch_id]||{}).name||"ปลายทาง";
     if(!await confirmDlg({
       title:"ยืนยันจัดส่ง + ตัดสต๊อก",
-      message:`จัดส่ง ${po.po_number||"PO นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 📦 สต๊อกของ ${recipient} จะถูกเพิ่มเข้าทันที\n• สถานะเปลี่ยนเป็น "🚚 จัดส่งแล้ว"\n• สาขาปลายทางจะกด "ตรวจรับ" ตามขั้นตอนปกติ`,
+      message:`จัดส่ง ${po.po_number||"PO นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 🚛 ของจะอยู่ในสถานะ "ลอยอยู่ระหว่างทาง" — ยังไม่เข้าสต๊อก ${recipient}\n• สต๊อก ${recipient} จะเพิ่มเข้าตอนปลายทางกด "✅ ยืนยันรับ"\n• สถานะเปลี่ยนเป็น "🚚 จัดส่งแล้ว"`,
       confirmLabel:"🚚 จัดส่ง + ตัดสต๊อก",
     }))return;
     setConfirming(po.id);
     try{
       const shippedAt=new Date().toISOString();
       await api.patchPOIfStatus(po.id,"open",{status:"shipped",updated_at:shippedAt});
+      // In-transit: deduct from sender only. Receiver is credited at confirmReceive.
       await transferStockBetweenBranches({
         fromBranchId:po.from_branch_id,
-        toBranchId:po.branch_id,
+        toBranchId:null,
         items:po.items||[],
         ings,
-        autoVisible:true,
+        autoVisible:false,
       });
       if(reloadIngs)await reloadIngs();
       await load();
@@ -4034,19 +4050,20 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     const recipient=(branchById[po.branch_id]||{}).name||"ปลายทาง";
     if(!await confirmDlg({
       title:"ยืนยันจัดส่ง + ตัดสต๊อก",
-      message:`จัดส่งใบโอน ${po.po_number||"นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 📦 สต๊อกของ ${recipient} จะถูกเพิ่มเข้าทันที\n• สาขาปลายทางจะกด "รับโอน" เพื่อยืนยัน (ปรับ delta ถ้ารับไม่ครบ)`,
+      message:`จัดส่งใบโอน ${po.po_number||"นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 🚛 ของจะอยู่ในสถานะ "ลอยอยู่ระหว่างทาง"\n• สต๊อก ${recipient} จะเพิ่มเข้าตอนปลายทางกด "✅ รับโอน + กรอกจำนวนรับจริง"`,
       confirmLabel:"🚚 จัดส่ง + ตัดสต๊อก",
     }))return;
     setConfirming(po.id);
     try{
       const shippedAt=new Date().toISOString();
       await api.patchPOIfStatus(po.id,"transfer_pending",{status:"transfer_shipped",updated_at:shippedAt});
+      // In-transit: deduct from sender only.
       await transferStockBetweenBranches({
         fromBranchId:po.from_branch_id,
-        toBranchId:po.branch_id,
+        toBranchId:null,
         items:po.items||[],
         ings,
-        autoVisible:true,
+        autoVisible:false,
       });
       if(reloadIngs)await reloadIngs();
       await load();
@@ -4056,12 +4073,20 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 
   async function confirmReceive(po){
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ยืนยันรับสินค้าได้");return;}
-    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• สต๊อกถูกย้ายไปแล้วตอนจัดส่ง — ไม่มีการเปลี่ยนแปลงสต๊อกเพิ่ม\n• ถ้ารับไม่ครบ ให้กด "สินค้าไม่ครบ" แทน\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
+    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• 📦 สต๊อก ${currentBranch.name} จะถูกเพิ่มทันทีตามจำนวนในใบสั่ง\n• ของที่ "ลอยอยู่ระหว่างทาง" จะเข้าสต๊อกปลายทางอย่างถาวร\n• ถ้ารับไม่ครบ ให้กด "สินค้าไม่ครบ" แทน เพื่อปรับจำนวนก่อน\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
       const receivedAt=new Date().toISOString();
-      // New flow: stock already moved at จัดส่ง — just flip status.
       await api.patchPOIfStatus(po.id,"shipped",{status:"awaiting_payment",received_at:receivedAt,received_by:currentUser?.username||currentUser?.name||null,updated_at:receivedAt});
+      // End of in-transit: credit receiver with the full ordered qty.
+      await transferStockBetweenBranches({
+        fromBranchId:null,
+        toBranchId:po.branch_id,
+        items:po.items||[],
+        ings,
+        autoVisible:true,
+      });
+      if(reloadIngs)await reloadIngs();
       // Stage 1 → SlipTrack: create รายการค้างจ่าย (paid:false). Fire-and-forget.
       pushPOToSlipTrack({...po,status:"awaiting_payment",received_at:receivedAt},branches);
       await load();
@@ -4106,8 +4131,34 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       });
       const receivedAt=new Date().toISOString();
       await api.patchPOIfStatus(po.id,"disputed",{items:newItems,subtotal,vat,total,status:"awaiting_payment",received_at:receivedAt,received_by:po.dispute_by||null,updated_at:receivedAt});
-      // Delta-only reconcile against stock that was already moved at create/acceptRequest
-      await applyReceiveDelta({senderId:po.from_branch_id,receiverId:po.branch_id,items:newItems,ings});
+      // End of in-transit: credit receiver with received_qty (what they actually got),
+      // and return any variance (ordered − received) back to the sender.
+      // Receiver credit (uses received_qty by default via transferStockBetweenBranches)
+      const itemsToCredit=newItems
+        .filter(it=>+it.received_qty>0)
+        .map(it=>({ingredient_id:it.ingredient_id||it.ingId,name:it.name,received_qty:+it.received_qty||0}));
+      if(itemsToCredit.length>0){
+        await transferStockBetweenBranches({
+          fromBranchId:null,
+          toBranchId:po.branch_id,
+          items:itemsToCredit,
+          ings,
+          autoVisible:true,
+        });
+      }
+      // Variance return to sender — items where received < ordered.
+      const variance=newItems
+        .map(it=>{const orig=+it.qty||0;const recv=+it.received_qty||0;return{ingredient_id:it.ingredient_id||it.ingId,name:it.name,qty:Math.max(0,Math.round((orig-recv)*1000)/1000)};})
+        .filter(it=>it.qty>0);
+      if(variance.length>0){
+        await transferStockBetweenBranches({
+          fromBranchId:null,
+          toBranchId:po.from_branch_id,
+          items:variance,
+          ings,
+          autoVisible:false,
+        });
+      }
       if(reloadIngs)await reloadIngs();
       // Stage 1 (revised) → SlipTrack: re-POST with same external_id; server updates the pending row's amount/items
       pushPOToSlipTrack({...po,status:"awaiting_payment",items:newItems,subtotal,vat,total,received_at:receivedAt},branches);
@@ -4323,8 +4374,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     }
     if(!await confirmDlg({
       title:"ยืนยันรับโอน",
-      message:`รับโอนจาก "${(branchById[po.from_branch_id]||{}).name||"-"}"\n\n• สต๊อกถูกย้ายไปแล้วตอนต้นทางกด "🚚 จัดส่ง"\n• ถ้ามีรายการรับน้อยลง ระบบจะคืนของให้ต้นทาง\n• ถ้ารับมากกว่าที่ส่ง ระบบจะตัดจากต้นทางเพิ่ม\n\nดำเนินการต่อ?`,
-      confirmLabel:"✅ รับโอน + ปรับสต๊อก",
+      message:`รับโอนจาก "${(branchById[po.from_branch_id]||{}).name||"-"}"\n\n• 🚛 ของ "ลอยอยู่ระหว่างทาง" จะเข้าสต๊อก ${currentBranch.name} ตามจำนวนที่รับจริง\n• ถ้าจำนวนรับน้อยกว่าที่ส่ง ส่วนต่างจะคืนให้ต้นทาง\n• หลังกด ไม่สามารถแก้ไขจำนวนได้อีก\n\nดำเนินการต่อ?`,
+      confirmLabel:"✅ รับโอน + เพิ่มสต๊อก",
     }))return;
     setConfirming(po.id);
     try{
@@ -4336,13 +4387,31 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         received_by:currentUser?.username||currentUser?.name||null,
         updated_at:receivedAt,
       });
-      // Delta-only: stock was already moved at transfer create. Only adjust diff.
-      await applyReceiveDelta({
-        senderId:po.from_branch_id,
-        receiverId:po.branch_id,
-        items:itemsWithReceived,
-        ings,
-      });
+      // End of in-transit: credit receiver with received_qty, return variance to sender.
+      const itemsToCredit=itemsWithReceived
+        .filter(it=>+it.received_qty>0)
+        .map(it=>({ingredient_id:it.ingredient_id||it.ingId,name:it.name,received_qty:+it.received_qty||0}));
+      if(itemsToCredit.length>0){
+        await transferStockBetweenBranches({
+          fromBranchId:null,
+          toBranchId:po.branch_id,
+          items:itemsToCredit,
+          ings,
+          autoVisible:true,
+        });
+      }
+      const variance=itemsWithReceived
+        .map(it=>{const orig=+it.qty||0;const recv=+it.received_qty||0;return{ingredient_id:it.ingredient_id||it.ingId,name:it.name,qty:Math.max(0,Math.round((orig-recv)*1000)/1000)};})
+        .filter(it=>it.qty>0);
+      if(variance.length>0){
+        await transferStockBetweenBranches({
+          fromBranchId:null,
+          toBranchId:po.from_branch_id,
+          items:variance,
+          ings,
+          autoVisible:false,
+        });
+      }
       if(reloadIngs)await reloadIngs();
       setReceivingTransfer(null);
       await load();
