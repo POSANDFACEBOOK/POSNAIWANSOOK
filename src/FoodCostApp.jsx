@@ -628,37 +628,6 @@ function setBranchSafetyInJson(existing,branchId,value){
 //   subStock = parentQty × sub.amountGram / parentIng.convert_to_gram
 // — i.e. how many sub-stock units are consumed/produced per one parent stock unit.
 // Recursion is capped at 3 levels to defend against cycles in mis-configured SOPs.
-// Returns the rows where shipping would push the sender's branch stock
-// negative. Each entry: {name, available, needed, shortage, unit}.
-// Empty array = safe to ship. Skips rows missing ingredient_id / qty.
-function checkStockAvailability(items,fromBranchId,ings){
-  const issues=[];
-  if(!fromBranchId||!Array.isArray(items)||!ings)return issues;
-  // Aggregate per-ingredient first in case the same id appears on multiple lines.
-  const totals=new Map();
-  for(const it of items){
-    const id=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id)||0);
-    const qty=+it.qty||+it.qtyNeeded||0;
-    if(!id||qty<=0)continue;
-    totals.set(id,(totals.get(id)||0)+qty);
-  }
-  for(const[id,need]of totals.entries()){
-    const ing=ings.find(x=>+x.id===id);
-    if(!ing)continue;
-    const have=branchStock(ing,fromBranchId);
-    if(have<need){
-      issues.push({
-        name:ing.name||`#${id}`,
-        available:have,
-        needed:need,
-        shortage:Math.round((need-have)*1000)/1000,
-        unit:ing.buy_unit||"หน่วย",
-      });
-    }
-  }
-  return issues;
-}
-
 async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible,_depth=0}){
   const toId=toBranchId!=null?(+toBranchId||null):null;
   const fromId=fromBranchId!=null?(+fromBranchId||null):null;
@@ -3968,19 +3937,6 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         confirmLabel:"จัดส่งต่อ (ข้ามรายการเสีย)",
       }))return;
     }
-    // Stock availability: refuse silent negative-stock writes.
-    const shortage=checkStockAvailability(validItems,po.from_branch_id,ings);
-    if(shortage.length>0){
-      const senderName=(branchById[po.from_branch_id]||{}).name||"ต้นทาง";
-      const lines=shortage.slice(0,6).map(s=>`• ${s.name}: มี ${s.available} ${s.unit} · ต้องการ ${s.needed} ${s.unit} (ขาด ${s.shortage} ${s.unit})`);
-      if(shortage.length>6)lines.push(`• ... และอีก ${shortage.length-6} รายการ`);
-      if(!await confirmDlg({
-        title:"⚠️ สต๊อกต้นทางไม่พอ",
-        message:`สต๊อกของ "${senderName}" ไม่พอสำหรับ ${shortage.length} รายการ:\n\n${lines.join("\n")}\n\nจัดส่งต่อจะทำให้สต๊อกติดลบ — ดำเนินการต่อ?`,
-        danger:true,
-        confirmLabel:"จัดส่งต่อ (สต๊อกอาจติดลบ)",
-      }))return;
-    }
     const recipient=(branchById[po.branch_id]||{}).name||"ปลายทาง";
     if(!await confirmDlg({
       title:"ยืนยันจัดส่ง + ตัดสต๊อก",
@@ -4032,19 +3988,6 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         message:`${allItems.length-validItems.length} จาก ${allItems.length} รายการขาดข้อมูล จะถูกข้าม:\n\n${bad.slice(0,6).map(n=>"• "+n).join("\n")}${bad.length>6?"\n• ... และอีก "+(bad.length-6)+" รายการ":""}\n\nต้องการดำเนินการจัดส่งโดยข้ามรายการเหล่านี้?`,
         danger:true,
         confirmLabel:"จัดส่งต่อ (ข้ามรายการเสีย)",
-      }))return;
-    }
-    // Stock availability check for the source branch.
-    const shortage=checkStockAvailability(validItems,po.from_branch_id,ings);
-    if(shortage.length>0){
-      const senderName=(branchById[po.from_branch_id]||{}).name||"ต้นทาง";
-      const lines=shortage.slice(0,6).map(s=>`• ${s.name}: มี ${s.available} ${s.unit} · ต้องการ ${s.needed} ${s.unit} (ขาด ${s.shortage} ${s.unit})`);
-      if(shortage.length>6)lines.push(`• ... และอีก ${shortage.length-6} รายการ`);
-      if(!await confirmDlg({
-        title:"⚠️ สต๊อกต้นทางไม่พอ",
-        message:`สต๊อกของ "${senderName}" ไม่พอสำหรับ ${shortage.length} รายการ:\n\n${lines.join("\n")}\n\nจัดส่งต่อจะทำให้สต๊อกติดลบ — ดำเนินการต่อ?`,
-        danger:true,
-        confirmLabel:"จัดส่งต่อ (สต๊อกอาจติดลบ)",
       }))return;
     }
     const recipient=(branchById[po.branch_id]||{}).name||"ปลายทาง";
