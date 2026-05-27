@@ -6194,6 +6194,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   const[orderQty,setOrderQty]=useState({});  // {ingId: number} — manually overridden order qty
   const[saving,setSaving]=useState(false);
   const[savingStock,setSavingStock]=useState(false);
+  const[submitResult,setSubmitResult]=useState(null);  // { poList, extList, skippedList, totalItems, totalCost } — shown in result modal
   const[safetyEdit,setSafetyEdit]=useState({});  // { ingId: stringValue } — local edit before commit
   const safetyTimers=useRef({});                  // { ingId: timeoutId } — debounce per-row
   async function saveSafety(ing,raw){
@@ -6349,18 +6350,19 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         return centralBranches.find(b=>(b.name||"").trim()===t)||null;
       };
 
-      let poCount=0,orderCount=0,skippedSelfPO=0;
+      const poList=[],extList=[],skippedList=[];
       for(const sup of Object.values(supMap)){
         const central=matchCentralSupplier(sup.supplierName);
         const isCentralOrderingFromItself=central&&+central.id===+currentBranch.id;
+        const subtotal=round2(sup.items.reduce((s,it)=>s+(+it.estimatedCost||0),0));
         if(central&&!isCentralOrderingFromItself){
           // → PO REQUEST: branch is asking central for goods.
           //   from = สาขา (creator of the request), to = ครัวกลาง (waits to accept)
           //   status = "requested" — central will press "รับเอกสาร" which swaps
           //   from/to and flips to "open" before the normal PO flow takes over.
-          const subtotal=round2(sup.items.reduce((s,it)=>s+(+it.estimatedCost||0),0));
+          const poNumber=genPONumber(currentBranch.id);
           await api.addPO({
-            po_number:genPONumber(currentBranch.id),
+            po_number:poNumber,
             branch_id:central.id,
             from_branch_id:currentBranch.id,
             po_date:todayStr(),
@@ -6381,11 +6383,11 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             created_by:currentUser.username,
             updated_at:new Date().toISOString(),
           });
-          poCount++;
+          poList.push({poNumber,centralName:central.name,items:sup.items,total:subtotal});
         }else if(isCentralOrderingFromItself){
           // Central trying to order from itself — silently skip; user picks an external
           // supplier when central restocks its own inventory
-          skippedSelfPO++;
+          skippedList.push({supplierName:sup.supplierName,itemCount:sup.items.length});
         }else{
           // → order_request grouped by external supplier
           await api.addOrder({
@@ -6395,18 +6397,20 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             requested_by:currentUser.username,requested_at:nowStr(),
             note:`นับสต็อก ${todayStr()}`,
           });
-          orderCount++;
+          extList.push({supplierName:sup.supplierName,items:sup.items,total:subtotal});
         }
       }
       // Reset overrides
       setOrderQty({});
       if(reload)await reload();
-      const lines=[];
-      if(poCount>0)lines.push(`📨 ส่งคำขอไปครัวกลาง ${poCount} ใบ — รอครัวกลางกด "รับเอกสาร" (ดูที่ "เอกสาร PO / สั่งของ")`);
-      if(orderCount>0)lines.push(`📦 คำสั่งซื้อภายนอก ${orderCount} ใบ → ดูที่ "📦 สั่งซัพพลายนอก" (กดพิมพ์ PDF ส่งซัพพลาย)`);
-      if(skippedSelfPO>0)lines.push(`⚠️ ${skippedSelfPO} กลุ่มข้าม (ครัวกลางสั่งจากตัวเอง — กรุณาตั้งซัพพลายภายนอก)`);
-      if(lines.length===0)lines.push("ไม่มีรายการถูกบันทึก");
-      alert(`✅ ส่งคำสั่งซื้อสำเร็จ\n\n${lines.join("\n")}`);
+      // Show beautiful result popup instead of plain alert — staff can see exactly
+      // where each item went (PO to central vs. external orders), preventing
+      // confusion when the printed PO has fewer items than what was submitted.
+      setSubmitResult({
+        poList,extList,skippedList,
+        totalItems:items.length,
+        totalCost:totals.totalCost,
+      });
     }catch(e){alert("ส่งไม่สำเร็จ: "+e.message);}
     setSaving(false);
   }
@@ -6509,6 +6513,104 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         </Card>;
       })}
     </div>}
+
+    {/* Beautiful result popup — replaces plain alert() so staff can see EXACTLY
+        where each item went: items routed to central PO vs. items routed to
+        external supplier orders. Eliminates the "I sent 70 but central printed
+        only 65" confusion. */}
+    {submitResult&&<Modal title="✅ ส่งคำสั่งซื้อสำเร็จ" onClose={()=>setSubmitResult(null)} wide>
+      {/* Hero stats */}
+      <div style={{background:`linear-gradient(135deg,${C.greenLight} 0%,${C.brandLight} 100%)`,borderRadius:14,padding:"18px 20px",marginBottom:16,border:`1.5px solid ${C.green}33`,display:"flex",justifyContent:"space-around",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,letterSpacing:.5,textTransform:"uppercase"}}>รายการทั้งหมด</div>
+          <div style={{fontSize:36,fontFamily:"'Sarabun',sans-serif",fontWeight:900,color:C.green,lineHeight:1.1,marginTop:4}}>{submitResult.totalItems}</div>
+          <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>รายการ</div>
+        </div>
+        <div style={{height:48,width:1,background:C.line}}/>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,letterSpacing:.5,textTransform:"uppercase"}}>มูลค่าประมาณ</div>
+          <div style={{fontSize:26,fontFamily:"'Sarabun',sans-serif",fontWeight:900,color:C.brand,lineHeight:1.1,marginTop:6}}>฿{(+submitResult.totalCost||0).toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+        </div>
+        {(submitResult.poList.length+submitResult.extList.length)>0&&<>
+          <div style={{height:48,width:1,background:C.line}}/>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,letterSpacing:.5,textTransform:"uppercase"}}>แยกเป็น</div>
+            <div style={{fontSize:18,fontFamily:"'Sarabun',sans-serif",fontWeight:900,color:C.ink,lineHeight:1.2,marginTop:6}}>{submitResult.poList.length+submitResult.extList.length} ใบ</div>
+            <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{submitResult.poList.length>0?`PO ${submitResult.poList.length}`:""}{submitResult.poList.length>0&&submitResult.extList.length>0?" · ":""}{submitResult.extList.length>0?`ซัพนอก ${submitResult.extList.length}`:""}</div>
+          </div>
+        </>}
+      </div>
+
+      {/* PO section — items routed to central kitchen */}
+      {submitResult.poList.length>0&&<div style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+          <span style={{fontSize:20}}>📨</span>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,color:C.ink}}>คำขอไปครัวกลาง</span>
+          <span style={{fontSize:11,padding:"3px 10px",background:C.tealLight,color:C.teal,borderRadius:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.teal}55`}}>{submitResult.poList.length} ใบ</span>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {submitResult.poList.map(po=><div key={po.poNumber} style={{padding:"12px 14px",border:`1.5px solid ${C.teal}55`,background:C.tealLight,borderRadius:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,flexWrap:"wrap",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.teal,letterSpacing:.3}}>{po.poNumber}</span>
+                <span style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>→ {po.centralName}</span>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:11,padding:"3px 10px",background:"#fff",color:C.teal,borderRadius:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.teal}55`}}>{po.items.length} รายการ</span>
+                <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.brand}}>฿{(+po.total||0).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+              </div>
+            </div>
+            <div style={{fontSize:11,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.8,maxHeight:120,overflowY:"auto"}}>
+              {po.items.map((it,i)=><span key={i} style={{display:"inline-block",background:"#fff",padding:"3px 9px",borderRadius:8,margin:"2px 4px 2px 0",border:`1px solid ${C.line}`}}>{it.name} <b style={{color:C.teal}}>{it.qtyNeeded}</b> <span style={{color:C.ink4}}>{it.unit}</span></span>)}
+            </div>
+          </div>)}
+        </div>
+        <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:10,padding:"9px 12px",background:C.bg,borderRadius:9,lineHeight:1.6,border:`1px solid ${C.line}`}}>💡 รอครัวกลางกด <b>"รับเอกสาร"</b> → <b>"🚚 จัดส่ง"</b> — ติดตามได้ที่แท็บ <b style={{color:C.brand}}>"📋 เอกสาร PO / สั่งของ"</b></div>
+      </div>}
+
+      {/* External section — items routed to outside suppliers */}
+      {submitResult.extList.length>0&&<div style={{marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+          <span style={{fontSize:20}}>📦</span>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,color:C.ink}}>คำสั่งซื้อภายนอก</span>
+          <span style={{fontSize:11,padding:"3px 10px",background:C.brandLight,color:C.brand,borderRadius:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.brandBorder}`}}>{submitResult.extList.length} ใบ</span>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {submitResult.extList.map((ex,idx)=><div key={idx} style={{padding:"12px 14px",border:`1.5px solid ${C.brandBorder}`,background:C.brandLight,borderRadius:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,flexWrap:"wrap",gap:8}}>
+              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.brand}}>{ex.supplierName}</span>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:11,padding:"3px 10px",background:"#fff",color:C.brand,borderRadius:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.brandBorder}`}}>{ex.items.length} รายการ</span>
+                <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.brand}}>฿{(+ex.total||0).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+              </div>
+            </div>
+            <div style={{fontSize:11,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.8,maxHeight:120,overflowY:"auto"}}>
+              {ex.items.map((it,j)=><span key={j} style={{display:"inline-block",background:"#fff",padding:"3px 9px",borderRadius:8,margin:"2px 4px 2px 0",border:`1px solid ${C.line}`}}>{it.name} <b style={{color:C.brand}}>{it.qtyNeeded}</b> <span style={{color:C.ink4}}>{it.unit}</span></span>)}
+            </div>
+          </div>)}
+        </div>
+        <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:10,padding:"9px 12px",background:C.bg,borderRadius:9,lineHeight:1.6,border:`1px solid ${C.line}`}}>💡 กดพิมพ์ PDF ส่งซัพพลายเอง — ดูที่แท็บ <b style={{color:C.brand}}>"📦 สั่งซัพพลายนอก"</b></div>
+      </div>}
+
+      {/* Skipped section — central ordering from itself */}
+      {submitResult.skippedList.length>0&&<div style={{marginBottom:16,padding:"12px 14px",background:C.redLight,borderRadius:12,border:`1.5px solid ${C.red}55`}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+          <span style={{fontSize:16}}>⚠️</span>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.red}}>{submitResult.skippedList.length} กลุ่มถูกข้าม</span>
+        </div>
+        <div style={{fontSize:11,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
+          ครัวกลางสั่งจากตัวเอง — กรุณาตั้งซัพพลายภายนอกสำหรับวัตถุดิบเหล่านี้:
+          <div style={{marginTop:6}}>{submitResult.skippedList.map((s,i)=><span key={i} style={{display:"inline-block",background:"#fff",padding:"3px 9px",borderRadius:8,margin:"2px 4px 2px 0",border:`1px solid ${C.red}55`,color:C.red,fontWeight:700}}>{s.supplierName} ({s.itemCount} รายการ)</span>)}</div>
+        </div>
+      </div>}
+
+      {/* Empty state (should rarely happen — items were already validated > 0) */}
+      {submitResult.poList.length===0&&submitResult.extList.length===0&&submitResult.skippedList.length===0&&<div style={{padding:"24px 18px",textAlign:"center",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>ไม่มีรายการถูกบันทึก</div>}
+
+      <div style={{display:"flex",justifyContent:"flex-end",paddingTop:14,borderTop:`1px solid ${C.line}`,gap:10}}>
+        <Btn onClick={()=>setSubmitResult(null)} icon={I.check}>เข้าใจแล้ว</Btn>
+      </div>
+    </Modal>}
 
     {/* FIXED bottom action bar */}
     {canOrder&&grouped.length>0&&<>
