@@ -4593,17 +4593,18 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     {/* Receive modal for external-supplier orders — actual qty + actual price */}
     {receivingExtOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingExtOrder.supplierName}`} onClose={()=>setReceivingExtOrder(null)} wide>
       <div style={{background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
-        💡 ใส่ <b>จำนวนที่รับจริง</b> และ <b>ราคา/หน่วยที่จ่ายจริง</b> ของแต่ละรายการ — ระบบจะเพิ่มสต๊อก "{currentBranch.name}" และบันทึกราคาเพื่อเก็บประวัติ
+        💡 <b>กรอก 2 ค่าให้ครบทุกแถว</b> ก่อนกดยืนยัน:<br/>① <b>จำนวนรับจริง</b> · ② <b>ราคา/หน่วยที่จ่ายจริง</b> — ระบบจะเพิ่มสต๊อก "{currentBranch.name}" และเก็บราคาเข้าประวัติ
       </div>
-      <div style={{maxHeight:"45vh",overflowY:"auto",marginBottom:14}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
-          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","ราคา/หน่วย","รวม"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:h==="รวม"?"right":"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+      <div style={{maxHeight:"45vh",overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch",marginBottom:14,border:`1px solid ${C.line}`,borderRadius:10}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,minWidth:560}}>
+          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","💰 ราคา/หน่วยที่จ่าย","รวม"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:i===3?C.brand:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
           <tbody>{receivingExtOrder.items.map((it,idx)=>{
             const ordered=+it.qtyNeeded||0;
             const got=+it.receivedQty||0;
             const price=+it.pricePerUnit||0;
             const lineTotal=got*price;
             const short=got<ordered;
+            const needPrice=got>0&&!(price>0);
             return <tr key={it._key} style={{borderTop:`1px solid ${C.lineLight}`,background:short?"#FFFBEB":"transparent"}}>
               <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>
                 <div>{it.name}</div>
@@ -4613,8 +4614,13 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
               <td style={{padding:"7px 10px"}}>
                 <NumStepper value={it.receivedQty} onChange={v=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={ordered}/>
               </td>
-              <td style={{padding:"7px 10px"}}>
-                <input type="number" min={0} step="0.01" value={it.pricePerUnit==null||it.pricePerUnit===""?"":it.pricePerUnit} onChange={e=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,pricePerUnit:e.target.value}:x)}))} placeholder="0.00" style={{...iS,padding:"6px 8px",fontSize:13,fontWeight:700,textAlign:"right",width:90,minHeight:34}}/>
+              <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>
+                <div style={{display:"inline-flex",alignItems:"center",gap:5}}>
+                  <span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span>
+                  <input type="number" min={0} step="0.01" value={it.pricePerUnit==null||it.pricePerUnit===""?"":it.pricePerUnit} onChange={e=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,pricePerUnit:e.target.value}:x)}))} placeholder="0.00" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${needPrice?C.red:(price>0?C.brand:C.brandBorder)}`,background:needPrice?"#FEF2F2":(price>0?C.brandLight:C.white),color:price>0?C.brand:C.ink}}/>
+                  <span style={{fontSize:11,color:C.ink4}}>/{it.unit||"หน่วย"}</span>
+                </div>
+                {needPrice&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>⚠ กรุณากรอกราคา</div>}
               </td>
               <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:lineTotal>0?C.green:C.ink4,whiteSpace:"nowrap"}}>฿{lineTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
             </tr>;
@@ -6129,17 +6135,18 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     {/* Receive confirmation modal */}
     {receivingOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingOrder.supplierName}`} onClose={()=>setReceivingOrder(null)} wide>
       <div style={{background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
-        💡 ใส่ <b>จำนวนที่รับจริง</b> และ <b>ราคา/หน่วย</b> ที่ซัพพลายเรียกเก็บ — ระบบจะเพิ่มสต็อกของสาขา "{receivingOrder.branchName}" และอัพเดทต้นทุนตามนี้
+        💡 <b>กรอก 2 ค่าให้ครบทุกแถว</b> ก่อนกดยืนยัน:<br/>① <b>จำนวนรับจริง</b> · ② <b>ราคา/หน่วยที่จ่ายจริง</b> — ระบบจะเพิ่มสต๊อกของสาขา "{receivingOrder.branchName}" และอัพเดทต้นทุนตามนี้
       </div>
-      <div style={{maxHeight:"45vh",overflowY:"auto",marginBottom:14}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
-          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","ราคา/หน่วย","รวม"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:h==="รวม"?"right":"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+      <div style={{maxHeight:"45vh",overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch",marginBottom:14,border:`1px solid ${C.line}`,borderRadius:10}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,minWidth:560}}>
+          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","💰 ราคา/หน่วยที่จ่าย","รวม"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:i===3?C.brand:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
           <tbody>{receivingOrder.items.map((it,idx)=>{
             const ordered=+it.qtyNeeded||0;
             const got=+it.receivedQty||0;
             const price=+it.pricePerUnit||0;
             const lineTotal=got*price;
             const short=got<ordered;
+            const needPrice=got>0&&!(price>0);
             return <tr key={it._key} style={{borderTop:`1px solid ${C.lineLight}`,background:short?"#FFFBEB":"transparent"}}>
               <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>
                 <div>{it.name}</div>
@@ -6149,8 +6156,13 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               <td style={{padding:"7px 10px"}}>
                 <NumStepper value={it.receivedQty} onChange={v=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={ordered}/>
               </td>
-              <td style={{padding:"7px 10px"}}>
-                <input type="number" min={0} step="0.01" value={it.pricePerUnit==null||it.pricePerUnit===""?"":it.pricePerUnit} onChange={e=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,pricePerUnit:e.target.value}:x)}))} placeholder="0.00" style={{...iS,padding:"6px 8px",fontSize:13,fontWeight:700,textAlign:"right",width:90,minHeight:34}}/>
+              <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>
+                <div style={{display:"inline-flex",alignItems:"center",gap:5}}>
+                  <span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span>
+                  <input type="number" min={0} step="0.01" value={it.pricePerUnit==null||it.pricePerUnit===""?"":it.pricePerUnit} onChange={e=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,pricePerUnit:e.target.value}:x)}))} placeholder="0.00" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${needPrice?C.red:(price>0?C.brand:C.brandBorder)}`,background:needPrice?"#FEF2F2":(price>0?C.brandLight:C.white),color:price>0?C.brand:C.ink}}/>
+                  <span style={{fontSize:11,color:C.ink4}}>/{it.unit||"หน่วย"}</span>
+                </div>
+                {needPrice&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>⚠ กรุณากรอกราคา</div>}
               </td>
               <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:lineTotal>0?C.green:C.ink4,whiteSpace:"nowrap"}}>฿{lineTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
             </tr>;
