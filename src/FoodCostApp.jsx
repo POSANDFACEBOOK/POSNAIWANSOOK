@@ -4771,7 +4771,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       </div>
     </Modal>}
 
-    {showPurchaseSummary&&<PurchaseSummaryModal pos={pos} ings={ings} branchById={branchById} currentBranch={currentBranch} currentUser={currentUser} onCreateOrders={isCentralBranch?createPurchaseOrdersFromSummary:null} onClose={()=>setShowPurchaseSummary(false)}/>}
+    {showPurchaseSummary&&<PurchaseSummaryModal ings={ings} branchById={branchById} currentBranch={currentBranch} currentUser={currentUser} onCreateOrders={isCentralBranch?createPurchaseOrdersFromSummary:null} onClose={()=>setShowPurchaseSummary(false)}/>}
   </div>;
 }
 
@@ -4779,9 +4779,38 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 // based on pending branch orders (status requested/open) vs central's own stock.
 // SOP cascade is applied so if a branch ordered a compound ingredient that
 // central has to produce, the sub-ingredients are counted toward the need.
-function PurchaseSummaryModal({pos,ings,branchById,currentBranch,currentUser,onCreateOrders,onClose}){
+function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreateOrders,onClose}){
   const PENDING=new Set(["requested","open"]);
   const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
+  // SELF-CONTAINED FETCH — bypass parent's filtered `pos` state so the summary
+  // never misses pending POs because the user happened to have a status/date/
+  // partner/direction filter set on the PO list. Re-fetch on demand so the
+  // count is always current with the database, not the UI's filter view.
+  const[pos,setPos]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[loadErr,setLoadErr]=useState("");
+  const[refreshTick,setRefreshTick]=useState(0);
+  useEffect(()=>{
+    if(currentBranch?.id==null)return;
+    let alive=true;
+    (async()=>{
+      setLoading(true);setLoadErr("");
+      try{
+        // viewerBranchId picks up POs where central is sender OR receiver.
+        // No date/status/partner filters → cover EVERY pending PO.
+        const data=await api.getPOs({viewerBranchId:currentBranch.id});
+        if(!alive)return;
+        // Pre-filter to PENDING here so downstream code only sees relevant rows.
+        setPos((data||[]).filter(p=>PENDING.has(p.status)));
+      }catch(e){
+        if(!alive)return;
+        setLoadErr(e&&e.message||String(e));
+      }
+      if(alive)setLoading(false);
+    })();
+    return()=>{alive=false;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[currentBranch?.id,refreshTick]);
   const summary=useMemo(()=>{
     // Aggregate "needed" qty per ingredient across all pending POs +
     // recurse into SOP sub-ingredients (depth ≤ 3 to defend against cycles).
@@ -4913,6 +4942,23 @@ function PurchaseSummaryModal({pos,ings,branchById,currentBranch,currentUser,onC
   }
 
   return <Modal title={`📋 สรุปวัตถุดิบที่ต้องซื้อวันนี้ (${todayStr()})`} onClose={onClose} extraWide>
+    {/* Loading / error / data states — loading guards against the empty "stock
+        sufficient" message showing before the fetch completes. */}
+    {loading?<div style={{padding:"60px 20px"}}><Loading text="กำลังโหลด PO ค้างจ่าย..."/></div>:
+     loadErr?<div style={{padding:"40px 20px",textAlign:"center",background:C.redLight,borderRadius:12,border:`1.5px solid ${C.red}55`,fontFamily:"'Sarabun',sans-serif"}}>
+       <div style={{fontSize:42,marginBottom:8}}>⚠️</div>
+       <div style={{fontSize:15,fontWeight:800,color:C.red,marginBottom:6}}>โหลด PO ค้างจ่ายไม่สำเร็จ</div>
+       <div style={{fontSize:12,color:C.ink3,marginBottom:14,wordBreak:"break-word"}}>{loadErr}</div>
+       <Btn v="primary" onClick={()=>setRefreshTick(t=>t+1)} icon={I.refresh}>ลองอีกครั้ง</Btn>
+     </div>:<>
+    {/* Refresh + freshness indicator — user can re-pull from DB without closing */}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,padding:"8px 12px",background:C.tealLight,borderRadius:10,border:`1px solid ${C.teal}33`,gap:10,flexWrap:"wrap"}}>
+      <div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:700,display:"flex",alignItems:"center",gap:6}}>
+        <span>✅</span>
+        <span>ดึงตรงจากฐานข้อมูล — ไม่ขึ้นอยู่กับ filter ของหน้า PO</span>
+      </div>
+      <button onClick={()=>setRefreshTick(t=>t+1)} title="ดึงข้อมูลใหม่" style={{background:C.white,border:`1px solid ${C.teal}55`,color:C.teal,padding:"5px 12px",borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",display:"inline-flex",alignItems:"center",gap:5}}>🔄 รีเฟรช</button>
+    </div>
     {/* Summary stats */}
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(160px,100%),1fr))",gap:10,marginBottom:14}}>
       <div style={{padding:"12px 14px",background:"#FEF3C7",border:`1px solid #F59E0B33`,borderRadius:10}}>
@@ -5011,6 +5057,7 @@ function PurchaseSummaryModal({pos,ings,branchById,currentBranch,currentUser,onC
         </div>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:28,fontWeight:900}}>฿{totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
       </div>
+    </>}
     </>}
   </Modal>;
 }
