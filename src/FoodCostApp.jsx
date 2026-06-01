@@ -3762,6 +3762,23 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       else if(direction==="received")filters.toBranchId=currentBranch.id;
       else filters.viewerBranchId=currentBranch.id;
       let data=await api.getPOs(filters);
+      // ── Self-heal stranded "requests" ────────────────────────────────────
+      // A PO addressed TO a central kitchen while in "open" is invalid: central
+      // is the receiver (no "🚚 จัดส่ง" button) and it's not "requested" (no
+      // "🖨 ปริ้นเอกสาร" button) → permanently stuck (e.g. PO-B4 บางใหญ่→ครัวกลาง).
+      // This came from copying an order-request or manually building a PO to
+      // central before the create-time fix. Flip it back to "requested" so
+      // central can accept it and the from/to swap proceeds normally.
+      // (central→central excluded: from must NOT be central. Race-safe + best-effort.)
+      const isCentralId=(id)=>(branchById[id]||{}).type==="central";
+      const stranded=data.filter(p=>p.status==="open"&&isCentralId(p.branch_id)&&!isCentralId(p.from_branch_id));
+      if(stranded.length){
+        await Promise.all(stranded.map(p=>
+          api.patchPOIfStatus(p.id,"open",{status:"requested",updated_at:new Date().toISOString()}).catch(()=>{})
+        ));
+        const fixedIds=new Set(stranded.map(p=>p.id));
+        data=data.map(p=>fixedIds.has(p.id)?{...p,status:"requested"}:p);
+      }
       if(partnerFilter){
         const pid=+partnerFilter;
         data=data.filter(p=>+p.from_branch_id===pid||+p.branch_id===pid);
@@ -4193,9 +4210,18 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     }
     const fromName=(branchById[newFromId]||{}).name||"—";
     const toName=(branchById[newToId]||{}).name||"—";
+    // If the copy is addressed TO a central kitchen (and not FROM one), it is a
+    // purchase REQUEST — it MUST start at "requested" so central can accept it
+    // (acceptRequest swaps direction → central→branch → open → ship). Forcing
+    // "open" here would strand the PO: central is the receiver and has no
+    // "🚚 จัดส่ง" button, and it's not "requested" so no "🖨 ปริ้นเอกสาร" either.
+    const toIsCentral=(branchById[newToId]||{}).type==="central";
+    const fromIsCentral=(branchById[newFromId]||{}).type==="central";
+    const newStatus=(toIsCentral&&!fromIsCentral)?"requested":"open";
+    const statusLabel=newStatus==="requested"?'"📨 รอครัวกลางรับ" (รอครัวกลางกดรับเอกสาร)':'"📋 รอจัดส่ง" (ยังไม่ตัดสต๊อก)';
     if(!await confirmDlg({
       title:"คัดลอกเอกสาร PO",
-      message:`สร้าง PO ใหม่จาก ${po.po_number||"เอกสารนี้"}?\n\n• คัดลอกรายการวัตถุดิบทั้งหมด\n• ผู้ส่ง: ${fromName} → ผู้รับ: ${toName}\n• สถานะตั้งต้น: "📋 รอจัดส่ง" (ยังไม่ตัดสต๊อก)\n• แก้ไขจำนวน/เพิ่ม-ลบรายการได้ก่อนกดจัดส่ง`,
+      message:`สร้าง PO ใหม่จาก ${po.po_number||"เอกสารนี้"}?\n\n• คัดลอกรายการวัตถุดิบทั้งหมด\n• ผู้ส่ง: ${fromName} → ผู้รับ: ${toName}\n• สถานะตั้งต้น: ${statusLabel}\n• แก้ไขจำนวน/เพิ่ม-ลบรายการได้ก่อนกดจัดส่ง`,
       confirmLabel:"📋 คัดลอก",
     }))return;
     try{
@@ -4223,7 +4249,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         branch_id:newToId,
         from_branch_id:newFromId,
         po_date:todayBkk(),
-        status:"open",
+        status:newStatus,
         items:cleanItems,
         subtotal:+po.subtotal||0,
         vat:+po.vat||0,
@@ -5364,12 +5390,17 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
     try{
       // Editing preserves status — to actually accept a dispute the creator uses the dedicated
       // "✅ ยอมรับการแก้ไข" button (acceptDispute), which has its own confirm + recompute.
+      // A brand-new PO addressed TO a central kitchen (and not FROM one) is a
+      // purchase REQUEST → it must start at "requested" so central can accept it
+      // (which swaps direction). Otherwise it strands as un-shippable "open".
+      const toIsCentral=branch?.type==="central";
+      const effStatus=(!editPO&&toIsCentral&&!fromIsCentral&&status!=="cancelled")?"requested":status;
       const payload={
         po_number:poNumber,
         branch_id:branch.id,
         from_branch_id:editPO?.from_branch_id||fromBranch?.id||null,
         po_date:poDate,
-        status,
+        status:effStatus,
         items:items.map(it=>({...it,line_total:round2((+it.qty||0)*(+it.price_per_unit||0))})),
         subtotal:round2(subtotal),
         vat:round2(vat),
