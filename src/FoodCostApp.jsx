@@ -4690,7 +4690,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     {/* Copy PO → pick destination branch popup. The user chooses which branch to
         re-issue all items to; doCopyPO builds the new PO with the right status. */}
     {copyPO&&(()=>{
-      const dests=branchOptions.filter(b=>+b.id!==+currentBranch.id);
+      // Exclude the current branch (no self-PO) and any closed/inactive branch
+      // — you can't open a new PO to a branch that's switched off.
+      const dests=branchOptions.filter(b=>+b.id!==+currentBranch.id&&b.active!==false);
       const itemCount=(copyPO.items||[]).length;
       return <Modal title="📋 คัดลอก PO — เลือกสาขาปลายทาง" onClose={()=>{if(!copyBusy)setCopyPO(null);}} wide>
         <div style={{background:`linear-gradient(135deg,${C.brandLight},${C.tealLight})`,borderRadius:12,padding:"14px 16px",marginBottom:14,border:`1px solid ${C.brandBorder}`}}>
@@ -4709,7 +4711,6 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                 <div style={{fontSize:14.5,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}</div>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginTop:3}}>
                   <Chip color={bIsCentral?"teal":"orange"}>{bIsCentral?"ครัวกลาง":"สาขา"}</Chip>
-                  {b.active===false&&<Chip color="gray">ปิด</Chip>}
                 </div>
               </div>
             </div>
