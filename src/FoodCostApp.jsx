@@ -3740,6 +3740,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[receivingTransfer,setReceivingTransfer]=useState(null); // null | { po, items[receivedQty] }
   const[receivingExtOrder,setReceivingExtOrder]=useState(null);  // null | { orderId, supplierName, items[receivedQty,pricePerUnit] }
   const[showPurchaseSummary,setShowPurchaseSummary]=useState(false);
+  const[copyPO,setCopyPO]=useState(null);          // null | po — copy-target branch picker
+  const[copyBusy,setCopyBusy]=useState(false);     // true while addPO for a copy is in-flight
   const isCentralBranch=currentBranch?.type==="central";
   const hasPO=hasPerm(currentUser,"po")||hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
   // Per-PO permissions
@@ -4197,33 +4199,33 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   //     requests). In that case the new doc puts central on the from side
   //     and uses the original's "other party" as the destination, so the
   //     copy is central's to manage.
-  async function duplicatePO(po){
+  // Step 1 — open the destination-branch picker popup. The user chooses WHICH
+  // branch to re-issue this PO's items to (instead of auto-keeping the original
+  // direction). Actual copy happens in doCopyPO once a branch is picked.
+  function duplicatePO(po){
     const canCopy=isCreator(po)||isCentralBranch;
     if(!canCopy){alert("ไม่มีสิทธิ์คัดลอกเอกสารนี้");return;}
-    // Resolve the new from/to. Creator-owned copies keep the original
-    // direction; for central-cross-branch copies, central becomes the new
-    // creator and the destination is whichever party wasn't central.
-    let newFromId=po.from_branch_id,newToId=po.branch_id;
-    if(!isCreator(po)&&isCentralBranch){
-      newFromId=currentBranch.id;
-      newToId=(+po.from_branch_id===+currentBranch.id)?po.branch_id:po.from_branch_id;
-    }
-    const fromName=(branchById[newFromId]||{}).name||"—";
-    const toName=(branchById[newToId]||{}).name||"—";
-    // If the copy is addressed TO a central kitchen (and not FROM one), it is a
-    // purchase REQUEST — it MUST start at "requested" so central can accept it
-    // (acceptRequest swaps direction → central→branch → open → ship). Forcing
-    // "open" here would strand the PO: central is the receiver and has no
-    // "🚚 จัดส่ง" button, and it's not "requested" so no "🖨 ปริ้นเอกสาร" either.
-    const toIsCentral=(branchById[newToId]||{}).type==="central";
-    const fromIsCentral=(branchById[newFromId]||{}).type==="central";
+    setCopyPO(po);
+  }
+  // Step 2 — actually copy `po`'s items into a NEW PO addressed to `targetBranch`.
+  // Sender is always the current branch. Destination = central (and sender not
+  // central) ⇒ the new doc is a REQUEST ("requested" so central can accept+swap);
+  // otherwise it's a shipment ("open"). This honours the same invariant as
+  // submitOrder / manual create, so a copy can never strand at un-shippable open.
+  async function doCopyPO(po,targetBranch){
+    if(!po||!targetBranch)return;
+    const newFromId=currentBranch.id;
+    const newToId=targetBranch.id;
+    const toIsCentral=targetBranch.type==="central";
+    const fromIsCentral=currentBranch?.type==="central";
     const newStatus=(toIsCentral&&!fromIsCentral)?"requested":"open";
     const statusLabel=newStatus==="requested"?'"📨 รอครัวกลางรับ" (รอครัวกลางกดรับเอกสาร)':'"📋 รอจัดส่ง" (ยังไม่ตัดสต๊อก)';
     if(!await confirmDlg({
       title:"คัดลอกเอกสาร PO",
-      message:`สร้าง PO ใหม่จาก ${po.po_number||"เอกสารนี้"}?\n\n• คัดลอกรายการวัตถุดิบทั้งหมด\n• ผู้ส่ง: ${fromName} → ผู้รับ: ${toName}\n• สถานะตั้งต้น: ${statusLabel}\n• แก้ไขจำนวน/เพิ่ม-ลบรายการได้ก่อนกดจัดส่ง`,
+      message:`สร้าง PO ใหม่จาก ${po.po_number||"เอกสารนี้"}?\n\n• คัดลอกรายการวัตถุดิบทั้งหมด\n• ผู้ส่ง: ${currentBranch.name} → ผู้รับ: ${targetBranch.name}\n• สถานะตั้งต้น: ${statusLabel}\n• แก้ไขจำนวน/เพิ่ม-ลบรายการได้ก่อนกดจัดส่ง`,
       confirmLabel:"📋 คัดลอก",
     }))return;
+    setCopyBusy(true);
     try{
       // Normalise + sanitise every item so the new PO deducts stock cleanly on ship.
       const cleanItems=(po.items||[]).map(it=>{
@@ -4242,6 +4244,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       }).filter(Boolean);
       if(cleanItems.length===0){
         alert("ไม่สามารถคัดลอกได้ — รายการในเอกสารต้นฉบับไม่มีจำนวนหรือไม่ผูกวัตถุดิบ");
+        setCopyBusy(false);
         return;
       }
       const newPO={
@@ -4259,9 +4262,11 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         updated_at:new Date().toISOString(),
       };
       await api.addPO(newPO);
+      setCopyPO(null);
       await load();
-      alert(`✅ คัดลอกสำเร็จ — เอกสารใหม่: ${newPO.po_number}\n\nกด ✎ แก้ไข เพื่อปรับรายการก่อนจัดส่ง`);
+      alert(`✅ คัดลอกสำเร็จ — เอกสารใหม่: ${newPO.po_number}\n   ${currentBranch.name} → ${targetBranch.name}\n\nกด ✎ แก้ไข เพื่อปรับรายการก่อนจัดส่ง`);
     }catch(e){showErr("คัดลอกไม่สำเร็จ",e);}
+    setCopyBusy(false);
   }
 
   function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
@@ -4681,6 +4686,40 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 
     {/* Step 2: Form */}
     {step==='form'&&pickedBranch&&<POFormPage branch={pickedBranch} fromBranch={editPO?branchById[editPO.from_branch_id]:currentBranch} editPO={editPO} ings={ings} currentUser={currentUser} onClose={()=>{setStep(null);setEditPO(null);}} onSaved={onSaved} reloadIngs={reloadIngs}/>}
+
+    {/* Copy PO → pick destination branch popup. The user chooses which branch to
+        re-issue all items to; doCopyPO builds the new PO with the right status. */}
+    {copyPO&&(()=>{
+      const dests=branchOptions.filter(b=>+b.id!==+currentBranch.id);
+      const itemCount=(copyPO.items||[]).length;
+      return <Modal title="📋 คัดลอก PO — เลือกสาขาปลายทาง" onClose={()=>{if(!copyBusy)setCopyPO(null);}} wide>
+        <div style={{background:`linear-gradient(135deg,${C.brandLight},${C.tealLight})`,borderRadius:12,padding:"14px 16px",marginBottom:14,border:`1px solid ${C.brandBorder}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:4}}>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,color:C.ink}}>{copyPO.po_number||`#${copyPO.id}`}</span>
+            <span style={{fontSize:11,padding:"3px 10px",background:"#fff",color:C.brand,borderRadius:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.brandBorder}`}}>{itemCount} รายการ</span>
+          </div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink3,lineHeight:1.6}}>เลือกสาขาที่จะ <b>เปิดรายการทั้งหมดนี้</b> ไปให้ — ผู้ส่งคือ <b style={{color:C.brand}}>{currentBranch.name}</b><br/>📨 ถ้าเลือก <b>ครัวกลาง</b> → เป็น "คำขอ" รอครัวกลางรับ · 🚚 ถ้าเลือก <b>สาขาอื่น</b> → เป็นใบจัดส่ง รอกดส่ง</div>
+        </div>
+        {dests.length===0?<div style={{padding:"30px 20px",textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>ไม่มีสาขาปลายทางอื่นให้เลือก</div>:
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(220px,100%),1fr))",gap:10}}>
+          {dests.map(b=>{const bIsCentral=b.type==="central";return <button key={b.id} disabled={copyBusy} onClick={()=>doCopyPO(copyPO,b)} style={{padding:"16px 16px",border:`2px solid ${bIsCentral?C.teal+"55":C.line}`,borderRadius:14,background:bIsCentral?C.tealLight:C.white,cursor:copyBusy?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .15s",minHeight:64,opacity:copyBusy?.6:1}} onMouseEnter={e=>{if(!copyBusy){e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}}} onMouseLeave={e=>{e.currentTarget.style.borderColor=bIsCentral?C.teal+"55":C.line;e.currentTarget.style.background=bIsCentral?C.tealLight:C.white;}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{width:38,height:38,borderRadius:10,background:bIsCentral?`linear-gradient(135deg,${C.teal},#0F766E)`:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={bIsCentral?I.truck:I.branch} s={17} c={C.white}/></div>
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{fontSize:14.5,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.name}</div>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginTop:3}}>
+                  <Chip color={bIsCentral?"teal":"orange"}>{bIsCentral?"ครัวกลาง":"สาขา"}</Chip>
+                  {b.active===false&&<Chip color="gray">ปิด</Chip>}
+                </div>
+              </div>
+            </div>
+          </button>;})}
+        </div>}
+        <div style={{display:"flex",justifyContent:"flex-end",paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:14}}>
+          <Btn v="ghost" onClick={()=>{if(!copyBusy)setCopyPO(null);}} disabled={copyBusy}>ยกเลิก</Btn>
+        </div>
+      </Modal>;
+    })()}
 
     {/* Full-screen view + actions */}
     {viewPO&&<POViewModal
