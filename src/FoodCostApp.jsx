@@ -11794,7 +11794,8 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   },[]);
   useEffect(()=>{if(posTab==="orders")loadAllOrders();},[posTab]);
 
-  const PTABS=[{id:"tables",l:"แผนผังโต๊ะ",icon:I.table},{id:"orders",l:"ออเดอร์วันนี้",icon:I.order},{id:"qr",l:"QR สั่งอาหาร",icon:I.qr}];
+  // QR-สั่งอาหาร tab removed — per-table QR is printed by tapping a table (one place only).
+  const PTABS=[{id:"tables",l:"แผนผังโต๊ะ",icon:I.table},{id:"orders",l:"ออเดอร์วันนี้",icon:I.order}];
 
   if(loading)return <Loading text="กำลังโหลดข้อมูล POS..."/>;
 
@@ -11849,7 +11850,6 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
           </div>
         </>}
       </div>}
-      {posTab==="qr"&&<div style={{overflowY:"auto",flex:1}}><POSQRPage branch={currentBranch} tables={tables} onTablesChanged={loadTables}/></div>}
     </div>
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll();}} wide>
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
