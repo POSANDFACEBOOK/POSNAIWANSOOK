@@ -9672,6 +9672,36 @@ function buildKitchenESC(item,tableNum){
   let len=0;bufs.forEach(u=>len+=u.length);const out=new Uint8Array(len);let off=0;
   bufs.forEach(u=>{out.set(u,off);off+=u.length;});return out;
 }
+// ESC/POS table-QR slip — uses the printer's NATIVE QR command (GS ( k) so a
+// thermal printer renders the code directly, no browser dialog. data = scan URL.
+function buildTableQRESC(table,branch,url){
+  const enc=new TextEncoder();const bufs=[];
+  const b=(...bytes)=>bufs.push(new Uint8Array(bytes));
+  const t=str=>bufs.push(enc.encode(str));
+  b(0x1b,0x40);                                          // init
+  b(0x1b,0x61,0x01);                                     // center
+  b(0x1d,0x21,0x00);t((branch.name||"")+"\n");
+  b(0x1d,0x21,0x11);t("โต๊ะ "+(table.table_number||"")+"\n");
+  b(0x1d,0x21,0x00);
+  if(table.label)t(table.label+"\n");
+  t("\n");
+  // ── QR code via GS ( k ──
+  const data=enc.encode(url);
+  b(0x1d,0x28,0x6b,0x04,0x00,0x31,0x41,0x32,0x00);       // fn65: model 2
+  b(0x1d,0x28,0x6b,0x03,0x00,0x31,0x43,0x06);            // fn67: module size 6
+  b(0x1d,0x28,0x6b,0x03,0x00,0x31,0x45,0x31);            // fn69: error correction M
+  const sl=data.length+3;
+  b(0x1d,0x28,0x6b,sl&0xff,(sl>>8)&0xff,0x31,0x50,0x30); // fn80: store data
+  bufs.push(data);
+  b(0x1d,0x28,0x6b,0x03,0x00,0x31,0x51,0x30);            // fn81: print
+  t("\n");
+  b(0x1d,0x21,0x00);t("สแกนเพื่อดูเมนูและสั่งอาหาร\n");
+  t("Scan to order\n");
+  b(0x1b,0x64,0x04);                                     // feed 4
+  b(0x1d,0x56,0x41,0x00);                                // cut
+  let len=0;bufs.forEach(u=>len+=u.length);const out=new Uint8Array(len);let off=0;
+  bufs.forEach(u=>{out.set(u,off);off+=u.length;});return out;
+}
 const _BT_SVC=["000018f0-0000-1000-8000-00805f9b34fb","49535343-fe7d-4ae5-8fa9-9fafd205e455","e7810a71-73ae-499d-8c15-faa9aef0c3f2","0000ff00-0000-1000-8000-00805f9b34fb"];
 const _BT_CHR=["00002af1-0000-1000-8000-00805f9b34fb","49535343-8841-881f-4a2d-13b6b6c9d39a","bef8d6c9-9c21-4c9e-b632-bd58c1009f9f","0000ff02-0000-1000-8000-00805f9b34fb"];
 async function btPrint(escData,btName){
@@ -10641,10 +10671,25 @@ function QRImg({url,size=120}){
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}&margin=8`;
   return <img src={qrUrl} alt="QR Code" style={{width:size,height:size,borderRadius:8,border:`1px solid ${C.line}`}}/>;
 }
-function printTableQR(table,branch){
+async function printTableQR(table,branch,printers=[]){
   const baseUrl=window.location.origin+window.location.pathname;
   const tokenPart=table.qr_token?`&t=${encodeURIComponent(table.qr_token)}`:"";
   const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${table.id}${tokenPart}`;
+  // 1) If a Bluetooth printer is configured for this branch, print the QR slip
+  //    DIRECTLY via ESC/POS — no browser dialog, straight out the connected printer.
+  const btP=(printers||[]).find(p=>p&&p.active!==false&&(p.branch_id==null||+p.branch_id===+branch.id)&&getPConn(p).type==="bluetooth");
+  if(btP){
+    try{
+      await btPrint(buildTableQRESC(table,branch,url),getPConn(btP).btName);
+      return;
+    }catch(e){
+      console.error("BT QR print failed — falling back to print window",e);
+      // fall through to the browser-window path below
+    }
+  }
+  // 2) Fallback (IP/network printer, no Bluetooth, or BT failed): open a print
+  //    window that auto-fires window.print() (browsers can't bypass the dialog
+  //    for non-Bluetooth printers).
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}&margin=10`;
   const w=openPrintWindow(340,420);
   if(!w)return;
@@ -11887,7 +11932,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     </div>
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll();}} wide>
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
-        <button onClick={()=>printTableQR(selTable,currentBranch)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
+        <button onClick={()=>printTableQR(selTable,currentBranch,printers)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
     </Modal>}
