@@ -11450,6 +11450,8 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
   const[catSel,setCatSel]=useState(null);       // null=catch-all, [] or [names]=specific
   const[catMenuOverride,setCatMenuOverride]=useState({});  // menu_id → assigned printer_id (for override view)
   const[catSaving,setCatSaving]=useState(false);
+  const[openCats,setOpenCats]=useState(()=>new Set());  // category names expanded to show per-menu checkboxes
+  function toggleOpenCat(c){setOpenCats(prev=>{const n=new Set(prev);if(n.has(c))n.delete(c);else n.add(c);return n;});}
   const allCategories=useMemo(()=>[...new Set(menus.map(m=>m.category).filter(Boolean))].sort(),[menus]);
   function openCatEdit(p){
     setCatEditP(p);
@@ -11457,6 +11459,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
     // Build menu→printer override map for the menus visible
     const ov={};menus.forEach(m=>{if(m.printer_id)ov[m.id]=+m.printer_id;});
     setCatMenuOverride(ov);
+    setOpenCats(new Set());
   }
   async function saveCatEdit(){
     if(!catEditP)return;
@@ -11670,61 +11673,67 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
     </div>}
     {/* Category routing modal */}
     {catEditP&&<Modal title={`🍳 หมวดหมู่ที่รับผิดชอบ — ${catEditP.name}`} onClose={()=>setCatEditP(null)} extraWide>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18}}>
-        {/* Left: category checklist */}
-        <div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-            <div style={{fontSize:13,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>📂 หมวดหมู่</div>
-            <div style={{display:"flex",gap:6}}>
-              <button onClick={()=>setCatSel(null)} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${catSel===null?C.green:C.line}`,background:catSel===null?C.greenLight:C.white,color:catSel===null?C.green:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกหมวด (catch-all)</button>
-              <button onClick={()=>setCatSel([...allCategories])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>เลือกทั้งหมด</button>
-              <button onClick={()=>setCatSel([])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
-            </div>
-          </div>
-          {catSel===null
-            ?<div style={{padding:"14px 16px",background:C.greenLight,borderRadius:10,border:`1.5px solid ${C.green}`,fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,lineHeight:1.7}}>
-              ✅ <b>Catch-all</b> — เครื่องนี้รับงานพิมพ์ทุกหมวด<br/>
-              <span style={{fontSize:11,fontWeight:400}}>ใช้เป็น "เครื่องสำรอง" — ระบบจะส่งงานมาที่นี่ถ้าไม่มีเครื่องอื่น match หมวดของเมนู</span>
-            </div>
-            :allCategories.length===0
-              ?<div style={{padding:30,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีหมวดหมู่เมนู — เพิ่มหมวดในแท็บ "เมนู" ก่อน</div>
-              :<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxHeight:340,overflowY:"auto"}}>
-                {allCategories.map(c=>{const has=catSel.includes(c);const count=menus.filter(m=>m.category===c).length;return <label key={c} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:8,cursor:"pointer",background:has?C.brandLight:C.white,border:`1.5px solid ${has?C.brandBorder:C.line}`,transition:"all .15s"}}>
-                  <input type="checkbox" checked={has} onChange={()=>toggleCat(c)} style={{accentColor:C.brand,width:15,height:15,cursor:"pointer"}}/>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:has?800:600,color:has?C.brand:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c}</div>
-                    <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{count} เมนู</div>
-                  </div>
-                </label>;})}
-              </div>}
-        </div>
-        {/* Right: per-menu override */}
-        <div>
-          <div style={{fontSize:13,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>🍽 Override รายเมนู (ระบุเครื่องเฉพาะ)</div>
-          <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:8,lineHeight:1.5}}>เมนูที่ตั้ง override จะข้ามกฎหมวดหมู่ — ส่งไปเครื่องที่ระบุเสมอ</div>
-          <div style={{maxHeight:380,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
-              <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}>
-                <tr><th style={{padding:"8px 10px",textAlign:"left",fontSize:11,color:C.ink3,borderBottom:`1px solid ${C.line}`}}>เมนู</th><th style={{padding:"8px 10px",textAlign:"left",fontSize:11,color:C.ink3,borderBottom:`1px solid ${C.line}`,width:180}}>ส่งไปที่</th></tr>
-              </thead>
-              <tbody>
-                {menus.map(m=>{const assigned=catMenuOverride[m.id]||"";return <tr key={m.id} style={{borderBottom:`1px solid ${C.lineLight}`}}>
-                  <td style={{padding:"7px 10px",fontSize:12,color:C.ink2}}>
-                    <div style={{fontWeight:600}}>{m.name}</div>
-                    <div style={{fontSize:10,color:C.ink4}}>{m.category||"—"}</div>
-                  </td>
-                  <td style={{padding:"7px 10px"}}>
-                    <select value={assigned} onChange={e=>setCatMenuOverride(prev=>({...prev,[m.id]:e.target.value?+e.target.value:null}))} style={{...iS,fontSize:11,padding:"4px 8px",height:28}}>
-                      <option value="">— ตามหมวด ({m.category||"-"}) —</option>
-                      {printers.map(pr=><option key={pr.id} value={pr.id}>{pr.id===catEditP.id?"⭐ ":""}{pr.name}</option>)}
-                    </select>
-                  </td>
-                </tr>;})}
-                {menus.length===0&&<tr><td colSpan={2} style={{padding:20,textAlign:"center",color:C.ink4,fontSize:12}}>ยังไม่มีเมนู</td></tr>}
-              </tbody>
-            </table>
+      <div>
+        {/* Header: title + quick actions */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,flexWrap:"wrap",gap:8}}>
+          <div style={{fontSize:13,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>📂 หมวดหมู่</div>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>setCatSel(null)} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${catSel===null?C.green:C.line}`,background:catSel===null?C.greenLight:C.white,color:catSel===null?C.green:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกหมวด (catch-all)</button>
+            <button onClick={()=>setCatSel([...allCategories])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>เลือกทั้งหมด</button>
+            <button onClick={()=>setCatSel([])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
           </div>
         </div>
+        {catSel===null
+          ?<div style={{padding:"14px 16px",background:C.greenLight,borderRadius:10,border:`1.5px solid ${C.green}`,fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,lineHeight:1.7}}>
+            ✅ <b>Catch-all</b> — เครื่องนี้รับงานพิมพ์ทุกหมวด<br/>
+            <span style={{fontSize:11,fontWeight:400}}>ใช้เป็น "เครื่องสำรอง" — ระบบจะส่งงานมาที่นี่ถ้าไม่มีเครื่องอื่น match หมวดของเมนู</span>
+          </div>
+          :allCategories.length===0
+            ?<div style={{padding:30,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีหมวดหมู่เมนู — เพิ่มหมวดในแท็บ "เมนู" ก่อน</div>
+            :<>
+              <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>ติ๊กหมวดที่ต้องการให้ออกเครื่องนี้ · กด <b style={{color:C.brand}}>▶ ระบุรายเมนู</b> ท้ายหมวด เพื่อเลือกเฉพาะบางเมนูในหมวดนั้นให้ออกเครื่องนี้ (เมนูที่ติ๊กจะข้ามกฎหมวด — ออกเครื่องนี้เสมอ)</div>
+              <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto",paddingRight:2}}>
+                {allCategories.map(c=>{
+                  const has=catSel.includes(c);
+                  const catMenus=menus.filter(m=>m.category===c);
+                  const isOpen=openCats.has(c);
+                  const pinnedHereCount=catMenus.filter(m=>{const cur=catMenuOverride[m.id];return cur!=null&&+cur===+catEditP.id;}).length;
+                  return <div key={c} style={{border:`1.5px solid ${has?C.brandBorder:C.line}`,borderRadius:10,overflow:"hidden",background:has?C.brandLight:C.white,transition:"all .15s"}}>
+                    {/* Category header */}
+                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px"}}>
+                      <input type="checkbox" checked={has} onChange={()=>toggleCat(c)} style={{accentColor:C.brand,width:17,height:17,cursor:"pointer",flexShrink:0}}/>
+                      <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>toggleOpenCat(c)}>
+                        <div style={{fontSize:14,fontFamily:"'Sarabun',sans-serif",fontWeight:has?800:600,color:has?C.brand:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c}</div>
+                        <div style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{catMenus.length} เมนู{pinnedHereCount>0?` · 📌 ปักหมุดเครื่องนี้ ${pinnedHereCount}`:""}</div>
+                      </div>
+                      <button onClick={()=>toggleOpenCat(c)} style={{display:"flex",alignItems:"center",gap:5,background:isOpen?C.brand:C.white,color:isOpen?C.white:C.ink3,border:`1px solid ${isOpen?C.brand:C.line}`,borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0}}>
+                        <span style={{fontSize:9}}>{isOpen?"▼":"▶"}</span> ระบุรายเมนู
+                      </button>
+                    </div>
+                    {/* Expanded: per-menu checkboxes — ติ๊กเพื่อปักหมุดเมนูให้ออกเครื่องนี้ */}
+                    {isOpen&&<div style={{borderTop:`1px dashed ${C.line}`,padding:"10px 12px",background:C.white}}>
+                      {catMenus.length===0
+                        ?<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center",padding:8}}>ไม่มีเมนูในหมวดนี้</div>
+                        :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(240px,100%),1fr))",gap:6}}>
+                          {catMenus.map(m=>{
+                            const cur=catMenuOverride[m.id];
+                            const pinnedHere=cur!=null&&+cur===+catEditP.id;
+                            const pinnedOther=cur!=null&&+cur!==+catEditP.id;
+                            const otherName=pinnedOther?(printers.find(pr=>+pr.id===+cur)?.name||"เครื่องอื่น"):"";
+                            return <label key={m.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:8,cursor:"pointer",background:pinnedHere?C.brandLight:C.bg,border:`1px solid ${pinnedHere?C.brandBorder:C.line}`,transition:"all .12s"}}>
+                              <input type="checkbox" checked={pinnedHere} onChange={()=>setCatMenuOverride(prev=>({...prev,[m.id]:pinnedHere?null:catEditP.id}))} style={{accentColor:C.brand,width:15,height:15,cursor:"pointer",flexShrink:0}}/>
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontSize:12.5,fontFamily:"'Sarabun',sans-serif",fontWeight:pinnedHere?800:600,color:pinnedHere?C.brand:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.name}</div>
+                                {pinnedOther&&<div style={{fontSize:9.5,color:"#B45309",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>📌 ปักหมุดที่ {otherName}</div>}
+                              </div>
+                            </label>;
+                          })}
+                        </div>}
+                    </div>}
+                  </div>;
+                })}
+              </div>
+            </>}
       </div>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:14}}>
         <Btn v="ghost" onClick={()=>setCatEditP(null)}>ยกเลิก</Btn>
