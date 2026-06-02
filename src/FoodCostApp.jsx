@@ -10025,8 +10025,20 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const[showSplitBill,setShowSplitBill]=useState(false);
   const[splitSel,setSplitSel]=useState({});
 
-  const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(m=>m.category))],[menus]);
-  const filtered=useMemo(()=>menus.filter(m=>(selCat==="ทั้งหมด"||m.category===selCat)&&m.name.toLowerCase().includes(search.toLowerCase())),[menus,selCat,search]);
+  // Category tabs follow THIS branch's own categorisation (m.local_categories[branchId]),
+  // matching the Menu management screen — NOT central's global m.category. A branch with
+  // no local categories shows only "ทั้งหมด". (Central, if it sells, uses the global category.)
+  // NOTE: the order item still carries m.category for kitchen-printer routing (resolvePrinter) — unchanged.
+  const isCentralSale=branch?.type==="central";
+  const bidSale=branch?.id;
+  const cats=useMemo(()=>{
+    const get=m=>isCentralSale?(m.category||null):((m.local_categories||{})[bidSale]||null);
+    return ["ทั้งหมด",...new Set(menus.map(get).filter(Boolean))];
+  },[menus,isCentralSale,bidSale]);
+  const filtered=useMemo(()=>{
+    const get=m=>isCentralSale?(m.category||null):((m.local_categories||{})[bidSale]||null);
+    return menus.filter(m=>(selCat==="ทั้งหมด"||get(m)===selCat)&&m.name.toLowerCase().includes(search.toLowerCase()));
+  },[menus,selCat,search,isCentralSale,bidSale]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
   const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
@@ -10423,8 +10435,10 @@ function CustomerPage({branchId,tableId,token}){
     })();
     return()=>{if(pollId)clearInterval(pollId);};
   },[branchId,tableId,token]);
-  const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(m=>m.category))],[menus]);
-  const filtered=useMemo(()=>menus.filter(m=>(selCat==="ทั้งหมด"||m.category===selCat)&&m.name.toLowerCase().includes(search.toLowerCase())),[menus,selCat,search]);
+  // Customers see THIS branch's own categories (m.local_categories[branchId]) — same as
+  // the Menu screen for this branch. No local categories → only "ทั้งหมด".
+  const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(m=>(m.local_categories||{})[branchId]||null).filter(Boolean))],[menus,branchId]);
+  const filtered=useMemo(()=>menus.filter(m=>(selCat==="ทั้งหมด"||((m.local_categories||{})[branchId]||null)===selCat)&&m.name.toLowerCase().includes(search.toLowerCase())),[menus,selCat,search,branchId]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const itemCount=cart.reduce((s,i)=>s+i.qty,0);
   function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
