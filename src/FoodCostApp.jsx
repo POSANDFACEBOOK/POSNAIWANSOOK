@@ -10037,7 +10037,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   },[menus,isCentralSale,bidSale]);
   const filtered=useMemo(()=>{
     const get=m=>isCentralSale?(m.category||null):((m.local_categories||{})[bidSale]||null);
-    return menus.filter(m=>(selCat==="ทั้งหมด"||get(m)===selCat)&&m.name.toLowerCase().includes(search.toLowerCase()));
+    return menus.filter(m=>{
+      const c=get(m);
+      if(!c)return false;                                  // ยังไม่จัดหมวด → ไม่ขึ้นในหน้าขายเลย (รวม "ทั้งหมด")
+      if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
+      return m.name.toLowerCase().includes(search.toLowerCase());
+    });
   },[menus,selCat,search,isCentralSale,bidSale]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
@@ -10174,6 +10179,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           <div style={{fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3}}>{m.name}</div>
           <div style={{fontSize:13,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
         </div>)}
+        {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"40px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
+          <Ic d={I.food} s={42} c={C.line}/>
+          <p style={{marginTop:10,fontSize:13.5,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูที่จัดหมวดหมู่ไว้"}</p>
+          {!search&&<p style={{marginTop:6,fontSize:11.5,color:C.ink4,lineHeight:1.7}}>ไปที่แท็บ <b style={{color:C.brand}}>"เมนู"</b> → สร้างหมวด → กำหนดหมวดให้เมนู<br/>เมนูจะขึ้นที่นี่ให้อัตโนมัติ</p>}
+        </div>}
       </div>
     </div>
 
@@ -10438,7 +10448,12 @@ function CustomerPage({branchId,tableId,token}){
   // Customers see THIS branch's own categories (m.local_categories[branchId]) — same as
   // the Menu screen for this branch. No local categories → only "ทั้งหมด".
   const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(m=>(m.local_categories||{})[branchId]||null).filter(Boolean))],[menus,branchId]);
-  const filtered=useMemo(()=>menus.filter(m=>(selCat==="ทั้งหมด"||((m.local_categories||{})[branchId]||null)===selCat)&&m.name.toLowerCase().includes(search.toLowerCase())),[menus,selCat,search,branchId]);
+  const filtered=useMemo(()=>menus.filter(m=>{
+    const c=(m.local_categories||{})[branchId]||null;
+    if(!c)return false;                                    // ยังไม่จัดหมวด → ลูกค้าไม่เห็น
+    if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
+    return m.name.toLowerCase().includes(search.toLowerCase());
+  }),[menus,selCat,search,branchId]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const itemCount=cart.reduce((s,i)=>s+i.qty,0);
   function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
@@ -10529,6 +10544,11 @@ function CustomerPage({branchId,tableId,token}){
             </div>
           </div>
         </div>;})}
+        {filtered.length===0&&<div style={{textAlign:"center",padding:"48px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
+          <Ic d={I.food} s={46} c={C.line}/>
+          <p style={{marginTop:12,fontSize:14,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูให้สั่ง"}</p>
+          {!search&&<p style={{marginTop:6,fontSize:12,color:C.ink4,lineHeight:1.7}}>ร้านกำลังจัดเมนู กรุณาสอบถามพนักงาน</p>}
+        </div>}
       </div>
       {cart.length>0&&<div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,flexShrink:0}}>
         <button onClick={()=>setStep("cart")} style={{width:"100%",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,border:"none",borderRadius:12,padding:"13px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
