@@ -10180,9 +10180,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(!existingOrder?.id)return;
     const pm=existingOrder.payment_method||payMethod;
     // Pull stored breakdown if available, otherwise use live computation
-    const data={...existingOrder,items,subtotal,discount:existingOrder.discount||totalDiscount,total:existingOrder.total||total,payment_method:pm,
-      service_charge:existingOrder.service_charge||sc,vat:existingOrder.vat||vat,vat_rate:existingOrder.vat_rate||vatRate,vat_included:existingOrder.vat_included!=null?existingOrder.vat_included:vatIncluded,
-      promo_amount:existingOrder.promo_amount||promoDiscount,promo_name:existingOrder.promo_name||selectedPromo?.name};
+    const data={...existingOrder,items,subtotal,discount:existingOrder.discount??totalDiscount,total:existingOrder.total??total,payment_method:pm,
+      service_charge:existingOrder.service_charge??sc,vat:existingOrder.vat??vat,vat_rate:existingOrder.vat_rate??vatRate,vat_included:existingOrder.vat_included!=null?existingOrder.vat_included:vatIncluded,
+      promo_amount:existingOrder.promo_amount??promoDiscount,promo_name:existingOrder.promo_name??selectedPromo?.name,cash_received:existingOrder.cash_received??(pm==="cash"?(+cashRcv||total):null)};
     printReceipt(data,table.table_number,branch.name,posSettings);
   }
 
@@ -10203,7 +10203,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const itemsWithDisc=items.map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
       const cashReceived=payMethod==="cash"?(+cashRcv||total):null;
       const promoMeta=selectedPromo?{promo_id:selectedPromo.id,promo_name:selectedPromo.name,promo_amount:promoDiscount}:{};
-      await api.updatePOSOrder(existingOrder.id,{status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,updated_at:new Date().toISOString()});
+      // Base fields (always exist) + full breakdown (needs the migration). If the
+      // breakdown columns aren't there yet, fall back to base so the sale never fails.
+      const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,updated_at:new Date().toISOString()};
+      const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived};
+      try{await api.updatePOSOrder(existingOrder.id,fullPayload);}
+      catch(err){console.error("save full order failed — retrying base fields (run the breakdown migration to persist VAT/SC/promo)",err);await api.updatePOSOrder(existingOrder.id,basePayload);}
       // record cash movement if cash payment
       if(payMethod==="cash"&&shift){
         try{
