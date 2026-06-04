@@ -10026,18 +10026,21 @@ function MenuOptionPicker({menu,options,onConfirm,onClose}){
   const keyOf=(o)=>String(o.id||o.name);
   const chosen=options.filter(o=>sel[keyOf(o)]);
   const total=base+chosen.reduce((s,o)=>s+(+o.price||0),0);
+  const hasRequired=options.some(o=>o.required);
+  const missingRequired=options.some(o=>o.required&&!sel[keyOf(o)]);  // block until all required picked
   return <Modal title={`เลือกตัวเลือก — ${menu.name}`} onClose={onClose}>
-    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink3,marginBottom:12}}>ราคาเริ่มต้น ฿{base.toLocaleString()} · เลือกได้หลายตัวเลือก</div>
+    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink3,marginBottom:12}}>ราคาเริ่มต้น ฿{base.toLocaleString()}{hasRequired?" · ตัวเลือกที่มี * ต้องเลือกก่อน":" · เลือกได้หลายตัวเลือก"}</div>
     <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"50vh",overflowY:"auto",marginBottom:14}}>
-      {options.map(o=>{const k=keyOf(o);const on=!!sel[k];const p=+o.price||0;return <label key={k} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",borderRadius:12,cursor:"pointer",background:on?C.brandLight:C.white,border:`1.5px solid ${on?C.brandBorder:C.line}`,transition:"all .12s"}}>
+      {options.map(o=>{const k=keyOf(o);const on=!!sel[k];const p=+o.price||0;const req=!!o.required;return <label key={k} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",borderRadius:12,cursor:"pointer",background:on?C.brandLight:C.white,border:`1.5px solid ${on?C.brandBorder:(req?C.red+"55":C.line)}`,transition:"all .12s"}}>
         <input type="checkbox" checked={on} onChange={()=>setSel(s=>({...s,[k]:!s[k]}))} style={{accentColor:C.brand,width:18,height:18,flexShrink:0}}/>
-        <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?800:600,color:on?C.brand:C.ink}}>{o.name}</span>
+        <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?800:600,color:on?C.brand:C.ink}}>{o.name}{req&&<span style={{marginLeft:7,fontSize:10,fontWeight:800,color:C.red,background:C.redLight,borderRadius:7,padding:"1px 7px"}}>* บังคับ</span>}</span>
         <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:p>0?C.brand:C.ink4}}>{p>0?`+฿${p.toLocaleString()}`:"ฟรี"}</span>
       </label>;})}
     </div>
+    {missingRequired&&<div style={{fontSize:12,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600,marginBottom:10,textAlign:"center"}}>⚠️ กรุณาเลือกตัวเลือกที่บังคับ (*) ก่อน</div>}
     <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:12,borderTop:`1px solid ${C.line}`}}>
       <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
-      <Btn onClick={()=>onConfirm(chosen.map(o=>({name:o.name,price:+o.price||0})))} icon={I.plus}>เพิ่ม · ฿{total.toLocaleString()}</Btn>
+      <Btn onClick={()=>onConfirm(chosen.map(o=>({name:o.name,price:+o.price||0})))} icon={I.plus} disabled={missingRequired}>เพิ่ม · ฿{total.toLocaleString()}</Btn>
     </div>
   </Modal>;
 }
@@ -11635,7 +11638,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
   function openBind(m){const sel={};getMenuOptions(m,currentBranch.id).forEach(o=>{if(o.id)sel[o.id]=true;});setBindSel(sel);setBindMenu(m);}
   async function saveBind(){
     if(!bindMenu)return;setBindBusy(true);
-    const chosen=lib.filter(o=>bindSel[o.id]).map(o=>({id:o.id,name:o.name,price:+o.price||0}));
+    const chosen=lib.filter(o=>bindSel[o.id]).map(o=>({id:o.id,name:o.name,price:+o.price||0,required:!!o.required}));
     const map={...(bindMenu.options_by_branch||{})};map[String(currentBranch.id)]=chosen;
     try{await api.updateMenu(bindMenu.id,{options_by_branch:map});setMenus(ms=>ms.map(x=>x.id===bindMenu.id?{...x,options_by_branch:map}:x));setBindMenu(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
     setBindBusy(false);
@@ -11746,16 +11749,16 @@ function POSOptionLibrary({currentBranch,onClose}){
   const lbl={display:"block",fontSize:12,fontWeight:600,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
   const[settings,setSettings]=useState(null);const[lib,setLib]=useState([]);
   const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(false);
-  const[form,setForm]=useState({name:"",price:""});const[editIdx,setEditIdx]=useState(null);
+  const[form,setForm]=useState({name:"",price:"",required:false});const[editIdx,setEditIdx]=useState(null);
   async function load(){setLoading(true);try{const ps=await api.getPOSSettings(currentBranch.id);const s=ps&&ps[0]?ps[0]:{branch_id:currentBranch.id};setSettings(s);setLib(Array.isArray(s.option_library)?s.option_library:[]);}catch(e){console.error("optLib",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
   async function persist(next){setBusy(true);try{const payload={...(settings||{}),branch_id:currentBranch.id,option_library:next};await api.upsertPOSSettings(payload);setSettings(payload);setLib(next);return true;}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));return false;}finally{setBusy(false);}}
   async function submit(){
-    const name=(form.name||"").trim();const price=+form.price||0;
+    const name=(form.name||"").trim();const price=+form.price||0;const required=!!form.required;
     if(!name)return alert("ใส่ชื่อตัวเลือก");
     if(lib.some((o,i)=>o.name===name&&i!==editIdx))return alert("มีตัวเลือกชื่อนี้แล้ว");
-    const next=editIdx!=null?lib.map((o,i)=>i===editIdx?{...o,name,price}:o):[...lib,{id:`o_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,price}];
-    if(await persist(next)){setForm({name:"",price:""});setEditIdx(null);}
+    const next=editIdx!=null?lib.map((o,i)=>i===editIdx?{...o,name,price,required}:o):[...lib,{id:`o_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,price,required}];
+    if(await persist(next)){setForm({name:"",price:"",required:false});setEditIdx(null);}
   }
   async function remove(i){if(!await confirmDlg({title:"ลบตัวเลือก",message:`ลบ "${lib[i].name}" ออกจากคลัง? เมนูที่ผูกไว้แล้วจะยังมีตัวเลือกนี้จนกว่าจะแก้ที่เมนู`}))return;await persist(lib.filter((_,j)=>j!==i));}
   return <Modal title="➕ ตัวเลือกในเมนู (คลัง add-on)" onClose={onClose} wide>
@@ -11764,15 +11767,16 @@ function POSOptionLibrary({currentBranch,onClose}){
       <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:14,flexWrap:"wrap"}}>
         <div style={{flex:"2 1 150px"}}><label style={lbl}>ชื่อตัวเลือก</label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="เช่น เพิ่มไข่" style={iS}/></div>
         <div style={{flex:"1 1 90px"}}><label style={lbl}>ราคา +฿</label><input value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value.replace(/[^\d.]/g,"")}))} inputMode="decimal" placeholder="0" style={iS}/></div>
+        <div style={{flex:"0 0 auto"}}><label style={lbl}>การเลือก</label><div style={{display:"flex",gap:5}}>{[{v:false,l:"ไม่บังคับ"},{v:true,l:"บังคับเลือก"}].map(o=><button key={String(o.v)} onClick={()=>setForm(f=>({...f,required:o.v}))} style={{padding:"8px 12px",borderRadius:8,border:`2px solid ${form.required===o.v?(o.v?C.red:C.green):C.line}`,background:form.required===o.v?(o.v?C.redLight:C.greenLight):C.white,color:form.required===o.v?(o.v?C.red:C.green):C.ink3,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{o.l}</button>)}</div></div>
         <Btn onClick={submit} loading={busy} icon={I.check}>{editIdx!=null?"บันทึก":"เพิ่ม"}</Btn>
-        {editIdx!=null&&<Btn v="ghost" onClick={()=>{setForm({name:"",price:""});setEditIdx(null);}}>ยกเลิก</Btn>}
+        {editIdx!=null&&<Btn v="ghost" onClick={()=>{setForm({name:"",price:"",required:false});setEditIdx(null);}}>ยกเลิก</Btn>}
       </div>
       {lib.length===0?<div style={{textAlign:"center",padding:36,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:40,marginBottom:6}}>➕</div><p style={{fontSize:13}}>ยังไม่มีตัวเลือก — เพิ่มด้านบน</p></div>
       :<div style={{display:"flex",flexDirection:"column",gap:6}}>
         {lib.map((o,i)=><div key={o.id||i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:10,background:C.white}}>
-          <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink}}>{o.name}</span>
+          <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink}}>{o.name}{o.required&&<span style={{marginLeft:8,fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:8,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>* บังคับเลือก</span>}</span>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:(+o.price||0)>0?C.brand:C.ink4}}>{(+o.price||0)>0?`+฿${(+o.price).toLocaleString()}`:"ฟรี"}</span>
-          <button onClick={()=>{setForm({name:o.name,price:String(o.price||"")});setEditIdx(i);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>แก้</button>
+          <button onClick={()=>{setForm({name:o.name,price:String(o.price||""),required:!!o.required});setEditIdx(i);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>แก้</button>
           <button onClick={()=>remove(i)} style={{background:C.redLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>ลบ</button>
         </div>)}
       </div>}
