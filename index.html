@@ -2,8 +2,30 @@
 <html lang="th">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <title>FoodCost</title>
+    <script>
+      // ── Lock zoom ───────────────────────────────────────────────────────────
+      // The viewport meta (user-scalable=no) blocks pinch on Android/PWA, but iOS
+      // Safari ignores it — so we also cancel the pinch gesture + multi-touch +
+      // ctrl/⌘-wheel + ctrl/⌘ +/- zoom. Single-finger scrolling is untouched.
+      (function () {
+        ["gesturestart", "gesturechange", "gestureend"].forEach(function (ev) {
+          document.addEventListener(ev, function (e) { e.preventDefault(); }, { passive: false });
+        });
+        document.addEventListener("touchmove", function (e) {
+          if (e.touches && e.touches.length > 1) e.preventDefault(); // pinch = 2+ fingers
+        }, { passive: false });
+        window.addEventListener("wheel", function (e) {
+          if (e.ctrlKey) e.preventDefault(); // trackpad pinch / ctrl-wheel zoom
+        }, { passive: false });
+        window.addEventListener("keydown", function (e) {
+          if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "-" || e.key === "=" || e.key === "0")) e.preventDefault();
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
