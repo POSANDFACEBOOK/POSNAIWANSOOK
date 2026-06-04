@@ -543,9 +543,6 @@ const ROLE_DEFAULT_PERMS={
   manager:["pos","crm","ingredients","menus","sop","summary","fs_sales","po","orders","history","suppliers"],
   staff:["pos","crm","ingredients","menus","sop","summary","fs_sales","po","orders","history","suppliers"],
   viewer:["pos","menus","sop"],
-  // ขายหน้าร้าน (POS) — front-of-house cashier. Only the POS surface (sale +
-  // POS back-office). Locked out of the full back office; ผูก 1 สาขาเท่านั้น.
-  pos:["pos"],
 };
 // Coerce a value to an array (handles JSON string from legacy DB rows, null = treat as null sentinel)
 function asArr(x){
@@ -572,10 +569,7 @@ function hasPerm(user,perm){
   if(user.role==="admin")return true;
   return getUserPerms(user).includes(perm);
 }
-const ROLES={admin:{label:"Admin",color:"purple"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"},pos:{label:"ขายหน้าร้าน (POS)",color:"orange"}};
-// A "POS user" is locked to the front-of-house experience (sale + POS back-office),
-// auto-scoped to its single branch — never the full back office.
-function isPOSRole(user){return user?.role==="pos";}
+const ROLES={admin:{label:"Admin",color:"purple"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"}};
 const ppg=(price,gram)=>(gram>0?price/gram:0);
 const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);if(!i)return s;const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;return s+ppg*x.amountGram;},0);
 // Per-branch stock helpers — falls back to legacy ingredient.stock when no branch entry exists
@@ -942,7 +936,7 @@ function ImgUp({value,onChange,label,compact}){
 // ══════════════════════════════════════════════════════
 // ── LOGIN ─────────────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function LoginPage({onLogin,posMode=false}){
+function LoginPage({onLogin}){
   const[u,setU]=useState("");const[p,setP]=useState("");const[err,setErr]=useState("");const[show,setShow]=useState(false);const[loading,setLoading]=useState(false);
   async function login(){if(!u||!p)return;setLoading(true);setErr("");try{const found=await api.loginUser(u,p);if(found&&found.length>0)onLogin(found[0]);else setErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");}catch(e){setErr("เชื่อมต่อ Supabase ไม่ได้");}setLoading(false);}
   return <div style={{minHeight:"100vh",background:`linear-gradient(135deg,${C.brandLight} 0%,#FEF3C7 50%,${C.blueLight} 100%)`,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -951,7 +945,6 @@ function LoginPage({onLogin,posMode=false}){
         <div style={{width:64,height:64,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px",boxShadow:`0 8px 24px ${C.brand}44`}}><Ic d={I.fire} s={30} c={C.white} sw={2}/></div>
         <h1 style={{fontSize:20,fontWeight:900,color:C.ink,marginBottom:2,fontFamily:"'Sarabun',sans-serif"}}>NAIWANSOOK FOODCOST</h1>
         <p style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",letterSpacing:1.5}}>BY BOSSMAX</p>
-        {posMode&&<div style={{marginTop:10,display:"inline-flex",alignItems:"center",gap:6,background:C.brandLight,color:C.brand,borderRadius:20,padding:"5px 14px",fontSize:12.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.brandBorder}`}}>🛒 เข้าสู่ระบบขายหน้าร้าน</div>}
       </div>
       <div style={{marginBottom:16}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ชื่อผู้ใช้</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.user} s={16} c={C.ink4}/></span><input value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} placeholder="username" style={{...iS,paddingLeft:40}} autoFocus/></div></div>
       <div style={{marginBottom:20}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>รหัสผ่าน</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.lock} s={16} c={C.ink4}/></span><input value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} type={show?"text":"password"} placeholder="password" style={{...iS,paddingLeft:40,paddingRight:44}}/><button onClick={()=>setShow(!show)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer"}}><Ic d={I.eye} s={16} c={C.ink4}/></button></div></div>
@@ -7160,12 +7153,6 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   const[uF,setUF]=useState(uF0);
   function toggleUserBranch(bid){
     setUF(f=>{
-      // POS users are bound to EXACTLY ONE branch — selecting a branch replaces
-      // the whole selection (single-select); tapping the same one clears it.
-      if(f.role==="pos"){
-        const cur=(f.allowed_branches||[]).map(x=>+x);
-        return{...f,allowed_branches:(cur.length===1&&cur[0]===+bid)?[]:[+bid]};
-      }
       // null = "ทุกสาขา" → start from full list, then remove the toggled one
       const current=f.allowed_branches===null?branches.map(b=>+b.id):(f.allowed_branches||[]).map(x=>+x);
       const next=current.includes(+bid)?current.filter(x=>x!==+bid):[...current,+bid];
@@ -7270,11 +7257,6 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
 
   async function saveUser(){
     if(!uF.username||!uF.password)return;
-    // POS users MUST be bound to exactly one branch (1 user = 1 สาขา).
-    if(uF.role==="pos"){
-      const ab=normalizeBranchIds(uF.allowed_branches);
-      if(!ab||ab.length!==1){alert("ผู้ใช้ขายหน้าร้าน (POS) ต้องเลือกสาขาให้ครบ 1 สาขาเท่านั้น");return;}
-    }
     setSaving(true);
     try{
       // Normalize perms + allowed_branches on every save so DB stays clean
@@ -7363,17 +7345,6 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink}}>ผู้ใช้งานและสิทธิ์</h3>
         {isAdmin&&<Btn onClick={()=>{setUF(uF0);setEditUID(null);setShowUser(true);}} icon={I.plus}>เพิ่มผู้ใช้</Btn>}
       </div>
-      {isAdmin&&(()=>{const posLink=(typeof window!=="undefined"?window.location.origin+window.location.pathname:"")+"?pos=1";return <div style={{background:`linear-gradient(135deg,${C.brandLight},${C.tealLight})`,border:`1px solid ${C.brandBorder}`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-          <span style={{fontSize:16}}>🛒</span>
-          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.ink}}>ลิงก์ขายหน้าร้าน (ส่งให้สาขา)</span>
-        </div>
-        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink3,lineHeight:1.6,marginBottom:8}}>ส่งลิงก์นี้ให้พนักงานสาขา — เปิดแล้วเข้าสู่หน้า login ขายหน้าร้านโดยตรง · สร้างผู้ใช้บทบาท <b style={{color:C.brand}}>ขายหน้าร้าน (POS)</b> แล้วผูก <b>1 สาขา</b> (ผู้ใช้นั้นจะเห็นเฉพาะการขาย + หลังบ้านการขายของสาขาตัวเองเท่านั้น)</div>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-          <input readOnly value={posLink} onFocus={e=>e.target.select()} style={{...iS,flex:1,minWidth:200,fontSize:12,background:C.white}}/>
-          <button onClick={()=>{try{navigator.clipboard.writeText(posLink);alert("คัดลอกลิงก์แล้ว ✅");}catch{window.prompt("คัดลอกลิงก์นี้:",posLink);}}} style={{background:C.brand,color:C.white,border:"none",borderRadius:9,padding:"9px 16px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>📋 คัดลอกลิงก์</button>
-        </div>
-      </div>;})()}
       <Card>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
           <thead><tr style={{background:C.bg}}>{["ผู้ใช้","ชื่อ","บทบาท","สิทธิ์","สาขา","สถานะ",""].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
@@ -7593,7 +7564,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         <div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Inp label="ชื่อผู้ใช้" value={uF.username} onChange={e=>setUF(f=>({...f,username:e.target.value}))} placeholder="username"/><Inp label="รหัสผ่าน" type="password" value={uF.password} onChange={e=>setUF(f=>({...f,password:e.target.value}))} placeholder="password"/></div>
           <Inp label="ชื่อ-นามสกุล" value={uF.name} onChange={e=>setUF(f=>({...f,name:e.target.value}))} placeholder="ชื่อจริง"/>
-          <div style={{marginBottom:14}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>บทบาท</label><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{Object.entries(ROLES).map(([k,r])=><button key={k} onClick={()=>setUF(f=>{const next={...f,role:k,perms:ROLE_DEFAULT_PERMS[k]||[]};if(k==="pos"){const cur=Array.isArray(f.allowed_branches)?f.allowed_branches.map(x=>+x):[];next.allowed_branches=cur.length?[cur[0]]:[];}return next;})} style={{padding:"6px 12px",borderRadius:8,border:`2px solid ${uF.role===k?C.brand:C.line}`,background:uF.role===k?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:uF.role===k?C.brand:C.ink3}}>{r.label}</button>)}</div>{uF.role==="pos"&&<div style={{marginTop:8,fontSize:11.5,color:C.brand,fontFamily:"'Sarabun',sans-serif",fontWeight:600,lineHeight:1.5,background:C.brandLight,borderRadius:8,padding:"7px 10px",border:`1px solid ${C.brandBorder}`}}>🛒 ผู้ใช้ขายหน้าร้าน — เห็นเฉพาะการขาย + หลังบ้านการขาย · เลือกได้ <b>1 สาขาเท่านั้น</b></div>}</div>
+          <div style={{marginBottom:14}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>บทบาท</label><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{Object.entries(ROLES).map(([k,r])=><button key={k} onClick={()=>setUF(f=>({...f,role:k,perms:ROLE_DEFAULT_PERMS[k]||[]}))} style={{padding:"6px 12px",borderRadius:8,border:`2px solid ${uF.role===k?C.brand:C.line}`,background:uF.role===k?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:uF.role===k?C.brand:C.ink3}}>{r.label}</button>)}</div></div>
           <div style={{display:"flex",gap:8}}>{[{v:true,l:"ใช้งาน"},{v:false,l:"ปิดใช้"}].map(o=><button key={String(o.v)} onClick={()=>setUF(f=>({...f,active:o.v}))} style={{padding:"6px 14px",borderRadius:8,border:`2px solid ${uF.active===o.v?C.brand:C.line}`,background:uF.active===o.v?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:uF.active===o.v?C.brand:C.ink3}}>{o.l}</button>)}</div>
         </div>
         <div>
@@ -9484,33 +9455,10 @@ export default function App(){
   const scanBranch=params.get("branch");
   const scanTable=params.get("table");
   const scanToken=params.get("t");
-  const forcePOS=params.get("pos")==="1";   // dedicated front-of-house link sent to branches
   if(isScan&&scanBranch&&scanTable){return <><style>{globalStyle}</style><CustomerPage branchId={scanBranch} tableId={scanTable} token={scanToken}/></>;}
 
-  if(!currentUser)return <><style>{globalStyle}</style><LoginPage onLogin={u=>{setCurrentUser(u);}} posMode={forcePOS}/></>;
+  if(!currentUser)return <><style>{globalStyle}</style><LoginPage onLogin={u=>{setCurrentUser(u);}}/></>;
   if(!currentBranch)return <><style>{globalStyle}</style><BranchSelectorWithLoad user={currentUser} onSelect={b=>setCurrentBranch(b)} onLogout={()=>setCurrentUser(null)}/></>;
-
-  // ── POS-only shell ──────────────────────────────────────────────────────
-  // A POS-role user (or anyone arriving via the ?pos=1 link) gets ONLY the
-  // front-of-house surface: the sale / back-office chooser scoped to their
-  // branch. No main sidebar — they can never reach the full back office.
-  if(isPOSRole(currentUser)||forcePOS){
-    return <><style>{globalStyle}</style>
-      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
-        <div style={{display:"flex",alignItems:"center",gap:12,padding:isMobile?"10px 14px":"12px 22px",background:"linear-gradient(135deg,#0F172A,#1E293B)",color:"#F8FAFC",flexShrink:0,boxShadow:"0 2px 10px rgba(15,23,42,.25)"}}>
-          <div style={{width:34,height:34,borderRadius:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.shop} s={18} c="#fff"/></div>
-          <div style={{minWidth:0,flex:1}}>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>🛒 ขายหน้าร้าน · {currentBranch.name}</div>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#94A3B8"}}>{currentUser.name||currentUser.username}{ROLES[currentUser.role]?` · ${ROLES[currentUser.role].label}`:""}</div>
-          </div>
-          <button onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} title="ออกจากระบบ" style={{background:"rgba(239,68,68,0.18)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"7px 12px",cursor:"pointer",color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,flexShrink:0}}>ออกจากระบบ</button>
-        </div>
-        <div style={{flex:1,padding:isMobile?"14px 12px":"20px 24px",minWidth:0,minHeight:0}}>
-          {loading?<Loading text="กำลังโหลด..."/>:<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
-        </div>
-      </div>
-    </>;
-  }
 
   // Diagnostic: user is logged in to a branch but no tab is visible — explain why instead of showing a blank shell.
   if(visibleTabs.length===0){
@@ -12017,9 +11965,7 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
     }).catch(e=>{setLoadingShift(false);alert("โหลดข้อมูลกะไม่สำเร็จ: "+e.message);});
   },[mode,currentBranch.id]);
 
-  // Back-office (sales) is open to anyone with full settings OR a POS-role user
-  // (their "จัดการหลังบ้าน" = POS back office only: tables, printers, shifts, reports).
-  const canManage=hasPerm(currentUser,"settings")||isPOSRole(currentUser);
+  const canManage=hasPerm(currentUser,"settings");
   if(mode===null)return <POSModeSelect onSelect={setMode} canManage={canManage}/>;
   if(mode==='manage'){
     if(!canManage){setMode(null);return null;}
@@ -12040,15 +11986,7 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
 function BranchSelectorWithLoad({user,onSelect,onLogout}){
   const[branches,setBranches]=useState([]);const[loading,setLoading]=useState(true);
   useEffect(()=>{api.getBranches().then(b=>setBranches(b)).finally(()=>setLoading(false));},[]);
-  // Branches this user can actually reach (admin = all; else allowed_branches whitelist).
-  const accessible=useMemo(()=>{
-    const allowed=user?.allowed_branches;const isAdmin=user?.role==="admin";
-    return (branches||[]).filter(b=>b.active!==false&&(isAdmin||allowed==null||(allowed||[]).map(x=>+x).includes(+b.id)));
-  },[branches,user]);
-  // Exactly one reachable branch (e.g. a POS user bound to a single branch) →
-  // auto-select it and skip the picker, landing straight on the POS chooser.
-  useEffect(()=>{if(!loading&&accessible.length===1)onSelect(accessible[0]);},[loading,accessible]);// eslint-disable-line react-hooks/exhaustive-deps
-  if(loading||accessible.length===1)return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><Loading text="กำลังโหลดรายการสาขา..."/></div></>;
+  if(loading)return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><Loading text="กำลังโหลดรายการสาขา..."/></div></>;
   return <BranchSelector branches={branches} onSelect={onSelect} user={user} onLogout={onLogout}/>;
 }
 
