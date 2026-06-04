@@ -12292,6 +12292,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   const printedRef=useRef(new Set(JSON.parse(sessionStorage.getItem("fc_printed_orders")||"[]")));
   const lastSigRef=useRef(new Map());
   const stationPrimedRef=useRef(false);   // skip the first batch so a station restart doesn't reprint open orders
+  const wakeLockRef=useRef(null);         // screen wake lock so the print station's screen never sleeps
   function persistPrinted(){try{sessionStorage.setItem("fc_printed_orders",JSON.stringify([...printedRef.current]));}catch{}}
   // Only the designated print station auto-prints — and it prints EVERY new order
   // (staff + customer), since the iPads can't print themselves.
@@ -12339,6 +12340,28 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     document.addEventListener("visibilitychange",onVis);
     return()=>{clearInterval(timerRef.current);document.removeEventListener("visibilitychange",onVis);};
   },[printStation]);// eslint-disable-line react-hooks/exhaustive-deps
+  // Keep the print-station screen awake (Screen Wake Lock — works on Android Chrome over
+  // https). The OS drops the lock whenever the page is hidden, so re-acquire on re-show.
+  useEffect(()=>{
+    if(!printStation)return;
+    let cancelled=false;
+    async function acquire(){
+      try{
+        if("wakeLock" in navigator && navigator.wakeLock?.request && document.visibilityState==="visible"){
+          wakeLockRef.current=await navigator.wakeLock.request("screen");
+        }
+      }catch(e){/* unsupported / denied / not visible — manual screen-timeout is the fallback */}
+    }
+    function onVis(){if(document.visibilityState==="visible"&&!cancelled)acquire();}
+    acquire();
+    document.addEventListener("visibilitychange",onVis);
+    return()=>{
+      cancelled=true;
+      document.removeEventListener("visibilitychange",onVis);
+      try{wakeLockRef.current&&wakeLockRef.current.release&&wakeLockRef.current.release();}catch{}
+      wakeLockRef.current=null;
+    };
+  },[printStation]);
   useEffect(()=>{if(showOrders)loadAllOrders();},[showOrders]);// eslint-disable-line react-hooks/exhaustive-deps
 
   // QR-สั่งอาหาร tab removed — per-table QR is printed by tapping a table (one place only).
@@ -12481,7 +12504,8 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
       </div>
       {station&&<div style={{background:"#FFFBEB",border:`1px solid #F59E0B`,borderRadius:12,padding:"11px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:"#92400E",lineHeight:1.7}}>
         <b>⚠️ ตั้งค่า Chrome ครั้งเดียว เพื่อให้พิมพ์ได้:</b><br/>
-        แตะ 🔒/ⓘ หน้า URL → <b>ตั้งค่าไซต์ (Site settings)</b> → <b>เนื้อหาที่ไม่ปลอดภัย (Insecure content)</b> → เลือก <b>อนุญาต (Allow)</b> แล้วรีโหลดหน้านี้ · จากนั้นเปิดหน้านี้ค้างไว้ตลอดเวลาเปิดร้าน
+        แตะ 🔒/ⓘ หน้า URL → <b>ตั้งค่าไซต์ (Site settings)</b> → <b>เนื้อหาที่ไม่ปลอดภัย (Insecure content)</b> → เลือก <b>อนุญาต (Allow)</b> แล้วรีโหลดหน้านี้ · จากนั้นเปิดหน้านี้ค้างไว้<br/>
+        <b>🔆 ระบบกันจอดับให้อัตโนมัติแล้ว</b> ระหว่างเปิดโหมดนี้ (แนะนำเสียบสายชาร์จไว้ด้วย และอย่าสลับไปแอปอื่น)
       </div>}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>เครื่องพิมพ์ของสาขา <b style={{color:C.ink}}>{currentBranch.name}</b> ({printers.length})</div>
