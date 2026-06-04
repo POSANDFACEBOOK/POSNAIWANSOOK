@@ -9748,6 +9748,46 @@ function resolvePrinter(item,printers){
   if(catchAll)return catchAll;
   return null;
 }
+// Concatenate several Uint8Arrays into one ESC/POS byte stream
+function _concatBytes(arrs){const len=arrs.reduce((a,b)=>a+b.length,0);const out=new Uint8Array(len);let off=0;for(const a of arrs){out.set(a,off);off+=a.length;}return out;}
+// Send raw ESC/POS bytes straight to an IP/network thermal printer (port 9100).
+// Raw printers don't speak HTTP — they accept the TCP bytes and never reply — so
+// with mode:"no-cors" the fetch hangs until our timeout. We treat:
+//   • AbortError (timeout reached)        → SUCCESS (bytes were sent, printer printed)
+//   • quick TypeError (<300ms, refused)   → FAIL (wrong IP/Port or printer powered off)
+//   • slow reject (>=300ms)               → SUCCESS (connection was made, bytes sent)
+function sendESCPOSToIP(ip,port,bytes){
+  return new Promise((resolve,reject)=>{
+    if(!ip){reject(new Error("ยังไม่ได้ตั้งค่า IP เครื่องพิมพ์"));return;}
+    const ctrl=new AbortController();
+    const startedAt=Date.now();
+    const tid=setTimeout(()=>ctrl.abort(),3000);
+    fetch(`http://${ip}:${port||9100}/`,{method:"POST",mode:"no-cors",cache:"no-store",headers:{"Content-Type":"application/octet-stream"},body:bytes,signal:ctrl.signal})
+      .then(()=>{clearTimeout(tid);resolve();})
+      .catch(e=>{clearTimeout(tid);const elapsed=Date.now()-startedAt;
+        if(e.name==="AbortError")resolve();
+        else if(elapsed<300)reject(new Error("เชื่อมต่อไม่ได้ — ตรวจ IP/Port หรือไฟเครื่องพิมพ์"));
+        else resolve();});
+  });
+}
+// Lightweight non-blocking toast (plain DOM, works from this module-level fn).
+function posToast(msg,type="ok",ms=3200){
+  try{
+    const id="fc-print-toast";let wrap=document.getElementById(id);
+    if(!wrap){wrap=document.createElement("div");wrap.id=id;wrap.style.cssText="position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:2147483647;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;font-family:'Sarabun',sans-serif";document.body.appendChild(wrap);}
+    const bg=type==="ok"?"#0D9488":type==="warn"?"#D97706":"#DC2626";
+    const card=document.createElement("div");
+    card.style.cssText=`background:${bg};color:#fff;padding:12px 20px;border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.25);font-size:14px;font-weight:700;max-width:90vw;white-space:pre-line;text-align:center;opacity:0;transform:translateY(10px);transition:opacity .22s,transform .22s`;
+    card.textContent=msg;wrap.appendChild(card);
+    requestAnimationFrame(()=>{card.style.opacity="1";card.style.transform="translateY(0)";});
+    setTimeout(()=>{card.style.opacity="0";card.style.transform="translateY(10px)";setTimeout(()=>{try{card.remove();}catch{}},250);},ms);
+  }catch{}
+}
+// Print kitchen slips. Each item routes to its resolved printer; items sharing a
+// printer print as one batch. IP printers get ESC/POS sent DIRECTLY (no browser
+// popup). Bluetooth uses Web-BT. Only items with NO configured printer fall back
+// to the browser print window. Reports per-printer success/fail — alerting ONLY
+// the printers that failed so staff know exactly which connection to check.
 async function printKitchen(items,tableNum,printers=[]){
   // Group items by resolved printer so each printer prints one batch
   const groups=new Map();  // printer.id (or "_window") → {printer, items[]}
@@ -9757,18 +9797,37 @@ async function printKitchen(items,tableNum,printers=[]){
     if(!groups.has(key))groups.set(key,{printer,items:[]});
     groups.get(key).items.push(item);
   }
-  for(const{printer,items:gItems} of groups.values()){
-    const conn=printer?getPConn(printer):{type:"ip"};
-    for(const item of gItems){
-      if(conn.type==="bluetooth"){
-        try{await btPrint(buildKitchenESC(item,tableNum),conn.btName);}
-        catch(e){alert("Bluetooth พิมพ์ไม่สำเร็จ: "+e.message+"\nใช้การพิมพ์ปกติแทน");printKitchenWindow(item,tableNum,printer);}
-      }else{
-        printKitchenWindow(item,tableNum,printer);
-      }
-      await new Promise(r=>setTimeout(r,300));
-    }
+  const ok=[],fail=[];let usedWindow=false;
+  const ipTasks=[],btGroups=[],winGroups=[];
+  for(const g of groups.values()){
+    if(!g.printer){winGroups.push(g);continue;}
+    const conn=getPConn(g.printer);
+    const pname=g.printer.name||`เครื่องพิมพ์ #${g.printer.id}`;
+    const escAll=_concatBytes(g.items.map(it=>buildKitchenESC(it,tableNum)));
+    if(conn.type==="bluetooth"){btGroups.push({conn,pname,escAll});}
+    else if(!g.printer.ip){fail.push({name:pname,msg:"ยังไม่ได้ตั้งค่า IP เครื่องพิมพ์"});}
+    else{ipTasks.push(sendESCPOSToIP(g.printer.ip,g.printer.port,escAll).then(()=>ok.push(pname)).catch(e=>fail.push({name:pname,msg:e.message||"เชื่อมต่อไม่ได้"})));}
   }
+  // IP/network printers fire concurrently (don't wait one timeout after another)
+  await Promise.all(ipTasks);
+  // Bluetooth printers run sequentially — each connect needs its own device pairing
+  for(const{conn,pname,escAll} of btGroups){
+    try{await btPrint(escAll,conn.btName);ok.push(pname);}
+    catch(e){fail.push({name:pname,msg:e.message||"Bluetooth พิมพ์ไม่สำเร็จ"});}
+  }
+  // No printer configured for these items → browser print window (last resort)
+  for(const g of winGroups){
+    usedWindow=true;
+    for(const item of g.items){printKitchenWindow(item,tableNum,null);await new Promise(r=>setTimeout(r,250));}
+  }
+  // Feedback: alert ONLY the failed printers; toast on success.
+  if(fail.length){
+    const lines=fail.map(f=>`❌ ${f.name} — ${f.msg}`).join("\n");
+    alert(`⚠️ พิมพ์ใบสั่งอาหารไม่สำเร็จ ${fail.length} เครื่อง\n\n${lines}\n\nกรุณาตรวจสอบการเชื่อมต่อ (IP / ไฟ / สายแลน) ของเครื่องพิมพ์ข้างต้น`+(ok.length?`\n\n✅ พิมพ์สำเร็จ ${ok.length} เครื่อง: ${ok.join(", ")}`:""));
+  }else if(ok.length){
+    posToast(`✅ พิมพ์ใบสั่งอาหารสำเร็จ${ok.length>1?` (${ok.length} เครื่อง)`:""}`);
+  }
+  return{ok,fail,usedWindow};
 }
 
 // ══════════════════════════════════════════════════════
