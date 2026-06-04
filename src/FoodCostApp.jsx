@@ -10015,32 +10015,46 @@ function getMenuOptions(menu,branchId){
   const arr=map[String(branchId)];
   return Array.isArray(arr)?arr.filter(o=>o&&o.name):[];
 }
+// True if the menu has at least one bound option GROUP that has choices.
+function menuHasOptions(menu,branchId){return getMenuOptions(menu,branchId).some(g=>g&&Array.isArray(g.choices)&&g.choices.length>0);}
 // Compact text of chosen options for prints/notes (e.g. "เพิ่มไข่, ไม่เผ็ด").
 function optionsText(opts){return (opts||[]).map(o=>o&&o.name).filter(Boolean).join(", ");}
 
-// Shared option picker — used by staff (POSOrderPanel) AND customer scan-order
-// (CustomerPage). Returns the chosen options [{name,price}] via onConfirm.
-function MenuOptionPicker({menu,options,onConfirm,onClose}){
-  const[sel,setSel]=useState({});
+// Shared option picker (GROUP-based) — staff (POSOrderPanel) + customer scan
+// (CustomerPage). `groups` = [{id,name,required,choices:[{id,name,price}]}].
+// Required group = pick exactly one (radio); optional = pick any (checkbox).
+// onConfirm gets the flat chosen choices [{name,price}].
+function MenuOptionPicker({menu,groups,onConfirm,onClose}){
+  const[sel,setSel]=useState({});  // choiceId -> true
   const base=+menu.price||0;
-  const keyOf=(o)=>String(o.id||o.name);
-  const chosen=options.filter(o=>sel[keyOf(o)]);
+  const grps=(groups||[]).filter(g=>g&&Array.isArray(g.choices)&&g.choices.length);
+  const chosen=grps.flatMap(g=>g.choices.filter(c=>sel[c.id]).map(c=>({name:c.name,price:+c.price||0})));
   const total=base+chosen.reduce((s,o)=>s+(+o.price||0),0);
-  const hasRequired=options.some(o=>o.required);
-  const missingRequired=options.some(o=>o.required&&!sel[keyOf(o)]);  // block until all required picked
+  const missingRequired=grps.some(g=>g.required&&!g.choices.some(c=>sel[c.id]));
+  function pick(g,c){setSel(s=>{const n={...s};if(g.required){g.choices.forEach(x=>{delete n[x.id];});n[c.id]=true;}else{if(n[c.id])delete n[c.id];else n[c.id]=true;}return n;});}
   return <Modal title={`เลือกตัวเลือก — ${menu.name}`} onClose={onClose}>
-    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink3,marginBottom:12}}>ราคาเริ่มต้น ฿{base.toLocaleString()}{hasRequired?" · ตัวเลือกที่มี * ต้องเลือกก่อน":" · เลือกได้หลายตัวเลือก"}</div>
-    <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"50vh",overflowY:"auto",marginBottom:14}}>
-      {options.map(o=>{const k=keyOf(o);const on=!!sel[k];const p=+o.price||0;const req=!!o.required;return <label key={k} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",borderRadius:12,cursor:"pointer",background:on?C.brandLight:C.white,border:`1.5px solid ${on?C.brandBorder:(req?C.red+"55":C.line)}`,transition:"all .12s"}}>
-        <input type="checkbox" checked={on} onChange={()=>setSel(s=>({...s,[k]:!s[k]}))} style={{accentColor:C.brand,width:18,height:18,flexShrink:0}}/>
-        <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?800:600,color:on?C.brand:C.ink}}>{o.name}{req&&<span style={{marginLeft:7,fontSize:10,fontWeight:800,color:C.red,background:C.redLight,borderRadius:7,padding:"1px 7px"}}>* บังคับ</span>}</span>
-        <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:p>0?C.brand:C.ink4}}>{p>0?`+฿${p.toLocaleString()}`:"ฟรี"}</span>
-      </label>;})}
+    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink3,marginBottom:12}}>ราคาเริ่มต้น ฿{base.toLocaleString()}</div>
+    <div style={{display:"flex",flexDirection:"column",gap:14,maxHeight:"52vh",overflowY:"auto",marginBottom:14}}>
+      {grps.map(g=>{const picked=g.choices.some(c=>sel[c.id]);const need=g.required&&!picked;return <div key={g.id}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>{g.name}</span>
+          {g.required?<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:7,padding:"2px 8px"}}>* บังคับ · เลือก 1</span>:<span style={{fontSize:10.5,fontWeight:700,color:C.ink4,background:C.bg,borderRadius:7,padding:"2px 8px"}}>เลือกได้หลายอย่าง</span>}
+          {need&&<span style={{fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>⚠️ ยังไม่เลือก</span>}
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {g.choices.map(c=>{const on=!!sel[c.id];const p=+c.price||0;return <label key={c.id} onClick={()=>pick(g,c)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:11,cursor:"pointer",background:on?C.brandLight:C.white,border:`1.5px solid ${on?C.brandBorder:C.line}`,transition:"all .12s"}}>
+            <span style={{width:18,height:18,flexShrink:0,borderRadius:g.required?"50%":5,border:`2px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,display:"flex",alignItems:"center",justifyContent:"center"}}>{on&&<span style={{width:8,height:8,borderRadius:g.required?"50%":2,background:C.white}}/>}</span>
+            <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?800:600,color:on?C.brand:C.ink}}>{c.name}</span>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:p>0?C.brand:C.ink4}}>{p>0?`+฿${p.toLocaleString()}`:"ฟรี"}</span>
+          </label>;})}
+        </div>
+      </div>;})}
+      {grps.length===0&&<div style={{padding:20,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>เมนูนี้ยังไม่มีตัวเลือก</div>}
     </div>
-    {missingRequired&&<div style={{fontSize:12,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600,marginBottom:10,textAlign:"center"}}>⚠️ กรุณาเลือกตัวเลือกที่บังคับ (*) ก่อน</div>}
+    {missingRequired&&<div style={{fontSize:12,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600,marginBottom:10,textAlign:"center"}}>⚠️ กรุณาเลือกกลุ่มที่บังคับ (*) ให้ครบก่อน</div>}
     <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:12,borderTop:`1px solid ${C.line}`}}>
       <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
-      <Btn onClick={()=>onConfirm(chosen.map(o=>({name:o.name,price:+o.price||0})))} icon={I.plus} disabled={missingRequired}>เพิ่ม · ฿{total.toLocaleString()}</Btn>
+      <Btn onClick={()=>onConfirm(chosen)} icon={I.plus} disabled={missingRequired}>เพิ่ม · ฿{total.toLocaleString()}</Btn>
     </div>
   </Modal>;
 }
@@ -10119,7 +10133,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
   // Tap a menu: if it has add-on options for this branch, open the picker; else add directly.
   const[optPick,setOptPick]=useState(null);  // menu awaiting option selection
-  function pickOrAdd(m){const opts=getMenuOptions(m,branch?.id);if(opts.length>0)setOptPick(m);else addItem(m);}
+  function pickOrAdd(m){if(menuHasOptions(m,branch?.id))setOptPick(m);else addItem(m);}
   function addItemWithOptions(m,chosen){
     const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);
     setItems(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);
@@ -10223,7 +10237,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       </div>
       <div style={{flex:1,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
         {filtered.map(m=><div key={m.id} onClick={()=>pickOrAdd(m)} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:"pointer",textAlign:"center",transition:"all .15s",position:"relative"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
-          {getMenuOptions(m,branch?.id).length>0&&<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
+          {menuHasOptions(m,branch?.id)&&<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
           {m.image?<img src={m.image} alt={m.name} style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4}}/>:<div style={{height:40,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={26} c={C.brand}/></div>}
           <div style={{fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3}}>{m.name}</div>
           <div style={{fontSize:13,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
@@ -10314,7 +10328,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     </div>}
 
     {/* Add-on option picker (staff) */}
-    {optPick&&<MenuOptionPicker menu={optPick} options={getMenuOptions(optPick,branch?.id)} onConfirm={chosen=>addItemWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
+    {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branch?.id)} onConfirm={chosen=>addItemWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
 
     {/* Split bill modal */}
     {showSplitBill&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
@@ -10511,7 +10525,7 @@ function CustomerPage({branchId,tableId,token}){
   function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
   // Add-on options: open the picker if the menu has any for this branch.
   const[optPick,setOptPick]=useState(null);
-  function pickOrAddCart(m){const opts=getMenuOptions(m,branchId);if(opts.length>0)setOptPick(m);else addToCart(m);}
+  function pickOrAddCart(m){if(menuHasOptions(m,branchId))setOptPick(m);else addToCart(m);}
   function addToCartWithOptions(m,chosen){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);setOptPick(null);}
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
@@ -10582,7 +10596,7 @@ function CustomerPage({branchId,tableId,token}){
       </div>
       <div style={{padding:"8px 12px",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"9px 14px"}}/></div>
       <div style={{flex:1,overflowY:"auto",padding:10,display:"flex",flexDirection:"column",gap:8}}>
-        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=getMenuOptions(m,branchId).length>0;return <div key={m.id} style={{background:C.white,borderRadius:12,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",transition:"all .15s",opacity:soldOut?0.6:1}}>
+        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId);return <div key={m.id} style={{background:C.white,borderRadius:12,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",transition:"all .15s",opacity:soldOut?0.6:1}}>
           {m.image?<img src={m.image} alt={m.name} style={{width:80,objectFit:"cover",flexShrink:0,filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.food} s={28} c={soldOut?C.ink4:C.brand}/></div>}
           <div style={{flex:1,padding:"10px 12px"}}>
             <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
@@ -10689,7 +10703,7 @@ function CustomerPage({branchId,tableId,token}){
         </div>
       </div>
     </div>}
-    {optPick&&<MenuOptionPicker menu={optPick} options={getMenuOptions(optPick,branchId)} onConfirm={chosen=>addToCartWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
+    {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branchId)} onConfirm={chosen=>addToCartWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
   </div>;
 }
 
@@ -11638,7 +11652,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
   function openBind(m){const sel={};getMenuOptions(m,currentBranch.id).forEach(o=>{if(o.id)sel[o.id]=true;});setBindSel(sel);setBindMenu(m);}
   async function saveBind(){
     if(!bindMenu)return;setBindBusy(true);
-    const chosen=lib.filter(o=>bindSel[o.id]).map(o=>({id:o.id,name:o.name,price:+o.price||0,required:!!o.required}));
+    const chosen=lib.filter(g=>bindSel[g.id]).map(g=>({id:g.id,name:g.name,required:!!g.required,choices:(g.choices||[]).map(c=>({id:c.id,name:c.name,price:+c.price||0}))}));
     const map={...(bindMenu.options_by_branch||{})};map[String(currentBranch.id)]=chosen;
     try{await api.updateMenu(bindMenu.id,{options_by_branch:map});setMenus(ms=>ms.map(x=>x.id===bindMenu.id?{...x,options_by_branch:map}:x));setBindMenu(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
     setBindBusy(false);
@@ -11665,14 +11679,16 @@ function POSMenuAvailManager({currentBranch,onClose}){
       </div>}
     </>}
     {bindMenu&&<Modal title={`ผูกตัวเลือก — ${bindMenu.name}`} onClose={()=>setBindMenu(null)}>
-      {lib.length===0?<div style={{padding:"24px 16px",textAlign:"center",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,lineHeight:1.7}}>ยังไม่มีตัวเลือกในคลัง<br/>ไปสร้างที่เมนู <b>"➕ ตัวเลือกในเมนู"</b> ก่อน แล้วกลับมาผูก</div>
+      {lib.length===0?<div style={{padding:"24px 16px",textAlign:"center",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,lineHeight:1.7}}>ยังไม่มีกลุ่มตัวเลือกในคลัง<br/>ไปสร้างที่ <b>"➕ ตัวเลือกในเมนู"</b> ก่อน แล้วกลับมาผูก</div>
       :<>
-        <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>เลือกตัวเลือกที่จะผูกกับเมนูนี้ (ลูกค้า/พนักงานจะเห็นตอนสั่ง)</div>
+        <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>เลือก<b>กลุ่มตัวเลือก</b>ที่จะผูกกับเมนูนี้ (ลูกค้า/พนักงานจะเห็นตอนสั่ง)</div>
         <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:"45vh",overflowY:"auto",marginBottom:14}}>
-          {lib.map(o=>{const on=!!bindSel[o.id];return <label key={o.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,cursor:"pointer",background:on?C.brandLight:C.white,border:`1.5px solid ${on?C.brandBorder:C.line}`}}>
-            <input type="checkbox" checked={on} onChange={()=>setBindSel(s=>({...s,[o.id]:!s[o.id]}))} style={{accentColor:C.brand,width:17,height:17}}/>
-            <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?800:600,color:on?C.brand:C.ink}}>{o.name}</span>
-            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:(+o.price||0)>0?C.brand:C.ink4}}>{(+o.price||0)>0?`+฿${(+o.price).toLocaleString()}`:"ฟรี"}</span>
+          {lib.map(g=>{const on=!!bindSel[g.id];const chTxt=(g.choices||[]).map(c=>c.name).join(", ");return <label key={g.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,cursor:"pointer",background:on?C.brandLight:C.white,border:`1.5px solid ${on?C.brandBorder:C.line}`}}>
+            <input type="checkbox" checked={on} onChange={()=>setBindSel(s=>({...s,[g.id]:!s[g.id]}))} style={{accentColor:C.brand,width:17,height:17,flexShrink:0}}/>
+            <span style={{flex:1,minWidth:0}}>
+              <span style={{display:"block",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?800:600,color:on?C.brand:C.ink}}>📦 {g.name} {g.required&&<span style={{fontSize:10,fontWeight:800,color:C.red}}>*บังคับ</span>}</span>
+              {chTxt&&<span style={{display:"block",fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{chTxt}</span>}
+            </span>
           </label>;})}
         </div>
         <div style={{display:"flex",justifyContent:"flex-end",gap:10,paddingTop:12,borderTop:`1px solid ${C.line}`}}>
@@ -11743,42 +11759,69 @@ function POSLocalCatManager({currentBranch,onClose}){
   </Modal>;
 }
 
-// "ตัวเลือกในเมนู" — the branch's option LIBRARY. Create reusable add-ons here,
-// then bind them to menus at "เมนูทั้งหมด". Stored in pos_settings.option_library.
+// "ตัวเลือกในเมนู" — the branch's option-GROUP library. Create a group (name +
+// required), then add sub-choices (name + price) under it. Bind whole groups to
+// menus at "เมนูทั้งหมด". Stored in pos_settings.option_library =
+// [{id,name,required,choices:[{id,name,price}]}].
 function POSOptionLibrary({currentBranch,onClose}){
   const lbl={display:"block",fontSize:12,fontWeight:600,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
   const[settings,setSettings]=useState(null);const[lib,setLib]=useState([]);
   const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(false);
-  const[form,setForm]=useState({name:"",price:"",required:false});const[editIdx,setEditIdx]=useState(null);
+  const[gName,setGName]=useState("");const[gReq,setGReq]=useState(false);
+  const[ci,setCi]=useState({});                 // {groupId:{name,price}}
+  const[editG,setEditG]=useState(null);const[eg,setEg]=useState({name:"",required:false});
   async function load(){setLoading(true);try{const ps=await api.getPOSSettings(currentBranch.id);const s=ps&&ps[0]?ps[0]:{branch_id:currentBranch.id};setSettings(s);setLib(Array.isArray(s.option_library)?s.option_library:[]);}catch(e){console.error("optLib",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
   async function persist(next){setBusy(true);try{const payload={...(settings||{}),branch_id:currentBranch.id,option_library:next};await api.upsertPOSSettings(payload);setSettings(payload);setLib(next);return true;}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));return false;}finally{setBusy(false);}}
-  async function submit(){
-    const name=(form.name||"").trim();const price=+form.price||0;const required=!!form.required;
-    if(!name)return alert("ใส่ชื่อตัวเลือก");
-    if(lib.some((o,i)=>o.name===name&&i!==editIdx))return alert("มีตัวเลือกชื่อนี้แล้ว");
-    const next=editIdx!=null?lib.map((o,i)=>i===editIdx?{...o,name,price,required}:o):[...lib,{id:`o_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,price,required}];
-    if(await persist(next)){setForm({name:"",price:"",required:false});setEditIdx(null);}
-  }
-  async function remove(i){if(!await confirmDlg({title:"ลบตัวเลือก",message:`ลบ "${lib[i].name}" ออกจากคลัง? เมนูที่ผูกไว้แล้วจะยังมีตัวเลือกนี้จนกว่าจะแก้ที่เมนู`}))return;await persist(lib.filter((_,j)=>j!==i));}
-  return <Modal title="➕ ตัวเลือกในเมนู (คลัง add-on)" onClose={onClose} wide>
+  async function addGroup(){const name=gName.trim();if(!name)return alert("ใส่ชื่อกลุ่มตัวเลือก");if(lib.some(g=>g.name===name))return alert("มีกลุ่มนี้แล้ว");if(await persist([...lib,{id:`g_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,required:gReq,choices:[]}])){setGName("");setGReq(false);}}
+  async function delGroup(g){if(!await confirmDlg({title:"ลบกลุ่มตัวเลือก",message:`ลบกลุ่ม "${g.name}" และตัวเลือกย่อยทั้งหมด?`}))return;await persist(lib.filter(x=>x.id!==g.id));}
+  async function saveEditG(){const name=(eg.name||"").trim();if(!name)return;if(await persist(lib.map(g=>g.id===editG?{...g,name,required:!!eg.required}:g)))setEditG(null);}
+  async function addChoice(g){const f=ci[g.id]||{};const name=(f.name||"").trim();const price=+f.price||0;if(!name)return alert("ใส่ชื่อตัวเลือกย่อย");const next=lib.map(x=>x.id===g.id?{...x,choices:[...(x.choices||[]),{id:`c_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,price}]}:x);if(await persist(next))setCi(s=>({...s,[g.id]:{name:"",price:""}}));}
+  async function delChoice(g,cid){await persist(lib.map(x=>x.id===g.id?{...x,choices:(x.choices||[]).filter(c=>c.id!==cid)}:x));}
+  return <Modal title="➕ ตัวเลือกในเมนู (กลุ่ม add-on)" onClose={onClose} extraWide>
     {loading?<Loading text="โหลดตัวเลือก..."/>:<>
-      <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:12,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>💡 สร้างตัวเลือกที่นี่ (เช่น "เพิ่มไข่ +10", "ไม่เผ็ด ฿0") → แล้วไปผูกกับเมนูที่ <b>"เมนูทั้งหมด → ➕ ตัวเลือก"</b> · ลูกค้าที่สแกนสั่งก็จะเห็นตัวเลือกที่ผูกไว้</div>
-      <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:14,flexWrap:"wrap"}}>
-        <div style={{flex:"2 1 150px"}}><label style={lbl}>ชื่อตัวเลือก</label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="เช่น เพิ่มไข่" style={iS}/></div>
-        <div style={{flex:"1 1 90px"}}><label style={lbl}>ราคา +฿</label><input value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value.replace(/[^\d.]/g,"")}))} inputMode="decimal" placeholder="0" style={iS}/></div>
-        <div style={{flex:"0 0 auto"}}><label style={lbl}>การเลือก</label><div style={{display:"flex",gap:5}}>{[{v:false,l:"ไม่บังคับ"},{v:true,l:"บังคับเลือก"}].map(o=><button key={String(o.v)} onClick={()=>setForm(f=>({...f,required:o.v}))} style={{padding:"8px 12px",borderRadius:8,border:`2px solid ${form.required===o.v?(o.v?C.red:C.green):C.line}`,background:form.required===o.v?(o.v?C.redLight:C.greenLight):C.white,color:form.required===o.v?(o.v?C.red:C.green):C.ink3,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{o.l}</button>)}</div></div>
-        <Btn onClick={submit} loading={busy} icon={I.check}>{editIdx!=null?"บันทึก":"เพิ่ม"}</Btn>
-        {editIdx!=null&&<Btn v="ghost" onClick={()=>{setForm({name:"",price:"",required:false});setEditIdx(null);}}>ยกเลิก</Btn>}
+      <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:12,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>💡 พิมพ์ <b>ชื่อกลุ่ม</b> (เช่น "ขนาด", "ระดับเผ็ด", "ท็อปปิ้ง") + เลือกบังคับ/ไม่บังคับ → แล้วเพิ่ม <b>ตัวเลือกย่อย</b>พร้อมราคา · นำกลุ่มไปผูกเมนูที่ "เมนูทั้งหมด → ➕ ตัวเลือก"</div>
+      {/* Add group */}
+      <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:14,flexWrap:"wrap",background:C.bg,borderRadius:10,padding:"10px 12px",border:`1px dashed ${C.line}`}}>
+        <div style={{flex:"2 1 160px"}}><label style={lbl}>ชื่อกลุ่มตัวเลือก</label><input value={gName} onChange={e=>setGName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addGroup()} placeholder="เช่น ขนาด, ระดับเผ็ด" style={iS}/></div>
+        <div style={{flex:"0 0 auto"}}><label style={lbl}>การเลือก</label><div style={{display:"flex",gap:5}}>{[{v:false,l:"ไม่บังคับ"},{v:true,l:"บังคับเลือก"}].map(o=><button key={String(o.v)} onClick={()=>setGReq(o.v)} style={{padding:"8px 12px",borderRadius:8,border:`2px solid ${gReq===o.v?(o.v?C.red:C.green):C.line}`,background:gReq===o.v?(o.v?C.redLight:C.greenLight):C.white,color:gReq===o.v?(o.v?C.red:C.green):C.ink3,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{o.l}</button>)}</div></div>
+        <Btn onClick={addGroup} loading={busy} icon={I.plus}>เพิ่มกลุ่ม</Btn>
       </div>
-      {lib.length===0?<div style={{textAlign:"center",padding:36,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:40,marginBottom:6}}>➕</div><p style={{fontSize:13}}>ยังไม่มีตัวเลือก — เพิ่มด้านบน</p></div>
-      :<div style={{display:"flex",flexDirection:"column",gap:6}}>
-        {lib.map((o,i)=><div key={o.id||i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:10,background:C.white}}>
-          <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink}}>{o.name}{o.required&&<span style={{marginLeft:8,fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:8,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>* บังคับเลือก</span>}</span>
-          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:(+o.price||0)>0?C.brand:C.ink4}}>{(+o.price||0)>0?`+฿${(+o.price).toLocaleString()}`:"ฟรี"}</span>
-          <button onClick={()=>{setForm({name:o.name,price:String(o.price||""),required:!!o.required});setEditIdx(i);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>แก้</button>
-          <button onClick={()=>remove(i)} style={{background:C.redLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>ลบ</button>
-        </div>)}
+      {/* Groups */}
+      {lib.length===0?<div style={{textAlign:"center",padding:36,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:40,marginBottom:6}}>📦</div><p style={{fontSize:13}}>ยังไม่มีกลุ่มตัวเลือก — เพิ่มด้านบน</p></div>
+      :<div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {lib.map(g=>{const cf=ci[g.id]||{};return <div key={g.id} style={{border:`1.5px solid ${C.line}`,borderRadius:12,overflow:"hidden"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:C.bg,borderBottom:`1px solid ${C.line}`,flexWrap:"wrap"}}>
+            {editG===g.id?<>
+              <input value={eg.name} onChange={e=>setEg(s=>({...s,name:e.target.value}))} autoFocus style={{...iS,flex:"1 1 140px"}}/>
+              <div style={{display:"flex",gap:5}}>{[{v:false,l:"ไม่บังคับ"},{v:true,l:"บังคับ"}].map(o=><button key={String(o.v)} onClick={()=>setEg(s=>({...s,required:o.v}))} style={{padding:"7px 11px",borderRadius:8,border:`2px solid ${eg.required===o.v?(o.v?C.red:C.green):C.line}`,background:eg.required===o.v?(o.v?C.redLight:C.greenLight):C.white,color:eg.required===o.v?(o.v?C.red:C.green):C.ink3,cursor:"pointer",fontSize:11.5,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{o.l}</button>)}</div>
+              <Btn onClick={saveEditG} loading={busy} s={{padding:"6px 12px",fontSize:12}}>บันทึก</Btn>
+              <Btn v="ghost" onClick={()=>setEditG(null)} s={{padding:"6px 12px",fontSize:12}}>ยกเลิก</Btn>
+            </>:<>
+              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,color:C.ink}}>📦 {g.name}</span>
+              {g.required?<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:8,padding:"2px 8px"}}>* บังคับเลือก</span>:<span style={{fontSize:10.5,fontWeight:700,color:C.ink4,background:C.white,borderRadius:8,padding:"2px 8px",border:`1px solid ${C.line}`}}>ไม่บังคับ</span>}
+              <span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>· {(g.choices||[]).length} ตัวเลือกย่อย</span>
+              <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+                <button onClick={()=>{setEditG(g.id);setEg({name:g.name,required:!!g.required});}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>แก้กลุ่ม</button>
+                <button onClick={()=>delGroup(g)} style={{background:C.redLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>ลบกลุ่ม</button>
+              </div>
+            </>}
+          </div>
+          <div style={{padding:"10px 12px"}}>
+            {(g.choices||[]).length>0&&<div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:8}}>
+              {(g.choices||[]).map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 10px",border:`1px solid ${C.lineLight}`,borderRadius:8,background:C.white}}>
+                <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:600,color:C.ink}}>{c.name}</span>
+                <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:(+c.price||0)>0?C.brand:C.ink4}}>{(+c.price||0)>0?`+฿${(+c.price).toLocaleString()}`:"ฟรี"}</span>
+                <button onClick={()=>delChoice(g,c.id)} style={{background:C.redLight,border:"none",borderRadius:6,padding:"4px 9px",cursor:"pointer",fontSize:11,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>ลบ</button>
+              </div>)}
+            </div>}
+            <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
+              <div style={{flex:"2 1 130px"}}><input value={cf.name||""} onChange={e=>setCi(s=>({...s,[g.id]:{...cf,name:e.target.value}}))} onKeyDown={e=>e.key==="Enter"&&addChoice(g)} placeholder="ชื่อตัวเลือกย่อย เช่น ใหญ่" style={{...iS,fontSize:13}}/></div>
+              <div style={{flex:"0 0 100px"}}><input value={cf.price||""} onChange={e=>setCi(s=>({...s,[g.id]:{...cf,price:e.target.value.replace(/[^\d.]/g,"")}}))} inputMode="decimal" placeholder="+฿0" style={{...iS,fontSize:13}}/></div>
+              <Btn onClick={()=>addChoice(g)} loading={busy} icon={I.plus} s={{padding:"8px 14px",fontSize:12}}>เพิ่มตัวเลือกย่อย</Btn>
+            </div>
+          </div>
+        </div>;})}
       </div>}
     </>}
   </Modal>;
