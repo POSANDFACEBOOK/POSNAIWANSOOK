@@ -10085,16 +10085,17 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 
   // Category tabs follow THIS branch's own categorisation (m.local_categories[branchId]),
   // matching the Menu management screen — NOT central's global m.category. A branch with
-  // no local categories shows only "ทั้งหมด". (Central, if it sells, uses the global category.)
+  // no local categories shows only "ทั้งหมด".
   // NOTE: the order item still carries m.category for kitchen-printer routing (resolvePrinter) — unchanged.
-  const isCentralSale=branch?.type==="central";
+  // Category = the branch's own assignment (local_categories[branchId]) for EVERY branch type,
+  // matching the category manager (which writes local_categories) — so central is consistent too.
   const bidSale=branch?.id;
   const cats=useMemo(()=>{
-    const get=m=>isCentralSale?(m.category||null):((m.local_categories||{})[bidSale]||null);
+    const get=m=>(m.local_categories||{})[bidSale]||null;
     return ["ทั้งหมด",...new Set(menus.map(get).filter(Boolean))];
-  },[menus,isCentralSale,bidSale]);
+  },[menus,bidSale]);
   const filtered=useMemo(()=>{
-    const get=m=>isCentralSale?(m.category||null):((m.local_categories||{})[bidSale]||null);
+    const get=m=>(m.local_categories||{})[bidSale]||null;
     return menus.filter(m=>{
       if((m.availability||{})[bidSale]==="hidden")return false;  // ตั้ง "ซ่อน" → ไม่ขึ้นหน้าขาย (ตรงกับหน้าลูกค้า)
       const c=get(m);
@@ -10102,7 +10103,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
       return m.name.toLowerCase().includes(search.toLowerCase());
     });
-  },[menus,selCat,search,isCentralSale,bidSale]);
+  },[menus,selCat,search,bidSale]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
   const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
