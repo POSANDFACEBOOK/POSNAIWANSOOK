@@ -9440,6 +9440,8 @@ export default function App(){
   // Branch-level perm gating was removed — permissions are now configured per-user only.
   const visibleTabs=TABS.filter(t=>{
     if(!currentUser)return false;
+    // ครัวกลางไม่ได้ขายหน้าร้าน → ไม่มีแท็บ "ขายหน้าร้าน" (ครอบทุก role รวม admin)
+    if(t.id==="pos"&&currentBranch?.type==="central")return false;
     if(currentUser.role==="admin")return true;
     return hasPerm(currentUser,t.perm);
   });
@@ -12465,6 +12467,7 @@ function POSPinGate({branchId}){
         const b=(bs||[]).find(x=>+x.id===+branchId);
         if(!b){setErr("ไม่พบสาขานี้ — ลิงก์อาจไม่ถูกต้อง");setLoading(false);return;}
         if(b.active===false){setErr("สาขานี้ถูกปิดใช้งาน");setLoading(false);return;}
+        if(b.type==="central"){setErr("ครัวกลางไม่ได้เปิดขายหน้าร้าน");setLoading(false);return;}
         const settings=ps&&ps[0]?ps[0]:null;
         setBranch(b);setStaff(Array.isArray(settings?.sales_staff)?settings.sales_staff:[]);
         setMenus(ms||[]);setPrinters(prs||[]);
