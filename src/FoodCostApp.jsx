@@ -12187,6 +12187,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   const[loading,setLoading]=useState(true);
   const[selTable,setSelTable]=useState(null);const[selOrder,setSelOrder]=useState(null);
   const[showPrinters,setShowPrinters]=useState(false);
+  const[showOrders,setShowOrders]=useState(false);   // today's-orders modal (re-added after the tab was replaced)
   const timerRef=useRef(null);
   const canEdit=hasPerm(currentUser,"pos");
 
@@ -12228,7 +12229,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     document.addEventListener("visibilitychange",onVis);
     return()=>{clearInterval(timerRef.current);document.removeEventListener("visibilitychange",onVis);};
   },[]);
-  useEffect(()=>{if(posTab==="orders")loadAllOrders();},[posTab]);
+  useEffect(()=>{if(showOrders)loadAllOrders();},[showOrders]);// eslint-disable-line react-hooks/exhaustive-deps
 
   // QR-สั่งอาหาร tab removed — per-table QR is printed by tapping a table (one place only).
   const PTABS=[{id:"tables",l:"แผนผังโต๊ะ",icon:I.table}];  // "ออเดอร์วันนี้" replaced by the menu-management dropdown
@@ -12251,6 +12252,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       {PTABS.map(t=>{const active=posTab===t.id;return <button key={t.id} onClick={()=>setPosTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:"none",cursor:"pointer",fontSize:12,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s"}}><Ic d={t.icon} s={13} c={active?C.brand:C.ink4}/>{t.l}</button>;})}
       {canEdit&&<POSMenuTools currentBranch={currentBranch} variant="dropdown" onChanged={()=>{reloadMenus&&reloadMenus();reloadPosSettings&&reloadPosSettings();}}/>}
       <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+        <Btn v="ghost" onClick={()=>setShowOrders(true)} icon={I.order} s={{padding:"5px 10px",fontSize:12}}>🧾 ออเดอร์วันนี้</Btn>
         <Btn v="success" onClick={onCashDrawer} icon={I.cash} s={{padding:"5px 12px",fontSize:12}}>💰 เงินในลิ้นชัก</Btn>
         {canEdit&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
         <Btn v="ghost" onClick={loadAll} icon={I.refresh} s={{padding:"5px 10px",fontSize:12}}>รีเฟรช</Btn>
@@ -12260,7 +12262,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
       {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}}/>}
-      {posTab==="orders"&&<div style={{overflowY:"auto",flex:1,padding:"14px 16px"}}>
+      {showOrders&&<Modal title="🧾 ออเดอร์วันนี้" onClose={()=>setShowOrders(false)} extraWide>
         {allOrders.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.order} s={48} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีออเดอร์</p></div>}
         {allOrders.length>0&&<>
           <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
@@ -12287,7 +12289,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
             })}
           </div>
         </>}
-      </div>}
+      </Modal>}
     </div>
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll();}} wide>
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
