@@ -11432,6 +11432,7 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
   useEffect(()=>{if(section==="shifts")loadShifts();},[section]);
   const SECS=[
     {id:"tables",l:"ผังโต๊ะ",icon:I.table,c:C.brand},
+    {id:"menu",l:"เมนู & หมวดหมู่",icon:I.food,c:"#0EA5E9"},
     {id:"sellers",l:"พนักงานขาย",icon:I.user,c:C.teal},
     {id:"printers",l:"เครื่องพิมพ์",icon:I.print,c:C.purple},
     {id:"settings",l:"ตั้งค่า POS",icon:I.settings,c:C.green},
@@ -11446,6 +11447,7 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
     </div>
     <div style={{flex:1,overflow:"auto",padding:"20px 24px",background:C.bg}}>
       {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} zones={zones} reloadZones={reloadZones} onDone={loadTables}/>)}
+      {section==="menu"&&<POSMenuTools currentBranch={currentBranch} variant="cards"/>}
       {section==="sellers"&&<POSSellerPanel currentBranch={currentBranch}/>}
       {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser} menus={menus}/>}
       {section==="settings"&&<POSSettingsPanel currentBranch={currentBranch}/>}
@@ -11524,6 +11526,116 @@ function POSSellerPanel({currentBranch}){
       </Card>;})}
     </div>}
   </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── POS MENU & CATEGORY TOOLS (sale screen + back office)
+// ══════════════════════════════════════════════════════
+// Same management surface from two places: a dropdown on the sale screen and a
+// section in the back office. Branch-level only — set availability & assign a
+// (local) category; the price/recipe stays central. (Add-on options = next.)
+function POSMenuTools({currentBranch,variant="dropdown"}){
+  const[open,setOpen]=useState(false);
+  const[active,setActive]=useState(null);  // 'menus' | 'cats' | 'options' | null
+  const items=[
+    {id:"menus",l:"เมนูทั้งหมด",icon:"🍔",sub:"สถานะ + จัดหมวด"},
+    {id:"cats",l:"หมวดหมู่",icon:"📂",sub:"เพิ่ม/แก้/ลบหมวด"},
+    {id:"options",l:"ตัวเลือกในเมนู",icon:"➕",sub:"add-on รายเมนู"},
+  ];
+  return <>
+    {variant==="dropdown"
+      ?<div style={{position:"relative"}}>
+        <button onClick={()=>setOpen(o=>!o)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:open?C.brandLight:"none",cursor:"pointer",fontSize:12,fontWeight:700,color:C.brand,fontFamily:"'Sarabun',sans-serif",borderBottom:"2.5px solid transparent"}}>🍔 จัดการเมนูและหมวดหมู่ <span style={{fontSize:9}}>▾</span></button>
+        {open&&<><div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:60}}/>
+          <div style={{position:"absolute",top:"100%",left:0,zIndex:61,background:C.white,border:`1px solid ${C.line}`,borderRadius:12,boxShadow:"0 14px 40px rgba(15,23,42,.16)",minWidth:240,overflow:"hidden",marginTop:2}}>
+            {items.map(it=><button key={it.id} onClick={()=>{setActive(it.id);setOpen(false);}} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"11px 14px",border:"none",borderBottom:`1px solid ${C.lineLight}`,background:C.white,cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=C.white}>
+              <span style={{fontSize:18}}>{it.icon}</span>
+              <span style={{minWidth:0}}><span style={{display:"block",fontSize:13.5,fontWeight:800,color:C.ink}}>{it.l}</span><span style={{display:"block",fontSize:11,color:C.ink4}}>{it.sub}</span></span>
+            </button>)}
+          </div></>}
+      </div>
+      :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(220px,100%),1fr))",gap:12}}>
+        {items.map(it=><button key={it.id} onClick={()=>setActive(it.id)} style={{display:"flex",alignItems:"center",gap:12,padding:"16px 16px",border:`1.5px solid ${C.line}`,borderRadius:14,background:C.white,cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
+          <span style={{fontSize:26}}>{it.icon}</span>
+          <span><span style={{display:"block",fontSize:15,fontWeight:800,color:C.ink}}>{it.l}</span><span style={{display:"block",fontSize:12,color:C.ink4,marginTop:2}}>{it.sub}</span></span>
+        </button>)}
+      </div>}
+    {active==="menus"&&<POSMenuAvailManager currentBranch={currentBranch} onClose={()=>setActive(null)}/>}
+    {active==="cats"&&<POSLocalCatManager currentBranch={currentBranch} onClose={()=>setActive(null)}/>}
+    {active==="options"&&<Modal title="➕ ตัวเลือกในเมนู (add-on)" onClose={()=>setActive(null)} wide><div style={{padding:"36px 20px",textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:46,marginBottom:10}}>🚧</div><div style={{fontSize:15,fontWeight:800,color:C.ink,marginBottom:8}}>กำลังพัฒนา — เร็วๆ นี้</div><div style={{fontSize:13,color:C.ink3,lineHeight:1.7,maxWidth:420,margin:"0 auto"}}>ตัวเลือกเสริม/add-on รายเมนู (เช่น "พิเศษ +10", "ไม่เผ็ด", "เพิ่มไข่ +10") — พนักงานเลือกตอนสั่ง บวกราคาเข้าบิล + พิมพ์เข้าครัว · จะเปิดให้ใช้ในรอบถัดไป</div></div></Modal>}
+  </>;
+}
+
+// "เมนูทั้งหมด" — branch sets availability (ขาย/วันนี้หมด/ซ่อน) + assigns a local category.
+function POSMenuAvailManager({currentBranch,onClose}){
+  const isCentral=currentBranch?.type==="central";
+  const[menus,setMenus]=useState([]);const[cats,setCats]=useState([]);const[loading,setLoading]=useState(true);
+  const[q,setQ]=useState("");const[busyId,setBusyId]=useState(null);
+  async function load(){setLoading(true);try{const[ms,cs]=await Promise.all([api.getMenus(),api.getCats()]);setMenus(ms||[]);setCats((cs||[]).filter(c=>c.type==="menu"&&(isCentral?!c.branch_id:+c.branch_id===+currentBranch.id)));}catch(e){console.error("menuMgr",e);}setLoading(false);}
+  useEffect(()=>{load();},[currentBranch.id]);
+  const visible=menus.filter(m=>{const vb=m.visible_branches||[];const okB=isCentral||vb.length===0||vb.includes(currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
+  async function setAvail(m,status){setBusyId(m.id);const avail={...(m.availability||{})};if(!status)delete avail[currentBranch.id];else avail[currentBranch.id]=status;try{await api.updateMenu(m.id,{availability:avail});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);}
+  async function setCat(m,catName){setBusyId(m.id);const lc={...(m.local_categories||{})};if(catName)lc[currentBranch.id]=catName;else delete lc[currentBranch.id];try{await api.updateMenu(m.id,{local_categories:lc});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,local_categories:lc}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);}
+  const AVS=[{v:"",l:"ขาย",c:C.green},{v:"sold_out",l:"วันนี้หมด",c:"#92400E"},{v:"hidden",l:"ซ่อน",c:C.red}];
+  return <Modal title="🍔 เมนูทั้งหมด — สถานะ & หมวดหมู่" onClose={onClose} extraWide>
+    {loading?<Loading text="โหลดเมนู..."/>:<>
+      <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:12,flexWrap:"wrap"}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,flex:1,minWidth:200}}/>
+        <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{visible.length} เมนู</span>
+      </div>
+      <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>💡 ราคา/สูตรแก้ที่ครัวกลาง · ที่นี่ตั้งได้ <b>สถานะการขาย</b> และ <b>หมวดหมู่</b> ของสาขานี้ (เมนูจะขึ้นหน้าขายเมื่อมีหมวด)</div>
+      {visible.length===0?<div style={{textAlign:"center",padding:40,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>
+      :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto"}}>
+        {visible.map(m=>{const cur=(m.availability||{})[currentBranch.id]||"";const lc=(m.local_categories||{})[currentBranch.id]||"";return <div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap",opacity:busyId===m.id?.6:1}}>
+          <div style={{minWidth:140,flex:"1 1 140px"}}>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{m.name}</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink4}}>฿{(+m.price||0).toLocaleString()}{m.category?` · ${m.category}`:""}</div>
+          </div>
+          <div style={{display:"flex",gap:4}}>
+            {AVS.map(a=><button key={a.v} onClick={()=>setAvail(m,a.v)} style={{padding:"5px 11px",borderRadius:8,border:`1.5px solid ${cur===a.v?a.c:C.line}`,background:cur===a.v?a.c:C.white,color:cur===a.v?C.white:C.ink3,cursor:"pointer",fontSize:11.5,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{a.l}</button>)}
+          </div>
+          <select value={lc} onChange={e=>setCat(m,e.target.value)} style={{...iS,width:170,fontSize:12,padding:"7px 10px",appearance:"none"}}>
+            <option value="">— เลือกหมวด —</option>
+            {cats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
+          </select>
+        </div>;})}
+      </div>}
+    </>}
+  </Modal>;
+}
+
+// "หมวดหมู่" — branch's own local menu categories (used by the POS sale tabs).
+function POSLocalCatManager({currentBranch,onClose}){
+  const isCentral=currentBranch?.type==="central";
+  const[cats,setCats]=useState([]);const[loading,setLoading]=useState(true);
+  const[newName,setNewName]=useState("");const[editId,setEditId]=useState(null);const[editName,setEditName]=useState("");const[busy,setBusy]=useState(false);
+  async function load(){setLoading(true);try{const all=await api.getCats();setCats((all||[]).filter(c=>c.type==="menu"&&(isCentral?!c.branch_id:+c.branch_id===+currentBranch.id)));}catch(e){console.error("catMgr",e);}setLoading(false);}
+  useEffect(()=>{load();},[currentBranch.id]);
+  async function add(){const n=newName.trim();if(!n)return;if(cats.some(c=>c.name===n))return alert("มีหมวดนี้แล้ว");setBusy(true);try{await api.addCat({type:"menu",name:n,branch_id:isCentral?null:currentBranch.id});setNewName("");await load();}catch(e){alert("เพิ่มไม่สำเร็จ: "+e.message);}setBusy(false);}
+  async function rename(){const n=editName.trim();if(!n||!editId)return;setBusy(true);try{await api.updateCat(editId,{name:n});setEditId(null);setEditName("");await load();}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusy(false);}
+  async function del(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ลบหมวด "${c.name}"? เมนูที่อยู่ในหมวดนี้จะไม่ถูกลบ แต่จะไม่มีหมวด`}))return;setBusy(true);try{await api.deleteCat(c.id);await load();}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}setBusy(false);}
+  return <Modal title="📂 จัดการหมวดหมู่" onClose={onClose} wide>
+    {loading?<Loading text="โหลดหมวดหมู่..."/>:<>
+      <div style={{display:"flex",gap:8,marginBottom:14}}>
+        <input value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="ชื่อหมวดใหม่ เช่น ของทอด, เครื่องดื่ม" style={{...iS,flex:1}}/>
+        <Btn onClick={add} loading={busy} icon={I.plus}>เพิ่ม</Btn>
+      </div>
+      {cats.length===0?<div style={{textAlign:"center",padding:36,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><Ic d={I.tag} s={40} c={C.line}/><p style={{marginTop:8,fontSize:13}}>ยังไม่มีหมวดหมู่ — เพิ่มด้านบน แล้วไปจัดเมนูเข้าหมวดที่ "เมนูทั้งหมด"</p></div>
+      :<div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {cats.map(c=><div key={c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:10,background:C.white}}>
+          {editId===c.id?<>
+            <input value={editName} onChange={e=>setEditName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&rename()} autoFocus style={{...iS,flex:1}}/>
+            <Btn onClick={rename} loading={busy} s={{padding:"6px 12px",fontSize:12}}>บันทึก</Btn>
+            <Btn v="ghost" onClick={()=>{setEditId(null);setEditName("");}} s={{padding:"6px 12px",fontSize:12}}>ยกเลิก</Btn>
+          </>:<>
+            <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink}}>📂 {c.name}</span>
+            <button onClick={()=>{setEditId(c.id);setEditName(c.name);}} style={{background:C.blueLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>แก้ไข</button>
+            <button onClick={()=>del(c)} style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>ลบ</button>
+          </>}
+        </div>)}
+      </div>}
+    </>}
+  </Modal>;
 }
 
 function POSShiftHistory({shifts,loading,reload}){
@@ -11921,7 +12033,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   useEffect(()=>{if(posTab==="orders")loadAllOrders();},[posTab]);
 
   // QR-สั่งอาหาร tab removed — per-table QR is printed by tapping a table (one place only).
-  const PTABS=[{id:"tables",l:"แผนผังโต๊ะ",icon:I.table},{id:"orders",l:"ออเดอร์วันนี้",icon:I.order}];
+  const PTABS=[{id:"tables",l:"แผนผังโต๊ะ",icon:I.table}];  // "ออเดอร์วันนี้" replaced by the menu-management dropdown
 
   if(loading)return <Loading text="กำลังโหลดข้อมูล POS..."/>;
 
@@ -11939,6 +12051,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     </div>
     <div style={{padding:"0 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",height:46,gap:2,flexShrink:0}}>
       {PTABS.map(t=>{const active=posTab===t.id;return <button key={t.id} onClick={()=>setPosTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:"none",cursor:"pointer",fontSize:12,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s"}}><Ic d={t.icon} s={13} c={active?C.brand:C.ink4}/>{t.l}</button>;})}
+      {canEdit&&<POSMenuTools currentBranch={currentBranch} variant="dropdown"/>}
       <div style={{marginLeft:"auto",display:"flex",gap:6}}>
         <Btn v="success" onClick={onCashDrawer} icon={I.cash} s={{padding:"5px 12px",fontSize:12}}>💰 เงินในลิ้นชัก</Btn>
         {canEdit&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
