@@ -10245,7 +10245,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"40px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
           <Ic d={I.food} s={42} c={C.line}/>
           <p style={{marginTop:10,fontSize:13.5,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูที่จัดหมวดหมู่ไว้"}</p>
-          {!search&&<p style={{marginTop:6,fontSize:11.5,color:C.ink4,lineHeight:1.7}}>ไปที่แท็บ <b style={{color:C.brand}}>"เมนู"</b> → สร้างหมวด → กำหนดหมวดให้เมนู<br/>เมนูจะขึ้นที่นี่ให้อัตโนมัติ</p>}
+          {!search&&<p style={{marginTop:6,fontSize:11.5,color:C.ink4,lineHeight:1.7}}>กด <b style={{color:C.brand}}>"🍔 จัดการเมนูและหมวดหมู่ → หมวดหมู่"</b> ด้านบน<br/>→ คลิกหมวด → ติ๊กเมนูเข้าหมวด · เมนูจะขึ้นที่นี่อัตโนมัติ</p>}
         </div>}
       </div>
     </div>
@@ -11492,7 +11492,7 @@ function calcPromoDiscount(promo,context){
 // ══════════════════════════════════════════════════════
 // ── POS BACK OFFICE (หลังบ้าน) ─────────────────────────
 // ══════════════════════════════════════════════════════
-function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branches,zones=[],reloadZones,menus=[],onExit}){
+function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branches,zones=[],reloadZones,menus=[],reloadMenus,onExit}){
   const[section,setSection]=useState("tables");
   const[tables,setTables]=useState([]);const[loadingT,setLoadingT]=useState(true);
   const[shifts,setShifts]=useState([]);const[loadingS,setLoadingS]=useState(false);
@@ -11517,7 +11517,7 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
     </div>
     <div style={{flex:1,overflow:"auto",padding:"20px 24px",background:C.bg}}>
       {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} zones={zones} reloadZones={reloadZones} onDone={loadTables}/>)}
-      {section==="menu"&&<POSMenuTools currentBranch={currentBranch} variant="cards"/>}
+      {section==="menu"&&<POSMenuTools currentBranch={currentBranch} variant="cards" onChanged={reloadMenus}/>}
       {section==="sellers"&&<POSSellerPanel currentBranch={currentBranch}/>}
       {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser} menus={menus}/>}
       {section==="settings"&&<POSSettingsPanel currentBranch={currentBranch}/>}
@@ -11604,7 +11604,7 @@ function POSSellerPanel({currentBranch}){
 // Same management surface from two places: a dropdown on the sale screen and a
 // section in the back office. Branch-level only — set availability & assign a
 // (local) category; the price/recipe stays central. (Add-on options = next.)
-function POSMenuTools({currentBranch,variant="dropdown"}){
+function POSMenuTools({currentBranch,variant="dropdown",onChanged}){
   const[open,setOpen]=useState(false);
   const[active,setActive]=useState(null);  // 'menus' | 'cats' | 'options' | null
   const items=[
@@ -11630,9 +11630,9 @@ function POSMenuTools({currentBranch,variant="dropdown"}){
           <span><span style={{display:"block",fontSize:15,fontWeight:800,color:C.ink}}>{it.l}</span><span style={{display:"block",fontSize:12,color:C.ink4,marginTop:2}}>{it.sub}</span></span>
         </button>)}
       </div>}
-    {active==="menus"&&<POSMenuAvailManager currentBranch={currentBranch} onClose={()=>setActive(null)}/>}
-    {active==="cats"&&<POSLocalCatManager currentBranch={currentBranch} onClose={()=>setActive(null)}/>}
-    {active==="options"&&<POSOptionLibrary currentBranch={currentBranch} onClose={()=>setActive(null)}/>}
+    {active==="menus"&&<POSMenuAvailManager currentBranch={currentBranch} onClose={()=>{setActive(null);onChanged&&onChanged();}}/>}
+    {active==="cats"&&<POSLocalCatManager currentBranch={currentBranch} onClose={()=>{setActive(null);onChanged&&onChanged();}}/>}
+    {active==="options"&&<POSOptionLibrary currentBranch={currentBranch} onClose={()=>{setActive(null);onChanged&&onChanged();}}/>}
   </>;
 }
 
@@ -12240,7 +12240,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     </div>
     <div style={{padding:"0 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",height:46,gap:2,flexShrink:0}}>
       {PTABS.map(t=>{const active=posTab===t.id;return <button key={t.id} onClick={()=>setPosTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:"none",cursor:"pointer",fontSize:12,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s"}}><Ic d={t.icon} s={13} c={active?C.brand:C.ink4}/>{t.l}</button>;})}
-      {canEdit&&<POSMenuTools currentBranch={currentBranch} variant="dropdown"/>}
+      {canEdit&&<POSMenuTools currentBranch={currentBranch} variant="dropdown" onChanged={reloadMenus}/>}
       <div style={{marginLeft:"auto",display:"flex",gap:6}}>
         <Btn v="success" onClick={onCashDrawer} icon={I.cash} s={{padding:"5px 12px",fontSize:12}}>💰 เงินในลิ้นชัก</Btn>
         {canEdit&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
@@ -12409,7 +12409,7 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   if(mode===null)return <POSModeSelect onSelect={setMode} canManage={canManage}/>;
   if(mode==='manage'){
     if(!canManage){setMode(null);return null;}
-    return <POSBackOffice currentBranch={currentBranch} currentUser={currentUser} printers={printers} reloadPrinters={reloadPrinters} branches={branches} zones={zones} reloadZones={loadZones} menus={menus} onExit={()=>{setMode(null);loadZones();loadPosSettings();loadPromotions();}}/>;
+    return <POSBackOffice currentBranch={currentBranch} currentUser={currentUser} printers={printers} reloadPrinters={reloadPrinters} branches={branches} zones={zones} reloadZones={loadZones} menus={menus} reloadMenus={reloadMenus} onExit={()=>{setMode(null);loadZones();loadPosSettings();loadPromotions();}}/>;
   }
   // mode === 'sale'
   if(loadingShift)return <Loading text="ตรวจสอบกะการขาย..."/>;
