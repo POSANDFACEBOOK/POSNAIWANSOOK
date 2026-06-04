@@ -11902,11 +11902,12 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
 // ══════════════════════════════════════════════════════
 // ── POS SALE MODE (โหมดขายหน้าร้าน) ────────────────────
 // ══════════════════════════════════════════════════════
-function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode}){
+function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode,saleOnly=false}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
   const[loading,setLoading]=useState(true);
   const[selTable,setSelTable]=useState(null);const[selOrder,setSelOrder]=useState(null);
+  const[showPrinters,setShowPrinters]=useState(false);
   const timerRef=useRef(null);
   const canEdit=hasPerm(currentUser,"pos");
 
@@ -11973,7 +11974,8 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
         <Btn v="success" onClick={onCashDrawer} icon={I.cash} s={{padding:"5px 12px",fontSize:12}}>💰 เงินในลิ้นชัก</Btn>
         {canEdit&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
         <Btn v="ghost" onClick={loadAll} icon={I.refresh} s={{padding:"5px 10px",fontSize:12}}>รีเฟรช</Btn>
-        <Btn v="ghost" onClick={onExitMode} s={{padding:"5px 10px",fontSize:12}}>← โหมด</Btn>
+        <Btn v="ghost" onClick={()=>setShowPrinters(true)} icon={I.print} s={{padding:"5px 10px",fontSize:12}}>🖨 เครื่องพิมพ์</Btn>
+        {!saleOnly&&<Btn v="ghost" onClick={onExitMode} s={{padding:"5px 10px",fontSize:12}}>← โหมด</Btn>}
       </div>
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
@@ -12013,7 +12015,93 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
     </Modal>}
+    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} onClose={()=>setShowPrinters(false)}/>}
   </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── PRINTER STATUS + ADD-BY-IP (from the sale screen) ──
+// ══════════════════════════════════════════════════════
+// Lightweight printer panel for cashiers: see each printer online/offline and
+// add a network printer by typing its IP. (Full routing/categories stay in the
+// manager back office.)
+function PrinterStatusModal({currentBranch,onClose}){
+  const lbl={display:"block",fontSize:12,fontWeight:600,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
+  const[printers,setPrinters]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[status,setStatus]=useState({});   // id -> 'testing'|'online'|'offline'|'bt'
+  const[form,setForm]=useState({name:"",ip:"",port:9100});
+  const[saving,setSaving]=useState(false);
+  async function load(){setLoading(true);try{const all=await api.getAllPrinters();setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}setLoading(false);}
+  useEffect(()=>{load();},[]);
+  // Ping each IP printer once the list loads (sends only ESC @ init — no paper).
+  useEffect(()=>{if(!loading)printers.forEach(p=>checkStatus(p));// eslint-disable-next-line
+  },[loading]);
+  async function checkStatus(p){
+    const conn=getPConn(p);
+    if(conn.type==="bluetooth"){setStatus(s=>({...s,[p.id]:"bt"}));return;}
+    setStatus(s=>({...s,[p.id]:"testing"}));
+    const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),2800);
+    const started=Date.now();
+    try{
+      await fetch(`http://${p.ip}:${p.port||9100}/`,{method:"POST",mode:"no-cors",cache:"no-store",headers:{"Content-Type":"application/octet-stream"},body:new Uint8Array([0x1B,0x40]),signal:ctrl.signal});
+      clearTimeout(tid);setStatus(s=>({...s,[p.id]:"online"}));
+    }catch(e){
+      clearTimeout(tid);const el=Date.now()-started;
+      // Timeout (AbortError) = TCP almost certainly accepted (raw printer never HTTP-replies) → online.
+      // Quick TypeError = connection refused → offline.
+      setStatus(s=>({...s,[p.id]:(e.name==="AbortError"&&el>=2000)?"online":"offline"}));
+    }
+  }
+  async function add(){
+    const name=(form.name||"").trim();const ip=(form.ip||"").trim();
+    if(!name)return alert("ใส่ชื่อเครื่องพิมพ์");
+    if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip))return alert("ใส่เลข IP ให้ถูกต้อง เช่น 192.168.1.50");
+    setSaving(true);
+    try{
+      await api.addPrinter({name,ip,port:+form.port||9100,type:"kitchen",branch_id:currentBranch.id,active:true,description:""});
+      setForm({name:"",ip:"",port:9100});
+      await load();
+    }catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}
+    setSaving(false);
+  }
+  const stView=(st)=>{
+    if(st==="testing")return{c:C.yellow,bg:"#FFFBEB",t:"กำลังเช็ค..."};
+    if(st==="online")return{c:C.green,bg:C.greenLight,t:"ออนไลน์"};
+    if(st==="bt")return{c:C.purple,bg:C.purpleLight,t:"บลูทูธ"};
+    if(st==="offline")return{c:C.red,bg:C.redLight,t:"ออฟไลน์"};
+    return{c:C.ink4,bg:C.bg,t:"ยังไม่เช็ค"};
+  };
+  return <Modal title="🖨 เครื่องพิมพ์ & สถานะการเชื่อมต่อ" onClose={onClose} wide>
+    {loading?<Loading text="โหลดเครื่องพิมพ์..."/>:<>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>เครื่องพิมพ์ของสาขา <b style={{color:C.ink}}>{currentBranch.name}</b> ({printers.length})</div>
+        <Btn v="ghost" onClick={()=>printers.forEach(p=>checkStatus(p))} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>เช็คสถานะใหม่</Btn>
+      </div>
+      {printers.length===0?<div style={{textAlign:"center",padding:"28px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif",background:C.bg,borderRadius:12,marginBottom:14}}><Ic d={I.print} s={40} c={C.line}/><p style={{marginTop:8,fontSize:13}}>ยังไม่มีเครื่องพิมพ์ — เพิ่มด้านล่างด้วยเลข IP</p></div>
+      :<div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+        {printers.map(p=>{const conn=getPConn(p);const sv=stView(status[p.id]);return <div key={p.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap"}}>
+          <span style={{width:11,height:11,borderRadius:"50%",background:sv.c,flexShrink:0,boxShadow:status[p.id]==="online"?`0 0 0 3px ${C.green}33`:"none"}}/>
+          <div style={{minWidth:0,flex:1}}>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{p.name}</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink4}}>{conn.type==="bluetooth"?`บลูทูธ${conn.btName?" · "+conn.btName:""}`:`${p.ip||"-"}:${p.port||9100}`}</div>
+          </div>
+          <span style={{fontSize:11.5,fontWeight:800,color:sv.c,background:sv.bg,border:`1px solid ${sv.c}44`,borderRadius:20,padding:"3px 12px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{sv.t}</span>
+          <button onClick={()=>checkStatus(p)} style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2}}>เช็ค</button>
+        </div>;})}
+      </div>}
+      <div style={{background:C.bg,border:`1px dashed ${C.line}`,borderRadius:12,padding:"14px 16px"}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}>➕ เพิ่มเครื่องพิมพ์ (เครือข่าย / IP)</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <div style={{flex:"2 1 160px"}}><label style={lbl}>ชื่อเครื่องพิมพ์</label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัวร้อน" style={iS}/></div>
+          <div style={{flex:"2 1 150px"}}><label style={lbl}>เลข IP</label><input value={form.ip} onChange={e=>setForm(f=>({...f,ip:e.target.value.replace(/[^\d.]/g,"")}))} inputMode="decimal" placeholder="192.168.1.50" style={iS}/></div>
+          <div style={{flex:"1 1 90px"}}><label style={lbl}>พอร์ต</label><input value={form.port} onChange={e=>setForm(f=>({...f,port:e.target.value.replace(/\D/g,"")}))} inputMode="numeric" placeholder="9100" style={iS}/></div>
+          <Btn onClick={add} loading={saving} icon={I.plus}>เพิ่ม</Btn>
+        </div>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,marginTop:8,lineHeight:1.6}}>💡 ใช้เครื่องพิมพ์ความร้อนที่ต่อ LAN/WiFi · พอร์ตมาตรฐานคือ 9100 · ตั้งหมวดหมู่/เลือกเมนูให้แต่ละเครื่องได้ที่ "จัดการหลังบ้าน → เครื่องพิมพ์"</div>
+      </div>
+    </>}
+  </Modal>;
 }
 
 // ══════════════════════════════════════════════════════
@@ -12056,7 +12144,7 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   if(loadingShift)return <Loading text="ตรวจสอบกะการขาย..."/>;
   if(!shift)return <OpenShiftModal currentBranch={currentBranch} currentUser={currentUser} onDone={s=>setShift(s)} onCancel={exitSale}/>;
   return <>
-    <POSSaleMode menus={menus} reloadMenus={reloadMenus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={exitSale}/>
+    <POSSaleMode menus={menus} reloadMenus={reloadMenus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={exitSale} saleOnly={saleOnly}/>
     {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCashDrawer(false)}/>}
     {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShowCashDrawer(false);setShift(null);if(!saleOnly)setMode(null);}}/>}
   </>;
