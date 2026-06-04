@@ -10010,13 +10010,17 @@ function POSTableManage({tables,branch,zones=[],reloadZones,onDone}){
 }
 
 // Per-branch add-on options bound to a menu: menu.options_by_branch[branchId] = [{id,name,price}]
-function getMenuOptions(menu,branchId){
+function getMenuOptions(menu,branchId,optionLibrary){
   const map=(menu&&menu.options_by_branch)||{};
-  const arr=map[String(branchId)];
-  return Array.isArray(arr)?arr.filter(o=>o&&o.name):[];
+  const bound=map[String(branchId)];
+  if(!Array.isArray(bound))return [];
+  const lib=Array.isArray(optionLibrary)?optionLibrary:[];
+  // A bound entry is either a group ID (reference — resolved LIVE from the
+  // library, so edits propagate) or a full group object (legacy snapshot).
+  return bound.map(b=>(typeof b==="string"||typeof b==="number")?lib.find(g=>String(g.id)===String(b)):b).filter(g=>g&&g.name);
 }
 // True if the menu has at least one bound option GROUP that has choices.
-function menuHasOptions(menu,branchId){return getMenuOptions(menu,branchId).some(g=>g&&Array.isArray(g.choices)&&g.choices.length>0);}
+function menuHasOptions(menu,branchId,optionLibrary){return getMenuOptions(menu,branchId,optionLibrary).some(g=>g&&Array.isArray(g.choices)&&g.choices.length>0);}
 // Compact text of chosen options for prints/notes (e.g. "เพิ่มไข่, ไม่เผ็ด").
 function optionsText(opts){return (opts||[]).map(o=>o&&o.name).filter(Boolean).join(", ");}
 
@@ -10131,10 +10135,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const total=round2(vatIncluded?subAfterDisc+sc:subAfterDisc+sc+vat);
   const cashChange=round2(Math.max(0,(+cashRcv||0)-total));
 
+  const optionLib=posSettings?.option_library||[];   // resolve referenced option groups
   function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
   // Tap a menu: if it has add-on options for this branch, open the picker; else add directly.
   const[optPick,setOptPick]=useState(null);  // menu awaiting option selection
-  function pickOrAdd(m){if(menuHasOptions(m,branch?.id))setOptPick(m);else addItem(m);}
+  function pickOrAdd(m){if(menuHasOptions(m,branch?.id,optionLib))setOptPick(m);else addItem(m);}
   function addItemWithOptions(m,chosen){
     const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);
     setItems(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);
@@ -10238,7 +10243,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       </div>
       <div style={{flex:1,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
         {filtered.map(m=>{const soldOut=(m.availability||{})[branch?.id]==="sold_out";return <div key={m.id} onClick={()=>{if(soldOut)return;pickOrAdd(m);}} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:soldOut?"not-allowed":"pointer",textAlign:"center",transition:"all .15s",position:"relative",opacity:soldOut?.55:1}} onMouseEnter={e=>{if(soldOut)return;e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
-          {soldOut?<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:"#92400E",background:"#FEF3C7",borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif",border:"1px solid #F59E0B"}}>วันนี้หมด</span>:menuHasOptions(m,branch?.id)&&<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
+          {soldOut?<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:"#92400E",background:"#FEF3C7",borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif",border:"1px solid #F59E0B"}}>วันนี้หมด</span>:menuHasOptions(m,branch?.id,optionLib)&&<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
           {m.image?<img src={m.image} alt={m.name} style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>:<div style={{height:40,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={26} c={soldOut?C.ink4:C.brand}/></div>}
           <div style={{fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3}}>{m.name}</div>
           <div style={{fontSize:13,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
@@ -10329,7 +10334,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     </div>}
 
     {/* Add-on option picker (staff) */}
-    {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branch?.id)} onConfirm={chosen=>addItemWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
+    {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branch?.id,optionLib)} onConfirm={chosen=>addItemWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
 
     {/* Split bill modal */}
     {showSplitBill&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
@@ -10484,6 +10489,7 @@ function CustomerPage({branchId,tableId,token}){
   const[step,setStep]=useState("menu");const[sending,setSending]=useState(false);const[done,setDone]=useState(false);
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
   const[myOrder,setMyOrder]=useState(null);
+  const[optionLib,setOptionLib]=useState([]);   // branch option-group library (to resolve bound refs)
   const[gateError,setGateError]=useState(null);  // null | "no_token" | "bad_token" | "branch_closed"
   const[gateLoading,setGateLoading]=useState(true);
   async function loadMyOrder(){try{const ex=await api.getOrderByTable(+tableId);if(ex&&ex.length>0)setMyOrder(ex[0]);else setMyOrder(null);}catch(e){console.error("loadMyOrder",e);}}
@@ -10500,9 +10506,10 @@ function CustomerPage({branchId,tableId,token}){
         const matches=await api.scanTable(branchId,tableId,token);
         if(!Array.isArray(matches)||matches.length===0){setGateError("bad_token");setBranch(b);setGateLoading(false);return;}
         const t=matches[0];
-        const ms=await api.getMenus();
+        const[ms,ps]=await Promise.all([api.getMenus(),api.getPOSSettings(branchId)]);
         setBranch(b);setTable(t);
         setMenus(ms.filter(m=>m.price>0&&(m.availability||{})[branchId]!=="hidden"));
+        {const s=ps&&ps[0]?ps[0]:null;setOptionLib(Array.isArray(s&&s.option_library)?s.option_library:[]);}
         setGateError(null);
         // Only start polling order state AFTER the gate passes — don't leak existence of orders to bad-token visitors
         loadMyOrder();
@@ -10526,7 +10533,7 @@ function CustomerPage({branchId,tableId,token}){
   function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
   // Add-on options: open the picker if the menu has any for this branch.
   const[optPick,setOptPick]=useState(null);
-  function pickOrAddCart(m){if(menuHasOptions(m,branchId))setOptPick(m);else addToCart(m);}
+  function pickOrAddCart(m){if(menuHasOptions(m,branchId,optionLib))setOptPick(m);else addToCart(m);}
   function addToCartWithOptions(m,chosen){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);setOptPick(null);}
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
@@ -10597,7 +10604,7 @@ function CustomerPage({branchId,tableId,token}){
       </div>
       <div style={{padding:"8px 12px",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"9px 14px"}}/></div>
       <div style={{flex:1,overflowY:"auto",padding:10,display:"flex",flexDirection:"column",gap:8}}>
-        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId);return <div key={m.id} style={{background:C.white,borderRadius:12,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",transition:"all .15s",opacity:soldOut?0.6:1}}>
+        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:12,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",transition:"all .15s",opacity:soldOut?0.6:1}}>
           {m.image?<img src={m.image} alt={m.name} style={{width:80,objectFit:"cover",flexShrink:0,filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.food} s={28} c={soldOut?C.ink4:C.brand}/></div>}
           <div style={{flex:1,padding:"10px 12px"}}>
             <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
@@ -10704,7 +10711,7 @@ function CustomerPage({branchId,tableId,token}){
         </div>
       </div>
     </div>}
-    {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branchId)} onConfirm={chosen=>addToCartWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
+    {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branchId,optionLib)} onConfirm={chosen=>addToCartWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
   </div>;
 }
 
@@ -11650,10 +11657,10 @@ function POSMenuAvailManager({currentBranch,onClose}){
   const visible=menus.filter(m=>{const vb=m.visible_branches||[];const okB=isCentral||vb.length===0||vb.includes(currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
   async function setAvail(m,status){setBusyId(m.id);const avail={...(m.availability||{})};if(!status)delete avail[currentBranch.id];else avail[currentBranch.id]=status;try{await api.updateMenu(m.id,{availability:avail});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);}
   const AVS=[{v:"",l:"ขาย",c:C.green},{v:"sold_out",l:"วันนี้หมด",c:"#92400E"},{v:"hidden",l:"ซ่อน",c:C.red}];
-  function openBind(m){const sel={};getMenuOptions(m,currentBranch.id).forEach(o=>{if(o.id)sel[o.id]=true;});setBindSel(sel);setBindMenu(m);}
+  function openBind(m){const sel={};const raw=((m.options_by_branch||{})[String(currentBranch.id)])||[];raw.forEach(b=>{const id=(typeof b==="string"||typeof b==="number")?b:(b&&b.id);if(id)sel[id]=true;});setBindSel(sel);setBindMenu(m);}
   async function saveBind(){
     if(!bindMenu)return;setBindBusy(true);
-    const chosen=lib.filter(g=>bindSel[g.id]).map(g=>({id:g.id,name:g.name,required:!!g.required,choices:(g.choices||[]).map(c=>({id:c.id,name:c.name,price:+c.price||0}))}));
+    const chosen=lib.filter(g=>bindSel[g.id]).map(g=>g.id);  // store group IDs (reference — library edits propagate live)
     const map={...(bindMenu.options_by_branch||{})};map[String(currentBranch.id)]=chosen;
     try{await api.updateMenu(bindMenu.id,{options_by_branch:map});setMenus(ms=>ms.map(x=>x.id===bindMenu.id?{...x,options_by_branch:map}:x));setBindMenu(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
     setBindBusy(false);
@@ -11667,7 +11674,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
       <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>💡 ตั้ง <b>สถานะการขาย</b> + ผูก <b>ตัวเลือก</b> (จากคลังที่สร้างใน "ตัวเลือกในเมนู") · การจัดเมนูเข้า<b>หมวดหมู่</b>ทำที่หน้า "หมวดหมู่"</div>
       {visible.length===0?<div style={{textAlign:"center",padding:40,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>
       :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto"}}>
-        {visible.map(m=>{const cur=(m.availability||{})[currentBranch.id]||"";const nOpt=getMenuOptions(m,currentBranch.id).length;return <div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap",opacity:busyId===m.id?.6:1}}>
+        {visible.map(m=>{const cur=(m.availability||{})[currentBranch.id]||"";const nOpt=getMenuOptions(m,currentBranch.id,lib).length;return <div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap",opacity:busyId===m.id?.6:1}}>
           <div style={{minWidth:140,flex:"1 1 140px"}}>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{m.name}</div>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink4}}>฿{(+m.price||0).toLocaleString()}{(m.local_categories||{})[currentBranch.id]?` · ${(m.local_categories||{})[currentBranch.id]}`:""}</div>
@@ -12173,7 +12180,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
 // ══════════════════════════════════════════════════════
 // ── POS SALE MODE (โหมดขายหน้าร้าน) ────────────────────
 // ══════════════════════════════════════════════════════
-function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode,saleOnly=false}){
+function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode,saleOnly=false,reloadPosSettings}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -12241,7 +12248,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     </div>
     <div style={{padding:"0 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",height:46,gap:2,flexShrink:0}}>
       {PTABS.map(t=>{const active=posTab===t.id;return <button key={t.id} onClick={()=>setPosTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:"none",cursor:"pointer",fontSize:12,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s"}}><Ic d={t.icon} s={13} c={active?C.brand:C.ink4}/>{t.l}</button>;})}
-      {canEdit&&<POSMenuTools currentBranch={currentBranch} variant="dropdown" onChanged={reloadMenus}/>}
+      {canEdit&&<POSMenuTools currentBranch={currentBranch} variant="dropdown" onChanged={()=>{reloadMenus&&reloadMenus();reloadPosSettings&&reloadPosSettings();}}/>}
       <div style={{marginLeft:"auto",display:"flex",gap:6}}>
         <Btn v="success" onClick={onCashDrawer} icon={I.cash} s={{padding:"5px 12px",fontSize:12}}>💰 เงินในลิ้นชัก</Btn>
         {canEdit&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
@@ -12416,7 +12423,7 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   if(loadingShift)return <Loading text="ตรวจสอบกะการขาย..."/>;
   if(!shift)return <OpenShiftModal currentBranch={currentBranch} currentUser={currentUser} onDone={s=>setShift(s)} onCancel={exitSale}/>;
   return <>
-    <POSSaleMode menus={menus} reloadMenus={reloadMenus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={exitSale} saleOnly={saleOnly}/>
+    <POSSaleMode menus={menus} reloadMenus={reloadMenus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={exitSale} saleOnly={saleOnly} reloadPosSettings={loadPosSettings}/>
     {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCashDrawer(false)}/>}
     {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShowCashDrawer(false);setShift(null);if(!saleOnly)setMode(null);}}/>}
   </>;
