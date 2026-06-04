@@ -9457,6 +9457,10 @@ export default function App(){
   const scanToken=params.get("t");
   if(isScan&&scanBranch&&scanTable){return <><style>{globalStyle}</style><CustomerPage branchId={scanBranch} tableId={scanTable} token={scanToken}/></>;}
 
+  // POS cashier sell link (?pos=1&branch=ID): 4-digit PIN → straight to sale.
+  // No username/password — PINs are defined per-branch in POS back office.
+  if(params.get("pos")==="1"&&params.get("branch")){return <><style>{globalStyle}</style><POSPinGate branchId={params.get("branch")}/></>;}
+
   if(!currentUser)return <><style>{globalStyle}</style><LoginPage onLogin={u=>{setCurrentUser(u);}}/></>;
   if(!currentBranch)return <><style>{globalStyle}</style><BranchSelectorWithLoad user={currentUser} onSelect={b=>setCurrentBranch(b)} onLogout={()=>setCurrentUser(null)}/></>;
 
@@ -11459,6 +11463,7 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
   useEffect(()=>{if(section==="shifts")loadShifts();},[section]);
   const SECS=[
     {id:"tables",l:"ผังโต๊ะ",icon:I.table,c:C.brand},
+    {id:"sellers",l:"พนักงานขาย",icon:I.user,c:C.teal},
     {id:"printers",l:"เครื่องพิมพ์",icon:I.print,c:C.purple},
     {id:"settings",l:"ตั้งค่า POS",icon:I.settings,c:C.green},
     {id:"promotions",l:"โปรโมชั่น",icon:I.tag,c:C.yellow},
@@ -11472,11 +11477,83 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
     </div>
     <div style={{flex:1,overflow:"auto",padding:"20px 24px",background:C.bg}}>
       {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} zones={zones} reloadZones={reloadZones} onDone={loadTables}/>)}
+      {section==="sellers"&&<POSSellerPanel currentBranch={currentBranch}/>}
       {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser} menus={menus}/>}
       {section==="settings"&&<POSSettingsPanel currentBranch={currentBranch}/>}
       {section==="promotions"&&<POSPromotionManager currentBranch={currentBranch} menus={menus}/>}
       {section==="shifts"&&<POSShiftHistory shifts={shifts} loading={loadingS} reload={loadShifts}/>}
     </div>
+  </div>;
+}
+
+// Manage this branch's cashier PINs + show the sell link. Staff are stored in
+// pos_settings.sales_staff (jsonb array) so no extra table/RLS is needed.
+function POSSellerPanel({currentBranch}){
+  const lbl={display:"block",fontSize:12,fontWeight:600,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
+  const[settings,setSettings]=useState(null);
+  const[staff,setStaff]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[saving,setSaving]=useState(false);
+  const[form,setForm]=useState({name:"",pin:""});
+  const[editIdx,setEditIdx]=useState(null);
+  const sellLink=(typeof window!=="undefined"?window.location.origin+window.location.pathname:"")+"?pos=1&branch="+currentBranch.id;
+  async function load(){setLoading(true);try{const ps=await api.getPOSSettings(currentBranch.id);const s=ps&&ps[0]?ps[0]:{branch_id:currentBranch.id};setSettings(s);setStaff(Array.isArray(s.sales_staff)?s.sales_staff:[]);}catch(e){console.error("loadSellers",e);}setLoading(false);}
+  useEffect(()=>{load();},[currentBranch.id]);
+  async function persist(next){
+    setSaving(true);
+    try{
+      const payload={...(settings||{}),branch_id:currentBranch.id,sales_staff:next};
+      await api.upsertPOSSettings(payload);
+      setSettings(payload);setStaff(next);return true;
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));return false;}
+    finally{setSaving(false);}
+  }
+  async function submit(){
+    const name=(form.name||"").trim();const pin=(form.pin||"").trim();
+    if(!name)return alert("ใส่ชื่อพนักงาน");
+    if(!/^\d{4}$/.test(pin))return alert("PIN ต้องเป็นตัวเลข 4 หลักเท่านั้น");
+    if(staff.some((s,i)=>String(s.pin)===pin&&i!==editIdx))return alert("PIN นี้ถูกใช้แล้ว — เลือกเลขอื่น");
+    const next=editIdx!=null?staff.map((s,i)=>i===editIdx?{...s,name,pin}:s):[...staff,{id:`s_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,pin,active:true}];
+    if(await persist(next)){setForm({name:"",pin:""});setEditIdx(null);}
+  }
+  async function toggleActive(idx){await persist(staff.map((s,i)=>i===idx?{...s,active:s.active===false}:s));}
+  async function remove(idx){if(!await confirmDlg({title:"ลบพนักงานขาย",message:`ลบ "${staff[idx]?.name}" ออกจากระบบขาย?`}))return;await persist(staff.filter((_,i)=>i!==idx));}
+  if(loading)return <Loading text="โหลดพนักงานขาย..."/>;
+  return <div>
+    <div style={{background:`linear-gradient(135deg,${C.brandLight},${C.tealLight})`,border:`1px solid ${C.brandBorder}`,borderRadius:14,padding:"14px 16px",marginBottom:18}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontSize:18}}>🔗</span><span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>ลิงก์ขายหน้าร้าน — {currentBranch.name}</span></div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink3,lineHeight:1.6,marginBottom:10}}>ส่งลิงก์นี้ให้พนักงานสาขา (บุ๊กมาร์กไว้ที่เครื่องขายได้) — เปิดแล้วใส่ <b>PIN 4 หลัก</b> ก็เข้าขายได้เลย ไม่ต้อง login</div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <input readOnly value={sellLink} onFocus={e=>e.target.select()} style={{...iS,flex:1,minWidth:220,fontSize:12,background:C.white}}/>
+        <button onClick={()=>{try{navigator.clipboard.writeText(sellLink);alert("คัดลอกลิงก์แล้ว ✅");}catch{window.prompt("คัดลอกลิงก์:",sellLink);}}} style={{background:C.brand,color:C.white,border:"none",borderRadius:9,padding:"9px 16px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>📋 คัดลอก</button>
+      </div>
+    </div>
+    <Card style={{padding:"14px 16px",marginBottom:16}}>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}>{editIdx!=null?"✏️ แก้ไขพนักงานขาย":"➕ เพิ่มพนักงานขาย"}</div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+        <div style={{flex:"2 1 180px"}}><label style={lbl}>ชื่อพนักงาน</label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น น้องเอ" style={iS}/></div>
+        <div style={{flex:"1 1 120px"}}><label style={lbl}>PIN (4 หลัก)</label><input value={form.pin} onChange={e=>setForm(f=>({...f,pin:e.target.value.replace(/\D/g,"").slice(0,4)}))} inputMode="numeric" placeholder="0000" style={{...iS,letterSpacing:4,fontWeight:800}}/></div>
+        <Btn onClick={submit} loading={saving} icon={I.check}>{editIdx!=null?"บันทึก":"เพิ่ม"}</Btn>
+        {editIdx!=null&&<Btn v="ghost" onClick={()=>{setForm({name:"",pin:""});setEditIdx(null);}}>ยกเลิก</Btn>}
+      </div>
+    </Card>
+    {staff.length===0?<div style={{textAlign:"center",padding:40,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><Ic d={I.user} s={44} c={C.line}/><p style={{marginTop:10,fontSize:13}}>ยังไม่มีพนักงานขาย — เพิ่มด้านบนเพื่อให้เข้าขายด้วย PIN</p></div>
+    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(260px,100%),1fr))",gap:10}}>
+      {staff.map((s,idx)=>{const inactive=s.active===false;return <Card key={s.id||idx} style={{padding:"12px 14px",opacity:inactive?.6:1}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.name}</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink3,marginTop:2}}>PIN: <b style={{letterSpacing:2,color:C.brand}}>{s.pin}</b></div>
+          </div>
+          <Chip color={inactive?"gray":"green"}>{inactive?"ปิด":"ใช้งาน"}</Chip>
+        </div>
+        <div style={{display:"flex",gap:6,marginTop:10}}>
+          <button onClick={()=>{setForm({name:s.name,pin:String(s.pin)});setEditIdx(idx);}} style={{flex:1,padding:"6px 0",border:`1px solid ${C.line}`,borderRadius:8,background:C.blueLight,color:C.blue,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>แก้ไข</button>
+          <button onClick={()=>toggleActive(idx)} style={{flex:1,padding:"6px 0",border:`1px solid ${C.line}`,borderRadius:8,background:inactive?C.greenLight:C.bg,color:inactive?C.green:C.ink3,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{inactive?"เปิด":"ปิด"}</button>
+          <button onClick={()=>remove(idx)} style={{padding:"6px 10px",border:`1px solid ${C.line}`,borderRadius:8,background:C.redLight,color:C.red,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ลบ</button>
+        </div>
+      </Card>;})}
+    </div>}
   </div>;
 }
 
@@ -11942,8 +12019,10 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
 // ══════════════════════════════════════════════════════
 // ── POS TAB (top-level wrapper: mode + shift) ────────
 // ══════════════════════════════════════════════════════
-function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadPrinters,reloadMenus}){
-  const[mode,setMode]=useState(null);  // null | 'sale' | 'manage'
+function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadPrinters,reloadMenus,saleOnly=false,onExit}){
+  // saleOnly = PIN-cashier kiosk: jump straight to the sale screen, no chooser,
+  // no back office; "exit" logs the cashier out (back to the PIN gate).
+  const[mode,setMode]=useState(saleOnly?'sale':null);  // null | 'sale' | 'manage'
   const[shift,setShift]=useState(null);
   const[loadingShift,setLoadingShift]=useState(false);
   const[showCashDrawer,setShowCashDrawer]=useState(false);
@@ -11965,7 +12044,9 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
     }).catch(e=>{setLoadingShift(false);alert("โหลดข้อมูลกะไม่สำเร็จ: "+e.message);});
   },[mode,currentBranch.id]);
 
-  const canManage=hasPerm(currentUser,"settings");
+  const canManage=!saleOnly&&hasPerm(currentUser,"settings");
+  // Where "exit" goes: kiosk cashier → logout to PIN gate; normal user → mode chooser.
+  const exitSale=()=>{if(saleOnly){onExit&&onExit();}else{setMode(null);}};
   if(mode===null)return <POSModeSelect onSelect={setMode} canManage={canManage}/>;
   if(mode==='manage'){
     if(!canManage){setMode(null);return null;}
@@ -11973,11 +12054,109 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   }
   // mode === 'sale'
   if(loadingShift)return <Loading text="ตรวจสอบกะการขาย..."/>;
-  if(!shift)return <OpenShiftModal currentBranch={currentBranch} currentUser={currentUser} onDone={s=>setShift(s)} onCancel={()=>setMode(null)}/>;
+  if(!shift)return <OpenShiftModal currentBranch={currentBranch} currentUser={currentUser} onDone={s=>setShift(s)} onCancel={exitSale}/>;
   return <>
-    <POSSaleMode menus={menus} reloadMenus={reloadMenus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={()=>setMode(null)}/>
+    <POSSaleMode menus={menus} reloadMenus={reloadMenus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={exitSale}/>
     {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCashDrawer(false)}/>}
-    {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShowCashDrawer(false);setShift(null);setMode(null);}}/>}
+    {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShowCashDrawer(false);setShift(null);if(!saleOnly)setMode(null);}}/>}
+  </>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── POS PIN GATE (cashier sell link: ?pos=1&branch=ID) ─
+// ══════════════════════════════════════════════════════
+// Branch staff open the branch's sell link, type their 4-digit PIN, and drop
+// straight into the sale screen. PINs are defined per-branch in POS back office
+// (stored in pos_settings.sales_staff). No username/password, no main app.
+function POSPinGate({branchId}){
+  const[branch,setBranch]=useState(null);
+  const[staff,setStaff]=useState([]);
+  const[menus,setMenus]=useState([]);
+  const[printers,setPrinters]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[err,setErr]=useState("");
+  const[pin,setPin]=useState("");
+  const[seller,setSeller]=useState(null);
+  const[shake,setShake]=useState(false);
+  const[tick,setTick]=useState(0);
+  useEffect(()=>{
+    let alive=true;setLoading(true);setErr("");
+    (async()=>{
+      try{
+        const[bs,ps,ms,prs]=await Promise.all([api.getBranches(),api.getPOSSettings(branchId),api.getMenus(),api.getAllPrinters()]);
+        if(!alive)return;
+        const b=(bs||[]).find(x=>+x.id===+branchId);
+        if(!b){setErr("ไม่พบสาขานี้ — ลิงก์อาจไม่ถูกต้อง");setLoading(false);return;}
+        if(b.active===false){setErr("สาขานี้ถูกปิดใช้งาน");setLoading(false);return;}
+        const settings=ps&&ps[0]?ps[0]:null;
+        setBranch(b);setStaff(Array.isArray(settings?.sales_staff)?settings.sales_staff:[]);
+        setMenus(ms||[]);setPrinters(prs||[]);
+      }catch(e){if(alive)setErr(e&&e.message||String(e));}
+      if(alive)setLoading(false);
+    })();
+    return()=>{alive=false;};
+  },[branchId,tick]);
+  useEffect(()=>{
+    if(pin.length<4)return;
+    const code=pin.slice(0,4);
+    const found=(staff||[]).find(s=>s&&s.active!==false&&String(s.pin)===code);
+    if(found){setSeller(found);setPin("");}
+    else{setShake(true);setTimeout(()=>{setShake(false);setPin("");},480);}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[pin]);
+  const isMobile=useIsMobile();
+  if(loading)return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight},#FEF3C7)`}}><Loading text="กำลังโหลด..."/></div></>;
+  if(err)return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.redLight},#FEF3C7)`,padding:20,fontFamily:"'Sarabun',sans-serif"}}>
+    <div style={{background:C.white,borderRadius:18,padding:"32px 28px",maxWidth:380,width:"100%",textAlign:"center",boxShadow:"0 20px 60px rgba(0,0,0,.12)"}}>
+      <div style={{fontSize:48,marginBottom:10}}>⚠️</div>
+      <div style={{fontSize:16,fontWeight:900,color:C.red,marginBottom:8}}>เปิดหน้าขายไม่ได้</div>
+      <div style={{fontSize:13,color:C.ink3,marginBottom:16,lineHeight:1.6}}>{err}</div>
+      <button onClick={()=>setTick(t=>t+1)} style={{background:C.brand,color:C.white,border:"none",borderRadius:10,padding:"10px 20px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800}}>ลองอีกครั้ง</button>
+    </div>
+  </div></>;
+  // Authenticated → kiosk sale screen
+  if(seller){
+    const synthUser={id:null,username:seller.name||"พนักงานขาย",name:seller.name||"พนักงานขาย",role:"staff",perms:["pos"]};
+    return <><style>{globalStyle}</style>
+      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,padding:isMobile?"10px 14px":"12px 22px",background:"linear-gradient(135deg,#0F172A,#1E293B)",color:"#F8FAFC",flexShrink:0,boxShadow:"0 2px 10px rgba(15,23,42,.25)"}}>
+          <div style={{width:34,height:34,borderRadius:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.shop} s={18} c="#fff"/></div>
+          <div style={{minWidth:0,flex:1}}>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>🛒 ขายหน้าร้าน · {branch.name}</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#94A3B8"}}>พนักงาน: {seller.name}</div>
+          </div>
+          <button onClick={()=>{setSeller(null);setPin("");}} title="ออก (ใส่ PIN ใหม่)" style={{background:"rgba(239,68,68,0.18)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"7px 12px",cursor:"pointer",color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,flexShrink:0}}>ออก</button>
+        </div>
+        <div style={{flex:1,padding:isMobile?"14px 12px":"20px 24px",minWidth:0,minHeight:0}}>
+          <POSTab menus={menus} reloadMenus={async()=>{try{setMenus(await api.getMenus());}catch{}}} currentBranch={branch} currentUser={synthUser} printers={printers} branches={[]} reloadPrinters={async()=>{try{setPrinters(await api.getAllPrinters());}catch{}}} saleOnly onExit={()=>{setSeller(null);setPin("");}}/>
+        </div>
+      </div>
+    </>;
+  }
+  // PIN pad
+  const keys=["1","2","3","4","5","6","7","8","9","del","0","ok"];
+  return <><style>{globalStyle}</style>
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight} 0%,#FEF3C7 50%,${C.blueLight} 100%)`,padding:16,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{background:C.white,borderRadius:24,padding:isMobile?"28px 22px":"36px 32px",width:"100%",maxWidth:360,boxShadow:"0 30px 80px rgba(15,23,42,.18)",animation:shake?"shakeX .45s":"mIn .4s cubic-bezier(.34,1.56,.64,1)"}}>
+        <div style={{textAlign:"center",marginBottom:22}}>
+          <div style={{width:60,height:60,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px",boxShadow:`0 10px 26px ${C.brand}44`}}><Ic d={I.shop} s={28} c="#fff"/></div>
+          <h1 style={{fontSize:18,fontWeight:900,color:C.ink,margin:"0 0 2px"}}>ขายหน้าร้าน</h1>
+          <p style={{fontSize:13,color:C.ink3,margin:0}}>{branch.name}</p>
+        </div>
+        <div style={{fontSize:12.5,color:C.ink3,textAlign:"center",marginBottom:12,fontWeight:600}}>ใส่ PIN พนักงานขาย 4 หลัก</div>
+        <div style={{display:"flex",justifyContent:"center",gap:12,marginBottom:22}}>
+          {[0,1,2,3].map(i=><div key={i} style={{width:16,height:16,borderRadius:"50%",background:i<pin.length?C.brand:C.lineLight,border:`2px solid ${i<pin.length?C.brand:C.line}`,transition:"all .15s"}}/>)}
+        </div>
+        {staff.length===0&&<div style={{background:C.yellowLight,border:`1px solid ${C.yellow}55`,borderRadius:10,padding:"10px 12px",fontSize:11.5,color:"#92400E",textAlign:"center",marginBottom:16,lineHeight:1.6}}>⚠️ สาขานี้ยังไม่ได้กำหนดพนักงานขาย<br/>ให้ผู้จัดการเพิ่มที่ "หลังบ้าน → พนักงานขาย"</div>}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+          {keys.map(k=>{
+            if(k==="del")return <button key={k} onClick={()=>setPin(p=>p.slice(0,-1))} style={{padding:"16px 0",borderRadius:14,border:`1.5px solid ${C.line}`,background:C.bg,cursor:"pointer",fontSize:18,fontFamily:"'Sarabun',sans-serif",fontWeight:800,color:C.ink3}}>⌫</button>;
+            if(k==="ok")return <button key={k} disabled style={{padding:"16px 0",borderRadius:14,border:"none",background:"transparent",cursor:"default"}}/>;
+            return <button key={k} onClick={()=>setPin(p=>(p+k).slice(0,4))} style={{padding:"16px 0",borderRadius:14,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:22,fontFamily:"'Sarabun',sans-serif",fontWeight:800,color:C.ink,transition:"all .1s"}} onMouseDown={e=>{e.currentTarget.style.background=C.brandLight;e.currentTarget.style.borderColor=C.brand;}} onMouseUp={e=>{e.currentTarget.style.background=C.white;e.currentTarget.style.borderColor=C.line;}} onMouseLeave={e=>{e.currentTarget.style.background=C.white;e.currentTarget.style.borderColor=C.line;}}>{k}</button>;
+          })}
+        </div>
+      </div>
+    </div>
   </>;
 }
 
@@ -11990,4 +12169,4 @@ function BranchSelectorWithLoad({user,onSelect,onLogout}){
   return <BranchSelector branches={branches} onSelect={onSelect} user={user} onLogout={onLogout}/>;
 }
 
-const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html,body{max-width:100vw;overflow-x:hidden}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}*{scrollbar-color:${C.ink4} ${C.lineLight};scrollbar-width:auto}::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:${C.lineLight};border-radius:999px}::-webkit-scrollbar-thumb{background:${C.ink4};border-radius:999px;border:2px solid ${C.lineLight};min-height:40px}::-webkit-scrollbar-thumb:hover{background:${C.brand};border-color:${C.brandLight}}::-webkit-scrollbar-thumb:active{background:${C.brandDark}}::-webkit-scrollbar-corner{background:transparent}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input,select,textarea{min-height:40px;font-size:16px!important}input[type=checkbox],input[type=radio]{min-height:auto}table{font-size:12px}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{border-width:1px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}`;
+const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html,body{max-width:100vw;overflow-x:hidden}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}@keyframes shakeX{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-9px)}40%,80%{transform:translateX(9px)}}*{scrollbar-color:${C.ink4} ${C.lineLight};scrollbar-width:auto}::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:${C.lineLight};border-radius:999px}::-webkit-scrollbar-thumb{background:${C.ink4};border-radius:999px;border:2px solid ${C.lineLight};min-height:40px}::-webkit-scrollbar-thumb:hover{background:${C.brand};border-color:${C.brandLight}}::-webkit-scrollbar-thumb:active{background:${C.brandDark}}::-webkit-scrollbar-corner{background:transparent}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input,select,textarea{min-height:40px;font-size:16px!important}input[type=checkbox],input[type=radio]{min-height:auto}table{font-size:12px}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{border-width:1px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}`;
