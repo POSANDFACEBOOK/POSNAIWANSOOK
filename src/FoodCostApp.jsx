@@ -9801,6 +9801,14 @@ function posToast(msg,type="ok",ms=3200){
     setTimeout(()=>{card.style.opacity="0";card.style.transform="translateY(10px)";setTimeout(()=>{try{card.remove();}catch{}},250);},ms);
   }catch{}
 }
+// ── Print-station mode (per device — localStorage) ───────
+// iPad/Safari can't reach an http LAN printer from the https app (mixed content,
+// no override on iOS). So ONE device on the LAN — an Android phone in Chrome with
+// "insecure content" allowed — is flagged as the PRINT STATION: it auto-prints
+// every new order and is the only device that talks to the printer. The iPads just
+// take orders; the station prints them within a few seconds. Flag is per-device.
+function isPrintStation(){try{return localStorage.getItem("fc_print_station")==="1";}catch{return false;}}
+function setPrintStation(on){try{localStorage.setItem("fc_print_station",on?"1":"0");}catch{}}
 // Print kitchen slips. Each item routes to its resolved printer; items sharing a
 // printer print as one batch. IP printers get ESC/POS sent DIRECTLY (no browser
 // popup). Bluetooth uses Web-BT. Only items with NO configured printer fall back
@@ -10244,6 +10252,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   }
 
   async function reprintItem(item){
+    if(!isPrintStation()){posToast("📟 พิมพ์ใบครัวได้จากเครื่อง “สถานีพิมพ์” (Android) เท่านั้น","warn");return;}
     await printKitchen([item],table.table_number,printers);
   }
 
@@ -10272,7 +10281,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const d={branch_id:branch.id,table_id:table.id,table_number:table.table_number,items,subtotal,discount:0,total:subtotal,status:"pending",ordered_by:currentUser.username,updated_at:new Date().toISOString()};
       if(existingOrder?.id)await api.updatePOSOrder(existingOrder.id,d);
       else await api.createPOSOrder(d);
-      printKitchen(items,table.table_number,printers);
+      // NOTE: we do NOT print here. The print-station device polls orders and prints
+      // new items (single source of truth → no double-print, works for iPad orders too).
+      posToast(isPrintStation()?"✅ บันทึกออเดอร์แล้ว — กำลังพิมพ์ใบครัว":"✅ บันทึกออเดอร์แล้ว — ใบครัวพิมพ์ที่สถานีพิมพ์","ok");
       onDone();onClose();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);
   }
@@ -10353,7 +10364,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 
       {/* Quick action bar */}
       {existingOrder?.id&&<div style={{padding:"6px 8px",borderBottom:`1px solid ${C.line}`,background:"#FFF8F6",display:"flex",gap:4,flexWrap:"wrap"}}>
-        <button onClick={()=>printKitchen(items,table.table_number,printers)} title="พิมพ์ใบครัวซ้ำทั้งหมด" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.line}`,borderRadius:7,background:C.white,cursor:"pointer",fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
+        <button onClick={()=>{if(!isPrintStation()){posToast("📟 พิมพ์ใบครัวได้จากเครื่อง “สถานีพิมพ์” (Android) เท่านั้น","warn");return;}printKitchen(items,table.table_number,printers);}} title="พิมพ์ใบครัวซ้ำทั้งหมด" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.line}`,borderRadius:7,background:C.white,cursor:"pointer",fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
           <Ic d={I.print} s={12} c={C.ink3}/>พิมพ์ครัว
         </button>
         <button onClick={reprintReceipt} title="พิมพ์ใบเสร็จซ้ำ" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.blue}`,borderRadius:7,background:C.blueLight,cursor:"pointer",fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
@@ -12274,25 +12285,35 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   const[selTable,setSelTable]=useState(null);const[selOrder,setSelOrder]=useState(null);
   const[showPrinters,setShowPrinters]=useState(false);
   const[showOrders,setShowOrders]=useState(false);   // today's-orders modal (re-added after the tab was replaced)
+  const[printStation,setPS]=useState(isPrintStation());   // is THIS device the print station?
   const timerRef=useRef(null);
   const canEdit=hasPerm(currentUser,"pos");
 
   const printedRef=useRef(new Set(JSON.parse(sessionStorage.getItem("fc_printed_orders")||"[]")));
   const lastSigRef=useRef(new Map());
+  const stationPrimedRef=useRef(false);   // skip the first batch so a station restart doesn't reprint open orders
   function persistPrinted(){try{sessionStorage.setItem("fc_printed_orders",JSON.stringify([...printedRef.current]));}catch{}}
+  // Only the designated print station auto-prints — and it prints EVERY new order
+  // (staff + customer), since the iPads can't print themselves.
   function autoPrintNew(orders){
+    if(!isPrintStation())return;
+    // First pass after (re)becoming the station: record what's already open WITHOUT
+    // printing, so a restart doesn't spew a reprint of every active order.
+    if(!stationPrimedRef.current){
+      orders.forEach(o=>{if(!o||!o.items)return;const sig=JSON.stringify(o.items.map(i=>[i.menu_id,i.qty,i.note||""]));lastSigRef.current.set(o.id,sig);printedRef.current.add(`${o.id}:init`);});
+      persistPrinted();stationPrimedRef.current=true;return;
+    }
     orders.forEach(o=>{
       if(!o||!o.items||o.items.length===0)return;
       if(o.status==="paid"||o.status==="cancelled")return;
       const sig=JSON.stringify(o.items.map(i=>[i.menu_id,i.qty,i.note||""]));
       const lastSig=lastSigRef.current.get(o.id);
       const isFirst=!printedRef.current.has(`${o.id}:init`);
-      const customerOrdered=o.ordered_by==="customer";
-      if(isFirst&&customerOrdered){
+      if(isFirst){
         const newItems=lastSig?(()=>{try{const old=JSON.parse(lastSig);const oldMap=new Map(old.map(([m,q,n])=>[`${m}|${n}`,q]));return o.items.filter(i=>{const k=`${i.menu_id}|${i.note||""}`;return!oldMap.has(k)||oldMap.get(k)<i.qty;}).map(i=>{const k=`${i.menu_id}|${i.note||""}`;const oldQ=oldMap.get(k)||0;return{...i,qty:i.qty-oldQ};});}catch{return o.items;}})():o.items;
         if(newItems.length>0){printKitchen(newItems,o.table_number,printers);}
         printedRef.current.add(`${o.id}:init`);persistPrinted();
-      }else if(lastSig&&lastSig!==sig&&customerOrdered){
+      }else if(lastSig&&lastSig!==sig){
         try{
           const old=JSON.parse(lastSig);const oldMap=new Map(old.map(([m,q,n])=>[`${m}|${n}`,q]));
           const newItems=o.items.filter(i=>{const k=`${i.menu_id}|${i.note||""}`;return!oldMap.has(k)||oldMap.get(k)<i.qty;}).map(i=>{const k=`${i.menu_id}|${i.note||""}`;const oldQ=oldMap.get(k)||0;return{...i,qty:i.qty-oldQ};});
@@ -12309,12 +12330,15 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   async function loadAll(){setLoading(true);try{await Promise.all([loadTables(),loadOrders()]);}catch(e){console.error(e);}setLoading(false);}
 
   useEffect(()=>{
+    stationPrimedRef.current=false;   // re-prime on mount and whenever station mode flips
     loadAll();
-    timerRef.current=setInterval(()=>{if(!document.hidden)loadOrders();},15000);
+    // The print station polls faster (6s) so kitchen tickets come out quickly; other devices stay light (15s).
+    const period=printStation?6000:15000;
+    timerRef.current=setInterval(()=>{if(!document.hidden)loadOrders();},period);
     const onVis=()=>{if(!document.hidden)loadOrders();};
     document.addEventListener("visibilitychange",onVis);
     return()=>{clearInterval(timerRef.current);document.removeEventListener("visibilitychange",onVis);};
-  },[]);
+  },[printStation]);// eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{if(showOrders)loadAllOrders();},[showOrders]);// eslint-disable-line react-hooks/exhaustive-deps
 
   // QR-สั่งอาหาร tab removed — per-table QR is printed by tapping a table (one place only).
@@ -12383,7 +12407,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
     </Modal>}
-    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} onClose={()=>setShowPrinters(false)}/>}
+    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} onClose={()=>setShowPrinters(false)} printStation={printStation} onTogglePrintStation={(v)=>setPS(v)}/>}
   </div>;
 }
 
@@ -12393,13 +12417,15 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
 // Lightweight printer panel for cashiers: see each printer online/offline and
 // add a network printer by typing its IP. (Full routing/categories stay in the
 // manager back office.)
-function PrinterStatusModal({currentBranch,onClose}){
+function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePrintStation}){
   const lbl={display:"block",fontSize:12,fontWeight:600,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
   const[printers,setPrinters]=useState([]);
   const[loading,setLoading]=useState(true);
   const[status,setStatus]=useState({});   // id -> 'testing'|'online'|'offline'|'bt'
   const[form,setForm]=useState({name:"",ip:"",port:9100});
   const[saving,setSaving]=useState(false);
+  const[station,setStation]=useState(printStation||isPrintStation());
+  function toggleStation(){const v=!station;setStation(v);setPrintStation(v);onTogglePrintStation&&onTogglePrintStation(v);}
   async function load(){setLoading(true);try{const all=await api.getAllPrinters();setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}setLoading(false);}
   useEffect(()=>{load();},[]);
   // Ping each IP printer once the list loads (sends only ESC @ init — no paper).
@@ -12442,6 +12468,21 @@ function PrinterStatusModal({currentBranch,onClose}){
   };
   return <Modal title="🖨 เครื่องพิมพ์ & สถานะการเชื่อมต่อ" onClose={onClose} wide>
     {loading?<Loading text="โหลดเครื่องพิมพ์..."/>:<>
+      {/* Print-station toggle — flip ON for the ONE device (Android) that prints */}
+      <div style={{border:`2px solid ${station?C.green:C.line}`,background:station?C.greenLight:C.bg,borderRadius:14,padding:"13px 15px",marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+        <div style={{fontSize:26,flexShrink:0}}>📟</div>
+        <div style={{flex:1,minWidth:160}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>ใช้เครื่องนี้เป็น “สถานีพิมพ์”</div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink3,lineHeight:1.6,marginTop:2}}>เปิดบนเครื่อง <b>Android เครื่องเดียว</b> ที่วางข้างเครื่องพิมพ์ — มันจะพิมพ์ใบครัวให้ทุกออเดอร์อัตโนมัติ · <b>ห้ามเปิดบน iPad</b> (พิมพ์ไม่ได้)</div>
+        </div>
+        <button onClick={toggleStation} style={{flexShrink:0,width:60,height:32,borderRadius:20,border:"none",cursor:"pointer",background:station?C.green:C.line,position:"relative",transition:"background .2s"}}>
+          <span style={{position:"absolute",top:3,left:station?31:3,width:26,height:26,borderRadius:"50%",background:C.white,boxShadow:"0 1px 4px rgba(0,0,0,.3)",transition:"left .2s"}}/>
+        </button>
+      </div>
+      {station&&<div style={{background:"#FFFBEB",border:`1px solid #F59E0B`,borderRadius:12,padding:"11px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:"#92400E",lineHeight:1.7}}>
+        <b>⚠️ ตั้งค่า Chrome ครั้งเดียว เพื่อให้พิมพ์ได้:</b><br/>
+        แตะ 🔒/ⓘ หน้า URL → <b>ตั้งค่าไซต์ (Site settings)</b> → <b>เนื้อหาที่ไม่ปลอดภัย (Insecure content)</b> → เลือก <b>อนุญาต (Allow)</b> แล้วรีโหลดหน้านี้ · จากนั้นเปิดหน้านี้ค้างไว้ตลอดเวลาเปิดร้าน
+      </div>}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>เครื่องพิมพ์ของสาขา <b style={{color:C.ink}}>{currentBranch.name}</b> ({printers.length})</div>
         <Btn v="ghost" onClick={()=>printers.forEach(p=>checkStatus(p))} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>เช็คสถานะใหม่</Btn>
