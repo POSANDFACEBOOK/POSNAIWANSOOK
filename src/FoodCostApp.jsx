@@ -4914,8 +4914,10 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       const shortBy=Math.max(0,Math.round((info.qty-onHand)*1000)/1000);
       if(shortBy<=0)continue;
       const buyQty=Math.round(shortBy*1000)/1000;
-      const buyUnits=Math.ceil(shortBy/(+ing.buy_amount||1));   // pieces/packs to buy
-      const estCost=Math.round(buyUnits*(+ing.buy_price||0)*100)/100;
+      // Cost = qty × price — same convention as the order line this creates,
+      // StockCheckView, and the PO (price_per_unit). (Previously divided by
+      // buy_amount → cost didn't match the qty shown on the same row.)
+      const estCost=Math.round(buyQty*(+ing.buy_price||0)*100)/100;
       rows.push({
         ingId:+ingId,
         name:ing.name,
@@ -4928,7 +4930,6 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
         totalNeed,
         onHand:Math.round(onHand*1000)/1000,
         shortBy:buyQty,
-        buyUnits,
         estCost,
         cascaded:info.fromOrders<info.qty-1e-9,
       });
