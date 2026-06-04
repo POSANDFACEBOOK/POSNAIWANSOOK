@@ -11,4 +11,15 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 1200,
   },
+  // Serve over plain http on the LAN so iPad/Safari can print to the http LAN
+  // printer (https→http "mixed content" is blocked on iOS; http→http is allowed).
+  // `host: true` binds 0.0.0.0 so the machine's LAN IP is reachable from the iPads.
+  preview: {
+    host: true,
+    port: 8080,
+  },
+  server: {
+    host: true,
+    port: 8080,
+  },
 })

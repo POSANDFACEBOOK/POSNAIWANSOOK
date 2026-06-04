@@ -56,6 +56,24 @@ function openPrintWindow(width=860,height=900){
 const randId=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
 // HTML-escape user-content before injecting into print popup HTML (XSS guard)
 const esc=(s)=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+// UUID v4 that also works on an insecure context (http:// on the LAN). crypto.randomUUID
+// is gated to secure contexts (HTTPS/localhost) and is undefined on a plain-http LAN page,
+// so we fall back to crypto.getRandomValues (available everywhere) then Math.random.
+function uuidv4(){
+  try{if(typeof crypto!=="undefined"&&crypto.randomUUID)return crypto.randomUUID();}catch{}
+  try{if(typeof crypto!=="undefined"&&crypto.getRandomValues){const b=crypto.getRandomValues(new Uint8Array(16));b[6]=(b[6]&0x0f)|0x40;b[8]=(b[8]&0x3f)|0x80;const h=[...b].map(x=>x.toString(16).padStart(2,"0"));return `${h[0]}${h[1]}${h[2]}${h[3]}-${h[4]}${h[5]}-${h[6]}${h[7]}-${h[8]}${h[9]}-${h[10]}${h[11]}${h[12]}${h[13]}${h[14]}${h[15]}`;}}catch{}
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,c=>{const r=Math.random()*16|0;const v=c==="x"?r:(r&0x3|0x8);return v.toString(16);});
+}
+// Canonical PUBLIC base URL for CUSTOMER-facing links (table-scan QR codes that
+// customers open on their own phone via mobile data). When the staff app is served
+// over http:// on the LAN, window.location.origin is a private IP customers can't
+// reach — so set PUBLIC_APP_URL to the live Vercel address and customer QRs always
+// point there. Empty string → fall back to the current origin (default; no change).
+const PUBLIC_APP_URL = "";   // e.g. "https://posnaiwansook.vercel.app"
+function publicBaseUrl(){
+  if(PUBLIC_APP_URL)return PUBLIC_APP_URL.replace(/\/+$/,"");
+  return (typeof window!=="undefined")?window.location.origin+window.location.pathname:"";
+}
 
 const api = {
   getIngs: () => sb(`ingredients?order=id.asc`),
@@ -107,11 +125,11 @@ const api = {
   // POS
   getPOSTables: (bid) => sb(`tables?order=table_number.asc&branch_id=eq.${bid}&active=eq.true`),
   // Rotate QR token for a single table (cuts off any leaked / stale QRs)
-  rotateTableToken: (id) => sb(`tables?id=eq.${id}`, {method:"PATCH", body:JSON.stringify({qr_token:crypto.randomUUID()})}),
+  rotateTableToken: (id) => sb(`tables?id=eq.${id}`, {method:"PATCH", body:JSON.stringify({qr_token:uuidv4()})}),
   // Rotate all active tables in a branch in one batch
   rotateAllTableTokens: async (bid) => {
     const tbls=await sb(`tables?branch_id=eq.${bid}&active=eq.true&select=id`);
-    for(const t of tbls){await sb(`tables?id=eq.${t.id}`, {method:"PATCH", body:JSON.stringify({qr_token:crypto.randomUUID()})});}
+    for(const t of tbls){await sb(`tables?id=eq.${t.id}`, {method:"PATCH", body:JSON.stringify({qr_token:uuidv4()})});}
     return tbls.length;
   },
   // Public scan — verify QR token + branch active before returning anything
@@ -10792,7 +10810,7 @@ function QRImg({url,size=120}){
   return <img src={qrUrl} alt="QR Code" style={{width:size,height:size,borderRadius:8,border:`1px solid ${C.line}`}}/>;
 }
 async function printTableQR(table,branch,printers=[]){
-  const baseUrl=window.location.origin+window.location.pathname;
+  const baseUrl=publicBaseUrl();
   const tokenPart=table.qr_token?`&t=${encodeURIComponent(table.qr_token)}`:"";
   const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${table.id}${tokenPart}`;
   // 1) If a Bluetooth printer is configured for this branch, print the QR slip
@@ -10817,7 +10835,7 @@ async function printTableQR(table,branch,printers=[]){
   w.document.close();
 }
 function POSQRPage({branch,tables,onTablesChanged}){
-  const baseUrl=window.location.origin+window.location.pathname;
+  const baseUrl=publicBaseUrl();
   const zones=[...new Set(tables.map(t=>t.zone).filter(Boolean))];
   const grouped=[...zones.map(z=>({zone:z,tables:tables.filter(t=>t.zone===z)})),{zone:null,tables:tables.filter(t=>!t.zone)}].filter(g=>g.tables.length>0);
   const buildUrl=(t)=>`${baseUrl}?scan=1&branch=${branch.id}&table=${t.id}${t.qr_token?`&t=${encodeURIComponent(t.qr_token)}`:""}`;
