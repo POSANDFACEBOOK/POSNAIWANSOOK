@@ -10092,6 +10092,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const filtered=useMemo(()=>{
     const get=m=>isCentralSale?(m.category||null):((m.local_categories||{})[bidSale]||null);
     return menus.filter(m=>{
+      if((m.availability||{})[bidSale]==="hidden")return false;  // ตั้ง "ซ่อน" → ไม่ขึ้นหน้าขาย (ตรงกับหน้าลูกค้า)
       const c=get(m);
       if(!c)return false;                                  // ยังไม่จัดหมวด → ไม่ขึ้นในหน้าขายเลย (รวม "ทั้งหมด")
       if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
@@ -10236,12 +10237,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"7px 12px",fontSize:13}}/>
       </div>
       <div style={{flex:1,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
-        {filtered.map(m=><div key={m.id} onClick={()=>pickOrAdd(m)} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:"pointer",textAlign:"center",transition:"all .15s",position:"relative"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
-          {menuHasOptions(m,branch?.id)&&<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
-          {m.image?<img src={m.image} alt={m.name} style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4}}/>:<div style={{height:40,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={26} c={C.brand}/></div>}
+        {filtered.map(m=>{const soldOut=(m.availability||{})[branch?.id]==="sold_out";return <div key={m.id} onClick={()=>{if(soldOut)return;pickOrAdd(m);}} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:soldOut?"not-allowed":"pointer",textAlign:"center",transition:"all .15s",position:"relative",opacity:soldOut?.55:1}} onMouseEnter={e=>{if(soldOut)return;e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
+          {soldOut?<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:"#92400E",background:"#FEF3C7",borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif",border:"1px solid #F59E0B"}}>วันนี้หมด</span>:menuHasOptions(m,branch?.id)&&<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
+          {m.image?<img src={m.image} alt={m.name} style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>:<div style={{height:40,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={26} c={soldOut?C.ink4:C.brand}/></div>}
           <div style={{fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3}}>{m.name}</div>
-          <div style={{fontSize:13,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
-        </div>)}
+          <div style={{fontSize:13,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
+        </div>;})}
         {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"40px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
           <Ic d={I.food} s={42} c={C.line}/>
           <p style={{marginTop:10,fontSize:13.5,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูที่จัดหมวดหมู่ไว้"}</p>
