@@ -9402,16 +9402,17 @@ export default function App(){
       (o.items||[]).forEach(it=>{
         const id=+(it.ingId||it.ingredient_id);
         const price=+it.pricePerUnit||+it.buyPrice||0;
-        if(!id||price<=0)return;
-        const s=stats.get(id)||{sum:0,count:0};
-        s.sum+=price;s.count+=1;
+        const qty=+it.receivedQty||+it.qtyNeeded||+it.qty||0;   // qty actually received at this price
+        if(!id||price<=0||qty<=0)return;
+        const s=stats.get(id)||{wsum:0,qty:0,count:0};
+        s.wsum+=price*qty;s.qty+=qty;s.count+=1;                // quantity-weighted
         stats.set(id,s);
       });
     });
     return (rawIngs||[]).map(ing=>{
       const s=stats.get(+ing.id);
-      if(!s||!s.count)return ing;
-      const avgPrice=s.sum/s.count;
+      if(!s||!(s.qty>0))return ing;
+      const avgPrice=s.wsum/s.qty;   // weighted average cost = Σ(price×qty) / Σqty
       const ctg=+ing.convert_to_gram||1;
       return{...ing,avg_price:+avgPrice.toFixed(4),avg_price_per_gram:+(avgPrice/ctg).toFixed(6),avg_price_count:s.count};
     });
