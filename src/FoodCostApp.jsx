@@ -69,10 +69,10 @@ function uuidv4(){
 // over http:// on the LAN, window.location.origin is a private IP customers can't
 // reach — so set PUBLIC_APP_URL to the live Vercel address and customer QRs always
 // point there. Empty string → fall back to the current origin (default; no change).
-const PUBLIC_APP_URL = "";   // e.g. "https://posnaiwansook.vercel.app"
+const PUBLIC_APP_URL = "https://foodcost-eta.vercel.app";   // live public URL — customer-scan QR links always point here (so QRs printed from the http LAN page still open for customers on mobile data)
 function publicBaseUrl(){
-  if(PUBLIC_APP_URL)return PUBLIC_APP_URL.replace(/\/+$/,"");
-  return (typeof window!=="undefined")?window.location.origin+window.location.pathname:"";
+  const raw=PUBLIC_APP_URL||((typeof window!=="undefined")?window.location.origin+window.location.pathname:"");
+  return raw.replace(/\/+$/,"")+"/";
 }
 
 const api = {
