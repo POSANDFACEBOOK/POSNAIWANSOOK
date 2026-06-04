@@ -9769,24 +9769,37 @@ function resolvePrinter(item,printers){
 // Concatenate several Uint8Arrays into one ESC/POS byte stream
 function _concatBytes(arrs){const len=arrs.reduce((a,b)=>a+b.length,0);const out=new Uint8Array(len);let off=0;for(const a of arrs){out.set(a,off);off+=a.length;}return out;}
 // Send raw ESC/POS bytes straight to an IP/network thermal printer (port 9100).
-// Raw printers don't speak HTTP — they accept the TCP bytes and never reply — so
-// with mode:"no-cors" the fetch hangs until our timeout. We treat:
-//   • AbortError (timeout reached)        → SUCCESS (bytes were sent, printer printed)
-//   • quick TypeError (<300ms, refused)   → FAIL (wrong IP/Port or printer powered off)
-//   • slow reject (>=300ms)               → SUCCESS (connection was made, bytes sent)
+// Raw printers don't speak HTTP — they accept the TCP bytes and never reply — so with
+// mode:"no-cors" we can't read the result. Honest interpretation:
+//   • AbortError (our timeout)  → SUCCESS — TCP stayed open long enough to flush the
+//        bytes; a reachable raw printer just never sends an HTTP reply.
+//   • ANY network error (refused / host-unreachable / blocked) → FAIL — the connection
+//        did NOT succeed, so nothing was delivered (printer off / wrong IP / wrong WiFi).
+// The 5s timeout is long enough that a dead host on the SAME subnet returns
+// host-unreachable (→ fail) before we give up — so an off printer reports fail, not OK.
 function sendESCPOSToIP(ip,port,bytes){
   return new Promise((resolve,reject)=>{
     if(!ip){reject(new Error("ยังไม่ได้ตั้งค่า IP เครื่องพิมพ์"));return;}
     const ctrl=new AbortController();
-    const startedAt=Date.now();
-    const tid=setTimeout(()=>ctrl.abort(),3000);
+    const tid=setTimeout(()=>ctrl.abort(),5000);
     fetch(`http://${ip}:${port||9100}/`,{method:"POST",mode:"no-cors",cache:"no-store",headers:{"Content-Type":"application/octet-stream"},body:bytes,signal:ctrl.signal})
       .then(()=>{clearTimeout(tid);resolve();})
-      .catch(e=>{clearTimeout(tid);const elapsed=Date.now()-startedAt;
-        if(e.name==="AbortError")resolve();
-        else if(elapsed<300)reject(new Error("เชื่อมต่อไม่ได้ — ตรวจ IP/Port หรือไฟเครื่องพิมพ์"));
-        else resolve();});
+      .catch(e=>{clearTimeout(tid);if(e.name==="AbortError")resolve();else reject(new Error("เชื่อมต่อไม่ได้ — เครื่องพิมพ์อาจปิดอยู่ / IP ไม่ตรง / อยู่คนละวง WiFi"));});
   });
+}
+// Build a short ASCII test slip (always prints regardless of the printer's Thai codepage).
+function buildTestPageESC(name){
+  const enc=new TextEncoder();const bufs=[];
+  const b=(...x)=>bufs.push(new Uint8Array(x));const t=s=>bufs.push(enc.encode(s));
+  b(0x1b,0x40);b(0x1b,0x61,0x01);
+  b(0x1d,0x21,0x11);t("PRINTER TEST\n");b(0x1d,0x21,0x00);
+  t((name||"")+"\n");
+  t(new Date().toISOString().replace("T"," ").slice(0,19)+"\n");
+  t("--------------------------------\n");
+  b(0x1b,0x45,0x01);t("Connection OK\n");b(0x1b,0x45,0x00);
+  t("FOODCOST POS\n");
+  b(0x1b,0x64,0x04);b(0x1d,0x56,0x41,0x00);
+  return _concatBytes(bufs);
 }
 // Lightweight non-blocking toast (plain DOM, works from this module-level fn).
 function posToast(msg,type="ok",ms=3200){
@@ -12458,16 +12471,34 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
     const conn=getPConn(p);
     if(conn.type==="bluetooth"){setStatus(s=>({...s,[p.id]:"bt"}));return;}
     setStatus(s=>({...s,[p.id]:"testing"}));
-    const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),2800);
-    const started=Date.now();
+    const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),6000);
     try{
       await fetch(`http://${p.ip}:${p.port||9100}/`,{method:"POST",mode:"no-cors",cache:"no-store",headers:{"Content-Type":"application/octet-stream"},body:new Uint8Array([0x1B,0x40]),signal:ctrl.signal});
-      clearTimeout(tid);setStatus(s=>({...s,[p.id]:"online"}));
+      clearTimeout(tid);setStatus(s=>({...s,[p.id]:"online"}));   // got a real (opaque) reply = definitely reachable (rare for raw printers)
     }catch(e){
-      clearTimeout(tid);const el=Date.now()-started;
-      // Timeout (AbortError) = TCP almost certainly accepted (raw printer never HTTP-replies) → online.
-      // Quick TypeError = connection refused → offline.
-      setStatus(s=>({...s,[p.id]:(e.name==="AbortError"&&el>=2000)?"online":"offline"}));
+      clearTimeout(tid);
+      // no-cors hides the result. A network error = definitely can't reach it → OFFLINE (printer off /
+      // wrong IP / คนละวง WiFi). A TIMEOUT is genuinely ambiguous — a silent reachable printer AND a
+      // silently-dropped unreachable host both hang — so we say "ไม่ยืนยัน", NOT a fake "online".
+      setStatus(s=>({...s,[p.id]:e.name==="AbortError"?"unknown":"offline"}));
+    }
+  }
+  async function testPrint(p){
+    const conn=getPConn(p);
+    if(conn.type==="bluetooth"){
+      setStatus(s=>({...s,[p.id]:"testing"}));
+      try{await btPrint(buildTestPageESC(p.name),conn.btName);setStatus(s=>({...s,[p.id]:"online"}));posToast("🧾 ส่งหน้าทดสอบทางบลูทูธแล้ว — ดูว่ามีกระดาษออกไหม","ok");}
+      catch(e){setStatus(s=>({...s,[p.id]:"offline"}));alert("❌ พิมพ์ทดสอบไม่สำเร็จ: "+(e.message||""));}
+      return;
+    }
+    setStatus(s=>({...s,[p.id]:"testing"}));
+    try{
+      await sendESCPOSToIP(p.ip,p.port,buildTestPageESC(p.name));
+      setStatus(s=>({...s,[p.id]:"online"}));
+      posToast("🧾 ส่งหน้าทดสอบไป “"+(p.name||"เครื่องพิมพ์")+"” แล้ว — ถ้ามีกระดาษออก = เชื่อมต่อได้จริง","ok");
+    }catch(e){
+      setStatus(s=>({...s,[p.id]:"offline"}));
+      alert("❌ “"+(p.name||"เครื่องพิมพ์")+"” พิมพ์ทดสอบไม่สำเร็จ\n"+(e.message||"")+"\n\nตรวจสอบ: ไฟเครื่องพิมพ์ · สายแลน · เลข IP · อยู่ WiFi วงเดียวกับเครื่องนี้ไหม");
     }
   }
   async function add(){
@@ -12484,9 +12515,10 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
   }
   const stView=(st)=>{
     if(st==="testing")return{c:C.yellow,bg:"#FFFBEB",t:"กำลังเช็ค..."};
-    if(st==="online")return{c:C.green,bg:C.greenLight,t:"ออนไลน์"};
+    if(st==="online")return{c:C.green,bg:C.greenLight,t:"เชื่อมต่อได้"};
     if(st==="bt")return{c:C.purple,bg:C.purpleLight,t:"บลูทูธ"};
-    if(st==="offline")return{c:C.red,bg:C.redLight,t:"ออฟไลน์"};
+    if(st==="offline")return{c:C.red,bg:C.redLight,t:"ออฟไลน์ · ติดต่อไม่ได้"};
+    if(st==="unknown")return{c:"#D97706",bg:"#FFFBEB",t:"ไม่ยืนยัน · กดทดสอบพิมพ์"};
     return{c:C.ink4,bg:C.bg,t:"ยังไม่เช็ค"};
   };
   return <Modal title="🖨 เครื่องพิมพ์ & สถานะการเชื่อมต่อ" onClose={onClose} wide>
@@ -12521,6 +12553,7 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
           </div>
           <span style={{fontSize:11.5,fontWeight:800,color:sv.c,background:sv.bg,border:`1px solid ${sv.c}44`,borderRadius:20,padding:"3px 12px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{sv.t}</span>
           <button onClick={()=>checkStatus(p)} style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2}}>เช็ค</button>
+          <button onClick={()=>testPrint(p)} title="พิมพ์หน้าทดสอบจริง — ยืนยันชัวร์ที่สุด" style={{background:C.brand,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,color:C.white}}>🧾 ทดสอบพิมพ์</button>
         </div>;})}
       </div>}
       <div style={{background:C.bg,border:`1px dashed ${C.line}`,borderRadius:12,padding:"14px 16px"}}>
@@ -12532,6 +12565,9 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
           <Btn onClick={add} loading={saving} icon={I.plus}>เพิ่ม</Btn>
         </div>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,marginTop:8,lineHeight:1.6}}>💡 ใช้เครื่องพิมพ์ความร้อนที่ต่อ LAN/WiFi · พอร์ตมาตรฐานคือ 9100 · ตั้งหมวดหมู่/เลือกเมนูให้แต่ละเครื่องได้ที่ "จัดการหลังบ้าน → เครื่องพิมพ์"</div>
+      </div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#92400E",background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:10,padding:"10px 13px",marginTop:12,lineHeight:1.7}}>
+        ⚠️ <b>"เช็ค"</b> เป็นการเดาเบื้องต้นเท่านั้น — เครื่องพิมพ์ความร้อนไม่ตอบกลับแบบเว็บ ระบบจึงยืนยันเองไม่ได้ 100% (เห็น "ไม่ยืนยัน" = ตอบไม่ชัด · "ออฟไลน์" = ติดต่อไม่ได้แน่ๆ) · <b>วิธีเช็คชัวร์ที่สุดคือกด "🧾 ทดสอบพิมพ์" แล้วดูว่ามีกระดาษออกจริงไหม</b>
       </div>
     </>}
   </Modal>;
