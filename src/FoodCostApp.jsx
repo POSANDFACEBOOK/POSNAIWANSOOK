@@ -9638,7 +9638,7 @@ const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อม�
 function printReceipt(order, tableNum, branchName, posSettings=null){
   const w=openPrintWindow(400,700);
   if(!w)return;
-  const rows=(order.items||[]).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${esc(i.name)}${i.note?`<br/><span style="font-size:11px;color:#666">★${esc(i.note)}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?esc(i.item_discount_value)+"%":"฿"+esc(i.item_discount_value)}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
+  const rows=(order.items||[]).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${esc(i.name)}${i.options&&i.options.length?`<br/><span style="font-size:11px;color:#0D9488">+ ${esc(optionsText(i.options))}</span>`:""}${i.note?`<br/><span style="font-size:11px;color:#666">★${esc(i.note)}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?esc(i.item_discount_value)+"%":"฿"+esc(i.item_discount_value)}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
   const payLabel=PAY_LABEL[order.payment_method]||esc(order.payment_method||"-");
   const cashLine=order.payment_method==="cash"&&order.cash_received?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(2)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-(order.total||0)).toFixed(2)}</span></div>`:"";
   const promoLine=order.promo_amount>0?`<div style="display:flex;justify-content:space-between;color:#7C3AED;font-size:12px"><span>🎁 ${esc(order.promo_name||"โปรโมชั่น")}</span><span>-฿${(+order.promo_amount).toFixed(2)}</span></div>`:"";
@@ -9671,6 +9671,7 @@ function buildKitchenESC(item,tableNum){
   t("================================\n");
   b(0x1d,0x21,0x11);b(0x1b,0x45,0x01);t(`${item.qty}x ${item.name}\n`);b(0x1b,0x45,0x00);
   b(0x1d,0x21,0x00);
+  if(item.options&&item.options.length){b(0x1d,0x21,0x01);t(`+ ${optionsText(item.options)}\n`);b(0x1d,0x21,0x00);}
   if(item.note){t("\n");b(0x1b,0x45,0x01);t(`★ ${item.note}\n`);b(0x1b,0x45,0x00);}
   t("================================\n");b(0x1b,0x64,0x05);b(0x1d,0x56,0x41,0x00);
   let len=0;bufs.forEach(u=>len+=u.length);const out=new Uint8Array(len);let off=0;
@@ -9724,7 +9725,7 @@ function printKitchenWindow(item,tableNum,printer){
   const title=printer?printer.name:"ใบสั่งอาหาร";
   const w=openPrintWindow(350,500);
   if(!w)return;
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - โต๊ะ ${tableNum}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:6px;color:#000}.hdr{text-align:center;font-size:13px;font-weight:700;margin:2px 0}.tbl{text-align:center;font-size:54px;font-weight:900;line-height:1;margin:6px 0;letter-spacing:1px;border:3px solid #000;padding:8px 0;border-radius:8px}.tm{text-align:center;font-size:11px;color:#444;margin:2px 0}.sep{border:0;border-top:2px dashed #000;margin:8px 0}.menu{text-align:center;font-size:24px;font-weight:900;line-height:1.2;margin:8px 0;padding:6px 4px}.qty{display:inline-block;background:#000;color:#fff;padding:2px 12px;border-radius:6px;font-size:24px;font-weight:900;margin-right:6px}.note{margin-top:8px;background:#FEF3C7;border:2px solid #000;border-radius:6px;padding:8px;font-size:15px;font-weight:700;text-align:center}.foot{text-align:center;font-size:10px;color:#666;margin-top:6px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><div class="hdr">🍳 ${title}</div><div class="tbl">โต๊ะ ${tableNum}</div><div class="tm">${new Date().toLocaleString("th-TH")}</div><hr class="sep"/><div class="menu"><span class="qty">${item.qty}x</span>${item.name}</div>${item.note?`<div class="note">★ ${item.note}</div>`:""}<hr class="sep"/><div class="foot">--- สิ้นสุดรายการ ---</div><script>window.onload=()=>setTimeout(()=>window.print(),200);<\/script></body></html>`);
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - โต๊ะ ${tableNum}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:6px;color:#000}.hdr{text-align:center;font-size:13px;font-weight:700;margin:2px 0}.tbl{text-align:center;font-size:54px;font-weight:900;line-height:1;margin:6px 0;letter-spacing:1px;border:3px solid #000;padding:8px 0;border-radius:8px}.tm{text-align:center;font-size:11px;color:#444;margin:2px 0}.sep{border:0;border-top:2px dashed #000;margin:8px 0}.menu{text-align:center;font-size:24px;font-weight:900;line-height:1.2;margin:8px 0;padding:6px 4px}.qty{display:inline-block;background:#000;color:#fff;padding:2px 12px;border-radius:6px;font-size:24px;font-weight:900;margin-right:6px}.note{margin-top:8px;background:#FEF3C7;border:2px solid #000;border-radius:6px;padding:8px;font-size:15px;font-weight:700;text-align:center}.foot{text-align:center;font-size:10px;color:#666;margin-top:6px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><div class="hdr">🍳 ${title}</div><div class="tbl">โต๊ะ ${tableNum}</div><div class="tm">${new Date().toLocaleString("th-TH")}</div><hr class="sep"/><div class="menu"><span class="qty">${item.qty}x</span>${item.name}</div>${item.options&&item.options.length?`<div style="text-align:center;font-size:18px;font-weight:800;color:#0D9488;margin:-2px 0 6px">+ ${esc(optionsText(item.options))}</div>`:""}${item.note?`<div class="note">★ ${item.note}</div>`:""}<hr class="sep"/><div class="foot">--- สิ้นสุดรายการ ---</div><script>window.onload=()=>setTimeout(()=>window.print(),200);<\/script></body></html>`);
   w.document.close();
 }
 // Resolve which printer should handle this kitchen item.
@@ -10008,6 +10009,39 @@ function POSTableManage({tables,branch,zones=[],reloadZones,onDone}){
   </div>;
 }
 
+// Per-branch add-on options bound to a menu: menu.options_by_branch[branchId] = [{id,name,price}]
+function getMenuOptions(menu,branchId){
+  const map=(menu&&menu.options_by_branch)||{};
+  const arr=map[String(branchId)];
+  return Array.isArray(arr)?arr.filter(o=>o&&o.name):[];
+}
+// Compact text of chosen options for prints/notes (e.g. "เพิ่มไข่, ไม่เผ็ด").
+function optionsText(opts){return (opts||[]).map(o=>o&&o.name).filter(Boolean).join(", ");}
+
+// Shared option picker — used by staff (POSOrderPanel) AND customer scan-order
+// (CustomerPage). Returns the chosen options [{name,price}] via onConfirm.
+function MenuOptionPicker({menu,options,onConfirm,onClose}){
+  const[sel,setSel]=useState({});
+  const base=+menu.price||0;
+  const keyOf=(o)=>String(o.id||o.name);
+  const chosen=options.filter(o=>sel[keyOf(o)]);
+  const total=base+chosen.reduce((s,o)=>s+(+o.price||0),0);
+  return <Modal title={`เลือกตัวเลือก — ${menu.name}`} onClose={onClose}>
+    <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink3,marginBottom:12}}>ราคาเริ่มต้น ฿{base.toLocaleString()} · เลือกได้หลายตัวเลือก</div>
+    <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"50vh",overflowY:"auto",marginBottom:14}}>
+      {options.map(o=>{const k=keyOf(o);const on=!!sel[k];const p=+o.price||0;return <label key={k} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",borderRadius:12,cursor:"pointer",background:on?C.brandLight:C.white,border:`1.5px solid ${on?C.brandBorder:C.line}`,transition:"all .12s"}}>
+        <input type="checkbox" checked={on} onChange={()=>setSel(s=>({...s,[k]:!s[k]}))} style={{accentColor:C.brand,width:18,height:18,flexShrink:0}}/>
+        <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?800:600,color:on?C.brand:C.ink}}>{o.name}</span>
+        <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:p>0?C.brand:C.ink4}}>{p>0?`+฿${p.toLocaleString()}`:"ฟรี"}</span>
+      </label>;})}
+    </div>
+    <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:12,borderTop:`1px solid ${C.line}`}}>
+      <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
+      <Btn onClick={()=>onConfirm(chosen.map(o=>({name:o.name,price:+o.price||0})))} icon={I.plus}>เพิ่ม · ฿{total.toLocaleString()}</Btn>
+    </div>
+  </Modal>;
+}
+
 // ══════════════════════════════════════════════════════
 // ── POS ORDER PANEL ───────────────────────────────────
 // ══════════════════════════════════════════════════════
@@ -10079,7 +10113,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const total=round2(vatIncluded?subAfterDisc+sc:subAfterDisc+sc+vat);
   const cashChange=round2(Math.max(0,(+cashRcv||0)-total));
 
-  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
+  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
+  // Tap a menu: if it has add-on options for this branch, open the picker; else add directly.
+  const[optPick,setOptPick]=useState(null);  // menu awaiting option selection
+  function pickOrAdd(m){const opts=getMenuOptions(m,branch?.id);if(opts.length>0)setOptPick(m);else addItem(m);}
+  function addItemWithOptions(m,chosen){
+    const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);
+    setItems(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);
+    setOptPick(null);
+  }
   function chQty(idx,d){setItems(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmItem(idx){setItems(p=>p.filter((_,i)=>i!==idx));}
 
@@ -10177,7 +10219,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"7px 12px",fontSize:13}}/>
       </div>
       <div style={{flex:1,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
-        {filtered.map(m=><div key={m.id} onClick={()=>addItem(m)} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:"pointer",textAlign:"center",transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
+        {filtered.map(m=><div key={m.id} onClick={()=>pickOrAdd(m)} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:"pointer",textAlign:"center",transition:"all .15s",position:"relative"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
+          {getMenuOptions(m,branch?.id).length>0&&<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
           {m.image?<img src={m.image} alt={m.name} style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4}}/>:<div style={{height:40,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={26} c={C.brand}/></div>}
           <div style={{fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3}}>{m.name}</div>
           <div style={{fontSize:13,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
@@ -10220,7 +10263,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
           :items.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:9,padding:"10px 12px",marginBottom:6,border:`1px solid ${C.line}`}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6,gap:6}}>
-              <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>}</div>
+              <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>}</div>
               {/* Reprint & void buttons */}
               <div style={{display:"flex",gap:4,marginLeft:4,flexShrink:0}}>
                 {existingOrder?.id&&<button onClick={()=>reprintItem(item)} title="พิมพ์ซ้ำรายการนี้ไปครัว" aria-label="พิมพ์ซ้ำ" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"7px 9px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",minWidth:32,minHeight:32}}><Ic d={I.print} s={13} c={C.blue}/></button>}
@@ -10266,6 +10309,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         </div>
       </div>
     </div>}
+
+    {/* Add-on option picker (staff) */}
+    {optPick&&<MenuOptionPicker menu={optPick} options={getMenuOptions(optPick,branch?.id)} onConfirm={chosen=>addItemWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
 
     {/* Split bill modal */}
     {showSplitBill&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
@@ -10459,7 +10505,11 @@ function CustomerPage({branchId,tableId,token}){
   }),[menus,selCat,search,branchId]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const itemCount=cart.reduce((s,i)=>s+i.qty,0);
-  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note);if(ex)return p.map(i=>i.menu_id===m.id&&!i.note?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
+  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
+  // Add-on options: open the picker if the menu has any for this branch.
+  const[optPick,setOptPick]=useState(null);
+  function pickOrAddCart(m){const opts=getMenuOptions(m,branchId);if(opts.length>0)setOptPick(m);else addToCart(m);}
+  function addToCartWithOptions(m,chosen){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);setOptPick(null);}
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
   async function placeOrder(){
@@ -10529,7 +10579,7 @@ function CustomerPage({branchId,tableId,token}){
       </div>
       <div style={{padding:"8px 12px",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"9px 14px"}}/></div>
       <div style={{flex:1,overflowY:"auto",padding:10,display:"flex",flexDirection:"column",gap:8}}>
-        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";return <div key={m.id} style={{background:C.white,borderRadius:12,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",transition:"all .15s",opacity:soldOut?0.6:1}}>
+        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=getMenuOptions(m,branchId).length>0;return <div key={m.id} style={{background:C.white,borderRadius:12,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",transition:"all .15s",opacity:soldOut?0.6:1}}>
           {m.image?<img src={m.image} alt={m.name} style={{width:80,objectFit:"cover",flexShrink:0,filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.food} s={28} c={soldOut?C.ink4:C.brand}/></div>}
           <div style={{flex:1,padding:"10px 12px"}}>
             <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
@@ -10539,7 +10589,9 @@ function CustomerPage({branchId,tableId,token}){
             {m.description&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:4,lineHeight:1.4}}>{m.description}</div>}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span style={{fontSize:16,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</span>
-              {soldOut?<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>หมดแล้ว</span>:inC?<div style={{display:"flex",alignItems:"center",gap:6}}>
+              {soldOut?<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>หมดแล้ว</span>
+                :hasOpts?<button onClick={()=>pickOrAddCart(m)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 14px",borderRadius:10,background:C.brand,border:"none",cursor:"pointer",color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800}}><Ic d={I.plus} s={14} c={C.white}/>เลือก</button>
+                :inC?<div style={{display:"flex",alignItems:"center",gap:6}}>
                 <button onClick={()=>chQty(cart.indexOf(inC),-1)} style={{width:34,height:34,borderRadius:8,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={13} c={C.brand}/></button>
                 <span style={{fontWeight:900,fontSize:15,minWidth:18,textAlign:"center",color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{inC.qty}</span>
                 <button onClick={()=>addToCart(m)} style={{width:34,height:34,borderRadius:8,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={13} c={C.white}/></button>
@@ -10606,7 +10658,7 @@ function CustomerPage({branchId,tableId,token}){
       <div style={{flex:1,overflowY:"auto",padding:10}}>
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:10}}>รายการที่สั่ง</h3>
         {cart.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:10,padding:"10px",marginBottom:6,border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:8}}>
-          <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}<div style={{fontSize:12,color:C.brand,fontWeight:700}}>฿{item.price} × {item.qty} = ฿{(item.price*item.qty).toFixed(0)}</div></div>
+          <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}<div style={{fontSize:12,color:C.brand,fontWeight:700}}>฿{item.price} × {item.qty} = ฿{(item.price*item.qty).toFixed(0)}</div></div>
           <div style={{display:"flex",alignItems:"center",gap:5}}>
             <button onClick={()=>chQty(idx,-1)} style={{width:34,height:34,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={12}/></button>
             <span style={{fontWeight:900,fontSize:14,minWidth:20,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
@@ -10634,6 +10686,7 @@ function CustomerPage({branchId,tableId,token}){
         </div>
       </div>
     </div>}
+    {optPick&&<MenuOptionPicker menu={optPick} options={getMenuOptions(optPick,branchId)} onConfirm={chosen=>addToCartWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
   </div>;
 }
 
@@ -11562,7 +11615,7 @@ function POSMenuTools({currentBranch,variant="dropdown"}){
       </div>}
     {active==="menus"&&<POSMenuAvailManager currentBranch={currentBranch} onClose={()=>setActive(null)}/>}
     {active==="cats"&&<POSLocalCatManager currentBranch={currentBranch} onClose={()=>setActive(null)}/>}
-    {active==="options"&&<Modal title="➕ ตัวเลือกในเมนู (add-on)" onClose={()=>setActive(null)} wide><div style={{padding:"36px 20px",textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:46,marginBottom:10}}>🚧</div><div style={{fontSize:15,fontWeight:800,color:C.ink,marginBottom:8}}>กำลังพัฒนา — เร็วๆ นี้</div><div style={{fontSize:13,color:C.ink3,lineHeight:1.7,maxWidth:420,margin:"0 auto"}}>ตัวเลือกเสริม/add-on รายเมนู (เช่น "พิเศษ +10", "ไม่เผ็ด", "เพิ่มไข่ +10") — พนักงานเลือกตอนสั่ง บวกราคาเข้าบิล + พิมพ์เข้าครัว · จะเปิดให้ใช้ในรอบถัดไป</div></div></Modal>}
+    {active==="options"&&<POSMenuOptionManager currentBranch={currentBranch} onClose={()=>setActive(null)}/>}
   </>;
 }
 
@@ -11634,6 +11687,78 @@ function POSLocalCatManager({currentBranch,onClose}){
           </>}
         </div>)}
       </div>}
+    </>}
+  </Modal>;
+}
+
+// "ตัวเลือกในเมนู" — per-branch add-on options bound to each menu. Customers and
+// staff see/pick them at order time. Stored in menu.options_by_branch[branchId].
+function POSMenuOptionManager({currentBranch,onClose}){
+  const lbl={display:"block",fontSize:12,fontWeight:600,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
+  const isCentral=currentBranch?.type==="central";
+  const[menus,setMenus]=useState([]);const[loading,setLoading]=useState(true);const[q,setQ]=useState("");
+  const[selId,setSelId]=useState(null);const[busy,setBusy]=useState(false);
+  const[form,setForm]=useState({name:"",price:""});const[editIdx,setEditIdx]=useState(null);
+  async function load(){setLoading(true);try{const ms=await api.getMenus();setMenus(ms||[]);}catch(e){console.error("optMgr",e);}setLoading(false);}
+  useEffect(()=>{load();},[currentBranch.id]);
+  const visible=menus.filter(m=>{const vb=m.visible_branches||[];const okB=isCentral||vb.length===0||vb.includes(currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
+  const sel=menus.find(m=>m.id===selId)||null;
+  const opts=sel?getMenuOptions(sel,currentBranch.id):[];
+  async function persist(next){
+    if(!sel)return;setBusy(true);
+    try{
+      const map={...(sel.options_by_branch||{})};map[String(currentBranch.id)]=next;
+      await api.updateMenu(sel.id,{options_by_branch:map});
+      setMenus(ms=>ms.map(m=>m.id===sel.id?{...m,options_by_branch:map}:m));
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
+    setBusy(false);
+  }
+  async function addOrUpdate(){
+    const name=(form.name||"").trim();const price=+form.price||0;
+    if(!name)return alert("ใส่ชื่อตัวเลือก");
+    const next=editIdx!=null?opts.map((o,i)=>i===editIdx?{...o,name,price}:o):[...opts,{id:`o_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,price}];
+    await persist(next);setForm({name:"",price:""});setEditIdx(null);
+  }
+  async function remove(i){await persist(opts.filter((_,j)=>j!==i));}
+  return <Modal title="➕ ตัวเลือกในเมนู (add-on)" onClose={onClose} extraWide>
+    {loading?<Loading text="โหลดเมนู..."/>:<>
+      <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:12,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>💡 เลือกเมนูทางซ้าย → เพิ่มตัวเลือก (เช่น "เพิ่มไข่ +10", "ไม่เผ็ด ฿0") · พนักงาน <b>และลูกค้าที่สแกนสั่ง</b> จะเห็นตัวเลือกนี้ตอนกดสั่ง · ราคาบวกเข้าบิลให้อัตโนมัติ</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(260px,100%),1fr))",gap:16}}>
+        {/* Left: menu picker */}
+        <div>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,marginBottom:8}}/>
+          <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:"48vh",overflowY:"auto"}}>
+            {visible.length===0?<div style={{padding:20,textAlign:"center",color:C.ink4,fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>
+            :visible.map(m=>{const n=getMenuOptions(m,currentBranch.id).length;const on=m.id===selId;return <button key={m.id} onClick={()=>{setSelId(m.id);setForm({name:"",price:""});setEditIdx(null);}} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"9px 12px",borderRadius:10,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
+              <span style={{fontSize:13.5,fontWeight:on?800:600,color:on?C.brand:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.name}</span>
+              {n>0&&<span style={{fontSize:10.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:10,padding:"2px 8px",whiteSpace:"nowrap"}}>{n} ตัวเลือก</span>}
+            </button>;})}
+          </div>
+        </div>
+        {/* Right: options editor */}
+        <div>
+          {!sel?<div style={{padding:"40px 16px",textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif",border:`1px dashed ${C.line}`,borderRadius:12}}><Ic d={I.food} s={40} c={C.line}/><p style={{marginTop:8,fontSize:13}}>เลือกเมนูทางซ้ายเพื่อตั้งตัวเลือก</p></div>
+          :<>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,color:C.ink,marginBottom:2}}>{sel.name}</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:12}}>฿{(+sel.price||0).toLocaleString()}</div>
+            <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:12,flexWrap:"wrap"}}>
+              <div style={{flex:"2 1 130px"}}><label style={lbl}>ชื่อตัวเลือก</label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น เพิ่มไข่" style={iS}/></div>
+              <div style={{flex:"1 1 80px"}}><label style={lbl}>ราคา +฿</label><input value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value.replace(/[^\d.]/g,"")}))} inputMode="decimal" placeholder="0" style={iS}/></div>
+              <Btn onClick={addOrUpdate} loading={busy} icon={I.check}>{editIdx!=null?"บันทึก":"เพิ่ม"}</Btn>
+              {editIdx!=null&&<Btn v="ghost" onClick={()=>{setForm({name:"",price:""});setEditIdx(null);}}>ยกเลิก</Btn>}
+            </div>
+            {opts.length===0?<div style={{padding:20,textAlign:"center",color:C.ink4,fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีตัวเลือก — เพิ่มด้านบน</div>
+            :<div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {opts.map((o,i)=><div key={o.id||i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",border:`1px solid ${C.line}`,borderRadius:10,background:C.white}}>
+                <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:700,color:C.ink}}>{o.name}</span>
+                <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:(+o.price||0)>0?C.brand:C.ink4}}>{(+o.price||0)>0?`+฿${(+o.price).toLocaleString()}`:"ฟรี"}</span>
+                <button onClick={()=>{setForm({name:o.name,price:String(o.price||"")});setEditIdx(i);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11.5,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>แก้</button>
+                <button onClick={()=>remove(i)} style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11.5,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>ลบ</button>
+              </div>)}
+            </div>}
+          </>}
+        </div>
+      </div>
     </>}
   </Modal>;
 }
