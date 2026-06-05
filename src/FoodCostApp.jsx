@@ -9477,11 +9477,11 @@ export default function App(){
   const scanBranch=params.get("branch");
   const scanTable=params.get("table");
   const scanToken=params.get("t");
-  if(isScan&&scanBranch&&scanTable){return <><style>{globalStyle}</style><CustomerPage branchId={scanBranch} tableId={scanTable} token={scanToken}/></>;}
+  if(isScan&&scanBranch&&scanTable){return <><style>{globalStyle}</style><CustomerPage branchId={scanBranch} tableId={scanTable} token={scanToken}/><ConfirmDlg/></>;}
 
   // POS cashier sell link (?pos=1&branch=ID): 4-digit PIN → straight to sale.
   // No username/password — PINs are defined per-branch in POS back office.
-  if(params.get("pos")==="1"&&params.get("branch")){return <><style>{globalStyle}</style><POSPinGate branchId={params.get("branch")}/></>;}
+  if(params.get("pos")==="1"&&params.get("branch")){return <><style>{globalStyle}</style><POSPinGate branchId={params.get("branch")}/><ConfirmDlg/></>;}
 
   if(!currentUser)return <><style>{globalStyle}</style><LoginPage onLogin={u=>{setCurrentUser(u);}}/></>;
   if(!currentBranch)return <><style>{globalStyle}</style><BranchSelectorWithLoad user={currentUser} onSelect={b=>setCurrentBranch(b)} onLogout={()=>setCurrentUser(null)}/></>;
@@ -10008,7 +10008,9 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
             :<><div style={{fontSize:11,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
             {active&&<>
               <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();setTableForm({id:t.id,table_number:t.table_number,label:t.label||"",seats:t.seats||4,shape:t.shape||"square",zone:t.zone||""});}} title="แก้ไขโต๊ะ" style={{position:"absolute",top:-13,left:-13,width:30,height:30,borderRadius:"50%",border:"2px solid #fff",background:C.blue,color:"#fff",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,.35)",zIndex:31}}>✏️</button>
-              <button onPointerDown={e=>e.stopPropagation()} onClick={async e=>{e.stopPropagation();if(await confirmDlg({title:"ลบโต๊ะ",message:`ลบโต๊ะ ${t.table_number}? โต๊ะจะถูกนำออกถาวร`,confirmLabel:"ลบโต๊ะ",cancelLabel:"ยกเลิก",danger:true})){onDeleteTable&&onDeleteTable(t.id);setEditId(null);}}} title="ลบโต๊ะ" style={{position:"absolute",top:-13,right:-13,width:30,height:30,borderRadius:"50%",border:"2px solid #fff",background:C.red,color:"#fff",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,.35)",zIndex:31}}>🗑</button>
+              <button onPointerDown={e=>e.stopPropagation()} onClick={async e=>{e.stopPropagation();
+                if(o){await confirmDlg({title:"⛔ ลบโต๊ะนี้ไม่ได้",message:`โต๊ะ ${t.table_number} กำลังมีออเดอร์ค้างอยู่ (${itemCount} รายการ · ฿${(o.total||0).toFixed(0)})\n\nกรุณาปิดบิลหรือยกเลิกออเดอร์ของโต๊ะนี้ก่อน แล้วจึงลบได้`,confirmLabel:"เข้าใจแล้ว",cancelLabel:"ปิด",danger:false});return;}
+                if(await confirmDlg({title:`🗑 ลบโต๊ะ ${t.table_number}?`,message:`⚠️ การลบนี้ถาวร — กู้คืนไม่ได้\nโต๊ะ ${t.table_number}${t.label?` (${t.label})`:""} · ${t.seats||4} ที่นั่ง จะถูกนำออกจากผังร้าน\n\nแน่ใจว่าต้องการลบใช่ไหม?`,confirmLabel:"ลบถาวร",cancelLabel:"ไม่ลบ",danger:true})){onDeleteTable&&onDeleteTable(t.id);setEditId(null);}}} title="ลบโต๊ะ" style={{position:"absolute",top:-13,right:-13,width:30,height:30,borderRadius:"50%",border:"2px solid #fff",background:C.red,color:"#fff",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,.35)",zIndex:31}}>🗑</button>
             </>}
           </div>;
         })}
