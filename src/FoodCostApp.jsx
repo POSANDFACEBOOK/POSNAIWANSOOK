@@ -11810,10 +11810,21 @@ function POSSellerPanel({currentBranch}){
   return <div>
     <div style={{background:`linear-gradient(135deg,${C.brandLight},${C.tealLight})`,border:`1px solid ${C.brandBorder}`,borderRadius:14,padding:"14px 16px",marginBottom:18}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontSize:18}}>🔗</span><span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>ลิงก์ขายหน้าร้าน — {currentBranch.name}</span></div>
-      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink3,lineHeight:1.6,marginBottom:10}}>ส่งลิงก์นี้ให้พนักงานสาขา (บุ๊กมาร์กไว้ที่เครื่องขายได้) — เปิดแล้วใส่ <b>PIN 4 หลัก</b> ก็เข้าขายได้เลย ไม่ต้อง login</div>
-      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        <input readOnly value={sellLink} onFocus={e=>e.target.select()} style={{...iS,flex:1,minWidth:220,fontSize:12,background:C.white}}/>
-        <button onClick={()=>{try{navigator.clipboard.writeText(sellLink);alert("คัดลอกลิงก์แล้ว ✅");}catch{window.prompt("คัดลอกลิงก์:",sellLink);}}} style={{background:C.brand,color:C.white,border:"none",borderRadius:9,padding:"9px 16px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>📋 คัดลอก</button>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink3,lineHeight:1.6,marginBottom:10}}>ส่งลิงก์นี้ให้พนักงานสาขา — เปิดแล้วใส่ <b>PIN 4 หลัก</b> ก็เข้าขายได้เลย ไม่ต้อง login</div>
+      <div style={{display:"flex",gap:14,flexWrap:"wrap",alignItems:"flex-start"}}>
+        {/* QR code — สแกนด้วยกล้องหรือ Chrome เพื่อเปิดหน้าขายได้ทันที */}
+        <div style={{flexShrink:0,background:C.white,borderRadius:12,padding:8,border:`1px solid ${C.line}`,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+          <QRImg url={sellLink} size={130}/>
+          <span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>สแกนเพื่อเปิดหน้าขาย</span>
+        </div>
+        <div style={{flex:1,minWidth:220,display:"flex",flexDirection:"column",gap:8}}>
+          <input readOnly value={sellLink} onFocus={e=>e.target.select()} style={{...iS,fontSize:11,background:C.white,wordBreak:"break-all"}}/>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <button onClick={()=>{try{navigator.clipboard.writeText(sellLink);posToast("คัดลอกลิงก์แล้ว ✅");}catch{window.prompt("คัดลอกลิงก์:",sellLink);}}} style={{flex:1,background:C.brand,color:C.white,border:"none",borderRadius:9,padding:"9px 14px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>📋 คัดลอกลิงก์</button>
+            <button onClick={()=>window.open(sellLink,"_blank")} style={{flex:1,background:C.teal,color:C.white,border:"none",borderRadius:9,padding:"9px 14px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>🔗 เปิดลิงก์</button>
+          </div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,lineHeight:1.6}}>💡 <b>วิธีเปิดบนแท็บเล็ต Android:</b> เปิดกล้อง → ส่องที่ QR → แตะลิงก์ที่ขึ้นมา → เปิดใน Chrome</div>
+        </div>
       </div>
     </div>
     <Card style={{padding:"14px 16px",marginBottom:16}}>
