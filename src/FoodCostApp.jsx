@@ -9893,10 +9893,14 @@ function tableDims(t){
   if(seats<=6)return{w:110,h:90};
   return{w:130,h:100};
 }
-function POSTableMap({tables,activeOrders,zones=[],onSelectTable}){
+function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone}){
   // Tables flow in a responsive grid that scrolls VERTICALLY only — no manual
   // x/y drag (that produced the off-screen horizontal row). Order = table number.
   const[zoneFilter,setZoneFilter]=useState("all");  // "all" | zone name | "none"
+  const[addingZone,setAddingZone]=useState(false);
+  const[newZoneName,setNewZoneName]=useState("");
+  const[zoneSaving,setZoneSaving]=useState(false);
+  async function confirmAddZone(){const n=newZoneName.trim();if(!n||!onAddZone){setAddingZone(false);return;}setZoneSaving(true);try{await onAddZone(n);setNewZoneName("");setAddingZone(false);}catch(e){alert("เพิ่มโซนไม่สำเร็จ: "+(e&&e.message||e));}setZoneSaving(false);}
   const zoneColorMap=useMemo(()=>{const m={};zones.forEach(z=>{m[z.name]=z.color||C.brand;});return m;},[zones]);
   function getTableOrder(tid){return activeOrders.find(o=>o.table_id===tid);}
   function getStatus(t){
@@ -9906,17 +9910,25 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable}){
     return "occupied";
   }
   // Zone filter + natural sort by table number
-  const allZoneNames=[...new Set(tables.map(t=>t.zone).filter(Boolean))];
+  const allZoneNames=[...new Set([...zones.map(z=>z.name).filter(Boolean),...tables.map(t=>t.zone).filter(Boolean)])];
   const filteredTables=zoneFilter==="all"?tables:zoneFilter==="none"?tables.filter(t=>!t.zone):tables.filter(t=>t.zone===zoneFilter);
   const sortedTables=[...filteredTables].sort((a,b)=>String(a.table_number||"").localeCompare(String(b.table_number||""),undefined,{numeric:true}));
 
   return <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
     {/* Zone filter row */}
-    {allZoneNames.length>0&&<div style={{padding:"8px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6,overflowX:"auto",flexShrink:0}}>
+    {(allZoneNames.length>0||onAddZone)&&<div style={{padding:"8px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6,overflowX:"auto",flexShrink:0}}>
       <span style={{fontSize:11,fontWeight:700,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>โซน:</span>
       <button onClick={()=>setZoneFilter("all")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="all"?`2px solid ${C.brand}`:`1px solid ${C.line}`,background:zoneFilter==="all"?C.brandLight:C.white,color:zoneFilter==="all"?C.brand:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ทั้งหมด ({tables.length})</button>
       {allZoneNames.map(zn=>{const c=zoneColorMap[zn]||C.ink3;const n=tables.filter(t=>t.zone===zn).length;const active=zoneFilter===zn;return <button key={zn} onClick={()=>setZoneFilter(zn)} style={{padding:"4px 12px",borderRadius:18,border:active?`2px solid ${c}`:`1px solid ${C.line}`,background:active?`${c}22`:C.white,color:active?c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}><span style={{width:8,height:8,borderRadius:"50%",background:c}}/>{zn} ({n})</button>;})}
       {tables.some(t=>!t.zone)&&<button onClick={()=>setZoneFilter("none")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="none"?`2px solid ${C.ink3}`:`1px solid ${C.line}`,background:zoneFilter==="none"?C.lineLight:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ไม่มีโซน ({tables.filter(t=>!t.zone).length})</button>}
+      {onAddZone&&(addingZone
+        ?<span style={{display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>
+          <input autoFocus value={newZoneName} onChange={e=>setNewZoneName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")confirmAddZone();else if(e.key==="Escape"){setAddingZone(false);setNewZoneName("");}}} placeholder="ชื่อโซน" style={{padding:"4px 10px",borderRadius:18,border:`1.5px solid ${C.brand}`,fontFamily:"'Sarabun',sans-serif",fontSize:12,width:96,outline:"none"}}/>
+          <button onClick={confirmAddZone} disabled={zoneSaving} title="บันทึกโซน" style={{padding:"4px 11px",borderRadius:18,border:"none",background:C.green,color:"#fff",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,whiteSpace:"nowrap"}}>{zoneSaving?"…":"✓"}</button>
+          <button onClick={()=>{setAddingZone(false);setNewZoneName("");}} title="ยกเลิก" style={{padding:"4px 9px",borderRadius:18,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700}}>✕</button>
+        </span>
+        :<button onClick={()=>setAddingZone(true)} title="เพิ่มโซนใหม่" style={{padding:"4px 12px",borderRadius:18,border:`1.5px dashed ${C.brand}`,background:C.white,color:C.brand,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:3}}>＋ เพิ่มโซน</button>
+      )}
     </div>}
     {/* Status legend */}
     <div style={{padding:"10px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",flexShrink:0}}>
@@ -12291,7 +12303,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
 // ══════════════════════════════════════════════════════
 // ── POS SALE MODE (โหมดขายหน้าร้าน) ────────────────────
 // ══════════════════════════════════════════════════════
-function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode,saleOnly=false,reloadPosSettings}){
+function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode,saleOnly=false,reloadPosSettings,refreshTick=0,reloadZones}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -12376,6 +12388,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     };
   },[printStation]);
   useEffect(()=>{if(showOrders)loadAllOrders();},[showOrders]);// eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{if(refreshTick)loadAll();},[refreshTick]);// eslint-disable-line react-hooks/exhaustive-deps  (refresh button in the kiosk header)
 
   // QR-สั่งอาหาร tab removed — per-table QR is printed by tapping a table (one place only).
   const PTABS=[{id:"tables",l:"แผนผังโต๊ะ",icon:I.table}];  // "ออเดอร์วันนี้" replaced by the menu-management dropdown
@@ -12384,6 +12397,8 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
 
   const todayOrders=allOrders.filter(o=>o.status==="paid"&&new Date(o.created_at).toDateString()===new Date().toDateString());
   const todayRev=todayOrders.reduce((s,o)=>s+(o.total||0),0);
+  const todayAvg=todayOrders.length?todayRev/todayOrders.length:0;
+  const todayPayBreak=Object.entries(todayOrders.reduce((m,o)=>{const k=o.payment_method||"other";if(!m[k])m[k]={sum:0,n:0};m[k].sum+=(o.total||0);m[k].n+=1;return m;},{})).sort((a,b)=>b[1].sum-a[1].sum);
 
   return <div style={{margin:"-20px -24px",display:"flex",flexDirection:"column",height:"calc(100vh - 150px)"}}>
     {/* Shift indicator strip */}
@@ -12398,22 +12413,34 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       {PTABS.map(t=>{const active=posTab===t.id;return <button key={t.id} onClick={()=>setPosTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:"none",cursor:"pointer",fontSize:12,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s"}}><Ic d={t.icon} s={13} c={active?C.brand:C.ink4}/>{t.l}</button>;})}
       {canEdit&&<POSMenuTools currentBranch={currentBranch} variant="dropdown" onChanged={()=>{reloadMenus&&reloadMenus();reloadPosSettings&&reloadPosSettings();}}/>}
       <div style={{marginLeft:"auto",display:"flex",gap:6}}>
-        <Btn v="ghost" onClick={()=>setShowOrders(true)} icon={I.order} s={{padding:"5px 10px",fontSize:12}}>🧾 ออเดอร์วันนี้</Btn>
+        <Btn v="ghost" onClick={()=>setShowOrders(true)} icon={I.order} s={{padding:"5px 10px",fontSize:12}}>📊 รายงานยอดวันนี้</Btn>
         <Btn v="success" onClick={onCashDrawer} icon={I.cash} s={{padding:"5px 12px",fontSize:12}}>💰 เงินในลิ้นชัก</Btn>
         {canEdit&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
-        <Btn v="ghost" onClick={loadAll} icon={I.refresh} s={{padding:"5px 10px",fontSize:12}}>รีเฟรช</Btn>
+        {!saleOnly&&<Btn v="ghost" onClick={loadAll} icon={I.refresh} s={{padding:"5px 10px",fontSize:12}}>รีเฟรช</Btn>}
         <Btn v="ghost" onClick={()=>setShowPrinters(true)} icon={I.print} s={{padding:"5px 10px",fontSize:12}}>🖨 เครื่องพิมพ์</Btn>
         {!saleOnly&&<Btn v="ghost" onClick={onExitMode} s={{padding:"5px 10px",fontSize:12}}>← โหมด</Btn>}
       </div>
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}}/>}
-      {showOrders&&<Modal title="🧾 ออเดอร์วันนี้" onClose={()=>setShowOrders(false)} extraWide>
-        {allOrders.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.order} s={48} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีออเดอร์</p></div>}
-        {allOrders.length>0&&<>
-          <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
-            {[{l:"ออเดอร์วันนี้",v:todayOrders.length,c:C.blue},{l:"รายรับวันนี้",v:`฿${todayRev.toFixed(0)}`,c:C.green},{l:"รอดำเนินการ",v:activeOrders.length,c:C.yellow}].map(s=><div key={s.l} style={{background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:10}}><div><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:18,fontWeight:800,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div></div>)}
+      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined}/>}
+      {showOrders&&<Modal title="📊 รายงานยอดวันนี้" onClose={()=>setShowOrders(false)} extraWide>
+        {/* สรุปยอดขายวันนี้ */}
+        <div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
+          {[{l:"💰 ยอดขายวันนี้",v:`฿${todayRev.toLocaleString(undefined,{maximumFractionDigits:0})}`,c:C.green},
+            {l:"🧾 บิลวันนี้",v:todayOrders.length,c:C.blue},
+            {l:"📈 เฉลี่ย/บิล",v:`฿${todayAvg.toFixed(0)}`,c:C.brand},
+            {l:"⏳ รอชำระ",v:activeOrders.length,c:C.yellow}].map(s=><div key={s.l} style={{flex:"1 1 140px",background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`}}><div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:20,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div>)}
+        </div>
+        {todayPayBreak.length>0&&<div style={{background:C.bg,borderRadius:12,padding:"12px 16px",marginBottom:16,border:`1px solid ${C.line}`}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>💳 แยกตามวิธีชำระเงิน</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {todayPayBreak.map(([k,v])=><div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12.5,fontFamily:"'Sarabun',sans-serif"}}><span style={{color:C.ink2}}>{PAY_LABEL[k]||k} <span style={{color:C.ink4}}>· {v.n} บิล</span></span><span style={{fontWeight:800,color:C.ink}}>฿{v.sum.toLocaleString(undefined,{maximumFractionDigits:0})}</span></div>)}
           </div>
+        </div>}
+        {/* รายการออเดอร์ */}
+        {allOrders.length===0?<div style={{textAlign:"center",padding:"40px 0",color:C.ink4}}><Ic d={I.order} s={48} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีออเดอร์</p></div>
+        :<>
+          <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>🧾 รายการออเดอร์ล่าสุด</div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(260px,100%),1fr))",gap:10}}>
             {allOrders.map(o=>{
               const stC={pending:C.yellow,confirmed:C.green,paid:C.green,cancelled:C.ink4};
@@ -12576,7 +12603,7 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
 // ══════════════════════════════════════════════════════
 // ── POS TAB (top-level wrapper: mode + shift) ────────
 // ══════════════════════════════════════════════════════
-function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadPrinters,reloadMenus,saleOnly=false,onExit}){
+function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadPrinters,reloadMenus,saleOnly=false,onExit,refreshTick=0}){
   // saleOnly = PIN-cashier kiosk: jump straight to the sale screen, no chooser,
   // no back office; "exit" logs the cashier out (back to the PIN gate).
   const[mode,setMode]=useState(saleOnly?'sale':null);  // null | 'sale' | 'manage'
@@ -12613,7 +12640,7 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   if(loadingShift)return <Loading text="ตรวจสอบกะการขาย..."/>;
   if(!shift)return <OpenShiftModal currentBranch={currentBranch} currentUser={currentUser} onDone={s=>setShift(s)} onCancel={exitSale}/>;
   return <>
-    <POSSaleMode menus={menus} reloadMenus={reloadMenus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={exitSale} saleOnly={saleOnly} reloadPosSettings={loadPosSettings}/>
+    <POSSaleMode menus={menus} reloadMenus={reloadMenus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={exitSale} saleOnly={saleOnly} reloadPosSettings={loadPosSettings} refreshTick={refreshTick} reloadZones={loadZones}/>
     {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCashDrawer(false)}/>}
     {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShowCashDrawer(false);setShift(null);if(!saleOnly)setMode(null);}}/>}
   </>;
@@ -12636,6 +12663,7 @@ function POSPinGate({branchId}){
   const[seller,setSeller]=useState(null);
   const[shake,setShake]=useState(false);
   const[tick,setTick]=useState(0);
+  const[posRefreshTick,setPosRefreshTick]=useState(0);   // kiosk header → triggers POSSaleMode.loadAll
   useEffect(()=>{
     let alive=true;setLoading(true);setErr("");
     (async()=>{
@@ -12679,14 +12707,17 @@ function POSPinGate({branchId}){
       <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:C.bg}}>
         <div style={{display:"flex",alignItems:"center",gap:12,padding:isMobile?"10px 14px":"12px 22px",background:"linear-gradient(135deg,#0F172A,#1E293B)",color:"#F8FAFC",flexShrink:0,boxShadow:"0 2px 10px rgba(15,23,42,.25)"}}>
           <div style={{width:34,height:34,borderRadius:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.shop} s={18} c="#fff"/></div>
-          <div style={{minWidth:0,flex:1}}>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>🛒 ขายหน้าร้าน · {branch.name}</div>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#94A3B8"}}>พนักงาน: {seller.name}</div>
+          <div style={{minWidth:0,flex:1,display:"flex",alignItems:"center",gap:10}}>
+            <div style={{minWidth:0}}>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>🛒 ขายหน้าร้าน · {branch.name}</div>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#94A3B8"}}>พนักงาน: {seller.name}</div>
+            </div>
+            <button onClick={()=>setPosRefreshTick(t=>t+1)} title="รีเฟรชข้อมูลโต๊ะ/ออเดอร์" style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:"#E2E8F0",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,flexShrink:0,display:"inline-flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}><Ic d={I.refresh} s={13} c="#E2E8F0"/>รีเฟรช</button>
           </div>
           <button onClick={()=>{setSeller(null);setPin("");}} title="ออก (ใส่ PIN ใหม่)" style={{background:"rgba(239,68,68,0.18)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"7px 12px",cursor:"pointer",color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,flexShrink:0}}>ออก</button>
         </div>
         <div style={{flex:1,padding:isMobile?"14px 12px":"20px 24px",minWidth:0,minHeight:0}}>
-          <POSTab menus={menus} reloadMenus={async()=>{try{setMenus(await api.getMenus());}catch{}}} currentBranch={branch} currentUser={synthUser} printers={printers} branches={[]} reloadPrinters={async()=>{try{setPrinters(await api.getAllPrinters());}catch{}}} saleOnly onExit={()=>{setSeller(null);setPin("");}}/>
+          <POSTab menus={menus} reloadMenus={async()=>{try{setMenus(await api.getMenus());}catch{}}} currentBranch={branch} currentUser={synthUser} printers={printers} branches={[]} reloadPrinters={async()=>{try{setPrinters(await api.getAllPrinters());}catch{}}} saleOnly onExit={()=>{setSeller(null);setPin("");}} refreshTick={posRefreshTick}/>
         </div>
       </div>
     </>;
