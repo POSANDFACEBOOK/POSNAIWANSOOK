@@ -9893,7 +9893,7 @@ function tableDims(t){
   if(seats<=6)return{w:110,h:90};
   return{w:130,h:100};
 }
-function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAddTable,onUpdateTable,onDeleteTable,onMoveTable}){
+function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAddTable,onUpdateTable,onDeleteTable,onMoveTable,onRenameZone,onDeleteZone}){
   // Free-position floor plan: TAP a table = open its order · LONG-PRESS a table to
   // lift it (shows ✏️/🗑 + drag to reposition). Drag is clamped to the canvas width
   // so the view still scrolls vertically only (no horizontal scroll).
@@ -9904,6 +9904,10 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
   const[editId,setEditId]=useState(null);      // table currently lifted for edit/move
   const[dragPos,setDragPos]=useState(null);      // {id,x,y} live drag
   const[dragging,setDragging]=useState(false);   // true while actively dragging → freeze canvas scroll
+  const[zoneManage,setZoneManage]=useState(null); // {name,id} when long-pressing a zone chip
+  const[zoneEditName,setZoneEditName]=useState("");
+  const[zoneMgrSaving,setZoneMgrSaving]=useState(false);
+  const zonePressRef=useRef(null);
   const[tableForm,setTableForm]=useState(null);  // add/edit table modal (null = closed)
   const[tableSaving,setTableSaving]=useState(false);
   const[canvasW,setCanvasW]=useState(360);
@@ -9957,6 +9961,32 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
     }catch(e){alert("บันทึกโต๊ะไม่สำเร็จ: "+(e&&e.message||e));}
     setTableSaving(false);
   }
+  // Zone chips: tap = filter · long-press = manage (rename/delete)
+  function zoneDown(e,zn,zid){
+    if(!(editable&&onRenameZone))return;
+    zonePressRef.current={zn,zid,sx:e.clientX,moved:false,fired:false};
+    zonePressRef.current.timer=setTimeout(()=>{const p=zonePressRef.current;if(p&&p.zn===zn&&!p.moved){p.fired=true;setZoneEditName(zn);setZoneManage({name:zn,id:zid});}},500);
+  }
+  function zoneMove(e){const p=zonePressRef.current;if(!p)return;if(Math.abs(e.clientX-p.sx)>8){p.moved=true;clearTimeout(p.timer);}}
+  function zoneUp(zn){const p=zonePressRef.current;zonePressRef.current=null;if(!p){setZoneFilter(zn);return;}clearTimeout(p.timer);if(!p.fired&&!p.moved)setZoneFilter(zn);}
+  async function doRenameZone(){
+    const nn=zoneEditName.trim();if(!nn||!zoneManage)return;
+    if(nn===zoneManage.name){setZoneManage(null);return;}
+    if(allZoneNames.some(z=>z.toLowerCase()===nn.toLowerCase()&&z!==zoneManage.name)){alert("มีโซนชื่อนี้อยู่แล้ว");return;}
+    setZoneMgrSaving(true);
+    try{if(onRenameZone)await onRenameZone(zoneManage.name,nn,zoneManage.id);if(zoneFilter===zoneManage.name)setZoneFilter(nn);setZoneManage(null);}
+    catch(e){alert("เปลี่ยนชื่อโซนไม่สำเร็จ: "+(e&&e.message||e));}
+    setZoneMgrSaving(false);
+  }
+  async function doDeleteZone(){
+    if(!zoneManage)return;
+    const cnt=tables.filter(t=>t.zone===zoneManage.name).length;
+    if(!await confirmDlg({title:`🗑 ลบโซน "${zoneManage.name}"?`,message:cnt>0?`โซนนี้มี ${cnt} โต๊ะ — โต๊ะเหล่านี้จะถูกย้ายไป "ไม่มีโซน" (โต๊ะไม่ถูกลบ)\n\nยืนยันลบโซนใช่ไหม?`:`ยืนยันลบโซน "${zoneManage.name}" ใช่หรือไม่?`,confirmLabel:"ลบโซน",cancelLabel:"ยกเลิก",danger:true}))return;
+    setZoneMgrSaving(true);
+    try{if(onDeleteZone)await onDeleteZone(zoneManage.name,zoneManage.id);if(zoneFilter===zoneManage.name)setZoneFilter("all");setZoneManage(null);}
+    catch(e){alert("ลบโซนไม่สำเร็จ: "+(e&&e.message||e));}
+    setZoneMgrSaving(false);
+  }
   // Zone filter + natural sort by table number
   const allZoneNames=[...new Set([...zones.map(z=>z.name).filter(Boolean),...tables.map(t=>t.zone).filter(Boolean)])];
   const filteredTables=zoneFilter==="all"?tables:zoneFilter==="none"?tables.filter(t=>!t.zone):tables.filter(t=>t.zone===zoneFilter);
@@ -9967,7 +9997,7 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
     {(allZoneNames.length>0||onAddZone)&&<div style={{padding:"8px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6,overflowX:"auto",flexShrink:0}}>
       <span style={{fontSize:11,fontWeight:700,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>โซน:</span>
       <button onClick={()=>setZoneFilter("all")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="all"?`2px solid ${C.brand}`:`1px solid ${C.line}`,background:zoneFilter==="all"?C.brandLight:C.white,color:zoneFilter==="all"?C.brand:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ทั้งหมด ({tables.length})</button>
-      {allZoneNames.map(zn=>{const c=zoneColorMap[zn]||C.ink3;const n=tables.filter(t=>t.zone===zn).length;const active=zoneFilter===zn;return <button key={zn} onClick={()=>setZoneFilter(zn)} style={{padding:"4px 12px",borderRadius:18,border:active?`2px solid ${c}`:`1px solid ${C.line}`,background:active?`${c}22`:C.white,color:active?c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}><span style={{width:8,height:8,borderRadius:"50%",background:c}}/>{zn} ({n})</button>;})}
+      {allZoneNames.map(zn=>{const c=zoneColorMap[zn]||C.ink3;const n=tables.filter(t=>t.zone===zn).length;const active=zoneFilter===zn;const zid=zones.find(z=>z.name===zn)?.id;return <button key={zn} onPointerDown={e=>zoneDown(e,zn,zid)} onPointerMove={zoneMove} onPointerUp={()=>zoneUp(zn)} onPointerCancel={()=>{if(zonePressRef.current){clearTimeout(zonePressRef.current.timer);zonePressRef.current=null;}}} title={(editable&&onRenameZone)?"แตะ = กรอง · กดค้าง = แก้ไข/ลบโซน":undefined} style={{padding:"4px 12px",borderRadius:18,border:active?`2px solid ${c}`:`1px solid ${C.line}`,background:active?`${c}22`:C.white,color:active?c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}><span style={{width:8,height:8,borderRadius:"50%",background:c}}/>{zn} ({n})</button>;})}
       {tables.some(t=>!t.zone)&&<button onClick={()=>setZoneFilter("none")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="none"?`2px solid ${C.ink3}`:`1px solid ${C.line}`,background:zoneFilter==="none"?C.lineLight:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ไม่มีโซน ({tables.filter(t=>!t.zone).length})</button>}
       {onAddZone&&(addingZone
         ?<span style={{display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>
@@ -9982,7 +10012,7 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
     <div style={{padding:"10px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",flexShrink:0}}>
       {Object.entries(TS).map(([k,v])=>{const n=tables.filter(t=>getStatus(t)===k).length;return n>0?<div key={k} style={{display:"flex",alignItems:"center",gap:5,background:v.bg,border:`1px solid ${v.border}`,borderRadius:8,padding:"3px 10px"}}><div style={{width:8,height:8,borderRadius:"50%",background:v.border}}/><span style={{fontSize:11,fontWeight:700,color:v.text,fontFamily:"'Sarabun',sans-serif"}}>{v.label} ({n})</span></div>:null;})}
       {editable&&<div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
-        <span style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>💡 กดค้างที่โต๊ะเพื่อแก้ไข·ลบ·ลากย้าย</span>
+        <span style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>💡 กดค้างที่โต๊ะ/โซนเพื่อแก้ไข·ลบ · ลากโต๊ะเพื่อย้าย</span>
         {onAddTable&&<button onClick={()=>setTableForm({table_number:"",label:"",seats:4,shape:"square",zone:(zoneFilter!=="all"&&zoneFilter!=="none")?zoneFilter:""})} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"6px 14px",borderRadius:9,border:"none",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:"#fff",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>➕ เพิ่มโต๊ะ</button>}
       </div>}
     </div>
@@ -10029,6 +10059,18 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16}}>
         <Btn v="ghost" onClick={()=>setTableForm(null)}>ยกเลิก</Btn>
         <Btn onClick={saveTableForm} loading={tableSaving} icon={I.check} disabled={!String(tableForm.table_number).trim()}>{tableForm.id?"บันทึก":"เพิ่มโต๊ะ"}</Btn>
+      </div>
+    </Modal>}
+    {zoneManage&&<Modal title={`📍 จัดการโซน — ${zoneManage.name}`} onClose={()=>setZoneManage(null)}>
+      <label style={fLbl}>ชื่อโซน</label>
+      <input autoFocus value={zoneEditName} onChange={e=>setZoneEditName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doRenameZone();}} placeholder="ชื่อโซน" style={iS}/>
+      <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:7}}>มี {tables.filter(t=>t.zone===zoneManage.name).length} โต๊ะในโซนนี้ · เปลี่ยนชื่อแล้วโต๊ะทุกตัวจะย้ายตามอัตโนมัติ</div>
+      <div style={{display:"flex",justifyContent:"space-between",gap:8,marginTop:18,flexWrap:"wrap"}}>
+        <Btn v="danger" onClick={doDeleteZone} loading={zoneMgrSaving} icon={I.trash} s={{padding:"10px 16px"}}>ลบโซน</Btn>
+        <div style={{display:"flex",gap:8}}>
+          <Btn v="ghost" onClick={()=>setZoneManage(null)}>ยกเลิก</Btn>
+          <Btn onClick={doRenameZone} loading={zoneMgrSaving} icon={I.check} disabled={!zoneEditName.trim()||zoneEditName.trim()===zoneManage.name}>บันทึกชื่อ</Btn>
+        </div>
       </div>
     </Modal>}
   </div>;
@@ -12430,6 +12472,21 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   async function handleUpdateTable(id,d){setTables(p=>p.map(t=>t.id===id?{...t,...d}:t));try{await api.updatePOSTable(id,d);}catch(e){alert("แก้ไขโต๊ะไม่สำเร็จ: "+(e&&e.message||e));loadTables();}}
   async function handleDeleteTable(id){const prev=tables;setTables(p=>p.filter(t=>t.id!==id));try{await api.deletePOSTable(id);}catch(e){alert("ลบโต๊ะไม่สำเร็จ: "+(e&&e.message||e));setTables(prev);}}
   async function handleMoveTable(id,x,y){setTables(p=>p.map(t=>t.id===id?{...t,x,y}:t));try{await api.updatePOSTable(id,{x,y});}catch(e){console.error("move table save failed",e);}}
+  // Zone rename/delete from the floor plan (rename cascades to tables; delete moves its tables to no-zone)
+  async function handleRenameZone(oldName,newName,id){
+    if(id)await api.updateZone(id,{name:newName});
+    const affected=tables.filter(t=>t.zone===oldName);
+    for(const t of affected)await api.updatePOSTable(t.id,{zone:newName});
+    setTables(p=>p.map(t=>t.zone===oldName?{...t,zone:newName}:t));
+    if(reloadZones)await reloadZones();
+  }
+  async function handleDeleteZone(name,id){
+    const affected=tables.filter(t=>t.zone===name);
+    for(const t of affected)await api.updatePOSTable(t.id,{zone:""});
+    setTables(p=>p.map(t=>t.zone===name?{...t,zone:""}:t));
+    if(id)await api.deleteZone(id);
+    if(reloadZones)await reloadZones();
+  }
   async function loadOrders(){const o=await api.getActiveOrders(currentBranch.id);setActiveOrders(o);autoPrintNew(o);}
   async function loadAllOrders(){const o=await api.getPOSOrders(currentBranch.id);setAllOrders(o);}
   async function loadAll(){setLoading(true);try{await Promise.all([loadTables(),loadOrders()]);}catch(e){console.error(e);}setLoading(false);}
@@ -12501,7 +12558,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       </div>
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined}/>}
+      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined} onRenameZone={canEdit?handleRenameZone:undefined} onDeleteZone={canEdit?handleDeleteZone:undefined}/>}
       {showOrders&&<Modal title="📊 รายงานยอดวันนี้" onClose={()=>setShowOrders(false)} extraWide>
         {/* สรุปยอดขายวันนี้ */}
         <div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
