@@ -9903,6 +9903,7 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
   const[zoneSaving,setZoneSaving]=useState(false);
   const[editId,setEditId]=useState(null);      // table currently lifted for edit/move
   const[dragPos,setDragPos]=useState(null);      // {id,x,y} live drag
+  const[dragging,setDragging]=useState(false);   // true while actively dragging → freeze canvas scroll
   const[tableForm,setTableForm]=useState(null);  // add/edit table modal (null = closed)
   const[tableSaving,setTableSaving]=useState(false);
   const[canvasW,setCanvasW]=useState(360);
@@ -9926,7 +9927,8 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
   function beginPress(e,t,cx,cy){
     const active=editId===t.id;
     pressRef.current={id:t.id,sx:e.clientX,sy:e.clientY,ox:cx,oy:cy,moved:false,dragging:editable&&active,curX:null,curY:null};
-    if(editable&&!active)pressRef.current.timer=setTimeout(()=>{const pr=pressRef.current;if(pr&&pr.id===t.id&&!pr.moved){setEditId(t.id);pr.dragging=true;}},460);
+    if(editable&&active){setDragging(true);}                       // already lifted → drag immediately
+    else if(editable)pressRef.current.timer=setTimeout(()=>{const pr=pressRef.current;if(pr&&pr.id===t.id&&!pr.moved){setEditId(t.id);pr.dragging=true;setDragging(true);}},460);
   }
   function movePress(e){
     const pr=pressRef.current;if(!pr)return;
@@ -9938,7 +9940,7 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
     setDragPos({id:pr.id,x:pr.curX,y:pr.curY});
   }
   function endPress(){
-    const pr=pressRef.current;pressRef.current=null;if(!pr)return;clearTimeout(pr.timer);
+    const pr=pressRef.current;pressRef.current=null;setDragging(false);if(!pr)return;clearTimeout(pr.timer);
     if(pr.dragging){if(pr.curX!=null&&onMoveTable)onMoveTable(pr.id,Math.round(pr.curX),Math.round(pr.curY));setDragPos(null);return;}
     if(pr.moved)return;
     if(editId&&editId!==pr.id){setEditId(null);return;}
@@ -9985,7 +9987,7 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
       </div>}
     </div>
     <div ref={canvasRef} onPointerMove={movePress} onPointerUp={endPress} onPointerCancel={endPress} onPointerDown={()=>{if(editId)setEditId(null);}}
-      style={{flex:1,overflowY:"auto",overflowX:"hidden",position:"relative",background:"#f0f4f8",backgroundImage:"radial-gradient(circle,#c8d0da 1px,transparent 1px)",backgroundSize:"20px 20px",WebkitOverflowScrolling:"touch",touchAction:"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
+      style={{flex:1,overflowY:dragging?"hidden":"auto",overflowX:"hidden",position:"relative",background:"#f0f4f8",backgroundImage:"radial-gradient(circle,#c8d0da 1px,transparent 1px)",backgroundSize:"20px 20px",WebkitOverflowScrolling:"touch",touchAction:dragging?"none":"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
       {sortedTables.length===0?<div style={{display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,padding:"60px 16px"}}>
         <Ic d={I.table} s={56} c={C.line}/><p style={{color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:15,textAlign:"center"}}>{zoneFilter==="all"?"ยังไม่มีโต๊ะ":`ไม่มีโต๊ะใน "${zoneFilter==="none"?"ไม่มีโซน":zoneFilter}"`}</p>
         {editable&&onAddTable&&<button onClick={()=>setTableForm({table_number:"",label:"",seats:4,shape:"square",zone:(zoneFilter!=="all"&&zoneFilter!=="none")?zoneFilter:""})} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"10px 20px",borderRadius:11,border:"none",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:"#fff",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800}}>➕ เพิ่มโต๊ะแรก</button>}
