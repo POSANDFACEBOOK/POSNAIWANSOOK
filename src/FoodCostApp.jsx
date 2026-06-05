@@ -9893,21 +9893,67 @@ function tableDims(t){
   if(seats<=6)return{w:110,h:90};
   return{w:130,h:100};
 }
-function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone}){
-  // Tables flow in a responsive grid that scrolls VERTICALLY only — no manual
-  // x/y drag (that produced the off-screen horizontal row). Order = table number.
+function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAddTable,onUpdateTable,onDeleteTable,onMoveTable}){
+  // Free-position floor plan: TAP a table = open its order · LONG-PRESS a table to
+  // lift it (shows ✏️/🗑 + drag to reposition). Drag is clamped to the canvas width
+  // so the view still scrolls vertically only (no horizontal scroll).
   const[zoneFilter,setZoneFilter]=useState("all");  // "all" | zone name | "none"
   const[addingZone,setAddingZone]=useState(false);
   const[newZoneName,setNewZoneName]=useState("");
   const[zoneSaving,setZoneSaving]=useState(false);
+  const[editId,setEditId]=useState(null);      // table currently lifted for edit/move
+  const[dragPos,setDragPos]=useState(null);      // {id,x,y} live drag
+  const[tableForm,setTableForm]=useState(null);  // add/edit table modal (null = closed)
+  const[tableSaving,setTableSaving]=useState(false);
+  const[canvasW,setCanvasW]=useState(360);
+  const canvasRef=useRef(null);
+  const pressRef=useRef(null);
+  const editable=!!(onAddTable||onMoveTable);
+  const TW=116,TH=96,GAP=14,PAD=16;
+  const fLbl={display:"block",fontSize:12.5,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"};
+  useEffect(()=>{function m(){if(canvasRef.current)setCanvasW(canvasRef.current.clientWidth);}m();window.addEventListener("resize",m);return()=>window.removeEventListener("resize",m);},[]);
   async function confirmAddZone(){const n=newZoneName.trim();if(!n||!onAddZone){setAddingZone(false);return;}setZoneSaving(true);try{await onAddZone(n);setNewZoneName("");setAddingZone(false);}catch(e){alert("เพิ่มโซนไม่สำเร็จ: "+(e&&e.message||e));}setZoneSaving(false);}
   const zoneColorMap=useMemo(()=>{const m={};zones.forEach(z=>{m[z.name]=z.color||C.brand;});return m;},[zones]);
   function getTableOrder(tid){return activeOrders.find(o=>o.table_id===tid);}
-  function getStatus(t){
-    const o=getTableOrder(t.id);
-    if(!o)return "available";
-    if(o.status==="bill_requested")return "bill";
-    return "occupied";
+  function getStatus(t){const o=getTableOrder(t.id);if(!o)return "available";if(o.status==="bill_requested")return "bill";return "occupied";}
+  const cols=Math.max(1,Math.floor((canvasW-PAD)/(TW+GAP)));
+  function slotFor(idx){return{x:PAD+(idx%cols)*(TW+GAP),y:PAD+Math.floor(idx/cols)*(TH+GAP)};}
+  function displayPos(t,idx){
+    if(dragPos&&dragPos.id===t.id)return{x:dragPos.x,y:dragPos.y};
+    if(typeof t.x==="number"&&typeof t.y==="number"&&(t.x||t.y))return{x:Math.max(0,Math.min(t.x,Math.max(0,canvasW-TW-PAD))),y:Math.max(0,t.y)};
+    return slotFor(idx);
+  }
+  function beginPress(e,t,cx,cy){
+    const active=editId===t.id;
+    pressRef.current={id:t.id,sx:e.clientX,sy:e.clientY,ox:cx,oy:cy,moved:false,dragging:editable&&active,curX:null,curY:null};
+    if(editable&&!active)pressRef.current.timer=setTimeout(()=>{const pr=pressRef.current;if(pr&&pr.id===t.id&&!pr.moved){setEditId(t.id);pr.dragging=true;}},460);
+  }
+  function movePress(e){
+    const pr=pressRef.current;if(!pr)return;
+    const dx=e.clientX-pr.sx,dy=e.clientY-pr.sy;
+    if(!pr.dragging){if(Math.abs(dx)>8||Math.abs(dy)>8){pr.moved=true;clearTimeout(pr.timer);}return;}
+    if(e.cancelable)e.preventDefault();
+    pr.curX=Math.max(0,Math.min(pr.ox+dx,Math.max(0,canvasW-TW-PAD)));
+    pr.curY=Math.max(0,pr.oy+dy);
+    setDragPos({id:pr.id,x:pr.curX,y:pr.curY});
+  }
+  function endPress(){
+    const pr=pressRef.current;pressRef.current=null;if(!pr)return;clearTimeout(pr.timer);
+    if(pr.dragging){if(pr.curX!=null&&onMoveTable)onMoveTable(pr.id,Math.round(pr.curX),Math.round(pr.curY));setDragPos(null);return;}
+    if(pr.moved)return;
+    if(editId&&editId!==pr.id){setEditId(null);return;}
+    if(editId===pr.id)return;
+    const t=tables.find(x=>x.id===pr.id);if(t&&onSelectTable)onSelectTable(t,getTableOrder(t.id));
+  }
+  async function saveTableForm(){
+    const f=tableForm;if(!f||!String(f.table_number).trim())return;setTableSaving(true);
+    const d={table_number:String(f.table_number).trim(),label:f.label||"",seats:+f.seats||4,shape:f.shape||"square",zone:f.zone||""};
+    try{
+      if(f.id){if(onUpdateTable)await onUpdateTable(f.id,d);}
+      else{const s=slotFor(sortedTables.length);if(onAddTable)await onAddTable({...d,w:90,h:80,x:s.x,y:s.y});}
+      setTableForm(null);
+    }catch(e){alert("บันทึกโต๊ะไม่สำเร็จ: "+(e&&e.message||e));}
+    setTableSaving(false);
   }
   // Zone filter + natural sort by table number
   const allZoneNames=[...new Set([...zones.map(z=>z.name).filter(Boolean),...tables.map(t=>t.zone).filter(Boolean)])];
@@ -9930,33 +9976,57 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone}){
         :<button onClick={()=>setAddingZone(true)} title="เพิ่มโซนใหม่" style={{padding:"4px 12px",borderRadius:18,border:`1.5px dashed ${C.brand}`,background:C.white,color:C.brand,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:3}}>＋ เพิ่มโซน</button>
       )}
     </div>}
-    {/* Status legend */}
+    {/* Status legend + add-table action */}
     <div style={{padding:"10px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",flexShrink:0}}>
       {Object.entries(TS).map(([k,v])=>{const n=tables.filter(t=>getStatus(t)===k).length;return n>0?<div key={k} style={{display:"flex",alignItems:"center",gap:5,background:v.bg,border:`1px solid ${v.border}`,borderRadius:8,padding:"3px 10px"}}><div style={{width:8,height:8,borderRadius:"50%",background:v.border}}/><span style={{fontSize:11,fontWeight:700,color:v.text,fontFamily:"'Sarabun',sans-serif"}}>{v.label} ({n})</span></div>:null;})}
+      {editable&&<div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
+        <span style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>💡 กดค้างที่โต๊ะเพื่อแก้ไข·ลบ·ลากย้าย</span>
+        {onAddTable&&<button onClick={()=>setTableForm({table_number:"",label:"",seats:4,shape:"square",zone:(zoneFilter!=="all"&&zoneFilter!=="none")?zoneFilter:""})} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"6px 14px",borderRadius:9,border:"none",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:"#fff",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>➕ เพิ่มโต๊ะ</button>}
+      </div>}
     </div>
-    <div style={{flex:1,overflowY:"auto",overflowX:"hidden",background:"#f0f4f8",backgroundImage:"radial-gradient(circle,#c8d0da 1px,transparent 1px)",backgroundSize:"20px 20px",padding:16,WebkitOverflowScrolling:"touch"}}>
-      {sortedTables.length===0?<div style={{display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10,padding:"60px 0"}}>
-        <Ic d={I.table} s={56} c={C.line}/><p style={{color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{zoneFilter==="all"?"ยังไม่มีโต๊ะ — เพิ่มโต๊ะในหลังบ้าน":`ไม่มีโต๊ะใน "${zoneFilter==="none"?"ไม่มีโซน":zoneFilter}"`}</p>
+    <div ref={canvasRef} onPointerMove={movePress} onPointerUp={endPress} onPointerCancel={endPress} onPointerDown={()=>{if(editId)setEditId(null);}}
+      style={{flex:1,overflowY:"auto",overflowX:"hidden",position:"relative",background:"#f0f4f8",backgroundImage:"radial-gradient(circle,#c8d0da 1px,transparent 1px)",backgroundSize:"20px 20px",WebkitOverflowScrolling:"touch",touchAction:"pan-y"}}>
+      {sortedTables.length===0?<div style={{display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,padding:"60px 16px"}}>
+        <Ic d={I.table} s={56} c={C.line}/><p style={{color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:15,textAlign:"center"}}>{zoneFilter==="all"?"ยังไม่มีโต๊ะ":`ไม่มีโต๊ะใน "${zoneFilter==="none"?"ไม่มีโซน":zoneFilter}"`}</p>
+        {editable&&onAddTable&&<button onClick={()=>setTableForm({table_number:"",label:"",seats:4,shape:"square",zone:(zoneFilter!=="all"&&zoneFilter!=="none")?zoneFilter:""})} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"10px 20px",borderRadius:11,border:"none",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:"#fff",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800}}>➕ เพิ่มโต๊ะแรก</button>}
       </div>
-      :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(118px,1fr))",gap:14,alignContent:"start"}}>
-        {sortedTables.map(t=>{
+      :<div style={{position:"relative",width:"100%",height:sortedTables.reduce((mx,t,idx)=>Math.max(mx,displayPos(t,idx).y),0)+TH+PAD+40}}>
+        {sortedTables.map((t,idx)=>{
+          const p=displayPos(t,idx);
           const st=getStatus(t);const sv=TS[st]||TS.available;
           const o=getTableOrder(t.id);
           const itemCount=(o?.items||[]).reduce((s,i)=>s+i.qty,0);
           const zoneColor=t.zone?zoneColorMap[t.zone]:null;
           const borderColor=zoneColor||sv.border;
-          return <div key={t.id} onClick={()=>onSelectTable(t,o)}
-            style={{position:"relative",height:96,background:sv.bg,border:`2.5px solid ${borderColor}`,borderRadius:t.shape==="round"?"50%":14,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",userSelect:"none",boxShadow:st!=="available"?`0 4px 16px ${sv.border}44`:"0 2px 8px rgba(0,0,0,.08)",transition:"transform .12s,box-shadow .2s"}}
-            onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";}} onMouseLeave={e=>{e.currentTarget.style.transform="";}}>
+          const active=editId===t.id;
+          return <div key={t.id} onPointerDown={e=>{e.stopPropagation();beginPress(e,t,p.x,p.y);}}
+            style={{position:"absolute",left:p.x,top:p.y,width:TW,height:TH,boxSizing:"border-box",background:sv.bg,border:`2.5px solid ${active?C.brand:borderColor}`,borderRadius:t.shape==="round"?"50%":14,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:editable?"grab":"pointer",userSelect:"none",touchAction:active?"none":"pan-y",boxShadow:active?`0 12px 26px ${C.brand}66`:(st!=="available"?`0 4px 16px ${sv.border}44`:"0 2px 8px rgba(0,0,0,.08)"),transform:active?"scale(1.06)":"none",transition:(dragPos&&dragPos.id===t.id)?"none":"transform .12s,box-shadow .2s,left .14s,top .14s",zIndex:active?30:1}}>
             {zoneColor&&<div style={{position:"absolute",top:-3,right:-3,width:10,height:10,borderRadius:"50%",background:zoneColor,border:`2px solid ${C.white}`,boxShadow:`0 1px 3px ${zoneColor}88`}}/>}
             <div style={{fontWeight:900,fontSize:17,color:sv.text,fontFamily:"'Sarabun',sans-serif",lineHeight:1}}>{t.table_number}</div>
             {t.label&&<div style={{fontSize:9,color:sv.text,fontFamily:"'Sarabun',sans-serif",opacity:.8,marginTop:1,maxWidth:"90%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.label}</div>}
             {st==="available"?<div style={{fontSize:10,color:C.green,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{t.seats||4} ที่นั่ง</div>
             :<><div style={{fontSize:11,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
+            {active&&<>
+              <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();setTableForm({id:t.id,table_number:t.table_number,label:t.label||"",seats:t.seats||4,shape:t.shape||"square",zone:t.zone||""});}} title="แก้ไขโต๊ะ" style={{position:"absolute",top:-13,left:-13,width:30,height:30,borderRadius:"50%",border:"2px solid #fff",background:C.blue,color:"#fff",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,.35)",zIndex:31}}>✏️</button>
+              <button onPointerDown={e=>e.stopPropagation()} onClick={async e=>{e.stopPropagation();if(await confirmDlg({title:"ลบโต๊ะ",message:`ลบโต๊ะ ${t.table_number}? โต๊ะจะถูกนำออกถาวร`,confirmLabel:"ลบโต๊ะ",cancelLabel:"ยกเลิก",danger:true})){onDeleteTable&&onDeleteTable(t.id);setEditId(null);}}} title="ลบโต๊ะ" style={{position:"absolute",top:-13,right:-13,width:30,height:30,borderRadius:"50%",border:"2px solid #fff",background:C.red,color:"#fff",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,.35)",zIndex:31}}>🗑</button>
+            </>}
           </div>;
         })}
       </div>}
     </div>
+    {tableForm&&<Modal title={tableForm.id?`✏️ แก้ไขโต๊ะ ${tableForm.table_number}`:"➕ เพิ่มโต๊ะ"} onClose={()=>setTableForm(null)}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div><label style={fLbl}>หมายเลขโต๊ะ *</label><input value={tableForm.table_number} onChange={e=>setTableForm(f=>({...f,table_number:e.target.value}))} placeholder="เช่น A1, 12" style={iS}/></div>
+        <div><label style={fLbl}>ชื่อ/ป้าย (ไม่บังคับ)</label><input value={tableForm.label} onChange={e=>setTableForm(f=>({...f,label:e.target.value}))} placeholder="ริมหน้าต่าง" style={iS}/></div>
+        <div><label style={fLbl}>จำนวนที่นั่ง</label><input type="number" min="1" value={tableForm.seats} onChange={e=>setTableForm(f=>({...f,seats:e.target.value}))} style={iS}/></div>
+        <div><label style={fLbl}>รูปทรง</label><select value={tableForm.shape} onChange={e=>setTableForm(f=>({...f,shape:e.target.value}))} style={{...iS,appearance:"none"}}><option value="square">สี่เหลี่ยม</option><option value="round">กลม</option></select></div>
+        <div style={{gridColumn:"1/-1"}}><label style={fLbl}>โซน</label><select value={tableForm.zone} onChange={e=>setTableForm(f=>({...f,zone:e.target.value}))} style={{...iS,appearance:"none"}}><option value="">— ไม่ระบุ —</option>{allZoneNames.map(z=><option key={z} value={z}>{z}</option>)}</select></div>
+      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16}}>
+        <Btn v="ghost" onClick={()=>setTableForm(null)}>ยกเลิก</Btn>
+        <Btn onClick={saveTableForm} loading={tableSaving} icon={I.check} disabled={!String(tableForm.table_number).trim()}>{tableForm.id?"บันทึก":"เพิ่มโต๊ะ"}</Btn>
+      </div>
+    </Modal>}
   </div>;
 }
 
@@ -12351,6 +12421,11 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   }
 
   async function loadTables(){const t=await api.getPOSTables(currentBranch.id);setTables(t);}
+  // Table editing from the floor plan (optimistic local update + persist)
+  async function handleAddTable(d){try{await api.addPOSTable({...d,branch_id:currentBranch.id,status:"available",active:true});await loadTables();}catch(e){alert("เพิ่มโต๊ะไม่สำเร็จ: "+(e&&e.message||e));}}
+  async function handleUpdateTable(id,d){setTables(p=>p.map(t=>t.id===id?{...t,...d}:t));try{await api.updatePOSTable(id,d);}catch(e){alert("แก้ไขโต๊ะไม่สำเร็จ: "+(e&&e.message||e));loadTables();}}
+  async function handleDeleteTable(id){const prev=tables;setTables(p=>p.filter(t=>t.id!==id));try{await api.deletePOSTable(id);}catch(e){alert("ลบโต๊ะไม่สำเร็จ: "+(e&&e.message||e));setTables(prev);}}
+  async function handleMoveTable(id,x,y){setTables(p=>p.map(t=>t.id===id?{...t,x,y}:t));try{await api.updatePOSTable(id,{x,y});}catch(e){console.error("move table save failed",e);}}
   async function loadOrders(){const o=await api.getActiveOrders(currentBranch.id);setActiveOrders(o);autoPrintNew(o);}
   async function loadAllOrders(){const o=await api.getPOSOrders(currentBranch.id);setAllOrders(o);}
   async function loadAll(){setLoading(true);try{await Promise.all([loadTables(),loadOrders()]);}catch(e){console.error(e);}setLoading(false);}
@@ -12422,7 +12497,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       </div>
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined}/>}
+      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined}/>}
       {showOrders&&<Modal title="📊 รายงานยอดวันนี้" onClose={()=>setShowOrders(false)} extraWide>
         {/* สรุปยอดขายวันนี้ */}
         <div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
