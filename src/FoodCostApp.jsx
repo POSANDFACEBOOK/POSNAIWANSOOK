@@ -10854,12 +10854,12 @@ function CustomerPage({branchId,tableId,token}){
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span style={{fontSize:16,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</span>
               {soldOut?<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>หมดแล้ว</span>
-                :hasOpts?<button onClick={()=>pickOrAddCart(m)} style={{display:"flex",alignItems:"center",gap:5,padding:"8px 14px",borderRadius:10,background:C.brand,border:"none",cursor:"pointer",color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800}}><Ic d={I.plus} s={14} c={C.white}/>เลือก</button>
-                :inC?<div style={{display:"flex",alignItems:"center",gap:6}}>
+                /* เมนูที่มีตัวเลือก: ปุ่ม + เด้งป๊อปอัพเลือกเสมอ (แต่ละครั้ง = รายการใหม่) · เมนูปกติในตะกร้า: ใช้ตัวเพิ่ม-ลด */
+                :(inC&&!hasOpts)?<div style={{display:"flex",alignItems:"center",gap:6}}>
                 <button onClick={()=>chQty(cart.indexOf(inC),-1)} style={{width:34,height:34,borderRadius:8,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={13} c={C.brand}/></button>
                 <span style={{fontWeight:900,fontSize:15,minWidth:18,textAlign:"center",color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{inC.qty}</span>
                 <button onClick={()=>addToCart(m)} style={{width:34,height:34,borderRadius:8,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={13} c={C.white}/></button>
-              </div>:<button onClick={()=>addToCart(m)} style={{width:32,height:32,borderRadius:9,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={17} c={C.white}/></button>}
+              </div>:<button onClick={()=>pickOrAddCart(m)} style={{width:32,height:32,borderRadius:9,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={17} c={C.white}/></button>}
             </div>
           </div>
         </div>;})}
