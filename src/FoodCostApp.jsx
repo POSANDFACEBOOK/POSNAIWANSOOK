@@ -11902,6 +11902,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
   const[menus,setMenus]=useState([]);const[lib,setLib]=useState([]);const[loading,setLoading]=useState(true);
   const[q,setQ]=useState("");const[busyId,setBusyId]=useState(null);
   const[bindMenu,setBindMenu]=useState(null);const[bindSel,setBindSel]=useState({});const[bindBusy,setBindBusy]=useState(false);
+  const[bulkOpen,setBulkOpen]=useState(false);const[bulkGroups,setBulkGroups]=useState({});const[bulkMenus,setBulkMenus]=useState({});const[bulkBusy,setBulkBusy]=useState(false);
   async function load(){setLoading(true);try{const[ms,ps]=await Promise.all([api.getMenus(),api.getPOSSettings(currentBranch.id)]);setMenus(ms||[]);const s=ps&&ps[0]?ps[0]:null;setLib(Array.isArray(s&&s.option_library)?s.option_library:[]);}catch(e){console.error("menuMgr",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
   const visible=menus.filter(m=>{const vb=m.visible_branches||[];const okB=isCentral||vb.length===0||vb.includes(currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
@@ -11915,11 +11916,26 @@ function POSMenuAvailManager({currentBranch,onClose}){
     try{await api.updateMenu(bindMenu.id,{options_by_branch:map});setMenus(ms=>ms.map(x=>x.id===bindMenu.id?{...x,options_by_branch:map}:x));setBindMenu(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
     setBindBusy(false);
   }
+  // Bulk-bind: apply the SAME option group(s) to many menus at once → they all become consistent.
+  async function applyBulk(){
+    const groupIds=lib.filter(g=>bulkGroups[g.id]).map(g=>g.id);
+    const menuIds=visible.filter(m=>bulkMenus[m.id]).map(m=>m.id);
+    if(menuIds.length===0){alert("เลือกเมนูอย่างน้อย 1 เมนู");return;}
+    if(groupIds.length===0&&!await confirmDlg({title:"ล้างตัวเลือก?",message:`ยังไม่ได้เลือกกลุ่มตัวเลือก — เมนูที่เลือก (${menuIds.length}) จะถูก “ล้างตัวเลือกออกทั้งหมด” ใช่ไหม?`,confirmLabel:"ล้างตัวเลือก",cancelLabel:"ยกเลิก",danger:true}))return;
+    setBulkBusy(true);
+    try{
+      for(const mid of menuIds){const m=menus.find(x=>x.id===mid);if(!m)continue;const map={...(m.options_by_branch||{})};map[String(currentBranch.id)]=groupIds;await api.updateMenu(mid,{options_by_branch:map});}
+      setMenus(ms=>ms.map(x=>menuIds.includes(x.id)?{...x,options_by_branch:{...(x.options_by_branch||{}),[String(currentBranch.id)]:groupIds}}:x));
+      setBulkOpen(false);posToast(`✅ ผูกตัวเลือกให้ ${menuIds.length} เมนูเหมือนกันแล้ว`);
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
+    setBulkBusy(false);
+  }
   return <Modal title="🍔 เมนูทั้งหมด — สถานะ & ตัวเลือก" onClose={onClose} extraWide>
     {loading?<Loading text="โหลดเมนู..."/>:<>
       <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:12,flexWrap:"wrap"}}>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,flex:1,minWidth:200}}/>
         <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{visible.length} เมนู</span>
+        <Btn v="teal" onClick={()=>{setBulkGroups({});setBulkMenus({});setBulkOpen(true);}} icon={I.plus} s={{padding:"7px 13px",fontSize:12}}>🔗 ผูกหลายเมนูพร้อมกัน</Btn>
       </div>
       <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>💡 ตั้ง <b>สถานะการขาย</b> + ผูก <b>ตัวเลือก</b> (จากคลังที่สร้างใน "ตัวเลือกในเมนู") · การจัดเมนูเข้า<b>หมวดหมู่</b>ทำที่หน้า "หมวดหมู่"</div>
       {visible.length===0?<div style={{textAlign:"center",padding:40,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>
@@ -11952,6 +11968,33 @@ function POSMenuAvailManager({currentBranch,onClose}){
         <div style={{display:"flex",justifyContent:"flex-end",gap:10,paddingTop:12,borderTop:`1px solid ${C.line}`}}>
           <Btn v="ghost" onClick={()=>setBindMenu(null)}>ยกเลิก</Btn>
           <Btn onClick={saveBind} loading={bindBusy} icon={I.check}>บันทึก</Btn>
+        </div>
+      </>}
+    </Modal>}
+    {bulkOpen&&<Modal title="🔗 ผูกตัวเลือกหลายเมนูพร้อมกัน" onClose={()=>setBulkOpen(false)} wide>
+      {lib.length===0?<div style={{padding:"24px 16px",textAlign:"center",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,lineHeight:1.7}}>ยังไม่มีกลุ่มตัวเลือกในคลัง<br/>ไปสร้างที่ <b>"➕ ตัวเลือกในเมนู"</b> ก่อน</div>
+      :<>
+        <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>1️⃣ เลือกกลุ่มตัวเลือก <span style={{fontSize:11,fontWeight:600,color:C.ink4}}>(เมนูที่เลือกจะได้กลุ่มชุดนี้เหมือนกันทั้งหมด)</span></div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
+          {lib.map(g=>{const on=!!bulkGroups[g.id];return <button key={g.id} onClick={()=>setBulkGroups(s=>({...s,[g.id]:!s[g.id]}))} style={{padding:"7px 13px",borderRadius:20,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700}}>{on?"✓ ":""}📦 {g.name}{g.required?" *":""}</button>;})}
+        </div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:8}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>2️⃣ เลือกเมนูที่จะผูก</div>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>setBulkMenus(Object.fromEntries(visible.map(m=>[m.id,true])))} style={{padding:"5px 11px",borderRadius:8,border:`1px solid ${C.line}`,background:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11.5,fontWeight:700}}>เลือกทั้งหมด</button>
+            <button onClick={()=>setBulkMenus({})} style={{padding:"5px 11px",borderRadius:8,border:`1px solid ${C.line}`,background:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11.5,fontWeight:700}}>ล้าง</button>
+          </div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight:"40vh",overflowY:"auto",marginBottom:14}}>
+          {visible.map(m=>{const on=!!bulkMenus[m.id];const nOpt=getMenuOptions(m,currentBranch.id,lib).length;return <label key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",borderRadius:9,cursor:"pointer",background:on?C.tealLight:C.white,border:`1.5px solid ${on?C.teal:C.line}`}}>
+            <input type="checkbox" checked={on} onChange={()=>setBulkMenus(s=>({...s,[m.id]:!s[m.id]}))} style={{accentColor:C.teal,width:17,height:17,flexShrink:0}}/>
+            <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:on?800:600,color:on?C.teal:C.ink}}>{m.name}</span>
+            {nOpt>0&&<span style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>มี {nOpt} กลุ่ม</span>}
+          </label>;})}
+        </div>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:10,paddingTop:12,borderTop:`1px solid ${C.line}`}}>
+          <Btn v="ghost" onClick={()=>setBulkOpen(false)}>ยกเลิก</Btn>
+          <Btn v="teal" onClick={applyBulk} loading={bulkBusy} icon={I.check} disabled={Object.values(bulkMenus).filter(Boolean).length===0}>ผูกให้ {Object.values(bulkMenus).filter(Boolean).length} เมนู</Btn>
         </div>
       </>}
     </Modal>}
