@@ -10374,13 +10374,13 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const cashChange=round2(Math.max(0,(+cashRcv||0)-total));
 
   const optionLib=posSettings?.option_library||[];   // resolve referenced option groups
-  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
+  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:(m.local_categories||{})[branch?.id]||m.category||null}];});}
   // Tap a menu: if it has add-on options for this branch, open the picker; else add directly.
   const[optPick,setOptPick]=useState(null);  // menu awaiting option selection
   function pickOrAdd(m){if(menuHasOptions(m,branch?.id,optionLib))setOptPick(m);else addItem(m);}
   function addItemWithOptions(m,chosen,qty){
     const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);
-    setItems(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);
+    setItems(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:(m.local_categories||{})[branch?.id]||m.category||null}]);
     setOptPick(null);
   }
   function chQty(idx,d){setItems(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
@@ -10776,11 +10776,11 @@ function CustomerPage({branchId,tableId,token}){
   }),[menus,selCat,search,branchId]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const itemCount=cart.reduce((s,i)=>s+i.qty,0);
-  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:m.category||null}];});}
+  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:(m.local_categories||{})[branchId]||m.category||null}];});}
   // Add-on options: open the picker if the menu has any for this branch.
   const[optPick,setOptPick]=useState(null);
   function pickOrAddCart(m){if(menuHasOptions(m,branchId,optionLib))setOptPick(m);else addToCart(m);}
-  function addToCartWithOptions(m,chosen,qty){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);setOptPick(null);}
+  function addToCartWithOptions(m,chosen,qty){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:(m.local_categories||{})[branchId]||m.category||null}]);setOptPick(null);}
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
   async function placeOrder(){
@@ -12182,7 +12182,18 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
   const[catSaving,setCatSaving]=useState(false);
   const[openCats,setOpenCats]=useState(()=>new Set());  // category names expanded to show per-menu checkboxes
   function toggleOpenCat(c){setOpenCats(prev=>{const n=new Set(prev);if(n.has(c))n.delete(c);else n.add(c);return n;});}
-  const allCategories=useMemo(()=>[...new Set(menus.map(m=>m.category).filter(Boolean))].sort(),[menus]);
+  // หมวดหมู่สำหรับ routing = รวมทั้ง global m.category (เดิม) + ทุกหมวดต่อสาขา (local_categories)
+  // เพราะทั้งระบบจัดเมนูเข้าหมวดด้วย local_categories[branch] — ช่อง global มักว่าง/มีค่าขยะ
+  const allCategories=useMemo(()=>{
+    const s=new Set();
+    menus.forEach(m=>{
+      if(m.category&&String(m.category).trim())s.add(String(m.category).trim());
+      Object.values(m.local_categories||{}).forEach(v=>{if(v&&String(v).trim())s.add(String(v).trim());});
+    });
+    return [...s].sort();
+  },[menus]);
+  // เมนูในหมวด c (เทียบทั้ง global และ local)
+  const menusInCat=(c)=>menus.filter(m=>m.category===c||Object.values(m.local_categories||{}).includes(c));
   function openCatEdit(p){
     setCatEditP(p);
     setCatSel(p.categories===undefined||p.categories===null?null:[...p.categories]);
@@ -12425,7 +12436,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
               <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto",paddingRight:2}}>
                 {allCategories.map(c=>{
                   const has=catSel.includes(c);
-                  const catMenus=menus.filter(m=>m.category===c);
+                  const catMenus=menusInCat(c);
                   const isOpen=openCats.has(c);
                   const pinnedHereCount=catMenus.filter(m=>{const cur=catMenuOverride[m.id];return cur!=null&&+cur===+catEditP.id;}).length;
                   return <div key={c} style={{border:`1.5px solid ${has?C.brandBorder:C.line}`,borderRadius:10,overflow:"hidden",background:has?C.brandLight:C.white,transition:"all .15s"}}>
