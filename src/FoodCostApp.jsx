@@ -10828,7 +10828,7 @@ function CustomerPage({branchId,tableId,token}){
     <p style={{fontSize:15,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>โต๊ะ {table.table_number}</p>
     <p style={{fontSize:14,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:24}}>อาหารกำลังเตรียมครับ 🍳</p>
     <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center"}}>
-      <Btn v="ghost" onClick={()=>{setDone(false);setStep("myorder");}}>📋 ดูออเดอร์ของฉัน</Btn>
+      <Btn v="ghost" onClick={()=>{setDone(false);setStep("myorder");}}>📋 ดูสรุปยอด</Btn>
       <Btn onClick={()=>{setDone(false);setCart([]);setStep("menu");}}>สั่งเพิ่ม</Btn>
     </div>
   </div>;
@@ -10840,8 +10840,11 @@ function CustomerPage({branchId,tableId,token}){
         <div style={{fontSize:12,color:"rgba(255,255,255,.8)",fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
       </div>
       <div style={{display:"flex",gap:7,alignItems:"center",flexShrink:0}}>
-        {cart.length>0&&step!=="cart"&&<button onClick={()=>setStep("cart")} style={{background:C.white,border:"none",borderRadius:12,padding:"8px 13px",cursor:"pointer",color:C.brand,fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:900,display:"flex",alignItems:"center",gap:6,boxShadow:"0 3px 10px rgba(0,0,0,.18)"}}>🛒 ตะกร้า<span style={{background:C.brand,color:C.white,borderRadius:11,minWidth:21,height:21,padding:"0 6px",fontSize:12.5,fontWeight:900,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{itemCount}</span></button>}
-        {myOrder&&step!=="myorder"&&<button onClick={()=>{loadMyOrder();setStep("myorder");}} style={{background:"rgba(255,255,255,0.22)",border:"1px solid rgba(255,255,255,0.4)",borderRadius:12,padding:"8px 11px",cursor:"pointer",color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,display:"flex",alignItems:"center",gap:5}}>📋 ออเดอร์<span style={{background:"rgba(255,255,255,0.32)",borderRadius:10,minWidth:19,height:19,padding:"0 5px",fontSize:11.5,fontWeight:900,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{myOrderItemCount}</span></button>}
+        {cart.length>0&&step!=="cart"&&<button onClick={()=>setStep("cart")} style={{background:C.white,border:"none",borderRadius:12,padding:"6px 13px",cursor:"pointer",color:C.brand,fontFamily:"'Sarabun',sans-serif",display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.15,boxShadow:"0 3px 10px rgba(0,0,0,.18)"}}>
+          <span style={{display:"flex",alignItems:"center",gap:6,fontSize:13.5,fontWeight:900}}>🛒 ตะกร้า<span style={{background:C.brand,color:C.white,borderRadius:11,minWidth:21,height:21,padding:"0 6px",fontSize:12.5,fontWeight:900,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{itemCount}</span></span>
+          <span style={{fontSize:9,fontWeight:700,color:C.ink4,marginTop:1}}>(มีออเดอร์ยังไม่ได้กดสั่ง)</span>
+        </button>}
+        {myOrder&&step!=="myorder"&&<button onClick={()=>{loadMyOrder();setStep("myorder");}} style={{background:"rgba(255,255,255,0.22)",border:"1px solid rgba(255,255,255,0.4)",borderRadius:12,padding:"8px 11px",cursor:"pointer",color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,display:"flex",alignItems:"center",gap:5}}>📋 สรุปยอด<span style={{background:"rgba(255,255,255,0.32)",borderRadius:10,minWidth:19,height:19,padding:"0 5px",fontSize:11.5,fontWeight:900,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{myOrderItemCount}</span></button>}
       </div>
     </div>
     {step==="menu"&&<>
@@ -10881,7 +10884,7 @@ function CustomerPage({branchId,tableId,token}){
     {step==="myorder"&&<>
       <div style={{flex:1,overflowY:"auto",padding:12}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-          <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:900,color:C.ink,margin:0}}>📋 ออเดอร์ของฉัน</h3>
+          <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:900,color:C.ink,margin:0}}>📋 สรุปยอดของฉัน</h3>
           <button onClick={loadMyOrder} style={{background:C.lineLight,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:600}}>🔄 รีเฟรช</button>
         </div>
         {!myOrder||(myOrder.items||[]).length===0?<div style={{textAlign:"center",padding:"50px 20px",color:C.ink4}}>
