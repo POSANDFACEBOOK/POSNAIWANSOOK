@@ -10839,10 +10839,10 @@ function CustomerPage({branchId,tableId,token}){
         <div style={{fontWeight:900,fontSize:17,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>{branch.name}</div>
         <div style={{fontSize:12,color:"rgba(255,255,255,.8)",fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
       </div>
-      {myOrder&&step!=="myorder"&&<button onClick={()=>{loadMyOrder();setStep("myorder");}} style={{background:"rgba(255,255,255,0.22)",border:"1px solid rgba(255,255,255,0.4)",borderRadius:10,padding:"6px 10px",cursor:"pointer",color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,display:"flex",flexDirection:"column",alignItems:"center",lineHeight:1.1}}>
-        <span>📋 ออเดอร์</span>
-        <span style={{fontSize:10,opacity:0.9,marginTop:2}}>{myOrderItemCount} รายการ • ฿{(myOrder.total||0).toFixed(0)}</span>
-      </button>}
+      <div style={{display:"flex",gap:7,alignItems:"center",flexShrink:0}}>
+        {cart.length>0&&step!=="cart"&&<button onClick={()=>setStep("cart")} style={{background:C.white,border:"none",borderRadius:12,padding:"8px 13px",cursor:"pointer",color:C.brand,fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:900,display:"flex",alignItems:"center",gap:6,boxShadow:"0 3px 10px rgba(0,0,0,.18)"}}>🛒 ตะกร้า<span style={{background:C.brand,color:C.white,borderRadius:11,minWidth:21,height:21,padding:"0 6px",fontSize:12.5,fontWeight:900,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{itemCount}</span></button>}
+        {myOrder&&step!=="myorder"&&<button onClick={()=>{loadMyOrder();setStep("myorder");}} style={{background:"rgba(255,255,255,0.22)",border:"1px solid rgba(255,255,255,0.4)",borderRadius:12,padding:"8px 11px",cursor:"pointer",color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,display:"flex",alignItems:"center",gap:5}}>📋 ออเดอร์<span style={{background:"rgba(255,255,255,0.32)",borderRadius:10,minWidth:19,height:19,padding:"0 5px",fontSize:11.5,fontWeight:900,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{myOrderItemCount}</span></button>}
+      </div>
     </div>
     {step==="menu"&&<>
       <div style={{padding:"8px 10px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
@@ -10877,13 +10877,6 @@ function CustomerPage({branchId,tableId,token}){
           {!search&&<p style={{marginTop:6,fontSize:12,color:C.ink4,lineHeight:1.7}}>ร้านกำลังจัดเมนู กรุณาสอบถามพนักงาน</p>}
         </div>}
       </div>
-      {cart.length>0&&<div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,flexShrink:0}}>
-        <button onClick={()=>setStep("cart")} style={{width:"100%",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,border:"none",borderRadius:12,padding:"13px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span style={{background:"rgba(255,255,255,.25)",borderRadius:20,padding:"2px 10px",fontSize:12,fontWeight:700,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>{itemCount} รายการ</span>
-          <span style={{fontSize:15,fontWeight:900,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>ดูตะกร้า →</span>
-          <span style={{fontSize:15,fontWeight:900,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>฿{total.toFixed(0)}</span>
-        </button>
-      </div>}
     </>}
     {step==="myorder"&&<>
       <div style={{flex:1,overflowY:"auto",padding:12}}>
@@ -10919,11 +10912,13 @@ function CustomerPage({branchId,tableId,token}){
           </div>
         </>}
       </div>
-      <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",gap:8,flexShrink:0,flexWrap:"wrap"}}>
-        <Btn v="ghost" onClick={()=>setStep("menu")} full s={{padding:"10px"}}>← กลับหน้าเมนู</Btn>
-        {myOrder&&myOrder.status!=="paid"&&myOrder.status!=="bill_requested"&&<Btn onClick={()=>setStep("menu")} full s={{padding:"10px"}}>+ สั่งเพิ่ม</Btn>}
-        {myOrder&&myOrder.status!=="paid"&&myOrder.status!=="bill_requested"&&<button onClick={async()=>{try{await api.updatePOSOrder(myOrder.id,{status:"bill_requested",updated_at:new Date().toISOString()});await loadMyOrder();alert("✅ แจ้งพนักงานแล้ว กรุณารอสักครู่");}catch{alert("เกิดข้อผิดพลาด กรุณาแจ้งพนักงาน");}}} style={{width:"100%",padding:"12px",background:`linear-gradient(135deg,${C.yellow},#D97706)`,border:"none",borderRadius:12,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>💰 เรียกบิล / ขอชำระเงิน</button>}
-        {myOrder&&myOrder.status==="bill_requested"&&<div style={{width:"100%",padding:"12px",background:C.yellowLight,border:`1.5px solid ${C.yellow}`,borderRadius:12,textAlign:"center",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:"#92400E"}}>⏳ แจ้งพนักงานแล้ว กรุณารอสักครู่...</div>}
+      <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",flexDirection:"column",gap:10,flexShrink:0}}>
+        {myOrder&&myOrder.status==="paid"
+          ?<div style={{padding:"13px",background:C.greenLight,border:`1.5px solid ${C.green}`,borderRadius:12,textAlign:"center",fontFamily:"'Sarabun',sans-serif",fontSize:14.5,fontWeight:900,color:C.green}}>✅ ชำระเงินแล้ว ขอบคุณครับ 🙏</div>
+          :<div style={{padding:"13px 14px",background:C.brandLight,border:`1.5px solid ${C.brandBorder}`,borderRadius:12,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{fontSize:14.5,fontWeight:900,color:C.brand,lineHeight:1.5}}>📲 กรุณานำ QR Code ไปชำระเงินที่แคชเชียร์</div>
+          </div>}
+        {myOrder&&myOrder.status!=="paid"&&<Btn onClick={()=>setStep("menu")} full icon={I.plus} s={{padding:"12px",fontSize:15,fontWeight:900}}>สั่งเพิ่ม</Btn>}
       </div>
     </>}
     {step==="cart"&&<>
@@ -10938,10 +10933,7 @@ function CustomerPage({branchId,tableId,token}){
           </div>
           <button onClick={()=>rmCart(idx)} style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
         </div>)}
-        <div style={{background:C.bg,borderRadius:10,padding:"12px",marginTop:4}}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}><span style={{fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{itemCount} รายการ</span><span style={{fontSize:17,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>฿{total.toFixed(0)}</span></div>
-          <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>*ราคายังไม่รวมค่าบริการ (ถ้ามี)</div>
-        </div>
+        <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",textAlign:"center",padding:"10px 0 2px"}}>รวม {itemCount} รายการ</div>
       </div>
       <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",gap:8,flexShrink:0}}>
         <Btn v="ghost" onClick={()=>setStep("menu")} full s={{padding:"10px"}}>← เพิ่มเมนู</Btn>
