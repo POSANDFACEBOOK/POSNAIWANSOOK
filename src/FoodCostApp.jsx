@@ -10260,6 +10260,7 @@ function optionsText(opts){return (opts||[]).map(o=>o&&o.name).filter(Boolean).j
 // onConfirm gets the flat chosen choices [{name,price}].
 function MenuOptionPicker({menu,groups,onConfirm,onClose}){
   const[sel,setSel]=useState({});  // choiceId -> true
+  const[qty,setQty]=useState(1);
   const base=+menu.price||0;
   const grps=(groups||[]).filter(g=>g&&Array.isArray(g.choices)&&g.choices.length);
   const chosen=grps.flatMap(g=>g.choices.filter(c=>sel[c.id]).map(c=>({name:c.name,price:+c.price||0})));
@@ -10286,9 +10287,15 @@ function MenuOptionPicker({menu,groups,onConfirm,onClose}){
       {grps.length===0&&<div style={{padding:20,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>เมนูนี้ยังไม่มีตัวเลือก</div>}
     </div>
     {missingRequired&&<div style={{fontSize:12,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600,marginBottom:10,textAlign:"center"}}>⚠️ กรุณาเลือกกลุ่มที่บังคับ (*) ให้ครบก่อน</div>}
-    <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:12,borderTop:`1px solid ${C.line}`}}>
-      <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
-      <Btn onClick={()=>onConfirm(chosen)} icon={I.plus} disabled={missingRequired}>เพิ่ม · ฿{total.toLocaleString()}</Btn>
+    <div style={{display:"flex",gap:10,alignItems:"center",paddingTop:12,borderTop:`1px solid ${C.line}`}}>
+      {/* ปุ่มเพิ่ม-ลดจำนวน */}
+      <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+        <button onClick={()=>setQty(q=>Math.max(1,q-1))} style={{width:42,height:42,borderRadius:11,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={16} c={C.brand}/></button>
+        <span style={{fontWeight:900,fontSize:18,minWidth:26,textAlign:"center",color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{qty}</span>
+        <button onClick={()=>setQty(q=>q+1)} style={{width:42,height:42,borderRadius:11,border:"none",background:C.brand,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={16} c={C.white}/></button>
+      </div>
+      {/* ปุ่มสั่ง */}
+      <Btn onClick={()=>onConfirm(chosen,qty)} icon={I.check} disabled={missingRequired} s={{flex:1,justifyContent:"center",minHeight:42}}>สั่ง · ฿{(total*qty).toLocaleString()}</Btn>
     </div>
   </Modal>;
 }
@@ -10371,9 +10378,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // Tap a menu: if it has add-on options for this branch, open the picker; else add directly.
   const[optPick,setOptPick]=useState(null);  // menu awaiting option selection
   function pickOrAdd(m){if(menuHasOptions(m,branch?.id,optionLib))setOptPick(m);else addItem(m);}
-  function addItemWithOptions(m,chosen){
+  function addItemWithOptions(m,chosen,qty){
     const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);
-    setItems(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);
+    setItems(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);
     setOptPick(null);
   }
   function chQty(idx,d){setItems(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
@@ -10573,7 +10580,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     </div>}
 
     {/* Add-on option picker (staff) */}
-    {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branch?.id,optionLib)} onConfirm={chosen=>addItemWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
+    {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branch?.id,optionLib)} onConfirm={(chosen,qty)=>addItemWithOptions(optPick,chosen,qty)} onClose={()=>setOptPick(null)}/>}
 
     {/* Split bill modal */}
     {showSplitBill&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
@@ -10773,7 +10780,7 @@ function CustomerPage({branchId,tableId,token}){
   // Add-on options: open the picker if the menu has any for this branch.
   const[optPick,setOptPick]=useState(null);
   function pickOrAddCart(m){if(menuHasOptions(m,branchId,optionLib))setOptPick(m);else addToCart(m);}
-  function addToCartWithOptions(m,chosen){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);setOptPick(null);}
+  function addToCartWithOptions(m,chosen,qty){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:m.category||null}]);setOptPick(null);}
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
   async function placeOrder(){
@@ -10951,7 +10958,7 @@ function CustomerPage({branchId,tableId,token}){
         </div>
       </div>
     </div>}
-    {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branchId,optionLib)} onConfirm={chosen=>addToCartWithOptions(optPick,chosen)} onClose={()=>setOptPick(null)}/>}
+    {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branchId,optionLib)} onConfirm={(chosen,qty)=>addToCartWithOptions(optPick,chosen,qty)} onClose={()=>setOptPick(null)}/>}
   </div>;
 }
 
