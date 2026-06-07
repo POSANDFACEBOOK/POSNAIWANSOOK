@@ -10842,28 +10842,29 @@ function CustomerPage({branchId,tableId,token}){
         {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"5px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
       </div>
       <div style={{padding:"8px 12px",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"9px 14px"}}/></div>
-      <div style={{flex:1,overflowY:"auto",padding:10,display:"flex",flexDirection:"column",gap:8}}>
-        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:12,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",transition:"all .15s",opacity:soldOut?0.6:1}}>
-          {m.image?<img src={m.image} alt={m.name} style={{width:80,objectFit:"cover",flexShrink:0,filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.food} s={28} c={soldOut?C.ink4:C.brand}/></div>}
-          <div style={{flex:1,padding:"10px 12px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
-              <div style={{fontWeight:700,fontSize:14,color:soldOut?C.ink4:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{m.name}</div>
-              {soldOut&&<span style={{fontSize:10,fontWeight:700,color:"#92400E",background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:10,padding:"1px 7px",flexShrink:0}}>วันนี้หมด</span>}
-            </div>
-            {m.description&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:4,lineHeight:1.4}}>{m.description}</div>}
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div style={{flex:1,overflowY:"auto",padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,alignContent:"start"}}>
+        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
+          <div style={{position:"relative",width:"100%",height:130,flexShrink:0}}>
+            {m.image?<img src={m.image} alt={m.name} style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
+            {soldOut&&<span style={{position:"absolute",top:6,left:6,fontSize:10,fontWeight:700,color:"#92400E",background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:10,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>วันนี้หมด</span>}
+            {hasOpts&&!soldOut&&<span style={{position:"absolute",top:6,right:6,fontSize:9.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:10,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
+          </div>
+          <div style={{padding:"9px 11px",display:"flex",flexDirection:"column",flex:1}}>
+            <div style={{fontWeight:700,fontSize:13.5,color:soldOut?C.ink4:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:2}}>{m.name}</div>
+            {m.description&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:6,lineHeight:1.4,overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{m.description}</div>}
+            <div style={{marginTop:"auto",display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
               <span style={{fontSize:16,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</span>
-              {soldOut?<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>หมดแล้ว</span>
-                /* เมนูที่มีตัวเลือก: ปุ่ม + เด้งป๊อปอัพเลือกเสมอ (แต่ละครั้ง = รายการใหม่) · เมนูปกติในตะกร้า: ใช้ตัวเพิ่ม-ลด */
-                :(inC&&!hasOpts)?<div style={{display:"flex",alignItems:"center",gap:6}}>
-                <button onClick={()=>chQty(cart.indexOf(inC),-1)} style={{width:34,height:34,borderRadius:8,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={13} c={C.brand}/></button>
-                <span style={{fontWeight:900,fontSize:15,minWidth:18,textAlign:"center",color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{inC.qty}</span>
-                <button onClick={()=>addToCart(m)} style={{width:34,height:34,borderRadius:8,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={13} c={C.white}/></button>
-              </div>:<button onClick={()=>pickOrAddCart(m)} style={{width:32,height:32,borderRadius:9,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={17} c={C.white}/></button>}
+              {soldOut?<span style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>หมด</span>
+                /* เมนูที่มีตัวเลือก: ปุ่ม + เด้งป๊อปอัพเลือกเสมอ · เมนูปกติในตะกร้า: ใช้ตัวเพิ่ม-ลด */
+                :(inC&&!hasOpts)?<div style={{display:"flex",alignItems:"center",gap:5}}>
+                <button onClick={()=>chQty(cart.indexOf(inC),-1)} style={{width:30,height:30,borderRadius:8,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={12} c={C.brand}/></button>
+                <span style={{fontWeight:900,fontSize:14,minWidth:16,textAlign:"center",color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{inC.qty}</span>
+                <button onClick={()=>addToCart(m)} style={{width:30,height:30,borderRadius:8,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={12} c={C.white}/></button>
+              </div>:<button onClick={()=>pickOrAddCart(m)} style={{width:34,height:34,borderRadius:10,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.plus} s={18} c={C.white}/></button>}
             </div>
           </div>
         </div>;})}
-        {filtered.length===0&&<div style={{textAlign:"center",padding:"48px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
+        {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"48px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
           <Ic d={I.food} s={46} c={C.line}/>
           <p style={{marginTop:12,fontSize:14,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูให้สั่ง"}</p>
           {!search&&<p style={{marginTop:6,fontSize:12,color:C.ink4,lineHeight:1.7}}>ร้านกำลังจัดเมนู กรุณาสอบถามพนักงาน</p>}
