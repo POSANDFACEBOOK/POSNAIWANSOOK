@@ -12755,6 +12755,11 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
     if(st==="unknown")return{c:"#D97706",bg:"#FFFBEB",t:"ไม่ยืนยัน · กดทดสอบพิมพ์"};
     return{c:C.ink4,bg:C.bg,t:"ยังไม่เช็ค"};
   };
+  const activePrinters=printers.filter(p=>p.active!==false);
+  const isIgnored=(p)=>{try{return JSON.parse(p.description||"{}").ig===1;}catch{return false;}};
+  const discovered=printers.filter(p=>p.active===false&&!isIgnored(p));
+  async function addDiscovered(p){try{await api.updatePrinter(p.id,{active:true,description:""});await load();posToast("✅ เพิ่มเครื่องพิมพ์เข้าระบบแล้ว");}catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}}
+  async function ignoreDiscovered(p){try{await api.updatePrinter(p.id,{description:JSON.stringify({d:1,ig:1})});await load();}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}
   return <Modal title="🖨 เครื่องพิมพ์ & สถานะการเชื่อมต่อ" onClose={onClose} wide>
     {loading?<Loading text="โหลดเครื่องพิมพ์..."/>:<>
       {/* ค้นหาเครื่องพิมพ์อัตโนมัติทำผ่านตัวพิมพ์ (Print Agent) — เบราว์เซอร์สแกน LAN เองไม่ได้ */}
@@ -12762,12 +12767,12 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
         🔍 <b>ค้นหาเครื่องพิมพ์อัตโนมัติ:</b> แค่เสียบเครื่องพิมพ์เข้าวง LAN ร้าน — <b>ตัวพิมพ์ (Print Agent)</b> จะสแกนเจอ + เพิ่มเข้าระบบให้เองทุกๆ ไม่กี่นาที (และตอนเปิด/รีสตาร์ท agent) → เครื่องที่เจอจะโผล่ในรายการข้างล่างนี้ · กด <b>"เช็คสถานะใหม่"</b> เพื่อรีโหลด แล้วตั้งชื่อ/เลือกหมวด/ลบ ได้เลย
       </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
-        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>เครื่องพิมพ์ของสาขา <b style={{color:C.ink}}>{currentBranch.name}</b> ({printers.length})</div>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>เครื่องพิมพ์ของสาขา <b style={{color:C.ink}}>{currentBranch.name}</b> ({activePrinters.length})</div>
         <Btn v="ghost" onClick={()=>printers.forEach(p=>checkStatus(p))} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>เช็คสถานะใหม่</Btn>
       </div>
-      {printers.length===0?<div style={{textAlign:"center",padding:"28px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif",background:C.bg,borderRadius:12,marginBottom:14}}><Ic d={I.print} s={40} c={C.line}/><p style={{marginTop:8,fontSize:13}}>ยังไม่มีเครื่องพิมพ์ — เพิ่มด้านล่างด้วยเลข IP</p></div>
+      {activePrinters.length===0?<div style={{textAlign:"center",padding:"28px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif",background:C.bg,borderRadius:12,marginBottom:14}}><Ic d={I.print} s={40} c={C.line}/><p style={{marginTop:8,fontSize:13}}>ยังไม่มีเครื่องพิมพ์ที่ใช้งาน — เพิ่มจาก "พบในเครือข่าย" ด้านล่าง หรือใส่ IP เอง</p></div>
       :<div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
-        {printers.map(p=>{const conn=getPConn(p);const sv=stView(status[p.id]);return <div key={p.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap"}}>
+        {activePrinters.map(p=>{const conn=getPConn(p);const sv=stView(status[p.id]);return <div key={p.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap"}}>
           <span style={{width:11,height:11,borderRadius:"50%",background:sv.c,flexShrink:0,boxShadow:status[p.id]==="online"?`0 0 0 3px ${C.green}33`:"none"}}/>
           <div style={{minWidth:0,flex:1}}>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{p.name}</div>
@@ -12779,8 +12784,21 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
           <button onClick={async()=>{if(await confirmDlg({title:`🗑 ลบเครื่องพิมพ์ "${p.name}"?`,message:`นำเครื่องพิมพ์ "${p.name}" (${p.ip||"-"}) ออกจากระบบ?\n\n⚠️ เมนูที่ส่งมาเครื่องนี้จะไม่ถูกพิมพ์จนกว่าจะตั้งเครื่องใหม่`,confirmLabel:"ลบเครื่องพิมพ์",cancelLabel:"ยกเลิก",danger:true})){try{await api.deletePrinter(p.id);await load();posToast("ลบเครื่องพิมพ์แล้ว");}catch(e){alert("ลบไม่สำเร็จ: "+(e&&e.message||e));}}}} title="ลบเครื่องพิมพ์" style={{background:C.redLight,border:`1px solid #FCA5A5`,borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={14} c={C.red}/></button>
         </div>;})}
       </div>}
+      {discovered.length>0&&<div style={{background:"#EFF6FF",border:`1px solid ${C.blue}44`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:13,fontWeight:800,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>🔍 พบในเครือข่าย ({discovered.length}) — แตะ "เพิ่มใช้งาน" เฉพาะเครื่องที่ต้องการ</div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {discovered.map(p=><div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:`1px solid ${C.blue}33`,borderRadius:10,background:C.white,flexWrap:"wrap"}}>
+            <div style={{minWidth:0,flex:1}}>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:700,color:C.ink}}>{p.ip}:{p.port||9100}</div>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4}}>พบเครื่องพิมพ์ในวง LAN — ยังไม่ได้ใช้งาน</div>
+            </div>
+            <button onClick={()=>addDiscovered(p)} style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:8,padding:"7px 14px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,color:C.white,whiteSpace:"nowrap"}}>➕ เพิ่มใช้งาน</button>
+            <button onClick={()=>ignoreDiscovered(p)} title="ไม่ใช้เครื่องนี้ (ซ่อนออกจากรายการ)" style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>🙈 ซ่อน</button>
+          </div>)}
+        </div>
+      </div>}
       <div style={{background:C.bg,border:`1px dashed ${C.line}`,borderRadius:12,padding:"14px 16px"}}>
-        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}>➕ เพิ่มเครื่องพิมพ์ (เครือข่าย / IP)</div>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}>➕ เพิ่มเครื่องพิมพ์ (เครือข่าย / IP) ด้วยตัวเอง</div>
         <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
           <div style={{flex:"2 1 160px"}}><label style={lbl}>ชื่อเครื่องพิมพ์</label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัวร้อน" style={iS}/></div>
           <div style={{flex:"2 1 150px"}}><label style={lbl}>เลข IP</label><input value={form.ip} onChange={e=>setForm(f=>({...f,ip:e.target.value.replace(/[^\d.]/g,"")}))} inputMode="decimal" placeholder="192.168.1.50" style={iS}/></div>

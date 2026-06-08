@@ -63,8 +63,9 @@ async function discoverPrinters(existing) {
   console.log(`🔍 พบอุปกรณ์เปิด port 9100: ${found.length ? found.join(", ") : "(ไม่พบ)"}`);
   for (const ip of found) {
     if (have.has(ip)) continue;
-    try { await addPrinter({ name: `เครื่องพิมพ์ ${ip}`, ip, port: 9100, type: "kitchen", branch_id: +BRANCH, active: true, description: "" }); console.log(`  ➕ เพิ่มเครื่องพิมพ์ใหม่อัตโนมัติ: ${ip} (ไปตั้งชื่อ/หมวดในแอปได้)`); }
-    catch (e) { console.log(`  ⚠️ เพิ่ม ${ip} ไม่สำเร็จ: ${e.message}`); }
+    // เพิ่มเป็น "รอเพิ่ม" (active:false) — ยังไม่พิมพ์งาน จนกว่าผู้ใช้จะกด "เพิ่มใช้งาน" ในแอป
+    try { await addPrinter({ name: `เครื่องพิมพ์ ${ip}`, ip, port: 9100, type: "kitchen", branch_id: +BRANCH, active: false, description: JSON.stringify({ d: 1 }) }); console.log(`  🔍 พบเครื่องพิมพ์ใหม่: ${ip} → ไปกด "เพิ่มใช้งาน" ในแอปถ้าต้องการใช้`); }
+    catch (e) { console.log(`  ⚠️ บันทึก ${ip} ไม่สำเร็จ: ${e.message}`); }
   }
 }
 
@@ -141,7 +142,7 @@ async function tick() {
   let orders, printers;
   try { [orders, printers] = await Promise.all([getActiveOrders(), getPrinters()]); }
   catch (e) { console.log("⚠️  ดึงข้อมูลไม่ได้ (เช็คเน็ต):", e.message); return; }
-  printers = (printers || []).filter(p => p.branch_id == null || +p.branch_id === +BRANCH);
+  printers = (printers || []).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false);
 
   if (!primed) {
     for (const o of orders) if (o && o.items) { state.sig[o.id] = sigOf(o); state.init[o.id] = 1; }
@@ -178,9 +179,9 @@ async function tick() {
   console.log("════════════════════════════════════════");
   try {
     let printers = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH);
-    await discoverPrinters(printers);                       // สแกนวง → เพิ่มเครื่องพิมพ์ใหม่อัตโนมัติ
-    printers = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH);  // โหลดใหม่รวมที่เพิ่ง add
-    console.log(`พบเครื่องพิมพ์ ${printers.length} เครื่อง:`);
+    await discoverPrinters(printers);                       // สแกนวง → บันทึกเครื่องใหม่เป็น "รอเพิ่ม"
+    printers = (await getPrinters()).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false);  // ใช้เฉพาะที่เปิดใช้งาน
+    console.log(`เครื่องพิมพ์ที่ใช้งาน ${printers.length} เครื่อง:`);
     for (const p of printers) console.log(`  • ${p.name} — ${isBluetooth(p) ? "บลูทูธ (ข้าม)" : (p.ip || "ไม่มี IP") + ":" + (p.port || 9100)}`);
     console.log("— ทดสอบพิมพ์ตอนเริ่ม —");
     for (const p of printers) if (!isBluetooth(p) && p.ip) {
