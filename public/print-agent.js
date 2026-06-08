@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 4;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 5;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -59,24 +59,30 @@ function probePort(ip, port, timeout) {
     s.on("connect", () => fin(true)); s.on("timeout", () => fin(false)); s.on("error", () => fin(false));
   });
 }
+let scanning = false;   // กันการสแกนซ้อนกัน (ถ้ารอบก่อนยังไม่เสร็จ ข้ามรอบใหม่ไปก่อน)
 async function discoverPrinters(existing) {
-  const sub = localSubnet();
-  if (!sub) { console.log("⚠️  หา subnet ไม่ได้ — ข้ามการค้นหาอัตโนมัติ"); return; }
-  console.log(`🔍 ค้นหาเครื่องพิมพ์ในเครือข่าย ${sub}.x (port 9100)...`);
-  const have = new Set((existing || []).map(p => p.ip).filter(Boolean));
-  const ips = []; for (let i = 1; i <= 254; i++) ips.push(`${sub}.${i}`);
-  const found = [];
-  for (let i = 0; i < ips.length; i += 40) {
-    const r = await Promise.all(ips.slice(i, i + 40).map(ip => probePort(ip, 9100, 1500).then(o => o ? ip : null)));
-    r.forEach(ip => { if (ip) found.push(ip); });
-  }
-  console.log(`🔍 พบอุปกรณ์เปิด port 9100: ${found.length ? found.join(", ") : "(ไม่พบ)"}`);
-  for (const ip of found) {
-    if (have.has(ip)) continue;
-    // เพิ่มเป็น "รอเพิ่ม" (active:false) — ยังไม่พิมพ์งาน จนกว่าผู้ใช้จะกด "เพิ่มใช้งาน" ในแอป
-    try { await addPrinter({ name: `เครื่องพิมพ์ ${ip}`, ip, port: 9100, type: "kitchen", branch_id: +BRANCH, active: false, description: JSON.stringify({ d: 1 }) }); console.log(`  🔍 พบเครื่องพิมพ์ใหม่: ${ip} → ไปกด "เพิ่มใช้งาน" ในแอปถ้าต้องการใช้`); }
-    catch (e) { console.log(`  ⚠️ บันทึก ${ip} ไม่สำเร็จ: ${e.message}`); }
-  }
+  if (scanning) { console.log("⏭️  ข้ามการสแกน (รอบก่อนยังทำงานอยู่)"); return; }
+  scanning = true;
+  try {
+    const sub = localSubnet();
+    if (!sub) { console.log("⚠️  หา subnet ไม่ได้ — ข้ามการค้นหาอัตโนมัติ"); return; }
+    console.log(`🔍 ค้นหาเครื่องพิมพ์ในเครือข่าย ${sub}.x (port 9100)...`);
+    const have = new Set((existing || []).map(p => p.ip).filter(Boolean));
+    const ips = []; for (let i = 1; i <= 254; i++) ips.push(`${sub}.${i}`);
+    const found = [];
+    for (let i = 0; i < ips.length; i += 40) {
+      const r = await Promise.all(ips.slice(i, i + 40).map(ip => probePort(ip, 9100, 1500).then(o => o ? ip : null)));
+      r.forEach(ip => { if (ip) found.push(ip); });
+    }
+    console.log(`🔍 พบอุปกรณ์เปิด port 9100: ${found.length ? found.join(", ") : "(ไม่พบ)"}`);
+    for (const ip of found) {
+      if (have.has(ip)) continue;
+      have.add(ip);   // กันเพิ่มซ้ำภายในรอบเดียวกัน
+      // เพิ่มเป็น "รอเพิ่ม" (active:false) — ยังไม่พิมพ์งาน จนกว่าผู้ใช้จะกด "เพิ่มใช้งาน" ในแอป
+      try { await addPrinter({ name: `เครื่องพิมพ์ ${ip}`, ip, port: 9100, type: "kitchen", branch_id: +BRANCH, active: false, description: JSON.stringify({ d: 1 }) }); console.log(`  🔍 พบเครื่องพิมพ์ใหม่: ${ip} → ไปกด "เพิ่มใช้งาน" ในแอปถ้าต้องการใช้`); }
+      catch (e) { console.log(`  ⚠️ บันทึก ${ip} ไม่สำเร็จ: ${e.message}`); }
+    }
+  } finally { scanning = false; }
 }
 
 // ── ESC/POS (พอร์ตมาจากแอป buildKitchenESC) ──────────────────────────────
@@ -202,8 +208,8 @@ async function tick() {
   console.log("\n⏳ เริ่มเฝ้าออเดอร์... (Ctrl+C เพื่อหยุด)\n");
   await tick();
   setInterval(tick, POLL_MS);
-  // สแกนหาเครื่องพิมพ์ใหม่ในวง LAN ทุก 5 นาที (เครื่องที่เสียบเพิ่มทีหลังจะถูกเพิ่มเองอัตโนมัติ)
-  setInterval(async () => { try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {} }, 5 * 60 * 1000);
+  // สแกนหาเครื่องพิมพ์ใหม่ในวง LAN ทุก 2 นาที (เครื่องที่เสียบเพิ่มทีหลังจะถูกเพิ่มเองอัตโนมัติ — เร็วพอให้ปุ่ม "ค้นหาเครื่องพิมพ์" ในแอปเห็นผลไว)
+  setInterval(async () => { try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {} }, 2 * 60 * 1000);
   // เช็คเวอร์ชันใหม่ทุก 20 นาที → อัปเดตเองโดยไม่ต้องแตะ Termux
   setInterval(checkUpdate, 20 * 60 * 1000);
   console.log(`(เวอร์ชัน agent: v${AGENT_VERSION} — จะอัปเดตเองอัตโนมัติเมื่อมีเวอร์ชันใหม่)`);

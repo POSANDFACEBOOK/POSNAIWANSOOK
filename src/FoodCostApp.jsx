@@ -9755,6 +9755,8 @@ function printKitchenWindow(item,tableNum,printer){
 //           3) catch-all printer (categories === null) → 4) any printer (fallback)
 function resolvePrinter(item,printers){
   if(!printers||printers.length===0)return null;
+  printers=printers.filter(p=>p.active!==false);   // อย่าส่งงานพิมพ์ไปเครื่องที่ยังไม่เปิดใช้งาน (เครื่องที่เพิ่งสแกนเจอ/ถูกซ่อน — categories=null จะกลายเป็น catch-all โดยไม่ตั้งใจ)
+  if(!printers.length)return null;
   if(item.printer_id){const p=printers.find(x=>x.id===+item.printer_id);if(p)return p;}
   const cat=item.category;
   if(cat){
@@ -12694,9 +12696,21 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
   const[status,setStatus]=useState({});   // id -> 'testing'|'online'|'offline'|'bt'
   const[form,setForm]=useState({name:"",ip:"",port:9100});
   const[saving,setSaving]=useState(false);
+  const[searched,setSearched]=useState(false);   // กด "ค้นหาเครื่องพิมพ์" แล้ว = แสดงทุกเครื่องในวง LAN (รวมที่เคยซ่อน/ลบ)
+  const[searching,setSearching]=useState(false);
+  const aliveRef=useRef(true);   // กันอัปเดต state หลังปิด modal (ระหว่างวนค้นหา 15 วินาที)
+  useEffect(()=>()=>{aliveRef.current=false;},[]);
   const[station,setStation]=useState(printStation||isPrintStation());
   function toggleStation(){const v=!station;setStation(v);setPrintStation(v);onTogglePrintStation&&onTogglePrintStation(v);}
-  async function load(){setLoading(true);try{const all=await api.getAllPrinters();setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}setLoading(false);}
+  async function load(){setLoading(true);try{const all=await api.getAllPrinters();if(aliveRef.current)setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}if(aliveRef.current)setLoading(false);}
+  async function loadSilent(){try{const all=await api.getAllPrinters();if(aliveRef.current)setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}}
+  async function findPrinters(){
+    setSearched(true);setSearching(true);
+    await loadSilent();
+    // ดึงซ้ำสักครู่ เพื่อรับเครื่องที่ตัวพิมพ์ (Print Agent) เพิ่งสแกนเจอในวง LAN (หยุดทันทีถ้าปิด modal)
+    for(let i=0;i<5&&aliveRef.current;i++){await new Promise(r=>setTimeout(r,3000));await loadSilent();}
+    if(aliveRef.current)setSearching(false);
+  }
   useEffect(()=>{load();},[]);
   // Ping each IP printer once the list loads (sends only ESC @ init — no paper).
   useEffect(()=>{if(!loading)printers.forEach(p=>checkStatus(p));// eslint-disable-next-line
@@ -12757,18 +12771,22 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
   };
   const activePrinters=printers.filter(p=>p.active!==false);
   const isIgnored=(p)=>{try{return JSON.parse(p.description||"{}").ig===1;}catch{return false;}};
-  const discovered=printers.filter(p=>p.active===false&&!isIgnored(p));
+  const notAdded=printers.filter(p=>p.active===false);
+  const discovered=searched?notAdded:notAdded.filter(p=>!isIgnored(p));   // กดค้นหาแล้วให้เห็นเครื่องที่เคยซ่อน/ลบด้วย
   async function addDiscovered(p){try{await api.updatePrinter(p.id,{active:true,description:""});await load();posToast("✅ เพิ่มเครื่องพิมพ์เข้าระบบแล้ว");}catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}}
   async function ignoreDiscovered(p){try{await api.updatePrinter(p.id,{description:JSON.stringify({d:1,ig:1})});await load();}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}
   return <Modal title="🖨 เครื่องพิมพ์ & สถานะการเชื่อมต่อ" onClose={onClose} wide>
     {loading?<Loading text="โหลดเครื่องพิมพ์..."/>:<>
       {/* ค้นหาเครื่องพิมพ์อัตโนมัติทำผ่านตัวพิมพ์ (Print Agent) — เบราว์เซอร์สแกน LAN เองไม่ได้ */}
       <div style={{background:C.blueLight,border:`1px solid ${C.blue}44`,borderRadius:12,padding:"12px 15px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,lineHeight:1.7}}>
-        🔍 <b>ค้นหาเครื่องพิมพ์อัตโนมัติ:</b> แค่เสียบเครื่องพิมพ์เข้าวง LAN ร้าน — <b>ตัวพิมพ์ (Print Agent)</b> จะสแกนเจอ + เพิ่มเข้าระบบให้เองทุกๆ ไม่กี่นาที (และตอนเปิด/รีสตาร์ท agent) → เครื่องที่เจอจะโผล่ในรายการข้างล่างนี้ · กด <b>"เช็คสถานะใหม่"</b> เพื่อรีโหลด แล้วตั้งชื่อ/เลือกหมวด/ลบ ได้เลย
+        🔍 <b>ค้นหาเครื่องพิมพ์อัตโนมัติ:</b> แค่เสียบเครื่องพิมพ์เข้าวง LAN ร้าน — <b>ตัวพิมพ์ (Print Agent)</b> จะสแกนเจอ + เพิ่มเข้าระบบให้เองทุกๆ ไม่กี่นาที (และตอนเปิด/รีสตาร์ท agent) → เครื่องที่เจอจะโผล่ในรายการข้างล่างนี้ · หรือกด <b>"ค้นหาเครื่องพิมพ์"</b> เพื่อแสดงทุกเครื่องในวง LAN (รวมเครื่องที่เคยซ่อน/ลบไป) แล้วเลือกเพิ่มเฉพาะที่ต้องการ
       </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>เครื่องพิมพ์ของสาขา <b style={{color:C.ink}}>{currentBranch.name}</b> ({activePrinters.length})</div>
-        <Btn v="ghost" onClick={()=>printers.forEach(p=>checkStatus(p))} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>เช็คสถานะใหม่</Btn>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <Btn v="info" onClick={findPrinters} disabled={searching} icon={I.search} s={{padding:"6px 12px",fontSize:12}}>{searching?"⟳ กำลังค้นหา...":"ค้นหาเครื่องพิมพ์"}</Btn>
+          <Btn v="ghost" onClick={()=>printers.forEach(p=>checkStatus(p))} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>เช็คสถานะใหม่</Btn>
+        </div>
       </div>
       {activePrinters.length===0?<div style={{textAlign:"center",padding:"28px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif",background:C.bg,borderRadius:12,marginBottom:14}}><Ic d={I.print} s={40} c={C.line}/><p style={{marginTop:8,fontSize:13}}>ยังไม่มีเครื่องพิมพ์ที่ใช้งาน — เพิ่มจาก "พบในเครือข่าย" ด้านล่าง หรือใส่ IP เอง</p></div>
       :<div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
@@ -12781,21 +12799,23 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
           <span style={{fontSize:11.5,fontWeight:800,color:sv.c,background:sv.bg,border:`1px solid ${sv.c}44`,borderRadius:20,padding:"3px 12px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{sv.t}</span>
           <button onClick={()=>checkStatus(p)} style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2}}>เช็ค</button>
           <button onClick={()=>testPrint(p)} title="พิมพ์หน้าทดสอบจริง — ยืนยันชัวร์ที่สุด" style={{background:C.brand,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,color:C.white}}>🧾 ทดสอบพิมพ์</button>
-          <button onClick={async()=>{if(await confirmDlg({title:`🗑 ลบเครื่องพิมพ์ "${p.name}"?`,message:`นำเครื่องพิมพ์ "${p.name}" (${p.ip||"-"}) ออกจากระบบ?\n\n⚠️ เมนูที่ส่งมาเครื่องนี้จะไม่ถูกพิมพ์จนกว่าจะตั้งเครื่องใหม่`,confirmLabel:"ลบเครื่องพิมพ์",cancelLabel:"ยกเลิก",danger:true})){try{await api.deletePrinter(p.id);await load();posToast("ลบเครื่องพิมพ์แล้ว");}catch(e){alert("ลบไม่สำเร็จ: "+(e&&e.message||e));}}}} title="ลบเครื่องพิมพ์" style={{background:C.redLight,border:`1px solid #FCA5A5`,borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={14} c={C.red}/></button>
+          <button onClick={async()=>{if(await confirmDlg({title:`🗑 นำเครื่องพิมพ์ "${p.name}" ออก?`,message:`นำเครื่องพิมพ์ "${p.name}" (${p.ip||"-"}) ออกจากการใช้งาน?\n\n⚠️ เมนูที่ส่งมาเครื่องนี้จะไม่ถูกพิมพ์จนกว่าจะเพิ่มกลับ\n\n💡 นำกลับมาได้ทุกเมื่อด้วยปุ่ม "ค้นหาเครื่องพิมพ์"`,confirmLabel:"นำออก",cancelLabel:"ยกเลิก",danger:true})){try{await api.updatePrinter(p.id,{active:false,description:JSON.stringify({d:1,ig:1})});await load();posToast("นำเครื่องพิมพ์ออกแล้ว — กด \"ค้นหาเครื่องพิมพ์\" เพื่อนำกลับ");}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}}} title="นำเครื่องพิมพ์ออก (นำกลับได้ด้วยปุ่มค้นหา)" style={{background:C.redLight,border:`1px solid #FCA5A5`,borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={14} c={C.red}/></button>
         </div>;})}
       </div>}
-      {discovered.length>0&&<div style={{background:"#EFF6FF",border:`1px solid ${C.blue}44`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
-        <div style={{fontSize:13,fontWeight:800,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>🔍 พบในเครือข่าย ({discovered.length}) — แตะ "เพิ่มใช้งาน" เฉพาะเครื่องที่ต้องการ</div>
-        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {discovered.map(p=><div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:`1px solid ${C.blue}33`,borderRadius:10,background:C.white,flexWrap:"wrap"}}>
+      {(discovered.length>0||searched)&&<div style={{background:"#EFF6FF",border:`1px solid ${C.blue}44`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+        <div style={{fontSize:13,fontWeight:800,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginBottom:searched?4:8}}>{searched?`🔍 ผลการค้นหาในเครือข่าย (${discovered.length})`:`🔍 พบในเครือข่าย (${discovered.length}) — แตะ "เพิ่มใช้งาน" เฉพาะเครื่องที่ต้องการ`}</div>
+        {searched&&<div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:8,lineHeight:1.6}}>แสดงทุกเครื่องที่พบในวง LAN รวมเครื่องที่<b>เคยซ่อน/ลบ</b>ไปแล้ว · เครื่องที่ <b>เพิ่มในระบบแล้ว</b> อยู่ด้านบน (กดเพิ่มซ้ำไม่ได้) · เครื่องที่ปิดอยู่/ไม่ได้ต่อสายจะไม่แสดง</div>}
+        {discovered.length===0?<div style={{fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center",padding:"12px 6px",lineHeight:1.7,whiteSpace:"pre-line"}}>{searching?"⟳ กำลังค้นหาเครื่องพิมพ์ในวง LAN...":"ไม่พบเครื่องพิมพ์อื่นในเครือข่าย\n(เครื่องที่เพิ่มแล้วอยู่ด้านบน · เครื่องที่ปิดอยู่/ไม่ได้ต่อสายจะไม่แสดง)\n\nเพิ่งเสียบเครื่องใหม่? ตัวพิมพ์สแกนเองทุก ~2 นาที — รอสักครู่แล้วกด \"ค้นหาเครื่องพิมพ์\" อีกครั้ง"}</div>
+        :<div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {discovered.map(p=>{const ig=isIgnored(p);return <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:`1px solid ${C.blue}33`,borderRadius:10,background:C.white,flexWrap:"wrap"}}>
             <div style={{minWidth:0,flex:1}}>
-              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:700,color:C.ink}}>{p.ip}:{p.port||9100}</div>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:700,color:C.ink}}>{p.ip}:{p.port||9100}{ig&&<span style={{marginLeft:8,fontSize:10.5,fontWeight:700,color:C.ink4,background:C.bg,border:`1px solid ${C.line}`,borderRadius:20,padding:"1px 8px",whiteSpace:"nowrap"}}>เคยซ่อนไว้</span>}</div>
               <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4}}>พบเครื่องพิมพ์ในวง LAN — ยังไม่ได้ใช้งาน</div>
             </div>
             <button onClick={()=>addDiscovered(p)} style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:8,padding:"7px 14px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,color:C.white,whiteSpace:"nowrap"}}>➕ เพิ่มใช้งาน</button>
-            <button onClick={()=>ignoreDiscovered(p)} title="ไม่ใช้เครื่องนี้ (ซ่อนออกจากรายการ)" style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>🙈 ซ่อน</button>
-          </div>)}
-        </div>
+            {!ig&&<button onClick={()=>ignoreDiscovered(p)} title="ไม่ใช้เครื่องนี้ (ซ่อนออกจากรายการ)" style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"7px 10px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>🙈 ซ่อน</button>}
+          </div>;})}
+        </div>}
       </div>}
       <div style={{background:C.bg,border:`1px dashed ${C.line}`,borderRadius:12,padding:"14px 16px"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}>➕ เพิ่มเครื่องพิมพ์ (เครือข่าย / IP) ด้วยตัวเอง</div>
