@@ -12439,7 +12439,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
                   const catMenus=menusInCat(c);
                   const isOpen=openCats.has(c);
                   const pinnedHereCount=catMenus.filter(m=>{const cur=catMenuOverride[m.id];return cur!=null&&+cur===+catEditP.id;}).length;
-                  return <div key={c} style={{border:`1.5px solid ${has?C.brandBorder:C.line}`,borderRadius:10,overflow:"hidden",background:has?C.brandLight:C.white,transition:"all .15s"}}>
+                  return <div key={c} style={{border:`1.5px solid ${has?C.brandBorder:C.line}`,borderRadius:10,overflow:"hidden",background:has?C.brandLight:C.white,transition:"all .15s",flexShrink:0}}>
                     {/* Category header */}
                     <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px"}}>
                       <input type="checkbox" checked={has} onChange={()=>toggleCat(c)} style={{accentColor:C.brand,width:17,height:17,cursor:"pointer",flexShrink:0}}/>
