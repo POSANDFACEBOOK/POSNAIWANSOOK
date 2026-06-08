@@ -12,6 +12,7 @@
 const net = require("net");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
@@ -30,6 +31,42 @@ async function sb(query) {
 }
 const getActiveOrders = () => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${BRANCH}`);
 const getPrinters = () => sb(`printers?order=id.asc`);
+const addPrinter = (d) => fetch(`${SUPA_URL}/rest/v1/printers`, { method: "POST", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
+
+// ── ค้นหาเครื่องพิมพ์อัตโนมัติในวงเครือข่าย (เหมือนสแกน WiFi) ──────────────
+function localSubnet() {
+  const ifs = os.networkInterfaces();
+  for (const name in ifs) for (const i of ifs[name]) {
+    if (i.family === "IPv4" && !i.internal) { const p = i.address.split("."); if (p.length === 4) return p.slice(0, 3).join("."); }
+  }
+  return null;
+}
+function probePort(ip, port, timeout) {
+  return new Promise(resolve => {
+    const s = net.createConnection({ host: ip, port }); let done = false;
+    const fin = open => { if (!done) { done = true; try { s.destroy(); } catch {} resolve(open); } };
+    s.setTimeout(timeout);
+    s.on("connect", () => fin(true)); s.on("timeout", () => fin(false)); s.on("error", () => fin(false));
+  });
+}
+async function discoverPrinters(existing) {
+  const sub = localSubnet();
+  if (!sub) { console.log("⚠️  หา subnet ไม่ได้ — ข้ามการค้นหาอัตโนมัติ"); return; }
+  console.log(`🔍 ค้นหาเครื่องพิมพ์ในเครือข่าย ${sub}.x (port 9100)...`);
+  const have = new Set((existing || []).map(p => p.ip).filter(Boolean));
+  const ips = []; for (let i = 1; i <= 254; i++) ips.push(`${sub}.${i}`);
+  const found = [];
+  for (let i = 0; i < ips.length; i += 40) {
+    const r = await Promise.all(ips.slice(i, i + 40).map(ip => probePort(ip, 9100, 1500).then(o => o ? ip : null)));
+    r.forEach(ip => { if (ip) found.push(ip); });
+  }
+  console.log(`🔍 พบอุปกรณ์เปิด port 9100: ${found.length ? found.join(", ") : "(ไม่พบ)"}`);
+  for (const ip of found) {
+    if (have.has(ip)) continue;
+    try { await addPrinter({ name: `เครื่องพิมพ์ ${ip}`, ip, port: 9100, type: "kitchen", branch_id: +BRANCH, active: true, description: "" }); console.log(`  ➕ เพิ่มเครื่องพิมพ์ใหม่อัตโนมัติ: ${ip} (ไปตั้งชื่อ/หมวดในแอปได้)`); }
+    catch (e) { console.log(`  ⚠️ เพิ่ม ${ip} ไม่สำเร็จ: ${e.message}`); }
+  }
+}
 
 // ── ESC/POS (พอร์ตมาจากแอป buildKitchenESC) ──────────────────────────────
 function optionsText(opts) { return (opts || []).map(o => o && o.name).filter(Boolean).join(", "); }
@@ -140,7 +177,9 @@ async function tick() {
   console.log(" สาขา (branch):", BRANCH);
   console.log("════════════════════════════════════════");
   try {
-    const printers = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH);
+    let printers = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH);
+    await discoverPrinters(printers);                       // สแกนวง → เพิ่มเครื่องพิมพ์ใหม่อัตโนมัติ
+    printers = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH);  // โหลดใหม่รวมที่เพิ่ง add
     console.log(`พบเครื่องพิมพ์ ${printers.length} เครื่อง:`);
     for (const p of printers) console.log(`  • ${p.name} — ${isBluetooth(p) ? "บลูทูธ (ข้าม)" : (p.ip || "ไม่มี IP") + ":" + (p.port || 9100)}`);
     console.log("— ทดสอบพิมพ์ตอนเริ่ม —");
