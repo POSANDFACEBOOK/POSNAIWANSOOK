@@ -12715,9 +12715,12 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
   // Ping each IP printer once the list loads (sends only ESC @ init — no paper).
   useEffect(()=>{if(!loading)printers.forEach(p=>checkStatus(p));// eslint-disable-next-line
   },[loading]);
+  // เปิดผ่าน https (Vercel/iPad) → เบราว์เซอร์ต่อ http://printer:9100 ไม่ได้ (mixed content) → เช็ค/ทดสอบฝั่งเบราว์เซอร์ใช้ไม่ได้ จึงให้ตัวพิมพ์ (agent) จัดการแทน
+  const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
   async function checkStatus(p){
     const conn=getPConn(p);
     if(conn.type==="bluetooth"){setStatus(s=>({...s,[p.id]:"bt"}));return;}
+    if(isHttps){setStatus(s=>({...s,[p.id]:"agent"}));return;}   // iPad/https เช็คตรงไม่ได้ — พิมพ์จริงผ่านตัวพิมพ์ (agent)
     setStatus(s=>({...s,[p.id]:"testing"}));
     const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),6000);
     try{
@@ -12737,6 +12740,11 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
       setStatus(s=>({...s,[p.id]:"testing"}));
       try{await btPrint(buildTestPageESC(p.name),conn.btName);setStatus(s=>({...s,[p.id]:"online"}));posToast("🧾 ส่งหน้าทดสอบทางบลูทูธแล้ว — ดูว่ามีกระดาษออกไหม","ok");}
       catch(e){setStatus(s=>({...s,[p.id]:"offline"}));alert("❌ พิมพ์ทดสอบไม่สำเร็จ: "+(e.message||""));}
+      return;
+    }
+    if(isHttps){   // iPad/https สั่งพิมพ์ตรงไม่ได้ — ตัวพิมพ์ (agent) จะพิมพ์หน้าทดสอบให้เองเมื่อเพิ่มเครื่อง
+      setStatus(s=>({...s,[p.id]:"agent"}));
+      alert("📟 iPad/มือถือ สั่งพิมพ์ทดสอบตรงๆ ไม่ได้ (ข้อจำกัดของ Safari/เว็บ)\n\n✅ ระบบพิมพ์จริงผ่าน \"ตัวพิมพ์ (Print Agent)\" ที่ร้านอยู่แล้ว — เมื่อกด \"เพิ่มใช้งาน\" เครื่องใหม่ ตัวพิมพ์จะพิมพ์หน้าทดสอบให้เองภายในไม่กี่วินาที\n\nวิธีเช็คชัวร์: ดูว่ามีกระดาษหน้าทดสอบออกจากเครื่องนี้ไหม · หรือลองสั่งออเดอร์จริง 1 รายการ");
       return;
     }
     setStatus(s=>({...s,[p.id]:"testing"}));
@@ -12765,6 +12773,7 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
     if(st==="testing")return{c:C.yellow,bg:"#FFFBEB",t:"กำลังเช็ค..."};
     if(st==="online")return{c:C.green,bg:C.greenLight,t:"เชื่อมต่อได้"};
     if(st==="bt")return{c:C.purple,bg:C.purpleLight,t:"บลูทูธ"};
+    if(st==="agent")return{c:C.blue,bg:C.blueLight,t:"พิมพ์ผ่านตัวพิมพ์ (agent)"};
     if(st==="offline")return{c:C.red,bg:C.redLight,t:"ออฟไลน์ · ติดต่อไม่ได้"};
     if(st==="unknown")return{c:"#D97706",bg:"#FFFBEB",t:"ไม่ยืนยัน · กดทดสอบพิมพ์"};
     return{c:C.ink4,bg:C.bg,t:"ยังไม่เช็ค"};
@@ -12828,7 +12837,9 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,marginTop:8,lineHeight:1.6}}>💡 ใช้เครื่องพิมพ์ความร้อนที่ต่อ LAN/WiFi · พอร์ตมาตรฐานคือ 9100 · ตั้งหมวดหมู่/เลือกเมนูให้แต่ละเครื่องได้ที่ "จัดการหลังบ้าน → เครื่องพิมพ์"</div>
       </div>
       <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#92400E",background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:10,padding:"10px 13px",marginTop:12,lineHeight:1.7}}>
-        ⚠️ <b>"เช็ค"</b> เป็นการเดาเบื้องต้นเท่านั้น — เครื่องพิมพ์ความร้อนไม่ตอบกลับแบบเว็บ ระบบจึงยืนยันเองไม่ได้ 100% (เห็น "ไม่ยืนยัน" = ตอบไม่ชัด · "ออฟไลน์" = ติดต่อไม่ได้แน่ๆ) · <b>วิธีเช็คชัวร์ที่สุดคือกด "🧾 ทดสอบพิมพ์" แล้วดูว่ามีกระดาษออกจริงไหม</b>
+        {isHttps
+          ?<>📟 <b>iPad/มือถือ เช็ค & ทดสอบพิมพ์ผ่านปุ่มนี้ไม่ได้</b> — Safari ต่อเครื่องพิมพ์ LAN ตรงๆ ไม่ได้ (จึงขึ้น <b>"พิมพ์ผ่านตัวพิมพ์ (agent)"</b>) · <b>การพิมพ์จริงทำผ่าน "ตัวพิมพ์ (Print Agent)" ที่ร้าน</b> · เมื่อกด <b>"เพิ่มใช้งาน"</b> เครื่องใหม่ ตัวพิมพ์จะพิมพ์หน้าทดสอบให้เองภายในไม่กี่วินาที — ถ้ามีกระดาษออก = ใช้งานได้จริง · หรือลองสั่งออเดอร์จริงเพื่อทดสอบ</>
+          :<>⚠️ <b>"เช็ค"</b> เป็นการเดาเบื้องต้นเท่านั้น — เครื่องพิมพ์ความร้อนไม่ตอบกลับแบบเว็บ ระบบจึงยืนยันเองไม่ได้ 100% (เห็น "ไม่ยืนยัน" = ตอบไม่ชัด · "ออฟไลน์" = ติดต่อไม่ได้แน่ๆ) · <b>วิธีเช็คชัวร์ที่สุดคือกด "🧾 ทดสอบพิมพ์" แล้วดูว่ามีกระดาษออกจริงไหม</b></>}
       </div>
     </>}
   </Modal>;

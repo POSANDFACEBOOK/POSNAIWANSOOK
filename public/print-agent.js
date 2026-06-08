@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 5;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 6;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -128,8 +128,9 @@ function sendToPrinter(ip, port, buf) {
 }
 
 // ── สถานะ: ออเดอร์/รายการที่พิมพ์ไปแล้ว (กันพิมพ์ซ้ำ) ──────────────────────
-let state = { sig: {}, init: {} };
+let state = { sig: {}, init: {}, greeted: {} };
 try { if (fs.existsSync(STATE_FILE)) state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {}
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {};
 let primed = fs.existsSync(STATE_FILE);   // มีไฟล์อยู่แล้ว = ไม่ต้อง prime ใหม่
 function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch {} }
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
@@ -188,6 +189,26 @@ async function tick() {
   saveState();
 }
 
+// พิมพ์หน้าทดสอบให้ "เครื่องที่เพิ่งเปิดใช้งาน" อัตโนมัติ — กด "เพิ่มใช้งาน" ในแอปแล้วมีกระดาษออกเองภายในไม่กี่วินาที
+// จำว่าเครื่องไหนทดสอบไปแล้ว (state.greeted) เพื่อไม่พิมพ์ซ้ำทุกครั้งที่รีสตาร์ท · เครื่องที่ถูกนำออกแล้วเพิ่มกลับ จะทดสอบใหม่
+async function greetNewPrinters() {
+  try {
+    const all = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH);
+    if (!state.greeted) state.greeted = {};
+    const activeIds = new Set(all.filter(p => p.active !== false).map(p => String(p.id)));
+    for (const k of Object.keys(state.greeted)) if (!activeIds.has(String(k))) delete state.greeted[k];
+    for (const p of all) {
+      if (p.active === false || isBluetooth(p) || !p.ip || state.greeted[p.id]) continue;
+      try {
+        await sendToPrinter(p.ip, p.port, testPageESC());
+        state.greeted[p.id] = 1; saveState();
+        console.log(`  🧾 หน้าทดสอบ → ${p.name} (${p.ip}) [เครื่องที่เพิ่งเพิ่ม] — ดูว่ามีกระดาษออกไหม`);
+      } catch (e) { /* ออฟไลน์/ติดต่อไม่ได้ — ลองใหม่รอบหน้า (ยังไม่ทำเครื่องหมายว่าทดสอบแล้ว) */ }
+    }
+    saveState();
+  } catch {}
+}
+
 (async () => {
   console.log("════════════════════════════════════════");
   console.log(" FOODCOST — ตัวพิมพ์ผ่านคลาวด์ (Print Agent)");
@@ -199,15 +220,14 @@ async function tick() {
     printers = (await getPrinters()).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false);  // ใช้เฉพาะที่เปิดใช้งาน
     console.log(`เครื่องพิมพ์ที่ใช้งาน ${printers.length} เครื่อง:`);
     for (const p of printers) console.log(`  • ${p.name} — ${isBluetooth(p) ? "บลูทูธ (ข้าม)" : (p.ip || "ไม่มี IP") + ":" + (p.port || 9100)}`);
-    console.log("— ทดสอบพิมพ์ตอนเริ่ม —");
-    for (const p of printers) if (!isBluetooth(p) && p.ip) {
-      try { await sendToPrinter(p.ip, p.port, testPageESC()); console.log(`  🧾 ส่งทดสอบ → ${p.name} (${p.ip}) — ดูว่ามีกระดาษออกไหม`); }
-      catch (e) { console.log(`  ❌ ทดสอบ → ${p.name} (${p.ip}): ${e.message}`); }
-    }
+    console.log("— ทดสอบพิมพ์เครื่องที่เปิดใช้งาน (ครั้งเดียวต่อเครื่อง) —");
+    await greetNewPrinters();
   } catch (e) { console.log("⚠️ โหลดเครื่องพิมพ์ไม่ได้:", e.message); }
   console.log("\n⏳ เริ่มเฝ้าออเดอร์... (Ctrl+C เพื่อหยุด)\n");
   await tick();
   setInterval(tick, POLL_MS);
+  // พิมพ์หน้าทดสอบให้เครื่องที่ "เพิ่งกดเพิ่มใช้งาน" อัตโนมัติ ทุก 30 วินาที
+  setInterval(greetNewPrinters, 30 * 1000);
   // สแกนหาเครื่องพิมพ์ใหม่ในวง LAN ทุก 2 นาที (เครื่องที่เสียบเพิ่มทีหลังจะถูกเพิ่มเองอัตโนมัติ — เร็วพอให้ปุ่ม "ค้นหาเครื่องพิมพ์" ในแอปเห็นผลไว)
   setInterval(async () => { try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {} }, 2 * 60 * 1000);
   // เช็คเวอร์ชันใหม่ทุก 20 นาที → อัปเดตเองโดยไม่ต้องแตะ Termux
