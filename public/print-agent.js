@@ -16,6 +16,8 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
+const AGENT_VERSION = 4;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
 const STATE_FILE = path.join(process.env.HOME || ".", ".foodcost-printed.json");
@@ -28,6 +30,14 @@ async function sb(query) {
   if (!res.ok) throw new Error(await res.text());
   const txt = await res.text();
   return txt ? JSON.parse(txt) : [];
+}
+// เช็คเวอร์ชันใหม่จากเซิร์ฟเวอร์ทุก 20 นาที — ถ้ามีใหม่กว่า → ออก (ตัว launcher จะโหลดใหม่+รันใหม่เอง)
+async function checkUpdate() {
+  try {
+    const txt = await (await fetch(`${AGENT_URL}?_=${Date.now()}`)).text();
+    const m = txt.match(/AGENT_VERSION\s*=\s*(\d+)/);
+    if (m && +m[1] > AGENT_VERSION) { console.log(`⬆️  พบเวอร์ชันใหม่ (v${m[1]}) — อัปเดต+รีสตาร์ทอัตโนมัติ...`); process.exit(0); }
+  } catch {}
 }
 const getActiveOrders = () => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${BRANCH}`);
 const getPrinters = () => sb(`printers?order=id.asc`);
@@ -194,4 +204,7 @@ async function tick() {
   setInterval(tick, POLL_MS);
   // สแกนหาเครื่องพิมพ์ใหม่ในวง LAN ทุก 5 นาที (เครื่องที่เสียบเพิ่มทีหลังจะถูกเพิ่มเองอัตโนมัติ)
   setInterval(async () => { try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {} }, 5 * 60 * 1000);
+  // เช็คเวอร์ชันใหม่ทุก 20 นาที → อัปเดตเองโดยไม่ต้องแตะ Termux
+  setInterval(checkUpdate, 20 * 60 * 1000);
+  console.log(`(เวอร์ชัน agent: v${AGENT_VERSION} — จะอัปเดตเองอัตโนมัติเมื่อมีเวอร์ชันใหม่)`);
 })();
