@@ -12182,18 +12182,21 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
   const[catSaving,setCatSaving]=useState(false);
   const[openCats,setOpenCats]=useState(()=>new Set());  // category names expanded to show per-menu checkboxes
   function toggleOpenCat(c){setOpenCats(prev=>{const n=new Set(prev);if(n.has(c))n.delete(c);else n.add(c);return n;});}
-  // หมวดหมู่สำหรับ routing = รวมทั้ง global m.category (เดิม) + ทุกหมวดต่อสาขา (local_categories)
-  // เพราะทั้งระบบจัดเมนูเข้าหมวดด้วย local_categories[branch] — ช่อง global มักว่าง/มีค่าขยะ
+  // แสดงเฉพาะหมวดที่ "สาขาของเครื่องพิมพ์นี้สร้างไว้" (local_categories[branch]) เท่านั้น
+  // สาขาไหนยังไม่ได้สร้างหมวด → ว่าง (ขึ้นข้อความให้ไปสร้างก่อน) · เครื่อง branch=null = รวมทุกสาขา
   const allCategories=useMemo(()=>{
+    if(!catEditP)return [];
+    const bid=catEditP.branch_id;
     const s=new Set();
     menus.forEach(m=>{
-      if(m.category&&String(m.category).trim())s.add(String(m.category).trim());
-      Object.values(m.local_categories||{}).forEach(v=>{if(v&&String(v).trim())s.add(String(v).trim());});
+      const lc=m.local_categories||{};
+      if(bid!=null){const v=lc[bid];if(v&&String(v).trim())s.add(String(v).trim());}
+      else Object.values(lc).forEach(v=>{if(v&&String(v).trim())s.add(String(v).trim());});
     });
     return [...s].sort();
-  },[menus]);
-  // เมนูในหมวด c (เทียบทั้ง global และ local)
-  const menusInCat=(c)=>menus.filter(m=>m.category===c||Object.values(m.local_categories||{}).includes(c));
+  },[menus,catEditP]);
+  // เมนูในหมวด c (เทียบจาก local_categories ของสาขานั้น)
+  const menusInCat=(c)=>menus.filter(m=>{const lc=m.local_categories||{};return (catEditP&&catEditP.branch_id!=null)?lc[catEditP.branch_id]===c:Object.values(lc).includes(c);});
   function openCatEdit(p){
     setCatEditP(p);
     setCatSel(p.categories===undefined||p.categories===null?null:[...p.categories]);
