@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 6;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 7;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -91,7 +91,7 @@ function isBluetooth(p) { try { return JSON.parse(p.description || "{}").c === "
 function resolvePrinter(item, printers) {
   if (!printers || !printers.length) return null;
   if (item.printer_id) { const p = printers.find(x => x.id === +item.printer_id); if (p) return p; }
-  if (item.category) { const byCat = printers.find(p => Array.isArray(p.categories) && p.categories.includes(item.category)); if (byCat) return byCat; }
+  if (item.category) { const c = String(item.category).trim(); const byCat = printers.find(p => Array.isArray(p.categories) && p.categories.some(x => String(x).trim() === c)); if (byCat) return byCat; }
   return printers.find(p => p.categories === null || p.categories === undefined) || null;
 }
 function buildKitchenESC(item, tableNum) {

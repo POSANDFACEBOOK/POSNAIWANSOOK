@@ -9760,7 +9760,8 @@ function resolvePrinter(item,printers){
   if(item.printer_id){const p=printers.find(x=>x.id===+item.printer_id);if(p)return p;}
   const cat=item.category;
   if(cat){
-    const byCat=printers.find(p=>Array.isArray(p.categories)&&p.categories.includes(cat));
+    const c=String(cat).trim();   // เทียบแบบตัดช่องว่างหัวท้าย กันชื่อหมวดมีเว้นวรรคเกินแล้วจับคู่ไม่ติด
+    const byCat=printers.find(p=>Array.isArray(p.categories)&&p.categories.some(x=>String(x).trim()===c));
     if(byCat)return byCat;
   }
   // catch-all: categories is null/undefined (NOT [] which means opt-out)
@@ -12679,7 +12680,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
     </Modal>}
-    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} onClose={()=>setShowPrinters(false)} printStation={printStation} onTogglePrintStation={(v)=>setPS(v)}/>}
+    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} onClose={()=>setShowPrinters(false)} printStation={printStation} onTogglePrintStation={(v)=>setPS(v)}/>}
   </div>;
 }
 
@@ -12689,7 +12690,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
 // Lightweight printer panel for cashiers: see each printer online/offline and
 // add a network printer by typing its IP. (Full routing/categories stay in the
 // manager back office.)
-function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePrintStation}){
+function PrinterStatusModal({currentBranch,menus=[],onClose,printStation=false,onTogglePrintStation}){
   const lbl={display:"block",fontSize:12,fontWeight:600,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
   const[printers,setPrinters]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -12698,6 +12699,10 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
   const[saving,setSaving]=useState(false);
   const[searched,setSearched]=useState(false);   // กด "ค้นหาเครื่องพิมพ์" แล้ว = แสดงทุกเครื่องในวง LAN (รวมที่เคยซ่อน/ลบ)
   const[searching,setSearching]=useState(false);
+  const[settingsId,setSettingsId]=useState(null);   // เครื่องที่กำลังเปิด "ตั้งค่าการพิมพ์"
+  const[sName,setSName]=useState("");                // ชื่อที่กำลังแก้
+  const[sCats,setSCats]=useState(null);              // null=พิมพ์ทุกหมวด(catch-all) · []/[ชื่อ]=เฉพาะหมวด
+  const[sSaving,setSSaving]=useState(false);
   const aliveRef=useRef(true);   // กันอัปเดต state หลังปิด modal (ระหว่างวนค้นหา 15 วินาที)
   useEffect(()=>()=>{aliveRef.current=false;},[]);
   const[station,setStation]=useState(printStation||isPrintStation());
@@ -12784,6 +12789,24 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
   const discovered=searched?notAdded:notAdded.filter(p=>!isIgnored(p));   // กดค้นหาแล้วให้เห็นเครื่องที่เคยซ่อน/ลบด้วย
   async function addDiscovered(p){try{await api.updatePrinter(p.id,{active:true,description:""});await load();posToast("✅ เพิ่มเครื่องพิมพ์เข้าระบบแล้ว");}catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}}
   async function ignoreDiscovered(p){try{await api.updatePrinter(p.id,{description:JSON.stringify({d:1,ig:1})});await load();}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}
+  // หมวดหมู่ที่ "จะปรากฏบนออเดอร์จริง" ของสาขานี้ = local_categories[สาขา] || category(global) ของแต่ละเมนู
+  const branchCategories=useMemo(()=>{
+    const bid=currentBranch&&currentBranch.id;const s=new Set();
+    (menus||[]).forEach(m=>{const lc=m.local_categories||{};const eff=(lc[bid]&&String(lc[bid]).trim())?String(lc[bid]).trim():((m.category&&String(m.category).trim())?String(m.category).trim():null);if(eff)s.add(eff);});
+    return [...s].sort();
+  },[menus,currentBranch]);
+  function openSettings(p){
+    if(settingsId===p.id){setSettingsId(null);return;}   // กดซ้ำ = ปิด
+    setSettingsId(p.id);setSName(p.name||"");setSCats(p.categories===undefined||p.categories===null?null:[...p.categories]);
+  }
+  function toggleSCat(c){setSCats(prev=>{const cur=prev===null?[]:prev;return cur.includes(c)?cur.filter(x=>x!==c):[...cur,c];});}
+  async function saveSettings(p){
+    const name=(sName||"").trim();if(!name)return alert("ใส่ชื่อเครื่องพิมพ์");
+    setSSaving(true);
+    try{await api.updatePrinter(p.id,{name,categories:sCats});await load();setSettingsId(null);posToast("บันทึกการตั้งค่าเครื่องพิมพ์แล้ว");}
+    catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
+    setSSaving(false);
+  }
   return <Modal title="🖨 เครื่องพิมพ์ & สถานะการเชื่อมต่อ" onClose={onClose} wide>
     {loading?<Loading text="โหลดเครื่องพิมพ์..."/>:<>
       {/* ค้นหาเครื่องพิมพ์อัตโนมัติทำผ่านตัวพิมพ์ (Print Agent) — เบราว์เซอร์สแกน LAN เองไม่ได้ */}
@@ -12799,16 +12822,39 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
       </div>
       {activePrinters.length===0?<div style={{textAlign:"center",padding:"28px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif",background:C.bg,borderRadius:12,marginBottom:14}}><Ic d={I.print} s={40} c={C.line}/><p style={{marginTop:8,fontSize:13}}>ยังไม่มีเครื่องพิมพ์ที่ใช้งาน — เพิ่มจาก "พบในเครือข่าย" ด้านล่าง หรือใส่ IP เอง</p></div>
       :<div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
-        {activePrinters.map(p=>{const conn=getPConn(p);const sv=stView(status[p.id]);return <div key={p.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap"}}>
-          <span style={{width:11,height:11,borderRadius:"50%",background:sv.c,flexShrink:0,boxShadow:status[p.id]==="online"?`0 0 0 3px ${C.green}33`:"none"}}/>
-          <div style={{minWidth:0,flex:1}}>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{p.name}</div>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink4}}>{conn.type==="bluetooth"?`บลูทูธ${conn.btName?" · "+conn.btName:""}`:`${p.ip||"-"}:${p.port||9100}`}</div>
+        {activePrinters.map(p=>{const conn=getPConn(p);const sv=stView(status[p.id]);const open=settingsId===p.id;const catLabel=(p.categories===undefined||p.categories===null)?"ทุกหมวด":(p.categories.length?p.categories.join(", "):"— ยังไม่กำหนด —");return <div key={p.id} style={{border:`1px solid ${open?C.blue:C.line}`,borderRadius:12,background:C.white,overflow:"hidden"}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",flexWrap:"wrap"}}>
+            <span style={{width:11,height:11,borderRadius:"50%",background:sv.c,flexShrink:0,boxShadow:status[p.id]==="online"?`0 0 0 3px ${C.green}33`:"none"}}/>
+            <div style={{minWidth:0,flex:1}}>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{p.name}</div>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink4}}>{conn.type==="bluetooth"?`บลูทูธ${conn.btName?" · "+conn.btName:""}`:`${p.ip||"-"}:${p.port||9100}`} · พิมพ์: {catLabel}</div>
+            </div>
+            <span style={{fontSize:11.5,fontWeight:800,color:sv.c,background:sv.bg,border:`1px solid ${sv.c}44`,borderRadius:20,padding:"3px 12px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{sv.t}</span>
+            <button onClick={()=>openSettings(p)} title="ตั้งค่าชื่อ + หมวดหมู่ที่พิมพ์ออกเครื่องนี้" style={{background:open?C.blue:C.bg,border:`1px solid ${open?C.blue:C.line}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:open?C.white:C.ink2,whiteSpace:"nowrap"}}>⚙️ ตั้งค่าการพิมพ์ {open?"▲":"▼"}</button>
+            <button onClick={()=>testPrint(p)} title="พิมพ์หน้าทดสอบจริง — ยืนยันชัวร์ที่สุด" style={{background:C.brand,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,color:C.white,whiteSpace:"nowrap"}}>🧾 ทดสอบพิมพ์</button>
+            <button onClick={async()=>{if(await confirmDlg({title:`🗑 นำเครื่องพิมพ์ "${p.name}" ออก?`,message:`นำเครื่องพิมพ์ "${p.name}" (${p.ip||"-"}) ออกจากการใช้งาน?\n\n⚠️ เมนูที่ส่งมาเครื่องนี้จะไม่ถูกพิมพ์จนกว่าจะเพิ่มกลับ\n\n💡 นำกลับมาได้ทุกเมื่อด้วยปุ่ม "ค้นหาเครื่องพิมพ์"`,confirmLabel:"นำออก",cancelLabel:"ยกเลิก",danger:true})){try{await api.updatePrinter(p.id,{active:false,description:JSON.stringify({d:1,ig:1})});await load();posToast("นำเครื่องพิมพ์ออกแล้ว — กด \"ค้นหาเครื่องพิมพ์\" เพื่อนำกลับ");}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}}} title="นำเครื่องพิมพ์ออก (นำกลับได้ด้วยปุ่มค้นหา)" style={{background:C.redLight,border:`1px solid #FCA5A5`,borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={14} c={C.red}/></button>
           </div>
-          <span style={{fontSize:11.5,fontWeight:800,color:sv.c,background:sv.bg,border:`1px solid ${sv.c}44`,borderRadius:20,padding:"3px 12px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{sv.t}</span>
-          <button onClick={()=>checkStatus(p)} style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2}}>เช็ค</button>
-          <button onClick={()=>testPrint(p)} title="พิมพ์หน้าทดสอบจริง — ยืนยันชัวร์ที่สุด" style={{background:C.brand,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,color:C.white}}>🧾 ทดสอบพิมพ์</button>
-          <button onClick={async()=>{if(await confirmDlg({title:`🗑 นำเครื่องพิมพ์ "${p.name}" ออก?`,message:`นำเครื่องพิมพ์ "${p.name}" (${p.ip||"-"}) ออกจากการใช้งาน?\n\n⚠️ เมนูที่ส่งมาเครื่องนี้จะไม่ถูกพิมพ์จนกว่าจะเพิ่มกลับ\n\n💡 นำกลับมาได้ทุกเมื่อด้วยปุ่ม "ค้นหาเครื่องพิมพ์"`,confirmLabel:"นำออก",cancelLabel:"ยกเลิก",danger:true})){try{await api.updatePrinter(p.id,{active:false,description:JSON.stringify({d:1,ig:1})});await load();posToast("นำเครื่องพิมพ์ออกแล้ว — กด \"ค้นหาเครื่องพิมพ์\" เพื่อนำกลับ");}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}}} title="นำเครื่องพิมพ์ออก (นำกลับได้ด้วยปุ่มค้นหา)" style={{background:C.redLight,border:`1px solid #FCA5A5`,borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={14} c={C.red}/></button>
+          {open&&<div style={{borderTop:`1px solid ${C.blue}33`,background:C.blueLight,padding:"13px 15px"}}>
+            <label style={lbl}>ชื่อเครื่องพิมพ์ (แก้ไขได้)</label>
+            <input value={sName} onChange={e=>setSName(e.target.value)} placeholder="เช่น ครัวร้อน · ครัวเย็น · แคชเชียร์" style={iS}/>
+            <div style={{marginTop:13,marginBottom:7,fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>🖨️ หมวดหมู่ที่จะพิมพ์ออกเครื่องนี้</div>
+            <label style={{display:"flex",alignItems:"center",gap:9,padding:"9px 11px",border:`1px solid ${sCats===null?C.blue:C.line}`,borderRadius:9,background:sCats===null?C.white:C.bg,cursor:"pointer",marginBottom:8}}>
+              <input type="checkbox" checked={sCats===null} onChange={e=>setSCats(e.target.checked?null:[])} style={{width:17,height:17,accentColor:C.blue,flexShrink:0}}/>
+              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink}}>พิมพ์ทุกหมวด <span style={{fontWeight:400,color:C.ink4,fontSize:11.5}}>(ทุกอย่างที่ไม่ได้กำหนดให้เครื่องอื่น)</span></span>
+            </label>
+            {sCats!==null&&(branchCategories.length===0
+              ?<div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",padding:"8px 4px",lineHeight:1.6}}>ยังไม่มีหมวดหมู่ในสาขานี้ — ไปสร้างหมวดหมู่ที่หน้า "เมนู" ก่อน แล้วค่อยกลับมาเลือก</div>
+              :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:7}}>
+                {branchCategories.map(c=><label key={c} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",border:`1px solid ${sCats.includes(c)?C.green:C.line}`,borderRadius:9,background:sCats.includes(c)?C.greenLight:C.white,cursor:"pointer"}}>
+                  <input type="checkbox" checked={sCats.includes(c)} onChange={()=>toggleSCat(c)} style={{width:16,height:16,accentColor:C.green,flexShrink:0}}/>
+                  <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c}</span>
+                </label>)}
+              </div>)}
+            <div style={{display:"flex",gap:8,marginTop:13}}>
+              <Btn v="success" onClick={()=>saveSettings(p)} loading={sSaving} icon={I.check} s={{padding:"8px 18px",fontSize:13}}>บันทึก</Btn>
+              <Btn v="ghost" onClick={()=>setSettingsId(null)} s={{padding:"8px 16px",fontSize:13}}>ยกเลิก</Btn>
+            </div>
+          </div>}
         </div>;})}
       </div>}
       {(discovered.length>0||searched)&&<div style={{background:"#EFF6FF",border:`1px solid ${C.blue}44`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
