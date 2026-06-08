@@ -191,4 +191,6 @@ async function tick() {
   console.log("\n⏳ เริ่มเฝ้าออเดอร์... (Ctrl+C เพื่อหยุด)\n");
   await tick();
   setInterval(tick, POLL_MS);
+  // สแกนหาเครื่องพิมพ์ใหม่ในวง LAN ทุก 5 นาที (เครื่องที่เสียบเพิ่มทีหลังจะถูกเพิ่มเองอัตโนมัติ)
+  setInterval(async () => { try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {} }, 5 * 60 * 1000);
 })();

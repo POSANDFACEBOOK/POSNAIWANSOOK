@@ -12757,22 +12757,10 @@ function PrinterStatusModal({currentBranch,onClose,printStation=false,onTogglePr
   };
   return <Modal title="🖨 เครื่องพิมพ์ & สถานะการเชื่อมต่อ" onClose={onClose} wide>
     {loading?<Loading text="โหลดเครื่องพิมพ์..."/>:<>
-      {/* Print-station toggle — flip ON for the ONE device (Android) that prints */}
-      <div style={{border:`2px solid ${station?C.green:C.line}`,background:station?C.greenLight:C.bg,borderRadius:14,padding:"13px 15px",marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-        <div style={{fontSize:26,flexShrink:0}}>📟</div>
-        <div style={{flex:1,minWidth:160}}>
-          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>ใช้เครื่องนี้เป็น “สถานีพิมพ์”</div>
-          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink3,lineHeight:1.6,marginTop:2}}>เปิดบนเครื่อง <b>Android เครื่องเดียว</b> ที่วางข้างเครื่องพิมพ์ — มันจะพิมพ์ใบครัวให้ทุกออเดอร์อัตโนมัติ · <b>ห้ามเปิดบน iPad</b> (พิมพ์ไม่ได้)</div>
-        </div>
-        <button onClick={toggleStation} style={{flexShrink:0,width:60,height:32,borderRadius:20,border:"none",cursor:"pointer",background:station?C.green:C.line,position:"relative",transition:"background .2s"}}>
-          <span style={{position:"absolute",top:3,left:station?31:3,width:26,height:26,borderRadius:"50%",background:C.white,boxShadow:"0 1px 4px rgba(0,0,0,.3)",transition:"left .2s"}}/>
-        </button>
+      {/* ค้นหาเครื่องพิมพ์อัตโนมัติทำผ่านตัวพิมพ์ (Print Agent) — เบราว์เซอร์สแกน LAN เองไม่ได้ */}
+      <div style={{background:C.blueLight,border:`1px solid ${C.blue}44`,borderRadius:12,padding:"12px 15px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,lineHeight:1.7}}>
+        🔍 <b>ค้นหาเครื่องพิมพ์อัตโนมัติ:</b> แค่เสียบเครื่องพิมพ์เข้าวง LAN ร้าน — <b>ตัวพิมพ์ (Print Agent)</b> จะสแกนเจอ + เพิ่มเข้าระบบให้เองทุกๆ ไม่กี่นาที (และตอนเปิด/รีสตาร์ท agent) → เครื่องที่เจอจะโผล่ในรายการข้างล่างนี้ · กด <b>"เช็คสถานะใหม่"</b> เพื่อรีโหลด แล้วตั้งชื่อ/เลือกหมวด/ลบ ได้เลย
       </div>
-      {station&&<div style={{background:"#FFFBEB",border:`1px solid #F59E0B`,borderRadius:12,padding:"11px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:"#92400E",lineHeight:1.7}}>
-        <b>⚠️ ตั้งค่า Chrome ครั้งเดียว เพื่อให้พิมพ์ได้:</b><br/>
-        แตะ 🔒/ⓘ หน้า URL → <b>ตั้งค่าไซต์ (Site settings)</b> → <b>เนื้อหาที่ไม่ปลอดภัย (Insecure content)</b> → เลือก <b>อนุญาต (Allow)</b> แล้วรีโหลดหน้านี้ · จากนั้นเปิดหน้านี้ค้างไว้<br/>
-        <b>🔆 ระบบกันจอดับให้อัตโนมัติแล้ว</b> ระหว่างเปิดโหมดนี้ (แนะนำเสียบสายชาร์จไว้ด้วย และอย่าสลับไปแอปอื่น)
-      </div>}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>เครื่องพิมพ์ของสาขา <b style={{color:C.ink}}>{currentBranch.name}</b> ({printers.length})</div>
         <Btn v="ghost" onClick={()=>printers.forEach(p=>checkStatus(p))} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>เช็คสถานะใหม่</Btn>
