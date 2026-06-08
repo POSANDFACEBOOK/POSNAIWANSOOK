@@ -9991,17 +9991,26 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
     setZoneMgrSaving(false);
   }
   // Zone filter + natural sort by table number
-  const allZoneNames=[...new Set([...zones.map(z=>z.name).filter(Boolean),...tables.map(t=>t.zone).filter(Boolean)])];
-  const filteredTables=zoneFilter==="all"?tables:zoneFilter==="none"?tables.filter(t=>!t.zone):tables.filter(t=>t.zone===zoneFilter);
+  // แสดงเฉพาะโซนที่สาขานี้สร้างไว้เอง (ตาราง table_zones) — ไม่รวมชื่อโซนที่ค้างอยู่บนโต๊ะจากโซนที่ถูกลบ (orphan)
+  const allZoneNames=[...new Set(zones.map(z=>z.name).filter(Boolean))];
+  const knownZ=new Set(allZoneNames);
+  const isUnzoned=(t)=>!t.zone||!knownZ.has(t.zone);   // ไม่มีโซน หรือโซนถูกลบไปแล้ว → กองที่ "ไม่มีโซน" (ไม่ให้โต๊ะหาย)
+  const filteredTables=zoneFilter==="all"?tables:zoneFilter==="none"?tables.filter(isUnzoned):tables.filter(t=>t.zone===zoneFilter);
   const sortedTables=[...filteredTables].sort((a,b)=>String(a.table_number||"").localeCompare(String(b.table_number||""),undefined,{numeric:true}));
+  // ไม่มีปุ่ม "ทั้งหมด" แล้ว → ตั้งค่าเริ่มต้น/แก้สถานะค้างเป็นโซนแรกที่สาขาสร้างไว้
+  // (ครอบคลุม: เปิดครั้งแรก = "all", หรือกรองค้างที่โซนที่ถูกลบไปแล้ว → เด้งไปโซนแรกอัตโนมัติ · ถ้าสาขายังไม่มีโซน คงไว้ที่ "all" แสดงโต๊ะทั้งหมด)
+  useEffect(()=>{
+    if(zoneFilter==="none")return;
+    if(allZoneNames.length===0){if(zoneFilter!=="all")setZoneFilter("all");return;}
+    if(!knownZ.has(zoneFilter))setZoneFilter(allZoneNames[0]);
+  },[allZoneNames.join("|"),zoneFilter]);// eslint-disable-line
 
   return <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
     {/* Zone filter row */}
     {(allZoneNames.length>0||onAddZone)&&<div style={{padding:"8px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6,overflowX:"auto",flexShrink:0}}>
       <span style={{fontSize:11,fontWeight:700,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>โซน:</span>
-      <button onClick={()=>setZoneFilter("all")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="all"?`2px solid ${C.brand}`:`1px solid ${C.line}`,background:zoneFilter==="all"?C.brandLight:C.white,color:zoneFilter==="all"?C.brand:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ทั้งหมด ({tables.length})</button>
       {allZoneNames.map(zn=>{const c=zoneColorMap[zn]||C.ink3;const n=tables.filter(t=>t.zone===zn).length;const active=zoneFilter===zn;const zid=zones.find(z=>z.name===zn)?.id;return <button key={zn} onPointerDown={e=>zoneDown(e,zn,zid)} onPointerMove={zoneMove} onPointerUp={()=>zoneUp(zn)} onPointerCancel={()=>{if(zonePressRef.current){clearTimeout(zonePressRef.current.timer);zonePressRef.current=null;}}} title={(editable&&onRenameZone)?"แตะ = กรอง · กดค้าง = แก้ไข/ลบโซน":undefined} style={{padding:"4px 12px",borderRadius:18,border:active?`2px solid ${c}`:`1px solid ${C.line}`,background:active?`${c}22`:C.white,color:active?c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}><span style={{width:8,height:8,borderRadius:"50%",background:c}}/>{zn} ({n})</button>;})}
-      {tables.some(t=>!t.zone)&&<button onClick={()=>setZoneFilter("none")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="none"?`2px solid ${C.ink3}`:`1px solid ${C.line}`,background:zoneFilter==="none"?C.lineLight:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ไม่มีโซน ({tables.filter(t=>!t.zone).length})</button>}
+      {tables.some(isUnzoned)&&<button onClick={()=>setZoneFilter("none")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="none"?`2px solid ${C.ink3}`:`1px solid ${C.line}`,background:zoneFilter==="none"?C.lineLight:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ไม่มีโซน ({tables.filter(isUnzoned).length})</button>}
       {onAddZone&&(addingZone
         ?<span style={{display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>
           <input autoFocus value={newZoneName} onChange={e=>setNewZoneName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")confirmAddZone();else if(e.key==="Escape"){setAddingZone(false);setNewZoneName("");}}} placeholder="ชื่อโซน" style={{padding:"4px 10px",borderRadius:18,border:`1.5px solid ${C.brand}`,fontFamily:"'Sarabun',sans-serif",fontSize:12,width:96,outline:"none"}}/>
@@ -12791,9 +12800,9 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const discovered=searched?notAdded:notAdded.filter(p=>!isIgnored(p));   // กดค้นหาแล้วให้เห็นเครื่องที่เคยซ่อน/ลบด้วย
   async function addDiscovered(p){try{await api.updatePrinter(p.id,{active:true,description:""});await load();posToast("✅ เพิ่มเครื่องพิมพ์เข้าระบบแล้ว");}catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}}
   async function ignoreDiscovered(p){try{await api.updatePrinter(p.id,{description:JSON.stringify({d:1,ig:1})});await load();}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}
-  // หมวดหมู่ที่ "จะปรากฏบนออเดอร์จริง" ของสาขานี้ = local_categories[สาขา] || category(global) ของแต่ละเมนู
-  // หมวดผลลัพธ์จริงของเมนู = local_categories[สาขา] || category(global) — ตรงกับ item.category ตอนสั่ง
-  const effCat=(m)=>{const lc=m.local_categories||{};const bid=currentBranch&&currentBranch.id;return (lc[bid]&&String(lc[bid]).trim())?String(lc[bid]).trim():((m.category&&String(m.category).trim())?String(m.category).trim():null);};
+  // แสดงเฉพาะหมวดที่ "สาขานี้สร้างไว้เอง" (local_categories[สาขา]) เท่านั้น — ไม่ดึงหมวดรวม (global)
+  // เมนูที่ยังไม่ได้ตั้งหมวดของสาขานี้จะไม่ขึ้นในตัวเลือก และจะพิมพ์ออกเครื่อง "พิมพ์ทุกหมวด" (catch-all)
+  const effCat=(m)=>{const lc=m.local_categories||{};const bid=currentBranch&&currentBranch.id;const v=lc[bid];return (v&&String(v).trim())?String(v).trim():null;};
   const branchCategories=useMemo(()=>{const s=new Set();(menus||[]).forEach(m=>{const e=effCat(m);if(e)s.add(e);});return [...s].sort();},[menus,currentBranch]);
   const menusInCat=(c)=>(menus||[]).filter(m=>effCat(m)===c);
   function openSettings(p){
