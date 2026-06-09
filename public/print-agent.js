@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 18;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 19;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -186,6 +186,30 @@ function newItemsVs(oldSig, items) {
   } catch { return items; }
 }
 
+// เรนเดอร์ใบครัวเป็นรูปภาพ (ไทยคมชัด) ผ่านบริการบน Vercel — ถ้าล้มเหลวคืน null แล้วถอยไปใช้ตัวอักษร ESC/POS
+const SLIP_RENDER_URL = "https://foodcost-eta.vercel.app/api/kitchen-slip";
+async function fetchSlipRaster(items, tableNum) {
+  try {
+    const res = await fetch(SLIP_RENDER_URL, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ table: String(tableNum || ""), time: new Date().toLocaleString("th-TH"), items: (items || []).map(it => ({ qty: it.qty, name: it.name, options: it.options || [], note: it.note || "" })) }),
+    });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > 30 ? buf : null;
+  } catch (e) { return null; }
+}
+// รวมรายการเป็นบัฟเฟอร์พิมพ์ — หนึ่งใบต่อหนึ่งรายการเมนู (ลองรูปภาพไทยคมชัดก่อน · ถ้าล้มเหลวถอยไปตัวอักษร ESC/POS เป็นรายตัว → พิมพ์ไม่มีวันพัง)
+async function itemsToBuffer(items, tableNum) {
+  const parts = []; let raster = 0, text = 0;
+  for (const it of items) {
+    let b = await fetchSlipRaster([it], tableNum);
+    if (b) raster++; else { b = buildKitchenESC(it, tableNum); text++; }
+    parts.push(b);
+  }
+  const mode = text === 0 ? "รูปภาพ" : (raster === 0 ? "ตัวอักษร(สำรอง)" : "ผสม รูปภาพ+ตัวอักษร");
+  return { buf: Buffer.concat(parts), mode };
+}
 async function printItems(items, tableNum, printers) {
   const groups = new Map();
   for (const it of items) { const p = resolvePrinter(it, printers); const key = p ? p.id : "_none"; if (!groups.has(key)) groups.set(key, { p, items: [] }); groups.get(key).items.push(it); }
@@ -193,8 +217,8 @@ async function printItems(items, tableNum, printers) {
     if (!p) { console.log("  ⚠️  ไม่มีเครื่องพิมพ์สำหรับ:", gItems.map(i => i.name).join(", ")); continue; }
     if (isBluetooth(p)) { console.log("  ⚠️  ข้ามเครื่องบลูทูธ:", p.name); continue; }
     if (!p.ip) { console.log("  ⚠️  ยังไม่ตั้ง IP:", p.name); continue; }
-    const buf = Buffer.concat(gItems.map(it => buildKitchenESC(it, tableNum)));
-    try { await sendToPrinter(p.ip, p.port, buf); console.log(`  ✅ พิมพ์ ${gItems.length} รายการ → ${p.name} (${p.ip})`); }
+    const { buf, mode } = await itemsToBuffer(gItems, tableNum);
+    try { await sendToPrinter(p.ip, p.port, buf); console.log(`  ✅ พิมพ์ ${gItems.length} รายการ [${mode}] → ${p.name} (${p.ip})`); }
     catch (e) { console.log(`  ❌ ไม่สำเร็จ → ${p.name} (${p.ip}): ${e.message}`); }
   }
 }
@@ -223,7 +247,8 @@ async function handleReprintRequests(printers) {
       state.reprinted[p.id] = rp.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำจาก tick ซ้อน
       const its = Array.isArray(rp.items) ? rp.items : [];
       if (!its.length) continue;
-      try { await sendToPrinter(p.ip, p.port, Buffer.concat(its.map(it => buildKitchenESC(it, rp.table || "-")))); console.log(`  🔁 พิมพ์ซ้ำ ${its.length} รายการ → ${p.name} (${p.ip})`); }
+      const { buf, mode } = await itemsToBuffer(its, rp.table || "-");   // พิมพ์ซ้ำเป็นรูปภาพไทยคมชัด (ถอยไปตัวอักษรถ้าล้มเหลว)
+      try { await sendToPrinter(p.ip, p.port, buf); console.log(`  🔁 พิมพ์ซ้ำ ${its.length} รายการ [${mode}] → ${p.name} (${p.ip})`); }
       catch (e) { console.log(`  ❌ พิมพ์ซ้ำ → ${p.name} (${p.ip}): ${e.message}`); }
     }
   }
