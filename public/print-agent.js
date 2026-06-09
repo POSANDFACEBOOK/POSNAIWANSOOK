@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 9;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 10;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -115,6 +115,26 @@ function testPageESC() {
   b(0x1b, 0x64, 0x03); b(0x1d, 0x56, 0x41, 0x00);
   return Buffer.concat(bufs);
 }
+// QR โต๊ะลูกค้า — ESC/POS GS ( k (พอร์ตจาก buildTableQRESC ในแอป)
+function buildQRESC(qr) {
+  const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(Buffer.from(s, "utf8"));
+  b(0x1b, 0x40); b(0x1b, 0x61, 0x01);
+  if (qr.branch) { b(0x1d, 0x21, 0x00); t(qr.branch + "\n"); }
+  b(0x1d, 0x21, 0x11); t("โต๊ะ " + (qr.table || "") + "\n"); b(0x1d, 0x21, 0x00);
+  if (qr.label) t(qr.label + "\n");
+  t("\n");
+  const data = Buffer.from(qr.url || "", "utf8");
+  b(0x1d, 0x28, 0x6b, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00);       // model 2
+  b(0x1d, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x43, 0x06);            // module size 6
+  b(0x1d, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x45, 0x31);            // error correction M
+  const sl = data.length + 3;
+  b(0x1d, 0x28, 0x6b, sl & 0xff, (sl >> 8) & 0xff, 0x31, 0x50, 0x30); // store data
+  bufs.push(data);
+  b(0x1d, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x51, 0x30);            // print
+  t("\n"); t("สแกนเพื่อดูเมนูและสั่งอาหาร\n"); t("Scan to order\n");
+  b(0x1b, 0x64, 0x04); b(0x1d, 0x56, 0x41, 0x00);
+  return Buffer.concat(bufs);
+}
 function sendToPrinter(ip, port, buf) {
   return new Promise((resolve, reject) => {
     const s = net.createConnection({ host: ip, port: +port || 9100 });
@@ -130,7 +150,7 @@ function sendToPrinter(ip, port, buf) {
 // ── สถานะ: ออเดอร์/รายการที่พิมพ์ไปแล้ว (กันพิมพ์ซ้ำ) ──────────────────────
 let state = { sig: {}, init: {}, greeted: {} };
 try { if (fs.existsSync(STATE_FILE)) state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {}
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {};
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {};
 let primed = fs.existsSync(STATE_FILE);   // มีไฟล์อยู่แล้ว = ไม่ต้อง prime ใหม่
 function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch {} }
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
@@ -185,6 +205,20 @@ async function handleReprintRequests(printers) {
   }
 }
 
+// พิมพ์ QR โต๊ะตามคำสั่งจากแอป: แอปเขียน description.qr = {at, url, table, branch, label}
+function qrOf(p) { try { const q = JSON.parse(p.description || "{}").qr; return (q && q.at) ? q : null; } catch { return null; } }
+async function handleQRRequests(printers) {
+  for (const p of printers) {
+    if (isBluetooth(p) || !p.ip) continue;
+    const q = qrOf(p);
+    if (q && String(state.qrPrinted[p.id]) !== String(q.at)) {
+      state.qrPrinted[p.id] = q.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
+      try { await sendToPrinter(p.ip, p.port, buildQRESC(q)); console.log(`  🔳 พิมพ์ QR โต๊ะ ${q.table} → ${p.name} (${p.ip})`); }
+      catch (e) { console.log(`  ❌ พิมพ์ QR → ${p.name} (${p.ip}): ${e.message}`); }
+    }
+  }
+}
+
 async function tick() {
   let orders, printers;
   try { [orders, printers] = await Promise.all([getActiveOrders(), getPrinters()]); }
@@ -193,13 +227,14 @@ async function tick() {
 
   if (!primed) {
     for (const o of orders) if (o && o.items) { state.sig[o.id] = sigOf(o); state.init[o.id] = 1; }
-    for (const p of printers) { const tp = tpOf(p); if (tp) state.tested[p.id] = tp; const rp = rpOf(p); if (rp) state.reprinted[p.id] = rp.at; }   // กันพิมพ์ย้อนหลังตอน prime ครั้งแรก
+    for (const p of printers) { const tp = tpOf(p); if (tp) state.tested[p.id] = tp; const rp = rpOf(p); if (rp) state.reprinted[p.id] = rp.at; const q = qrOf(p); if (q) state.qrPrinted[p.id] = q.at; }   // กันพิมพ์ย้อนหลังตอน prime ครั้งแรก
     primed = true; saveState();
     console.log(`🔰 บันทึกออเดอร์ค้าง ${orders.length} รายการ (ไม่พิมพ์ซ้ำ) — พร้อมพิมพ์ออเดอร์ใหม่`);
     return;
   }
   await handleTestRequests(printers);   // ทดสอบพิมพ์ตามคำสั่งที่กดจากแอป
   await handleReprintRequests(printers);   // พิมพ์ใบครัวซ้ำตามคำสั่งที่กดจากแอป
+  await handleQRRequests(printers);   // พิมพ์ QR โต๊ะตามคำสั่งที่กดจากแอป
   for (const o of orders) {
     if (!o || !o.items || !o.items.length) continue;
     const sig = sigOf(o), last = state.sig[o.id], first = !state.init[o.id];

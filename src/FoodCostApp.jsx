@@ -11042,9 +11042,17 @@ async function printTableQR(table,branch,printers=[]){
       // fall through to the browser-window path below
     }
   }
-  // 2) Fallback (IP/network printer, no Bluetooth, or BT failed): open a print
-  //    window that auto-fires window.print() (browsers can't bypass the dialog
-  //    for non-Bluetooth printers).
+  // 2) เครื่องพิมพ์ IP → สั่งพิมพ์ผ่าน "ตัวพิมพ์ (agent)" (iPad/เบราว์เซอร์ต่อ LAN ตรงไม่ได้)
+  const ipP=(printers||[]).find(p=>{if(!p||p.active===false||!p.ip)return false;if(p.branch_id!=null&&+p.branch_id!==+branch.id)return false;let bt=false;try{bt=JSON.parse(p.description||"{}").c==="bt";}catch{}return !bt;});
+  if(ipP){
+    try{
+      let d={};try{d=JSON.parse(ipP.description||"{}");}catch{}
+      await api.updatePrinter(ipP.id,{description:JSON.stringify({...d,qr:{at:Date.now(),url,table:table.table_number,branch:branch.name||"",label:table.label||""}})});
+      posToast("🔳 ส่งคำสั่งพิมพ์ QR โต๊ะ "+table.table_number+" ไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
+      return;
+    }catch(e){alert("ส่งคำสั่งพิมพ์ QR ไม่สำเร็จ: "+(e&&e.message||e));return;}
+  }
+  // 3) Fallback: ไม่มีเครื่องพิมพ์ IP/BT (เช่นเปิดบนคอมที่ไม่มี agent) → เปิดหน้าต่างพิมพ์ของเบราว์เซอร์
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}&margin=10`;
   const w=openPrintWindow(340,420);
   if(!w)return;
