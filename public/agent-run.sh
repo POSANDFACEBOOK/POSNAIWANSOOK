@@ -30,9 +30,15 @@ while true; do
   fi
 
   if [ -f print-agent.js ]; then
-    node print-agent.js "$BR"
+    node print-agent.js "$BR"; RC=$?
   else
-    echo "❌ ยังไม่มีไฟล์ print-agent.js และโหลดไม่ได้ — รอเน็ต..."
+    echo "❌ ยังไม่มีไฟล์ print-agent.js และโหลดไม่ได้ — รอเน็ต..."; RC=0
+  fi
+
+  # exit code 3 = มี agent อื่นทำงานอยู่แล้ว (ตัวซ้ำ) → หยุด loop นี้ ไม่ต้องรันวนซ้ำ (กันสแปม)
+  if [ "$RC" = "3" ]; then
+    echo "⛔ มี Print Agent อื่นทำงานอยู่แล้ว — ปิด session ซ้ำนี้ (ไม่รันซ้ำ)"
+    break
   fi
 
   echo ""
