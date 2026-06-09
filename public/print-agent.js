@@ -16,13 +16,18 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 15;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 16;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
 const STATE_FILE = path.join(process.env.HOME || ".", ".foodcost-printed.json");
 
 if (!BRANCH) { console.error("❌ ต้องใส่ branch id ด้วย เช่น:  node print-agent.js 6"); process.exit(1); }
+
+// กันรัน agent ซ้อนกันหลายตัว (เคยทำให้พิมพ์ออกซ้ำ 2 ใบ) — จองพอร์ต local เป็นตัวล็อก · ถ้ามีตัวอื่นจองอยู่แล้วให้ปิด instance ซ้ำนี้
+const _lock = net.createServer();
+_lock.on("error", () => { console.log("⛔ มี Print Agent ทำงานอยู่แล้ว — ปิด instance ซ้ำนี้ (กันพิมพ์ซ้ำ)"); process.exit(0); });
+_lock.listen(48191, "127.0.0.1");
 
 // ── Supabase REST ────────────────────────────────────────────────────────
 async function sb(query) {
@@ -111,24 +116,25 @@ function resolvePrinter(item, printers) {
 function buildKitchenESC(item, tableNum) {
   const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(thaiBytes(s));
   b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01);
-  b(0x1d, 0x21, 0x00); t("ใบสั่งอาหาร\n");
-  b(0x1d, 0x21, 0x33); t(`โต๊ะ ${tableNum}\n`);
+  b(0x1d, 0x21, 0x00); b(0x1b, 0x45, 0x01); t("ใบสั่งอาหาร\n"); b(0x1b, 0x45, 0x00);
+  b(0x1d, 0x21, 0x11); b(0x1b, 0x45, 0x01); t(`${tableNum}\n`); b(0x1b, 0x45, 0x00);   // เลขโต๊ะตัวใหญ่ (ไม่มีคำว่า "โต๊ะ")
   b(0x1d, 0x21, 0x00); t(new Date().toLocaleString("th-TH") + "\n");
-  t("================================\n");
-  b(0x1d, 0x21, 0x11); b(0x1b, 0x45, 0x01); t(`${item.qty}x ${item.name}\n`); b(0x1b, 0x45, 0x00);
-  b(0x1d, 0x21, 0x00);
-  if (item.options && item.options.length) { b(0x1d, 0x21, 0x01); t(`+ ${optionsText(item.options)}\n`); b(0x1d, 0x21, 0x00); }
-  if (item.note) { t("\n"); b(0x1b, 0x45, 0x01); t(`★ ${item.note}\n`); b(0x1b, 0x45, 0x00); }
-  t("================================\n"); b(0x1b, 0x64, 0x05); b(0x1d, 0x56, 0x41, 0x00);
+  t("--------------------------------\n");
+  b(0x1b, 0x61, 0x00);   // ชิดซ้าย
+  // ชื่อเมนู: ขนาดปกติ + ตัวหนา → สระ/วรรณยุกต์ไทยเรียงถูกตำแหน่ง (ตัวใหญ่พิเศษทำให้เพี้ยน)
+  b(0x1b, 0x45, 0x01); t(`${item.qty}x ${item.name}\n`); b(0x1b, 0x45, 0x00);
+  if (item.options && item.options.length) t(`   + ${optionsText(item.options)}\n`);
+  if (item.note) { b(0x1b, 0x45, 0x01); t(`   * ${item.note}\n`); b(0x1b, 0x45, 0x00); }
+  t("--------------------------------\n"); b(0x1b, 0x64, 0x05); b(0x1d, 0x56, 0x41, 0x00);
   return Buffer.concat(bufs);
 }
 function testPageESC() {
   const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(thaiBytes(s));
   b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01);
-  b(0x1d, 0x21, 0x11); t("ทดสอบพิมพ์\n"); b(0x1d, 0x21, 0x00);
+  b(0x1b, 0x45, 0x01); t("ทดสอบพิมพ์\n"); b(0x1b, 0x45, 0x00);
   t(`PRINT AGENT v${AGENT_VERSION}\n`);
   t("ภาษาไทยใช้งานได้แล้ว\n");
-  t("เมนูทดสอบ ก ข ค ง\n");
+  t("ชาบูจัมโบ้ กุ้งเผา ผัดไทย\n");   // คำที่มีสระ/วรรณยุกต์ — ดูว่าเรียงบนล่างถูกไหม
   t(new Date().toLocaleString("th-TH") + "\n");
   b(0x1b, 0x64, 0x03); b(0x1d, 0x56, 0x41, 0x00);
   return Buffer.concat(bufs);
