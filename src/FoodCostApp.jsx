@@ -9806,11 +9806,14 @@ function escposQRBytes(payload){
   out.push(0x0a,0x1b,0x61,0x00);                              // บรรทัดใหม่ + กลับชิดซ้าย
   return out;
 }
-// เลือกเครื่องพิมพ์ใบเสร็จ: 1) catch-all (categories=null) 2) เครื่อง IP ที่เปิดใช้งานเครื่องแรก (ข้ามบลูทูธ)
-function pickReceiptPrinter(printers){
+// เครื่องพิมพ์ใบเสร็จ = เครื่องที่ติ๊ก "ใช้เป็นเครื่องพิมพ์ใบเสร็จ" (description.rcpt=1) — เลือกได้หลายเครื่อง ใบเสร็จออกทุกเครื่องที่เลือก
+function isReceiptPrinter(p){try{return JSON.parse(p.description||"{}").rcpt===1;}catch{return false;}}
+function getReceiptPrinters(printers){
   const act=(printers||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
-  if(!act.length)return null;
-  return act.find(p=>p.categories==null)||act[0];
+  if(!act.length)return [];
+  const flagged=act.filter(isReceiptPrinter);
+  if(flagged.length)return flagged;
+  return [act.find(p=>p.categories==null)||act[0]];   // ยังไม่กำหนดเครื่องพิมพ์ใบเสร็จ → ใช้ catch-all/เครื่องแรก (เข้ากันได้กับของเดิม)
 }
 function buildReceiptLines(order,tableNum,branchName,posSettings){
   const L=[];
@@ -10649,17 +10652,17 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // พิมพ์ใบเสร็จ — iPad/https พิมพ์ผ่านตัวพิมพ์ (agent) เป็นรูปภาพไทยคมชัด · เดสก์ท็อป/LAN ใช้หน้าต่างพิมพ์ปกติ
   async function smartPrintReceipt(order,tableNum){
     const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
-    const rcp=isHttps?pickReceiptPrinter(printers):null;
-    if(isHttps&&rcp){
+    const rcps=isHttps?getReceiptPrinters(printers):[];
+    if(isHttps&&rcps.length){
       try{
         const b64=await buildReceiptB64(order,tableNum,branch.name,posSettings);
-        let d={};try{d=JSON.parse(rcp.description||"{}");}catch{}
-        await api.updatePrinter(rcp.id,{description:JSON.stringify({...d,pj:{at:Date.now(),b64}})});
-        posToast("🧾 ส่งใบเสร็จไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
+        const at=Date.now();
+        await Promise.all(rcps.map(rcp=>{let d={};try{d=JSON.parse(rcp.description||"{}");}catch{}return api.updatePrinter(rcp.id,{description:JSON.stringify({...d,pj:{at,b64}})});}));
+        posToast(`🧾 ส่งใบเสร็จไป ${rcps.length} เครื่องแล้ว — กระดาษจะออกใน ~5 วินาที`,"ok");
       }catch(e){posToast("พิมพ์ใบเสร็จไม่สำเร็จ: "+(e&&e.message||e),"warn");try{printReceipt(order,tableNum,branch.name,posSettings);}catch{}}
       return;
     }
-    if(isHttps&&!rcp)posToast("⚠️ ยังไม่ได้ตั้งเครื่องพิมพ์ — เพิ่มที่ ⚙️ เครื่องพิมพ์ก่อน","warn");
+    if(isHttps&&!rcps.length)posToast("⚠️ ยังไม่ได้ตั้งเครื่องพิมพ์ — เพิ่มที่ ⚙️ เครื่องพิมพ์ก่อน","warn");
     printReceipt(order,tableNum,branch.name,posSettings);
   }
   function reprintReceipt(){
@@ -12964,6 +12967,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const[sOverride,setSOverride]=useState({});        // menu_id → printer_id (ปักหมุดเมนูเฉพาะให้ออกเครื่องนี้)
   const[sOpenCats,setSOpenCats]=useState(()=>new Set());  // หมวดที่กางดูรายเมนู
   const[sSaving,setSSaving]=useState(false);
+  const[sRcpt,setSRcpt]=useState(false);            // เครื่องนี้เป็นเครื่องพิมพ์ใบเสร็จด้วยหรือไม่ (description.rcpt)
   const aliveRef=useRef(true);   // กันอัปเดต state หลังปิด modal (ระหว่างวนค้นหา 15 วินาที)
   useEffect(()=>()=>{aliveRef.current=false;},[]);
   const[station,setStation]=useState(printStation||isPrintStation());
@@ -13071,6 +13075,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const menusInCat=(c)=>(menus||[]).filter(m=>effCat(m)===c);
   function openSettings(p){
     setSettingsP(p);setSName(p.name||"");setSCats(p.categories===undefined||p.categories===null?null:[...p.categories]);
+    let dd={};try{dd=JSON.parse(p.description||"{}");}catch{}setSRcpt(dd.rcpt===1);
     const ov={};(menus||[]).forEach(m=>{if(m.printer_id)ov[m.id]=+m.printer_id;});setSOverride(ov);setSOpenCats(new Set());
   }
   function toggleSCat(c){setSCats(prev=>{const cur=prev===null?[]:prev;return cur.includes(c)?cur.filter(x=>x!==c):[...cur,c];});}
@@ -13080,7 +13085,11 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     const name=(sName||"").trim();if(!name)return alert("ใส่ชื่อเครื่องพิมพ์");
     setSSaving(true);
     try{
-      await api.updatePrinter(p.id,{name,categories:sCats});
+      // อ่าน description ล่าสุดก่อนรวม flag ใบเสร็จ (กันทับคำสั่งพิมพ์ tp/rp/qr/pj ที่อาจถูกเขียนมาระหว่างเปิดหน้าตั้งค่า)
+      let fresh=p;try{const all=await api.getAllPrinters();const f=(all||[]).find(x=>+x.id===+p.id);if(f)fresh=f;}catch{}
+      let dd={};try{dd=JSON.parse(fresh.description||"{}");}catch{}
+      if(sRcpt)dd.rcpt=1;else delete dd.rcpt;
+      await api.updatePrinter(p.id,{name,categories:sCats,description:JSON.stringify(dd)});
       const ups=[];(menus||[]).forEach(m=>{const nw=sOverride[m.id]||null;const ol=m.printer_id||null;if(String(nw)!==String(ol))ups.push(api.updateMenu(m.id,{printer_id:nw}));});
       if(ups.length)await Promise.all(ups);
       await load();if(reloadMenus)await reloadMenus();
@@ -13106,7 +13115,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
         {activePrinters.map(p=>{const conn=getPConn(p);const sv=stView(status[p.id]);const catLabel=(p.categories===undefined||p.categories===null)?"ทุกหมวด":(p.categories.length?p.categories.join(", "):"— ยังไม่กำหนด —");const ovCount=(menus||[]).filter(m=>+m.printer_id===+p.id).length;return <div key={p.id} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 14px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap"}}>
           <span style={{width:11,height:11,borderRadius:"50%",background:sv.c,flexShrink:0,boxShadow:status[p.id]==="online"?`0 0 0 3px ${C.green}33`:"none"}}/>
           <div style={{minWidth:0,flex:1}}>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{p.name}</div>
+            <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}><span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{p.name}</span>{isReceiptPrinter(p)&&<span style={{fontSize:10,fontWeight:800,color:C.green,background:C.greenLight,border:`1px solid ${C.green}55`,borderRadius:20,padding:"1px 8px",fontFamily:"'Sarabun',sans-serif"}}>🧾 ใบเสร็จ</span>}</div>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink4}}>{conn.type==="bluetooth"?`บลูทูธ${conn.btName?" · "+conn.btName:""}`:`${p.ip||"-"}:${p.port||9100}`} · พิมพ์: {catLabel}{ovCount>0?` · +${ovCount} เมนู`:""}</div>
           </div>
           <span style={{fontSize:11.5,fontWeight:800,color:sv.c,background:sv.bg,border:`1px solid ${sv.c}44`,borderRadius:20,padding:"3px 12px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{sv.t}</span>
@@ -13118,6 +13127,13 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       {settingsP&&<Modal title={`🖨️ กำหนดการพิมพ์ — ${settingsP.name}`} onClose={()=>setSettingsP(null)} extraWide>
         <label style={lbl}>ชื่อเครื่องพิมพ์ (แก้ไขได้)</label>
         <input value={sName} onChange={e=>setSName(e.target.value)} placeholder="เช่น ครัวร้อน · ครัวเย็น · แคชเชียร์" style={iS}/>
+        <label style={{display:"flex",alignItems:"center",gap:11,margin:"13px 0 4px",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${sRcpt?C.green:C.line}`,background:sRcpt?C.greenLight:C.white,cursor:"pointer"}}>
+          <input type="checkbox" checked={sRcpt} onChange={e=>setSRcpt(e.target.checked)} style={{accentColor:C.green,width:19,height:19,cursor:"pointer",flexShrink:0}}/>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:13.5,fontWeight:800,color:sRcpt?C.green:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ</div>
+            <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.5}}>เช็คบิล/พิมพ์ใบเสร็จซ้ำ/แยกบิล จะพิมพ์ออกเครื่องนี้ · ติ๊กได้หลายเครื่อง — ใบเสร็จจะออกทุกเครื่องที่เลือก</div>
+          </div>
+        </label>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"15px 0 8px",flexWrap:"wrap",gap:8}}>
           <div style={{fontSize:13,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>📂 หมวดหมู่ / เมนู ที่พิมพ์ออกเครื่องนี้</div>
           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
