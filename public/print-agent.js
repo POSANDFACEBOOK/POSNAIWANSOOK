@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 10;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 11;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -86,6 +86,19 @@ async function discoverPrinters(existing) {
 }
 
 // ── ESC/POS (พอร์ตมาจากแอป buildKitchenESC) ──────────────────────────────
+// แปลงข้อความเป็น TIS-620 (CP874) สำหรับเครื่องพิมพ์ไทย — Unicode ไทย U+0E01..U+0E5B → ไบต์ 0xA1..0xFB
+// (ส่ง UTF-8 ตรงๆ เครื่องจะอ่านเป็นภาษาจีนมั่ว — ต้องส่งเป็น TIS-620 + เลือก code page ไทยด้วย ESC t)
+function thaiBytes(s) {
+  const out = [];
+  for (const ch of String(s)) {
+    const cp = ch.codePointAt(0);
+    if (cp < 0x80) out.push(cp);                                       // ASCII
+    else if (cp >= 0x0e01 && cp <= 0x0e5b) out.push(cp - 0x0e00 + 0xa0); // ไทย → TIS-620
+    else out.push(0x3f);                                              // อื่นๆ → '?'
+  }
+  return Buffer.from(out);
+}
+const SET_THAI = [0x1b, 0x74, 0x15];   // ESC t 21 = เลือก code page ไทย (TIS-620/CP874)
 function optionsText(opts) { return (opts || []).map(o => o && o.name).filter(Boolean).join(", "); }
 function isBluetooth(p) { try { return JSON.parse(p.description || "{}").c === "bt"; } catch { return false; } }
 function resolvePrinter(item, printers) {
@@ -95,8 +108,8 @@ function resolvePrinter(item, printers) {
   return printers.find(p => p.categories === null || p.categories === undefined) || null;
 }
 function buildKitchenESC(item, tableNum) {
-  const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(Buffer.from(s, "utf8"));
-  b(0x1b, 0x40); b(0x1b, 0x61, 0x01);
+  const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(thaiBytes(s));
+  b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01);
   b(0x1d, 0x21, 0x00); t("ใบสั่งอาหาร\n");
   b(0x1d, 0x21, 0x33); t(`โต๊ะ ${tableNum}\n`);
   b(0x1d, 0x21, 0x00); t(new Date().toLocaleString("th-TH") + "\n");
@@ -109,16 +122,16 @@ function buildKitchenESC(item, tableNum) {
   return Buffer.concat(bufs);
 }
 function testPageESC() {
-  const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(Buffer.from(s, "utf8"));
-  b(0x1b, 0x40); b(0x1b, 0x61, 0x01); b(0x1d, 0x21, 0x11); t("PRINT AGENT OK\n"); b(0x1d, 0x21, 0x00);
+  const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(thaiBytes(s));
+  b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01); b(0x1d, 0x21, 0x11); t("PRINT AGENT OK\n"); b(0x1d, 0x21, 0x00);
   t(new Date().toLocaleString() + "\n"); t("FOODCOST CLOUD AGENT\n");
   b(0x1b, 0x64, 0x03); b(0x1d, 0x56, 0x41, 0x00);
   return Buffer.concat(bufs);
 }
 // QR โต๊ะลูกค้า — ESC/POS GS ( k (พอร์ตจาก buildTableQRESC ในแอป)
 function buildQRESC(qr) {
-  const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(Buffer.from(s, "utf8"));
-  b(0x1b, 0x40); b(0x1b, 0x61, 0x01);
+  const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(thaiBytes(s));
+  b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01);
   if (qr.branch) { b(0x1d, 0x21, 0x00); t(qr.branch + "\n"); }
   b(0x1d, 0x21, 0x11); t("โต๊ะ " + (qr.table || "") + "\n"); b(0x1d, 0x21, 0x00);
   if (qr.label) t(qr.label + "\n");
