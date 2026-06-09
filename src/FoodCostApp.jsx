@@ -12758,9 +12758,14 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       catch(e){setStatus(s=>({...s,[p.id]:"offline"}));alert("❌ พิมพ์ทดสอบไม่สำเร็จ: "+(e.message||""));}
       return;
     }
-    if(isHttps){   // iPad/https สั่งพิมพ์ตรงไม่ได้ — ตัวพิมพ์ (agent) จะพิมพ์หน้าทดสอบให้เองเมื่อเพิ่มเครื่อง
-      setStatus(s=>({...s,[p.id]:"agent"}));
-      alert("📟 iPad/มือถือ สั่งพิมพ์ทดสอบตรงๆ ไม่ได้ (ข้อจำกัดของ Safari/เว็บ)\n\n✅ ระบบพิมพ์จริงผ่าน \"ตัวพิมพ์ (Print Agent)\" ที่ร้านอยู่แล้ว — เมื่อกด \"เพิ่มใช้งาน\" เครื่องใหม่ ตัวพิมพ์จะพิมพ์หน้าทดสอบให้เองภายในไม่กี่วินาที\n\nวิธีเช็คชัวร์: ดูว่ามีกระดาษหน้าทดสอบออกจากเครื่องนี้ไหม · หรือลองสั่งออเดอร์จริง 1 รายการ");
+    if(isHttps){   // iPad/https สั่งพิมพ์ตรงไม่ได้ → ส่งคำสั่งให้ "ตัวพิมพ์ (agent)" พิมพ์ทดสอบแทน (agent จะพิมพ์ให้ภายใน ~5 วิ)
+      setStatus(s=>({...s,[p.id]:"testing"}));
+      try{
+        let d={};try{d=JSON.parse(p.description||"{}");}catch{}
+        await api.updatePrinter(p.id,{description:JSON.stringify({...d,tp:Date.now()})});
+        setStatus(s=>({...s,[p.id]:"agent"}));
+        posToast("🧾 ส่งคำสั่งทดสอบพิมพ์ไปที่ตัวพิมพ์แล้ว — กระดาษจะออกจาก “"+(p.name||"เครื่องพิมพ์")+"” ใน ~5 วินาที","ok");
+      }catch(e){setStatus(s=>({...s,[p.id]:"agent"}));alert("ส่งคำสั่งทดสอบไม่สำเร็จ: "+(e&&e.message||e));}
       return;
     }
     setStatus(s=>({...s,[p.id]:"testing"}));

@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 7;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 8;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -130,7 +130,7 @@ function sendToPrinter(ip, port, buf) {
 // ── สถานะ: ออเดอร์/รายการที่พิมพ์ไปแล้ว (กันพิมพ์ซ้ำ) ──────────────────────
 let state = { sig: {}, init: {}, greeted: {} };
 try { if (fs.existsSync(STATE_FILE)) state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {}
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {};
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {};
 let primed = fs.existsSync(STATE_FILE);   // มีไฟล์อยู่แล้ว = ไม่ต้อง prime ใหม่
 function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch {} }
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
@@ -155,6 +155,20 @@ async function printItems(items, tableNum, printers) {
   }
 }
 
+// ทดสอบพิมพ์ตามคำสั่งจากแอป: แอปเขียน description.tp = เวลาที่กด → agent พิมพ์หน้าทดสอบให้เครื่องนั้นภายใน ~5 วินาที
+function tpOf(p) { try { return +(JSON.parse(p.description || "{}").tp) || 0; } catch { return 0; } }
+async function handleTestRequests(printers) {
+  for (const p of printers) {
+    if (isBluetooth(p) || !p.ip) continue;
+    const tp = tpOf(p);
+    if (tp && String(state.tested[p.id]) !== String(tp)) {
+      state.tested[p.id] = tp; saveState();   // มาร์คก่อนส่ง กันรอบ tick ซ้อนยิงซ้ำ (กดใหม่ = tp ใหม่ = ลองใหม่)
+      try { await sendToPrinter(p.ip, p.port, testPageESC()); console.log(`  🧾 ทดสอบพิมพ์ (สั่งจากแอป) → ${p.name} (${p.ip}) — ดูว่ามีกระดาษออกไหม`); }
+      catch (e) { console.log(`  ❌ ทดสอบพิมพ์ → ${p.name} (${p.ip}): ${e.message}`); }
+    }
+  }
+}
+
 async function tick() {
   let orders, printers;
   try { [orders, printers] = await Promise.all([getActiveOrders(), getPrinters()]); }
@@ -163,10 +177,12 @@ async function tick() {
 
   if (!primed) {
     for (const o of orders) if (o && o.items) { state.sig[o.id] = sigOf(o); state.init[o.id] = 1; }
+    for (const p of printers) { const tp = tpOf(p); if (tp) state.tested[p.id] = tp; }   // กันพิมพ์ทดสอบย้อนหลังตอน prime ครั้งแรก
     primed = true; saveState();
     console.log(`🔰 บันทึกออเดอร์ค้าง ${orders.length} รายการ (ไม่พิมพ์ซ้ำ) — พร้อมพิมพ์ออเดอร์ใหม่`);
     return;
   }
+  await handleTestRequests(printers);   // ทดสอบพิมพ์ตามคำสั่งที่กดจากแอป
   for (const o of orders) {
     if (!o || !o.items || !o.items.length) continue;
     const sig = sigOf(o), last = state.sig[o.id], first = !state.init[o.id];
