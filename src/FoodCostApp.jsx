@@ -10588,33 +10588,29 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       <div style={{flex:1,overflowY:"auto",padding:8}}>
         {items.length===0
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
-          :items.map((item,idx)=>{const baseQty=sentBaseMap.get(sentKey(item))||0;const newQty=Math.max(0,item.qty-baseQty);const unsent=newQty>0;return <SwipeRow key={idx} actionWidth={existingOrder?.id?86:46} bg={unsent?"#FFF7ED":C.greenLight} actions={<>
+          :items.map((item,idx)=>({item,idx,unsent:item.qty>(sentBaseMap.get(sentKey(item))||0)}))
+            .sort((a,b)=>(a.unsent?1:0)-(b.unsent?1:0))   // ส่งครัวแล้วอยู่บน · เมนูที่เพิ่งกดเข้ามา (ยังไม่ส่ง) ลงไปอยู่ล่างสุด
+            .map(({item,idx,unsent})=><SwipeRow key={idx} actionWidth={existingOrder?.id?86:46} bg={unsent?"#FFF7ED":C.greenLight} actions={<>
               {existingOrder?.id&&<button onClick={()=>agentReprint([item])} title="พิมพ์ซ้ำเฉพาะรายการนี้ไปครัว" aria-label="พิมพ์ซ้ำรายการนี้" style={{flex:1,border:"none",borderRadius:7,background:C.blue,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.print} s={16} c={C.white}/></button>}
               <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" aria-label="ลบรายการ" style={{flex:1,border:"none",borderRadius:7,background:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={16} c={C.white}/></button>
             </>}>
-            <div style={{padding:"10px 12px"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6,gap:6}}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>
-                  {item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}
-                  {item.note&&<div style={{fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>}
-                  <div style={{marginTop:3}}><span style={{fontSize:10,fontWeight:800,fontFamily:"'Sarabun',sans-serif",padding:"1px 8px",borderRadius:20,color:unsent?"#C2410C":C.green,background:unsent?"#FFEDD5":"#DCFCE7",border:`1px solid ${unsent?"#FED7AA":"#BBF7D0"}`}}>{unsent?(baseQty>0?`🟠 ใหม่ +${newQty} · ยังไม่ส่งครัว`:"🟠 ยังไม่ส่งครัว"):"✓ ส่งครัวแล้ว"}</span></div>
-                </div>
-                <span style={{fontSize:9.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0,opacity:.6}}>◀ ปัด</span>
+            <div style={{display:"flex",alignItems:"center",gap:9,padding:"9px 11px"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13.5,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>
+                {item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>+ {optionsText(item.options)}</div>}
+                {item.note
+                  ?<div onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",cursor:"pointer",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>
+                  :<div onClick={()=>{setNoteIdx(idx);setNoteText("");}} style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",cursor:"pointer"}}>+ หมายเหตุ</div>}
               </div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <div style={{display:"flex",alignItems:"center",gap:6}}>
-                  <button onClick={()=>chQty(idx,-1)} aria-label="ลดจำนวน" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={13}/></button>
-                  <span style={{fontSize:14,fontWeight:800,minWidth:22,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
-                  <button onClick={()=>chQty(idx,1)} aria-label="เพิ่มจำนวน" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={13}/></button>
-                </div>
-                <div style={{display:"flex",alignItems:"center",gap:6}}>
-                  <button onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{background:C.lineLight,border:"none",borderRadius:7,padding:"6px 10px",cursor:"pointer",fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600,minHeight:32}}>หมายเหตุ</button>
-                  <span style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</span>
-                </div>
+              <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+                <button onClick={()=>chQty(idx,-1)} aria-label="ลดจำนวน" style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={12}/></button>
+                <span style={{fontSize:14,fontWeight:800,minWidth:20,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
+                <button onClick={()=>chQty(idx,1)} aria-label="เพิ่มจำนวน" style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={12}/></button>
               </div>
+              <div style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif",minWidth:52,textAlign:"right",flexShrink:0}}>฿{(item.price*item.qty).toFixed(0)}</div>
+              <span style={{fontSize:14,color:C.ink4,opacity:.35,flexShrink:0}}>‹</span>
             </div>
-          </SwipeRow>;})
+          </SwipeRow>)
         }
       </div>
 
