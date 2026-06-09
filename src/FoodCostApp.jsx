@@ -9750,7 +9750,7 @@ async function btPrint(escData,btName){
 // เรนเดอร์ข้อความเป็น "รูปภาพขาวดำ" ด้วยฟอนต์ Sarabun (ไทยถูกต้อง 100% สระ/วรรณยุกต์เรียงสวย)
 // แล้วแปลงเป็นคำสั่ง ESC/POS raster (GS v 0) → พิมพ์ไทยคมชัดทุกเครื่อง ไม่ต้องพึ่ง code page เครื่องพิมพ์
 // lines: [{t, size, bold, align:'left'|'center', mb, rule}] · คืนค่าเป็น base64 ของไบต์ ESC/POS พร้อมพิมพ์
-async function escposSlipRaster(lines,width=576){
+async function escposSlipRaster(lines,width=576,opts={}){
   try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch{}
   const pad=14;
   const lineH=l=>l.rule?16:Math.round((l.size||28)*1.45)+(l.mb||4);
@@ -9763,6 +9763,14 @@ async function escposSlipRaster(lines,width=576){
   for(const l of lines){
     if(l.rule){ctx.fillRect(pad,y+6,width-pad*2,2);y+=lineH(l);continue;}
     const size=l.size||28;ctx.font=`${l.bold?"bold ":""}${size}px 'Sarabun',sans-serif`;
+    if(l.l!=null||l.r!=null){   // แถวสองคอลัมน์: ซ้าย(ชื่อ) + ขวา(ราคา) บนบรรทัดเดียว — ราคาชิดขวา ชื่อยาวเกินตัดด้วย …
+      const rtxt=l.r!=null?String(l.r):"";const rw=rtxt?ctx.measureText(rtxt).width:0;
+      let ltxt=l.l!=null?String(l.l):"";const avail=width-pad*2-rw-12;
+      if(ltxt&&avail>20&&ctx.measureText(ltxt).width>avail){while(ltxt.length>1&&ctx.measureText(ltxt+"…").width>avail)ltxt=ltxt.slice(0,-1);ltxt+="…";}
+      if(ltxt)ctx.fillText(ltxt,pad,y);
+      if(rtxt)ctx.fillText(rtxt,Math.max(pad,width-pad-rw),y);
+      y+=lineH(l);continue;
+    }
     const txt=l.t||"";let x=pad;
     if(l.align==="center"){const w=ctx.measureText(txt).width;x=Math.max(pad,Math.round((width-w)/2));}
     ctx.fillText(txt,x,y);
@@ -9772,11 +9780,85 @@ async function escposSlipRaster(lines,width=576){
   const bpr=Math.ceil(width/8);const ras=new Uint8Array(bpr*h);
   for(let yy=0;yy<h;yy++)for(let xx=0;xx<width;xx++){const i=(yy*width+xx)*4;const lum=data[i]*0.299+data[i+1]*0.587+data[i+2]*0.114;const a=data[i+3];if(a>40&&lum<128)ras[yy*bpr+(xx>>3)]|=(0x80>>(xx&7));}
   const head=[0x1b,0x40,0x1b,0x61,0x00,0x1d,0x76,0x30,0x00,bpr&0xff,(bpr>>8)&0xff,h&0xff,(h>>8)&0xff];
+  const extra=opts&&opts.appendBytes?Array.from(opts.appendBytes):[];   // ไบต์เสริม (เช่น QR เนทีฟ) แทรกก่อนป้อน/ตัดกระดาษ
   const tail=[0x0a,0x0a,0x0a,0x1d,0x56,0x41,0x00];
-  const out=new Uint8Array(head.length+ras.length+tail.length);
-  out.set(head,0);out.set(ras,head.length);out.set(tail,head.length+ras.length);
+  const out=new Uint8Array(head.length+ras.length+extra.length+tail.length);
+  out.set(head,0);out.set(ras,head.length);
+  if(extra.length)out.set(extra,head.length+ras.length);
+  out.set(tail,head.length+ras.length+extra.length);
   let bin="";for(let i=0;i<out.length;i++)bin+=String.fromCharCode(out[i]);
   return btoa(bin);
+}
+// ── ใบเสร็จเป็นรูปภาพ (raster) สำหรับ iPad/https พิมพ์ผ่านตัวพิมพ์ (agent) — ไทยคมชัด + QR พร้อมเพย์เนทีฟ ──
+function bahtR(n){return "฿"+(+n||0).toFixed(2);}
+function stripEmoji(s){return String(s||"").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}️⃣]/gu,"").replace(/\s+/g," ").trim();}
+// สร้างไบต์ QR เนทีฟ (GS ( k) จัดกึ่งกลาง — เอาไว้ต่อท้าย raster ใบเสร็จ (เครื่องพิมพ์เรนเดอร์ QR เอง คมชัด)
+function escposQRBytes(payload){
+  const data=new TextEncoder().encode(payload);const out=[];
+  out.push(0x0a,0x1b,0x61,0x01);                              // บรรทัดใหม่ + จัดกึ่งกลาง
+  out.push(0x1d,0x28,0x6b,0x04,0x00,0x31,0x41,0x32,0x00);     // model 2
+  out.push(0x1d,0x28,0x6b,0x03,0x00,0x31,0x43,0x06);          // ขนาดโมดูล 6 (เท่า QR โต๊ะที่พิมพ์ได้จริง — กันกว้างเกินกระดาษ)
+  out.push(0x1d,0x28,0x6b,0x03,0x00,0x31,0x45,0x31);          // แก้ความผิดพลาด M
+  const sl=data.length+3;
+  out.push(0x1d,0x28,0x6b,sl&0xff,(sl>>8)&0xff,0x31,0x50,0x30);// เก็บข้อมูล
+  for(const b of data)out.push(b);
+  out.push(0x1d,0x28,0x6b,0x03,0x00,0x31,0x51,0x30);          // พิมพ์
+  out.push(0x0a,0x1b,0x61,0x00);                              // บรรทัดใหม่ + กลับชิดซ้าย
+  return out;
+}
+// เลือกเครื่องพิมพ์ใบเสร็จ: 1) catch-all (categories=null) 2) เครื่อง IP ที่เปิดใช้งานเครื่องแรก (ข้ามบลูทูธ)
+function pickReceiptPrinter(printers){
+  const act=(printers||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
+  if(!act.length)return null;
+  return act.find(p=>p.categories==null)||act[0];
+}
+function buildReceiptLines(order,tableNum,branchName,posSettings){
+  const L=[];
+  L.push({t:branchName||"",size:34,bold:true,align:"center",mb:2});
+  if(posSettings&&posSettings.receipt_header)String(posSettings.receipt_header).split("\n").forEach(ln=>{if(ln.trim())L.push({t:ln.trim(),size:20,align:"center",mb:1});});
+  if(posSettings&&posSettings.vat_enabled)L.push({t:"ใบกำกับภาษีอย่างย่อ",size:22,bold:true,align:"center"});
+  L.push({t:"โต๊ะ "+tableNum,size:40,bold:true,align:"center"});
+  L.push({t:new Date().toLocaleString("th-TH",{calendar:"gregory"})+(order.id!=null?(" · เลขที่ "+order.id):""),size:18,align:"center"});
+  L.push({rule:true});
+  (order.items||[]).forEach(i=>{
+    const lineTotal=i.price*i.qty;const disc=i.item_discount||0;
+    L.push({l:`${i.qty}x ${i.name}`,r:bahtR(lineTotal-disc),size:26});
+    if(i.options&&i.options.length)L.push({t:"   + "+optionsText(i.options),size:20});
+    if(i.note)L.push({t:"   * "+i.note,size:20});
+    if(disc>0)L.push({t:"   ลด "+(i.item_discount_type==="percent"?i.item_discount_value+"%":bahtR(i.item_discount_value)),size:18});
+  });
+  L.push({rule:true});
+  L.push({l:"ยอดรวม",r:bahtR(order.subtotal||0),size:24});
+  if(order.discount>0)L.push({l:"ส่วนลดรวม",r:"-"+bahtR(order.discount),size:22});
+  if(order.promo_amount>0)L.push({l:stripEmoji(order.promo_name||"โปรโมชั่น"),r:"-"+bahtR(order.promo_amount),size:22});
+  if(order.service_charge>0)L.push({l:"ค่าบริการ (Service)",r:"+"+bahtR(order.service_charge),size:22});
+  if(order.vat>0)L.push({l:`VAT ${order.vat_rate||7}%${order.vat_included?" (รวมในราคา)":""}`,r:(order.vat_included?"":"+")+bahtR(order.vat),size:22});
+  L.push({l:"รวมทั้งสิ้น",r:bahtR(order.total||0),size:32,bold:true,mb:6});
+  if(posSettings&&posSettings.vat_enabled&&order.vat_included!==false)L.push({t:"* ราคานี้รวมภาษีมูลค่าเพิ่ม (VAT) แล้ว",size:16,align:"center"});
+  if(order.payment_method==="cash"&&order.cash_received){
+    L.push({l:"รับเงิน",r:bahtR(order.cash_received),size:22});
+    L.push({l:"เงินทอน",r:bahtR(Math.max(0,(+order.cash_received)-(order.total||0))),size:22});
+  }
+  L.push({rule:true});
+  L.push({t:"ชำระโดย: "+stripEmoji(PAY_LABEL[order.payment_method]||order.payment_method||"-"),size:24,bold:true,align:"center"});
+  L.push({t:"ขอบคุณที่ใช้บริการครับ",size:22,align:"center",mb:2});
+  if(posSettings&&posSettings.receipt_footer)String(posSettings.receipt_footer).split("\n").forEach(ln=>{if(ln.trim())L.push({t:ln.trim(),size:18,align:"center",mb:1});});
+  return L;
+}
+async function buildReceiptB64(order,tableNum,branchName,posSettings){
+  const lines=buildReceiptLines(order,tableNum,branchName,posSettings);
+  let qrBytes=null;
+  if(posSettings&&posSettings.show_qr_promptpay&&posSettings.promptpay_id&&order.payment_method!=="cash"){
+    const payload=genPromptPayPayload(posSettings.promptpay_id,order.total||0);
+    if(payload){
+      lines.push({rule:true});
+      lines.push({t:"สแกนพร้อมเพย์เพื่อชำระ",size:22,bold:true,align:"center"});
+      if(posSettings.promptpay_name)lines.push({t:stripEmoji(posSettings.promptpay_name),size:18,align:"center"});
+      lines.push({t:String(posSettings.promptpay_id),size:16,align:"center"});
+      qrBytes=escposQRBytes(payload);
+    }
+  }
+  return await escposSlipRaster(lines,576,qrBytes?{appendBytes:qrBytes}:{});
 }
 function printKitchenWindow(item,tableNum,printer){
   const title=printer?printer.name:"ใบสั่งอาหาร";
@@ -10564,6 +10646,22 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
   }
 
+  // พิมพ์ใบเสร็จ — iPad/https พิมพ์ผ่านตัวพิมพ์ (agent) เป็นรูปภาพไทยคมชัด · เดสก์ท็อป/LAN ใช้หน้าต่างพิมพ์ปกติ
+  async function smartPrintReceipt(order,tableNum){
+    const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
+    const rcp=isHttps?pickReceiptPrinter(printers):null;
+    if(isHttps&&rcp){
+      try{
+        const b64=await buildReceiptB64(order,tableNum,branch.name,posSettings);
+        let d={};try{d=JSON.parse(rcp.description||"{}");}catch{}
+        await api.updatePrinter(rcp.id,{description:JSON.stringify({...d,pj:{at:Date.now(),b64}})});
+        posToast("🧾 ส่งใบเสร็จไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
+      }catch(e){posToast("พิมพ์ใบเสร็จไม่สำเร็จ: "+(e&&e.message||e),"warn");try{printReceipt(order,tableNum,branch.name,posSettings);}catch{}}
+      return;
+    }
+    if(isHttps&&!rcp)posToast("⚠️ ยังไม่ได้ตั้งเครื่องพิมพ์ — เพิ่มที่ ⚙️ เครื่องพิมพ์ก่อน","warn");
+    printReceipt(order,tableNum,branch.name,posSettings);
+  }
   function reprintReceipt(){
     if(!existingOrder?.id)return;
     const pm=existingOrder.payment_method||payMethod;
@@ -10571,7 +10669,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     const data={...existingOrder,items,subtotal,discount:existingOrder.discount??totalDiscount,total:existingOrder.total??total,payment_method:pm,
       service_charge:existingOrder.service_charge??sc,vat:existingOrder.vat??vat,vat_rate:existingOrder.vat_rate??vatRate,vat_included:existingOrder.vat_included!=null?existingOrder.vat_included:vatIncluded,
       promo_amount:existingOrder.promo_amount??promoDiscount,promo_name:existingOrder.promo_name??selectedPromo?.name,cash_received:existingOrder.cash_received??(pm==="cash"?(+cashRcv||total):null)};
-    printReceipt(data,table.table_number,branch.name,posSettings);
+    smartPrintReceipt(data,table.table_number);
   }
 
   async function saveOrder(){
@@ -10604,7 +10702,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"sale",amount:total,reason:`ขายโต๊ะ ${table.table_number}`,order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
         }catch(err){console.error("บันทึก cash movement ไม่สำเร็จ:",err);}
       }
-      printReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,branch.name,posSettings);
+      await smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number);
       onDone();onClose();
     }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSaving(false);
   }
@@ -10761,7 +10859,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
             const ratio=subtotal>0?splitSubtotal/subtotal:0;
             const splitSC=sc*ratio,splitVAT=vat*ratio;
             const splitTotal=vatIncluded?splitSubtotal+splitSC:splitSubtotal+splitSC+splitVAT;
-            printReceipt({items:splitItems,subtotal:splitSubtotal,discount:0,total:splitTotal,payment_method:"split",service_charge:splitSC,vat:splitVAT,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,branch.name,posSettings);
+            smartPrintReceipt({items:splitItems,subtotal:splitSubtotal,discount:0,total:splitTotal,payment_method:"split",service_charge:splitSC,vat:splitVAT,vat_rate:vatRate,vat_included:vatIncluded},table.table_number);
           }} full s={{padding:"9px"}}>พิมพ์บิลแยก (ตัวอย่าง)</Btn>
         </div>
       </div>
