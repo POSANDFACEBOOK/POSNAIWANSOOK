@@ -9747,7 +9747,37 @@ async function btPrint(escData,btName){
   try{device.gatt.disconnect();}catch{}return device.name;
 }
 // ─────────────────────────────────────────────────────────
-
+// เรนเดอร์ข้อความเป็น "รูปภาพขาวดำ" ด้วยฟอนต์ Sarabun (ไทยถูกต้อง 100% สระ/วรรณยุกต์เรียงสวย)
+// แล้วแปลงเป็นคำสั่ง ESC/POS raster (GS v 0) → พิมพ์ไทยคมชัดทุกเครื่อง ไม่ต้องพึ่ง code page เครื่องพิมพ์
+// lines: [{t, size, bold, align:'left'|'center', mb, rule}] · คืนค่าเป็น base64 ของไบต์ ESC/POS พร้อมพิมพ์
+async function escposSlipRaster(lines,width=576){
+  try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch{}
+  const pad=14;
+  const lineH=l=>l.rule?16:Math.round((l.size||28)*1.45)+(l.mb||4);
+  let h=pad*2; lines.forEach(l=>{h+=lineH(l);});
+  const cv=document.createElement("canvas");cv.width=width;cv.height=h;
+  const ctx=cv.getContext("2d");
+  ctx.fillStyle="#fff";ctx.fillRect(0,0,width,h);
+  ctx.fillStyle="#000";ctx.textBaseline="top";
+  let y=pad;
+  for(const l of lines){
+    if(l.rule){ctx.fillRect(pad,y+6,width-pad*2,2);y+=lineH(l);continue;}
+    const size=l.size||28;ctx.font=`${l.bold?"bold ":""}${size}px 'Sarabun',sans-serif`;
+    const txt=l.t||"";let x=pad;
+    if(l.align==="center"){const w=ctx.measureText(txt).width;x=Math.max(pad,Math.round((width-w)/2));}
+    ctx.fillText(txt,x,y);
+    y+=lineH(l);
+  }
+  const data=ctx.getImageData(0,0,width,h).data;
+  const bpr=Math.ceil(width/8);const ras=new Uint8Array(bpr*h);
+  for(let yy=0;yy<h;yy++)for(let xx=0;xx<width;xx++){const i=(yy*width+xx)*4;const lum=data[i]*0.299+data[i+1]*0.587+data[i+2]*0.114;const a=data[i+3];if(a>40&&lum<128)ras[yy*bpr+(xx>>3)]|=(0x80>>(xx&7));}
+  const head=[0x1b,0x40,0x1b,0x61,0x00,0x1d,0x76,0x30,0x00,bpr&0xff,(bpr>>8)&0xff,h&0xff,(h>>8)&0xff];
+  const tail=[0x0a,0x0a,0x0a,0x1d,0x56,0x41,0x00];
+  const out=new Uint8Array(head.length+ras.length+tail.length);
+  out.set(head,0);out.set(ras,head.length);out.set(tail,head.length+ras.length);
+  let bin="";for(let i=0;i<out.length;i++)bin+=String.fromCharCode(out[i]);
+  return btoa(bin);
+}
 function printKitchenWindow(item,tableNum,printer){
   const title=printer?printer.name:"ใบสั่งอาหาร";
   const w=openPrintWindow(350,500);
@@ -12880,13 +12910,22 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       catch(e){setStatus(s=>({...s,[p.id]:"offline"}));alert("❌ พิมพ์ทดสอบไม่สำเร็จ: "+(e.message||""));}
       return;
     }
-    if(isHttps){   // iPad/https สั่งพิมพ์ตรงไม่ได้ → ส่งคำสั่งให้ "ตัวพิมพ์ (agent)" พิมพ์ทดสอบแทน (agent จะพิมพ์ให้ภายใน ~5 วิ)
+    if(isHttps){   // iPad/https สั่งพิมพ์ตรงไม่ได้ → เรนเดอร์ไทยเป็นรูปภาพ (คมชัด) แล้วส่งให้ "ตัวพิมพ์ (agent)" พิมพ์ (~5 วิ)
       setStatus(s=>({...s,[p.id]:"testing"}));
       try{
+        const b64=await escposSlipRaster([
+          {t:"ทดสอบพิมพ์ (รูปภาพ)",size:30,bold:true,align:"center"},
+          {t:"ภาษาไทยคมชัด",size:24,align:"center"},
+          {rule:true},
+          {t:"ชาบูจัมโบ้ กุ้งเผา ผัดไทย",size:32,bold:true,align:"left"},
+          {t:"ในวันเบาๆ + เพิ่มมาก",size:28,align:"left"},
+          {rule:true},
+          {t:new Date().toLocaleString("th-TH"),size:20,align:"center"},
+        ],576);
         let d={};try{d=JSON.parse(p.description||"{}");}catch{}
-        await api.updatePrinter(p.id,{description:JSON.stringify({...d,tp:Date.now()})});
+        await api.updatePrinter(p.id,{description:JSON.stringify({...d,pj:{at:Date.now(),b64}})});
         setStatus(s=>({...s,[p.id]:"agent"}));
-        posToast("🧾 ส่งคำสั่งทดสอบพิมพ์ไปที่ตัวพิมพ์แล้ว — กระดาษจะออกจาก “"+(p.name||"เครื่องพิมพ์")+"” ใน ~5 วินาที","ok");
+        posToast("🧾 ส่งทดสอบพิมพ์ (แบบรูปภาพ ไทยคมชัด) ไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
       }catch(e){setStatus(s=>({...s,[p.id]:"agent"}));alert("ส่งคำสั่งทดสอบไม่สำเร็จ: "+(e&&e.message||e));}
       return;
     }

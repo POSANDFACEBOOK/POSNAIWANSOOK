@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 16;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 17;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -174,7 +174,7 @@ function sendToPrinter(ip, port, buf) {
 // ── สถานะ: ออเดอร์/รายการที่พิมพ์ไปแล้ว (กันพิมพ์ซ้ำ) ──────────────────────
 let state = { sig: {}, init: {}, greeted: {} };
 try { if (fs.existsSync(STATE_FILE)) state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {}
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {};
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {};
 let primed = fs.existsSync(STATE_FILE);   // มีไฟล์อยู่แล้ว = ไม่ต้อง prime ใหม่
 function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch {} }
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
@@ -243,6 +243,20 @@ async function handleQRRequests(printers) {
   }
 }
 
+// พิมพ์รูปภาพ (raster ESC/POS ที่แอปเรนเดอร์ไทยคมชัดมาให้แล้ว) ตามคำสั่ง: description.pj = {at, b64}
+function pjOf(p) { try { const j = JSON.parse(p.description || "{}").pj; return (j && j.at && j.b64) ? j : null; } catch { return null; } }
+async function handlePJRequests(printers) {
+  for (const p of printers) {
+    if (isBluetooth(p) || !p.ip) continue;
+    const j = pjOf(p);
+    if (j && String(state.printed[p.id]) !== String(j.at)) {
+      state.printed[p.id] = j.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
+      try { await sendToPrinter(p.ip, p.port, Buffer.from(j.b64, "base64")); console.log(`  🖼️ พิมพ์รูปภาพ (ไทยคมชัด) → ${p.name} (${p.ip})`); }
+      catch (e) { console.log(`  ❌ พิมพ์รูปภาพ → ${p.name} (${p.ip}): ${e.message}`); }
+    }
+  }
+}
+
 async function tick() {
   let orders, printers;
   try { [orders, printers] = await Promise.all([getActiveOrders(), getPrinters()]); }
@@ -251,7 +265,7 @@ async function tick() {
 
   if (!primed) {
     for (const o of orders) if (o && o.items) { state.sig[o.id] = sigOf(o); state.init[o.id] = 1; }
-    for (const p of printers) { const tp = tpOf(p); if (tp) state.tested[p.id] = tp; const rp = rpOf(p); if (rp) state.reprinted[p.id] = rp.at; const q = qrOf(p); if (q) state.qrPrinted[p.id] = q.at; }   // กันพิมพ์ย้อนหลังตอน prime ครั้งแรก
+    for (const p of printers) { const tp = tpOf(p); if (tp) state.tested[p.id] = tp; const rp = rpOf(p); if (rp) state.reprinted[p.id] = rp.at; const q = qrOf(p); if (q) state.qrPrinted[p.id] = q.at; const j = pjOf(p); if (j) state.printed[p.id] = j.at; }   // กันพิมพ์ย้อนหลังตอน prime ครั้งแรก
     primed = true; saveState();
     console.log(`🔰 บันทึกออเดอร์ค้าง ${orders.length} รายการ (ไม่พิมพ์ซ้ำ) — พร้อมพิมพ์ออเดอร์ใหม่`);
     return;
@@ -259,6 +273,7 @@ async function tick() {
   await handleTestRequests(printers);   // ทดสอบพิมพ์ตามคำสั่งที่กดจากแอป
   await handleReprintRequests(printers);   // พิมพ์ใบครัวซ้ำตามคำสั่งที่กดจากแอป
   await handleQRRequests(printers);   // พิมพ์ QR โต๊ะตามคำสั่งที่กดจากแอป
+  await handlePJRequests(printers);   // พิมพ์รูปภาพ (ไทยคมชัด) ตามคำสั่งที่กดจากแอป
   for (const o of orders) {
     if (!o || !o.items || !o.items.length) continue;
     const sig = sigOf(o), last = state.sig[o.id], first = !state.init[o.id];
