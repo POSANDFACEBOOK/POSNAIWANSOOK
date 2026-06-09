@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 13;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 14;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -98,7 +98,7 @@ function thaiBytes(s) {
   }
   return Buffer.from(out);
 }
-const THAI_CP = 21;                              // เลขโค้ดเพจไทย (ปรับได้ถ้ารุ่นนี้ใช้เลขอื่น เช่น 26/20)
+const THAI_CP = 27;                              // เลขโค้ดเพจไทยของ Xprinter C300H (ยืนยันจากการทดสอบจริง — รุ่นนี้ใช้ 27 ไม่ใช่ 21)
 const SET_THAI = [0x1c, 0x2e, 0x1b, 0x74, THAI_CP];   // FS . (ยกเลิกโหมดตัวอักษรจีน 2 ไบต์) + ESC t = เลือกโค้ดเพจไทย (TIS-620/CP874)
 function optionsText(opts) { return (opts || []).map(o => o && o.name).filter(Boolean).join(", "); }
 function isBluetooth(p) { try { return JSON.parse(p.description || "{}").c === "bt"; } catch { return false; } }
@@ -124,19 +124,12 @@ function buildKitchenESC(item, tableNum) {
 }
 function testPageESC() {
   const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(thaiBytes(s));
-  const a = s => bufs.push(Buffer.from(s, "ascii"));
-  const W = "กขคง จฉช";   // คำทดสอบไทยสั้นๆ — บรรทัดไหนอ่านออกว่า "กขคง จฉช" = โค้ดเพจนั้นถูก
   b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01);
-  b(0x1d, 0x21, 0x11); t(`PRINT AGENT v${AGENT_VERSION}\n`); b(0x1d, 0x21, 0x00);
-  b(0x1b, 0x61, 0x00);   // ชิดซ้าย
-  a("=== find Thai codepage ===\n");
-  a("look for: ");
-  t("กขคง จฉช\n");   // (อาจเพี้ยนบรรทัดนี้)
-  // ไม่ส่ง FS . (เผื่อ FS . รบกวน)
-  for (const cp of [21, 26]) { b(0x1b, 0x74, cp); a(`nofs${cp}:`); t(W + "\n"); }
-  // ส่ง FS . (ยกเลิกโหมดจีน) + ไล่โค้ดเพจ 0..50
-  for (let cp = 0; cp <= 50; cp++) { b(0x1c, 0x2e); b(0x1b, 0x74, cp); a(`${cp}:`); t(W + "\n"); }
-  b(0x1b, 0x74, THAI_CP);
+  b(0x1d, 0x21, 0x11); t("ทดสอบพิมพ์\n"); b(0x1d, 0x21, 0x00);
+  t(`PRINT AGENT v${AGENT_VERSION}\n`);
+  t("ภาษาไทยใช้งานได้แล้ว\n");
+  t("เมนูทดสอบ ก ข ค ง\n");
+  t(new Date().toLocaleString("th-TH") + "\n");
   b(0x1b, 0x64, 0x03); b(0x1d, 0x56, 0x41, 0x00);
   return Buffer.concat(bufs);
 }
