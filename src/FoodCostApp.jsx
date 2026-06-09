@@ -10589,7 +10589,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         {items.length===0
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
           :items.map((item,idx)=>{const baseQty=sentBaseMap.get(sentKey(item))||0;const newQty=Math.max(0,item.qty-baseQty);const unsent=newQty>0;return <SwipeRow key={idx} actionWidth={existingOrder?.id?86:46} bg={unsent?"#FFF7ED":C.greenLight} actions={<>
-              {existingOrder?.id&&<button onClick={()=>agentReprint(items)} title="พิมพ์ซ้ำทั้งออเดอร์ไปครัว (เผื่อบิลครัวหาย)" aria-label="พิมพ์ซ้ำทั้งออเดอร์" style={{flex:1,border:"none",borderRadius:7,background:C.blue,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.print} s={16} c={C.white}/></button>}
+              {existingOrder?.id&&<button onClick={()=>agentReprint([item])} title="พิมพ์ซ้ำเฉพาะรายการนี้ไปครัว" aria-label="พิมพ์ซ้ำรายการนี้" style={{flex:1,border:"none",borderRadius:7,background:C.blue,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.print} s={16} c={C.white}/></button>}
               <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" aria-label="ลบรายการ" style={{flex:1,border:"none",borderRadius:7,background:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={16} c={C.white}/></button>
             </>}>
             <div style={{padding:"10px 12px"}}>
