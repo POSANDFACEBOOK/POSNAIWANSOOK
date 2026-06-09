@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 14;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 15;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -316,7 +316,8 @@ async function greetNewPrinters() {
   setInterval(greetNewPrinters, 30 * 1000);
   // สแกนหาเครื่องพิมพ์ใหม่ในวง LAN ทุก 2 นาที (เครื่องที่เสียบเพิ่มทีหลังจะถูกเพิ่มเองอัตโนมัติ — เร็วพอให้ปุ่ม "ค้นหาเครื่องพิมพ์" ในแอปเห็นผลไว)
   setInterval(async () => { try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {} }, 2 * 60 * 1000);
-  // เช็คเวอร์ชันใหม่ทุก 20 นาที → อัปเดตเองโดยไม่ต้องแตะ Termux
-  setInterval(checkUpdate, 20 * 60 * 1000);
+  // เช็คเวอร์ชันใหม่ทุก 5 นาที → อัปเดตเองโดยไม่ต้องแตะ Termux (เช็คตอนเริ่มด้วย)
+  checkUpdate();
+  setInterval(checkUpdate, 5 * 60 * 1000);
   console.log(`(เวอร์ชัน agent: v${AGENT_VERSION} — จะอัปเดตเองอัตโนมัติเมื่อมีเวอร์ชันใหม่)`);
 })();
