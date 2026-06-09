@@ -39,8 +39,9 @@ function buildLines(body) {
 function render(createCanvas, lines, W) {
   const pad = 8, QCOL = 86, RPAD = 8;
   const meas = createCanvas(8, 8).getContext("2d");
-  const COMB = /[ัำิ-ฺ็-๎]/;   // สระบน/ล่าง+ำ+วรรณยุกต์ (ห้ามตัดแยกจากพยัญชนะฐาน)
-  const clusters = s => { const out = []; for (const ch of s) { if (out.length && COMB.test(ch)) out[out.length - 1] += ch; else out.push(ch); } return out; };
+  const PRE = /[เแโใไ]/;        // สระหน้า — ต้องอยู่กับพยัญชนะที่ตามมา (ห้ามค้างท้ายบรรทัด)
+  const COMB = /[ัำิ-ฺ็-๎]/;    // สระบน/ล่าง/ำ + วรรณยุกต์ — อยู่กับพยัญชนะที่นำหน้า
+  const clusters = s => { const out = []; let pre = ""; for (const ch of s) { if (PRE.test(ch)) { pre += ch; continue; } if (out.length && !pre && COMB.test(ch)) { out[out.length - 1] += ch; continue; } out.push(pre + ch); pre = ""; } if (pre) out.push(pre); return out; };
   function wrap(text, size, bold, maxW) {
     meas.font = `${bold ? "bold " : ""}${size}px Sarabun, sans-serif`;
     const s = String(text); if (meas.measureText(s).width <= maxW) return [s];
