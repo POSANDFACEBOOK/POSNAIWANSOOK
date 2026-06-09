@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 12;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 13;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -124,17 +124,18 @@ function buildKitchenESC(item, tableNum) {
 }
 function testPageESC() {
   const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(thaiBytes(s));
+  const a = s => bufs.push(Buffer.from(s, "ascii"));
+  const W = "กขคง จฉช";   // คำทดสอบไทยสั้นๆ — บรรทัดไหนอ่านออกว่า "กขคง จฉช" = โค้ดเพจนั้นถูก
   b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01);
   b(0x1d, 0x21, 0x11); t(`PRINT AGENT v${AGENT_VERSION}\n`); b(0x1d, 0x21, 0x00);
-  t("ทดสอบภาษาไทย\n");
   b(0x1b, 0x61, 0x00);   // ชิดซ้าย
-  t("--- หาโค้ดเพจไทยที่ถูก ---\n");
-  // พิมพ์คำไทยเดียวกันภายใต้หลายโค้ดเพจ → ดูว่าบรรทัด t=NN ไหนอ่านออก = ใช้เลขนั้น
-  for (const cp of [21, 26, 20, 255, 30, 28, 71]) {
-    b(0x1c, 0x2e); b(0x1b, 0x74, cp);   // FS . + ESC t cp
-    bufs.push(Buffer.from(`t=${cp}: `, "ascii"));
-    t("เมนูทดสอบ กขค\n");
-  }
+  a("=== find Thai codepage ===\n");
+  a("look for: ");
+  t("กขคง จฉช\n");   // (อาจเพี้ยนบรรทัดนี้)
+  // ไม่ส่ง FS . (เผื่อ FS . รบกวน)
+  for (const cp of [21, 26]) { b(0x1b, 0x74, cp); a(`nofs${cp}:`); t(W + "\n"); }
+  // ส่ง FS . (ยกเลิกโหมดจีน) + ไล่โค้ดเพจ 0..50
+  for (let cp = 0; cp <= 50; cp++) { b(0x1c, 0x2e); b(0x1b, 0x74, cp); a(`${cp}:`); t(W + "\n"); }
   b(0x1b, 0x74, THAI_CP);
   b(0x1b, 0x64, 0x03); b(0x1d, 0x56, 0x41, 0x00);
   return Buffer.concat(bufs);
