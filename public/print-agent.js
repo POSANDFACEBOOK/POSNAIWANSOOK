@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 11;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 12;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -98,7 +98,8 @@ function thaiBytes(s) {
   }
   return Buffer.from(out);
 }
-const SET_THAI = [0x1b, 0x74, 0x15];   // ESC t 21 = เลือก code page ไทย (TIS-620/CP874)
+const THAI_CP = 21;                              // เลขโค้ดเพจไทย (ปรับได้ถ้ารุ่นนี้ใช้เลขอื่น เช่น 26/20)
+const SET_THAI = [0x1c, 0x2e, 0x1b, 0x74, THAI_CP];   // FS . (ยกเลิกโหมดตัวอักษรจีน 2 ไบต์) + ESC t = เลือกโค้ดเพจไทย (TIS-620/CP874)
 function optionsText(opts) { return (opts || []).map(o => o && o.name).filter(Boolean).join(", "); }
 function isBluetooth(p) { try { return JSON.parse(p.description || "{}").c === "bt"; } catch { return false; } }
 function resolvePrinter(item, printers) {
@@ -123,8 +124,18 @@ function buildKitchenESC(item, tableNum) {
 }
 function testPageESC() {
   const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(thaiBytes(s));
-  b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01); b(0x1d, 0x21, 0x11); t("PRINT AGENT OK\n"); b(0x1d, 0x21, 0x00);
-  t(new Date().toLocaleString() + "\n"); t("FOODCOST CLOUD AGENT\n");
+  b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01);
+  b(0x1d, 0x21, 0x11); t(`PRINT AGENT v${AGENT_VERSION}\n`); b(0x1d, 0x21, 0x00);
+  t("ทดสอบภาษาไทย\n");
+  b(0x1b, 0x61, 0x00);   // ชิดซ้าย
+  t("--- หาโค้ดเพจไทยที่ถูก ---\n");
+  // พิมพ์คำไทยเดียวกันภายใต้หลายโค้ดเพจ → ดูว่าบรรทัด t=NN ไหนอ่านออก = ใช้เลขนั้น
+  for (const cp of [21, 26, 20, 255, 30, 28, 71]) {
+    b(0x1c, 0x2e); b(0x1b, 0x74, cp);   // FS . + ESC t cp
+    bufs.push(Buffer.from(`t=${cp}: `, "ascii"));
+    t("เมนูทดสอบ กขค\n");
+  }
+  b(0x1b, 0x74, THAI_CP);
   b(0x1b, 0x64, 0x03); b(0x1d, 0x56, 0x41, 0x00);
   return Buffer.concat(bufs);
 }
