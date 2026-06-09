@@ -10316,7 +10316,7 @@ function MenuOptionPicker({menu,groups,onConfirm,onClose}){
 // ── POS ORDER PANEL ───────────────────────────────────
 // ══════════════════════════════════════════════════════
 // แถวที่ปัดซ้ายเพื่อเผยปุ่มที่ซ่อนไว้ข้างหลัง (เช่น พิมพ์ซ้ำ/ยกเลิก) — แตะ=ปกติ, ปัดซ้าย=โผล่ปุ่ม
-function SwipeRow({children,actions,actionWidth=86}){
+function SwipeRow({children,actions,actionWidth=86,bg}){
   const[open,setOpen]=useState(false);
   const fg=useRef(null),st=useRef(null),dragged=useRef(false);
   const setX=x=>{if(fg.current)fg.current.style.transform=`translateX(${x}px)`;};
@@ -10328,7 +10328,7 @@ function SwipeRow({children,actions,actionWidth=86}){
   function end(){const s=st.current;st.current=null;if(fg.current)fg.current.style.transition="transform .18s";if(!s||s.drag!==true)return;const willOpen=s.cur<-actionWidth/2;setOpen(willOpen);setX(willOpen?-actionWidth:0);}
   return <div style={{position:"relative",overflow:"hidden",borderRadius:9,marginBottom:6,border:`1px solid ${C.line}`,background:C.bg}}>
     <div style={{position:"absolute",top:0,right:0,bottom:0,width:actionWidth,display:"flex",alignItems:"stretch",gap:5,padding:5,boxSizing:"border-box"}}>{actions}</div>
-    <div ref={fg} onClickCapture={e=>{if(dragged.current){e.stopPropagation();e.preventDefault();dragged.current=false;}}} onTouchStart={down} onTouchMove={move} onTouchEnd={end} onTouchCancel={end} onMouseDown={down} onMouseMove={e=>{if(st.current)move(e);}} onMouseUp={end} onMouseLeave={()=>{if(st.current&&st.current.drag===true)end();else st.current=null;}} style={{position:"relative",background:C.white,touchAction:"pan-y",willChange:"transform"}}>{children}</div>
+    <div ref={fg} onClickCapture={e=>{if(dragged.current){e.stopPropagation();e.preventDefault();dragged.current=false;}}} onTouchStart={down} onTouchMove={move} onTouchEnd={end} onTouchCancel={end} onMouseDown={down} onMouseMove={e=>{if(st.current)move(e);}} onMouseUp={end} onMouseLeave={()=>{if(st.current&&st.current.drag===true)end();else st.current=null;}} style={{position:"relative",background:bg||C.white,touchAction:"pan-y",willChange:"transform"}}>{children}</div>
   </div>;
 }
 function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser,onClose,onDone,printers=[],shift=null,posSettings=null,promotions=[]}){
@@ -10372,11 +10372,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   // มีรายการใหม่ที่ยังไม่ได้ส่งพิมพ์ไหม (เทียบกับที่ส่งไปแล้วใน existingOrder) → ใช้เปิด/ปิดปุ่ม "ส่งรายการ"
   const sentKey=i=>`${i.menu_id}|${i.note||""}|${optionsText(i.options)}`;
-  const hasNewItems=useMemo(()=>{
-    const base=new Map();(existingOrder?.items||[]).forEach(i=>base.set(sentKey(i),(base.get(sentKey(i))||0)+i.qty));
-    for(const i of items){if(i.qty>(base.get(sentKey(i))||0))return true;}
-    return false;
-  },[items,existingOrder]);
+  // จำนวนที่ "ส่งครัวไปแล้ว" ต่อเมนู (จาก existingOrder) — ใช้แยกสีรายการที่ส่งแล้ว/ยังไม่ส่ง และเปิด/ปิดปุ่มส่ง
+  const sentBaseMap=useMemo(()=>{const m=new Map();(existingOrder?.items||[]).forEach(i=>m.set(sentKey(i),(m.get(sentKey(i))||0)+i.qty));return m;},[existingOrder]);
+  const hasNewItems=useMemo(()=>{for(const i of items){if(i.qty>(sentBaseMap.get(sentKey(i))||0))return true;}return false;},[items,sentBaseMap]);
   const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
   const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
   const manualDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0);
@@ -10464,7 +10462,6 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     else if(sent)posToast("🔁 ส่งคำสั่งพิมพ์ใบครัวไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
     else posToast("⚠️ เมนูนี้ยังไม่ได้กำหนดเครื่องพิมพ์ — ตั้งที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์","warn");
   }
-  const reprintItem=(item)=>agentReprint([item]);
 
   async function cancelOrder(){
     if(!existingOrder?.id)return;
@@ -10591,13 +10588,18 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       <div style={{flex:1,overflowY:"auto",padding:8}}>
         {items.length===0
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
-          :items.map((item,idx)=><SwipeRow key={idx} actionWidth={existingOrder?.id?86:46} actions={<>
-              {existingOrder?.id&&<button onClick={()=>reprintItem(item)} title="พิมพ์ซ้ำรายการนี้ไปครัว" aria-label="พิมพ์ซ้ำ" style={{flex:1,border:"none",borderRadius:7,background:C.blue,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.print} s={16} c={C.white}/></button>}
+          :items.map((item,idx)=>{const baseQty=sentBaseMap.get(sentKey(item))||0;const newQty=Math.max(0,item.qty-baseQty);const unsent=newQty>0;return <SwipeRow key={idx} actionWidth={existingOrder?.id?86:46} bg={unsent?"#FFF7ED":C.greenLight} actions={<>
+              {existingOrder?.id&&<button onClick={()=>agentReprint(items)} title="พิมพ์ซ้ำทั้งออเดอร์ไปครัว (เผื่อบิลครัวหาย)" aria-label="พิมพ์ซ้ำทั้งออเดอร์" style={{flex:1,border:"none",borderRadius:7,background:C.blue,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.print} s={16} c={C.white}/></button>}
               <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" aria-label="ลบรายการ" style={{flex:1,border:"none",borderRadius:7,background:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={16} c={C.white}/></button>
             </>}>
             <div style={{padding:"10px 12px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6,gap:6}}>
-                <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>
+                  {item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}
+                  {item.note&&<div style={{fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>}
+                  <div style={{marginTop:3}}><span style={{fontSize:10,fontWeight:800,fontFamily:"'Sarabun',sans-serif",padding:"1px 8px",borderRadius:20,color:unsent?"#C2410C":C.green,background:unsent?"#FFEDD5":"#DCFCE7",border:`1px solid ${unsent?"#FED7AA":"#BBF7D0"}`}}>{unsent?(baseQty>0?`🟠 ใหม่ +${newQty} · ยังไม่ส่งครัว`:"🟠 ยังไม่ส่งครัว"):"✓ ส่งครัวแล้ว"}</span></div>
+                </div>
                 <span style={{fontSize:9.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0,opacity:.6}}>◀ ปัด</span>
               </div>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
@@ -10612,7 +10614,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
                 </div>
               </div>
             </div>
-          </SwipeRow>)
+          </SwipeRow>;})
         }
       </div>
 
