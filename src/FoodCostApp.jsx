@@ -9657,9 +9657,14 @@ export default function App(){
 // ── PRINT HELPERS ─────────────────────────────────────
 // ══════════════════════════════════════════════════════
 const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
-function printReceipt(order, tableNum, branchName, posSettings=null){
+function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const w=openPrintWindow(400,700);
   if(!w)return;
+  // องค์ประกอบตามหลักภาษีไทย (ใบกำกับภาษีอย่างย่อ) — แสดงเมื่อเปิด VAT ในตั้งค่า POS
+  const taxLabel=posSettings?.vat_enabled?`<div style="text-align:center;font-weight:800;font-size:13px;margin:3px 0">ใบกำกับภาษีอย่างย่อ</div>`:"";
+  const rcptNo=order.id!=null?` · เลขที่ ${esc(order.id)}`:"";
+  const vatIncNote=(posSettings?.vat_enabled&&order.vat_included!==false)?`<div style="text-align:center;font-size:10px;color:#555;margin-top:3px">* ราคานี้รวมภาษีมูลค่าเพิ่ม (VAT) แล้ว</div>`:"";
+  const autoPrint=opts.preview?"":`<script>window.onload=()=>window.print();<\/script>`;
   const rows=(order.items||[]).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${esc(i.name)}${i.options&&i.options.length?`<br/><span style="font-size:11px;color:#0D9488">+ ${esc(optionsText(i.options))}</span>`:""}${i.note?`<br/><span style="font-size:11px;color:#666">★${esc(i.note)}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?esc(i.item_discount_value)+"%":"฿"+esc(i.item_discount_value)}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
   const payLabel=PAY_LABEL[order.payment_method]||esc(order.payment_method||"-");
   const cashLine=order.payment_method==="cash"&&order.cash_received?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(2)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-(order.total||0)).toFixed(2)}</span></div>`:"";
@@ -9677,7 +9682,7 @@ function printReceipt(order, tableNum, branchName, posSettings=null){
   }
   const headerExtra=posSettings?.receipt_header?`<div style="text-align:center;font-size:11px;color:#444;white-space:pre-line;margin:4px 0">${esc(posSettings.receipt_header)}</div>`:"";
   const footerExtra=posSettings?.receipt_footer?`<div style="text-align:center;font-size:11px;color:#444;white-space:pre-line;margin-top:6px">${esc(posSettings.receipt_footer)}</div>`:"";
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px;font-size:13px}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2>${esc(branchName)}</h2>${headerExtra}<div class="tbl-num">โต๊ะ ${esc(tableNum)}</div><div style="text-align:center;font-size:11px;color:#555">${new Date().toLocaleString("th-TH",{calendar:"gregory"})}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>ส่วนลดรวม</span><span>-฿${(+order.discount).toFixed(2)}</span></div>`:""}${promoLine}${scLine}${vatLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>รวมทั้งสิ้น</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${cashLine}<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div>${qrBlock}<div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div>${footerExtra}<br/><script>window.onload=()=>window.print();<\/script></body></html>`);
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px;font-size:13px}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2>${esc(branchName)}</h2>${headerExtra}${taxLabel}<div class="tbl-num">โต๊ะ ${esc(tableNum)}</div><div style="text-align:center;font-size:11px;color:#555">${new Date().toLocaleString("th-TH",{calendar:"gregory"})}${rcptNo}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>ส่วนลดรวม</span><span>-฿${(+order.discount).toFixed(2)}</span></div>`:""}${promoLine}${scLine}${vatLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>รวมทั้งสิ้น</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${vatIncNote}${cashLine}<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div>${qrBlock}<div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div>${footerExtra}<br/>${autoPrint}</body></html>`);
   w.document.close();
 }
 // ── Bluetooth ESC-POS helpers ────────────────────────────
@@ -10315,6 +10320,64 @@ function MenuOptionPicker({menu,groups,onConfirm,onClose}){
 // ══════════════════════════════════════════════════════
 // ── POS ORDER PANEL ───────────────────────────────────
 // ══════════════════════════════════════════════════════
+// จัดการใบเสร็จรับเงิน: ตั้งหัว/ท้ายกระดาษ + VAT ตามใบกำกับภาษีอย่างย่อของไทย + พรีวิว
+function ReceiptSettingsModal({currentBranch,onClose,onSaved}){
+  const lbl={display:"block",fontSize:12.5,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
+  const[loading,setLoading]=useState(true);const[s,setS]=useState(null);const[saving,setSaving]=useState(false);
+  async function load(){setLoading(true);try{const r=await api.getPOSSettings(currentBranch.id);setS((r&&r[0])||{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,receipt_header:"",receipt_footer:""});}catch(e){alert("โหลดไม่สำเร็จ: "+(e&&e.message||e));}setLoading(false);}
+  useEffect(()=>{load();/* eslint-disable-next-line */},[]);
+  const set=(k,v)=>setS(p=>({...p,[k]:v}));
+  const TPL="(ชื่อร้าน / ผู้ประกอบการ)\n(ที่อยู่ร้าน)\nเลขประจำตัวผู้เสียภาษี 0-0000-00000-00-0\nโทร. 0xx-xxx-xxxx";
+  async function save(){
+    setSaving(true);
+    try{const d={...s,branch_id:currentBranch.id,updated_at:new Date().toISOString()};delete d.id;const res=await api.upsertPOSSettings(d);if(Array.isArray(res)&&res[0])setS(res[0]);if(onSaved)await onSaved();posToast("บันทึกรูปแบบใบเสร็จแล้ว","ok");onClose();}
+    catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
+    setSaving(false);
+  }
+  function preview(){
+    const rate=+s.vat_rate||7;const sub=1597;
+    const vat=s.vat_enabled?(s.vat_included!==false?round2(sub*rate/(100+rate)):round2(sub*rate/100)):0;
+    const total=(s.vat_enabled&&s.vat_included===false)?round2(sub+vat):sub;
+    const sample={id:"(ตัวอย่าง)",items:[{name:"ชาบูจัมโบ้",qty:1,price:999},{name:"ชาบูเล็ก",qty:2,price:299,note:"ไม่เผ็ด"}],subtotal:sub,discount:0,total,payment_method:"cash",cash_received:total,vat_included:s.vat_included!==false,vat_rate:rate,vat,service_charge:0};
+    printReceipt(sample,"A1",currentBranch.name,s,{preview:true});
+  }
+  return <Modal title="🧾 จัดการใบเสร็จรับเงิน" onClose={onClose} wide>
+    {loading||!s?<Loading text="โหลดการตั้งค่า..."/>:<>
+      <div style={{background:C.blueLight,border:`1px solid ${C.blue}44`,borderRadius:12,padding:"11px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,lineHeight:1.7}}>
+        🧾 ใบเสร็จออกแบบตาม <b>ใบกำกับภาษีอย่างย่อ</b> ของไทย — เปิด VAT แล้วระบบจะใส่คำว่า "ใบกำกับภาษีอย่างย่อ" + "ราคารวม VAT แล้ว" + เลขที่ใบเสร็จ ให้อัตโนมัติ · ใส่ <b>ชื่อร้าน/ที่อยู่/เลขผู้เสียภาษี</b> ในหัวกระดาษด้านล่าง
+      </div>
+      <div style={{border:`1px solid ${C.line}`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+        <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+          <input type="checkbox" checked={!!s.vat_enabled} onChange={e=>set('vat_enabled',e.target.checked)} style={{width:18,height:18,accentColor:C.brand}}/>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>📊 จดทะเบียน VAT (ออกใบกำกับภาษีอย่างย่อ)</span>
+        </label>
+        {s.vat_enabled&&<div style={{display:"flex",gap:10,marginTop:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <div style={{flex:"0 0 110px"}}><label style={lbl}>อัตรา VAT (%)</label><input value={s.vat_rate??7} onChange={e=>set('vat_rate',e.target.value.replace(/[^\d.]/g,''))} inputMode="decimal" style={iS}/></div>
+          <div style={{flex:"1 1 200px"}}><label style={lbl}>วิธีคิด VAT</label>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>set('vat_included',true)} style={{flex:1,padding:"9px 8px",borderRadius:9,border:`1.5px solid ${s.vat_included!==false?C.brand:C.line}`,background:s.vat_included!==false?C.brandLight:C.white,color:s.vat_included!==false?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700}}>รวมในราคาแล้ว</button>
+              <button onClick={()=>set('vat_included',false)} style={{flex:1,padding:"9px 8px",borderRadius:9,border:`1.5px solid ${s.vat_included===false?C.brand:C.line}`,background:s.vat_included===false?C.brandLight:C.white,color:s.vat_included===false?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700}}>แยก VAT</button>
+            </div>
+          </div>
+        </div>}
+      </div>
+      <div style={{marginBottom:14}}>
+        <label style={lbl}>ข้อความหัวกระดาษ (ชื่อร้าน · ที่อยู่ · เลขประจำตัวผู้เสียภาษี)</label>
+        <textarea value={s.receipt_header||""} onChange={e=>set('receipt_header',e.target.value)} rows={5} placeholder={TPL} style={{...iS,resize:"vertical",lineHeight:1.6,fontSize:13}}/>
+        <button onClick={()=>set('receipt_header',(s.receipt_header&&s.receipt_header.trim())?s.receipt_header:TPL)} style={{marginTop:6,background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2}}>📋 ใส่แม่แบบใบกำกับภาษีอย่างย่อ</button>
+      </div>
+      <div style={{marginBottom:8}}>
+        <label style={lbl}>ข้อความท้ายกระดาษ</label>
+        <textarea value={s.receipt_footer||""} onChange={e=>set('receipt_footer',e.target.value)} rows={3} placeholder="เช่น ขอบคุณที่ใช้บริการ · FB/Line: ..." style={{...iS,resize:"vertical",lineHeight:1.6,fontSize:13}}/>
+      </div>
+      <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:12}}>💡 ส่วน วันที่ · เลขที่ใบเสร็จ · รายการ/จำนวน/ราคา · ยอดรวม · VAT ระบบใส่ให้อัตโนมัติบนใบเสร็จ</div>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",borderTop:`1px solid ${C.line}`,paddingTop:14}}>
+        <Btn v="ghost" onClick={preview} icon={I.bill}>👁 ดูตัวอย่าง</Btn>
+        <Btn v="success" onClick={save} loading={saving} icon={I.save}>บันทึก</Btn>
+      </div>
+    </>}
+  </Modal>;
+}
 // แถวที่ปัดซ้ายเพื่อเผยปุ่มที่ซ่อนไว้ข้างหลัง (เช่น พิมพ์ซ้ำ/ยกเลิก) — แตะ=ปกติ, ปัดซ้าย=โผล่ปุ่ม
 function SwipeRow({children,actions,actionWidth=86,bg}){
   const[open,setOpen]=useState(false);
@@ -12564,6 +12627,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   const[loading,setLoading]=useState(true);
   const[selTable,setSelTable]=useState(null);const[selOrder,setSelOrder]=useState(null);
   const[showPrinters,setShowPrinters]=useState(false);
+  const[showReceipt,setShowReceipt]=useState(false);
   const[showOrders,setShowOrders]=useState(false);   // today's-orders modal (re-added after the tab was replaced)
   const[printStation,setPS]=useState(isPrintStation());   // is THIS device the print station?
   const timerRef=useRef(null);
@@ -12693,6 +12757,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
         {canEdit&&!saleOnly&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
         {!saleOnly&&<Btn v="ghost" onClick={loadAll} icon={I.refresh} s={{padding:"5px 10px",fontSize:12}}>รีเฟรช</Btn>}
         <Btn v="ghost" onClick={()=>setShowPrinters(true)} icon={I.print} s={{padding:"5px 10px",fontSize:12}}>🖨 เครื่องพิมพ์</Btn>
+        <Btn v="ghost" onClick={()=>setShowReceipt(true)} icon={I.bill} s={{padding:"5px 10px",fontSize:12}}>🧾 จัดการใบเสร็จ</Btn>
         {!saleOnly&&<Btn v="ghost" onClick={onExitMode} s={{padding:"5px 10px",fontSize:12}}>← โหมด</Btn>}
       </div>
     </div>
@@ -12746,6 +12811,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={loadAll} printers={printers}/>
     </Modal>}
     {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} reloadMenus={reloadMenus} onClose={()=>setShowPrinters(false)} printStation={printStation} onTogglePrintStation={(v)=>setPS(v)}/>}
+    {showReceipt&&<ReceiptSettingsModal currentBranch={currentBranch} onClose={()=>setShowReceipt(false)} onSaved={reloadPosSettings}/>}
   </div>;
 }
 
