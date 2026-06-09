@@ -12694,7 +12694,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
       <div style={{marginLeft:"auto",display:"flex",gap:6}}>
         <Btn v="ghost" onClick={()=>setShowOrders(true)} icon={I.order} s={{padding:"5px 10px",fontSize:12}}>📊 รายงานยอดวันนี้</Btn>
         <Btn v="success" onClick={onCashDrawer} icon={I.cash} s={{padding:"5px 12px",fontSize:12}}>💰 เงินในลิ้นชัก</Btn>
-        {canEdit&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
+        {canEdit&&!saleOnly&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
         {!saleOnly&&<Btn v="ghost" onClick={loadAll} icon={I.refresh} s={{padding:"5px 10px",fontSize:12}}>รีเฟรช</Btn>}
         <Btn v="ghost" onClick={()=>setShowPrinters(true)} icon={I.print} s={{padding:"5px 10px",fontSize:12}}>🖨 เครื่องพิมพ์</Btn>
         {!saleOnly&&<Btn v="ghost" onClick={onExitMode} s={{padding:"5px 10px",fontSize:12}}>← โหมด</Btn>}
@@ -13001,7 +13001,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
 // ══════════════════════════════════════════════════════
 // ── POS TAB (top-level wrapper: mode + shift) ────────
 // ══════════════════════════════════════════════════════
-function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadPrinters,reloadMenus,saleOnly=false,onExit,refreshTick=0}){
+function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadPrinters,reloadMenus,saleOnly=false,onExit,refreshTick=0,closeShiftSignal=0,onShiftState}){
   // saleOnly = PIN-cashier kiosk: jump straight to the sale screen, no chooser,
   // no back office; "exit" logs the cashier out (back to the PIN gate).
   const[mode,setMode]=useState(saleOnly?'sale':null);  // null | 'sale' | 'manage'
@@ -13025,6 +13025,9 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
       setLoadingShift(false);
     }).catch(e=>{setLoadingShift(false);alert("โหลดข้อมูลกะไม่สำเร็จ: "+e.message);});
   },[mode,currentBranch.id]);
+  // รายงานสถานะ "มีกะเปิดอยู่ไหม" ให้ตัวห่อหุ้ม (kiosk bar) ใช้โชว์/ซ่อนปุ่มปิดกะ + รับสัญญาณกดปิดกะจากบาร์ด้านบน
+  useEffect(()=>{if(onShiftState)onShiftState(mode==='sale'&&!!shift);},[mode,shift]);// eslint-disable-line
+  useEffect(()=>{if(closeShiftSignal>0&&mode==='sale'&&shift)setShowCloseShift(true);},[closeShiftSignal]);// eslint-disable-line
 
   const canManage=!saleOnly&&hasPerm(currentUser,"settings");
   // Where "exit" goes: kiosk cashier → logout to PIN gate; normal user → mode chooser.
@@ -13062,6 +13065,8 @@ function POSPinGate({branchId}){
   const[shake,setShake]=useState(false);
   const[tick,setTick]=useState(0);
   const[posRefreshTick,setPosRefreshTick]=useState(0);   // kiosk header → triggers POSSaleMode.loadAll
+  const[shiftOpen,setShiftOpen]=useState(false);         // มีกะเปิดอยู่ไหม (POSTab รายงานมา) → โชว์ปุ่มปิดกะบนแถบบน
+  const[closeShiftReq,setCloseShiftReq]=useState(0);     // กดปุ่มปิดกะบนแถบบน → ส่งสัญญาณให้ POSTab เปิดหน้าปิดกะ
   useEffect(()=>{
     let alive=true;setLoading(true);setErr("");
     (async()=>{
@@ -13112,10 +13117,10 @@ function POSPinGate({branchId}){
             </div>
             <button onClick={()=>setPosRefreshTick(t=>t+1)} title="รีเฟรชข้อมูลโต๊ะ/ออเดอร์" style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:"#E2E8F0",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,flexShrink:0,display:"inline-flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}><Ic d={I.refresh} s={13} c="#E2E8F0"/>รีเฟรช</button>
           </div>
-          <button onClick={()=>{setSeller(null);setPin("");}} title="ออก (ใส่ PIN ใหม่)" style={{background:"rgba(239,68,68,0.18)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"7px 12px",cursor:"pointer",color:"#FCA5A5",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,flexShrink:0}}>ออก</button>
+          {shiftOpen&&<button onClick={()=>setCloseShiftReq(n=>n+1)} title="ปิดกะการขาย & พิมพ์สรุปยอด" style={{background:"linear-gradient(135deg,#EF4444,#DC2626)",border:"none",borderRadius:11,padding:isMobile?"10px 18px":"12px 26px",cursor:"pointer",color:"#fff",fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?14.5:16,fontWeight:900,flexShrink:0,display:"inline-flex",alignItems:"center",gap:7,boxShadow:"0 3px 12px rgba(239,68,68,.4)",whiteSpace:"nowrap"}}>🔚 ปิดกะ</button>}
         </div>
         <div style={{flex:1,padding:isMobile?"14px 12px":"20px 24px",minWidth:0,minHeight:0}}>
-          <POSTab menus={menus} reloadMenus={async()=>{try{setMenus(await api.getMenus());}catch{}}} currentBranch={branch} currentUser={synthUser} printers={printers} branches={[]} reloadPrinters={async()=>{try{setPrinters(await api.getAllPrinters());}catch{}}} saleOnly onExit={()=>{setSeller(null);setPin("");}} refreshTick={posRefreshTick}/>
+          <POSTab menus={menus} reloadMenus={async()=>{try{setMenus(await api.getMenus());}catch{}}} currentBranch={branch} currentUser={synthUser} printers={printers} branches={[]} reloadPrinters={async()=>{try{setPrinters(await api.getAllPrinters());}catch{}}} saleOnly onExit={()=>{setSeller(null);setPin("");}} refreshTick={posRefreshTick} closeShiftSignal={closeShiftReq} onShiftState={setShiftOpen}/>
         </div>
       </div>
     </>;
