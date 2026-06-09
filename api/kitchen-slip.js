@@ -17,38 +17,66 @@ async function ensureFont(GlobalFonts) {
   fontReg = true;
 }
 
-function optName(opts) { return (opts || []).map(o => o && o.name).filter(Boolean).join(", "); }
-
 function buildLines(body) {
   const lines = [
-    { t: "ใบสั่งอาหาร", size: 30, bold: true, align: "center" },
-    { t: String(body.table || ""), size: 64, bold: true, align: "center" },
+    { t: "ใบสั่งอาหาร", size: 28, bold: true, align: "center" },
+    { t: String(body.table || ""), size: 52, bold: true, align: "center" },
   ];
-  if (body.time) lines.push({ t: String(body.time), size: 20, align: "center" });
+  if (body.time) lines.push({ t: String(body.time), size: 19, align: "center" });
   lines.push({ rule: true });
+  lines.push({ c1: "จำนวน", c2: "ชื่อเมนู", size: 22, bold: true });   // หัวคอลัมน์
   (body.items || []).forEach(it => {
-    lines.push({ t: `${it.qty}x ${it.name}`, size: 42, bold: true, align: "left" });
-    const opt = optName(it.options);
-    if (opt) lines.push({ t: "   + " + opt, size: 26, align: "left" });
-    if (it.note) lines.push({ t: "   * " + it.note, size: 26, bold: true, align: "left" });
+    lines.push({ c1: String(it.qty), c2: String(it.name || ""), size: 36, bold: true, mb: 2 });
+    (it.options || []).forEach(o => { const n = o && o.name; if (n) lines.push({ t: "- " + n, size: 24, indent: true }); });  // ตัวเลือกแสดงทีละบรรทัด
+    if (it.note) lines.push({ t: "* " + it.note, size: 24, bold: true, indent: true });
   });
-  lines.push({ rule: true });
   return lines;
 }
 
+// เรนเดอร์เป็นรูปภาพ 1-bit แล้วแปลงเป็น ESC/POS raster (GS v 0)
+// รองรับ: {rule} เส้นคั่น · {t,size,bold,align,indent} ข้อความ · {c1,c2,size,bold} สองคอลัมน์ (จำนวน|ชื่อเมนู)
+// ชิดขอบบน/ล่างให้มากสุด (pad น้อย) ประหยัดกระดาษ · ตัดบรรทัดชื่อยาวโดยไม่แยกสระ/วรรณยุกต์ไทย
 function render(createCanvas, lines, W) {
-  const lineH = l => l.rule ? 20 : Math.round((l.size || 28) * 1.45) + 6;
-  const pad = 16;
-  let h = pad * 2; lines.forEach(l => { h += lineH(l); });
+  const pad = 8, QCOL = 86, RPAD = 8;
+  const meas = createCanvas(8, 8).getContext("2d");
+  const COMB = /[ัำิ-ฺ็-๎]/;   // สระบน/ล่าง+ำ+วรรณยุกต์ (ห้ามตัดแยกจากพยัญชนะฐาน)
+  const clusters = s => { const out = []; for (const ch of s) { if (out.length && COMB.test(ch)) out[out.length - 1] += ch; else out.push(ch); } return out; };
+  function wrap(text, size, bold, maxW) {
+    meas.font = `${bold ? "bold " : ""}${size}px Sarabun, sans-serif`;
+    const s = String(text); if (meas.measureText(s).width <= maxW) return [s];
+    const out = []; let cur = "";
+    for (const c of clusters(s)) { if (meas.measureText(cur + c).width <= maxW || cur === "") cur += c; else { out.push(cur); cur = c; } }
+    if (cur) out.push(cur); return out.length ? out : [s];
+  }
+  const nameMaxW = W - pad - QCOL - RPAD, fullMaxW = W - pad * 2;
+  const rows = [];   // ขยายบรรทัดที่ยาวเกินเป็นหลายบรรทัด
+  for (const l of lines) {
+    if (l.rule) { rows.push(l); continue; }
+    if (l.c1 != null || l.c2 != null) {
+      const nl = l.c2 != null ? wrap(l.c2, l.size, l.bold, nameMaxW) : [""];
+      nl.forEach((t, i) => rows.push({ c1: i === 0 ? l.c1 : "", c2: t, size: l.size, bold: l.bold, mb: i === nl.length - 1 ? (l.mb || 0) : 0 }));
+      continue;
+    }
+    if (l.align === "center") { rows.push(l); continue; }   // หัว/กึ่งกลาง: สั้น ไม่ต้อง wrap
+    const tl = wrap(l.t || "", l.size, l.bold, l.indent ? nameMaxW : fullMaxW);
+    tl.forEach((t, i) => rows.push({ t, size: l.size, bold: l.bold, indent: l.indent, mb: i === tl.length - 1 ? (l.mb || 0) : 0 }));
+  }
+  const lineH = l => l.rule ? 12 : Math.round((l.size || 28) * 1.3) + (l.mb != null ? l.mb : 3);
+  let h = pad * 2; rows.forEach(l => { h += lineH(l); });
   const cv = createCanvas(W, h);
   const ctx = cv.getContext("2d");
   ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, h);
   ctx.fillStyle = "#000"; ctx.textBaseline = "top";
   let y = pad;
-  for (const l of lines) {
-    if (l.rule) { ctx.fillRect(pad, y + 9, W - pad * 2, 2); y += lineH(l); continue; }
+  for (const l of rows) {
+    if (l.rule) { ctx.fillRect(pad, y + 5, W - pad * 2, 2); y += lineH(l); continue; }
     ctx.font = `${l.bold ? "bold " : ""}${l.size || 28}px Sarabun, sans-serif`;
-    const txt = l.t || ""; let x = pad;
+    if (l.c1 != null || l.c2 != null) {
+      if (l.c1) ctx.fillText(String(l.c1), pad, y);
+      if (l.c2) ctx.fillText(String(l.c2), pad + QCOL, y);
+      y += lineH(l); continue;
+    }
+    const txt = l.t || ""; let x = l.indent ? pad + QCOL : pad;
     if (l.align === "center") { const w = ctx.measureText(txt).width; x = Math.max(pad, Math.round((W - w) / 2)); }
     ctx.fillText(txt, x, y);
     y += lineH(l);
@@ -62,7 +90,7 @@ function render(createCanvas, lines, W) {
     if (img[i + 3] > 40 && lum < 128) ras[yy * bpr + (xx >> 3)] |= (0x80 >> (xx & 7));
   }
   const head = Buffer.from([0x1b, 0x40, 0x1b, 0x61, 0x00, 0x1d, 0x76, 0x30, 0x00, bpr & 0xff, (bpr >> 8) & 0xff, h & 0xff, (h >> 8) & 0xff]);
-  const tail = Buffer.from([0x0a, 0x0a, 0x0a, 0x1d, 0x56, 0x41, 0x00]);
+  const tail = Buffer.from([0x0a, 0x0a, 0x0a, 0x1d, 0x56, 0x41, 0x00]);   // feed ~3 บรรทัดให้พ้นใบมีดก่อนตัด (น้อยกว่านี้ใบมีดจะตัดโดนตัวอักษร)
   return Buffer.concat([head, ras, tail]);
 }
 
