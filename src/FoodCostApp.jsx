@@ -10315,6 +10315,22 @@ function MenuOptionPicker({menu,groups,onConfirm,onClose}){
 // ══════════════════════════════════════════════════════
 // ── POS ORDER PANEL ───────────────────────────────────
 // ══════════════════════════════════════════════════════
+// แถวที่ปัดซ้ายเพื่อเผยปุ่มที่ซ่อนไว้ข้างหลัง (เช่น พิมพ์ซ้ำ/ยกเลิก) — แตะ=ปกติ, ปัดซ้าย=โผล่ปุ่ม
+function SwipeRow({children,actions,actionWidth=86}){
+  const[open,setOpen]=useState(false);
+  const fg=useRef(null),st=useRef(null),dragged=useRef(false);
+  const setX=x=>{if(fg.current)fg.current.style.transform=`translateX(${x}px)`;};
+  // อ่านตำแหน่ง translateX จริงจาก DOM (กันค่าเพี้ยนตอนปัดเร็วซ้อนระหว่างอนิเมชัน)
+  const curX=()=>{const el=fg.current;if(!el)return open?-actionWidth:0;const t=getComputedStyle(el).transform;const m=t&&t.match(/matrix\(([^)]+)\)/);if(m){const p=m[1].split(",").map(Number);if(p.length>=6)return p[4];}return open?-actionWidth:0;};
+  useEffect(()=>{if(fg.current)fg.current.style.transition="transform .18s";setX(open?-actionWidth:0);},[open,actionWidth]);
+  function down(e){const t=e.touches?e.touches[0]:e;dragged.current=false;const b=curX();st.current={x0:t.clientX,y0:t.clientY,base:b,drag:null,cur:b};if(fg.current)fg.current.style.transition="none";}
+  function move(e){const s=st.current;if(!s)return;const t=e.touches?e.touches[0]:e;const dx=t.clientX-s.x0,dy=t.clientY-s.y0;if(s.drag===null){if(Math.abs(dx)>10||Math.abs(dy)>10)s.drag=Math.abs(dx)>Math.abs(dy)*1.3;}if(s.drag===true){dragged.current=true;if(e.cancelable&&e.preventDefault)e.preventDefault();const x=Math.max(-actionWidth,Math.min(0,s.base+dx));s.cur=x;setX(x);}}
+  function end(){const s=st.current;st.current=null;if(fg.current)fg.current.style.transition="transform .18s";if(!s||s.drag!==true)return;const willOpen=s.cur<-actionWidth/2;setOpen(willOpen);setX(willOpen?-actionWidth:0);}
+  return <div style={{position:"relative",overflow:"hidden",borderRadius:9,marginBottom:6,border:`1px solid ${C.line}`,background:C.bg}}>
+    <div style={{position:"absolute",top:0,right:0,bottom:0,width:actionWidth,display:"flex",alignItems:"stretch",gap:5,padding:5,boxSizing:"border-box"}}>{actions}</div>
+    <div ref={fg} onClickCapture={e=>{if(dragged.current){e.stopPropagation();e.preventDefault();dragged.current=false;}}} onTouchStart={down} onTouchMove={move} onTouchEnd={end} onTouchCancel={end} onMouseDown={down} onMouseMove={e=>{if(st.current)move(e);}} onMouseUp={end} onMouseLeave={()=>{if(st.current&&st.current.drag===true)end();else st.current=null;}} style={{position:"relative",background:C.white,touchAction:"pan-y",willChange:"transform"}}>{children}</div>
+  </div>;
+}
 function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser,onClose,onDone,printers=[],shift=null,posSettings=null,promotions=[]}){
   const isMobile=useIsMobile();
   const[mobileView,setMobileView]=useState("menu"); // "menu" | "order"
@@ -10354,6 +10370,13 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     });
   },[menus,selCat,search,bidSale]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
+  // มีรายการใหม่ที่ยังไม่ได้ส่งพิมพ์ไหม (เทียบกับที่ส่งไปแล้วใน existingOrder) → ใช้เปิด/ปิดปุ่ม "ส่งรายการ"
+  const sentKey=i=>`${i.menu_id}|${i.note||""}|${optionsText(i.options)}`;
+  const hasNewItems=useMemo(()=>{
+    const base=new Map();(existingOrder?.items||[]).forEach(i=>base.set(sentKey(i),(base.get(sentKey(i))||0)+i.qty));
+    for(const i of items){if(i.qty>(base.get(sentKey(i))||0))return true;}
+    return false;
+  },[items,existingOrder]);
   const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
   const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
   const manualDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0);
@@ -10395,26 +10418,53 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     setItems(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:(m.local_categories||{})[branch?.id]||m.category||null}]);
     setOptPick(null);
   }
-  function chQty(idx,d){setItems(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
+  function chQty(idx,d){
+    const it=items[idx];if(!it)return;
+    // floor = จำนวนที่ "ส่งครัวไปแล้ว" ของเมนูนี้ — ลดต่ำกว่านี้ด้วยปุ่ม − ไม่ได้ (ต้องปัดซ้ายยกเลิก เพื่อให้ครัว/QR ตรงกัน)
+    const base=new Map();(existingOrder?.items||[]).forEach(b=>base.set(sentKey(b),(base.get(sentKey(b))||0)+b.qty));
+    const floor=base.get(sentKey(it))||0;
+    if(d<0&&it.qty<=floor){posToast("รายการนี้ส่งครัวแล้ว — ลดจำนวนไม่ได้ · ปัดซ้ายเพื่อยกเลิกทั้งรายการ","warn");return;}
+    setItems(p=>p.map((x,j)=>j===idx?{...x,qty:Math.max(floor,x.qty+d)}:x).filter(x=>x.qty>0));
+  }
   function rmItem(idx){setItems(p=>p.filter((_,i)=>i!==idx));}
 
   async function voidItem(idx){
     if(existingOrder?.status==="paid"){alert("ไม่สามารถยกเลิกรายการของบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'รับเงินเข้า/จ่ายออก' ในเงินในลิ้นชัก");return;}
-    if(!await confirmDlg({message:`ยกเลิก "${items[idx]?.name}"?`,title:"ยกเลิกรายการ",confirmLabel:"ยกเลิกรายการ",cancelLabel:"ไม่ยกเลิก",danger:true}))return;
-    const newItems=items.filter((_,i)=>i!==idx);
+    const target=items[idx];if(!target)return;
+    if(!await confirmDlg({message:`ยกเลิก "${target.name}"?`,title:"ยกเลิกรายการ",confirmLabel:"ยกเลิกรายการ",cancelLabel:"ไม่ยกเลิก",danger:true}))return;
+    const newLocal=items.filter((_,i)=>i!==idx);
+    // ถ้าออเดอร์มีใน DB แล้ว และรายการที่ยกเลิกเป็น "รายการที่ส่งไปแล้ว" → อัปเดต DB (ครัว/QR ลูกค้าตรงกัน)
+    // โดยลบเฉพาะรายการที่ส่งแล้วตัวนั้นออก — ไม่ดึงรายการใหม่ที่ "ยังไม่ได้กดส่ง" ลง DB ก่อนเวลา
     if(existingOrder?.id){
-      try{
-        const newSub=newItems.reduce((s,i)=>s+i.price*i.qty,0);
-        await api.updatePOSOrder(existingOrder.id,{items:newItems,subtotal:newSub,total:newSub,discount:0,updated_at:new Date().toISOString()});
-      }catch(e){alert("ยกเลิกรายการไม่สำเร็จ: "+e.message);return;}
+      const k=sentKey(target);let removed=false;const newSent=[];
+      for(const s of(existingOrder.items||[])){if(!removed&&sentKey(s)===k){removed=true;continue;}newSent.push(s);}
+      if(removed){
+        try{
+          const newSub=newSent.reduce((s,i)=>s+i.price*i.qty,0);
+          await api.updatePOSOrder(existingOrder.id,{items:newSent,subtotal:newSub,total:newSub,discount:0,updated_at:new Date().toISOString()});
+        }catch(e){alert("ยกเลิกรายการไม่สำเร็จ: "+e.message);return;}
+      }
     }
-    setItems(newItems);
+    setItems(newLocal);
   }
 
-  async function reprintItem(item){
-    if(!isPrintStation()){posToast("📟 พิมพ์ใบครัวได้จากเครื่อง “สถานีพิมพ์” (Android) เท่านั้น","warn");return;}
-    await printKitchen([item],table.table_number,printers);
+  // พิมพ์ใบครัวซ้ำผ่าน "ตัวพิมพ์ (agent)" — จับคู่เครื่องพิมพ์ตามหมวด แล้วเขียนคำสั่ง rp ลง description ของเครื่องนั้น (agent พิมพ์ให้ ~5 วิ)
+  async function agentReprint(list){
+    const groups=new Map();
+    (list||[]).forEach(it=>{const pr=resolvePrinter(it,printers);const k=pr?pr.id:"_none";if(!groups.has(k))groups.set(k,{pr,items:[]});groups.get(k).items.push(it);});
+    let sent=0,noPrinter=0;const ups=[];
+    for(const{pr,items:gi}of groups.values()){
+      let d={};try{d=pr?JSON.parse(pr.description||"{}"):{};}catch{}
+      if(!pr||pr.active===false||!pr.ip||d.c==="bt"){noPrinter+=gi.length;continue;}   // ข้ามบลูทูธ/ไม่มี IP — agent พิมพ์ผ่าน IP เท่านั้น
+      ups.push(api.updatePrinter(pr.id,{description:JSON.stringify({...d,rp:{at:Date.now(),items:gi,table:table.table_number}})}));
+      sent+=gi.length;
+    }
+    try{if(ups.length)await Promise.all(ups);}catch(e){alert("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
+    if(sent&&noPrinter)posToast(`🔁 ส่งพิมพ์ซ้ำ ${sent} รายการ · อีก ${noPrinter} ยังไม่ได้กำหนดเครื่องพิมพ์`,"warn");
+    else if(sent)posToast("🔁 ส่งคำสั่งพิมพ์ใบครัวไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
+    else posToast("⚠️ เมนูนี้ยังไม่ได้กำหนดเครื่องพิมพ์ — ตั้งที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์","warn");
   }
+  const reprintItem=(item)=>agentReprint([item]);
 
   async function cancelOrder(){
     if(!existingOrder?.id)return;
@@ -10441,9 +10491,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const d={branch_id:branch.id,table_id:table.id,table_number:table.table_number,items,subtotal,discount:0,total:subtotal,status:"pending",ordered_by:currentUser.username,updated_at:new Date().toISOString()};
       if(existingOrder?.id)await api.updatePOSOrder(existingOrder.id,d);
       else await api.createPOSOrder(d);
-      // NOTE: we do NOT print here. The print-station device polls orders and prints
-      // new items (single source of truth → no double-print, works for iPad orders too).
-      posToast(isPrintStation()?"✅ บันทึกออเดอร์แล้ว — กำลังพิมพ์ใบครัว":"✅ บันทึกออเดอร์แล้ว — ใบครัวพิมพ์ที่สถานีพิมพ์","ok");
+      // NOTE: ไม่พิมพ์ที่นี่ — "ตัวพิมพ์ (agent)" ที่ร้าน poll ออเดอร์แล้วพิมพ์รายการใหม่เอง (จุดเดียว กันพิมพ์ซ้ำ + ใช้ได้กับ iPad)
+      posToast("✅ ส่งรายการแล้ว — ตัวพิมพ์กำลังพิมพ์ใบครัว","ok");
       onDone();onClose();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);
   }
@@ -10524,7 +10573,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 
       {/* Quick action bar */}
       {existingOrder?.id&&<div style={{padding:"6px 8px",borderBottom:`1px solid ${C.line}`,background:"#FFF8F6",display:"flex",gap:4,flexWrap:"wrap"}}>
-        <button onClick={()=>{if(!isPrintStation()){posToast("📟 พิมพ์ใบครัวได้จากเครื่อง “สถานีพิมพ์” (Android) เท่านั้น","warn");return;}printKitchen(items,table.table_number,printers);}} title="พิมพ์ใบครัวซ้ำทั้งหมด" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.line}`,borderRadius:7,background:C.white,cursor:"pointer",fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
+        <button onClick={()=>agentReprint(items)} title="พิมพ์ใบครัวซ้ำทั้งหมด (ผ่านตัวพิมพ์)" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.line}`,borderRadius:7,background:C.white,cursor:"pointer",fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
           <Ic d={I.print} s={12} c={C.ink3}/>พิมพ์ครัว
         </button>
         <button onClick={reprintReceipt} title="พิมพ์ใบเสร็จซ้ำ" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 4px",border:`1px solid ${C.blue}`,borderRadius:7,background:C.blueLight,cursor:"pointer",fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>
@@ -10542,27 +10591,28 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       <div style={{flex:1,overflowY:"auto",padding:8}}>
         {items.length===0
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
-          :items.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:9,padding:"10px 12px",marginBottom:6,border:`1px solid ${C.line}`}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6,gap:6}}>
-              <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>}</div>
-              {/* Reprint & void buttons */}
-              <div style={{display:"flex",gap:4,marginLeft:4,flexShrink:0}}>
-                {existingOrder?.id&&<button onClick={()=>reprintItem(item)} title="พิมพ์ซ้ำรายการนี้ไปครัว" aria-label="พิมพ์ซ้ำ" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"7px 9px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",minWidth:32,minHeight:32}}><Ic d={I.print} s={13} c={C.blue}/></button>}
-                <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" aria-label="ลบรายการ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"7px 9px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",minWidth:32,minHeight:32}}><Ic d={I.x} s={13} c={C.red}/></button>
+          :items.map((item,idx)=><SwipeRow key={idx} actionWidth={existingOrder?.id?86:46} actions={<>
+              {existingOrder?.id&&<button onClick={()=>reprintItem(item)} title="พิมพ์ซ้ำรายการนี้ไปครัว" aria-label="พิมพ์ซ้ำ" style={{flex:1,border:"none",borderRadius:7,background:C.blue,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.print} s={16} c={C.white}/></button>}
+              <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" aria-label="ลบรายการ" style={{flex:1,border:"none",borderRadius:7,background:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={16} c={C.white}/></button>
+            </>}>
+            <div style={{padding:"10px 12px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6,gap:6}}>
+                <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>}</div>
+                <span style={{fontSize:9.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0,opacity:.6}}>◀ ปัด</span>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <button onClick={()=>chQty(idx,-1)} aria-label="ลดจำนวน" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={13}/></button>
+                  <span style={{fontSize:14,fontWeight:800,minWidth:22,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
+                  <button onClick={()=>chQty(idx,1)} aria-label="เพิ่มจำนวน" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={13}/></button>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <button onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{background:C.lineLight,border:"none",borderRadius:7,padding:"6px 10px",cursor:"pointer",fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600,minHeight:32}}>หมายเหตุ</button>
+                  <span style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</span>
+                </div>
               </div>
             </div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <button onClick={()=>chQty(idx,-1)} aria-label="ลดจำนวน" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={13}/></button>
-                <span style={{fontSize:14,fontWeight:800,minWidth:22,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
-                <button onClick={()=>chQty(idx,1)} aria-label="เพิ่มจำนวน" style={{width:30,height:30,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={13}/></button>
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <button onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{background:C.lineLight,border:"none",borderRadius:7,padding:"6px 10px",cursor:"pointer",fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600,minHeight:32}}>หมายเหตุ</button>
-                <span style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</span>
-              </div>
-            </div>
-          </div>)
+          </SwipeRow>)
         }
       </div>
 
@@ -10574,7 +10624,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         </div>
         <div style={{display:"flex",gap:6}}>
           {existingOrder?.id&&<Btn v="yellow" onClick={()=>setShowPay(true)} icon={I.bill} full s={{padding:"8px 10px",fontSize:13}}>💳 เช็คบิล</Btn>}
-          <Btn onClick={saveOrder} icon={I.check} loading={saving} full s={{padding:"8px 10px",fontSize:13}}>{existingOrder?.id?"อัปเดต":"สั่ง"}</Btn>
+          <Btn onClick={saveOrder} icon={I.check} loading={saving} disabled={!hasNewItems} full s={{padding:"8px 10px",fontSize:13}}>{hasNewItems?"ส่งรายการ":(items.length?"✓ ส่งครัวแล้ว":"ส่งรายการ")}</Btn>
         </div>
       </div>
     </div>
