@@ -9808,6 +9808,14 @@ function escposQRBytes(payload){
 }
 // เครื่องพิมพ์ใบเสร็จ = เครื่องที่ติ๊ก "ใช้เป็นเครื่องพิมพ์ใบเสร็จ" (description.rcpt=1) — เลือกได้หลายเครื่อง ใบเสร็จออกทุกเครื่องที่เลือก
 function isReceiptPrinter(p){try{return JSON.parse(p.description||"{}").rcpt===1;}catch{return false;}}
+// เขียนคำสั่งใหม่ลง description โดย "ล้างคำสั่งเก่าทุกชนิด (tp/rp/qr/pj) ทิ้ง" เก็บเฉพาะ config (rcpt/c/d/ig…)
+// กันคำสั่งค้างสะสมแล้ว agent ยิงซ้ำ/พิมพ์ผิดใบ (เช่น rp ใบครัวค้างแล้วโผล่มาตอนพิมพ์ใบเสร็จ) — คำสั่งเป็น one-shot
+function cmdDesc(printer,key,val){
+  let d={};try{d=JSON.parse((printer&&printer.description)||"{}");}catch{}
+  const{tp,rp,qr,pj,...keep}=d;   // ทิ้งคำสั่งเก่าทั้งหมด
+  keep[key]=val;
+  return JSON.stringify(keep);
+}
 function getReceiptPrinters(printers){
   const act=(printers||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
   if(!act.length)return [];
@@ -10632,7 +10640,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     for(const{pr,items:gi}of groups.values()){
       let d={};try{d=pr?JSON.parse(pr.description||"{}"):{};}catch{}
       if(!pr||pr.active===false||!pr.ip||d.c==="bt"){noPrinter+=gi.length;continue;}   // ข้ามบลูทูธ/ไม่มี IP — agent พิมพ์ผ่าน IP เท่านั้น
-      ups.push(api.updatePrinter(pr.id,{description:JSON.stringify({...d,rp:{at:Date.now(),items:gi,table:table.table_number}})}));
+      ups.push(api.updatePrinter(pr.id,{description:cmdDesc(pr,"rp",{at:Date.now(),items:gi,table:table.table_number})}));
       sent+=gi.length;
     }
     try{if(ups.length)await Promise.all(ups);}catch(e){alert("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
@@ -10657,7 +10665,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       try{
         const b64=await buildReceiptB64(order,tableNum,branch.name,posSettings);
         const at=Date.now();
-        await Promise.all(rcps.map(rcp=>{let d={};try{d=JSON.parse(rcp.description||"{}");}catch{}return api.updatePrinter(rcp.id,{description:JSON.stringify({...d,pj:{at,b64}})});}));
+        await Promise.all(rcps.map(rcp=>api.updatePrinter(rcp.id,{description:cmdDesc(rcp,"pj",{at,b64})})));
         posToast(`🧾 ส่งใบเสร็จไป ${rcps.length} เครื่องแล้ว — กระดาษจะออกใน ~5 วินาที`,"ok");
       }catch(e){posToast("พิมพ์ใบเสร็จไม่สำเร็จ: "+(e&&e.message||e),"warn");try{printReceipt(order,tableNum,branch.name,posSettings);}catch{}}
       return;
@@ -11238,8 +11246,7 @@ async function printTableQR(table,branch,printers=[]){
   const ipP=(printers||[]).find(p=>{if(!p||p.active===false||!p.ip)return false;if(p.branch_id!=null&&+p.branch_id!==+branch.id)return false;let bt=false;try{bt=JSON.parse(p.description||"{}").c==="bt";}catch{}return !bt;});
   if(ipP){
     try{
-      let d={};try{d=JSON.parse(ipP.description||"{}");}catch{}
-      await api.updatePrinter(ipP.id,{description:JSON.stringify({...d,qr:{at:Date.now(),url,table:table.table_number,branch:branch.name||"",label:table.label||""}})});
+      await api.updatePrinter(ipP.id,{description:cmdDesc(ipP,"qr",{at:Date.now(),url,table:table.table_number,branch:branch.name||"",label:table.label||""})});
       posToast("🔳 ส่งคำสั่งพิมพ์ QR โต๊ะ "+table.table_number+" ไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
       return;
     }catch(e){alert("ส่งคำสั่งพิมพ์ QR ไม่สำเร็จ: "+(e&&e.message||e));return;}
@@ -13024,8 +13031,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           {rule:true},
           {t:new Date().toLocaleString("th-TH"),size:20,align:"center"},
         ],576);
-        let d={};try{d=JSON.parse(p.description||"{}");}catch{}
-        await api.updatePrinter(p.id,{description:JSON.stringify({...d,pj:{at:Date.now(),b64}})});
+        await api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at:Date.now(),b64})});
         setStatus(s=>({...s,[p.id]:"agent"}));
         posToast("🧾 ส่งทดสอบพิมพ์ (แบบรูปภาพ ไทยคมชัด) ไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
       }catch(e){setStatus(s=>({...s,[p.id]:"agent"}));alert("ส่งคำสั่งทดสอบไม่สำเร็จ: "+(e&&e.message||e));}

@@ -20,15 +20,15 @@ async function ensureFont(GlobalFonts) {
 function buildLines(body) {
   const lines = [
     { t: "ใบสั่งอาหาร", size: 28, bold: true, align: "center" },
-    { t: String(body.table || ""), size: 52, bold: true, align: "center" },
+    { t: String(body.table || ""), size: 76, bold: true, align: "center" },   // เบอร์โต๊ะตัวใหญ่มาก ครัวเห็นชัด
   ];
-  if (body.time) lines.push({ t: String(body.time), size: 19, align: "center" });
+  if (body.time) lines.push({ t: String(body.time), size: 20, align: "center" });
   lines.push({ rule: true });
-  lines.push({ c1: "จำนวน", c2: "ชื่อเมนู", size: 22, bold: true });   // หัวคอลัมน์
+  lines.push({ c1: "จำนวน", c2: "ชื่อเมนู", size: 24, bold: true });   // หัวคอลัมน์
   (body.items || []).forEach(it => {
-    lines.push({ c1: String(it.qty), c2: String(it.name || ""), size: 36, bold: true, mb: 2 });
-    (it.options || []).forEach(o => { const n = o && o.name; if (n) lines.push({ t: "- " + n, size: 24, indent: true }); });  // ตัวเลือกแสดงทีละบรรทัด
-    if (it.note) lines.push({ t: "* " + it.note, size: 24, bold: true, indent: true });
+    lines.push({ c1: String(it.qty), c2: String(it.name || ""), size: 46, bold: true, mb: 3 });   // จำนวน+ชื่อเมนูตัวใหญ่
+    (it.options || []).forEach(o => { const n = o && o.name; if (n) lines.push({ t: "- " + n, size: 30, indent: true }); });  // ตัวเลือกแสดงทีละบรรทัด
+    if (it.note) lines.push({ t: "* " + it.note, size: 30, bold: true, indent: true });
   });
   return lines;
 }
@@ -37,7 +37,7 @@ function buildLines(body) {
 // รองรับ: {rule} เส้นคั่น · {t,size,bold,align,indent} ข้อความ · {c1,c2,size,bold} สองคอลัมน์ (จำนวน|ชื่อเมนู)
 // ชิดขอบบน/ล่างให้มากสุด (pad น้อย) ประหยัดกระดาษ · ตัดบรรทัดชื่อยาวโดยไม่แยกสระ/วรรณยุกต์ไทย
 function render(createCanvas, lines, W) {
-  const pad = 8, QCOL = 86, RPAD = 8;
+  const pad = 8, QCOL = 96, RPAD = 8;
   const meas = createCanvas(8, 8).getContext("2d");
   const PRE = /[เแโใไ]/;        // สระหน้า — ต้องอยู่กับพยัญชนะที่ตามมา (ห้ามค้างท้ายบรรทัด)
   const COMB = /[ัำิ-ฺ็-๎]/;    // สระบน/ล่าง/ำ + วรรณยุกต์ — อยู่กับพยัญชนะที่นำหน้า
