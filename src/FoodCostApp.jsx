@@ -13147,7 +13147,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const isIgnored=(p)=>{try{return JSON.parse(p.description||"{}").ig===1;}catch{return false;}};
   const notAdded=printers.filter(p=>p.active===false);
   const discovered=searched?notAdded:notAdded.filter(p=>!isIgnored(p));   // กดค้นหาแล้วให้เห็นเครื่องที่เคยซ่อน/ลบด้วย
-  async function addDiscovered(p){try{await api.updatePrinter(p.id,{active:true,description:""});await load();posToast("✅ เพิ่มเครื่องพิมพ์เข้าระบบแล้ว");}catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}}
+  // เพิ่มใช้งานเครื่องที่ค้นเจอ — รีเซ็ตชื่อเป็นค่าเริ่มต้น (เลข IP) เสมอ เผื่อเป็นเครื่องที่เคยลบแล้วชื่อเดิมค้างอยู่ · ผู้ใช้ค่อยตั้งชื่อใหม่ตามตำแหน่งจริง
+  async function addDiscovered(p){try{await api.updatePrinter(p.id,{name:`เครื่องพิมพ์ ${p.ip||""}`.trim(),active:true,description:""});await load();posToast("✅ เพิ่มเครื่องพิมพ์เข้าระบบแล้ว — ตั้งชื่อตามจุดที่วางได้ที่ \"กำหนดการพิมพ์\"");}catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}}
   async function ignoreDiscovered(p){try{await api.updatePrinter(p.id,{description:JSON.stringify({d:1,ig:1})});await load();}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}
   // แสดงเฉพาะหมวดที่ "สาขานี้สร้างไว้เอง" (local_categories[สาขา]) เท่านั้น — ไม่ดึงหมวดรวม (global)
   // เมนูที่ยังไม่ได้ตั้งหมวดของสาขานี้จะไม่ขึ้นในตัวเลือก และจะพิมพ์ออกเครื่อง "พิมพ์ทุกหมวด" (catch-all)
