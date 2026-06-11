@@ -13025,10 +13025,22 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   async function loadSilent(){try{const all=await api.getAllPrinters();if(aliveRef.current)setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}}
   async function findPrinters(){
     setSearched(true);setSearching(true);
-    await loadSilent();
-    // ดึงซ้ำสักครู่ เพื่อรับเครื่องที่ตัวพิมพ์ (Print Agent) เพิ่งสแกนเจอในวง LAN (หยุดทันทีถ้าปิด modal)
-    for(let i=0;i<5&&aliveRef.current;i++){await new Promise(r=>setTimeout(r,3000));await loadSilent();}
-    if(aliveRef.current)setSearching(false);
+    // สั่งให้ตัวพิมพ์ (agent) สแกนหาเครื่องใหม่ในวง LAN "ทันที" (ไม่รอรอบสแกนอัตโนมัติ 2 นาที)
+    const at=Date.now();
+    try{await Promise.all((printers||[]).map(p=>{let d={};try{d=JSON.parse(p.description||"{}");}catch{}return api.updatePrinter(p.id,{description:JSON.stringify({...d,scanReq:at})});}));}catch{}
+    const beforeIds=new Set((printers||[]).map(p=>p.id));
+    let foundNew=false;
+    // ดึงซ้ำทุก 2 วิ จนกว่าจะเจอเครื่องใหม่ หรือครบ ~28 วิ (agent สแกน ~10 วิ) — หยุดทันทีถ้าปิด modal
+    for(let i=0;i<14&&aliveRef.current;i++){
+      await new Promise(r=>setTimeout(r,2000));
+      let all=null;try{all=await api.getAllPrinters();}catch{}
+      if(all&&aliveRef.current){
+        const mine=all.filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id);
+        setPrinters(mine);
+        if(mine.some(p=>!beforeIds.has(p.id))){foundNew=true;break;}
+      }
+    }
+    if(aliveRef.current){setSearching(false);if(foundNew)posToast("✅ พบเครื่องพิมพ์ใหม่ในเครือข่าย!","ok");}
   }
   useEffect(()=>{load();},[]);
   // เช็คสถานะเมื่อรายการโหลด/รีเฟรช (https = อ่าน description.on ที่ agent รายงาน · LAN = probe ตรง)

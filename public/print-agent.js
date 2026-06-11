@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 23;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 24;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -76,8 +76,8 @@ async function discoverPrinters(existing) {
     const have = new Set((existing || []).map(p => p.ip).filter(Boolean));
     const ips = []; for (let i = 1; i <= 254; i++) ips.push(`${sub}.${i}`);
     const found = [];
-    for (let i = 0; i < ips.length; i += 40) {
-      const r = await Promise.all(ips.slice(i, i + 40).map(ip => probePort(ip, 9100, 1500).then(o => o ? ip : null)));
+    for (let i = 0; i < ips.length; i += 60) {   // สแกนทีละ 60 IP (เร็วขึ้น)
+      const r = await Promise.all(ips.slice(i, i + 60).map(ip => probePort(ip, 9100, 1500).then(o => o ? ip : null)));
       r.forEach(ip => { if (ip) found.push(ip); });
     }
     console.log(`🔍 พบอุปกรณ์เปิด port 9100: ${found.length ? found.join(", ") : "(ไม่พบ)"}`);
@@ -175,7 +175,7 @@ function sendToPrinter(ip, port, buf) {
 // ── สถานะ: ออเดอร์/รายการที่พิมพ์ไปแล้ว (กันพิมพ์ซ้ำ) ──────────────────────
 let state = { sig: {}, init: {}, greeted: {} };
 try { if (fs.existsSync(STATE_FILE)) state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {}
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {};
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
 let primed = fs.existsSync(STATE_FILE);   // มีไฟล์อยู่แล้ว = ไม่ต้อง prime ใหม่
 function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch {} }
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
@@ -303,6 +303,17 @@ async function handlePingRequests(printers) {
   if (need) { saveState(); await pingPrinters(true); }   // force เขียน onAt เสมอ → แอปรู้ว่าเช็คเสร็จ หยุดหมุน
 }
 
+// ปุ่ม "ค้นหาเครื่องพิมพ์" ในแอปเขียน description.scanReq → agent สแกนหาเครื่องใหม่ในวง LAN ทันที (ไม่รอรอบ 2 นาที)
+async function handleScanRequests(printers) {
+  let maxReq = 0;
+  for (const p of printers) { let d = {}; try { d = JSON.parse(p.description || "{}"); } catch {} const sr = +d.scanReq || 0; if (sr > maxReq) maxReq = sr; }
+  if (maxReq && maxReq > (state.lastScanReq || 0)) {
+    state.lastScanReq = maxReq; saveState();
+    console.log("🔍 รับคำสั่งค้นหาเครื่องพิมพ์จากแอป — สแกนทันที");
+    try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {}
+  }
+}
+
 async function tick() {
   let orders, printers;
   try { [orders, printers] = await Promise.all([getActiveOrders(), getPrinters()]); }
@@ -321,6 +332,7 @@ async function tick() {
   await handleQRRequests(printers);   // พิมพ์ QR โต๊ะตามคำสั่งที่กดจากแอป
   await handlePJRequests(printers);   // พิมพ์รูปภาพ (ไทยคมชัด) ตามคำสั่งที่กดจากแอป
   await handlePingRequests(printers);   // เช็คสถานะเครื่องทันทีเมื่อกด "เช็คสถานะใหม่" ในแอป
+  await handleScanRequests(printers);   // สแกนหาเครื่องพิมพ์ใหม่ทันทีเมื่อกด "ค้นหาเครื่องพิมพ์" ในแอป
   for (const o of orders) {
     if (!o || !o.items || !o.items.length) continue;
     const sig = sigOf(o), last = state.sig[o.id], first = !state.init[o.id];
