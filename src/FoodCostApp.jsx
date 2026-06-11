@@ -12998,7 +12998,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const[rechecking,setRechecking]=useState(false);   // กำลังกด "เช็คสถานะใหม่" (รอ agent เช็คสด)
   const[settingsP,setSettingsP]=useState(null);      // เครื่องที่เปิดป๊อบอัพ "กำหนดการพิมพ์" อยู่ (null=ปิด)
   const[sName,setSName]=useState("");                // ชื่อที่กำลังแก้
-  const[sCats,setSCats]=useState(null);              // null=พิมพ์ทุกหมวด(catch-all) · []/[ชื่อ]=เฉพาะหมวด
+  const[sCats,setSCats]=useState([]);                // หมวดที่เครื่องนี้รับ ([]=ยังไม่กำหนด/ไม่รับ · [ชื่อ]=เฉพาะหมวดนั้น) — ไม่มี catch-all แล้ว
   const[sOverride,setSOverride]=useState({});        // menu_id → printer_id (ปักหมุดเมนูเฉพาะให้ออกเครื่องนี้)
   const[sOpenCats,setSOpenCats]=useState(()=>new Set());  // หมวดที่กางดูรายเมนู
   const[sSaving,setSSaving]=useState(false);
@@ -13120,7 +13120,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const branchCategories=useMemo(()=>{const s=new Set();(menus||[]).forEach(m=>{const e=effCat(m);if(e)s.add(e);});return [...s].sort();},[menus,currentBranch]);
   const menusInCat=(c)=>(menus||[]).filter(m=>effCat(m)===c);
   function openSettings(p){
-    setSettingsP(p);setSName(p.name||"");setSCats(p.categories===undefined||p.categories===null?null:[...p.categories]);
+    setSettingsP(p);setSName(p.name||"");setSCats(Array.isArray(p.categories)?[...p.categories]:[]);   // ไม่มี catch-all แล้ว — null/undefined → [] (ต้องเลือกหมวดเอง)
     let dd={};try{dd=JSON.parse(p.description||"{}");}catch{}setSRcpt(dd.rcpt===1);
     const ov={};(menus||[]).forEach(m=>{if(m.printer_id)ov[m.id]=+m.printer_id;});setSOverride(ov);setSOpenCats(new Set());
   }
@@ -13183,14 +13183,11 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"15px 0 8px",flexWrap:"wrap",gap:8}}>
           <div style={{fontSize:13,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>📂 หมวดหมู่ / เมนู ที่พิมพ์ออกเครื่องนี้</div>
           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            <button onClick={()=>setSCats(null)} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${sCats===null?C.green:C.line}`,background:sCats===null?C.greenLight:C.white,color:sCats===null?C.green:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>พิมพ์ทุกหมวด</button>
             <button onClick={()=>setSCats([...branchCategories])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>เลือกทุกหมวด</button>
             <button onClick={()=>setSCats([])} style={{padding:"4px 10px",borderRadius:7,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
           </div>
         </div>
-        {sCats===null
-          ?<div style={{padding:"14px 16px",background:C.greenLight,borderRadius:10,border:`1.5px solid ${C.green}`,fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:600,lineHeight:1.7}}>✅ <b>พิมพ์ทุกหมวด</b> — เครื่องนี้รับงานพิมพ์ทุกหมวด (เครื่องสำรอง)<br/><span style={{fontSize:11,fontWeight:400}}>ระบบจะส่งงานมาที่นี่ถ้าไม่มีเครื่องอื่นกำหนดหมวดของเมนูนั้นไว้</span></div>
-          :branchCategories.length===0
+        {branchCategories.length===0
             ?<div style={{padding:24,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>ยังไม่มีหมวดหมู่ในสาขานี้ — ไปสร้างหมวดหมู่ที่หน้า "เมนู" ก่อน แล้วค่อยกลับมาเลือก</div>
             :<>
               <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>ติ๊ก <b>ช่องหน้าหมวด</b> = พิมพ์ทั้งหมวด · กด <b style={{color:C.blue}}>▼ เลือกเมนู</b> ท้ายหมวด เพื่อเลือกเฉพาะบางเมนูในหมวดนั้น (เมนูที่ติ๊กจะออกเครื่องนี้เสมอ แม้ไม่ติ๊กทั้งหมวด)</div>
