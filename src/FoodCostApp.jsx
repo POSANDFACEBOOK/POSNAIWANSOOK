@@ -9821,11 +9821,8 @@ function cmdDesc(printer,key,val){
   return JSON.stringify(keep);
 }
 function getReceiptPrinters(printers){
-  const act=(printers||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
-  if(!act.length)return [];
-  const flagged=act.filter(isReceiptPrinter);
-  if(flagged.length)return flagged;
-  return [act.find(p=>p.categories==null)||act[0]];   // ยังไม่กำหนดเครื่องพิมพ์ใบเสร็จ → ใช้ catch-all/เครื่องแรก (เข้ากันได้กับของเดิม)
+  // เฉพาะเครื่องที่ติ๊ก "🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ" (rcpt=1) เท่านั้น — ใบเสร็จ/เช็คบิล/QR โต๊ะ ออกเฉพาะเครื่องเหล่านี้ (ไม่มี fallback ไปเครื่องครัว)
+  return (printers||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth"&&isReceiptPrinter(p));
 }
 // paid=true → ใบเสร็จ/ใบกำกับภาษี (โชว์รับเงิน/เงินทอน/ชำระโดย) · paid=false → ใบแจ้งยอดก่อนจ่าย (ไม่โชว์ว่าจ่ายแล้ว)
 function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
@@ -10694,8 +10691,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       }catch(e){posToast("พิมพ์ไม่สำเร็จ: "+(e&&e.message||e),"warn");try{printReceipt(order,tableNum,branch.name,posSettings,{paid});}catch{}}
       return;
     }
-    if(isHttps&&!rcps.length)posToast("⚠️ ยังไม่ได้ตั้งเครื่องพิมพ์ — เพิ่มที่ ⚙️ เครื่องพิมพ์ก่อน","warn");
-    printReceipt(order,tableNum,branch.name,posSettings,{paid});
+    if(isHttps&&!rcps.length){posToast("⚠️ ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ไปที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์ → ติ๊ก \"🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ\"","warn");return;}
+    printReceipt(order,tableNum,branch.name,posSettings,{paid});   // เดสก์ท็อป/LAN (ไม่ใช่ https) → หน้าต่างพิมพ์เบราว์เซอร์
   }
   function reprintReceipt(){
     if(!existingOrder?.id)return;
@@ -11266,16 +11263,22 @@ async function printTableQR(table,branch,printers=[]){
       // fall through to the browser-window path below
     }
   }
-  // 2) เครื่องพิมพ์ IP → สั่งพิมพ์ผ่าน "ตัวพิมพ์ (agent)" (iPad/เบราว์เซอร์ต่อ LAN ตรงไม่ได้)
-  const ipP=(printers||[]).find(p=>{if(!p||p.active===false||!p.ip)return false;if(p.branch_id!=null&&+p.branch_id!==+branch.id)return false;let bt=false;try{bt=JSON.parse(p.description||"{}").c==="bt";}catch{}return !bt;});
-  if(ipP){
+  // 2) QR โต๊ะ ออกเฉพาะ "เครื่องพิมพ์ใบเสร็จ" ที่ติ๊กไว้เท่านั้น → สั่งพิมพ์ผ่าน "ตัวพิมพ์ (agent)"
+  const rcps=getReceiptPrinters(printers).filter(p=>p.branch_id==null||+p.branch_id===+branch.id);
+  if(rcps.length){
     try{
-      await api.updatePrinter(ipP.id,{description:cmdDesc(ipP,"qr",{at:Date.now(),url,table:table.table_number,branch:branch.name||"",label:table.label||""})});
-      posToast("🔳 ส่งคำสั่งพิมพ์ QR โต๊ะ "+table.table_number+" ไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
+      const at=Date.now();
+      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"qr",{at,url,table:table.table_number,branch:branch.name||"",label:table.label||""})})));
+      posToast("🔳 ส่งคำสั่งพิมพ์ QR โต๊ะ "+table.table_number+" ไปเครื่องพิมพ์ใบเสร็จแล้ว — กระดาษจะออกใน ~5 วินาที","ok");
       return;
     }catch(e){alert("ส่งคำสั่งพิมพ์ QR ไม่สำเร็จ: "+(e&&e.message||e));return;}
   }
-  // 3) Fallback: ไม่มีเครื่องพิมพ์ IP/BT (เช่นเปิดบนคอมที่ไม่มี agent) → เปิดหน้าต่างพิมพ์ของเบราว์เซอร์
+  // ไม่มีเครื่องพิมพ์ใบเสร็จที่ติ๊กไว้ + อยู่บน https (iPad) → เตือนให้ไปติ๊กก่อน (เปิดหน้าต่างพิมพ์ก็ส่งเข้าเครื่อง LAN ไม่ได้)
+  if(typeof location!=="undefined"&&location.protocol==="https:"){
+    posToast("⚠️ ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ไปที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์ → ติ๊ก \"🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ\"","warn");
+    return;
+  }
+  // 3) Fallback: เดสก์ท็อปที่ไม่มี agent → เปิดหน้าต่างพิมพ์ของเบราว์เซอร์
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}&margin=10`;
   const w=openPrintWindow(340,420);
   if(!w)return;
