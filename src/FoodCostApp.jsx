@@ -12992,6 +12992,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const[saving,setSaving]=useState(false);
   const[searched,setSearched]=useState(false);   // กด "ค้นหาเครื่องพิมพ์" แล้ว = แสดงทุกเครื่องในวง LAN (รวมที่เคยซ่อน/ลบ)
   const[searching,setSearching]=useState(false);
+  const[rechecking,setRechecking]=useState(false);   // กำลังกด "เช็คสถานะใหม่" (รอ agent เช็คสด)
   const[settingsP,setSettingsP]=useState(null);      // เครื่องที่เปิดป๊อบอัพ "กำหนดการพิมพ์" อยู่ (null=ปิด)
   const[sName,setSName]=useState("");                // ชื่อที่กำลังแก้
   const[sCats,setSCats]=useState(null);              // null=พิมพ์ทุกหมวด(catch-all) · []/[ชื่อ]=เฉพาะหมวด
@@ -13040,6 +13041,18 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       // silently-dropped unreachable host both hang — so we say "ไม่ยืนยัน", NOT a fake "online".
       setStatus(s=>({...s,[p.id]:e.name==="AbortError"?"unknown":"offline"}));
     }
+  }
+  // ปุ่ม "เช็คสถานะใหม่": https → สั่งตัวพิมพ์ (agent) เช็คเดี๋ยวนี้ (เขียน pingReq) แล้วรอผล ~ไม่กี่วิ · LAN → probe ตรงเหมือนเดิม
+  async function recheckStatus(){
+    if(rechecking)return;
+    if(!isHttps){printers.forEach(p=>checkStatus(p));return;}
+    setRechecking(true);
+    const at=Date.now();
+    try{
+      await Promise.all((printers||[]).filter(p=>p.ip&&getPConn(p).type!=="bluetooth").map(p=>{let d={};try{d=JSON.parse(p.description||"{}");}catch{}return api.updatePrinter(p.id,{description:JSON.stringify({...d,pingReq:at})});}));
+    }catch(e){}
+    for(let i=0;i<6&&aliveRef.current;i++){await new Promise(r=>setTimeout(r,1500));await loadSilent();}   // loadSilent → useEffect[printers] อ่านสถานะใหม่ที่ agent รายงาน
+    if(aliveRef.current)setRechecking(false);
   }
   async function testPrint(p){
     const conn=getPConn(p);
@@ -13137,7 +13150,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>เครื่องพิมพ์ของสาขา <b style={{color:C.ink}}>{currentBranch.name}</b> ({activePrinters.length})</div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           <Btn v="info" onClick={findPrinters} disabled={searching} icon={I.search} s={{padding:"6px 12px",fontSize:12}}>{searching?"⟳ กำลังค้นหา...":"ค้นหาเครื่องพิมพ์"}</Btn>
-          <Btn v="ghost" onClick={()=>printers.forEach(p=>checkStatus(p))} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>เช็คสถานะใหม่</Btn>
+          <Btn v="ghost" onClick={recheckStatus} disabled={rechecking} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>{rechecking?"⟳ กำลังเช็ค...":"เช็คสถานะใหม่"}</Btn>
         </div>
       </div>
       {activePrinters.length===0?<div style={{textAlign:"center",padding:"28px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif",background:C.bg,borderRadius:12,marginBottom:14}}><Ic d={I.print} s={40} c={C.line}/><p style={{marginTop:8,fontSize:13}}>ยังไม่มีเครื่องพิมพ์ที่ใช้งาน — เพิ่มจาก "พบในเครือข่าย" ด้านล่าง หรือใส่ IP เอง</p></div>

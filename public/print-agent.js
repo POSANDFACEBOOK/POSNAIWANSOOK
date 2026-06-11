@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 21;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 22;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -175,7 +175,7 @@ function sendToPrinter(ip, port, buf) {
 // ── สถานะ: ออเดอร์/รายการที่พิมพ์ไปแล้ว (กันพิมพ์ซ้ำ) ──────────────────────
 let state = { sig: {}, init: {}, greeted: {} };
 try { if (fs.existsSync(STATE_FILE)) state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); } catch {}
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {};
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {};
 let primed = fs.existsSync(STATE_FILE);   // มีไฟล์อยู่แล้ว = ไม่ต้อง prime ใหม่
 function saveState() { try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch {} }
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
@@ -292,6 +292,17 @@ async function handlePJRequests(printers) {
   }
 }
 
+// ปุ่ม "เช็คสถานะใหม่" ในแอปเขียน description.pingReq = เวลาที่กด → agent เช็คสถานะเครื่องทันที (ไม่ต้องรอรอบ 30 วิ)
+async function handlePingRequests(printers) {
+  let need = false;
+  for (const p of printers) {
+    let d = {}; try { d = JSON.parse(p.description || "{}"); } catch {}
+    const pr = +d.pingReq || 0;
+    if (pr && String(state.pinged[p.id]) !== String(pr)) { state.pinged[p.id] = pr; need = true; }
+  }
+  if (need) { saveState(); await pingPrinters(); }
+}
+
 async function tick() {
   let orders, printers;
   try { [orders, printers] = await Promise.all([getActiveOrders(), getPrinters()]); }
@@ -309,6 +320,7 @@ async function tick() {
   await handleReprintRequests(printers);   // พิมพ์ใบครัวซ้ำตามคำสั่งที่กดจากแอป
   await handleQRRequests(printers);   // พิมพ์ QR โต๊ะตามคำสั่งที่กดจากแอป
   await handlePJRequests(printers);   // พิมพ์รูปภาพ (ไทยคมชัด) ตามคำสั่งที่กดจากแอป
+  await handlePingRequests(printers);   // เช็คสถานะเครื่องทันทีเมื่อกด "เช็คสถานะใหม่" ในแอป
   for (const o of orders) {
     if (!o || !o.items || !o.items.length) continue;
     const sig = sigOf(o), last = state.sig[o.id], first = !state.init[o.id];
