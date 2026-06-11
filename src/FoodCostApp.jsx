@@ -10664,7 +10664,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 
   // พิมพ์ใบครัวซ้ำผ่าน "ตัวพิมพ์ (agent)" — ส่งไป "ทุกเครื่องที่ตั้งค่าให้รับหมวดนั้น" (ตรงตาม กำหนดการพิมพ์) ไม่ใช่เครื่องเดียว
   async function agentReprint(list){
-    const usable=(printers||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
+    let prs=printers;   // ดึงเครื่องพิมพ์ล่าสุดจาก DB — กันค่าค้าง (เพิ่งแก้หมวด/เครื่องพิมพ์ในหน้าต่างตั้งค่า)
+    try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
+    const usable=(prs||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
     const ups=[];const sentItems=new Set();
     for(const p of usable){
       const mine=(list||[]).filter(it=>printerHandles(p,it));
@@ -10691,7 +10693,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // พิมพ์ใบเสร็จ — iPad/https พิมพ์ผ่านตัวพิมพ์ (agent) เป็นรูปภาพไทยคมชัด · เดสก์ท็อป/LAN ใช้หน้าต่างพิมพ์ปกติ
   async function smartPrintReceipt(order,tableNum,paid){
     const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
-    const rcps=isHttps?getReceiptPrinters(printers):[];
+    let prs=printers;   // ดึงเครื่องพิมพ์ล่าสุดจาก DB — กันค่าค้าง (เพิ่งติ๊ก "เครื่องพิมพ์ใบเสร็จ" ในหน้าต่างตั้งค่าแล้วยังไม่รีเฟรช)
+    try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
+    const rcps=isHttps?getReceiptPrinters(prs):[];
     if(isHttps&&rcps.length){
       try{
         const b64=await buildReceiptB64(order,tableNum,branch.name,posSettings,paid);
@@ -11261,9 +11265,11 @@ async function printTableQR(table,branch,printers=[]){
   const baseUrl=publicBaseUrl();
   const tokenPart=table.qr_token?`&t=${encodeURIComponent(table.qr_token)}`:"";
   const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${table.id}${tokenPart}`;
+  let prs=printers;   // ดึงเครื่องพิมพ์ล่าสุดจาก DB — กันค่าค้าง (เพิ่งติ๊ก "เครื่องพิมพ์ใบเสร็จ" ในหน้าต่างตั้งค่า)
+  try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
   // 1) If a Bluetooth printer is configured for this branch, print the QR slip
   //    DIRECTLY via ESC/POS — no browser dialog, straight out the connected printer.
-  const btP=(printers||[]).find(p=>p&&p.active!==false&&(p.branch_id==null||+p.branch_id===+branch.id)&&getPConn(p).type==="bluetooth");
+  const btP=(prs||[]).find(p=>p&&p.active!==false&&(p.branch_id==null||+p.branch_id===+branch.id)&&getPConn(p).type==="bluetooth");
   if(btP){
     try{
       await btPrint(buildTableQRESC(table,branch,url),getPConn(btP).btName);
@@ -11274,7 +11280,7 @@ async function printTableQR(table,branch,printers=[]){
     }
   }
   // 2) QR โต๊ะ ออกเฉพาะ "เครื่องพิมพ์ใบเสร็จ" ที่ติ๊กไว้เท่านั้น → สั่งพิมพ์ผ่าน "ตัวพิมพ์ (agent)"
-  const rcps=getReceiptPrinters(printers).filter(p=>p.branch_id==null||+p.branch_id===+branch.id);
+  const rcps=getReceiptPrinters(prs).filter(p=>p.branch_id==null||+p.branch_id===+branch.id);
   if(rcps.length){
     try{
       const at=Date.now();
