@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 19;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 20;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -210,17 +210,26 @@ async function itemsToBuffer(items, tableNum) {
   const mode = text === 0 ? "รูปภาพ" : (raster === 0 ? "ตัวอักษร(สำรอง)" : "ผสม รูปภาพ+ตัวอักษร");
   return { buf: Buffer.concat(parts), mode };
 }
+// เครื่องนี้ต้องพิมพ์รายการนี้ไหม — ตาม "กำหนดการพิมพ์" เป๊ะๆ: ปักหมุดเมนู(printer_id)→เฉพาะเครื่องนั้น · ไม่งั้น categories=null(พิมพ์ทุกหมวด) หรือมีหมวดนั้นในลิสต์
+function printerHandles(p, it) {
+  if (it.printer_id != null && it.printer_id !== "") return +p.id === +it.printer_id;
+  if (p.categories === null || p.categories === undefined) return true;
+  if (!Array.isArray(p.categories) || it.category == null) return false;
+  const c = String(it.category).trim();
+  return p.categories.some(x => String(x).trim() === c);
+}
 async function printItems(items, tableNum, printers) {
-  const groups = new Map();
-  for (const it of items) { const p = resolvePrinter(it, printers); const key = p ? p.id : "_none"; if (!groups.has(key)) groups.set(key, { p, items: [] }); groups.get(key).items.push(it); }
-  for (const { p, items: gItems } of groups.values()) {
-    if (!p) { console.log("  ⚠️  ไม่มีเครื่องพิมพ์สำหรับ:", gItems.map(i => i.name).join(", ")); continue; }
-    if (isBluetooth(p)) { console.log("  ⚠️  ข้ามเครื่องบลูทูธ:", p.name); continue; }
-    if (!p.ip) { console.log("  ⚠️  ยังไม่ตั้ง IP:", p.name); continue; }
-    const { buf, mode } = await itemsToBuffer(gItems, tableNum);
-    try { await sendToPrinter(p.ip, p.port, buf); console.log(`  ✅ พิมพ์ ${gItems.length} รายการ [${mode}] → ${p.name} (${p.ip})`); }
+  // ส่งรายการไป "ทุกเครื่องที่ตั้งค่าให้รับ" (ไม่ใช่เครื่องเดียว) — ตั้งทุกเครื่องพิมพ์ทุกหมวด = ออกทุกเครื่อง · ตั้งคนละหมวด = แยกกัน · ตรงตามที่ตั้งใน "กำหนดการพิมพ์"
+  const usable = (printers || []).filter(p => !isBluetooth(p) && p.ip);
+  for (const p of usable) {
+    const mine = items.filter(it => printerHandles(p, it));
+    if (!mine.length) continue;
+    const { buf, mode } = await itemsToBuffer(mine, tableNum);
+    try { await sendToPrinter(p.ip, p.port, buf); console.log(`  ✅ พิมพ์ ${mine.length} รายการ [${mode}] → ${p.name} (${p.ip})`); }
     catch (e) { console.log(`  ❌ ไม่สำเร็จ → ${p.name} (${p.ip}): ${e.message}`); }
   }
+  const orphan = items.filter(it => !usable.some(p => printerHandles(p, it)));
+  if (orphan.length) console.log("  ⚠️  ไม่มีเครื่องพิมพ์สำหรับ (ยังไม่ได้กำหนดหมวด):", orphan.map(i => i.name).join(", "));
 }
 
 // ทดสอบพิมพ์ตามคำสั่งจากแอป: แอปเขียน description.tp = เวลาที่กด → agent พิมพ์หน้าทดสอบให้เครื่องนั้นภายใน ~5 วินาที

@@ -9910,6 +9910,16 @@ function resolvePrinter(item,printers){
   if(catchAll)return catchAll;
   return null;
 }
+// เครื่องนี้ต้องพิมพ์รายการนี้ไหม — ตาม "กำหนดการพิมพ์" เป๊ะๆ: ปักหมุดเมนู(printer_id)→เฉพาะเครื่องนั้น · ไม่งั้น categories=null(พิมพ์ทุกหมวด) หรือมีหมวดนั้นในลิสต์
+// (จานเดียวออกได้หลายเครื่องถ้าตั้งรับหมวดเดียวกัน — ตั้งทุกเครื่องพิมพ์ทุกหมวด=ออกทุกเครื่อง)
+function printerHandles(p,item){
+  if(!p)return false;
+  if(item.printer_id!=null&&item.printer_id!=="")return +p.id===+item.printer_id;
+  if(p.categories===null||p.categories===undefined)return true;
+  if(!Array.isArray(p.categories)||item.category==null)return false;
+  const c=String(item.category).trim();
+  return p.categories.some(x=>String(x).trim()===c);
+}
 // Concatenate several Uint8Arrays into one ESC/POS byte stream
 function _concatBytes(arrs){const len=arrs.reduce((a,b)=>a+b.length,0);const out=new Uint8Array(len);let off=0;for(const a of arrs){out.set(a,off);off+=a.length;}return out;}
 // Send raw ESC/POS bytes straight to an IP/network thermal printer (port 9100).
@@ -10645,18 +10655,19 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     setItems(newLocal);
   }
 
-  // พิมพ์ใบครัวซ้ำผ่าน "ตัวพิมพ์ (agent)" — จับคู่เครื่องพิมพ์ตามหมวด แล้วเขียนคำสั่ง rp ลง description ของเครื่องนั้น (agent พิมพ์ให้ ~5 วิ)
+  // พิมพ์ใบครัวซ้ำผ่าน "ตัวพิมพ์ (agent)" — ส่งไป "ทุกเครื่องที่ตั้งค่าให้รับหมวดนั้น" (ตรงตาม กำหนดการพิมพ์) ไม่ใช่เครื่องเดียว
   async function agentReprint(list){
-    const groups=new Map();
-    (list||[]).forEach(it=>{const pr=resolvePrinter(it,printers);const k=pr?pr.id:"_none";if(!groups.has(k))groups.set(k,{pr,items:[]});groups.get(k).items.push(it);});
-    let sent=0,noPrinter=0;const ups=[];
-    for(const{pr,items:gi}of groups.values()){
-      let d={};try{d=pr?JSON.parse(pr.description||"{}"):{};}catch{}
-      if(!pr||pr.active===false||!pr.ip||d.c==="bt"){noPrinter+=gi.length;continue;}   // ข้ามบลูทูธ/ไม่มี IP — agent พิมพ์ผ่าน IP เท่านั้น
-      ups.push(api.updatePrinter(pr.id,{description:cmdDesc(pr,"rp",{at:Date.now(),items:gi,table:table.table_number})}));
-      sent+=gi.length;
+    const usable=(printers||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
+    const ups=[];const sentItems=new Set();
+    for(const p of usable){
+      const mine=(list||[]).filter(it=>printerHandles(p,it));
+      if(!mine.length)continue;
+      ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:mine,table:table.table_number})}));
+      mine.forEach(it=>sentItems.add(it));
     }
+    const noPrinter=(list||[]).filter(it=>!usable.some(p=>printerHandles(p,it))).length;
     try{if(ups.length)await Promise.all(ups);}catch(e){alert("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
+    const sent=sentItems.size;
     if(sent&&noPrinter)posToast(`🔁 ส่งพิมพ์ซ้ำ ${sent} รายการ · อีก ${noPrinter} ยังไม่ได้กำหนดเครื่องพิมพ์`,"warn");
     else if(sent)posToast("🔁 ส่งคำสั่งพิมพ์ใบครัวไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
     else posToast("⚠️ เมนูนี้ยังไม่ได้กำหนดเครื่องพิมพ์ — ตั้งที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์","warn");
