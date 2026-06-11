@@ -52,6 +52,16 @@ function openPrintWindow(width=860,height=900){
   if(!w){alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — กรุณาอนุญาต popup ในแถบที่อยู่ของเบราว์เซอร์ แล้วลองอีกครั้ง");return null;}
   return w;
 }
+// แปะแถบปุ่ม "🖨 พิมพ์ / ✕ ปิดหน้าต่าง" ลอยบนสุดของทุกหน้าต่างพิมพ์/พรีวิว (ซ่อนตอนพิมพ์จริง) — เรียกหลัง document.close()
+function addPrintClose(w){
+  if(!w)return;
+  const inject=()=>{try{
+    const d=w.document;if(!d||!d.body||d.getElementById("fc-closebar"))return;
+    if(d.head){const st=d.createElement("style");st.textContent="@media print{.fc-noprint{display:none!important}}";d.head.appendChild(st);}
+    d.body.insertAdjacentHTML("afterbegin",`<div id="fc-closebar" class="fc-noprint" style="position:fixed;top:0;left:0;right:0;display:flex;gap:10px;justify-content:center;padding:9px;background:#f8fafc;border-bottom:1px solid #cbd5e1;z-index:99999;box-shadow:0 2px 6px rgba(0,0,0,.12)"><button onclick="window.print()" style="padding:9px 20px;border:none;border-radius:9px;background:#0D9488;color:#fff;font-weight:800;font-size:15px;cursor:pointer;font-family:sans-serif">🖨 พิมพ์</button><button onclick="window.close()" style="padding:9px 22px;border:none;border-radius:9px;background:#64748b;color:#fff;font-weight:800;font-size:15px;cursor:pointer;font-family:sans-serif">✕ ปิดหน้าต่าง</button></div><div class="fc-noprint" style="height:52px"></div>`);
+  }catch(e){}};
+  inject();try{w.addEventListener&&w.addEventListener("load",inject);}catch{}
+}
 // Random suffix for filenames so they're not enumerable by sequential ID
 const randId=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
 // HTML-escape user-content before injecting into print popup HTML (XSS guard)
@@ -2366,7 +2376,7 @@ window.addEventListener('load',async()=>{
 </script></body></html>`;
     const win=openPrintWindow(800,700);
     if(!win)return;
-    win.document.write(html);win.document.close();
+    win.document.write(html);win.document.close();addPrintClose(win);
   }
   const filtered=useMemo(()=>q.trim()?sopIngs.filter(i=>i.name.toLowerCase().includes(q.toLowerCase())):sopIngs,[sopIngs,q]);
   // Pickable ingredients = all ingredients except SELF (prevent self-reference)
@@ -2731,7 +2741,7 @@ window.addEventListener('load',async()=>{
 </script></body></html>`;
     const win=openPrintWindow(800,700);
     if(!win)return;
-    win.document.write(html);win.document.close();
+    win.document.write(html);win.document.close();addPrintClose(win);
   }
   return <>
   {/* Header bar */}
@@ -3020,7 +3030,7 @@ ${action==='print'?"setTimeout(function(){window.print();},400);":""}
 ${action==='pdf'?"window.addEventListener('load',function(){setTimeout(savePDF,400);});":""}
 <\/script>
 </body></html>`;
-  w.document.write(html);w.document.close();
+  w.document.write(html);w.document.close();addPrintClose(w);
 }
 
 // Export PO list to Excel
@@ -5022,7 +5032,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       </tbody></table>
     `).join("");
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการต้องซื้อ ${todayStr()}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 4px}.meta{font-size:12px;color:#64748B;margin:2px 0}@media print{.noprint{display:none}}</style></head><body><h2>📋 รายการที่ครัวกลางต้องไปซื้อวันนี้</h2><p class="meta">วันที่: <b>${esc(todayStr())}</b> · สาขา: <b>${esc(currentBranch?.name||"ครัวกลาง")}</b> · คำสั่งซื้อค้าง: <b>${orderCount}</b> ใบ</p>${groupHtml}<div style="margin-top:18px;padding:12px;background:#FEF3C7;border:2px solid #F59E0B;border-radius:10px;font-size:14px"><b>รวมทั้งสิ้นประมาณ: <span style="color:#FF6B35;font-size:18px">฿${totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span></b></div><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
-    w.document.close();
+    w.document.close();addPrintClose(w);
     setTimeout(()=>{try{w.print();}catch{}},600);
   }
 
@@ -6007,7 +6017,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     // "ยืนยันรับ".
     const rows=(order.items||[]).map((i,n)=>`<tr><td style="text-align:center;color:#64748B">${n+1}</td><td>${esc(i.name)}</td><td>${esc(i.qtyNeeded||0)}</td><td>${esc(i.unit||"")}</td></tr>`).join("");
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการสั่งวัตถุดิบ</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 6px}.meta{font-size:13px;margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — รายการสั่งวัตถุดิบ</h2><p class="meta">ซัพพลายเออร์: <b>${esc(order.supplier_name)}</b></p><p class="meta">สาขาผู้สั่ง: <b>${esc(order.branch_name)}</b></p><p class="meta">สั่งโดย: <b>${esc(order.requested_by)}</b> · วันที่: ${esc(order.requested_at)}</p>${order.note?`<p class="meta">หมายเหตุ: ${esc(order.note)}</p>`:""}<table><thead><tr><th style="width:48px">ลำดับ</th><th>วัตถุดิบ</th><th style="width:120px">จำนวน</th><th style="width:90px">หน่วย</th></tr></thead><tbody>${rows}</tbody></table><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
-    w.document.close();
+    w.document.close();addPrintClose(w);
     setTimeout(()=>{try{w.print();}catch{}setPrintingId(null);},600);
   }
 
@@ -6797,7 +6807,7 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
     if(!w)return;
     const rows=(snap.items||[]).map(i=>`<tr><td>${esc(i.name)}</td><td>฿${esc(i.price)}</td><td>฿${(+(i.cost||0)).toFixed(2)}</td><td>${(+(i.margin||0)).toFixed(1)}%</td><td>${esc(i.soldQty)}</td><td>฿${(+(i.totalRevenue||0)).toFixed(0)}</td><td>฿${(+(i.totalProfit||0)).toFixed(0)}</td></tr>`).join("");
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>สรุปต้นทุน</title><style>body{font-family:'Sarabun',sans-serif;padding:24px}h2{color:#FF6B35}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — สรุปต้นทุน</h2><p>สาขา: <b>${esc(snap.branch_name||"")}</b> | ${esc(snap.date_from)} ถึง ${esc(snap.date_to)} | บันทึกโดย: ${esc(snap.saved_by)}</p><table><thead><tr><th>เมนู</th><th>ราคาขาย</th><th>ต้นทุน</th><th>กำไร%</th><th>ขายออก</th><th>รายรับ</th><th>กำไรสุทธิ</th></tr></thead><tbody>${rows}</tbody></table><button class="noprint" onclick="window.print()">พิมพ์</button></body></html>`);
-    w.document.close();
+    w.document.close();addPrintClose(w);
     setTimeout(()=>{try{w.print();}catch{}},600);
   }
 
@@ -9687,7 +9697,7 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
     ?`<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div>${qrBlock}<div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div>`
     :`<div class="line"></div><div style="text-align:center;font-size:14px;font-weight:800">** ยังไม่ชำระเงิน **</div><div style="text-align:center;font-size:11px;color:#555;margin-top:2px">กรุณาชำระที่เคาน์เตอร์</div>${qrBlock}`;
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:8px;font-size:13px}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{@page{margin:0;size:72mm auto}}</style></head><body><h2>${esc(branchName)}</h2>${headerExtra}${taxLabel}<div class="tbl-num">โต๊ะ ${esc(tableNum)}</div><div style="text-align:center;font-size:11px;color:#555">${new Date().toLocaleString("th-TH")}${rcptNo}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>ส่วนลดรวม</span><span>-฿${(+order.discount).toFixed(2)}</span></div>`:""}${promoLine}${scLine}${vatLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>${paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"}</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${vatIncNote}${cashLine}${payBlock}${footerExtra}<br/>${autoPrint}</body></html>`);
-  w.document.close();
+  w.document.close();addPrintClose(w);
 }
 // ── Bluetooth ESC-POS helpers ────────────────────────────
 function getPConn(p){try{const d=JSON.parse(p.description||"{}");if(d.c==="bt")return{type:"bluetooth",btName:d.n||""};}catch{}return{type:"ip"};}
@@ -9886,7 +9896,7 @@ function printKitchenWindow(item,tableNum,printer){
   const w=openPrintWindow(350,500);
   if(!w)return;
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - โต๊ะ ${tableNum}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:6px;color:#000}.hdr{text-align:center;font-size:13px;font-weight:700;margin:2px 0}.tbl{text-align:center;font-size:54px;font-weight:900;line-height:1;margin:6px 0;letter-spacing:1px;border:3px solid #000;padding:8px 0;border-radius:8px}.tm{text-align:center;font-size:11px;color:#444;margin:2px 0}.sep{border:0;border-top:2px dashed #000;margin:8px 0}.menu{text-align:center;font-size:24px;font-weight:900;line-height:1.2;margin:8px 0;padding:6px 4px}.qty{display:inline-block;background:#000;color:#fff;padding:2px 12px;border-radius:6px;font-size:24px;font-weight:900;margin-right:6px}.note{margin-top:8px;background:#FEF3C7;border:2px solid #000;border-radius:6px;padding:8px;font-size:15px;font-weight:700;text-align:center}.foot{text-align:center;font-size:10px;color:#666;margin-top:6px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><div class="hdr">🍳 ${title}</div><div class="tbl">โต๊ะ ${tableNum}</div><div class="tm">${new Date().toLocaleString("th-TH")}</div><hr class="sep"/><div class="menu"><span class="qty">${item.qty}x</span>${item.name}</div>${item.options&&item.options.length?`<div style="text-align:center;font-size:18px;font-weight:800;color:#0D9488;margin:-2px 0 6px">+ ${esc(optionsText(item.options))}</div>`:""}${item.note?`<div class="note">★ ${item.note}</div>`:""}<hr class="sep"/><div class="foot">--- สิ้นสุดรายการ ---</div><script>window.onload=()=>setTimeout(()=>window.print(),200);<\/script></body></html>`);
-  w.document.close();
+  w.document.close();addPrintClose(w);
 }
 // Resolve which printer should handle this kitchen item.
 // Priority: 1) menu-level override (item.printer_id) → 2) category-routed printer →
@@ -11283,7 +11293,7 @@ async function printTableQR(table,branch,printers=[]){
   const w=openPrintWindow(340,420);
   if(!w)return;
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR โต๊ะ ${table.table_number}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;text-align:center;padding:20px;margin:0}h2{font-size:22px;margin:8px 0}p{color:#64748b;font-size:13px;margin:4px 0}.box{border:2px dashed #e2e8f0;border-radius:16px;padding:20px;display:inline-block}@media print{@page{margin:0;size:auto}}</style></head><body><div class="box"><p style="font-size:11px;font-weight:700;letter-spacing:2px;color:#94a3b8;text-transform:uppercase">${branch.name}</p><h2>โต๊ะ ${table.table_number}</h2>${table.label?`<p>${table.label}</p>`:""}<img src="${qrUrl}" style="width:200px;height:200px;margin:12px 0;border-radius:8px"/><p style="font-size:12px">สแกนเพื่อดูเมนูและสั่งอาหาร</p><p style="font-size:11px;color:#94a3b8">Scan to order</p></div><br/><script>window.onload=()=>setTimeout(()=>window.print(),500)<\/script></body></html>`);
-  w.document.close();
+  w.document.close();addPrintClose(w);
 }
 function POSQRPage({branch,tables,onTablesChanged}){
   const baseUrl=publicBaseUrl();
@@ -11592,7 +11602,7 @@ ${note?`<div class="div"></div><div><b>หมายเหตุ:</b> ${note}</di
 <div class="center" style="font-size:10px;color:#666;margin-top:10px">พิมพ์เมื่อ ${new Date().toLocaleString("th-TH")}</div>
 <script>setTimeout(()=>{window.print();},300);</script>
 </body></html>`;
-  w.document.write(html);w.document.close();
+  w.document.write(html);w.document.close();addPrintClose(w);
 }
 function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
   const[movements,setMovements]=useState([]);const[orders,setOrders]=useState([]);
