@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 20;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 21;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -47,6 +47,7 @@ async function checkUpdate() {
 const getActiveOrders = () => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${BRANCH}`);
 const getPrinters = () => sb(`printers?order=id.asc`);
 const addPrinter = (d) => fetch(`${SUPA_URL}/rest/v1/printers`, { method: "POST", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
+const patchPrinter = (id, d) => fetch(`${SUPA_URL}/rest/v1/printers?id=eq.${id}`, { method: "PATCH", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
 
 // ── ค้นหาเครื่องพิมพ์อัตโนมัติในวงเครือข่าย (เหมือนสแกน WiFi) ──────────────
 function localSubnet() {
@@ -350,6 +351,25 @@ async function greetNewPrinters() {
   } catch {}
 }
 
+// เช็คว่าเครื่องพิมพ์ออนไลน์ไหม (ลองต่อ TCP 9100) แล้วบันทึกสถานะลง description.on ให้แอปโชว์จุดเขียว/แดง
+// (iPad/https เช็คเองไม่ได้เพราะ mixed content — ต้องให้ agent เช็คแล้วรายงาน) · เขียนเฉพาะตอนสถานะเปลี่ยน (ลด writes + กันแย่งเขียนคำสั่ง)
+let pinging = false;
+async function pingPrinters() {
+  if (pinging) return; pinging = true;
+  try {
+    const ps = (await getPrinters()).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false && !isBluetooth(p) && p.ip);
+    const res = await Promise.all(ps.map(async p => ({ p, open: await probePort(p.ip, p.port || 9100, 2500) })));
+    for (const { p, open } of res) {
+      const v = open ? 1 : 0;
+      let d = {}; try { d = JSON.parse(p.description || "{}"); } catch {}
+      if (d.on === v) continue;   // สถานะเดิม ไม่ต้องเขียน
+      try { const r = await sb(`printers?id=eq.${p.id}&select=description`); if (r && r[0]) { try { d = JSON.parse(r[0].description || "{}"); } catch {} } } catch {}   // อ่านล่าสุดก่อนเขียน กันทับคำสั่ง
+      if (d.on === v) continue;
+      try { await patchPrinter(p.id, { description: JSON.stringify({ ...d, on: v, onAt: Date.now() }) }); console.log(`  📡 ${p.name} (${p.ip}) → ${v ? "ออนไลน์ 🟢" : "ออฟไลน์ 🔴"}`); } catch {}
+    }
+  } catch {} finally { pinging = false; }
+}
+
 (async () => {
   console.log("════════════════════════════════════════");
   console.log(" FOODCOST — ตัวพิมพ์ผ่านคลาวด์ (Print Agent)");
@@ -369,6 +389,8 @@ async function greetNewPrinters() {
   setInterval(tick, POLL_MS);
   // พิมพ์หน้าทดสอบให้เครื่องที่ "เพิ่งกดเพิ่มใช้งาน" อัตโนมัติ ทุก 30 วินาที
   setInterval(greetNewPrinters, 30 * 1000);
+  await pingPrinters();                       // เช็คออนไลน์/ออฟไลน์ครั้งแรก
+  setInterval(pingPrinters, 30 * 1000);       // แล้วเช็คทุก 30 วิ → แอปโชว์จุดเขียว/แดง
   // สแกนหาเครื่องพิมพ์ใหม่ในวง LAN ทุก 2 นาที (เครื่องที่เสียบเพิ่มทีหลังจะถูกเพิ่มเองอัตโนมัติ — เร็วพอให้ปุ่ม "ค้นหาเครื่องพิมพ์" ในแอปเห็นผลไว)
   setInterval(async () => { try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {} }, 2 * 60 * 1000);
   // เช็คเวอร์ชันใหม่ทุก 5 นาที → อัปเดตเองโดยไม่ต้องแตะ Termux (เช็คตอนเริ่มด้วย)

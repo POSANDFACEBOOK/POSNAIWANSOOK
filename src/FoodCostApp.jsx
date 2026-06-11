@@ -13013,15 +13013,21 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     if(aliveRef.current)setSearching(false);
   }
   useEffect(()=>{load();},[]);
-  // Ping each IP printer once the list loads (sends only ESC @ init — no paper).
+  // เช็คสถานะเมื่อรายการโหลด/รีเฟรช (https = อ่าน description.on ที่ agent รายงาน · LAN = probe ตรง)
   useEffect(()=>{if(!loading)printers.forEach(p=>checkStatus(p));// eslint-disable-next-line
-  },[loading]);
+  },[loading,printers]);
+  // รีเฟรชอัตโนมัติทุก 15 วิ ขณะเปิดหน้านี้ → จุดเขียว/แดงอัปเดตสดตามที่ตัวพิมพ์รายงาน
+  useEffect(()=>{const t=setInterval(()=>{if(aliveRef.current)loadSilent();},15000);return ()=>clearInterval(t);// eslint-disable-next-line
+  },[]);
   // เปิดผ่าน https (Vercel/iPad) → เบราว์เซอร์ต่อ http://printer:9100 ไม่ได้ (mixed content) → เช็ค/ทดสอบฝั่งเบราว์เซอร์ใช้ไม่ได้ จึงให้ตัวพิมพ์ (agent) จัดการแทน
   const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
   async function checkStatus(p){
     const conn=getPConn(p);
     if(conn.type==="bluetooth"){setStatus(s=>({...s,[p.id]:"bt"}));return;}
-    if(isHttps){setStatus(s=>({...s,[p.id]:"agent"}));return;}   // iPad/https เช็คตรงไม่ได้ — พิมพ์จริงผ่านตัวพิมพ์ (agent)
+    if(isHttps){   // iPad/https เช็คตรงไม่ได้ — อ่านสถานะที่ตัวพิมพ์ (agent) ping แล้วรายงานไว้ใน description.on (อัปเดตทุก 30 วิ)
+      let d={};try{d=JSON.parse(p.description||"{}");}catch{}
+      setStatus(s=>({...s,[p.id]:d.on===1?"online":"offline"}));return;
+    }
     setStatus(s=>({...s,[p.id]:"testing"}));
     const ctrl=new AbortController();const tid=setTimeout(()=>ctrl.abort(),6000);
     try{
@@ -13043,8 +13049,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       catch(e){setStatus(s=>({...s,[p.id]:"offline"}));alert("❌ พิมพ์ทดสอบไม่สำเร็จ: "+(e.message||""));}
       return;
     }
-    if(isHttps){   // iPad/https สั่งพิมพ์ตรงไม่ได้ → เรนเดอร์ไทยเป็นรูปภาพ (คมชัด) แล้วส่งให้ "ตัวพิมพ์ (agent)" พิมพ์ (~5 วิ)
-      setStatus(s=>({...s,[p.id]:"testing"}));
+    if(isHttps){   // iPad/https สั่งพิมพ์ตรงไม่ได้ → เรนเดอร์ไทยเป็นรูปภาพ (คมชัด) แล้วส่งให้ "ตัวพิมพ์ (agent)" พิมพ์ (~5 วิ) · ไม่แตะจุดสถานะ (ปล่อยให้เป็นเขียว/แดงตามที่ agent ping)
       try{
         const b64=await escposSlipRaster([
           {t:"ทดสอบพิมพ์ (รูปภาพ)",size:30,bold:true,align:"center"},
@@ -13056,9 +13061,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           {t:new Date().toLocaleString("th-TH"),size:20,align:"center"},
         ],576);
         await api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at:Date.now(),b64})});
-        setStatus(s=>({...s,[p.id]:"agent"}));
         posToast("🧾 ส่งทดสอบพิมพ์ (แบบรูปภาพ ไทยคมชัด) ไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
-      }catch(e){setStatus(s=>({...s,[p.id]:"agent"}));alert("ส่งคำสั่งทดสอบไม่สำเร็จ: "+(e&&e.message||e));}
+      }catch(e){alert("ส่งคำสั่งทดสอบไม่สำเร็จ: "+(e&&e.message||e));}
       return;
     }
     setStatus(s=>({...s,[p.id]:"testing"}));
@@ -13083,14 +13087,10 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     }catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}
     setSaving(false);
   }
+  // จุดสถานะ 2 สีเท่านั้น: เขียว = ออนไลน์ · แดง = ออฟไลน์ (ทุกสถานะที่ไม่ใช่ออนไลน์)
   const stView=(st)=>{
-    if(st==="testing")return{c:C.yellow,bg:"#FFFBEB",t:"กำลังเช็ค..."};
-    if(st==="online")return{c:C.green,bg:C.greenLight,t:"เชื่อมต่อได้"};
-    if(st==="bt")return{c:C.purple,bg:C.purpleLight,t:"บลูทูธ"};
-    if(st==="agent")return{c:C.blue,bg:C.blueLight,t:"พิมพ์ผ่านตัวพิมพ์ (agent)"};
-    if(st==="offline")return{c:C.red,bg:C.redLight,t:"ออฟไลน์ · ติดต่อไม่ได้"};
-    if(st==="unknown")return{c:"#D97706",bg:"#FFFBEB",t:"ไม่ยืนยัน · กดทดสอบพิมพ์"};
-    return{c:C.ink4,bg:C.bg,t:"ยังไม่เช็ค"};
+    if(st==="online")return{c:C.green,bg:C.greenLight,t:"🟢 ออนไลน์"};
+    return{c:C.red,bg:C.redLight,t:"🔴 ออฟไลน์"};
   };
   const activePrinters=printers.filter(p=>p.active!==false);
   const isIgnored=(p)=>{try{return JSON.parse(p.description||"{}").ig===1;}catch{return false;}};
