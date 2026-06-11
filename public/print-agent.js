@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 22;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 23;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -300,7 +300,7 @@ async function handlePingRequests(printers) {
     const pr = +d.pingReq || 0;
     if (pr && String(state.pinged[p.id]) !== String(pr)) { state.pinged[p.id] = pr; need = true; }
   }
-  if (need) { saveState(); await pingPrinters(); }
+  if (need) { saveState(); await pingPrinters(true); }   // force เขียน onAt เสมอ → แอปรู้ว่าเช็คเสร็จ หยุดหมุน
 }
 
 async function tick() {
@@ -366,7 +366,8 @@ async function greetNewPrinters() {
 // เช็คว่าเครื่องพิมพ์ออนไลน์ไหม (ลองต่อ TCP 9100) แล้วบันทึกสถานะลง description.on ให้แอปโชว์จุดเขียว/แดง
 // (iPad/https เช็คเองไม่ได้เพราะ mixed content — ต้องให้ agent เช็คแล้วรายงาน) · เขียนเฉพาะตอนสถานะเปลี่ยน (ลด writes + กันแย่งเขียนคำสั่ง)
 let pinging = false;
-async function pingPrinters() {
+// force=true (สั่งจากปุ่ม "เช็คสถานะใหม่") → เขียน onAt เสมอแม้สถานะไม่เปลี่ยน เพื่อให้แอปรู้ว่าเช็คเสร็จแล้ว (หยุดหมุนทันที)
+async function pingPrinters(force) {
   if (pinging) return; pinging = true;
   try {
     const ps = (await getPrinters()).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false && !isBluetooth(p) && p.ip);
@@ -374,9 +375,9 @@ async function pingPrinters() {
     for (const { p, open } of res) {
       const v = open ? 1 : 0;
       let d = {}; try { d = JSON.parse(p.description || "{}"); } catch {}
-      if (d.on === v) continue;   // สถานะเดิม ไม่ต้องเขียน
+      if (!force && d.on === v) continue;   // ปกติ: สถานะเดิม ไม่ต้องเขียน (ลด writes)
       try { const r = await sb(`printers?id=eq.${p.id}&select=description`); if (r && r[0]) { try { d = JSON.parse(r[0].description || "{}"); } catch {} } } catch {}   // อ่านล่าสุดก่อนเขียน กันทับคำสั่ง
-      if (d.on === v) continue;
+      if (!force && d.on === v) continue;
       try { await patchPrinter(p.id, { description: JSON.stringify({ ...d, on: v, onAt: Date.now() }) }); console.log(`  📡 ${p.name} (${p.ip}) → ${v ? "ออนไลน์ 🟢" : "ออฟไลน์ 🔴"}`); } catch {}
     }
   } catch {} finally { pinging = false; }

@@ -7416,7 +7416,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
           </div>
         </div>
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
-          {[{label:"ทั้งหมด",count:printers.length,color:"#6366F1"},{label:"ครัว",count:printers.filter(p=>p.type==="kitchen").length,color:"#F59E0B"},{label:"บาร์",count:printers.filter(p=>p.type==="bar").length,color:"#10B981"},{label:"แคชเชียร์",count:printers.filter(p=>p.type==="receipt").length,color:"#3B82F6"}].map(s=><div key={s.label} style={{textAlign:"center",background:"rgba(255,255,255,0.07)",borderRadius:12,padding:"10px 18px",border:"1px solid rgba(255,255,255,0.1)"}}>
+          {[{label:"เครื่องพิมพ์ทั้งหมด",count:printers.length,color:"#6366F1"}].map(s=><div key={s.label} style={{textAlign:"center",background:"rgba(255,255,255,0.07)",borderRadius:12,padding:"10px 18px",border:"1px solid rgba(255,255,255,0.1)"}}>
             <div style={{fontSize:22,fontWeight:900,color:s.color,lineHeight:1}}>{s.count}</div>
             <div style={{fontSize:11,color:"rgba(255,255,255,0.45)",fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{s.label}</div>
           </div>)}
@@ -7434,7 +7434,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         </div>
         <div style={{padding:"24px 28px"}}>
           {/* Row 1: name + conn type + printer type + branch */}
-          <div style={{display:"grid",gridTemplateColumns:"2fr 1.4fr 1fr 1fr",gap:14,marginBottom:14}}>
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1.4fr 1fr",gap:14,marginBottom:14}}>
             <Inp label="ชื่อเครื่องพิมพ์ *" value={pForm.name} onChange={e=>setPForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัวหลัก, บาร์"/>
             <div>
               <label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ประเภทการเชื่อมต่อ</label>
@@ -7442,8 +7442,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
                 {[{v:"ip",label:"🌐 IP Network"},{v:"bluetooth",label:"📶 Bluetooth"}].map(o=><button key={o.v} onClick={()=>setPForm(f=>({...f,conn:o.v}))} style={{flex:1,padding:"9px 0",border:"none",background:pForm.conn===o.v?`linear-gradient(135deg,${C.brand},${C.brandDark})`:C.white,color:pForm.conn===o.v?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer",transition:"all .15s"}}>{o.label}</button>)}
               </div>
             </div>
-            <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ประเภท</label><select value={pForm.type} onChange={e=>setPForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="kitchen">🍳 ครัว</option><option value="bar">🍹 บาร์</option><option value="receipt">🧾 แคชเชียร์</option><option value="other">📄 อื่นๆ</option></select></div>
-            <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+                        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
           </div>
           {/* Row 2: IP fields OR BT scan */}
           {pForm.conn==="ip"?<div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:14,marginBottom:14,alignItems:"flex-end"}}>
@@ -7488,7 +7487,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
       </div>:
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(320px,100%),1fr))",gap:16}}>
         {printers.map(p=>{
-          const typeConf={kitchen:{label:"ครัว",emoji:"🍳",color:"#F59E0B",bg:"#FFFBEB",border:"#FDE68A"},bar:{label:"บาร์",emoji:"🍹",color:"#10B981",bg:"#ECFDF5",border:"#A7F3D0"},receipt:{label:"แคชเชียร์",emoji:"🧾",color:"#3B82F6",bg:"#EFF6FF",border:"#BFDBFE"},other:{label:"อื่นๆ",emoji:"📄",color:"#8B5CF6",bg:"#F5F3FF",border:"#DDD6FE"}}[p.type]||{label:p.type,emoji:"🖨️",color:C.ink3,bg:C.bg,border:C.line};
+          const typeConf={label:getPConn(p).type==="bluetooth"?"บลูทูธ":"เครือข่าย",emoji:"🖨️",color:C.ink3,bg:C.bg,border:C.line};
           return <div key={p.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:16,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.05)",transition:"box-shadow .2s",display:"flex",flexDirection:"column"}}>
             <div style={{padding:"18px 20px 14px",borderBottom:`1px solid ${C.line}`,background:`linear-gradient(135deg,${typeConf.bg},${C.white})`,display:"flex",alignItems:"flex-start",gap:14}}>
               <div style={{width:48,height:48,background:typeConf.bg,border:`2px solid ${typeConf.border}`,borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>{typeConf.emoji}</div>
@@ -12626,7 +12625,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
         </div>
       </div>
       <div style={{display:"flex",gap:8}}>
-        {[{label:"ทั้งหมด",count:printers.length,color:"#6366F1"},{label:"ครัว",count:printers.filter(p=>p.type==="kitchen").length,color:"#F59E0B"},{label:"บาร์",count:printers.filter(p=>p.type==="bar").length,color:"#10B981"},{label:"แคชเชียร์",count:printers.filter(p=>p.type==="receipt").length,color:"#3B82F6"}].map(s=><div key={s.label} style={{textAlign:"center",background:"rgba(255,255,255,0.07)",borderRadius:10,padding:"7px 14px",border:"1px solid rgba(255,255,255,0.1)"}}>
+        {[{label:"เครื่องพิมพ์ทั้งหมด",count:printers.length,color:"#6366F1"}].map(s=><div key={s.label} style={{textAlign:"center",background:"rgba(255,255,255,0.07)",borderRadius:10,padding:"7px 14px",border:"1px solid rgba(255,255,255,0.1)"}}>
           <div style={{fontSize:18,fontWeight:900,color:s.color,lineHeight:1}}>{s.count}</div>
           <div style={{fontSize:10,color:"rgba(255,255,255,0.45)",fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{s.label}</div>
         </div>)}
@@ -12639,7 +12638,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
         {editPID&&<Chip color="yellow">กำลังแก้ไข</Chip>}
       </div>
       <div style={{padding:"18px 22px"}}>
-        <div style={{display:"grid",gridTemplateColumns:"2fr 1.4fr 1fr 1fr",gap:12,marginBottom:12}}>
+        <div style={{display:"grid",gridTemplateColumns:"2fr 1.4fr 1fr",gap:12,marginBottom:12}}>
           <Inp label="ชื่อเครื่องพิมพ์ *" value={pForm.name} onChange={e=>setPForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัวหลัก, บาร์"/>
           <div>
             <label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ประเภทการเชื่อมต่อ</label>
@@ -12647,8 +12646,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
               {[{v:"ip",label:"🌐 IP"},{v:"bluetooth",label:"📶 BT"}].map(o=><button key={o.v} onClick={()=>setPForm(f=>({...f,conn:o.v}))} style={{flex:1,padding:"9px 0",border:"none",background:pForm.conn===o.v?`linear-gradient(135deg,${C.brand},${C.brandDark})`:C.white,color:pForm.conn===o.v?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer"}}>{o.label}</button>)}
             </div>
           </div>
-          <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ประเภท</label><select value={pForm.type} onChange={e=>setPForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="kitchen">🍳 ครัว</option><option value="bar">🍹 บาร์</option><option value="receipt">🧾 แคชเชียร์</option><option value="other">📄 อื่นๆ</option></select></div>
-          <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{(branches||[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+                    <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{(branches||[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
         </div>
         {pForm.conn==="ip"?<div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:12,marginBottom:12,alignItems:"flex-end"}}>
           <Inp label="IP Address *" value={pForm.ip} onChange={e=>setPForm(f=>({...f,ip:e.target.value}))} placeholder="192.168.1.100"/>
@@ -12682,7 +12680,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
       <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มเครื่องพิมพ์แรกของคุณด้านบน</div>
     </div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(320px,100%),1fr))",gap:14}}>
       {printers.map(p=>{
-        const typeConf={kitchen:{label:"ครัว",emoji:"🍳",color:"#F59E0B",bg:"#FFFBEB",border:"#FDE68A"},bar:{label:"บาร์",emoji:"🍹",color:"#10B981",bg:"#ECFDF5",border:"#A7F3D0"},receipt:{label:"แคชเชียร์",emoji:"🧾",color:"#3B82F6",bg:"#EFF6FF",border:"#BFDBFE"},other:{label:"อื่นๆ",emoji:"📄",color:"#8B5CF6",bg:"#F5F3FF",border:"#DDD6FE"}}[p.type]||{label:p.type,emoji:"🖨️",color:C.ink3,bg:C.bg,border:C.line};
+        const typeConf={label:getPConn(p).type==="bluetooth"?"บลูทูธ":"เครือข่าย",emoji:"🖨️",color:C.ink3,bg:C.bg,border:C.line};
         return <div key={p.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
           <div style={{padding:"14px 18px 12px",borderBottom:`1px solid ${C.line}`,background:`linear-gradient(135deg,${typeConf.bg},${C.white})`,display:"flex",alignItems:"flex-start",gap:12}}>
             <div style={{width:42,height:42,background:typeConf.bg,border:`2px solid ${typeConf.border}`,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{typeConf.emoji}</div>
@@ -13066,11 +13064,20 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     if(rechecking)return;
     if(!isHttps){printers.forEach(p=>checkStatus(p));return;}
     setRechecking(true);
+    const before={};(printers||[]).forEach(p=>{try{before[p.id]=JSON.parse(p.description||"{}").onAt||0;}catch{}});   // จำเวลาเดิม เพื่อรู้ว่า agent อัปเดตแล้ว
     const at=Date.now();
     try{
       await Promise.all((printers||[]).filter(p=>p.ip&&getPConn(p).type!=="bluetooth").map(p=>{let d={};try{d=JSON.parse(p.description||"{}");}catch{}return api.updatePrinter(p.id,{description:JSON.stringify({...d,pingReq:at})});}));
     }catch(e){}
-    for(let i=0;i<6&&aliveRef.current;i++){await new Promise(r=>setTimeout(r,1500));await loadSilent();}   // loadSilent → useEffect[printers] อ่านสถานะใหม่ที่ agent รายงาน
+    // หยุดหมุน "ทันที" ที่ตัวพิมพ์ตอบกลับ (onAt ใหม่กว่าเดิม) — ไม่รอครบเวลา · เช็คทุก 0.8 วิ สูงสุด ~10 วิ
+    for(let i=0;i<12&&aliveRef.current;i++){
+      await new Promise(r=>setTimeout(r,800));
+      let mine=null;try{const all=await api.getAllPrinters();mine=(all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id);}catch{}
+      if(mine&&aliveRef.current){
+        setPrinters(mine);   // useEffect[printers] จะ re-derive จุดเขียว/แดง
+        if(mine.some(p=>{try{return (JSON.parse(p.description||"{}").onAt||0)>(before[p.id]||0);}catch{return false;}}))break;
+      }
+    }
     if(aliveRef.current)setRechecking(false);
   }
   async function testPrint(p){
