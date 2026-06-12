@@ -9539,7 +9539,7 @@ export default function App(){
       {isMobile&&mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",backdropFilter:"blur(3px)",zIndex:199,animation:"mIn .2s ease"}}/>}
 
       {/* ── SIDEBAR ── */}
-      <aside style={{width:sidebarW,background:"#0F172A",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
+      <aside style={{width:sidebarW,background:"linear-gradient(165deg,#3E5273 0%,#2B3C57 50%,#28374F 100%)",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
 
         {/* Logo */}
         <div style={{padding:"22px 18px 16px",borderBottom:"1px solid rgba(255,255,255,0.07)"}}>
@@ -9574,7 +9574,11 @@ export default function App(){
         <nav style={{flex:1,padding:"0 10px 10px"}}>
           {visibleTabs.map(t2=>{
             const active=tab===t2.id;
-            return <button key={t2.id} onClick={()=>setTab(t2.id)} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",marginBottom:2,borderRadius:10,border:"none",cursor:"pointer",background:active?`rgba(${isCentral?"20,184,166":"255,107,53"},0.18)`:"transparent",transition:"all .15s",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
+            const activeBg=`rgba(${isCentral?"20,184,166":"255,107,53"},0.18)`;
+            return <button key={t2.id} onClick={()=>setTab(t2.id)}
+              onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow="0 7px 18px rgba(0,0,0,0.3)";if(!active)e.currentTarget.style.background="rgba(255,255,255,0.12)";}}
+              onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";e.currentTarget.style.background=active?activeBg:"transparent";}}
+              style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",marginBottom:2,borderRadius:10,border:"none",cursor:"pointer",background:active?activeBg:"transparent",transition:"all .18s cubic-bezier(.4,0,.2,1)",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
               <div style={{width:30,height:30,borderRadius:8,background:active?`rgba(${isCentral?"20,184,166":"255,107,53"},0.25)`:"rgba(255,255,255,0.05)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .15s"}}>
                 <Ic d={t2.icon} s={14} c={active?accentColor:"rgba(255,255,255,0.45)"}/>
               </div>
