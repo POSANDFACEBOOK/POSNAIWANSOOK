@@ -9539,7 +9539,7 @@ export default function App(){
       {isMobile&&mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",backdropFilter:"blur(3px)",zIndex:199,animation:"mIn .2s ease"}}/>}
 
       {/* ── SIDEBAR ── */}
-      <aside style={{width:sidebarW,background:"linear-gradient(170deg,#FFFFFF 0%,#FFF4EC 52%,#FFE7D6 100%)",borderRight:"1px solid #FBDFCB",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
+      <aside style={{width:sidebarW,background:"linear-gradient(170deg,#FFE6D2 0%,#FFD3B5 52%,#FFC29B 100%)",borderRight:"1px solid #F6C39E",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
 
         {/* Logo */}
         <div style={{padding:"22px 18px 16px",borderBottom:"1px solid #FBDFCB"}}>
@@ -9557,7 +9557,7 @@ export default function App(){
         {/* Branch badge */}
         <div style={{padding:"12px 14px 8px"}}>
           <div style={{background:"rgba(255,255,255,0.75)",borderRadius:10,padding:"9px 12px",border:"1px solid #FBD9C4"}}>
-            <div style={{fontSize:9,color:"#C2854F",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:2}}>{t("branch.current")}</div>
+            <div style={{fontSize:9,color:"#9A5A2C",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:2}}>{t("branch.current")}</div>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
               <Ic d={isCentral?I.shop:I.branch} s={13} c={accentColor}/>
               <span style={{fontSize:13,fontWeight:800,color:"#1F2937",fontFamily:"'Sarabun',sans-serif"}}>{currentBranch.name}</span>
@@ -9567,22 +9567,22 @@ export default function App(){
 
         {/* Nav label */}
         <div style={{padding:"10px 18px 5px"}}>
-          <span style={{fontSize:9,fontWeight:700,color:"#C2854F",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
+          <span style={{fontSize:9,fontWeight:700,color:"#9A5A2C",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
         </div>
 
         {/* Nav items */}
         <nav style={{flex:1,padding:"0 10px 10px"}}>
           {visibleTabs.map(t2=>{
             const active=tab===t2.id;
-            const activeBg=`rgba(${isCentral?"20,184,166":"255,107,53"},0.18)`;
+            const activeBg="#FFFFFF";
             return <button key={t2.id} onClick={()=>setTab(t2.id)}
               onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow="0 8px 20px rgba(234,88,12,0.30)";if(!active){e.currentTarget.style.background="rgba(234,88,12,0.24)";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#7C2D12";}}}
-              onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";e.currentTarget.style.background=active?activeBg:"transparent";if(!active){const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#6B7280";}}}
-              style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",marginBottom:2,borderRadius:10,border:"none",cursor:"pointer",background:active?activeBg:"transparent",transition:"all .18s cubic-bezier(.4,0,.2,1)",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
-              <div style={{width:30,height:30,borderRadius:8,background:active?`rgba(${isCentral?"20,184,166":"255,107,53"},0.22)`:"#FFF1E8",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .15s"}}>
-                <Ic d={t2.icon} s={14} c={active?accentColor:"#B07A52"}/>
+              onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=active?"0 2px 8px rgba(124,45,18,0.10)":"";e.currentTarget.style.background=active?activeBg:"transparent";if(!active){const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#6E4B34";}}}
+              style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",marginBottom:2,borderRadius:10,border:active?"1px solid #F6C39E":"1px solid transparent",cursor:"pointer",background:active?activeBg:"transparent",boxShadow:active?"0 2px 8px rgba(124,45,18,0.10)":"none",transition:"all .18s cubic-bezier(.4,0,.2,1)",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
+              <div style={{width:30,height:30,borderRadius:8,background:active?`rgba(${isCentral?"20,184,166":"255,107,53"},0.28)`:"#FFFFFF",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .15s",boxShadow:active?"none":"0 1px 3px rgba(124,45,18,0.12)"}}>
+                <Ic d={t2.icon} s={14} c={active?accentColor:"#A8704E"}/>
               </div>
-              <span style={{fontSize:13,fontWeight:active?800:500,color:active?"#9A3412":"#6B7280",transition:"all .15s",whiteSpace:"pre-line",lineHeight:1.25}}>{t2.l}</span>
+              <span style={{fontSize:13,fontWeight:active?800:500,color:active?"#7C2D12":"#6E4B34",transition:"all .15s",whiteSpace:"pre-line",lineHeight:1.25}}>{t2.l}</span>
               {active&&<div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:accentColor}}/>}
             </button>;
           })}
@@ -9590,7 +9590,7 @@ export default function App(){
 
         {/* Language switcher */}
         <div style={{padding:"4px 14px 8px"}}>
-          <div style={{fontSize:9,fontWeight:700,color:"#C2854F",letterSpacing:1.2,textTransform:"uppercase",marginBottom:5}}>{t("lang.label")}</div>
+          <div style={{fontSize:9,fontWeight:700,color:"#9A5A2C",letterSpacing:1.2,textTransform:"uppercase",marginBottom:5}}>{t("lang.label")}</div>
           <div style={{display:"flex",gap:4}}>
             {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:6,border:sel?`1px solid ${accentColor}`:"1px solid #F2D3BF",cursor:"pointer",background:sel?accentColor:"#FFF6EF",color:sel?"#fff":"#8B6B57",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"background .15s"}}>{L.l}</button>;})}
           </div>
