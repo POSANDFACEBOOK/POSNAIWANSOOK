@@ -9539,35 +9539,35 @@ export default function App(){
       {isMobile&&mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",backdropFilter:"blur(3px)",zIndex:199,animation:"mIn .2s ease"}}/>}
 
       {/* ── SIDEBAR ── */}
-      <aside style={{width:sidebarW,background:"linear-gradient(165deg,#3E5273 0%,#2B3C57 50%,#28374F 100%)",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
+      <aside style={{width:sidebarW,background:"linear-gradient(170deg,#FFFFFF 0%,#FFF4EC 52%,#FFE7D6 100%)",borderRight:"1px solid #FBDFCB",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
 
         {/* Logo */}
-        <div style={{padding:"22px 18px 16px",borderBottom:"1px solid rgba(255,255,255,0.07)"}}>
+        <div style={{padding:"22px 18px 16px",borderBottom:"1px solid #FBDFCB"}}>
           <div style={{display:"flex",alignItems:"center",gap:11}}>
             <div style={{width:38,height:38,background:`linear-gradient(135deg,${accentColor},${accentDark})`,borderRadius:11,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 4px 14px ${accentColor}55`}}>
               <Ic d={isCentral?I.shop:I.fire} s={18} c="#fff" sw={2}/>
             </div>
             <div>
-              <div style={{fontWeight:900,fontSize:13,color:"#F8FAFC",letterSpacing:-.2,lineHeight:1.2}}>NAIWANSOOK</div>
-              <div style={{fontSize:10,color:"rgba(255,255,255,0.35)",fontWeight:600,letterSpacing:1.5}}>FOODCOST</div>
+              <div style={{fontWeight:900,fontSize:13,color:"#9A3412",letterSpacing:-.2,lineHeight:1.2}}>NAIWANSOOK</div>
+              <div style={{fontSize:10,color:"#EA7C45",fontWeight:700,letterSpacing:1.5}}>FOODCOST</div>
             </div>
           </div>
         </div>
 
         {/* Branch badge */}
         <div style={{padding:"12px 14px 8px"}}>
-          <div style={{background:"rgba(255,255,255,0.06)",borderRadius:10,padding:"9px 12px",border:"1px solid rgba(255,255,255,0.08)"}}>
-            <div style={{fontSize:9,color:"rgba(255,255,255,0.35)",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:2}}>{t("branch.current")}</div>
+          <div style={{background:"rgba(255,255,255,0.75)",borderRadius:10,padding:"9px 12px",border:"1px solid #FBD9C4"}}>
+            <div style={{fontSize:9,color:"#C2854F",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:2}}>{t("branch.current")}</div>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
               <Ic d={isCentral?I.shop:I.branch} s={13} c={accentColor}/>
-              <span style={{fontSize:13,fontWeight:800,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif"}}>{currentBranch.name}</span>
+              <span style={{fontSize:13,fontWeight:800,color:"#1F2937",fontFamily:"'Sarabun',sans-serif"}}>{currentBranch.name}</span>
             </div>
           </div>
         </div>
 
         {/* Nav label */}
         <div style={{padding:"10px 18px 5px"}}>
-          <span style={{fontSize:9,fontWeight:700,color:"rgba(255,255,255,0.25)",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
+          <span style={{fontSize:9,fontWeight:700,color:"#C2854F",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
         </div>
 
         {/* Nav items */}
@@ -9576,13 +9576,13 @@ export default function App(){
             const active=tab===t2.id;
             const activeBg=`rgba(${isCentral?"20,184,166":"255,107,53"},0.18)`;
             return <button key={t2.id} onClick={()=>setTab(t2.id)}
-              onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow="0 7px 18px rgba(0,0,0,0.3)";if(!active)e.currentTarget.style.background="rgba(255,255,255,0.12)";}}
+              onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow="0 7px 18px rgba(234,88,12,0.22)";if(!active)e.currentTarget.style.background="rgba(234,88,12,0.10)";}}
               onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";e.currentTarget.style.background=active?activeBg:"transparent";}}
               style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",marginBottom:2,borderRadius:10,border:"none",cursor:"pointer",background:active?activeBg:"transparent",transition:"all .18s cubic-bezier(.4,0,.2,1)",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
-              <div style={{width:30,height:30,borderRadius:8,background:active?`rgba(${isCentral?"20,184,166":"255,107,53"},0.25)`:"rgba(255,255,255,0.05)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .15s"}}>
-                <Ic d={t2.icon} s={14} c={active?accentColor:"rgba(255,255,255,0.45)"}/>
+              <div style={{width:30,height:30,borderRadius:8,background:active?`rgba(${isCentral?"20,184,166":"255,107,53"},0.22)`:"#FFF1E8",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .15s"}}>
+                <Ic d={t2.icon} s={14} c={active?accentColor:"#B07A52"}/>
               </div>
-              <span style={{fontSize:13,fontWeight:active?700:400,color:active?"#F8FAFC":"rgba(255,255,255,0.55)",transition:"all .15s",whiteSpace:"pre-line",lineHeight:1.25}}>{t2.l}</span>
+              <span style={{fontSize:13,fontWeight:active?800:500,color:active?"#9A3412":"#6B7280",transition:"all .15s",whiteSpace:"pre-line",lineHeight:1.25}}>{t2.l}</span>
               {active&&<div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:accentColor}}/>}
             </button>;
           })}
@@ -9590,29 +9590,29 @@ export default function App(){
 
         {/* Language switcher */}
         <div style={{padding:"4px 14px 8px"}}>
-          <div style={{fontSize:9,fontWeight:700,color:"rgba(255,255,255,0.35)",letterSpacing:1.2,textTransform:"uppercase",marginBottom:5}}>{t("lang.label")}</div>
+          <div style={{fontSize:9,fontWeight:700,color:"#C2854F",letterSpacing:1.2,textTransform:"uppercase",marginBottom:5}}>{t("lang.label")}</div>
           <div style={{display:"flex",gap:4}}>
-            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:6,border:sel?`1px solid ${accentColor}`:"1px solid rgba(255,255,255,0.08)",cursor:"pointer",background:sel?accentColor:"rgba(255,255,255,0.05)",color:sel?"#fff":"rgba(255,255,255,0.55)",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"background .15s"}}>{L.l}</button>;})}
+            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:6,border:sel?`1px solid ${accentColor}`:"1px solid #F2D3BF",cursor:"pointer",background:sel?accentColor:"#FFF6EF",color:sel?"#fff":"#8B6B57",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"background .15s"}}>{L.l}</button>;})}
           </div>
         </div>
 
         {/* User section */}
-        <div style={{padding:"12px 14px 20px",borderTop:"1px solid rgba(255,255,255,0.07)"}}>
-          <div style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"rgba(255,255,255,0.05)",borderRadius:10,marginBottom:8}}>
+        <div style={{padding:"12px 14px 20px",borderTop:"1px solid #FBDFCB"}}>
+          <div style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"#FFF7F1",borderRadius:10,marginBottom:8}}>
             <div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg,${accentColor},${accentDark})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <Ic d={I.user} s={14} c="#fff"/>
             </div>
             <div style={{minWidth:0}}>
-              <div style={{fontSize:12,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{currentUser.name||currentUser.username}</div>
-              <div style={{fontSize:10,color:"rgba(255,255,255,0.4)"}}>{ROLES[currentUser.role]?.label||currentUser.role}</div>
+              <div style={{fontSize:12,fontWeight:700,color:"#1F2937",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{currentUser.name||currentUser.username}</div>
+              <div style={{fontSize:10,color:"#94A3B8"}}>{ROLES[currentUser.role]?.label||currentUser.role}</div>
             </div>
           </div>
           <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:8,padding:"7px 0",cursor:"pointer",fontSize:11,color:"rgba(255,255,255,0.6)",fontFamily:"'Sarabun',sans-serif",fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .15s"}}>
-              <Ic d={I.branch} s={11} c="rgba(255,255,255,0.5)"/>{t("branch.switch")}
+            <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"#FFF0E6",border:"1px solid #F5C9AE",borderRadius:8,padding:"7px 0",cursor:"pointer",fontSize:11,color:"#9A5B3B",fontFamily:"'Sarabun',sans-serif",fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .15s"}}>
+              <Ic d={I.branch} s={11} c="#B5765A"/>{t("branch.switch")}
             </button>
-            <button onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} title="ออกจากระบบ" style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:8,padding:"7px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .15s"}}>
-              <Ic d={I.logout} s={13} c="#F87171"/>
+            <button onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} title="ออกจากระบบ" style={{background:"rgba(239,68,68,0.1)",border:"1px solid #FBCFCF",borderRadius:8,padding:"7px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .15s"}}>
+              <Ic d={I.logout} s={13} c="#EF4444"/>
             </button>
           </div>
         </div>
