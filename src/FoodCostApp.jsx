@@ -9576,8 +9576,8 @@ export default function App(){
             const active=tab===t2.id;
             const activeBg=`rgba(${isCentral?"20,184,166":"255,107,53"},0.18)`;
             return <button key={t2.id} onClick={()=>setTab(t2.id)}
-              onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow="0 7px 18px rgba(234,88,12,0.22)";if(!active)e.currentTarget.style.background="rgba(234,88,12,0.10)";}}
-              onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";e.currentTarget.style.background=active?activeBg:"transparent";}}
+              onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow="0 8px 20px rgba(234,88,12,0.30)";if(!active){e.currentTarget.style.background="rgba(234,88,12,0.24)";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#7C2D12";}}}
+              onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";e.currentTarget.style.background=active?activeBg:"transparent";if(!active){const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#6B7280";}}}
               style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",marginBottom:2,borderRadius:10,border:"none",cursor:"pointer",background:active?activeBg:"transparent",transition:"all .18s cubic-bezier(.4,0,.2,1)",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
               <div style={{width:30,height:30,borderRadius:8,background:active?`rgba(${isCentral?"20,184,166":"255,107,53"},0.22)`:"#FFF1E8",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .15s"}}>
                 <Ic d={t2.icon} s={14} c={active?accentColor:"#B07A52"}/>
