@@ -9539,79 +9539,77 @@ export default function App(){
       {isMobile&&mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",backdropFilter:"blur(3px)",zIndex:199,animation:"mIn .2s ease"}}/>}
 
       {/* ── SIDEBAR ── */}
-      <aside style={{width:sidebarW,background:"linear-gradient(170deg,#FFE6D2 0%,#FFD3B5 52%,#FFC29B 100%)",borderRight:"1px solid #F6C39E",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
+      <aside style={{width:sidebarW,background:"#FCFCFD",borderRight:"1px solid #ECECEF",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",fontFamily:"'Sarabun',sans-serif",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
 
-        {/* Logo */}
-        <div style={{padding:"22px 18px 16px",borderBottom:"1px solid #FBDFCB"}}>
-          <div style={{display:"flex",alignItems:"center",gap:11}}>
-            <div style={{width:38,height:38,background:`linear-gradient(135deg,${accentColor},${accentDark})`,borderRadius:11,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 4px 14px ${accentColor}55`}}>
+        {/* Brand header (โลโก้ + ป้ายสาขา) — accent-wash บางๆ เป็น brand moment เดียวของแถบ */}
+        <div style={{background:`linear-gradient(180deg,${accentColor}0F,transparent)`,borderBottom:"1px solid #ECECEF"}}>
+          {/* Logo */}
+          <div style={{padding:"20px 16px 14px",display:"flex",alignItems:"center",gap:11}}>
+            <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${accentColor},${accentDark})`,boxShadow:`0 2px 8px ${accentColor}33`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <Ic d={isCentral?I.shop:I.fire} s={18} c="#fff" sw={2}/>
             </div>
             <div>
-              <div style={{fontWeight:900,fontSize:13,color:"#9A3412",letterSpacing:-.2,lineHeight:1.2}}>NAIWANSOOK</div>
-              <div style={{fontSize:10,color:"#EA7C45",fontWeight:700,letterSpacing:1.5}}>FOODCOST</div>
+              <div style={{fontSize:14,fontWeight:800,color:"#0F172A",letterSpacing:-.2,lineHeight:1.15}}>NAIWANSOOK</div>
+              <div style={{fontSize:9.5,fontWeight:700,color:"#94A3B8",letterSpacing:2,textTransform:"uppercase",marginTop:1}}>FOODCOST</div>
             </div>
           </div>
-        </div>
-
-        {/* Branch badge */}
-        <div style={{padding:"12px 14px 8px"}}>
-          <div style={{background:"rgba(255,255,255,0.75)",borderRadius:10,padding:"9px 12px",border:"1px solid #FBD9C4"}}>
-            <div style={{fontSize:9,color:"#9A5A2C",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:2}}>{t("branch.current")}</div>
-            <div style={{display:"flex",alignItems:"center",gap:6}}>
-              <Ic d={isCentral?I.shop:I.branch} s={13} c={accentColor}/>
-              <span style={{fontSize:13,fontWeight:800,color:"#1F2937",fontFamily:"'Sarabun',sans-serif"}}>{currentBranch.name}</span>
+          {/* Branch badge */}
+          <div style={{padding:"0 14px 14px"}}>
+            <div style={{background:`${accentColor}12`,border:`1px solid ${accentColor}29`,borderRadius:10,padding:"9px 12px"}}>
+              <div style={{fontSize:9,fontWeight:700,color:"#94A3B8",letterSpacing:1.2,textTransform:"uppercase",marginBottom:3}}>{t("branch.current")}</div>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <Ic d={isCentral?I.shop:I.branch} s={13} c={accentColor}/>
+                <span style={{fontSize:13,fontWeight:700,color:"#0F172A",fontFamily:"'Sarabun',sans-serif"}}>{currentBranch.name}</span>
+              </div>
             </div>
           </div>
         </div>
 
         {/* Nav label */}
-        <div style={{padding:"10px 18px 5px"}}>
-          <span style={{fontSize:9,fontWeight:700,color:"#9A5A2C",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
+        <div style={{padding:"14px 18px 6px"}}>
+          <span style={{fontSize:10,fontWeight:700,color:"#94A3B8",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
         </div>
 
-        {/* Nav items */}
-        <nav style={{flex:1,padding:"0 10px 10px"}}>
+        {/* Nav items — Linear/Vercel minimal: พื้นขาวสะอาด, accent เฉพาะ active (แถบ inset ซ้าย + ไอคอน), state นิ่งไม่ยกตัว */}
+        <nav style={{flex:1,padding:"0 10px 12px"}}>
           {visibleTabs.map(t2=>{
             const active=tab===t2.id;
-            const activeBg="#FFFFFF";
             return <button key={t2.id} onClick={()=>setTab(t2.id)}
-              onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow="0 8px 20px rgba(234,88,12,0.30)";if(!active){e.currentTarget.style.background="rgba(234,88,12,0.24)";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#7C2D12";}}}
-              onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=active?"0 2px 8px rgba(124,45,18,0.10)":"";e.currentTarget.style.background=active?activeBg:"transparent";if(!active){const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#6E4B34";}}}
-              style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",marginBottom:2,borderRadius:10,border:active?"1px solid #F6C39E":"1px solid transparent",cursor:"pointer",background:active?activeBg:"transparent",boxShadow:active?"0 2px 8px rgba(124,45,18,0.10)":"none",transition:"all .18s cubic-bezier(.4,0,.2,1)",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
-              <div style={{width:30,height:30,borderRadius:8,background:active?`rgba(${isCentral?"20,184,166":"255,107,53"},0.28)`:"#FFFFFF",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .15s",boxShadow:active?"none":"0 1px 3px rgba(124,45,18,0.12)"}}>
-                <Ic d={t2.icon} s={14} c={active?accentColor:"#A8704E"}/>
+              onMouseEnter={e=>{if(active)return;e.currentTarget.style.background="#F7F7F9";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#1E293B";}}
+              onMouseLeave={e=>{if(active)return;e.currentTarget.style.background="transparent";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#475569";}}
+              style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"9px 11px 9px 14px",marginBottom:1,borderRadius:8,border:"none",cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif",transition:"background .14s ease,color .14s ease",background:active?`${accentColor}0F`:"transparent",boxShadow:active?`inset 3px 0 0 0 ${accentColor}`:"none"}}>
+              <div style={{width:28,height:28,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"background .14s ease",background:active?`${accentColor}14`:"#F1F1F4"}}>
+                <Ic d={t2.icon} s={14} c={active?accentColor:"#94A3B8"}/>
               </div>
-              <span style={{fontSize:13,fontWeight:active?800:500,color:active?"#7C2D12":"#6E4B34",transition:"all .15s",whiteSpace:"pre-line",lineHeight:1.25}}>{t2.l}</span>
-              {active&&<div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:accentColor}}/>}
+              <span style={{fontSize:13,color:active?"#0F172A":"#475569",fontWeight:active?700:500,whiteSpace:"pre-line",lineHeight:1.25,transition:"color .14s ease"}}>{t2.l}</span>
             </button>;
           })}
         </nav>
 
         {/* Language switcher */}
-        <div style={{padding:"4px 14px 8px"}}>
-          <div style={{fontSize:9,fontWeight:700,color:"#9A5A2C",letterSpacing:1.2,textTransform:"uppercase",marginBottom:5}}>{t("lang.label")}</div>
-          <div style={{display:"flex",gap:4}}>
-            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:6,border:sel?`1px solid ${accentColor}`:"1px solid #F2D3BF",cursor:"pointer",background:sel?accentColor:"#FFF6EF",color:sel?"#fff":"#8B6B57",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"background .15s"}}>{L.l}</button>;})}
+        <div style={{padding:"6px 14px 10px"}}>
+          <div style={{fontSize:9,fontWeight:700,color:"#94A3B8",letterSpacing:1.2,textTransform:"uppercase",marginBottom:6}}>{t("lang.label")}</div>
+          <div style={{display:"flex",gap:5}}>
+            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .14s ease",background:sel?accentColor:"#F4F4F6",border:sel?`1px solid ${accentColor}`:"1px solid #ECECEF",color:sel?"#fff":"#64748B",boxShadow:sel?`0 1px 4px ${accentColor}40`:"none"}}>{L.l}</button>;})}
           </div>
         </div>
 
         {/* User section */}
-        <div style={{padding:"12px 14px 20px",borderTop:"1px solid #FBDFCB"}}>
-          <div style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"#FFF7F1",borderRadius:10,marginBottom:8}}>
-            <div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg,${accentColor},${accentDark})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+        <div style={{padding:"12px 14px 18px",borderTop:"1px solid #ECECEF"}}>
+          <div style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"#F7F7F9",border:"1px solid #ECECEF",borderRadius:10,marginBottom:8}}>
+            <div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg,${accentColor},${accentDark})`,boxShadow:`0 2px 8px ${accentColor}33`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <Ic d={I.user} s={14} c="#fff"/>
             </div>
             <div style={{minWidth:0}}>
-              <div style={{fontSize:12,fontWeight:700,color:"#1F2937",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{currentUser.name||currentUser.username}</div>
-              <div style={{fontSize:10,color:"#94A3B8"}}>{ROLES[currentUser.role]?.label||currentUser.role}</div>
+              <div style={{fontSize:12.5,fontWeight:700,color:"#0F172A",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{currentUser.name||currentUser.username}</div>
+              <div style={{fontSize:10,fontWeight:500,color:"#94A3B8"}}>{ROLES[currentUser.role]?.label||currentUser.role}</div>
             </div>
           </div>
           <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"#FFF0E6",border:"1px solid #F5C9AE",borderRadius:8,padding:"7px 0",cursor:"pointer",fontSize:11,color:"#9A5B3B",fontFamily:"'Sarabun',sans-serif",fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .15s"}}>
-              <Ic d={I.branch} s={11} c="#B5765A"/>{t("branch.switch")}
+            <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"#F4F4F6",border:"1px solid #ECECEF",borderRadius:8,padding:"7px 0",cursor:"pointer",fontSize:11,fontWeight:600,color:"#475569",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .14s"}}>
+              <Ic d={I.branch} s={11} c="#94A3B8"/>{t("branch.switch")}
             </button>
-            <button onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} title="ออกจากระบบ" style={{background:"rgba(239,68,68,0.1)",border:"1px solid #FBCFCF",borderRadius:8,padding:"7px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .15s"}}>
+            <button onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} title="ออกจากระบบ" style={{background:"#FEF2F2",border:"1px solid #FEE2E2",borderRadius:8,padding:"7px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .14s"}}>
               <Ic d={I.logout} s={13} c="#EF4444"/>
             </button>
           </div>
