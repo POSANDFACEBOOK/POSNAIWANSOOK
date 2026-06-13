@@ -9539,27 +9539,27 @@ export default function App(){
       {isMobile&&mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",backdropFilter:"blur(3px)",zIndex:199,animation:"mIn .2s ease"}}/>}
 
       {/* ── SIDEBAR ── */}
-      <aside style={{width:sidebarW,background:"#FCFCFD",borderRight:"1px solid #ECECEF",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",fontFamily:"'Sarabun',sans-serif",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
+      <aside style={{width:sidebarW,background:"#1E2738",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",fontFamily:"'Sarabun',sans-serif",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
 
-        {/* Brand header (โลโก้ + ป้ายสาขา) — accent-wash บางๆ เป็น brand moment เดียวของแถบ */}
-        <div style={{background:`linear-gradient(180deg,${accentColor}0F,transparent)`,borderBottom:"1px solid #ECECEF"}}>
+        {/* Brand header (โลโก้ + ป้ายสาขา) — เรืองส้มจางๆ ด้านบนเป็น brand moment */}
+        <div style={{background:`linear-gradient(180deg,${accentColor}1A,transparent)`,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>
           {/* Logo */}
           <div style={{padding:"20px 16px 14px",display:"flex",alignItems:"center",gap:11}}>
-            <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${accentColor},${accentDark})`,boxShadow:`0 2px 8px ${accentColor}33`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${accentColor},${accentDark})`,boxShadow:`0 3px 12px ${accentColor}55`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <Ic d={isCentral?I.shop:I.fire} s={18} c="#fff" sw={2}/>
             </div>
             <div>
-              <div style={{fontSize:14,fontWeight:800,color:"#0F172A",letterSpacing:-.2,lineHeight:1.15}}>NAIWANSOOK</div>
-              <div style={{fontSize:9.5,fontWeight:700,color:"#94A3B8",letterSpacing:2,textTransform:"uppercase",marginTop:1}}>FOODCOST</div>
+              <div style={{fontSize:14,fontWeight:800,color:"#F1F5F9",letterSpacing:-.2,lineHeight:1.15}}>NAIWANSOOK</div>
+              <div style={{fontSize:9.5,fontWeight:700,color:"#8B97AC",letterSpacing:2,textTransform:"uppercase",marginTop:1}}>FOODCOST</div>
             </div>
           </div>
           {/* Branch badge */}
           <div style={{padding:"0 14px 14px"}}>
-            <div style={{background:`${accentColor}12`,border:`1px solid ${accentColor}29`,borderRadius:10,padding:"9px 12px"}}>
-              <div style={{fontSize:9,fontWeight:700,color:"#94A3B8",letterSpacing:1.2,textTransform:"uppercase",marginBottom:3}}>{t("branch.current")}</div>
+            <div style={{background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"9px 12px"}}>
+              <div style={{fontSize:9,fontWeight:700,color:"#8B97AC",letterSpacing:1.2,textTransform:"uppercase",marginBottom:3}}>{t("branch.current")}</div>
               <div style={{display:"flex",alignItems:"center",gap:6}}>
                 <Ic d={isCentral?I.shop:I.branch} s={13} c={accentColor}/>
-                <span style={{fontSize:13,fontWeight:700,color:"#0F172A",fontFamily:"'Sarabun',sans-serif"}}>{currentBranch.name}</span>
+                <span style={{fontSize:13,fontWeight:700,color:"#F1F5F9",fontFamily:"'Sarabun',sans-serif"}}>{currentBranch.name}</span>
               </div>
             </div>
           </div>
@@ -9567,50 +9567,50 @@ export default function App(){
 
         {/* Nav label */}
         <div style={{padding:"14px 18px 6px"}}>
-          <span style={{fontSize:10,fontWeight:700,color:"#94A3B8",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
+          <span style={{fontSize:10,fontWeight:700,color:"#8B97AC",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
         </div>
 
-        {/* Nav items — Linear/Vercel minimal: พื้นขาวสะอาด, accent เฉพาะ active (แถบ inset ซ้าย + ไอคอน), state นิ่งไม่ยกตัว */}
+        {/* Nav items — ดาร์กสเลท: ตัวอักษรอ่อน, active = พื้น accent-tint + แถบ accent ชิดซ้าย + ไอคอน accent, state นิ่งไม่ยกตัว */}
         <nav style={{flex:1,padding:"0 10px 12px"}}>
           {visibleTabs.map(t2=>{
             const active=tab===t2.id;
             return <button key={t2.id} onClick={()=>setTab(t2.id)}
-              onMouseEnter={e=>{if(active)return;e.currentTarget.style.background="#F7F7F9";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#1E293B";}}
-              onMouseLeave={e=>{if(active)return;e.currentTarget.style.background="transparent";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#475569";}}
-              style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"9px 11px 9px 14px",marginBottom:1,borderRadius:8,border:"none",cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif",transition:"background .14s ease,color .14s ease",background:active?`${accentColor}0F`:"transparent",boxShadow:active?`inset 3px 0 0 0 ${accentColor}`:"none"}}>
-              <div style={{width:28,height:28,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"background .14s ease",background:active?`${accentColor}14`:"#F1F1F4"}}>
-                <Ic d={t2.icon} s={14} c={active?accentColor:"#94A3B8"}/>
+              onMouseEnter={e=>{if(active)return;e.currentTarget.style.background="rgba(255,255,255,0.06)";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#F1F5F9";}}
+              onMouseLeave={e=>{if(active)return;e.currentTarget.style.background="transparent";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#AEB8C8";}}
+              style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"9px 11px 9px 14px",marginBottom:1,borderRadius:8,border:"none",cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif",transition:"background .14s ease,color .14s ease",background:active?`${accentColor}29`:"transparent",boxShadow:active?`inset 3px 0 0 0 ${accentColor}`:"none"}}>
+              <div style={{width:28,height:28,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"background .14s ease",background:active?`${accentColor}33`:"transparent"}}>
+                <Ic d={t2.icon} s={14} c={active?accentColor:"#8B97AC"}/>
               </div>
-              <span style={{fontSize:13,color:active?"#0F172A":"#475569",fontWeight:active?700:500,whiteSpace:"pre-line",lineHeight:1.25,transition:"color .14s ease"}}>{t2.l}</span>
+              <span style={{fontSize:13,color:active?"#FFFFFF":"#AEB8C8",fontWeight:active?700:500,whiteSpace:"pre-line",lineHeight:1.25,transition:"color .14s ease"}}>{t2.l}</span>
             </button>;
           })}
         </nav>
 
         {/* Language switcher */}
         <div style={{padding:"6px 14px 10px"}}>
-          <div style={{fontSize:9,fontWeight:700,color:"#94A3B8",letterSpacing:1.2,textTransform:"uppercase",marginBottom:6}}>{t("lang.label")}</div>
+          <div style={{fontSize:9,fontWeight:700,color:"#8B97AC",letterSpacing:1.2,textTransform:"uppercase",marginBottom:6}}>{t("lang.label")}</div>
           <div style={{display:"flex",gap:5}}>
-            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .14s ease",background:sel?accentColor:"#F4F4F6",border:sel?`1px solid ${accentColor}`:"1px solid #ECECEF",color:sel?"#fff":"#64748B",boxShadow:sel?`0 1px 4px ${accentColor}40`:"none"}}>{L.l}</button>;})}
+            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .14s ease",background:sel?accentColor:"rgba(255,255,255,0.06)",border:sel?`1px solid ${accentColor}`:"1px solid rgba(255,255,255,0.1)",color:sel?"#fff":"#AEB8C8",boxShadow:sel?`0 1px 6px ${accentColor}66`:"none"}}>{L.l}</button>;})}
           </div>
         </div>
 
         {/* User section */}
-        <div style={{padding:"12px 14px 18px",borderTop:"1px solid #ECECEF"}}>
-          <div style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"#F7F7F9",border:"1px solid #ECECEF",borderRadius:10,marginBottom:8}}>
-            <div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg,${accentColor},${accentDark})`,boxShadow:`0 2px 8px ${accentColor}33`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+        <div style={{padding:"12px 14px 18px",borderTop:"1px solid rgba(255,255,255,0.08)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,marginBottom:8}}>
+            <div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg,${accentColor},${accentDark})`,boxShadow:`0 3px 12px ${accentColor}55`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <Ic d={I.user} s={14} c="#fff"/>
             </div>
             <div style={{minWidth:0}}>
-              <div style={{fontSize:12.5,fontWeight:700,color:"#0F172A",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{currentUser.name||currentUser.username}</div>
-              <div style={{fontSize:10,fontWeight:500,color:"#94A3B8"}}>{ROLES[currentUser.role]?.label||currentUser.role}</div>
+              <div style={{fontSize:12.5,fontWeight:700,color:"#F1F5F9",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{currentUser.name||currentUser.username}</div>
+              <div style={{fontSize:10,fontWeight:500,color:"#8B97AC"}}>{ROLES[currentUser.role]?.label||currentUser.role}</div>
             </div>
           </div>
           <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"#F4F4F6",border:"1px solid #ECECEF",borderRadius:8,padding:"7px 0",cursor:"pointer",fontSize:11,fontWeight:600,color:"#475569",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .14s"}}>
-              <Ic d={I.branch} s={11} c="#94A3B8"/>{t("branch.switch")}
+            <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:8,padding:"7px 0",cursor:"pointer",fontSize:11,fontWeight:600,color:"#AEB8C8",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .14s"}}>
+              <Ic d={I.branch} s={11} c="#8B97AC"/>{t("branch.switch")}
             </button>
-            <button onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} title="ออกจากระบบ" style={{background:"#FEF2F2",border:"1px solid #FEE2E2",borderRadius:8,padding:"7px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .14s"}}>
-              <Ic d={I.logout} s={13} c="#EF4444"/>
+            <button onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} title="ออกจากระบบ" style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.28)",borderRadius:8,padding:"7px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .14s"}}>
+              <Ic d={I.logout} s={13} c="#F87171"/>
             </button>
           </div>
         </div>
