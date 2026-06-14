@@ -860,8 +860,9 @@ const todayStr=()=>todayBkk();
 const iS={width:"100%",padding:"11px 14px",border:`1.5px solid ${C.line}`,borderRadius:10,fontSize:15,fontFamily:"'Sarabun',sans-serif",outline:"none",boxSizing:"border-box",color:C.ink,background:C.white,transition:"border .15s"};
 function Field({label,hint,children,style}){return <div style={{marginBottom:16,...style}}>{(label||hint)&&<div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>{label&&<label style={{fontSize:13,fontWeight:600,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{label}</label>}{hint&&<span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{hint}</span>}</div>}{children}</div>;}
 function Inp({label,hint,style:s,...p}){
-  // For type=number, default min=0 (block negatives) unless caller explicitly overrides.
-  const numProps=p.type==="number"&&p.min===undefined?{min:0}:{};
+  // For type=number: default min=0 (block negatives) + force the numeric keypad on mobile/iPad
+  // (iPad shows the full keyboard for type=number unless inputMode is set). Caller can override both.
+  const numProps=p.type==="number"?{...(p.min===undefined?{min:0}:{}),inputMode:"decimal"}:{};
   return <Field label={label} hint={hint}><input style={{...iS,...s}} {...numProps} {...p}/></Field>;
 }
 function TA({label,hint,rows=4,...p}){return <Field label={label} hint={hint}><textarea rows={rows} style={{...iS,resize:"vertical",lineHeight:1.8}} {...p}/></Field>;}
@@ -1325,10 +1326,10 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
                 <input value={row.name??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,name:e.target.value===""?undefined:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13}}/>
               </td>
               <td style={{padding:"8px 12px"}}>
-                <input type="number" value={row.buy_price??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,buy_price:e.target.value===""?undefined:+e.target.value}:x))} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตราคา" style={{...iS,padding:"4px 8px",fontSize:13,width:80,color:row.buy_price!==undefined?C.ink:C.ink4}}/>
+                <input type="number" inputMode="decimal" value={row.buy_price??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,buy_price:e.target.value===""?undefined:+e.target.value}:x))} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตราคา" style={{...iS,padding:"4px 8px",fontSize:13,width:80,color:row.buy_price!==undefined?C.ink:C.ink4}}/>
               </td>
               <td style={{padding:"8px 12px"}}>
-                <input type="number" value={row.stock??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,stock:e.target.value===""?undefined:+e.target.value,stockProvided:e.target.value!==""}:x))} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตสต๊อก" style={{...iS,padding:"4px 8px",fontSize:13,width:90,fontWeight:700,color:row.stockProvided?C.green:C.ink4}}/>
+                <input type="number" inputMode="decimal" value={row.stock??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,stock:e.target.value===""?undefined:+e.target.value,stockProvided:e.target.value!==""}:x))} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตสต๊อก" style={{...iS,padding:"4px 8px",fontSize:13,width:90,fontWeight:700,color:row.stockProvided?C.green:C.ink4}}/>
               </td>
               <td style={{padding:"8px 12px"}}>
                 <select value={row.category??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,category:e.target.value===""?undefined:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:12,appearance:"none",color:row.category?C.ink:C.ink4}}>
@@ -1514,7 +1515,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
           <tbody>{rows.map((row,idx)=><tr key={row._kid||idx} style={{borderTop:`1px solid ${C.lineLight}`,opacity:row.selected?1:.5}}>
             <td style={{padding:"8px 12px",textAlign:"center"}}><input type="checkbox" checked={!!row.selected} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,selected:e.target.checked}:x))} style={{accentColor:C.brand,width:15,height:15}}/></td>
             <td style={{padding:"8px 12px"}}><input value={row.name} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,name:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13}}/></td>
-            <td style={{padding:"8px 12px"}}><input type="number" value={row.price} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,price:+e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13,width:90}}/></td>
+            <td style={{padding:"8px 12px"}}><input type="number" inputMode="decimal" value={row.price} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,price:+e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13,width:90}}/></td>
             <td style={{padding:"8px 12px"}}><select value={row.category} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,category:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:12,appearance:"none"}}>{allMenuCatList.map(c=><option key={c}>{c}</option>)}</select></td>
             <td style={{padding:"8px 12px"}}><input value={row.description} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,description:e.target.value}:x))} placeholder="รายละเอียด..." style={{...iS,padding:"4px 8px",fontSize:12}}/></td>
           </tr>)}
@@ -2209,7 +2210,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
           </div>
           <div style={{display:"flex",gap:6,marginBottom:10}}>
             <div style={{flex:2}}><select value={ni.ingredientId} onChange={e=>setNi({...ni,ingredientId:e.target.value})} style={{...iS,fontSize:13}}><option value="">-- เลือกวัตถุดิบ --</option>{ings.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select></div>
-            <div style={{flex:1}}><input type="number" min="0" step="0.1" value={ni.amountGram} onChange={e=>setNi({...ni,amountGram:e.target.value})} onKeyDown={e=>{if(e.key==="Enter")addIngredientToForm();}} placeholder="กรัม" style={{...iS,fontSize:13}}/></div>
+            <div style={{flex:1}}><input type="number" inputMode="decimal" min="0" step="0.1" value={ni.amountGram} onChange={e=>setNi({...ni,amountGram:e.target.value})} onKeyDown={e=>{if(e.key==="Enter")addIngredientToForm();}} placeholder="กรัม" style={{...iS,fontSize:13}}/></div>
             <Btn v="ghost" onClick={addIngredientToForm} icon={I.plus} s={{padding:"10px 12px"}}>เพิ่ม</Btn>
           </div>
           {(form.ingredients||[]).length>0&&<div style={{background:C.brandLight,borderRadius:12,padding:"12px",border:`1px solid ${C.brandBorder}`}}>
@@ -4682,7 +4683,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
               <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>
                 <div style={{display:"inline-flex",alignItems:"center",gap:5}}>
                   <span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span>
-                  <input type="number" min={0} step="0.01" value={it.pricePerUnit==null||it.pricePerUnit===""?"":it.pricePerUnit} onChange={e=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,pricePerUnit:e.target.value}:x)}))} placeholder="0.00" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${needPrice?C.red:(price>0?C.brand:C.brandBorder)}`,background:needPrice?"#FEF2F2":(price>0?C.brandLight:C.white),color:price>0?C.brand:C.ink}}/>
+                  <input type="number" inputMode="decimal" min={0} step="0.01" value={it.pricePerUnit==null||it.pricePerUnit===""?"":it.pricePerUnit} onChange={e=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,pricePerUnit:e.target.value}:x)}))} placeholder="0.00" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${needPrice?C.red:(price>0?C.brand:C.brandBorder)}`,background:needPrice?"#FEF2F2":(price>0?C.brandLight:C.white),color:price>0?C.brand:C.ink}}/>
                   <span style={{fontSize:11,color:C.ink4}}>/{it.unit||"หน่วย"}</span>
                 </div>
                 {needPrice&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>⚠ กรุณากรอกราคา</div>}
@@ -5563,7 +5564,7 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
               <NumStepper value={it.qty} onChange={v=>updateItem(idx,"qty",+v||0)} step={1} width={64} inputStyle={{fontSize:13,fontWeight:700}}/>
             </td>
             <td style={{padding:"6px 10px"}}>
-              <input type="number" step="0.01" value={it.price_per_unit} onChange={e=>updateItem(idx,"price_per_unit",+e.target.value)} style={{...iS,fontSize:13,padding:"5px 8px",height:30,textAlign:"right"}}/>
+              <input type="number" inputMode="decimal" step="0.01" value={it.price_per_unit} onChange={e=>updateItem(idx,"price_per_unit",+e.target.value)} style={{...iS,fontSize:13,padding:"5px 8px",height:30,textAlign:"right"}}/>
             </td>
             <td style={{padding:"6px 10px",textAlign:"right",fontWeight:800,fontSize:14,color:C.brand}}>฿{(+it.line_total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
             <td style={{padding:"6px 4px",textAlign:"center"}}>
@@ -5589,7 +5590,7 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
           </div>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:6,alignItems:"center"}}>
             <span>VAT (%)</span>
-            <input type="number" step="0.1" value={vatPct} onChange={e=>setVatPct(+e.target.value)} style={{...iS,fontSize:12,padding:"4px 8px",height:26,width:70,textAlign:"right"}}/>
+            <input type="number" inputMode="decimal" step="0.1" value={vatPct} onChange={e=>setVatPct(+e.target.value)} style={{...iS,fontSize:12,padding:"4px 8px",height:26,width:70,textAlign:"right"}}/>
           </div>
           {vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>
             <span>VAT</span>
@@ -6303,7 +6304,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>
                 <div style={{display:"inline-flex",alignItems:"center",gap:5}}>
                   <span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span>
-                  <input type="number" min={0} step="0.01" value={it.pricePerUnit==null||it.pricePerUnit===""?"":it.pricePerUnit} onChange={e=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,pricePerUnit:e.target.value}:x)}))} placeholder="0.00" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${needPrice?C.red:(price>0?C.brand:C.brandBorder)}`,background:needPrice?"#FEF2F2":(price>0?C.brandLight:C.white),color:price>0?C.brand:C.ink}}/>
+                  <input type="number" inputMode="decimal" min={0} step="0.01" value={it.pricePerUnit==null||it.pricePerUnit===""?"":it.pricePerUnit} onChange={e=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,pricePerUnit:e.target.value}:x)}))} placeholder="0.00" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${needPrice?C.red:(price>0?C.brand:C.brandBorder)}`,background:needPrice?"#FEF2F2":(price>0?C.brandLight:C.white),color:price>0?C.brand:C.ink}}/>
                   <span style={{fontSize:11,color:C.ink4}}>/{it.unit||"หน่วย"}</span>
                 </div>
                 {needPrice&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>⚠ กรุณากรอกราคา</div>}
@@ -10218,7 +10219,7 @@ function POSTableMap({tables,activeOrders,zones=[],onSelectTable,onAddZone,onAdd
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <div><label style={fLbl}>หมายเลขโต๊ะ *</label><input value={tableForm.table_number} onChange={e=>setTableForm(f=>({...f,table_number:e.target.value}))} placeholder="เช่น A1, 12" style={iS}/></div>
         <div><label style={fLbl}>ชื่อ/ป้าย (ไม่บังคับ)</label><input value={tableForm.label} onChange={e=>setTableForm(f=>({...f,label:e.target.value}))} placeholder="ริมหน้าต่าง" style={iS}/></div>
-        <div><label style={fLbl}>จำนวนที่นั่ง</label><input type="number" min="1" value={tableForm.seats} onChange={e=>setTableForm(f=>({...f,seats:e.target.value}))} style={iS}/></div>
+        <div><label style={fLbl}>จำนวนที่นั่ง</label><input type="number" inputMode="numeric" min="1" value={tableForm.seats} onChange={e=>setTableForm(f=>({...f,seats:e.target.value}))} style={iS}/></div>
         <div><label style={fLbl}>รูปทรง</label><select value={tableForm.shape} onChange={e=>setTableForm(f=>({...f,shape:e.target.value}))} style={{...iS,appearance:"none"}}><option value="square">สี่เหลี่ยม</option><option value="round">กลม</option></select></div>
         <div style={{gridColumn:"1/-1"}}><label style={fLbl}>โซน</label><select value={tableForm.zone} onChange={e=>setTableForm(f=>({...f,zone:e.target.value}))} style={{...iS,appearance:"none"}}><option value="">— ไม่ระบุ —</option>{allZoneNames.map(z=><option key={z} value={z}>{z}</option>)}</select></div>
       </div>
@@ -10373,7 +10374,7 @@ function POSTableManage({tables,branch,zones=[],reloadZones,onDone}){
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>หมายเลขโต๊ะ *</label><input value={form.table_number} onChange={e=>setForm(f=>({...f,table_number:e.target.value}))} placeholder="1, A1, VIP1" style={iS}/></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ชื่อ/Label</label><input value={form.label} onChange={e=>setForm(f=>({...f,label:e.target.value}))} placeholder="ริมหน้าต่าง" style={iS}/></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>โซน</label><select value={form.zone} onChange={e=>setForm(f=>({...f,zone:e.target.value}))} style={{...iS,appearance:"none"}}><option value="">— ไม่ระบุ —</option>{allZones.map(z=><option key={z} value={z}>{z}</option>)}</select></div>
-        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>จำนวนที่นั่ง</label><input type="number" value={form.seats} onChange={e=>setForm(f=>({...f,seats:+e.target.value}))} style={iS}/></div>
+        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>จำนวนที่นั่ง</label><input type="number" inputMode="numeric" value={form.seats} onChange={e=>setForm(f=>({...f,seats:+e.target.value}))} style={iS}/></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>รูปทรง</label><select value={form.shape} onChange={e=>setForm(f=>({...f,shape:e.target.value}))} style={{...iS,appearance:"none"}}><option value="square">สี่เหลี่ยม</option><option value="round">กลม</option></select></div>
       </div>
       <Btn onClick={addSingle} icon={I.plus} disabled={!form.table_number} loading={saving}>เพิ่มโต๊ะ</Btn>
@@ -10382,9 +10383,9 @@ function POSTableManage({tables,branch,zones=[],reloadZones,onDone}){
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:12,marginBottom:12}}>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>โซน</label><select value={bulk.zone} onChange={e=>setBulk(f=>({...f,zone:e.target.value}))} style={{...iS,appearance:"none"}}><option value="">— ไม่ระบุ —</option>{allZones.map(z=><option key={z} value={z}>{z}</option>)}</select></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>Prefix</label><input value={bulk.prefix} onChange={e=>setBulk(f=>({...f,prefix:e.target.value}))} placeholder="A (ไม่บังคับ)" style={iS}/></div>
-        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>เริ่มที่</label><input type="number" value={bulk.from} onChange={e=>setBulk(f=>({...f,from:+e.target.value}))} style={iS}/></div>
-        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ถึง</label><input type="number" value={bulk.to} onChange={e=>setBulk(f=>({...f,to:+e.target.value}))} style={iS}/></div>
-        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ที่นั่ง/โต๊ะ</label><input type="number" value={bulk.seats} onChange={e=>setBulk(f=>({...f,seats:+e.target.value}))} style={iS}/></div>
+        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>เริ่มที่</label><input type="number" inputMode="numeric" value={bulk.from} onChange={e=>setBulk(f=>({...f,from:+e.target.value}))} style={iS}/></div>
+        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ถึง</label><input type="number" inputMode="numeric" value={bulk.to} onChange={e=>setBulk(f=>({...f,to:+e.target.value}))} style={iS}/></div>
+        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ที่นั่ง/โต๊ะ</label><input type="number" inputMode="numeric" value={bulk.seats} onChange={e=>setBulk(f=>({...f,seats:+e.target.value}))} style={iS}/></div>
       </div>
       <div style={{marginBottom:12,fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>จะสร้าง <b>{Math.max(0,bulk.to-bulk.from+1)}</b> โต๊ะ ({bulk.prefix||""}{bulk.from} ถึง {bulk.prefix||""}{bulk.to})</div>
       <Btn onClick={addBulk} loading={saving} icon={I.plus}>สร้างโต๊ะทั้งหมด</Btn>
@@ -10952,7 +10953,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               <select value={d?.t||"percent"} onChange={e=>setItemDisc(p=>({...p,[idx]:{...(p[idx]||{}),t:e.target.value,v:p[idx]?.v||0}}))} style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}>
                 <option value="percent">%</option><option value="amount">฿</option>
               </select>
-              <input type="number" value={d?.v||""} placeholder="0" onChange={e=>setItemDisc(p=>({...p,[idx]:{...(p[idx]||{t:"percent"}),v:e.target.value}}))} style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}/>
+              <input type="number" inputMode="decimal" value={d?.v||""} placeholder="0" onChange={e=>setItemDisc(p=>({...p,[idx]:{...(p[idx]||{t:"percent"}),v:e.target.value}}))} style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}/>
               {lineDisc>0&&<span style={{fontSize:11,color:C.red,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>-฿{lineDisc.toFixed(0)}</span>}
             </div>}
           </div>;})}
@@ -10974,7 +10975,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
           <div style={{display:"flex",gap:4}}>
             {[{v:"percent",l:"%"},{v:"amount",l:"฿"}].map(t=><button key={t.v} onClick={()=>setDiscType(t.v)} style={{padding:"6px 12px",borderRadius:8,border:`2px solid ${discType===t.v?C.brand:C.line}`,background:discType===t.v?C.brand:C.white,color:discType===t.v?C.white:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13}}>{t.l}</button>)}
           </div>
-          <input type="number" value={discValue||""} placeholder="0" onChange={e=>setDiscValue(e.target.value)} style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:700,flex:1}}/>
+          <input type="number" inputMode="decimal" value={discValue||""} placeholder="0" onChange={e=>setDiscValue(e.target.value)} style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:700,flex:1}}/>
           {discType==="percent"&&<div style={{display:"flex",gap:3}}>{[5,10,15,20].map(p=><button key={p} onClick={()=>setDiscValue(p)} style={{padding:"5px 8px",border:`1px solid ${C.line}`,background:C.white,borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:600,color:C.ink3}}>{p}%</button>)}</div>}
         </div>}
 
@@ -10989,7 +10990,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
         {payMethod==="cash"&&<div style={{background:C.greenLight,border:`1.5px solid ${C.green}`,borderRadius:10,padding:10,marginBottom:14}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.green,marginBottom:6}}>💵 รับเงินสด</div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
-            <input type="number" value={cashRcv} placeholder={total.toFixed(0)} onChange={e=>setCashRcv(e.target.value)} style={{...iS,padding:"8px 10px",fontSize:16,fontWeight:700,flex:1}}/>
+            <input type="number" inputMode="decimal" value={cashRcv} placeholder={total.toFixed(0)} onChange={e=>setCashRcv(e.target.value)} style={{...iS,padding:"8px 10px",fontSize:16,fontWeight:700,flex:1}}/>
             <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>{[100,500,1000].map(v=><button key={v} onClick={()=>setCashRcv(String((+cashRcv||0)+v))} style={{padding:"5px 8px",background:C.white,border:`1px solid ${C.green}`,borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.green}}>+{v}</button>)}
             <button onClick={()=>setCashRcv(String(total))} style={{padding:"5px 8px",background:C.green,border:"none",borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.white}}>พอดี</button></div>
           </div>
@@ -11399,7 +11400,7 @@ function OpenShiftModal({currentBranch,currentUser,onDone,onCancel}){
       </div>
       <div style={{padding:24}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8}}>เงินทอนเริ่มต้นในลิ้นชัก *</div>
-        <input type="number" autoFocus value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" style={{...iS,fontSize:26,fontWeight:900,padding:"14px 18px",textAlign:"center",letterSpacing:1}}/>
+        <input type="number" inputMode="decimal" autoFocus value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" style={{...iS,fontSize:26,fontWeight:900,padding:"14px 18px",textAlign:"center",letterSpacing:1}}/>
         <div style={{display:"flex",gap:6,marginTop:8}}>
           {[500,1000,2000,3000,5000].map(v=><button key={v} onClick={()=>setCash(String(v))} style={{flex:1,padding:"7px 0",border:`1px solid ${C.line}`,borderRadius:8,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.ink2}}>฿{v.toLocaleString()}</button>)}
         </div>
@@ -11503,7 +11504,7 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
         <div style={{display:"grid",gridTemplateColumns:action==='out'?"1fr 1fr":"1fr",gap:10,marginBottom:10}}>
           <div>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5}}>จำนวนเงิน *</div>
-            <input type="number" autoFocus value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" style={{...iS,fontSize:20,fontWeight:900,padding:"10px 14px",textAlign:"center"}}/>
+            <input type="number" inputMode="decimal" autoFocus value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" style={{...iS,fontSize:20,fontWeight:900,padding:"10px 14px",textAlign:"center"}}/>
           </div>
           {action==='out'&&<div>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5}}>หมวดหมู่ *</div>
@@ -11695,7 +11696,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         </div>
         <div style={{marginBottom:14}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🧮 นับเงินจริงในลิ้นชัก *</div>
-          <input type="number" value={actualCash} onChange={e=>setActualCash(e.target.value)} placeholder="0" style={{...iS,fontSize:24,fontWeight:900,padding:"14px 18px",textAlign:"center"}}/>
+          <input type="number" inputMode="decimal" value={actualCash} onChange={e=>setActualCash(e.target.value)} placeholder="0" style={{...iS,fontSize:24,fontWeight:900,padding:"14px 18px",textAlign:"center"}}/>
           {actualCash!==""&&<div style={{marginTop:8,padding:"10px 14px",borderRadius:10,background:totals.diff===0?C.greenLight:totals.diff>0?C.blueLight:C.redLight,border:`1.5px solid ${totals.diff===0?C.green:totals.diff>0?C.blue:C.red}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:totals.diff===0?C.green:totals.diff>0?C.blue:C.red}}>
               {totals.diff===0?"✅ ตรงเป๊ะ":totals.diff>0?"📈 เกิน":"📉 ขาด"}
@@ -11786,7 +11787,7 @@ function POSSettingsPanel({currentBranch}){
       {settings.vat_enabled&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <div>
           <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>อัตรา VAT (%)</div>
-          <input type="number" step="0.01" value={settings.vat_rate} onChange={e=>set('vat_rate',+e.target.value)} style={{...iS,fontSize:15,fontWeight:700}}/>
+          <input type="number" inputMode="decimal" step="0.01" value={settings.vat_rate} onChange={e=>set('vat_rate',+e.target.value)} style={{...iS,fontSize:15,fontWeight:700}}/>
         </div>
         <div>
           <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>วิธีคิด VAT</div>
@@ -11812,7 +11813,7 @@ function POSSettingsPanel({currentBranch}){
       </div>
       {settings.service_charge_enabled&&<div>
         <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>อัตรา Service Charge (%)</div>
-        <input type="number" step="0.01" value={settings.service_charge_rate} onChange={e=>set('service_charge_rate',+e.target.value)} style={{...iS,fontSize:15,fontWeight:700,maxWidth:200}}/>
+        <input type="number" inputMode="decimal" step="0.01" value={settings.service_charge_rate} onChange={e=>set('service_charge_rate',+e.target.value)} style={{...iS,fontSize:15,fontWeight:700,maxWidth:200}}/>
       </div>}
     </Card>
 
