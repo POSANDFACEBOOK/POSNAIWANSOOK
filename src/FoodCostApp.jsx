@@ -12580,12 +12580,6 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
     setCatSaving(false);
   }
-  function toggleCat(c){
-    setCatSel(prev=>{
-      const cur=prev===null?allCategories.slice():prev;
-      return cur.includes(c)?cur.filter(x=>x!==c):[...cur,c];
-    });
-  }
   async function testPrinter(p){
     const conn=getPConn(p);
     setTestResults(r=>({...r,[p.id]:{status:"testing"}}));
@@ -12802,13 +12796,16 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
                   const catMenus=menusInCat(c);
                   const isOpen=openCats.has(c);
                   const pinnedHereCount=catMenus.filter(m=>{const cur=catMenuOverride[m.id];return cur!=null&&+cur===+catEditP.id;}).length;
-                  return <div key={c} style={{border:`1.5px solid ${has?C.brandBorder:C.line}`,borderRadius:10,overflow:"hidden",background:has?C.brandLight:C.white,transition:"all .15s",flexShrink:0}}>
+                  // ติ๊กครบทุกเมนู → หัวหมวดติ๊กอัตโนมัติ (รู้ว่าเลือกครบทั้งหมวด) · ติ๊กบางส่วน → ขีดครึ่ง (–)
+                  const allHere=catMenus.length>0&&pinnedHereCount===catMenus.length;const checked=has||allHere;const indet=!checked&&pinnedHereCount>0;
+                  const toggleCatMaster=()=>{if(checked){setCatSel(prev=>{const cur=prev===null?allCategories.slice():prev;return cur.filter(x=>x!==c);});setCatMenuOverride(prev=>{const n={...prev};catMenus.forEach(m=>{if(n[m.id]!=null&&+n[m.id]===+catEditP.id)n[m.id]=null;});return n;});}else{setCatSel(prev=>{const cur=prev===null?allCategories.slice():prev;return cur.includes(c)?cur:[...cur,c];});}};
+                  return <div key={c} style={{border:`1.5px solid ${checked?C.brandBorder:(indet?`${C.brand}66`:C.line)}`,borderRadius:10,overflow:"hidden",background:checked?C.brandLight:C.white,transition:"all .15s",flexShrink:0}}>
                     {/* Category header */}
                     <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px"}}>
-                      <input type="checkbox" checked={has} onChange={()=>toggleCat(c)} style={{accentColor:C.brand,width:17,height:17,cursor:"pointer",flexShrink:0}}/>
+                      <input type="checkbox" checked={checked} ref={el=>{if(el)el.indeterminate=indet;}} onChange={toggleCatMaster} style={{accentColor:C.brand,width:17,height:17,cursor:"pointer",flexShrink:0}}/>
                       <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>toggleOpenCat(c)}>
-                        <div style={{fontSize:14,fontFamily:"'Sarabun',sans-serif",fontWeight:has?800:600,color:has?C.brand:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c}</div>
-                        <div style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{catMenus.length} เมนู{pinnedHereCount>0?` · 📌 ปักหมุดเครื่องนี้ ${pinnedHereCount}`:""}</div>
+                        <div style={{fontSize:14,fontFamily:"'Sarabun',sans-serif",fontWeight:checked?800:600,color:checked?C.brand:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c}</div>
+                        <div style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{catMenus.length} เมนู{allHere?" · ✓ เลือกครบทั้งหมวด":pinnedHereCount>0?` · 📌 ปักหมุดเครื่องนี้ ${pinnedHereCount}`:""}</div>
                       </div>
                       <button onClick={()=>toggleOpenCat(c)} style={{display:"flex",alignItems:"center",gap:5,background:isOpen?C.brand:C.white,color:isOpen?C.white:C.ink3,border:`1px solid ${isOpen?C.brand:C.line}`,borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0}}>
                         <span style={{fontSize:9}}>{isOpen?"▼":"▶"}</span> ระบุรายเมนู
@@ -13164,7 +13161,6 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     let dd={};try{dd=JSON.parse(p.description||"{}");}catch{}setSRcpt(dd.rcpt===1);
     const ov={};(menus||[]).forEach(m=>{if(m.printer_id)ov[m.id]=+m.printer_id;});setSOverride(ov);setSOpenCats(new Set());
   }
-  function toggleSCat(c){setSCats(prev=>{const cur=prev===null?[]:prev;return cur.includes(c)?cur.filter(x=>x!==c):[...cur,c];});}
   function toggleSOpenCat(c){setSOpenCats(prev=>{const n=new Set(prev);if(n.has(c))n.delete(c);else n.add(c);return n;});}
   async function saveSettings(){
     const p=settingsP;if(!p)return;
@@ -13230,14 +13226,18 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
         {branchCategories.length===0
             ?<div style={{padding:24,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>ยังไม่มีหมวดหมู่ในสาขานี้ — ไปสร้างหมวดหมู่ที่หน้า "เมนู" ก่อน แล้วค่อยกลับมาเลือก</div>
             :<>
-              <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>ติ๊ก <b>ช่องหน้าหมวด</b> = พิมพ์ทั้งหมวด · กด <b style={{color:C.blue}}>▼ เลือกเมนู</b> ท้ายหมวด เพื่อเลือกเฉพาะบางเมนูในหมวดนั้น (เมนูที่ติ๊กจะออกเครื่องนี้เสมอ แม้ไม่ติ๊กทั้งหมวด)</div>
+              <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>ติ๊ก <b>ช่องหน้าหมวด</b> = พิมพ์ทั้งหมวด · กด <b style={{color:C.blue}}>▼ เลือกเมนู</b> ท้ายหมวด เพื่อเลือกเฉพาะบางเมนูในหมวดนั้น · <b style={{color:C.blue}}>ติ๊กครบทุกเมนู ช่องหน้าหมวดจะติ๊กให้อัตโนมัติ</b> (ติ๊กบางส่วน = ขีดครึ่ง –)</div>
               <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"50vh",overflowY:"auto",paddingRight:2}}>
-                {branchCategories.map(c=>{const has=sCats.includes(c);const catMenus=menusInCat(c);const isOpen=sOpenCats.has(c);const pinHere=catMenus.filter(m=>{const cur=sOverride[m.id];return cur!=null&&+cur===+settingsP.id;}).length;return <div key={c} style={{border:`1.5px solid ${has?C.blue:C.line}`,borderRadius:10,overflow:"hidden",background:has?C.blueLight:C.white,flexShrink:0}}>
+                {branchCategories.map(c=>{const has=sCats.includes(c);const catMenus=menusInCat(c);const isOpen=sOpenCats.has(c);const pinHere=catMenus.filter(m=>{const cur=sOverride[m.id];return cur!=null&&+cur===+settingsP.id;}).length;
+                  // ติ๊กครบทุกเมนู → หัวหมวดติ๊กให้อัตโนมัติ (รู้ว่าเลือกครบทั้งหมวด) · ติ๊กบางส่วน → ขีดครึ่ง (–) · ติ๊กหัวหมวด=เลือกทั้งหมวด · ปลด=ล้างทั้งหมวด
+                  const allHere=catMenus.length>0&&pinHere===catMenus.length;const checked=has||allHere;const indet=!checked&&pinHere>0;
+                  const toggleCatMaster=()=>{if(checked){setSCats(prev=>(prev||[]).filter(x=>x!==c));setSOverride(prev=>{const n={...prev};catMenus.forEach(m=>{if(n[m.id]!=null&&+n[m.id]===+settingsP.id)n[m.id]=null;});return n;});}else{setSCats(prev=>{const cur=prev===null?[]:prev;return cur.includes(c)?cur:[...cur,c];});}};
+                  return <div key={c} style={{border:`1.5px solid ${checked?C.blue:(indet?`${C.blue}66`:C.line)}`,borderRadius:10,overflow:"hidden",background:checked?C.blueLight:C.white,flexShrink:0}}>
                   <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px"}}>
-                    <input type="checkbox" checked={has} onChange={()=>toggleSCat(c)} style={{accentColor:C.blue,width:18,height:18,cursor:"pointer",flexShrink:0}}/>
+                    <input type="checkbox" checked={checked} ref={el=>{if(el)el.indeterminate=indet;}} onChange={toggleCatMaster} style={{accentColor:C.blue,width:18,height:18,cursor:"pointer",flexShrink:0}}/>
                     <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>toggleSOpenCat(c)}>
-                      <div style={{fontSize:14,fontFamily:"'Sarabun',sans-serif",fontWeight:has?800:600,color:has?C.blue:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c}</div>
-                      <div style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{catMenus.length} เมนู{pinHere>0?` · 📌 เลือกเฉพาะ ${pinHere}`:""}</div>
+                      <div style={{fontSize:14,fontFamily:"'Sarabun',sans-serif",fontWeight:checked?800:600,color:checked?C.blue:C.ink2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{c}</div>
+                      <div style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{catMenus.length} เมนู{allHere?" · ✓ เลือกครบทั้งหมวด":pinHere>0?` · 📌 เลือกเฉพาะ ${pinHere}`:""}</div>
                     </div>
                     <button onClick={()=>toggleSOpenCat(c)} style={{display:"flex",alignItems:"center",gap:5,background:isOpen?C.blue:C.white,color:isOpen?C.white:C.ink3,border:`1px solid ${isOpen?C.blue:C.line}`,borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0}}><span style={{fontSize:9}}>{isOpen?"▼":"▶"}</span> เลือกเมนู</button>
                   </div>
