@@ -13181,10 +13181,6 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   }
   return <Modal title="🖨 เครื่องพิมพ์ & สถานะการเชื่อมต่อ" onClose={onClose} wide>
     {loading?<Loading text="โหลดเครื่องพิมพ์..."/>:<>
-      {/* ค้นหาเครื่องพิมพ์อัตโนมัติทำผ่านตัวพิมพ์ (Print Agent) — เบราว์เซอร์สแกน LAN เองไม่ได้ */}
-      <div style={{background:C.blueLight,border:`1px solid ${C.blue}44`,borderRadius:12,padding:"12px 15px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,lineHeight:1.7}}>
-        🔍 <b>ค้นหาเครื่องพิมพ์อัตโนมัติ:</b> แค่เสียบเครื่องพิมพ์เข้าวง LAN ร้าน — <b>ตัวพิมพ์ (Print Agent)</b> จะสแกนเจอ + เพิ่มเข้าระบบให้เองทุกๆ ไม่กี่นาที (และตอนเปิด/รีสตาร์ท agent) → เครื่องที่เจอจะโผล่ในรายการข้างล่างนี้ · หรือกด <b>"ค้นหาเครื่องพิมพ์"</b> เพื่อแสดงทุกเครื่องในวง LAN (รวมเครื่องที่เคยซ่อน/ลบไป) แล้วเลือกเพิ่มเฉพาะที่ต้องการ
-      </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>เครื่องพิมพ์ของสาขา <b style={{color:C.ink}}>{currentBranch.name}</b> ({activePrinters.length})</div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -13286,11 +13282,6 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           <Btn onClick={add} loading={saving} icon={I.plus}>เพิ่ม</Btn>
         </div>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,marginTop:8,lineHeight:1.6}}>💡 ใช้เครื่องพิมพ์ความร้อนที่ต่อ LAN/WiFi · พอร์ตมาตรฐานคือ 9100 · ตั้งหมวดหมู่/เลือกเมนูให้แต่ละเครื่องได้ที่ "จัดการหลังบ้าน → เครื่องพิมพ์"</div>
-      </div>
-      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#92400E",background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:10,padding:"10px 13px",marginTop:12,lineHeight:1.7}}>
-        {isHttps
-          ?<>📟 <b>iPad/มือถือ เช็ค & ทดสอบพิมพ์ผ่านปุ่มนี้ไม่ได้</b> — Safari ต่อเครื่องพิมพ์ LAN ตรงๆ ไม่ได้ (จึงขึ้น <b>"พิมพ์ผ่านตัวพิมพ์ (agent)"</b>) · <b>การพิมพ์จริงทำผ่าน "ตัวพิมพ์ (Print Agent)" ที่ร้าน</b> · เมื่อกด <b>"เพิ่มใช้งาน"</b> เครื่องใหม่ ตัวพิมพ์จะพิมพ์หน้าทดสอบให้เองภายในไม่กี่วินาที — ถ้ามีกระดาษออก = ใช้งานได้จริง · หรือลองสั่งออเดอร์จริงเพื่อทดสอบ</>
-          :<>⚠️ <b>"เช็ค"</b> เป็นการเดาเบื้องต้นเท่านั้น — เครื่องพิมพ์ความร้อนไม่ตอบกลับแบบเว็บ ระบบจึงยืนยันเองไม่ได้ 100% (เห็น "ไม่ยืนยัน" = ตอบไม่ชัด · "ออฟไลน์" = ติดต่อไม่ได้แน่ๆ) · <b>วิธีเช็คชัวร์ที่สุดคือกด "🧾 ทดสอบพิมพ์" แล้วดูว่ามีกระดาษออกจริงไหม</b></>}
       </div>
     </>}
   </Modal>;
