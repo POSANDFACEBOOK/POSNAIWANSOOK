@@ -159,6 +159,42 @@ const api = {
   getOrderByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`),
   createPOSOrder: (d) => sb("orders", { method:"POST", body:JSON.stringify(d) }),
   updatePOSOrder: (id, d) => sb(`orders?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
+  getPOSOrderById: (id) => sb(`orders?id=eq.${id}&limit=1`),
+  // Optimistic concurrency for the POS `orders` table: PATCH only if updated_at still
+  // matches what the caller last saw. Returns the new row, or null if another device
+  // changed it first — so destructive writes (void/checkout/cancel) abort+reload instead
+  // of silently clobbering a concurrent customer add. timestamptz eq compares by value.
+  updatePOSOrderIfUnchanged: async (id, seen, d) => {
+    const guard = seen==null ? "is.null" : `eq.${encodeURIComponent(seen)}`;
+    const res = await sb(`orders?id=eq.${id}&updated_at=${guard}`, { method:"PATCH", body:JSON.stringify(d) });
+    return (Array.isArray(res)&&res.length>0)?res[0]:null;
+  },
+  // Atomically APPEND items to a table's OPEN order (create one if none exists),
+  // retrying on concurrent writes. Pure-REST compare-and-set: two diners — or a diner
+  // and the cashier — adding at the same moment never overwrite each other. The
+  // create branch relies on the partial unique index (one open order per table) to
+  // turn a simultaneous double-create into a duplicate-key it catches and retries as
+  // an append. Falls back gracefully (just creates) if that index isn't there yet.
+  posAppendItems: async ({branch_id, table_id, table_number, newItems, ordered_by}) => {
+    const sum = (arr) => Math.round((arr||[]).reduce((s,i)=>s+(+i.price||0)*(+i.qty||0),0)*100)/100;
+    for(let attempt=0; attempt<6; attempt++){
+      const ex = await sb(`orders?table_id=eq.${table_id}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`);
+      if(Array.isArray(ex)&&ex.length>0){
+        const cur=ex[0]; const merged=[...(cur.items||[]),...newItems]; const s=sum(merged);
+        const guard = cur.updated_at==null ? "is.null" : `eq.${encodeURIComponent(cur.updated_at)}`;
+        const res=await sb(`orders?id=eq.${cur.id}&updated_at=${guard}`, { method:"PATCH", body:JSON.stringify({items:merged,subtotal:s,total:s,updated_at:new Date().toISOString()}) });
+        if(Array.isArray(res)&&res.length>0)return res[0];
+        // lost the compare-and-set race → re-read fresh and retry
+      }else{
+        try{
+          const s=sum(newItems);
+          const res=await sb("orders", { method:"POST", body:JSON.stringify({branch_id,table_id,table_number,items:newItems,subtotal:s,discount:0,total:s,status:"pending",ordered_by,updated_at:new Date().toISOString()}) });
+          return (Array.isArray(res)&&res.length>0)?res[0]:res;
+        }catch(e){ if(/duplicate key/i.test((e&&e.message)||""))continue; throw e; }
+      }
+    }
+    throw new Error("มีผู้สั่งพร้อมกันจำนวนมาก — กรุณาลองใหม่อีกครั้ง");
+  },
   // CRM
   getCRMCustomers: (bid) => sb(`crm_customers?order=id.desc${bid?`&branch_id=eq.${bid}`:""}`),
   addCRMCustomer: (d) => sb("crm_customers", {method:"POST", body:JSON.stringify(d)}),
@@ -10556,6 +10592,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const isMobile=useIsMobile();
   const[mobileView,setMobileView]=useState("menu"); // "menu" | "order"
   const[items,setItems]=useState(existingOrder?.items||[]);
+  // last-known updated_at of this table's order — the token for optimistic-concurrency
+  // (compare-and-set) writes. Updated after every successful guarded write so multiple
+  // ops in one session (e.g. void → checkout) don't false-conflict with themselves.
+  const verRef=useRef(existingOrder?.updated_at||null);
   const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
   const[saving,setSaving]=useState(false);const[showPay,setShowPay]=useState(false);
@@ -10659,9 +10699,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       for(const s of(existingOrder.items||[])){if(!removed&&sentKey(s)===k){removed=true;continue;}newSent.push(s);}
       if(removed){
         try{
-          const newSub=newSent.reduce((s,i)=>s+i.price*i.qty,0);
-          await api.updatePOSOrder(existingOrder.id,{items:newSent,subtotal:newSub,total:newSub,discount:0,updated_at:new Date().toISOString()});
-        }catch(e){alert("ยกเลิกรายการไม่สำเร็จ: "+e.message);return;}
+          const newSub=round2(newSent.reduce((s,i)=>s+i.price*i.qty,0));
+          const row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,{items:newSent,subtotal:newSub,total:newSub,discount:0,updated_at:new Date().toISOString()});
+          if(!row){alert("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อดูรายการล่าสุดก่อนยกเลิก");onDone();onClose();return;}
+          verRef.current=row.updated_at;
+        }catch(e){alert("ยกเลิกรายการไม่สำเร็จ: "+friendlyError(e));return;}
       }
     }
     setItems(newLocal);
@@ -10691,8 +10733,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(!existingOrder?.id)return;
     if(existingOrder.status==="paid"){alert("ไม่สามารถยกเลิกบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'จ่ายออก' ในเงินในลิ้นชัก");return;}
     if(!await confirmDlg({message:`ยกเลิกออเดอร์ทั้งหมดของโต๊ะ ${table.table_number}?`,title:"ยกเลิกออเดอร์",confirmLabel:"ยกเลิกออเดอร์",cancelLabel:"ไม่ยกเลิก",danger:true}))return;
-    try{await api.updatePOSOrder(existingOrder.id,{status:"cancelled",updated_at:new Date().toISOString()});onDone();onClose();}
-    catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
+    try{
+      const row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,{status:"cancelled",updated_at:new Date().toISOString()});
+      if(!row){alert("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ แล้วลองยกเลิกอีกครั้ง");onDone();onClose();return;}
+      onDone();onClose();
+    }catch(e){alert("เกิดข้อผิดพลาด: "+friendlyError(e));}
   }
 
   // พิมพ์ใบเสร็จ — iPad/https พิมพ์ผ่านตัวพิมพ์ (agent) เป็นรูปภาพไทยคมชัด · เดสก์ท็อป/LAN ใช้หน้าต่างพิมพ์ปกติ
@@ -10727,13 +10772,16 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(!items.length){alert("กรุณาเลือกเมนูก่อนครับ");return;}
     setSaving(true);
     try{
-      const d={branch_id:branch.id,table_id:table.id,table_number:table.table_number,items,subtotal,discount:0,total:subtotal,status:"pending",ordered_by:currentUser.username,updated_at:new Date().toISOString()};
-      if(existingOrder?.id)await api.updatePOSOrder(existingOrder.id,d);
-      else await api.createPOSOrder(d);
+      // ส่งเฉพาะ "รายการใหม่ที่ยังไม่ได้ส่ง" (delta เหนือจำนวนที่ส่งครัวไปแล้ว) แบบ append atomic
+      // — ไม่เขียนทับทั้งก้อน เพื่อไม่ลบรายการที่ลูกค้า/อุปกรณ์อื่นเพิ่งสั่งเพิ่มเข้ามาพร้อมกัน
+      const delta=[];
+      for(const it of items){const sent=sentBaseMap.get(sentKey(it))||0;const extra=(+it.qty||0)-sent;if(extra>0)delta.push({...it,qty:extra});}
+      if(existingOrder?.id&&!delta.length){posToast("ไม่มีรายการใหม่ที่ต้องส่ง","warn");setSaving(false);return;}
+      await api.posAppendItems({branch_id:branch.id,table_id:table.id,table_number:table.table_number,newItems:existingOrder?.id?delta:items,ordered_by:currentUser.username});
       // NOTE: ไม่พิมพ์ที่นี่ — "ตัวพิมพ์ (agent)" ที่ร้าน poll ออเดอร์แล้วพิมพ์รายการใหม่เอง (จุดเดียว กันพิมพ์ซ้ำ + ใช้ได้กับ iPad)
       posToast("✅ ส่งรายการแล้ว — ตัวพิมพ์กำลังพิมพ์ใบครัว","ok");
       onDone();onClose();
-    }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+friendlyError(e));}setSaving(false);
   }
   async function checkOut(){
     setSaving(true);
@@ -10745,8 +10793,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // breakdown columns aren't there yet, fall back to base so the sale never fails.
       const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,updated_at:new Date().toISOString()};
       const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived};
-      try{await api.updatePOSOrder(existingOrder.id,fullPayload);}
-      catch(err){console.error("save full order failed — retrying base fields (run the breakdown migration to persist VAT/SC/promo)",err);await api.updatePOSOrder(existingOrder.id,basePayload);}
+      let row;
+      try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,fullPayload);}
+      catch(err){console.error("save full order failed — retrying base fields (run the breakdown migration to persist VAT/SC/promo)",err);row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,basePayload);}
+      if(!row){alert("⚠️ มีการเพิ่ม/แก้รายการของโต๊ะนี้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — ยังไม่ได้ตัดเงิน\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อตรวจสอบยอดล่าสุดก่อนชำระเงิน");setSaving(false);onDone();onClose();return;}
+      verRef.current=row.updated_at;
       // record cash movement if cash payment
       if(payMethod==="cash"&&shift){
         try{
@@ -11096,18 +11147,11 @@ function CustomerPage({branchId,tableId,token}){
         alert("QR ของโต๊ะนี้ถูกอัพเดทใหม่ — กรุณาขอ QR ปัจจุบันจากพนักงาน");
         return;
       }
-      const ex=await api.getOrderByTable(+tableId);
-      if(ex&&ex.length>0){
-        const merged=[...ex[0].items,...cart];
-        const newSub=round2(merged.reduce((s,i)=>s+i.price*i.qty,0));
-        await api.updatePOSOrder(ex[0].id,{items:merged,subtotal:newSub,total:newSub,updated_at:new Date().toISOString()});
-      }else{
-        const data={branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,items:cart,subtotal:round2(total),discount:0,total:round2(total),status:"pending",ordered_by:"customer",updated_at:new Date().toISOString()};
-        await api.createPOSOrder(data);
-      }
+      // Atomic append (compare-and-set + retry) — สั่งพร้อมกันหลายคนโต๊ะเดียวไม่ทับกัน, ไม่มีรายการหาย
+      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:cart,ordered_by:"customer"});
       setDone(true);
       loadMyOrder();
-    }catch(e){console.error("placeOrder",e);alert("สั่งไม่สำเร็จ กรุณาลองใหม่");}
+    }catch(e){console.error("placeOrder",e);alert("สั่งไม่สำเร็จ: "+friendlyError(e));}
     setSending(false);
   }
   if(gateLoading)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{textAlign:"center"}}><div style={{width:40,height:40,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 12px"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กำลังตรวจสอบ QR...</p></div></div>;
