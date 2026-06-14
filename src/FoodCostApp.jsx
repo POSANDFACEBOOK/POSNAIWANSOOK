@@ -869,6 +869,12 @@ function Inp({label,hint,style:s,onChange,...p}){
   }
   return <Field label={label} hint={hint}><input style={{...iS,...s}} {...p} onChange={onChange}/></Field>;
 }
+// Money/number input: iOS numeric keypad (type=text+inputMode) + live thousand separators
+// (1,000). Stores/returns the RAW numeric string with NO commas via onValue. integer → no dot.
+function NumInput({value,onValue,integer=false,style,...p}){
+  const fmt=v=>{const s=String(v??"");if(s==="")return "";const[i,d]=s.split(".");const gi=(i||"").replace(/\B(?=(\d{3})+(?!\d))/g,",");return d!==undefined?`${gi}.${d}`:gi;};
+  return <input type="text" inputMode={integer?"numeric":"decimal"} value={fmt(value)} onChange={e=>{let v=e.target.value.replace(/,/g,"").replace(/[^0-9.]/g,"");v=integer?v.replace(/\./g,""):v.replace(/(\..*)\./g,"$1");onValue(v);}} style={style} {...p}/>;
+}
 function TA({label,hint,rows=4,...p}){return <Field label={label} hint={hint}><textarea rows={rows} style={{...iS,resize:"vertical",lineHeight:1.8}} {...p}/></Field>;}
 function Sel({label,options,...p}){return <Field label={label}><select style={{...iS,appearance:"none",cursor:"pointer"}} {...p}>{options.map(o=><option key={o.v??o} value={o.v??o}>{o.l??o}</option>)}</select></Field>;}
 function Btn({children,v="primary",onClick,icon,disabled,full,s,loading}){
@@ -10957,7 +10963,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               <select value={d?.t||"percent"} onChange={e=>setItemDisc(p=>({...p,[idx]:{...(p[idx]||{}),t:e.target.value,v:p[idx]?.v||0}}))} style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}>
                 <option value="percent">%</option><option value="amount">฿</option>
               </select>
-              <input type="text" inputMode="decimal" value={d?.v||""} placeholder="0" onChange={e=>setItemDisc(p=>({...p,[idx]:{...(p[idx]||{t:"percent"}),v:e.target.value}}))} style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}/>
+              <NumInput value={d?.v||""} onValue={v=>setItemDisc(p=>({...p,[idx]:{...(p[idx]||{t:"percent"}),v}}))} placeholder="0" style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}/>
               {lineDisc>0&&<span style={{fontSize:11,color:C.red,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>-฿{lineDisc.toFixed(0)}</span>}
             </div>}
           </div>;})}
@@ -10979,7 +10985,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
           <div style={{display:"flex",gap:4}}>
             {[{v:"percent",l:"%"},{v:"amount",l:"฿"}].map(t=><button key={t.v} onClick={()=>setDiscType(t.v)} style={{padding:"6px 12px",borderRadius:8,border:`2px solid ${discType===t.v?C.brand:C.line}`,background:discType===t.v?C.brand:C.white,color:discType===t.v?C.white:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13}}>{t.l}</button>)}
           </div>
-          <input type="text" inputMode="decimal" value={discValue||""} placeholder="0" onChange={e=>setDiscValue(e.target.value)} style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:700,flex:1}}/>
+          <NumInput value={discValue||""} onValue={setDiscValue} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:700,flex:1}}/>
           {discType==="percent"&&<div style={{display:"flex",gap:3}}>{[5,10,15,20].map(p=><button key={p} onClick={()=>setDiscValue(p)} style={{padding:"5px 8px",border:`1px solid ${C.line}`,background:C.white,borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:600,color:C.ink3}}>{p}%</button>)}</div>}
         </div>}
 
@@ -10994,25 +11000,25 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
         {payMethod==="cash"&&<div style={{background:C.greenLight,border:`1.5px solid ${C.green}`,borderRadius:10,padding:10,marginBottom:14}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.green,marginBottom:6}}>💵 รับเงินสด</div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
-            <input type="text" inputMode="decimal" value={cashRcv} placeholder={total.toFixed(0)} onChange={e=>setCashRcv(e.target.value)} style={{...iS,padding:"8px 10px",fontSize:16,fontWeight:700,flex:1}}/>
+            <NumInput value={cashRcv} onValue={setCashRcv} placeholder={total.toFixed(0)} style={{...iS,padding:"8px 10px",fontSize:16,fontWeight:700,flex:1}}/>
             <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>{[100,500,1000].map(v=><button key={v} onClick={()=>setCashRcv(String((+cashRcv||0)+v))} style={{padding:"5px 8px",background:C.white,border:`1px solid ${C.green}`,borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.green}}>+{v}</button>)}
             <button onClick={()=>setCashRcv(String(total))} style={{padding:"5px 8px",background:C.green,border:"none",borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.white}}>พอดี</button></div>
           </div>
           {+cashRcv>0&&<div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:`1px solid ${C.green}40`}}>
             <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink2}}>เงินทอน</span>
-            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:cashChange>=0?C.green:C.red}}>฿{cashChange.toFixed(0)}</span>
+            <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:18,fontWeight:900,color:cashChange>=0?C.green:C.red}}>฿{cashChange.toLocaleString("en-US",{maximumFractionDigits:0})}</span>
           </div>}
         </div>}
       </div>
       <div style={{padding:"12px 20px",borderTop:`1px solid ${C.line}`,background:C.bg,borderRadius:"0 0 18px 18px"}}>
-        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>ยอดรวม</span><span>฿{subtotal.toFixed(2)}</span></div>
-        {(totalDiscount-promoDiscount)>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.red,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>ส่วนลด (ปรับเอง)</span><span>-฿{(totalDiscount-promoDiscount).toFixed(2)}</span></div>}
-        {promoDiscount>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.purple,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>🎁 {selectedPromo?.name||"โปรโมชั่น"}</span><span>-฿{promoDiscount.toFixed(2)}</span></div>}
-        {sc>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>Service Charge {posSettings?.service_charge_rate||0}%</span><span>+฿{sc.toFixed(2)}</span></div>}
-        {vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>VAT {vatRate}% {vatIncluded?"(รวมในราคา)":""}</span><span>{vatIncluded?"":"+"}฿{vat.toFixed(2)}</span></div>}
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>ยอดรวม</span><span>฿{subtotal.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+        {(totalDiscount-promoDiscount)>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.red,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>ส่วนลด (ปรับเอง)</span><span>-฿{(totalDiscount-promoDiscount).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>}
+        {promoDiscount>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.purple,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>🎁 {selectedPromo?.name||"โปรโมชั่น"}</span><span>-฿{promoDiscount.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>}
+        {sc>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>Service Charge {posSettings?.service_charge_rate||0}%</span><span>+฿{sc.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>}
+        {vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>VAT {vatRate}% {vatIncluded?"(รวมในราคา)":""}</span><span>{vatIncluded?"":"+"}฿{vat.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:`linear-gradient(135deg,${C.green},#059669)`,borderRadius:10,marginBottom:10,color:C.white}}>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:700}}>ยอดสุทธิ</span>
-          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900}}>฿{total.toFixed(2)}</span>
+          <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900}}>฿{total.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
         </div>
         <div style={{display:"flex",gap:8}}>
           <Btn v="ghost" onClick={onClose} s={{padding:"10px 16px",fontSize:13}}>ยกเลิก</Btn>
@@ -11404,7 +11410,7 @@ function OpenShiftModal({currentBranch,currentUser,onDone,onCancel}){
       </div>
       <div style={{padding:24}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8}}>เงินทอนเริ่มต้นในลิ้นชัก *</div>
-        <input type="text" inputMode="decimal" autoFocus value={cash} onChange={e=>setCash(e.target.value)} placeholder="0" style={{...iS,fontSize:26,fontWeight:900,padding:"14px 18px",textAlign:"center",letterSpacing:1}}/>
+        <NumInput value={cash} onValue={setCash} autoFocus placeholder="0" style={{...iS,fontSize:26,fontWeight:900,padding:"14px 18px",textAlign:"center",letterSpacing:1}}/>
         <div style={{display:"flex",gap:6,marginTop:8}}>
           {[500,1000,2000,3000,5000].map(v=><button key={v} onClick={()=>setCash(String(v))} style={{flex:1,padding:"7px 0",border:`1px solid ${C.line}`,borderRadius:8,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.ink2}}>฿{v.toLocaleString()}</button>)}
         </div>
@@ -11508,7 +11514,7 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
         <div style={{display:"grid",gridTemplateColumns:action==='out'?"1fr 1fr":"1fr",gap:10,marginBottom:10}}>
           <div>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5}}>จำนวนเงิน *</div>
-            <input type="text" inputMode="decimal" autoFocus value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" style={{...iS,fontSize:20,fontWeight:900,padding:"10px 14px",textAlign:"center"}}/>
+            <NumInput value={amount} onValue={setAmount} autoFocus placeholder="0" style={{...iS,fontSize:20,fontWeight:900,padding:"10px 14px",textAlign:"center"}}/>
           </div>
           {action==='out'&&<div>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5}}>หมวดหมู่ *</div>
@@ -11700,7 +11706,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         </div>
         <div style={{marginBottom:14}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🧮 นับเงินจริงในลิ้นชัก *</div>
-          <input type="text" inputMode="decimal" value={actualCash} onChange={e=>setActualCash(e.target.value)} placeholder="0" style={{...iS,fontSize:24,fontWeight:900,padding:"14px 18px",textAlign:"center"}}/>
+          <NumInput value={actualCash} onValue={setActualCash} placeholder="0" style={{...iS,fontSize:24,fontWeight:900,padding:"14px 18px",textAlign:"center"}}/>
           {actualCash!==""&&<div style={{marginTop:8,padding:"10px 14px",borderRadius:10,background:totals.diff===0?C.greenLight:totals.diff>0?C.blueLight:C.redLight,border:`1.5px solid ${totals.diff===0?C.green:totals.diff>0?C.blue:C.red}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:totals.diff===0?C.green:totals.diff>0?C.blue:C.red}}>
               {totals.diff===0?"✅ ตรงเป๊ะ":totals.diff>0?"📈 เกิน":"📉 ขาด"}
