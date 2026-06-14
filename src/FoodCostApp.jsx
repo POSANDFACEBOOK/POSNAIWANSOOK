@@ -2040,6 +2040,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const[form,setForm]=useState({name:"",code:"",category:"",price:"",description:"",image:null,ingredients:[],sop:[]});
   const[ingQ,setIngQ]=useState("");const[ni,setNi]=useState({ingredientId:"",amountGram:""});
   const isCentral=currentBranch?.type==="central";
+  const isMobile=useIsMobile();
   const canE=hasPerm(currentUser,"menus")&&isCentral;const canD=hasPerm(currentUser,"menus")&&isCentral;
   const localCats=useMemo(()=>allCats.filter(c=>c.type==="menu"&&(isCentral?!c.branch_id:c.branch_id===currentBranch?.id)),[allCats,isCentral,currentBranch]);
   async function toggleAvailability(menu,status){
@@ -2139,7 +2140,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
       <div style={{fontSize:36,marginBottom:6,opacity:.5}}>🍽️</div>
       <div style={{fontSize:13}}>{q.trim()?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูในหมวดนี้"}</div>
     </div>}
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(300px,100%),1fr))",gap:16}}>
+    <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(4,minmax(0,1fr))",gap:16}}>
       {filtered.map(menu=>{const cost=menuCost(menu,ings);const profit=menu.price-cost;const mg=menu.price>0?profit/menu.price*100:0;const mc=marginColor(mg);return <Card key={menu.id} hover style={{overflow:"hidden"}}>
         <div style={{height:5,background:`linear-gradient(90deg,${mc},${mc}66)`}}/>
         {menu.image?<img src={menu.image} alt={menu.name} style={{width:"100%",height:130,objectFit:"cover"}}/>:<div style={{height:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/></div>}
@@ -2162,15 +2163,6 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
               <option value="">— ยังไม่กำหนดหมวด —</option>
               {localCats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
-          </div>}
-          {canE&&printers.length>0&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.lineLight}`}}>
-            <div style={{display:"flex",alignItems:"center",gap:6}}>
-              <Ic d={I.print} s={12} c={C.ink4}/>
-              <select value={menu.printer_id||""} onChange={async e=>{try{await api.updateMenu(menu.id,{printer_id:e.target.value?+e.target.value:null});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} style={{...iS,flex:1,padding:"4px 8px",fontSize:11,height:28}}>
-                <option value="">— ไม่ระบุ printer —</option>
-                {printers.map(p=><option key={p.id} value={p.id}>{p.name} ({p.ip})</option>)}
-              </select>
-            </div>
           </div>}
           <div style={{marginTop:10,display:"flex",gap:6,paddingTop:10,borderTop:`1px solid ${C.lineLight}`}}>
             {(()=>{const avail=(menu.availability||{})[currentBranch?.id];const isSoldOut=avail==="sold_out";const isHidden=avail==="hidden";return(<>
