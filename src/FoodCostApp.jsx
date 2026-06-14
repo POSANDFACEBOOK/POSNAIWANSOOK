@@ -1909,7 +1909,6 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
             </div>
             <div style={{minWidth:0}}>
               <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📋 SOP วัตถุดิบ</div>
-              <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{form.has_sop?"มี SOP — จะแสดงในแท็บ SOP เพื่อสร้างขั้นตอนได้":"ยังไม่มี SOP — เปิดเพื่อสร้างขั้นตอนภายหลัง"}</div>
             </div>
           </div>
           <div style={{display:"flex",gap:6,flexShrink:0}}>
@@ -1981,10 +1980,6 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
   }
 
   return <Modal title={`📦 นับสต็อก — ${currentBranch?.name||"—"}`} onClose={onClose} wide>
-    {/* Info chip */}
-    <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,padding:"7px 11px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:9,lineHeight:1.5}}>
-      ℹ️ จำนวนสต็อก<b style={{color:C.brand}}>แยกตามสาขา</b> · ค้นหา → ใส่จำนวนใหม่ → กดบันทึก
-    </div>
     {/* Search bar */}
     <div style={{marginBottom:8}}>
       <div style={{position:"relative"}}>
@@ -2140,7 +2135,6 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
       {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImportMenu(true)} icon={I.ul}>Import</Btn>}
     </div>
-    {canE&&selCat==="ทั้งหมด"&&<div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#1E40AF",fontFamily:"'Sarabun',sans-serif"}}>เลือกหมวดหมู่ก่อน จึงจะเพิ่มเมนูใหม่ได้</div>}
     {filtered.length===0&&<div style={{textAlign:"center",padding:"40px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
       <div style={{fontSize:36,marginBottom:6,opacity:.5}}>🍽️</div>
       <div style={{fontSize:13}}>{q.trim()?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูในหมวดนี้"}</div>
@@ -4516,7 +4510,6 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.ink,margin:0,display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontSize:24}}>📄</span> เอกสาร PO (ใบสั่งซื้อวัตถุดิบ)
         </h3>
-        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4,margin:"4px 0 0"}}>เปิดใบสั่งซื้อระหว่างสาขาได้ทุกทิศทาง · กดปุ่ม "+" เพื่อสร้างใหม่ · กด ✅ ยืนยันเมื่อได้รับสินค้า</p>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {isCentralBranch&&<Btn v="success" onClick={()=>setShowPurchaseSummary(true)} s={{padding:"8px 14px",fontSize:13}}>📋 สรุปต้องซื้อวันนี้</Btn>}
@@ -5083,12 +5076,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
        <div style={{fontSize:12,color:C.ink3,marginBottom:14,wordBreak:"break-word"}}>{loadErr}</div>
        <Btn v="primary" onClick={()=>setRefreshTick(t=>t+1)} icon={I.refresh}>ลองอีกครั้ง</Btn>
      </div>:<>
-    {/* Refresh + freshness indicator — user can re-pull from DB without closing */}
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,padding:"8px 12px",background:C.tealLight,borderRadius:10,border:`1px solid ${C.teal}33`,gap:10,flexWrap:"wrap"}}>
-      <div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:700,display:"flex",alignItems:"center",gap:6}}>
-        <span>✅</span>
-        <span>ดึงตรงจากฐานข้อมูล — ไม่ขึ้นอยู่กับ filter ของหน้า PO</span>
-      </div>
+    <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",marginBottom:12,gap:10,flexWrap:"wrap"}}>
       <button onClick={()=>setRefreshTick(t=>t+1)} title="ดึงข้อมูลใหม่" style={{background:C.white,border:`1px solid ${C.teal}55`,color:C.teal,padding:"5px 12px",borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",display:"inline-flex",alignItems:"center",gap:5}}>🔄 รีเฟรช</button>
     </div>
     {/* Summary stats */}
@@ -5116,8 +5104,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       <div style={{fontSize:16,fontWeight:800,color:C.green}}>สต๊อกพอแล้ว — ไม่ต้องซื้อเพิ่ม</div>
       <div style={{fontSize:12,color:C.ink3,marginTop:6}}>{orderCount===0?"ยังไม่มีคำสั่งซื้อค้าง":"ทุกรายการมีสต๊อกครัวกลางพอจัดส่ง"}</div>
     </div>:<>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
-        <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3,flex:1,minWidth:200}}>💡 เปรียบเทียบจาก <b>คำสั่งซื้อที่สาขาส่งมา</b> (รวม SOP) <b>ลบด้วย สต๊อกครัวกลาง</b></div>
+      <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           <Btn v="ghost" onClick={printShoppingList} icon={I.print} s={{padding:"8px 12px",fontSize:12}}>🖨 พิมพ์เฉยๆ</Btn>
           {onCreateOrders&&<Btn v="success" onClick={createAndPrint} s={{padding:"8px 14px",fontSize:12}}>🛒 สร้างรายการ + พิมพ์</Btn>}
@@ -5710,9 +5697,6 @@ function CostSummarySection({branches,currentBranch,currentUser,menus,ings,reloa
         <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:22,fontWeight:900,margin:0,letterSpacing:.3}}>สรุปต้นทุนรายวัน</h2>
         <span style={{background:"rgba(255,255,255,0.15)",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",letterSpacing:.5}}>SAVED SNAPSHOTS</span>
       </div>
-      <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,margin:0,opacity:0.85,position:"relative"}}>
-        ดูสรุปยอดขาย / ต้นทุน / กำไร รายวัน — บันทึกอัตโนมัติจากแท็บ <b style={{color:"#FCD34D"}}>"ยอดขายรายเมนูตามระบบ FOODSTORY"</b> โดยกดปุ่ม 💾 บันทึกสรุปล่างสุด
-      </p>
     </div>
 
     {/* KPI cards */}
@@ -6607,9 +6591,6 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         <span style={{fontSize:26}}>📋</span>
         <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,margin:0,letterSpacing:.2}}>สร้างคำสั่งซื้อ</h2>
       </div>
-      <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,margin:0,opacity:0.85,position:"relative"}}>
-        กรอกจำนวนที่ต้องสั่งในคอลัมน์ <b style={{color:"#FCD34D"}}>"✏ สั่ง"</b> → ระบบจะส่งคำสั่งซื้อแยกตามซัพพลายเออร์อัตโนมัติ
-      </p>
     </div>
 
     {/* Filter row */}
@@ -7087,7 +7068,6 @@ function SupplierStatsModal({supplier,orders,onClose}){
       ?<div style={{padding:"40px 20px",textAlign:"center",background:C.bg,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:42,marginBottom:8}}>📭</div>
         <div style={{fontSize:14,fontWeight:800,color:C.ink3}}>ยังไม่มีรายการที่ <b>รับสินค้าแล้ว</b> จากซัพพลายนี้ในช่วงที่เลือก</div>
-        <div style={{fontSize:11,color:C.ink4,marginTop:4}}>ราคาจะถูกบันทึกเมื่อกดปุ่ม ✅ ยืนยันรับสินค้า + กรอกราคาจริง</div>
       </div>
       :<>
         {/* Top ingredients */}
@@ -7501,7 +7481,6 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
                 <span style={{fontSize:14}}>🔍</span>แสดงทั้งหมด
               </button>
             </div>
-            <div style={{marginTop:8,fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>* "สแกนเฉพาะเครื่องปริ้น" จะกรองเฉพาะอุปกรณ์ที่ชื่อขึ้นต้นด้วย XP, MTP, RPP, POS, Thermal, BT Printer ฯลฯ</div>
           </div>}
           {/* Buttons */}
           <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
@@ -10424,7 +10403,6 @@ function POSTableManage({tables,branch,zones=[],reloadZones,onDone}){
       <Btn onClick={addSingle} icon={I.plus} disabled={!form.table_number} loading={saving}>เพิ่มโต๊ะ</Btn>
     </div>}
     {tab==="bulk"&&<div>
-      <div style={{background:C.blueLight,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:13,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มหลายโต๊ะพร้อมกัน ระบบจัดตำแหน่งให้อัตโนมัติครับ</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr 1fr",gap:12,marginBottom:12}}>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>โซน</label><select value={bulk.zone} onChange={e=>setBulk(f=>({...f,zone:e.target.value}))} style={{...iS,appearance:"none"}}><option value="">— ไม่ระบุ —</option>{allZones.map(z=><option key={z} value={z}>{z}</option>)}</select></div>
         <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>Prefix</label><input value={bulk.prefix} onChange={e=>setBulk(f=>({...f,prefix:e.target.value}))} placeholder="A (ไม่บังคับ)" style={iS}/></div>
@@ -10564,7 +10542,6 @@ function ReceiptSettingsModal({currentBranch,onClose,onSaved}){
         <label style={lbl}>ข้อความท้ายกระดาษ</label>
         <textarea value={s.receipt_footer||""} onChange={e=>set('receipt_footer',e.target.value)} rows={3} placeholder="เช่น ขอบคุณที่ใช้บริการ · FB/Line: ..." style={{...iS,resize:"vertical",lineHeight:1.6,fontSize:13}}/>
       </div>
-      <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:12}}>💡 ส่วน วันที่ · เลขที่ใบเสร็จ · รายการ/จำนวน/ราคา · ยอดรวม · VAT ระบบใส่ให้อัตโนมัติบนใบเสร็จ</div>
       <div style={{display:"flex",gap:8,justifyContent:"flex-end",borderTop:`1px solid ${C.line}`,paddingTop:14}}>
         <Btn v="ghost" onClick={preview} icon={I.bill}>👁 ดูตัวอย่าง</Btn>
         <Btn v="success" onClick={save} loading={saving} icon={I.save}>บันทึก</Btn>
@@ -11374,7 +11351,6 @@ function POSQRPage({branch,tables,onTablesChanged}){
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,gap:10,flexWrap:"wrap"}}>
       <div>
         <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:800,color:C.ink,marginBottom:4}}>QR Code สั่งอาหาร</h2>
-        <p style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>พิมพ์ QR Code วางที่โต๊ะ ลูกค้าสแกนแล้วสั่งได้เลย · QR แต่ละใบมี token เฉพาะ</p>
       </div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
         <Btn v="ghost" s={{fontSize:12}} onClick={rotateAll} disabled={rotating} icon={I.refresh}>หมุน QR ทั้งหมด</Btn>
@@ -12301,7 +12277,6 @@ function POSMenuAvailManager({currentBranch,onClose}){
         <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{visible.length} เมนู</span>
         <Btn v="teal" onClick={()=>{setBulkGroups({});setBulkMenus({});setBulkOpen(true);}} icon={I.plus} s={{padding:"7px 13px",fontSize:12}}>🔗 ผูกหลายเมนูพร้อมกัน</Btn>
       </div>
-      <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>💡 ตั้ง <b>สถานะการขาย</b> + ผูก <b>ตัวเลือก</b> (จากคลังที่สร้างใน "ตัวเลือกในเมนู") · การจัดเมนูเข้า<b>หมวดหมู่</b>ทำที่หน้า "หมวดหมู่"</div>
       {visible.length===0?<div style={{textAlign:"center",padding:40,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>
       :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto"}}>
         {visible.map(m=>{const cur=(m.availability||{})[currentBranch.id]||"";const nOpt=getMenuOptions(m,currentBranch.id,lib).length;return <div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap",opacity:busyId===m.id?.6:1}}>
@@ -12445,7 +12420,6 @@ function POSOptionLibrary({currentBranch,onClose}){
   async function delChoice(g,cid){await persist(lib.map(x=>x.id===g.id?{...x,choices:(x.choices||[]).filter(c=>c.id!==cid)}:x));}
   return <Modal title="➕ ตัวเลือกในเมนู (กลุ่ม add-on)" onClose={onClose} extraWide>
     {loading?<Loading text="โหลดตัวเลือก..."/>:<>
-      <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:12,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>💡 พิมพ์ <b>ชื่อกลุ่ม</b> (เช่น "ขนาด", "ระดับเผ็ด", "ท็อปปิ้ง") + เลือกบังคับ/ไม่บังคับ → แล้วเพิ่ม <b>ตัวเลือกย่อย</b>พร้อมราคา · นำกลุ่มไปผูกเมนูที่ "เมนูทั้งหมด → ➕ ตัวเลือก"</div>
       {/* Add group */}
       <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:14,flexWrap:"wrap",background:C.bg,borderRadius:10,padding:"10px 12px",border:`1px dashed ${C.line}`}}>
         <div style={{flex:"2 1 160px"}}><label style={lbl}>ชื่อกลุ่มตัวเลือก</label><input value={gName} onChange={e=>setGName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addGroup()} placeholder="เช่น ขนาด, ระดับเผ็ด" style={iS}/></div>
@@ -12789,7 +12763,6 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
           :allCategories.length===0
             ?<div style={{padding:30,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีหมวดหมู่เมนู — เพิ่มหมวดในแท็บ "เมนู" ก่อน</div>
             :<>
-              <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>ติ๊กหมวดที่ต้องการให้ออกเครื่องนี้ · กด <b style={{color:C.brand}}>▶ ระบุรายเมนู</b> ท้ายหมวด เพื่อเลือกเฉพาะบางเมนูในหมวดนั้นให้ออกเครื่องนี้ (เมนูที่ติ๊กจะข้ามกฎหมวด — ออกเครื่องนี้เสมอ)</div>
               <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"58vh",overflowY:"auto",paddingRight:2}}>
                 {allCategories.map(c=>{
                   const has=catSel.includes(c);
@@ -13222,7 +13195,6 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
         {branchCategories.length===0
             ?<div style={{padding:24,textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>ยังไม่มีหมวดหมู่ในสาขานี้ — ไปสร้างหมวดหมู่ที่หน้า "เมนู" ก่อน แล้วค่อยกลับมาเลือก</div>
             :<>
-              <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"8px 12px",border:`1px solid ${C.line}`}}>ติ๊ก <b>ช่องหน้าหมวด</b> = พิมพ์ทั้งหมวด · กด <b style={{color:C.blue}}>▼ เลือกเมนู</b> ท้ายหมวด เพื่อเลือกเฉพาะบางเมนูในหมวดนั้น · <b style={{color:C.blue}}>ติ๊กครบทุกเมนู ช่องหน้าหมวดจะติ๊กให้อัตโนมัติ</b> (ติ๊กบางส่วน = ขีดครึ่ง –)</div>
               <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"50vh",overflowY:"auto",paddingRight:2}}>
                 {branchCategories.map(c=>{const has=sCats.includes(c);const catMenus=menusInCat(c);const isOpen=sOpenCats.has(c);const pinHere=catMenus.filter(m=>{const cur=sOverride[m.id];return cur!=null&&+cur===+settingsP.id;}).length;
                   // ติ๊กครบทุกเมนู → หัวหมวดติ๊กให้อัตโนมัติ (รู้ว่าเลือกครบทั้งหมวด) · ติ๊กบางส่วน → ขีดครึ่ง (–) · ติ๊กหัวหมวด=เลือกทั้งหมวด · ปลด=ล้างทั้งหมวด
