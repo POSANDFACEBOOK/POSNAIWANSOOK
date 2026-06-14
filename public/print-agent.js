@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 24;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 25;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -190,26 +190,43 @@ function newItemsVs(oldSig, items) {
 // เรนเดอร์ใบครัวเป็นรูปภาพ (ไทยคมชัด) ผ่านบริการบน Vercel — ถ้าล้มเหลวคืน null แล้วถอยไปใช้ตัวอักษร ESC/POS
 const SLIP_RENDER_URL = "https://foodcost-eta.vercel.app/api/kitchen-slip";
 async function fetchSlipRaster(items, tableNum) {
+  // กันค้าง: ถ้าเรนเดอร์เกิน 9 วิ (serverless cold-start/ช้า) ยกเลิกแล้วถอยไปตัวอักษร — ไม่ให้บล็อกทั้งคิวพิมพ์
+  const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), 9000) : null;
   try {
     const res = await fetch(SLIP_RENDER_URL, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ table: String(tableNum || ""), time: new Date().toLocaleString("th-TH"), items: (items || []).map(it => ({ qty: it.qty, name: it.name, options: it.options || [], note: it.note || "" })) }),
+      ...(ctrl ? { signal: ctrl.signal } : {}),
     });
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     return buf.length > 30 ? buf : null;
   } catch (e) { return null; }
+  finally { if (timer) clearTimeout(timer); }
 }
-// รวมรายการเป็นบัฟเฟอร์พิมพ์ — หนึ่งใบต่อหนึ่งรายการเมนู (ลองรูปภาพไทยคมชัดก่อน · ถ้าล้มเหลวถอยไปตัวอักษร ESC/POS เป็นรายตัว → พิมพ์ไม่มีวันพัง)
+// map แบบจำกัดจำนวนที่ทำพร้อมกัน (รักษาลำดับผลลัพธ์) — เรนเดอร์ใบครัวหลายใบพร้อมกันโดยไม่ยิง serverless ถล่มทีเดียว
+async function mapLimit(arr, limit, fn) {
+  const out = new Array(arr.length); let i = 0;
+  async function worker() { while (i < arr.length) { const idx = i++; out[idx] = await fn(arr[idx], idx); } }
+  await Promise.all(Array.from({ length: Math.min(limit, arr.length || 1) }, worker));
+  return out;
+}
+// เรนเดอร์ "หนึ่งใบต่อหนึ่งรายการ" พร้อมกัน (cap 6) — ลองรูปภาพไทยคมชัดก่อน ถอยไปตัวอักษร ESC/POS ถ้าล้มเหลว (พิมพ์ไม่มีวันพัง)
+async function renderItemBufs(items, tableNum) {
+  return mapLimit(items || [], 6, async it => {
+    const b = await fetchSlipRaster([it], tableNum);
+    return b ? { buf: b, raster: true } : { buf: buildKitchenESC(it, tableNum), raster: false };
+  });
+}
+function bufsMode(parts) {
+  const raster = parts.filter(r => r.raster).length, text = parts.length - raster;
+  return text === 0 ? "รูปภาพ" : (raster === 0 ? "ตัวอักษร(สำรอง)" : "ผสม รูปภาพ+ตัวอักษร");
+}
+// รวมรายการเป็นบัฟเฟอร์พิมพ์ (เรนเดอร์ทุกใบพร้อมกัน) — ใช้โดยเส้นทางพิมพ์ซ้ำ (rp)
 async function itemsToBuffer(items, tableNum) {
-  const parts = []; let raster = 0, text = 0;
-  for (const it of items) {
-    let b = await fetchSlipRaster([it], tableNum);
-    if (b) raster++; else { b = buildKitchenESC(it, tableNum); text++; }
-    parts.push(b);
-  }
-  const mode = text === 0 ? "รูปภาพ" : (raster === 0 ? "ตัวอักษร(สำรอง)" : "ผสม รูปภาพ+ตัวอักษร");
-  return { buf: Buffer.concat(parts), mode };
+  const parts = await renderItemBufs(items, tableNum);
+  return { buf: Buffer.concat(parts.map(p => p.buf)), mode: bufsMode(parts) };
 }
 // เครื่องนี้ต้องพิมพ์รายการนี้ไหม — ตาม "กำหนดการพิมพ์" เป๊ะๆ: ปักหมุดเมนู(printer_id)→เฉพาะเครื่องนั้น · ไม่งั้น categories=null(พิมพ์ทุกหมวด) หรือมีหมวดนั้นในลิสต์
 function printerHandles(p, it) {
@@ -222,13 +239,21 @@ function printerHandles(p, it) {
 async function printItems(items, tableNum, printers) {
   // ส่งรายการไป "ทุกเครื่องที่ตั้งค่าให้รับ" (ไม่ใช่เครื่องเดียว) — ตั้งทุกเครื่องพิมพ์ทุกหมวด = ออกทุกเครื่อง · ตั้งคนละหมวด = แยกกัน · ตรงตามที่ตั้งใน "กำหนดการพิมพ์"
   const usable = (printers || []).filter(p => !isBluetooth(p) && p.ip);
-  for (const p of usable) {
-    const mine = items.filter(it => printerHandles(p, it));
-    if (!mine.length) continue;
-    const { buf, mode } = await itemsToBuffer(mine, tableNum);
-    try { await sendToPrinter(p.ip, p.port, buf); console.log(`  ✅ พิมพ์ ${mine.length} รายการ [${mode}] → ${p.name} (${p.ip})`); }
-    catch (e) { console.log(`  ❌ ไม่สำเร็จ → ${p.name} (${p.ip}): ${e.message}`); }
-  }
+  // เรนเดอร์ทุกใบ "ครั้งเดียว พร้อมกัน" แล้วใช้ซ้ำกับทุกเครื่องที่รับรายการนั้น (ไม่เรนเดอร์ซ้ำต่อเครื่อง, ไม่เรียงทีละใบ)
+  const bufs = await renderItemBufs(items, tableNum);
+  // ส่งไปทุกเครื่องพร้อมกัน (คนละเครื่อง = ไม่ชนกัน) — เครื่องเดียวกันไม่ถูกยิงซ้อน เพราะ tick พิมพ์ทีละออเดอร์
+  const jobs = usable.map(p => {
+    const idxs = [];
+    items.forEach((it, i) => { if (printerHandles(p, it)) idxs.push(i); });
+    if (!idxs.length) return null;
+    const parts = idxs.map(i => bufs[i]);
+    return { p, buf: Buffer.concat(parts.map(x => x.buf)), mode: bufsMode(parts), n: idxs.length };
+  }).filter(Boolean);
+  await Promise.all(jobs.map(({ p, buf, mode, n }) =>
+    sendToPrinter(p.ip, p.port, buf)
+      .then(() => console.log(`  ✅ พิมพ์ ${n} รายการ [${mode}] → ${p.name} (${p.ip})`))
+      .catch(e => console.log(`  ❌ ไม่สำเร็จ → ${p.name} (${p.ip}): ${e.message}`))
+  ));
   const orphan = items.filter(it => !usable.some(p => printerHandles(p, it)));
   if (orphan.length) console.log("  ⚠️  ไม่มีเครื่องพิมพ์สำหรับ (ยังไม่ได้กำหนดหมวด):", orphan.map(i => i.name).join(", "));
 }
