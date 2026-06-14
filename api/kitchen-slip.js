@@ -24,7 +24,6 @@ function buildLines(body) {
   ];
   if (body.time) lines.push({ t: String(body.time), size: 20, align: "center" });
   lines.push({ rule: true });
-  lines.push({ c1: "จำนวน", c2: "ชื่อเมนู", size: 24, bold: true });   // หัวคอลัมน์
   (body.items || []).forEach(it => {
     lines.push({ c1: String(it.qty), c2: String(it.name || ""), size: 46, bold: true, mb: 3 });   // จำนวน+ชื่อเมนูตัวใหญ่
     (it.options || []).forEach(o => { const n = o && o.name; if (n) lines.push({ t: "- " + n, size: 30, indent: true }); });  // ตัวเลือกแสดงทีละบรรทัด
