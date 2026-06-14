@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 25;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 26;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -44,8 +44,10 @@ async function checkUpdate() {
     if (m && +m[1] > AGENT_VERSION) { console.log(`⬆️  พบเวอร์ชันใหม่ (v${m[1]}) — อัปเดต+รีสตาร์ทอัตโนมัติ...`); process.exit(0); }
   } catch {}
 }
-const getActiveOrders = () => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${BRANCH}`);
-const getPrinters = () => sb(`printers?order=id.asc`);
+// ดึงเฉพาะคอลัมน์ที่ agent ใช้จริง (id, เลขโต๊ะ, รายการ) — ประหยัด bandwidth ตอน poll ทุก 5 วิ
+const getActiveOrders = () => sb(`orders?status=neq.paid&status=neq.cancelled&select=id,table_number,items&order=created_at.desc&branch_id=eq.${BRANCH}`);
+// ดึงเฉพาะเครื่องพิมพ์ของสาขานี้ (+ที่ใช้ร่วมทุกสาขา branch_id=null) — ไม่ดึงข้ามสาขา (ทุก caller กรองแบบนี้อยู่แล้ว)
+const getPrinters = () => sb(`printers?or=(branch_id.is.null,branch_id.eq.${BRANCH})&order=id.asc`);
 const addPrinter = (d) => fetch(`${SUPA_URL}/rest/v1/printers`, { method: "POST", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
 const patchPrinter = (id, d) => fetch(`${SUPA_URL}/rest/v1/printers?id=eq.${id}`, { method: "PATCH", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
 

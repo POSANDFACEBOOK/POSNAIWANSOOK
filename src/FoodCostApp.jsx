@@ -156,7 +156,7 @@ const api = {
   updatePrinter: (id,d) => sb(`printers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deletePrinter: (id) => sb(`printers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   getActiveOrders: (bid) => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${bid}`),
-  getOrderByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`),
+  getOrderByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&select=id,items,status,created_at,subtotal,discount,total&order=created_at.desc&limit=1`),
   createPOSOrder: (d) => sb("orders", { method:"POST", body:JSON.stringify(d) }),
   updatePOSOrder: (id, d) => sb(`orders?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   getPOSOrderById: (id) => sb(`orders?id=eq.${id}&limit=1`),
