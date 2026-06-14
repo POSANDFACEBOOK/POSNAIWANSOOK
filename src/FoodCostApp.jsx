@@ -2043,12 +2043,6 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const isMobile=useIsMobile();
   const canE=hasPerm(currentUser,"menus")&&isCentral;const canD=hasPerm(currentUser,"menus")&&isCentral;
   const localCats=useMemo(()=>allCats.filter(c=>c.type==="menu"&&(isCentral?!c.branch_id:c.branch_id===currentBranch?.id)),[allCats,isCentral,currentBranch]);
-  async function toggleAvailability(menu,status){
-    const avail={...(menu.availability||{})};
-    if(avail[currentBranch.id]===status)delete avail[currentBranch.id];
-    else avail[currentBranch.id]=status;
-    try{await api.updateMenu(menu.id,{availability:avail});await reload();}catch(e){alert("บันทึกไม่สำเร็จ");}
-  }
   async function toggleVBMenu(menu,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(menu.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateMenu(menu.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   async function assignLocalCat(menuId,catName){const menu=menus.find(m=>m.id===menuId);const lc={...(menu.local_categories||{})};if(catName)lc[currentBranch.id]=catName;else delete lc[currentBranch.id];try{await api.updateMenu(menuId,{local_categories:lc});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   async function addCat(){if(!newCatName.trim())return;try{await api.addCat({type:"menu",name:newCatName.trim(),branch_id:isCentral?null:currentBranch?.id});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
@@ -2164,16 +2158,6 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
               {localCats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
           </div>}
-          <div style={{marginTop:10,display:"flex",gap:6,paddingTop:10,borderTop:`1px solid ${C.lineLight}`}}>
-            {(()=>{const avail=(menu.availability||{})[currentBranch?.id];const isSoldOut=avail==="sold_out";const isHidden=avail==="hidden";return(<>
-              <button onClick={()=>toggleAvailability(menu,"sold_out")} style={{flex:1,padding:"6px 8px",borderRadius:8,border:`1.5px solid ${isSoldOut?"#F59E0B":"#E2E8F0"}`,background:isSoldOut?"#FEF3C7":"transparent",cursor:"pointer",fontSize:11,fontWeight:700,color:isSoldOut?"#92400E":"#94A3B8",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
-                <span style={{fontSize:13}}>{isSoldOut?"🟡":"⬜"}</span>วันนี้ของหมด
-              </button>
-              <button onClick={()=>toggleAvailability(menu,"hidden")} style={{flex:1,padding:"6px 8px",borderRadius:8,border:`1.5px solid ${isHidden?"#EF4444":"#E2E8F0"}`,background:isHidden?"#FEE2E2":"transparent",cursor:"pointer",fontSize:11,fontWeight:700,color:isHidden?"#991B1B":"#94A3B8",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
-                <span style={{fontSize:13}}>{isHidden?"🔴":"⬜"}</span>งดขายชั่วคราว
-              </button>
-            </>);})()}
-          </div>
           {isCentral&&<div style={{marginTop:6,padding:"8px 0 2px",borderTop:`1px solid ${C.lineLight}`}}>
             <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>แสดงที่สาขา:</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
