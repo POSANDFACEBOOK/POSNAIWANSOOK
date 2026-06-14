@@ -10928,20 +10928,6 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 const PAY_METHODS=[
   {v:"cash",l:"เงินสด",icon:"💵",c:"#10B981"},
   {v:"promptpay",l:"พร้อมเพย์",icon:"📲",c:"#1E40AF"},
-  {v:"transfer",l:"โอนธนาคาร",icon:"🏦",c:"#3B82F6"},
-  {v:"credit",l:"บัตรเครดิต",icon:"💳",c:"#7C3AED"},
-  {v:"debit",l:"บัตรเดบิต",icon:"💳",c:"#9333EA"},
-  {v:"truemoney",l:"TrueMoney",icon:"🟠",c:"#F97316"},
-  {v:"shopeepay",l:"ShopeePay",icon:"🛒",c:"#EE4D2D"},
-  {v:"linepay",l:"LINE Pay",icon:"💚",c:"#06C755"},
-  {v:"rabbit",l:"Rabbit LINE Pay",icon:"🐰",c:"#FB923C"},
-  {v:"paotang",l:"เป๋าตัง",icon:"💰",c:"#0891B2"},
-  {v:"alipay",l:"Alipay",icon:"🅰️",c:"#1677FF"},
-  {v:"wechatpay",l:"WeChat Pay",icon:"💬",c:"#07C160"},
-  {v:"grabpay",l:"GrabPay",icon:"🟢",c:"#00B14F"},
-  {v:"airpay",l:"AirPay",icon:"✈️",c:"#FB7185"},
-  {v:"qr",l:"QR อื่นๆ",icon:"📱",c:"#64748B"},
-  {v:"voucher",l:"คูปอง/Voucher",icon:"🎫",c:"#A16207"},
   {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
 ];
 function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null}){
