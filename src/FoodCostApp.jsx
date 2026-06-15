@@ -869,11 +869,50 @@ function Inp({label,hint,style:s,onChange,...p}){
   }
   return <Field label={label} hint={hint}><input style={{...iS,...s}} {...p} onChange={onChange}/></Field>;
 }
-// Money/number input: iOS numeric keypad (type=text+inputMode) + live thousand separators
-// (1,000). Stores/returns the RAW numeric string with NO commas via onValue. integer → no dot.
-function NumInput({value,onValue,integer=false,style,...p}){
-  const fmt=v=>{const s=String(v??"");if(s==="")return "";const[i,d]=s.split(".");const gi=(i||"").replace(/\B(?=(\d{3})+(?!\d))/g,",");return d!==undefined?`${gi}.${d}`:gi;};
-  return <input type="text" inputMode={integer?"numeric":"decimal"} value={fmt(value)} onChange={e=>{let v=e.target.value.replace(/,/g,"").replace(/[^0-9.]/g,"");v=integer?v.replace(/\./g,""):v.replace(/(\..*)\./g,"$1");onValue(v);}} style={style} {...p}/>;
+// Group an integer part with thousand separators: "12500.5" → "12,500.5"
+function commaGroup(v){const s=String(v??"");if(s==="")return "";const[i,d]=s.split(".");const gi=(i||"").replace(/\B(?=(\d{3})+(?!\d))/g,",");return d!==undefined?`${gi}.${d}`:gi;}
+// On-screen numeric keypad — pops up from the bottom on every device (iPad + desktop),
+// so cash/discount entry never depends on the OS keyboard. Physical number keys also work.
+function NumPad({value,onChange,onClose,integer,title}){
+  const[v,setV]=useState(value==null?"":String(value));
+  const vref=useRef(v);vref.current=v;
+  const press=useCallback(k=>{setV(cur=>{
+    if(k==="⌫")return cur.slice(0,-1);
+    if(k===".")return integer||cur.includes(".")?cur:(cur===""?"0.":cur+".");
+    if(cur==="0")return k;                 // replace a lone leading zero
+    return cur+k;
+  });},[integer]);
+  const done=()=>{onChange(vref.current);onClose();};
+  useEffect(()=>{const h=e=>{
+    if(e.key>="0"&&e.key<="9")press(e.key);
+    else if(e.key==="."&&!integer)press(".");
+    else if(e.key==="Backspace")press("⌫");
+    else if(e.key==="Enter"){onChange(vref.current);onClose();}
+    else if(e.key==="Escape")onClose();
+  };window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);},[press,integer,onChange,onClose]);
+  const keys=["7","8","9","4","5","6","1","2","3",integer?"C":".","0","⌫"];
+  return <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.45)",zIndex:10000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:"20px 20px 0 0",padding:"16px 16px 22px",width:"100%",maxWidth:440,boxShadow:"0 -6px 30px rgba(0,0,0,0.25)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <span style={{fontSize:13,fontWeight:800,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>🔢 {title||"ใส่ตัวเลข"}</span>
+        <button onClick={()=>setV("")} style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 12px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>ล้าง</button>
+      </div>
+      <div style={{fontSize:36,fontWeight:900,textAlign:"right",padding:"10px 16px",background:C.bg,borderRadius:14,marginBottom:14,fontFamily:"'Sarabun',sans-serif",color:C.ink,minHeight:46,letterSpacing:1}}>{commaGroup(v)||"0"}</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+        {keys.map((k,i)=><button key={i} onClick={()=>press(k)} style={{padding:"18px 0",fontSize:24,fontWeight:800,border:`1px solid ${C.line}`,borderRadius:14,background:(k==="⌫"||k==="C")?C.bg:C.white,color:C.ink,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{k}</button>)}
+      </div>
+      <button onClick={done} style={{marginTop:12,width:"100%",padding:"15px",fontSize:17,fontWeight:900,border:"none",borderRadius:14,background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>✓ ตกลง</button>
+    </div>
+  </div>;
+}
+// Money/number field: tap → custom on-screen numpad pops up (works on every device) and
+// the field shows the value grouped with thousand separators. Stores the RAW number via onValue.
+function NumInput({value,onValue,integer=false,style,placeholder,...p}){
+  const[open,setOpen]=useState(false);
+  return <>
+    <input type="text" readOnly value={commaGroup(value)} placeholder={placeholder} onClick={()=>setOpen(true)} style={{cursor:"pointer",...style}} {...p}/>
+    {open&&<NumPad value={value} integer={integer} title={placeholder} onChange={onValue} onClose={()=>setOpen(false)}/>}
+  </>;
 }
 function TA({label,hint,rows=4,...p}){return <Field label={label} hint={hint}><textarea rows={rows} style={{...iS,resize:"vertical",lineHeight:1.8}} {...p}/></Field>;}
 function Sel({label,options,...p}){return <Field label={label}><select style={{...iS,appearance:"none",cursor:"pointer"}} {...p}>{options.map(o=><option key={o.v??o} value={o.v??o}>{o.l??o}</option>)}</select></Field>;}
