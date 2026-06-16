@@ -7238,19 +7238,20 @@ const ASSET_STATUS=[
   {v:"disposed",l:"จำหน่ายแล้ว",c:C.ink4},
 ];
 const assetMoney=n=>(+n||0).toLocaleString("en-US",{maximumFractionDigits:0});
-// Straight-line depreciation: (cost − salvage) / life, accrued by whole months since acquisition.
+// Straight-line depreciation on the TOTAL value (cost/unit × quantity − salvage) / life,
+// accrued by whole months since acquisition. quantity defaults to 1 (single asset).
 function assetDeprec(a){
-  const cost=+a.cost||0,salvage=+a.salvage_value||0,life=+a.useful_life_years||0;
-  const base=Math.max(0,cost-salvage);
+  const unit=+a.cost||0,qty=+a.quantity||1,gross=unit*qty,salvage=+a.salvage_value||0,life=+a.useful_life_years||0;
+  const base=Math.max(0,gross-salvage);
   const perYear=life>0?base/life:0,perMonth=perYear/12;
   let months=0;
   if(a.acquired_date){const acq=new Date(a.acquired_date+"T00:00:00"),now=new Date();
     if(!isNaN(acq.getTime())){months=(now.getFullYear()-acq.getFullYear())*12+(now.getMonth()-acq.getMonth());if(now.getDate()<acq.getDate())months-=1;if(months<0)months=0;}}
   const accum=life>0?Math.min(base,perMonth*months):0;
-  return {cost,salvage,life,perYear,perMonth,months,accum,book:cost-accum,pct:base>0?Math.min(100,accum/base*100):0};
+  return {unit,qty,cost:gross,salvage,life,perYear,perMonth,months,accum,book:gross-accum,pct:base>0?Math.min(100,accum/base*100):0};
 }
 function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],allCats=[],reloadCats}){
-  const A0={name:"",category:"",image:null,acquired_date:todayBkk(),cost:"",salvage_value:"",useful_life_years:"5",status:"active",assignee:"",location:"",note:""};
+  const A0={name:"",category:"",image:null,quantity:"1",acquired_date:todayBkk(),cost:"",salvage_value:"",useful_life_years:"5",status:"active",assignee:"",location:"",note:""};
   const[form,setForm]=useState(A0);
   const[editId,setEditId]=useState(null);
   const[showForm,setShowForm]=useState(false);
@@ -7275,13 +7276,13 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
   }),[myList,q,fStatus,selCat]);
   const totals=useMemo(()=>{let cost=0,accum=0,book=0;myList.forEach(a=>{if((a.status||"active")==="disposed")return;const d=assetDeprec(a);cost+=d.cost;accum+=d.accum;book+=d.book;});return {cost,accum,book};},[myList]);
   function openAdd(){setForm(A0);setEditId(null);setShowForm(true);}
-  function openEdit(a){setForm({name:a.name||"",category:a.category||"",image:a.image||null,acquired_date:a.acquired_date||todayBkk(),cost:a.cost==null?"":String(a.cost),salvage_value:a.salvage_value==null?"":String(a.salvage_value),useful_life_years:a.useful_life_years==null?"":String(a.useful_life_years),status:a.status||"active",assignee:a.assignee||"",location:a.location||"",note:a.note||""});setEditId(a.id);setShowForm(true);}
+  function openEdit(a){setForm({name:a.name||"",category:a.category||"",image:a.image||null,quantity:a.quantity==null?"1":String(a.quantity),acquired_date:a.acquired_date||todayBkk(),cost:a.cost==null?"":String(a.cost),salvage_value:a.salvage_value==null?"":String(a.salvage_value),useful_life_years:a.useful_life_years==null?"":String(a.useful_life_years),status:a.status||"active",assignee:a.assignee||"",location:a.location||"",note:a.note||""});setEditId(a.id);setShowForm(true);}
   function closeForm(){setShowForm(false);setForm(A0);setEditId(null);}
   async function save(){
     if(!form.name.trim()){alert("กรุณาใส่ชื่อสินทรัพย์");return;}
     setSaving(true);
     try{
-      const row={name:form.name.trim(),category:form.category||null,image:form.image||null,acquired_date:form.acquired_date||null,cost:+form.cost||0,salvage_value:+form.salvage_value||0,useful_life_years:+form.useful_life_years||0,status:form.status||"active",assignee:form.assignee||null,location:form.location||null,note:form.note||null};
+      const row={name:form.name.trim(),category:form.category||null,image:form.image||null,quantity:+form.quantity||1,acquired_date:form.acquired_date||null,cost:+form.cost||0,salvage_value:+form.salvage_value||0,useful_life_years:+form.useful_life_years||0,status:form.status||"active",assignee:form.assignee||null,location:form.location||null,note:form.note||null};
       if(editId)await api.updateAsset(editId,row);
       else await api.addAsset({...row,branch_id:currentBranch.id});
       await reloadAssets();closeForm();posToast("✅ บันทึกสินทรัพย์แล้ว","ok");
@@ -7344,16 +7345,17 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
             </div>
             <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center",marginTop:4}}>
               {a.category&&<Chip color="blue">{a.category}</Chip>}
+              <span style={{fontSize:10.5,fontWeight:800,color:C.brand,background:`${C.brand}1A`,padding:"2px 8px",borderRadius:20,fontFamily:"'Sarabun',sans-serif"}}>× {assetMoney(a.quantity==null?1:a.quantity)} ชิ้น</span>
               <span style={{fontSize:10.5,fontWeight:800,color:st.c,background:`${st.c}22`,padding:"2px 8px",borderRadius:20,fontFamily:"'Sarabun',sans-serif"}}>{st.l}</span>
             </div>
             {(a.assignee||a.location)&&<div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:5}}>{a.assignee?`👤 ${a.assignee}`:""}{a.assignee&&a.location?" · ":""}{a.location?`📍 ${a.location}`:""}</div>}
             {a.acquired_date&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>📅 ได้มา {new Date(a.acquired_date+"T00:00:00").toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"})}</div>}
           </div>
         </div>
-        <div style={{padding:"10px 14px",borderTop:`1px solid ${C.lineLight}`,background:C.bg,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
-          {[{l:"ทุน",v:assetMoney(d.cost),c:C.ink},{l:"ค่าเสื่อมสะสม",v:assetMoney(d.accum),c:C.red},{l:"คงเหลือ",v:assetMoney(d.book),c:C.green}].map(x=><div key={x.l} style={{textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{x.l}</div><div style={{fontSize:13,fontWeight:800,color:x.c,fontFamily:"'Sarabun',sans-serif"}}>฿{x.v}</div></div>)}
-        </div>
-        {d.life>0&&<div style={{padding:"0 14px 12px"}}>
+        {d.cost>0&&<div style={{padding:"10px 14px",borderTop:`1px solid ${C.lineLight}`,background:C.bg,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
+          {[{l:"มูลค่ารวม",v:assetMoney(d.cost),c:C.ink},{l:"ค่าเสื่อมสะสม",v:assetMoney(d.accum),c:C.red},{l:"คงเหลือ",v:assetMoney(d.book),c:C.green}].map(x=><div key={x.l} style={{textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{x.l}</div><div style={{fontSize:13,fontWeight:800,color:x.c,fontFamily:"'Sarabun',sans-serif"}}>฿{x.v}</div></div>)}
+        </div>}
+        {d.cost>0&&d.life>0&&<div style={{padding:"0 14px 12px"}}>
           <div style={{height:6,background:C.lineLight,borderRadius:6,overflow:"hidden"}}><div style={{width:`${d.pct}%`,height:"100%",background:d.pct>=100?C.ink4:`linear-gradient(90deg,${C.brand},${C.red})`}}/></div>
           <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:3,textAlign:"right"}}>เสื่อมแล้ว {d.pct.toFixed(0)}% · {d.life} ปี · ฿{assetMoney(d.perYear)}/ปี</div>
         </div>}
@@ -7366,7 +7368,8 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
         <Sel label="หมวด" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} options={[{v:"",l:assetCats.length?"— เลือกหมวด —":"— ยังไม่มีหมวด (เพิ่มที่แถบด้านบน) —"},...assetCats.map(c=>({v:c.name,l:c.name}))]}/>
         <Inp label="📅 วันที่ได้มา" type="date" value={form.acquired_date} onChange={e=>setForm(f=>({...f,acquired_date:e.target.value}))}/>
         <Sel label="🔧 สถานะ" value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))} options={ASSET_STATUS.map(s=>({v:s.v,l:s.l}))}/>
-        <Field label="💰 ราคาทุน (บาท)"><NumInput value={form.cost} onValue={v=>setForm(f=>({...f,cost:v}))} placeholder="0" style={iS}/></Field>
+        <Field label="🔢 จำนวน (ชิ้น)"><NumInput value={form.quantity} onValue={v=>setForm(f=>({...f,quantity:v}))} integer placeholder="1" style={iS}/></Field>
+        <Field label="💰 ราคาทุน/หน่วย (บาท)"><NumInput value={form.cost} onValue={v=>setForm(f=>({...f,cost:v}))} placeholder="0" style={iS}/></Field>
         <Field label="อายุการใช้งาน (ปี)"><NumInput value={form.useful_life_years} onValue={v=>setForm(f=>({...f,useful_life_years:v}))} integer placeholder="5" style={iS}/></Field>
         <Field label="มูลค่าซาก (บาท)"><NumInput value={form.salvage_value} onValue={v=>setForm(f=>({...f,salvage_value:v}))} placeholder="0" style={iS}/></Field>
         <Inp label="👤 ผู้รับผิดชอบ" value={form.assignee} onChange={e=>setForm(f=>({...f,assignee:e.target.value}))} placeholder="ชื่อพนักงาน"/>
