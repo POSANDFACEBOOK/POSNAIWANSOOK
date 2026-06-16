@@ -113,6 +113,11 @@ const api = {
   addSupplier: (d) => sb("suppliers", { method: "POST", body: JSON.stringify(d) }),
   updateSupplier: (id, d) => sb(`suppliers?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteSupplier: (id) => sb(`suppliers?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
+  // Fixed assets (ทะเบียนสินทรัพย์) — per branch
+  getAssets: () => sb("assets?order=id.desc"),
+  addAsset: (d) => sb("assets", { method: "POST", body: JSON.stringify(d) }),
+  updateAsset: (id, d) => sb(`assets?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
+  deleteAsset: (id) => sb(`assets?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   getCostHist: (bid) => sb(`cost_history?order=id.desc&limit=50${bid ? `&branch_id=eq.${bid}` : ""}`),
   addCostHist: (d) => sb("cost_history", { method: "POST", body: JSON.stringify(d) }),
   deleteCostHistItem: (id) => sb(`cost_history?id=eq.${id}`, {method:"DELETE", prefer:"return=minimal"}),
@@ -461,6 +466,7 @@ const TRANSLATIONS={
     "tab.orders":"สั่งวัตถุดิบ",
     "tab.history":"ประวัติต้นทุน",
     "tab.suppliers":"ซัพพลาย",
+    "tab.assets":"สินทรัพย์",
     "tab.kitchen3d":"ครัว 3D",
     "tab.settings":"ตั้งค่า",
     "branch.central":"ครัวกลาง",
@@ -491,6 +497,7 @@ const TRANSLATIONS={
     "tab.orders":"Order Ingredients",
     "tab.history":"Cost History",
     "tab.suppliers":"Suppliers",
+    "tab.assets":"Assets",
     "tab.kitchen3d":"Kitchen 3D",
     "tab.settings":"Settings",
     "branch.central":"Central Kitchen",
@@ -521,6 +528,7 @@ const TRANSLATIONS={
     "tab.orders":"ສັ່ງວັດຖຸດິບ",
     "tab.history":"ປະຫວັດຕົ້ນທຶນ",
     "tab.suppliers":"ຜູ້ສະໜອງ",
+    "tab.assets":"ຊັບສິນ",
     "tab.kitchen3d":"ຄົວ 3D",
     "tab.settings":"ການຕັ້ງຄ່າ",
     "branch.central":"ຄົວກາງ",
@@ -551,6 +559,7 @@ const TRANSLATIONS={
     "tab.orders":"ပစ္စည်းမှာယူ",
     "tab.history":"ကုန်ကျစရိတ်မှတ်တမ်း",
     "tab.suppliers":"ပစ္စည်းပေးသွင်းသူ",
+    "tab.assets":"ပိုင်ဆိုင်မှု",
     "tab.kitchen3d":"မီးဖို 3D",
     "tab.settings":"ဆက်တင်များ",
     "branch.central":"အလယ်တန်းမီးဖို",
@@ -600,12 +609,13 @@ const ALL_PERMS=[
   {id:"orders",label:"สั่งวัตถุดิบ"},
   {id:"history",label:"ประวัติต้นทุน"},
   {id:"suppliers",label:"ซัพพลาย"},
+  {id:"assets",label:"สินทรัพย์"},
   {id:"kitchen_3d",label:"ครัว 3D"},
   {id:"settings",label:"ตั้งค่า"},
 ];
 const ROLE_DEFAULT_PERMS={
   admin:ALL_PERMS.map(p=>p.id),
-  manager:["pos","crm","ingredients","menus","sop","summary","fs_sales","po","orders","history","suppliers"],
+  manager:["pos","crm","ingredients","menus","sop","summary","fs_sales","po","orders","history","suppliers","assets"],
   staff:["pos","crm","ingredients","menus","sop","summary","fs_sales","po","orders","history","suppliers"],
   viewer:["pos","menus","sop"],
 };
@@ -7218,6 +7228,143 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
   </div>;
 }
 
+// ══════════════════════════════════════════════════════
+// ── ASSETS (ทะเบียนสินทรัพย์ + ค่าเสื่อมราคาแบบเส้นตรง) ──
+// ══════════════════════════════════════════════════════
+const ASSET_STATUS=[
+  {v:"active",l:"ใช้งานปกติ",c:C.green},
+  {v:"repair",l:"ซ่อมบำรุง",c:C.yellow},
+  {v:"broken",l:"ชำรุด",c:C.red},
+  {v:"disposed",l:"จำหน่ายแล้ว",c:C.ink4},
+];
+const ASSET_CATS=["เครื่องครัว","เครื่องใช้ไฟฟ้า","เฟอร์นิเจอร์","อุปกรณ์","ตกแต่งร้าน","ยานพาหนะ","อื่นๆ"];
+const assetMoney=n=>(+n||0).toLocaleString("en-US",{maximumFractionDigits:0});
+// Straight-line depreciation: (cost − salvage) / life, accrued by whole months since acquisition.
+function assetDeprec(a){
+  const cost=+a.cost||0,salvage=+a.salvage_value||0,life=+a.useful_life_years||0;
+  const base=Math.max(0,cost-salvage);
+  const perYear=life>0?base/life:0,perMonth=perYear/12;
+  let months=0;
+  if(a.acquired_date){const acq=new Date(a.acquired_date+"T00:00:00"),now=new Date();
+    if(!isNaN(acq.getTime())){months=(now.getFullYear()-acq.getFullYear())*12+(now.getMonth()-acq.getMonth());if(now.getDate()<acq.getDate())months-=1;if(months<0)months=0;}}
+  const accum=life>0?Math.min(base,perMonth*months):0;
+  return {cost,salvage,life,perYear,perMonth,months,accum,book:cost-accum,pct:base>0?Math.min(100,accum/base*100):0};
+}
+function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[]}){
+  const A0={name:"",category:"",image:null,acquired_date:todayBkk(),cost:"",salvage_value:"",useful_life_years:"5",status:"active",assignee:"",location:"",note:""};
+  const[form,setForm]=useState(A0);
+  const[editId,setEditId]=useState(null);
+  const[showForm,setShowForm]=useState(false);
+  const[saving,setSaving]=useState(false);
+  const[q,setQ]=useState("");
+  const[fStatus,setFStatus]=useState("all");
+  const canE=hasPerm(currentUser,"assets");
+  const myList=useMemo(()=>assets.filter(a=>+a.branch_id===+currentBranch?.id),[assets,currentBranch]);
+  const filtered=useMemo(()=>myList.filter(a=>{
+    if(fStatus!=="all"&&(a.status||"active")!==fStatus)return false;
+    const ql=q.trim().toLowerCase();
+    return !ql||`${a.name} ${a.category||""} ${a.assignee||""} ${a.location||""}`.toLowerCase().includes(ql);
+  }),[myList,q,fStatus]);
+  const totals=useMemo(()=>{let cost=0,accum=0,book=0;myList.forEach(a=>{if((a.status||"active")==="disposed")return;const d=assetDeprec(a);cost+=d.cost;accum+=d.accum;book+=d.book;});return {cost,accum,book};},[myList]);
+  function openAdd(){setForm(A0);setEditId(null);setShowForm(true);}
+  function openEdit(a){setForm({name:a.name||"",category:a.category||"",image:a.image||null,acquired_date:a.acquired_date||todayBkk(),cost:a.cost==null?"":String(a.cost),salvage_value:a.salvage_value==null?"":String(a.salvage_value),useful_life_years:a.useful_life_years==null?"":String(a.useful_life_years),status:a.status||"active",assignee:a.assignee||"",location:a.location||"",note:a.note||""});setEditId(a.id);setShowForm(true);}
+  function closeForm(){setShowForm(false);setForm(A0);setEditId(null);}
+  async function save(){
+    if(!form.name.trim()){alert("กรุณาใส่ชื่อสินทรัพย์");return;}
+    setSaving(true);
+    try{
+      const row={name:form.name.trim(),category:form.category||null,image:form.image||null,acquired_date:form.acquired_date||null,cost:+form.cost||0,salvage_value:+form.salvage_value||0,useful_life_years:+form.useful_life_years||0,status:form.status||"active",assignee:form.assignee||null,location:form.location||null,note:form.note||null};
+      if(editId)await api.updateAsset(editId,row);
+      else await api.addAsset({...row,branch_id:currentBranch.id});
+      await reloadAssets();closeForm();posToast("✅ บันทึกสินทรัพย์แล้ว","ok");
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
+    setSaving(false);
+  }
+  async function del(a){if(!await confirmDlg({title:"ลบสินทรัพย์",message:`ต้องการลบ "${a.name}" ใช่หรือไม่?`,danger:true}))return;try{await api.deleteAsset(a.id);await reloadAssets();}catch(e){alert("ลบไม่สำเร็จ: "+(e&&e.message||e));}}
+  const stOf=v=>ASSET_STATUS.find(s=>s.v===v)||ASSET_STATUS[0];
+  const prev=assetDeprec(form);
+  return <div>
+    <div style={{background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:12,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+      <span style={{fontSize:18}}>🏷️</span>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>สินทรัพย์ของสาขา: {currentBranch?.name||"—"} <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>({myList.length})</span></div>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>ค่าเสื่อมราคาแบบเส้นตรง — แต่ละสาขาเก็บสินทรัพย์ของตัวเอง</div>
+      </div>
+      {canE&&<Btn onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มสินทรัพย์</Btn>}
+    </div>
+    <div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
+      {[{l:"📦 จำนวนสินทรัพย์",v:myList.length,c:C.blue},
+        {l:"💰 มูลค่าทุนรวม",v:`฿${assetMoney(totals.cost)}`,c:C.ink},
+        {l:"📉 ค่าเสื่อมสะสม",v:`฿${assetMoney(totals.accum)}`,c:C.red},
+        {l:"💎 มูลค่าคงเหลือ",v:`฿${assetMoney(totals.book)}`,c:C.green}].map(s=><div key={s.l} style={{flex:"1 1 150px",background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`}}><div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:20,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div>)}
+    </div>
+    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 ค้นหาสินทรัพย์ / ผู้รับผิดชอบ / ที่ตั้ง..." style={{...iS,flex:"1 1 240px",maxWidth:360}}/>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        {[{v:"all",l:"ทั้งหมด"},...ASSET_STATUS].map(s=>{const on=fStatus===s.v;return <button key={s.v} onClick={()=>setFStatus(s.v)} style={{padding:"6px 12px",borderRadius:20,border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,cursor:"pointer",fontSize:12,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</button>;})}
+      </div>
+    </div>
+    {filtered.length===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.box} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีสินทรัพย์{myList.length>0?"ที่ตรงกับตัวกรอง":""}</p>{canE&&myList.length===0&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.brand}}>"+ เพิ่มสินทรัพย์"</b> เพื่อเริ่ม</p>}</div>
+    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(300px,100%),1fr))",gap:14}}>
+      {filtered.map(a=>{const d=assetDeprec(a);const st=stOf(a.status||"active");return <Card key={a.id} style={{overflow:"hidden"}}>
+        <div style={{display:"flex",gap:12,padding:"12px 14px"}}>
+          {a.image?<img src={a.image} alt="" style={{width:74,height:74,objectFit:"cover",borderRadius:12,border:`1px solid ${C.line}`,flexShrink:0}}/>:<div style={{width:74,height:74,borderRadius:12,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={28} c={C.line}/></div>}
+          <div style={{minWidth:0,flex:1}}>
+            <div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"flex-start"}}>
+              <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</div>
+              {canE&&<div style={{display:"flex",gap:4,flexShrink:0}}>
+                <button onClick={()=>openEdit(a)} title="แก้ไข" style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>
+                <button onClick={()=>del(a)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+              </div>}
+            </div>
+            <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center",marginTop:4}}>
+              {a.category&&<Chip color="blue">{a.category}</Chip>}
+              <span style={{fontSize:10.5,fontWeight:800,color:st.c,background:`${st.c}22`,padding:"2px 8px",borderRadius:20,fontFamily:"'Sarabun',sans-serif"}}>{st.l}</span>
+            </div>
+            {(a.assignee||a.location)&&<div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:5}}>{a.assignee?`👤 ${a.assignee}`:""}{a.assignee&&a.location?" · ":""}{a.location?`📍 ${a.location}`:""}</div>}
+            {a.acquired_date&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>📅 ได้มา {new Date(a.acquired_date+"T00:00:00").toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"})}</div>}
+          </div>
+        </div>
+        <div style={{padding:"10px 14px",borderTop:`1px solid ${C.lineLight}`,background:C.bg,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
+          {[{l:"ทุน",v:assetMoney(d.cost),c:C.ink},{l:"ค่าเสื่อมสะสม",v:assetMoney(d.accum),c:C.red},{l:"คงเหลือ",v:assetMoney(d.book),c:C.green}].map(x=><div key={x.l} style={{textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{x.l}</div><div style={{fontSize:13,fontWeight:800,color:x.c,fontFamily:"'Sarabun',sans-serif"}}>฿{x.v}</div></div>)}
+        </div>
+        {d.life>0&&<div style={{padding:"0 14px 12px"}}>
+          <div style={{height:6,background:C.lineLight,borderRadius:6,overflow:"hidden"}}><div style={{width:`${d.pct}%`,height:"100%",background:d.pct>=100?C.ink4:`linear-gradient(90deg,${C.brand},${C.red})`}}/></div>
+          <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:3,textAlign:"right"}}>เสื่อมแล้ว {d.pct.toFixed(0)}% · {d.life} ปี · ฿{assetMoney(d.perYear)}/ปี</div>
+        </div>}
+      </Card>;})}
+    </div>}
+    {showForm&&<Modal title={editId?"✏️ แก้ไขสินทรัพย์":"➕ เพิ่มสินทรัพย์"} onClose={closeForm} wide>
+      <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><ImgUp label="" value={form.image} onChange={v=>setForm(f=>({...f,image:v}))}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Inp label="ชื่อสินทรัพย์ *" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น เตาแก๊ส, ตู้แช่แข็ง" autoFocus/>
+        <Sel label="หมวด" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} options={[{v:"",l:"— เลือกหมวด —"},...ASSET_CATS.map(c=>({v:c,l:c}))]}/>
+        <Inp label="📅 วันที่ได้มา" type="date" value={form.acquired_date} onChange={e=>setForm(f=>({...f,acquired_date:e.target.value}))}/>
+        <Sel label="🔧 สถานะ" value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))} options={ASSET_STATUS.map(s=>({v:s.v,l:s.l}))}/>
+        <Field label="💰 ราคาทุน (บาท)"><NumInput value={form.cost} onValue={v=>setForm(f=>({...f,cost:v}))} placeholder="0" style={iS}/></Field>
+        <Field label="อายุการใช้งาน (ปี)"><NumInput value={form.useful_life_years} onValue={v=>setForm(f=>({...f,useful_life_years:v}))} integer placeholder="5" style={iS}/></Field>
+        <Field label="มูลค่าซาก (บาท)"><NumInput value={form.salvage_value} onValue={v=>setForm(f=>({...f,salvage_value:v}))} placeholder="0" style={iS}/></Field>
+        <Inp label="👤 ผู้รับผิดชอบ" value={form.assignee} onChange={e=>setForm(f=>({...f,assignee:e.target.value}))} placeholder="ชื่อพนักงาน"/>
+        <Inp label="📍 ที่ตั้ง" value={form.location} onChange={e=>setForm(f=>({...f,location:e.target.value}))} placeholder="เช่น ครัว, หน้าร้าน"/>
+        <Inp label="หมายเหตุ" value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))} placeholder="ยี่ห้อ / รุ่น / เลขเครื่อง"/>
+      </div>
+      {(+form.cost>0&&+form.useful_life_years>0)&&<div style={{background:C.greenLight,border:`1px solid ${C.green}44`,borderRadius:10,padding:"10px 14px",margin:"12px 0",fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:12,fontWeight:800,color:C.green,marginBottom:6}}>📉 ค่าเสื่อมราคา (เส้นตรง)</div>
+        <div style={{display:"flex",gap:16,flexWrap:"wrap",fontSize:12.5,color:C.ink2}}>
+          <span>ค่าเสื่อม/ปี: <b>฿{assetMoney(prev.perYear)}</b></span>
+          <span>ค่าเสื่อม/เดือน: <b>฿{assetMoney(prev.perMonth)}</b></span>
+          <span>สะสมถึงวันนี้: <b style={{color:C.red}}>฿{assetMoney(prev.accum)}</b></span>
+          <span>มูลค่าคงเหลือ: <b style={{color:C.green}}>฿{assetMoney(prev.book)}</b></span>
+        </div>
+      </div>}
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:12,borderTop:`1px solid ${C.line}`,marginTop:12}}>
+        <Btn v="ghost" onClick={closeForm}>ยกเลิก</Btn>
+        <Btn v="success" onClick={save} loading={saving} icon={I.check} disabled={!form.name.trim()}>{editId?"บันทึก":"เพิ่มสินทรัพย์"}</Btn>
+      </div>
+    </Modal>}
+  </div>;
+}
+
 function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,reloadBranches,suppliers,reloadSuppliers,currentUser,printers=[],reloadPrinters,currentBranch}){
   const[section,setSection]=useState("branches");
   const[showUser,setShowUser]=useState(false);const[editUID,setEditUID]=useState(null);const[saving,setSaving]=useState(false);
@@ -9366,7 +9513,7 @@ export default function App(){
   const[branches,setBranches]=useState([]);const[suppliers,setSuppliers]=useState([]);
   const[costHistory,setCostHistory]=useState([]);const[actionHistory,setActionHistory]=useState([]);
   const[orders,setOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
-  const[printers,setPrinters]=useState([]);
+  const[printers,setPrinters]=useState([]);const[assets,setAssets]=useState([]);
   const[loading,setLoading]=useState(false);const[initErr,setInitErr]=useState("");
   const[tab,setTab]=useState("pos");
   const isMobile=useIsMobile();
@@ -9393,6 +9540,7 @@ export default function App(){
       ]);
       setIngs(i);setMenus(m);setAllCats(c);setUsers(u);setBranches(b);setSuppliers(s);
       setCostHistory(ch);setActionHistory(ah);setOrders(o);setPrinters(pr);
+      try{const as=await api.getAssets();setAssets(as);}catch{}
       if(isCentral){const ao=await api.getAllOrders();setAllOrders(ao);}
     }catch(e){setInitErr("เชื่อมต่อ Supabase ไม่ได้: "+e.message);}
     setLoading(false);
@@ -9461,6 +9609,7 @@ export default function App(){
     action:async()=>{const d=await api.getActionHist();setActionHistory(d);},
     orders:async()=>{const isCentral=currentBranch?.type==="central";const d=await api.getOrders(isCentral?null:currentBranch?.id);setOrders(d);if(isCentral){const ao=await api.getAllOrders();setAllOrders(ao);}},
     printers:async()=>{const d=await api.getAllPrinters();setPrinters(d);},
+    assets:async()=>{const d=await api.getAssets();setAssets(d);},
   };
   const ings=useMemo(()=>{
     const isCentral=currentBranch?.type==="central";
@@ -9502,6 +9651,7 @@ export default function App(){
     ...(currentUser&&currentUser.role!=="admin"&&hasPerm(currentUser,"orders")&&!hasPerm(currentUser,"po")?[{id:"orders",l:t("tab.orders"),icon:I.truck,perm:"orders"}]:[]),
     {id:"history",l:t("tab.history"),icon:I.clock,perm:"history"},
     {id:"suppliers",l:t("tab.suppliers"),icon:I.truck,perm:"suppliers"},
+    {id:"assets",l:t("tab.assets"),icon:I.box,perm:"assets"},
     {id:"kitchen3d",l:t("tab.kitchen3d"),icon:I.shop,perm:"kitchen_3d"},
     {id:"settings",l:t("tab.settings"),icon:I.settings,perm:"settings"},
   ];
@@ -9520,7 +9670,7 @@ export default function App(){
   useEffect(()=>{
     if(visibleTabs.length>0&&!visibleTabs.find(t=>t.id===tab))setTab(visibleTabs[0].id);
   },[visibleTabsHash]);
-  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",fs_sales:"นำเข้ายอดขายจาก FoodStory เพื่อดูเมนูที่ขายได้แต่ละวัน",po:"เปิด/แก้ไข/ปริ้น เอกสารใบสั่งซื้อวัตถุดิบ (Purchase Order)",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
+  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",fs_sales:"นำเข้ายอดขายจาก FoodStory เพื่อดูเมนูที่ขายได้แต่ละวัน",po:"เปิด/แก้ไข/ปริ้น เอกสารใบสั่งซื้อวัตถุดิบ (Purchase Order)",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",assets:"ทะเบียนสินทรัพย์ของสาขา พร้อมคำนวณค่าเสื่อมราคา",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
 
   // Check scan mode
   const params=typeof window!=="undefined"?new URLSearchParams(window.location.search):new URLSearchParams();
@@ -9694,6 +9844,7 @@ export default function App(){
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders}/>}
+            {tab==="assets"&&<AssetsTab assets={assets} reloadAssets={reload.assets} currentUser={currentUser} currentBranch={currentBranch} branches={branches}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
             {tab==="kitchen3d"&&<Kitchen3DView currentBranch={currentBranch} currentUser={currentUser} branches={branches} reloadBranches={reload.branches}/>}
             {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} printers={printers} reloadPrinters={reload.printers} currentBranch={currentBranch}/>}
