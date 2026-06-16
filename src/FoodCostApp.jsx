@@ -7237,7 +7237,6 @@ const ASSET_STATUS=[
   {v:"broken",l:"ชำรุด",c:C.red},
   {v:"disposed",l:"จำหน่ายแล้ว",c:C.ink4},
 ];
-const ASSET_CATS=["เครื่องครัว","เครื่องใช้ไฟฟ้า","เฟอร์นิเจอร์","อุปกรณ์","ตกแต่งร้าน","ยานพาหนะ","อื่นๆ"];
 const assetMoney=n=>(+n||0).toLocaleString("en-US",{maximumFractionDigits:0});
 // Straight-line depreciation: (cost − salvage) / life, accrued by whole months since acquisition.
 function assetDeprec(a){
@@ -7250,7 +7249,7 @@ function assetDeprec(a){
   const accum=life>0?Math.min(base,perMonth*months):0;
   return {cost,salvage,life,perYear,perMonth,months,accum,book:cost-accum,pct:base>0?Math.min(100,accum/base*100):0};
 }
-function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[]}){
+function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],allCats=[],reloadCats}){
   const A0={name:"",category:"",image:null,acquired_date:todayBkk(),cost:"",salvage_value:"",useful_life_years:"5",status:"active",assignee:"",location:"",note:""};
   const[form,setForm]=useState(A0);
   const[editId,setEditId]=useState(null);
@@ -7260,11 +7259,20 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[]}){
   const[fStatus,setFStatus]=useState("all");
   const canE=hasPerm(currentUser,"assets");
   const myList=useMemo(()=>assets.filter(a=>+a.branch_id===+currentBranch?.id),[assets,currentBranch]);
+  const[selCat,setSelCat]=useState("ทั้งหมด");
+  const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");
+  const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
+  const assetCats=useMemo(()=>allCats.filter(c=>c.type==="asset"&&+c.branch_id===+currentBranch?.id),[allCats,currentBranch]);
+  async function addCat(){if(!newCatName.trim())return;try{await api.addCat({type:"asset",name:newCatName.trim(),branch_id:currentBranch?.id});if(reloadCats)await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
+  async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;try{await api.updateCat(editingCatId,{name:editingCatName.trim()});if(reloadCats)await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
+  async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่? (สินทรัพย์ในหมวดนี้จะยังอยู่ แต่หมวดจะหายไป)`}))return;try{await api.deleteCat(c.id);if(reloadCats)await reloadCats();if(selCat===c.name)setSelCat("ทั้งหมด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
+  const catTabBtn=(label,active,onClick)=><button onClick={onClick} style={{padding:"6px 14px",borderRadius:20,border:`1.5px solid ${active?C.brand:C.line}`,background:active?C.brandLight:"transparent",color:active?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{label}</button>;
   const filtered=useMemo(()=>myList.filter(a=>{
+    if(selCat!=="ทั้งหมด"&&(a.category||"")!==selCat)return false;
     if(fStatus!=="all"&&(a.status||"active")!==fStatus)return false;
     const ql=q.trim().toLowerCase();
     return !ql||`${a.name} ${a.category||""} ${a.assignee||""} ${a.location||""}`.toLowerCase().includes(ql);
-  }),[myList,q,fStatus]);
+  }),[myList,q,fStatus,selCat]);
   const totals=useMemo(()=>{let cost=0,accum=0,book=0;myList.forEach(a=>{if((a.status||"active")==="disposed")return;const d=assetDeprec(a);cost+=d.cost;accum+=d.accum;book+=d.book;});return {cost,accum,book};},[myList]);
   function openAdd(){setForm(A0);setEditId(null);setShowForm(true);}
   function openEdit(a){setForm({name:a.name||"",category:a.category||"",image:a.image||null,acquired_date:a.acquired_date||todayBkk(),cost:a.cost==null?"":String(a.cost),salvage_value:a.salvage_value==null?"":String(a.salvage_value),useful_life_years:a.useful_life_years==null?"":String(a.useful_life_years),status:a.status||"active",assignee:a.assignee||"",location:a.location||"",note:a.note||""});setEditId(a.id);setShowForm(true);}
@@ -7292,6 +7300,23 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[]}){
       </div>
       {canE&&<Btn onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มสินทรัพย์</Btn>}
     </div>
+    {(canE||assetCats.length>0)&&<div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap",alignItems:"center",padding:"10px 14px",background:C.bg,borderRadius:14,border:`1px solid ${C.line}`}}>
+      {catTabBtn("ทั้งหมด",selCat==="ทั้งหมด",()=>setSelCat("ทั้งหมด"))}
+      {assetCats.map(c=>editingCatId===c.id
+        ?<input key={c.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape")setEditingCatId(null);}} autoFocus style={{...iS,width:120,padding:"5px 10px",fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
+        :<div key={c.id} style={{display:"flex",alignItems:"center"}}>
+          {catTabBtn(c.name,selCat===c.name,()=>setSelCat(c.name))}
+          {canE&&<button onClick={()=>{setEditingCatId(c.id);setEditingCatName(c.name);}} title="เปลี่ยนชื่อหมวด" style={{marginLeft:2,background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.pencil} s={11} c={C.ink4}/></button>}
+          {canE&&<button onClick={()=>delCat(c)} title="ลบหมวด" style={{background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.trash} s={11} c={C.red}/></button>}
+        </div>)}
+      {canE&&(addingCat
+        ?<div style={{display:"flex",gap:4,alignItems:"center"}}>
+          <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addCat();if(e.key==="Escape"){setAddingCat(false);setNewCatName("");}}} autoFocus placeholder="ชื่อหมวด..." style={{...iS,width:120,padding:"5px 10px",fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
+          <Btn v="success" onClick={addCat} s={{padding:"5px 12px",fontSize:12}}>ตกลง</Btn>
+          <Btn v="ghost" onClick={()=>{setAddingCat(false);setNewCatName("");}} s={{padding:"5px 10px",fontSize:12}}>ยกเลิก</Btn>
+        </div>
+        :<button onClick={()=>setAddingCat(true)} style={{padding:"6px 14px",borderRadius:20,border:`1.5px dashed ${C.line}`,background:"transparent",color:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>+ เพิ่มหมวด</button>)}
+    </div>}
     <div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
       {[{l:"📦 จำนวนสินทรัพย์",v:myList.length,c:C.blue},
         {l:"💰 มูลค่าทุนรวม",v:`฿${assetMoney(totals.cost)}`,c:C.ink},
@@ -7338,7 +7363,7 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[]}){
       <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><ImgUp label="" value={form.image} onChange={v=>setForm(f=>({...f,image:v}))}/></div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <Inp label="ชื่อสินทรัพย์ *" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น เตาแก๊ส, ตู้แช่แข็ง" autoFocus/>
-        <Sel label="หมวด" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} options={[{v:"",l:"— เลือกหมวด —"},...ASSET_CATS.map(c=>({v:c,l:c}))]}/>
+        <Sel label="หมวด" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} options={[{v:"",l:assetCats.length?"— เลือกหมวด —":"— ยังไม่มีหมวด (เพิ่มที่แถบด้านบน) —"},...assetCats.map(c=>({v:c.name,l:c.name}))]}/>
         <Inp label="📅 วันที่ได้มา" type="date" value={form.acquired_date} onChange={e=>setForm(f=>({...f,acquired_date:e.target.value}))}/>
         <Sel label="🔧 สถานะ" value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))} options={ASSET_STATUS.map(s=>({v:s.v,l:s.l}))}/>
         <Field label="💰 ราคาทุน (บาท)"><NumInput value={form.cost} onValue={v=>setForm(f=>({...f,cost:v}))} placeholder="0" style={iS}/></Field>
@@ -9844,7 +9869,7 @@ export default function App(){
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders}/>}
-            {tab==="assets"&&<AssetsTab assets={assets} reloadAssets={reload.assets} currentUser={currentUser} currentBranch={currentBranch} branches={branches}/>}
+            {tab==="assets"&&<AssetsTab assets={assets} reloadAssets={reload.assets} currentUser={currentUser} currentBranch={currentBranch} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
             {tab==="kitchen3d"&&<Kitchen3DView currentBranch={currentBranch} currentUser={currentUser} branches={branches} reloadBranches={reload.branches}/>}
             {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} printers={printers} reloadPrinters={reload.printers} currentBranch={currentBranch}/>}
