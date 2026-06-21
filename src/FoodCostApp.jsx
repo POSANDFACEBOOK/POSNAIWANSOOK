@@ -129,6 +129,9 @@ const api = {
   // Area-approval inbox: rows held at "pending_approval" in both order tables
   getPendingApprovalOrders: () => sb(`order_requests?status=eq.pending_approval&order=id.desc`),
   getPendingApprovalPOs: () => sb(`purchase_orders?status=eq.pending_approval&order=id.desc`),
+  // Approval history log (one row per approve/reject decision)
+  addApprovalLog: (d) => sb("approval_log", { method:"POST", body:JSON.stringify(d), headers:{ "Prefer":"return=minimal" } }),
+  getApprovalLog: () => sb("approval_log?order=decided_at.desc&limit=500"),
   // Web Push subscriptions (one row per device; endpoint is unique → upsert)
   savePushSub: (d) => sb("push_subscriptions", { method:"POST", body:JSON.stringify(d), headers:{ "Prefer":"resolution=merge-duplicates,return=minimal" } }),
   deletePushSub: (endpoint) => sb(`push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`, { method:"DELETE", headers:{ "Prefer":"return=minimal" } }),
@@ -7445,6 +7448,17 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
   const money=n=>(+n||0).toLocaleString("en-US",{maximumFractionDigits:0});
   const itemsOf=o=>Array.isArray(o.items)?o.items:[];
   const sumItems=o=>itemsOf(o).reduce((s,it)=>s+((+it.estimatedCost||+it.line_total||((+it.price_per_unit||0)*(+it.qty||+it.qtyNeeded||0)))||0),0);
+  // ── ประวัติการอนุมัติ ──
+  const[view,setView]=useState("pending");          // pending | history
+  const[logs,setLogs]=useState([]);const[logLoading,setLogLoading]=useState(false);
+  const[fDate,setFDate]=useState("");const[fBranch,setFBranch]=useState("");const[fSupplier,setFSupplier]=useState("");
+  const dkeyOf=l=>{try{const d=new Date(l.decided_at);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}catch{return "";}};
+  const dlabelOf=k=>{const d=new Date(k+"T00:00:00");return isNaN(d.getTime())?k:d.toLocaleDateString("th-TH",{weekday:"short",day:"numeric",month:"short",year:"numeric"});};
+  async function loadLogs(){setLogLoading(true);try{const d=await api.getApprovalLog();if(aliveRef.current)setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{if(aliveRef.current)setLogs([]);}if(aliveRef.current)setLogLoading(false);}
+  async function logDecision(decision,kind,o){try{
+    const branchId=kind==="po"?o.from_branch_id:o.branch_id;
+    await api.addApprovalLog({decision,kind,ref:kind==="po"?(o.po_number||("PO#"+o.id)):("ORD#"+o.id),branch_id:branchId,branch_name:branchName(branchId),supplier_name:kind==="po"?"ครัวกลาง":(o.supplier_name||"ซัพพลายนอก"),total:kind==="po"?(+o.total||sumItems(o)):sumItems(o),items_count:itemsOf(o).length,items:itemsOf(o),decided_by:currentUser?.username||currentUser?.name||""});
+  }catch{}}
   async function load(silent){
     if(!silent)setLoading(true);
     try{
@@ -7460,10 +7474,10 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
     if(aliveRef.current&&!silent)setLoading(false);
   }
   useEffect(()=>{aliveRef.current=true;prevRef.current=-1;load();const id=setInterval(()=>{if(!document.hidden)load(true);},12000);const onVis=()=>{if(!document.hidden)load(true);};document.addEventListener("visibilitychange",onVis);return()=>{aliveRef.current=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};},[]);// eslint-disable-line react-hooks/exhaustive-deps
-  async function approveReq(o){setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"pending"});posToast("✅ อนุมัติแล้ว — สาขาส่งให้ซัพพลายต่อได้","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
-  async function approvePO(o){setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"requested",updated_at:new Date().toISOString()});posToast("✅ อนุมัติแล้ว — ส่งให้ครัวกลางต่อ","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
-  async function rejectReq(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับออเดอร์ซัพพลาย "${o.supplier_name||""}" ของ ${branchName(o.branch_id)}?\nสาขาจะเห็นว่าถูกปฏิเสธ และนับสต็อกส่งใหม่ได้`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"rejected"});posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
-  async function rejectPO(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับ PO ${o.po_number||""} ของ ${branchName(o.from_branch_id)}?`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"cancelled",updated_at:new Date().toISOString()});posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
+  async function approveReq(o){setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"pending"});await logDecision("approved","ext",o);posToast("✅ อนุมัติแล้ว — สาขาส่งให้ซัพพลายต่อได้","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
+  async function approvePO(o){setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"requested",updated_at:new Date().toISOString()});await logDecision("approved","po",o);posToast("✅ อนุมัติแล้ว — ส่งให้ครัวกลางต่อ","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
+  async function rejectReq(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับออเดอร์ซัพพลาย "${o.supplier_name||""}" ของ ${branchName(o.branch_id)}?\nสาขาจะเห็นว่าถูกปฏิเสธ และนับสต็อกส่งใหม่ได้`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"rejected"});await logDecision("rejected","ext",o);posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
+  async function rejectPO(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับ PO ${o.po_number||""} ของ ${branchName(o.from_branch_id)}?`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"cancelled",updated_at:new Date().toISOString()});await logDecision("rejected","po",o);posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   const total=reqs.length+pos.length;
   return <div>
     <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap",background:total>0?"#F5F3FF":C.bg,border:`1px solid ${total>0?"#A855F7":C.line}`,borderRadius:12,padding:"12px 16px"}}>
@@ -7475,7 +7489,10 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
       <Btn v={pushOn?"ghost":"info"} onClick={turnOnPush} loading={pushBusy} disabled={pushOn} s={{padding:"6px 12px",fontSize:12}}>{pushOn?"🔔 แจ้งเตือนเปิดอยู่":"🔔 เปิดแจ้งเตือนมือถือ"}</Btn>
       <Btn v="ghost" onClick={()=>load()} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>รีเฟรช</Btn>
     </div>
-    {loading?<Loading text="โหลดคำสั่งซื้อรออนุมัติ..."/>
+    <div style={{display:"flex",gap:6,marginBottom:14}}>
+      {[{id:"pending",l:`⏳ รออนุมัติ${total>0?` (${total})`:""}`},{id:"history",l:"🗂 ประวัติการอนุมัติ"}].map(tb=>{const on=view===tb.id;return <button key={tb.id} onClick={()=>{setView(tb.id);if(tb.id==="history")loadLogs();}} style={{padding:"8px 16px",borderRadius:20,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{tb.l}</button>;})}
+    </div>
+    {view==="pending"&&(loading?<Loading text="โหลดคำสั่งซื้อรออนุมัติ..."/>
     :total===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><div style={{fontSize:48}}>✅</div><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่มีคำสั่งซื้อรออนุมัติ</p></div>
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(340px,100%),1fr))",gap:14}}>
       {pos.map(o=>{const k="p"+o.id;return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.blue}`}}>
@@ -7496,7 +7513,40 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
           <div style={{display:"flex",gap:8}}><Btn v="success" onClick={()=>approveReq(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectReq(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
         </div>
       </Card>;})}
-    </div>}
+    </div>)}
+    {view==="history"&&(()=>{
+      const scoped=logs;
+      const byDate=fDate?scoped.filter(l=>dkeyOf(l)===fDate):scoped;
+      const byBranch=fBranch?byDate.filter(l=>String(l.branch_id)===String(fBranch)):byDate;
+      const rows=fSupplier?byBranch.filter(l=>(l.supplier_name||"")===fSupplier):byBranch;
+      const dateOpts=[...new Set(scoped.map(dkeyOf).filter(Boolean))].sort().reverse();
+      const branchOpts=[...new Set(byDate.map(l=>+l.branch_id).filter(x=>x))];
+      const supOpts=[...new Set(byBranch.map(l=>l.supplier_name).filter(Boolean))];
+      const selSty={...iS,fontSize:12.5,minWidth:150,cursor:"pointer"};
+      return <div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14,alignItems:"center"}}>
+          <select value={fDate} onChange={e=>{setFDate(e.target.value);setFBranch("");setFSupplier("");}} style={selSty}><option value="">📅 ทุกวัน</option>{dateOpts.map(d=><option key={d} value={d}>{dlabelOf(d)}</option>)}</select>
+          <select value={fBranch} onChange={e=>{setFBranch(e.target.value);setFSupplier("");}} style={selSty}><option value="">🏪 ทุกสาขา</option>{branchOpts.map(b=><option key={b} value={b}>{branchName(b)}</option>)}</select>
+          <select value={fSupplier} onChange={e=>setFSupplier(e.target.value)} style={selSty}><option value="">🚚 ทุกซัพพลาย</option>{supOpts.map(s=><option key={s} value={s}>{s}</option>)}</select>
+          {(fDate||fBranch||fSupplier)&&<button onClick={()=>{setFDate("");setFBranch("");setFSupplier("");}} style={{padding:"7px 12px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>ล้างตัวกรอง</button>}
+          <Btn v="ghost" onClick={loadLogs} icon={I.refresh} s={{padding:"6px 12px",fontSize:12,marginLeft:"auto"}}>รีเฟรช</Btn>
+        </div>
+        {logLoading?<Loading text="โหลดประวัติการอนุมัติ..."/>
+        :rows.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการอนุมัติ{(fDate||fBranch||fSupplier)?"ตามตัวกรองนี้":""}</div>
+        :<><div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>ทั้งหมด {rows.length} รายการ</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {rows.map(l=>{const ok=l.decision==="approved";return <Card key={l.id} style={{padding:"10px 14px",borderLeft:`4px solid ${ok?C.green:C.red}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{fontWeight:800,fontSize:13.5,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{l.kind==="po"?"🏢":"🚚"} {l.supplier_name||"-"} <span style={{color:C.ink4,fontWeight:600}}>· {branchName(l.branch_id)}</span></div>
+                <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{l.ref||""} · {l.items_count||(Array.isArray(l.items)?l.items.length:0)} รายการ · ฿{money(l.total)} · โดย {l.decided_by||"-"} · {(()=>{try{return new Date(l.decided_at).toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}catch{return "";}})()}</div>
+              </div>
+              <span style={{fontSize:11,fontWeight:800,color:ok?C.green:C.red,background:ok?C.greenLight:C.redLight,padding:"3px 10px",borderRadius:20,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{ok?"✅ อนุมัติ":"❌ ตีกลับ"}</span>
+            </div>
+          </Card>;})}
+          </div></>}
+      </div>;
+    })()}
   </div>;
 }
 
