@@ -126,6 +126,9 @@ const api = {
   addActionHist: (d) => sb("action_history", { method: "POST", body: JSON.stringify(d) }),
   clearActionHist: () => sb("action_history?id=gt.0", { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   getOrders: (bid) => sb(`order_requests?order=id.desc${bid ? `&branch_id=eq.${bid}` : ""}`),
+  // Area-approval inbox: rows held at "pending_approval" in both order tables
+  getPendingApprovalOrders: () => sb(`order_requests?status=eq.pending_approval&order=id.desc`),
+  getPendingApprovalPOs: () => sb(`purchase_orders?status=eq.pending_approval&order=id.desc`),
   addOrder: (d) => sb("order_requests", { method: "POST", body: JSON.stringify(d) }),
   updateOrder: (id, d) => sb(`order_requests?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   // Optimistic concurrency: PATCH only when the row is in an expected status.
@@ -467,6 +470,7 @@ const TRANSLATIONS={
     "tab.history":"ประวัติต้นทุน",
     "tab.suppliers":"ซัพพลาย",
     "tab.assets":"สินทรัพย์",
+    "tab.approve":"อนุมัติ",
     "tab.kitchen3d":"ครัว 3D",
     "tab.settings":"ตั้งค่า",
     "branch.central":"ครัวกลาง",
@@ -498,6 +502,7 @@ const TRANSLATIONS={
     "tab.history":"Cost History",
     "tab.suppliers":"Suppliers",
     "tab.assets":"Assets",
+    "tab.approve":"Approve",
     "tab.kitchen3d":"Kitchen 3D",
     "tab.settings":"Settings",
     "branch.central":"Central Kitchen",
@@ -529,6 +534,7 @@ const TRANSLATIONS={
     "tab.history":"ປະຫວັດຕົ້ນທຶນ",
     "tab.suppliers":"ຜູ້ສະໜອງ",
     "tab.assets":"ຊັບສິນ",
+    "tab.approve":"ອະນຸມັດ",
     "tab.kitchen3d":"ຄົວ 3D",
     "tab.settings":"ການຕັ້ງຄ່າ",
     "branch.central":"ຄົວກາງ",
@@ -560,6 +566,7 @@ const TRANSLATIONS={
     "tab.history":"ကုန်ကျစရိတ်မှတ်တမ်း",
     "tab.suppliers":"ပစ္စည်းပေးသွင်းသူ",
     "tab.assets":"ပိုင်ဆိုင်မှု",
+    "tab.approve":"အတည်ပြု",
     "tab.kitchen3d":"မီးဖို 3D",
     "tab.settings":"ဆက်တင်များ",
     "branch.central":"အလယ်တန်းမီးဖို",
@@ -610,12 +617,14 @@ const ALL_PERMS=[
   {id:"history",label:"ประวัติต้นทุน"},
   {id:"suppliers",label:"ซัพพลาย"},
   {id:"assets",label:"สินทรัพย์"},
+  {id:"approve",label:"อนุมัติคำสั่งซื้อ (Area)"},
   {id:"kitchen_3d",label:"ครัว 3D"},
   {id:"settings",label:"ตั้งค่า"},
 ];
 const ROLE_DEFAULT_PERMS={
   admin:ALL_PERMS.map(p=>p.id),
-  manager:["pos","crm","ingredients","menus","sop","summary","fs_sales","po","orders","history","suppliers","assets"],
+  area:["approve","po","orders","summary","history"],
+  manager:["pos","crm","ingredients","menus","sop","summary","fs_sales","po","orders","history","suppliers","assets","approve"],
   staff:["pos","crm","ingredients","menus","sop","summary","fs_sales","po","orders","history","suppliers"],
   viewer:["pos","menus","sop"],
 };
@@ -644,7 +653,7 @@ function hasPerm(user,perm){
   if(user.role==="admin")return true;
   return getUserPerms(user).includes(perm);
 }
-const ROLES={admin:{label:"Admin",color:"purple"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"}};
+const ROLES={admin:{label:"Admin",color:"purple"},area:{label:"Area / พื้นที่",color:"orange"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"}};
 const ppg=(price,gram)=>(gram>0?price/gram:0);
 const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);if(!i)return s;const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;return s+ppg*x.amountGram;},0);
 // Per-branch stock helpers — falls back to legacy ingredient.stock when no branch entry exists
@@ -3793,6 +3802,8 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
 }
 
 const PO_STATUS={
+  // Branch submitted, waiting for an Area Manager to approve before it is released to central.
+  pending_approval:{label:"⏳ รออนุมัติ",       short:"รออนุมัติ",   color:"#A855F7",bg:"#F5F3FF"},
   // Branch sent a stock-check order to central (จาก=สาขา → ถึง=ครัวกลาง).
   // Central must press "รับเอกสาร" to swap from/to and move it into "open".
   requested:       {label:"📨 รอครัวกลางรับ",  short:"รอครัวกลางรับ",color:"#A855F7",bg:"#F5F3FF"},
@@ -6207,9 +6218,9 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     }catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}
   }
 
-  const statusColor={pending:"yellow",approved:"green",rejected:"red",delivered:"blue"};
-  // External-supplier flow: pending → (กดพิมพ์ = ส่งให้ซัพ) approved → (ยืนยันรับ + บวกสต็อก) delivered
-  const statusLabel={pending:"รอส่งซัพพลาย",approved:"ส่งให้ซัพพลายแล้ว",rejected:"ปฏิเสธ",delivered:"รับสินค้าแล้ว"};
+  const statusColor={pending_approval:"purple",pending:"yellow",approved:"green",rejected:"red",delivered:"blue"};
+  // External-supplier flow: (รออนุมัติ Area) → pending → (กดพิมพ์ = ส่งให้ซัพ) approved → (ยืนยันรับ + บวกสต็อก) delivered
+  const statusLabel={pending_approval:"⏳ รออนุมัติ",pending:"รอส่งซัพพลาย",approved:"ส่งให้ซัพพลายแล้ว",rejected:"ปฏิเสธ",delivered:"รับสินค้าแล้ว"};
 
   return <div>
     {/* Back link to PO documents (this tab is reached via the button on POSection) */}
@@ -6570,7 +6581,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             branch_id:central.id,
             from_branch_id:currentBranch.id,
             po_date:todayStr(),
-            status:"requested",
+            status:"pending_approval",   // hold: Area Manager must approve before it reaches central (released → "requested")
             items:sup.items.map(it=>({
               ingredient_id:it.ingId,
               name:it.name,
@@ -6597,7 +6608,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
           await api.addOrder({
             branch_id:currentBranch.id,branch_name:currentBranch.name,
             supplier_id:sup.supplierId,supplier_name:sup.supplierName,
-            items:sup.items,status:"pending",
+            items:sup.items,status:"pending_approval",   // hold: Area Manager approves → released to "pending"
             requested_by:currentUser.username,requested_at:nowStr(),
             note:`นับสต็อก ${todayStr()}`,
           });
@@ -7390,6 +7401,74 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
         <Btn v="success" onClick={save} loading={saving} icon={I.check} disabled={!form.name.trim()}>{editId?"บันทึก":"เพิ่มสินทรัพย์"}</Btn>
       </div>
     </Modal>}
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
+// ── APPROVAL (Area Manager อนุมัติคำสั่งซื้อของสาขา) ────
+// ══════════════════════════════════════════════════════
+function approvalBeep(){try{const A=window.AudioContext||window.webkitAudioContext;if(!A)return;const a=new A();const o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.type="sine";o.frequency.value=880;g.gain.setValueAtTime(0.0001,a.currentTime);g.gain.exponentialRampToValueAtTime(0.25,a.currentTime+0.02);g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+0.45);o.start();o.stop(a.currentTime+0.47);}catch{}}
+function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
+  const[reqs,setReqs]=useState([]);const[pos,setPos]=useState([]);
+  const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(null);
+  const aliveRef=useRef(true);const prevRef=useRef(-1);
+  const branchName=id=>branches.find(b=>+b.id===+id)?.name||`สาขา #${id}`;
+  const allowed=useMemo(()=>currentUser?.role==="admin"?null:normalizeBranchIds(currentUser?.allowed_branches),[currentUser]);
+  const inScope=bid=>!allowed||allowed.map(x=>+x).includes(+bid);
+  const money=n=>(+n||0).toLocaleString("en-US",{maximumFractionDigits:0});
+  const itemsOf=o=>Array.isArray(o.items)?o.items:[];
+  const sumItems=o=>itemsOf(o).reduce((s,it)=>s+((+it.estimatedCost||+it.line_total||((+it.price_per_unit||0)*(+it.qty||+it.qtyNeeded||0)))||0),0);
+  async function load(silent){
+    if(!silent)setLoading(true);
+    try{
+      const[r,p]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[])]);
+      if(!aliveRef.current)return;
+      const rr=(Array.isArray(r)?r:[]).filter(o=>inScope(o.branch_id));
+      const pp=(Array.isArray(p)?p:[]).filter(o=>inScope(o.from_branch_id));
+      setReqs(rr);setPos(pp);
+      const total=rr.length+pp.length;
+      if(prevRef.current>=0&&total>prevRef.current)approvalBeep();
+      prevRef.current=total;
+    }catch{}
+    if(aliveRef.current&&!silent)setLoading(false);
+  }
+  useEffect(()=>{aliveRef.current=true;prevRef.current=-1;load();const id=setInterval(()=>{if(!document.hidden)load(true);},12000);const onVis=()=>{if(!document.hidden)load(true);};document.addEventListener("visibilitychange",onVis);return()=>{aliveRef.current=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};},[]);// eslint-disable-line react-hooks/exhaustive-deps
+  async function approveReq(o){setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"pending"});posToast("✅ อนุมัติแล้ว — สาขาส่งให้ซัพพลายต่อได้","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
+  async function approvePO(o){setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"requested",updated_at:new Date().toISOString()});posToast("✅ อนุมัติแล้ว — ส่งให้ครัวกลางต่อ","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
+  async function rejectReq(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับออเดอร์ซัพพลาย "${o.supplier_name||""}" ของ ${branchName(o.branch_id)}?\nสาขาจะเห็นว่าถูกปฏิเสธ และนับสต็อกส่งใหม่ได้`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"rejected"});posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
+  async function rejectPO(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับ PO ${o.po_number||""} ของ ${branchName(o.from_branch_id)}?`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"cancelled",updated_at:new Date().toISOString()});posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
+  const total=reqs.length+pos.length;
+  return <div>
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap",background:total>0?"#F5F3FF":C.bg,border:`1px solid ${total>0?"#A855F7":C.line}`,borderRadius:12,padding:"12px 16px"}}>
+      <span style={{fontSize:22}}>{total>0?"🔔":"✅"}</span>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:15,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>คำสั่งซื้อรออนุมัติ{total>0&&<span style={{color:"#7C3AED"}}> ({total})</span>}</div>
+        <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{allowed?"เฉพาะสาขาที่คุณดูแล":"ทุกสาขา"} · เด้ง+เสียงเตือนอัตโนมัติทุก ~12 วิ</div>
+      </div>
+      <Btn v="ghost" onClick={()=>load()} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>รีเฟรช</Btn>
+    </div>
+    {loading?<Loading text="โหลดคำสั่งซื้อรออนุมัติ..."/>
+    :total===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><div style={{fontSize:48}}>✅</div><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่มีคำสั่งซื้อรออนุมัติ</p></div>
+    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(340px,100%),1fr))",gap:14}}>
+      {pos.map(o=>{const k="p"+o.id;return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.blue}`}}>
+        <div style={{padding:"12px 14px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🏢 ครัวกลาง · {o.po_number||""}</span><Chip color="blue">ครัวกลาง</Chip></div>
+          <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>จากสาขา <b style={{color:C.ink}}>{branchName(o.from_branch_id)}</b> · โดย {o.created_by||"-"}</div>
+          <div style={{margin:"8px 0",maxHeight:120,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",borderBottom:`1px dashed ${C.lineLight}`,padding:"2px 0",gap:8}}><span style={{color:C.ink2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name} <span style={{color:C.ink4}}>×{it.qty||0} {it.unit||""}</span></span><span style={{color:C.ink3,whiteSpace:"nowrap"}}>฿{money(it.line_total)}</span></div>)}</div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}><span>รวม</span><span>฿{money(o.total||sumItems(o))}</span></div>
+          <div style={{display:"flex",gap:8}}><Btn v="success" onClick={()=>approvePO(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectPO(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
+        </div>
+      </Card>;})}
+      {reqs.map(o=>{const k="r"+o.id;return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.teal}`}}>
+        <div style={{padding:"12px 14px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🚚 {o.supplier_name||"ซัพพลายนอก"}</span><Chip color="teal">ซัพพลายนอก</Chip></div>
+          <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>จากสาขา <b style={{color:C.ink}}>{branchName(o.branch_id)}</b> · โดย {o.requested_by||"-"}</div>
+          <div style={{margin:"8px 0",maxHeight:120,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",borderBottom:`1px dashed ${C.lineLight}`,padding:"2px 0",gap:8}}><span style={{color:C.ink2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name} <span style={{color:C.ink4}}>×{it.qtyNeeded||it.qty||0} {it.unit||""}</span></span><span style={{color:C.ink3,whiteSpace:"nowrap"}}>฿{money(it.estimatedCost||it.line_total)}</span></div>)}</div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}><span>รวม</span><span>฿{money(sumItems(o))}</span></div>
+          <div style={{display:"flex",gap:8}}><Btn v="success" onClick={()=>approveReq(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectReq(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
+        </div>
+      </Card>;})}
+    </div>}
   </div>;
 }
 
@@ -9543,7 +9622,7 @@ export default function App(){
   const[orders,setOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
   const[printers,setPrinters]=useState([]);const[assets,setAssets]=useState([]);
   const[loading,setLoading]=useState(false);const[initErr,setInitErr]=useState("");
-  const[tab,setTab]=useState("pos");
+  const[tab,setTab]=useState(()=>{try{return new URLSearchParams(window.location.search).get("approve")==="1"?"approve":"pos";}catch{return "pos";}});
   const isMobile=useIsMobile();
   const[mobileNavOpen,setMobileNavOpen]=useState(false);
   // Auto-close mobile drawer when tab changes
@@ -9668,6 +9747,7 @@ export default function App(){
 
   const TABS=[
     {id:"pos",l:t("tab.pos"),icon:I.table,perm:"pos"},
+    {id:"approve",l:t("tab.approve"),icon:I.check,perm:"approve"},
     {id:"crm",l:t("tab.crm"),icon:I.users,perm:"crm"},
     {id:"ingredients",l:t("tab.ingredients"),icon:I.leaf,perm:"ingredients"},
     {id:"menus",l:t("tab.menus"),icon:I.fire,perm:"menus"},
@@ -9698,7 +9778,7 @@ export default function App(){
   useEffect(()=>{
     if(visibleTabs.length>0&&!visibleTabs.find(t=>t.id===tab))setTab(visibleTabs[0].id);
   },[visibleTabsHash]);
-  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",fs_sales:"นำเข้ายอดขายจาก FoodStory เพื่อดูเมนูที่ขายได้แต่ละวัน",po:"เปิด/แก้ไข/ปริ้น เอกสารใบสั่งซื้อวัตถุดิบ (Purchase Order)",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",assets:"ทะเบียนสินทรัพย์ของสาขา พร้อมคำนวณค่าเสื่อมราคา",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
+  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",approve:"อนุมัติคำสั่งซื้อที่สาขาส่งมา ก่อนส่งต่อครัวกลาง/ซัพพลายนอก",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",fs_sales:"นำเข้ายอดขายจาก FoodStory เพื่อดูเมนูที่ขายได้แต่ละวัน",po:"เปิด/แก้ไข/ปริ้น เอกสารใบสั่งซื้อวัตถุดิบ (Purchase Order)",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",assets:"ทะเบียนสินทรัพย์ของสาขา พร้อมคำนวณค่าเสื่อมราคา",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
 
   // Check scan mode
   const params=typeof window!=="undefined"?new URLSearchParams(window.location.search):new URLSearchParams();
@@ -9872,6 +9952,7 @@ export default function App(){
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders}/>}
+            {tab==="approve"&&<ApprovalTab currentUser={currentUser} currentBranch={currentBranch} branches={branches} reloadOrders={reload.orders}/>}
             {tab==="assets"&&<AssetsTab assets={assets} reloadAssets={reload.assets} currentUser={currentUser} currentBranch={currentBranch} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
             {tab==="kitchen3d"&&<Kitchen3DView currentBranch={currentBranch} currentUser={currentUser} branches={branches} reloadBranches={reload.branches}/>}
