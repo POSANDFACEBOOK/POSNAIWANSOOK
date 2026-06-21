@@ -129,6 +129,9 @@ const api = {
   // Area-approval inbox: rows held at "pending_approval" in both order tables
   getPendingApprovalOrders: () => sb(`order_requests?status=eq.pending_approval&order=id.desc`),
   getPendingApprovalPOs: () => sb(`purchase_orders?status=eq.pending_approval&order=id.desc`),
+  // Web Push subscriptions (one row per device; endpoint is unique → upsert)
+  savePushSub: (d) => sb("push_subscriptions", { method:"POST", body:JSON.stringify(d), headers:{ "Prefer":"resolution=merge-duplicates,return=minimal" } }),
+  deletePushSub: (endpoint) => sb(`push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`, { method:"DELETE", headers:{ "Prefer":"return=minimal" } }),
   addOrder: (d) => sb("order_requests", { method: "POST", body: JSON.stringify(d) }),
   updateOrder: (id, d) => sb(`order_requests?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   // Optimistic concurrency: PATCH only when the row is in an expected status.
@@ -6618,6 +6621,8 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       // Reset overrides
       setOrderQty({});
       if(reload)await reload();
+      // Notify the Area Manager(s) of this branch that an order is waiting for approval (Web Push, fire-and-forget)
+      if(poList.length||extList.length){try{fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({branch_id:currentBranch.id,branchName:currentBranch.name})});}catch{}}
       // Show beautiful result popup instead of plain alert — staff can see exactly
       // where each item went (PO to central vs. external orders), preventing
       // confusion when the printed PO has fewer items than what was submitted.
@@ -7408,10 +7413,32 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
 // ── APPROVAL (Area Manager อนุมัติคำสั่งซื้อของสาขา) ────
 // ══════════════════════════════════════════════════════
 function approvalBeep(){try{const A=window.AudioContext||window.webkitAudioContext;if(!A)return;const a=new A();const o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.type="sine";o.frequency.value=880;g.gain.setValueAtTime(0.0001,a.currentTime);g.gain.exponentialRampToValueAtTime(0.25,a.currentTime+0.02);g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+0.45);o.start();o.stop(a.currentTime+0.47);}catch{}}
+// ── Web Push (Area approval notifications) ──
+const PUSH_VAPID_PUBLIC="BILnJiPdqZ_-7I0uwEoYHWWwPoi_FL1NDG4GRXpv7OzG1edCFdxFgGzLQVkJ4hDisWr4nEgG_i9gRLSgMqS22JY";
+const pushSupported=()=>typeof navigator!=="undefined"&&"serviceWorker" in navigator&&typeof window!=="undefined"&&"PushManager" in window&&"Notification" in window;
+function urlB64ToUint8(b64){const pad="=".repeat((4-b64.length%4)%4);const s=(b64+pad).replace(/-/g,"+").replace(/_/g,"/");const raw=atob(s);const arr=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i);return arr;}
+async function registerPushSW(){if(!("serviceWorker" in navigator))return null;try{return await navigator.serviceWorker.register("/sw.js");}catch{return null;}}
+// Ask permission + subscribe this device + store it (scoped to the user's branches). Returns true on success.
+async function enablePushNotifications(user){
+  if(!pushSupported())throw new Error("อุปกรณ์/เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน — บน iPhone/iPad ต้อง 'เพิ่มลงในหน้าจอโฮม' ก่อน");
+  const perm=await Notification.requestPermission();
+  if(perm!=="granted")throw new Error("ยังไม่ได้อนุญาตการแจ้งเตือนในเบราว์เซอร์");
+  const reg=await navigator.serviceWorker.register("/sw.js");
+  await navigator.serviceWorker.ready;
+  let sub=await reg.pushManager.getSubscription();
+  if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64ToUint8(PUSH_VAPID_PUBLIC)});
+  const allowed=user?.role==="admin"?null:(normalizeBranchIds(user?.allowed_branches)||null);
+  await api.savePushSub({endpoint:sub.endpoint,subscription:sub.toJSON(),user_id:user?.id??null,username:user?.username||user?.name||"",allowed_branches:allowed});
+  return true;
+}
+async function pushIsOn(){if(!pushSupported())return false;try{if(Notification.permission!=="granted")return false;const reg=await navigator.serviceWorker.getRegistration();const sub=reg&&await reg.pushManager.getSubscription();return !!sub;}catch{return false;}}
 function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
   const[reqs,setReqs]=useState([]);const[pos,setPos]=useState([]);
   const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(null);
+  const[pushOn,setPushOn]=useState(false);const[pushBusy,setPushBusy]=useState(false);
   const aliveRef=useRef(true);const prevRef=useRef(-1);
+  useEffect(()=>{pushIsOn().then(v=>{if(aliveRef.current)setPushOn(v);});},[]);
+  async function turnOnPush(){setPushBusy(true);try{await enablePushNotifications(currentUser);setPushOn(true);posToast("🔔 เปิดแจ้งเตือนเข้าเครื่องนี้แล้ว","ok");}catch(e){alert("เปิดแจ้งเตือนไม่สำเร็จ:\n"+(e.message||e)+"\n\n📱 บน iPhone/iPad: เปิดลิงก์ใน Safari → แชร์ → 'เพิ่มลงในหน้าจอโฮม' → เปิดจากไอคอนนั้น → กดปุ่มนี้อีกครั้ง");}setPushBusy(false);}
   const branchName=id=>branches.find(b=>+b.id===+id)?.name||`สาขา #${id}`;
   const allowed=useMemo(()=>currentUser?.role==="admin"?null:normalizeBranchIds(currentUser?.allowed_branches),[currentUser]);
   const inScope=bid=>!allowed||allowed.map(x=>+x).includes(+bid);
@@ -7445,6 +7472,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
         <div style={{fontSize:15,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>คำสั่งซื้อรออนุมัติ{total>0&&<span style={{color:"#7C3AED"}}> ({total})</span>}</div>
         <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{allowed?"เฉพาะสาขาที่คุณดูแล":"ทุกสาขา"} · เด้ง+เสียงเตือนอัตโนมัติทุก ~12 วิ</div>
       </div>
+      <Btn v={pushOn?"ghost":"info"} onClick={turnOnPush} loading={pushBusy} disabled={pushOn} s={{padding:"6px 12px",fontSize:12}}>{pushOn?"🔔 แจ้งเตือนเปิดอยู่":"🔔 เปิดแจ้งเตือนมือถือ"}</Btn>
       <Btn v="ghost" onClick={()=>load()} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>รีเฟรช</Btn>
     </div>
     {loading?<Loading text="โหลดคำสั่งซื้อรออนุมัติ..."/>
@@ -9654,6 +9682,7 @@ export default function App(){
   }
 
   useEffect(()=>{if(currentBranch)loadAll();},[currentBranch]);
+  useEffect(()=>{registerPushSW();},[]);   // register the push service worker so notifications arrive app-wide
 
   // Periodic re-check of the logged-in user — admin disabling = auto-logout within ~60s.
   // Refs let the closure read the LATEST currentUser/currentBranch without re-creating the interval on every render.
