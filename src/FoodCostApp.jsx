@@ -6081,6 +6081,27 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
 
   const displayOrders=isCentral?(view==="all"?allOrders:orders):orders;
 
+  // ── Live status sync ────────────────────────────────────────────────────
+  // The orders list used to load once and never refresh, so when an Area
+  // approved an order the branch's "คัดลอก" button stayed locked until a manual
+  // page refresh. Auto-refetch while the list is open: ~5s while something is
+  // waiting on Area approval (so the unlock feels instant), a light ~20s
+  // heartbeat otherwise. Pause while a modal is open / an action is running, or
+  // when the tab is in the background; refetch immediately on returning to it.
+  const reloadRef=useRef(reload);useEffect(()=>{reloadRef.current=reload;});
+  const pollSkipRef=useRef(false);
+  pollSkipRef.current=!!(editingQty||receivingOrder||saving||printingId);
+  const waitingApproval=displayOrders.some(o=>o.status==="pending_approval");
+  useEffect(()=>{
+    if(mode!=="list")return;
+    let alive=true;
+    const tick=()=>{if(alive&&!document.hidden&&!pollSkipRef.current&&reloadRef.current)reloadRef.current();};
+    const id=setInterval(tick,waitingApproval?5000:20000);
+    const onVis=()=>{if(!document.hidden)tick();};
+    document.addEventListener("visibilitychange",onVis);
+    return()=>{alive=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};
+  },[mode,waitingApproval]);// eslint-disable-line react-hooks/exhaustive-deps
+
   function printOrder(order){
     if(printingId===order.id)return;
     setPrintingId(order.id);
