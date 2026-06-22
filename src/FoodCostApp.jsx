@@ -114,7 +114,7 @@ const api = {
   updateSupplier: (id, d) => sb(`suppliers?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteSupplier: (id) => sb(`suppliers?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   // Fixed assets (ทะเบียนสินทรัพย์) — per branch
-  getAssets: () => sb("assets?order=id.desc"),
+  getAssets: () => sb("assets?order=id.desc&limit=1000"),
   addAsset: (d) => sb("assets", { method: "POST", body: JSON.stringify(d) }),
   updateAsset: (id, d) => sb(`assets?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteAsset: (id) => sb(`assets?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
@@ -125,7 +125,7 @@ const api = {
   getActionHist: () => sb("action_history?order=id.desc&limit=100"),
   addActionHist: (d) => sb("action_history", { method: "POST", body: JSON.stringify(d) }),
   clearActionHist: () => sb("action_history?id=gt.0", { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
-  getOrders: (bid) => sb(`order_requests?order=id.desc${bid ? `&branch_id=eq.${bid}` : ""}`),
+  getOrders: (bid) => sb(`order_requests?order=id.desc&limit=400${bid ? `&branch_id=eq.${bid}` : ""}`),
   // Area-approval inbox: rows held at "pending_approval" in both order tables
   getPendingApprovalOrders: () => sb(`order_requests?status=eq.pending_approval&order=id.desc`),
   getPendingApprovalPOs: () => sb(`purchase_orders?status=eq.pending_approval&order=id.desc`),
@@ -145,7 +145,7 @@ const api = {
     return res;
   },
   deleteOrder: (id) => sb(`order_requests?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
-  getAllOrders: () => sb("order_requests?order=id.desc"),
+  getAllOrders: () => sb("order_requests?order=id.desc&limit=600"),
   // POS
   getPOSTables: (bid) => sb(`tables?order=table_number.asc&branch_id=eq.${bid}&active=eq.true`),
   // Rotate QR token for a single table (cuts off any leaked / stale QRs)
@@ -169,7 +169,7 @@ const api = {
   addPrinter: (d) => sb("printers", {method:"POST", body:JSON.stringify(d)}),
   updatePrinter: (id,d) => sb(`printers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deletePrinter: (id) => sb(`printers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
-  getActiveOrders: (bid) => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${bid}`),
+  getActiveOrders: (bid) => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${bid}&limit=200`),
   getOrderByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&select=id,items,status,created_at,subtotal,discount,total&order=created_at.desc&limit=1`),
   createPOSOrder: (d) => sb("orders", { method:"POST", body:JSON.stringify(d) }),
   updatePOSOrder: (id, d) => sb(`orders?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
@@ -210,7 +210,7 @@ const api = {
     throw new Error("มีผู้สั่งพร้อมกันจำนวนมาก — กรุณาลองใหม่อีกครั้ง");
   },
   // CRM
-  getCRMCustomers: (bid) => sb(`crm_customers?order=id.desc${bid?`&branch_id=eq.${bid}`:""}`),
+  getCRMCustomers: (bid) => sb(`crm_customers?order=id.desc&limit=5000${bid?`&branch_id=eq.${bid}`:""}`),
   addCRMCustomer: (d) => sb("crm_customers", {method:"POST", body:JSON.stringify(d)}),
   updateCRMCustomer: (id,d) => sb(`crm_customers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deleteCRMCustomer: (id) => sb(`crm_customers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
@@ -278,7 +278,7 @@ const api = {
   deleteExternalSalesBy: (branchId,date) => sb(`external_sales?branch_id=eq.${+branchId}&sale_date=eq.${date}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   // Purchase Orders
   getPOs: (filters={}) => {
-    const q=["order=po_date.desc,id.desc"];
+    const q=["order=po_date.desc,id.desc","limit=1000"];
     // viewerBranchId = branch sees POs where it is sender OR receiver
     if(filters.viewerBranchId!=null)q.push(`or=(from_branch_id.eq.${filters.viewerBranchId},branch_id.eq.${filters.viewerBranchId})`);
     if(filters.fromBranchId!=null)q.push(`from_branch_id=eq.${filters.fromBranchId}`);
@@ -1028,7 +1028,7 @@ function Thumb({src,alt="",w,h,size=32,radius=7,iconBg,iconColor,icon,iconSize,s
   const[err,setErr]=useState(false);
   const ph=<div style={{width:W,height:H,borderRadius:radius,background:iconBg||C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,...style}}><Ic d={icon||I.leaf} s={iconSize||Math.max(12,Math.round(Math.min(W,H)*0.5))} c={iconColor||C.green}/></div>;
   if(!src||err)return ph;
-  return <img src={src} alt={alt} onError={()=>setErr(true)} style={{width:W,height:H,objectFit:"cover",borderRadius:radius,flexShrink:0,...imgStyle}}/>;
+  return <img src={src} alt={alt} loading="lazy" decoding="async" onError={()=>setErr(true)} style={{width:W,height:H,objectFit:"cover",borderRadius:radius,flexShrink:0,...imgStyle}}/>;
 }
 
 // Number stepper — left = decrement, right = increment, center = direct input.
@@ -1056,11 +1056,15 @@ function NumStepper({value,onChange,onBlur,step=1,min=0,max,placeholder,inputSty
 function ErrBox({msg,onRetry}){return <div style={{background:C.redLight,border:`1px solid ${C.red}22`,borderRadius:12,padding:"16px 20px",display:"flex",alignItems:"center",gap:12,margin:"16px 0"}}><Ic d={I.warning} s={20} c={C.red}/><span style={{flex:1,color:C.red,fontFamily:"'Sarabun',sans-serif",fontSize:14}}>{msg}</span>{onRetry&&<Btn v="danger" onClick={onRetry} s={{padding:"6px 14px",fontSize:12}}>ลองใหม่</Btn>}</div>;}
 function STh({label,col,sortCol,sortDir,onSort}){const active=sortCol===col;return <th onClick={()=>onSort(col)} style={{padding:"10px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:active?C.brand:C.ink3,cursor:"pointer",whiteSpace:"nowrap",userSelect:"none",background:active?C.brandLight:C.bg}}><div style={{display:"flex",alignItems:"center",gap:4}}>{label}<Ic d={active?(sortDir==="asc"?I.sortAsc:I.sortDesc):I.sortAsc} s={12} c={active?C.brand:C.ink4}/></div></th>;}
 
-async function compressImage(file,maxW=1600,quality=0.88){return new Promise(resolve=>{const img=new Image();const url=URL.createObjectURL(file);img.onload=()=>{const scale=Math.min(1,maxW/Math.max(img.width,img.height));const w=Math.round(img.width*scale);const h=Math.round(img.height*scale);const canvas=document.createElement("canvas");canvas.width=w;canvas.height=h;const ctx=canvas.getContext("2d");ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";ctx.drawImage(img,0,0,w,h);canvas.toBlob(blob=>{URL.revokeObjectURL(url);resolve(blob);},"image/jpeg",quality);};img.src=url;});}
+async function compressImage(file,maxW=1000,quality=0.7){return new Promise(resolve=>{const img=new Image();const url=URL.createObjectURL(file);img.onerror=()=>{URL.revokeObjectURL(url);resolve(file);};img.onload=()=>{const scale=Math.min(1,maxW/Math.max(img.width,img.height));const w=Math.round(img.width*scale);const h=Math.round(img.height*scale);const canvas=document.createElement("canvas");canvas.width=w;canvas.height=h;const ctx=canvas.getContext("2d");ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";ctx.drawImage(img,0,0,w,h);
+  // Prefer WebP (~30% smaller at equal quality); fall back to JPEG where the
+  // browser can't encode WebP (toDataURL returns a non-webp type then).
+  const type=canvas.toDataURL("image/webp").indexOf("data:image/webp")===0?"image/webp":"image/jpeg";
+  canvas.toBlob(blob=>{URL.revokeObjectURL(url);resolve(blob||file);},type,quality);};img.src=url;});}
 
 function ImgUp({value,onChange,label,compact}){
   const ref=useRef();const[uploading,setUploading]=useState(false);
-  const h=async e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>10*1024*1024){alert("รูปต้องไม่เกิน 10MB");return;}setUploading(true);try{const compressed=await compressImage(f,800,0.75);const path=`${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;const url=await api.uploadImage(new File([compressed],path,{type:"image/jpeg"}),path);onChange(url);}catch(err){alert("อัปโหลดรูปไม่สำเร็จ: "+err.message);}setUploading(false);e.target.value="";};
+  const h=async e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>10*1024*1024){alert("รูปต้องไม่เกิน 10MB");return;}setUploading(true);try{const compressed=await compressImage(f,1000,0.7);const type=compressed.type||"image/jpeg";const ext=type==="image/webp"?"webp":type==="image/png"?"png":"jpg";const path=`${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;const url=await api.uploadImage(new File([compressed],path,{type}),path);onChange(url);}catch(err){alert("อัปโหลดรูปไม่สำเร็จ: "+err.message);}setUploading(false);e.target.value="";};
   return <div style={{marginBottom:compact?0:16}}>{label&&!compact&&<div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>{label}</div>}
     <div style={{display:"flex",alignItems:"center",gap:12}}>
       {value?<div style={{position:"relative"}}><img src={value} alt="" style={{width:compact?44:96,height:compact?44:96,objectFit:"cover",borderRadius:compact?8:14,border:`2px solid ${C.line}`}}/><button onClick={()=>onChange(null)} style={{position:"absolute",top:-7,right:-7,width:20,height:20,borderRadius:"50%",background:C.red,border:`2px solid ${C.white}`,color:C.white,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>✕</button></div>
@@ -2131,6 +2135,13 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     if(isCentral)return m.category===selCat;
     return (m.local_categories||{})[currentBranch?.id]===selCat;
   });},[menus,q,isCentral,currentBranch,selCat]);
+  // Per-menu cost memoized: build an id→ingredient Map once, then a menu.id→cost
+  // Map. The card grid used to re-run an O(menus×ings) `ings.find` scan on every
+  // render — i.e. every keystroke in the search box and every orders-poll-driven
+  // `ings` change — which janked typing. Now it's computed once per data change.
+  const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(i.id,i));return m;},[ings]);
+  const costByMenu=useMemo(()=>{const m=new Map();(menus||[]).forEach(mn=>m.set(mn.id,(mn.ingredients||[]).reduce((s,x)=>{const i=ingById.get(x.ingredientId);if(!i)return s;const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;return s+ppg*x.amountGram;},0)));return m;},[menus,ingById]);
+  const mcost=(menu)=>costByMenu.has(menu.id)?costByMenu.get(menu.id):menuCost(menu,ings);
   // Empty search → empty list (no point dumping every ingredient).
   const filteredIngs=useMemo(()=>{
     const q=(ingQ||"").trim().toLowerCase();
@@ -2210,9 +2221,9 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
       <div style={{fontSize:13}}>{q.trim()?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูในหมวดนี้"}</div>
     </div>}
     <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(4,minmax(0,1fr))",gap:16}}>
-      {filtered.map(menu=>{const cost=menuCost(menu,ings);const profit=menu.price-cost;const mg=menu.price>0?profit/menu.price*100:0;const mc=marginColor(mg);return <Card key={menu.id} hover style={{overflow:"hidden"}}>
+      {filtered.map(menu=>{const cost=mcost(menu);const profit=menu.price-cost;const mg=menu.price>0?profit/menu.price*100:0;const mc=marginColor(mg);return <Card key={menu.id} hover style={{overflow:"hidden"}}>
         <div style={{height:5,background:`linear-gradient(90deg,${mc},${mc}66)`}}/>
-        {menu.image?<img src={menu.image} alt={menu.name} style={{width:"100%",height:130,objectFit:"cover"}}/>:<div style={{height:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/></div>}
+        {menu.image?<img src={menu.image} alt={menu.name} loading="lazy" decoding="async" style={{width:"100%",height:130,objectFit:"cover"}}/>:<div style={{height:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/></div>}
         <div style={{padding:"12px 16px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
             <div><div style={{fontWeight:800,fontSize:16,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{menu.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>{canE?<select value={menu.category||""} onClick={e=>e.stopPropagation()} onChange={async e=>{try{await api.updateMenu(menu.id,{category:e.target.value});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} title="เปลี่ยนหมวดหมู่ของเมนูนี้" style={{fontSize:11,fontWeight:800,color:C.blue,background:C.blueLight,border:`1px solid ${C.blue}40`,borderRadius:20,padding:"3px 9px",fontFamily:"'Sarabun',sans-serif",cursor:"pointer",maxWidth:160}}><option value="">— ไม่มีหมวด —</option>{localCats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}{menu.category&&!localCats.some(c=>c.name===menu.category)&&<option value={menu.category}>{menu.category}</option>}</select>:<Chip color="blue">{menu.category}</Chip>}{menu.code&&<span style={{fontSize:10,fontWeight:800,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"1px 7px",borderRadius:8,fontFamily:"monospace",whiteSpace:"nowrap"}}>🔖 {menu.code}</span>}</div></div>
@@ -7374,7 +7385,7 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(300px,100%),1fr))",gap:14}}>
       {filtered.map(a=>{const d=assetDeprec(a);const st=stOf(a.status||"active");return <Card key={a.id} style={{overflow:"hidden"}}>
         <div style={{display:"flex",gap:12,padding:"12px 14px"}}>
-          {a.image?<img src={a.image} alt="" style={{width:74,height:74,objectFit:"cover",borderRadius:12,border:`1px solid ${C.line}`,flexShrink:0}}/>:<div style={{width:74,height:74,borderRadius:12,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={28} c={C.line}/></div>}
+          {a.image?<img src={a.image} alt="" loading="lazy" decoding="async" style={{width:74,height:74,objectFit:"cover",borderRadius:12,border:`1px solid ${C.line}`,flexShrink:0}}/>:<div style={{width:74,height:74,borderRadius:12,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={28} c={C.line}/></div>}
           <div style={{minWidth:0,flex:1}}>
             <div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"flex-start"}}>
               <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</div>
@@ -11204,7 +11215,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       <div style={{flex:1,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
         {filtered.map(m=>{const soldOut=(m.availability||{})[branch?.id]==="sold_out";return <div key={m.id} onClick={()=>{if(soldOut)return;pickOrAdd(m);}} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:soldOut?"not-allowed":"pointer",textAlign:"center",transition:"all .15s",position:"relative",opacity:soldOut?.55:1}} onMouseEnter={e=>{if(soldOut)return;e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
           {soldOut?<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:"#92400E",background:"#FEF3C7",borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif",border:"1px solid #F59E0B"}}>วันนี้หมด</span>:menuHasOptions(m,branch?.id,optionLib)&&<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
-          {m.image?<img src={m.image} alt={m.name} style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>:<div style={{height:40,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={26} c={soldOut?C.ink4:C.brand}/></div>}
+          {m.image?<img src={m.image} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>:<div style={{height:40,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={26} c={soldOut?C.ink4:C.brand}/></div>}
           <div style={{fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3}}>{m.name}</div>
           <div style={{fontSize:13,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
         </div>;})}
@@ -11550,7 +11561,7 @@ function CustomerPage({branchId,tableId,token}){
       <div style={{flex:1,overflowY:"auto",padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,alignContent:"start"}}>
         {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
           <div style={{position:"relative",width:"100%",height:130,flexShrink:0}}>
-            {m.image?<img src={m.image} alt={m.name} style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
+            {m.image?<img src={m.image} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
             {soldOut&&<span style={{position:"absolute",top:6,left:6,fontSize:10,fontWeight:700,color:"#92400E",background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:10,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>วันนี้หมด</span>}
             {hasOpts&&!soldOut&&<span style={{position:"absolute",top:6,right:6,fontSize:9.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:10,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
           </div>
