@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } from "react";
-import * as XLSX from "xlsx";
+// xlsx is ~130KB gzip and only used in import/export handlers — never on first
+// paint. Load it on demand (one cached dynamic import) so it stays OUT of the
+// boot chunk that every visitor downloads, including the customer QR-scan
+// (?scan=1) and POS PIN (?pos=1) routes that can never import/export.
+let _xlsxMod;
+const loadXLSX=async()=>{ if(!_xlsxMod){ const m=await import("xlsx"); _xlsxMod=(m&&m.utils)?m:((m&&m.default)||m); } return _xlsxMod; };
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
@@ -1162,8 +1167,9 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
   function handleXlsxFile(e){
     const f=e.target.files?.[0];if(!f)return;
     const r=new FileReader();
-    r.onload=ev=>{
+    r.onload=async ev=>{
       try{
+        const XLSX=await loadXLSX();
         const wb=XLSX.read(ev.target.result,{type:"array"});
         // Read EVERY sheet — export splits by หมวดหมู่ into one sheet per category.
         // Concatenate row arrays and, if a row's category cell is blank, use the
@@ -1472,8 +1478,9 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
   function handleXlsxFile(e){
     const f=e.target.files?.[0];if(!f)return;
     const r=new FileReader();
-    r.onload=ev=>{
+    r.onload=async ev=>{
       try{
+        const XLSX=await loadXLSX();
         const wb=XLSX.read(ev.target.result,{type:"array"});
         const ws=wb.Sheets[wb.SheetNames[0]];
         const json=XLSX.utils.sheet_to_json(ws,{defval:""});
@@ -1786,8 +1793,9 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     await reload();setOpen(false);
   }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
-  function exportXlsx(){
+  async function exportXlsx(){
     if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
+    const XLSX=await loadXLSX();
     const branchName=currentBranch?.name||"";
     const stockCol=`📦 สต๊อก${branchName?` (${branchName})`:""}`;
     const colWidths=[{wch:6},{wch:14},{wch:32},{wch:18},{wch:10},{wch:11},{wch:12},{wch:14},{wch:12},{wch:18},{wch:20},{wch:25}];
@@ -2169,8 +2177,9 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   }
   async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,code:(form.code||"").trim()||null,category:form.category||selCat||"",price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{await api.addMenu(item);addH(`เพิ่มเมนู: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบเมนู",message:`ต้องการลบเมนู "${name}" ใช่หรือไม่?`}))return;try{await api.deleteMenu(id);addH(`ลบเมนู: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
-  function exportXlsx(){
+  async function exportXlsx(){
     if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
+    const XLSX=await loadXLSX();
     const rows=filtered.map((m,i)=>{const cost=menuCost(m,ings);const profit=(+m.price||0)-cost;const mg=m.price>0?profit/m.price*100:0;return{
       "ลำดับ":i+1,
       "🔖 รหัส":m.code||"",
@@ -3127,8 +3136,9 @@ ${action==='pdf'?"window.addEventListener('load',function(){setTimeout(savePDF,4
 }
 
 // Export PO list to Excel
-function exportPOsToExcel(pos,branchById){
+async function exportPOsToExcel(pos,branchById){
   if(!pos||pos.length===0){alert("ไม่มีข้อมูลให้ Export");return;}
+  const XLSX=await loadXLSX();
   const stL={open:"รอจัดส่ง",requested:"รอครัวกลางรับ",shipped:"จัดส่งแล้ว",awaiting_payment:"รอชำระเงิน",paid:"จ่ายแล้ว",received:"จ่ายแล้ว",disputed:"ส่งกลับ",cancelled:"ยกเลิก",transfer_pending:"รอจัดส่ง (โอน)",transfer_shipped:"จัดส่งแล้ว (โอน)",transfer_done:"โอนเสร็จสิ้น"};
   const isTransfer=po=>po.status==="transfer_pending"||po.status==="transfer_shipped"||po.status==="transfer_done";
   const summary=pos.map(po=>({
@@ -3193,6 +3203,7 @@ function FSImportModal({branches,currentUser,onClose,onDone}){
     if(!/\.xlsx?$/i.test(f.name)){alert("กรุณาเลือกไฟล์ .xlsx เท่านั้น");return;}
     try{
       const buf=await f.arrayBuffer();
+      const XLSX=await loadXLSX();
       const wb=XLSX.read(buf,{type:'array'});
       const ws=wb.Sheets[wb.SheetNames[0]];
       const data=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
@@ -3355,7 +3366,8 @@ async function generateCostSnapshot({branchId,date,menus,ings,currentUser}){
   });
 }
 // Export a single saved snapshot's items as a 1-sheet Excel file
-function exportSnapshotXlsx(snapshot,branchName){
+async function exportSnapshotXlsx(snapshot,branchName){
+  const XLSX=await loadXLSX();
   const items=Array.isArray(snapshot.items)?snapshot.items:[];
   const rows=items.map((it,i)=>{
     const rev=+it.revenue||0,cost=+it.cost||0;
@@ -3551,8 +3563,9 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
     setCreating(null);
   }
 
-  function exportXlsx(){
+  async function exportXlsx(){
     if(rows.length===0){alert("ไม่มีข้อมูลให้ export");return;}
+    const XLSX=await loadXLSX();
     const sheet1=pivot.map(p=>{
       const o={"เมนู":p.menu_name,"หมวด":p.category||"","จับคู่ระบบ":p.matched?"✅":"❌"};
       dates.forEach(d=>{o[d]=p.cells.get(d)||0;});
