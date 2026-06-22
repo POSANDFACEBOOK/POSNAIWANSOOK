@@ -308,17 +308,29 @@ const api = {
     if (!res.ok) throw new Error(await res.text());
     return `${SUPA_URL}/storage/v1/object/public/foodcost-images/${path}`;
   },
-  // Private slip upload — returns the storage *path* only (not a public URL)
+  // Private slip upload — stores in the company Google Shared Drive (frees Supabase
+  // for scaling) and returns a "drive:<id>" reference. Falls back to the Supabase
+  // private bucket (bare path) if Drive is unavailable, so upload never breaks.
   uploadSlip: async (file, path) => {
+    try {
+      const r = await fetch(`/api/drive-upload?name=${encodeURIComponent(path)}`, {
+        method: "POST", headers: { "Content-Type": file.type || "image/jpeg" }, body: file,
+      });
+      if (r.ok) { const d = await r.json().catch(() => ({})); if (d && d.id) return `drive:${d.id}`; }
+    } catch {}
+    // Fallback: Supabase private bucket (original behavior)
     const res = await fetch(`${SUPA_URL}/storage/v1/object/po-slips-private/${path}`, {
       method: "POST", headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": file.type, "x-upsert": "true" }, body: file,
     });
     if (!res.ok) throw new Error(await res.text());
     return path;  // Caller stores this path; viewing requires getSlipSignedUrl
   },
-  // Get a short-lived signed URL to view a private slip
+  // Get a viewable URL for a slip. Drive-stored slips resolve to our authenticated
+  // proxy; legacy Supabase slips keep working unchanged.
   getSlipSignedUrl: async (pathOrUrl, expiresIn=3600) => {
     if(!pathOrUrl)return null;
+    // Drive-stored slips → authenticated proxy (relative URL; never a public hotlink)
+    if(/^drive:/.test(pathOrUrl))return `/api/drive-view?id=${encodeURIComponent(pathOrUrl.slice(6))}`;
     // Backward compat: legacy slips were saved as full URLs to the public bucket
     if(/^https?:\/\//.test(pathOrUrl))return pathOrUrl;
     const res = await fetch(`${SUPA_URL}/storage/v1/object/sign/po-slips-private/${pathOrUrl}`, {
@@ -4272,7 +4284,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       // Sign the slip path with a 1-year expiry so SlipTrack can render the image.
       // The user can re-sign from FoodCost if it ever expires.
       let signedSlipUrl=null;
-      try{signedSlipUrl=await api.getSlipSignedUrl(slipUrl,31536000);}catch{}
+      try{signedSlipUrl=await api.getSlipSignedUrl(slipUrl,31536000);if(signedSlipUrl&&signedSlipUrl.startsWith("/"))signedSlipUrl=location.origin+signedSlipUrl;}catch{}
       // Stage 2 → SlipTrack: flip the same external_id from pending → confirmed (จ่ายแล้ว)
       pushPOToSlipTrack(po,branches,{paid:true,paidAt,slipUrl:signedSlipUrl,paymentNote:note});
       await load();setViewPO(null);
@@ -7646,7 +7658,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
       await pushPOToSlipTrack({...po},branches);            // Stage 1
       let signedSlipUrl=null;
       if(po.payment_slip_url){
-        try{signedSlipUrl=await api.getSlipSignedUrl(po.payment_slip_url,31536000);}catch{}
+        try{signedSlipUrl=await api.getSlipSignedUrl(po.payment_slip_url,31536000);if(signedSlipUrl&&signedSlipUrl.startsWith("/"))signedSlipUrl=location.origin+signedSlipUrl;}catch{}
       }
       const r2=await pushPOToSlipTrack({...po},branches,{   // Stage 2
         paid:true,
