@@ -11,10 +11,18 @@ import { JWT } from "google-auth-library";
 const SA_B64 = process.env.GOOGLE_SA_KEY_B64 || "";
 const VIEW_TOKEN = process.env.DRIVE_VIEW_TOKEN || "";
 
+// Accept the SA key as EITHER base64-encoded JSON OR raw JSON pasted directly.
+function loadSA() {
+  const raw = (SA_B64 || "").trim();
+  if (!raw) throw new Error("GOOGLE_SA_KEY_B64 not set");
+  try { return JSON.parse(raw); } catch {}
+  try { return JSON.parse(Buffer.from(raw, "base64").toString("utf8")); } catch {}
+  throw new Error("GOOGLE_SA_KEY_B64 is neither valid JSON nor base64-encoded JSON");
+}
 let _jwt;
 async function accessToken() {
   if (!_jwt) {
-    const sa = JSON.parse(Buffer.from(SA_B64, "base64").toString("utf8"));
+    const sa = loadSA();
     _jwt = new JWT({ email: sa.client_email, key: sa.private_key, scopes: ["https://www.googleapis.com/auth/drive.file"] });
   }
   const { token } = await _jwt.getAccessToken();
