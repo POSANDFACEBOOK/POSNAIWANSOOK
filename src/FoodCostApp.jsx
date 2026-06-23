@@ -7327,7 +7327,7 @@ function assetDeprec(a){
   return {unit,qty,cost:gross,salvage,life,perYear,perMonth,months,accum,book:gross-accum,pct:base>0?Math.min(100,accum/base*100):0};
 }
 function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],allCats=[],reloadCats}){
-  const A0={name:"",category:"",image:null,quantity:"1",acquired_date:todayBkk(),cost:"",salvage_value:"",useful_life_years:"5",status:"active",assignee:"",location:"",note:""};
+  const A0={name:"",category:"",image:null,quantity:"1",acquired_date:todayBkk(),cost:"",salvage_value:"",useful_life_years:"5",status:"active",assignee:"",location:"",width_cm:"",length_cm:"",height_cm:"",weight_kg:"",vendor:"",lead_time:"",note:""};
   const[form,setForm]=useState(A0);
   const[editId,setEditId]=useState(null);
   const[showForm,setShowForm]=useState(false);
@@ -7352,13 +7352,21 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
   }),[myList,q,fStatus,selCat]);
   const totals=useMemo(()=>{let cost=0,accum=0,book=0;myList.forEach(a=>{if((a.status||"active")==="disposed")return;const d=assetDeprec(a);cost+=d.cost;accum+=d.accum;book+=d.book;});return {cost,accum,book};},[myList]);
   function openAdd(){setForm(A0);setEditId(null);setShowForm(true);}
-  function openEdit(a){setForm({name:a.name||"",category:a.category||"",image:a.image||null,quantity:a.quantity==null?"1":String(a.quantity),acquired_date:a.acquired_date||todayBkk(),cost:a.cost==null?"":String(a.cost),salvage_value:a.salvage_value==null?"":String(a.salvage_value),useful_life_years:a.useful_life_years==null?"":String(a.useful_life_years),status:a.status||"active",assignee:a.assignee||"",location:a.location||"",note:a.note||""});setEditId(a.id);setShowForm(true);}
+  function openEdit(a){setForm({name:a.name||"",category:a.category||"",image:a.image||null,quantity:a.quantity==null?"1":String(a.quantity),acquired_date:a.acquired_date||todayBkk(),cost:a.cost==null?"":String(a.cost),salvage_value:a.salvage_value==null?"":String(a.salvage_value),useful_life_years:a.useful_life_years==null?"":String(a.useful_life_years),status:a.status||"active",assignee:a.assignee||"",location:a.location||"",width_cm:a.width_cm==null?"":String(a.width_cm),length_cm:a.length_cm==null?"":String(a.length_cm),height_cm:a.height_cm==null?"":String(a.height_cm),weight_kg:a.weight_kg==null?"":String(a.weight_kg),vendor:a.vendor||"",lead_time:a.lead_time||"",note:a.note||""});setEditId(a.id);setShowForm(true);}
   function closeForm(){setShowForm(false);setForm(A0);setEditId(null);}
   async function save(){
     if(!form.name.trim()){alert("กรุณาใส่ชื่อสินทรัพย์");return;}
     setSaving(true);
     try{
       const row={name:form.name.trim(),category:form.category||null,image:form.image||null,quantity:+form.quantity||1,acquired_date:form.acquired_date||null,cost:+form.cost||0,salvage_value:+form.salvage_value||0,useful_life_years:+form.useful_life_years||0,status:form.status||"active",assignee:form.assignee||null,location:form.location||null,note:form.note||null};
+      // Extra spec/purchase fields — only sent when filled, so saving keeps working
+      // even before the new DB columns are added (run the ALTER TABLE once to persist them).
+      if(form.width_cm!=="")row.width_cm=+form.width_cm||0;
+      if(form.length_cm!=="")row.length_cm=+form.length_cm||0;
+      if(form.height_cm!=="")row.height_cm=+form.height_cm||0;
+      if(form.weight_kg!=="")row.weight_kg=+form.weight_kg||0;
+      if((form.vendor||"").trim())row.vendor=form.vendor.trim();
+      if((form.lead_time||"").trim())row.lead_time=form.lead_time.trim();
       if(editId)await api.updateAsset(editId,row);
       else await api.addAsset({...row,branch_id:currentBranch.id});
       await reloadAssets();closeForm();posToast("✅ บันทึกสินทรัพย์แล้ว","ok");
@@ -7425,6 +7433,7 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
               <span style={{fontSize:10.5,fontWeight:800,color:st.c,background:`${st.c}22`,padding:"2px 8px",borderRadius:20,fontFamily:"'Sarabun',sans-serif"}}>{st.l}</span>
             </div>
             {(a.assignee||a.location)&&<div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:5}}>{a.assignee?`👤 ${a.assignee}`:""}{a.assignee&&a.location?" · ":""}{a.location?`📍 ${a.location}`:""}</div>}
+            {(a.width_cm||a.length_cm||a.height_cm||a.weight_kg||a.vendor||a.lead_time)&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:3}}>{[(a.width_cm||a.length_cm||a.height_cm)?`📐 ${a.width_cm||"-"}×${a.length_cm||"-"}×${a.height_cm||"-"} ซม.`:"",a.weight_kg?`⚖️ ${a.weight_kg} กก.`:"",a.vendor?`🏪 ${a.vendor}`:"",a.lead_time?`⏱️ ${a.lead_time}`:""].filter(Boolean).join(" · ")}</div>}
             {a.acquired_date&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>📅 ได้มา {new Date(a.acquired_date+"T00:00:00").toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"})}</div>}
           </div>
         </div>
@@ -7450,6 +7459,12 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
         <Field label="มูลค่าซาก (บาท)"><NumInput value={form.salvage_value} onValue={v=>setForm(f=>({...f,salvage_value:v}))} placeholder="0" style={iS}/></Field>
         <Inp label="👤 ผู้รับผิดชอบ" value={form.assignee} onChange={e=>setForm(f=>({...f,assignee:e.target.value}))} placeholder="ชื่อพนักงาน"/>
         <Inp label="📍 ที่ตั้ง" value={form.location} onChange={e=>setForm(f=>({...f,location:e.target.value}))} placeholder="เช่น ครัว, หน้าร้าน"/>
+        <Field label="↔️ กว้าง (ซม.)"><NumInput value={form.width_cm} onValue={v=>setForm(f=>({...f,width_cm:v}))} placeholder="0" style={iS}/></Field>
+        <Field label="📐 ยาว (ซม.)"><NumInput value={form.length_cm} onValue={v=>setForm(f=>({...f,length_cm:v}))} placeholder="0" style={iS}/></Field>
+        <Field label="📏 สูง (ซม.)"><NumInput value={form.height_cm} onValue={v=>setForm(f=>({...f,height_cm:v}))} placeholder="0" style={iS}/></Field>
+        <Field label="⚖️ น้ำหนัก (กก.)"><NumInput value={form.weight_kg} onValue={v=>setForm(f=>({...f,weight_kg:v}))} placeholder="0" style={iS}/></Field>
+        <Inp label="🏪 ร้านที่ซื้อ" value={form.vendor} onChange={e=>setForm(f=>({...f,vendor:e.target.value}))} placeholder="ชื่อร้าน / ผู้ขาย"/>
+        <Inp label="⏱️ ระยะเวลาการสั่งซื้อ" value={form.lead_time} onChange={e=>setForm(f=>({...f,lead_time:e.target.value}))} placeholder="เช่น 3-5 วัน"/>
         <Inp label="หมายเหตุ" value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))} placeholder="ยี่ห้อ / รุ่น / เลขเครื่อง"/>
       </div>
       {(+form.cost>0&&+form.useful_life_years>0)&&<div style={{background:C.greenLight,border:`1px solid ${C.green}44`,borderRadius:10,padding:"10px 14px",margin:"12px 0",fontFamily:"'Sarabun',sans-serif"}}>
