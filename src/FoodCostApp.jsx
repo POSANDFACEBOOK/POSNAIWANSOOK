@@ -7499,6 +7499,26 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
   async function del(a){if(!await confirmDlg({title:"ลบสินทรัพย์",message:`ต้องการลบ "${a.name}" ใช่หรือไม่?`,danger:true}))return;try{await api.deleteAsset(a.id);await reloadAssets();}catch(e){alert("ลบไม่สำเร็จ: "+(e&&e.message||e));}}
   const stOf=v=>ASSET_STATUS.find(s=>s.v===v)||ASSET_STATUS[0];
   const prev=assetDeprec(form);
+  // Export the CURRENTLY-FILTERED assets (category/status/search) to Excel — every
+  // field except the image, plus computed depreciation columns.
+  async function exportXlsx(){
+    if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
+    const XLSX=await loadXLSX();
+    const rows=filtered.map((a,i)=>{const d=assetDeprec(a);return{
+      "ลำดับ":i+1,"ชื่อสินทรัพย์":a.name||"","หมวด":a.category||"","สถานะ":stOf(a.status||"active").l,
+      "วันที่ได้มา":a.acquired_date||"","จำนวน":a.quantity==null?1:+a.quantity,
+      "ราคาทุน/หน่วย":+a.cost||0,"มูลค่าทุนรวม":+d.cost.toFixed(2),"มูลค่าซาก":+a.salvage_value||0,
+      "อายุการใช้งาน (ปี)":+a.useful_life_years||0,"ค่าเสื่อม/ปี":+d.perYear.toFixed(2),
+      "ค่าเสื่อมสะสม":+d.accum.toFixed(2),"มูลค่าคงเหลือ":+d.book.toFixed(2),
+      "กว้าง (ซม.)":a.width_cm??"","ยาว (ซม.)":a.length_cm??"","สูง (ซม.)":a.height_cm??"","น้ำหนัก (กก.)":a.weight_kg??"",
+      "ผู้รับผิดชอบ":a.assignee||"","ที่ตั้ง":a.location||"","ร้านที่ซื้อ":a.vendor||"","ระยะเวลาการสั่งซื้อ":a.lead_time||"","หมายเหตุ":a.note||"",
+    };});
+    const wb=XLSX.utils.book_new();const ws=XLSX.utils.json_to_sheet(rows);
+    ws["!cols"]=[{wch:6},{wch:28},{wch:16},{wch:12},{wch:12},{wch:8},{wch:12},{wch:13},{wch:11},{wch:14},{wch:11},{wch:13},{wch:13},{wch:10},{wch:10},{wch:10},{wch:11},{wch:18},{wch:16},{wch:18},{wch:18},{wch:24}];
+    XLSX.utils.book_append_sheet(wb,ws,"สินทรัพย์");
+    const tag=selCat==="ทั้งหมด"?"ทั้งหมด":selCat;
+    XLSX.writeFile(wb,`Assets_${(currentBranch?.name||"branch").replace(/\s+/g,"_")}_${tag.replace(/\s+/g,"_")}_${todayBkk()}.xlsx`);
+  }
   return <div>
     <div style={{background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:12,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
       <span style={{fontSize:18}}>🏷️</span>
@@ -7507,6 +7527,7 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
         <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>ค่าเสื่อมราคาแบบเส้นตรง — แต่ละสาขาเก็บสินทรัพย์ของตัวเอง</div>
       </div>
       {canE&&<Btn onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มสินทรัพย์</Btn>}
+      <Btn v="success" onClick={exportXlsx} disabled={filtered.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export</Btn>
     </div>
     {(canE||assetCats.length>0)&&<div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap",alignItems:"center",padding:"10px 14px",background:C.bg,borderRadius:14,border:`1px solid ${C.line}`}}>
       {catTabBtn("ทั้งหมด",selCat==="ทั้งหมด",()=>setSelCat("ทั้งหมด"))}
