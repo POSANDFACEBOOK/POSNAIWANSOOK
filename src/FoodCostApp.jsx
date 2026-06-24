@@ -1884,12 +1884,23 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
 // Stock-count history for one ingredient at the current branch — every saved count
 // from the นับสต็อก function (logged into stock_logs).
 function StockHistoryModal({ing,currentBranch,onClose}){
-  const[rows,setRows]=useState(null);
-  useEffect(()=>{let alive=true;api.getStockLogs(ing.id,currentBranch.id).then(d=>{if(alive)setRows(Array.isArray(d)?d:[]);}).catch(()=>{if(alive)setRows([]);});return()=>{alive=false;};},[ing.id]);// eslint-disable-line react-hooks/exhaustive-deps
+  const[rows,setRows]=useState(null);const[err,setErr]=useState(false);
+  const aliveRef=useRef(true);
+  useEffect(()=>{aliveRef.current=true;return()=>{aliveRef.current=false;};},[]);
+  async function load(){
+    setRows(null);setErr(false);
+    try{
+      // Race against a 10s timeout so a slow/hung request never sticks on "loading".
+      const d=await Promise.race([api.getStockLogs(ing.id,currentBranch.id),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),10000))]);
+      if(aliveRef.current)setRows(Array.isArray(d)?d:[]);
+    }catch{ if(aliveRef.current){setErr(true);setRows([]);} }
+  }
+  useEffect(()=>{load();},[ing.id]);// eslint-disable-line react-hooks/exhaustive-deps
   const fmtDt=s=>{try{return new Date(s).toLocaleString("th-TH",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch{return s||"";}};
   return <Modal title={`🕘 ประวัติการนับสต็อก — ${ing.name}`} onClose={onClose} wide>
     <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>สาขา: <b style={{color:C.ink2}}>{currentBranch?.name||"—"}</b> · บันทึกทุกครั้งที่กดบันทึกในหน้านับสต็อก</div>
     {rows===null?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
+    :err?<div style={{textAlign:"center",padding:"36px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>โหลดประวัติไม่สำเร็จ — เครือข่าย/เซิร์ฟเวอร์ช้า<div style={{marginTop:10}}><Btn v="ghost" onClick={load}>↻ ลองใหม่</Btn></div></div>
     :rows.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการนับสต็อก<br/><span style={{fontSize:12}}>ประวัติจะเริ่มบันทึกตั้งแต่การกดบันทึกครั้งถัดไป</span></div>
     :<div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:"60vh",overflowY:"auto",paddingRight:4}}>
       {rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{border:`1px solid ${C.line}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif"}}>
