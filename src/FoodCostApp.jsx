@@ -2017,7 +2017,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
       <Btn v="success" onClick={()=>setShowStockCheck(true)} icon={I.box}>📦 นับสต็อก</Btn>
-      <Btn v="ghost" onClick={()=>setShowWaste(true)} icon={I.trash} s={{color:C.red,borderColor:`${C.red}55`}}>🗑️ ของเสีย</Btn>
+      <Btn onClick={()=>setShowWaste(true)} icon={I.trash} s={{background:`linear-gradient(135deg,${C.red},#B91C1C)`,color:C.white,boxShadow:`0 4px 16px ${C.red}44`}}>🗑️ ของเสีย</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
