@@ -1814,7 +1814,7 @@ function WastePopup({ings=[],menus=[],currentBranch,currentUser,branches=[],onCl
   const[logs,setLogs]=useState([]);const[loadingLogs,setLoadingLogs]=useState(false);const[fBranch,setFBranch]=useState("");
   async function loadLogs(){setLoadingLogs(true);try{const d=await api.getWasteLogs();setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{setLogs([]);}setLoadingLogs(false);}
   useEffect(()=>{if(view==="history")loadLogs();},[view]);// eslint-disable-line react-hooks/exhaustive-deps
-  const scopeBranches=useMemo(()=>branches.filter(b=>inScope(b.id)),[branches,allowed]);// eslint-disable-line react-hooks/exhaustive-deps
+  const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false&&inScope(b.id)),[branches,allowed]);// eslint-disable-line react-hooks/exhaustive-deps
   const shownLogs=useMemo(()=>logs.filter(l=>!fBranch||+l.branch_id===+fBranch),[logs,fBranch]);
   async function delLog(l){if(!await confirmDlg({title:"ลบรายการของเสีย",message:`ลบ "${l.ingredient_name}" (${l.qty} ${l.unit||""}) ?`,danger:true}))return;try{await api.deleteWasteLog(l.id);loadLogs();}catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}}
   const tabBtn=(id,label)=>{const on=view===id;return <button onClick={()=>setView(id)} style={{padding:"8px 18px",borderRadius:20,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{label}</button>;};
