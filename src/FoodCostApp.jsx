@@ -1775,7 +1775,7 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
 
 // 🗑️ ของเสีย — record + history of wasted ingredients. Photos go to Google Drive.
 function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
-  const[view,setView]=useState("record");
+  const[showRecord,setShowRecord]=useState(true);            // auto-open the record popup on entering the tab
   // ── record form ──
   const[date,setDate]=useState(todayBkk());
   const[q,setQ]=useState("");const[sel,setSel]=useState(null);
@@ -1804,7 +1804,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
     try{
       await api.addWasteLog({branch_id:currentBranch.id,branch_name:currentBranch.name,log_date:date,item_type:isMenu?"menu":"ingredient",ingredient_id:sel.id,ingredient_name:sel.name,unit,qty:+qty,unit_price:unitPrice,total:price===""?round2((+qty||0)*unitPrice):+price,reason:(reason||"").trim()||null,images,created_by:currentUser?.username||currentUser?.name||""});
       posToast("✅ บันทึกของเสียแล้ว","ok");
-      setSel(null);setQ("");setQty("");setPrice("");setReason("");setImages([]);
+      setSel(null);setQ("");setQty("");setPrice("");setReason("");setImages([]);loadLogs();// reset for next entry + refresh history behind
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
     setSaving(false);
   }
@@ -1813,14 +1813,16 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
   const inScope=bid=>!allowed||allowed.map(x=>+x).includes(+bid);
   const[logs,setLogs]=useState([]);const[loadingLogs,setLoadingLogs]=useState(false);const[fBranch,setFBranch]=useState("");
   async function loadLogs(){setLoadingLogs(true);try{const d=await api.getWasteLogs();setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{setLogs([]);}setLoadingLogs(false);}
-  useEffect(()=>{if(view==="history")loadLogs();},[view]);// eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{loadLogs();},[]);// eslint-disable-line react-hooks/exhaustive-deps
+  function closeRecord(){setShowRecord(false);loadLogs();}   // close popup → land on the (refreshed) history page
   const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false&&inScope(b.id)),[branches,allowed]);// eslint-disable-line react-hooks/exhaustive-deps
   const shownLogs=useMemo(()=>logs.filter(l=>!fBranch||+l.branch_id===+fBranch),[logs,fBranch]);
   async function delLog(l){if(!await confirmDlg({title:"ลบรายการของเสีย",message:`ลบ "${l.ingredient_name}" (${l.qty} ${l.unit||""}) ?`,danger:true}))return;try{await api.deleteWasteLog(l.id);loadLogs();}catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}}
-  const tabBtn=(id,label)=>{const on=view===id;return <button onClick={()=>setView(id)} style={{padding:"8px 18px",borderRadius:20,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{label}</button>;};
   return <div>
-    <div style={{display:"flex",gap:8,marginBottom:16}}>{tabBtn("record","✍️ บันทึก")}{tabBtn("history","🗂️ ประวัติ")}</div>
-    {view==="record"&&<div style={{maxWidth:760}}>
+    <div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
+      <Btn onClick={()=>setShowRecord(true)} icon={I.plus} s={{background:`linear-gradient(135deg,${C.red},#B91C1C)`,color:C.white,boxShadow:`0 4px 16px ${C.red}44`}}>บันทึกของเสีย</Btn>
+    </div>
+    {showRecord&&<Modal title="🗑️ บันทึกของเสีย" onClose={closeRecord} wide>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <Inp label="📅 วันที่" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
         <Field label="🏪 สาขา"><div style={{...iS,display:"flex",alignItems:"center",background:C.bg,color:C.ink3}}>{currentBranch?.name||"—"}</div></Field>
@@ -1850,10 +1852,11 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
         <input ref={fileRef} type="file" accept="image/*" multiple onChange={onFiles} style={{display:"none"}}/>
       </div>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,marginTop:14,borderTop:`1px solid ${C.line}`}}>
-        <Btn v="danger" onClick={save} loading={saving} disabled={saving||uploading>0} icon={I.check}>บันทึกของเสีย</Btn>
+        <Btn v="ghost" onClick={closeRecord}>ปิด</Btn>
+        <Btn v="danger" onClick={save} loading={saving} disabled={saving||uploading>0} icon={I.check}>บันทึก</Btn>
       </div>
-    </div>}
-    {view==="history"&&<div>
+    </Modal>}
+    <div>
       {scopeBranches.length>1&&<div style={{marginBottom:12,maxWidth:280}}><Sel label="กรองสาขา" value={fBranch} onChange={e=>setFBranch(e.target.value)} options={[{v:"",l:"ทุกสาขา (ที่ดูแล)"},...scopeBranches.map(b=>({v:String(b.id),l:b.name}))]}/></div>}
       {loadingLogs?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
       :shownLogs.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีรายการของเสีย</div>
@@ -1873,7 +1876,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
           {Array.isArray(l.images)&&l.images.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>{l.images.map((ref,i)=><img key={i} src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" onClick={()=>window.open(driveImgSrc(ref),"_blank","noopener")} style={{width:56,height:56,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer"}}/>)}</div>}
         </div>)}
       </div>}
-    </div>}
+    </div>
   </div>;
 }
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[],menus=[]}){
