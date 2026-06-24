@@ -6301,7 +6301,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     if(mode!=="list")return;
     let alive=true;
     const tick=()=>{if(alive&&!document.hidden&&!pollSkipRef.current&&reloadRef.current)reloadRef.current();};
-    const id=setInterval(tick,waitingApproval?5000:20000);
+    const id=setInterval(tick,waitingApproval?10000:30000);
     const onVis=()=>{if(!document.hidden)tick();};
     document.addEventListener("visibilitychange",onVis);
     return()=>{alive=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};
@@ -7740,7 +7740,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
     }catch{}
     if(aliveRef.current&&!silent)setLoading(false);
   }
-  useEffect(()=>{aliveRef.current=true;prevRef.current=-1;load();const id=setInterval(()=>{if(!document.hidden)load(true);},12000);const onVis=()=>{if(!document.hidden)load(true);};document.addEventListener("visibilitychange",onVis);return()=>{aliveRef.current=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};},[]);// eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{aliveRef.current=true;prevRef.current=-1;load();const id=setInterval(()=>{if(!document.hidden)load(true);},20000);const onVis=()=>{if(!document.hidden)load(true);};document.addEventListener("visibilitychange",onVis);return()=>{aliveRef.current=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};},[]);// eslint-disable-line react-hooks/exhaustive-deps
   async function approveReq(o){setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"pending"});await logDecision("approved","ext",o);posToast("✅ อนุมัติแล้ว — สาขาส่งให้ซัพพลายต่อได้","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   async function approvePO(o){setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"requested",updated_at:new Date().toISOString()});await logDecision("approved","po",o);posToast("✅ อนุมัติแล้ว — ส่งให้ครัวกลางต่อ","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   async function rejectReq(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับออเดอร์ซัพพลาย "${o.supplier_name||""}" ของ ${branchName(o.branch_id)}?\nสาขาจะเห็นว่าถูกปฏิเสธ และนับสต็อกส่งใหม่ได้`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"rejected"});await logDecision("rejected","ext",o);posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
@@ -11716,7 +11716,7 @@ function CustomerPage({branchId,tableId,token}){
         setGateError(null);
         // Only start polling order state AFTER the gate passes — don't leak existence of orders to bad-token visitors
         loadMyOrder();
-        pollId=setInterval(()=>{if(!document.hidden)loadMyOrder();},15000);
+        pollId=setInterval(()=>{if(!document.hidden)loadMyOrder();},30000);
       }catch(e){console.error("scan gate",e);setGateError("bad_token");}
       setGateLoading(false);
     })();
@@ -13522,8 +13522,8 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   useEffect(()=>{
     stationPrimedRef.current=false;   // re-prime on mount and whenever station mode flips
     loadAll();
-    // The print station polls faster (6s) so kitchen tickets come out quickly; other devices stay light (15s).
-    const period=printStation?6000:15000;
+    // The print station polls faster (6s) so kitchen tickets come out quickly; other devices stay light (20s).
+    const period=printStation?6000:20000;
     timerRef.current=setInterval(()=>{if(!document.hidden)loadOrders();},period);
     const onVis=()=>{if(!document.hidden)loadOrders();};
     document.addEventListener("visibilitychange",onVis);
