@@ -123,6 +123,8 @@ const api = {
   addWasteLog: (d) => sb("waste_logs", { method: "POST", body: JSON.stringify(d) }),
   getWasteLogs: (bid) => sb(`waste_logs?order=log_date.desc,id.desc&limit=2000${bid ? `&branch_id=eq.${bid}` : ""}`),
   deleteWasteLog: (id) => sb(`waste_logs?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
+  addStockLog: (d) => sb("stock_logs", { method: "POST", body: JSON.stringify(d) }),
+  getStockLogs: (ingId, bid) => sb(`stock_logs?ingredient_id=eq.${ingId}&branch_id=eq.${bid}&order=counted_at.desc&limit=200`),
   addAsset: (d) => sb("assets", { method: "POST", body: JSON.stringify(d) }),
   updateAsset: (id, d) => sb(`assets?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteAsset: (id) => sb(`assets?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
@@ -1879,10 +1881,29 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
     </div>
   </div>;
 }
+// Stock-count history for one ingredient at the current branch — every saved count
+// from the นับสต็อก function (logged into stock_logs).
+function StockHistoryModal({ing,currentBranch,onClose}){
+  const[rows,setRows]=useState(null);
+  useEffect(()=>{let alive=true;api.getStockLogs(ing.id,currentBranch.id).then(d=>{if(alive)setRows(Array.isArray(d)?d:[]);}).catch(()=>{if(alive)setRows([]);});return()=>{alive=false;};},[ing.id]);// eslint-disable-line react-hooks/exhaustive-deps
+  const fmtDt=s=>{try{return new Date(s).toLocaleString("th-TH",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch{return s||"";}};
+  return <Modal title={`🕘 ประวัติการนับสต็อก — ${ing.name}`} onClose={onClose} wide>
+    <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>สาขา: <b style={{color:C.ink2}}>{currentBranch?.name||"—"}</b> · บันทึกทุกครั้งที่กดบันทึกในหน้านับสต็อก</div>
+    {rows===null?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
+    :rows.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการนับสต็อก<br/><span style={{fontSize:12}}>ประวัติจะเริ่มบันทึกตั้งแต่การกดบันทึกครั้งถัดไป</span></div>
+    :<div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:"60vh",overflowY:"auto",paddingRight:4}}>
+      {rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{border:`1px solid ${C.line}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:13.5,fontWeight:700,color:C.ink}}>{prev} → <b style={{color:C.brand}}>{nw}</b> {ing.buy_unit||""} <span style={{fontSize:11.5,fontWeight:800,color:delta>0?C.green:delta<0?C.red:C.ink4,marginLeft:4}}>{delta>0?`▲ +${delta}`:delta<0?`▼ ${delta}`:"±0"}</span></div>
+        <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(r.counted_at)} · โดย {r.counted_by||"—"}</div>
+      </div>;})}
+    </div>}
+  </Modal>;
+}
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[],menus=[]}){
   const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
   const[priceHistoryItem,setPriceHistoryItem]=useState(null);
+  const[stockHistItem,setStockHistItem]=useState(null);
   const ef={name:"",code:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
   const[form,setForm]=useState(ef);
   const isCentral=currentBranch?.type==="central";
@@ -2070,8 +2091,11 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
                 :<span style={{color:C.ink4,fontStyle:"italic"}}>ยังไม่มีประวัติ</span>}
               <span style={{marginLeft:"auto",color:C.ink4,fontSize:10,fontWeight:700}}>{hasHist?`เคยซื้อ ${r.count} ครั้ง`:"ดูประวัติ"} <span style={{color:txt}}>›</span></span>
             </button>;})()}
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              {(()=>{const bs=branchStock(item,currentBranch?.id);const safety=branchSafety(item,currentBranch?.id);const low=safety>0&&bs<safety;return <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>สต็อก ({currentBranch?.name||"—"}): <b style={{color:low?C.red:C.green}}>{bs} {item.buy_unit}</b>{safety>0&&<span style={{fontSize:10,color:C.ink4,marginLeft:4}}>· safety {safety}</span>}</span>;})()}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0,flexWrap:"wrap"}}>
+                {(()=>{const bs=branchStock(item,currentBranch?.id);const safety=branchSafety(item,currentBranch?.id);const low=safety>0&&bs<safety;return <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>สต็อก ({currentBranch?.name||"—"}): <b style={{color:low?C.red:C.green}}>{bs} {item.buy_unit}</b>{safety>0&&<span style={{fontSize:10,color:C.ink4,marginLeft:4}}>· safety {safety}</span>}</span>;})()}
+                <button onClick={()=>setStockHistItem(item)} title="ประวัติการนับสต๊อก" style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:7,padding:"2px 8px",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:3,fontSize:10,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0}}><Ic d={I.clock} s={11} c={C.ink3}/>ประวัติ</button>
+              </div>
               <EditedBy username={item.edit_by} editAt={item.edit_at}/>
             </div>
           </div>
@@ -2095,6 +2119,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     </>}
     {showImport&&<ImportIngModal onClose={()=>setShowImport(false)} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} ings={ings} onDone={async()=>{await reload();setShowImport(false);}}/>}
     {priceHistoryItem&&<PriceHistoryModal ing={priceHistoryItem} orders={orders} allOrders={allOrders} isCentral={isCentral} onClose={()=>setPriceHistoryItem(null)}/>}
+    {stockHistItem&&<StockHistoryModal ing={stockHistItem} currentBranch={currentBranch} onClose={()=>setStockHistItem(null)}/>}
     {open&&<Modal title={editId?"✏️ แก้ไขวัตถุดิบ":"➕ เพิ่มวัตถุดิบใหม่"} onClose={()=>setOpen(false)}>
       <ImgUp label="รูปวัตถุดิบ" value={form.image} onChange={v=>upd("image",v)}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:12}}>
@@ -2172,12 +2197,15 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
     if(raw===undefined||raw===""){alert("ใส่จำนวนก่อน");return;}
     const v=+raw;
     if(isNaN(v)||v<0){alert("จำนวนไม่ถูกต้อง");return;}
+    const prev=branchStock(ing,currentBranch.id);
     setSaving(s=>({...s,[ing.id]:true}));
     try{
       const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,v);
       // Per-branch count only updates the stock map; do NOT touch edit_by/
       // edit_at — those should reflect catalog edits (price/name/...) only.
       await api.updateIng(ing.id,{stock_by_branch:next});
+      // Log the count so the ingredient card can show its stock-count history (best-effort).
+      api.addStockLog({ingredient_id:ing.id,branch_id:currentBranch.id,prev_qty:prev,new_qty:v,counted_by:currentUser?.username||currentUser?.name||""}).catch(()=>{});
       if(reload)await reload();
       setEdits(e=>{const n={...e};delete n[ing.id];return n;});
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -2191,8 +2219,10 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
     for(const[id,v]of entries){
       const ing=ings.find(x=>+x.id===+id);if(!ing)continue;
       try{
+        const prev=branchStock(ing,currentBranch.id);
         const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0);
         await api.updateIng(+id,{stock_by_branch:next});
+        api.addStockLog({ingredient_id:+id,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:currentUser?.username||currentUser?.name||""}).catch(()=>{});
         ok.push(id);
       }catch(e){alert(`บันทึก ${ing.name} ไม่สำเร็จ: ${e.message}`);}
     }
