@@ -643,7 +643,7 @@ const ALL_PERMS=[
   {id:"history",label:"ประวัติต้นทุน"},
   {id:"suppliers",label:"ซัพพลาย"},
   {id:"assets",label:"สินทรัพย์"},
-  {id:"approve",label:"อนุมัติคำสั่งซื้อ (Area)"},
+  {id:"approve",label:"อนุมัติการสั่งของ"},
   {id:"kitchen_3d",label:"ครัว 3D"},
   {id:"settings",label:"ตั้งค่า"},
 ];
@@ -10029,8 +10029,8 @@ export default function App(){
   const addH=useCallback(async a=>{try{await api.addActionHist({action:a,time:nowStr()});await reload.action();}catch{}},[currentBranch]);
 
   const TABS=[
+    {id:"approve",l:"อนุมัติการสั่งของ",icon:I.check,perm:"approve"},
     {id:"pos",l:t("tab.pos"),icon:I.table,perm:"pos"},
-    {id:"approve",l:t("tab.approve"),icon:I.check,perm:"approve"},
     {id:"crm",l:t("tab.crm"),icon:I.users,perm:"crm"},
     {id:"ingredients",l:t("tab.ingredients"),icon:I.leaf,perm:"ingredients"},
     {id:"menus",l:t("tab.menus"),icon:I.fire,perm:"menus"},
