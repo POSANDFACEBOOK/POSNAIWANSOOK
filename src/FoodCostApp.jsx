@@ -120,6 +120,9 @@ const api = {
   deleteSupplier: (id) => sb(`suppliers?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   // Fixed assets (ทะเบียนสินทรัพย์) — per branch
   getAssets: () => sb("assets?order=id.desc&limit=1000"),
+  addWasteLog: (d) => sb("waste_logs", { method: "POST", body: JSON.stringify(d) }),
+  getWasteLogs: (bid) => sb(`waste_logs?order=log_date.desc,id.desc&limit=2000${bid ? `&branch_id=eq.${bid}` : ""}`),
+  deleteWasteLog: (id) => sb(`waste_logs?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   addAsset: (d) => sb("assets", { method: "POST", body: JSON.stringify(d) }),
   updateAsset: (id, d) => sb(`assets?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteAsset: (id) => sb(`assets?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
@@ -1079,6 +1082,20 @@ async function compressImage(file,maxW=1000,quality=0.7){return new Promise(reso
   const type=canvas.toDataURL("image/webp").indexOf("data:image/webp")===0?"image/webp":"image/jpeg";
   canvas.toBlob(blob=>{URL.revokeObjectURL(url);resolve(blob||file);},type,quality);};img.src=url;});}
 
+// Upload an image to Google Drive via the serverless proxy; returns a "drive:<id>" ref.
+// Used where we want images in Drive (6TB) instead of Supabase Storage (e.g. waste photos).
+async function uploadImageToDrive(file){
+  const blob=await compressImage(file,1280,0.8);
+  const type=blob.type||"image/jpeg";
+  const ext=type==="image/webp"?"webp":type==="image/png"?"png":"jpg";
+  const res=await fetch(`/api/drive-upload?name=${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`,{method:"POST",headers:{"Content-Type":type},body:blob});
+  if(!res.ok)throw new Error(await res.text());
+  const j=await res.json().catch(()=>({}));
+  if(!j.id)throw new Error("อัปโหลดไม่สำเร็จ");
+  return `drive:${j.id}`;
+}
+// Resolve an image ref (drive:<id> or a plain URL) to a viewable <img src>.
+function driveImgSrc(ref){ if(!ref)return ""; return /^drive:/.test(ref)?`/api/drive-view?id=${encodeURIComponent(ref.slice(6))}`:ref; }
 function ImgUp({value,onChange,label,compact}){
   const ref=useRef();const[uploading,setUploading]=useState(false);
   const h=async e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>10*1024*1024){alert("รูปต้องไม่เกิน 10MB");return;}setUploading(true);try{const compressed=await compressImage(f,1000,0.7);const type=compressed.type||"image/jpeg";const ext=type==="image/webp"?"webp":type==="image/png"?"png":"jpg";const path=`${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;const url=await api.uploadImage(new File([compressed],path,{type}),path);onChange(url);}catch(err){alert("อัปโหลดรูปไม่สำเร็จ: "+err.message);}setUploading(false);e.target.value="";};
@@ -1756,8 +1773,103 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
   </Modal>;
 }
 
+// 🗑️ ของเสีย — record + history of wasted ingredients. Photos go to Google Drive.
+function WastePopup({ings=[],currentBranch,currentUser,branches=[],onClose}){
+  const[view,setView]=useState("record");
+  // ── record form ──
+  const[date,setDate]=useState(todayBkk());
+  const[q,setQ]=useState("");const[sel,setSel]=useState(null);
+  const[qty,setQty]=useState("");const[price,setPrice]=useState("");const[reason,setReason]=useState("");
+  const[images,setImages]=useState([]);const[uploading,setUploading]=useState(0);const[saving,setSaving]=useState(false);
+  const fileRef=useRef();
+  const unit=sel?.buy_unit||"หน่วย";const unitPrice=+sel?.buy_price||0;
+  const matches=useMemo(()=>{const ql=q.trim().toLowerCase();if(!ql)return[];return ings.filter(i=>i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql)).slice(0,25);},[ings,q]);
+  useEffect(()=>{if(sel)setPrice(String(round2((+qty||0)*unitPrice)));},[qty,sel?.id]);// eslint-disable-line react-hooks/exhaustive-deps
+  async function onFiles(e){
+    const files=Array.from(e.target.files||[]);e.target.value="";if(!files.length)return;
+    setUploading(u=>u+files.length);
+    await Promise.all(files.map(async f=>{try{const ref=await uploadImageToDrive(f);setImages(im=>[...im,ref]);}catch(err){alert("อัปรูปไม่สำเร็จ: "+(err.message||err));}finally{setUploading(u=>u-1);}}));
+  }
+  async function save(){
+    if(!sel){alert("กรุณาเลือกวัตถุดิบ");return;}
+    if(!(+qty>0)){alert("กรุณาใส่จำนวนของเสีย");return;}
+    if(uploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
+    setSaving(true);
+    try{
+      await api.addWasteLog({branch_id:currentBranch.id,branch_name:currentBranch.name,log_date:date,ingredient_id:sel.id,ingredient_name:sel.name,unit,qty:+qty,unit_price:unitPrice,total:price===""?round2((+qty||0)*unitPrice):+price,reason:(reason||"").trim()||null,images,created_by:currentUser?.username||currentUser?.name||""});
+      posToast("✅ บันทึกของเสียแล้ว","ok");
+      setSel(null);setQ("");setQty("");setPrice("");setReason("");setImages([]);
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
+    setSaving(false);
+  }
+  // ── history ──
+  const allowed=useMemo(()=>currentUser?.role==="admin"?null:normalizeBranchIds(currentUser?.allowed_branches),[currentUser]);
+  const inScope=bid=>!allowed||allowed.map(x=>+x).includes(+bid);
+  const[logs,setLogs]=useState([]);const[loadingLogs,setLoadingLogs]=useState(false);const[fBranch,setFBranch]=useState("");
+  async function loadLogs(){setLoadingLogs(true);try{const d=await api.getWasteLogs();setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{setLogs([]);}setLoadingLogs(false);}
+  useEffect(()=>{if(view==="history")loadLogs();},[view]);// eslint-disable-line react-hooks/exhaustive-deps
+  const scopeBranches=useMemo(()=>branches.filter(b=>inScope(b.id)),[branches,allowed]);// eslint-disable-line react-hooks/exhaustive-deps
+  const shownLogs=useMemo(()=>logs.filter(l=>!fBranch||+l.branch_id===+fBranch),[logs,fBranch]);
+  async function delLog(l){if(!await confirmDlg({title:"ลบรายการของเสีย",message:`ลบ "${l.ingredient_name}" (${l.qty} ${l.unit||""}) ?`,danger:true}))return;try{await api.deleteWasteLog(l.id);loadLogs();}catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}}
+  const tabBtn=(id,label)=>{const on=view===id;return <button onClick={()=>setView(id)} style={{padding:"8px 18px",borderRadius:20,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{label}</button>;};
+  return <Modal title="🗑️ ของเสีย" onClose={onClose} wide>
+    <div style={{display:"flex",gap:8,marginBottom:16}}>{tabBtn("record","✍️ บันทึก")}{tabBtn("history","🗂️ ประวัติ")}</div>
+    {view==="record"&&<div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <Inp label="📅 วันที่" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
+        <Field label="🏪 สาขา"><div style={{...iS,display:"flex",alignItems:"center",background:C.bg,color:C.ink3}}>{currentBranch?.name||"—"}</div></Field>
+      </div>
+      <div style={{marginBottom:12,position:"relative"}}>
+        <div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>🔍 วัตถุดิบ *</div>
+        <input value={q} onChange={e=>{setQ(e.target.value);setSel(null);}} placeholder="พิมพ์ชื่อวัตถุดิบ..." style={{...iS}}/>
+        {!sel&&matches.length>0&&<div style={{position:"absolute",zIndex:5,left:0,right:0,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,marginTop:4,maxHeight:230,overflowY:"auto",boxShadow:"0 6px 20px rgba(15,23,42,0.12)"}}>
+          {matches.map(i=><div key={i.id} onClick={()=>{setSel(i);setQ(i.name);}} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.lineLight}`}}><Thumb src={i.image} alt={i.name} size={26} radius={6} iconBg={C.brandLight} iconColor={C.brand} iconSize={13}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600,color:C.ink}}>{i.name}</div><div style={{fontSize:10,color:C.ink4}}>{i.category||""} · ฿{(+i.buy_price||0).toLocaleString()}/{i.buy_unit||"หน่วย"}</div></div></div>)}
+        </div>}
+        {sel&&<div style={{marginTop:6,fontSize:12,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>✅ เลือก: <b>{sel.name}</b> · ฿{unitPrice.toLocaleString()}/{unit}</div>}
+      </div>
+      {sel&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <Field label={`🔢 จำนวน (${unit})`}><NumInput value={qty} onValue={setQty} placeholder="0" style={iS}/></Field>
+        <Field label="💰 มูลค่า (บาท) — คำนวณอัตโนมัติ แก้ได้"><NumInput value={price} onValue={setPrice} placeholder="0" style={iS}/></Field>
+      </div>}
+      <Inp label="📝 เหตุผล" value={reason} onChange={e=>setReason(e.target.value)} placeholder="เช่น หมดอายุ, ตกพื้น, เสียระหว่างเก็บ"/>
+      <div style={{marginTop:12}}>
+        <div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📎 แนบรูป (ไม่จำกัด){uploading>0&&<span style={{color:C.brand,marginLeft:8,fontSize:12}}>กำลังอัป {uploading}...</span>}</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+          {images.map((ref,i)=><div key={i} style={{position:"relative"}}><img src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" style={{width:72,height:72,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`}}/><button onClick={()=>setImages(im=>im.filter((_,j)=>j!==i))} style={{position:"absolute",top:-6,right:-6,width:20,height:20,borderRadius:"50%",background:C.red,border:`2px solid ${C.white}`,color:C.white,cursor:"pointer",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button></div>)}
+          <button onClick={()=>fileRef.current?.click()} style={{width:72,height:72,borderRadius:10,border:`2px dashed ${C.line}`,background:C.bg,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,color:C.ink4}}><Ic d={I.img} s={20} c={C.ink4}/><span style={{fontSize:10,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มรูป</span></button>
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" multiple onChange={onFiles} style={{display:"none"}}/>
+      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,marginTop:14,borderTop:`1px solid ${C.line}`}}>
+        <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
+        <Btn v="danger" onClick={save} loading={saving} disabled={saving||uploading>0} icon={I.check}>บันทึกของเสีย</Btn>
+      </div>
+    </div>}
+    {view==="history"&&<div>
+      {scopeBranches.length>1&&<div style={{marginBottom:12,maxWidth:280}}><Sel label="กรองสาขา" value={fBranch} onChange={e=>setFBranch(e.target.value)} options={[{v:"",l:"ทุกสาขา (ที่ดูแล)"},...scopeBranches.map(b=>({v:String(b.id),l:b.name}))]}/></div>}
+      {loadingLogs?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
+      :shownLogs.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีรายการของเสีย</div>
+      :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"60vh",overflowY:"auto",paddingRight:4}}>
+        {shownLogs.map(l=><div key={l.id} style={{border:`1px solid ${C.line}`,borderRadius:12,padding:"10px 14px",fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{l.ingredient_name} <span style={{color:C.red,fontWeight:700}}>−{l.qty} {l.unit||""}</span></div>
+              <div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>📅 {l.log_date} · {scopeBranches.length>1?`🏪 ${l.branch_name||""} · `:""}โดย {l.created_by||"—"}</div>
+              {l.reason&&<div style={{fontSize:12,color:C.ink3,marginTop:3}}>📝 {l.reason}</div>}
+            </div>
+            <div style={{textAlign:"right",whiteSpace:"nowrap"}}>
+              <div style={{fontSize:14,fontWeight:900,color:C.red}}>฿{(+l.total||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+              <button onClick={()=>delLog(l)} title="ลบ" style={{background:"none",border:"none",cursor:"pointer",color:C.ink4,fontSize:13,marginTop:2}}>🗑️</button>
+            </div>
+          </div>
+          {Array.isArray(l.images)&&l.images.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>{l.images.map((ref,i)=><img key={i} src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" onClick={()=>window.open(driveImgSrc(ref),"_blank","noopener")} style={{width:56,height:56,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer"}}/>)}</div>}
+        </div>)}
+      </div>}
+    </div>}
+  </Modal>;
+}
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[]}){
-  const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);
+  const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);const[showWaste,setShowWaste]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
   const[priceHistoryItem,setPriceHistoryItem]=useState(null);
   const ef={name:"",code:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
@@ -1905,6 +2017,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
       <Btn v="success" onClick={()=>setShowStockCheck(true)} icon={I.box}>📦 นับสต็อก</Btn>
+      <Btn v="ghost" onClick={()=>setShowWaste(true)} icon={I.trash} s={{color:C.red,borderColor:`${C.red}55`}}>🗑️ ของเสีย</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
@@ -2024,6 +2137,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       </div>
     </Modal>}
     {showStockCheck&&<StockCheckPopup ings={filtered} currentBranch={currentBranch} currentUser={currentUser} reload={reload} onClose={()=>setShowStockCheck(false)}/>}
+    {showWaste&&<WastePopup ings={ings} currentBranch={currentBranch} currentUser={currentUser} branches={branches} onClose={()=>setShowWaste(false)}/>}
   </div>;
 }
 
