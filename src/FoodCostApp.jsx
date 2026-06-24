@@ -1774,7 +1774,7 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
 }
 
 // 🗑️ ของเสีย — record + history of wasted ingredients. Photos go to Google Drive.
-function WastePopup({ings=[],menus=[],currentBranch,currentUser,branches=[],onClose}){
+function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
   const[view,setView]=useState("record");
   // ── record form ──
   const[date,setDate]=useState(todayBkk());
@@ -1818,9 +1818,9 @@ function WastePopup({ings=[],menus=[],currentBranch,currentUser,branches=[],onCl
   const shownLogs=useMemo(()=>logs.filter(l=>!fBranch||+l.branch_id===+fBranch),[logs,fBranch]);
   async function delLog(l){if(!await confirmDlg({title:"ลบรายการของเสีย",message:`ลบ "${l.ingredient_name}" (${l.qty} ${l.unit||""}) ?`,danger:true}))return;try{await api.deleteWasteLog(l.id);loadLogs();}catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}}
   const tabBtn=(id,label)=>{const on=view===id;return <button onClick={()=>setView(id)} style={{padding:"8px 18px",borderRadius:20,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{label}</button>;};
-  return <Modal title="🗑️ ของเสีย" onClose={onClose} wide>
+  return <div>
     <div style={{display:"flex",gap:8,marginBottom:16}}>{tabBtn("record","✍️ บันทึก")}{tabBtn("history","🗂️ ประวัติ")}</div>
-    {view==="record"&&<div>
+    {view==="record"&&<div style={{maxWidth:760}}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <Inp label="📅 วันที่" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
         <Field label="🏪 สาขา"><div style={{...iS,display:"flex",alignItems:"center",background:C.bg,color:C.ink3}}>{currentBranch?.name||"—"}</div></Field>
@@ -1850,7 +1850,6 @@ function WastePopup({ings=[],menus=[],currentBranch,currentUser,branches=[],onCl
         <input ref={fileRef} type="file" accept="image/*" multiple onChange={onFiles} style={{display:"none"}}/>
       </div>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,marginTop:14,borderTop:`1px solid ${C.line}`}}>
-        <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
         <Btn v="danger" onClick={save} loading={saving} disabled={saving||uploading>0} icon={I.check}>บันทึกของเสีย</Btn>
       </div>
     </div>}
@@ -1875,10 +1874,10 @@ function WastePopup({ings=[],menus=[],currentBranch,currentUser,branches=[],onCl
         </div>)}
       </div>}
     </div>}
-  </Modal>;
+  </div>;
 }
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[],menus=[]}){
-  const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);const[showWaste,setShowWaste]=useState(false);
+  const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
   const[priceHistoryItem,setPriceHistoryItem]=useState(null);
   const ef={name:"",code:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
@@ -2026,7 +2025,6 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
       <Btn v="success" onClick={()=>setShowStockCheck(true)} icon={I.box}>📦 นับสต็อก</Btn>
-      <Btn onClick={()=>setShowWaste(true)} icon={I.trash} s={{background:`linear-gradient(135deg,${C.red},#B91C1C)`,color:C.white,boxShadow:`0 4px 16px ${C.red}44`}}>🗑️ ของเสีย</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
@@ -2146,7 +2144,6 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       </div>
     </Modal>}
     {showStockCheck&&<StockCheckPopup ings={filtered} currentBranch={currentBranch} currentUser={currentUser} reload={reload} onClose={()=>setShowStockCheck(false)}/>}
-    {showWaste&&<WastePopup ings={ings} menus={menus} currentBranch={currentBranch} currentUser={currentUser} branches={branches} onClose={()=>setShowWaste(false)}/>}
   </div>;
 }
 
@@ -10037,6 +10034,7 @@ export default function App(){
     {id:"crm",l:t("tab.crm"),icon:I.users,perm:"crm"},
     {id:"ingredients",l:t("tab.ingredients"),icon:I.leaf,perm:"ingredients"},
     {id:"menus",l:t("tab.menus"),icon:I.fire,perm:"menus"},
+    {id:"waste",l:"ของเสีย",icon:I.trash,perm:"ingredients"},
     {id:"sop",l:t("tab.sop"),icon:I.sop,perm:"sop"},
     {id:"summary",l:t("tab.summary"),icon:I.chart,perm:"summary"},
     {id:"fssales",l:t("tab.fssales"),icon:I.chart,perm:"fs_sales"},
@@ -10064,7 +10062,7 @@ export default function App(){
   useEffect(()=>{
     if(visibleTabs.length>0&&!visibleTabs.find(t=>t.id===tab))setTab(visibleTabs[0].id);
   },[visibleTabsHash]);
-  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",approve:"อนุมัติคำสั่งซื้อที่สาขาส่งมา ก่อนส่งต่อครัวกลาง/ซัพพลายนอก",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",fs_sales:"นำเข้ายอดขายจาก FoodStory เพื่อดูเมนูที่ขายได้แต่ละวัน",po:"เปิด/แก้ไข/ปริ้น เอกสารใบสั่งซื้อวัตถุดิบ (Purchase Order)",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",assets:"ทะเบียนสินทรัพย์ของสาขา พร้อมคำนวณค่าเสื่อมราคา",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
+  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",approve:"อนุมัติคำสั่งซื้อที่สาขาส่งมา ก่อนส่งต่อครัวกลาง/ซัพพลายนอก",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",waste:"บันทึกของเสีย (วัตถุดิบ/เมนู) พร้อมรูปและเหตุผล + ดูประวัติตามสาขา",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",fs_sales:"นำเข้ายอดขายจาก FoodStory เพื่อดูเมนูที่ขายได้แต่ละวัน",po:"เปิด/แก้ไข/ปริ้น เอกสารใบสั่งซื้อวัตถุดิบ (Purchase Order)",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",assets:"ทะเบียนสินทรัพย์ของสาขา พร้อมคำนวณค่าเสื่อมราคา",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
 
   // Check scan mode
   const params=typeof window!=="undefined"?new URLSearchParams(window.location.search):new URLSearchParams();
@@ -10231,6 +10229,7 @@ export default function App(){
             {tab==="crm"&&<CRMTab currentBranch={currentBranch} currentUser={currentUser} menus={menus}/>}
             {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats} orders={orders} allOrders={allOrders} menus={menus}/>}
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
+            {tab==="waste"&&<WasteView ings={ings} menus={menus} currentBranch={currentBranch} currentUser={currentUser} branches={branches}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
