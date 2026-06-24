@@ -7507,7 +7507,7 @@ async function enablePushNotifications(user){
   return true;
 }
 async function pushIsOn(){if(!pushSupported())return false;try{if(Notification.permission!=="granted")return false;const reg=await navigator.serviceWorker.getRegistration();const sub=reg&&await reg.pushManager.getSubscription();return !!sub;}catch{return false;}}
-function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
+function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]}){
   const[reqs,setReqs]=useState([]);const[pos,setPos]=useState([]);
   const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(null);
   const[pushOn,setPushOn]=useState(false);const[pushBusy,setPushBusy]=useState(false);
@@ -7520,6 +7520,10 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
   const money=n=>(+n||0).toLocaleString("en-US",{maximumFractionDigits:0});
   const itemsOf=o=>Array.isArray(o.items)?o.items:[];
   const sumItems=o=>itemsOf(o).reduce((s,it)=>s+((+it.estimatedCost||+it.line_total||((+it.price_per_unit||0)*(+it.qty||+it.qtyNeeded||0)))||0),0);
+  // Real current stock per ordered item, at the ORDER's branch — so the Area can see
+  // "how much is on hand vs how much is being ordered". Items carry ingId (= ingredient id).
+  const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
+  const stockOfItem=(it,bid)=>{const ing=ingById.get(+(it&&it.ingId));return ing?branchStock(ing,bid):null;};
   // ── ประวัติการอนุมัติ ──
   const[view,setView]=useState("pending");          // pending | history
   const[logs,setLogs]=useState([]);const[logLoading,setLogLoading]=useState(false);
@@ -7572,7 +7576,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
         <div style={{padding:"12px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🏢 ครัวกลาง · {o.po_number||""}</span><Chip color="blue">ครัวกลาง</Chip></div>
           <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>จากสาขา <b style={{color:C.ink}}>{branchName(o.from_branch_id)}</b> · โดย {o.created_by||"-"}</div>
-          <div style={{margin:"8px 0",maxHeight:120,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",borderBottom:`1px dashed ${C.lineLight}`,padding:"2px 0",gap:8}}><span style={{color:C.ink2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name} <span style={{color:C.ink4}}>×{it.qty||0} {it.unit||""}</span></span><span style={{color:C.ink3,whiteSpace:"nowrap"}}>฿{money(it.line_total)}</span></div>)}</div>
+          <div style={{margin:"8px 0",maxHeight:200,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=>{const st=stockOfItem(it,o.from_branch_id);return <div key={i} style={{borderBottom:`1px dashed ${C.lineLight}`,padding:"4px 0"}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><span style={{color:C.ink2,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</span><span style={{color:C.ink3,whiteSpace:"nowrap"}}>฿{money(it.line_total)}</span></div><div style={{display:"flex",gap:10,marginTop:2,fontSize:11,flexWrap:"wrap"}}><span style={{color:st!=null&&st<=0?C.red:C.ink4}}>📦 คงเหลือ <b style={{color:st!=null&&st<=0?C.red:C.ink2}}>{st!=null?st:"-"}</b> {it.unit||""}</span><span style={{color:C.brand,fontWeight:700}}>🛒 สั่ง {it.qty||it.qtyNeeded||0} {it.unit||""}</span></div></div>;})}</div>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}><span>รวม</span><span>฿{money(o.total||sumItems(o))}</span></div>
           <div style={{display:"flex",gap:8}}><Btn v="success" onClick={()=>approvePO(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectPO(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
         </div>
@@ -7581,7 +7585,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
         <div style={{padding:"12px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🚚 {o.supplier_name||"ซัพพลายนอก"}</span><Chip color="teal">ซัพพลายนอก</Chip></div>
           <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>จากสาขา <b style={{color:C.ink}}>{branchName(o.branch_id)}</b> · โดย {o.requested_by||"-"}</div>
-          <div style={{margin:"8px 0",maxHeight:120,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",borderBottom:`1px dashed ${C.lineLight}`,padding:"2px 0",gap:8}}><span style={{color:C.ink2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name} <span style={{color:C.ink4}}>×{it.qtyNeeded||it.qty||0} {it.unit||""}</span></span><span style={{color:C.ink3,whiteSpace:"nowrap"}}>฿{money(it.estimatedCost||it.line_total)}</span></div>)}</div>
+          <div style={{margin:"8px 0",maxHeight:200,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=>{const st=stockOfItem(it,o.branch_id);return <div key={i} style={{borderBottom:`1px dashed ${C.lineLight}`,padding:"4px 0"}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><span style={{color:C.ink2,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</span><span style={{color:C.ink3,whiteSpace:"nowrap"}}>฿{money(it.estimatedCost||it.line_total)}</span></div><div style={{display:"flex",gap:10,marginTop:2,fontSize:11,flexWrap:"wrap"}}><span style={{color:st!=null&&st<=0?C.red:C.ink4}}>📦 คงเหลือ <b style={{color:st!=null&&st<=0?C.red:C.ink2}}>{st!=null?st:"-"}</b> {it.unit||""}</span><span style={{color:C.teal,fontWeight:700}}>🛒 สั่ง {it.qtyNeeded||it.qty||0} {it.unit||""}</span></div></div>;})}</div>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}><span>รวม</span><span>฿{money(sumItems(o))}</span></div>
           <div style={{display:"flex",gap:8}}><Btn v="success" onClick={()=>approveReq(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectReq(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
         </div>
@@ -10111,7 +10115,7 @@ export default function App(){
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders}/>}
-            {tab==="approve"&&<ApprovalTab currentUser={currentUser} currentBranch={currentBranch} branches={branches} reloadOrders={reload.orders}/>}
+            {tab==="approve"&&<ApprovalTab currentUser={currentUser} currentBranch={currentBranch} branches={branches} reloadOrders={reload.orders} ings={ings}/>}
             {tab==="assets"&&<AssetsTab assets={assets} reloadAssets={reload.assets} currentUser={currentUser} currentBranch={currentBranch} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
             {tab==="kitchen3d"&&<Kitchen3DView currentBranch={currentBranch} currentUser={currentUser} branches={branches} reloadBranches={reload.branches}/>}
