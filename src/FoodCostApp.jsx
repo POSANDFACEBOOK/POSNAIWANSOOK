@@ -7524,6 +7524,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
   const[view,setView]=useState("pending");          // pending | history
   const[logs,setLogs]=useState([]);const[logLoading,setLogLoading]=useState(false);
   const[fDate,setFDate]=useState("");const[fBranch,setFBranch]=useState("");const[fSupplier,setFSupplier]=useState("");
+  const[openLog,setOpenLog]=useState(null);   // expanded history row (shows its items)
   const dkeyOf=l=>{try{const d=new Date(l.decided_at);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}catch{return "";}};
   const dlabelOf=k=>{const d=new Date(k+"T00:00:00");return isNaN(d.getTime())?k:d.toLocaleDateString("th-TH",{weekday:"short",day:"numeric",month:"short",year:"numeric"});};
   async function loadLogs(){setLogLoading(true);try{const d=await api.getApprovalLog();if(aliveRef.current)setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{if(aliveRef.current)setLogs([]);}if(aliveRef.current)setLogLoading(false);}
@@ -7607,14 +7608,21 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders}){
         :rows.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการอนุมัติ{(fDate||fBranch||fSupplier)?"ตามตัวกรองนี้":""}</div>
         :<><div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>ทั้งหมด {rows.length} รายการ</div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {rows.map(l=>{const ok=l.decision==="approved";return <Card key={l.id} style={{padding:"10px 14px",borderLeft:`4px solid ${ok?C.green:C.red}`}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <div style={{minWidth:0,flex:1}}>
-                <div style={{fontWeight:800,fontSize:13.5,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{l.kind==="po"?"🏢":"🚚"} {l.supplier_name||"-"} <span style={{color:C.ink4,fontWeight:600}}>· {branchName(l.branch_id)}</span></div>
-                <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{l.ref||""} · {l.items_count||(Array.isArray(l.items)?l.items.length:0)} รายการ · ฿{money(l.total)} · โดย {l.decided_by||"-"} · {(()=>{try{return new Date(l.decided_at).toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}catch{return "";}})()}</div>
+          {rows.map(l=>{const ok=l.decision==="approved";const open=openLog===l.id;const its=Array.isArray(l.items)?l.items:[];return <Card key={l.id} style={{padding:"10px 14px",borderLeft:`4px solid ${ok?C.green:C.red}`,overflow:"hidden"}}>
+            <div onClick={()=>setOpenLog(open?null:l.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",cursor:"pointer",userSelect:"none"}}>
+              <div style={{minWidth:0,flex:1,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:11,color:C.ink4,width:12,textAlign:"center",flexShrink:0}}>{open?"▼":"▶"}</span>
+                <div style={{minWidth:0}}>
+                  <div style={{fontWeight:800,fontSize:13.5,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{l.kind==="po"?"🏢":"🚚"} {l.supplier_name||"-"} <span style={{color:C.ink4,fontWeight:600}}>· {branchName(l.branch_id)}</span></div>
+                  <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{l.ref||""} · {l.items_count||its.length} รายการ · ฿{money(l.total)} · โดย {l.decided_by||"-"} · {(()=>{try{return new Date(l.decided_at).toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}catch{return "";}})()}</div>
+                </div>
               </div>
               <span style={{fontSize:11,fontWeight:800,color:ok?C.green:C.red,background:ok?C.greenLight:C.redLight,padding:"3px 10px",borderRadius:20,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{ok?"✅ อนุมัติ":"❌ ตีกลับ"}</span>
             </div>
+            {open&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.line}`}}>
+              {its.length===0?<div style={{color:C.ink4,textAlign:"center",padding:"6px 0",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>— ไม่มีรายละเอียดรายการ —</div>
+              :<div style={{fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{its.map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",borderBottom:`1px dashed ${C.lineLight}`,padding:"3px 0",gap:8}}><span style={{color:C.ink2,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{i+1}. {it.name} <span style={{color:C.ink4}}>×{it.qty||it.qtyNeeded||0} {it.unit||""}</span></span><span style={{color:C.ink3,whiteSpace:"nowrap"}}>฿{money(it.line_total||it.estimatedCost||((+it.price_per_unit||0)*(+it.qty||+it.qtyNeeded||0)))}</span></div>)}</div>}
+            </div>}
           </Card>;})}
           </div></>}
       </div>;
