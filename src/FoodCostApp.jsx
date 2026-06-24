@@ -10034,7 +10034,7 @@ export default function App(){
     {id:"crm",l:t("tab.crm"),icon:I.users,perm:"crm"},
     {id:"ingredients",l:t("tab.ingredients"),icon:I.leaf,perm:"ingredients"},
     {id:"menus",l:t("tab.menus"),icon:I.fire,perm:"menus"},
-    {id:"waste",l:"ของเสีย",icon:I.trash,perm:"ingredients"},
+    {id:"waste",l:"บันทึกของเสีย",icon:I.trash,perm:"ingredients"},
     {id:"sop",l:t("tab.sop"),icon:I.sop,perm:"sop"},
     {id:"summary",l:t("tab.summary"),icon:I.chart,perm:"summary"},
     {id:"fssales",l:t("tab.fssales"),icon:I.chart,perm:"fs_sales"},
