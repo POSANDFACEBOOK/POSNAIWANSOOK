@@ -2224,20 +2224,25 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
         const safety=branchSafety(ing,currentBranch.id);
         const lowStock=safety>0&&newVal<safety;
         const isSaving=!!saving[ing.id];
-        return <div key={ing.id} style={{background:dirty?C.brandLight:C.white,border:`1.5px solid ${dirty?C.brandBorder:C.line}`,borderRadius:12,padding:"10px 12px",display:"flex",gap:10,alignItems:"center",transition:"all .15s"}}>
-          <Thumb src={ing.image} alt={ing.name} size={isMobile?44:48} radius={8} iconBg={C.brandLight} iconColor={C.brand} iconSize={22}/>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:14,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ing.name}</div>
-            <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",gap:6,flexWrap:"wrap",marginTop:2}}>
-              {ing.category&&<span>{ing.category}</span>}
-              <span>· เดิม {cur} {ing.buy_unit}</span>
-              {safety>0&&<span style={{color:lowStock?"#92400E":C.ink4}}>· safety {safety}</span>}
+        return <div key={ing.id} style={{background:dirty?C.brandLight:C.white,border:`1.5px solid ${dirty?C.brandBorder:C.line}`,borderRadius:14,padding:"10px 12px",display:"flex",gap:12,alignItems:"center",transition:"all .15s"}}>
+          {/* รูปใหญ่ซ้าย — กึ่งกลางระหว่างบรรทัดบน/ล่าง */}
+          <Thumb src={ing.image} alt={ing.name} size={64} radius={10} iconBg={C.brandLight} iconColor={C.brand} iconSize={30}/>
+          <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",gap:8}}>
+            {/* บรรทัดบน — รายละเอียด (ชื่อเต็ม ไม่ตัด) */}
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:15,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.25}}>{ing.name}</div>
+              <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",gap:10,flexWrap:"wrap",marginTop:2}}>
+                {ing.category&&<span>{ing.category}</span>}
+                <span>เดิม <b style={{color:C.ink2}}>{cur}</b> {ing.buy_unit}</span>
+                {safety>0&&<span style={{color:lowStock?"#92400E":C.ink4,fontWeight:lowStock?700:400}}>safety {safety}</span>}
+              </div>
             </div>
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-            <NumStepper value={editVal??""} onChange={v=>setEdits(o=>({...o,[ing.id]:v}))} placeholder={String(cur)} width={isMobile?64:74} inputStyle={{fontSize:15,border:`2px solid ${dirty?C.brand:C.line}`,background:dirty?C.white:C.bg}}/>
-            <span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,minWidth:24}}>{ing.buy_unit}</span>
-            <button onClick={()=>saveOne(ing)} disabled={isSaving||!dirty} style={{background:dirty&&!isSaving?`linear-gradient(135deg,${C.green},#059669)`:C.lineLight,border:"none",borderRadius:9,padding:"8px 12px",cursor:dirty&&!isSaving?"pointer":"not-allowed",color:dirty&&!isSaving?C.white:C.ink4,fontSize:12,fontWeight:800,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4,minHeight:38,minWidth:isMobile?44:60,whiteSpace:"nowrap"}}>{isSaving?"⏳":<><Ic d={I.check} s={13} c={dirty?C.white:C.ink4}/>{!isMobile&&<span>บันทึก</span>}</>}</button>
+            {/* บรรทัดล่าง — ช่องนับจำนวน */}
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <NumStepper value={editVal??""} onChange={v=>setEdits(o=>({...o,[ing.id]:v}))} placeholder={String(cur)} width={isMobile?82:96} inputStyle={{fontSize:18,fontWeight:800,border:`2px solid ${dirty?C.brand:C.line}`,background:dirty?C.white:C.bg,minHeight:40}}/>
+              <span style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:700,minWidth:26}}>{ing.buy_unit}</span>
+              <button onClick={()=>saveOne(ing)} disabled={isSaving||!dirty} style={{marginLeft:"auto",background:dirty&&!isSaving?`linear-gradient(135deg,${C.green},#059669)`:C.lineLight,border:"none",borderRadius:10,padding:"10px 16px",cursor:dirty&&!isSaving?"pointer":"not-allowed",color:dirty&&!isSaving?C.white:C.ink4,fontSize:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:5,minHeight:42,minWidth:64,whiteSpace:"nowrap"}}>{isSaving?"⏳":<><Ic d={I.check} s={15} c={dirty?C.white:C.ink4}/>บันทึก</>}</button>
+            </div>
           </div>
         </div>;
       })}
