@@ -1774,7 +1774,7 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
 }
 
 // 🗑️ ของเสีย — record + history of wasted ingredients. Photos go to Google Drive.
-function WastePopup({ings=[],currentBranch,currentUser,branches=[],onClose}){
+function WastePopup({ings=[],menus=[],currentBranch,currentUser,branches=[],onClose}){
   const[view,setView]=useState("record");
   // ── record form ──
   const[date,setDate]=useState(todayBkk());
@@ -1782,9 +1782,15 @@ function WastePopup({ings=[],currentBranch,currentUser,branches=[],onClose}){
   const[qty,setQty]=useState("");const[price,setPrice]=useState("");const[reason,setReason]=useState("");
   const[images,setImages]=useState([]);const[uploading,setUploading]=useState(0);const[saving,setSaving]=useState(false);
   const fileRef=useRef();
-  const unit=sel?.buy_unit||"หน่วย";const unitPrice=+sel?.buy_price||0;
-  const matches=useMemo(()=>{const ql=q.trim().toLowerCase();if(!ql)return[];return ings.filter(i=>i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql)).slice(0,25);},[ings,q]);
-  useEffect(()=>{if(sel)setPrice(String(round2((+qty||0)*unitPrice)));},[qty,sel?.id]);// eslint-disable-line react-hooks/exhaustive-deps
+  const[kind,setKind]=useState("ing");                       // ing | menu — ของเสียเป็นวัตถุดิบหรือเมนู
+  const isMenu=kind==="menu";
+  const pool=isMenu?menus:ings;
+  const unit=isMenu?"ที่":(sel?.buy_unit||"หน่วย");
+  // วัตถุดิบ: ราคา = buy_price/หน่วย · เมนู: มูลค่า = ต้นทุนเมนู (menuCost)
+  const unitPrice=sel?(isMenu?round2(menuCost(sel,ings)):(+sel.buy_price||0)):0;
+  const matches=useMemo(()=>{const ql=q.trim().toLowerCase();if(!ql)return[];return pool.filter(i=>i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql)).slice(0,25);},[pool,q]);
+  function switchKind(k){setKind(k);setSel(null);setQ("");setQty("");setPrice("");}
+  useEffect(()=>{if(sel)setPrice(String(round2((+qty||0)*unitPrice)));},[qty,sel?.id,kind]);// eslint-disable-line react-hooks/exhaustive-deps
   async function onFiles(e){
     const files=Array.from(e.target.files||[]);e.target.value="";if(!files.length)return;
     setUploading(u=>u+files.length);
@@ -1796,7 +1802,7 @@ function WastePopup({ings=[],currentBranch,currentUser,branches=[],onClose}){
     if(uploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
     setSaving(true);
     try{
-      await api.addWasteLog({branch_id:currentBranch.id,branch_name:currentBranch.name,log_date:date,ingredient_id:sel.id,ingredient_name:sel.name,unit,qty:+qty,unit_price:unitPrice,total:price===""?round2((+qty||0)*unitPrice):+price,reason:(reason||"").trim()||null,images,created_by:currentUser?.username||currentUser?.name||""});
+      await api.addWasteLog({branch_id:currentBranch.id,branch_name:currentBranch.name,log_date:date,item_type:isMenu?"menu":"ingredient",ingredient_id:sel.id,ingredient_name:sel.name,unit,qty:+qty,unit_price:unitPrice,total:price===""?round2((+qty||0)*unitPrice):+price,reason:(reason||"").trim()||null,images,created_by:currentUser?.username||currentUser?.name||""});
       posToast("✅ บันทึกของเสียแล้ว","ok");
       setSel(null);setQ("");setQty("");setPrice("");setReason("");setImages([]);
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
@@ -1819,11 +1825,14 @@ function WastePopup({ings=[],currentBranch,currentUser,branches=[],onClose}){
         <Inp label="📅 วันที่" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
         <Field label="🏪 สาขา"><div style={{...iS,display:"flex",alignItems:"center",background:C.bg,color:C.ink3}}>{currentBranch?.name||"—"}</div></Field>
       </div>
+      <div style={{display:"flex",gap:8,marginBottom:12}}>
+        {[{k:"ing",l:"🥬 วัตถุดิบ"},{k:"menu",l:"🍽️ เมนู"}].map(t=>{const on=kind===t.k;return <button key={t.k} onClick={()=>switchKind(t.k)} style={{flex:1,padding:"9px",borderRadius:10,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{t.l}</button>;})}
+      </div>
       <div style={{marginBottom:12,position:"relative"}}>
-        <div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>🔍 วัตถุดิบ *</div>
-        <input value={q} onChange={e=>{setQ(e.target.value);setSel(null);}} placeholder="พิมพ์ชื่อวัตถุดิบ..." style={{...iS}}/>
+        <div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>🔍 {isMenu?"เมนู":"วัตถุดิบ"} *</div>
+        <input value={q} onChange={e=>{setQ(e.target.value);setSel(null);}} placeholder={isMenu?"พิมพ์ชื่อเมนู...":"พิมพ์ชื่อวัตถุดิบ..."} style={{...iS}}/>
         {!sel&&matches.length>0&&<div style={{position:"absolute",zIndex:5,left:0,right:0,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,marginTop:4,maxHeight:230,overflowY:"auto",boxShadow:"0 6px 20px rgba(15,23,42,0.12)"}}>
-          {matches.map(i=><div key={i.id} onClick={()=>{setSel(i);setQ(i.name);}} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.lineLight}`}}><Thumb src={i.image} alt={i.name} size={26} radius={6} iconBg={C.brandLight} iconColor={C.brand} iconSize={13}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600,color:C.ink}}>{i.name}</div><div style={{fontSize:10,color:C.ink4}}>{i.category||""} · ฿{(+i.buy_price||0).toLocaleString()}/{i.buy_unit||"หน่วย"}</div></div></div>)}
+          {matches.map(i=>{const ip=isMenu?round2(menuCost(i,ings)):(+i.buy_price||0);return <div key={i.id} onClick={()=>{setSel(i);setQ(i.name);}} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.lineLight}`}}><Thumb src={i.image} alt={i.name} size={26} radius={6} iconBg={C.brandLight} iconColor={C.brand} iconSize={13}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600,color:C.ink}}>{i.name}</div><div style={{fontSize:10,color:C.ink4}}>{i.category||""} · ฿{ip.toLocaleString()}/{isMenu?"ที่":(i.buy_unit||"หน่วย")}</div></div></div>;})}
         </div>}
         {sel&&<div style={{marginTop:6,fontSize:12,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>✅ เลือก: <b>{sel.name}</b> · ฿{unitPrice.toLocaleString()}/{unit}</div>}
       </div>
@@ -1853,7 +1862,7 @@ function WastePopup({ings=[],currentBranch,currentUser,branches=[],onClose}){
         {shownLogs.map(l=><div key={l.id} style={{border:`1px solid ${C.line}`,borderRadius:12,padding:"10px 14px",fontFamily:"'Sarabun',sans-serif"}}>
           <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}>
             <div style={{minWidth:0}}>
-              <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{l.ingredient_name} <span style={{color:C.red,fontWeight:700}}>−{l.qty} {l.unit||""}</span></div>
+              <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{l.item_type==="menu"&&<span style={{fontSize:9,fontWeight:800,color:C.brand,background:C.brandLight,padding:"1px 6px",borderRadius:6,marginRight:5,verticalAlign:"middle"}}>เมนู</span>}{l.ingredient_name} <span style={{color:C.red,fontWeight:700}}>−{l.qty} {l.unit||""}</span></div>
               <div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>📅 {l.log_date} · {scopeBranches.length>1?`🏪 ${l.branch_name||""} · `:""}โดย {l.created_by||"—"}</div>
               {l.reason&&<div style={{fontSize:12,color:C.ink3,marginTop:3}}>📝 {l.reason}</div>}
             </div>
@@ -1868,7 +1877,7 @@ function WastePopup({ings=[],currentBranch,currentUser,branches=[],onClose}){
     </div>}
   </Modal>;
 }
-function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[]}){
+function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[],menus=[]}){
   const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);const[showWaste,setShowWaste]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
   const[priceHistoryItem,setPriceHistoryItem]=useState(null);
@@ -2137,7 +2146,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       </div>
     </Modal>}
     {showStockCheck&&<StockCheckPopup ings={filtered} currentBranch={currentBranch} currentUser={currentUser} reload={reload} onClose={()=>setShowStockCheck(false)}/>}
-    {showWaste&&<WastePopup ings={ings} currentBranch={currentBranch} currentUser={currentUser} branches={branches} onClose={()=>setShowWaste(false)}/>}
+    {showWaste&&<WastePopup ings={ings} menus={menus} currentBranch={currentBranch} currentUser={currentUser} branches={branches} onClose={()=>setShowWaste(false)}/>}
   </div>;
 }
 
@@ -10220,7 +10229,7 @@ export default function App(){
           {initErr&&<ErrBox msg={initErr} onRetry={loadAll}/>}
           {loading?<Loading text="กำลังโหลดข้อมูลจาก Cloud..."/>:<>
             {tab==="crm"&&<CRMTab currentBranch={currentBranch} currentUser={currentUser} menus={menus}/>}
-            {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats} orders={orders} allOrders={allOrders}/>}
+            {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats} orders={orders} allOrders={allOrders} menus={menus}/>}
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
