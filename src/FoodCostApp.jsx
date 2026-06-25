@@ -1889,7 +1889,8 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
 }
 // Stock-count SESSION history — each time someone starts a count (photo + name) +
 // the items they recorded that session (grouped by session_id).
-function StockSessionHistory({currentUser,branches=[],onClose}){
+function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
+  const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
   const allowed=useMemo(()=>currentUser?.role==="admin"?null:normalizeBranchIds(currentUser?.allowed_branches),[currentUser]);
   const inScope=bid=>!allowed||allowed.map(x=>+x).includes(+bid);
   const[sessions,setSessions]=useState(null);const[err,setErr]=useState(false);const[fBranch,setFBranch]=useState("");
@@ -1929,7 +1930,7 @@ function StockSessionHistory({currentUser,branches=[],onClose}){
         {on&&<div style={{borderTop:`1px solid ${C.lineLight}`,padding:"8px 12px",background:C.bg}}>
           {rows===null||rows===undefined?<div style={{fontSize:12,color:C.ink4,textAlign:"center",padding:"8px 0"}}>กำลังโหลด...</div>
           :rows.length===0?<div style={{fontSize:12,color:C.ink4,textAlign:"center",padding:"8px 0"}}>ครั้งนี้ยังไม่ได้บันทึกรายการ</div>
-          :<>{<div style={{fontSize:11,color:C.ink4,marginBottom:4}}>นับ {rows.length} รายการ</div>}{rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0",borderBottom:`1px dashed ${C.lineLight}`,fontFamily:"'Sarabun',sans-serif",fontSize:12.5}}><span style={{fontWeight:600,color:C.ink2,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.ingredient_name||`#${r.ingredient_id}`}</span><span style={{whiteSpace:"nowrap",color:C.ink4,flexShrink:0}}>ก่อน <b style={{color:C.ink2}}>{prev}</b> · หลัง <b style={{color:C.brand}}>{nw}</b> · ต่าง <b style={{color:delta>0?C.green:delta<0?C.red:C.ink3}}>{delta>0?`+${delta}`:delta}</b> {r.unit||""}</span></div>;})}</>}
+          :<>{<div style={{fontSize:11,color:C.ink4,marginBottom:4}}>นับ {rows.length} รายการ</div>}{rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0",borderBottom:`1px dashed ${C.lineLight}`,fontFamily:"'Sarabun',sans-serif",fontSize:12.5}}><span style={{fontWeight:600,color:C.ink2,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.ingredient_name||`#${r.ingredient_id}`}</span><span style={{whiteSpace:"nowrap",color:C.ink4,flexShrink:0}}>ก่อน <b style={{color:C.ink2}}>{prev}</b> · หลัง <b style={{color:C.brand}}>{nw}</b> · ต่าง <b style={{color:delta>0?C.green:delta<0?C.red:C.ink3}}>{delta>0?`+${delta}`:delta}</b> {r.unit||ingById.get(+r.ingredient_id)?.buy_unit||""}</span></div>;})}</>}
         </div>}
       </div>;})}
     </div>}
@@ -2286,7 +2287,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       </div>
     </Modal>}
     {showStockGate&&<StockCounterGate currentUser={currentUser} currentBranch={currentBranch} onClose={()=>setShowStockGate(false)} onConfirm={c=>{setStockCounter(c);setShowStockGate(false);setShowStockCheck(true);}}/>}
-    {showSessionHist&&<StockSessionHistory currentUser={currentUser} branches={branches} onClose={()=>setShowSessionHist(false)}/>}
+    {showSessionHist&&<StockSessionHistory currentUser={currentUser} branches={branches} ings={ings} onClose={()=>setShowSessionHist(false)}/>}
     {showStockCheck&&<StockCheckPopup ings={filtered} currentBranch={currentBranch} currentUser={currentUser} reload={reload} counter={stockCounter} onClose={()=>setShowStockCheck(false)}/>}
   </div>;
 }
@@ -7879,7 +7880,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
             <div style={{minWidth:0}}><div style={{fontSize:13.5,fontWeight:800,color:C.ink}}>{s.counter_name||"-"}</div><div style={{fontSize:11,color:C.ink4}}>🏪 {branchName(s.branch_id)} · 🕘 {t}</div></div>
           </div>
           <button onClick={()=>toggleSess(s)} style={{background:"none",border:"none",cursor:"pointer",color:C.brand,fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",padding:"2px 0",marginBottom:6}}>{open?"▼ ซ่อนรายการที่นับ":"▶ ดูรายการที่นับ"}</button>
-          {open&&<div style={{margin:"4px 0 8px",maxHeight:180,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{(its===undefined||its===null)?<div style={{color:C.ink4,padding:"6px 0",textAlign:"center"}}>กำลังโหลด...</div>:its.length===0?<div style={{color:C.ink4,padding:"6px 0",textAlign:"center"}}>ยังไม่มีรายการที่บันทึก</div>:its.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",borderBottom:`1px dashed ${C.lineLight}`}}><span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:C.ink2,fontWeight:600}}>{r.ingredient_name||`#${r.ingredient_id}`}</span><span style={{whiteSpace:"nowrap",color:C.ink4}}>ก่อน <b style={{color:C.ink2}}>{prev}</b> · หลัง <b style={{color:C.brand}}>{nw}</b> · ต่าง <b style={{color:delta>0?C.green:delta<0?C.red:C.ink3}}>{delta>0?`+${delta}`:delta}</b> {r.unit||""}</span></div>;})}</div>}
+          {open&&<div style={{margin:"4px 0 8px",maxHeight:180,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{(its===undefined||its===null)?<div style={{color:C.ink4,padding:"6px 0",textAlign:"center"}}>กำลังโหลด...</div>:its.length===0?<div style={{color:C.ink4,padding:"6px 0",textAlign:"center"}}>ยังไม่มีรายการที่บันทึก</div>:its.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",borderBottom:`1px dashed ${C.lineLight}`}}><span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:C.ink2,fontWeight:600}}>{r.ingredient_name||`#${r.ingredient_id}`}</span><span style={{whiteSpace:"nowrap",color:C.ink4}}>ก่อน <b style={{color:C.ink2}}>{prev}</b> · หลัง <b style={{color:C.brand}}>{nw}</b> · ต่าง <b style={{color:delta>0?C.green:delta<0?C.red:C.ink3}}>{delta>0?`+${delta}`:delta}</b> {r.unit||ingById.get(+r.ingredient_id)?.buy_unit||""}</span></div>;})}</div>}
           <Btn v="success" onClick={()=>approveSession(s)} loading={busy===k} icon={I.check} full s={{padding:"9px",fontSize:13}}>✅ อนุมัติการนับสต็อก</Btn>
         </div>
       </Card>;})}
