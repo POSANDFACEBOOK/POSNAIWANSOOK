@@ -128,6 +128,9 @@ const api = {
   addStockSession: (d) => sb("stock_count_sessions", { method: "POST", body: JSON.stringify(d) }),
   getStockSessions: (bid) => sb(`stock_count_sessions?order=started_at.desc,id.desc&limit=300${bid ? `&branch_id=eq.${bid}` : ""}`),
   getStockLogsBySession: (sid) => sb(`stock_logs?session_id=eq.${sid}&order=counted_at.asc,id.asc&limit=500`),
+  getOpenStockSession: (bid) => sb(`stock_count_sessions?branch_id=eq.${bid}&status=eq.open&order=started_at.desc&limit=1`),
+  getOpenStockSessions: () => sb(`stock_count_sessions?status=eq.open&order=started_at.desc&limit=200`),
+  approveStockSession: (id, by) => sb(`stock_count_sessions?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ status: "approved", approved_by: by || "", approved_at: new Date().toISOString() }) }),
   addAsset: (d) => sb("assets", { method: "POST", body: JSON.stringify(d) }),
   updateAsset: (id, d) => sb(`assets?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteAsset: (id) => sb(`assets?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
@@ -1918,7 +1921,7 @@ function StockSessionHistory({currentUser,branches=[],onClose}){
         <div onClick={()=>toggle(s)} style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px",cursor:"pointer",background:on?C.brandLight:C.white}}>
           {s.counter_photo?<img src={driveImgSrc(s.counter_photo)} alt="" loading="lazy" decoding="async" onClick={e=>{e.stopPropagation();openImg(s.counter_photo);}} title="รูปผู้นับ" style={{width:48,height:48,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:48,height:48,borderRadius:10,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.user||I.box} s={20} c={C.line}/></div>}
           <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{s.counter_name||"—"}</div>
+            <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{s.counter_name||"—"} {s.status==="approved"?<span style={{fontSize:10,fontWeight:800,color:C.green,background:C.greenLight,padding:"1px 7px",borderRadius:10,verticalAlign:"middle"}}>✅ อนุมัติแล้ว</span>:<span style={{fontSize:10,fontWeight:800,color:"#B45309",background:"#FFFBEB",padding:"1px 7px",borderRadius:10,verticalAlign:"middle"}}>⏳ รออนุมัติ</span>}</div>
             <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(s.started_at)}{scopeBranches.length>1?` · 🏪 ${s.branch_name||""}`:""}</div>
           </div>
           <span style={{fontSize:12,color:C.ink4}}>{on?"▼":"▶"}</span>
@@ -1999,7 +2002,7 @@ function StockHistoryModal({ing,currentBranch,onClose}){
   </Modal>;
 }
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[],menus=[]}){
-  const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);const[showStockGate,setShowStockGate]=useState(false);const[stockCounter,setStockCounter]=useState(null);const[showSessionHist,setShowSessionHist]=useState(false);
+  const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);const[showStockGate,setShowStockGate]=useState(false);const[stockCounter,setStockCounter]=useState(null);const[showSessionHist,setShowSessionHist]=useState(false);const[stockBtnLoading,setStockBtnLoading]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
   const[priceHistoryItem,setPriceHistoryItem]=useState(null);
   const[stockHistItem,setStockHistItem]=useState(null);
@@ -2036,6 +2039,17 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(c.id);await reloadCats();if(cat===c.name)setCat("ทุกหมวด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
   const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return ings.filter(i=>{const matchB=ingVisibleAt(i,currentBranch?.id,isCentral);const matchQ=!ql||i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql);return matchQ&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;});},[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
+  // นับสต็อก: ถ้ามีครั้งนับที่ "ยังไม่อนุมัติ" (open) ของสาขานี้อยู่ → นับต่อในครั้งเดิม (ไม่ต้องถ่ายใหม่)
+  // ถ้าไม่มี (ครั้งก่อนอนุมัติไปแล้ว หรือยังไม่เคยนับ) → ขอถ่ายรูป+ลงชื่อใหม่ (เปิด session ใหม่)
+  async function startStockCount(){
+    setStockBtnLoading(true);
+    try{
+      const open=await api.getOpenStockSession(currentBranch.id);
+      const sess=Array.isArray(open)?open[0]:open;
+      if(sess&&sess.id){setStockCounter({name:sess.counter_name,photo:sess.counter_photo,sessionId:sess.id});setStockBtnLoading(false);setShowStockCheck(true);return;}
+    }catch{}
+    setStockBtnLoading(false);setShowStockGate(true);
+  }
   function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||1);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
   async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{
     // Pull existing safety_by_branch from the row being edited (if any) so we
@@ -2147,7 +2161,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
-      <Btn v="success" onClick={()=>setShowStockGate(true)} icon={I.box}>📦 นับสต็อก</Btn>
+      <Btn v="success" onClick={startStockCount} loading={stockBtnLoading} icon={I.box}>📦 นับสต็อก</Btn>
       <Btn v="ghost" onClick={()=>setShowSessionHist(true)} icon={I.clock}>🕘 ประวัติการนับ</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
@@ -7789,7 +7803,8 @@ async function enablePushNotifications(user){
 }
 async function pushIsOn(){if(!pushSupported())return false;try{if(Notification.permission!=="granted")return false;const reg=await navigator.serviceWorker.getRegistration();const sub=reg&&await reg.pushManager.getSubscription();return !!sub;}catch{return false;}}
 function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]}){
-  const[reqs,setReqs]=useState([]);const[pos,setPos]=useState([]);
+  const[reqs,setReqs]=useState([]);const[pos,setPos]=useState([]);const[stockSess,setStockSess]=useState([]);
+  const[sessItems,setSessItems]=useState({});const[openSess,setOpenSess]=useState(null);
   const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(null);
   const[pushOn,setPushOn]=useState(false);const[pushBusy,setPushBusy]=useState(false);
   const aliveRef=useRef(true);const prevRef=useRef(-1);
@@ -7820,12 +7835,13 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   async function load(silent){
     if(!silent)setLoading(true);
     try{
-      const[r,p]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[])]);
+      const[r,p,ss]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[]),api.getOpenStockSessions().catch(()=>[])]);
       if(!aliveRef.current)return;
       const rr=(Array.isArray(r)?r:[]).filter(o=>inScope(o.branch_id));
       const pp=(Array.isArray(p)?p:[]).filter(o=>inScope(o.from_branch_id));
-      setReqs(rr);setPos(pp);
-      const total=rr.length+pp.length;
+      const sCount=(Array.isArray(ss)?ss:[]).filter(s=>inScope(s.branch_id));
+      setReqs(rr);setPos(pp);setStockSess(sCount);
+      const total=rr.length+pp.length+sCount.length;
       if(prevRef.current>=0&&total>prevRef.current)approvalBeep();
       prevRef.current=total;
     }catch{}
@@ -7836,12 +7852,14 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   async function approvePO(o){setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"requested",updated_at:new Date().toISOString()});await logDecision("approved","po",o);posToast("✅ อนุมัติแล้ว — ส่งให้ครัวกลางต่อ","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   async function rejectReq(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับออเดอร์ซัพพลาย "${o.supplier_name||""}" ของ ${branchName(o.branch_id)}?\nสาขาจะเห็นว่าถูกปฏิเสธ และนับสต็อกส่งใหม่ได้`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"rejected"});await logDecision("rejected","ext",o);posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   async function rejectPO(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับ PO ${o.po_number||""} ของ ${branchName(o.from_branch_id)}?`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"cancelled",updated_at:new Date().toISOString()});await logDecision("rejected","po",o);posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
-  const total=reqs.length+pos.length;
+  async function approveSession(s){setBusy("s"+s.id);try{await api.approveStockSession(s.id,currentUser?.username||currentUser?.name||"");posToast("✅ อนุมัติการนับสต็อกแล้ว","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);setBusy(null);}
+  async function toggleSess(s){if(openSess===s.id){setOpenSess(null);return;}setOpenSess(s.id);if(sessItems[s.id]===undefined){setSessItems(m=>({...m,[s.id]:null}));try{const d=await api.getStockLogsBySession(s.id);if(aliveRef.current)setSessItems(m=>({...m,[s.id]:Array.isArray(d)?d:[]}));}catch{if(aliveRef.current)setSessItems(m=>({...m,[s.id]:[]}));}}}
+  const total=reqs.length+pos.length+stockSess.length;
   return <div>
     <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap",background:total>0?"#F5F3FF":C.bg,border:`1px solid ${total>0?"#A855F7":C.line}`,borderRadius:12,padding:"12px 16px"}}>
       <span style={{fontSize:22}}>{total>0?"🔔":"✅"}</span>
       <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:15,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>คำสั่งซื้อรออนุมัติ{total>0&&<span style={{color:"#7C3AED"}}> ({total})</span>}</div>
+        <div style={{fontSize:15,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>รายการรออนุมัติ{total>0&&<span style={{color:"#7C3AED"}}> ({total})</span>}</div>
         <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{allowed?"เฉพาะสาขาที่คุณดูแล":"ทุกสาขา"} · เด้ง+เสียงเตือนอัตโนมัติทุก ~12 วิ</div>
       </div>
       <Btn v={pushOn?"ghost":"info"} onClick={turnOnPush} loading={pushBusy} disabled={pushOn} s={{padding:"6px 12px",fontSize:12}}>{pushOn?"🔔 แจ้งเตือนเปิดอยู่":"🔔 เปิดแจ้งเตือนมือถือ"}</Btn>
@@ -7853,6 +7871,18 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
     {view==="pending"&&(loading?<Loading text="โหลดคำสั่งซื้อรออนุมัติ..."/>
     :total===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><div style={{fontSize:48}}>✅</div><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่มีคำสั่งซื้อรออนุมัติ</p></div>
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(340px,100%),1fr))",gap:14}}>
+      {stockSess.map(s=>{const k="s"+s.id;const open=openSess===s.id;const its=sessItems[s.id];const t=(()=>{try{return new Date(s.started_at).toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}catch{return "";}})();return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.brand}`}}>
+        <div style={{padding:"12px 14px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📋 นับสต็อก</span><Chip color="orange">นับสต็อก</Chip></div>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>
+            {s.counter_photo?<img src={driveImgSrc(s.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>window.open(driveImgSrc(s.counter_photo),"_blank","noopener")} style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:42,height:42,borderRadius:8,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={18} c={C.line}/></div>}
+            <div style={{minWidth:0}}><div style={{fontSize:13.5,fontWeight:800,color:C.ink}}>{s.counter_name||"-"}</div><div style={{fontSize:11,color:C.ink4}}>🏪 {branchName(s.branch_id)} · 🕘 {t}</div></div>
+          </div>
+          <button onClick={()=>toggleSess(s)} style={{background:"none",border:"none",cursor:"pointer",color:C.brand,fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",padding:"2px 0",marginBottom:6}}>{open?"▼ ซ่อนรายการที่นับ":"▶ ดูรายการที่นับ"}</button>
+          {open&&<div style={{margin:"4px 0 8px",maxHeight:180,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{(its===undefined||its===null)?<div style={{color:C.ink4,padding:"6px 0",textAlign:"center"}}>กำลังโหลด...</div>:its.length===0?<div style={{color:C.ink4,padding:"6px 0",textAlign:"center"}}>ยังไม่มีรายการที่บันทึก</div>:its.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",borderBottom:`1px dashed ${C.lineLight}`}}><span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:C.ink2,fontWeight:600}}>{r.ingredient_name||`#${r.ingredient_id}`}</span><span style={{whiteSpace:"nowrap",color:C.ink4}}>ก่อน <b style={{color:C.ink2}}>{prev}</b> · หลัง <b style={{color:C.brand}}>{nw}</b> · ต่าง <b style={{color:delta>0?C.green:delta<0?C.red:C.ink3}}>{delta>0?`+${delta}`:delta}</b> {r.unit||""}</span></div>;})}</div>}
+          <Btn v="success" onClick={()=>approveSession(s)} loading={busy===k} icon={I.check} full s={{padding:"9px",fontSize:13}}>✅ อนุมัติการนับสต็อก</Btn>
+        </div>
+      </Card>;})}
       {pos.map(o=>{const k="p"+o.id;return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.blue}`}}>
         <div style={{padding:"12px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🏢 ครัวกลาง · {o.po_number||""}</span><Chip color="blue">ครัวกลาง</Chip></div>
