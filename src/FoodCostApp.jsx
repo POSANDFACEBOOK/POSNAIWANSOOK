@@ -2301,7 +2301,10 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   const[edits,setEdits]=useState({});  // {ingId: stringValue}
   const[saving,setSaving]=useState({});  // {ingId: bool}
   const inputRef=useRef();
-  useEffect(()=>{const t=setTimeout(()=>inputRef.current?.focus(),100);return()=>clearTimeout(t);},[]);
+  const[padFor,setPadFor]=useState(null);   // ingredient id whose on-screen number pad is open
+  function bumpEdit(ing,delta){setEdits(o=>{const base=(o[ing.id]!==undefined&&o[ing.id]!=="")?(+o[ing.id]||0):branchStock(ing,currentBranch.id);const next=Math.max(0,Math.round((base+delta)*1000)/1000);return{...o,[ing.id]:String(next)};});}
+  // Don't auto-pop the native keyboard on mobile (it shoves the layout around); desktop only.
+  useEffect(()=>{if(isMobile)return;const t=setTimeout(()=>inputRef.current?.focus(),100);return()=>clearTimeout(t);},[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered=useMemo(()=>{
     if(!q.trim())return ings;
@@ -2353,7 +2356,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
     <div style={{marginBottom:8}}>
       <div style={{position:"relative"}}>
         <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span>
-        <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อวัตถุดิบ / หมวด / ซัพพลาย..." style={{...iS,paddingLeft:40,fontSize:15,padding:"11px 14px 11px 40px"}}/>
+        <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อวัตถุดิบ / หมวด / ซัพพลาย..." style={{...iS,paddingLeft:40,fontSize:16,padding:"11px 14px 11px 40px"}}/>
       </div>
       <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:6}}>พบ <b style={{color:C.brand}}>{filtered.length}</b> รายการ {Object.keys(edits).length>0&&<span style={{color:C.green,marginLeft:8}}>· แก้ไขค้างไว้ {Object.keys(edits).length} รายการ</span>}</div>
     </div>
@@ -2386,7 +2389,11 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
             </div>
             {/* บรรทัดล่าง — ช่องนับจำนวน */}
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <NumStepper value={editVal??""} onChange={v=>setEdits(o=>({...o,[ing.id]:v}))} placeholder={String(cur)} width={isMobile?82:96} inputStyle={{fontSize:18,fontWeight:800,border:`2px solid ${dirty?C.brand:C.line}`,background:dirty?C.white:C.bg,minHeight:40}}/>
+              <div style={{display:"inline-flex",alignItems:"center",gap:5}}>
+                <button type="button" onClick={()=>bumpEdit(ing,-1)} aria-label="ลด" style={{minWidth:40,minHeight:42,borderRadius:9,border:`1.5px solid ${C.line}`,background:C.bg,fontSize:22,fontWeight:900,color:C.brand,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1,touchAction:"manipulation",flexShrink:0}}>−</button>
+                <input type="text" readOnly value={editVal!==undefined&&editVal!==""?commaGroup(editVal):""} placeholder={String(cur)} onClick={()=>setPadFor(ing.id)} style={{width:isMobile?72:92,minHeight:42,textAlign:"center",fontSize:18,fontWeight:800,borderRadius:9,border:`2px solid ${dirty?C.brand:C.line}`,background:dirty?C.white:C.bg,color:C.ink,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}/>
+                <button type="button" onClick={()=>bumpEdit(ing,1)} aria-label="เพิ่ม" style={{minWidth:40,minHeight:42,borderRadius:9,border:`1.5px solid ${C.line}`,background:C.bg,fontSize:22,fontWeight:900,color:C.brand,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1,touchAction:"manipulation",flexShrink:0}}>+</button>
+              </div>
               <span style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:700,minWidth:26}}>{ing.buy_unit}</span>
               <button onClick={()=>saveOne(ing)} disabled={isSaving||!dirty} style={{marginLeft:"auto",background:dirty&&!isSaving?`linear-gradient(135deg,${C.green},#059669)`:C.lineLight,border:"none",borderRadius:10,padding:"10px 16px",cursor:dirty&&!isSaving?"pointer":"not-allowed",color:dirty&&!isSaving?C.white:C.ink4,fontSize:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:5,minHeight:42,minWidth:64,whiteSpace:"nowrap"}}>{isSaving?"⏳":<><Ic d={I.check} s={15} c={dirty?C.white:C.ink4}/>บันทึก</>}</button>
             </div>
@@ -2400,6 +2407,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
       <Btn v="ghost" onClick={onClose} full s={{padding:"11px"}}>ปิด</Btn>
       {Object.keys(edits).length>0&&<Btn v="success" onClick={saveAll} icon={I.check} full s={{padding:"11px"}}>บันทึกทั้งหมด ({Object.keys(edits).length})</Btn>}
     </div>
+    {padFor!=null&&(()=>{const ing=ings.find(x=>+x.id===+padFor);const ev=edits[padFor];return <NumPad value={ev!==undefined&&ev!==""?ev:""} integer={false} title={ing?`นับ: ${ing.name}`:"นับสต็อก"} onChange={v=>setEdits(o=>({...o,[padFor]:v}))} onClose={()=>setPadFor(null)}/>;})()}
   </Modal>;
 }
 
