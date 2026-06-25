@@ -1926,7 +1926,7 @@ function StockSessionHistory({currentUser,branches=[],onClose}){
         {on&&<div style={{borderTop:`1px solid ${C.lineLight}`,padding:"8px 12px",background:C.bg}}>
           {rows===null||rows===undefined?<div style={{fontSize:12,color:C.ink4,textAlign:"center",padding:"8px 0"}}>กำลังโหลด...</div>
           :rows.length===0?<div style={{fontSize:12,color:C.ink4,textAlign:"center",padding:"8px 0"}}>ครั้งนี้ยังไม่ได้บันทึกรายการ</div>
-          :<>{<div style={{fontSize:11,color:C.ink4,marginBottom:4}}>นับ {rows.length} รายการ</div>}{rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12.5,padding:"4px 0",borderBottom:`1px dashed ${C.lineLight}`}}><span style={{color:C.ink2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.ingredient_name||`#${r.ingredient_id}`}</span><span style={{whiteSpace:"nowrap",color:C.ink3}}>นับได้ <b style={{color:C.brand}}>{nw}</b>{prev!==nw&&<span style={{color:C.ink4,marginLeft:6,fontWeight:400}}>· เดิม {prev}</span>}</span></div>;})}</>}
+          :<>{<div style={{fontSize:11,color:C.ink4,marginBottom:4}}>นับ {rows.length} รายการ</div>}{rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{padding:"5px 0",borderBottom:`1px dashed ${C.lineLight}`,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:13,fontWeight:600,color:C.ink2}}>{r.ingredient_name||`#${r.ingredient_id}`}</div><div style={{display:"flex",flexWrap:"wrap",gap:"2px 12px",fontSize:12,marginTop:1}}><span style={{color:C.ink4}}>ก่อนนับ <b style={{color:C.ink2}}>{prev}</b> {r.unit||""}</span><span style={{color:C.ink4}}>หลังนับ <b style={{color:C.brand}}>{nw}</b> {r.unit||""}</span><span style={{color:C.ink4}}>ผลต่าง <b style={{color:delta>0?C.green:delta<0?C.red:C.ink3}}>{delta>0?`+${delta}`:delta}</b> {r.unit||""}</span></div></div>;})}</>}
         </div>}
       </div>;})}
     </div>}
@@ -1987,7 +1987,11 @@ function StockHistoryModal({ing,currentBranch,onClose}){
       {rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{border:`1px solid ${C.line}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif",display:"flex",gap:10,alignItems:"flex-start"}}>
         {r.counter_photo&&<img src={driveImgSrc(r.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>window.open(driveImgSrc(r.counter_photo),"_blank","noopener")} title="รูปผู้นับ" style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>}
         <div style={{minWidth:0,flex:1}}>
-          <div style={{fontSize:13.5,fontWeight:700,color:C.ink}}>นับได้ <b style={{color:C.brand}}>{nw}</b> {ing.buy_unit||""}{prev!==nw&&<span style={{fontSize:12,fontWeight:400,color:C.ink4,marginLeft:6}}>· เดิม {prev}</span>}</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:"2px 14px",fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>
+            <span style={{color:C.ink4}}>ก่อนนับ <b style={{color:C.ink2}}>{prev}</b> {r.unit||ing.buy_unit||""}</span>
+            <span style={{color:C.ink4}}>หลังนับ <b style={{color:C.brand,fontSize:14}}>{nw}</b> {r.unit||ing.buy_unit||""}</span>
+            <span style={{color:C.ink4}}>ผลต่าง <b style={{color:delta>0?C.green:delta<0?C.red:C.ink3}}>{delta>0?`+${delta}`:delta}</b> {r.unit||ing.buy_unit||""}</span>
+          </div>
           <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(r.counted_at)} · โดย {r.counted_by||"—"}</div>
         </div>
       </div>;})}
@@ -2303,7 +2307,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
       // edit_at — those should reflect catalog edits (price/name/...) only.
       await api.updateIng(ing.id,{stock_by_branch:next});
       // Log the count so the ingredient card can show its stock-count history (best-effort).
-      api.addStockLog({ingredient_id:ing.id,ingredient_name:ing.name,branch_id:currentBranch.id,prev_qty:prev,new_qty:v,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
+      api.addStockLog({ingredient_id:ing.id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:v,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
       if(reload)await reload();
       setEdits(e=>{const n={...e};delete n[ing.id];return n;});
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -2320,7 +2324,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         const prev=branchStock(ing,currentBranch.id);
         const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0);
         await api.updateIng(+id,{stock_by_branch:next});
-        api.addStockLog({ingredient_id:+id,ingredient_name:ing.name,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
+        api.addStockLog({ingredient_id:+id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
         ok.push(id);
       }catch(e){alert(`บันทึก ${ing.name} ไม่สำเร็จ: ${e.message}`);}
     }
