@@ -7516,7 +7516,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
 }
 
 function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders=[],allOrders=[]}){
-  const supF0={name:"",contact:"",phone:"",note:"",active:true,central_only:false};
+  const supF0={name:"",contact:"",phone:"",note:"",active:true,central_only:false,delivery_info:"",min_order:"",invoice_type:"receipt",credit_term:""};
   const[supForm,setSupForm]=useState(supF0);
   const[editSID,setEditSID]=useState(null);
   const canE=hasPerm(currentUser,"suppliers");
@@ -7525,11 +7525,13 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
   // on the central branch row and are visible to other branches via the StockCheck
   // filter, but the SupplierTab itself only ever shows the *current branch's* rows.
   const myList=useMemo(()=>suppliers.filter(s=>+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
+  const[q,setQ]=useState("");
+  const shown=useMemo(()=>{const ql=q.trim().toLowerCase();return ql?myList.filter(s=>s.name.toLowerCase().includes(ql)||(s.contact||"").toLowerCase().includes(ql)||(s.phone||"").includes(q.trim())):myList;},[myList,q]);
   const [statsFor,setStatsFor]=useState(null);
   const [showForm,setShowForm]=useState(false);  // controls the SupplierFormModal
   function openAdd(){setSupForm(supF0);setEditSID(null);setShowForm(true);}
   function openEdit(s){
-    setSupForm({name:s.name,contact:s.contact||"",phone:s.phone||"",note:s.note||"",active:s.active!==false,central_only:!!s.central_only});
+    setSupForm({name:s.name,contact:s.contact||"",phone:s.phone||"",note:s.note||"",active:s.active!==false,central_only:!!s.central_only,delivery_info:s.delivery_info||"",min_order:s.min_order==null?"":String(s.min_order),invoice_type:s.invoice_type||"receipt",credit_term:s.credit_term||""});
     setEditSID(s.id);
     setShowForm(true);
   }
@@ -7539,8 +7541,9 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
   async function saveSup(){
     if(!supForm.name)return;
     try{
-      if(editSID)await api.updateSupplier(editSID,supForm);
-      else await api.addSupplier({...supForm,branch_id:currentBranch.id});
+      const payload={...supForm,min_order:(supForm.min_order===""||supForm.min_order==null)?null:+supForm.min_order};
+      if(editSID)await api.updateSupplier(editSID,payload);
+      else await api.addSupplier({...payload,branch_id:currentBranch.id});
       await reloadSuppliers();
       closeForm();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -7554,14 +7557,21 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
       </div>
       {canE&&<Btn onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มซัพพลาย</Btn>}
     </div>
+    {myList.length>0&&<div style={{position:"relative",marginBottom:12}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อซัพพลาย / ผู้ติดต่อ / เบอร์..." style={{...iS,paddingLeft:40,fontSize:16}}/></div>}
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(280px,100%),1fr))",gap:12,marginBottom:16}}>
-      {myList.map(s=><Card key={s.id} hover onClick={()=>setStatsFor(s)} style={{padding:"14px 16px"}}>
+      {shown.map(s=><Card key={s.id} hover onClick={()=>setStatsFor(s)} style={{padding:"14px 16px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
           <div style={{minWidth:0,flex:1}}>
             <div style={{fontWeight:700,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4,display:"flex",alignItems:"center",gap:6}}>{s.name}<span style={{fontSize:10,color:C.ink4,fontWeight:600}}>📊 กดดูสถิติ</span></div>
             {s.contact&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}><span style={{color:C.ink4}}>ผู้ติดต่อ:</span> {s.contact}</div>}
             {s.phone&&<div style={{fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>📞 {s.phone}</div>}
             {s.note&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontStyle:"italic",marginTop:4}}>📝 {s.note}</div>}
+            {s.delivery_info&&<div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:3}}>🚚 {s.delivery_info}</div>}
+            {(s.min_order>0||s.credit_term||s.invoice_type)&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
+              {s.min_order>0&&<span style={{fontSize:10,fontWeight:700,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"2px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif"}}>📦 ขั้นต่ำ ฿{(+s.min_order).toLocaleString()}</span>}
+              {s.credit_term&&<span style={{fontSize:10,fontWeight:700,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"2px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif"}}>💳 {s.credit_term}</span>}
+              {s.invoice_type&&<span style={{fontSize:10,fontWeight:700,color:s.invoice_type==="tax"?C.blue:C.ink3,background:s.invoice_type==="tax"?C.blueLight:C.bg,border:`1px solid ${s.invoice_type==="tax"?C.blue+"40":C.line}`,padding:"2px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif"}}>🧾 {s.invoice_type==="tax"?"ใบกำกับภาษี":"ใบเสร็จ"}</span>}
+            </div>}
           </div>
           {canE&&<div style={{display:"flex",gap:4,flexShrink:0}} onClick={e=>e.stopPropagation()}>
             <button onClick={()=>openEdit(s)} title="แก้ไขซัพพลาย" style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
@@ -7569,7 +7579,7 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
           </div>}
         </div>
       </Card>)}
-      {myList.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีซัพพลายของสาขานี้</p>{canE&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.brand}}>"+ เพิ่มซัพพลาย"</b> ด้านบนเพื่อเริ่ม</p>}</div>}
+      {shown.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{q?"ไม่พบซัพพลายที่ค้นหา":"ยังไม่มีซัพพลายของสาขานี้"}</p>{canE&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.brand}}>"+ เพิ่มซัพพลาย"</b> ด้านบนเพื่อเริ่ม</p>}</div>}
     </div>
     {statsFor&&<SupplierStatsModal supplier={statsFor} orders={ordersScope} onClose={()=>setStatsFor(null)}/>}
     {showForm&&<Modal title={editSID?"✏️ แก้ไขซัพพลาย":"➕ เพิ่มซัพพลายใหม่"} onClose={closeForm}>
@@ -7578,6 +7588,18 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
         <Inp label="ชื่อผู้ติดต่อ" value={supForm.contact} onChange={e=>setSupForm(f=>({...f,contact:e.target.value}))} placeholder="คุณสมชาย"/>
         <Inp label="เบอร์โทร" value={supForm.phone} onChange={e=>setSupForm(f=>({...f,phone:e.target.value}))} placeholder="081-234-5678"/>
         <Inp label="หมายเหตุ" value={supForm.note} onChange={e=>setSupForm(f=>({...f,note:e.target.value}))} placeholder="ส่งทุกเช้า..."/>
+      </div>
+      <div style={{background:C.bg,borderRadius:12,padding:14,marginBottom:14,border:`1px solid ${C.line}`}}>
+        <div style={{fontSize:13,fontWeight:800,color:C.ink2,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>🚚 การจัดส่ง / การเงิน</div>
+        <Inp label="ข้อมูลการจัดส่ง" value={supForm.delivery_info} onChange={e=>setSupForm(f=>({...f,delivery_info:e.target.value}))} placeholder="เช่น ส่ง จ-ศ เช้า, มีรถส่งเอง, สั่งล่วงหน้า 1 วัน"/>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Inp label="📦 ยอดสั่งขั้นต่ำ (บาท)" type="number" value={supForm.min_order} onChange={e=>setSupForm(f=>({...f,min_order:e.target.value}))} placeholder="0"/>
+          <Inp label="💳 เครดิตเทอม" value={supForm.credit_term} onChange={e=>setSupForm(f=>({...f,credit_term:e.target.value}))} placeholder="เช่น 30 วัน / เงินสด"/>
+        </div>
+        <div style={{fontSize:13,fontWeight:600,color:C.ink2,margin:"4px 0 6px",fontFamily:"'Sarabun',sans-serif"}}>🧾 ประเภทเอกสาร</div>
+        <div style={{display:"flex",gap:8}}>
+          {[{v:"tax",l:"ใบกำกับภาษี"},{v:"receipt",l:"ใบเสร็จธรรมดา"}].map(o=>{const on=(supForm.invoice_type||"receipt")===o.v;return <button key={o.v} type="button" onClick={()=>setSupForm(f=>({...f,invoice_type:o.v}))} style={{flex:1,padding:"10px",borderRadius:10,border:`2px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{on?"✓ ":""}{o.l}</button>;})}
+        </div>
       </div>
       <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:12,borderTop:`1px solid ${C.line}`}}>
         <Btn v="ghost" onClick={closeForm}>ยกเลิก</Btn>
