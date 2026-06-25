@@ -2137,7 +2137,58 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   }
   // Suppliers for current branch (own list)
   const myBranchSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
+  // ── ภาพรวมมูลค่าวัตถุดิบ (มูลค่า = สต็อก × ราคาทุน ต่อสาขา) ──
+  const[showReport,setShowReport]=useState(false);
+  const report=useMemo(()=>{
+    const list=ings.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentral));
+    let totalValue=0,lowCount=0;const byCat={};const rows=[];
+    for(const i of list){
+      const qty=branchStock(i,currentBranch?.id);const price=+i.buy_price||0;const value=qty*price;
+      const safety=branchSafety(i,currentBranch?.id);const low=safety>0&&qty<safety;
+      totalValue+=value;if(low)lowCount++;
+      const c=i.category||"ไม่มีหมวด";if(!byCat[c])byCat[c]={name:c,value:0,count:0};byCat[c].value+=value;byCat[c].count++;
+      rows.push({id:i.id,name:i.name,qty,unit:i.buy_unit||"",price,value,low});
+    }
+    return {totalValue,count:rows.length,lowCount,catList:Object.values(byCat).sort((a,b)=>b.value-a.value),topItems:rows.sort((a,b)=>b.value-a.value)};
+  },[ings,currentBranch,isCentral]);
+  const rMoney=n=>(+n||0).toLocaleString(undefined,{maximumFractionDigits:0});
   return <div>
+    {/* 📊 แดชบอร์ดภาพรวมมูลค่าวัตถุดิบ */}
+    <div style={{background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,border:`1px solid ${C.brandBorder}`,borderRadius:16,padding:"14px 16px",marginBottom:16,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:150}}>
+          <div style={{fontSize:12,color:C.ink3,fontWeight:700}}>📊 มูลค่าสต็อกวัตถุดิบ · {currentBranch?.name||"—"}</div>
+          <div style={{fontSize:26,fontWeight:900,color:C.brand,lineHeight:1.1,marginTop:2}}>฿{rMoney(report.totalValue)}</div>
+        </div>
+        <div style={{textAlign:"center",background:C.white,borderRadius:10,padding:"6px 14px",minWidth:64}}><div style={{fontSize:18,fontWeight:900,color:C.ink}}>{report.count}</div><div style={{fontSize:10,color:C.ink4}}>รายการ</div></div>
+        <div style={{textAlign:"center",background:report.lowCount>0?"#FEF2F2":C.white,borderRadius:10,padding:"6px 14px",minWidth:64,border:report.lowCount>0?"1px solid #FECACA":"none"}}><div style={{fontSize:18,fontWeight:900,color:report.lowCount>0?C.red:C.ink}}>{report.lowCount}</div><div style={{fontSize:10,color:C.ink4}}>ต่ำกว่า safety</div></div>
+        <button onClick={()=>setShowReport(v=>!v)} style={{background:C.white,border:`1px solid ${C.brandBorder}`,borderRadius:10,padding:"9px 14px",cursor:"pointer",fontSize:12,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{showReport?"▲ ซ่อนรายงาน":"▼ ดูรายงาน"}</button>
+      </div>
+      {showReport&&<div style={{marginTop:14,borderTop:`1px solid ${C.brandBorder}`,paddingTop:12}}>
+        <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,marginBottom:8}}>📂 มูลค่าตามหมวดหมู่</div>
+        <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:18}}>
+          {report.catList.length===0?<div style={{fontSize:12,color:C.ink4,textAlign:"center",padding:"10px 0"}}>ยังไม่มีข้อมูล</div>
+          :report.catList.map(c=>{const pct=report.totalValue>0?c.value/report.totalValue*100:0;const barW=report.catList[0].value>0?c.value/report.catList[0].value*100:0;return <div key={c.name}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:2}}><span style={{color:C.ink2,fontWeight:600}}>{c.name} <span style={{color:C.ink4,fontWeight:400}}>({c.count})</span></span><span style={{color:C.ink2,fontWeight:700}}>฿{rMoney(c.value)} <span style={{color:C.ink4,fontWeight:400,fontSize:11}}>{pct.toFixed(0)}%</span></span></div>
+            <div style={{height:8,background:C.white,borderRadius:6,overflow:"hidden",border:`1px solid ${C.line}`}}><div style={{width:`${barW}%`,height:"100%",background:`linear-gradient(90deg,${C.brand},${C.brandDark})`}}/></div>
+          </div>;})}
+        </div>
+        <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,marginBottom:8}}>🏆 อันดับมูลค่าสูงสุด <span style={{color:C.ink4,fontWeight:400,fontSize:11}}>(จำนวน × ราคาทุน)</span></div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {report.topItems.slice(0,12).map((r,i)=>{const barW=report.topItems[0].value>0?r.value/report.topItems[0].value*100:0;return <div key={r.id} style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:11,fontWeight:800,color:C.ink4,width:18,textAlign:"right",flexShrink:0}}>{i+1}</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12}}><span style={{color:C.ink,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}{r.low&&<span style={{color:C.red,marginLeft:4,fontSize:10}}>⚠️</span>}</span><span style={{color:C.ink2,fontWeight:700,whiteSpace:"nowrap"}}>฿{rMoney(r.value)}</span></div>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginTop:2}}>
+                <div style={{flex:1,height:6,background:C.white,borderRadius:5,overflow:"hidden",border:`1px solid ${C.line}`}}><div style={{width:`${barW}%`,height:"100%",background:r.low?C.red:C.green}}/></div>
+                <span style={{fontSize:10,color:C.ink4,whiteSpace:"nowrap"}}>{r.qty} {r.unit} × ฿{(+r.price).toLocaleString()}</span>
+              </div>
+            </div>
+          </div>;})}
+          {report.topItems.length>12&&<div style={{fontSize:11,color:C.ink4,textAlign:"center",marginTop:4}}>+ อีก {report.topItems.length-12} รายการ</div>}
+        </div>
+      </div>}
+    </div>
     {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>วัตถุดิบจัดการโดยสาขาครัวกลางเท่านั้น • สาขานี้ดูข้อมูลได้อย่างเดียว</span></div>}
     <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
       <button onClick={()=>{setCat("ทุกหมวด");setPg(1);}} style={{padding:"7px 18px",borderRadius:20,border:`2px solid ${cat==="ทุกหมวด"?C.brand:C.line}`,background:cat==="ทุกหมวด"?C.brand:"transparent",color:cat==="ทุกหมวด"?C.white:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .15s"}}>ทุกหมวด</button>
