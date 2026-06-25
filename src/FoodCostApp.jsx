@@ -1926,7 +1926,7 @@ function StockSessionHistory({currentUser,branches=[],onClose}){
         {on&&<div style={{borderTop:`1px solid ${C.lineLight}`,padding:"8px 12px",background:C.bg}}>
           {rows===null||rows===undefined?<div style={{fontSize:12,color:C.ink4,textAlign:"center",padding:"8px 0"}}>กำลังโหลด...</div>
           :rows.length===0?<div style={{fontSize:12,color:C.ink4,textAlign:"center",padding:"8px 0"}}>ครั้งนี้ยังไม่ได้บันทึกรายการ</div>
-          :<>{<div style={{fontSize:11,color:C.ink4,marginBottom:4}}>นับ {rows.length} รายการ</div>}{rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12.5,padding:"4px 0",borderBottom:`1px dashed ${C.lineLight}`}}><span style={{color:C.ink2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.ingredient_name||`#${r.ingredient_id}`}</span><span style={{whiteSpace:"nowrap",color:C.ink3}}>{prev} → <b style={{color:C.brand}}>{nw}</b> <span style={{fontWeight:800,color:delta>0?C.green:delta<0?C.red:C.ink4}}>{delta>0?`+${delta}`:delta<0?`${delta}`:"±0"}</span></span></div>;})}</>}
+          :<>{<div style={{fontSize:11,color:C.ink4,marginBottom:4}}>นับ {rows.length} รายการ</div>}{rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12.5,padding:"4px 0",borderBottom:`1px dashed ${C.lineLight}`}}><span style={{color:C.ink2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.ingredient_name||`#${r.ingredient_id}`}</span><span style={{whiteSpace:"nowrap",color:C.ink3}}>นับได้ <b style={{color:C.brand}}>{nw}</b>{prev!==nw&&<span style={{color:C.ink4,marginLeft:6,fontWeight:400}}>· เดิม {prev}</span>}</span></div>;})}</>}
         </div>}
       </div>;})}
     </div>}
@@ -1987,7 +1987,7 @@ function StockHistoryModal({ing,currentBranch,onClose}){
       {rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{border:`1px solid ${C.line}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif",display:"flex",gap:10,alignItems:"flex-start"}}>
         {r.counter_photo&&<img src={driveImgSrc(r.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>window.open(driveImgSrc(r.counter_photo),"_blank","noopener")} title="รูปผู้นับ" style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>}
         <div style={{minWidth:0,flex:1}}>
-          <div style={{fontSize:13.5,fontWeight:700,color:C.ink}}>{prev} → <b style={{color:C.brand}}>{nw}</b> {ing.buy_unit||""} <span style={{fontSize:11.5,fontWeight:800,color:delta>0?C.green:delta<0?C.red:C.ink4,marginLeft:4}}>{delta>0?`▲ +${delta}`:delta<0?`▼ ${delta}`:"±0"}</span></div>
+          <div style={{fontSize:13.5,fontWeight:700,color:C.ink}}>นับได้ <b style={{color:C.brand}}>{nw}</b> {ing.buy_unit||""}{prev!==nw&&<span style={{fontSize:12,fontWeight:400,color:C.ink4,marginLeft:6}}>· เดิม {prev}</span>}</div>
           <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(r.counted_at)} · โดย {r.counted_by||"—"}</div>
         </div>
       </div>;})}
