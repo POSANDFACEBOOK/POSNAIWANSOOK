@@ -1881,6 +1881,28 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
     </div>
   </div>;
 }
+// Gate before stock counting: capture WHO is counting (photo + name) for accountability.
+function StockCounterGate({currentUser,onConfirm,onClose}){
+  const[name,setName]=useState(currentUser?.name||currentUser?.username||"");
+  const[photo,setPhoto]=useState(null);
+  const[uploading,setUploading]=useState(false);
+  const fileRef=useRef();
+  async function onPhoto(e){const f=e.target.files?.[0];e.target.value="";if(!f)return;setUploading(true);try{const ref=await uploadImageToDrive(f);setPhoto(ref);}catch(err){alert("อัปโหลดรูปไม่สำเร็จ: "+(err.message||err));}setUploading(false);}
+  const ready=!!photo&&!!name.trim()&&!uploading;
+  return <Modal title="📋 ผู้รับผิดชอบนับสต็อก" onClose={onClose}>
+    <div style={{fontSize:13,color:C.ink3,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>ก่อนเริ่มนับสต็อก กรุณา<b>ถ่ายรูปผู้นับ</b> และ <b>ใส่ชื่อ</b> เพื่อยืนยันผู้รับผิดชอบ</div>
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,marginBottom:16}}>
+      {photo?<div style={{position:"relative"}}><img src={driveImgSrc(photo)} alt="" style={{width:150,height:150,objectFit:"cover",borderRadius:14,border:`2px solid ${C.green}`}}/><button onClick={()=>setPhoto(null)} title="ถ่ายใหม่" style={{position:"absolute",top:-8,right:-8,width:24,height:24,borderRadius:"50%",background:C.red,color:C.white,border:`2px solid ${C.white}`,cursor:"pointer",fontSize:11,fontWeight:700}}>✕</button></div>
+      :<button onClick={()=>fileRef.current?.click()} disabled={uploading} style={{width:150,height:150,borderRadius:14,border:`2px dashed ${C.brandBorder}`,background:C.brandLight,cursor:uploading?"wait":"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,color:C.brand}}>{uploading?<span style={{fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>กำลังอัป...</span>:<><Ic d={I.img} s={34} c={C.brand}/><span style={{fontSize:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>📷 ถ่ายรูปผู้นับ</span></>}</button>}
+      <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onPhoto} style={{display:"none"}}/>
+    </div>
+    <Inp label="ชื่อผู้นับสต็อก *" value={name} onChange={e=>setName(e.target.value)} placeholder="ชื่อพนักงานที่นับ"/>
+    <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:14,marginTop:14,borderTop:`1px solid ${C.line}`}}>
+      <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
+      <Btn v="success" onClick={()=>onConfirm({name:name.trim(),photo})} disabled={!ready} icon={I.check}>เริ่มนับสต็อก</Btn>
+    </div>
+  </Modal>;
+}
 // Stock-count history for one ingredient at the current branch — every saved count
 // from the นับสต็อก function (logged into stock_logs).
 function StockHistoryModal({ing,currentBranch,onClose}){
@@ -1903,15 +1925,18 @@ function StockHistoryModal({ing,currentBranch,onClose}){
     :err?<div style={{textAlign:"center",padding:"36px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>โหลดประวัติไม่สำเร็จ — เครือข่าย/เซิร์ฟเวอร์ช้า<div style={{marginTop:10}}><Btn v="ghost" onClick={load}>↻ ลองใหม่</Btn></div></div>
     :rows.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการนับสต็อก<br/><span style={{fontSize:12}}>ประวัติจะเริ่มบันทึกตั้งแต่การกดบันทึกครั้งถัดไป</span></div>
     :<div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:"60vh",overflowY:"auto",paddingRight:4}}>
-      {rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{border:`1px solid ${C.line}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif"}}>
-        <div style={{fontSize:13.5,fontWeight:700,color:C.ink}}>{prev} → <b style={{color:C.brand}}>{nw}</b> {ing.buy_unit||""} <span style={{fontSize:11.5,fontWeight:800,color:delta>0?C.green:delta<0?C.red:C.ink4,marginLeft:4}}>{delta>0?`▲ +${delta}`:delta<0?`▼ ${delta}`:"±0"}</span></div>
-        <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(r.counted_at)} · โดย {r.counted_by||"—"}</div>
+      {rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{border:`1px solid ${C.line}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif",display:"flex",gap:10,alignItems:"flex-start"}}>
+        {r.counter_photo&&<img src={driveImgSrc(r.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>window.open(driveImgSrc(r.counter_photo),"_blank","noopener")} title="รูปผู้นับ" style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>}
+        <div style={{minWidth:0,flex:1}}>
+          <div style={{fontSize:13.5,fontWeight:700,color:C.ink}}>{prev} → <b style={{color:C.brand}}>{nw}</b> {ing.buy_unit||""} <span style={{fontSize:11.5,fontWeight:800,color:delta>0?C.green:delta<0?C.red:C.ink4,marginLeft:4}}>{delta>0?`▲ +${delta}`:delta<0?`▼ ${delta}`:"±0"}</span></div>
+          <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(r.counted_at)} · โดย {r.counted_by||"—"}</div>
+        </div>
       </div>;})}
     </div>}
   </Modal>;
 }
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[],menus=[]}){
-  const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);
+  const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);const[showStockGate,setShowStockGate]=useState(false);const[stockCounter,setStockCounter]=useState(null);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
   const[priceHistoryItem,setPriceHistoryItem]=useState(null);
   const[stockHistItem,setStockHistItem]=useState(null);
@@ -2059,7 +2084,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
-      <Btn v="success" onClick={()=>setShowStockCheck(true)} icon={I.box}>📦 นับสต็อก</Btn>
+      <Btn v="success" onClick={()=>setShowStockGate(true)} icon={I.box}>📦 นับสต็อก</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
@@ -2182,14 +2207,15 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
         <Btn onClick={save} icon={I.check} disabled={!form.name||!form.buy_price} loading={saving}>{editId?"บันทึก":"เพิ่มวัตถุดิบ"}</Btn>
       </div>
     </Modal>}
-    {showStockCheck&&<StockCheckPopup ings={filtered} currentBranch={currentBranch} currentUser={currentUser} reload={reload} onClose={()=>setShowStockCheck(false)}/>}
+    {showStockGate&&<StockCounterGate currentUser={currentUser} onClose={()=>setShowStockGate(false)} onConfirm={c=>{setStockCounter(c);setShowStockGate(false);setShowStockCheck(true);}}/>}
+    {showStockCheck&&<StockCheckPopup ings={filtered} currentBranch={currentBranch} currentUser={currentUser} reload={reload} counter={stockCounter} onClose={()=>setShowStockCheck(false)}/>}
   </div>;
 }
 
 // ══════════════════════════════════════════════════════
 // ── STOCK CHECK POPUP (used from IngTab) ──────────────
 // ══════════════════════════════════════════════════════
-function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
+function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}){
   const isMobile=useIsMobile();
   const[q,setQ]=useState("");
   const[edits,setEdits]=useState({});  // {ingId: stringValue}
@@ -2216,7 +2242,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
       // edit_at — those should reflect catalog edits (price/name/...) only.
       await api.updateIng(ing.id,{stock_by_branch:next});
       // Log the count so the ingredient card can show its stock-count history (best-effort).
-      api.addStockLog({ingredient_id:ing.id,branch_id:currentBranch.id,prev_qty:prev,new_qty:v,counted_by:currentUser?.username||currentUser?.name||""}).catch(()=>{});
+      api.addStockLog({ingredient_id:ing.id,branch_id:currentBranch.id,prev_qty:prev,new_qty:v,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null}).catch(()=>{});
       if(reload)await reload();
       setEdits(e=>{const n={...e};delete n[ing.id];return n;});
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -2233,7 +2259,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose}){
         const prev=branchStock(ing,currentBranch.id);
         const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0);
         await api.updateIng(+id,{stock_by_branch:next});
-        api.addStockLog({ingredient_id:+id,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:currentUser?.username||currentUser?.name||""}).catch(()=>{});
+        api.addStockLog({ingredient_id:+id,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null}).catch(()=>{});
         ok.push(id);
       }catch(e){alert(`บันทึก ${ing.name} ไม่สำเร็จ: ${e.message}`);}
     }
