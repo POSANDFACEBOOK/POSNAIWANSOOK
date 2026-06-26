@@ -2406,13 +2406,14 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
     finally{delete savingRef.current[ing.id];setSaving(s=>{const n={...s};delete n[ing.id];return n;});}
   }
   async function saveAll(){
-    if(savingAllRef.current)return;   // ignore double-tap on "บันทึกทั้งหมด"
-    const entries=Object.entries(edits).filter(([id,v])=>v!==""&&v!=null);
-    if(entries.length===0){alert("ยังไม่มีการเปลี่ยนแปลง");return;}
-    if(!await confirmDlg({title:"บันทึกสต็อก",message:`บันทึก ${entries.length} รายการ?`,confirmLabel:"บันทึก"}))return;
-    savingAllRef.current=true;setSavingAll(true);
-    const ok=[];
+    if(savingAllRef.current)return;   // ignore double-tap — claim the lock synchronously, BEFORE the
+    savingAllRef.current=true;        // confirm dialog, so a second tap while it's open can't slip through.
     try{
+      const entries=Object.entries(edits).filter(([id,v])=>v!==""&&v!=null);
+      if(entries.length===0){alert("ยังไม่มีการเปลี่ยนแปลง");return;}
+      if(!await confirmDlg({title:"บันทึกสต็อก",message:`บันทึก ${entries.length} รายการ?`,confirmLabel:"บันทึก"}))return;
+      setSavingAll(true);
+      const ok=[];
       for(const[id,v]of entries){
         if(savingRef.current[id])continue;   // this item already being saved individually — skip to avoid a duplicate insert
         const ing=ings.find(x=>+x.id===+id);if(!ing)continue;
@@ -2428,8 +2429,8 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
       }
       if(reload)await reload();
       setEdits({});
+      alert(`✅ บันทึกสต็อก ${ok.length} รายการสำเร็จ`);
     }finally{savingAllRef.current=false;setSavingAll(false);}
-    alert(`✅ บันทึกสต็อก ${ok.length} รายการสำเร็จ`);
   }
 
   return <Modal title={`📦 นับสต็อก — ${currentBranch?.name||"—"}`} onClose={onClose} wide>
