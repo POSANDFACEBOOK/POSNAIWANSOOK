@@ -8216,6 +8216,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   const stockOfItem=(it,bid)=>{const ing=ingById.get(+(it&&it.ingId));return ing?branchStock(ing,bid):null;};
   // ── ประวัติการอนุมัติ ──
   const[view,setView]=useState("pending");          // pending | history
+  const[detailCard,setDetailCard]=useState(null);   // {kind:'po'|'ext', o} → full-screen detail popup with item images
   const[logs,setLogs]=useState([]);const[logLoading,setLogLoading]=useState(false);
   const[fDate,setFDate]=useState("");const[fBranch,setFBranch]=useState("");const[fSupplier,setFSupplier]=useState("");
   const[openLog,setOpenLog]=useState(null);   // expanded history row (shows its items)
@@ -8278,24 +8279,54 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
         </div>
       </Card>;})}
       {pos.map(o=>{const k="p"+o.id;return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.blue}`}}>
-        <div style={{padding:"12px 14px"}}>
+        <div onClick={()=>setDetailCard({kind:"po",o})} title="แตะดูรายละเอียด + รูปภาพ" style={{padding:"12px 14px",cursor:"pointer"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🏢 ครัวกลาง · {o.po_number||""}</span><Chip color="blue">ครัวกลาง</Chip></div>
           <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>จากสาขา <b style={{color:C.ink}}>{branchName(o.from_branch_id)}</b> · โดย {o.created_by||"-"}</div>
           <div style={{margin:"8px 0",maxHeight:200,overflowY:"auto",overflowX:"hidden",paddingRight:12,scrollbarGutter:"stable",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=>{const st=stockOfItem(it,o.from_branch_id);return <div key={i} style={{borderBottom:`1px dashed ${C.lineLight}`,padding:"4px 0"}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><span style={{color:C.ink2,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</span><span style={{color:C.ink3,whiteSpace:"nowrap"}}>฿{money(it.line_total)}</span></div><div style={{display:"flex",gap:10,marginTop:2,fontSize:11,flexWrap:"wrap"}}><span style={{color:st!=null&&st<=0?C.red:C.ink4}}>📦 คงเหลือ <b style={{color:st!=null&&st<=0?C.red:C.ink2}}>{st!=null?st:"-"}</b> {it.unit||""}</span><span style={{color:C.brand,fontWeight:700}}>🛒 สั่ง {it.qty||it.qtyNeeded||0} {it.unit||""}</span></div></div>;})}</div>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}><span>รวม</span><span>฿{money(o.total||sumItems(o))}</span></div>
-          <div style={{display:"flex",gap:8}}><Btn v="success" onClick={()=>approvePO(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectPO(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}><span style={{fontSize:11,fontWeight:600,color:C.blue}}>🔍 แตะดูรายละเอียด + รูป</span><span>รวม ฿{money(o.total||sumItems(o))}</span></div>
         </div>
+        <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:8,padding:"0 14px 12px"}}><Btn v="success" onClick={()=>approvePO(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectPO(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
       </Card>;})}
       {reqs.map(o=>{const k="r"+o.id;return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.teal}`}}>
-        <div style={{padding:"12px 14px"}}>
+        <div onClick={()=>setDetailCard({kind:"ext",o})} title="แตะดูรายละเอียด + รูปภาพ" style={{padding:"12px 14px",cursor:"pointer"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🚚 {o.supplier_name||"ซัพพลายนอก"}</span><Chip color="teal">ซัพพลายนอก</Chip></div>
           <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>จากสาขา <b style={{color:C.ink}}>{branchName(o.branch_id)}</b> · โดย {o.requested_by||"-"}</div>
           <div style={{margin:"8px 0",maxHeight:200,overflowY:"auto",overflowX:"hidden",paddingRight:12,scrollbarGutter:"stable",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=>{const st=stockOfItem(it,o.branch_id);return <div key={i} style={{borderBottom:`1px dashed ${C.lineLight}`,padding:"4px 0"}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><span style={{color:C.ink2,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</span><span style={{color:C.ink3,whiteSpace:"nowrap"}}>฿{money(it.estimatedCost||it.line_total)}</span></div><div style={{display:"flex",gap:10,marginTop:2,fontSize:11,flexWrap:"wrap"}}><span style={{color:st!=null&&st<=0?C.red:C.ink4}}>📦 คงเหลือ <b style={{color:st!=null&&st<=0?C.red:C.ink2}}>{st!=null?st:"-"}</b> {it.unit||""}</span><span style={{color:C.teal,fontWeight:700}}>🛒 สั่ง {it.qtyNeeded||it.qty||0} {it.unit||""}</span></div></div>;})}</div>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}><span>รวม</span><span>฿{money(sumItems(o))}</span></div>
-          <div style={{display:"flex",gap:8}}><Btn v="success" onClick={()=>approveReq(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectReq(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}><span style={{fontSize:11,fontWeight:600,color:C.teal}}>🔍 แตะดูรายละเอียด + รูป</span><span>รวม ฿{money(sumItems(o))}</span></div>
         </div>
+        <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:8,padding:"0 14px 12px"}}><Btn v="success" onClick={()=>approveReq(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectReq(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
       </Card>;})}
     </div>)}
+    {detailCard&&(()=>{
+      const o=detailCard.o,kind=detailCard.kind;
+      const bid=kind==="po"?o.from_branch_id:o.branch_id;
+      const title=kind==="po"?`🏢 ครัวกลาง · ${o.po_number||""}`:`🚚 ${o.supplier_name||"ซัพพลายนอก"}`;
+      const list=itemsOf(o);
+      const grand=kind==="po"?(o.total||sumItems(o)):sumItems(o);
+      const ingOf=it=>ingById.get(+(it.ingId||it.ingredient_id));
+      const accent=kind==="po"?C.blue:C.teal;
+      return <Modal title={title} onClose={()=>setDetailCard(null)} extraWide>
+        <div style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>จากสาขา <b style={{color:C.ink}}>{branchName(bid)}</b> · โดย {kind==="po"?(o.created_by||"-"):(o.requested_by||"-")} · <b style={{color:C.ink2}}>{list.length}</b> รายการ</div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {list.map((it,i)=>{const ing=ingOf(it);const st=stockOfItem(it,bid);const qty=it.qtyNeeded||it.qty||0;const price=it.estimatedCost||it.line_total||0;const low=st!=null&&st<=0;return <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,fontFamily:"'Sarabun',sans-serif"}}>
+            <div onClick={ing?.image?(()=>imgView(driveImgSrc(ing.image))):undefined} style={{cursor:ing?.image?"pointer":"default",flexShrink:0}}><Thumb src={ing?.image} alt={it.name} size={58} radius={10} iconBg={C.brandLight} iconColor={C.brand} iconSize={24}/></div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:15,fontWeight:800,color:C.ink,wordBreak:"break-word"}}>{it.name}</div>
+              <div style={{fontSize:12.5,color:low?C.red:C.ink4,marginTop:4}}>📦 คงเหลือ <b style={{color:low?C.red:C.ink2}}>{st!=null?st:"-"}</b> {it.unit||""}</div>
+            </div>
+            <div style={{textAlign:"right",flexShrink:0}}>
+              <div style={{fontSize:22,fontWeight:900,color:accent,lineHeight:1.1}}>{qty} <span style={{fontSize:12,fontWeight:600,color:C.ink4}}>{it.unit||""}</span></div>
+              <div style={{fontSize:12,color:C.ink3,marginTop:3}}>฿{money(price)}</div>
+            </div>
+          </div>;})}
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14,paddingTop:12,borderTop:`2px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif"}}>
+          <span style={{fontSize:15,fontWeight:800,color:C.ink2}}>รวมทั้งสิ้น</span>
+          <span style={{fontSize:26,fontWeight:900,color:C.brand}}>฿{money(grand)}</span>
+        </div>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center",marginTop:10}}>แตะรูปเพื่อขยายเต็มจอ · กดอนุมัติ/ตีกลับได้ที่การ์ดด้านหลัง</div>
+      </Modal>;
+    })()}
     {view==="history"&&(()=>{
       const scoped=logs;
       const byDate=fDate?scoped.filter(l=>dkeyOf(l)===fDate):scoped;
