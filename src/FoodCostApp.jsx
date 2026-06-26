@@ -1160,6 +1160,27 @@ function ReceivePhotoAttach({images,setImages,uploading,setUploading}){
     <input ref={fileRef} type="file" accept="image/*" multiple onChange={onFiles} style={{display:"none"}}/>
   </div>;
 }
+// View/add/remove receive photos AFTER an order is received (retroactive). Saves via
+// the caller-supplied onSave(images) so it works for both order_requests and POs.
+function ReceiveImagesEditor({initial,title,onSave,onClose}){
+  const[imgs,setImgs]=useState(Array.isArray(initial)?initial:[]);
+  const[uploading,setUploading]=useState(0);const[saving,setSaving]=useState(false);
+  async function save(){
+    if(uploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
+    setSaving(true);
+    try{ await onSave(imgs); onClose(); }
+    catch(e){alert("บันทึกไม่สำเร็จ: "+((e&&e.message)||e));}
+    setSaving(false);
+  }
+  return <Modal title={title||"📷 รูปรับสินค้า"} onClose={onClose} wide>
+    <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>เพิ่มรูปที่ถ่ายไว้ตอนรับของย้อนหลังได้ — เลือกจากอัลบั้ม กดบันทึกเพื่อเก็บ</div>
+    <ReceivePhotoAttach images={imgs} setImages={setImgs} uploading={uploading} setUploading={setUploading}/>
+    <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16,paddingTop:14,borderTop:`1px solid ${C.line}`}}>
+      <Btn v="ghost" onClick={onClose}>ปิด</Btn>
+      <Btn v="success" onClick={save} loading={saving||uploading>0} disabled={saving||uploading>0} icon={I.check}>บันทึกรูป</Btn>
+    </div>
+  </Modal>;
+}
 // Flip an external-supplier order_requests row to "delivered", carrying the receive
 // photos. Tolerates a DB without the optional receive_images column yet: on that
 // specific error it retries without photos so the receive (and stock credit) still
@@ -5469,6 +5490,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       onAcceptRequest={()=>acceptRequest(viewPO)}
       onShip={()=>shipPO(viewPO)}
       onConfirmReceive={(imgs)=>confirmReceive(viewPO,imgs)}
+      onSavePhotos={async(imgs)=>{await api.updatePO(viewPO.id,{receive_images:imgs});await load();}}
       onSubmitDispute={(items,note)=>submitDispute(viewPO,items,note)}
       onAcceptDispute={()=>acceptDispute(viewPO)}
       onEdit={()=>{setViewPO(null);startEdit(viewPO);}}
@@ -5858,7 +5880,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
 }
 
 // Full-screen PO view with status-aware actions
-function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canDelete,onClose,onAcceptRequest,onShip,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel,onDelete}){
+function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canDelete,onClose,onAcceptRequest,onShip,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel,onDelete,onSavePhotos}){
   const isCreator=+po.from_branch_id===currentBranch.id;
   const isReceiver=+po.branch_id===currentBranch.id;
   // Central kitchen has manager-level access: it can act on any PO,
@@ -5873,11 +5895,14 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const[receivedQty,setReceivedQty]=useState(()=>{const m={};(po.items||[]).forEach((it,i)=>{m[i]=it.received_qty!=null?it.received_qty:it.qty;});return m;});
   const[disputeNote,setDisputeNote]=useState(po.dispute_note||"");
   const[recvImages,setRecvImages]=useState(()=>Array.isArray(po.receive_images)?po.receive_images:[]);  // receive photos (Drive)
-  const[recvUploading,setRecvUploading]=useState(0);
+  const[recvUploading,setRecvUploading]=useState(0);const[savingPhotos,setSavingPhotos]=useState(false);
   // Permissions for actions in this view
   const canAcceptReq=isReceiver&&po.status==="requested";
   const canShipPO=canManage&&po.status==="open";
   const canConfirmReceive=isReceiver&&po.status==="shipped";
+  // After receiving (received_at set), the receiver can still add/remove receive photos retroactively.
+  const canEditPhotos=isReceiver&&!canConfirmReceive&&!!po.received_at&&typeof onSavePhotos==="function";
+  async function savePhotosNow(){if(recvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}setSavingPhotos(true);try{await onSavePhotos(recvImages);alert("✅ บันทึกรูปแล้ว");}catch(e){alert("บันทึกไม่สำเร็จ: "+((e&&e.message)||e));}setSavingPhotos(false);}
   const canDispute=isReceiver&&po.status==="shipped";
   const canAcceptDispute=canManage&&po.status==="disputed";
   // Items can only be edited where stock hasn't moved yet (requested, open).
@@ -5995,7 +6020,11 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         {mode==="view"&&canConfirmReceive&&<div style={{background:C.white,borderRadius:14,padding:"14px 18px",marginBottom:14,border:`1px solid ${C.line}`}}>
           <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading}/>
         </div>}
-        {mode==="view"&&!canConfirmReceive&&Array.isArray(po.receive_images)&&po.receive_images.length>0&&<div style={{background:C.white,borderRadius:14,padding:"14px 18px",marginBottom:14,border:`1px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif"}}>
+        {mode==="view"&&canEditPhotos&&<div style={{background:C.white,borderRadius:14,padding:"14px 18px",marginBottom:14,border:`1px solid ${C.line}`}}>
+          <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading}/>
+          <div style={{display:"flex",justifyContent:"flex-end",marginTop:10}}><Btn v="success" onClick={savePhotosNow} loading={savingPhotos||recvUploading>0} disabled={savingPhotos||recvUploading>0} icon={I.check} s={{padding:"8px 16px"}}>บันทึกรูป</Btn></div>
+        </div>}
+        {mode==="view"&&!canConfirmReceive&&!canEditPhotos&&Array.isArray(po.receive_images)&&po.receive_images.length>0&&<div style={{background:C.white,borderRadius:14,padding:"14px 18px",marginBottom:14,border:`1px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif"}}>
           <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8}}>📷 รูปตอนรับสินค้า ({po.receive_images.length})</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>{po.receive_images.map((ref,i)=><img key={i} src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(ref))} style={{width:72,height:72,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`,cursor:"pointer"}}/>)}</div>
         </div>}
@@ -6687,6 +6716,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const[editingQty,setEditingQty]=useState(null);    // { order, items:[mutable copies] }
   const[receivingOrder,setReceivingOrder]=useState(null); // { order, items:[copies with receivedQty] }
   const[recvImages,setRecvImages]=useState([]);const[recvUploading,setRecvUploading]=useState(0);  // receive photos (Drive)
+  const[photoEditOrder,setPhotoEditOrder]=useState(null);  // delivered order whose receive photos are being viewed/added retroactively
   const[copiedId,setCopiedId]=useState(null);          // shows ✓ briefly after copy succeeds
 
   // Plain-text list for LINE chat: "1. name qty unit"
@@ -6957,7 +6987,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
             {canEditOrder(order)&&order.status==="pending"&&<button onClick={()=>startEditQty(order)} title="แก้ไขจำนวน" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
             {(order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="พิมพ์ซ้ำ" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>}
             {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
-            {Array.isArray(order.receive_images)&&order.receive_images.length>0&&<button onClick={()=>photoGallery(order.receive_images,"📷 รูปรับสินค้า — "+(order.supplier_name||""))} title="ดูรูปตอนรับสินค้า" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 9px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.blue}}><Ic d={I.img} s={12} c={C.blue}/>{order.receive_images.length}</button>}
+            {order.status==="delivered"&&(()=>{const n=Array.isArray(order.receive_images)?order.receive_images.length:0;return <button onClick={()=>setPhotoEditOrder(order)} title="ดู / เพิ่มรูปรับสินค้า" style={{background:n>0?C.blueLight:C.bg,border:n>0?"none":`1px dashed ${C.line}`,borderRadius:7,padding:"5px 9px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.blue}}><Ic d={I.img} s={12} c={C.blue}/>{n>0?n:"เพิ่มรูป"}</button>;})()}
             {canEditOrder(order)&&order.status!=="delivered"&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
           </div>
         </div>
@@ -7059,6 +7089,9 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         <Btn v="success" onClick={confirmReceiveExternal} loading={recvUploading>0} disabled={recvUploading>0} icon={I.check}>ยืนยันรับ + เพิ่มสต็อก</Btn>
       </div>
     </Modal>}
+
+    {/* Retroactive receive-photo editor — view / add photos on an already-received order */}
+    {photoEditOrder&&<ReceiveImagesEditor initial={photoEditOrder.receive_images} title={"📷 รูปรับสินค้า — "+(photoEditOrder.supplier_name||"ORD-"+photoEditOrder.id)} onClose={()=>setPhotoEditOrder(null)} onSave={async imgs=>{await api.updateOrder(photoEditOrder.id,{receive_images:imgs});await reload();}}/>}
   </div>;
 }
 
