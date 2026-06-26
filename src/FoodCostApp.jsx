@@ -1021,6 +1021,27 @@ function ImgViewerHost(){
     <img src={src} alt="" onClick={e=>e.stopPropagation()} style={{maxWidth:"94vw",maxHeight:"88vh",objectFit:"contain",borderRadius:10,boxShadow:"0 12px 50px rgba(0,0,0,0.6)"}}/>
   </div>;
 }
+// Global photo-gallery popup — grid of thumbnails (tap one → full-screen imgView).
+// Opened from anywhere via photoGallery(images, title). One host mounted in App.
+let _galleryOpener=null;
+function photoGallery(images,title){ if(images&&images.length&&_galleryOpener)_galleryOpener({images,title}); }
+function PhotoGalleryHost(){
+  const[st,setSt]=useState(null);
+  useEffect(()=>{_galleryOpener=v=>setSt(v);return()=>{_galleryOpener=null;};},[]);
+  useEffect(()=>{if(!st)return;const h=e=>{if(e.key==="Escape")setSt(null);};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[st]);
+  if(!st)return null;
+  return <div onClick={()=>setSt(null)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.7)",backdropFilter:"blur(6px)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"'Sarabun',sans-serif"}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,maxWidth:"min(94vw,640px)",width:"100%",maxHeight:"88vh",overflowY:"auto",boxShadow:"0 30px 80px rgba(0,0,0,0.4)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"14px 18px",borderBottom:`1px solid ${C.line}`,position:"sticky",top:0,background:C.white,zIndex:1}}>
+        <span style={{fontSize:15,fontWeight:900,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{st.title||"รูปภาพ"} ({st.images.length})</span>
+        <button onClick={()=>setSt(null)} aria-label="ปิด" style={{background:C.lineLight,border:"none",borderRadius:8,width:34,height:34,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.x} s={16} c={C.ink3}/></button>
+      </div>
+      <div style={{padding:16,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:10}}>
+        {st.images.map((ref,i)=><img key={i} src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(ref))} style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`,cursor:"pointer"}}/>)}
+      </div>
+    </div>
+  </div>;
+}
 let _confirmOpener=null;
 function confirmDlg(opts){
   return new Promise(resolve=>{
@@ -1120,6 +1141,41 @@ async function uploadImageToDrive(file){
 }
 // Resolve an image ref (drive:<id> or a plain URL) to a viewable <img src>.
 function driveImgSrc(ref){ if(!ref)return ""; return /^drive:/.test(ref)?`/api/drive-view?id=${encodeURIComponent(ref.slice(6))}`:ref; }
+// Multi-photo attach (album picker, no camera — note: NO `capture` attr → opens gallery).
+// Unlimited photos, uploaded to Drive. Parent owns images[] + uploading-count so it
+// can block its confirm until uploads finish. Tap a thumbnail to view it full-screen.
+function ReceivePhotoAttach({images,setImages,uploading,setUploading}){
+  const fileRef=useRef();
+  async function onFiles(e){
+    const files=Array.from(e.target.files||[]);e.target.value="";if(!files.length)return;
+    setUploading(u=>u+files.length);
+    await Promise.all(files.map(async f=>{try{const ref=await uploadImageToDrive(f);setImages(im=>[...im,ref]);}catch(err){alert("อัปรูปไม่สำเร็จ: "+(err.message||err));}finally{setUploading(u=>u-1);}}));
+  }
+  return <div style={{marginTop:4}}>
+    <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📎 แนบรูปสินค้า / ใบส่งของ <span style={{fontWeight:400,color:C.ink4}}>(เลือกจากอัลบั้ม · ไม่จำกัดจำนวน)</span>{uploading>0&&<span style={{color:C.brand,marginLeft:8,fontSize:12,fontWeight:700}}>⏳ กำลังอัป {uploading}...</span>}</div>
+    <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+      {(images||[]).map((ref,i)=><div key={i} style={{position:"relative"}}><img src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(ref))} style={{width:72,height:72,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`,cursor:"pointer"}}/><button onClick={()=>setImages(im=>im.filter((_,j)=>j!==i))} style={{position:"absolute",top:-6,right:-6,width:20,height:20,borderRadius:"50%",background:C.red,border:`2px solid ${C.white}`,color:C.white,cursor:"pointer",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button></div>)}
+      <button onClick={()=>fileRef.current?.click()} style={{width:72,height:72,borderRadius:10,border:`2px dashed ${C.line}`,background:C.bg,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,color:C.ink4}}><Ic d={I.img} s={20} c={C.ink4}/><span style={{fontSize:10,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มรูป</span></button>
+    </div>
+    <input ref={fileRef} type="file" accept="image/*" multiple onChange={onFiles} style={{display:"none"}}/>
+  </div>;
+}
+// Flip an external-supplier order_requests row to "delivered", carrying the receive
+// photos. Tolerates a DB without the optional receive_images column yet: on that
+// specific error it retries without photos so the receive (and stock credit) still
+// succeeds, then warns the operator that the column needs adding.
+async function deliverOrderWithPhotos(orderId,expectedStatus,payloadItems,images){
+  try{
+    return await api.updateOrderIfStatus(orderId,expectedStatus,{items:payloadItems,status:"delivered",receive_images:images||[]});
+  }catch(err){
+    if(/receive_images/.test(String((err&&err.message)||""))){
+      const r=await api.updateOrderIfStatus(orderId,expectedStatus,{items:payloadItems,status:"delivered"});
+      if(images&&images.length)setTimeout(()=>alert("✅ รับสินค้าสำเร็จ แต่ยังบันทึกรูปไม่ได้\nผู้ดูแลระบบต้องเพิ่มคอลัมน์ receive_images ใน order_requests ก่อน"),0);
+      return r;
+    }
+    throw err;
+  }
+}
 function ImgUp({value,onChange,label,compact}){
   const ref=useRef();const[uploading,setUploading]=useState(false);
   const h=async e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>10*1024*1024){alert("รูปต้องไม่เกิน 10MB");return;}setUploading(true);try{const compressed=await compressImage(f,1000,0.7);const type=compressed.type||"image/jpeg";const ext=type==="image/webp"?"webp":type==="image/png"?"png":"jpg";const path=`${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;const url=await api.uploadImage(new File([compressed],path,{type}),path);onChange(url);}catch(err){alert("อัปโหลดรูปไม่สำเร็จ: "+err.message);}setUploading(false);e.target.value="";};
@@ -4400,6 +4456,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[transferForm,setTransferForm]=useState(null);     // null | { toBranchId, items, notes }
   const[receivingTransfer,setReceivingTransfer]=useState(null); // null | { po, items[receivedQty] }
   const[receivingExtOrder,setReceivingExtOrder]=useState(null);  // null | { orderId, supplierName, items[receivedQty,pricePerUnit] }
+  const[extRecvImages,setExtRecvImages]=useState([]);const[extRecvUploading,setExtRecvUploading]=useState(0);  // receive photos (Drive)
   const[showPurchaseSummary,setShowPurchaseSummary]=useState(false);
   const[copyPO,setCopyPO]=useState(null);          // null | po — copy-target branch picker
   const[copyBusy,setCopyBusy]=useState(false);     // true while addPO for a copy is in-flight
@@ -4469,6 +4526,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 
   // Open the receive modal for an external-supplier order (central kitchen).
   function startReceiveExt(order){
+    setExtRecvImages(Array.isArray(order.receive_images)?order.receive_images:[]);setExtRecvUploading(0);
     setReceivingExtOrder({
       orderId:order.id,
       orderStatus:order.status,
@@ -4494,6 +4552,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       alert("ยังไม่ได้ระบุจำนวนที่รับเข้าจริง");
       return;
     }
+    if(extRecvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
       message:`ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?`,
@@ -4501,7 +4560,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     }))return;
     try{
       const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
-      await api.updateOrderIfStatus(receivingExtOrder.orderId,receivingExtOrder.orderStatus,{items:payloadItems,status:"delivered"});
+      await deliverOrderWithPhotos(receivingExtOrder.orderId,receivingExtOrder.orderStatus,payloadItems,extRecvImages);
       await transferStockBetweenBranches({
         fromBranchId:null,
         toBranchId:currentBranch.id,
@@ -5322,9 +5381,10 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>ยอดรวมที่จ่ายจริง</span>
         <span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{receivingExtOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
       </div>
-      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+      <ReceivePhotoAttach images={extRecvImages} setImages={setExtRecvImages} uploading={extRecvUploading} setUploading={setExtRecvUploading}/>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
         <Btn v="ghost" onClick={()=>setReceivingExtOrder(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveExt} icon={I.check}>✅ ยืนยันรับ + เพิ่มสต๊อก</Btn>
+        <Btn v="success" onClick={confirmReceiveExt} loading={extRecvUploading>0} disabled={extRecvUploading>0} icon={I.check}>✅ ยืนยันรับ + เพิ่มสต๊อก</Btn>
       </div>
     </Modal>}
 
@@ -6601,6 +6661,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const toggleExpand=(id)=>setExpandedOrders(e=>({...e,[id]:!e[id]}));
   const[editingQty,setEditingQty]=useState(null);    // { order, items:[mutable copies] }
   const[receivingOrder,setReceivingOrder]=useState(null); // { order, items:[copies with receivedQty] }
+  const[recvImages,setRecvImages]=useState([]);const[recvUploading,setRecvUploading]=useState(0);  // receive photos (Drive)
   const[copiedId,setCopiedId]=useState(null);          // shows ✓ briefly after copy succeeds
 
   // Plain-text list for LINE chat: "1. name qty unit"
@@ -6710,6 +6771,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
 
   // ─ Receive confirmation
   function startReceive(order){
+    setRecvImages(Array.isArray(order.receive_images)?order.receive_images:[]);setRecvUploading(0);
     setReceivingOrder({
       orderId:order.id,
       orderStatus:order.status,
@@ -6741,6 +6803,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       alert("ยังไม่ได้ระบุจำนวนที่รับเข้าจริง");
       return;
     }
+    if(recvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
       message:`ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต็อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?`,
@@ -6749,7 +6812,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     try{
       // Lock first; only proceed if status matches what we read
       const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
-      await api.updateOrderIfStatus(receivingOrder.orderId,receivingOrder.orderStatus,{items:payloadItems,status:"delivered"});
+      await deliverOrderWithPhotos(receivingOrder.orderId,receivingOrder.orderStatus,payloadItems,recvImages);
       // External supplier → credit-only (no source deduction)
       await transferStockBetweenBranches({
         fromBranchId:null,
@@ -6869,6 +6932,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
             {canEditOrder(order)&&order.status==="pending"&&<button onClick={()=>startEditQty(order)} title="แก้ไขจำนวน" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
             {(order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="พิมพ์ซ้ำ" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>}
             {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
+            {Array.isArray(order.receive_images)&&order.receive_images.length>0&&<button onClick={()=>photoGallery(order.receive_images,"📷 รูปรับสินค้า — "+(order.supplier_name||""))} title="ดูรูปตอนรับสินค้า" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 9px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.blue}}><Ic d={I.img} s={12} c={C.blue}/>{order.receive_images.length}</button>}
             {canEditOrder(order)&&order.status!=="delivered"&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
           </div>
         </div>
@@ -6964,9 +7028,10 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           </tr></tfoot>
         </table>
       </div>
-      <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+      <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading}/>
+      <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
         <Btn v="ghost" onClick={()=>setReceivingOrder(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveExternal} icon={I.check}>ยืนยันรับ + เพิ่มสต็อก</Btn>
+        <Btn v="success" onClick={confirmReceiveExternal} loading={recvUploading>0} disabled={recvUploading>0} icon={I.check}>ยืนยันรับ + เพิ่มสต็อก</Btn>
       </div>
     </Modal>}
   </div>;
@@ -7720,7 +7785,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
           <div style={{overflowX:"auto",maxHeight:"40vh"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
               <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>
-                {["เลขที่","วันที่","สาขา","รายการ","ยอดประมาณ","สถานะ"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}
+                {["เลขที่","วันที่","สาขา","รายการ","ยอดประมาณ","สถานะ","รูป"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}
               </tr></thead>
               <tbody>{[...filtered].sort((a,b)=>{
                 const da=parseSupplierOrderDate(a.requested_at),db=parseSupplierOrderDate(b.requested_at);
@@ -7736,6 +7801,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
                   <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>
                     <span style={{fontSize:11,fontWeight:800,color:stColor[o.status]||C.ink3,background:(stColor[o.status]||C.ink3)+"22",padding:"3px 9px",borderRadius:14,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${(stColor[o.status]||C.ink3)}55`}}>{stLabel[o.status]||o.status}</span>
                   </td>
+                  <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>{Array.isArray(o.receive_images)&&o.receive_images.length>0?<button onClick={()=>photoGallery(o.receive_images,"📷 รูปรับสินค้า — "+supplier.name)} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"4px 8px",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.blue}}><Ic d={I.img} s={12} c={C.blue}/>{o.receive_images.length}</button>:<span style={{color:C.ink4,fontSize:11}}>—</span>}</td>
                 </tr>;
               })}</tbody>
             </table>
@@ -10569,6 +10635,7 @@ export default function App(){
     <style>{globalStyle}</style>
     <ConfirmDlg/>
     <ImgViewerHost/>
+    <PhotoGalleryHost/>
     <LangContext.Provider value={lang}>
     <div style={{display:"flex",minHeight:"100vh",background:"#F1F5F9"}}>
 
