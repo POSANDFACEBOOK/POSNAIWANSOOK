@@ -1144,15 +1144,21 @@ function driveImgSrc(ref){ if(!ref)return ""; return /^drive:/.test(ref)?`/api/d
 // Multi-photo attach (album picker, no camera — note: NO `capture` attr → opens gallery).
 // Unlimited photos, uploaded to Drive. Parent owns images[] + uploading-count so it
 // can block its confirm until uploads finish. Tap a thumbnail to view it full-screen.
-function ReceivePhotoAttach({images,setImages,uploading,setUploading}){
+function ReceivePhotoAttach({images,setImages,uploading,setUploading,minRequired}){
   const fileRef=useRef();
+  const n=(images||[]).length;const need=Math.max(0,+minRequired||0);const short=need>0&&n<need;
   async function onFiles(e){
     const files=Array.from(e.target.files||[]);e.target.value="";if(!files.length)return;
     setUploading(u=>u+files.length);
     await Promise.all(files.map(async f=>{try{const ref=await uploadImageToDrive(f);setImages(im=>[...im,ref]);}catch(err){alert("อัปรูปไม่สำเร็จ: "+(err.message||err));}finally{setUploading(u=>u-1);}}));
   }
   return <div style={{marginTop:4}}>
-    <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📎 แนบรูปสินค้า / ใบส่งของ <span style={{fontWeight:400,color:C.ink4}}>(เลือกจากอัลบั้ม · ไม่จำกัดจำนวน)</span>{uploading>0&&<span style={{color:C.brand,marginLeft:8,fontSize:12,fontWeight:700}}>⏳ กำลังอัป {uploading}...</span>}</div>
+    <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+      <span>📎 แนบรูปสินค้า / ใบส่งของ <span style={{fontWeight:400,color:C.ink4}}>(เลือกจากอัลบั้ม)</span></span>
+      {need>0&&<span style={{fontSize:11,fontWeight:800,padding:"2px 9px",borderRadius:12,background:short?C.redLight:C.greenLight,color:short?C.red:C.green}}>{n}/{need} รูป{short?" · ยังไม่ครบ":" ✓"}</span>}
+      {uploading>0&&<span style={{color:C.brand,fontSize:12,fontWeight:700}}>⏳ กำลังอัป {uploading}...</span>}
+    </div>
+    {need>0&&short&&<div style={{fontSize:12,color:C.red,fontFamily:"'Sarabun',sans-serif",marginBottom:8,fontWeight:600}}>⚠️ ต้องแนบรูปอย่างน้อย {need} รูป (1 รูปต่อ 1 รายการสินค้า) จึงจะยืนยันรับได้</div>}
     <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
       {(images||[]).map((ref,i)=><div key={i} style={{position:"relative"}}><img src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(ref))} style={{width:72,height:72,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`,cursor:"pointer"}}/><button onClick={()=>setImages(im=>im.filter((_,j)=>j!==i))} style={{position:"absolute",top:-6,right:-6,width:20,height:20,borderRadius:"50%",background:C.red,border:`2px solid ${C.white}`,color:C.white,cursor:"pointer",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button></div>)}
       <button onClick={()=>fileRef.current?.click()} style={{width:72,height:72,borderRadius:10,border:`2px dashed ${C.line}`,background:C.bg,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,color:C.ink4}}><Ic d={I.img} s={20} c={C.ink4}/><span style={{fontSize:10,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มรูป</span></button>
@@ -4574,6 +4580,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       return;
     }
     if(extRecvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
+    {const need=(receivingExtOrder.items||[]).length;if(extRecvImages.length<need){alert(`ต้องแนบรูปอย่างน้อย ${need} รูป (1 รูปต่อ 1 รายการสินค้า)\nตอนนี้แนบ ${extRecvImages.length} รูป`);return;}}
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
       message:`ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?`,
@@ -4776,6 +4783,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 
   async function confirmReceive(po,images){
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ยืนยันรับสินค้าได้");return;}
+    {const need=(po.items||[]).length;const have=Array.isArray(images)?images.length:0;if(have<need){alert(`ต้องแนบรูปอย่างน้อย ${need} รูป (1 รูปต่อ 1 รายการสินค้า)\nตอนนี้แนบ ${have} รูป`);return;}}
     if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• 📦 สต๊อก ${currentBranch.name} จะถูกเพิ่มทันทีตามจำนวนในใบสั่ง\n• ของที่ "ลอยอยู่ระหว่างทาง" จะเข้าสต๊อกปลายทางอย่างถาวร\n• ถ้ารับไม่ครบ ให้กด "สินค้าไม่ครบ" แทน เพื่อปรับจำนวนก่อน\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
@@ -5416,10 +5424,10 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>ยอดรวมที่จ่ายจริง</span>
         <span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{receivingExtOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
       </div>
-      <ReceivePhotoAttach images={extRecvImages} setImages={setExtRecvImages} uploading={extRecvUploading} setUploading={setExtRecvUploading}/>
+      <ReceivePhotoAttach images={extRecvImages} setImages={setExtRecvImages} uploading={extRecvUploading} setUploading={setExtRecvUploading} minRequired={(receivingExtOrder.items||[]).length}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
         <Btn v="ghost" onClick={()=>setReceivingExtOrder(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveExt} loading={extRecvUploading>0} disabled={extRecvUploading>0} icon={I.check}>✅ ยืนยันรับ + เพิ่มสต๊อก</Btn>
+        <Btn v="success" onClick={confirmReceiveExt} loading={extRecvUploading>0} disabled={extRecvUploading>0||extRecvImages.length<(receivingExtOrder.items||[]).length} icon={I.check}>✅ ยืนยันรับ + เพิ่มสต๊อก</Btn>
       </div>
     </Modal>}
 
@@ -6018,7 +6026,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
 
         {/* 📷 Receive photos — attach (while confirming) or view (after delivered) */}
         {mode==="view"&&canConfirmReceive&&<div style={{background:C.white,borderRadius:14,padding:"14px 18px",marginBottom:14,border:`1px solid ${C.line}`}}>
-          <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading}/>
+          <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading} minRequired={(po.items||[]).length}/>
         </div>}
         {mode==="view"&&canEditPhotos&&<div style={{background:C.white,borderRadius:14,padding:"14px 18px",marginBottom:14,border:`1px solid ${C.line}`}}>
           <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading}/>
@@ -6047,7 +6055,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         {canAcceptReq&&onAcceptRequest&&<Btn onClick={onAcceptRequest} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px ${C.purple}55`}}>🖨 ปริ้นเอกสาร</Btn>}
         {canShipPO&&onShip&&<Btn onClick={onShip} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px rgba(14,165,233,.45)`}}>🚚 จัดส่ง + ตัดสต๊อก</Btn>}
         {canDispute&&<Btn onClick={()=>setMode("dispute")} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 20px",fontWeight:900,color:C.white,boxShadow:"0 4px 14px rgba(234,88,12,.4)"}}>⚠️ สินค้าไม่ครบ</Btn>}
-        {canConfirmReceive&&<Btn v="success" onClick={()=>onConfirmReceive(recvImages)} loading={busy||recvUploading>0} disabled={busy||recvUploading>0} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14,boxShadow:`0 4px 14px ${C.green}55`}}>✅ ยืนยันรับสินค้าครบ</Btn>}
+        {canConfirmReceive&&<Btn v="success" onClick={()=>onConfirmReceive(recvImages)} loading={busy||recvUploading>0} disabled={busy||recvUploading>0||recvImages.length<(po.items||[]).length} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14,boxShadow:`0 4px 14px ${C.green}55`}}>✅ ยืนยันรับสินค้าครบ</Btn>}
         {canAcceptDispute&&<Btn v="success" onClick={onAcceptDispute} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14}}>✅ ยอมรับการแก้ไข</Btn>}
         {canPayNow&&<Btn onClick={onOpenPayment} s={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px ${C.blue}55`}}>💳 ชำระเงิน</Btn>}
       </>}
@@ -6859,6 +6867,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       return;
     }
     if(recvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
+    {const need=(receivingOrder.items||[]).length;if(recvImages.length<need){alert(`ต้องแนบรูปอย่างน้อย ${need} รูป (1 รูปต่อ 1 รายการสินค้า)\nตอนนี้แนบ ${recvImages.length} รูป`);return;}}
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
       message:`ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต็อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?`,
@@ -7083,10 +7092,10 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           </tr></tfoot>
         </table>
       </div>
-      <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading}/>
+      <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading} minRequired={(receivingOrder.items||[]).length}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
         <Btn v="ghost" onClick={()=>setReceivingOrder(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveExternal} loading={recvUploading>0} disabled={recvUploading>0} icon={I.check}>ยืนยันรับ + เพิ่มสต็อก</Btn>
+        <Btn v="success" onClick={confirmReceiveExternal} loading={recvUploading>0} disabled={recvUploading>0||recvImages.length<(receivingOrder.items||[]).length} icon={I.check}>ยืนยันรับ + เพิ่มสต็อก</Btn>
       </div>
     </Modal>}
 
