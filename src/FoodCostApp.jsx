@@ -2368,6 +2368,12 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   const[saving,setSaving]=useState({});  // {ingId: bool}
   const inputRef=useRef();
   const[padFor,setPadFor]=useState(null);   // ingredient id whose on-screen number pad is open
+  // Synchronous in-flight guards (refs update immediately, unlike the `saving`
+  // state which only disables the button on the next render — too late to stop a
+  // fast double-tap / mobile ghost-click that was inserting the same count twice).
+  const savingRef=useRef({});       // {ingId: true} while that item's save is in flight
+  const savingAllRef=useRef(false);
+  const[savingAll,setSavingAll]=useState(false);
   function bumpEdit(ing,delta){setEdits(o=>{const base=(o[ing.id]!==undefined&&o[ing.id]!=="")?(+o[ing.id]||0):branchStock(ing,currentBranch.id);const next=Math.max(0,Math.round((base+delta)*1000)/1000);return{...o,[ing.id]:String(next)};});}
   // Don't auto-pop the native keyboard on mobile (it shoves the layout around); desktop only.
   useEffect(()=>{if(isMobile)return;const t=setTimeout(()=>inputRef.current?.focus(),100);return()=>clearTimeout(t);},[]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -2379,11 +2385,13 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   },[ings,q]);
 
   async function saveOne(ing){
+    if(savingRef.current[ing.id])return;   // already saving this item — ignore double-tap/ghost-click
     const raw=edits[ing.id];
     if(raw===undefined||raw===""){alert("ใส่จำนวนก่อน");return;}
     const v=+raw;
     if(isNaN(v)||v<0){alert("จำนวนไม่ถูกต้อง");return;}
     const prev=branchStock(ing,currentBranch.id);
+    savingRef.current[ing.id]=true;
     setSaving(s=>({...s,[ing.id]:true}));
     try{
       const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,v);
@@ -2395,25 +2403,32 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
       if(reload)await reload();
       setEdits(e=>{const n={...e};delete n[ing.id];return n;});
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
-    setSaving(s=>{const n={...s};delete n[ing.id];return n;});
+    finally{delete savingRef.current[ing.id];setSaving(s=>{const n={...s};delete n[ing.id];return n;});}
   }
   async function saveAll(){
+    if(savingAllRef.current)return;   // ignore double-tap on "บันทึกทั้งหมด"
     const entries=Object.entries(edits).filter(([id,v])=>v!==""&&v!=null);
     if(entries.length===0){alert("ยังไม่มีการเปลี่ยนแปลง");return;}
     if(!await confirmDlg({title:"บันทึกสต็อก",message:`บันทึก ${entries.length} รายการ?`,confirmLabel:"บันทึก"}))return;
+    savingAllRef.current=true;setSavingAll(true);
     const ok=[];
-    for(const[id,v]of entries){
-      const ing=ings.find(x=>+x.id===+id);if(!ing)continue;
-      try{
-        const prev=branchStock(ing,currentBranch.id);
-        const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0);
-        await api.updateIng(+id,{stock_by_branch:next});
-        api.addStockLog({ingredient_id:+id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
-        ok.push(id);
-      }catch(e){alert(`บันทึก ${ing.name} ไม่สำเร็จ: ${e.message}`);}
-    }
-    if(reload)await reload();
-    setEdits({});
+    try{
+      for(const[id,v]of entries){
+        if(savingRef.current[id])continue;   // this item already being saved individually — skip to avoid a duplicate insert
+        const ing=ings.find(x=>+x.id===+id);if(!ing)continue;
+        savingRef.current[id]=true;
+        try{
+          const prev=branchStock(ing,currentBranch.id);
+          const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0);
+          await api.updateIng(+id,{stock_by_branch:next});
+          api.addStockLog({ingredient_id:+id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
+          ok.push(id);
+        }catch(e){alert(`บันทึก ${ing.name} ไม่สำเร็จ: ${e.message}`);}
+        finally{delete savingRef.current[id];}
+      }
+      if(reload)await reload();
+      setEdits({});
+    }finally{savingAllRef.current=false;setSavingAll(false);}
     alert(`✅ บันทึกสต็อก ${ok.length} รายการสำเร็จ`);
   }
 
@@ -2471,7 +2486,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
     {/* Footer actions */}
     <div style={{display:"flex",gap:8,paddingTop:10,borderTop:`1px solid ${C.line}`,background:C.white}}>
       <Btn v="ghost" onClick={onClose} full s={{padding:"11px"}}>ปิด</Btn>
-      {Object.keys(edits).length>0&&<Btn v="success" onClick={saveAll} icon={I.check} full s={{padding:"11px"}}>บันทึกทั้งหมด ({Object.keys(edits).length})</Btn>}
+      {Object.keys(edits).length>0&&<Btn v="success" onClick={saveAll} disabled={savingAll} loading={savingAll} icon={I.check} full s={{padding:"11px"}}>บันทึกทั้งหมด ({Object.keys(edits).length})</Btn>}
     </div>
     {padFor!=null&&(()=>{const ing=ings.find(x=>+x.id===+padFor);const ev=edits[padFor];return <NumPad value={ev!==undefined&&ev!==""?ev:""} integer={false} title={ing?`นับ: ${ing.name}`:"นับสต็อก"} onChange={v=>setEdits(o=>({...o,[padFor]:v}))} onClose={()=>setPadFor(null)}/>;})()}
   </Modal>;
