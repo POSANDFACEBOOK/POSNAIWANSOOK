@@ -1917,7 +1917,7 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
     {sessions===null?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
     :err?<div style={{textAlign:"center",padding:"36px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>โหลดไม่สำเร็จ<div style={{marginTop:10}}><Btn v="ghost" onClick={load}>↻ ลองใหม่</Btn></div></div>
     :shown.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการนับ</div>
-    :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"62vh",overflowY:"auto",paddingRight:4}}>
+    :<div style={{display:"flex",flexDirection:"column",gap:8}}>
       {shown.map(s=>{const on=openId===s.id;const rows=items[s.id];return <div key={s.id} style={{border:`1px solid ${on?C.brandBorder:C.line}`,borderRadius:12,overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
         <div onClick={()=>toggle(s)} style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px",cursor:"pointer",background:on?C.brandLight:C.white}}>
           {s.counter_photo?<img src={driveImgSrc(s.counter_photo)} alt="" loading="lazy" decoding="async" onClick={e=>{e.stopPropagation();openImg(s.counter_photo);}} title="รูปผู้นับ" style={{width:48,height:48,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:48,height:48,borderRadius:10,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.user||I.box} s={20} c={C.line}/></div>}
