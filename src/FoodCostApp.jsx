@@ -8217,6 +8217,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   // ── ประวัติการอนุมัติ ──
   const[view,setView]=useState("pending");          // pending | history
   const[detailCard,setDetailCard]=useState(null);   // {kind:'po'|'ext', o} → full-screen detail popup with item images
+  const[detailSess,setDetailSess]=useState(null);   // stock-count session → full-screen detail popup
   const[logs,setLogs]=useState([]);const[logLoading,setLogLoading]=useState(false);
   const[fDate,setFDate]=useState("");const[fBranch,setFBranch]=useState("");const[fSupplier,setFSupplier]=useState("");
   const[openLog,setOpenLog]=useState(null);   // expanded history row (shows its items)
@@ -8249,6 +8250,8 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   async function rejectPO(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับ PO ${o.po_number||""} ของ ${branchName(o.from_branch_id)}?`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"cancelled",updated_at:new Date().toISOString()});await logDecision("rejected","po",o);posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   async function approveSession(s){setBusy("s"+s.id);try{await api.approveStockSession(s.id,currentUser?.username||currentUser?.name||"");posToast("✅ อนุมัติการนับสต็อกแล้ว","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);setBusy(null);}
   async function toggleSess(s){if(openSess===s.id){setOpenSess(null);return;}setOpenSess(s.id);if(sessItems[s.id]===undefined){setSessItems(m=>({...m,[s.id]:null}));try{const d=await api.getStockLogsBySession(s.id);if(aliveRef.current)setSessItems(m=>({...m,[s.id]:Array.isArray(d)?d:[]}));}catch{if(aliveRef.current)setSessItems(m=>({...m,[s.id]:[]}));}}}
+  // Open a stock-count session full-screen, loading its counted items on demand (reuses the sessItems cache).
+  async function openSessDetail(s){setDetailSess(s);if(sessItems[s.id]===undefined){setSessItems(m=>({...m,[s.id]:null}));try{const d=await api.getStockLogsBySession(s.id);if(aliveRef.current)setSessItems(m=>({...m,[s.id]:Array.isArray(d)?d:[]}));}catch{if(aliveRef.current)setSessItems(m=>({...m,[s.id]:[]}));}}}
   const total=reqs.length+pos.length+stockSess.length;
   return <div>
     <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap",background:total>0?"#F5F3FF":C.bg,border:`1px solid ${total>0?"#A855F7":C.line}`,borderRadius:12,padding:"12px 16px"}}>
@@ -8266,15 +8269,16 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
     {view==="pending"&&(loading?<Loading text="โหลดคำสั่งซื้อรออนุมัติ..."/>
     :total===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><div style={{fontSize:48}}>✅</div><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่มีคำสั่งซื้อรออนุมัติ</p></div>
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(340px,100%),1fr))",gap:14}}>
-      {stockSess.map(s=>{const k="s"+s.id;const open=openSess===s.id;const its=sessItems[s.id];const t=(()=>{try{return new Date(s.started_at).toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}catch{return "";}})();return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.brand}`}}>
-        <div style={{padding:"12px 14px"}}>
+      {stockSess.map(s=>{const k="s"+s.id;const its=sessItems[s.id];const cnt=Array.isArray(its)?its.length:null;const t=(()=>{try{return new Date(s.started_at).toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}catch{return "";}})();return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.brand}`}}>
+        <div onClick={()=>openSessDetail(s)} title="แตะดูรายการที่นับ + รูป" style={{padding:"12px 14px",cursor:"pointer"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📋 นับสต็อก</span><Chip color="orange">นับสต็อก</Chip></div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>
-            {s.counter_photo?<img src={driveImgSrc(s.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(s.counter_photo))} style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:42,height:42,borderRadius:8,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={18} c={C.line}/></div>}
+            {s.counter_photo?<img src={driveImgSrc(s.counter_photo)} alt="" loading="lazy" decoding="async" onClick={e=>{e.stopPropagation();imgView(driveImgSrc(s.counter_photo));}} style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:42,height:42,borderRadius:8,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={18} c={C.line}/></div>}
             <div style={{minWidth:0}}><div style={{fontSize:13.5,fontWeight:800,color:C.ink}}>{s.counter_name||"-"}</div><div style={{fontSize:11,color:C.ink4}}>🏪 {branchName(s.branch_id)} · 🕘 {t}</div></div>
           </div>
-          <button onClick={()=>toggleSess(s)} style={{background:"none",border:"none",cursor:"pointer",color:C.brand,fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",padding:"2px 0",marginBottom:6}}>{open?"▼ ซ่อนรายการที่นับ":"▶ ดูรายการที่นับ"}</button>
-          {open&&<div style={{margin:"4px 0 8px",maxHeight:180,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{(its===undefined||its===null)?<div style={{color:C.ink4,padding:"6px 0",textAlign:"center"}}>กำลังโหลด...</div>:its.length===0?<div style={{color:C.ink4,padding:"6px 0",textAlign:"center"}}>ยังไม่มีรายการที่บันทึก</div>:its.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",borderBottom:`1px dashed ${C.lineLight}`}}><span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:C.ink2,fontWeight:600}}>{r.ingredient_name||`#${r.ingredient_id}`}</span><span style={{whiteSpace:"nowrap",color:C.ink4}}>ก่อน <b style={{color:C.ink2}}>{prev}</b> · หลัง <b style={{color:C.brand}}>{nw}</b> · ต่าง <b style={{color:delta>0?C.green:delta<0?C.red:C.ink3}}>{delta>0?`+${delta}`:delta}</b> {r.unit||ingById.get(+r.ingredient_id)?.buy_unit||""}</span></div>;})}</div>}
+          <div style={{fontSize:11,fontWeight:600,color:C.brand,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>🔍 แตะดูรายการที่นับ + รูป{cnt!=null?` (${cnt} รายการ)`:""}</div>
+        </div>
+        <div style={{padding:"0 14px 12px"}}>
           <Btn v="success" onClick={()=>approveSession(s)} loading={busy===k} icon={I.check} full s={{padding:"9px",fontSize:13}}>✅ อนุมัติการนับสต็อก</Btn>
         </div>
       </Card>;})}
@@ -8325,6 +8329,33 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
           <span style={{fontSize:26,fontWeight:900,color:C.brand}}>฿{money(grand)}</span>
         </div>
         <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center",marginTop:10}}>แตะรูปเพื่อขยายเต็มจอ · กดอนุมัติ/ตีกลับได้ที่การ์ดด้านหลัง</div>
+      </Modal>;
+    })()}
+    {detailSess&&(()=>{
+      const s=detailSess;const its=sessItems[s.id];
+      const t=(()=>{try{return new Date(s.started_at).toLocaleString("th-TH",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch{return "";}})();
+      return <Modal title={`📋 นับสต็อก — ${branchName(s.branch_id)}`} onClose={()=>setDetailSess(null)} extraWide>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
+          {s.counter_photo?<img src={driveImgSrc(s.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(s.counter_photo))} style={{width:64,height:64,objectFit:"cover",borderRadius:12,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:64,height:64,borderRadius:12,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={26} c={C.line}/></div>}
+          <div style={{minWidth:0}}><div style={{fontSize:16,fontWeight:900,color:C.ink}}>{s.counter_name||"-"}</div><div style={{fontSize:12.5,color:C.ink4,marginTop:2}}>🏪 {branchName(s.branch_id)} · 🕘 {t}</div><div style={{fontSize:12,color:C.ink3,marginTop:2}}>{Array.isArray(its)?`${its.length} รายการ`:""}</div></div>
+        </div>
+        {(its===undefined||its===null)?<div style={{textAlign:"center",padding:"40px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
+        :its.length===0?<div style={{textAlign:"center",padding:"40px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีรายการที่บันทึก</div>
+        :<div style={{display:"flex",flexDirection:"column",gap:9}}>
+          {its.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);const ing=ingById.get(+r.ingredient_id);const unit=r.unit||ing?.buy_unit||"";return <div key={r.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,fontFamily:"'Sarabun',sans-serif"}}>
+            <div onClick={ing?.image?(()=>imgView(driveImgSrc(ing.image))):undefined} style={{cursor:ing?.image?"pointer":"default",flexShrink:0}}><Thumb src={ing?.image} alt={r.ingredient_name} size={52} radius={10} iconBg={C.brandLight} iconColor={C.brand} iconSize={22}/></div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:14.5,fontWeight:800,color:C.ink,wordBreak:"break-word"}}>{r.ingredient_name||`#${r.ingredient_id}`}</div>
+              <div style={{fontSize:12.5,color:C.ink4,marginTop:3}}>ก่อนนับ <b style={{color:C.ink2}}>{prev}</b> → หลังนับ <b style={{color:C.brand}}>{nw}</b> {unit}</div>
+            </div>
+            <div style={{textAlign:"right",flexShrink:0}}>
+              <div style={{fontSize:11,color:C.ink4}}>ผลต่าง</div>
+              <div style={{fontSize:19,fontWeight:900,color:delta>0?C.green:delta<0?C.red:C.ink3,lineHeight:1.1}}>{delta>0?`+${delta}`:delta}</div>
+              <div style={{fontSize:11,color:C.ink4}}>{unit}</div>
+            </div>
+          </div>;})}
+        </div>}
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center",marginTop:12}}>แตะรูปเพื่อขยายเต็มจอ · กดอนุมัติได้ที่การ์ดด้านหลัง</div>
       </Modal>;
     })()}
     {view==="history"&&(()=>{
