@@ -4753,13 +4753,17 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     setConfirming(null);
   }
 
-  async function confirmReceive(po){
+  async function confirmReceive(po,images){
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ยืนยันรับสินค้าได้");return;}
     if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• 📦 สต๊อก ${currentBranch.name} จะถูกเพิ่มทันทีตามจำนวนในใบสั่ง\n• ของที่ "ลอยอยู่ระหว่างทาง" จะเข้าสต๊อกปลายทางอย่างถาวร\n• ถ้ารับไม่ครบ ให้กด "สินค้าไม่ครบ" แทน เพื่อปรับจำนวนก่อน\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
       const receivedAt=new Date().toISOString();
-      await api.patchPOIfStatus(po.id,"shipped",{status:"awaiting_payment",received_at:receivedAt,received_by:currentUser?.username||currentUser?.name||null,updated_at:receivedAt});
+      const imgs=Array.isArray(images)?images:[];
+      const recvPatch={status:"awaiting_payment",received_at:receivedAt,received_by:currentUser?.username||currentUser?.name||null,updated_at:receivedAt};
+      // Optional receive photos column — degrade gracefully if it hasn't been added yet.
+      try{ await api.patchPOIfStatus(po.id,"shipped",{...recvPatch,receive_images:imgs}); }
+      catch(err){ if(imgs.length&&/receive_images/.test(String((err&&err.message)||""))){ await api.patchPOIfStatus(po.id,"shipped",recvPatch); setTimeout(()=>alert("✅ รับสินค้าสำเร็จ แต่ยังบันทึกรูปไม่ได้\nผู้ดูแลระบบต้องเพิ่มคอลัมน์ receive_images ใน purchase_orders ก่อน"),0); } else throw err; }
       // End of in-transit: credit receiver with the full ordered qty.
       await transferStockBetweenBranches({
         fromBranchId:null,
@@ -5464,7 +5468,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       onClose={()=>setViewPO(null)}
       onAcceptRequest={()=>acceptRequest(viewPO)}
       onShip={()=>shipPO(viewPO)}
-      onConfirmReceive={()=>confirmReceive(viewPO)}
+      onConfirmReceive={(imgs)=>confirmReceive(viewPO,imgs)}
       onSubmitDispute={(items,note)=>submitDispute(viewPO,items,note)}
       onAcceptDispute={()=>acceptDispute(viewPO)}
       onEdit={()=>{setViewPO(null);startEdit(viewPO);}}
@@ -5868,6 +5872,8 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const[mode,setMode]=useState("view");  // view | dispute
   const[receivedQty,setReceivedQty]=useState(()=>{const m={};(po.items||[]).forEach((it,i)=>{m[i]=it.received_qty!=null?it.received_qty:it.qty;});return m;});
   const[disputeNote,setDisputeNote]=useState(po.dispute_note||"");
+  const[recvImages,setRecvImages]=useState(()=>Array.isArray(po.receive_images)?po.receive_images:[]);  // receive photos (Drive)
+  const[recvUploading,setRecvUploading]=useState(0);
   // Permissions for actions in this view
   const canAcceptReq=isReceiver&&po.status==="requested";
   const canShipPO=canManage&&po.status==="open";
@@ -5985,6 +5991,15 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
           </div>
         </div>
 
+        {/* 📷 Receive photos — attach (while confirming) or view (after delivered) */}
+        {mode==="view"&&canConfirmReceive&&<div style={{background:C.white,borderRadius:14,padding:"14px 18px",marginBottom:14,border:`1px solid ${C.line}`}}>
+          <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading}/>
+        </div>}
+        {mode==="view"&&!canConfirmReceive&&Array.isArray(po.receive_images)&&po.receive_images.length>0&&<div style={{background:C.white,borderRadius:14,padding:"14px 18px",marginBottom:14,border:`1px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8}}>📷 รูปตอนรับสินค้า ({po.receive_images.length})</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:8}}>{po.receive_images.map((ref,i)=><img key={i} src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(ref))} style={{width:72,height:72,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`,cursor:"pointer"}}/>)}</div>
+        </div>}
+
       </div>
     </div>
 
@@ -6003,7 +6018,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         {canAcceptReq&&onAcceptRequest&&<Btn onClick={onAcceptRequest} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px ${C.purple}55`}}>🖨 ปริ้นเอกสาร</Btn>}
         {canShipPO&&onShip&&<Btn onClick={onShip} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px rgba(14,165,233,.45)`}}>🚚 จัดส่ง + ตัดสต๊อก</Btn>}
         {canDispute&&<Btn onClick={()=>setMode("dispute")} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 20px",fontWeight:900,color:C.white,boxShadow:"0 4px 14px rgba(234,88,12,.4)"}}>⚠️ สินค้าไม่ครบ</Btn>}
-        {canConfirmReceive&&<Btn v="success" onClick={onConfirmReceive} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14,boxShadow:`0 4px 14px ${C.green}55`}}>✅ ยืนยันรับสินค้าครบ</Btn>}
+        {canConfirmReceive&&<Btn v="success" onClick={()=>onConfirmReceive(recvImages)} loading={busy||recvUploading>0} disabled={busy||recvUploading>0} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14,boxShadow:`0 4px 14px ${C.green}55`}}>✅ ยืนยันรับสินค้าครบ</Btn>}
         {canAcceptDispute&&<Btn v="success" onClick={onAcceptDispute} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14}}>✅ ยอมรับการแก้ไข</Btn>}
         {canPayNow&&<Btn onClick={onOpenPayment} s={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px ${C.blue}55`}}>💳 ชำระเงิน</Btn>}
       </>}
