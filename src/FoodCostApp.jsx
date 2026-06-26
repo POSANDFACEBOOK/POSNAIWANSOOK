@@ -4772,7 +4772,17 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       // Stage 1 → SlipTrack: create รายการค้างจ่าย (paid:false). Fire-and-forget.
       pushPOToSlipTrack({...po,status:"awaiting_payment",received_at:receivedAt},branches);
       await load();
-    }catch(e){showErr("ยืนยันไม่สำเร็จ",e);}
+      setViewPO(null);   // close the doc so a stale "shipped" view can't be re-confirmed
+    }catch(e){
+      // Most common cause of the optimistic-lock failure here is a STALE open
+      // document: this PO was already received (status moved shipped→awaiting_payment)
+      // so the re-confirm finds 0 "shipped" rows. Don't scare the user — refresh and explain.
+      if(/ถูกแก้ไขโดยผู้ใช้อื่น/.test(String((e&&e.message)||""))){
+        await load();
+        setViewPO(null);
+        alert("เอกสารนี้น่าจะถูกรับสินค้าไปแล้ว (หรือสถานะเปลี่ยนไป)\nระบบรีเฟรชให้แล้ว — ถ้าสถานะขึ้น \"💰 รอชำระเงิน\" แสดงว่ารับเรียบร้อยแล้ว ไม่ต้องกดรับซ้ำ");
+      }else{showErr("ยืนยันไม่สำเร็จ",e);}
+    }
     setConfirming(null);
   }
   async function submitDispute(po,updatedItems,note){
