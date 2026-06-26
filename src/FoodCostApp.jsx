@@ -1006,6 +1006,21 @@ function Modal({title,onClose,children,wide,extraWide,noScroll,disableEsc}){
     </div>
   </div>;
 }
+// Global full-screen image viewer (lightbox) — one host mounted in App, opened
+// from anywhere via imgView(src). Replaces window.open() tab-popups (which had no
+// way to close on mobile). Tap backdrop or the ✕ button or press Esc to close.
+let _imgViewer=null;
+function imgView(src){ if(src&&_imgViewer)_imgViewer(src); }
+function ImgViewerHost(){
+  const[src,setSrc]=useState(null);
+  useEffect(()=>{_imgViewer=s=>setSrc(s);return()=>{_imgViewer=null;};},[]);
+  useEffect(()=>{if(!src)return;const h=e=>{if(e.key==="Escape")setSrc(null);};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[src]);
+  if(!src)return null;
+  return <div onClick={()=>setSrc(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",zIndex:99999,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+    <button onClick={()=>setSrc(null)} aria-label="ปิด" style={{position:"absolute",top:14,right:14,width:46,height:46,borderRadius:"50%",background:"rgba(255,255,255,0.16)",border:"2px solid rgba(255,255,255,0.75)",color:"#fff",fontSize:24,fontWeight:800,lineHeight:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1,WebkitTapHighlightColor:"transparent"}}>✕</button>
+    <img src={src} alt="" onClick={e=>e.stopPropagation()} style={{maxWidth:"94vw",maxHeight:"88vh",objectFit:"contain",borderRadius:10,boxShadow:"0 12px 50px rgba(0,0,0,0.6)"}}/>
+  </div>;
+}
 let _confirmOpener=null;
 function confirmDlg(opts){
   return new Promise(resolve=>{
@@ -1881,7 +1896,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
               <button onClick={()=>delLog(l)} title="ลบ" style={{background:"none",border:"none",cursor:"pointer",color:C.ink4,fontSize:13,marginTop:2}}>🗑️</button>
             </div>
           </div>
-          {Array.isArray(l.images)&&l.images.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>{l.images.map((ref,i)=><img key={i} src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" onClick={()=>window.open(driveImgSrc(ref),"_blank","noopener")} style={{width:56,height:56,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer"}}/>)}</div>}
+          {Array.isArray(l.images)&&l.images.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>{l.images.map((ref,i)=><img key={i} src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(ref))} style={{width:56,height:56,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer"}}/>)}</div>}
         </div>)}
       </div>}
     </div>
@@ -1911,7 +1926,7 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
   const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false&&inScope(b.id)),[branches,allowed]);// eslint-disable-line react-hooks/exhaustive-deps
   const shown=(sessions||[]).filter(s=>!fBranch||+s.branch_id===+fBranch);
   const fmtDt=s=>{try{return new Date(s).toLocaleString("th-TH",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch{return s||"";}};
-  const openImg=ref=>{if(ref)window.open(driveImgSrc(ref),"_blank","noopener");};
+  const openImg=ref=>{if(ref)imgView(driveImgSrc(ref));};
   return <Modal title="🕘 ประวัติการนับสต็อก (รายครั้ง)" onClose={onClose} wide>
     {scopeBranches.length>1&&<div style={{marginBottom:12,maxWidth:280}}><Sel label="กรองสาขา" value={fBranch} onChange={e=>setFBranch(e.target.value)} options={[{v:"",l:"ทุกสาขา (ที่ดูแล)"},...scopeBranches.map(b=>({v:String(b.id),l:b.name}))]}/></div>}
     {sessions===null?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
@@ -1989,7 +2004,7 @@ function StockHistoryModal({ing,currentBranch,onClose}){
     :rows.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการนับสต็อก<br/><span style={{fontSize:12}}>ประวัติจะเริ่มบันทึกตั้งแต่การกดบันทึกครั้งถัดไป</span></div>
     :<div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:"60vh",overflowY:"auto",paddingRight:4}}>
       {rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{border:`1px solid ${C.line}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif",display:"flex",gap:10,alignItems:"flex-start"}}>
-        {r.counter_photo&&<img src={driveImgSrc(r.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>window.open(driveImgSrc(r.counter_photo),"_blank","noopener")} title="รูปผู้นับ" style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>}
+        {r.counter_photo&&<img src={driveImgSrc(r.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(r.counter_photo))} title="รูปผู้นับ" style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>}
         <div style={{minWidth:0,flex:1}}>
           <div style={{display:"flex",flexWrap:"wrap",gap:"2px 14px",fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>
             <span style={{color:C.ink4}}>ก่อนนับ <b style={{color:C.ink2}}>{prev}</b> {r.unit||ing.buy_unit||""}</span>
@@ -7957,7 +7972,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
         <div style={{padding:"12px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📋 นับสต็อก</span><Chip color="orange">นับสต็อก</Chip></div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>
-            {s.counter_photo?<img src={driveImgSrc(s.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>window.open(driveImgSrc(s.counter_photo),"_blank","noopener")} style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:42,height:42,borderRadius:8,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={18} c={C.line}/></div>}
+            {s.counter_photo?<img src={driveImgSrc(s.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(s.counter_photo))} style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:42,height:42,borderRadius:8,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={18} c={C.line}/></div>}
             <div style={{minWidth:0}}><div style={{fontSize:13.5,fontWeight:800,color:C.ink}}>{s.counter_name||"-"}</div><div style={{fontSize:11,color:C.ink4}}>🏪 {branchName(s.branch_id)} · 🕘 {t}</div></div>
           </div>
           <button onClick={()=>toggleSess(s)} style={{background:"none",border:"none",cursor:"pointer",color:C.brand,fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",padding:"2px 0",marginBottom:6}}>{open?"▼ ซ่อนรายการที่นับ":"▶ ดูรายการที่นับ"}</button>
@@ -10389,6 +10404,7 @@ export default function App(){
   return <>
     <style>{globalStyle}</style>
     <ConfirmDlg/>
+    <ImgViewerHost/>
     <LangContext.Provider value={lang}>
     <div style={{display:"flex",minHeight:"100vh",background:"#F1F5F9"}}>
 
