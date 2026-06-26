@@ -1040,6 +1040,7 @@ function ConfirmDlg(){
   const title=o.title||(danger?"ยืนยันการลบ":"ยืนยัน");
   const msg=o.message||"ต้องการดำเนินการนี้ใช่หรือไม่?";
   const ok=o.confirmLabel||(danger?"ลบ":"ยืนยัน");
+  const noCancel=o.cancelLabel===null||o.notice===true;  // notice-only: just an acknowledge button
   const cancel=o.cancelLabel||"ยกเลิก";
   const accent=danger?C.red:C.brand;
   const accentLight=danger?C.redLight:C.brandLight;
@@ -1054,7 +1055,7 @@ function ConfirmDlg(){
         <div style={{fontSize:13.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,whiteSpace:"pre-line"}}>{msg}</div>
       </div>
       <div style={{display:"flex",gap:8,padding:"4px 18px 18px",flexWrap:"wrap"}}>
-        <button onClick={()=>close(false)} style={{flex:"1 1 120px",minHeight:46,padding:"12px 16px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,color:C.ink2,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.background=C.lineLight;}} onMouseLeave={e=>{e.currentTarget.style.background=C.white;}}>{cancel}</button>
+        {!noCancel&&<button onClick={()=>close(false)} style={{flex:"1 1 120px",minHeight:46,padding:"12px 16px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,color:C.ink2,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.background=C.lineLight;}} onMouseLeave={e=>{e.currentTarget.style.background=C.white;}}>{cancel}</button>}
         <button onClick={()=>close(true)} autoFocus style={{flex:"1 1 120px",minHeight:46,padding:"12px 16px",borderRadius:12,border:"none",background:danger?`linear-gradient(135deg,${C.red},#DC2626)`:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",boxShadow:`0 8px 20px ${accent}55`,transition:"all .15s"}} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.filter="brightness(1.05)";}} onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.filter="";}}>{ok}</button>
       </div>
     </div>
@@ -2062,7 +2063,21 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     try{
       const open=await api.getOpenStockSession(currentBranch.id);
       const sess=Array.isArray(open)?open[0]:open;
-      if(sess&&sess.id){setStockCounter({name:sess.counter_name,photo:sess.counter_photo,sessionId:sess.id});setStockBtnLoading(false);setShowStockCheck(true);return;}
+      if(sess&&sess.id){
+        // An open (unapproved) session started on an EARLIER day means last round's
+        // count is still waiting for Area approval. Block a new count so it can't
+        // overwrite figures Area is reviewing — they must approve that round first.
+        // Same-day open session just keeps counting (you're mid-count today).
+        const bkkDay=d=>{try{return new Date(d).toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});}catch{return "";}};
+        const sDay=bkkDay(sess.started_at),today=bkkDay(new Date());
+        if(sDay&&today&&sDay!==today){
+          setStockBtnLoading(false);
+          let dShow=sDay;try{dShow=new Date(sess.started_at).toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric",timeZone:"Asia/Bangkok"});}catch{}
+          await confirmDlg({title:"⏳ ต้องรออนุมัติก่อน",message:`การนับสต็อกครั้งก่อน (เริ่ม ${dShow}${sess.counter_name?` โดย ${sess.counter_name}`:""}) ยังรอ Area อนุมัติอยู่\n\nต้องให้ Area อนุมัติรอบนั้นก่อน จึงจะเริ่มนับสต็อกรอบใหม่ได้`,confirmLabel:"เข้าใจแล้ว",cancelLabel:null,danger:false});
+          return;
+        }
+        setStockCounter({name:sess.counter_name,photo:sess.counter_photo,sessionId:sess.id});setStockBtnLoading(false);setShowStockCheck(true);return;
+      }
     }catch{}
     setStockBtnLoading(false);setShowStockGate(true);
   }
