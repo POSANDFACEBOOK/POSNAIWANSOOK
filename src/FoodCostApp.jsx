@@ -1121,7 +1121,19 @@ function NumStepper({value,onChange,onBlur,step=1,min=0,max,placeholder,inputSty
 function ErrBox({msg,onRetry}){return <div style={{background:C.redLight,border:`1px solid ${C.red}22`,borderRadius:12,padding:"16px 20px",display:"flex",alignItems:"center",gap:12,margin:"16px 0"}}><Ic d={I.warning} s={20} c={C.red}/><span style={{flex:1,color:C.red,fontFamily:"'Sarabun',sans-serif",fontSize:14}}>{msg}</span>{onRetry&&<Btn v="danger" onClick={onRetry} s={{padding:"6px 14px",fontSize:12}}>ลองใหม่</Btn>}</div>;}
 function STh({label,col,sortCol,sortDir,onSort}){const active=sortCol===col;return <th onClick={()=>onSort(col)} style={{padding:"10px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:active?C.brand:C.ink3,cursor:"pointer",whiteSpace:"nowrap",userSelect:"none",background:active?C.brandLight:C.bg}}><div style={{display:"flex",alignItems:"center",gap:4}}>{label}<Ic d={active?(sortDir==="asc"?I.sortAsc:I.sortDesc):I.sortAsc} s={12} c={active?C.brand:C.ink4}/></div></th>;}
 
-async function compressImage(file,maxW=1000,quality=0.7){return new Promise(resolve=>{const img=new Image();const url=URL.createObjectURL(file);img.onerror=()=>{URL.revokeObjectURL(url);resolve(file);};img.onload=()=>{const scale=Math.min(1,maxW/Math.max(img.width,img.height));const w=Math.round(img.width*scale);const h=Math.round(img.height*scale);const canvas=document.createElement("canvas");canvas.width=w;canvas.height=h;const ctx=canvas.getContext("2d");ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";ctx.drawImage(img,0,0,w,h);
+async function compressImage(file,maxW=1000,quality=0.7){
+  // iPhone HEIC/HEIF photos can't be decoded by <canvas> on most non-Safari browsers
+  // (the <img> fires onerror → the RAW HEIC got uploaded → broken thumbnails everywhere).
+  // Convert HEIC→JPEG first, lazy-loading the decoder only when a HEIC is actually picked.
+  if(/hei[cf]/i.test(file.type||"")||/\.(heic|heif)$/i.test(file.name||"")){
+    try{
+      const heic2any=(await import("heic2any")).default;
+      const out=await heic2any({blob:file,toType:"image/jpeg",quality:0.92});
+      const b=Array.isArray(out)?out[0]:out;
+      file=new File([b],(file.name||"photo").replace(/\.(heic|heif)$/i,"")+".jpg",{type:"image/jpeg"});
+    }catch(e){/* conversion failed — fall through to the canvas attempt below */}
+  }
+  return new Promise(resolve=>{const img=new Image();const url=URL.createObjectURL(file);img.onerror=()=>{URL.revokeObjectURL(url);resolve(file);};img.onload=()=>{const scale=Math.min(1,maxW/Math.max(img.width,img.height));const w=Math.round(img.width*scale);const h=Math.round(img.height*scale);const canvas=document.createElement("canvas");canvas.width=w;canvas.height=h;const ctx=canvas.getContext("2d");ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";ctx.drawImage(img,0,0,w,h);
   // Prefer WebP (~30% smaller at equal quality); fall back to JPEG where the
   // browser can't encode WebP (toDataURL returns a non-webp type then).
   const type=canvas.toDataURL("image/webp").indexOf("data:image/webp")===0?"image/webp":"image/jpeg";
@@ -1141,6 +1153,13 @@ async function uploadImageToDrive(file){
 }
 // Resolve an image ref (drive:<id> or a plain URL) to a viewable <img src>.
 function driveImgSrc(ref){ if(!ref)return ""; return /^drive:/.test(ref)?`/api/drive-view?id=${encodeURIComponent(ref.slice(6))}`:ref; }
+// <img> that shows a tidy placeholder instead of the browser's broken-image icon when
+// the photo can't load (e.g. legacy HEIC uploads that non-Safari browsers can't render).
+function ImgOrFallback({src,onClick,style,note="เปิดรูปไม่ได้"}){
+  const[err,setErr]=useState(false);
+  if(err||!src)return <div onClick={onClick} style={{...style,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,background:C.lineLight,color:C.ink4,fontSize:9,textAlign:"center",fontFamily:"'Sarabun',sans-serif",cursor:onClick?"pointer":"default",padding:2,boxSizing:"border-box"}}><Ic d={I.img} s={16} c={C.ink4}/><span style={{lineHeight:1.1}}>{note}</span></div>;
+  return <img src={src} alt="" loading="lazy" decoding="async" onClick={onClick} onError={()=>setErr(true)} style={style}/>;
+}
 // Multi-photo attach (album picker, no camera — note: NO `capture` attr → opens gallery).
 // Unlimited photos, uploaded to Drive. Parent owns images[] + uploading-count so it
 // can block its confirm until uploads finish. Tap a thumbnail to view it full-screen.
@@ -1980,7 +1999,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
               <button onClick={()=>delLog(l)} title="ลบ" style={{background:"none",border:"none",cursor:"pointer",color:C.ink4,fontSize:13,marginTop:2}}>🗑️</button>
             </div>
           </div>
-          {Array.isArray(l.images)&&l.images.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>{l.images.map((ref,i)=><img key={i} src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(ref))} style={{width:56,height:56,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer"}}/>)}</div>}
+          {Array.isArray(l.images)&&l.images.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>{l.images.map((ref,i)=><ImgOrFallback key={i} src={driveImgSrc(ref)} onClick={()=>imgView(driveImgSrc(ref))} note="HEIC เปิดไม่ได้" style={{width:56,height:56,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer"}}/>)}</div>}
         </div>)}
       </div>}
     </div>
