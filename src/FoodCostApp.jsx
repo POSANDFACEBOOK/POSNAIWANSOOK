@@ -6729,7 +6729,7 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
 function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBranch,currentUser,reloadIngs,onBack}){
   const isCentral=currentBranch.type==="central";
   const[mode,setMode]=useState("check");  // "check" = stock check / new order; "list" = existing orders
-  const[view,setView]=useState(isCentral?"all":"mine");
+  const[view,setView]=useState("mine");  // central defaults to its OWN orders; toggle to "all" for oversight
   const[saving,setSaving]=useState(false);
   const[printingId,setPrintingId]=useState(null);
   const canOrder=hasPerm(currentUser,"orders");
@@ -6771,7 +6771,9 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     }
   }
 
-  const displayOrders=isCentral?(view==="all"?allOrders:orders):orders;
+  // For central, `orders` is unfiltered (getOrders(null) = every branch), so "ครัวกลาง"
+  // must explicitly keep only central's own external orders; "ทุกสาขา" shows all.
+  const displayOrders=isCentral?(view==="all"?allOrders:(orders||[]).filter(o=>+o.branch_id===+currentBranch.id)):orders;
 
   // ── Live status sync ────────────────────────────────────────────────────
   // The orders list used to load once and never refresh, so when an Area
