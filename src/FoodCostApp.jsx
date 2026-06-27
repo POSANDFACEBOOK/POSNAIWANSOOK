@@ -6308,10 +6308,10 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
               <input value={it.unit} onChange={e=>updateItem(idx,"unit",e.target.value)} style={{...iS,fontSize:12,padding:"5px 8px",height:30,textAlign:"center"}}/>
             </td>
             <td style={{padding:"6px 10px"}}>
-              <NumStepper value={it.qty} onChange={v=>updateItem(idx,"qty",+v||0)} step={1} width={64} inputStyle={{fontSize:13,fontWeight:700}}/>
+              <NumStepper value={it.qty} onChange={v=>updateItem(idx,"qty",v)} step={1} width={64} inputStyle={{fontSize:13,fontWeight:700}}/>
             </td>
             <td style={{padding:"6px 10px"}}>
-              <input type="text" inputMode="decimal" step="0.01" value={it.price_per_unit} onChange={e=>updateItem(idx,"price_per_unit",+e.target.value)} style={{...iS,fontSize:13,padding:"5px 8px",height:30,textAlign:"right"}}/>
+              <input type="text" inputMode="decimal" step="0.01" value={it.price_per_unit} onChange={e=>updateItem(idx,"price_per_unit",e.target.value)} style={{...iS,fontSize:13,padding:"5px 8px",height:30,textAlign:"right"}}/>
             </td>
             <td style={{padding:"6px 10px",textAlign:"right",fontWeight:800,fontSize:14,color:C.brand}}>฿{(+it.line_total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
             <td style={{padding:"6px 4px",textAlign:"center"}}>
