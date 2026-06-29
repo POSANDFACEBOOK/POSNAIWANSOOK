@@ -5218,12 +5218,14 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         supplier_id:supplierId,
         supplier_name:g.name,
         items,
-        status:"pending",
+        status:"pending_approval",   // hold for Area approval — same as the normal สร้างคำสั่งซื้อ flow
         requested_by:currentUser.username,
         requested_at:nowStr(),
         note:`สรุปต้องซื้อวันนี้ (${todayStr()})`,
       });
     }
+    // Notify the Area manager(s) that central's purchases are waiting for approval (fire-and-forget).
+    try{fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({branch_id:currentBranch.id,branchName:currentBranch.name})});}catch{}
     if(reloadOrders)await reloadOrders();
   }
 
@@ -5753,8 +5755,9 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
     try{w.document.write('<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px;color:#64748b;font-size:16px">⏳ กำลังเตรียมรายการสั่งซื้อ...</body>');w.document.close();}catch{}
     if(!await confirmDlg({
       title:"สร้างรายการสั่งซื้อ + พิมพ์",
-      message:`สร้างรายการสั่งซื้อ ${distinctIngs} วัตถุดิบ จาก ${groups.length} ซัพพลาย สำหรับ "${currentBranch?.name||"ครัวกลาง"}" และพิมพ์ใบนำส่ง?
-\nหลังจากนั้นกด "📦 รับสินค้าจากซัพพลาย" เพื่อยืนยันรับเข้า + กรอกราคาจริง`,
+      message:`สร้างรายการสั่งซื้อ ${distinctIngs} วัตถุดิบ จาก ${groups.length} ซัพพลาย สำหรับ "${currentBranch?.name||"ครัวกลาง"}" และพิมพ์ใบรายการซื้อ?
+\n• รายการจะส่งให้ Area อนุมัติก่อน (แท็บ "อนุมัติการสั่งของ")
+• อนุมัติแล้ว → ส่งซัพพลาย → กด "ยืนยันรับ" + กรอกราคาจริง`,
       confirmLabel:"🛒 สร้าง + พิมพ์",
     })){try{w.close();}catch{}return;}
     try{
