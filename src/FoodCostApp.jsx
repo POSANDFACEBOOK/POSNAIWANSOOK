@@ -8234,7 +8234,8 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   // Real current stock per ordered item, at the ORDER's branch — so the Area can see
   // "how much is on hand vs how much is being ordered". Items carry ingId (= ingredient id).
   const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
-  const stockOfItem=(it,bid)=>{const ing=ingById.get(+(it&&it.ingId));return ing?branchStock(ing,bid):null;};
+  // Item carries the ingredient id as `ingId` (external orders) OR `ingredient_id` (PO requests) — accept both so PO cards/popups still show the real on-hand stock.
+  const stockOfItem=(it,bid)=>{const ing=it&&ingById.get(+(it.ingId??it.ingredient_id));return ing?branchStock(ing,bid):null;};
   // ── ประวัติการอนุมัติ ──
   const[view,setView]=useState("pending");          // pending | history
   const[detailCard,setDetailCard]=useState(null);   // {kind:'po'|'ext', o} → full-screen detail popup with item images
