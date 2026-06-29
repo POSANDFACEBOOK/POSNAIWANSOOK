@@ -5408,6 +5408,10 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                 </td>
                 <td style={{padding:"8px 12px",textAlign:"center",whiteSpace:"nowrap"}}>
                   <div style={{display:"inline-flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
+                    {po.status==="pending_approval"
+                      // Locked until Area approves — no ดู/พิมพ์/แก้ไข/etc. for staff yet.
+                      ?<span style={{fontSize:11,color:C.ink4,fontStyle:"italic",fontFamily:"'Sarabun',sans-serif",display:"inline-flex",alignItems:"center",gap:4}}><Ic d={I.clock} s={12} c={C.ink4}/>รอ Area อนุมัติก่อน</span>
+                      :<>
                     <button onClick={()=>setViewPO(po)} title="ดูรายละเอียด" style={{background:C.lineLight,border:`1px solid ${C.line}`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.eye} s={13} c={C.ink2}/></button>
                     {!["requested","transfer_pending","transfer_shipped","transfer_done"].includes(po.status)&&<button onClick={()=>printPO(po,toB?.name,'print',fromB?.name)} title="พิมพ์ (มีปุ่มดาวน์โหลด PDF ในหน้าพิมพ์)" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center"}}><Ic d={I.print} s={13} c={C.blue}/></button>}
                     {(isCreator(po)||isCentralBranch)&&hasPO&&<button onClick={()=>duplicatePO(po)} title={isCreator(po)?"คัดลอก — สร้าง PO ใหม่จากเอกสารนี้":"คัดลอก (ครัวกลาง) — สร้าง PO ใหม่จากเอกสารนี้"} style={{background:"#EDE9FE",border:`1px solid #DDD6FE`,borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.copy} s={13} c="#7C3AED"/></button>}
@@ -5420,6 +5424,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                     {iCreator&&po.status==="awaiting_payment"&&<button onClick={()=>setPayPO(po)} title="ชำระเงิน" style={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.blue}55`}}>💳 ชำระเงิน</button>}
                     {iCreator&&po.status==="disputed"&&<button onClick={()=>acceptDispute(po)} disabled={confirming===po.id} title="ยอมรับการแก้ไข" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ยอมรับการแก้</button>}
                     {canConfirmPO(po)&&<button onClick={()=>setViewPO(po)} title="ตรวจสอบ + ยืนยันรับ" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ตรวจรับ</button>}
+                      </>}
                   </div>
                 </td>
               </tr>;
@@ -7094,15 +7099,20 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
                   delivered (รับแล้ว) 🖨 พิมพ์ซ้ำ · 🗑 ลบ (rollback)
                   rejected  🗑 ลบ */}
           <div onClick={stopBubble} style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
-            {(()=>{const held=order.status==="pending_approval";return <button onClick={()=>{if(held){posToast("⏳ ต้องให้ Area อนุมัติก่อน จึงจะคัดลอกส่งซัพพลายได้","warn");return;}copyOrderText(order);}} disabled={held} title={held?"รออนุมัติจาก Area ก่อน จึงจะคัดลอกส่งซัพพลายได้":"คัดลอกข้อความ (สำหรับวางในไลน์ซัพพลาย)"} style={{background:held?C.bg:(copiedId===order.id?C.greenLight:C.tealLight),border:held?`1px solid ${C.line}`:"none",borderRadius:7,padding:"5px 8px",cursor:held?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:held?C.ink4:(copiedId===order.id?C.green:C.teal),opacity:held?0.7:1,transition:"background .15s"}}>
-              <Ic d={held?I.clock:(copiedId===order.id?I.check:I.copy)} s={12} c={held?C.ink4:(copiedId===order.id?C.green:C.teal)}/>
-              {held?"รออนุมัติ":(copiedId===order.id?"คัดลอกแล้ว":"คัดลอก")}
-            </button>;})()}
+            {order.status==="pending_approval"
+              // Locked until Area approves — staff can do NOTHING with the order yet.
+              ?<span style={{fontSize:11,color:C.ink4,fontStyle:"italic",fontFamily:"'Sarabun',sans-serif",display:"inline-flex",alignItems:"center",gap:4}}><Ic d={I.clock} s={12} c={C.ink4}/>รอ Area อนุมัติก่อน</span>
+              :<>
+            <button onClick={()=>copyOrderText(order)} title="คัดลอกข้อความ (สำหรับวางในไลน์ซัพพลาย)" style={{background:copiedId===order.id?C.greenLight:C.tealLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:copiedId===order.id?C.green:C.teal,transition:"background .15s"}}>
+              <Ic d={copiedId===order.id?I.check:I.copy} s={12} c={copiedId===order.id?C.green:C.teal}/>
+              {copiedId===order.id?"คัดลอกแล้ว":"คัดลอก"}
+            </button>
             {canEditOrder(order)&&order.status==="pending"&&<button onClick={()=>startEditQty(order)} title="แก้ไขจำนวน" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
             {(order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="พิมพ์ซ้ำ" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>}
             {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
             {order.status==="delivered"&&(()=>{const n=Array.isArray(order.receive_images)?order.receive_images.length:0;return <button onClick={()=>setPhotoEditOrder(order)} title="ดู / เพิ่มรูปรับสินค้า" style={{background:n>0?C.blueLight:C.bg,border:n>0?"none":`1px dashed ${C.line}`,borderRadius:7,padding:"5px 9px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.blue}}><Ic d={I.img} s={12} c={C.blue}/>{n>0?n:"เพิ่มรูป"}</button>;})()}
             {canEditOrder(order)&&order.status!=="delivered"&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
+              </>}
           </div>
         </div>
         {/* Items table — only when expanded */}
