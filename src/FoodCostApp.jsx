@@ -6809,9 +6809,9 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
 // ══════════════════════════════════════════════════════
 // ── ORDER TAB ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBranch,currentUser,reloadIngs,onBack}){
+function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBranch,currentUser,reloadIngs,onBack,forcedMode,hideModeTabs}){
   const isCentral=currentBranch.type==="central";
-  const[mode,setMode]=useState("check");  // "check" = stock check / new order; "list" = existing orders
+  const[mode,setMode]=useState(forcedMode||"check");  // "check" = stock check / new order; "list" = existing orders
   const[view,setView]=useState("mine");  // central defaults to its OWN orders; toggle to "all" for oversight
   const[saving,setSaving]=useState(false);
   const[printingId,setPrintingId]=useState(null);
@@ -7032,13 +7032,14 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   return <div>
     {/* Back link to PO documents (this tab is reached via the button on POSection) */}
     {onBack&&<button onClick={onBack} style={{background:"transparent",border:"none",cursor:"pointer",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,padding:"6px 0",marginBottom:8,display:"inline-flex",alignItems:"center",gap:6}}>← กลับไปเอกสาร PO</button>}
-    {/* Mode toggle: stock check vs orders list */}
-    <div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:480}}>
+    {/* Mode toggle: stock check vs orders list. Hidden when the parent already splits
+        these into top-level tabs (สั่งวัตถุดิบ button → check only; ซัพพลายนอก toggle → list only). */}
+    {!hideModeTabs&&<div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:480}}>
       {[
         {id:"check",l:"📋 สร้างคำสั่งซื้อ",c:C.brand},
         {id:"list",l:"📦 สั่งซัพพลายนอก",c:C.teal},
       ].map(t=>{const sel=mode===t.id;return <button key={t.id} onClick={()=>setMode(t.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:sel?t.c:"transparent",color:sel?C.white:C.ink3,transition:"all .15s"}}>{t.l}</button>;})}
-    </div>
+    </div>}
 
     {mode==="check"&&<StockCheckView ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} reload={reload} reloadIngs={reloadIngs}/>}
 
@@ -10989,12 +10990,16 @@ export default function App(){
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="po"&&<>
-              {hasPerm(currentUser,"orders")&&<div style={{display:"flex",gap:6,marginBottom:16,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:420}}>
+              {/* Top toggle [เอกสาร PO | ซัพพลายนอก]. Hidden on the "create order" sub-page
+                  (reached via the สั่งวัตถุดิบ button) which has its own back link. */}
+              {hasPerm(currentUser,"orders")&&poSubTab!=="create"&&<div style={{display:"flex",gap:6,marginBottom:16,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:420}}>
                 {[{id:"po",l:"📄 เอกสาร PO",c:C.brand},{id:"ext",l:"🚚 ซัพพลายนอก",c:C.teal}].map(s=>{const on=poSubTab===s.id;return <button key={s.id} onClick={()=>setPoSubTab(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3,transition:"all .15s"}}>{s.l}</button>;})}
               </div>}
-              {poSubTab==="ext"&&hasPerm(currentUser,"orders")
-                ?<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser}/>
-                :<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setPoSubTab("ext")} orders={orders} reloadOrders={reload.orders}/>}
+              {poSubTab==="create"&&hasPerm(currentUser,"orders")
+                ?<OrderTab forcedMode="check" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setPoSubTab("po")}/>
+                :poSubTab==="ext"&&hasPerm(currentUser,"orders")
+                ?<OrderTab forcedMode="list" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser}/>
+                :<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setPoSubTab("create")} orders={orders} reloadOrders={reload.orders}/>}
             </>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
