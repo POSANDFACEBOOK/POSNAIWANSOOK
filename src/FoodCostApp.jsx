@@ -10657,6 +10657,7 @@ export default function App(){
   const[printers,setPrinters]=useState([]);const[assets,setAssets]=useState([]);
   const[loading,setLoading]=useState(false);const[initErr,setInitErr]=useState("");
   const[tab,setTab]=useState(()=>{try{return new URLSearchParams(window.location.search).get("approve")==="1"?"approve":"pos";}catch{return "pos";}});
+  const[poSubTab,setPoSubTab]=useState("po");   // within the "เอกสาร PO" menu: "po" = PO docs · "ext" = สั่งซัพพลายนอก (OrderTab)
   const isMobile=useIsMobile();
   const[mobileNavOpen,setMobileNavOpen]=useState(false);
   // Auto-close mobile drawer when tab changes
@@ -10987,7 +10988,14 @@ export default function App(){
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
-            {tab==="po"&&<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setTab("orders")} orders={orders} reloadOrders={reload.orders}/>}
+            {tab==="po"&&<>
+              {hasPerm(currentUser,"orders")&&<div style={{display:"flex",gap:6,marginBottom:16,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:420}}>
+                {[{id:"po",l:"📄 เอกสาร PO",c:C.brand},{id:"ext",l:"🚚 ซัพพลายนอก",c:C.teal}].map(s=>{const on=poSubTab===s.id;return <button key={s.id} onClick={()=>setPoSubTab(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3,transition:"all .15s"}}>{s.l}</button>;})}
+              </div>}
+              {poSubTab==="ext"&&hasPerm(currentUser,"orders")
+                ?<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser}/>
+                :<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setPoSubTab("ext")} orders={orders} reloadOrders={reload.orders}/>}
+            </>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders}/>}
