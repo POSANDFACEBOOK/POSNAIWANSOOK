@@ -2149,35 +2149,69 @@ function StockCounterGate({currentUser,currentBranch,onConfirm,onClose}){
 }
 // Stock-count history for one ingredient at the current branch — every saved count
 // from the นับสต็อก function (logged into stock_logs).
-function StockHistoryModal({ing,currentBranch,onClose}){
+function StockHistoryModal({ing,currentBranch,branches=[],onClose}){
   const[rows,setRows]=useState(null);const[err,setErr]=useState(false);
   const aliveRef=useRef(true);
   useEffect(()=>{aliveRef.current=true;return()=>{aliveRef.current=false;};},[]);
+  const branchName=id=>{const b=(branches||[]).find(x=>+x.id===+id);return b?b.name:("สาขา "+id);};
+  // Parse ISO ("2026-06-26T..") OR Thai "DD/MM/YYYY HH:mm" (Buddhist year) → epoch ms for sorting.
+  const toMs=s=>{if(!s)return 0;const t=Date.parse(s);if(!isNaN(t))return t;const m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ ,]+(\d{1,2}):(\d{2}))?/.exec(String(s));if(m){const y=+m[3],yr=y>2400?y-543:y;return new Date(yr,(+m[2])-1,+m[1],+(m[4]||0),+(m[5]||0)).getTime();}return 0;};
   async function load(){
     setRows(null);setErr(false);
+    const ingId=+ing.id,bid=+currentBranch.id,U=ing.buy_unit||"";
     try{
-      // Race against a 10s timeout so a slow/hung request never sticks on "loading".
-      const d=await Promise.race([api.getStockLogs(ing.id,currentBranch.id),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),10000))]);
-      if(aliveRef.current)setRows(Array.isArray(d)?d:[]);
+      // Build a UNIFIED movement timeline from every source that touches this
+      // ingredient's stock at this branch: counts, external-supplier receipts,
+      // internal PO/transfer in/out, and waste. (Derived live — covers past data.)
+      const oneShot=p=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),12000))]);
+      const sbq=q=>sb(q).then(r=>Array.isArray(r)?r:[]).catch(()=>[]);
+      const [logs,waste,ext,pos]=await oneShot(Promise.all([
+        api.getStockLogs(ingId,bid).then(r=>Array.isArray(r)?r:[]).catch(()=>[]),
+        sbq(`waste_logs?select=id,qty,unit,reason,created_at,log_date,created_by,item_type&ingredient_id=eq.${ingId}&branch_id=eq.${bid}&order=id.desc&limit=300`),
+        sbq(`order_requests?select=id,supplier_name,requested_at,requested_by,status,items&branch_id=eq.${bid}&status=eq.delivered&order=id.desc&limit=400`),
+        sbq(`purchase_orders?select=id,po_number,from_branch_id,branch_id,status,received_at,received_by,updated_at,po_date,items&or=(branch_id.eq.${bid},from_branch_id.eq.${bid})&order=id.desc&limit=400`),
+      ]));
+      if(!aliveRef.current)return;
+      const evs=[];
+      // 1) Stock counts — absolute snapshots
+      logs.forEach(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0;evs.push({k:"count",at:toMs(r.counted_at),prev,nw,delta:round2(nw-prev),by:r.counted_by,photo:r.counter_photo,unit:r.unit||U});});
+      // 2) Waste (ingredient only) — deduction
+      waste.forEach(w=>{if(w.item_type==="menu")return;evs.push({k:"waste",at:toMs(w.created_at||w.log_date),delta:-(+w.qty||0),by:w.created_by,ref:w.reason||"",unit:w.unit||U});});
+      // 3) External-supplier receipts (order_requests delivered) — credit
+      ext.forEach(o=>(o.items||[]).forEach(it=>{if(+(it.ingId||it.ingredient_id)!==ingId)return;const q=+(it.receivedQty??it.received_qty??it.qtyNeeded??it.qty)||0;if(q>0)evs.push({k:"recv_ext",at:toMs(o.requested_at),delta:+q,ref:o.supplier_name||"ซัพพลายนอก",by:o.requested_by,unit:it.unit||U});}));
+      // 4) Internal PO / transfer — credit if receiver, debit if sender
+      pos.forEach(p=>(p.items||[]).forEach(it=>{if(+(it.ingredient_id||it.ingId)!==ingId)return;
+        const isRecv=+p.branch_id===bid,isSend=+p.from_branch_id===bid;
+        if(isRecv&&p.received_at&&/received|awaiting_payment|paid|transfer_done/.test(p.status||"")){
+          const q=+(it.received_qty??it.qty)||0;if(q>0)evs.push({k:"po_in",at:toMs(p.received_at),delta:+q,ref:(p.po_number||"PO")+" · จาก "+branchName(p.from_branch_id),by:p.received_by,unit:it.unit||U});
+        }else if(isSend&&/shipped|transfer_shipped|awaiting_payment|paid|received|transfer_done/.test(p.status||"")){
+          const q=+it.qty||0;if(q>0)evs.push({k:"po_out",at:toMs(p.received_at||p.updated_at||p.po_date),delta:-q,ref:(p.po_number||"PO")+" · ไป "+branchName(p.branch_id),unit:it.unit||U});
+        }
+      }));
+      evs.sort((a,b)=>b.at-a.at);
+      if(aliveRef.current)setRows(evs);
     }catch{ if(aliveRef.current){setErr(true);setRows([]);} }
   }
-  useEffect(()=>{load();},[ing.id]);// eslint-disable-line react-hooks/exhaustive-deps
-  const fmtDt=s=>{try{return new Date(s).toLocaleString("th-TH",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch{return s||"";}};
-  return <Modal title={`🕘 ประวัติการนับสต็อก — ${ing.name}`} onClose={onClose} wide>
-    <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>สาขา: <b style={{color:C.ink2}}>{currentBranch?.name||"—"}</b> · บันทึกทุกครั้งที่กดบันทึกในหน้านับสต็อก</div>
+  useEffect(()=>{load();},[ing.id,currentBranch?.id]);// eslint-disable-line react-hooks/exhaustive-deps
+  const fmtDt=ms=>{try{return new Date(ms).toLocaleString("th-TH",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch{return "";}};
+  const META={count:{ic:I.clock,c:C.brand,bg:C.brandLight,l:"📋 นับสต็อก"},recv_ext:{ic:I.truck,c:C.teal,bg:C.tealLight,l:"📥 รับจากซัพพลายนอก"},po_in:{ic:I.box,c:C.green,bg:C.greenLight,l:"📥 รับเข้า"},po_out:{ic:I.send,c:C.blue,bg:C.blueLight,l:"📤 ส่งออก"},waste:{ic:I.trash,c:C.red,bg:C.redLight,l:"🗑️ ของเสีย"}};
+  return <Modal title={`🕘 ประวัติการเคลื่อนไหวสต็อก — ${ing.name}`} onClose={onClose} wide>
+    <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>สาขา: <b style={{color:C.ink2}}>{currentBranch?.name||"—"}</b> · รวมทุกการเปลี่ยนแปลง: นับสต็อก · รับจากซัพ · รับ/ส่ง PO · ของเสีย</div>
     {rows===null?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
     :err?<div style={{textAlign:"center",padding:"36px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>โหลดประวัติไม่สำเร็จ — เครือข่าย/เซิร์ฟเวอร์ช้า<div style={{marginTop:10}}><Btn v="ghost" onClick={load}>↻ ลองใหม่</Btn></div></div>
-    :rows.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการนับสต็อก<br/><span style={{fontSize:12}}>ประวัติจะเริ่มบันทึกตั้งแต่การกดบันทึกครั้งถัดไป</span></div>
+    :rows.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการเคลื่อนไหวสต็อก</div>
     :<div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:"60vh",overflowY:"auto",paddingRight:4}}>
-      {rows.map(r=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return <div key={r.id} style={{border:`1px solid ${C.line}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif",display:"flex",gap:10,alignItems:"flex-start"}}>
-        {r.counter_photo&&<img src={driveImgSrc(r.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(r.counter_photo))} title="รูปผู้นับ" style={{width:42,height:42,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>}
+      {rows.map((r,i)=>{const m=META[r.k]||META.count;const unit=r.unit||ing.buy_unit||"";return <div key={i} style={{border:`1px solid ${C.line}`,borderLeft:`4px solid ${m.c}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif",display:"flex",gap:10,alignItems:"flex-start"}}>
+        {r.photo?<img src={driveImgSrc(r.photo)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(r.photo))} title="รูปผู้นับ" style={{width:40,height:40,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>
+          :<div style={{width:40,height:40,borderRadius:8,background:m.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={m.ic} s={18} c={m.c}/></div>}
         <div style={{minWidth:0,flex:1}}>
-          <div style={{display:"flex",flexWrap:"wrap",gap:"2px 14px",fontSize:13,fontFamily:"'Sarabun',sans-serif"}}>
-            <span style={{color:C.ink4}}>ก่อนนับ <b style={{color:C.ink2}}>{prev}</b> {r.unit||ing.buy_unit||""}</span>
-            <span style={{color:C.ink4}}>หลังนับ <b style={{color:C.brand,fontSize:14}}>{nw}</b> {r.unit||ing.buy_unit||""}</span>
-            <span style={{color:C.ink4}}>ผลต่าง <b style={{color:delta>0?C.green:delta<0?C.red:C.ink3}}>{delta>0?`+${delta}`:delta}</b> {r.unit||ing.buy_unit||""}</span>
+          <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"baseline"}}>
+            <span style={{fontSize:13,fontWeight:800,color:m.c}}>{m.l}</span>
+            {r.k==="count"
+              ?<span style={{fontSize:12.5,color:C.ink4}}>ก่อน <b style={{color:C.ink2}}>{r.prev}</b> → หลัง <b style={{color:C.brand}}>{r.nw}</b> · ต่าง <b style={{color:r.delta>0?C.green:r.delta<0?C.red:C.ink3}}>{r.delta>0?`+${r.delta}`:r.delta}</b> {unit}</span>
+              :<span style={{fontSize:15,fontWeight:900,color:r.delta>0?C.green:C.red}}>{r.delta>0?`+${round2(r.delta)}`:round2(r.delta)} <span style={{fontSize:11,fontWeight:600,color:C.ink4}}>{unit}</span></span>}
           </div>
-          <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(r.counted_at)} · โดย {r.counted_by||"—"}</div>
+          <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(r.at)}{r.by?` · โดย ${r.by}`:""}{r.ref?` · ${r.ref}`:""}</div>
         </div>
       </div>;})}
     </div>}
@@ -2612,7 +2646,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     </>}
     {showImport&&<ImportIngModal onClose={()=>setShowImport(false)} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} ings={ings} onDone={async()=>{await reload();setShowImport(false);}}/>}
     {priceHistoryItem&&<PriceHistoryModal ing={priceHistoryItem} orders={orders} allOrders={allOrders} isCentral={isCentral} onClose={()=>setPriceHistoryItem(null)}/>}
-    {stockHistItem&&<StockHistoryModal ing={stockHistItem} currentBranch={currentBranch} onClose={()=>setStockHistItem(null)}/>}
+    {stockHistItem&&<StockHistoryModal ing={stockHistItem} currentBranch={currentBranch} branches={branches} onClose={()=>setStockHistItem(null)}/>}
     {reportModal&&<IngReportModal kind={reportModal} scope={(reportScope==="org"&&report.org)?"org":"branch"} data={R} currentBranch={currentBranch} onClose={()=>setReportModal(null)}/>}
     {open&&<Modal title={editId?"✏️ แก้ไขวัตถุดิบ":"➕ เพิ่มวัตถุดิบใหม่"} onClose={()=>setOpen(false)}>
       <ImgUp label="รูปวัตถุดิบ" value={form.image} onChange={v=>upd("image",v)}/>
