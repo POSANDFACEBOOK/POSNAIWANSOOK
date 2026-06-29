@@ -730,6 +730,23 @@ function branchStockExact(ing,branchId){
   const k=String(branchId);
   return (map[k]!=null&&map[k]!=="")?(+map[k]||0):0;
 }
+// ── Atomic per-branch stock writes via Postgres RPC (row-locked → no lost updates
+// when several users move/count the same ingredient at once). Returns true if applied
+// via RPC, false if the RPC isn't installed yet (caller then falls back to a PATCH).
+// Optimistic start; flips off on the PostgREST "function not found" error so we don't
+// re-attempt a missing RPC for every item in a big receive.
+const _rpcStock={delta:true,set:true};
+const _rpcMissing=e=>/PGRST202|find the function|does not exist|404|Not Found|schema cache/i.test(String((e&&e.message)||e));
+async function rpcStockDelta(ingId,branchId,delta){
+  if(!_rpcStock.delta)return false;
+  try{await sb("rpc/apply_branch_stock_delta",{method:"POST",body:JSON.stringify({p_id:+ingId,p_branch:String(branchId),p_delta:Math.round((+delta||0)*1000)/1000})});return true;}
+  catch(e){if(_rpcMissing(e)){_rpcStock.delta=false;return false;}throw e;}
+}
+async function rpcStockSet(ingId,branchId,qty){
+  if(!_rpcStock.set)return false;
+  try{await sb("rpc/set_branch_stock",{method:"POST",body:JSON.stringify({p_id:+ingId,p_branch:String(branchId),p_qty:Math.round((+qty||0)*1000)/1000})});return true;}
+  catch(e){if(_rpcMissing(e)){_rpcStock.set=false;return false;}throw e;}
+}
 // Per-branch supplier mapping — each branch can pick one of THEIR suppliers for each ingredient.
 function branchSupplierId(ing,branchId){
   if(!ing||branchId==null)return null;
@@ -801,32 +818,30 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     e.add+=qty;agg.set(ingId,e);
   }
   for(const[ingId,{add,row}]of agg.entries()){
-    let stockMap=row.stock_by_branch;
-    if(toId){
-      const curRecv=branchStockExact(row,toId);   // baseline 0 if no slot — never the legacy global
-      stockMap=setBranchStockInJson(stockMap,toId,Math.round((curRecv+add)*1000)/1000);
-    }
-    if(fromId){
-      const curSender=branchStockExact(row,fromId);
-      stockMap=setBranchStockInJson(stockMap,fromId,Math.round((curSender-add)*1000)/1000);
-    }
-    const patch={stock_by_branch:stockMap};
-    if(autoVisible&&toId){
-      const cur=row.visible_branches;
-      if(cur!=null){  // null = visible to all → no change
-        const arr=Array.isArray(cur)?[...cur]:[];
-        if(!arr.includes(toId))arr.push(toId);
-        patch.visible_branches=arr;
-      }
-    }
     try{
-      await api.updateIng(ingId,patch);
-      // Write the new map back onto the shared in-memory row so any LATER call in the
-      // same flow (the sender-variance/return call, the SOP cascade, or a second
-      // transferStockBetweenBranches sharing this `ings`) reads the updated value —
-      // otherwise its full-column PATCH would clobber the credit/debit just written.
-      row.stock_by_branch=stockMap;
-      if(patch.visible_branches)row.visible_branches=patch.visible_branches;
+      // Preferred path: atomic per-branch deltas (server adds/subtracts under a row
+      // lock) → concurrent moves on the same ingredient can't clobber each other.
+      let viaRpc=true;
+      if(toId&&!(await rpcStockDelta(ingId,toId,+add)))viaRpc=false;
+      if(viaRpc&&fromId&&!(await rpcStockDelta(ingId,fromId,-add)))viaRpc=false;
+      if(!viaRpc){
+        // Fallback (RPC not installed yet): read-modify-write whole-column PATCH.
+        // branchStockExact (baseline 0, no legacy global) + write-back avoid the
+        // phantom-units and sequential-clobber bugs even on this path.
+        let stockMap=row.stock_by_branch;
+        if(toId)stockMap=setBranchStockInJson(stockMap,toId,Math.round((branchStockExact(row,toId)+add)*1000)/1000);
+        if(fromId)stockMap=setBranchStockInJson(stockMap,fromId,Math.round((branchStockExact(row,fromId)-add)*1000)/1000);
+        await api.updateIng(ingId,{stock_by_branch:stockMap});
+        row.stock_by_branch=stockMap;
+      }
+      // visible_branches tick (not a stock race; only when the ingredient has an explicit list)
+      if(autoVisible&&toId){
+        const cur=row.visible_branches;
+        if(cur!=null){
+          const arr=Array.isArray(cur)?[...cur]:[];
+          if(!arr.includes(toId)){arr.push(toId);await api.updateIng(ingId,{visible_branches:arr});row.visible_branches=arr;}
+        }
+      }
     }
     catch(err){
       console.error("transferStock failed",ingId,err);
@@ -1966,7 +1981,18 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
     setSaving(true);
     try{
       await api.addWasteLog({branch_id:currentBranch.id,branch_name:currentBranch.name,log_date:date,item_type:isMenu?"menu":"ingredient",ingredient_id:sel.id,ingredient_name:sel.name,unit,qty:+qty,unit_price:unitPrice,total:price===""?round2((+qty||0)*unitPrice):+price,reason:(reason||"").trim()||null,images,created_by:currentUser?.username||currentUser?.name||""});
-      posToast("✅ บันทึกของเสียแล้ว","ok");
+      // Deduct on-hand for a wasted INGREDIENT (menus have no stock). Direct atomic
+      // delta — NOT transferStockBetweenBranches — so we don't SOP-cascade into the
+      // wasted item's sub-ingredients (we threw away the item itself, not its recipe).
+      if(!isMenu){
+        try{
+          if(!await rpcStockDelta(sel.id,currentBranch.id,-(+qty))){
+            const next=setBranchStockInJson(sel.stock_by_branch,currentBranch.id,Math.round((branchStockExact(sel,currentBranch.id)-(+qty))*1000)/1000);
+            await api.updateIng(sel.id,{stock_by_branch:next});
+          }
+        }catch(e2){alert("⚠️ บันทึกของเสียแล้ว แต่หักสต๊อกไม่สำเร็จ: "+(e2&&e2.message||e2)+"\nกรุณาปรับสต๊อกในหน้านับสต็อก");}
+      }
+      posToast("✅ บันทึกของเสีย + หักสต๊อกแล้ว","ok");
       setSel(null);setQ("");setQty("");setPrice("");setReason("");setImages([]);loadLogs();// reset for next entry + refresh history behind
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
     setSaving(false);
@@ -2681,10 +2707,12 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
     savingRef.current[ing.id]=true;
     setSaving(s=>({...s,[ing.id]:true}));
     try{
-      const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,v);
-      // Per-branch count only updates the stock map; do NOT touch edit_by/
-      // edit_at — those should reflect catalog edits (price/name/...) only.
-      await api.updateIng(ing.id,{stock_by_branch:next});
+      // Atomic per-branch SET (preserves other branches' slots even if another user
+      // is moving stock at the same moment); falls back to a whole-column PATCH only
+      // if the RPC isn't installed yet. Per-branch count never touches edit_by/edit_at.
+      if(!await rpcStockSet(ing.id,currentBranch.id,v)){
+        await api.updateIng(ing.id,{stock_by_branch:setBranchStockInJson(ing.stock_by_branch,currentBranch.id,v)});
+      }
       // Log the count so the ingredient card can show its stock-count history (best-effort).
       api.addStockLog({ingredient_id:ing.id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:v,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
       if(reload)await reload();
@@ -2707,8 +2735,9 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         savingRef.current[id]=true;
         try{
           const prev=branchStock(ing,currentBranch.id);
-          const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0);
-          await api.updateIng(+id,{stock_by_branch:next});
+          if(!await rpcStockSet(+id,currentBranch.id,+v||0)){
+            await api.updateIng(+id,{stock_by_branch:setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0)});
+          }
           api.addStockLog({ingredient_id:+id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
           ok.push(id);
         }catch(e){alert(`บันทึก ${ing.name} ไม่สำเร็จ: ${e.message}`);}
