@@ -5661,6 +5661,8 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
   const[loading,setLoading]=useState(true);
   const[loadErr,setLoadErr]=useState("");
   const[refreshTick,setRefreshTick]=useState(0);
+  const[creating,setCreating]=useState(false);
+  const creatingRef=useRef(false);   // sync guard against double-submit (loop of addOrder takes seconds)
   useEffect(()=>{
     if(currentBranch?.id==null)return;
     let alive=true;
@@ -5768,20 +5770,23 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
 
   async function createAndPrint(){
     if(!onCreateOrders){printShoppingList();return;}
-    if(!await confirmDlg({
-      title:"สร้างรายการสั่งซื้อ + พิมพ์",
-      message:`สร้างรายการสั่งซื้อ ${distinctIngs} วัตถุดิบ จาก ${groups.length} ซัพพลาย สำหรับ "${currentBranch?.name||"ครัวกลาง"}" และพิมพ์ใบรายการซื้อ?
+    if(creatingRef.current)return;   // already creating — ignore double-tap
+    creatingRef.current=true;        // claim before the async confirm so a 2nd click can't slip through
+    try{
+      if(!await confirmDlg({
+        title:"สร้างรายการสั่งซื้อ + พิมพ์",
+        message:`สร้างรายการสั่งซื้อ ${distinctIngs} วัตถุดิบ จาก ${groups.length} ซัพพลาย สำหรับ "${currentBranch?.name||"ครัวกลาง"}" และพิมพ์ใบรายการซื้อ?
 \n• รายการจะส่งให้ Area อนุมัติก่อน (แท็บ "อนุมัติการสั่งของ")
 • อนุมัติแล้ว → ส่งซัพพลาย → กด "ยืนยันรับ" + กรอกราคาจริง`,
-      confirmLabel:"🛒 สร้าง + พิมพ์",
-    }))return;
-    try{
+        confirmLabel:"🛒 สร้าง + พิมพ์",
+      }))return;
+      setCreating(true);
       await onCreateOrders(groups);
       printShoppingList();   // iframe-based — prints fine even though it runs after the await above
       if(onClose)onClose();
     }catch(e){
       alert("สร้างรายการไม่สำเร็จ: "+(e&&e.message||e));
-    }
+    }finally{creatingRef.current=false;setCreating(false);}
   }
 
   function printShoppingList(){
@@ -5851,7 +5856,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           <Btn v="ghost" onClick={printShoppingList} icon={I.print} s={{padding:"8px 12px",fontSize:12}}>🖨 พิมพ์เฉยๆ</Btn>
-          {onCreateOrders&&<Btn v="success" onClick={createAndPrint} s={{padding:"8px 14px",fontSize:12}}>🛒 สร้างรายการ + พิมพ์</Btn>}
+          {onCreateOrders&&<Btn v="success" onClick={createAndPrint} loading={creating} disabled={creating} s={{padding:"8px 14px",fontSize:12}}>🛒 สร้างรายการ + พิมพ์</Btn>}
         </div>
       </div>
 
