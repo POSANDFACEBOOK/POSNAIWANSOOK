@@ -57,6 +57,26 @@ function openPrintWindow(width=860,height=900){
   if(!w){alert("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — กรุณาอนุญาต popup ในแถบที่อยู่ของเบราว์เซอร์ แล้วลองอีกครั้ง");return null;}
   return w;
 }
+// Print HTML WITHOUT opening a popup window — renders into a hidden iframe and prints
+// that. Works even when called AFTER an await (no popup-blocker, no blank about:blank
+// window). Use this where the print is triggered after async work (e.g. create-then-print).
+function printHtml(html){
+  try{
+    const iframe=document.createElement("iframe");
+    iframe.setAttribute("aria-hidden","true");
+    iframe.style.cssText="position:fixed;left:-99999px;top:0;width:794px;height:1123px;border:0;opacity:0;pointer-events:none";
+    document.body.appendChild(iframe);
+    const cw=iframe.contentWindow,doc=cw.document;
+    doc.open();doc.write(html);doc.close();
+    let cleaned=false;const cleanup=()=>{if(cleaned)return;cleaned=true;setTimeout(()=>{try{document.body.removeChild(iframe);}catch{}},300);};
+    try{cw.addEventListener("afterprint",cleanup);}catch{}
+    let printed=false;const doPrint=()=>{if(printed)return;printed=true;try{cw.focus();cw.print();}catch{}};
+    iframe.onload=()=>setTimeout(doPrint,200);
+    setTimeout(doPrint,800);       // fallback if onload doesn't fire
+    setTimeout(cleanup,60000);     // safety: never leak the iframe
+    return true;
+  }catch(e){return false;}
+}
 // แปะแถบปุ่ม "🖨 พิมพ์ / ✕ ปิดหน้าต่าง" ลอยบนสุดของทุกหน้าต่างพิมพ์/พรีวิว (ซ่อนตอนพิมพ์จริง) — เรียกหลัง document.close()
 function addPrintClose(w){
   if(!w)return;
@@ -5748,31 +5768,23 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
 
   async function createAndPrint(){
     if(!onCreateOrders){printShoppingList();return;}
-    // Open the print window NOW — inside the click gesture — so the browser doesn't
-    // block it as a non-user-initiated popup after the async create step below.
-    const w=openPrintWindow(900,900);
-    if(!w)return;  // popups blocked → openPrintWindow already alerted; allow + retry
-    try{w.document.write('<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px;color:#64748b;font-size:16px">⏳ กำลังเตรียมรายการสั่งซื้อ...</body>');w.document.close();}catch{}
     if(!await confirmDlg({
       title:"สร้างรายการสั่งซื้อ + พิมพ์",
       message:`สร้างรายการสั่งซื้อ ${distinctIngs} วัตถุดิบ จาก ${groups.length} ซัพพลาย สำหรับ "${currentBranch?.name||"ครัวกลาง"}" และพิมพ์ใบรายการซื้อ?
 \n• รายการจะส่งให้ Area อนุมัติก่อน (แท็บ "อนุมัติการสั่งของ")
 • อนุมัติแล้ว → ส่งซัพพลาย → กด "ยืนยันรับ" + กรอกราคาจริง`,
       confirmLabel:"🛒 สร้าง + พิมพ์",
-    })){try{w.close();}catch{}return;}
+    }))return;
     try{
       await onCreateOrders(groups);
-      printShoppingList(w);
+      printShoppingList();   // iframe-based — prints fine even though it runs after the await above
       if(onClose)onClose();
     }catch(e){
-      try{w.close();}catch{}
       alert("สร้างรายการไม่สำเร็จ: "+(e&&e.message||e));
     }
   }
 
-  function printShoppingList(preW){
-    const w=preW||openPrintWindow(900,900);
-    if(!w)return;
+  function printShoppingList(){
     const groupHtml=groups.map(g=>`
       <h3 style="margin:18px 0 6px;color:#0F172A;border-bottom:2px solid #FF6B35;padding-bottom:4px">${esc(g.name)}</h3>
       <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#F1F5F9">
@@ -5795,10 +5807,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       <td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:900;color:#FF6B35">฿${g.subtotal.toLocaleString(undefined,{minimumFractionDigits:2})}</td></tr>
       </tbody></table>
     `).join("");
-    w.document.open();
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการต้องซื้อ ${todayStr()}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 4px}.meta{font-size:12px;color:#64748B;margin:2px 0}@media print{.noprint{display:none}}</style></head><body><h2>📋 รายการที่ครัวกลางต้องไปซื้อวันนี้</h2><p class="meta">วันที่: <b>${esc(todayStr())}</b> · สาขา: <b>${esc(currentBranch?.name||"ครัวกลาง")}</b> · คำสั่งซื้อค้าง: <b>${orderCount}</b> ใบ</p>${groupHtml}<div style="margin-top:18px;padding:12px;background:#FEF3C7;border:2px solid #F59E0B;border-radius:10px;font-size:14px"><b>รวมทั้งสิ้นประมาณ: <span style="color:#FF6B35;font-size:18px">฿${totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span></b></div><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
-    w.document.close();addPrintClose(w);
-    setTimeout(()=>{try{w.print();}catch{}},600);
+    printHtml(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการต้องซื้อ ${todayStr()}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 4px}.meta{font-size:12px;color:#64748B;margin:2px 0}@media print{.noprint{display:none}}</style></head><body><h2>📋 รายการที่ครัวกลางต้องไปซื้อวันนี้</h2><p class="meta">วันที่: <b>${esc(todayStr())}</b> · สาขา: <b>${esc(currentBranch?.name||"ครัวกลาง")}</b> · คำสั่งซื้อค้าง: <b>${orderCount}</b> ใบ</p>${groupHtml}<div style="margin-top:18px;padding:12px;background:#FEF3C7;border:2px solid #F59E0B;border-radius:10px;font-size:14px"><b>รวมทั้งสิ้นประมาณ: <span style="color:#FF6B35;font-size:18px">฿${totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span></b></div><br/></body></html>`);
   }
 
   return <Modal title={`📋 สรุปวัตถุดิบที่ต้องซื้อวันนี้ (${todayStr()})`} onClose={onClose} extraWide>
