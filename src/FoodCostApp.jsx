@@ -721,6 +721,15 @@ function branchStock(ing,branchId){
 function setBranchStockInJson(existing,branchId,value){
   return {...(existing||{}),[String(branchId)]:+value||0};
 }
+// Per-branch on-hand WITHOUT the legacy global-stock fallback. Used for the WRITE
+// math in stock moves: a branch with no slot yet must start from 0, never the global
+// ing.stock (which would seed phantom units into that branch's slot on first touch).
+function branchStockExact(ing,branchId){
+  if(!ing||branchId==null)return 0;
+  const map=ing.stock_by_branch||{};
+  const k=String(branchId);
+  return (map[k]!=null&&map[k]!=="")?(+map[k]||0):0;
+}
 // Per-branch supplier mapping — each branch can pick one of THEIR suppliers for each ingredient.
 function branchSupplierId(ing,branchId){
   if(!ing||branchId==null)return null;
@@ -794,11 +803,11 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
   for(const[ingId,{add,row}]of agg.entries()){
     let stockMap=row.stock_by_branch;
     if(toId){
-      const curRecv=branchStock(row,toId);
+      const curRecv=branchStockExact(row,toId);   // baseline 0 if no slot — never the legacy global
       stockMap=setBranchStockInJson(stockMap,toId,Math.round((curRecv+add)*1000)/1000);
     }
     if(fromId){
-      const curSender=branchStock(row,fromId);
+      const curSender=branchStockExact(row,fromId);
       stockMap=setBranchStockInJson(stockMap,fromId,Math.round((curSender-add)*1000)/1000);
     }
     const patch={stock_by_branch:stockMap};
@@ -810,7 +819,15 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
         patch.visible_branches=arr;
       }
     }
-    try{await api.updateIng(ingId,patch);}
+    try{
+      await api.updateIng(ingId,patch);
+      // Write the new map back onto the shared in-memory row so any LATER call in the
+      // same flow (the sender-variance/return call, the SOP cascade, or a second
+      // transferStockBetweenBranches sharing this `ings`) reads the updated value —
+      // otherwise its full-column PATCH would clobber the credit/debit just written.
+      row.stock_by_branch=stockMap;
+      if(patch.visible_branches)row.visible_branches=patch.visible_branches;
+    }
     catch(err){
       console.error("transferStock failed",ingId,err);
       failedUpdates.push({ingId,name:row.name||"#"+ingId,reason:err&&err.message||String(err)});
@@ -4947,17 +4964,27 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   async function cancelPO(po){
     if(!isCreator(po)&&!isCentralBranch){alert("เฉพาะผู้ออกเอกสารหรือครัวกลางเท่านั้นที่ยกเลิกได้");return;}
     if(po.status==="paid"||po.status==="cancelled"){alert("เอกสารนี้ไม่สามารถยกเลิกในสถานะปัจจุบันได้");return;}
+    // Stock has ALREADY moved for any status past requested/open/transfer_pending:
+    // in-transit (shipped/disputed/transfer_shipped) debited the sender at ship time
+    // even though received_at is null; received/awaiting_payment moved both sides.
+    // Cancelling MUST reverse it or the deducted stock is silently stranded.
+    const STOCK_MOVED=new Set(["shipped","disputed","transfer_shipped","awaiting_payment","received","transfer_done"]);
+    const willRefund=STOCK_MOVED.has(po.status);
     const wasReceived=!!po.received_at;
-    const msg=wasReceived
-      ?`ยกเลิก ${po.po_number||"PO นี้"}?\n\n⚠️ เอกสารนี้ถูกยืนยันรับสินค้าแล้ว — ระบบจะคืนสต็อก:\n• สาขา "${(branchById[po.branch_id]||{}).name||po.branch_id}" จะถูกหักออก\n• ครัวกลางจะถูกคืนเข้า`
+    const msg=willRefund
+      ?`ยกเลิก ${po.po_number||"PO นี้"}?\n\n⚠️ สต๊อกถูกตัดไปแล้ว — ระบบจะคืนสต็อกให้:\n`+(wasReceived
+          ?`• สาขา "${(branchById[po.branch_id]||{}).name||po.branch_id}" จะถูกหักออก\n• ต้นทาง "${(branchById[po.from_branch_id]||{}).name||po.from_branch_id}" จะถูกคืนเข้า`
+          :`• ของที่ "ลอยอยู่ระหว่างทาง" จะถูกคืนเข้าต้นทาง "${(branchById[po.from_branch_id]||{}).name||po.from_branch_id}"`)
       :`ยกเลิก ${po.po_number||"PO นี้"}?`;
-    if(!await confirmDlg({title:"ยกเลิก PO",message:msg,danger:true,confirmLabel:wasReceived?"ยกเลิก + คืนสต็อก":"ยกเลิก PO"}))return;
+    if(!await confirmDlg({title:"ยกเลิก PO",message:msg,danger:true,confirmLabel:willRefund?"ยกเลิก + คืนสต็อก":"ยกเลิก PO"}))return;
     try{
       // Race-safe — abort if another user/tab changed status while we were
       // reading the row. patchPOIfStatus throws if 0 rows match the
       // expected status, surfaced as "เอกสารถูกแก้ไขโดยผู้ใช้อื่นแล้ว".
       await api.patchPOIfStatus(po.id,po.status,{status:"cancelled",updated_at:new Date().toISOString()});
-      if(wasReceived)await rollbackPOStock(po);   // after status flip so the row is locked
+      // `po` still holds the PRE-cancel status, which rollbackPOStock routes on
+      // (NOT_MOVED statuses are a safe no-op inside it).
+      if(willRefund)await rollbackPOStock(po);
       await load();setViewPO(null);
     }catch(e){showErr("ยกเลิกไม่สำเร็จ",e);}
   }
@@ -5141,7 +5168,10 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     if(!receivingTransfer)return;
     const po=receivingTransfer.po;
     const itemsWithReceived=receivingTransfer.items.map(({_key,...rest})=>{
-      const qty=Math.max(0,Math.round((+rest.receivedQty||0)*1000)/1000);
+      // Clamp to the ordered qty — receiving MORE than shipped would mint stock
+      // (credit > what the sender was debited at ship time).
+      const ordered=+rest.qty||0;
+      const qty=Math.min(ordered,Math.max(0,Math.round((+rest.receivedQty||0)*1000)/1000));
       return{...rest,received_qty:qty,receivedQty:qty};
     });
     if(!itemsWithReceived.some(it=>+it.received_qty>0)){
