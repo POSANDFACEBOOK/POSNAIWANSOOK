@@ -27,6 +27,15 @@ const round2 = (n) => Math.round((+n||0)*100)/100;
 const fmtTHB = (n) => `฿${(+n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 // Today in Asia/Bangkok (YYYY-MM-DD) — avoids UTC off-by-one near midnight
 const todayBkk = () => new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});
+// Current minutes-of-day in Asia/Bangkok (0–1439), regardless of the device timezone.
+function bkkNowMinutes(){
+  try{
+    const p=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Bangkok",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(new Date());
+    const h=+((p.find(x=>x.type==="hour")||{}).value||0);
+    const m=+((p.find(x=>x.type==="minute")||{}).value||0);
+    return (h%24)*60+m;
+  }catch{const d=new Date();return d.getHours()*60+d.getMinutes();}
+}
 // Friendly error mapping (avoid leaking Postgres internals to cashiers)
 function friendlyError(err){
   const raw=(err&&err.message)?err.message:String(err||"");
@@ -2372,6 +2381,17 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   // นับสต็อก: ถ้ามีครั้งนับที่ "ยังไม่อนุมัติ" (open) ของสาขานี้อยู่ → นับต่อในครั้งเดิม (ไม่ต้องถ่ายใหม่)
   // ถ้าไม่มี (ครั้งก่อนอนุมัติไปแล้ว หรือยังไม่เคยนับ) → ขอถ่ายรูป+ลงชื่อใหม่ (เปิด session ใหม่)
   async function startStockCount(){
+    // Time-gate the นับสต็อก button to the allowed window (Asia/Bangkok, exact):
+    //   สาขา 16:00–22:00 · ครัวกลาง 12:00–16:00. End is exclusive.
+    {
+      const win=isCentral?{s:12*60,e:16*60,lbl:"12:00–16:00"}:{s:16*60,e:22*60,lbl:"16:00–22:00"};
+      const now=bkkNowMinutes();
+      if(now<win.s||now>=win.e){
+        const hhmm=m=>`${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+        await confirmDlg({title:"⏰ ยังไม่ถึงเวลานับสต็อก",message:`${isCentral?"ครัวกลาง":"สาขา"}เปิดให้นับสต็อกได้เฉพาะช่วง ${win.lbl} น. (เวลาไทย)\n\nขณะนี้ ${hhmm(now)} น. — กรุณากลับมาในช่วงเวลาที่กำหนด`,confirmLabel:"เข้าใจแล้ว",cancelLabel:null,danger:false});
+        return;
+      }
+    }
     setStockBtnLoading(true);
     try{
       const open=await api.getOpenStockSession(currentBranch.id);
