@@ -2597,8 +2597,8 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       <Btn v="success" onClick={startStockCount} loading={stockBtnLoading} icon={I.box}>📦 นับสต็อก</Btn>
       <Btn v="ghost" onClick={()=>setShowSessionHist(true)} icon={I.clock}>🕘 ประวัติการนับ</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
-      {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
-      {canE&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
+      {currentUser?.role==="admin"&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
+      {currentUser?.role==="admin"&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
     </div>
     <div style={{fontSize:12,color:C.ink4,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>แสดง {paged.length} จาก {filtered.length} รายการ</div>
     {paged.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.warning} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่พบวัตถุดิบ</p></div>:<>
