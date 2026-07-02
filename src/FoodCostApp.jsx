@@ -1271,13 +1271,24 @@ function ReceiveImagesEditor({initial,title,onSave,onClose}){
 // photos. Tolerates a DB without the optional receive_images column yet: on that
 // specific error it retries without photos so the receive (and stock credit) still
 // succeeds, then warns the operator that the column needs adding.
-async function deliverOrderWithPhotos(orderId,expectedStatus,payloadItems,images){
+async function deliverOrderWithPhotos(orderId,expectedStatus,payloadItems,images,deliveryFee){
+  const payload={items:payloadItems,status:"delivered",receive_images:images||[]};
+  if(deliveryFee!=null)payload.delivery_fee=+deliveryFee||0;
   try{
-    return await api.updateOrderIfStatus(orderId,expectedStatus,{items:payloadItems,status:"delivered",receive_images:images||[]});
+    return await api.updateOrderIfStatus(orderId,expectedStatus,payload);
   }catch(err){
-    if(/receive_images/.test(String((err&&err.message)||""))){
-      const r=await api.updateOrderIfStatus(orderId,expectedStatus,{items:payloadItems,status:"delivered"});
-      if(images&&images.length)setTimeout(()=>alert("✅ รับสินค้าสำเร็จ แต่ยังบันทึกรูปไม่ได้\nผู้ดูแลระบบต้องเพิ่มคอลัมน์ receive_images ใน order_requests ก่อน"),0);
+    const m=String((err&&err.message)||"");
+    // Each optional column can be absent until its migration is run — drop just the
+    // missing one and keep the rest, so the receive (and stock credit) still completes.
+    if(/delivery_fee/.test(m)){
+      const r=await api.updateOrderIfStatus(orderId,expectedStatus,{items:payloadItems,status:"delivered",receive_images:images||[]});
+      if(+deliveryFee>0)setTimeout(()=>alert("✅ รับสินค้าสำเร็จ แต่ยังบันทึกค่าจัดส่งไม่ได้\nผู้ดูแลต้องเพิ่มคอลัมน์ delivery_fee ใน order_requests ก่อน"),0);
+      return r;
+    }
+    if(/receive_images/.test(m)){
+      const p2={items:payloadItems,status:"delivered"};if(deliveryFee!=null)p2.delivery_fee=+deliveryFee||0;
+      const r=await api.updateOrderIfStatus(orderId,expectedStatus,p2);
+      if(images&&images.length)setTimeout(()=>alert("✅ รับสินค้าสำเร็จ แต่ยังบันทึกรูปไม่ได้\nผู้ดูแลต้องเพิ่มคอลัมน์ receive_images ใน order_requests ก่อน"),0);
       return r;
     }
     throw err;
@@ -4623,6 +4634,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[receivingTransfer,setReceivingTransfer]=useState(null); // null | { po, items[receivedQty] }
   const[receivingExtOrder,setReceivingExtOrder]=useState(null);  // null | { orderId, supplierName, items[receivedQty,pricePerUnit] }
   const[extRecvImages,setExtRecvImages]=useState([]);const[extRecvUploading,setExtRecvUploading]=useState(0);  // receive photos (Drive)
+  const[extDeliveryFee,setExtDeliveryFee]=useState("0");  // ค่าจัดส่งของออเดอร์นี้ (0 = ไม่มี)
   const[showPurchaseSummary,setShowPurchaseSummary]=useState(false);
   const[copyPO,setCopyPO]=useState(null);          // null | po — copy-target branch picker
   const[copyBusy,setCopyBusy]=useState(false);     // true while addPO for a copy is in-flight
@@ -4693,6 +4705,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   // Open the receive modal for an external-supplier order (central kitchen).
   function startReceiveExt(order){
     setExtRecvImages(Array.isArray(order.receive_images)?order.receive_images:[]);setExtRecvUploading(0);
+    setExtDeliveryFee(order.delivery_fee!=null?String(order.delivery_fee):"0");
     setReceivingExtOrder({
       orderId:order.id,
       orderStatus:order.status,
@@ -4727,7 +4740,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     }))return;
     try{
       const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
-      await deliverOrderWithPhotos(receivingExtOrder.orderId,receivingExtOrder.orderStatus,payloadItems,extRecvImages);
+      await deliverOrderWithPhotos(receivingExtOrder.orderId,receivingExtOrder.orderStatus,payloadItems,extRecvImages,+extDeliveryFee||0);
       await transferStockBetweenBranches({
         fromBranchId:null,
         toBranchId:currentBranch.id,
@@ -5579,10 +5592,14 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
           })}</tbody>
         </table>
       </div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
-        <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>ยอดรวมที่จ่ายจริง</span>
-        <span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{receivingExtOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-      </div>
+      {(()=>{const itemsTotal=receivingExtOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0);const fee=+extDeliveryFee||0;return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,color:C.ink3,marginBottom:8}}><span>ยอดค่าสินค้า</span><span style={{fontWeight:700,color:C.ink2}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
+          <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>🚚 ค่าจัดส่ง <span style={{fontSize:11,fontWeight:400,color:C.ink4}}>(ไม่มีใส่ 0)</span></span>
+          <div style={{display:"inline-flex",alignItems:"center",gap:5}}><span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span><input type="text" inputMode="decimal" value={extDeliveryFee} onChange={e=>setExtDeliveryFee(e.target.value)} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${fee>0?C.brand:C.brandBorder}`,background:fee>0?C.brandLight:C.white,color:fee>0?C.brand:C.ink}}/></div>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,borderTop:`1px dashed ${C.line}`}}><span style={{fontSize:14,fontWeight:800,color:C.ink}}>ยอดรวมทั้งสิ้น</span><span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{(itemsTotal+fee).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+      </div>;})()}
       <ReceivePhotoAttach images={extRecvImages} setImages={setExtRecvImages} uploading={extRecvUploading} setUploading={setExtRecvUploading} minRequired={(receivingExtOrder.items||[]).length}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
         <Btn v="ghost" onClick={()=>setReceivingExtOrder(null)}>ยกเลิก</Btn>
@@ -6885,6 +6902,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const[editingQty,setEditingQty]=useState(null);    // { order, items:[mutable copies] }
   const[receivingOrder,setReceivingOrder]=useState(null); // { order, items:[copies with receivedQty] }
   const[recvImages,setRecvImages]=useState([]);const[recvUploading,setRecvUploading]=useState(0);  // receive photos (Drive)
+  const[recvDeliveryFee,setRecvDeliveryFee]=useState("0");  // ค่าจัดส่งของออเดอร์นี้ (0 = ไม่มี)
   const[photoEditOrder,setPhotoEditOrder]=useState(null);  // delivered order whose receive photos are being viewed/added retroactively
   const[copiedId,setCopiedId]=useState(null);          // shows ✓ briefly after copy succeeds
 
@@ -6998,6 +7016,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   // ─ Receive confirmation
   function startReceive(order){
     setRecvImages(Array.isArray(order.receive_images)?order.receive_images:[]);setRecvUploading(0);
+    setRecvDeliveryFee(order.delivery_fee!=null?String(order.delivery_fee):"0");
     setReceivingOrder({
       orderId:order.id,
       orderStatus:order.status,
@@ -7039,7 +7058,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     try{
       // Lock first; only proceed if status matches what we read
       const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
-      await deliverOrderWithPhotos(receivingOrder.orderId,receivingOrder.orderStatus,payloadItems,recvImages);
+      await deliverOrderWithPhotos(receivingOrder.orderId,receivingOrder.orderStatus,payloadItems,recvImages,+recvDeliveryFee||0);
       // External supplier → credit-only (no source deduction)
       await transferStockBetweenBranches({
         fromBranchId:null,
@@ -7256,11 +7275,18 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
             </tr>;
           })}</tbody>
           <tfoot><tr style={{background:C.bg,borderTop:`2px solid ${C.line}`}}>
-            <td colSpan={4} style={{padding:"10px 10px",textAlign:"right",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2}}>ยอดรวมทั้งสิ้น</td>
-            <td style={{padding:"10px 10px",textAlign:"right",fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:900,color:C.green,whiteSpace:"nowrap"}}>฿{receivingOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+            <td colSpan={4} style={{padding:"10px 10px",textAlign:"right",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2}}>ยอดค่าสินค้า</td>
+            <td style={{padding:"10px 10px",textAlign:"right",fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:900,color:C.ink,whiteSpace:"nowrap"}}>฿{receivingOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
           </tr></tfoot>
         </table>
       </div>
+      {(()=>{const itemsTotal=receivingOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0);const fee=+recvDeliveryFee||0;return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
+          <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>🚚 ค่าจัดส่ง <span style={{fontSize:11,fontWeight:400,color:C.ink4}}>(ไม่มีใส่ 0)</span></span>
+          <div style={{display:"inline-flex",alignItems:"center",gap:5}}><span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span><input type="text" inputMode="decimal" value={recvDeliveryFee} onChange={e=>setRecvDeliveryFee(e.target.value)} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${fee>0?C.brand:C.brandBorder}`,background:fee>0?C.brandLight:C.white,color:fee>0?C.brand:C.ink}}/></div>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,borderTop:`1px dashed ${C.line}`}}><span style={{fontSize:14,fontWeight:800,color:C.ink}}>ยอดรวมทั้งสิ้น</span><span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{(itemsTotal+fee).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+      </div>;})()}
       <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading} minRequired={(receivingOrder.items||[]).length}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
         <Btn v="ghost" onClick={()=>setReceivingOrder(null)}>ยกเลิก</Btn>
