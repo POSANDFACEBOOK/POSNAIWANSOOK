@@ -6177,7 +6177,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
               <th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:70}}>หน่วย</th>
               <th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:90}}>สั่ง</th>
               {mode==="dispute"&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:"#9A3412",fontWeight:800,width:120}}>ได้รับจริง *</th>}
-              {(mode==="view"&&po.status==="disputed")&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:"#9A3412",fontWeight:800,width:100}}>ได้จริง</th>}
+              {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.green,fontWeight:800,width:110}}>รับจริง</th>}
               <th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:100}}>ราคา/หน่วย</th>
               <th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:110}}>รวม</th>
             </tr></thead>
@@ -6193,7 +6193,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
                   {mode==="dispute"&&<td style={{padding:"6px 8px",textAlign:"center"}}>
                     <NumStepper value={receivedQty[i]} onChange={v=>setReceivedQty(prev=>({...prev,[i]:v}))} max={+it.qty} step={1} width={64} btnColor={short?C.red:C.brand} btnBg={short?"#FEF2F2":C.bg} inputStyle={{fontSize:14,fontWeight:800,color:short?C.red:C.ink,background:short?"#FEF2F2":C.white,border:`2px solid ${short?C.red:C.brandBorder}`}}/>
                   </td>}
-                  {(mode==="view"&&po.status==="disputed")&&<td style={{padding:"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:short?C.red:C.green}}>{recv!=null?recv:it.qty}{short&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>ขาด {(+it.qty-+recv).toFixed(2)}</div>}</td>}
+                  {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<td style={{padding:"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:short?C.red:C.green}}>{recv!=null?recv:it.qty}{short&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>ขาด {(+it.qty-+recv).toFixed(2)}</div>}</td>}
                   <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,color:C.ink2}}>฿{(+it.price_per_unit||0).toFixed(2)}</td>
                   <td style={{padding:"9px 12px",textAlign:"right",fontSize:14,fontWeight:800,color:C.brand}}>฿{(+it.line_total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                 </tr>;
