@@ -1976,6 +1976,8 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
 // 🗑️ ของเสีย — record + history of wasted ingredients. Photos go to Google Drive.
 function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
   const[showRecord,setShowRecord]=useState(true);            // auto-open the record popup on entering the tab
+  const isMobile=useIsMobile();const isNarrow=useIsMobile(1100);// responsive card grid: 6/row desktop → 4 tablet → 2 phone
+  const wasteCols=isMobile?2:isNarrow?4:6;
   // ── record form ──
   const[date,setDate]=useState(todayBkk());
   const[q,setQ]=useState("");const[sel,setSel]=useState(null);
@@ -2071,21 +2073,27 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
       {scopeBranches.length>1&&<div style={{marginBottom:12,maxWidth:280}}><Sel label="กรองสาขา" value={fBranch} onChange={e=>setFBranch(e.target.value)} options={[{v:"",l:"ทุกสาขา (ที่ดูแล)"},...scopeBranches.map(b=>({v:String(b.id),l:b.name}))]}/></div>}
       {loadingLogs?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
       :shownLogs.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีรายการของเสีย</div>
-      :<div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"60vh",overflowY:"auto",paddingRight:4}}>
-        {shownLogs.map(l=><div key={l.id} style={{border:`1px solid ${C.line}`,borderRadius:12,padding:"10px 14px",fontFamily:"'Sarabun',sans-serif"}}>
-          <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start"}}>
-            <div style={{minWidth:0}}>
-              <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{l.item_type==="menu"&&<span style={{fontSize:9,fontWeight:800,color:C.brand,background:C.brandLight,padding:"1px 6px",borderRadius:6,marginRight:5,verticalAlign:"middle"}}>เมนู</span>}{l.ingredient_name} <span style={{color:C.red,fontWeight:700}}>−{l.qty} {l.unit||""}</span></div>
-              <div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>📅 {l.log_date} · {scopeBranches.length>1?`🏪 ${l.branch_name||""} · `:""}โดย {l.created_by||"—"}</div>
-              {l.reason&&<div style={{fontSize:12,color:C.ink3,marginTop:3}}>📝 {l.reason}</div>}
-            </div>
-            <div style={{textAlign:"right",whiteSpace:"nowrap"}}>
-              <div style={{fontSize:14,fontWeight:900,color:C.red}}>฿{(+l.total||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div>
-              <button onClick={()=>delLog(l)} title="ลบ" style={{background:"none",border:"none",cursor:"pointer",color:C.ink4,fontSize:13,marginTop:2}}>🗑️</button>
-            </div>
+      :<div style={{display:"grid",gridTemplateColumns:`repeat(${wasteCols},minmax(0,1fr))`,gap:12,maxHeight:"64vh",overflowY:"auto",paddingRight:4,paddingBottom:4}}>
+        {shownLogs.map(l=>{const imgs=Array.isArray(l.images)?l.images:[];const clamp2={display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"};
+        return <div key={l.id} style={{border:`1px solid ${C.line}`,borderRadius:14,overflow:"hidden",background:C.white,boxShadow:"0 1px 4px rgba(15,23,42,.05)",fontFamily:"'Sarabun',sans-serif",display:"flex",flexDirection:"column"}}>
+          <div style={{position:"relative",height:96,flexShrink:0}}>
+            {imgs.length>0
+              ?<ImgOrFallback src={driveImgSrc(imgs[0])} onClick={()=>imgs.length>1?photoGallery(imgs,l.ingredient_name):imgView(driveImgSrc(imgs[0]))} note="HEIC" style={{width:"100%",height:"100%",objectFit:"cover",cursor:"pointer",display:"block"}}/>
+              :<div style={{width:"100%",height:"100%",background:C.redLight,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={26} c={C.red+"66"}/></div>}
+            {imgs.length>1&&<span style={{position:"absolute",left:6,bottom:6,background:"rgba(15,23,42,.72)",color:C.white,fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:10,pointerEvents:"none"}}>📷 {imgs.length}</span>}
+            <button onClick={e=>{e.stopPropagation();delLog(l);}} title="ลบ" style={{position:"absolute",top:6,right:6,width:26,height:26,borderRadius:"50%",background:"rgba(255,255,255,.92)",border:`1px solid ${C.line}`,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(15,23,42,.15)"}}>🗑️</button>
+            {l.item_type==="menu"&&<span style={{position:"absolute",top:6,left:6,fontSize:9,fontWeight:800,color:C.white,background:C.brand,padding:"2px 7px",borderRadius:8}}>เมนู</span>}
           </div>
-          {Array.isArray(l.images)&&l.images.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>{l.images.map((ref,i)=><ImgOrFallback key={i} src={driveImgSrc(ref)} onClick={()=>imgView(driveImgSrc(ref))} note="HEIC เปิดไม่ได้" style={{width:56,height:56,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"pointer"}}/>)}</div>}
-        </div>)}
+          <div style={{padding:"9px 11px",display:"flex",flexDirection:"column",gap:3,flex:1}}>
+            <div style={{fontSize:13,fontWeight:800,color:C.ink,lineHeight:1.3,...clamp2}} title={l.ingredient_name}>{l.ingredient_name}</div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:6}}>
+              <span style={{fontSize:12,color:C.red,fontWeight:700,whiteSpace:"nowrap",minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}} title={`−${l.qty} ${l.unit||""}`}>−{l.qty} {l.unit||""}</span>
+              <span style={{fontSize:15,fontWeight:900,color:C.red,whiteSpace:"nowrap",flexShrink:0}}>฿{(+l.total||0).toLocaleString(undefined,{maximumFractionDigits:0})}</span>
+            </div>
+            <div style={{fontSize:10.5,color:C.ink4,lineHeight:1.4}}>📅 {l.log_date}{scopeBranches.length>1?` · 🏪 ${l.branch_name||""}`:""}<br/>👤 {l.created_by||"—"}</div>
+            {l.reason&&<div style={{fontSize:11,color:C.ink3,marginTop:1,...clamp2}} title={l.reason}>📝 {l.reason}</div>}
+          </div>
+        </div>;})}
       </div>}
     </div>
   </div>;
