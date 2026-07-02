@@ -36,6 +36,9 @@ function bkkNowMinutes(){
     return (h%24)*60+m;
   }catch{const d=new Date();return d.getHours()*60+d.getMinutes();}
 }
+// Allowed stock-count window (Asia/Bangkok, minutes-of-day). Branch 16:00–23:30 · Central 12:00–16:00.
+function stockCountWindow(isCentral){ return isCentral?{s:12*60,e:16*60,lbl:"12:00–16:00"}:{s:16*60,e:23*60+30,lbl:"16:00–23:30"}; }
+const hhmmOfMin=m=>`${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
 // Friendly error mapping (avoid leaking Postgres internals to cashiers)
 function friendlyError(err){
   const raw=(err&&err.message)?err.message:String(err||"");
@@ -2394,11 +2397,10 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     // Time-gate the นับสต็อก button to the allowed window (Asia/Bangkok, exact):
     //   สาขา 16:00–22:00 · ครัวกลาง 12:00–16:00. End is exclusive.
     {
-      const win=isCentral?{s:12*60,e:16*60,lbl:"12:00–16:00"}:{s:16*60,e:22*60,lbl:"16:00–22:00"};
+      const win=stockCountWindow(isCentral);
       const now=bkkNowMinutes();
       if(now<win.s||now>=win.e){
-        const hhmm=m=>`${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
-        await confirmDlg({title:"⏰ ยังไม่ถึงเวลานับสต็อก",message:`${isCentral?"ครัวกลาง":"สาขา"}เปิดให้นับสต็อกได้เฉพาะช่วง ${win.lbl} น. (เวลาไทย)\n\nขณะนี้ ${hhmm(now)} น. — กรุณากลับมาในช่วงเวลาที่กำหนด`,confirmLabel:"เข้าใจแล้ว",cancelLabel:null,danger:false});
+        await confirmDlg({title:"⏰ ยังไม่ถึงเวลานับสต็อก",message:`${isCentral?"ครัวกลาง":"สาขา"}เปิดให้นับสต็อกได้เฉพาะช่วง ${win.lbl} น. (เวลาไทย)\n\nขณะนี้ ${hhmmOfMin(now)} น. — กรุณากลับมาในช่วงเวลาที่กำหนด`,confirmLabel:"เข้าใจแล้ว",cancelLabel:null,danger:false});
         return;
       }
     }
@@ -2740,6 +2742,19 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
 // ══════════════════════════════════════════════════════
 function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}){
   const isMobile=useIsMobile();
+  // Warn as the branch/central stock-count window is about to close, so the counter
+  // can save in time. (Does NOT force-close — saving stays allowed past the end.)
+  const _winEnd=stockCountWindow(currentBranch?.type==="central").e;
+  const[remainMin,setRemainMin]=useState(()=>_winEnd-bkkNowMinutes());
+  const warnedRef=useRef({});
+  useEffect(()=>{
+    const tick=()=>{
+      const rem=_winEnd-bkkNowMinutes();setRemainMin(rem);
+      if(rem<=15&&rem>5&&!warnedRef.current.a){warnedRef.current.a=true;alert(`⏰ ใกล้หมดเวลานับสต็อก — เหลืออีกประมาณ ${rem} นาที (ถึง ${hhmmOfMin(_winEnd)} น.)\nกรุณาบันทึกรายการที่นับให้ทันเวลา`);}
+      if(rem<=5&&rem>0&&!warnedRef.current.b){warnedRef.current.b=true;alert("⏰ เหลือเวลานับสต็อกอีกไม่ถึง 5 นาที!\nรีบกด \"บันทึกทั้งหมด\" ก่อนหมดเวลา");}
+    };
+    tick();const id=setInterval(tick,30000);return()=>clearInterval(id);
+  },[_winEnd]);
   const[q,setQ]=useState("");
   const[edits,setEdits]=useState({});  // {ingId: stringValue}
   const[saving,setSaving]=useState({});  // {ingId: bool}
@@ -2814,6 +2829,11 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   }
 
   return <Modal title={`📦 นับสต็อก — ${currentBranch?.name||"—"}`} onClose={onClose} wide>
+    {/* Countdown banner as the count window nears its close */}
+    {remainMin<=30&&(()=>{const late=remainMin<=10;const over=remainMin<=0;return <div style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderRadius:10,marginBottom:10,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,background:over||late?C.redLight:"#FFFBEB",border:`1px solid ${over||late?C.red+"55":"#FDE68A"}`,color:over||late?C.red:"#92400E"}}>
+      <Ic d={I.clock} s={16} c={over||late?C.red:"#92400E"}/>
+      <span>{over?`หมดเวลานับสต็อกแล้ว (${hhmmOfMin(_winEnd)} น.) — กรุณากดบันทึกทั้งหมดทันที`:`ใกล้หมดเวลานับสต็อก — เหลืออีก ${remainMin} นาที (ถึง ${hhmmOfMin(_winEnd)} น.) กรุณาบันทึกให้ทัน`}</span>
+    </div>;})()}
     {/* Search bar */}
     <div style={{marginBottom:8}}>
       <div style={{position:"relative"}}>
