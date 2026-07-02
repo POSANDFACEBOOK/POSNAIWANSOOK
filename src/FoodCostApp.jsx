@@ -6235,6 +6235,10 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
             <div style={{fontSize:13,color:"#9A3412",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{dispAt}{po.dispute_by?` · ${po.dispute_by}`:""}</div>
             {po.dispute_note&&<div style={{fontSize:11,color:"#7C2D12",marginTop:4,fontFamily:"'Sarabun',sans-serif"}}>"{po.dispute_note}"</div>}
           </div>}
+          {po.reject_reason&&<div style={{background:C.redLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.red}`}}>
+            <div style={{fontSize:11,color:C.red,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>❌ Area ตีกลับ — เหตุผล</div>
+            <div style={{fontSize:13,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",fontWeight:700,lineHeight:1.6}}>{po.reject_reason}{po.rejected_by&&<span style={{color:C.ink4,fontWeight:600,fontSize:11}}> — โดย {po.rejected_by}</span>}</div>
+          </div>}
           {payAt&&<div style={{background:C.greenLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.green}`}}>
             <div style={{fontSize:11,color:C.green,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>💳 ชำระเงิน</div>
             <div style={{fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{payAt}{po.payment_by?` · ${po.payment_by}`:""}</div>
@@ -7289,6 +7293,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               </>}
           </div>
         </div>
+        {/* Area's reject reason — always visible on the row so the branch knows what to fix */}
+        {order.status==="rejected"&&order.reject_reason&&<div style={{margin:"0 14px 10px",padding:"8px 12px",background:C.redLight,border:`1px solid ${C.red}44`,borderRadius:10,fontSize:12.5,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>❌ <b>Area ตีกลับ:</b> {order.reject_reason}{order.rejected_by&&<span style={{color:C.ink4,fontSize:11}}> — โดย {order.rejected_by}</span>}</div>}
         {/* Items table — only when expanded */}
         {isExpanded&&<div style={{padding:"4px 14px 12px",borderTop:`1px solid ${C.lineLight}`}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,marginTop:8}}>
@@ -8180,7 +8186,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
                   <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{(o.items||[]).length} รายการ</td>
                   <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:C.green,whiteSpace:"nowrap"}}>฿{fmtMoney(itemsTotal)}</td>
                   <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>
-                    <span style={{fontSize:11,fontWeight:800,color:stColor[o.status]||C.ink3,background:(stColor[o.status]||C.ink3)+"22",padding:"3px 9px",borderRadius:14,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${(stColor[o.status]||C.ink3)}55`}}>{stLabel[o.status]||o.status}</span>
+                    <span title={o.status==="rejected"&&o.reject_reason?`เหตุผล: ${o.reject_reason}`:undefined} style={{fontSize:11,fontWeight:800,color:stColor[o.status]||C.ink3,background:(stColor[o.status]||C.ink3)+"22",padding:"3px 9px",borderRadius:14,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${(stColor[o.status]||C.ink3)}55`,cursor:o.status==="rejected"&&o.reject_reason?"help":undefined}}>{stLabel[o.status]||o.status}</span>
                   </td>
                   <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>{Array.isArray(o.receive_images)&&o.receive_images.length>0?<button onClick={()=>photoGallery(o.receive_images,"📷 รูปรับสินค้า — "+supplier.name)} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"4px 8px",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.blue}}><Ic d={I.img} s={12} c={C.blue}/>{o.receive_images.length}</button>:<span style={{color:C.ink4,fontSize:11}}>—</span>}</td>
                 </tr>;
@@ -8539,9 +8545,12 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   const dkeyOf=l=>{try{const d=new Date(l.decided_at);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}catch{return "";}};
   const dlabelOf=k=>{const d=new Date(k+"T00:00:00");return isNaN(d.getTime())?k:d.toLocaleDateString("th-TH",{weekday:"short",day:"numeric",month:"short",year:"numeric"});};
   async function loadLogs(){setLogLoading(true);try{const d=await api.getApprovalLog();if(aliveRef.current)setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{if(aliveRef.current)setLogs([]);}if(aliveRef.current)setLogLoading(false);}
-  async function logDecision(decision,kind,o){try{
+  async function logDecision(decision,kind,o,reason){try{
     const branchId=kind==="po"?o.from_branch_id:o.branch_id;
-    await api.addApprovalLog({decision,kind,ref:kind==="po"?(o.po_number||("PO#"+o.id)):("ORD#"+o.id),branch_id:branchId,branch_name:branchName(branchId),supplier_name:kind==="po"?"ครัวกลาง":(o.supplier_name||"ซัพพลายนอก"),total:kind==="po"?(+o.total||sumItems(o)):sumItems(o),items_count:itemsOf(o).length,items:itemsOf(o),decided_by:currentUser?.username||currentUser?.name||""});
+    const base={decision,kind,ref:kind==="po"?(o.po_number||("PO#"+o.id)):("ORD#"+o.id),branch_id:branchId,branch_name:branchName(branchId),supplier_name:kind==="po"?"ครัวกลาง":(o.supplier_name||"ซัพพลายนอก"),total:kind==="po"?(+o.total||sumItems(o)):sumItems(o),items_count:itemsOf(o).length,items:itemsOf(o),decided_by:currentUser?.username||currentUser?.name||""};
+    // Reason column may not exist yet — retry without it rather than losing the log row.
+    try{await api.addApprovalLog(reason?{...base,reason}:base);}
+    catch(e){await api.addApprovalLog(base);}
   }catch{}}
   async function load(silent){
     if(!silent)setLoading(true);
@@ -8561,8 +8570,37 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   useEffect(()=>{aliveRef.current=true;prevRef.current=-1;load();const id=setInterval(()=>{if(!document.hidden)load(true);},20000);const onVis=()=>{if(!document.hidden)load(true);};document.addEventListener("visibilitychange",onVis);return()=>{aliveRef.current=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};},[]);// eslint-disable-line react-hooks/exhaustive-deps
   async function approveReq(o){setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"pending"});await logDecision("approved","ext",o);posToast("✅ อนุมัติแล้ว — สาขาส่งให้ซัพพลายต่อได้","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   async function approvePO(o){setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"requested",updated_at:new Date().toISOString()});await logDecision("approved","po",o);posToast("✅ อนุมัติแล้ว — ส่งให้ครัวกลางต่อ","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
-  async function rejectReq(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับออเดอร์ซัพพลาย "${o.supplier_name||""}" ของ ${branchName(o.branch_id)}?\nสาขาจะเห็นว่าถูกปฏิเสธ และนับสต็อกส่งใหม่ได้`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"rejected"});await logDecision("rejected","ext",o);posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
-  async function rejectPO(o){if(!await confirmDlg({title:"ตีกลับคำสั่งซื้อ",message:`ตีกลับ PO ${o.po_number||""} ของ ${branchName(o.from_branch_id)}?`,confirmLabel:"ตีกลับ",cancelLabel:"ไม่",danger:true}))return;setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"cancelled",updated_at:new Date().toISOString()});await logDecision("rejected","po",o);posToast("ตีกลับแล้ว","warn");}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
+  // Reject flow: reason is REQUIRED — the branch must always know WHY their
+  // order was sent back. Reason is stored on the document itself (reject_reason/
+  // rejected_by) and in the approval log.
+  const[rejecting,setRejecting]=useState(null);           // {kind:"ext"|"po", o}
+  const[rejectReason,setRejectReason]=useState("");
+  function rejectReq(o){setRejectReason("");setRejecting({kind:"ext",o});}
+  function rejectPO(o){setRejectReason("");setRejecting({kind:"po",o});}
+  const _colMissing=e=>/PGRST204|column/i.test(String((e&&e.message)||e));
+  async function doReject(){
+    if(!rejecting)return;
+    const reason=rejectReason.trim();
+    if(!reason){alert("กรุณาใส่เหตุผลที่ตีกลับ เพื่อให้สาขารู้ว่าต้องแก้อะไร");return;}
+    const{kind,o}=rejecting;
+    const who=currentUser?.username||currentUser?.name||"";
+    setBusy((kind==="po"?"p":"r")+o.id);
+    try{
+      if(kind==="ext"){
+        // Try with the reason columns; if the migration hasn't run yet fall back to
+        // status-only so the reject itself never blocks (reason still in approval log).
+        try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"rejected",reject_reason:reason,rejected_by:who});}
+        catch(e){if(_colMissing(e))await api.updateOrderIfStatus(o.id,"pending_approval",{status:"rejected"});else throw e;}
+      }else{
+        try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"cancelled",reject_reason:reason,rejected_by:who,updated_at:new Date().toISOString()});}
+        catch(e){if(_colMissing(e))await api.patchPOIfStatus(o.id,"pending_approval",{status:"cancelled",updated_at:new Date().toISOString()});else throw e;}
+      }
+      await logDecision("rejected",kind,o,reason);
+      posToast("ตีกลับแล้ว — สาขาจะเห็นเหตุผล","warn");
+      setRejecting(null);setRejectReason("");
+    }catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}
+    await load(true);if(reloadOrders)reloadOrders();setBusy(null);
+  }
   async function approveSession(s){setBusy("s"+s.id);try{await api.approveStockSession(s.id,currentUser?.username||currentUser?.name||"");posToast("✅ อนุมัติการนับสต็อกแล้ว","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);setBusy(null);}
   async function toggleSess(s){if(openSess===s.id){setOpenSess(null);return;}setOpenSess(s.id);if(sessItems[s.id]===undefined){setSessItems(m=>({...m,[s.id]:null}));try{const d=await api.getStockLogsBySession(s.id);if(aliveRef.current)setSessItems(m=>({...m,[s.id]:Array.isArray(d)?d:[]}));}catch{if(aliveRef.current)setSessItems(m=>({...m,[s.id]:[]}));}}}
   // Open a stock-count session full-screen, loading its counted items on demand (reuses the sessItems cache).
@@ -8616,6 +8654,21 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
         <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:8,padding:"0 14px 12px"}}><Btn v="success" onClick={()=>approveReq(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectReq(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
       </Card>;})}
     </div>)}
+    {rejecting&&(()=>{
+      const o=rejecting.o,isPo=rejecting.kind==="po";
+      const ref=isPo?(o.po_number||("PO#"+o.id)):`ออเดอร์ "${o.supplier_name||"ซัพพลายนอก"}"`;
+      const bname=branchName(isPo?o.from_branch_id:o.branch_id);
+      const kBusy=busy===((isPo?"p":"r")+o.id);
+      return <Modal title="❌ ตีกลับคำสั่งซื้อ" onClose={()=>{if(!kBusy){setRejecting(null);setRejectReason("");}}}>
+        <div style={{fontSize:13.5,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:12,lineHeight:1.7}}>ตีกลับ {ref} ของสาขา <b style={{color:C.ink}}>{bname}</b><br/><span style={{color:C.ink4,fontSize:12}}>สาขาจะเห็นเหตุผลนี้ และแก้ไข/ส่งคำสั่งซื้อใหม่ได้</span></div>
+        <div style={{fontSize:13,fontWeight:700,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>เหตุผลที่ตีกลับ * (จำเป็น)</div>
+        <textarea autoFocus value={rejectReason} onChange={e=>setRejectReason(e.target.value)} rows={3} placeholder="เช่น สั่งเกินความจำเป็น / ราคาสูงผิดปกติ / ให้ใช้ของคงเหลือก่อน..." style={{...iS,fontSize:14,resize:"none",lineHeight:1.6,border:`2px solid ${rejectReason.trim()?C.line:C.red}`}}/>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,paddingTop:12,borderTop:`1px solid ${C.line}`}}>
+          <Btn v="ghost" onClick={()=>{setRejecting(null);setRejectReason("");}} disabled={kBusy}>ยกเลิก</Btn>
+          <Btn v="danger" onClick={doReject} loading={kBusy} disabled={kBusy||!rejectReason.trim()}>❌ ยืนยันตีกลับ</Btn>
+        </div>
+      </Modal>;
+    })()}
     {detailCard&&(()=>{
       const o=detailCard.o,kind=detailCard.kind;
       const bid=kind==="po"?o.from_branch_id:o.branch_id;
@@ -8701,6 +8754,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
                 <div style={{minWidth:0}}>
                   <div style={{fontWeight:800,fontSize:13.5,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{l.kind==="po"?"🏢":"🚚"} {l.supplier_name||"-"} <span style={{color:C.ink4,fontWeight:600}}>· {branchName(l.branch_id)}</span></div>
                   <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{l.ref||""} · {l.items_count||its.length} รายการ · ฿{money(l.total)} · โดย {l.decided_by||"-"} · {(()=>{try{return new Date(l.decided_at).toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}catch{return "";}})()}</div>
+                  {l.reason&&<div style={{fontSize:11.5,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",marginTop:3,fontWeight:700}}>❌ เหตุผล: {l.reason}</div>}
                 </div>
               </div>
               <span style={{fontSize:11,fontWeight:800,color:ok?C.green:C.red,background:ok?C.greenLight:C.redLight,padding:"3px 10px",borderRadius:20,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{ok?"✅ อนุมัติ":"❌ ตีกลับ"}</span>
