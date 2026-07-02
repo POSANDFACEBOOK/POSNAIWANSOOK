@@ -193,6 +193,13 @@ const api = {
     return res;
   },
   deleteOrder: (id) => sb(`order_requests?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
+  // Status-guarded DELETE — refuses if the order moved on (e.g. another device just
+  // confirmed receive → stock credited); deleting then would orphan that credit.
+  deleteOrderIfStatus: async (id,expectedStatus) => {
+    const res=await sb(`order_requests?id=eq.${id}&status=eq.${encodeURIComponent(expectedStatus)}`, { method: "DELETE" });
+    if(!Array.isArray(res)||res.length===0)throw new Error("รายการถูกแก้ไขโดยผู้ใช้อื่นแล้ว — กรุณารีเฟรชและลองใหม่");
+    return res[0];
+  },
   getAllOrders: () => sb("order_requests?order=id.desc&limit=600"),
   // POS
   getPOSTables: (bid) => sb(`tables?order=table_number.asc&branch_id=eq.${bid}&active=eq.true`),
@@ -344,6 +351,14 @@ const api = {
     return res;
   },
   deletePO: (id) => sb(`purchase_orders?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  // DELETE only while the row is still in the status this screen showed. If another
+  // device shipped/received it in the meantime, 0 rows match → throw instead of
+  // destroying a document whose stock has already moved (stranded deduction).
+  deletePOIfStatus: async (id,expectedStatus) => {
+    const res=await sb(`purchase_orders?id=eq.${id}&status=eq.${encodeURIComponent(expectedStatus)}`, {method:"DELETE"});
+    if(!Array.isArray(res)||res.length===0)throw new Error("เอกสารถูกแก้ไขโดยผู้ใช้อื่นแล้ว — กรุณารีเฟรชและลองใหม่");
+    return res[0];
+  },
   uploadImage: async (file, path) => {
     const res = await fetch(`${SUPA_URL}/storage/v1/object/foodcost-images/${path}`, {
       method: "POST", headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": file.type, "x-upsert": "true" }, body: file,
@@ -747,8 +762,12 @@ function branchStockExact(ing,branchId){
 // via RPC, false if the RPC isn't installed yet (caller then falls back to a PATCH).
 // Optimistic start; flips off on the PostgREST "function not found" error so we don't
 // re-attempt a missing RPC for every item in a big receive.
-const _rpcStock={delta:true,set:true};
-const _rpcMissing=e=>/PGRST202|find the function|does not exist|404|Not Found|schema cache/i.test(String((e&&e.message)||e));
+const _rpcStock={delta:true,set:true,transfer:true};
+// Narrow on purpose: ONLY the PostgREST "function not found" shape (PGRST202) may
+// downgrade to the non-atomic PATCH fallback. Any other error (permission, network,
+// transient 5xx) must THROW so the caller reports it — silently losing atomicity
+// for the rest of the session is worse than a visible failure.
+const _rpcMissing=e=>/PGRST202|find the function/i.test(String((e&&e.message)||e));
 async function rpcStockDelta(ingId,branchId,delta){
   if(!_rpcStock.delta)return false;
   try{await sb("rpc/apply_branch_stock_delta",{method:"POST",body:JSON.stringify({p_id:+ingId,p_branch:String(branchId),p_delta:Math.round((+delta||0)*1000)/1000})});return true;}
@@ -758,6 +777,14 @@ async function rpcStockSet(ingId,branchId,qty){
   if(!_rpcStock.set)return false;
   try{await sb("rpc/set_branch_stock",{method:"POST",body:JSON.stringify({p_id:+ingId,p_branch:String(branchId),p_qty:Math.round((+qty||0)*1000)/1000})});return true;}
   catch(e){if(_rpcMissing(e)){_rpcStock.set=false;return false;}throw e;}
+}
+// Both slots of a branch→branch move in ONE row-locked transaction: the debit and
+// credit can never half-apply (no minted/lost stock if the connection drops between
+// them). Falls back to two apply_branch_stock_delta calls when not installed yet.
+async function rpcStockTransfer(ingId,fromId,toId,qty){
+  if(!_rpcStock.transfer)return false;
+  try{await sb("rpc/transfer_branch_stock",{method:"POST",body:JSON.stringify({p_id:+ingId,p_from:String(fromId),p_to:String(toId),p_qty:Math.round((+qty||0)*1000)/1000})});return true;}
+  catch(e){if(_rpcMissing(e)){_rpcStock.transfer=false;return false;}throw e;}
 }
 // Per-branch supplier mapping — each branch can pick one of THEIR suppliers for each ingredient.
 function branchSupplierId(ing,branchId){
@@ -804,7 +831,7 @@ function setBranchSafetyInJson(existing,branchId,value){
 //   subStock = parentQty × sub.amountGram / parentIng.convert_to_gram
 // — i.e. how many sub-stock units are consumed/produced per one parent stock unit.
 // Recursion is capped at 3 levels to defend against cycles in mis-configured SOPs.
-async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible,_depth=0}){
+async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible,_depth=0,_acc=null}){
   const toId=toBranchId!=null?(+toBranchId||null):null;
   const fromId=fromBranchId!=null?(+fromBranchId||null):null;
   if(!toId&&!fromId){
@@ -815,10 +842,12 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     if(_depth===0)setTimeout(()=>alert("⚠️ ไม่ได้ตัดสต๊อก — สาขาต้นทางและปลายทางเป็นสาขาเดียวกัน"),200);
     return;
   }
+  // Failure accumulator shared down the SOP-cascade recursion so problems at
+  // ANY depth surface in the single top-level alert (a silently-skipped
+  // sub-ingredient is still a wrong stock number).
+  const acc=_acc||{notFound:[],zeroQty:[],failedUpdates:[]};
+  const{notFound,zeroQty,failedUpdates}=acc;
   const agg=new Map();
-  const notFound=[];      // items whose ingredient_id wasn't in `ings`
-  const zeroQty=[];       // items with qty <= 0 (informational only)
-  const failedUpdates=[]; // API patch errors
   for(const it of (items||[])){
     const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
     if(!ingId){notFound.push({ingId:0,name:it.name||"(ไม่มีชื่อ)",reason:"ไม่มี ingredient_id"});continue;}
@@ -829,39 +858,65 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     const e=agg.get(ingId)||{add:0,row};
     e.add+=qty;agg.set(ingId,e);
   }
-  for(const[ingId,{add,row}]of agg.entries()){
+  const levelFailed=new Set();   // parents whose OWN write failed → don't cascade their children
+  for(const[ingId,{add:addRaw,row}]of agg.entries()){
+    // Round the delta ONCE and reuse for both slots: rounding +add and −add
+    // independently is asymmetric at exact .0005 boundaries (Math.round half-up)
+    // and would credit slightly more than it debits.
+    const add=Math.round(addRaw*1000)/1000;
+    if(!add||add<=0)continue;
     try{
-      // Preferred path: atomic per-branch deltas (server adds/subtracts under a row
-      // lock) → concurrent moves on the same ingredient can't clobber each other.
-      let viaRpc=true;
-      if(toId&&!(await rpcStockDelta(ingId,toId,+add)))viaRpc=false;
-      if(viaRpc&&fromId&&!(await rpcStockDelta(ingId,fromId,-add)))viaRpc=false;
-      if(!viaRpc){
-        // Fallback (RPC not installed yet): read-modify-write whole-column PATCH.
-        // branchStockExact (baseline 0, no legacy global) + write-back avoid the
-        // phantom-units and sequential-clobber bugs even on this path.
-        let stockMap=row.stock_by_branch;
-        if(toId)stockMap=setBranchStockInJson(stockMap,toId,Math.round((branchStockExact(row,toId)+add)*1000)/1000);
-        if(fromId)stockMap=setBranchStockInJson(stockMap,fromId,Math.round((branchStockExact(row,fromId)-add)*1000)/1000);
-        await api.updateIng(ingId,{stock_by_branch:stockMap});
-        row.stock_by_branch=stockMap;
-      }
-      // visible_branches tick (not a stock race; only when the ingredient has an explicit list)
-      if(autoVisible&&toId){
-        const cur=row.visible_branches;
-        if(cur!=null){
-          const arr=Array.isArray(cur)?[...cur]:[];
-          if(!arr.includes(toId)){arr.push(toId);await api.updateIng(ingId,{visible_branches:arr});row.visible_branches=arr;}
+      // Preferred path #1: both slots in ONE server-side transaction — debit and
+      // credit can never half-apply even if the connection drops between them.
+      let applied=!!(toId&&fromId&&await rpcStockTransfer(ingId,fromId,toId,add));
+      if(!applied){
+        // Path #2: atomic per-branch deltas (server adds/subtracts under a row
+        // lock) → concurrent moves on the same ingredient can't clobber each other.
+        let viaRpc=true;
+        if(toId&&!(await rpcStockDelta(ingId,toId,+add)))viaRpc=false;
+        if(viaRpc&&fromId&&!(await rpcStockDelta(ingId,fromId,-add)))viaRpc=false;
+        if(!viaRpc){
+          // Fallback (RPC not installed yet): read-modify-write whole-column PATCH.
+          // branchStockExact (baseline 0, no legacy global) + write-back avoid the
+          // phantom-units and sequential-clobber bugs even on this path.
+          let stockMap=row.stock_by_branch;
+          if(toId)stockMap=setBranchStockInJson(stockMap,toId,Math.round((branchStockExact(row,toId)+add)*1000)/1000);
+          if(fromId)stockMap=setBranchStockInJson(stockMap,fromId,Math.round((branchStockExact(row,fromId)-add)*1000)/1000);
+          await api.updateIng(ingId,{stock_by_branch:stockMap});
+          row.stock_by_branch=stockMap;
         }
       }
     }
     catch(err){
       console.error("transferStock failed",ingId,err);
+      levelFailed.add(+ingId);
       failedUpdates.push({ingId,name:row.name||"#"+ingId,reason:err&&err.message||String(err)});
+      continue;   // stock write failed → skip the visibility tick too
+    }
+    // visible_branches tick — OUTSIDE the stock try/catch: the stock move above
+    // already committed, so a failure here must NOT be reported as a failed stock
+    // save (the "ลองใหม่" advice would double-apply the move). Cosmetic only.
+    if(autoVisible&&toId){
+      try{
+        const cur=row.visible_branches;
+        if(cur!=null){
+          const arr=Array.isArray(cur)?[...cur]:[];
+          if(!arr.includes(toId)){arr.push(toId);await api.updateIng(ingId,{visible_branches:arr});row.visible_branches=arr;}
+        }
+      }catch(err){console.warn("visible_branches tick failed (stock already moved OK)",ingId,err);}
     }
   }
-  // Top-level callers only: surface anything that silently fell through so
-  // the user doesn't end up with a PO marked "จัดส่งแล้ว" but no stock move.
+
+  // ── SOP cascade ──────────────────────────────────────────────────────────
+  // For each parent ingredient that has SOP sub-ingredients, recursively move
+  // the proportional sub-quantities in the same direction. _depth caps at 3
+  // levels so a circular SOP (X uses Y, Y uses X) can't melt the API.
+  // Parents whose own write failed are excluded — their transfer didn't happen,
+  // so moving their children would desync (and a retry would double-move them).
+  if(_depth<3)await _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,acc,levelFailed});
+
+  // Top-level callers only: surface anything that silently fell through AT ANY
+  // DEPTH so the user doesn't end up with a PO marked "จัดส่งแล้ว" but no stock move.
   if(_depth===0&&(notFound.length>0||failedUpdates.length>0||zeroQty.length>0)){
     const lines=[];
     if(zeroQty.length>0){
@@ -880,19 +935,17 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
       if(failedUpdates.length>5)lines.push(`   • ... และอีก ${failedUpdates.length-5} รายการ`);
     }
     lines.push("");
-    lines.push("กรุณาตรวจสอบใน \"วัตถุดิบ\" แล้วลองทำรายการใหม่อีกครั้ง");
+    lines.push("⚠️ อย่ากดทำรายการเดิมซ้ำทั้งใบ — รายการที่สำเร็จไปแล้วจะถูกตัด/เพิ่มซ้ำ");
+    lines.push("ให้ปรับเฉพาะรายการข้างบนในหน้า \"นับสต็อก\" หรือแจ้งแอดมิน");
     setTimeout(()=>alert(lines.join("\n")),200);
   }
-
-  // ── SOP cascade ──────────────────────────────────────────────────────────
-  // For each parent ingredient that has SOP sub-ingredients, recursively move
-  // the proportional sub-quantities in the same direction. _depth caps at 3
-  // levels so a circular SOP (X uses Y, Y uses X) can't melt the API.
-  if(_depth>=3)return;
+}
+async function _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,acc,levelFailed}){
   const cascadeItems=[];
   for(const it of (items||[])){
     const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
     if(!ingId)continue;
+    if(levelFailed.has(+ingId))continue;
     const parent=(ings||[]).find(x=>+x.id===ingId);
     if(!parent||!parent.has_sop)continue;
     const subs=Array.isArray(parent.ingredients)?parent.ingredients:[];
@@ -922,6 +975,7 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
       ings,
       autoVisible:false,                 // sub-ingredient visibility doesn't auto-toggle
       _depth:_depth+1,
+      _acc:acc,                          // child failures bubble into the top-level alert
     });
   }
 }
@@ -1552,12 +1606,21 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
           item.supplier_id=sup?.id||null;
           item.supplier_name=sup?.name||row.supplier_name;
         }
-        if(row.stockProvided&&currentBranch?.id){
-          const base=existing?.stock_by_branch||null;
-          item.stock_by_branch=setBranchStockInJson(base,currentBranch.id,+row.stock||0);
+        // Stock column: for EXISTING rows never PATCH the whole stock_by_branch map —
+        // the base here comes from the page-load cache, so it would silently revert
+        // every move other branches made since. Set ONLY this branch's slot via the
+        // atomic RPC instead. (New rows below still embed the map — fresh row, no race.)
+        if(row.stockProvided&&currentBranch?.id&&!existing){
+          item.stock_by_branch=setBranchStockInJson(null,currentBranch.id,+row.stock||0);
         }
         if(existing){
-          await api.updateIng(existing.id,item);updated++;
+          await api.updateIng(existing.id,item);
+          if(row.stockProvided&&currentBranch?.id){
+            if(!await rpcStockSet(existing.id,currentBranch.id,+row.stock||0)){
+              await api.updateIng(existing.id,{stock_by_branch:setBranchStockInJson(existing.stock_by_branch,currentBranch.id,+row.stock||0)});
+            }
+          }
+          updated++;
         }else{
           // New ingredient — fill in required defaults for fields the file didn't supply
           if(!item.name)continue;
@@ -1984,6 +2047,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
   const[qty,setQty]=useState("");const[price,setPrice]=useState("");const[reason,setReason]=useState("");
   const[images,setImages]=useState([]);const[uploading,setUploading]=useState(0);const[saving,setSaving]=useState(false);
   const fileRef=useRef();
+  const savingRef=useRef(false);   // synchronous double-tap guard — React `saving` state lags a frame; a ghost-click would deduct stock twice
   const[kind,setKind]=useState("ing");                       // ing | menu — ของเสียเป็นวัตถุดิบหรือเมนู
   const isMenu=kind==="menu";
   const pool=isMenu?menus:ings;
@@ -1999,9 +2063,11 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
     await Promise.all(files.map(async f=>{try{const ref=await uploadImageToDrive(f);setImages(im=>[...im,ref]);}catch(err){alert("อัปรูปไม่สำเร็จ: "+(err.message||err));}finally{setUploading(u=>u-1);}}));
   }
   async function save(){
+    if(savingRef.current)return;
     if(!sel){alert("กรุณาเลือกวัตถุดิบ");return;}
     if(!(+qty>0)){alert("กรุณาใส่จำนวนของเสีย");return;}
     if(uploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
+    savingRef.current=true;
     setSaving(true);
     try{
       await api.addWasteLog({branch_id:currentBranch.id,branch_name:currentBranch.name,log_date:date,item_type:isMenu?"menu":"ingredient",ingredient_id:sel.id,ingredient_name:sel.name,unit,qty:+qty,unit_price:unitPrice,total:price===""?round2((+qty||0)*unitPrice):+price,reason:(reason||"").trim()||null,images,created_by:currentUser?.username||currentUser?.name||""});
@@ -2019,6 +2085,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
       posToast("✅ บันทึกของเสีย + หักสต๊อกแล้ว","ok");
       setSel(null);setQ("");setQty("");setPrice("");setReason("");setImages([]);loadLogs();// reset for next entry + refresh history behind
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
+    savingRef.current=false;
     setSaving(false);
   }
   // ── history ──
@@ -5133,9 +5200,12 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     }
     if(!await confirmDlg({title:isPaid?"⚠️ ลบเอกสารที่ชำระแล้ว":"ลบเอกสาร PO",message:msg,danger:true,confirmLabel:isPaid?"ลบทิ้งถาวร":(wasReceived?"ลบ + คืนสต็อก":"ลบ")}))return;
     try{
-      // Rollback BEFORE delete so we still have the row to read items/branch_ids from
-      if(wasReceived)await rollbackPOStock(po);
-      await api.deletePO(po.id);
+      // Conditional DELETE first — claims the row only if its status is still what
+      // this screen showed (a concurrent "🚚 จัดส่ง" on another device aborts here
+      // instead of silently stranding its deduction). Rollback runs on the RETURNED
+      // row, so it reads fresh items/branch_ids, not the stale list row.
+      const deleted=await api.deletePOIfStatus(po.id,po.status);
+      if(wasReceived)await rollbackPOStock(deleted||po);
       await load();setViewPO(null);
     }catch(e){alert("ลบไม่สำเร็จ: "+e.message);}
   }
@@ -6433,7 +6503,11 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
         updated_at:new Date().toISOString(),
       };
       if(editPO){
-        await api.updatePO(editPO.id,payload);
+        // Optimistic lock: only PATCH while the row is STILL in the status it had
+        // when the edit form opened. Without it, saving after another device pressed
+        // "🚚 จัดส่ง" would rewrite status back to open/requested — the shipped
+        // deduction would be invisible and the PO could be shipped (deducted) twice.
+        await api.patchPOIfStatus(editPO.id,editPO.status,payload);
         // Edit path — items changed on a moved PO requires delta math; out of scope
         // for now. Force user to cancel+recreate at moved statuses by blocking edit
         // upstream (startEdit only allows "requested" / "open").
@@ -7121,7 +7195,10 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           autoVisible:false,
         });
       }
-      await api.deleteOrder(order.id);
+      // Status-guarded: if another device just confirmed receive (→ delivered,
+      // stock credited), this DELETE matches 0 rows and throws instead of
+      // orphaning that credit.
+      await api.deleteOrderIfStatus(order.id,order.status);
       if(reloadIngs)await reloadIngs();
       await reload();
     }catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}
@@ -7336,6 +7413,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   const[orderQty,setOrderQty]=useState({});  // {ingId: number} — manually overridden order qty
   const[saving,setSaving]=useState(false);
   const[savingStock,setSavingStock]=useState(false);
+  const savingStockRef=useRef(false);   // synchronous double-tap guard (state lags a frame)
   const[submitResult,setSubmitResult]=useState(null);  // { poList, extList, skippedList, totalItems, totalCost } — shown in result modal
   const[safetyEdit,setSafetyEdit]=useState({});  // { ingId: stringValue } — local edit before commit
   const safetyTimers=useRef({});                  // { ingId: timeoutId } — debounce per-row
@@ -7438,21 +7516,38 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
 
   // Save updated stock counts back to ingredients (per-branch)
   async function saveStockCounts(){
+    if(savingStockRef.current)return;   // double-tap → would double-write + duplicate logs
     const entries=Object.entries(onHand).filter(([id,v])=>v!==""&&v!=null);
     if(entries.length===0){alert("ยังไม่ได้ใส่จำนวน");return;}
-    if(!await confirmDlg({title:"บันทึกสต็อกที่นับ",message:`อัปเดตสต็อกของ ${entries.length} รายการในสาขา "${currentBranch?.name}"?`,confirmLabel:"อัปเดต"}))return;
-    setSavingStock(true);
+    savingStockRef.current=true;
     try{
+      if(!await confirmDlg({title:"บันทึกสต็อกที่นับ",message:`อัปเดตสต็อกของ ${entries.length} รายการในสาขา "${currentBranch?.name}"?`,confirmLabel:"อัปเดต"}))return;
+      setSavingStock(true);
+      const failed=[];const failedIds=new Set();
       for(const[id,v]of entries){
         const ing=ings.find(x=>+x.id===+id);if(!ing)continue;
-        const next=setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0);
-        await api.updateIng(+id,{stock_by_branch:next});
+        try{
+          const prev=branchStock(ing,currentBranch.id);
+          // Atomic per-branch SET — same path as the นับสต็อก popup. The old code
+          // PATCHed the whole stock_by_branch map from the page-load cache, which
+          // silently reverted every move other branches made since loading.
+          if(!await rpcStockSet(+id,currentBranch.id,+v||0)){
+            await api.updateIng(+id,{stock_by_branch:setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0)});
+          }
+          api.addStockLog({ingredient_id:+id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:currentUser?.username||currentUser?.name||""}).catch(()=>{});
+        }catch(e){failed.push(`${ing.name}: ${e.message||e}`);failedIds.add(String(id));}
       }
       if(reloadIngs)await reloadIngs();
-      setOnHand({});
-      alert(`✅ อัปเดตสต็อกของสาขา "${currentBranch?.name}" เรียบร้อย`);
+      if(failed.length>0){
+        alert(`⚠️ บันทึกไม่สำเร็จ ${failed.length} รายการ:\n${failed.slice(0,8).join("\n")}${failed.length>8?"\n...":""}\n\nรายการอื่นบันทึกแล้ว — แก้เฉพาะรายการข้างบนแล้วบันทึกใหม่`);
+        // Keep ONLY the failed entries in the form so a retry can't double-save the rest
+        setOnHand(prev=>Object.fromEntries(Object.entries(prev).filter(([id])=>failedIds.has(String(id)))));
+      }else{
+        setOnHand({});
+        alert(`✅ อัปเดตสต็อกของสาขา "${currentBranch?.name}" เรียบร้อย`);
+      }
     }catch(e){alert("ไม่สำเร็จ: "+e.message);}
-    setSavingStock(false);
+    finally{savingStockRef.current=false;setSavingStock(false);}
   }
 
   // Submit orders — group by supplier, then route each group:
