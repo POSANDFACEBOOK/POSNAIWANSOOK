@@ -6236,7 +6236,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
             {po.dispute_note&&<div style={{fontSize:11,color:"#7C2D12",marginTop:4,fontFamily:"'Sarabun',sans-serif"}}>"{po.dispute_note}"</div>}
           </div>}
           {po.reject_reason&&<div style={{background:C.redLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.red}`}}>
-            <div style={{fontSize:11,color:C.red,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>❌ Area ตีกลับ — เหตุผล</div>
+            <div style={{fontSize:11,color:C.red,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>❌ ตีกลับ — เหตุผล</div>
             <div style={{fontSize:13,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",fontWeight:700,lineHeight:1.6}}>{po.reject_reason}{po.rejected_by&&<span style={{color:C.ink4,fontWeight:600,fontSize:11}}> — โดย {po.rejected_by}</span>}</div>
           </div>}
           {payAt&&<div style={{background:C.greenLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.green}`}}>
@@ -7294,7 +7294,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           </div>
         </div>
         {/* Area's reject reason — always visible on the row so the branch knows what to fix */}
-        {order.status==="rejected"&&order.reject_reason&&<div style={{margin:"0 14px 10px",padding:"8px 12px",background:C.redLight,border:`1px solid ${C.red}44`,borderRadius:10,fontSize:12.5,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>❌ <b>Area ตีกลับ:</b> {order.reject_reason}{order.rejected_by&&<span style={{color:C.ink4,fontSize:11}}> — โดย {order.rejected_by}</span>}</div>}
+        {order.status==="rejected"&&order.reject_reason&&<div style={{margin:"0 14px 10px",padding:"8px 12px",background:C.redLight,border:`1px solid ${C.red}44`,borderRadius:10,fontSize:12.5,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>❌ <b>ตีกลับ:</b> {order.reject_reason}{order.rejected_by&&<span style={{color:C.ink4,fontSize:11}}> — โดย {order.rejected_by}</span>}</div>}
         {/* Items table — only when expanded */}
         {isExpanded&&<div style={{padding:"4px 14px 12px",borderTop:`1px solid ${C.lineLight}`}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,marginTop:8}}>
