@@ -4895,10 +4895,10 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         <div style={{fontSize:12,color:C.ink4,marginTop:2}}>สาขาขอ → Area อนุมัติ → ครัวกลางออกใบส่งให้สาขา · <b style={{color:C.ink3}}>ไม่ตัดสต๊อก</b></div>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        {onOrderMaterials&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOrderMaterials} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
+        {onOrderMaterials&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOrderMaterials} icon={I.truck}>สั่งวัตถุดิบเปิดPR</Btn>}
         {onTransfer&&hasPO&&<Btn v="purple" onClick={onTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {false&&onCreatePO&&hasPO&&<Btn onClick={onCreatePO} icon={I.plus}>สร้างเอกสาร PO</Btn>}{/* ซ่อนไว้ก่อนตามที่ผู้ใช้ขอ — เปลี่ยน false กลับเป็นเงื่อนไขเดิมเพื่อเปิดคืน */}
-        <Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สร้างใบขอซื้อ</Btn>
+        {false&&<Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สร้างใบขอซื้อ</Btn>}{/* ซ่อนไว้ตามที่ผู้ใช้ขอ — PR สร้างผ่านปุ่ม "สั่งวัตถุดิบเปิดPR" แทน */}
       </div>
     </div>
     {isCentral&&<div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:420}}>
