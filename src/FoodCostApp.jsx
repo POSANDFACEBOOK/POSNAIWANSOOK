@@ -4810,7 +4810,10 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         // Optimistic lock on "rejected" — if the card was stale (already approved/converted by
         // another user), this matches 0 rows and throws instead of resurrecting it (which would
         // duplicate an already-issued delivery).
-        await api.updatePRIfStatus(editingPR.id,"rejected",{...body,status:"pending_approval",reject_reason:null,rejected_by:null});
+        // Stamp revised_at so Area sees "ถูกแก้ไข+ส่งใหม่". Column-missing fallback keeps
+        // resubmit working even before the ALTER TABLE runs.
+        try{await api.updatePRIfStatus(editingPR.id,"rejected",{...body,status:"pending_approval",reject_reason:null,rejected_by:null,revised_at:new Date().toISOString()});}
+        catch(e){if(/PGRST204|column/i.test(String((e&&e.message)||e)))await api.updatePRIfStatus(editingPR.id,"rejected",{...body,status:"pending_approval",reject_reason:null,rejected_by:null});else throw e;}
         posToast("✅ แก้ไข + ส่งใหม่แล้ว — รอ Area อนุมัติ","ok");
       }else{
         await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"ingredient",...body,status:"pending_approval",created_by:currentUser?.username||currentUser?.name||""});
@@ -4969,7 +4972,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         <div style={{padding:"12px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
             <div style={{minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
-              <div style={{fontSize:13.5,fontWeight:900,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{pr.pr_number||("PR#"+pr.id)}</div>
+              <div style={{fontSize:13.5,fontWeight:900,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{pr.pr_number||("PR#"+pr.id)}{pr.revised_at&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,color:"#B45309",background:"#FFFBEB",border:"1px solid #FDE68A",padding:"1px 6px",borderRadius:8,verticalAlign:"middle"}}>🔄 แก้ไขแล้ว</span>}</div>
               <div style={{fontSize:11,color:C.ink4,marginTop:2}}>{canSeeAll?`🏪 ${pr.branch_name||branchName(pr.branch_id)} · `:""}โดย {pr.requested_by||"—"} · {fmtDT(pr.created_at)}</div>
             </div>
             <span style={{fontSize:11,fontWeight:800,color:st.c,background:st.bg,padding:"3px 10px",borderRadius:14,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{st.l}</span>
@@ -8959,9 +8962,10 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
         </div>
         <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:8,padding:"0 14px 12px"}}><Btn v="success" onClick={()=>approveReq(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectReq(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
       </Card>;})}
-      {prPend.map(o=>{const k="pr"+o.id;return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.green}`}}>
+      {prPend.map(o=>{const k="pr"+o.id;return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${o.revised_at?"#F59E0B":C.green}`}}>
         <div style={{padding:"12px 14px"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📝 {o.pr_number||("PR#"+o.id)}</span><Chip color="green">ใบขอซื้อ</Chip></div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📝 {o.pr_number||("PR#"+o.id)}</span><Chip color={o.revised_at?"yellow":"green"}>{o.revised_at?"🔄 แก้ไขมา":"ใบขอซื้อ"}</Chip></div>
+          {o.revised_at&&<div style={{margin:"0 0 8px",padding:"7px 11px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:9,fontSize:12,color:"#92400E",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>🔄 ใบนี้ถูกแก้ไข + ส่งกลับมาใหม่ (เคยถูกตีกลับ) · แก้เมื่อ {fmtDT(o.revised_at)}</div>}
           <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>จากสาขา <b style={{color:C.ink}}>{branchName(o.branch_id)}</b> · โดย {o.requested_by||"-"}</div>
           <div style={{margin:"8px 0",maxHeight:200,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,borderBottom:`1px dashed ${C.lineLight}`,padding:"4px 0"}}><span style={{color:C.ink2,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}{it.note?<span style={{color:C.ink4,fontSize:11}}> ★{it.note}</span>:""}</span><span style={{color:C.green,fontWeight:700,whiteSpace:"nowrap"}}>{it.qty||0} {it.unit||""}</span></div>)}</div>
           {o.needed_by&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>📅 ต้องการภายใน {fmtD(o.needed_by)}</div>}
