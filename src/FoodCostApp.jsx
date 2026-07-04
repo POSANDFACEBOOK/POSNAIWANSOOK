@@ -359,6 +359,19 @@ const api = {
     if(!Array.isArray(res)||res.length===0)throw new Error("เอกสารถูกแก้ไขโดยผู้ใช้อื่นแล้ว — กรุณารีเฟรชและลองใหม่");
     return res[0];
   },
+  // ── Purchase Requisitions (ใบขอซื้อ) — request layer that FEEDS the PO/ext flow. Never touches stock. ──
+  getPRs: (bid) => sb(`purchase_requisitions?order=id.desc&limit=600${bid?`&branch_id=eq.${bid}`:""}`),
+  getApprovedPRs: () => sb(`purchase_requisitions?status=eq.approved&order=id.desc&limit=1000`),
+  getPendingApprovalPRs: () => sb(`purchase_requisitions?status=eq.pending_approval&order=id.desc`),
+  addPR: (d) => sb("purchase_requisitions", {method:"POST", body:JSON.stringify(d)}),
+  updatePR: (id,d) => sb(`purchase_requisitions?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  // Optimistic lock — only transition when still in the expected status (blocks double approve/reject/convert).
+  updatePRIfStatus: async (id,expectedStatus,d) => {
+    const res=await sb(`purchase_requisitions?id=eq.${id}&status=eq.${encodeURIComponent(expectedStatus)}`, {method:"PATCH", body:JSON.stringify(d)});
+    if(!Array.isArray(res)||res.length===0)throw new Error("ใบขอซื้อถูกอัปเดตโดยผู้ใช้อื่นแล้ว — กรุณารีเฟรชและลองใหม่");
+    return res;
+  },
+  deletePR: (id) => sb(`purchase_requisitions?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   uploadImage: async (file, path) => {
     const res = await fetch(`${SUPA_URL}/storage/v1/object/foodcost-images/${path}`, {
       method: "POST", headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": file.type, "x-upsert": "true" }, body: file,
@@ -4728,6 +4741,192 @@ const PO_STATUS={
   transfer_shipped:{label:"🚚 จัดส่งแล้ว (โอน)",short:"จัดส่งแล้ว",  color:"#0EA5E9",bg:"#E0F2FE"},
   transfer_done:   {label:"✅ โอนเสร็จสิ้น",     short:"โอนเสร็จ",    color:"#10B981",bg:"#D1FAE5"},
 };
+// ── ใบขอซื้อ (PR / Purchase Requisition) ──────────────────────────────────
+// Request+approve layer that FEEDS the existing PO/external flow. NEVER moves stock.
+// Central consolidates all Area-approved ingredient PRs → one external order per supplier.
+function genPRNumber(branchId){
+  const d=new Date();
+  const ym=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}`;
+  const seq=Math.random().toString(36).slice(2,7).toUpperCase();
+  return `PR-${ym}-${branchId?`B${branchId}-`:""}${seq}`;
+}
+const PR_STATUS={
+  draft:{l:"ร่าง",c:"#64748B",bg:"#F1F5F9"},
+  pending_approval:{l:"⏳ รออนุมัติ",c:"#B45309",bg:"#FFFBEB"},
+  approved:{l:"✅ อนุมัติแล้ว",c:"#0F6E56",bg:"#E1F5EE"},
+  converted:{l:"📦 ออกซื้อแล้ว",c:"#185FA5",bg:"#E6F1FB"},
+  rejected:{l:"❌ ตีกลับ",c:"#B91C1C",bg:"#FEE2E2"},
+  cancelled:{l:"ยกเลิก",c:"#64748B",bg:"#F1F5F9"},
+};
+function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,currentUser,reloadOrders}){
+  const isCentral=currentBranch?.type==="central";
+  const canSeeAll=isCentral||currentUser?.role==="admin"||currentUser?.role==="area";
+  const branchName=id=>branches.find(b=>+b.id===+id)?.name||("สาขา "+id);
+  const[prs,setPrs]=useState(null);const[err,setErr]=useState(false);
+  const[view,setView]=useState(isCentral?"pool":"list");
+  const[showForm,setShowForm]=useState(false);
+  const aliveRef=useRef(true);
+  useEffect(()=>{aliveRef.current=true;return()=>{aliveRef.current=false;};},[]);
+  async function load(){setErr(false);try{const d=await api.getPRs(canSeeAll?null:currentBranch?.id);if(aliveRef.current)setPrs(Array.isArray(d)?d:[]);}catch{if(aliveRef.current){setErr(true);setPrs([]);}}}
+  useEffect(()=>{load();},[currentBranch?.id]);// eslint-disable-line react-hooks/exhaustive-deps
+  // create form
+  const[items,setItems]=useState([]);const[reason,setReason]=useState("");const[neededBy,setNeededBy]=useState("");
+  const[q,setQ]=useState("");const[saving,setSaving]=useState(false);const savingRef=useRef(false);
+  const matches=useMemo(()=>{const ql=q.trim().toLowerCase();if(!ql)return[];return ings.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentral)&&(i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql))).slice(0,20);},[ings,q,currentBranch,isCentral]);
+  function addItem(i){if(items.some(x=>+x.ingredient_id===+i.id)){setQ("");return;}setItems(a=>[...a,{ingredient_id:i.id,name:i.name,unit:i.buy_unit||"หน่วย",qty:"",note:""}]);setQ("");}
+  function openForm(){setItems([]);setReason("");setNeededBy("");setQ("");setShowForm(true);}
+  async function submitPR(){
+    if(savingRef.current)return;
+    const clean=items.filter(x=>+x.qty>0);
+    if(clean.length===0){alert("กรุณาเพิ่มรายการและใส่จำนวนอย่างน้อย 1 รายการ");return;}
+    savingRef.current=true;setSaving(true);
+    try{
+      await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"ingredient",items:clean.map(x=>({ingredient_id:+x.ingredient_id,name:x.name,unit:x.unit,qty:+x.qty,note:(x.note||"").trim()||null})),reason:(reason||"").trim()||null,needed_by:neededBy||null,status:"pending_approval",created_by:currentUser?.username||currentUser?.name||"",updated_at:new Date().toISOString()});
+      posToast("✅ ส่งใบขอซื้อแล้ว — รอ Area อนุมัติ","ok");setShowForm(false);await load();
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
+    savingRef.current=false;setSaving(false);
+  }
+  async function cancelPR(pr){if(!await confirmDlg({title:"ยกเลิกใบขอซื้อ",message:`ยกเลิก ${pr.pr_number||"ใบนี้"}?`,danger:true,confirmLabel:"ยกเลิก"}))return;try{await api.updatePR(pr.id,{status:"cancelled",updated_at:new Date().toISOString()});await load();}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}}
+  async function delPR(pr){if(!await confirmDlg({title:"ลบใบขอซื้อ",message:`ลบ ${pr.pr_number||"ใบนี้"} ถาวร?`,danger:true,confirmLabel:"ลบ"}))return;try{await api.deletePR(pr.id);await load();}catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}}
+  // central consolidation pool
+  const approvedPRs=useMemo(()=>(prs||[]).filter(p=>p.status==="approved"&&p.type==="ingredient"),[prs]);
+  const pool=useMemo(()=>{const m=new Map();for(const p of approvedPRs){for(const it of (p.items||[])){const id=+it.ingredient_id;if(!id||!(+it.qty>0))continue;const e=m.get(id)||{ingredient_id:id,name:it.name,unit:it.unit,total:0,byBranch:[]};e.total=round2(e.total+(+it.qty||0));e.byBranch.push({branch:p.branch_name||branchName(p.branch_id),qty:+it.qty||0});m.set(id,e);}}return[...m.values()].sort((a,b)=>a.name.localeCompare(b.name));},[approvedPRs]);// eslint-disable-line react-hooks/exhaustive-deps
+  const[consolidating,setConsolidating]=useState(false);const consolidatingRef=useRef(false);
+  async function consolidateAll(){
+    if(consolidatingRef.current)return;   // synchronous guard — one client, block double-tap
+    // Only PRs that actually carry a buyable line are consolidatable.
+    const candidates=approvedPRs.filter(p=>(p.items||[]).some(it=>+it.ingredient_id>0&&+it.qty>0));
+    if(candidates.length===0){alert("ยังไม่มีใบขอซื้อที่อนุมัติแล้วให้รวม");return;}
+    consolidatingRef.current=true;
+    const noSup=pool.filter(row=>{const ing=ings.find(x=>+x.id===row.ingredient_id);return !ing||!branchSupplierName(ing,currentBranch?.id,suppliers);}).length;
+    if(!await confirmDlg({title:"รวมออกซื้อ",message:`รวม ${candidates.length} ใบขอซื้อ (${pool.length} รายการ) ออกเป็นออเดอร์ซัพพลายนอก?${noSup>0?`\n\n⚠️ ${noSup} รายการยังไม่มีซัพพลาย — จะรวมไว้กลุ่ม "ไม่ระบุซัพพลาย" (ไปแก้ซัพ/ราคาในแท็บซัพพลายนอกได้)`:""}\n\n• จัดกลุ่มตามซัพพลายเออร์อัตโนมัติ\n• ใบขอซื้อจะเปลี่ยนเป็น "ออกซื้อแล้ว"`,confirmLabel:"รวมออกซื้อ"})){consolidatingRef.current=false;return;}
+    setConsolidating(true);
+    const ref=`ออกซื้อ · ${fmtD(todayStr())}`;
+    const claimed=[],claimSkipped=[];
+    try{
+      // 1) CLAIM the PRs FIRST via the optimistic lock (approved→converted). Only rows we
+      //    win are ours to buy — a retry OR a second central device re-runs this and their
+      //    updatePRIfStatus matches 0 rows (already converted) → they claim nothing → they
+      //    create NO orders. This is what makes the buy un-duplicatable despite non-atomic POSTs.
+      for(const p of candidates){
+        try{await api.updatePRIfStatus(p.id,"approved",{status:"converted",converted_ref:ref,converted_at:new Date().toISOString(),updated_at:new Date().toISOString()});claimed.push(p);}
+        catch{claimSkipped.push(p);}
+      }
+      if(claimed.length===0)throw new Error("ไม่มีใบขอซื้อที่รวมได้ (อาจถูกอีกเครื่องรวมไปแล้ว) — รีเฟรชแล้วลองใหม่");
+      // 2) Build supplier groups from the CLAIMED PRs only, then create one order per supplier.
+      const supMap={};
+      for(const p of claimed){
+        for(const it of (p.items||[])){
+          const id=+it.ingredient_id,qty=+it.qty||0;if(!id||qty<=0)continue;
+          const ing=ings.find(x=>+x.id===id);
+          const sid=ing?branchSupplierId(ing,currentBranch?.id):null;
+          const sname=(ing&&branchSupplierName(ing,currentBranch?.id,suppliers))||"ไม่ระบุซัพพลาย";
+          const key=sid?("id:"+sid):("name:"+sname);
+          if(!supMap[key])supMap[key]={supplierId:sid||null,supplierName:sname,byId:new Map()};
+          const price=+ing?.buy_price||0;
+          const ex=supMap[key].byId.get(id)||{ingId:id,name:it.name,unit:it.unit,qtyNeeded:0,pricePerUnit:price,supplierId:sid||null,supplierName:sname};
+          ex.qtyNeeded=round2(ex.qtyNeeded+qty);ex.estimatedCost=round2(ex.qtyNeeded*price);
+          supMap[key].byId.set(id,ex);
+        }
+      }
+      const groups=Object.values(supMap).map(g=>({supplierId:g.supplierId,supplierName:g.supplierName,items:[...g.byId.values()]}));
+      const orderFailed=[];
+      for(const g of groups){
+        try{await api.addOrder({branch_id:currentBranch?.id,branch_name:currentBranch?.name,supplier_id:g.supplierId,supplier_name:g.supplierName,items:g.items,status:"pending",requested_by:currentUser?.username||currentUser?.name||"",requested_at:nowStr(),note:`รวมจากใบขอซื้อ ${claimed.length} ใบ (${fmtD(todayStr())})`});}
+        catch{orderFailed.push(g.supplierName);}
+      }
+      if(orderFailed.length>0)alert(`⚠️ สร้างออเดอร์ไม่สำเร็จ ${orderFailed.length} กลุ่ม: ${orderFailed.join(", ")}\n\nใบขอซื้อถูกปิดเป็น "ออกซื้อแล้ว" ไปแล้ว แต่กลุ่มนี้ยังไม่มีออเดอร์ — กรุณาสร้างออเดอร์ซัพนอกกลุ่มนี้เองในแท็บ "ซัพพลายนอก" (อย่ากดรวมซ้ำ — จะไม่เกิดซ้ำเพราะใบถูกปิดแล้ว)`);
+      else posToast(`✅ รวมออกซื้อแล้ว ${groups.length} ออเดอร์${claimSkipped.length?` (ข้าม ${claimSkipped.length} ใบที่ถูกรวมไปแล้ว)`:""}`,"ok");
+      if(reloadOrders)reloadOrders();await load();
+    }catch(e){alert("รวมออกซื้อไม่สำเร็จ: "+(e.message||e));if(reloadOrders)reloadOrders();await load();}
+    consolidatingRef.current=false;setConsolidating(false);
+  }
+  const list=prs||[];
+  const canDel=currentUser?.role==="admin";
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+      <div style={{fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:18,fontWeight:900,color:C.ink}}>📝 ใบขอซื้อ (PR)</div>
+        <div style={{fontSize:12,color:C.ink4,marginTop:2}}>สาขาขอ → Area อนุมัติ → ครัวกลางรวมออกซื้อ · <b style={{color:C.ink3}}>ไม่ตัดสต๊อก</b></div>
+      </div>
+      <Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>สร้างใบขอซื้อ</Btn>
+    </div>
+    {isCentral&&<div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:420}}>
+      {[{id:"pool",l:"🧺 กองรอซื้อ",c:C.teal},{id:"list",l:"📋 ใบขอซื้อทั้งหมด",c:C.brand}].map(s=>{const on=view===s.id;return <button key={s.id} onClick={()=>setView(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3}}>{s.l}</button>;})}
+    </div>}
+    {prs===null?<Loading text="โหลดใบขอซื้อ..."/>
+    :err?<div style={{textAlign:"center",padding:"36px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>โหลดไม่สำเร็จ<div style={{marginTop:10}}><Btn v="ghost" onClick={load}>↻ ลองใหม่</Btn></div></div>
+    :(isCentral&&view==="pool")?<Card style={{overflow:"hidden"}}>
+      <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.line}`,background:C.tealLight,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:14,fontWeight:900,color:"#0F6E56"}}>🧺 กองรอซื้อ — รวมยอดจากทุกสาขาที่อนุมัติแล้ว</div><div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>{approvedPRs.length} ใบขอซื้อ · {pool.length} วัตถุดิบ</div></div>
+        {pool.length>0&&<Btn onClick={consolidateAll} loading={consolidating} icon={I.check} s={{background:`linear-gradient(135deg,${C.teal},#0F766E)`,color:C.white}}>รวมออกซื้อทั้งหมด</Btn>}
+      </div>
+      {pool.length===0?<div style={{textAlign:"center",padding:"46px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีใบขอซื้อที่อนุมัติแล้วรอรวม</div>
+      :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
+        <thead><tr style={{background:C.bg}}>
+          <th style={{padding:"9px 14px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>วัตถุดิบ</th>
+          <th style={{padding:"9px 14px",textAlign:"right",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>รวมทั้งหมด</th>
+          <th style={{padding:"9px 14px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>แยกตามสาขา</th>
+        </tr></thead>
+        <tbody>{pool.map((r,i)=><tr key={r.ingredient_id} style={{borderTop:`1px solid ${C.lineLight}`,background:i%2?"#FAFBFC":C.white}}>
+          <td style={{padding:"9px 14px",fontSize:13,fontWeight:700,color:C.ink}}>{r.name}</td>
+          <td style={{padding:"9px 14px",textAlign:"right",fontSize:14,fontWeight:900,color:C.teal,whiteSpace:"nowrap"}}>{fmtQty(r.total)} <span style={{fontSize:10,color:C.ink4}}>{r.unit}</span></td>
+          <td style={{padding:"9px 14px"}}><div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{r.byBranch.map((b,j)=><span key={j} style={{fontSize:11,background:C.bg,border:`1px solid ${C.line}`,borderRadius:12,padding:"2px 9px",color:C.ink3,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{b.branch} <b style={{color:C.ink}}>{fmtQty(b.qty)}</b></span>)}</div></td>
+        </tr>)}</tbody>
+      </table></div>}
+    </Card>
+    :list.length===0?<div style={{textAlign:"center",padding:"56px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:44}}>📝</div><p style={{marginTop:10,fontSize:15}}>ยังไม่มีใบขอซื้อ</p><p style={{fontSize:12}}>กด "➕ สร้างใบขอซื้อ" เพื่อเริ่ม</p></div>
+    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(340px,100%),1fr))",gap:12}}>
+      {list.map(pr=>{const st=PR_STATUS[pr.status]||PR_STATUS.pending_approval;const mine=+pr.branch_id===+currentBranch?.id;return <Card key={pr.id} style={{overflow:"hidden"}}>
+        <div style={{padding:"12px 14px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
+            <div style={{minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
+              <div style={{fontSize:13.5,fontWeight:900,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{pr.pr_number||("PR#"+pr.id)}</div>
+              <div style={{fontSize:11,color:C.ink4,marginTop:2}}>{canSeeAll?`🏪 ${pr.branch_name||branchName(pr.branch_id)} · `:""}โดย {pr.requested_by||"—"} · {fmtDT(pr.created_at)}</div>
+            </div>
+            <span style={{fontSize:11,fontWeight:800,color:st.c,background:st.bg,padding:"3px 10px",borderRadius:14,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{st.l}</span>
+          </div>
+          <div style={{background:C.bg,borderRadius:9,padding:"8px 10px",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink2,maxHeight:132,overflowY:"auto"}}>{(pr.items||[]).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,padding:"2px 0",borderBottom:i<(pr.items||[]).length-1?`1px dashed ${C.lineLight}`:"none"}}><span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}{it.note?<span style={{color:C.ink4,fontSize:11}}> ★{it.note}</span>:""}</span><span style={{whiteSpace:"nowrap",fontWeight:700,color:C.brand}}>{fmtQty(+it.qty||0)} {it.unit||""}</span></div>)}</div>
+          {pr.needed_by&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:6}}>📅 ต้องการภายใน {fmtD(pr.needed_by)}</div>}
+          {pr.reason&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:5}}>📝 {pr.reason}</div>}
+          {pr.status==="rejected"&&pr.reject_reason&&<div style={{marginTop:8,padding:"7px 11px",background:C.redLight,border:`1px solid ${C.red}44`,borderRadius:9,fontSize:12,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif"}}>❌ ตีกลับ: {pr.reject_reason}{pr.rejected_by?<span style={{color:C.ink4,fontSize:11}}> — โดย {pr.rejected_by}</span>:""}</div>}
+          {pr.status==="converted"&&pr.converted_ref&&<div style={{marginTop:8,padding:"7px 11px",background:C.blueLight,border:`1px solid ${C.blue}44`,borderRadius:9,fontSize:12,color:"#185FA5",fontFamily:"'Sarabun',sans-serif"}}>📦 {pr.converted_ref}</div>}
+          {((mine&&pr.status==="pending_approval")||canDel)&&<div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:10}}>
+            {mine&&pr.status==="pending_approval"&&<Btn v="ghost" onClick={()=>cancelPR(pr)} s={{fontSize:12,padding:"6px 12px"}}>ยกเลิก</Btn>}
+            {canDel&&<button onClick={()=>delPR(pr)} title="ลบถาวร" style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",color:C.red,fontSize:12}}>🗑️</button>}
+          </div>}
+        </div>
+      </Card>;})}
+    </div>}
+    {showForm&&<Modal title="📝 สร้างใบขอซื้อ (PR)" onClose={()=>setShowForm(false)} wide>
+      <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12,background:C.bg,borderRadius:9,padding:"9px 12px",border:`1px solid ${C.line}`}}>สาขา: <b style={{color:C.ink}}>{currentBranch?.name||"—"}</b> · ใบนี้เป็น<b>คำขอ</b> ยังไม่ตัดสต๊อก — Area อนุมัติแล้วครัวกลางจะรวมออกซื้อให้</div>
+      <div style={{marginBottom:12,position:"relative"}}>
+        <div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>🔍 เพิ่มวัตถุดิบที่ต้องการ</div>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="พิมพ์ชื่อวัตถุดิบ..." style={{...iS}}/>
+        {matches.length>0&&<div style={{position:"absolute",zIndex:5,left:0,right:0,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,marginTop:4,maxHeight:230,overflowY:"auto",boxShadow:"0 6px 20px rgba(15,23,42,0.12)"}}>
+          {matches.map(i=><div key={i.id} onClick={()=>addItem(i)} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.lineLight}`}}><Thumb src={i.image} alt={i.name} size={26} radius={6} iconBg={C.brandLight} iconColor={C.brand} iconSize={13}/><div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600,color:C.ink}}>{i.name}</div><div style={{fontSize:10,color:C.ink4}}>{i.category||""} · {i.buy_unit||"หน่วย"}</div></div></div>)}
+        </div>}
+      </div>
+      {items.length>0&&<div style={{border:`1px solid ${C.line}`,borderRadius:12,overflow:"hidden",marginBottom:12}}>
+        {items.map((it,idx)=><div key={it.ingredient_id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderTop:idx>0?`1px solid ${C.lineLight}`:"none",fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</div><input value={it.note} onChange={e=>setItems(a=>a.map((x,j)=>j===idx?{...x,note:e.target.value}:x))} placeholder="หมายเหตุ (ไม่บังคับ)" style={{border:"none",background:"transparent",fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",outline:"none",width:"100%",padding:0,marginTop:2}}/></div>
+          <div style={{width:96}}><NumInput value={it.qty} onValue={v=>setItems(a=>a.map((x,j)=>j===idx?{...x,qty:v}:x))} placeholder="0" style={{...iS,textAlign:"center",padding:"7px 8px"}}/></div>
+          <span style={{fontSize:11,color:C.ink4,width:36}}>{it.unit}</span>
+          <button onClick={()=>setItems(a=>a.filter((_,j)=>j!==idx))} style={{background:"none",border:"none",cursor:"pointer",color:C.ink4,fontSize:15}}>✕</button>
+        </div>)}
+      </div>}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <Field label="📅 ต้องการภายใน (ไม่บังคับ)"><input type="date" value={neededBy} onChange={e=>setNeededBy(e.target.value)} style={{...iS}}/></Field>
+        <div/>
+      </div>
+      <Inp label="📝 เหตุผล / หมายเหตุ" value={reason} onChange={e=>setReason(e.target.value)} placeholder="เช่น ของใกล้หมด, เตรียมงานจัดเลี้ยง"/>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,marginTop:14,borderTop:`1px solid ${C.line}`}}>
+        <Btn v="ghost" onClick={()=>setShowForm(false)}>ปิด</Btn>
+        <Btn onClick={submitPR} loading={saving} disabled={saving||items.filter(x=>+x.qty>0).length===0} icon={I.check} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>ส่งใบขอซื้อ</Btn>
+      </div>
+    </Modal>}
+  </div>;
+}
 function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders,orders=[],reloadOrders}){
   // Every branch (central or otherwise) can issue a PO to any other branch
   // and only ever sees POs it's involved in (as sender or receiver).
@@ -8533,7 +8732,7 @@ async function enablePushNotifications(user){
 }
 async function pushIsOn(){if(!pushSupported())return false;try{if(Notification.permission!=="granted")return false;const reg=await navigator.serviceWorker.getRegistration();const sub=reg&&await reg.pushManager.getSubscription();return !!sub;}catch{return false;}}
 function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]}){
-  const[reqs,setReqs]=useState([]);const[pos,setPos]=useState([]);const[stockSess,setStockSess]=useState([]);
+  const[reqs,setReqs]=useState([]);const[pos,setPos]=useState([]);const[stockSess,setStockSess]=useState([]);const[prPend,setPrPend]=useState([]);
   const[sessItems,setSessItems]=useState({});const[openSess,setOpenSess]=useState(null);
   const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(null);
   const[pushOn,setPushOn]=useState(false);const[pushBusy,setPushBusy]=useState(false);
@@ -8563,7 +8762,9 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   async function loadLogs(){setLogLoading(true);try{const d=await api.getApprovalLog();if(aliveRef.current)setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{if(aliveRef.current)setLogs([]);}if(aliveRef.current)setLogLoading(false);}
   async function logDecision(decision,kind,o,reason){try{
     const branchId=kind==="po"?o.from_branch_id:o.branch_id;
-    const base={decision,kind,ref:kind==="po"?(o.po_number||("PO#"+o.id)):("ORD#"+o.id),branch_id:branchId,branch_name:branchName(branchId),supplier_name:kind==="po"?"ครัวกลาง":(o.supplier_name||"ซัพพลายนอก"),total:kind==="po"?(+o.total||sumItems(o)):sumItems(o),items_count:itemsOf(o).length,items:itemsOf(o),decided_by:currentUser?.username||currentUser?.name||""};
+    const ref=kind==="po"?(o.po_number||("PO#"+o.id)):kind==="pr"?(o.pr_number||("PR#"+o.id)):("ORD#"+o.id);
+    const supName=kind==="po"?"ครัวกลาง":kind==="pr"?"ใบขอซื้อ (PR)":(o.supplier_name||"ซัพพลายนอก");
+    const base={decision,kind,ref,branch_id:branchId,branch_name:branchName(branchId),supplier_name:supName,total:kind==="po"?(+o.total||sumItems(o)):sumItems(o),items_count:itemsOf(o).length,items:itemsOf(o),decided_by:currentUser?.username||currentUser?.name||""};
     // Reason column may not exist yet — retry without it rather than losing the log row.
     try{await api.addApprovalLog(reason?{...base,reason}:base);}
     catch(e){await api.addApprovalLog(base);}
@@ -8571,13 +8772,14 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   async function load(silent){
     if(!silent)setLoading(true);
     try{
-      const[r,p,ss]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[]),api.getOpenStockSessions().catch(()=>[])]);
+      const[r,p,ss,pr]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[]),api.getOpenStockSessions().catch(()=>[]),api.getPendingApprovalPRs().catch(()=>[])]);
       if(!aliveRef.current)return;
       const rr=(Array.isArray(r)?r:[]).filter(o=>inScope(o.branch_id));
       const pp=(Array.isArray(p)?p:[]).filter(o=>inScope(o.from_branch_id));
       const sCount=(Array.isArray(ss)?ss:[]).filter(s=>inScope(s.branch_id));
-      setReqs(rr);setPos(pp);setStockSess(sCount);
-      const total=rr.length+pp.length+sCount.length;
+      const prr=(Array.isArray(pr)?pr:[]).filter(o=>inScope(o.branch_id));
+      setReqs(rr);setPos(pp);setStockSess(sCount);setPrPend(prr);
+      const total=rr.length+pp.length+sCount.length+prr.length;
       if(prevRef.current>=0&&total>prevRef.current)approvalBeep();
       prevRef.current=total;
     }catch{}
@@ -8593,6 +8795,8 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   const[rejectReason,setRejectReason]=useState("");
   function rejectReq(o){setRejectReason("");setRejecting({kind:"ext",o});}
   function rejectPO(o){setRejectReason("");setRejecting({kind:"po",o});}
+  function rejectPR(o){setRejectReason("");setRejecting({kind:"pr",o});}
+  async function approvePR(o){setBusy("pr"+o.id);try{await api.updatePRIfStatus(o.id,"pending_approval",{status:"approved",approved_by:currentUser?.username||currentUser?.name||"",approved_at:new Date().toISOString(),updated_at:new Date().toISOString()});await logDecision("approved","pr",o);posToast("✅ อนุมัติใบขอซื้อ — เข้ากองรอซื้อของครัวกลาง","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);setBusy(null);}
   const _colMissing=e=>/PGRST204|column/i.test(String((e&&e.message)||e));
   async function doReject(){
     if(!rejecting)return;
@@ -8600,13 +8804,15 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
     if(!reason){alert("กรุณาใส่เหตุผลที่ตีกลับ เพื่อให้สาขารู้ว่าต้องแก้อะไร");return;}
     const{kind,o}=rejecting;
     const who=currentUser?.username||currentUser?.name||"";
-    setBusy((kind==="po"?"p":"r")+o.id);
+    setBusy((kind==="po"?"p":kind==="pr"?"pr":"r")+o.id);
     try{
       if(kind==="ext"){
         // Try with the reason columns; if the migration hasn't run yet fall back to
         // status-only so the reject itself never blocks (reason still in approval log).
         try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"rejected",reject_reason:reason,rejected_by:who});}
         catch(e){if(_colMissing(e))await api.updateOrderIfStatus(o.id,"pending_approval",{status:"rejected"});else throw e;}
+      }else if(kind==="pr"){
+        await api.updatePRIfStatus(o.id,"pending_approval",{status:"rejected",reject_reason:reason,rejected_by:who,updated_at:new Date().toISOString()});
       }else{
         try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"cancelled",reject_reason:reason,rejected_by:who,updated_at:new Date().toISOString()});}
         catch(e){if(_colMissing(e))await api.patchPOIfStatus(o.id,"pending_approval",{status:"cancelled",updated_at:new Date().toISOString()});else throw e;}
@@ -8621,7 +8827,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   async function toggleSess(s){if(openSess===s.id){setOpenSess(null);return;}setOpenSess(s.id);if(sessItems[s.id]===undefined){setSessItems(m=>({...m,[s.id]:null}));try{const d=await api.getStockLogsBySession(s.id);if(aliveRef.current)setSessItems(m=>({...m,[s.id]:Array.isArray(d)?d:[]}));}catch{if(aliveRef.current)setSessItems(m=>({...m,[s.id]:[]}));}}}
   // Open a stock-count session full-screen, loading its counted items on demand (reuses the sessItems cache).
   async function openSessDetail(s){setDetailSess(s);if(sessItems[s.id]===undefined){setSessItems(m=>({...m,[s.id]:null}));try{const d=await api.getStockLogsBySession(s.id);if(aliveRef.current)setSessItems(m=>({...m,[s.id]:Array.isArray(d)?d:[]}));}catch{if(aliveRef.current)setSessItems(m=>({...m,[s.id]:[]}));}}}
-  const total=reqs.length+pos.length+stockSess.length;
+  const total=reqs.length+pos.length+stockSess.length+prPend.length;
   return <div>
     <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap",background:total>0?"#F5F3FF":C.bg,border:`1px solid ${total>0?"#A855F7":C.line}`,borderRadius:12,padding:"12px 16px"}}>
       <span style={{fontSize:22}}>{total>0?"🔔":"✅"}</span>
@@ -8669,14 +8875,24 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
         </div>
         <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:8,padding:"0 14px 12px"}}><Btn v="success" onClick={()=>approveReq(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectReq(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
       </Card>;})}
+      {prPend.map(o=>{const k="pr"+o.id;return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.green}`}}>
+        <div style={{padding:"12px 14px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📝 {o.pr_number||("PR#"+o.id)}</span><Chip color="green">ใบขอซื้อ</Chip></div>
+          <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>จากสาขา <b style={{color:C.ink}}>{branchName(o.branch_id)}</b> · โดย {o.requested_by||"-"}</div>
+          <div style={{margin:"8px 0",maxHeight:200,overflowY:"auto",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,borderBottom:`1px dashed ${C.lineLight}`,padding:"4px 0"}}><span style={{color:C.ink2,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}{it.note?<span style={{color:C.ink4,fontSize:11}}> ★{it.note}</span>:""}</span><span style={{color:C.green,fontWeight:700,whiteSpace:"nowrap"}}>{it.qty||0} {it.unit||""}</span></div>)}</div>
+          {o.needed_by&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>📅 ต้องการภายใน {fmtD(o.needed_by)}</div>}
+          {o.reason&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:4}}>📝 {o.reason}</div>}
+        </div>
+        <div style={{display:"flex",gap:8,padding:"0 14px 12px"}}><Btn v="success" onClick={()=>approvePR(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectPR(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
+      </Card>;})}
     </div>)}
     {rejecting&&(()=>{
-      const o=rejecting.o,isPo=rejecting.kind==="po";
-      const ref=isPo?(o.po_number||("PO#"+o.id)):`ออเดอร์ "${o.supplier_name||"ซัพพลายนอก"}"`;
+      const o=rejecting.o,kind=rejecting.kind,isPo=kind==="po",isPr=kind==="pr";
+      const ref=isPo?(o.po_number||("PO#"+o.id)):isPr?`ใบขอซื้อ "${o.pr_number||("PR#"+o.id)}"`:`ออเดอร์ "${o.supplier_name||"ซัพพลายนอก"}"`;
       const bname=branchName(isPo?o.from_branch_id:o.branch_id);
-      const kBusy=busy===((isPo?"p":"r")+o.id);
-      return <Modal title="❌ ตีกลับคำสั่งซื้อ" onClose={()=>{if(!kBusy){setRejecting(null);setRejectReason("");}}}>
-        <div style={{fontSize:13.5,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:12,lineHeight:1.7}}>ตีกลับ {ref} ของสาขา <b style={{color:C.ink}}>{bname}</b><br/><span style={{color:C.ink4,fontSize:12}}>สาขาจะเห็นเหตุผลนี้ และแก้ไข/ส่งคำสั่งซื้อใหม่ได้</span></div>
+      const kBusy=busy===((isPo?"p":isPr?"pr":"r")+o.id);
+      return <Modal title={isPr?"❌ ตีกลับใบขอซื้อ":"❌ ตีกลับคำสั่งซื้อ"} onClose={()=>{if(!kBusy){setRejecting(null);setRejectReason("");}}}>
+        <div style={{fontSize:13.5,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:12,lineHeight:1.7}}>ตีกลับ {ref} ของสาขา <b style={{color:C.ink}}>{bname}</b><br/><span style={{color:C.ink4,fontSize:12}}>สาขาจะเห็นเหตุผลนี้ และแก้ไข/ส่งใหม่ได้</span></div>
         <div style={{fontSize:13,fontWeight:700,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>เหตุผลที่ตีกลับ * (จำเป็น)</div>
         <textarea autoFocus value={rejectReason} onChange={e=>setRejectReason(e.target.value)} rows={3} placeholder="เช่น สั่งเกินความจำเป็น / ราคาสูงผิดปกติ / ให้ใช้ของคงเหลือก่อน..." style={{...iS,fontSize:14,resize:"none",lineHeight:1.6,border:`2px solid ${rejectReason.trim()?C.line:C.red}`}}/>
         <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:14,paddingTop:12,borderTop:`1px solid ${C.line}`}}>
@@ -11271,11 +11487,13 @@ export default function App(){
             {tab==="po"&&<>
               {/* Top toggle [เอกสาร PO | ซัพพลายนอก]. Hidden on the "create order" sub-page
                   (reached via the สั่งวัตถุดิบ button) which has its own back link. */}
-              {hasPerm(currentUser,"orders")&&poSubTab!=="create"&&<div style={{display:"flex",gap:6,marginBottom:16,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:420}}>
-                {[{id:"po",l:"📄 เอกสาร PO",c:C.brand},{id:"ext",l:"🚚 ซัพพลายนอก",c:C.teal}].map(s=>{const on=poSubTab===s.id;return <button key={s.id} onClick={()=>setPoSubTab(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3,transition:"all .15s"}}>{s.l}</button>;})}
+              {hasPerm(currentUser,"orders")&&poSubTab!=="create"&&<div style={{display:"flex",gap:6,marginBottom:16,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:560}}>
+                {[{id:"pr",l:"📝 ใบขอซื้อ",c:C.green},{id:"po",l:"📄 เอกสาร PO",c:C.brand},{id:"ext",l:"🚚 ซัพพลายนอก",c:C.teal}].map(s=>{const on=poSubTab===s.id;return <button key={s.id} onClick={()=>setPoSubTab(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3,transition:"all .15s"}}>{s.l}</button>;})}
               </div>}
               {poSubTab==="create"&&hasPerm(currentUser,"orders")
                 ?<OrderTab forcedMode="check" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setPoSubTab("po")}/>
+                :poSubTab==="pr"
+                ?<RequisitionView branches={branches} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reloadOrders={reload.orders}/>
                 :poSubTab==="ext"&&hasPerm(currentUser,"orders")
                 ?<OrderTab forcedMode="list" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser}/>
                 :<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setPoSubTab("create")} orders={orders} reloadOrders={reload.orders}/>}
