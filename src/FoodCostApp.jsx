@@ -4777,71 +4777,86 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
   const[q,setQ]=useState("");const[saving,setSaving]=useState(false);const savingRef=useRef(false);
   const matches=useMemo(()=>{const ql=q.trim().toLowerCase();if(!ql)return[];return ings.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentral)&&(i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql))).slice(0,20);},[ings,q,currentBranch,isCentral]);
   function addItem(i){if(items.some(x=>+x.ingredient_id===+i.id)){setQ("");return;}setItems(a=>[...a,{ingredient_id:i.id,name:i.name,unit:i.buy_unit||"หน่วย",qty:"",note:""}]);setQ("");}
-  function openForm(){setItems([]);setReason("");setNeededBy("");setQ("");setShowForm(true);}
+  const[editingPR,setEditingPR]=useState(null);   // when set, the form edits+resubmits this (rejected) PR instead of creating new
+  function openForm(){setEditingPR(null);setItems([]);setReason("");setNeededBy("");setQ("");setShowForm(true);}
+  function editPR(pr){setEditingPR(pr);setItems((pr.items||[]).map(it=>({ingredient_id:+it.ingredient_id,name:it.name,unit:it.unit||"หน่วย",qty:it.qty,note:it.note||""})));setReason(pr.reason||"");setNeededBy(pr.needed_by||"");setQ("");setShowForm(true);}
   async function submitPR(){
     if(savingRef.current)return;
+    if(isCentral){alert('ครัวกลางเป็นผู้จ่ายของ — ไม่ต้องสร้างใบขอซื้อให้ตัวเอง\nถ้าต้องการซื้อของเข้าครัวกลาง ใช้ปุ่ม "สั่งวัตถุดิบ" แทน');return;}
     const clean=items.filter(x=>+x.qty>0);
     if(clean.length===0){alert("กรุณาเพิ่มรายการและใส่จำนวนอย่างน้อย 1 รายการ");return;}
     savingRef.current=true;setSaving(true);
     try{
-      await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"ingredient",items:clean.map(x=>({ingredient_id:+x.ingredient_id,name:x.name,unit:x.unit,qty:+x.qty,note:(x.note||"").trim()||null})),reason:(reason||"").trim()||null,needed_by:neededBy||null,status:"pending_approval",created_by:currentUser?.username||currentUser?.name||"",updated_at:new Date().toISOString()});
-      posToast("✅ ส่งใบขอซื้อแล้ว — รอ Area อนุมัติ","ok");setShowForm(false);await load();
+      const body={items:clean.map(x=>({ingredient_id:+x.ingredient_id,name:x.name,unit:x.unit,qty:+x.qty,note:(x.note||"").trim()||null})),reason:(reason||"").trim()||null,needed_by:neededBy||null,updated_at:new Date().toISOString()};
+      if(editingPR){
+        // Re-submit a rejected PR: same document → back to pending_approval, clear the reject note.
+        // Optimistic lock on "rejected" — if the card was stale (already approved/converted by
+        // another user), this matches 0 rows and throws instead of resurrecting it (which would
+        // duplicate an already-issued delivery).
+        await api.updatePRIfStatus(editingPR.id,"rejected",{...body,status:"pending_approval",reject_reason:null,rejected_by:null});
+        posToast("✅ แก้ไข + ส่งใหม่แล้ว — รอ Area อนุมัติ","ok");
+      }else{
+        await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"ingredient",...body,status:"pending_approval",created_by:currentUser?.username||currentUser?.name||""});
+        posToast("✅ ส่งใบขอซื้อแล้ว — รอ Area อนุมัติ","ok");
+      }
+      setShowForm(false);setEditingPR(null);await load();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
     savingRef.current=false;setSaving(false);
   }
   async function cancelPR(pr){if(!await confirmDlg({title:"ยกเลิกใบขอซื้อ",message:`ยกเลิก ${pr.pr_number||"ใบนี้"}?`,danger:true,confirmLabel:"ยกเลิก"}))return;try{await api.updatePR(pr.id,{status:"cancelled",updated_at:new Date().toISOString()});await load();}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}}
   async function delPR(pr){if(!await confirmDlg({title:"ลบใบขอซื้อ",message:`ลบ ${pr.pr_number||"ใบนี้"} ถาวร?`,danger:true,confirmLabel:"ลบ"}))return;try{await api.deletePR(pr.id);await load();}catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}}
   // central consolidation pool
-  const approvedPRs=useMemo(()=>(prs||[]).filter(p=>p.status==="approved"&&p.type==="ingredient"),[prs]);
+  // Exclude central-self PRs: central is the SUPPLIER, so a central→central delivery PO
+  // would be un-shippable (shipPO refuses same branch) and strand the request.
+  const approvedPRs=useMemo(()=>(prs||[]).filter(p=>p.status==="approved"&&p.type==="ingredient"&&+p.branch_id!==+currentBranch?.id),[prs,currentBranch]);
   const pool=useMemo(()=>{const m=new Map();for(const p of approvedPRs){for(const it of (p.items||[])){const id=+it.ingredient_id;if(!id||!(+it.qty>0))continue;const e=m.get(id)||{ingredient_id:id,name:it.name,unit:it.unit,total:0,byBranch:[]};e.total=round2(e.total+(+it.qty||0));e.byBranch.push({branch:p.branch_name||branchName(p.branch_id),qty:+it.qty||0});m.set(id,e);}}return[...m.values()].sort((a,b)=>a.name.localeCompare(b.name));},[approvedPRs]);// eslint-disable-line react-hooks/exhaustive-deps
   const[consolidating,setConsolidating]=useState(false);const consolidatingRef=useRef(false);
-  async function consolidateAll(){
-    if(consolidatingRef.current)return;   // synchronous guard — one client, block double-tap
-    // Only PRs that actually carry a buyable line are consolidatable.
-    const candidates=approvedPRs.filter(p=>(p.items||[]).some(it=>+it.ingredient_id>0&&+it.qty>0));
-    if(candidates.length===0){alert("ยังไม่มีใบขอซื้อที่อนุมัติแล้วให้รวม");return;}
+  // PR fulfillment = "จัดส่งให้สาขา": issue an internal delivery PO (ครัวกลาง→สาขา) per
+  // requesting branch. NO stock moves here — the PO lands at "open"; central ships it from
+  // the PO tab ("🚚 จัดส่ง") which is where the atomic stock deduct/credit happens.
+  async function distributeToBranches(){
+    if(consolidatingRef.current)return;   // synchronous guard — block double-tap
+    const candidates=approvedPRs.filter(p=>+p.branch_id&&(p.items||[]).some(it=>+it.ingredient_id>0&&+it.qty>0));
+    if(candidates.length===0){alert("ยังไม่มีใบขอซื้อที่อนุมัติแล้วให้จัดส่ง");return;}
     consolidatingRef.current=true;
-    const noSup=pool.filter(row=>{const ing=ings.find(x=>+x.id===row.ingredient_id);return !ing||!branchSupplierName(ing,currentBranch?.id,suppliers);}).length;
-    if(!await confirmDlg({title:"รวมออกซื้อ",message:`รวม ${candidates.length} ใบขอซื้อ (${pool.length} รายการ) ออกเป็นออเดอร์ซัพพลายนอก?${noSup>0?`\n\n⚠️ ${noSup} รายการยังไม่มีซัพพลาย — จะรวมไว้กลุ่ม "ไม่ระบุซัพพลาย" (ไปแก้ซัพ/ราคาในแท็บซัพพลายนอกได้)`:""}\n\n• จัดกลุ่มตามซัพพลายเออร์อัตโนมัติ\n• ใบขอซื้อจะเปลี่ยนเป็น "ออกซื้อแล้ว"`,confirmLabel:"รวมออกซื้อ"})){consolidatingRef.current=false;return;}
+    const branchCount=new Set(candidates.map(p=>+p.branch_id)).size;
+    if(!await confirmDlg({title:"จัดส่งให้สาขา",message:`ออกใบส่งของ (PO ครัวกลาง→สาขา) จาก ${candidates.length} ใบขอซื้อที่อนุมัติแล้ว?\n\n• แยกใบต่อสาขา (${branchCount} สาขา)\n• ใบส่งจะอยู่สถานะ "รอจัดส่ง" — ครัวกลางไปกด "🚚 จัดส่ง" ที่แท็บ PO เพื่อส่ง (ตัดสต๊อกตอนส่ง)\n• ใบขอซื้อจะปิดเป็น "จัดส่งแล้ว"`,confirmLabel:"ออกใบส่งของ"})){consolidatingRef.current=false;return;}
     setConsolidating(true);
-    const ref=`ออกซื้อ · ${fmtD(todayStr())}`;
+    const ref=`ใบส่งของ · ${fmtD(todayStr())}`;
     const claimed=[],claimSkipped=[];
     try{
-      // 1) CLAIM the PRs FIRST via the optimistic lock (approved→converted). Only rows we
-      //    win are ours to buy — a retry OR a second central device re-runs this and their
-      //    updatePRIfStatus matches 0 rows (already converted) → they claim nothing → they
-      //    create NO orders. This is what makes the buy un-duplicatable despite non-atomic POSTs.
+      // 1) CLAIM the PRs FIRST via the optimistic lock (approved→converted). A retry or a
+      //    second central device matches 0 rows on already-claimed PRs → issues NO POs, so
+      //    the non-idempotent addPO can never create duplicate delivery documents.
       for(const p of candidates){
         try{await api.updatePRIfStatus(p.id,"approved",{status:"converted",converted_ref:ref,converted_at:new Date().toISOString(),updated_at:new Date().toISOString()});claimed.push(p);}
         catch{claimSkipped.push(p);}
       }
-      if(claimed.length===0)throw new Error("ไม่มีใบขอซื้อที่รวมได้ (อาจถูกอีกเครื่องรวมไปแล้ว) — รีเฟรชแล้วลองใหม่");
-      // 2) Build supplier groups from the CLAIMED PRs only, then create one order per supplier.
-      const supMap={};
+      if(claimed.length===0)throw new Error("ไม่มีใบขอซื้อที่จัดส่งได้ (อาจถูกอีกเครื่องทำไปแล้ว) — รีเฟรชแล้วลองใหม่");
+      // 2) Group CLAIMED PRs by requesting BRANCH → one delivery PO (central→branch) each.
+      const byBranch={};
       for(const p of claimed){
+        const bid=+p.branch_id;if(!bid)continue;
+        if(!byBranch[bid])byBranch[bid]={branch_id:bid,branch_name:p.branch_name||branchName(bid),byId:new Map()};
         for(const it of (p.items||[])){
           const id=+it.ingredient_id,qty=+it.qty||0;if(!id||qty<=0)continue;
-          const ing=ings.find(x=>+x.id===id);
-          const sid=ing?branchSupplierId(ing,currentBranch?.id):null;
-          const sname=(ing&&branchSupplierName(ing,currentBranch?.id,suppliers))||"ไม่ระบุซัพพลาย";
-          const key=sid?("id:"+sid):("name:"+sname);
-          if(!supMap[key])supMap[key]={supplierId:sid||null,supplierName:sname,byId:new Map()};
-          const price=+ing?.buy_price||0;
-          const ex=supMap[key].byId.get(id)||{ingId:id,name:it.name,unit:it.unit,qtyNeeded:0,pricePerUnit:price,supplierId:sid||null,supplierName:sname};
-          ex.qtyNeeded=round2(ex.qtyNeeded+qty);ex.estimatedCost=round2(ex.qtyNeeded*price);
-          supMap[key].byId.set(id,ex);
+          const ing=ings.find(x=>+x.id===id);const price=+ing?.buy_price||0;
+          const ex=byBranch[bid].byId.get(id)||{ingredient_id:id,name:it.name,unit:it.unit,qty:0,price_per_unit:price};
+          ex.qty=round2(ex.qty+qty);byBranch[bid].byId.set(id,ex);
         }
       }
-      const groups=Object.values(supMap).map(g=>({supplierId:g.supplierId,supplierName:g.supplierName,items:[...g.byId.values()]}));
-      const orderFailed=[];
+      const groups=Object.values(byBranch);
+      const poFailed=[];
       for(const g of groups){
-        try{await api.addOrder({branch_id:currentBranch?.id,branch_name:currentBranch?.name,supplier_id:g.supplierId,supplier_name:g.supplierName,items:g.items,status:"pending",requested_by:currentUser?.username||currentUser?.name||"",requested_at:nowStr(),note:`รวมจากใบขอซื้อ ${claimed.length} ใบ (${fmtD(todayStr())})`});}
-        catch{orderFailed.push(g.supplierName);}
+        const items=[...g.byId.values()].map(it=>({ingredient_id:it.ingredient_id,name:it.name,unit:it.unit,qty:round2(it.qty),price_per_unit:it.price_per_unit,line_total:round2(it.qty*it.price_per_unit),note:""}));
+        const subtotal=round2(items.reduce((s,it)=>s+(+it.line_total||0),0));
+        try{await api.addPO({po_number:genPONumber(currentBranch?.id),branch_id:g.branch_id,from_branch_id:currentBranch?.id,po_date:todayStr(),status:"open",items,subtotal,vat:0,total:subtotal,notes:`ออกจากใบขอซื้อที่อนุมัติ (${fmtD(todayStr())})`,created_by:currentUser?.username||currentUser?.name||"",updated_at:new Date().toISOString()});}
+        catch{poFailed.push(g.branch_name);}
       }
-      if(orderFailed.length>0)alert(`⚠️ สร้างออเดอร์ไม่สำเร็จ ${orderFailed.length} กลุ่ม: ${orderFailed.join(", ")}\n\nใบขอซื้อถูกปิดเป็น "ออกซื้อแล้ว" ไปแล้ว แต่กลุ่มนี้ยังไม่มีออเดอร์ — กรุณาสร้างออเดอร์ซัพนอกกลุ่มนี้เองในแท็บ "ซัพพลายนอก" (อย่ากดรวมซ้ำ — จะไม่เกิดซ้ำเพราะใบถูกปิดแล้ว)`);
-      else posToast(`✅ รวมออกซื้อแล้ว ${groups.length} ออเดอร์${claimSkipped.length?` (ข้าม ${claimSkipped.length} ใบที่ถูกรวมไปแล้ว)`:""}`,"ok");
+      if(poFailed.length>0)alert(`⚠️ ออกใบส่งไม่สำเร็จ ${poFailed.length} สาขา: ${poFailed.join(", ")}\n\nใบขอซื้อปิดแล้ว แต่สาขานี้ยังไม่มีใบส่ง — สร้าง PO ครัวกลาง→สาขานี้เองที่แท็บ "เอกสาร PO" (อย่ากดจัดส่งซ้ำ — ใบถูกปิดแล้วจะไม่เกิดซ้ำ)`);
+      else posToast(`✅ ออกใบส่งของ ${groups.length} สาขาแล้ว — ไปกด "🚚 จัดส่ง" ที่แท็บเอกสาร PO${claimSkipped.length?` (ข้าม ${claimSkipped.length} ใบที่ทำไปแล้ว)`:""}`,"ok");
       if(reloadOrders)reloadOrders();await load();
-    }catch(e){alert("รวมออกซื้อไม่สำเร็จ: "+(e.message||e));if(reloadOrders)reloadOrders();await load();}
+    }catch(e){alert("จัดส่งไม่สำเร็จ: "+(e.message||e));if(reloadOrders)reloadOrders();await load();}
     consolidatingRef.current=false;setConsolidating(false);
   }
   const list=prs||[];
@@ -4860,7 +4875,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
       <div style={{fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:18,fontWeight:900,color:C.ink}}>📝 ใบขอซื้อ (PR)</div>
-        <div style={{fontSize:12,color:C.ink4,marginTop:2}}>สาขาขอ → Area อนุมัติ → ครัวกลางรวมออกซื้อ · <b style={{color:C.ink3}}>ไม่ตัดสต๊อก</b></div>
+        <div style={{fontSize:12,color:C.ink4,marginTop:2}}>สาขาขอ → Area อนุมัติ → ครัวกลางออกใบส่งให้สาขา · <b style={{color:C.ink3}}>ไม่ตัดสต๊อก</b></div>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {onOrderMaterials&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOrderMaterials} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
@@ -4870,14 +4885,14 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
       </div>
     </div>
     {isCentral&&<div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:420}}>
-      {[{id:"pool",l:"🧺 กองรอซื้อ",c:C.teal},{id:"list",l:"📋 ใบขอซื้อทั้งหมด",c:C.brand}].map(s=>{const on=view===s.id;return <button key={s.id} onClick={()=>setView(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3}}>{s.l}</button>;})}
+      {[{id:"pool",l:"🧺 รอจัดส่ง",c:C.teal},{id:"list",l:"📋 ใบขอซื้อทั้งหมด",c:C.brand}].map(s=>{const on=view===s.id;return <button key={s.id} onClick={()=>setView(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3}}>{s.l}</button>;})}
     </div>}
     {prs===null?<Loading text="โหลดใบขอซื้อ..."/>
     :err?<div style={{textAlign:"center",padding:"36px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>โหลดไม่สำเร็จ<div style={{marginTop:10}}><Btn v="ghost" onClick={load}>↻ ลองใหม่</Btn></div></div>
     :(isCentral&&view==="pool")?<Card style={{overflow:"hidden"}}>
       <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.line}`,background:C.tealLight,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-        <div style={{fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:14,fontWeight:900,color:"#0F6E56"}}>🧺 กองรอซื้อ — รวมยอดจากทุกสาขาที่อนุมัติแล้ว</div><div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>{approvedPRs.length} ใบขอซื้อ · {pool.length} วัตถุดิบ</div></div>
-        {pool.length>0&&<Btn onClick={consolidateAll} loading={consolidating} icon={I.check} s={{background:`linear-gradient(135deg,${C.teal},#0F766E)`,color:C.white}}>รวมออกซื้อทั้งหมด</Btn>}
+        <div style={{fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:14,fontWeight:900,color:"#0F6E56"}}>🧺 รอจัดส่ง — ยอดที่อนุมัติแล้ว แยกตามวัตถุดิบ/สาขา</div><div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>{approvedPRs.length} ใบขอซื้อ · {pool.length} วัตถุดิบ</div></div>
+        {pool.length>0&&<Btn onClick={distributeToBranches} loading={consolidating} icon={I.truck} s={{background:`linear-gradient(135deg,${C.teal},#0F766E)`,color:C.white}}>📦 ออกใบส่งให้สาขา</Btn>}
       </div>
       {pool.length===0?<div style={{textAlign:"center",padding:"46px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีใบขอซื้อที่อนุมัติแล้วรอรวม</div>
       :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
@@ -4947,7 +4962,8 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
           {pr.reason&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:5}}>📝 {pr.reason}</div>}
           {pr.status==="rejected"&&pr.reject_reason&&<div style={{marginTop:8,padding:"7px 11px",background:C.redLight,border:`1px solid ${C.red}44`,borderRadius:9,fontSize:12,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif"}}>❌ ตีกลับ: {pr.reject_reason}{pr.rejected_by?<span style={{color:C.ink4,fontSize:11}}> — โดย {pr.rejected_by}</span>:""}</div>}
           {pr.status==="converted"&&pr.converted_ref&&<div style={{marginTop:8,padding:"7px 11px",background:C.blueLight,border:`1px solid ${C.blue}44`,borderRadius:9,fontSize:12,color:"#185FA5",fontFamily:"'Sarabun',sans-serif"}}>📦 {pr.converted_ref}</div>}
-          {((mine&&pr.status==="pending_approval")||canDel)&&<div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:10}}>
+          {((mine&&(pr.status==="pending_approval"||pr.status==="rejected"))||canDel)&&<div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:10}}>
+            {mine&&pr.status==="rejected"&&<Btn onClick={()=>editPR(pr)} icon={I.pencil} s={{fontSize:12,padding:"6px 12px",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>แก้ไข + ส่งใหม่</Btn>}
             {mine&&pr.status==="pending_approval"&&<Btn v="ghost" onClick={()=>cancelPR(pr)} s={{fontSize:12,padding:"6px 12px"}}>ยกเลิก</Btn>}
             {canDel&&<button onClick={()=>delPR(pr)} title="ลบถาวร" style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",color:C.red,fontSize:12}}>🗑️</button>}
           </div>}
@@ -4955,8 +4971,8 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
       </Card>;})}
     </div>}
     </>}
-    {showForm&&<Modal title="📝 สร้างใบขอซื้อ (PR)" onClose={()=>setShowForm(false)} wide>
-      <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12,background:C.bg,borderRadius:9,padding:"9px 12px",border:`1px solid ${C.line}`}}>สาขา: <b style={{color:C.ink}}>{currentBranch?.name||"—"}</b> · ใบนี้เป็น<b>คำขอ</b> ยังไม่ตัดสต๊อก — Area อนุมัติแล้วครัวกลางจะรวมออกซื้อให้</div>
+    {showForm&&<Modal title={editingPR?"✏️ แก้ไขใบขอซื้อ + ส่งใหม่":"📝 สร้างใบขอซื้อ (PR)"} onClose={()=>{setShowForm(false);setEditingPR(null);}} wide>
+      <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12,background:C.bg,borderRadius:9,padding:"9px 12px",border:`1px solid ${C.line}`}}>สาขา: <b style={{color:C.ink}}>{currentBranch?.name||"—"}</b> · ใบนี้เป็น<b>คำขอ</b> ยังไม่ตัดสต๊อก — Area อนุมัติแล้วครัวกลางจะออกใบส่งให้</div>
       <div style={{marginBottom:12,position:"relative"}}>
         <div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>🔍 เพิ่มวัตถุดิบที่ต้องการ</div>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="พิมพ์ชื่อวัตถุดิบ..." style={{...iS}}/>
@@ -4978,8 +4994,8 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
       </div>
       <Inp label="📝 เหตุผล / หมายเหตุ" value={reason} onChange={e=>setReason(e.target.value)} placeholder="เช่น ของใกล้หมด, เตรียมงานจัดเลี้ยง"/>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,marginTop:14,borderTop:`1px solid ${C.line}`}}>
-        <Btn v="ghost" onClick={()=>setShowForm(false)}>ปิด</Btn>
-        <Btn onClick={submitPR} loading={saving} disabled={saving||items.filter(x=>+x.qty>0).length===0} icon={I.check} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>ส่งใบขอซื้อ</Btn>
+        <Btn v="ghost" onClick={()=>{setShowForm(false);setEditingPR(null);}}>ปิด</Btn>
+        <Btn onClick={submitPR} loading={saving} disabled={saving||items.filter(x=>+x.qty>0).length===0} icon={I.check} s={{background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>{editingPR?"แก้ไข + ส่งใหม่":"ส่งใบขอซื้อ"}</Btn>
       </div>
     </Modal>}
   </div>;
@@ -7844,7 +7860,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   async function submitOrder(){
     const items=visibleIngs.map(i=>{const q2=getOrderQty(i);return{ing:i,qty:q2};}).filter(x=>x.qty>0);
     if(items.length===0){alert("ไม่มีรายการที่ต้องสั่ง");return;}
-    if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\n• ของจากครัวกลาง → จะสร้างเป็น "เอกสาร PO"\n• ของจากซัพพลายภายนอก → จะแยกเป็นใบสั่งตามซัพพลาย (พิมพ์ PDF ส่งได้)`,confirmLabel:"ส่งคำสั่งซื้อ"}))return;
+    if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\n• ของจากครัวกลาง → จะสร้างเป็น "ใบขอซื้อ (PR)" รอ Area อนุมัติ\n• ของจากซัพพลายภายนอก → จะแยกเป็นใบสั่งตามซัพพลาย (พิมพ์ PDF ส่งได้)`,confirmLabel:"ส่งคำสั่งซื้อ"}))return;
     setSaving(true);
     try{
       // Group items by per-branch supplier
@@ -7874,39 +7890,16 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       };
 
       const poList=[],extList=[],skippedList=[];
+      const centralItems=[];const centralNames=new Set();
       for(const sup of Object.values(supMap)){
         const central=matchCentralSupplier(sup.supplierName);
         const isCentralOrderingFromItself=central&&+central.id===+currentBranch.id;
         const subtotal=round2(sup.items.reduce((s,it)=>s+(+it.estimatedCost||0),0));
         if(central&&!isCentralOrderingFromItself){
-          // → PO REQUEST: branch is asking central for goods.
-          //   from = สาขา (creator of the request), to = ครัวกลาง (waits to accept)
-          //   status = "requested" — central will press "รับเอกสาร" which swaps
-          //   from/to and flips to "open" before the normal PO flow takes over.
-          const poNumber=genPONumber(currentBranch.id);
-          await api.addPO({
-            po_number:poNumber,
-            branch_id:central.id,
-            from_branch_id:currentBranch.id,
-            po_date:todayStr(),
-            status:"pending_approval",   // hold: Area Manager must approve before it reaches central (released → "requested")
-            items:sup.items.map(it=>({
-              ingredient_id:it.ingId,
-              name:it.name,
-              unit:it.unit,
-              qty:+it.qtyNeeded||0,
-              price_per_unit:+it.pricePerUnit||0,
-              line_total:+it.estimatedCost||0,
-              note:"",
-            })),
-            subtotal,
-            vat:0,
-            total:subtotal,
-            notes:`สั่งจากนับสต็อก ${fmtD(todayStr())} โดย ${currentUser.username}`,
-            created_by:currentUser.username,
-            updated_at:new Date().toISOString(),
-          });
-          poList.push({poNumber,centralName:central.name,items:sup.items,total:subtotal});
+          // → ใบขอซื้อ (PR): branch REQUESTS central-supplied goods. Area approves,
+          //   then central issues per-branch delivery POs from the PR pool ("จัดส่งให้สาขา").
+          //   (No stock moves here — PR is a request, not a stock document.)
+          centralItems.push(...sup.items);centralNames.add(central.name);
         }else if(isCentralOrderingFromItself){
           // Central trying to order from itself — silently skip; user picks an external
           // supplier when central restocks its own inventory
@@ -7922,6 +7915,22 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
           });
           extList.push({supplierName:sup.supplierName,items:sup.items,total:subtotal});
         }
+      }
+      if(centralItems.length>0){
+        const prNumber=genPRNumber(currentBranch.id);
+        await api.addPR({
+          pr_number:prNumber,
+          branch_id:currentBranch.id,branch_name:currentBranch.name,
+          requested_by:currentUser.username,
+          type:"ingredient",
+          items:centralItems.map(it=>({ingredient_id:it.ingId,name:it.name,unit:it.unit,qty:+it.qtyNeeded||0,note:null})),
+          reason:`สั่งจากนับสต็อก ${fmtD(todayStr())}`,
+          needed_by:null,
+          status:"pending_approval",
+          created_by:currentUser.username,
+          updated_at:new Date().toISOString(),
+        });
+        poList.push({poNumber:prNumber,centralName:[...centralNames].join(", ")||"ครัวกลาง",items:centralItems,total:round2(centralItems.reduce((s,it)=>s+(+it.estimatedCost||0),0))});
       }
       // Reset overrides
       setOrderQty({});
@@ -8058,7 +8067,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
           <div style={{textAlign:"center"}}>
             <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,letterSpacing:.5,textTransform:"uppercase"}}>แยกเป็น</div>
             <div style={{fontSize:18,fontFamily:"'Sarabun',sans-serif",fontWeight:900,color:C.ink,lineHeight:1.2,marginTop:6}}>{submitResult.poList.length+submitResult.extList.length} ใบ</div>
-            <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{submitResult.poList.length>0?`PO ${submitResult.poList.length}`:""}{submitResult.poList.length>0&&submitResult.extList.length>0?" · ":""}{submitResult.extList.length>0?`ซัพนอก ${submitResult.extList.length}`:""}</div>
+            <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{submitResult.poList.length>0?`ใบขอซื้อ ${submitResult.poList.length}`:""}{submitResult.poList.length>0&&submitResult.extList.length>0?" · ":""}{submitResult.extList.length>0?`ซัพนอก ${submitResult.extList.length}`:""}</div>
           </div>
         </>}
       </div>
