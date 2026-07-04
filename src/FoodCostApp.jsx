@@ -559,7 +559,7 @@ const TRANSLATIONS={
     "tab.sop":"SOP",
     "tab.summary":"สรุปต้นทุน",
     "tab.fssales":"ยอดขายรายเมนู\nตามระบบ FOODSTORY",
-    "tab.po":"เอกสาร PO / สั่งของ",
+    "tab.po":"สร้างเอกสารสั่งซื้อวัตถุดิบ",
     "tab.orders":"สั่งวัตถุดิบ",
     "tab.history":"ประวัติต้นทุน",
     "tab.suppliers":"ซัพพลาย",
@@ -706,7 +706,7 @@ const ALL_PERMS=[
   {id:"sop",label:"SOP"},
   {id:"summary",label:"สรุปต้นทุน"},
   {id:"fs_sales",label:"ยอดขาย FoodStory"},
-  {id:"po",label:"เอกสาร PO / สั่งของ"},
+  {id:"po",label:"สร้างเอกสารสั่งซื้อวัตถุดิบ"},
   {id:"orders",label:"สั่งวัตถุดิบ"},
   {id:"history",label:"ประวัติต้นทุน"},
   {id:"suppliers",label:"ซัพพลาย"},
@@ -11237,7 +11237,10 @@ export default function App(){
   const[printers,setPrinters]=useState([]);const[assets,setAssets]=useState([]);
   const[loading,setLoading]=useState(false);const[initErr,setInitErr]=useState("");
   const[tab,setTab]=useState(()=>{try{return new URLSearchParams(window.location.search).get("approve")==="1"?"approve":"pos";}catch{return "pos";}});
-  const[poSubTab,setPoSubTab]=useState("po");   // within the "เอกสาร PO" menu: "pr" = ใบขอซื้อ · "po" = PO docs · "ext" = สั่งซัพพลายนอก (OrderTab)
+  const[poSubTab,setPoSubTab]=useState("pr");   // within the menu: "pr" = ใบขอซื้อ · "po" = PO docs · "ext" = สั่งซัพพลายนอก (OrderTab)
+  // Always land on the ใบขอซื้อ (PR) sub-tab each time this menu is entered (fires only when
+  // `tab` becomes "po"; switching sub-tabs keeps tab="po" so it won't reset mid-use).
+  useEffect(()=>{if(tab==="po")setPoSubTab("pr");},[tab]);
   const[poAction,setPoAction]=useState(null);   // create | transfer — set by PR-tab buttons, consumed by POSection on mount
   const isMobile=useIsMobile();
   const[mobileNavOpen,setMobileNavOpen]=useState(false);
