@@ -1405,7 +1405,24 @@ function ImgUp({value,onChange,label,compact}){
 // ══════════════════════════════════════════════════════
 function LoginPage({onLogin}){
   const[u,setU]=useState("");const[p,setP]=useState("");const[err,setErr]=useState("");const[show,setShow]=useState(false);const[loading,setLoading]=useState(false);
-  async function login(){if(!u||!p)return;setLoading(true);setErr("");try{const found=await api.loginUser(u,p);if(found&&found.length>0)onLogin(found[0]);else setErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");}catch(e){setErr("เชื่อมต่อ Supabase ไม่ได้");}setLoading(false);}
+  // Cold-start resilient: Supabase free tier sleeps after inactivity, so the FIRST query
+  // can be slow or time out. Race each attempt against a 12s timeout and retry up to 3×
+  // with a "waking server" message, instead of a silent indefinite hang.
+  async function login(){
+    if(!u||!p)return;setLoading(true);setErr("");
+    for(let attempt=1;attempt<=3;attempt++){
+      try{
+        if(attempt>1)setErr(`⏳ กำลังปลุกเซิร์ฟเวอร์... (ครั้งที่ ${attempt}/3)`);
+        const found=await Promise.race([api.loginUser(u,p),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),12000))]);
+        if(found&&found.length>0){setErr("");onLogin(found[0]);}
+        else setErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
+        setLoading(false);return;
+      }catch(e){
+        if(attempt>=3){setErr("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — เซิร์ฟเวอร์อาจกำลังตื่นจากพัก กรุณากดเข้าสู่ระบบอีกครั้ง");setLoading(false);return;}
+        await new Promise(r=>setTimeout(r,1200));
+      }
+    }
+  }
   return <div style={{minHeight:"100vh",background:`linear-gradient(135deg,${C.brandLight} 0%,#FEF3C7 50%,${C.blueLight} 100%)`,display:"flex",alignItems:"center",justifyContent:"center"}}>
     <div style={{background:C.white,borderRadius:24,padding:"44px 40px",width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 32px 80px rgba(15,23,42,.15)",animation:"mIn .4s cubic-bezier(.34,1.56,.64,1)"}}>
       <div style={{textAlign:"center",marginBottom:36}}>
