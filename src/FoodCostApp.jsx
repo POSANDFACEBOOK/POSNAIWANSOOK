@@ -1061,6 +1061,9 @@ const _b2=n=>String(n).padStart(2,"0");
 const fmtD=(d)=>{const x=d===undefined?new Date():parseAnyDate(d);return x?`${_b2(x.getDate())}/${_b2(x.getMonth()+1)}/${x.getFullYear()+543}`:(typeof d==="string"?d:"");};
 const fmtDT=(d)=>{const x=d===undefined?new Date():parseAnyDate(d);return x?`${_b2(x.getDate())}/${_b2(x.getMonth()+1)}/${x.getFullYear()+543} ${_b2(x.getHours())}:${_b2(x.getMinutes())}`:(typeof d==="string"?d:"");};
 const nowStr=()=>new Date().toISOString();   // STORAGE: unambiguous ISO (was a th locale string → the swap-bug root cause)
+// Compact quantity: integers plain, decimals trimmed of trailing zeros. GLOBAL (was only a
+// local in one component → RequisitionView referenced it out of scope and white-screened).
+const fmtQty=n=>{const v=+n||0;return v%1===0?String(v):v.toFixed(3).replace(/0+$/,"").replace(/\.$/,"");};
 const todayStr=()=>todayBkk();
 
 const iS={width:"100%",padding:"11px 14px",border:`1.5px solid ${C.line}`,borderRadius:10,fontSize:15,fontFamily:"'Sarabun',sans-serif",outline:"none",boxSizing:"border-box",color:C.ink,background:C.white,transition:"border .15s"};
