@@ -1022,10 +1022,32 @@ function ingVisibleAt(ing,branchId,isCentral){
 }
 const marginColor=(m)=>m>=60?C.green:m>=40?C.yellow:C.red;
 const marginLabel=(m)=>m>=60?"ดี":m>=40?"พอใช้":"ต่ำ";
-// Format date/time in Thai locale but always Gregorian year (not Buddhist) — receipts must read 2026 not 2569
-const fmtDT=(d)=>(d?new Date(d):new Date()).toLocaleString("th-TH",{calendar:"gregory",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
-const fmtD=(d)=>(d?new Date(d):new Date()).toLocaleDateString("th-TH",{calendar:"gregory",year:"numeric",month:"2-digit",day:"2-digit"});
-const nowStr=()=>fmtDT();
+// ── Canonical date handling ──────────────────────────────────────────────
+// One display format across the WHOLE app: "DD/MM/พ.ศ." (zero-padded day, NUMERIC
+// month, Buddhist-era year), plus " HH:mm" for date+time.  e.g. 5 มิ.ย. 2026 → 05/06/2569.
+// parseAnyDate is the ONLY parser: it reads Date | epoch-ms | ISO | "D/M/YYYY[ HH:mm[:ss]]"
+// (Gregorian OR Buddhist year) and — crucially — parses the D/M/Y form MANUALLY so a
+// "03/07/2026" can never be mis-read by the engine as American M/D (7 March) — the exact
+// day↔month swap bug that made receipts show wrong months.
+function parseAnyDate(v){
+  if(v==null||v==="")return null;
+  if(v instanceof Date)return isNaN(v.getTime())?null:v;
+  if(typeof v==="number")return isNaN(v)?null:new Date(v);
+  const s=String(v).trim();
+  const m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ ,T]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(s);
+  if(m){const y=+m[3],yr=y>2400?y-543:y;const d=new Date(yr,(+m[2])-1,+m[1],+(m[4]||0),+(m[5]||0),+(m[6]||0));return isNaN(d.getTime())?null:d;}
+  const iso=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s);            // bare date → LOCAL midnight (never UTC-shift the calendar day)
+  if(iso)return new Date(+iso[1],+iso[2]-1,+iso[3]);
+  const t=Date.parse(s);return isNaN(t)?null:new Date(t);   // ISO datetime / RFC — unambiguous, safe
+}
+const _b2=n=>String(n).padStart(2,"0");
+// Buddhist-era numeric display — pass null/undefined for "now". Returns the raw string
+// unchanged if it can't be parsed (so odd legacy values never render as blank/NaN).
+// Only a MISSING arg (undefined, e.g. fmtDT()) means "now". An explicit null/""/bad value
+// returns "" — so a null DB field never masquerades as a real current timestamp.
+const fmtD=(d)=>{const x=d===undefined?new Date():parseAnyDate(d);return x?`${_b2(x.getDate())}/${_b2(x.getMonth()+1)}/${x.getFullYear()+543}`:(typeof d==="string"?d:"");};
+const fmtDT=(d)=>{const x=d===undefined?new Date():parseAnyDate(d);return x?`${_b2(x.getDate())}/${_b2(x.getMonth()+1)}/${x.getFullYear()+543} ${_b2(x.getHours())}:${_b2(x.getMinutes())}`:(typeof d==="string"?d:"");};
+const nowStr=()=>new Date().toISOString();   // STORAGE: unambiguous ISO (was a th locale string → the swap-bug root cause)
 const todayStr=()=>todayBkk();
 
 const iS={width:"100%",padding:"11px 14px",border:`1.5px solid ${C.line}`,borderRadius:10,fontSize:15,fontFamily:"'Sarabun',sans-serif",outline:"none",boxSizing:"border-box",color:C.ink,background:C.white,transition:"border .15s"};
@@ -1200,7 +1222,7 @@ function ConfirmDlg(){
     </div>
   </div>;
 }
-function EditedBy({username,editAt}){if(!username)return null;return <span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.user} s={9} c={C.ink4}/>แก้โดย {username}{editAt?` · ${editAt}`:""}</span>;}
+function EditedBy({username,editAt}){if(!username)return null;return <span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.user} s={9} c={C.ink4}/>แก้โดย {username}{editAt?` · ${fmtDT(editAt)}`:""}</span>;}
 function Loading({text="กำลังโหลด..."}){return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"80px 0",gap:16}}><div style={{width:44,height:44,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{text}</p></div>;}
 
 // Thumbnail with broken-image fallback. If the src URL fails to load (or is empty),
@@ -1584,7 +1606,7 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
         // Blank cell in the file = "leave existing value untouched".
         const item={
           edit_by:currentUser.username,
-          edit_at:new Date().toLocaleString("th-TH"),
+          edit_at:nowStr(),
           branch_id:currentBranch.id,
         };
         if(row.name!==undefined)item.name=row.name;
@@ -1829,7 +1851,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
           category:row.category,
           price:+row.price||0,
           description:row.description||"",
-          edit_by:currentUser.username,edit_at:new Date().toLocaleString("th-TH"),
+          edit_by:currentUser.username,edit_at:nowStr(),
           branch_id:currentBranch.id,
         };
         if(existing){
@@ -1959,8 +1981,8 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
         });
       }
     }
-    // Newest first. Falls back to orderId when date strings tie.
-    out.sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.orderId-a.orderId));
+    // Newest first — sort by parsed epoch (robust to ISO or legacy DD/MM), orderId on ties.
+    out.sort((a,b)=>((parseAnyDate(b.date)?.getTime()||0)-(parseAnyDate(a.date)?.getTime()||0))||(b.orderId-a.orderId));
     return out;
   })();
 
@@ -2018,7 +2040,7 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
               const isMin=Math.abs(r.price-minP)<0.005&&minP!==maxP;
               const isMax=Math.abs(r.price-maxP)<0.005&&minP!==maxP;
               return <tr key={r.orderId+":"+i} style={{borderTop:i>0?`1px solid ${C.lineLight}`:"none",background:i%2===0?C.white:"#FAFBFC"}}>
-                <td style={{padding:"10px",color:C.ink2,whiteSpace:"nowrap"}}>{r.date||"—"}</td>
+                <td style={{padding:"10px",color:C.ink2,whiteSpace:"nowrap"}}>{fmtDT(r.date)||"—"}</td>
                 <td style={{padding:"10px",fontWeight:700,color:C.brand,wordBreak:"break-word"}}>{r.supplier}</td>
                 {isCentral&&<td style={{padding:"10px",color:C.ink3,fontSize:12,wordBreak:"break-word"}}>{r.branch||"—"}</td>}
                 <td style={{padding:"10px",textAlign:"right",color:C.ink2,whiteSpace:"nowrap"}}>{fmtQty(r.qty)} <span style={{fontSize:10,color:C.ink4}}>{r.unit}</span></td>
@@ -2157,7 +2179,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
               <span style={{fontSize:12,color:C.red,fontWeight:700,whiteSpace:"nowrap",minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}} title={`−${l.qty} ${l.unit||""}`}>−{l.qty} {l.unit||""}</span>
               <span style={{fontSize:15,fontWeight:900,color:C.red,whiteSpace:"nowrap",flexShrink:0}}>฿{(+l.total||0).toLocaleString(undefined,{maximumFractionDigits:0})}</span>
             </div>
-            <div style={{fontSize:10.5,color:C.ink4,lineHeight:1.4}}>📅 {l.log_date}{scopeBranches.length>1?` · 🏪 ${l.branch_name||""}`:""}<br/>👤 {l.created_by||"—"}</div>
+            <div style={{fontSize:10.5,color:C.ink4,lineHeight:1.4}}>📅 {fmtD(l.log_date)}{scopeBranches.length>1?` · 🏪 ${l.branch_name||""}`:""}<br/>👤 {l.created_by||"—"}</div>
             {l.reason&&<div style={{fontSize:11,color:C.ink3,marginTop:1,...clamp2}} title={l.reason}>📝 {l.reason}</div>}
           </div>
         </div>;})}
@@ -2188,7 +2210,7 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
   }
   const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false&&inScope(b.id)),[branches,allowed]);// eslint-disable-line react-hooks/exhaustive-deps
   const shown=(sessions||[]).filter(s=>!fBranch||+s.branch_id===+fBranch);
-  const fmtDt=s=>{try{return new Date(s).toLocaleString("th-TH",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch{return s||"";}};
+  const fmtDt=s=>fmtDT(s);
   const openImg=ref=>{if(ref)imgView(driveImgSrc(ref));};
   return <Modal title="🕘 ประวัติการนับสต็อก (รายครั้ง)" onClose={onClose} wide>
     {scopeBranches.length>1&&<div style={{marginBottom:12,maxWidth:280}}><Sel label="กรองสาขา" value={fBranch} onChange={e=>setFBranch(e.target.value)} options={[{v:"",l:"ทุกสาขา (ที่ดูแล)"},...scopeBranches.map(b=>({v:String(b.id),l:b.name}))]}/></div>}
@@ -2251,8 +2273,9 @@ function StockHistoryModal({ing,currentBranch,branches=[],onClose}){
   const aliveRef=useRef(true);
   useEffect(()=>{aliveRef.current=true;return()=>{aliveRef.current=false;};},[]);
   const branchName=id=>{const b=(branches||[]).find(x=>+x.id===+id);return b?b.name:("สาขา "+id);};
-  // Parse ISO ("2026-06-26T..") OR Thai "DD/MM/YYYY HH:mm" (Buddhist year) → epoch ms for sorting.
-  const toMs=s=>{if(!s)return 0;const t=Date.parse(s);if(!isNaN(t))return t;const m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ ,]+(\d{1,2}):(\d{2}))?/.exec(String(s));if(m){const y=+m[3],yr=y>2400?y-543:y;return new Date(yr,(+m[2])-1,+m[1],+(m[4]||0),+(m[5]||0)).getTime();}return 0;};
+  // Epoch ms for sorting — via the canonical parser so a "DD/MM/YYYY" string is never
+  // mis-read as American M/D (the swap bug that dropped events at the wrong date).
+  const toMs=s=>{const d=parseAnyDate(s);return d?d.getTime():0;};
   async function load(){
     setRows(null);setErr(false);
     const ingId=+ing.id,bid=+currentBranch.id,U=ing.buy_unit||"";
@@ -2290,7 +2313,7 @@ function StockHistoryModal({ing,currentBranch,branches=[],onClose}){
     }catch{ if(aliveRef.current){setErr(true);setRows([]);} }
   }
   useEffect(()=>{load();},[ing.id,currentBranch?.id]);// eslint-disable-line react-hooks/exhaustive-deps
-  const fmtDt=ms=>{try{return new Date(ms).toLocaleString("th-TH",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch{return "";}};
+  const fmtDt=ms=>fmtDT(ms);
   const META={count:{ic:I.clock,c:C.brand,bg:C.brandLight,l:"📋 นับสต็อก"},recv_ext:{ic:I.truck,c:C.teal,bg:C.tealLight,l:"📥 รับจากซัพพลายนอก"},po_in:{ic:I.box,c:C.green,bg:C.greenLight,l:"📥 รับเข้า"},po_out:{ic:I.send,c:C.blue,bg:C.blueLight,l:"📤 ส่งออก"},waste:{ic:I.trash,c:C.red,bg:C.redLight,l:"🗑️ ของเสีย"}};
   return <Modal title={`🕘 ประวัติการเคลื่อนไหวสต็อก — ${ing.name}`} onClose={onClose} wide>
     <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>สาขา: <b style={{color:C.ink2}}>{currentBranch?.name||"—"}</b> · รวมทุกการเปลี่ยนแปลง: นับสต็อก · รับจากซัพ · รับ/ส่ง PO · ของเสีย</div>
@@ -2492,7 +2515,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
         const sDay=bkkDay(sess.started_at),today=bkkDay(new Date());
         if(sDay&&today&&sDay!==today){
           setStockBtnLoading(false);
-          let dShow=sDay;try{dShow=new Date(sess.started_at).toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric",timeZone:"Asia/Bangkok"});}catch{}
+          let dShow=sDay;try{dShow=fmtD(sess.started_at);}catch{}
           await confirmDlg({title:"⏳ ต้องรออนุมัติก่อน",message:`การนับสต็อกครั้งก่อน (เริ่ม ${dShow}${sess.counter_name?` โดย ${sess.counter_name}`:""}) ยังรอ Area อนุมัติอยู่\n\nต้องให้ Area อนุมัติรอบนั้นก่อน จึงจะเริ่มนับสต็อกรอบใหม่ได้`,confirmLabel:"เข้าใจแล้ว",cancelLabel:null,danger:false});
           return;
         }
@@ -3311,7 +3334,7 @@ body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-prin
   ${ingChips?`<div class="sec-label">ส่วนผสมที่ใช้</div><div class="ings">${ingChips}</div>`:''}
   <div class="sec-label">ขั้นตอนการเตรียม / จัดการ &nbsp;(${(ing.sop||[]).length} ขั้นตอน)</div>
   <div class="steps">${steps}</div>
-  <div class="footer"><span>NAIWANSOOK · ห้องครัว</span><span>พิมพ์วันที่ ${new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}</span></div>
+  <div class="footer"><span>NAIWANSOOK · ห้องครัว</span><span>พิมพ์วันที่ ${fmtD()}</span></div>
 </div>
 <script>
 async function waitImgs(){
@@ -3676,7 +3699,7 @@ body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-prin
   ${ingChips?`<div class="sec-label">วัตถุดิบที่ใช้</div><div class="ings">${ingChips}</div>`:''}
   <div class="sec-label">ขั้นตอนการทำ &nbsp;(${(menu.sop||[]).length} ขั้นตอน)</div>
   <div class="steps">${steps}</div>
-  <div class="footer"><span>NAIWANSOOK · ห้องครัว</span><span>พิมพ์วันที่ ${new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}</span></div>
+  <div class="footer"><span>NAIWANSOOK · ห้องครัว</span><span>พิมพ์วันที่ ${fmtD()}</span></div>
 </div>
 <script>
 async function waitImgs(){
@@ -3913,14 +3936,14 @@ function buildPOHTML(po,toBranchName,fromBranchName){
   </div>
   <div style="text-align:right">
     <div style="font-size:18px;font-weight:900;color:#0F172A">${esc(po.po_number||"-")}</div>
-    <div style="font-size:13px;color:#475569;margin-top:4px">วันที่ ${esc(po.po_date||"-")}</div>
+    <div style="font-size:13px;color:#475569;margin-top:4px">วันที่ ${esc(fmtD(po.po_date)||"-")}</div>
     <div style="font-size:11px;color:#94A3B8;margin-top:4px">สถานะ: ${stLabel}</div>
   </div>
 </div>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;font-size:13px">
   <div><b style="color:#475569;font-weight:600">จาก (ผู้ออก):</b> ${esc(fromBranchName||"-")}</div>
   <div><b style="color:#475569;font-weight:600">ถึง (ผู้รับ):</b> ${esc(toBranchName||"-")}</div>
-  ${po.received_at?`<div><b style="color:#475569;font-weight:600">รับเมื่อ:</b> ${esc(new Date(po.received_at).toLocaleString("th-TH",{calendar:"gregory"}))}${po.received_by?` โดย ${esc(po.received_by)}`:""}</div>`:""}
+  ${po.received_at?`<div><b style="color:#475569;font-weight:600">รับเมื่อ:</b> ${esc(fmtDT(po.received_at))}${po.received_by?` โดย ${esc(po.received_by)}`:""}</div>`:""}
   ${po.notes?`<div style="grid-column:1/3"><b style="color:#475569;font-weight:600">หมายเหตุ:</b> ${esc(po.notes)}</div>`:""}
 </div>
 <table style="width:100%;border-collapse:collapse;margin:14px 0">
@@ -3996,7 +4019,7 @@ async function exportPOsToExcel(pos,branchById){
   const summary=pos.map(po=>({
     "เลข PO":po.po_number||"",
     "ประเภท":isTransfer(po)?"โอนระหว่างสาขา":"จัดซื้อ",
-    "วันที่":po.po_date||"",
+    "วันที่":fmtD(po.po_date),
     "จาก":branchById[po.from_branch_id]?.name||"",
     "ถึง":branchById[po.branch_id]?.name||"",
     "สถานะ":stL[po.status]||po.status||"",
@@ -4006,7 +4029,7 @@ async function exportPOsToExcel(pos,branchById){
     "ยอดสุทธิ":isTransfer(po)?"การโอน":(+po.total||0),
     "ผู้สร้าง":po.created_by||"",
     "ผู้รับ":po.received_by||"",
-    "วันที่รับ":po.received_at?new Date(po.received_at).toLocaleString("th-TH"):"",
+    "วันที่รับ":fmtDT(po.received_at),
     "หมายเหตุ":po.notes||"",
   }));
   const details=[];
@@ -4014,7 +4037,7 @@ async function exportPOsToExcel(pos,branchById){
     (po.items||[]).forEach((it,idx)=>{
       details.push({
         "เลข PO":po.po_number||"",
-        "วันที่":po.po_date||"",
+        "วันที่":fmtD(po.po_date),
         "จาก":branchById[po.from_branch_id]?.name||"",
         "ถึง":branchById[po.branch_id]?.name||"",
         "ลำดับ":idx+1,
@@ -4156,7 +4179,7 @@ function FSImportModal({branches,currentUser,onClose,onDone}){
         </Field>
       </div>
       <div style={{background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:12,color:"#92400E",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
-        ⚠️ <b>หมายเหตุ:</b> ถ้าสาขานี้ในวันที่ <b>{saleDate}</b> เคยนำเข้าแล้ว ข้อมูลเดิมจะถูก<b>แทนที่ทั้งหมด</b> ก่อนใส่ใหม่
+        ⚠️ <b>หมายเหตุ:</b> ถ้าสาขานี้ในวันที่ <b>{fmtD(saleDate)}</b> เคยนำเข้าแล้ว ข้อมูลเดิมจะถูก<b>แทนที่ทั้งหมด</b> ก่อนใส่ใหม่
       </div>
       <div style={{maxHeight:320,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10,marginBottom:14}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
@@ -4367,7 +4390,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
     const prevPct=prevRev>0?round2(prevCost/prevRev*100):0;
     if(!await confirmDlg({
       title:"💾 บันทึกสรุปต้นทุน",
-      message:`บันทึกสรุปต้นทุนของวันที่ ${date} (สาขา ${br?.name||"-"}) ไปยังแท็บ "สรุปต้นทุน"?\n\nยอดขาย: ฿${prevRev.toLocaleString(undefined,{minimumFractionDigits:2})}\nต้นทุน: ฿${prevCost.toLocaleString(undefined,{minimumFractionDigits:2})} (${prevPct}%)\n\n• หากเคยบันทึกไว้แล้ว ระบบจะอัพเดททับของเดิม\n• หลังบันทึก หน้านี้จะเคลียร์เพื่อรอรับไฟล์ใหม่`,
+      message:`บันทึกสรุปต้นทุนของวันที่ ${fmtD(date)} (สาขา ${br?.name||"-"}) ไปยังแท็บ "สรุปต้นทุน"?\n\nยอดขาย: ฿${prevRev.toLocaleString(undefined,{minimumFractionDigits:2})}\nต้นทุน: ฿${prevCost.toLocaleString(undefined,{minimumFractionDigits:2})} (${prevPct}%)\n\n• หากเคยบันทึกไว้แล้ว ระบบจะอัพเดททับของเดิม\n• หลังบันทึก หน้านี้จะเคลียร์เพื่อรอรับไฟล์ใหม่`,
       confirmLabel:"บันทึกสรุป",
     }))return;
     const key=`${branchId}|${date}`;
@@ -4497,7 +4520,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
       <div style={{fontSize:12,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>📦 รายการที่นำเข้า ({batches.length} ไฟล์):</div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
         {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);return <div key={`${b.branch_id}-${b.sale_date}`} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 10px",fontSize:11,fontFamily:"'Sarabun',sans-serif",color:C.ink2,display:"flex",alignItems:"center",gap:6}}>
-          <span><b>{b.sale_date}</b> · {br?.name||"—"} · {b.count} เมนู / {b.qtySum} ครั้ง</span>
+          <span><b>{fmtD(b.sale_date)}</b> · {br?.name||"—"} · {b.count} เมนู / {b.qtySum} ครั้ง</span>
           {canImport&&<button onClick={()=>delDate(b.branch_id,b.sale_date)} title="ลบยอดของวันนี้" style={{background:C.redLight,border:"none",borderRadius:5,padding:"2px 6px",cursor:"pointer",color:C.red,fontSize:10,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>×</button>}
         </div>;})}
       </div>
@@ -4589,7 +4612,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
               const cost=cu!=null?round2(cu*(+r.qty||0)):null;
               const profit=cost!=null?round2((+r.net_total||0)-cost):null;
               return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`,background:i%2===0?C.white:"#FAFBFC"}}>
-                <td style={{padding:"8px 12px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{r.sale_date}</td>
+                <td style={{padding:"8px 12px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{fmtD(r.sale_date)}</td>
                 <td style={{padding:"8px 12px",fontSize:12,color:C.ink3}}>{branches.find(b=>+b.id===+r.branch_id)?.name||"—"}</td>
                 <td style={{padding:"8px 12px",fontSize:13,fontWeight:600,color:C.ink}}>
                   <span style={{display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
@@ -4624,7 +4647,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
       // When multiple batches share data, show count summary instead.
       const firstBatch=batches[0];
       const firstBranch=firstBatch?branches.find(x=>+x.id===+firstBatch.branch_id):null;
-      const dateLabel=batches.length===1?firstBatch.sale_date:`${batches.length} รายการ`;
+      const dateLabel=batches.length===1?fmtD(firstBatch.sale_date):`${batches.length} รายการ`;
       const branchLabel=batches.length===1?(firstBranch?.name||"—"):"หลายสาขา";
       const sameBranch=batches.every(b=>+b.branch_id===+(firstBatch?.branch_id||0));
       const finalBranchLabel=batches.length>1&&sameBranch?(firstBranch?.name||"—"):branchLabel;
@@ -4671,9 +4694,9 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
         </div>
         {/* Save buttons */}
         {canImport&&<div style={{display:"flex",gap:isMobile?6:8,flexWrap:"wrap",justifyContent:isMobile?"stretch":"flex-end",width:isMobile?"100%":"auto"}}>
-          {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <button key={`save-${b.branch_id}-${b.sale_date}`} onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title={`บันทึกสรุปต้นทุน ${b.sale_date} · ${br?.name||"—"} → ไปแสดงในแท็บ "สรุปต้นทุน"`} style={{background:busy?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:9,padding:isMobile?"9px 14px":"9px 18px",cursor:busy?"not-allowed":"pointer",color:C.white,fontSize:isMobile?12:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif",boxShadow:busy?"none":"0 4px 14px rgba(16,185,129,0.42)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,letterSpacing:.2,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:38}}>
+          {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <button key={`save-${b.branch_id}-${b.sale_date}`} onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title={`บันทึกสรุปต้นทุน ${fmtD(b.sale_date)} · ${br?.name||"—"} → ไปแสดงในแท็บ "สรุปต้นทุน"`} style={{background:busy?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:9,padding:isMobile?"9px 14px":"9px 18px",cursor:busy?"not-allowed":"pointer",color:C.white,fontSize:isMobile?12:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif",boxShadow:busy?"none":"0 4px 14px rgba(16,185,129,0.42)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,letterSpacing:.2,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:38}}>
             <span style={{fontSize:isMobile?13:14}}>{busy?"⏳":"💾"}</span>
-            <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{busy?"กำลังบันทึก...":`บันทึกสรุป — ${b.sale_date}${batches.length>1?` · ${br?.name||"—"}`:""}`}</span>
+            <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{busy?"กำลังบันทึก...":`บันทึกสรุป — ${fmtD(b.sale_date)}${batches.length>1?` · ${br?.name||"—"}`:""}`}</span>
           </button>;})}
         </div>}
       </div>
@@ -5462,7 +5485,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         status:"pending_approval",   // hold for Area approval — same as the normal สร้างคำสั่งซื้อ flow
         requested_by:currentUser.username,
         requested_at:nowStr(),
-        note:`สรุปต้องซื้อวันนี้ (${todayStr()})`,
+        note:`สรุปต้องซื้อวันนี้ (${fmtD(todayStr())})`,
       });
     }
     // Notify the Area manager(s) that central's purchases are waiting for approval (fire-and-forget).
@@ -5547,8 +5570,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
               const fromB=branchById[po.from_branch_id];
               const toB=branchById[po.branch_id];
               const st=PO_STATUS[po.status]||{label:po.status,color:C.ink3,bg:C.lineLight};
-              const created=po.created_at?new Date(po.created_at).toLocaleString("th-TH",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}):po.po_date;
-              const recAt=po.received_at?new Date(po.received_at).toLocaleDateString("th-TH"):null;
+              const created=po.created_at?fmtDT(po.created_at):fmtD(po.po_date);
+              const recAt=po.received_at?fmtD(po.received_at):null;
               const iCreator=isCreator(po),iReceiver=isReceiver(po);
               return <tr key={po.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=idx%2===0?C.white:"#FAFBFC"}>
                 <td style={{padding:"11px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{created}</td>
@@ -5566,7 +5589,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                 <td style={{padding:"11px 14px",textAlign:"center"}}>
                   <span style={{fontSize:11,fontWeight:700,color:st.color,background:st.bg,padding:"3px 10px",borderRadius:18,whiteSpace:"nowrap",display:"inline-block"}}>{st.label}</span>
                   {(po.status==="awaiting_payment"||po.status==="paid"||po.status==="received")&&recAt&&<div style={{fontSize:10,color:C.green,fontFamily:"'Sarabun',sans-serif",marginTop:3,fontWeight:600}}>รับ: {recAt}{po.received_by?` · ${po.received_by}`:""}</div>}
-                  {po.status==="paid"&&po.payment_at&&<div style={{fontSize:10,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginTop:2,fontWeight:600}}>จ่าย: {new Date(po.payment_at).toLocaleDateString("th-TH")}</div>}
+                  {po.status==="paid"&&po.payment_at&&<div style={{fontSize:10,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginTop:2,fontWeight:600}}>จ่าย: {fmtD(po.payment_at)}</div>}
                 </td>
                 <td style={{padding:"8px 12px",textAlign:"center",whiteSpace:"nowrap"}}>
                   <div style={{display:"inline-flex",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
@@ -5626,7 +5649,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                 const stBg=o.status==="pending"?"#FEF3C7":"#D1FAE5";
                 const stLabel=o.status==="pending"?"รอซื้อ":"ซื้อแล้ว รอรับเข้า";
                 return <tr key={o.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=C.tealLight} onMouseLeave={e=>e.currentTarget.style.background=idx%2===0?C.white:"#FAFBFC"}>
-                  <td style={{padding:"11px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{o.requested_at||"—"}</td>
+                  <td style={{padding:"11px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{fmtDT(o.requested_at)||"—"}</td>
                   <td style={{padding:"11px 14px",fontSize:13,fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>
                     EXT-{o.id}
                     <div style={{fontSize:10,color:C.ink4,fontWeight:500,marginTop:1}}>สร้างโดย {o.requested_by||"—"}</div>
@@ -6042,10 +6065,10 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       <td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:900;color:#FF6B35">฿${g.subtotal.toLocaleString(undefined,{minimumFractionDigits:2})}</td></tr>
       </tbody></table>
     `).join("");
-    printHtml(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการต้องซื้อ ${todayStr()}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 4px}.meta{font-size:12px;color:#64748B;margin:2px 0}@media print{.noprint{display:none}}</style></head><body><h2>📋 รายการที่ครัวกลางต้องไปซื้อวันนี้</h2><p class="meta">วันที่: <b>${esc(todayStr())}</b> · สาขา: <b>${esc(currentBranch?.name||"ครัวกลาง")}</b> · คำสั่งซื้อค้าง: <b>${orderCount}</b> ใบ</p>${groupHtml}<div style="margin-top:18px;padding:12px;background:#FEF3C7;border:2px solid #F59E0B;border-radius:10px;font-size:14px"><b>รวมทั้งสิ้นประมาณ: <span style="color:#FF6B35;font-size:18px">฿${totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span></b></div><br/></body></html>`);
+    printHtml(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการต้องซื้อ ${fmtD(todayStr())}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 4px}.meta{font-size:12px;color:#64748B;margin:2px 0}@media print{.noprint{display:none}}</style></head><body><h2>📋 รายการที่ครัวกลางต้องไปซื้อวันนี้</h2><p class="meta">วันที่: <b>${esc(fmtD(todayStr()))}</b> · สาขา: <b>${esc(currentBranch?.name||"ครัวกลาง")}</b> · คำสั่งซื้อค้าง: <b>${orderCount}</b> ใบ</p>${groupHtml}<div style="margin-top:18px;padding:12px;background:#FEF3C7;border:2px solid #F59E0B;border-radius:10px;font-size:14px"><b>รวมทั้งสิ้นประมาณ: <span style="color:#FF6B35;font-size:18px">฿${totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span></b></div><br/></body></html>`);
   }
 
-  return <Modal title={`📋 สรุปวัตถุดิบที่ต้องซื้อวันนี้ (${todayStr()})`} onClose={onClose} extraWide>
+  return <Modal title={`📋 สรุปวัตถุดิบที่ต้องซื้อวันนี้ (${fmtD(todayStr())})`} onClose={onClose} extraWide>
     {/* Loading / error / data states — loading guards against the empty "stock
         sufficient" message showing before the fetch completes. */}
     {loading?<div style={{padding:"60px 20px"}}><Loading text="กำลังโหลด PO ค้างจ่าย..."/></div>:
@@ -6169,9 +6192,9 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const isCentralBranch=currentBranch?.type==="central";
   const canManage=isCreator||isCentralBranch;
   const st=PO_STATUS[po.status]||{label:po.status,color:C.ink3,bg:C.lineLight};
-  const recAt=po.received_at?new Date(po.received_at).toLocaleString("th-TH"):null;
-  const dispAt=po.dispute_at?new Date(po.dispute_at).toLocaleString("th-TH"):null;
-  const payAt=po.payment_at?new Date(po.payment_at).toLocaleString("th-TH"):null;
+  const recAt=po.received_at?fmtDT(po.received_at):null;
+  const dispAt=po.dispute_at?fmtDT(po.dispute_at):null;
+  const payAt=po.payment_at?fmtDT(po.payment_at):null;
   const[mode,setMode]=useState("view");  // view | dispute
   const[receivedQty,setReceivedQty]=useState(()=>{const m={};(po.items||[]).forEach((it,i)=>{m[i]=it.received_qty!=null?it.received_qty:it.qty;});return m;});
   const[disputeNote,setDisputeNote]=useState(po.dispute_note||"");
@@ -6205,7 +6228,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         <div style={{fontSize:26}}>📄</div>
         <div>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,letterSpacing:.2}}>{po.po_number||`PO #${po.id}`}</div>
-          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,opacity:.92}}>{fromBranch?.name||"-"} <span style={{margin:"0 6px",opacity:.6}}>→</span> {toBranch?.name||"-"} · {po.po_date||""}</div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,opacity:.92}}>{fromBranch?.name||"-"} <span style={{margin:"0 6px",opacity:.6}}>→</span> {toBranch?.name||"-"} · {fmtD(po.po_date)}</div>
         </div>
       </div>
       <div style={{display:"flex",alignItems:"center",gap:14}}>
@@ -6223,7 +6246,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
           <div style={{background:C.white,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`}}>
             <div style={{fontSize:11,color:C.ink4,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>📤 ผู้ออก</div>
             <div style={{fontSize:14,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{fromBranch?.name||"-"}</div>
-            <div style={{fontSize:11,color:C.ink4,marginTop:2,fontFamily:"'Sarabun',sans-serif"}}>{po.created_by||""} · {po.created_at?new Date(po.created_at).toLocaleString("th-TH"):"-"}</div>
+            <div style={{fontSize:11,color:C.ink4,marginTop:2,fontFamily:"'Sarabun',sans-serif"}}>{po.created_by||""} · {po.created_at?fmtDT(po.created_at):"-"}</div>
           </div>
           <div style={{background:C.white,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`}}>
             <div style={{fontSize:11,color:C.ink4,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>📥 ผู้รับ</div>
@@ -6669,7 +6692,7 @@ function CostSummarySection({branches,currentBranch,currentUser,menus,ings,reloa
   useEffect(()=>{load();},[filterBranch,dateFrom,dateTo,currentBranch?.id]);
 
   async function del(s){
-    if(!await confirmDlg({title:"ลบสรุปต้นทุน",message:`ลบสรุปของวันที่ ${s.snapshot_date}?\n(ข้อมูลขายดิบไม่กระทบ — ลบแค่สรุปนี้เท่านั้น)`,danger:true,confirmLabel:"ลบทิ้ง"}))return;
+    if(!await confirmDlg({title:"ลบสรุปต้นทุน",message:`ลบสรุปของวันที่ ${fmtD(s.snapshot_date)}?\n(ข้อมูลขายดิบไม่กระทบ — ลบแค่สรุปนี้เท่านั้น)`,danger:true,confirmLabel:"ลบทิ้ง"}))return;
     setBusy(s.id);
     try{await api.deleteCostSnapshot(s.id);await load();}
     catch(e){showErr("ลบไม่สำเร็จ",e);}
@@ -6782,7 +6805,7 @@ function CostSummarySection({branches,currentBranch,currentUser,menus,ings,reloa
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <span style={{fontSize:18}}>📅</span>
                     <div>
-                      <div>{s.snapshot_date}</div>
+                      <div>{fmtD(s.snapshot_date)}</div>
                       <div style={{fontSize:10,color:C.ink4,fontWeight:600,marginTop:1}}>{s.menu_count||0} เมนู · {+s.total_qty||0} ครั้ง</div>
                     </div>
                   </div>
@@ -6911,7 +6934,7 @@ function EditSnapshotModal({snapshot,branches,menus,ings,currentUser,reloadMenus
     setSaving(false);
   }
 
-  return <Modal title={`✏️ แก้ไขสรุป — ${snapshot.snapshot_date} · ${br?.name||"—"}`} onClose={onClose} extraWide>
+  return <Modal title={`✏️ แก้ไขสรุป — ${fmtD(snapshot.snapshot_date)} · ${br?.name||"—"}`} onClose={onClose} extraWide>
     <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:14,padding:"10px 14px",background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:10,lineHeight:1.6}}>
       ℹ️ แก้ไขได้เฉพาะ <b style={{color:"#92400E"}}>"จำนวน"</b> เท่านั้น — ระบบจะคำนวณต้นทุน/กำไร/% ใหม่อัตโนมัติเมื่อเปลี่ยนจำนวน
     </div>
@@ -7068,7 +7091,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     // who quotes their own price. The user records the actual price during
     // "ยืนยันรับ".
     const rows=(order.items||[]).map((i,n)=>`<tr><td style="text-align:center;color:#64748B">${n+1}</td><td>${esc(i.name)}</td><td>${esc(i.qtyNeeded||0)}</td><td>${esc(i.unit||"")}</td></tr>`).join("");
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการสั่งวัตถุดิบ</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 6px}.meta{font-size:13px;margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — รายการสั่งวัตถุดิบ</h2><p class="meta">ซัพพลายเออร์: <b>${esc(order.supplier_name)}</b></p><p class="meta">สาขาผู้สั่ง: <b>${esc(order.branch_name)}</b></p><p class="meta">สั่งโดย: <b>${esc(order.requested_by)}</b> · วันที่: ${esc(order.requested_at)}</p>${order.note?`<p class="meta">หมายเหตุ: ${esc(order.note)}</p>`:""}<table><thead><tr><th style="width:48px">ลำดับ</th><th>วัตถุดิบ</th><th style="width:120px">จำนวน</th><th style="width:90px">หน่วย</th></tr></thead><tbody>${rows}</tbody></table><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการสั่งวัตถุดิบ</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 6px}.meta{font-size:13px;margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — รายการสั่งวัตถุดิบ</h2><p class="meta">ซัพพลายเออร์: <b>${esc(order.supplier_name)}</b></p><p class="meta">สาขาผู้สั่ง: <b>${esc(order.branch_name)}</b></p><p class="meta">สั่งโดย: <b>${esc(order.requested_by)}</b> · วันที่: ${esc(fmtDT(order.requested_at))}</p>${order.note?`<p class="meta">หมายเหตุ: ${esc(order.note)}</p>`:""}<table><thead><tr><th style="width:48px">ลำดับ</th><th>วัตถุดิบ</th><th style="width:120px">จำนวน</th><th style="width:90px">หน่วย</th></tr></thead><tbody>${rows}</tbody></table><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
     w.document.close();addPrintClose(w);
     setTimeout(()=>{try{w.print();}catch{}setPrintingId(null);},600);
   }
@@ -7252,7 +7275,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           </div>
           {/* 2. วันที่+สร้างโดย (2 lines) */}
           <div style={{minWidth:130,fontFamily:"'Sarabun',sans-serif"}}>
-            <div style={{fontSize:12,color:C.ink2,fontWeight:600,whiteSpace:"nowrap"}}>{order.requested_at}</div>
+            <div style={{fontSize:12,color:C.ink2,fontWeight:600,whiteSpace:"nowrap"}}>{fmtDT(order.requested_at)}</div>
             <div style={{fontSize:11,color:C.ink4,whiteSpace:"nowrap"}}>สร้างโดย {order.requested_by}</div>
           </div>
           {/* 3. ซัพพลาย */}
@@ -7622,7 +7645,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             subtotal,
             vat:0,
             total:subtotal,
-            notes:`สั่งจากนับสต็อก ${todayStr()} โดย ${currentUser.username}`,
+            notes:`สั่งจากนับสต็อก ${fmtD(todayStr())} โดย ${currentUser.username}`,
             created_by:currentUser.username,
             updated_at:new Date().toISOString(),
           });
@@ -7638,7 +7661,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             supplier_id:sup.supplierId,supplier_name:sup.supplierName,
             items:sup.items,status:"pending_approval",   // hold: Area Manager approves → released to "pending"
             requested_by:currentUser.username,requested_at:nowStr(),
-            note:`นับสต็อก ${todayStr()}`,
+            note:`นับสต็อก ${fmtD(todayStr())}`,
           });
           extList.push({supplierName:sup.supplierName,items:sup.items,total:subtotal});
         }
@@ -7894,14 +7917,14 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
 
   function startEdit(snap){setEditSnap({id:snap.id,date_from:snap.date_from,date_to:snap.date_to,items:(snap.items||[]).map(i=>({...i}))});setSelSnap(null);}
   async function saveEdit(){if(!editSnap)return;setEditSaving(true);try{await api.updateCostHistItem(editSnap.id,{date_from:editSnap.date_from,date_to:editSnap.date_to,items:editSnap.items});await reloadHistory();setEditSnap(null);alert("✅ แก้ไขสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setEditSaving(false);}
-  async function deleteSnap(snap){if(!await confirmDlg({title:"ลบประวัติต้นทุน",message:`ต้องการลบรายการ\n"${snap.date_from} → ${snap.date_to}"\nใช่หรือไม่?`}))return;try{await api.deleteCostHistItem(snap.id);await reloadHistory();}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
+  async function deleteSnap(snap){if(!await confirmDlg({title:"ลบประวัติต้นทุน",message:`ต้องการลบรายการ\n"${fmtD(snap.date_from)} → ${fmtD(snap.date_to)}"\nใช่หรือไม่?`}))return;try{await api.deleteCostHistItem(snap.id);await reloadHistory();}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
 
   function exportCSV(snap){const rows=[["เมนู","ราคาขาย","ต้นทุน","กำไร%","ขายออก","รายรับ","กำไรสุทธิ"],...(snap.items||[]).map(i=>[i.name,i.price,i.cost?.toFixed(2),i.margin?.toFixed(1),i.soldQty,i.totalRevenue?.toFixed(0),i.totalProfit?.toFixed(0)])];const csv=rows.map(r=>r.join(",")).join("\n");const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});const u=URL.createObjectURL(blob);const a=document.createElement("a");a.href=u;a.download=`foodcost-${snap.date_from}_${snap.date_to}.csv`;a.click();URL.revokeObjectURL(u);}
   function printSnap(snap){
     const w=openPrintWindow(820,720);
     if(!w)return;
     const rows=(snap.items||[]).map(i=>`<tr><td>${esc(i.name)}</td><td>฿${esc(i.price)}</td><td>฿${(+(i.cost||0)).toFixed(2)}</td><td>${(+(i.margin||0)).toFixed(1)}%</td><td>${esc(i.soldQty)}</td><td>฿${(+(i.totalRevenue||0)).toFixed(0)}</td><td>฿${(+(i.totalProfit||0)).toFixed(0)}</td></tr>`).join("");
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>สรุปต้นทุน</title><style>body{font-family:'Sarabun',sans-serif;padding:24px}h2{color:#FF6B35}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — สรุปต้นทุน</h2><p>สาขา: <b>${esc(snap.branch_name||"")}</b> | ${esc(snap.date_from)} ถึง ${esc(snap.date_to)} | บันทึกโดย: ${esc(snap.saved_by)}</p><table><thead><tr><th>เมนู</th><th>ราคาขาย</th><th>ต้นทุน</th><th>กำไร%</th><th>ขายออก</th><th>รายรับ</th><th>กำไรสุทธิ</th></tr></thead><tbody>${rows}</tbody></table><button class="noprint" onclick="window.print()">พิมพ์</button></body></html>`);
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>สรุปต้นทุน</title><style>body{font-family:'Sarabun',sans-serif;padding:24px}h2{color:#FF6B35}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — สรุปต้นทุน</h2><p>สาขา: <b>${esc(snap.branch_name||"")}</b> | ${esc(fmtD(snap.date_from))} ถึง ${esc(fmtD(snap.date_to))} | บันทึกโดย: ${esc(snap.saved_by)}</p><table><thead><tr><th>เมนู</th><th>ราคาขาย</th><th>ต้นทุน</th><th>กำไร%</th><th>ขายออก</th><th>รายรับ</th><th>กำไรสุทธิ</th></tr></thead><tbody>${rows}</tbody></table><button class="noprint" onclick="window.print()">พิมพ์</button></body></html>`);
     w.document.close();addPrintClose(w);
     setTimeout(()=>{try{w.print();}catch{}},600);
   }
@@ -7939,8 +7962,8 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
       :costHistory.map(snap=><Card key={snap.id} style={{marginBottom:12,overflow:"hidden"}}>
         <div style={{padding:"12px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",background:C.bg,borderBottom:`1px solid ${C.line}`,flexWrap:"wrap",gap:8}}>
           <div>
-            <div style={{fontWeight:800,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>📅 {snap.date_from} → {snap.date_to}</div>
-            <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{(snap.items||[]).length} เมนู · บันทึกโดย {snap.saved_by} · {snap.saved_at}</div>
+            <div style={{fontWeight:800,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>📅 {fmtD(snap.date_from)} → {fmtD(snap.date_to)}</div>
+            <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{(snap.items||[]).length} เมนู · บันทึกโดย {snap.saved_by} · {fmtDT(snap.saved_at)}</div>
           </div>
           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
             <Btn v="ghost" onClick={()=>{setSelSnap(selSnap?.id===snap.id?null:snap);setEditSnap(null);}} s={{padding:"5px 10px",fontSize:11}} icon={I.eye}>รายละเอียด</Btn>
@@ -8006,7 +8029,7 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
       <Card>{actionHistory.length===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.clock} s={40} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติ</p></div>
       :actionHistory.map((item,idx)=><div key={idx} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 18px",borderBottom:`1px solid ${C.lineLight}`}}>
         <div style={{width:30,height:30,borderRadius:"50%",background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.check} s={13} c={C.brand}/></div>
-        <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.action}</div><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>{item.time}</div></div>
+        <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.action}</div><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>{fmtDT(item.time)}</div></div>
       </div>)}</Card>
     </div>}
   </div>;
@@ -8018,16 +8041,9 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
 // ══════════════════════════════════════════════════════
 // ── SUPPLIER TAB ──────────────────────────────────────
 // ══════════════════════════════════════════════════════
-// Parse the Thai-locale timestamps that nowStr() writes ("DD/MM/YYYY[, HH:MM]")
-// back into a Date object so we can date-range filter supplier orders.
-function parseSupplierOrderDate(str){
-  if(!str)return null;
-  const m=String(str).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
-  if(!m)return null;
-  const [_,dd,mm,yyyy,hh,mi,ss]=m;
-  const d=new Date(+yyyy,+mm-1,+dd,+(hh||0),+(mi||0),+(ss||0));
-  return isNaN(d.getTime())?null:d;
-}
+// Supplier-order timestamps: new rows are ISO (nowStr), legacy rows are "DD/MM/YYYY[, HH:MM]".
+// parseAnyDate handles both without the American M/D swap.
+function parseSupplierOrderDate(str){return parseAnyDate(str);}
 
 function SupplierStatsModal({supplier,orders,onClose}){
   const todayBkkLocal=todayBkk();
@@ -8041,12 +8057,12 @@ function SupplierStatsModal({supplier,orders,onClose}){
     if(range==="this"){
       const s=new Date(now.getFullYear(),now.getMonth(),1);
       const e=new Date(now.getFullYear(),now.getMonth()+1,1);
-      return{start:s,end:e,label:`เดือนนี้ (${s.toLocaleDateString("th-TH",{month:"short",year:"numeric",calendar:"gregory"})})`};
+      return{start:s,end:e,label:`เดือนนี้ (${_b2(s.getMonth()+1)}/${s.getFullYear()+543})`};
     }
     if(range==="last"){
       const s=new Date(now.getFullYear(),now.getMonth()-1,1);
       const e=new Date(now.getFullYear(),now.getMonth(),1);
-      return{start:s,end:e,label:`เดือนที่แล้ว (${s.toLocaleDateString("th-TH",{month:"short",year:"numeric",calendar:"gregory"})})`};
+      return{start:s,end:e,label:`เดือนที่แล้ว (${_b2(s.getMonth()+1)}/${s.getFullYear()+543})`};
     }
     const s=from?new Date(from+"T00:00:00"):new Date(0);
     const e=to?new Date(to+"T23:59:59"):new Date();
@@ -8135,7 +8151,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
       </div>
       <div style={{padding:"12px 14px",background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:11,color:"#92400E",fontWeight:700}}>สั่งครั้งล่าสุด</div>
-        <div style={{fontSize:14,fontWeight:900,color:"#92400E",marginTop:4}}>{totals.latestDate?totals.latestDate.toLocaleDateString("th-TH",{calendar:"gregory",day:"2-digit",month:"short",year:"numeric"}):"—"}</div>
+        <div style={{fontSize:14,fontWeight:900,color:"#92400E",marginTop:4}}>{totals.latestDate?fmtD(totals.latestDate):"—"}</div>
       </div>
     </div>
 
@@ -8181,7 +8197,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
                 const itemsTotal=(o.items||[]).reduce((s,it)=>s+(+it.estimatedCost||0),0);
                 return <tr key={o.id} style={{borderTop:`1px solid ${C.lineLight}`,background:i%2===0?C.white:"#FAFBFC"}}>
                   <td style={{padding:"7px 10px",fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>ORD-{o.id}</td>
-                  <td style={{padding:"7px 10px",color:C.ink2,whiteSpace:"nowrap",fontSize:12}}>{o.requested_at||"—"}</td>
+                  <td style={{padding:"7px 10px",color:C.ink2,whiteSpace:"nowrap",fontSize:12}}>{fmtDT(o.requested_at)||"—"}</td>
                   <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{o.branch_name||"—"}</td>
                   <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{(o.items||[]).length} รายการ</td>
                   <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:C.green,whiteSpace:"nowrap"}}>฿{fmtMoney(itemsTotal)}</td>
@@ -8371,7 +8387,7 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
     const XLSX=await loadXLSX();
     const rows=filtered.map((a,i)=>{const d=assetDeprec(a);return{
       "ลำดับ":i+1,"ชื่อสินทรัพย์":a.name||"","หมวด":a.category||"","สถานะ":stOf(a.status||"active").l,
-      "วันที่ได้มา":a.acquired_date||"","จำนวน":a.quantity==null?1:+a.quantity,
+      "วันที่ได้มา":fmtD(a.acquired_date),"จำนวน":a.quantity==null?1:+a.quantity,
       "ราคาทุน/หน่วย":+a.cost||0,"มูลค่าทุนรวม":+d.cost.toFixed(2),"มูลค่าซาก":+a.salvage_value||0,
       "อายุการใช้งาน (ปี)":+a.useful_life_years||0,"ค่าเสื่อม/ปี":+d.perYear.toFixed(2),
       "ค่าเสื่อมสะสม":+d.accum.toFixed(2),"มูลค่าคงเหลือ":+d.book.toFixed(2),
@@ -8443,7 +8459,7 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
             </div>
             {(a.assignee||a.location)&&<div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:5}}>{a.assignee?`👤 ${a.assignee}`:""}{a.assignee&&a.location?" · ":""}{a.location?`📍 ${a.location}`:""}</div>}
             {(a.width_cm||a.length_cm||a.height_cm||a.weight_kg||a.vendor||a.lead_time)&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:3}}>{[(a.width_cm||a.length_cm||a.height_cm)?`📐 ${a.width_cm||"-"}×${a.length_cm||"-"}×${a.height_cm||"-"} ซม.`:"",a.weight_kg?`⚖️ ${a.weight_kg} กก.`:"",a.vendor?`🏪 ${a.vendor}`:"",a.lead_time?`⏱️ ${a.lead_time}`:""].filter(Boolean).join(" · ")}</div>}
-            {a.acquired_date&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>📅 ได้มา {new Date(a.acquired_date+"T00:00:00").toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"})}</div>}
+            {a.acquired_date&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>📅 ได้มา {fmtD(a.acquired_date)}</div>}
           </div>
         </div>
         {d.cost>0&&<div style={{padding:"10px 14px",borderTop:`1px solid ${C.lineLight}`,background:C.bg,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
@@ -8543,7 +8559,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   const[fDate,setFDate]=useState("");const[fBranch,setFBranch]=useState("");const[fSupplier,setFSupplier]=useState("");
   const[openLog,setOpenLog]=useState(null);   // expanded history row (shows its items)
   const dkeyOf=l=>{try{const d=new Date(l.decided_at);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}catch{return "";}};
-  const dlabelOf=k=>{const d=new Date(k+"T00:00:00");return isNaN(d.getTime())?k:d.toLocaleDateString("th-TH",{weekday:"short",day:"numeric",month:"short",year:"numeric"});};
+  const dlabelOf=k=>fmtD(k)||k;
   async function loadLogs(){setLogLoading(true);try{const d=await api.getApprovalLog();if(aliveRef.current)setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{if(aliveRef.current)setLogs([]);}if(aliveRef.current)setLogLoading(false);}
   async function logDecision(decision,kind,o,reason){try{
     const branchId=kind==="po"?o.from_branch_id:o.branch_id;
@@ -8622,7 +8638,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
     {view==="pending"&&(loading?<Loading text="โหลดคำสั่งซื้อรออนุมัติ..."/>
     :total===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><div style={{fontSize:48}}>✅</div><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่มีคำสั่งซื้อรออนุมัติ</p></div>
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(340px,100%),1fr))",gap:14}}>
-      {stockSess.map(s=>{const k="s"+s.id;const its=sessItems[s.id];const cnt=Array.isArray(its)?its.length:null;const t=(()=>{try{return new Date(s.started_at).toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}catch{return "";}})();return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.brand}`}}>
+      {stockSess.map(s=>{const k="s"+s.id;const its=sessItems[s.id];const cnt=Array.isArray(its)?its.length:null;const t=fmtDT(s.started_at);return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${C.brand}`}}>
         <div onClick={()=>openSessDetail(s)} title="แตะดูรายการที่นับ + รูป" style={{padding:"12px 14px",cursor:"pointer"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📋 นับสต็อก</span><Chip color="orange">นับสต็อก</Chip></div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>
@@ -8701,7 +8717,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
     })()}
     {detailSess&&(()=>{
       const s=detailSess;const its=sessItems[s.id];
-      const t=(()=>{try{return new Date(s.started_at).toLocaleString("th-TH",{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});}catch{return "";}})();
+      const t=fmtDT(s.started_at);
       return <Modal title={`📋 นับสต็อก — ${branchName(s.branch_id)}`} onClose={()=>setDetailSess(null)} extraWide>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
           {s.counter_photo?<img src={driveImgSrc(s.counter_photo)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(s.counter_photo))} style={{width:64,height:64,objectFit:"cover",borderRadius:12,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:64,height:64,borderRadius:12,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={26} c={C.line}/></div>}
@@ -8753,7 +8769,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
                 <span style={{fontSize:11,color:C.ink4,width:12,textAlign:"center",flexShrink:0}}>{open?"▼":"▶"}</span>
                 <div style={{minWidth:0}}>
                   <div style={{fontWeight:800,fontSize:13.5,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{l.kind==="po"?"🏢":"🚚"} {l.supplier_name||"-"} <span style={{color:C.ink4,fontWeight:600}}>· {branchName(l.branch_id)}</span></div>
-                  <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{l.ref||""} · {l.items_count||its.length} รายการ · ฿{money(l.total)} · โดย {l.decided_by||"-"} · {(()=>{try{return new Date(l.decided_at).toLocaleString("th-TH",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});}catch{return "";}})()}</div>
+                  <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{l.ref||""} · {l.items_count||its.length} รายการ · ฿{money(l.total)} · โดย {l.decided_by||"-"} · {fmtDT(l.decided_at)}</div>
                   {l.reason&&<div style={{fontSize:11.5,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",marginTop:3,fontWeight:700}}>❌ เหตุผล: {l.reason}</div>}
                 </div>
               </div>
@@ -9467,14 +9483,14 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
         {(()=>{const tags=getCustomerTags(selCust,transactions);return tags.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>{tags.map((tg,i)=><span key={i} style={{fontSize:12,padding:"3px 10px",borderRadius:20,background:tg.bg,color:tg.c,fontWeight:700}}>{tg.l}</span>)}</div>;})()}
         {/* Info */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-          {[["วันเกิด",selCust.birthdate?new Date(selCust.birthdate).toLocaleDateString("th-TH"):"—"],["เก้าอี้ที่ชอบ",selCust.seat_pref||"—"],["แพ้อาหาร",selCust.allergies||"—"],["หมายเหตุ",selCust.notes||"—"]].map(([k,v])=><div key={k} style={{background:C.lineLight,borderRadius:8,padding:"8px 10px"}}><div style={{fontSize:10,color:C.ink4,fontWeight:700}}>{k}</div><div style={{fontSize:12,color:C.ink,fontWeight:500,marginTop:2}}>{v}</div></div>)}
+          {[["วันเกิด",selCust.birthdate?fmtD(selCust.birthdate):"—"],["เก้าอี้ที่ชอบ",selCust.seat_pref||"—"],["แพ้อาหาร",selCust.allergies||"—"],["หมายเหตุ",selCust.notes||"—"]].map(([k,v])=><div key={k} style={{background:C.lineLight,borderRadius:8,padding:"8px 10px"}}><div style={{fontSize:10,color:C.ink4,fontWeight:700}}>{k}</div><div style={{fontSize:12,color:C.ink,fontWeight:500,marginTop:2}}>{v}</div></div>)}
         </div>
         {/* Transactions */}
         <div style={{marginBottom:12}}>
           <div style={{fontWeight:700,fontSize:13,color:C.ink,marginBottom:6}}>ประวัติธุรกรรม</div>
           <div style={{maxHeight:160,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
             {transactions.filter(t=>t.customer_id===selCust.id).slice(0,20).map(t=><div key={t.id} style={{display:"flex",justifyContent:"space-between",padding:"5px 8px",background:C.lineLight,borderRadius:7,fontSize:12}}>
-              <span style={{color:C.ink3}}>{new Date(t.created_at).toLocaleDateString("th-TH")}</span>
+              <span style={{color:C.ink3}}>{fmtD(t.created_at)}</span>
               <span style={{color:t.points_earned?C.green:C.red,fontWeight:700}}>{t.points_earned?"+"+t.points_earned+" pts":t.points_redeemed?"-"+t.points_redeemed+" pts":"—"}</span>
               {t.amount>0&&<span style={{color:C.ink}}>฿{t.amount.toLocaleString()}</span>}
             </div>)}
@@ -9610,7 +9626,7 @@ function CRMloyalty({customers,transactions,vouchers,setVouchers,showVoucherForm
           return<div key={v.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:v.status==="used"||expired?"#F8FAFC":C.yellowLight,borderRadius:8,opacity:v.status==="used"||expired?.6:1}}>
             <div style={{flex:1}}>
               <div style={{fontFamily:"monospace",fontWeight:800,color:C.ink,fontSize:14}}>{v.code}</div>
-              <div style={{fontSize:11,color:C.ink3,marginTop:1}}>{cust?.name||"ลูกค้า"} • หมดอายุ {new Date(v.expires_at).toLocaleDateString("th-TH")}</div>
+              <div style={{fontSize:11,color:C.ink3,marginTop:1}}>{cust?.name||"ลูกค้า"} • หมดอายุ {fmtD(v.expires_at)}</div>
             </div>
             <div style={{fontWeight:800,color:C.brand,fontSize:15}}>{v.type==="percent"?v.value+"%":"฿"+v.value}</div>
             <span style={{fontSize:11,padding:"3px 9px",borderRadius:20,fontWeight:700,background:v.status==="active"&&!expired?C.greenLight:C.lineLight,color:v.status==="active"&&!expired?C.green:C.ink3}}>{v.status==="used"?"ใช้แล้ว":expired?"หมดอายุ":"ใช้ได้"}</span>
@@ -9808,7 +9824,7 @@ function CRMFeedback({feedback,customers,showFeedForm,setShowFeedForm,canEdit,cu
       {lowScore.map(f=>{const cust=customers.find(c=>c.id===f.customer_id);return<div key={f.id} style={{background:"#fff",borderRadius:8,padding:"8px 12px",marginBottom:6,display:"flex",gap:10,alignItems:"flex-start"}}>
         <div style={{fontWeight:800,fontSize:18,color:C.red}}>{"⭐".repeat(f.score)}</div>
         <div style={{flex:1}}>
-          <div style={{fontWeight:700,fontSize:13,color:C.ink}}>{cust?.name||"ลูกค้าทั่วไป"} <span style={{color:C.ink4,fontWeight:400,fontSize:11}}>— {new Date(f.created_at).toLocaleDateString("th-TH")}</span></div>
+          <div style={{fontWeight:700,fontSize:13,color:C.ink}}>{cust?.name||"ลูกค้าทั่วไป"} <span style={{color:C.ink4,fontWeight:400,fontSize:11}}>— {fmtD(f.created_at)}</span></div>
           {f.comment&&<div style={{fontSize:12,color:C.ink3,marginTop:2}}>"{f.comment}"</div>}
         </div>
       </div>;})}
@@ -9826,7 +9842,7 @@ function CRMFeedback({feedback,customers,showFeedForm,setShowFeedForm,canEdit,cu
                 <span style={{fontSize:16}}>{"⭐".repeat(f.score)}</span>
                 <span style={{fontWeight:700,fontSize:13,color:C.ink}}>{cust?.name||"ลูกค้าทั่วไป"}</span>
               </div>
-              <span style={{fontSize:11,color:C.ink4}}>{new Date(f.created_at).toLocaleDateString("th-TH")}</span>
+              <span style={{fontSize:11,color:C.ink4}}>{fmtD(f.created_at)}</span>
             </div>
             {f.comment&&<div style={{fontSize:12,color:C.ink2,fontStyle:"italic"}}>"{f.comment}"</div>}
           </div>;
@@ -11317,7 +11333,7 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const payBlock=paid
     ?`<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div>${qrBlock}<div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div>`
     :`<div class="line"></div><div style="text-align:center;font-size:14px;font-weight:800">** ยังไม่ชำระเงิน **</div><div style="text-align:center;font-size:11px;color:#555;margin-top:2px">กรุณาชำระที่เคาน์เตอร์</div>${qrBlock}`;
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;margin:0;padding:0;font-size:13px;background:#e2e8f0}#rcpt{width:72mm;margin:0 auto;padding:10px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.18)}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{body{background:#fff}#rcpt{zoom:1!important;box-shadow:none;margin:0}@page{margin:0;size:72mm auto}}</style></head><body><div id="rcpt"><h2>${esc(branchName)}</h2>${headerExtra}${taxLabel}<div class="tbl-num">โต๊ะ ${esc(tableNum)}</div><div style="text-align:center;font-size:11px;color:#555">${new Date().toLocaleString("th-TH")}${rcptNo}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>ส่วนลดรวม</span><span>-฿${(+order.discount).toFixed(2)}</span></div>`:""}${promoLine}${scLine}${vatLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>${paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"}</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${vatIncNote}${cashLine}${payBlock}${footerExtra}</div><br/>${autoPrint}</body></html>`);
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;margin:0;padding:0;font-size:13px;background:#e2e8f0}#rcpt{width:72mm;margin:0 auto;padding:10px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.18)}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{body{background:#fff}#rcpt{zoom:1!important;box-shadow:none;margin:0}@page{margin:0;size:72mm auto}}</style></head><body><div id="rcpt"><h2>${esc(branchName)}</h2>${headerExtra}${taxLabel}<div class="tbl-num">โต๊ะ ${esc(tableNum)}</div><div style="text-align:center;font-size:11px;color:#555">${fmtDT()}${rcptNo}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>ส่วนลดรวม</span><span>-฿${(+order.discount).toFixed(2)}</span></div>`:""}${promoLine}${scLine}${vatLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>${paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"}</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${vatIncNote}${cashLine}${payBlock}${footerExtra}</div><br/>${autoPrint}</body></html>`);
   w.document.close();addPrintClose(w);
 }
 // ── Bluetooth ESC-POS helpers ────────────────────────────
@@ -11329,7 +11345,7 @@ function buildKitchenESC(item,tableNum){
   b(0x1b,0x40);b(0x1b,0x61,0x01);
   b(0x1d,0x21,0x00);t("ใบสั่งอาหาร\n");
   b(0x1d,0x21,0x33);t(`โต๊ะ ${tableNum}\n`);
-  b(0x1d,0x21,0x00);t(new Date().toLocaleString("th-TH")+"\n");
+  b(0x1d,0x21,0x00);t(fmtDT()+"\n");
   t("================================\n");
   b(0x1d,0x21,0x11);b(0x1b,0x45,0x01);t(`${item.qty}x ${item.name}\n`);b(0x1b,0x45,0x00);
   b(0x1d,0x21,0x00);
@@ -11463,7 +11479,7 @@ function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
   if(paid){ if(posSettings&&posSettings.vat_enabled)L.push({t:"ใบกำกับภาษีอย่างย่อ",size:22,bold:true,align:"center",mb:2}); }
   else L.push({t:"ใบแจ้งยอด (ยังไม่ชำระเงิน)",size:24,bold:true,align:"center",mb:2});
   L.push({t:"โต๊ะ "+tableNum,size:42,bold:true,align:"center"});
-  L.push({t:new Date().toLocaleString("th-TH")+(order.id!=null?(" · เลขที่ "+order.id):""),size:18,align:"center"});   // พ.ศ. (ไม่ใส่ calendar:gregory)
+  L.push({t:fmtDT()+(order.id!=null?(" · เลขที่ "+order.id):""),size:18,align:"center"});
   L.push({rule:true});
   (order.items||[]).forEach(i=>{
     const lineTotal=i.price*i.qty;const disc=i.item_discount||0;
@@ -11516,7 +11532,7 @@ function printKitchenWindow(item,tableNum,printer){
   const title=printer?printer.name:"ใบสั่งอาหาร";
   const w=openPrintWindow(350,500);
   if(!w)return;
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - โต๊ะ ${tableNum}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:6px;color:#000}.hdr{text-align:center;font-size:13px;font-weight:700;margin:2px 0}.tbl{text-align:center;font-size:54px;font-weight:900;line-height:1;margin:6px 0;letter-spacing:1px;border:3px solid #000;padding:8px 0;border-radius:8px}.tm{text-align:center;font-size:11px;color:#444;margin:2px 0}.sep{border:0;border-top:2px dashed #000;margin:8px 0}.menu{text-align:center;font-size:24px;font-weight:900;line-height:1.2;margin:8px 0;padding:6px 4px}.qty{display:inline-block;background:#000;color:#fff;padding:2px 12px;border-radius:6px;font-size:24px;font-weight:900;margin-right:6px}.note{margin-top:8px;background:#FEF3C7;border:2px solid #000;border-radius:6px;padding:8px;font-size:15px;font-weight:700;text-align:center}.foot{text-align:center;font-size:10px;color:#666;margin-top:6px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><div class="hdr">🍳 ${title}</div><div class="tbl">โต๊ะ ${tableNum}</div><div class="tm">${new Date().toLocaleString("th-TH")}</div><hr class="sep"/><div class="menu"><span class="qty">${item.qty}x</span>${item.name}</div>${item.options&&item.options.length?`<div style="text-align:center;font-size:18px;font-weight:800;color:#0D9488;margin:-2px 0 6px">+ ${esc(optionsText(item.options))}</div>`:""}${item.note?`<div class="note">★ ${item.note}</div>`:""}<hr class="sep"/><div class="foot">--- สิ้นสุดรายการ ---</div><script>window.onload=()=>setTimeout(()=>window.print(),200);<\/script></body></html>`);
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - โต๊ะ ${tableNum}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:6px;color:#000}.hdr{text-align:center;font-size:13px;font-weight:700;margin:2px 0}.tbl{text-align:center;font-size:54px;font-weight:900;line-height:1;margin:6px 0;letter-spacing:1px;border:3px solid #000;padding:8px 0;border-radius:8px}.tm{text-align:center;font-size:11px;color:#444;margin:2px 0}.sep{border:0;border-top:2px dashed #000;margin:8px 0}.menu{text-align:center;font-size:24px;font-weight:900;line-height:1.2;margin:8px 0;padding:6px 4px}.qty{display:inline-block;background:#000;color:#fff;padding:2px 12px;border-radius:6px;font-size:24px;font-weight:900;margin-right:6px}.note{margin-top:8px;background:#FEF3C7;border:2px solid #000;border-radius:6px;padding:8px;font-size:15px;font-weight:700;text-align:center}.foot{text-align:center;font-size:10px;color:#666;margin-top:6px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><div class="hdr">🍳 ${title}</div><div class="tbl">โต๊ะ ${tableNum}</div><div class="tm">${fmtDT()}</div><hr class="sep"/><div class="menu"><span class="qty">${item.qty}x</span>${item.name}</div>${item.options&&item.options.length?`<div style="text-align:center;font-size:18px;font-weight:800;color:#0D9488;margin:-2px 0 6px">+ ${esc(optionsText(item.options))}</div>`:""}${item.note?`<div class="note">★ ${item.note}</div>`:""}<hr class="sep"/><div class="foot">--- สิ้นสุดรายการ ---</div><script>window.onload=()=>setTimeout(()=>window.print(),200);<\/script></body></html>`);
   w.document.close();addPrintClose(w);
 }
 // Resolve which printer should handle this kitchen item.
@@ -13089,7 +13105,7 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
           <div style={{fontSize:26}}>💰</div>
           <div>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:900}}>เงินในลิ้นชัก</div>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,opacity:.85}}>กะ #{shift.id} · เปิดเมื่อ {new Date(shift.opened_at).toLocaleString("th-TH")}</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,opacity:.85}}>กะ #{shift.id} · เปิดเมื่อ {fmtDT(shift.opened_at)}</div>
           </div>
         </div>
         <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:32,height:32,cursor:"pointer",color:C.white,fontSize:18}}>✕</button>
@@ -13165,7 +13181,7 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
                   {m.category&&<span style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>· {m.category}</span>}
                 </div>
                 {m.reason&&<div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>{m.reason}</div>}
-                <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>{m.username||'-'} · {new Date(m.created_at).toLocaleString("th-TH")}</div>
+                <div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>{m.username||'-'} · {fmtDT(m.created_at)}</div>
               </div>
               <div style={{fontSize:15,fontWeight:900,color:isOut?C.red:C.green,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{isOut?'-':'+'}฿{(+m.amount).toLocaleString()}</div>
             </div>;
@@ -13193,8 +13209,8 @@ function printZReport({shift,totals,branch,user,note}){
   <div>${user.name||user.username}</div>
 </div>
 <div class="div"></div>
-<div class="row"><span>เปิดกะ</span><span>${new Date(shift.opened_at).toLocaleString("th-TH")}</span></div>
-<div class="row"><span>ปิดกะ</span><span>${new Date().toLocaleString("th-TH")}</span></div>
+<div class="row"><span>เปิดกะ</span><span>${fmtDT(shift.opened_at)}</span></div>
+<div class="row"><span>ปิดกะ</span><span>${fmtDT()}</span></div>
 <div class="div"></div>
 <h3>📊 ยอดขาย</h3>
 <div class="row"><span>จำนวนบิล</span><span class="bold">${totals.orderCount} บิล</span></div>
@@ -13217,7 +13233,7 @@ function printZReport({shift,totals,branch,user,note}){
 <div class="row big bold" style="color:${totals.diff===0?'#10B981':totals.diff>0?'#3B82F6':'#EF4444'}"><span>${totals.diff===0?'✅ ตรงเป๊ะ':totals.diff>0?'📈 เกิน':'📉 ขาด'}</span><span>${totals.diff>0?'+':''}฿${fmt(Math.abs(totals.diff))}</span></div>
 ${note?`<div class="div"></div><div><b>หมายเหตุ:</b> ${note}</div>`:''}
 <div class="div"></div>
-<div class="center" style="font-size:10px;color:#666;margin-top:10px">พิมพ์เมื่อ ${new Date().toLocaleString("th-TH")}</div>
+<div class="center" style="font-size:10px;color:#666;margin-top:10px">พิมพ์เมื่อ ${fmtDT()}</div>
 <script>setTimeout(()=>{window.print();},300);</script>
 </body></html>`;
   w.document.write(html);w.document.close();addPrintClose(w);
@@ -14071,8 +14087,8 @@ function POSShiftHistory({shifts,loading,reload}){
           </div>
           <div style={{padding:"12px 14px",fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,lineHeight:1.7}}>
             <div>👤 {s.username||'-'}</div>
-            <div>🕐 เปิด: {new Date(s.opened_at).toLocaleString("th-TH")}</div>
-            {s.closed_at&&<div>🕔 ปิด: {new Date(s.closed_at).toLocaleString("th-TH")}</div>}
+            <div>🕐 เปิด: {fmtDT(s.opened_at)}</div>
+            {s.closed_at&&<div>🕔 ปิด: {fmtDT(s.closed_at)}</div>}
             <div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed ${C.line}`,display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontSize:12}}>
               <div>เริ่มต้น: <b>฿{(+s.opening_cash||0).toLocaleString()}</b></div>
               <div>บิล: <b>{s.order_count||0}</b></div>
@@ -14670,7 +14686,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           {t:"ชาบูจัมโบ้ กุ้งเผา ผัดไทย",size:32,bold:true,align:"left"},
           {t:"ในวันเบาๆ + เพิ่มมาก",size:28,align:"left"},
           {rule:true},
-          {t:new Date().toLocaleString("th-TH"),size:20,align:"center"},
+          {t:fmtDT(),size:20,align:"center"},
         ],576);
         await api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at:Date.now(),b64})});
         posToast("🧾 ส่งทดสอบพิมพ์ (แบบรูปภาพ ไทยคมชัด) ไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
@@ -14863,7 +14879,7 @@ function BillDetailCard({order,onBack}){
       <div style={{padding:"14px 18px",background:C.bg,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
           <div style={{fontSize:20,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {o.table_number}</div>
-          <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:3}}>บิล #{o.id} · {new Date(o.created_at).toLocaleString("th-TH")}</div>
+          <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:3}}>บิล #{o.id} · {fmtDT(o.created_at)}</div>
         </div>
         <span style={{fontSize:12,fontWeight:800,color:stC[o.status]||C.ink3,background:`${stC[o.status]||C.ink3}22`,padding:"4px 12px",borderRadius:20,fontFamily:"'Sarabun',sans-serif"}}>{stL[o.status]||o.status}</span>
       </div>
@@ -14896,8 +14912,8 @@ function BillDetailCard({order,onBack}){
 }
 
 function SalesReportModal({currentBranch,onClose}){
-  const fmtD=(d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-  const todayStr=fmtD(new Date());
+  const isoKey=(d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;  // machine key (ISO) — do NOT shadow the global BE fmtD
+  const todayStr=isoKey(new Date());
   const[date,setDate]=useState(todayStr);
   const[filter,setFilter]=useState("all");
   const[orders,setOrders]=useState([]);
@@ -14929,7 +14945,7 @@ function SalesReportModal({currentBranch,onClose}){
   const m=(n)=>(+n||0).toLocaleString(undefined,{maximumFractionDigits:0});
 
   const isToday=date===todayStr;
-  const shiftDay=(delta)=>{const d=new Date(date+"T00:00:00");d.setDate(d.getDate()+delta);const ns=fmtD(d);if(ns<=todayStr)setDate(ns);};
+  const shiftDay=(delta)=>{const d=new Date(date+"T00:00:00");d.setDate(d.getDate()+delta);const ns=isoKey(d);if(ns<=todayStr)setDate(ns);};
   const stC={pending:C.yellow,confirmed:C.green,bill_requested:C.brand,paid:C.green,cancelled:C.ink4};
   const stL={pending:"รอยืนยัน",confirmed:"กำลังทำ",bill_requested:"เรียกบิล",paid:"ชำระแล้ว",cancelled:"ยกเลิก"};
   const navBtn={width:34,height:34,borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:13,color:C.ink2,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0};
@@ -14941,7 +14957,7 @@ function SalesReportModal({currentBranch,onClose}){
       <input type="date" value={date} max={todayStr} onChange={e=>e.target.value&&setDate(e.target.value)} style={{padding:"8px 11px",borderRadius:9,border:`1px solid ${C.line}`,fontSize:13,fontFamily:"'Sarabun',sans-serif",color:C.ink,background:C.white}}/>
       <button onClick={()=>shiftDay(1)} disabled={isToday} style={{...navBtn,opacity:isToday?.4:1,cursor:isToday?"default":"pointer"}} title="วันถัดไป">▶</button>
       {!isToday&&<button onClick={()=>setDate(todayStr)} style={{padding:"8px 13px",borderRadius:9,border:`1px solid ${C.brand}`,background:`${C.brand}12`,color:C.brand,cursor:"pointer",fontSize:12.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>วันนี้</button>}
-      <span style={{marginLeft:"auto",fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{new Date(date+"T00:00:00").toLocaleDateString("th-TH",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}{isToday?" · วันนี้":""}</span>
+      <span style={{marginLeft:"auto",fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{fmtD(date)}{isToday?" · วันนี้":""}</span>
     </div>
 
     {loading?<div style={{padding:"40px 0"}}><Loading text="กำลังโหลดรายงาน..."/></div>
