@@ -4813,6 +4813,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
   const matches=useMemo(()=>{const ql=q.trim().toLowerCase();if(!ql)return[];return ings.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentral)&&(i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql))).slice(0,20);},[ings,q,currentBranch,isCentral]);
   function addItem(i){if(items.some(x=>+x.ingredient_id===+i.id)){setQ("");return;}setItems(a=>[...a,{ingredient_id:i.id,name:i.name,unit:i.buy_unit||"หน่วย",qty:"",note:""}]);setQ("");}
   const[editingPR,setEditingPR]=useState(null);   // when set, the form edits+resubmits this (rejected) PR instead of creating new
+  const[detailPR,setDetailPR]=useState(null);     // full-detail popup for a PR row (items + reason + banners)
   function openForm(){setEditingPR(null);setItems([]);setReason("");setNeededBy("");setQ("");setShowForm(true);}
   function editPR(pr){setEditingPR(pr);setItems((pr.items||[]).map(it=>({ingredient_id:+it.ingredient_id,name:it.name,unit:it.unit||"หน่วย",qty:it.qty,note:it.note||""})));setReason(pr.reason||"");setNeededBy(pr.needed_by||"");setQ("");setShowForm(true);}
   async function submitPR(){
@@ -4985,30 +4986,48 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
       </div>}
     </Card>
     {filtered.length===0?<div style={{textAlign:"center",padding:"56px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:44}}>📝</div><p style={{marginTop:10,fontSize:15}}>{(prs||[]).length===0?"ยังไม่มีใบขอซื้อ":"ไม่พบใบขอซื้อตามตัวกรอง"}</p><p style={{fontSize:12}}>{(prs||[]).length===0?'กด "➕ สร้างใบขอซื้อ" เพื่อเริ่ม':"ลองปรับตัวกรอง"}</p></div>
-    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(340px,100%),1fr))",gap:12}}>
-      {filtered.map(pr=>{const st=PR_STATUS[pr.status]||PR_STATUS.pending_approval;const mine=+pr.branch_id===+currentBranch?.id;return <Card key={pr.id} style={{overflow:"hidden"}}>
-        <div style={{padding:"12px 14px"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
-            <div style={{minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
-              <div style={{fontSize:13.5,fontWeight:900,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{pr.pr_number||("PR#"+pr.id)}{pr.revised_at&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,color:"#B45309",background:"#FFFBEB",border:"1px solid #FDE68A",padding:"1px 6px",borderRadius:8,verticalAlign:"middle"}}>🔄 แก้ไขแล้ว</span>}</div>
-              <div style={{fontSize:11,color:C.ink4,marginTop:2}}>{canSeeAll?`🏪 ${pr.branch_name||branchName(pr.branch_id)} · `:""}โดย {pr.requested_by||"—"} · {fmtDT(pr.created_at)}</div>
-            </div>
-            <span style={{fontSize:11,fontWeight:800,color:st.c,background:st.bg,padding:"3px 10px",borderRadius:14,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{st.l}</span>
-          </div>
-          <div style={{background:C.bg,borderRadius:9,padding:"8px 10px",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink2,maxHeight:132,overflowY:"auto"}}>{(pr.items||[]).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,padding:"2px 0",borderBottom:i<(pr.items||[]).length-1?`1px dashed ${C.lineLight}`:"none"}}><span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}{it.note?<span style={{color:C.ink4,fontSize:11}}> ★{it.note}</span>:""}</span><span style={{whiteSpace:"nowrap",fontWeight:700,color:C.brand}}>{fmtQty(+it.qty||0)} {it.unit||""}</span></div>)}</div>
-          {pr.needed_by&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:6}}>📅 ต้องการภายใน {fmtD(pr.needed_by)}</div>}
-          {pr.reason&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:5}}>📝 {pr.reason}</div>}
-          {pr.status==="rejected"&&pr.reject_reason&&<div style={{marginTop:8,padding:"7px 11px",background:C.redLight,border:`1px solid ${C.red}44`,borderRadius:9,fontSize:12,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif"}}>❌ ตีกลับ: {pr.reject_reason}{pr.rejected_by?<span style={{color:C.ink4,fontSize:11}}> — โดย {pr.rejected_by}</span>:""}</div>}
-          {pr.status==="converted"&&pr.converted_ref&&<div style={{marginTop:8,padding:"7px 11px",background:C.blueLight,border:`1px solid ${C.blue}44`,borderRadius:9,fontSize:12,color:"#185FA5",fontFamily:"'Sarabun',sans-serif"}}>📦 {pr.converted_ref}</div>}
-          {((mine&&(pr.status==="pending_approval"||pr.status==="rejected"))||canDel)&&<div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:10}}>
-            {mine&&pr.status==="rejected"&&<Btn onClick={()=>editPR(pr)} icon={I.pencil} s={{fontSize:12,padding:"6px 12px",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>แก้ไข + ส่งใหม่</Btn>}
-            {mine&&pr.status==="pending_approval"&&<Btn v="ghost" onClick={()=>cancelPR(pr)} s={{fontSize:12,padding:"6px 12px"}}>ยกเลิก</Btn>}
-            {canDel&&<button onClick={()=>delPR(pr)} title="ลบถาวร" style={{background:C.redLight,border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",color:C.red,fontSize:12}}>🗑️</button>}
-          </div>}
-        </div>
-      </Card>;})}
-    </div>}
+    :<Card style={{overflow:"hidden",padding:0}}>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
+          <thead><tr style={{background:C.ink}}>
+            {[["วันที่","left"],["เลขที่ PR","left"],["สาขา / โดย","left"],["สถานะ","left"],["มูลค่า","right"],["จัดการ","center"]].map(([h,a])=><th key={h} style={{padding:"11px 14px",textAlign:a,fontSize:12,fontWeight:800,color:C.white,whiteSpace:"nowrap"}}>{h}</th>)}
+          </tr></thead>
+          <tbody>{filtered.map(pr=>{const st=PR_STATUS[pr.status]||PR_STATUS.pending_approval;const mine=+pr.branch_id===+currentBranch?.id;const n=(pr.items||[]).length;const prVal=(pr.items||[]).reduce((s,it)=>{const ing=ings.find(x=>+x.id===+it.ingredient_id);return s+(+it.qty||0)*(+ing?.buy_price||0);},0);return <tr key={pr.id} style={{borderTop:`1px solid ${C.lineLight}`}}>
+            <td style={{padding:"9px 14px",fontSize:12,color:C.ink3,whiteSpace:"nowrap"}}>{fmtDT(pr.created_at)}</td>
+            <td style={{padding:"9px 14px",whiteSpace:"nowrap"}}><div style={{fontSize:13,fontWeight:800,color:C.ink}}>{pr.pr_number||("PR#"+pr.id)}{pr.revised_at&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,color:"#B45309",background:"#FFFBEB",border:"1px solid #FDE68A",padding:"1px 6px",borderRadius:8,verticalAlign:"middle"}}>🔄 แก้ไข</span>}</div><div style={{fontSize:10.5,color:C.ink4}}>{n} รายการ</div></td>
+            <td style={{padding:"9px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{canSeeAll?<b style={{color:C.ink}}>🏪 {pr.branch_name||branchName(pr.branch_id)}</b>:null}{canSeeAll?" · ":""}โดย {pr.requested_by||"—"}</td>
+            <td style={{padding:"9px 14px"}}><span style={{fontSize:11,fontWeight:800,color:st.c,background:st.bg,padding:"3px 10px",borderRadius:14,whiteSpace:"nowrap"}}>{st.l}</span>{pr.status==="rejected"&&pr.reject_reason&&<div style={{fontSize:10.5,color:"#B91C1C",marginTop:3,maxWidth:230,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>❌ {pr.reject_reason}</div>}{pr.status==="converted"&&pr.converted_ref&&<div style={{fontSize:10.5,color:"#185FA5",marginTop:3}}>📦 {pr.converted_ref}</div>}</td>
+            <td style={{padding:"9px 14px",textAlign:"right",fontSize:13,fontWeight:800,color:C.brand,whiteSpace:"nowrap"}}>฿{prVal.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+            <td style={{padding:"9px 14px",textAlign:"center",whiteSpace:"nowrap"}}><div style={{display:"inline-flex",gap:4,alignItems:"center",justifyContent:"center"}}>
+              {mine&&pr.status==="rejected"&&<Btn onClick={()=>editPR(pr)} icon={I.pencil} s={{fontSize:11,padding:"5px 10px",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>แก้ไข</Btn>}
+              <RowMenu items={[
+                {label:"ดูรายละเอียด",icon:I.eye,onClick:()=>setDetailPR(pr)},
+                mine&&pr.status==="rejected"&&{label:"แก้ไข + ส่งใหม่",icon:I.pencil,color:C.brand,onClick:()=>editPR(pr)},
+                mine&&pr.status==="pending_approval"&&{label:"ยกเลิกใบ",icon:I.x,onClick:()=>cancelPR(pr)},
+                canDel&&{label:"ลบถาวร",icon:I.trash,danger:true,onClick:()=>delPR(pr)},
+              ]}/>
+            </div></td>
+          </tr>;})}</tbody>
+        </table>
+      </div>
+    </Card>}
     </>}
+    {detailPR&&(()=>{const pr=detailPR;const st=PR_STATUS[pr.status]||PR_STATUS.pending_approval;const mine=+pr.branch_id===+currentBranch?.id;return <Modal title={`📝 ${pr.pr_number||("PR#"+pr.id)}`} onClose={()=>setDetailPR(null)} wide>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center",fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>
+        <span>🏪 <b style={{color:C.ink}}>{pr.branch_name||branchName(pr.branch_id)}</b></span><span>· โดย {pr.requested_by||"—"}</span><span>· {fmtDT(pr.created_at)}</span>
+        <span style={{fontSize:11,fontWeight:800,color:st.c,background:st.bg,padding:"3px 10px",borderRadius:14}}>{st.l}</span>
+        {pr.revised_at&&<span style={{fontSize:10,fontWeight:800,color:"#B45309",background:"#FFFBEB",border:"1px solid #FDE68A",padding:"2px 8px",borderRadius:10}}>🔄 แก้ไขเมื่อ {fmtDT(pr.revised_at)}</span>}
+      </div>
+      {pr.needed_by&&<div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>📅 ต้องการภายใน {fmtD(pr.needed_by)}</div>}
+      <div style={{border:`1px solid ${C.line}`,borderRadius:12,overflow:"hidden",marginBottom:12}}>
+        <div style={{padding:"9px 14px",background:C.bg,borderBottom:`1px solid ${C.line}`,fontWeight:800,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📋 รายการ ({(pr.items||[]).length})</div>
+        {(pr.items||[]).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,padding:"8px 14px",borderTop:i>0?`1px solid ${C.lineLight}`:"none",fontFamily:"'Sarabun',sans-serif",fontSize:13}}><span style={{color:C.ink2,fontWeight:600}}>{it.name}{it.note?<span style={{color:C.ink4,fontSize:11}}> ★{it.note}</span>:""}</span><span style={{fontWeight:800,color:C.brand,whiteSpace:"nowrap"}}>{fmtQty(+it.qty||0)} {it.unit||""}</span></div>)}
+      </div>
+      {pr.reason&&<div style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>📝 {pr.reason}</div>}
+      {pr.status==="rejected"&&pr.reject_reason&&<div style={{padding:"9px 13px",background:C.redLight,border:`1px solid ${C.red}44`,borderRadius:10,fontSize:13,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>❌ ตีกลับ: {pr.reject_reason}{pr.rejected_by?<span style={{color:C.ink4,fontSize:11}}> — โดย {pr.rejected_by}</span>:""}</div>}
+      {pr.status==="converted"&&pr.converted_ref&&<div style={{padding:"9px 13px",background:C.blueLight,border:`1px solid ${C.blue}44`,borderRadius:10,fontSize:13,color:"#185FA5",fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>📦 {pr.converted_ref}</div>}
+      {mine&&pr.status==="rejected"&&<div style={{display:"flex",justifyContent:"flex-end",marginTop:8}}><Btn onClick={()=>{setDetailPR(null);editPR(pr);}} icon={I.pencil} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>แก้ไข + ส่งใหม่</Btn></div>}
+    </Modal>;})()}
     {showForm&&<Modal title={editingPR?"✏️ แก้ไขใบขอซื้อ + ส่งใหม่":"📝 สร้างใบขอซื้อ (PR)"} onClose={()=>{setShowForm(false);setEditingPR(null);}} wide>
       <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12,background:C.bg,borderRadius:9,padding:"9px 12px",border:`1px solid ${C.line}`}}>สาขา: <b style={{color:C.ink}}>{currentBranch?.name||"—"}</b> · ใบนี้เป็น<b>คำขอ</b> ยังไม่ตัดสต๊อก — Area อนุมัติแล้วครัวกลางจะออกใบส่งให้</div>
       <div style={{marginBottom:12,position:"relative"}}>
