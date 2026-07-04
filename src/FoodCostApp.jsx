@@ -4758,13 +4758,16 @@ const PR_STATUS={
   rejected:{l:"❌ ตีกลับ",c:"#B91C1C",bg:"#FEE2E2"},
   cancelled:{l:"ยกเลิก",c:"#64748B",bg:"#F1F5F9"},
 };
-function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,currentUser,reloadOrders}){
+function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,currentUser,reloadOrders,onOrderMaterials,onCreatePO,onTransfer}){
   const isCentral=currentBranch?.type==="central";
   const canSeeAll=isCentral||currentUser?.role==="admin"||currentUser?.role==="area";
   const branchName=id=>branches.find(b=>+b.id===+id)?.name||("สาขา "+id);
+  const hasPO=hasPerm(currentUser,"po")||hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
   const[prs,setPrs]=useState(null);const[err,setErr]=useState(false);
   const[view,setView]=useState(isCentral?"pool":"list");
   const[showForm,setShowForm]=useState(false);
+  // filters (cloned from the เอกสาร PO screen, adapted to PR)
+  const[fStatus,setFStatus]=useState("");const[fBranch,setFBranch]=useState("");const[fFrom,setFFrom]=useState("");const[fTo,setFTo]=useState("");
   const aliveRef=useRef(true);
   useEffect(()=>{aliveRef.current=true;return()=>{aliveRef.current=false;};},[]);
   async function load(){setErr(false);try{const d=await api.getPRs(canSeeAll?null:currentBranch?.id);if(aliveRef.current)setPrs(Array.isArray(d)?d:[]);}catch{if(aliveRef.current){setErr(true);setPrs([]);}}}
@@ -4843,13 +4846,28 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
   }
   const list=prs||[];
   const canDel=currentUser?.role==="admin";
+  const filtered=useMemo(()=>{let l=prs||[];
+    if(fStatus)l=l.filter(p=>p.status===fStatus);
+    if(fBranch)l=l.filter(p=>+p.branch_id===+fBranch);
+    if(fFrom){const t=new Date(fFrom+"T00:00:00").getTime();l=l.filter(p=>{const d=parseAnyDate(p.created_at);return d&&d.getTime()>=t;});}
+    if(fTo){const t=new Date(fTo+"T23:59:59").getTime();l=l.filter(p=>{const d=parseAnyDate(p.created_at);return d&&d.getTime()<=t;});}
+    return l;
+  },[prs,fStatus,fBranch,fFrom,fTo]);
+  const estTotal=useMemo(()=>filtered.reduce((s,p)=>s+(p.items||[]).reduce((a,it)=>{const ing=ings.find(x=>+x.id===+it.ingredient_id);return a+(+it.qty||0)*(+ing?.buy_price||0);},0),0),[filtered,ings]);
+  const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false),[branches]);
+  const statusChips=[{v:"",l:"📋 ทั้งหมด",c:C.brand},{v:"pending_approval",l:"⏳ รออนุมัติ",c:"#B45309"},{v:"approved",l:"✅ อนุมัติแล้ว",c:C.teal},{v:"converted",l:"📦 ออกซื้อแล้ว",c:C.blue}];
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
       <div style={{fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:18,fontWeight:900,color:C.ink}}>📝 ใบขอซื้อ (PR)</div>
         <div style={{fontSize:12,color:C.ink4,marginTop:2}}>สาขาขอ → Area อนุมัติ → ครัวกลางรวมออกซื้อ · <b style={{color:C.ink3}}>ไม่ตัดสต๊อก</b></div>
       </div>
-      <Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>สร้างใบขอซื้อ</Btn>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        {onOrderMaterials&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOrderMaterials} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
+        {onTransfer&&hasPO&&<Btn v="purple" onClick={onTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
+        {onCreatePO&&hasPO&&<Btn onClick={onCreatePO} icon={I.plus}>สร้างเอกสาร PO</Btn>}
+        <Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สร้างใบขอซื้อ</Btn>
+      </div>
     </div>
     {isCentral&&<div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:420}}>
       {[{id:"pool",l:"🧺 กองรอซื้อ",c:C.teal},{id:"list",l:"📋 ใบขอซื้อทั้งหมด",c:C.brand}].map(s=>{const on=view===s.id;return <button key={s.id} onClick={()=>setView(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3}}>{s.l}</button>;})}
@@ -4875,9 +4893,47 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         </tr>)}</tbody>
       </table></div>}
     </Card>
-    :list.length===0?<div style={{textAlign:"center",padding:"56px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:44}}>📝</div><p style={{marginTop:10,fontSize:15}}>ยังไม่มีใบขอซื้อ</p><p style={{fontSize:12}}>กด "➕ สร้างใบขอซื้อ" เพื่อเริ่ม</p></div>
+    :<><div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+      {statusChips.map(d=>{const active=fStatus===d.v;return <button key={d.v} onClick={()=>setFStatus(d.v)} style={{padding:"7px 16px",borderRadius:10,border:`2px solid ${active?d.c:C.line}`,background:active?`${d.c}15`:C.white,color:active?d.c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:active?800:600,fontSize:13,transition:"all .15s"}}>{d.l}</button>;})}
+    </div>
+    <Card style={{padding:"12px 16px",marginBottom:14,background:C.bg}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(160px,100%),1fr))",gap:10,alignItems:"end"}}>
+        {canSeeAll&&<div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สาขาที่ขอ</div>
+          <select value={fBranch} onChange={e=>setFBranch(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
+            <option value="">— ทุกสาขา —</option>
+            {scopeBranches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>}
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สถานะ</div>
+          <select value={fStatus} onChange={e=>setFStatus(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
+            <option value="">— ทุกสถานะ —</option>
+            <option value="pending_approval">⏳ รออนุมัติ</option>
+            <option value="approved">✅ อนุมัติแล้ว</option>
+            <option value="converted">📦 ออกซื้อแล้ว</option>
+            <option value="rejected">❌ ตีกลับ</option>
+            <option value="cancelled">ยกเลิก</option>
+          </select>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ตั้งแต่วันที่</div>
+          <input type="date" value={fFrom} onChange={e=>setFFrom(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ถึง</div>
+          <input type="date" value={fTo} onChange={e=>setFTo(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/>
+        </div>
+        <Btn v="ghost" onClick={load} icon={I.refresh} s={{padding:"8px 14px",fontSize:12}}>รีเฟรช</Btn>
+      </div>
+      {filtered.length>0&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.line}`,display:"flex",justifyContent:"space-between",fontSize:12,fontFamily:"'Sarabun',sans-serif",color:C.ink3}}>
+        <span>📑 พบ <b style={{color:C.ink}}>{filtered.length}</b> ใบขอซื้อ</span>
+        <span>💰 มูลค่าประมาณ <b style={{color:C.brand,fontSize:14}}>฿{estTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</b></span>
+      </div>}
+    </Card>
+    {filtered.length===0?<div style={{textAlign:"center",padding:"56px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:44}}>📝</div><p style={{marginTop:10,fontSize:15}}>{(prs||[]).length===0?"ยังไม่มีใบขอซื้อ":"ไม่พบใบขอซื้อตามตัวกรอง"}</p><p style={{fontSize:12}}>{(prs||[]).length===0?'กด "➕ สร้างใบขอซื้อ" เพื่อเริ่ม':"ลองปรับตัวกรอง"}</p></div>
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(340px,100%),1fr))",gap:12}}>
-      {list.map(pr=>{const st=PR_STATUS[pr.status]||PR_STATUS.pending_approval;const mine=+pr.branch_id===+currentBranch?.id;return <Card key={pr.id} style={{overflow:"hidden"}}>
+      {filtered.map(pr=>{const st=PR_STATUS[pr.status]||PR_STATUS.pending_approval;const mine=+pr.branch_id===+currentBranch?.id;return <Card key={pr.id} style={{overflow:"hidden"}}>
         <div style={{padding:"12px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
             <div style={{minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
@@ -4898,6 +4954,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         </div>
       </Card>;})}
     </div>}
+    </>}
     {showForm&&<Modal title="📝 สร้างใบขอซื้อ (PR)" onClose={()=>setShowForm(false)} wide>
       <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12,background:C.bg,borderRadius:9,padding:"9px 12px",border:`1px solid ${C.line}`}}>สาขา: <b style={{color:C.ink}}>{currentBranch?.name||"—"}</b> · ใบนี้เป็น<b>คำขอ</b> ยังไม่ตัดสต๊อก — Area อนุมัติแล้วครัวกลางจะรวมออกซื้อให้</div>
       <div style={{marginBottom:12,position:"relative"}}>
@@ -4927,7 +4984,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     </Modal>}
   </div>;
 }
-function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders,orders=[],reloadOrders}){
+function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders,orders=[],reloadOrders,initialAction,onConsumeAction}){
   // Every branch (central or otherwise) can issue a PO to any other branch
   // and only ever sees POs it's involved in (as sender or receiver).
   // - "from_branch_id" = creator (sender)
@@ -5533,6 +5590,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   // until destination presses "รับโอน". On receive: branch→branch stock move.
   // ─────────────────────────────────────────────────────────────────────────
   function startTransfer(){setTransferForm({toBranchId:"",items:[],notes:"",search:""});}
+  // "สร้างเอกสาร PO" / "โอนวัตถุดิบ" were moved to the ใบขอซื้อ (PR) tab; when tapped there
+  // they switch to this PO tab with an initialAction so the matching flow opens here.
+  useEffect(()=>{if(!initialAction)return;if(initialAction==="create")startCreate();else if(initialAction==="transfer")startTransfer();onConsumeAction&&onConsumeAction();},[initialAction]);// eslint-disable-line react-hooks/exhaustive-deps
   async function saveTransfer(){
     if(!transferForm)return;
     const toId=+transferForm.toBranchId;
@@ -5701,9 +5761,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {isCentralBranch&&<Btn v="success" onClick={()=>setShowPurchaseSummary(true)} s={{padding:"8px 14px",fontSize:13}}>📋 สรุปต้องซื้อวันนี้</Btn>}
-        {onOpenOrders&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOpenOrders} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
-        {hasPO&&<Btn v="purple" onClick={startTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
-        {hasPO&&<Btn onClick={startCreate} icon={I.plus}>สร้างเอกสาร PO</Btn>}
+        {/* สั่งวัตถุดิบ / โอนวัตถุดิบ / สร้างเอกสาร PO ย้ายไปหัวแถบ "ใบขอซื้อ" แล้ว */}
       </div>
     </div>
 
@@ -11153,7 +11211,8 @@ export default function App(){
   const[printers,setPrinters]=useState([]);const[assets,setAssets]=useState([]);
   const[loading,setLoading]=useState(false);const[initErr,setInitErr]=useState("");
   const[tab,setTab]=useState(()=>{try{return new URLSearchParams(window.location.search).get("approve")==="1"?"approve":"pos";}catch{return "pos";}});
-  const[poSubTab,setPoSubTab]=useState("po");   // within the "เอกสาร PO" menu: "po" = PO docs · "ext" = สั่งซัพพลายนอก (OrderTab)
+  const[poSubTab,setPoSubTab]=useState("po");   // within the "เอกสาร PO" menu: "pr" = ใบขอซื้อ · "po" = PO docs · "ext" = สั่งซัพพลายนอก (OrderTab)
+  const[poAction,setPoAction]=useState(null);   // create | transfer — set by PR-tab buttons, consumed by POSection on mount
   const isMobile=useIsMobile();
   const[mobileNavOpen,setMobileNavOpen]=useState(false);
   // Auto-close mobile drawer when tab changes
@@ -11493,10 +11552,10 @@ export default function App(){
               {poSubTab==="create"&&hasPerm(currentUser,"orders")
                 ?<OrderTab forcedMode="check" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setPoSubTab("po")}/>
                 :poSubTab==="pr"
-                ?<RequisitionView branches={branches} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reloadOrders={reload.orders}/>
+                ?<RequisitionView branches={branches} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reloadOrders={reload.orders} onOrderMaterials={()=>setPoSubTab("create")} onCreatePO={()=>{setPoAction("create");setPoSubTab("po");}} onTransfer={()=>{setPoAction("transfer");setPoSubTab("po");}}/>
                 :poSubTab==="ext"&&hasPerm(currentUser,"orders")
                 ?<OrderTab forcedMode="list" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser}/>
-                :<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setPoSubTab("create")} orders={orders} reloadOrders={reload.orders}/>}
+                :<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setPoSubTab("create")} orders={orders} reloadOrders={reload.orders} initialAction={poAction} onConsumeAction={()=>setPoAction(null)}/>}
             </>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
