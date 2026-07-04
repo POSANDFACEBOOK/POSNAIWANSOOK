@@ -8869,7 +8869,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
     }catch{}
     if(aliveRef.current&&!silent)setLoading(false);
   }
-  useEffect(()=>{aliveRef.current=true;prevRef.current=-1;load();const id=setInterval(()=>{if(!document.hidden)load(true);},20000);const onVis=()=>{if(!document.hidden)load(true);};document.addEventListener("visibilitychange",onVis);return()=>{aliveRef.current=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};},[]);// eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{aliveRef.current=true;prevRef.current=-1;load();const id=setInterval(()=>{if(!document.hidden)load(true);},30000);const onVis=()=>{if(!document.hidden)load(true);};document.addEventListener("visibilitychange",onVis);return()=>{aliveRef.current=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};},[]);// eslint-disable-line react-hooks/exhaustive-deps
   async function approveReq(o){setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"pending"});await logDecision("approved","ext",o);posToast("✅ อนุมัติแล้ว — สาขาส่งให้ซัพพลายต่อได้","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   async function approvePO(o){setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"requested",updated_at:new Date().toISOString()});await logDecision("approved","po",o);posToast("✅ อนุมัติแล้ว — ส่งให้ครัวกลางต่อ","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   // Reject flow: reason is REQUIRED — the branch must always know WHY their
@@ -14930,7 +14930,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   useEffect(()=>{if(!loading)printers.forEach(p=>checkStatus(p));// eslint-disable-next-line
   },[loading,printers]);
   // รีเฟรชอัตโนมัติทุก 15 วิ ขณะเปิดหน้านี้ → จุดเขียว/แดงอัปเดตสดตามที่ตัวพิมพ์รายงาน
-  useEffect(()=>{const t=setInterval(()=>{if(aliveRef.current)loadSilent();},15000);return ()=>clearInterval(t);// eslint-disable-next-line
+  useEffect(()=>{const t=setInterval(()=>{if(aliveRef.current&&!document.hidden)loadSilent();},30000);return ()=>clearInterval(t);// eslint-disable-next-line
   },[]);
   // เปิดผ่าน https (Vercel/iPad) → เบราว์เซอร์ต่อ http://printer:9100 ไม่ได้ (mixed content) → เช็ค/ทดสอบฝั่งเบราว์เซอร์ใช้ไม่ได้ จึงให้ตัวพิมพ์ (agent) จัดการแทน
   const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
