@@ -4865,7 +4865,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {onOrderMaterials&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOrderMaterials} icon={I.truck}>สั่งวัตถุดิบ</Btn>}
         {onTransfer&&hasPO&&<Btn v="purple" onClick={onTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
-        {onCreatePO&&hasPO&&<Btn onClick={onCreatePO} icon={I.plus}>สร้างเอกสาร PO</Btn>}
+        {false&&onCreatePO&&hasPO&&<Btn onClick={onCreatePO} icon={I.plus}>สร้างเอกสาร PO</Btn>}{/* ซ่อนไว้ก่อนตามที่ผู้ใช้ขอ — เปลี่ยน false กลับเป็นเงื่อนไขเดิมเพื่อเปิดคืน */}
         <Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สร้างใบขอซื้อ</Btn>
       </div>
     </div>
