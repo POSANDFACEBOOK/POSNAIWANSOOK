@@ -6615,6 +6615,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
               <th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:90}}>สั่ง</th>
               {mode==="dispute"&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:"#9A3412",fontWeight:800,width:120}}>ได้รับจริง *</th>}
               {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.green,fontWeight:800,width:110}}>รับจริง</th>}
+              {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.red,fontWeight:800,width:110}}>ผลต่าง</th>}
               <th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:100}}>ราคา/หน่วย</th>
               <th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:110}}>รวม</th>
             </tr></thead>
@@ -6630,7 +6631,8 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
                   {mode==="dispute"&&<td style={{padding:"6px 8px",textAlign:"center"}}>
                     <NumStepper value={receivedQty[i]} onChange={v=>setReceivedQty(prev=>({...prev,[i]:v}))} max={+it.qty} step={1} width={64} btnColor={short?C.red:C.brand} btnBg={short?"#FEF2F2":C.bg} inputStyle={{fontSize:14,fontWeight:800,color:short?C.red:C.ink,background:short?"#FEF2F2":C.white,border:`2px solid ${short?C.red:C.brandBorder}`}}/>
                   </td>}
-                  {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<td style={{padding:"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:short?C.red:C.green}}>{recv!=null?recv:it.qty}{short&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>ขาด {(+it.qty-+recv).toFixed(2)}</div>}</td>}
+                  {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<td style={{padding:"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:short?C.red:C.green}}>{recv!=null?recv:it.qty}</td>}
+                  {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&(()=>{const price=+it.price_per_unit||0;const rv=recv!=null?+recv:+it.qty;const dQty=round2(rv-(+it.qty||0));const dVal=round2(dQty*price);return <td style={{padding:"9px 12px",textAlign:"center"}}>{dQty===0?<span style={{color:C.green,fontWeight:800,fontSize:13}}>✓ ครบ</span>:<><div style={{color:dQty<0?C.red:C.green,fontWeight:800,fontSize:13}}>{dQty<0?`ขาด ${Math.abs(dQty)}`:`เกิน ${dQty}`}</div>{dVal!==0&&<div style={{fontSize:11,color:dQty<0?C.red:C.green,fontWeight:700,marginTop:1}}>{dVal>0?"+":"-"}฿{Math.abs(dVal).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>}</>}</td>;})()}
                   <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,color:C.ink2}}>฿{(+it.price_per_unit||0).toFixed(2)}</td>
                   <td style={{padding:"9px 12px",textAlign:"right",fontSize:14,fontWeight:800,color:C.brand}}>฿{(+it.line_total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
                 </tr>;
@@ -7653,14 +7655,18 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         {/* Items table — only when expanded */}
         {isExpanded&&<div style={{padding:"4px 14px 12px",borderTop:`1px solid ${C.lineLight}`}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,marginTop:8}}>
-            <thead><tr style={{background:C.bg}}>{[...["ซัพพลาย","วัตถุดิบ","จำนวนที่ต้องสั่ง"],...(order.status==="delivered"?["รับเข้าจริง","ผลต่าง"]:[]),"ราคาประมาณ"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:C.ink3,fontSize:11}}>{h}</th>)}</tr></thead>
-            <tbody>{(order.items||[]).map((it,i)=>{const showRecv=order.status==="delivered";const rcv=it.receivedQty!=null?+it.receivedQty:(it.received_qty!=null?+it.received_qty:null);const ord=+it.qtyNeeded||0;const d=rcv!=null?round2(rcv-ord):null;return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
+            <thead><tr style={{background:C.bg}}>{(order.status==="delivered"?["ซัพพลาย","วัตถุดิบ","สั่ง","รับเข้าจริง","ผลต่าง"]:["ซัพพลาย","วัตถุดิบ","จำนวนที่ต้องสั่ง","ราคาประมาณ"]).map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:C.ink3,fontSize:11}}>{h}</th>)}</tr></thead>
+            <tbody>{(order.items||[]).map((it,i)=>{const delivered=order.status==="delivered";const price=+it.pricePerUnit||0;const ord=+it.qtyNeeded||0;const rcv=it.receivedQty!=null?+it.receivedQty:(it.received_qty!=null?+it.received_qty:null);const ordVal=round2(ord*price);const rcvVal=rcv!=null?round2(rcv*price):(+it.estimatedCost||0);const dQty=rcv!=null?round2(rcv-ord):null;const dVal=rcv!=null?round2(rcvVal-ordVal):null;const money=v=>`฿${(+v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`,verticalAlign:"top"}}>
               <td style={{padding:"7px 10px"}}><Chip color="teal">{it.supplierName||it.supplier_name||"ไม่ระบุ"}</Chip></td>
               <td style={{padding:"7px 10px",fontWeight:600,color:C.ink}}>{it.name}</td>
-              <td style={{padding:"7px 10px",color:C.brand,fontWeight:700}}>{it.qtyNeeded} {it.unit}</td>
-              {showRecv&&<td style={{padding:"7px 10px",color:C.blue,fontWeight:800}}>{rcv!=null?`${round2(rcv)} ${it.unit||""}`:"—"}</td>}
-              {showRecv&&<td style={{padding:"7px 10px",fontWeight:800,color:d==null?C.ink4:d<0?C.red:d>0?C.green:C.ink3}}>{d==null?"—":d===0?"✓ ครบ":d<0?`ขาด ${Math.abs(d)} ${it.unit||""}`:`เกิน ${d} ${it.unit||""}`}</td>}
-              <td style={{padding:"7px 10px",color:C.green,fontWeight:700}}>฿{it.estimatedCost?.toFixed(2)}</td>
+              {delivered?<>
+                <td style={{padding:"7px 10px"}}><div style={{color:C.brand,fontWeight:700}}>{ord} {it.unit}</div><div style={{fontSize:11,color:C.ink4}}>{money(ordVal)}</div></td>
+                <td style={{padding:"7px 10px"}}><div style={{color:C.blue,fontWeight:800}}>{rcv!=null?`${round2(rcv)} ${it.unit||""}`:"—"}</div><div style={{fontSize:11,color:C.ink4}}>{rcv!=null?money(rcvVal):"—"}</div></td>
+                <td style={{padding:"7px 10px"}}>{dQty==null?<span style={{color:C.ink4}}>—</span>:<><div style={{fontWeight:800,color:dQty<0?C.red:dQty>0?C.green:C.ink3}}>{dQty===0?"✓ ครบ":dQty<0?`ขาด ${Math.abs(dQty)} ${it.unit||""}`:`เกิน ${dQty} ${it.unit||""}`}</div>{dVal!==0&&<div style={{fontSize:11,fontWeight:700,color:dVal<0?C.red:C.green}}>{dVal>0?"+":"-"}{money(Math.abs(dVal))}</div>}</>}</td>
+              </>:<>
+                <td style={{padding:"7px 10px",color:C.brand,fontWeight:700}}>{it.qtyNeeded} {it.unit}</td>
+                <td style={{padding:"7px 10px",color:C.green,fontWeight:700}}>{money(it.estimatedCost)}</td>
+              </>}
             </tr>;})}
             </tbody>
           </table>
