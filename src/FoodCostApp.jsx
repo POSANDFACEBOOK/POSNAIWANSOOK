@@ -7653,13 +7653,15 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         {/* Items table — only when expanded */}
         {isExpanded&&<div style={{padding:"4px 14px 12px",borderTop:`1px solid ${C.lineLight}`}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,marginTop:8}}>
-            <thead><tr style={{background:C.bg}}>{["ซัพพลาย","วัตถุดิบ","จำนวนที่ต้องสั่ง","ราคาประมาณ"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:C.ink3,fontSize:11}}>{h}</th>)}</tr></thead>
-            <tbody>{(order.items||[]).map((it,i)=><tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
+            <thead><tr style={{background:C.bg}}>{[...["ซัพพลาย","วัตถุดิบ","จำนวนที่ต้องสั่ง"],...(order.status==="delivered"?["รับเข้าจริง","ผลต่าง"]:[]),"ราคาประมาณ"].map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:C.ink3,fontSize:11}}>{h}</th>)}</tr></thead>
+            <tbody>{(order.items||[]).map((it,i)=>{const showRecv=order.status==="delivered";const rcv=it.receivedQty!=null?+it.receivedQty:(it.received_qty!=null?+it.received_qty:null);const ord=+it.qtyNeeded||0;const d=rcv!=null?round2(rcv-ord):null;return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
               <td style={{padding:"7px 10px"}}><Chip color="teal">{it.supplierName||it.supplier_name||"ไม่ระบุ"}</Chip></td>
               <td style={{padding:"7px 10px",fontWeight:600,color:C.ink}}>{it.name}</td>
               <td style={{padding:"7px 10px",color:C.brand,fontWeight:700}}>{it.qtyNeeded} {it.unit}</td>
+              {showRecv&&<td style={{padding:"7px 10px",color:C.blue,fontWeight:800}}>{rcv!=null?`${round2(rcv)} ${it.unit||""}`:"—"}</td>}
+              {showRecv&&<td style={{padding:"7px 10px",fontWeight:800,color:d==null?C.ink4:d<0?C.red:d>0?C.green:C.ink3}}>{d==null?"—":d===0?"✓ ครบ":d<0?`ขาด ${Math.abs(d)} ${it.unit||""}`:`เกิน ${d} ${it.unit||""}`}</td>}
               <td style={{padding:"7px 10px",color:C.green,fontWeight:700}}>฿{it.estimatedCost?.toFixed(2)}</td>
-            </tr>)}
+            </tr>;})}
             </tbody>
           </table>
           {order.note&&<div style={{fontSize:11,color:C.ink4,marginTop:8,fontFamily:"'Sarabun',sans-serif"}}>หมายเหตุ: {order.note}</div>}
