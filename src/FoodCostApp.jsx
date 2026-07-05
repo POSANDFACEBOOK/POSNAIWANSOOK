@@ -5043,7 +5043,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
                 {label:"ดูรายละเอียด",icon:I.eye,onClick:()=>setDetailPR(pr)},
                 mine&&pr.status==="rejected"&&{label:"แก้ไข + ส่งใหม่",icon:I.pencil,color:C.brand,onClick:()=>editPR(pr)},
                 mine&&pr.status==="pending_approval"&&{label:"ยกเลิกใบ",icon:I.x,onClick:()=>cancelPR(pr)},
-                canDel&&{label:"ลบถาวร",icon:I.trash,danger:true,onClick:()=>delPR(pr)},
+                canDel&&["pending_approval","rejected","cancelled","draft"].includes(pr.status)&&{label:"ลบถาวร",icon:I.trash,danger:true,onClick:()=>delPR(pr)},
               ]}/>
             </div></td>
           </tr>;})}</tbody>
@@ -5135,7 +5135,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   // (cancelled). Once we hit shipped/awaiting_payment/paid/disputed/
   // transfer_shipped/transfer_done, force the user to กดยกเลิก first.
   const DELETABLE_PO_STATUSES=new Set(["requested","open","cancelled","transfer_pending"]);
-  const canDeletePO=(po)=>canEditPO(po)&&DELETABLE_PO_STATUSES.has(po.status);
+  // A branch's request PO becomes "requested" the moment Area approves it. From then on the
+  // requesting branch must NOT delete it — only central (the receiver/acceptor) or an admin can.
+  const canDeletePO=(po)=>canEditPO(po)&&DELETABLE_PO_STATUSES.has(po.status)&&!(po.status==="requested"&&isCreator(po)&&!isCentralBranch&&currentUser?.role!=="admin");
 
   async function load(){
     setLoading(true);
@@ -7685,7 +7687,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
             {(order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="พิมพ์ซ้ำ" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>}
             {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
             {order.status==="delivered"&&(()=>{const n=Array.isArray(order.receive_images)?order.receive_images.length:0;return <button onClick={()=>setPhotoEditOrder(order)} title="ดู / เพิ่มรูปรับสินค้า" style={{background:n>0?C.blueLight:C.bg,border:n>0?"none":`1px dashed ${C.line}`,borderRadius:7,padding:"5px 9px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.blue}}><Ic d={I.img} s={12} c={C.blue}/>{n>0?n:"เพิ่มรูป"}</button>;})()}
-            {canEditOrder(order)&&order.status!=="delivered"&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
+            {/* ลบได้เฉพาะใบที่ Area ตีกลับ (rejected) — เมื่ออนุมัติแล้ว (pending/approved) พนักงานลบไม่ได้; admin ยังเคลียร์ได้ (ยกเว้นรับแล้ว) */}
+            {((order.status==="rejected"&&canEditOrder(order))||(currentUser?.role==="admin"&&order.status!=="delivered"))&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
               </>}
           </div>
         </div>
