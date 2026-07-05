@@ -2243,6 +2243,7 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
   const inScope=bid=>!allowed||allowed.map(x=>+x).includes(+bid);
   const[sessions,setSessions]=useState(null);const[err,setErr]=useState(false);const[fBranch,setFBranch]=useState("");
   const[openId,setOpenId]=useState(null);const[items,setItems]=useState({});
+  const[exportingId,setExportingId]=useState(null);
   const aliveRef=useRef(true);
   useEffect(()=>{aliveRef.current=true;return()=>{aliveRef.current=false;};},[]);
   async function load(){
@@ -2255,6 +2256,43 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
     if(openId===s.id){setOpenId(null);return;}
     setOpenId(s.id);
     if(items[s.id]===undefined){setItems(m=>({...m,[s.id]:null}));try{const d=await api.getStockLogsBySession(s.id);if(aliveRef.current)setItems(m=>({...m,[s.id]:Array.isArray(d)?d:[]}));}catch{if(aliveRef.current)setItems(m=>({...m,[s.id]:[]}));}}
+  }
+  // Export ONE count session to Excel — a small info sheet + the counted lines,
+  // so the branch can open a single count outside the app. Fetches rows if the
+  // row wasn't expanded yet.
+  async function exportSession(s){
+    if(exportingId)return;
+    setExportingId(s.id);
+    try{
+      let rows=items[s.id];
+      if(!Array.isArray(rows)){const d=await api.getStockLogsBySession(s.id);rows=Array.isArray(d)?d:[];if(aliveRef.current)setItems(m=>({...m,[s.id]:rows}));}
+      if(!rows.length){alert("ครั้งนี้ยังไม่มีรายการให้ Export");return;}
+      const XLSX=await loadXLSX();
+      const info=[
+        {"ข้อมูล":"ผู้นับ","ค่า":s.counter_name||"—"},
+        {"ข้อมูล":"สาขา","ค่า":s.branch_name||""},
+        {"ข้อมูล":"วันที่นับ","ค่า":fmtDT(s.started_at)},
+        {"ข้อมูล":"สถานะ","ค่า":s.status==="approved"?"อนุมัติแล้ว":"รออนุมัติ"},
+        {"ข้อมูล":"จำนวนรายการ","ค่า":rows.length},
+      ];
+      const dataRows=rows.map((r,i)=>{const prev=+r.prev_qty||0,nw=+r.new_qty||0,delta=round2(nw-prev);return{
+        "ลำดับ":i+1,
+        "วัตถุดิบ":r.ingredient_name||`#${r.ingredient_id}`,
+        "หน่วย":r.unit||ingById.get(+r.ingredient_id)?.buy_unit||"",
+        "จำนวนก่อนนับ":prev,
+        "จำนวนหลังนับ":nw,
+        "ผลต่าง":delta,
+      };});
+      const wb=XLSX.utils.book_new();
+      const wsInfo=XLSX.utils.json_to_sheet(info);wsInfo["!cols"]=[{wch:14},{wch:30}];
+      XLSX.utils.book_append_sheet(wb,wsInfo,"ข้อมูลการนับ");
+      const ws=XLSX.utils.json_to_sheet(dataRows);ws["!cols"]=[{wch:6},{wch:32},{wch:10},{wch:14},{wch:14},{wch:12}];
+      XLSX.utils.book_append_sheet(wb,ws,"รายการนับ");
+      const safe=(s.branch_name||"สาขา").replace(/[^\w฀-๿]+/g,"_");
+      const dateStr=(s.started_at||"").slice(0,10)||todayStr();
+      XLSX.writeFile(wb,`นับสต็อก_${safe}_${dateStr}.xlsx`);
+    }catch(e){alert("Export ไม่สำเร็จ: "+((e&&e.message)||e));}
+    finally{if(aliveRef.current)setExportingId(null);}
   }
   const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false&&inScope(b.id)),[branches,allowed]);// eslint-disable-line react-hooks/exhaustive-deps
   const shown=(sessions||[]).filter(s=>!fBranch||+s.branch_id===+fBranch);
@@ -2273,6 +2311,7 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
             <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{s.counter_name||"—"} {s.status==="approved"?<span style={{fontSize:10,fontWeight:800,color:C.green,background:C.greenLight,padding:"1px 7px",borderRadius:10,verticalAlign:"middle"}}>✅ อนุมัติแล้ว</span>:<span style={{fontSize:10,fontWeight:800,color:"#B45309",background:"#FFFBEB",padding:"1px 7px",borderRadius:10,verticalAlign:"middle"}}>⏳ รออนุมัติ</span>}</div>
             <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(s.started_at)}{scopeBranches.length>1?` · 🏪 ${s.branch_name||""}`:""}</div>
           </div>
+          <button onClick={e=>{e.stopPropagation();exportSession(s);}} disabled={exportingId===s.id} title="ดาวน์โหลดเป็น Excel" style={{background:C.greenLight,border:`1px solid ${C.green}55`,borderRadius:8,padding:"5px 10px",cursor:exportingId===s.id?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:4,fontSize:11,fontWeight:800,color:C.green,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0}}>{exportingId===s.id?"กำลังสร้าง...":"📊 Excel"}</button>
           <span style={{fontSize:12,color:C.ink4}}>{on?"▼":"▶"}</span>
         </div>
         {on&&<div style={{borderTop:`1px solid ${C.lineLight}`,padding:"8px 12px",background:C.bg}}>
