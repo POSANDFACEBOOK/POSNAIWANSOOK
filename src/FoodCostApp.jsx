@@ -5645,13 +5645,13 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   function pickBranch(b){setPickedBranch(b);setStep('form');}
   function startEdit(po){
     // Editing items is safe only when stock hasn't moved yet:
-    //   • "requested" — central hasn't accepted
-    //   • "open" — central accepted but hasn't pressed "🚚 จัดส่ง"
-    // Once status is "shipped" or beyond, stock is in the system and item-edits
-    // would silently desync (delta math at edit is not yet wired).
-    const STILL_EDITABLE=new Set(["requested","open"]);
+    //   • "open" — central accepted / distribution PO, before "🚚 จัดส่ง" (central's working doc)
+    // A requester's document is LOCKED once Area approves it (status leaves pending_approval,
+    // e.g. → "requested"): an approved document must not be editable. Central adjusts its own
+    // "open" doc before shipping. "shipped"+ = stock moved, never editable.
+    const STILL_EDITABLE=new Set(["open"]);
     if(!STILL_EDITABLE.has(po.status)){
-      alert(`เอกสารนี้สต๊อกถูกย้ายแล้ว — แก้ไขจำนวนไม่ได้\n\nถ้าจะเปลี่ยนรายการ ให้ลบใบนี้แล้วสร้างใหม่ครับ`);
+      alert(`เอกสารนี้อนุมัติ/ดำเนินการไปแล้ว — แก้ไขไม่ได้\n\nถ้าต้องการเปลี่ยน ให้ลบใบนี้แล้วสร้างใหม่ หรือให้ Area ตีกลับก่อน`);
       return;
     }
     const b=branches.find(x=>x.id===po.branch_id);setPickedBranch(b||null);setEditPO(po);setStep('form');
@@ -5931,7 +5931,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                       {label:"ดูรายละเอียด",icon:I.eye,onClick:()=>setViewPO(po)},
                       !["requested","transfer_pending","transfer_shipped","transfer_done"].includes(po.status)&&{label:"พิมพ์เอกสาร",icon:I.print,color:C.blue,onClick:()=>printPO(po,toB?.name,'print',fromB?.name)},
                       (isCreator(po)||isCentralBranch)&&hasPO&&{label:"คัดลอก",icon:I.copy,color:"#7C3AED",onClick:()=>duplicatePO(po)},
-                      canEditPO(po)&&po.status!=="paid"&&po.status!=="cancelled"&&po.status!=="transfer_done"&&{label:"แก้ไข",icon:I.pencil,color:"#92400E",onClick:()=>startEdit(po)},
+                      canEditPO(po)&&po.status==="open"&&{label:"แก้ไข",icon:I.pencil,color:"#92400E",onClick:()=>startEdit(po)},
                       canDeletePO(po)&&{label:"ลบ",icon:I.trash,danger:true,onClick:()=>delPO(po)},
                     ]}/>
                     {isReceiver(po)&&po.status==="requested"&&<button onClick={()=>acceptRequest(po)} disabled={confirming===po.id} title="ปริ้นใบจัดของ + รับเอกสาร" style={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.purple}55`}}>🖨 ปริ้นเอกสาร</button>}
@@ -6542,7 +6542,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const canDispute=isReceiver&&po.status==="shipped";
   const canAcceptDispute=canManage&&po.status==="disputed";
   // Items can only be edited where stock hasn't moved yet (requested, open).
-  const canEditFromView=canManage&&(po.status==="open"||po.status==="requested");
+  const canEditFromView=canManage&&po.status==="open";   // อนุมัติแล้ว (requested ขึ้นไป) ล็อกแก้ไข
   const canPayNow=canManage&&po.status==="awaiting_payment";
   const canCancelPO=canManage&&po.status!=="paid"&&po.status!=="cancelled";
 
@@ -7640,7 +7640,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               <Ic d={copiedId===order.id?I.check:I.copy} s={12} c={copiedId===order.id?C.green:C.teal}/>
               {copiedId===order.id?"คัดลอกแล้ว":"คัดลอก"}
             </button>
-            {canEditOrder(order)&&order.status==="pending"&&<button onClick={()=>startEditQty(order)} title="แก้ไขจำนวน" style={{background:C.blueLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>}
+            {/* แก้ไขจำนวนถูกล็อก: ออเดอร์ที่ Area อนุมัติแล้ว (pending = รอส่งซัพ) แก้ไม่ได้ — ถ้าต้องแก้ให้ Area ตีกลับก่อน */}
             {(order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="พิมพ์ซ้ำ" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>}
             {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
             {order.status==="delivered"&&(()=>{const n=Array.isArray(order.receive_images)?order.receive_images.length:0;return <button onClick={()=>setPhotoEditOrder(order)} title="ดู / เพิ่มรูปรับสินค้า" style={{background:n>0?C.blueLight:C.bg,border:n>0?"none":`1px dashed ${C.line}`,borderRadius:7,padding:"5px 9px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.blue}}><Ic d={I.img} s={12} c={C.blue}/>{n>0?n:"เพิ่มรูป"}</button>;})()}
