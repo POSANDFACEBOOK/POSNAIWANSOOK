@@ -296,6 +296,9 @@ const api = {
   deleteCRMPromotion: (id) => sb(`crm_promotions?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   getCRMVouchersAll: () => sb(`crm_vouchers?order=id.desc&limit=2000`),
   updateCRMVoucherIfStatus: async (id,expected,d) => { const r=await sb(`crm_vouchers?id=eq.${id}&status=eq.${expected}`, {method:"PATCH", headers:{"Prefer":"return=representation"}, body:JSON.stringify(d)}); if(!Array.isArray(r)||r.length===0)throw new Error("คูปองนี้ถูกใช้ไปแล้ว"); return r; },
+  // CRM — LINE broadcast (via serverless /api/line-broadcast) + history
+  broadcastLine: async (payload) => { const r=await fetch("/api/line-broadcast",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); const j=await r.json().catch(()=>({})); if(!r.ok)throw new Error(j.error||("HTTP "+r.status)); return j; },
+  getCRMBroadcasts: () => sb(`crm_broadcasts?order=id.desc&limit=50`),
   // POS Shifts & Cash Drawer
   getActiveShift: (bid) => sb(`pos_shifts?branch_id=eq.${bid}&status=eq.open&order=opened_at.desc&limit=1`),
   getShifts: (bid,limit=50) => sb(`pos_shifts?branch_id=eq.${bid}&order=opened_at.desc&limit=${limit}`),
@@ -9912,6 +9915,73 @@ function CRMPromotions({promotions,currentBranch,canEdit,reload}){
   </div>;
 }
 
+// LINE broadcast: compose a message, pick which branches' LINE OAs to send to, and
+// push it to all their friends via /api/line-broadcast. Admin/manager only.
+function CRMBroadcast({currentUser}){
+  const canBroadcast=currentUser?.role==="admin"||currentUser?.role==="manager";
+  const[branches,setBranches]=useState([]);
+  const[sel,setSel]=useState([]);
+  const[text,setText]=useState("");
+  const[bkey,setBkey]=useState(()=>{try{return localStorage.getItem("nw_broadcast_key")||"";}catch{return "";}});
+  const[sending,setSending]=useState(false);
+  const[results,setResults]=useState(null);
+  const[hist,setHist]=useState([]);
+  useEffect(()=>{api.getBranches().then(b=>setBranches((Array.isArray(b)?b:[]).filter(x=>x.active!==false&&x.type!=="central"))).catch(()=>{});api.getCRMBroadcasts().then(h=>setHist(Array.isArray(h)?h:[])).catch(()=>{});},[]);
+  const bName=id=>{const b=branches.find(x=>+x.id===+id);return b?b.name:("#"+id);};
+  function toggle(id){setSel(s=>s.includes(+id)?s.filter(x=>x!==+id):[...s,+id]);}
+  const allSel=branches.length>0&&sel.length===branches.length;
+  async function send(){
+    if(sending)return;
+    if(!sel.length){alert("เลือกสาขาอย่างน้อย 1 สาขา");return;}
+    if(!text.trim()){alert("พิมพ์ข้อความก่อน");return;}
+    if(!bkey.trim()){alert("ใส่รหัสบรอดแคสต์ (ตั้งไว้ใน Vercel env: BROADCAST_KEY)");return;}
+    if(!await confirmDlg({title:"ยืนยันบรอดแคสต์",message:`ส่งข้อความนี้หาเพื่อนไลน์ทุกคนของ ${sel.length} สาขา:\n${sel.map(bName).join(", ")}\n\n⚠️ ใช้โควตา LINE และย้อนกลับไม่ได้`,confirmLabel:"📣 ส่งเลย"}))return;
+    try{localStorage.setItem("nw_broadcast_key",bkey.trim());}catch{}
+    setSending(true);setResults(null);
+    try{
+      const r=await api.broadcastLine({branches:sel,text:text.trim(),key:bkey.trim(),sent_by:currentUser?.name||currentUser?.username||""});
+      setResults(r.results||[]);
+      if((r.okCount||0)>0){setText("");}
+      api.getCRMBroadcasts().then(h=>setHist(Array.isArray(h)?h:[])).catch(()=>{});
+    }catch(e){alert("ส่งไม่สำเร็จ: "+((e&&e.message)||e));}
+    setSending(false);
+  }
+  if(!canBroadcast)return <div style={{textAlign:"center",color:C.ink4,padding:40,fontFamily:"'Sarabun',sans-serif"}}>🔒 การบรอดแคสต์จำกัดเฉพาะผู้ดูแล / ผู้จัดการ</div>;
+  return <div style={{maxWidth:640}}>
+    <div style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:16,marginBottom:16}}>
+      <div style={{fontSize:15,fontWeight:900,color:C.ink,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>📣 บรอดแคสต์ผ่าน LINE</div>
+      <Field label="ข้อความ">
+        <textarea value={text} onChange={e=>setText(e.target.value)} rows={5} placeholder={"พิมพ์ข้อความถึงลูกค้า…\nเช่น 🔥 โปรวันนี้! ชาบูลด 20% ทั้งวัน"} style={{...iS,resize:"vertical",lineHeight:1.6}}/>
+      </Field>
+      <div style={{fontSize:11,color:text.length>4900?C.red:C.ink4,textAlign:"right",marginTop:-8,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>{text.length}/5000</div>
+      <Field label="ส่งไปสาขา (LINE OA)">
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <button onClick={()=>setSel(allSel?[]:branches.map(b=>+b.id))} style={{background:"none",border:"none",color:C.brand,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{allSel?"ยกเลิกทั้งหมด":"เลือกทุกสาขา"}</button>
+          <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>เลือกแล้ว {sel.length}</span>
+        </div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:8}}>{branches.map(b=>{const on=sel.includes(+b.id);return <label key={b.id} style={{display:"flex",alignItems:"center",gap:6,fontSize:13,fontFamily:"'Sarabun',sans-serif",background:on?C.brandLight:C.bg,border:`1px solid ${on?C.brandBorder:C.line}`,borderRadius:9,padding:"7px 12px",cursor:"pointer",fontWeight:on?800:500,color:on?C.brand:C.ink2}}><input type="checkbox" checked={on} onChange={()=>toggle(b.id)}/> 🏪 {b.name}</label>;})}</div>
+        {branches.length===0&&<div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</div>}
+      </Field>
+      <Field label="รหัสบรอดแคสต์ (BROADCAST_KEY)">
+        <input type="password" value={bkey} onChange={e=>setBkey(e.target.value)} placeholder="รหัสที่ตั้งไว้ใน Vercel env" style={iS}/>
+      </Field>
+      <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",margin:"-8px 0 10px"}}>กันคนอื่นยิงมั่ว — ตั้งค่าครั้งเดียวจำไว้ในเครื่องนี้ · ⚠️ บรอดแคสต์ใช้โควตาข้อความของ LINE OA</div>
+      <Btn full v="primary" onClick={send} loading={sending} disabled={sending} s={{padding:"14px",fontSize:16}}>📣 ส่งบรอดแคสต์</Btn>
+    </div>
+    {results&&<div style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:16,marginBottom:16,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{fontSize:14,fontWeight:900,color:C.ink,marginBottom:8}}>ผลการส่ง</div>
+      {results.map((r,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,padding:"6px 0",borderBottom:`1px dashed ${C.lineLight}`,fontSize:13}}><span style={{fontWeight:700,color:C.ink2}}>🏪 {bName(r.branch_id)}</span><span style={{fontWeight:800,color:r.ok?C.green:C.red}}>{r.ok?"✅ ส่งแล้ว":`❌ ${r.error||"ผิดพลาด"}`}</span></div>)}
+    </div>}
+    {hist.length>0&&<div style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:16,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{fontSize:14,fontWeight:900,color:C.ink,marginBottom:8}}>🕘 ประวัติบรอดแคสต์</div>
+      {hist.slice(0,15).map(h=>{const okN=Array.isArray(h.results)?h.results.filter(x=>x.ok).length:0;const tot=Array.isArray(h.results)?h.results.length:(Array.isArray(h.branch_ids)?h.branch_ids.length:0);return <div key={h.id} style={{padding:"8px 0",borderBottom:`1px dashed ${C.lineLight}`}}>
+        <div style={{fontSize:12,color:C.ink4}}>{fmtDT(h.created_at)} · {h.sent_by||"-"} · ส่งสำเร็จ {okN}/{tot} สาขา</div>
+        <div style={{fontSize:13,color:C.ink2,marginTop:2,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{(h.message||"").slice(0,140)}{(h.message||"").length>140?"…":""}</div>
+      </div>;})}
+    </div>}
+  </div>;
+}
+
 function CRMTab({currentBranch,currentUser,menus}){
   const[subTab,setSubTab]=useState("customers");
   const[customers,setCustomers]=useState([]);
@@ -9981,6 +10051,7 @@ function CRMTab({currentBranch,currentUser,menus}){
     {id:"points",l:pendingClaims>0?`แต้ม/อนุมัติ (${pendingClaims})`:"แต้ม/อนุมัติ"},
     {id:"loyalty",l:"ความภักดี"},
     {id:"promotions",l:"โปรโมชั่น"},
+    ...((currentUser?.role==="admin"||currentUser?.role==="manager")?[{id:"broadcast",l:"📣 บรอดแคสต์"}]:[]),
     {id:"reservations",l:"จองโต๊ะ"},
     {id:"feedback",l:"ความคิดเห็น"},
     {id:"analytics",l:"วิเคราะห์"},
@@ -10006,6 +10077,9 @@ function CRMTab({currentBranch,currentUser,menus}){
 
     {/* ── PROMOTIONS ── */}
     {subTab==="promotions"&&<CRMPromotions promotions={promotions} currentBranch={currentBranch} canEdit={canEdit} reload={loadAll}/>}
+
+    {/* ── BROADCAST (LINE) ── */}
+    {subTab==="broadcast"&&<CRMBroadcast currentUser={currentUser}/>}
 
     {/* ── RESERVATIONS ── */}
     {subTab==="reservations"&&<CRMReservations reservations={reservations} customers={customers} showResForm={showResForm} setShowResForm={setShowResForm} editRes={editRes} setEditRes={setEditRes} resFilter={resFilter} setResFilter={setResFilter} canEdit={canEdit} currentBranch={currentBranch} reload={loadAll}/>}
