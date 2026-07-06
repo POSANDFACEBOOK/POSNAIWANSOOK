@@ -299,6 +299,7 @@ const api = {
   // CRM — LINE broadcast (via serverless /api/line-broadcast) + history
   broadcastLine: async (payload) => { const r=await fetch("/api/line-broadcast",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); const j=await r.json().catch(()=>({})); if(!r.ok)throw new Error(j.error||("HTTP "+r.status)); return j; },
   getCRMBroadcasts: () => sb(`crm_broadcasts?order=id.desc&limit=50`),
+  runBroadcastCron: (key) => fetch("/api/broadcast-cron?key="+encodeURIComponent(key||""),{method:"POST"}).then(r=>r.json().catch(()=>({}))).catch(()=>({})),
   // POS Shifts & Cash Drawer
   getActiveShift: (bid) => sb(`pos_shifts?branch_id=eq.${bid}&status=eq.open&order=opened_at.desc&limit=1`),
   getShifts: (bid,limit=50) => sb(`pos_shifts?branch_id=eq.${bid}&order=opened_at.desc&limit=${limit}`),
@@ -1310,7 +1311,7 @@ function NumStepper({value,onChange,onBlur,step=1,min=0,max,placeholder,inputSty
 function ErrBox({msg,onRetry}){return <div style={{background:C.redLight,border:`1px solid ${C.red}22`,borderRadius:12,padding:"16px 20px",display:"flex",alignItems:"center",gap:12,margin:"16px 0"}}><Ic d={I.warning} s={20} c={C.red}/><span style={{flex:1,color:C.red,fontFamily:"'Sarabun',sans-serif",fontSize:14}}>{msg}</span>{onRetry&&<Btn v="danger" onClick={onRetry} s={{padding:"6px 14px",fontSize:12}}>ลองใหม่</Btn>}</div>;}
 function STh({label,col,sortCol,sortDir,onSort}){const active=sortCol===col;return <th onClick={()=>onSort(col)} style={{padding:"10px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:active?C.brand:C.ink3,cursor:"pointer",whiteSpace:"nowrap",userSelect:"none",background:active?C.brandLight:C.bg}}><div style={{display:"flex",alignItems:"center",gap:4}}>{label}<Ic d={active?(sortDir==="asc"?I.sortAsc:I.sortDesc):I.sortAsc} s={12} c={active?C.brand:C.ink4}/></div></th>;}
 
-async function compressImage(file,maxW=1000,quality=0.7){
+async function compressImage(file,maxW=1000,quality=0.7,forceType){
   // iPhone HEIC/HEIF photos can't be decoded by <canvas> on most non-Safari browsers
   // (the <img> fires onerror → the RAW HEIC got uploaded → broken thumbnails everywhere).
   // Convert HEIC→JPEG first, lazy-loading the decoder only when a HEIC is actually picked.
@@ -1325,8 +1326,17 @@ async function compressImage(file,maxW=1000,quality=0.7){
   return new Promise(resolve=>{const img=new Image();const url=URL.createObjectURL(file);img.onerror=()=>{URL.revokeObjectURL(url);resolve(file);};img.onload=()=>{const scale=Math.min(1,maxW/Math.max(img.width,img.height));const w=Math.round(img.width*scale);const h=Math.round(img.height*scale);const canvas=document.createElement("canvas");canvas.width=w;canvas.height=h;const ctx=canvas.getContext("2d");ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";ctx.drawImage(img,0,0,w,h);
   // Prefer WebP (~30% smaller at equal quality); fall back to JPEG where the
   // browser can't encode WebP (toDataURL returns a non-webp type then).
-  const type=canvas.toDataURL("image/webp").indexOf("data:image/webp")===0?"image/webp":"image/jpeg";
+  const type=forceType||(canvas.toDataURL("image/webp").indexOf("data:image/webp")===0?"image/webp":"image/jpeg");
   canvas.toBlob(blob=>{URL.revokeObjectURL(url);resolve(blob||file);},type,quality);};img.src=url;});}
+// Upload forced to JPEG — for LINE image messages (LINE does NOT accept WebP).
+async function uploadImageJpegToDrive(file){
+  const blob=await compressImage(file,1280,0.82,"image/jpeg");
+  const res=await fetch(`/api/drive-upload?name=${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`,{method:"POST",headers:{"Content-Type":"image/jpeg"},body:blob});
+  if(!res.ok)throw new Error(await res.text());
+  const j=await res.json().catch(()=>({}));
+  if(!j.id)throw new Error("อัปโหลดไม่สำเร็จ");
+  return `drive:${j.id}`;
+}
 
 // Upload an image to Google Drive via the serverless proxy; returns a "drive:<id>" ref.
 // Used where we want images in Drive (6TB) instead of Supabase Storage (e.g. waste photos).
@@ -9926,23 +9936,38 @@ function CRMBroadcast({currentUser}){
   const[sending,setSending]=useState(false);
   const[results,setResults]=useState(null);
   const[hist,setHist]=useState([]);
-  useEffect(()=>{api.getBranches().then(b=>setBranches((Array.isArray(b)?b:[]).filter(x=>x.active!==false&&x.type!=="central"))).catch(()=>{});api.getCRMBroadcasts().then(h=>setHist(Array.isArray(h)?h:[])).catch(()=>{});},[]);
+  const[img,setImg]=useState(null);const[up,setUp]=useState(false);
+  const[schedMode,setSchedMode]=useState("now");const[schedAt,setSchedAt]=useState("");
+  const fileRef=useRef();
+  function loadHist(){api.getCRMBroadcasts().then(h=>setHist(Array.isArray(h)?h:[])).catch(()=>{});}
+  useEffect(()=>{
+    api.getBranches().then(b=>setBranches((Array.isArray(b)?b:[]).filter(x=>x.active!==false&&x.type!=="central"))).catch(()=>{});
+    loadHist();
+    // heartbeat: dispatch any due scheduled broadcasts if a key is remembered on this device
+    try{const k=localStorage.getItem("nw_broadcast_key");if(k)api.runBroadcastCron(k).then(()=>loadHist());}catch{}
+  },[]);// eslint-disable-line
   const bName=id=>{const b=branches.find(x=>+x.id===+id);return b?b.name:("#"+id);};
   function toggle(id){setSel(s=>s.includes(+id)?s.filter(x=>x!==+id):[...s,+id]);}
   const allSel=branches.length>0&&sel.length===branches.length;
+  async function onPhoto(e){const f=e.target.files&&e.target.files[0];e.target.value="";if(!f)return;setUp(true);try{const ref=await uploadImageJpegToDrive(f);setImg(ref);}catch(err){alert("อัปโหลดรูปไม่สำเร็จ: "+((err&&err.message)||err));}setUp(false);}
   async function send(){
-    if(sending)return;
+    if(sending||up)return;
     if(!sel.length){alert("เลือกสาขาอย่างน้อย 1 สาขา");return;}
-    if(!text.trim()){alert("พิมพ์ข้อความก่อน");return;}
+    if(!text.trim()&&!img){alert("ใส่ข้อความหรือรูปก่อน");return;}
     if(!bkey.trim()){alert("ใส่รหัสบรอดแคสต์ (ตั้งไว้ใน Vercel env: BROADCAST_KEY)");return;}
-    if(!await confirmDlg({title:"ยืนยันบรอดแคสต์",message:`ส่งข้อความนี้หาเพื่อนไลน์ทุกคนของ ${sel.length} สาขา:\n${sel.map(bName).join(", ")}\n\n⚠️ ใช้โควตา LINE และย้อนกลับไม่ได้`,confirmLabel:"📣 ส่งเลย"}))return;
+    const later=schedMode==="later";
+    let schedIso=null;
+    if(later){ if(!schedAt){alert("เลือกวันเวลาที่จะส่ง");return;} const ms=Date.parse(schedAt); if(!ms||ms<Date.now()+60000){alert("เวลาส่งต้องเป็นอนาคต (อีกอย่างน้อย 1 นาที)");return;} schedIso=new Date(ms).toISOString(); }
+    const image_url=img?(publicBaseUrl().replace(/\/+$/,"")+driveImgSrc(img)):null;
+    const msg=later?`ตั้งเวลาส่ง ${fmtDT(schedIso)}\nถึงเพื่อนไลน์ทุกคนของ ${sel.length} สาขา:\n${sel.map(bName).join(", ")}`:`ส่งเดี๋ยวนี้หาเพื่อนไลน์ทุกคนของ ${sel.length} สาขา:\n${sel.map(bName).join(", ")}\n\n⚠️ ใช้โควตา LINE ย้อนกลับไม่ได้`;
+    if(!await confirmDlg({title:later?"ตั้งเวลาบรอดแคสต์":"ยืนยันบรอดแคสต์",message:msg,confirmLabel:later?"⏰ ตั้งเวลา":"📣 ส่งเลย"}))return;
     try{localStorage.setItem("nw_broadcast_key",bkey.trim());}catch{}
     setSending(true);setResults(null);
     try{
-      const r=await api.broadcastLine({branches:sel,text:text.trim(),key:bkey.trim(),sent_by:currentUser?.name||currentUser?.username||""});
-      setResults(r.results||[]);
-      if((r.okCount||0)>0){setText("");}
-      api.getCRMBroadcasts().then(h=>setHist(Array.isArray(h)?h:[])).catch(()=>{});
+      const r=await api.broadcastLine({branches:sel,text:text.trim(),image_url,key:bkey.trim(),scheduled_at:schedIso,sent_by:currentUser?.name||currentUser?.username||""});
+      if(r.scheduled){alert("⏰ ตั้งเวลาบรอดแคสต์แล้ว — ระบบจะส่งอัตโนมัติเมื่อถึงเวลา");setText("");setImg(null);setSchedMode("now");setSchedAt("");}
+      else{setResults(r.results||[]);if((r.okCount||0)>0){setText("");setImg(null);}}
+      loadHist();
     }catch(e){alert("ส่งไม่สำเร็จ: "+((e&&e.message)||e));}
     setSending(false);
   }
@@ -9954,6 +9979,11 @@ function CRMBroadcast({currentUser}){
         <textarea value={text} onChange={e=>setText(e.target.value)} rows={5} placeholder={"พิมพ์ข้อความถึงลูกค้า…\nเช่น 🔥 โปรวันนี้! ชาบูลด 20% ทั้งวัน"} style={{...iS,resize:"vertical",lineHeight:1.6}}/>
       </Field>
       <div style={{fontSize:11,color:text.length>4900?C.red:C.ink4,textAlign:"right",marginTop:-8,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>{text.length}/5000</div>
+      <Field label="รูปแนบ (ถ้ามี) — โปรฯ / การ์ด · ระบบแปลงเป็น JPEG ให้">
+        {img?<div style={{position:"relative",display:"inline-block"}}><img src={driveImgSrc(img)} alt="" style={{maxWidth:240,maxHeight:190,borderRadius:10,border:`1px solid ${C.line}`,display:"block"}}/><button onClick={()=>setImg(null)} style={{position:"absolute",top:-8,right:-8,width:24,height:24,borderRadius:"50%",background:C.red,color:C.white,border:`2px solid ${C.white}`,cursor:"pointer",fontWeight:700}}>✕</button></div>
+        :<button onClick={()=>fileRef.current&&fileRef.current.click()} disabled={up} style={{padding:"10px 16px",borderRadius:10,border:`2px dashed ${C.brandBorder}`,background:C.brandLight,cursor:up?"wait":"pointer",color:C.brand,fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,display:"inline-flex",alignItems:"center",gap:6}}>{up?"กำลังอัป...":<><Ic d={I.img} s={18} c={C.brand}/> เลือกรูป</>}</button>}
+        <input ref={fileRef} type="file" accept="image/*" onChange={onPhoto} style={{display:"none"}}/>
+      </Field>
       <Field label="ส่งไปสาขา (LINE OA)">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
           <button onClick={()=>setSel(allSel?[]:branches.map(b=>+b.id))} style={{background:"none",border:"none",color:C.brand,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{allSel?"ยกเลิกทั้งหมด":"เลือกทุกสาขา"}</button>
@@ -9966,7 +9996,13 @@ function CRMBroadcast({currentUser}){
         <input type="password" value={bkey} onChange={e=>setBkey(e.target.value)} placeholder="รหัสที่ตั้งไว้ใน Vercel env" style={iS}/>
       </Field>
       <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",margin:"-8px 0 10px"}}>กันคนอื่นยิงมั่ว — ตั้งค่าครั้งเดียวจำไว้ในเครื่องนี้ · ⚠️ บรอดแคสต์ใช้โควตาข้อความของ LINE OA</div>
-      <Btn full v="primary" onClick={send} loading={sending} disabled={sending} s={{padding:"14px",fontSize:16}}>📣 ส่งบรอดแคสต์</Btn>
+      <Field label="เวลาส่ง">
+        <div style={{display:"flex",gap:8,marginBottom:schedMode==="later"?8:0}}>
+          {[["now","ส่งเดี๋ยวนี้"],["later","⏰ ตั้งเวลา"]].map(([v,l])=><button key={v} onClick={()=>setSchedMode(v)} style={{flex:1,padding:"9px",borderRadius:9,border:`2px solid ${schedMode===v?C.brand:C.line}`,background:schedMode===v?C.brand:C.white,color:schedMode===v?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,cursor:"pointer"}}>{l}</button>)}
+        </div>
+        {schedMode==="later"&&<input type="datetime-local" value={schedAt} onChange={e=>setSchedAt(e.target.value)} style={iS}/>}
+      </Field>
+      <Btn full v="primary" onClick={send} loading={sending} disabled={sending||up} s={{padding:"14px",fontSize:16}}>{schedMode==="later"?"⏰ ตั้งเวลาส่ง":"📣 ส่งบรอดแคสต์"}</Btn>
     </div>
     {results&&<div style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:16,marginBottom:16,fontFamily:"'Sarabun',sans-serif"}}>
       <div style={{fontSize:14,fontWeight:900,color:C.ink,marginBottom:8}}>ผลการส่ง</div>
@@ -9974,9 +10010,12 @@ function CRMBroadcast({currentUser}){
     </div>}
     {hist.length>0&&<div style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:16,fontFamily:"'Sarabun',sans-serif"}}>
       <div style={{fontSize:14,fontWeight:900,color:C.ink,marginBottom:8}}>🕘 ประวัติบรอดแคสต์</div>
-      {hist.slice(0,15).map(h=>{const okN=Array.isArray(h.results)?h.results.filter(x=>x.ok).length:0;const tot=Array.isArray(h.results)?h.results.length:(Array.isArray(h.branch_ids)?h.branch_ids.length:0);return <div key={h.id} style={{padding:"8px 0",borderBottom:`1px dashed ${C.lineLight}`}}>
-        <div style={{fontSize:12,color:C.ink4}}>{fmtDT(h.created_at)} · {h.sent_by||"-"} · ส่งสำเร็จ {okN}/{tot} สาขา</div>
-        <div style={{fontSize:13,color:C.ink2,marginTop:2,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{(h.message||"").slice(0,140)}{(h.message||"").length>140?"…":""}</div>
+      {hist.slice(0,15).map(h=>{const okN=Array.isArray(h.results)?h.results.filter(x=>x.ok).length:0;const tot=Array.isArray(h.results)?h.results.length:(Array.isArray(h.branch_ids)?h.branch_ids.length:0);const sched=h.status==="scheduled";return <div key={h.id} style={{padding:"8px 0",borderBottom:`1px dashed ${C.lineLight}`,display:"flex",gap:10}}>
+        {h.image_url&&<img src={h.image_url} alt="" loading="lazy" decoding="async" style={{width:44,height:44,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,flexShrink:0}}/>}
+        <div style={{minWidth:0,flex:1}}>
+          <div style={{fontSize:12,color:sched?C.purple:C.ink4,fontWeight:sched?800:400}}>{sched?`⏰ รอส่ง ${fmtDT(h.scheduled_at)}`:`${fmtDT(h.created_at)} · ส่งสำเร็จ ${okN}/${tot} สาขา`}{h.sent_by?` · ${h.sent_by}`:""}</div>
+          <div style={{fontSize:13,color:C.ink2,marginTop:2,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{(h.message||(h.image_url?"[รูปภาพ]":"")).slice(0,140)}{(h.message||"").length>140?"…":""}</div>
+        </div>
       </div>;})}
     </div>}
   </div>;
