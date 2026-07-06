@@ -1283,7 +1283,7 @@ function Thumb({src,alt="",w,h,size=32,radius=7,iconBg,iconColor,icon,iconSize,s
   const[err,setErr]=useState(false);
   const ph=<div style={{width:W,height:H,borderRadius:radius,background:iconBg||C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,...style}}><Ic d={icon||I.leaf} s={iconSize||Math.max(12,Math.round(Math.min(W,H)*0.5))} c={iconColor||C.green}/></div>;
   if(!src||err)return ph;
-  return <img src={src} alt={alt} loading="lazy" decoding="async" onError={()=>setErr(true)} style={{width:W,height:H,objectFit:"cover",borderRadius:radius,flexShrink:0,...imgStyle}}/>;
+  return <img src={driveImgSrc(src)} alt={alt} loading="lazy" decoding="async" onError={()=>setErr(true)} style={{width:W,height:H,objectFit:"cover",borderRadius:radius,flexShrink:0,...imgStyle}}/>;
 }
 
 // Number stepper — left = decrement, right = increment, center = direct input.
@@ -1352,6 +1352,9 @@ async function uploadImageToDrive(file){
 }
 // Resolve an image ref (drive:<id> or a plain URL) to a viewable <img src>.
 function driveImgSrc(ref){ if(!ref)return ""; return /^drive:/.test(ref)?`/api/drive-view?id=${encodeURIComponent(ref.slice(6))}`:ref; }
+// Absolute form — for images embedded in printed windows (their about:blank base
+// can't resolve the relative /api/drive-view proxy path).
+function driveImgAbs(ref){ if(!ref)return ""; const s=driveImgSrc(ref); return /^https?:/i.test(s)?s:(publicBaseUrl().replace(/\/+$/,"")+s); }
 // <img> that shows a tidy placeholder instead of the browser's broken-image icon when
 // the photo can't load (e.g. legacy HEIC uploads that non-Safari browsers can't render).
 function ImgOrFallback({src,onClick,style,note="เปิดรูปไม่ได้"}){
@@ -1433,10 +1436,10 @@ async function deliverOrderWithPhotos(orderId,expectedStatus,payloadItems,images
 }
 function ImgUp({value,onChange,label,compact}){
   const ref=useRef();const[uploading,setUploading]=useState(false);
-  const h=async e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>10*1024*1024){alert("รูปต้องไม่เกิน 10MB");return;}setUploading(true);try{const compressed=await compressImage(f,1000,0.7);const type=compressed.type||"image/jpeg";const ext=type==="image/webp"?"webp":type==="image/png"?"png":"jpg";const path=`${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;const url=await api.uploadImage(new File([compressed],path,{type}),path);onChange(url);}catch(err){alert("อัปโหลดรูปไม่สำเร็จ: "+err.message);}setUploading(false);e.target.value="";};
+  const h=async e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>10*1024*1024){alert("รูปต้องไม่เกิน 10MB");return;}setUploading(true);try{const ref=await uploadImageToDrive(f);onChange(ref);}catch(err){alert("อัปโหลดรูปไม่สำเร็จ: "+((err&&err.message)||err));}setUploading(false);e.target.value="";};
   return <div style={{marginBottom:compact?0:16}}>{label&&!compact&&<div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>{label}</div>}
     <div style={{display:"flex",alignItems:"center",gap:12}}>
-      {value?<div style={{position:"relative"}}><img src={value} alt="" style={{width:compact?44:96,height:compact?44:96,objectFit:"cover",borderRadius:compact?8:14,border:`2px solid ${C.line}`}}/><button onClick={()=>onChange(null)} style={{position:"absolute",top:-7,right:-7,width:20,height:20,borderRadius:"50%",background:C.red,border:`2px solid ${C.white}`,color:C.white,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>✕</button></div>
+      {value?<div style={{position:"relative"}}><img src={driveImgSrc(value)} alt="" style={{width:compact?44:96,height:compact?44:96,objectFit:"cover",borderRadius:compact?8:14,border:`2px solid ${C.line}`}}/><button onClick={()=>onChange(null)} style={{position:"absolute",top:-7,right:-7,width:20,height:20,borderRadius:"50%",background:C.red,border:`2px solid ${C.white}`,color:C.white,cursor:"pointer",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>✕</button></div>
       :<div onClick={()=>ref.current?.click()} style={{width:compact?44:96,height:compact?44:96,border:`2px dashed ${C.line}`,borderRadius:compact?8:14,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",background:uploading?C.brandLight:C.bg,gap:4,transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{if(!uploading){e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.bg;}}}>
         {uploading?<span style={{fontSize:10,color:C.brand,fontFamily:"'Sarabun',sans-serif",textAlign:"center",padding:4}}>กำลังอัปโหลด...</span>:<><Ic d={I.img} s={compact?16:24} c={C.ink4}/>{!compact&&<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>อัปโหลด</span>}</>}
       </div>}
@@ -3222,7 +3225,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(4,minmax(0,1fr))",gap:16}}>
       {filtered.map(menu=>{const cost=mcost(menu);const profit=menu.price-cost;const mg=menu.price>0?profit/menu.price*100:0;const mc=marginColor(mg);return <Card key={menu.id} hover style={{overflow:"hidden"}}>
         <div style={{height:5,background:`linear-gradient(90deg,${mc},${mc}66)`}}/>
-        {menu.image?<img src={menu.image} alt={menu.name} loading="lazy" decoding="async" style={{width:"100%",height:130,objectFit:"cover"}}/>:<div style={{height:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/></div>}
+        {menu.image?<img src={driveImgSrc(menu.image)} alt={menu.name} loading="lazy" decoding="async" style={{width:"100%",height:130,objectFit:"cover"}}/>:<div style={{height:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/></div>}
         <div style={{padding:"12px 16px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
             <div><div style={{fontWeight:800,fontSize:16,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{menu.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>{canE?<select value={menu.category||""} onClick={e=>e.stopPropagation()} onChange={async e=>{try{await api.updateMenu(menu.id,{category:e.target.value});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} title="เปลี่ยนหมวดหมู่ของเมนูนี้" style={{fontSize:11,fontWeight:800,color:C.blue,background:C.blueLight,border:`1px solid ${C.blue}40`,borderRadius:20,padding:"3px 9px",fontFamily:"'Sarabun',sans-serif",cursor:"pointer",maxWidth:160}}><option value="">— ไม่มีหมวด —</option>{localCats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}{menu.category&&!localCats.some(c=>c.name===menu.category)&&<option value={menu.category}>{menu.category}</option>}</select>:<Chip color="blue">{menu.category}</Chip>}{menu.code&&<span style={{fontSize:10,fontWeight:800,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"1px 7px",borderRadius:8,fontFamily:"monospace",whiteSpace:"nowrap"}}>🔖 {menu.code}</span>}</div></div>
@@ -3394,7 +3397,7 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
             ${s.title?`<div class="stitle">${s.title}</div>`:''}
             ${s.desc?`<div class="sdesc">${s.desc.replace(/\n/g,'<br/>')}</div>`:''}
           </div>
-          ${s.image?`<img src="${s.image}" class="simg"/>`:''}
+          ${s.image?`<img src="${driveImgAbs(s.image)}" class="simg"/>`:''}
         </div>
       </div>`).join('');
     const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>SOP วัตถุดิบ - ${ing.name}</title>
@@ -3438,7 +3441,7 @@ body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-prin
 </style></head><body>
 <div id="wrap">
   <div class="header">
-    ${ing.image?`<img src="${ing.image}" class="himg" crossorigin="anonymous"/>`:''}
+    ${ing.image?`<img src="${driveImgAbs(ing.image)}" class="himg"/>`:''}
     <div class="hmain">
       <div class="hlabel">SOP วัตถุดิบ · Ingredient Standard Operating Procedure</div>
       <div class="htitle">${ing.name}</div>
@@ -3639,7 +3642,7 @@ window.addEventListener('load',async()=>{
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:5}}>{step.title||`ขั้นตอนที่ ${idx+1}`}</div>
                 {step.desc&&<p style={{fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.8,background:C.bg,padding:"10px 14px",borderRadius:10,border:`1px solid ${C.line}`,marginBottom:step.image?10:0,whiteSpace:"pre-wrap"}}>{step.desc}</p>}
-                {step.image&&<img src={step.image} alt={step.title} style={{maxWidth:340,borderRadius:12,border:`2px solid ${C.line}`,marginTop:8,display:"block"}}/>}
+                {step.image&&<img src={driveImgSrc(step.image)} alt={step.title} style={{maxWidth:340,borderRadius:12,border:`2px solid ${C.line}`,marginTop:8,display:"block"}}/>}
               </div>
             </div>)}
           </div>}
@@ -3772,7 +3775,7 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
             ${s.title?`<div class="stitle">${s.title}</div>`:''}
             ${s.desc?`<div class="sdesc">${s.desc.replace(/\n/g,'<br/>')}</div>`:''}
           </div>
-          ${s.image?`<img src="${s.image}" class="simg"/>`:''}
+          ${s.image?`<img src="${driveImgAbs(s.image)}" class="simg"/>`:''}
         </div>
       </div>`).join('');
     const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>SOP - ${menu.name}</title>
@@ -3805,7 +3808,7 @@ body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-prin
 </style></head><body>
 <div id="wrap">
   <div class="header">
-    ${menu.image?`<img src="${menu.image}" class="himg" crossorigin="anonymous"/>`:''}
+    ${menu.image?`<img src="${driveImgAbs(menu.image)}" class="himg"/>`:''}
     <div class="hmain">
       <div class="hlabel">ขั้นตอนการทำ · Standard Operating Procedure</div>
       <div class="htitle">${menu.name}</div>
@@ -3895,7 +3898,7 @@ window.addEventListener('load',async()=>{
       {menu?<>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18,paddingBottom:14,borderBottom:`1px solid ${C.lineLight}`}}>
           <div style={{display:"flex",gap:12,alignItems:"center"}}>
-            {menu.image&&<img src={menu.image} alt={menu.name} style={{width:52,height:52,objectFit:"cover",borderRadius:10,border:`2px solid ${C.line}`}}/>}
+            {menu.image&&<img src={driveImgSrc(menu.image)} alt={menu.name} style={{width:52,height:52,objectFit:"cover",borderRadius:10,border:`2px solid ${C.line}`}}/>}
             <div><h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:20,fontWeight:900,color:C.ink,marginBottom:3}}>{menu.name}</h2><EditedBy username={menu.edit_by} editAt={menu.edit_at}/></div>
           </div>
           <div style={{display:"flex",gap:8}}>
@@ -3970,7 +3973,7 @@ window.addEventListener('load',async()=>{
             <div style={{flex:1}}>
               <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:5}}>{step.title||`ขั้นตอนที่ ${idx+1}`}</div>
               {step.desc&&<p style={{fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.8,background:C.bg,padding:"10px 14px",borderRadius:10,border:`1px solid ${C.line}`,marginBottom:step.image?10:0,whiteSpace:"pre-wrap"}}>{step.desc}</p>}
-              {step.image&&<img src={step.image} alt={step.title} style={{maxWidth:340,borderRadius:12,border:`2px solid ${C.line}`,marginTop:8,display:"block"}}/>}
+              {step.image&&<img src={driveImgSrc(step.image)} alt={step.title} style={{maxWidth:340,borderRadius:12,border:`2px solid ${C.line}`,marginTop:8,display:"block"}}/>}
             </div>
           </div>)}
         </div>}
@@ -8846,7 +8849,7 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(300px,100%),1fr))",gap:14}}>
       {filtered.map(a=>{const d=assetDeprec(a);const st=stOf(a.status||"active");return <Card key={a.id} style={{overflow:"hidden"}}>
         <div style={{display:"flex",gap:12,padding:"12px 14px"}}>
-          {a.image?<img src={a.image} alt="" loading="lazy" decoding="async" style={{width:74,height:74,objectFit:"cover",borderRadius:12,border:`1px solid ${C.line}`,flexShrink:0}}/>:<div style={{width:74,height:74,borderRadius:12,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={28} c={C.line}/></div>}
+          {a.image?<img src={driveImgSrc(a.image)} alt="" loading="lazy" decoding="async" style={{width:74,height:74,objectFit:"cover",borderRadius:12,border:`1px solid ${C.line}`,flexShrink:0}}/>:<div style={{width:74,height:74,borderRadius:12,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={28} c={C.line}/></div>}
           <div style={{minWidth:0,flex:1}}>
             <div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"flex-start"}}>
               <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</div>
@@ -13211,7 +13214,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       <div style={{flex:1,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
         {filtered.map(m=>{const soldOut=(m.availability||{})[branch?.id]==="sold_out";return <div key={m.id} onClick={()=>{if(soldOut)return;pickOrAdd(m);}} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:soldOut?"not-allowed":"pointer",textAlign:"center",transition:"all .15s",position:"relative",opacity:soldOut?.55:1}} onMouseEnter={e=>{if(soldOut)return;e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
           {soldOut?<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:"#92400E",background:"#FEF3C7",borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif",border:"1px solid #F59E0B"}}>วันนี้หมด</span>:menuHasOptions(m,branch?.id,optionLib)&&<span style={{position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
-          {m.image?<img src={m.image} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>:<div style={{height:40,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={26} c={soldOut?C.ink4:C.brand}/></div>}
+          {m.image?<img src={driveImgSrc(m.image)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>:<div style={{height:40,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={26} c={soldOut?C.ink4:C.brand}/></div>}
           <div style={{fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3}}>{m.name}</div>
           <div style={{fontSize:13,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
         </div>;})}
@@ -13691,7 +13694,7 @@ function CustomerPage({branchId,tableId,token}){
       <div style={{flex:1,overflowY:"auto",padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,alignContent:"start"}}>
         {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
           <div style={{position:"relative",width:"100%",height:130,flexShrink:0}}>
-            {m.image?<img src={m.image} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
+            {m.image?<img src={driveImgSrc(m.image)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
             {soldOut&&<span style={{position:"absolute",top:6,left:6,fontSize:10,fontWeight:700,color:"#92400E",background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:10,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>วันนี้หมด</span>}
             {hasOpts&&!soldOut&&<span style={{position:"absolute",top:6,right:6,fontSize:9.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:10,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
           </div>
