@@ -281,6 +281,21 @@ const api = {
   addCRMReservation: (d) => sb("crm_reservations", {method:"POST", body:JSON.stringify(d)}),
   updateCRMReservation: (id,d) => sb(`crm_reservations?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deleteCRMReservation: (id) => sb(`crm_reservations?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  // CRM — scan/visit events for per-branch statistics
+  getCRMEvents: (bid) => sb(`crm_events?order=id.desc&limit=5000${bid?`&branch_id=eq.${bid}`:""}`),
+  addCRMEvent: (d) => sb("crm_events", {method:"POST", headers:{"Prefer":"return=minimal"}, body:JSON.stringify(d)}),
+  // CRM — customer-submitted point claims (bill + receipt), approved by admin
+  getCRMPointClaims: (bid,status) => sb(`crm_point_claims?order=id.desc&limit=1000${bid?`&branch_id=eq.${bid}`:""}${status?`&status=eq.${status}`:""}`),
+  addCRMPointClaim: (d) => sb("crm_point_claims", {method:"POST", body:JSON.stringify(d)}),
+  updateCRMPointClaim: (id,d) => sb(`crm_point_claims?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  updateCRMPointClaimIfStatus: async (id,expected,d) => { const r=await sb(`crm_point_claims?id=eq.${id}&status=eq.${expected}`, {method:"PATCH", headers:{"Prefer":"return=representation"}, body:JSON.stringify(d)}); if(!Array.isArray(r)||r.length===0)throw new Error("รายการนี้ถูกดำเนินการไปแล้ว"); return r; },
+  // CRM — promotions / campaigns
+  getCRMPromotions: () => sb(`crm_promotions?order=id.desc&limit=500`),
+  addCRMPromotion: (d) => sb("crm_promotions", {method:"POST", body:JSON.stringify(d)}),
+  updateCRMPromotion: (id,d) => sb(`crm_promotions?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  deleteCRMPromotion: (id) => sb(`crm_promotions?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
+  getCRMVouchersAll: () => sb(`crm_vouchers?order=id.desc&limit=2000`),
+  updateCRMVoucherIfStatus: async (id,expected,d) => { const r=await sb(`crm_vouchers?id=eq.${id}&status=eq.${expected}`, {method:"PATCH", headers:{"Prefer":"return=representation"}, body:JSON.stringify(d)}); if(!Array.isArray(r)||r.length===0)throw new Error("คูปองนี้ถูกใช้ไปแล้ว"); return r; },
   // POS Shifts & Cash Drawer
   getActiveShift: (bid) => sb(`pos_shifts?branch_id=eq.${bid}&status=eq.open&order=opened_at.desc&limit=1`),
   getShifts: (bid,limit=50) => sb(`pos_shifts?branch_id=eq.${bid}&order=opened_at.desc&limit=${limit}`),
@@ -9199,7 +9214,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
       return{...f,allowed_branches:next};
     });
   }
-  const bF0={name:"",type:"branch",active:true};
+  const bF0={name:"",type:"branch",active:true,line_url:""};
   const[branchForm,setBranchForm]=useState(bF0);const[editBID,setEditBID]=useState(null);const[showBranch,setShowBranch]=useState(false);
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
@@ -9311,7 +9326,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     try{
       // Branch-level perm gating removed — permissions are managed per-user only.
       // Send allowed_perms:null to clear any legacy data so the column doesn't gate visibility anymore.
-      const payload={name:branchForm.name,type:branchForm.type,active:branchForm.active,allowed_perms:null};
+      const payload={name:branchForm.name,type:branchForm.type,active:branchForm.active,allowed_perms:null,line_url:branchForm.line_url||null};
       if(editBID)await api.updateBranch(editBID,payload);else await api.addBranch(payload);
       await reloadBranches();
       setBranchForm(bF0);setEditBID(null);
@@ -9352,7 +9367,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
               </div>
             </div>
             {isAdmin&&<div style={{display:"flex",gap:3,flexShrink:0}}>
-              <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active});setEditBID(b.id);setShowBranch(true);}} title="แก้ไข" style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+              <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active,line_url:b.line_url||""});setEditBID(b.id);setShowBranch(true);}} title="แก้ไข" style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
               {b.type!=="central"&&<button onClick={async()=>{
                 if(!await confirmDlg({title:b.active?"ปิดใช้งานสาขา":"เปิดใช้งานสาขา",message:b.active?`ปิดใช้งาน "${b.name}"?\n\nสาขาจะไม่ปรากฏใน picker, การสแกน QR ของสาขานี้จะถูกปฏิเสธ\n(ข้อมูลทั้งหมดจะยังอยู่ — ไม่ลบจริง)`:`เปิดใช้งาน "${b.name}" อีกครั้ง?`,danger:b.active,confirmLabel:b.active?"ปิดใช้งาน":"เปิดใช้งาน"}))return;
                 try{await api.updateBranch(b.id,{active:!b.active});await reloadBranches();}
@@ -9367,6 +9382,8 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     {/* Branch add/edit modal */}
     {showBranch&&<Modal title={editBID?"✏️ แก้ไขสาขา":"➕ เพิ่มสาขาใหม่"} onClose={()=>{setShowBranch(false);setBranchForm(bF0);setEditBID(null);}}>
       <Inp label="ชื่อสาขา *" value={branchForm.name} onChange={e=>setBranchForm(f=>({...f,name:e.target.value}))} placeholder="เช่น คลองสาม, สีลม, ครัวกลาง" autoFocus/>
+      <Inp label="🟢 ลิงก์แอดไลน์ของสาขา (LINE OA)" value={branchForm.line_url} onChange={e=>setBranchForm(f=>({...f,line_url:e.target.value}))} placeholder="https://lin.ee/xxxxxxx"/>
+      <div style={{fontSize:11,color:C.ink4,marginTop:-6,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เอาจาก LINE OA Manager &gt; เพิ่มเพื่อน &gt; คัดลอกลิงก์ — ลูกค้าที่สแกน QR สาขานี้จะกดแอดไลน์นี้</div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <Field label="ประเภท"><select value={branchForm.type} onChange={e=>setBranchForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="branch">🏢 สาขา</option><option value="central">🏛 ครัวกลาง</option></select></Field>
         <Field label="สถานะ"><select value={branchForm.active?"true":"false"} onChange={e=>setBranchForm(f=>({...f,active:e.target.value==="true"}))} style={{...iS,appearance:"none"}}><option value="true">✅ เปิดใช้งาน</option><option value="false">⏸ ปิดใช้งาน</option></select></Field>
@@ -9671,6 +9688,230 @@ function getCustomerTags(cust,txns){
 }
 function genVoucherCode(){return"VCH-"+Math.random().toString(36).slice(2,8).toUpperCase();}
 
+// Loyalty rate + promotion helpers (shared by CRM ops screens)
+const POINTS_DIVISOR=25;  // 1 แต้ม ต่อ 25 บาท — ปรับได้ตรงนี้
+function pointsFromAmount(amt){return Math.floor((+amt||0)/POINTS_DIVISOR);}
+const PROMO_TYPES={percent:"ส่วนลด %",fixed:"ลดเป็นบาท",free_item:"ของแถม",points_x:"คูณแต้ม"};
+function promoDesc(p){const v=+p.value||0;return p.type==="percent"?`ลด ${v}%`:p.type==="fixed"?`ลด ฿${v.toLocaleString()}`:p.type==="free_item"?"ของแถม":p.type==="points_x"?`แต้ม x${v}`:"";}
+
+// CRM ops hub: per-branch QR stats + cashier quick-award + customer bill-claim approval.
+function CRMPoints({currentBranch,currentUser,customers,claims,events,canEdit,reload}){
+  const[qPhone,setQPhone]=useState("");const[qName,setQName]=useState("");const[qAmt,setQAmt]=useState("");const[qBusy,setQBusy]=useState(false);
+  const[busyId,setBusyId]=useState(null);const[editPts,setEditPts]=useState({});
+  const pending=(claims||[]).filter(c=>c.status==="pending");
+  const who=currentUser?.name||currentUser?.username||"";
+  const stat=(type,days)=>{const since=days?Date.now()-days*864e5:0;return (events||[]).filter(e=>e.type===type&&(!days||new Date(e.created_at||0).getTime()>=since)).length;};
+  async function findOrCreate(phone,name){
+    const norm=(phone||"").trim();const digits=norm.replace(/\D/g,"");
+    const found=digits&&(customers||[]).find(c=>(c.phone||"").replace(/\D/g,"")===digits);
+    if(found)return found;
+    const created=await api.addCRMCustomer({name:(name||"").trim()||("ลูกค้า "+digits.slice(-4)),phone:norm,branch_id:currentBranch.id,points:0,created_at:new Date().toISOString()});
+    return Array.isArray(created)?created[0]:created;
+  }
+  async function quickAward(){
+    if(qBusy)return;
+    if((qPhone||"").trim().replace(/\D/g,"").length<9){alert("กรอกเบอร์ให้ถูกต้อง");return;}
+    if(!(+qAmt>0)){alert("กรอกยอดเงิน");return;}
+    setQBusy(true);
+    try{
+      const cust=await findOrCreate(qPhone,qName);
+      if(!cust||!cust.id)throw new Error("สร้าง/ค้นหาลูกค้าไม่สำเร็จ");
+      const pts=pointsFromAmount(+qAmt);
+      await api.updateCRMCustomer(cust.id,{points:Math.max(0,(+cust.points||0)+pts)});
+      await api.addCRMTransaction({customer_id:cust.id,branch_id:currentBranch.id,amount:+qAmt||0,points_earned:pts,points_redeemed:0,note:`แคชเชียร์เพิ่มแต้ม · ${who}`,created_at:new Date().toISOString()});
+      setQPhone("");setQName("");setQAmt("");
+      alert(`✅ เพิ่ม ${pts} แต้มให้ ${cust.name} แล้ว`);
+      await reload();
+    }catch(e){alert("เพิ่มแต้มไม่สำเร็จ: "+((e&&e.message)||e));}
+    setQBusy(false);
+  }
+  async function approveClaim(cl){
+    if(busyId)return;
+    const pts=editPts[cl.id]!=null?parseInt(editPts[cl.id])||0:pointsFromAmount(cl.amount);
+    if(!await confirmDlg({title:"อนุมัติแต้ม",message:`เพิ่ม ${pts} แต้มให้ ${cl.customer_name||cl.phone}\n(บิล ${cl.bill_number||"-"} · ฿${(+cl.amount||0).toLocaleString()})?`,confirmLabel:"อนุมัติ + แต้ม"}))return;
+    setBusyId(cl.id);
+    try{
+      const cust=await findOrCreate(cl.phone,cl.customer_name);
+      if(!cust||!cust.id)throw new Error("ค้นหา/สร้างลูกค้าไม่สำเร็จ");
+      // claim-first guard: only one approver awards, prevents double points
+      await api.updateCRMPointClaimIfStatus(cl.id,"pending",{status:"approved",points:pts,customer_id:cust.id,approved_by:who,approved_at:new Date().toISOString()});
+      await api.updateCRMCustomer(cust.id,{points:Math.max(0,(+cust.points||0)+pts)});
+      await api.addCRMTransaction({customer_id:cust.id,branch_id:currentBranch.id,amount:+cl.amount||0,points_earned:pts,points_redeemed:0,note:`อนุมัติบิล ${cl.bill_number||("#"+cl.id)} · ${who}`,created_at:new Date().toISOString()});
+      await reload();
+    }catch(e){alert("อนุมัติไม่สำเร็จ: "+((e&&e.message)||e));await reload();}
+    setBusyId(null);
+  }
+  async function rejectClaim(cl){
+    if(busyId)return;
+    const reason=window.prompt("เหตุผลที่ปฏิเสธ (เช่น รูปไม่ชัด / บิลซ้ำ):","");
+    if(reason===null)return;
+    setBusyId(cl.id);
+    try{await api.updateCRMPointClaimIfStatus(cl.id,"pending",{status:"rejected",note:reason,approved_by:who,approved_at:new Date().toISOString()});await reload();}
+    catch(e){alert("ไม่สำเร็จ: "+((e&&e.message)||e));await reload();}
+    setBusyId(null);
+  }
+  const joinUrl=publicBaseUrl()+"?join=1";
+  return <div>
+    <div style={{background:C.white,border:`1px dashed ${C.brandBorder}`,borderRadius:14,padding:16,marginBottom:16,display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
+      <QRImg url={joinUrl} size={116}/>
+      <div style={{flex:1,minWidth:200}}>
+        <div style={{fontSize:15,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📱 QR ลูกค้า — ใช้ตัวเดียวทุกสาขา</div>
+        <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",margin:"4px 0 8px",lineHeight:1.6}}>พิมพ์ไปตั้งหน้าร้าน / ส่งให้ลูกค้าจอง — สแกนแล้วเลือกสาขา → แอดไลน์ · จองโต๊ะ · สะสมแต้ม</div>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <code style={{fontSize:11,background:C.bg,padding:"6px 9px",borderRadius:6,color:C.ink3,wordBreak:"break-all",fontFamily:"monospace"}}>{joinUrl}</code>
+          <Btn v="ghost" onClick={()=>{try{navigator.clipboard.writeText(joinUrl);alert("คัดลอกลิงก์แล้ว");}catch{alert(joinUrl);}}} icon={I.copy} s={{padding:"6px 12px",fontSize:12}}>คัดลอกลิงก์</Btn>
+          <a href={joinUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:C.blue,fontWeight:700,fontFamily:"'Sarabun',sans-serif",textDecoration:"underline"}}>เปิดดูตัวอย่าง →</a>
+        </div>
+      </div>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginBottom:16}}>
+      {[["สแกน 7 วัน",stat("visit",7),C.brand],["แอดไลน์ 7 วัน",stat("line_click",7),"#06C755"],["จอง 7 วัน",stat("booking",7),C.blue],["ส่งบิล 7 วัน",stat("point_claim",7),C.purple]].map(([l,n,c])=><div key={l} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:12,padding:"12px 14px"}}><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{l}</div><div style={{fontSize:24,fontWeight:900,color:c,fontFamily:"'Sarabun',sans-serif"}}>{n}</div></div>)}
+    </div>
+    {canEdit&&<div style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:16,marginBottom:18}}>
+      <div style={{fontSize:15,fontWeight:900,color:C.ink,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>⚡ เพิ่มแต้มด่วน (แคชเชียร์)</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8,alignItems:"end"}}>
+        <Field label="เบอร์ลูกค้า *" style={{marginBottom:0}}><input type="tel" inputMode="tel" value={qPhone} onChange={e=>setQPhone(e.target.value)} placeholder="08x-xxx-xxxx" style={iS}/></Field>
+        <Field label="ชื่อ (ถ้าเป็นสมาชิกใหม่)" style={{marginBottom:0}}><input value={qName} onChange={e=>setQName(e.target.value)} placeholder="ชื่อลูกค้า" style={iS}/></Field>
+        <Field label="ยอดเงิน (บาท) *" style={{marginBottom:0}}><input type="text" inputMode="decimal" value={qAmt} onChange={e=>setQAmt(e.target.value.replace(/[^0-9.]/g,""))} placeholder="0" style={iS}/></Field>
+        <Btn v="success" onClick={quickAward} loading={qBusy} s={{padding:"12px 16px"}}>+{pointsFromAmount(qAmt)} แต้ม</Btn>
+      </div>
+      <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:8}}>อัตรา 1 แต้ม / {POINTS_DIVISOR} บาท · เบอร์ที่ยังไม่เป็นสมาชิกจะถูกสร้างให้อัตโนมัติ</div>
+    </div>}
+    <div style={{fontSize:15,fontWeight:900,color:C.ink,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>🧾 บิลรออนุมัติ ({pending.length})</div>
+    {pending.length===0?<div style={{textAlign:"center",color:C.ink4,padding:24,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีบิลรออนุมัติ — ลูกค้าส่งบิลผ่าน QR แล้วจะมาโผล่ที่นี่</div>
+    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(270px,1fr))",gap:12}}>
+      {pending.map(cl=><div key={cl.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{display:"flex",gap:10,padding:12}}>
+          {cl.receipt_image?<img src={driveImgSrc(cl.receipt_image)} alt="" loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(cl.receipt_image))} style={{width:64,height:64,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:64,height:64,borderRadius:10,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.img} s={22} c={C.line}/></div>}
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cl.customer_name||"—"}</div>
+            <div style={{fontSize:12,color:C.ink3}}>📞 {cl.phone||"-"}</div>
+            <div style={{fontSize:11.5,color:C.ink4}}>บิล {cl.bill_number||"-"} · {fmtDT(cl.created_at)}</div>
+            <div style={{fontSize:16,fontWeight:900,color:C.green,marginTop:2}}>฿{(+cl.amount||0).toLocaleString()}</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center",padding:"0 12px 12px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:4,fontSize:12,color:C.ink3}}>แต้ม <input type="text" inputMode="numeric" value={editPts[cl.id]!=null?editPts[cl.id]:pointsFromAmount(cl.amount)} onChange={e=>setEditPts(m=>({...m,[cl.id]:e.target.value.replace(/\D/g,"")}))} style={{width:54,padding:"6px 8px",border:`1.5px solid ${C.brandBorder}`,borderRadius:8,fontSize:14,fontWeight:800,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}/></div>
+          <Btn v="success" onClick={()=>approveClaim(cl)} loading={busyId===cl.id} s={{flex:1,padding:"8px",fontSize:13}}>อนุมัติ</Btn>
+          <Btn v="danger" onClick={()=>rejectClaim(cl)} disabled={busyId===cl.id} s={{padding:"8px 12px",fontSize:13}}>ปฏิเสธ</Btn>
+        </div>
+      </div>)}
+    </div>}
+  </div>;
+}
+
+// Promotions/campaigns manager + a cashier "check/redeem code" tool that marks a
+// per-customer voucher used or increments a campaign's usage (with validity/quota checks).
+function CRMPromotions({promotions,currentBranch,canEdit,reload}){
+  const[branches,setBranches]=useState([]);
+  useEffect(()=>{api.getBranches().then(b=>setBranches((Array.isArray(b)?b:[]).filter(x=>x.active!==false&&x.type!=="central"))).catch(()=>{});},[]);
+  const pF0={name:"",type:"percent",value:"",min_spend:"",branch_ids:[],start_date:todayBkk(),end_date:"",quota:"",code:"",description:"",active:true};
+  const[form,setForm]=useState(pF0);const[show,setShow]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);
+  const[redeem,setRedeem]=useState("");const[rBusy,setRBusy]=useState(false);
+  const bName=id=>{const b=branches.find(x=>+x.id===+id);return b?b.name:("#"+id);};
+  function openNew(){setForm(pF0);setEditId(null);setShow(true);}
+  function openEdit(p){setForm({name:p.name||"",type:p.type||"percent",value:String(p.value??""),min_spend:String(p.min_spend??""),branch_ids:Array.isArray(p.branch_ids)?p.branch_ids.map(Number):[],start_date:p.start_date||"",end_date:p.end_date||"",quota:p.quota==null?"":String(p.quota),code:p.code||"",description:p.description||"",active:p.active!==false});setEditId(p.id);setShow(true);}
+  function toggleBranch(id){setForm(f=>{const has=f.branch_ids.includes(+id);return{...f,branch_ids:has?f.branch_ids.filter(x=>x!==+id):[...f.branch_ids,+id]};});}
+  async function save(){
+    if(!form.name.trim()){alert("ใส่ชื่อโปรโมชั่น");return;}
+    setSaving(true);
+    try{
+      const payload={name:form.name.trim(),type:form.type,value:+form.value||0,min_spend:+form.min_spend||0,branch_ids:form.branch_ids&&form.branch_ids.length?form.branch_ids:null,start_date:form.start_date||null,end_date:form.end_date||null,quota:form.quota===""?null:(parseInt(form.quota)||0),code:(form.code||"").trim().toUpperCase()||null,description:form.description.trim()||null,active:form.active};
+      if(editId)await api.updateCRMPromotion(editId,payload);else await api.addCRMPromotion({...payload,used_count:0,created_at:new Date().toISOString()});
+      setShow(false);setForm(pF0);setEditId(null);await reload();
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+((e&&e.message)||e));}
+    setSaving(false);
+  }
+  async function toggleActive(p){try{await api.updateCRMPromotion(p.id,{active:!(p.active!==false)});await reload();}catch(e){alert("ไม่สำเร็จ: "+((e&&e.message)||e));}}
+  async function del(p){if(!await confirmDlg({title:"ลบโปรโมชั่น",message:`ลบ "${p.name}" ถาวร?`,danger:true,confirmLabel:"ลบ"}))return;try{await api.deleteCRMPromotion(p.id);await reload();}catch(e){alert("ลบไม่สำเร็จ: "+((e&&e.message)||e));}}
+  async function useCode(){
+    const code=(redeem||"").trim().toUpperCase();if(!code||rBusy)return;
+    setRBusy(true);
+    try{
+      const vs=await api.getCRMVouchersAll().catch(()=>[]);
+      const v=(vs||[]).find(x=>(x.code||"").toUpperCase()===code);
+      if(v){
+        if(v.status==="used")alert("⚠️ คูปองนี้ถูกใช้ไปแล้ว");
+        else{await api.updateCRMVoucherIfStatus(v.id,"active",{status:"used",used_at:new Date().toISOString()});alert(`✅ ใช้คูปอง ${code} แล้ว — มูลค่า ${v.value}${v.type==="percent"?"%":" บาท"}\nแคชเชียร์กดส่วนลดนี้ใน FoodStory ได้เลย`);}
+        setRedeem("");setRBusy(false);await reload();return;
+      }
+      const p=(promotions||[]).find(x=>(x.code||"").toUpperCase()===code);
+      if(!p){alert("❌ ไม่พบโค้ดนี้");setRBusy(false);return;}
+      const today=todayBkk();
+      if(p.active===false){alert("โปรโมชั่นนี้ปิดอยู่");setRBusy(false);return;}
+      if(p.start_date&&today<p.start_date){alert("โปรโมชั่นยังไม่เริ่ม");setRBusy(false);return;}
+      if(p.end_date&&today>p.end_date){alert("โปรโมชั่นหมดอายุแล้ว");setRBusy(false);return;}
+      if(p.quota!=null&&(+p.used_count||0)>=+p.quota){alert("โปรโมชั่นเต็มโควตาแล้ว");setRBusy(false);return;}
+      await api.updateCRMPromotion(p.id,{used_count:(+p.used_count||0)+1});
+      alert(`✅ ใช้โปรฯ "${p.name}" — ${promoDesc(p)}\nแคชเชียร์กดส่วนลดนี้ใน FoodStory ได้เลย`);
+      setRedeem("");await reload();
+    }catch(e){alert("ไม่สำเร็จ: "+((e&&e.message)||e));}
+    setRBusy(false);
+  }
+  return <div>
+    {/* Redeem / check code */}
+    <div style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:16,marginBottom:16}}>
+      <div style={{fontSize:14,fontWeight:900,color:C.ink,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>🎟️ ตรวจ / ใช้โค้ด (คูปองลูกค้า หรือ โค้ดโปรฯ)</div>
+      <div style={{display:"flex",gap:8}}>
+        <input value={redeem} onChange={e=>setRedeem(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")useCode();}} placeholder="กรอกโค้ด เช่น VCH-AB12CD หรือ SONGKRAN" style={{...iS,textTransform:"uppercase"}}/>
+        <Btn onClick={useCode} loading={rBusy} s={{padding:"11px 20px",whiteSpace:"nowrap"}}>ใช้โค้ด</Btn>
+      </div>
+      <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:6}}>ระบบจะเช็ควันที่/โควตา/ซ้ำให้ แล้วมาร์คว่าใช้แล้ว — ส่วนตัวเลขส่วนลดกดที่ FoodStory ตามปกติ</div>
+    </div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+      <div style={{fontSize:15,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>🎁 โปรโมชั่น ({(promotions||[]).length})</div>
+      {canEdit&&<Btn icon={I.plus} onClick={openNew}>เพิ่มโปรโมชั่น</Btn>}
+    </div>
+    {(promotions||[]).length===0?<div style={{textAlign:"center",color:C.ink4,padding:24,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีโปรโมชั่น</div>
+    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12}}>
+      {(promotions||[]).map(p=>{const on=p.active!==false;const full=p.quota!=null&&(+p.used_count||0)>=+p.quota;return <div key={p.id} style={{background:C.white,border:`1px solid ${on?C.brandBorder:C.line}`,borderRadius:14,padding:14,fontFamily:"'Sarabun',sans-serif",opacity:on?1:.6}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:15,fontWeight:900,color:C.ink}}>{p.name}</div>
+            <div style={{fontSize:13,fontWeight:800,color:C.brand,marginTop:2}}>{promoDesc(p)}{+p.min_spend>0?` · ขั้นต่ำ ฿${(+p.min_spend).toLocaleString()}`:""}</div>
+          </div>
+          <span style={{fontSize:10,fontWeight:800,color:on?C.green:C.ink4,background:on?C.greenLight:C.lineLight,padding:"2px 8px",borderRadius:10,whiteSpace:"nowrap"}}>{on?"เปิด":"ปิด"}</span>
+        </div>
+        {p.code&&<div style={{fontSize:12,marginTop:6}}>โค้ด: <b style={{color:C.purple,letterSpacing:.5}}>{p.code}</b></div>}
+        <div style={{fontSize:11.5,color:C.ink4,marginTop:4}}>🏪 {Array.isArray(p.branch_ids)&&p.branch_ids.length?p.branch_ids.map(bName).join(", "):"ทุกสาขา"}</div>
+        <div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>📅 {p.start_date?fmtD(p.start_date):"—"} → {p.end_date?fmtD(p.end_date):"ไม่จำกัด"}</div>
+        <div style={{fontSize:11.5,color:full?C.red:C.ink4,marginTop:2,fontWeight:full?800:400}}>ใช้ไป {(+p.used_count||0).toLocaleString()}{p.quota!=null?` / ${(+p.quota).toLocaleString()}`:""} ครั้ง{full?" (เต็ม)":""}</div>
+        {p.description&&<div style={{fontSize:12,color:C.ink3,marginTop:6}}>{p.description}</div>}
+        {canEdit&&<div style={{display:"flex",gap:6,marginTop:10}}>
+          <Btn v="ghost" onClick={()=>toggleActive(p)} s={{flex:1,padding:"6px",fontSize:12}}>{on?"⏸ ปิด":"▶ เปิด"}</Btn>
+          <Btn v="ghost" onClick={()=>openEdit(p)} icon={I.pencil} s={{padding:"6px 10px",fontSize:12,background:"#FEF3C7",color:"#92400E"}}>แก้</Btn>
+          <Btn v="ghost" onClick={()=>del(p)} icon={I.trash} s={{padding:"6px 10px",fontSize:12,background:C.redLight,color:C.red}}>ลบ</Btn>
+        </div>}
+      </div>;})}
+    </div>}
+    {show&&<Modal title={editId?"✏️ แก้ไขโปรโมชั่น":"➕ เพิ่มโปรโมชั่น"} onClose={()=>{setShow(false);setForm(pF0);setEditId(null);}} wide>
+      <Inp label="ชื่อโปรโมชั่น *" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น สงกรานต์ลด 15%"/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Field label="ชนิด"><select value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}>{Object.entries(PROMO_TYPES).map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></Field>
+        <Inp label={form.type==="percent"?"ส่วนลด (%)":form.type==="points_x"?"ตัวคูณแต้ม":"มูลค่า (บาท)"} type="number" value={form.value} onChange={e=>setForm(f=>({...f,value:e.target.value}))} placeholder="0"/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Inp label="ยอดขั้นต่ำ (บาท)" type="number" value={form.min_spend} onChange={e=>setForm(f=>({...f,min_spend:e.target.value}))} placeholder="0"/>
+        <Inp label="โค้ด (ถ้ามี)" value={form.code} onChange={e=>setForm(f=>({...f,code:e.target.value.toUpperCase()}))} placeholder="เช่น SONGKRAN"/>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+        <Field label="เริ่ม"><input type="date" value={form.start_date} onChange={e=>setForm(f=>({...f,start_date:e.target.value}))} style={iS}/></Field>
+        <Field label="สิ้นสุด"><input type="date" value={form.end_date} onChange={e=>setForm(f=>({...f,end_date:e.target.value}))} style={iS}/></Field>
+        <Inp label="โควตา (เว้นว่าง=ไม่จำกัด)" type="number" value={form.quota} onChange={e=>setForm(f=>({...f,quota:e.target.value}))} placeholder="ไม่จำกัด"/>
+      </div>
+      <Field label="สาขาที่ร่วม (ไม่เลือก = ทุกสาขา)">
+        <div style={{display:"flex",flexWrap:"wrap",gap:8}}>{branches.map(b=><label key={b.id} style={{display:"flex",alignItems:"center",gap:5,fontSize:13,fontFamily:"'Sarabun',sans-serif",background:form.branch_ids.includes(+b.id)?C.brandLight:C.bg,border:`1px solid ${form.branch_ids.includes(+b.id)?C.brandBorder:C.line}`,borderRadius:8,padding:"5px 10px",cursor:"pointer"}}><input type="checkbox" checked={form.branch_ids.includes(+b.id)} onChange={()=>toggleBranch(b.id)}/> {b.name}</label>)}</div>
+      </Field>
+      <Field label="รายละเอียด (ถ้ามี)"><textarea value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} rows={2} placeholder="เงื่อนไขเพิ่มเติม" style={{...iS,resize:"none"}}/></Field>
+      <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",margin:"6px 0"}}><input type="checkbox" checked={form.active} onChange={e=>setForm(f=>({...f,active:e.target.checked}))}/> เปิดใช้งานทันที</label>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:12,marginTop:8,borderTop:`1px solid ${C.line}`}}>
+        <Btn v="ghost" onClick={()=>{setShow(false);setForm(pF0);setEditId(null);}}>ยกเลิก</Btn>
+        <Btn onClick={save} loading={saving} icon={I.check}>{editId?"บันทึก":"เพิ่มโปรโมชั่น"}</Btn>
+      </div>
+    </Modal>}
+  </div>;
+}
+
 function CRMTab({currentBranch,currentUser,menus}){
   const[subTab,setSubTab]=useState("customers");
   const[customers,setCustomers]=useState([]);
@@ -9678,6 +9919,7 @@ function CRMTab({currentBranch,currentUser,menus}){
   const[vouchers,setVouchers]=useState([]);
   const[feedback,setFeedback]=useState([]);
   const[reservations,setReservations]=useState([]);
+  const[claims,setClaims]=useState([]);const[events,setEvents]=useState([]);const[promotions,setPromotions]=useState([]);
   const[loading,setLoading]=useState(false);
   const[err,setErr]=useState("");
 
@@ -9705,14 +9947,17 @@ function CRMTab({currentBranch,currentUser,menus}){
   async function loadAll(){
     setLoading(true);setErr("");
     try{
-      const[c,tx,v,fb,res]=await Promise.all([
+      const[c,tx,v,fb,res,cl,ev,pr]=await Promise.all([
         api.getCRMCustomers(currentBranch.id),
         api.getCRMTransactions(currentBranch.id),
         api.getCRMVouchers(currentBranch.id),
         api.getCRMFeedback(currentBranch.id),
         api.getCRMReservations(currentBranch.id),
+        api.getCRMPointClaims(currentBranch.id).catch(()=>[]),
+        api.getCRMEvents(currentBranch.id).catch(()=>[]),
+        api.getCRMPromotions().catch(()=>[]),
       ]);
-      setCustomers(c);setTransactions(tx);setVouchers(v);setFeedback(fb);setReservations(res);
+      setCustomers(c);setTransactions(tx);setVouchers(v);setFeedback(fb);setReservations(res);setClaims(cl||[]);setEvents(ev||[]);setPromotions(pr||[]);
     }catch(e){setErr(e.message);}
     setLoading(false);
   }
@@ -9730,9 +9975,12 @@ function CRMTab({currentBranch,currentUser,menus}){
     return list;
   },[customers,transactions,custSearch,custFilter]);
 
+  const pendingClaims=claims.filter(c=>c.status==="pending").length;
   const SUB_TABS=[
     {id:"customers",l:"ลูกค้า"},
+    {id:"points",l:pendingClaims>0?`แต้ม/อนุมัติ (${pendingClaims})`:"แต้ม/อนุมัติ"},
     {id:"loyalty",l:"ความภักดี"},
+    {id:"promotions",l:"โปรโมชั่น"},
     {id:"reservations",l:"จองโต๊ะ"},
     {id:"feedback",l:"ความคิดเห็น"},
     {id:"analytics",l:"วิเคราะห์"},
@@ -9752,6 +10000,12 @@ function CRMTab({currentBranch,currentUser,menus}){
 
     {/* ── LOYALTY ── */}
     {subTab==="loyalty"&&<CRMloyalty customers={customers} transactions={transactions} vouchers={vouchers} setVouchers={setVouchers} showVoucherForm={showVoucherForm} setShowVoucherForm={setShowVoucherForm} voucherCustId={voucherCustId} setVoucherCustId={setVoucherCustId} canEdit={canEdit} currentBranch={currentBranch} reload={loadAll}/>}
+
+    {/* ── POINTS / CLAIMS (QR stats + cashier award + bill approval) ── */}
+    {subTab==="points"&&<CRMPoints currentBranch={currentBranch} currentUser={currentUser} customers={customers} claims={claims} events={events} canEdit={canEdit} reload={loadAll}/>}
+
+    {/* ── PROMOTIONS ── */}
+    {subTab==="promotions"&&<CRMPromotions promotions={promotions} currentBranch={currentBranch} canEdit={canEdit} reload={loadAll}/>}
 
     {/* ── RESERVATIONS ── */}
     {subTab==="reservations"&&<CRMReservations reservations={reservations} customers={customers} showResForm={showResForm} setShowResForm={setShowResForm} editRes={editRes} setEditRes={setEditRes} resFilter={resFilter} setResFilter={setResFilter} canEdit={canEdit} currentBranch={currentBranch} reload={loadAll}/>}
@@ -10119,8 +10373,8 @@ function CRMReservations({reservations,customers,showResForm,setShowResForm,edit
             <div style={{fontSize:9,color:st.c,fontWeight:700}}>{resDate.toLocaleString("th-TH",{month:"short"})}</div>
           </div>
           <div style={{flex:1,minWidth:0}}>
-            <div style={{fontWeight:700,fontSize:14,color:C.ink}}>{cust?.name||"ลูกค้าทั่วไป"} ({res.party_size} คน)</div>
-            <div style={{fontSize:12,color:C.ink3,marginTop:2}}>{resDate.toLocaleString("th-TH",{hour:"2-digit",minute:"2-digit"})} น. {res.table_pref&&`• ที่นั่ง: ${res.table_pref}`}</div>
+            <div style={{fontWeight:700,fontSize:14,color:C.ink}}>{cust?.name||res.customer_name||"ลูกค้าทั่วไป"} ({res.party_size} คน){!cust&&res.customer_name&&<span style={{fontSize:10,fontWeight:800,color:C.purple,background:"#F5F3FF",padding:"1px 7px",borderRadius:10,marginLeft:6,verticalAlign:"middle"}}>📱 จองผ่าน QR</span>}</div>
+            <div style={{fontSize:12,color:C.ink3,marginTop:2}}>{resDate.toLocaleString("th-TH",{hour:"2-digit",minute:"2-digit"})} น. {(res.phone||cust?.phone)&&`• 📞 ${res.phone||cust?.phone}`} {res.table_pref&&`• ที่นั่ง: ${res.table_pref}`}</div>
             {res.special_req&&<div style={{fontSize:11,color:C.ink4,marginTop:2,background:C.yellowLight,borderRadius:6,padding:"2px 8px",display:"inline-block"}}>★ {res.special_req}</div>}
           </div>
           <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
@@ -11512,6 +11766,9 @@ export default function App(){
   // POS cashier sell link (?pos=1&branch=ID): 4-digit PIN → straight to sale.
   // No username/password — PINs are defined per-branch in POS back office.
   if(params.get("pos")==="1"&&params.get("branch")){return <><style>{globalStyle}</style><POSPinGate branchId={params.get("branch")}/><ConfirmDlg/></>;}
+
+  // Public CRM landing (?join=1): one QR, customer picks branch → add LINE / book / collect points.
+  if(params.get("join")==="1"){return <><style>{globalStyle}</style><CRMJoinPage initialBranchId={params.get("branch")}/><ConfirmDlg/></>;}
 
   if(!currentUser)return <><style>{globalStyle}</style><LoginPage onLogin={u=>{setCurrentUser(u);}}/></>;
   if(!currentBranch)return <><style>{globalStyle}</style><BranchSelectorWithLoad user={currentUser} onSelect={b=>setCurrentBranch(b)} onLogout={()=>setCurrentUser(null)}/></>;
@@ -13068,6 +13325,140 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
 // ══════════════════════════════════════════════════════
 // ── POS CUSTOMER PAGE (ลูกค้าสแกน QR) ────────────────
 // ══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// PUBLIC CRM LANDING (?join=1) — ONE QR for every branch. Customer picks the
+// branch they dined at, then adds that branch's LINE OA, books a table, or
+// submits a bill to collect points. No login. Records per-branch scan stats
+// (crm_events). Same public-route pattern as ?scan / ?pos.
+// ═══════════════════════════════════════════════════════════════════════════
+function crmLogEvent(branchId,type,meta){if(!branchId)return;try{const p=api.addCRMEvent({branch_id:+branchId,type,meta:meta||null,created_at:new Date().toISOString()});if(p&&p.catch)p.catch(()=>{});}catch{}}
+const joinH={fontSize:19,fontWeight:900,color:C.ink,marginBottom:14,fontFamily:"'Sarabun',sans-serif"};
+const backLink={background:"none",border:"none",color:C.ink4,fontSize:13,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",padding:"4px 0",marginBottom:6,display:"block"};
+const consentRow={display:"flex",alignItems:"center",gap:8,fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",margin:"8px 0",cursor:"pointer",lineHeight:1.5};
+const hubCard={padding:"22px 10px",borderRadius:16,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:8,boxShadow:"0 2px 8px rgba(0,0,0,.05)"};
+const hubLbl={fontSize:15,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",textAlign:"center"};
+
+function CRMJoinBooking({branch,onDone,onBack}){
+  const[name,setName]=useState("");const[phone,setPhone]=useState("");
+  const[when,setWhen]=useState("");const[size,setSize]=useState("2");const[req,setReq]=useState("");
+  const[consent,setConsent]=useState(false);const[saving,setSaving]=useState(false);
+  const ready=name.trim()&&phone.trim().length>=9&&when&&consent&&!saving;
+  async function submit(){
+    if(!ready)return;setSaving(true);
+    try{
+      await api.addCRMReservation({branch_id:+branch.id,customer_name:name.trim(),phone:phone.trim(),reserved_at:new Date(when).toISOString(),party_size:parseInt(size)||2,special_req:req.trim(),status:"pending",created_at:new Date().toISOString()});
+      crmLogEvent(branch.id,"booking",{party:parseInt(size)||2});
+      onDone();
+    }catch(e){alert("จองไม่สำเร็จ: "+((e&&e.message)||e));setSaving(false);}
+  }
+  return <>
+    <button onClick={onBack} style={backLink}>← กลับ</button>
+    <div style={joinH}>📅 จองโต๊ะ · {branch.name}</div>
+    <Inp label="ชื่อผู้จอง *" value={name} onChange={e=>setName(e.target.value)} placeholder="ชื่อ-นามสกุล"/>
+    <Field label="เบอร์โทร *"><input type="tel" inputMode="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="08x-xxx-xxxx" style={iS}/></Field>
+    <Field label="วันและเวลาที่จอง *"><input type="datetime-local" value={when} onChange={e=>setWhen(e.target.value)} style={iS}/></Field>
+    <Inp label="จำนวนคน" type="number" value={size} onChange={e=>setSize(e.target.value)} placeholder="2"/>
+    <Field label="หมายเหตุ (ถ้ามี)"><textarea value={req} onChange={e=>setReq(e.target.value)} rows={2} placeholder="เช่น ขอโต๊ะริมหน้าต่าง / มีเด็กเล็ก" style={{...iS,resize:"none"}}/></Field>
+    <label style={consentRow}><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)} style={{width:18,height:18,flexShrink:0}}/> <span>ยินยอมให้ร้านเก็บข้อมูลเพื่อติดต่อยืนยันการจอง (PDPA)</span></label>
+    <Btn full v="success" onClick={submit} loading={saving} disabled={!ready} s={{marginTop:10,padding:"14px",fontSize:16}}>✅ ยืนยันการจอง</Btn>
+  </>;
+}
+
+function CRMJoinClaim({branch,onDone,onBack}){
+  const[name,setName]=useState("");const[phone,setPhone]=useState("");
+  const[bill,setBill]=useState("");const[amount,setAmount]=useState("");
+  const[img,setImg]=useState(null);const[up,setUp]=useState(false);const[saving,setSaving]=useState(false);
+  const fileRef=useRef();
+  async function onPhoto(e){const f=e.target.files&&e.target.files[0];e.target.value="";if(!f)return;setUp(true);try{const ref=await uploadImageToDrive(f);setImg(ref);}catch(err){alert("อัปโหลดรูปไม่สำเร็จ: "+((err&&err.message)||err));}setUp(false);}
+  const ready=phone.trim().length>=9&&(+amount>0)&&!!img&&!saving&&!up;
+  async function submit(){
+    if(!ready)return;setSaving(true);
+    try{
+      await api.addCRMPointClaim({branch_id:+branch.id,customer_name:name.trim(),phone:phone.trim(),bill_number:bill.trim(),amount:+amount||0,receipt_image:img||null,status:"pending",created_at:new Date().toISOString()});
+      crmLogEvent(branch.id,"point_claim",{amount:+amount||0});
+      onDone();
+    }catch(e){alert("ส่งไม่สำเร็จ: "+((e&&e.message)||e));setSaving(false);}
+  }
+  return <>
+    <button onClick={onBack} style={backLink}>← กลับ</button>
+    <div style={joinH}>⭐ สะสมแต้ม · {branch.name}</div>
+    <div style={{fontSize:12.5,color:C.ink4,marginBottom:12,lineHeight:1.6,fontFamily:"'Sarabun',sans-serif"}}>กรอกยอดบิลแล้วแนบรูปใบเสร็จ ทีมงานจะตรวจและเพิ่มแต้มให้ภายหลัง 🎁</div>
+    <Inp label="ชื่อ" value={name} onChange={e=>setName(e.target.value)} placeholder="ชื่อของคุณ"/>
+    <Field label="เบอร์โทร (ใช้สะสมแต้ม) *"><input type="tel" inputMode="tel" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="08x-xxx-xxxx" style={iS}/></Field>
+    <Inp label="เลขที่บิล/ใบเสร็จ" value={bill} onChange={e=>setBill(e.target.value)} placeholder="เช่น A00123"/>
+    <Inp label="ยอดใช้จ่าย (บาท) *" type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0"/>
+    <Field label="รูปใบเสร็จ *">
+      {img?<div style={{position:"relative",display:"inline-block"}}><img src={driveImgSrc(img)} alt="" style={{width:120,height:120,objectFit:"cover",borderRadius:12,border:`1px solid ${C.line}`}}/><button onClick={()=>setImg(null)} style={{position:"absolute",top:-8,right:-8,width:24,height:24,borderRadius:"50%",background:C.red,color:C.white,border:`2px solid ${C.white}`,cursor:"pointer",fontWeight:700}}>✕</button></div>
+      :<button onClick={()=>fileRef.current&&fileRef.current.click()} disabled={up} style={{width:120,height:120,borderRadius:12,border:`2px dashed ${C.brandBorder}`,background:C.brandLight,cursor:up?"wait":"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:6,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{up?<span style={{fontSize:12}}>กำลังอัป...</span>:<><Ic d={I.img} s={28} c={C.brand}/><span style={{fontSize:12,fontWeight:700}}>ถ่าย/เลือกรูป</span></>}</button>}
+      <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onPhoto} style={{display:"none"}}/>
+    </Field>
+    <Btn full v="success" onClick={submit} loading={saving} disabled={!ready} s={{marginTop:8,padding:"14px",fontSize:16}}>📤 ส่งบิลสะสมแต้ม</Btn>
+  </>;
+}
+
+function CRMJoinPage({initialBranchId}){
+  const[branches,setBranches]=useState(null);
+  const[branch,setBranch]=useState(null);
+  const[view,setView]=useState("hub");
+  useEffect(()=>{let alive=true;api.getBranches().then(bs=>{if(!alive)return;const list=(Array.isArray(bs)?bs:[]).filter(b=>b.active!==false&&b.type!=="central");setBranches(list);if(initialBranchId){const b=list.find(x=>+x.id===+initialBranchId);if(b){setBranch(b);crmLogEvent(b.id,"visit",{via:"qr"});}}}).catch(()=>{if(alive)setBranches([]);});return()=>{alive=false;};},[initialBranchId]);
+  function pickBranch(b){setBranch(b);setView("hub");crmLogEvent(b.id,"visit",{via:"select"});}
+  function openLine(){if(!branch)return;crmLogEvent(branch.id,"line_click");if(branch.line_url)window.open(branch.line_url,"_blank","noopener");else alert("สาขานี้ยังไม่ได้ตั้งค่าลิงก์ไลน์ กรุณาแจ้งร้าน");}
+
+  const wrap=children=><div style={{minHeight:"100vh",background:"linear-gradient(160deg,#FFF7ED,#FEF2F2 55%,#F5F3FF)",fontFamily:"'Sarabun',sans-serif",paddingBottom:40}}>
+    <div style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,padding:"22px 20px 26px",textAlign:"center",borderBottomLeftRadius:26,borderBottomRightRadius:26,boxShadow:"0 6px 22px rgba(0,0,0,.18)"}}>
+      <div style={{fontSize:27,fontWeight:900,letterSpacing:.3}}>🍲 NAIWANSOOK</div>
+      <div style={{fontSize:13,opacity:.92,marginTop:2}}>ชาบู · หมูกระทะ</div>
+    </div>
+    <div style={{maxWidth:460,margin:"0 auto",padding:"20px 16px 0"}}>{children}</div>
+  </div>;
+
+  const lineBtn=<button onClick={openLine} style={{width:"100%",padding:15,borderRadius:14,border:"none",background:"#06C755",color:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:900,boxShadow:"0 4px 14px rgba(6,199,85,.4)",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>➕ แอดไลน์ {branch&&branch.name}</button>;
+
+  if(branches===null)return wrap(<div style={{textAlign:"center",padding:"40px 0",color:C.ink4}}>กำลังโหลด...</div>);
+
+  if(!branch)return wrap(<>
+    <div style={{fontSize:19,fontWeight:900,color:C.ink,textAlign:"center",marginBottom:4}}>วันนี้มาทานสาขาไหนครับ? 😋</div>
+    <div style={{fontSize:13,color:C.ink4,textAlign:"center",marginBottom:18}}>เลือกสาขาเพื่อแอดไลน์ร้าน จองโต๊ะ และสะสมแต้ม</div>
+    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+      {branches.map(b=><button key={b.id} onClick={()=>pickBranch(b)} style={{padding:"16px 18px",borderRadius:14,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:800,color:C.ink,textAlign:"left",boxShadow:"0 2px 8px rgba(0,0,0,.05)",display:"flex",alignItems:"center",gap:10}}>🏪 {b.name}<span style={{marginLeft:"auto",color:C.brand,fontSize:22}}>›</span></button>)}
+      {branches.length===0&&<div style={{textAlign:"center",color:C.ink4,padding:20}}>ยังไม่มีสาขาให้เลือก</div>}
+    </div>
+  </>);
+
+  if(view==="booked")return wrap(<div style={{textAlign:"center"}}>
+    <div style={{fontSize:60}}>🎉</div>
+    <div style={{fontSize:20,fontWeight:900,color:C.ink,marginTop:6}}>รับการจองแล้ว!</div>
+    <div style={{fontSize:13.5,color:C.ink3,margin:"8px 0 20px",lineHeight:1.6}}>ทางร้าน {branch.name} จะติดต่อกลับเพื่อยืนยัน<br/>แอดไลน์ไว้เพื่อรับการยืนยันเร็วขึ้น 👇</div>
+    {lineBtn}
+    <button onClick={()=>setView("hub")} style={{...backLink,marginTop:16,textAlign:"center",width:"100%"}}>← กลับหน้าหลัก</button>
+  </div>);
+
+  if(view==="claimed")return wrap(<div style={{textAlign:"center"}}>
+    <div style={{fontSize:60}}>✅</div>
+    <div style={{fontSize:20,fontWeight:900,color:C.ink,marginTop:6}}>ส่งบิลเรียบร้อย!</div>
+    <div style={{fontSize:13.5,color:C.ink3,margin:"8px 0 20px",lineHeight:1.6}}>ทีมงานกำลังตรวจสอบและจะเพิ่มแต้มให้<br/>แอดไลน์ {branch.name} เพื่อรับแจ้งเตือนแต้ม 👇</div>
+    {lineBtn}
+    <button onClick={()=>setView("hub")} style={{...backLink,marginTop:16,textAlign:"center",width:"100%"}}>← กลับหน้าหลัก</button>
+  </div>);
+
+  if(view==="booking")return wrap(<CRMJoinBooking branch={branch} onBack={()=>setView("hub")} onDone={()=>setView("booked")}/>);
+  if(view==="claim")return wrap(<CRMJoinClaim branch={branch} onBack={()=>setView("hub")} onDone={()=>setView("claimed")}/>);
+
+  return wrap(<>
+    <div style={{textAlign:"center",marginBottom:16}}>
+      <div style={{fontSize:12,color:C.ink4}}>สาขาที่เลือก</div>
+      <div style={{fontSize:23,fontWeight:900,color:C.brand}}>🏪 {branch.name}</div>
+      <button onClick={()=>setBranch(null)} style={{marginTop:4,background:"none",border:"none",color:C.ink4,fontSize:12,textDecoration:"underline",cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>เปลี่ยนสาขา</button>
+    </div>
+    <div style={{marginBottom:12}}>{lineBtn}</div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+      <button onClick={()=>setView("booking")} style={hubCard}><span style={{fontSize:30}}>📅</span><span style={hubLbl}>จองโต๊ะ</span></button>
+      <button onClick={()=>setView("claim")} style={hubCard}><span style={{fontSize:30}}>⭐</span><span style={hubLbl}>สะสมแต้ม</span></button>
+    </div>
+    <div style={{fontSize:11.5,color:C.ink4,textAlign:"center",marginTop:18,lineHeight:1.6}}>แอดไลน์ร้านเพื่อรับโปรโมชั่น ข่าวสาร และสะสมแต้ม 🎁</div>
+  </>);
+}
+
 function CustomerPage({branchId,tableId,token}){
   const[branch,setBranch]=useState(null);const[table,setTable]=useState(null);const[menus,setMenus]=useState([]);
   const[cart,setCart]=useState([]);const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
