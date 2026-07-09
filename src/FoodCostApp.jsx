@@ -7505,8 +7505,17 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     // No price column — this document is handed to the external supplier
     // who quotes their own price. The user records the actual price during
     // "ยืนยันรับ".
-    const rows=(order.items||[]).map((i,n)=>`<tr><td style="text-align:center;color:#64748B">${n+1}</td><td>${esc(i.name)}</td><td>${esc(i.qtyNeeded||0)}</td><td>${esc(i.unit||"")}</td></tr>`).join("");
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการสั่งวัตถุดิบ</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 6px}.meta{font-size:13px;margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — รายการสั่งวัตถุดิบ</h2><p class="meta">ซัพพลายเออร์: <b>${esc(order.supplier_name)}</b></p><p class="meta">สาขาผู้สั่ง: <b>${esc(order.branch_name)}</b></p><p class="meta">สั่งโดย: <b>${esc(order.requested_by)}</b> · วันที่: ${esc(fmtDT(order.requested_at))}</p>${order.note?`<p class="meta">หมายเหตุ: ${esc(order.note)}</p>`:""}<table><thead><tr><th style="width:48px">ลำดับ</th><th>วัตถุดิบ</th><th style="width:120px">จำนวน</th><th style="width:90px">หน่วย</th></tr></thead><tbody>${rows}</tbody></table><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
+    // When reprinting AFTER receiving (delivered), the document must match what was
+    // actually received: show receivedQty (not the ordered qtyNeeded) and drop items
+    // that weren't received at all. Before receiving it stays the order sent to the supplier.
+    const delivered=order.status==="delivered";
+    const recvOf=it=>(it.receivedQty!=null?+it.receivedQty:(it.received_qty!=null?+it.received_qty:null));
+    const qtyCol=it=>{if(!delivered)return +it.qtyNeeded||0;const r=recvOf(it);return r==null?(+it.qtyNeeded||0):r;};
+    const printItems=delivered?(order.items||[]).filter(it=>qtyCol(it)>0):(order.items||[]);
+    const docTitle=delivered?"ใบรับสินค้า (จำนวนรับเข้าจริง)":"รายการสั่งวัตถุดิบ";
+    const qtyHeader=delivered?"จำนวนรับเข้าจริง":"จำนวน";
+    const rows=printItems.map((it,n)=>`<tr><td style="text-align:center;color:#64748B">${n+1}</td><td>${esc(it.name)}</td><td>${esc(qtyCol(it))}</td><td>${esc(it.unit||"")}</td></tr>`).join("");
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${docTitle}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 6px}.meta{font-size:13px;margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — ${docTitle}</h2><p class="meta">ซัพพลายเออร์: <b>${esc(order.supplier_name)}</b></p><p class="meta">สาขาผู้สั่ง: <b>${esc(order.branch_name)}</b></p><p class="meta">สั่งโดย: <b>${esc(order.requested_by)}</b> · วันที่: ${esc(fmtDT(order.requested_at))}</p>${order.note?`<p class="meta">หมายเหตุ: ${esc(order.note)}</p>`:""}<table><thead><tr><th style="width:48px">ลำดับ</th><th>วัตถุดิบ</th><th style="width:120px">${qtyHeader}</th><th style="width:90px">หน่วย</th></tr></thead><tbody>${rows}</tbody></table><br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
     w.document.close();addPrintClose(w);
     setTimeout(()=>{try{w.print();}catch{}setPrintingId(null);},600);
   }
