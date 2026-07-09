@@ -1052,6 +1052,15 @@ function ingVisibleAt(ing,branchId,isCentral){
   if(vb.length===0)return false;
   return vb.includes(branchId);
 }
+// Supplier visibility (OPT-IN, unlike ingredients): a supplier is owned by the branch
+// that created it (s.branch_id) and also shows at any branch central ticked into its
+// visible_branches. Central creates + opens per branch; branches see own + opened.
+function supVisibleAt(s,branchId){
+  if(s==null||branchId==null)return false;
+  if(+s.branch_id===+branchId)return true;
+  const vb=s.visible_branches;
+  return Array.isArray(vb)&&vb.map(Number).includes(+branchId);
+}
 const marginColor=(m)=>m>=60?C.green:m>=40?C.yellow:C.red;
 const marginLabel=(m)=>m>=60?"ดี":m>=40?"พอใช้":"ต่ำ";
 // ── Canonical date handling ──────────────────────────────────────────────
@@ -2727,7 +2736,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
   }
   // Suppliers for current branch (own list)
-  const myBranchSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
+  const myBranchSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&supVisibleAt(s,currentBranch?.id)),[suppliers,currentBranch]);
   // ── ภาพรวมมูลค่าวัตถุดิบ (มูลค่า = สต็อก × ราคาทุน ต่อสาขา) ──
   const[reportScope,setReportScope]=useState(()=>isCentral&&branches.length>1?"org":"branch");
   const[reportModal,setReportModal]=useState(null);  // metric kind being detailed
@@ -7889,7 +7898,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   },[]);
 
   // Suppliers visible to the current branch — each branch has its own supplier list.
-  const visibleSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
+  const visibleSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&supVisibleAt(s,currentBranch?.id)),[suppliers,currentBranch]);
   const visibleSupplierNames=useMemo(()=>new Set(visibleSuppliers.map(s=>s.name)),[visibleSuppliers]);
 
   // Strict per-branch supplier resolver — NO fallback to central's
@@ -8620,7 +8629,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
   </Modal>;
 }
 
-function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders=[],allOrders=[]}){
+function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders=[],allOrders=[],branches=[]}){
   const supF0={name:"",contact:"",phone:"",note:"",active:true,central_only:false,delivery_info:"",min_order:"",invoice_type:"receipt",credit_term:""};
   const[supForm,setSupForm]=useState(supF0);
   const[editSID,setEditSID]=useState(null);
@@ -8629,7 +8638,16 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
   // Each branch has its own supplier list — central_only suppliers are still kept
   // on the central branch row and are visible to other branches via the StockCheck
   // filter, but the SupplierTab itself only ever shows the *current branch's* rows.
-  const myList=useMemo(()=>suppliers.filter(s=>+s.branch_id===+currentBranch?.id),[suppliers,currentBranch]);
+  // Central manages its own suppliers (which it opens to branches); a branch sees
+  // suppliers it owns (legacy) + ones central opened to it via visible_branches.
+  const myList=useMemo(()=>suppliers.filter(s=>supVisibleAt(s,currentBranch?.id)),[suppliers,currentBranch]);
+  async function toggleVBSup(s,branchId){
+    const cur=Array.isArray(s.visible_branches)?s.visible_branches.map(Number):[];
+    const i=cur.indexOf(+branchId);
+    if(i===-1)cur.push(+branchId);else cur.splice(i,1);
+    try{await api.updateSupplier(s.id,{visible_branches:cur});await reloadSuppliers();}
+    catch(e){alert("บันทึกไม่สำเร็จ: "+((e&&e.message)||e));}
+  }
   const[q,setQ]=useState("");
   const shown=useMemo(()=>{const ql=q.trim().toLowerCase();return ql?myList.filter(s=>s.name.toLowerCase().includes(ql)||(s.contact||"").toLowerCase().includes(ql)||(s.phone||"").includes(q.trim())):myList;},[myList,q]);
   const [statsFor,setStatsFor]=useState(null);
@@ -8648,7 +8666,7 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
     try{
       const payload={...supForm,min_order:(supForm.min_order===""||supForm.min_order==null)?null:+supForm.min_order};
       if(editSID)await api.updateSupplier(editSID,payload);
-      else await api.addSupplier({...payload,branch_id:currentBranch.id});
+      else await api.addSupplier({...payload,branch_id:currentBranch.id,visible_branches:[]});
       await reloadSuppliers();
       closeForm();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -8657,10 +8675,10 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
     <div style={{background:isCentral?C.greenLight:C.brandLight,border:`1px solid ${isCentral?C.green+"33":C.brandBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
       <span style={{fontSize:18}}>{isCentral?"🏢":"🏪"}</span>
       <div style={{flex:1,minWidth:0}}>
-        <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>ซัพพลายของสาขา: {currentBranch?.name||"—"} <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>({myList.length})</span></div>
-        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>แต่ละสาขามีซัพพลายของตัวเอง — เปลี่ยนสาขาจะเห็นรายการคนละชุด</div>
+        <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{isCentral?"ซัพพลาย (ครัวกลางจัดการ)":`ซัพพลายของสาขา: ${currentBranch?.name||"—"}`} <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>({myList.length})</span></div>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>{isCentral?"ครัวกลางสร้างซัพพลายที่เดียว แล้วกด “เปิดให้สาขา” บนการ์ดเพื่อให้ไปโชว์ที่สาขานั้นทันที":"ซัพพลายที่ครัวกลางเปิดให้ + ของสาขาเอง (ครัวกลางเป็นผู้จัดการ)"}</div>
       </div>
-      {canE&&<Btn onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มซัพพลาย</Btn>}
+      {canE&&isCentral&&<Btn onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มซัพพลาย</Btn>}
     </div>
     {myList.length>0&&<div style={{position:"relative",marginBottom:12}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อซัพพลาย / ผู้ติดต่อ / เบอร์..." style={{...iS,paddingLeft:40,fontSize:16}}/></div>}
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(280px,100%),1fr))",gap:12,marginBottom:16}}>
@@ -8678,13 +8696,20 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
               {s.invoice_type&&<span style={{fontSize:10,fontWeight:700,color:s.invoice_type==="tax"?C.blue:C.ink3,background:s.invoice_type==="tax"?C.blueLight:C.bg,border:`1px solid ${s.invoice_type==="tax"?C.blue+"40":C.line}`,padding:"2px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif"}}>🧾 {s.invoice_type==="tax"?"ใบกำกับภาษี":"ใบเสร็จ"}</span>}
             </div>}
           </div>
-          {canE&&<div style={{display:"flex",gap:4,flexShrink:0}} onClick={e=>e.stopPropagation()}>
+          {canE&&+s.branch_id===+currentBranch?.id&&<div style={{display:"flex",gap:4,flexShrink:0}} onClick={e=>e.stopPropagation()}>
             <button onClick={()=>openEdit(s)} title="แก้ไขซัพพลาย" style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
             <button onClick={async()=>{if(!await confirmDlg({title:"ลบซัพพลายเออร์",message:`ต้องการลบ "${s.name}" ใช่หรือไม่?`}))return;await api.deleteSupplier(s.id);await reloadSuppliers();}} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>
           </div>}
         </div>
+        {isCentral&&canE&&+s.branch_id===+currentBranch?.id&&<div onClick={e=>e.stopPropagation()} style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.lineLight}`}}>
+          <div style={{fontSize:10,color:C.ink4,marginBottom:5,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>เปิดให้สาขา:</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+            {branches.filter(b=>b.type!=="central").map(b=>{const isOn=Array.isArray(s.visible_branches)&&s.visible_branches.map(Number).includes(+b.id);return <button key={b.id} onClick={()=>toggleVBSup(s,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
+            {branches.filter(b=>b.type!=="central").length===0&&<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>}
+          </div>
+        </div>}
       </Card>)}
-      {shown.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{q?"ไม่พบซัพพลายที่ค้นหา":"ยังไม่มีซัพพลายของสาขานี้"}</p>{canE&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.brand}}>"+ เพิ่มซัพพลาย"</b> ด้านบนเพื่อเริ่ม</p>}</div>}
+      {shown.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{q?"ไม่พบซัพพลายที่ค้นหา":(isCentral?"ยังไม่มีซัพพลาย":"ยังไม่มีซัพพลายที่เปิดให้สาขานี้")}</p>{canE&&isCentral&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.brand}}>"+ เพิ่มซัพพลาย"</b> ด้านบนเพื่อเริ่ม</p>}</div>}
     </div>
     {statsFor&&<SupplierStatsModal supplier={statsFor} orders={ordersScope} onClose={()=>setStatsFor(null)}/>}
     {showForm&&<Modal title={editSID?"✏️ แก้ไขซัพพลาย":"➕ เพิ่มซัพพลายใหม่"} onClose={closeForm}>
@@ -12061,7 +12086,7 @@ export default function App(){
             </>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
-            {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders}/>}
+            {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders} branches={branches}/>}
             {tab==="approve"&&<ApprovalTab currentUser={currentUser} currentBranch={currentBranch} branches={branches} reloadOrders={reload.orders} ings={ings}/>}
             {tab==="assets"&&<AssetsTab assets={assets} reloadAssets={reload.assets} currentUser={currentUser} currentBranch={currentBranch} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
