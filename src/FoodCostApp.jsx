@@ -2179,6 +2179,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
     if(savingRef.current)return;
     if(!sel){alert("กรุณาเลือกวัตถุดิบ");return;}
     if(!(+qty>0)){alert("กรุณาใส่จำนวนของเสีย");return;}
+    if(!images||images.length===0){alert("📷 กรุณาแนบรูปของเสียอย่างน้อย 1 รูป เพื่อใช้ตรวจสอบ");return;}
     if(uploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
     savingRef.current=true;
     setSaving(true);
@@ -2254,16 +2255,16 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
       </div>}
       <Inp label="📝 เหตุผล" value={reason} onChange={e=>setReason(e.target.value)} placeholder="เช่น หมดอายุ, ตกพื้น, เสียระหว่างเก็บ"/>
       <div style={{marginTop:12}}>
-        <div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📎 แนบรูป (ไม่จำกัด){uploading>0&&<span style={{color:C.brand,marginLeft:8,fontSize:12}}>กำลังอัป {uploading}...</span>}</div>
+        <div style={{fontSize:13,fontWeight:700,color:images.length===0?C.red:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📎 แนบรูป <span style={{color:images.length===0?C.red:C.ink4,fontWeight:images.length===0?800:400}}>{images.length===0?"* บังคับอย่างน้อย 1 รูป":`(${images.length} รูป · เพิ่มได้ไม่จำกัด)`}</span>{uploading>0&&<span style={{color:C.brand,marginLeft:8,fontSize:12}}>กำลังอัป {uploading}...</span>}</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
           {images.map((ref,i)=><div key={i} style={{position:"relative"}}><img src={driveImgSrc(ref)} alt="" loading="lazy" decoding="async" style={{width:72,height:72,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`}}/><button onClick={()=>setImages(im=>im.filter((_,j)=>j!==i))} style={{position:"absolute",top:-6,right:-6,width:20,height:20,borderRadius:"50%",background:C.red,border:`2px solid ${C.white}`,color:C.white,cursor:"pointer",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button></div>)}
-          <button onClick={()=>fileRef.current?.click()} style={{width:72,height:72,borderRadius:10,border:`2px dashed ${C.line}`,background:C.bg,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,color:C.ink4}}><Ic d={I.img} s={20} c={C.ink4}/><span style={{fontSize:10,fontFamily:"'Sarabun',sans-serif"}}>เพิ่มรูป</span></button>
+          <button onClick={()=>fileRef.current?.click()} style={{width:72,height:72,borderRadius:10,border:`2px dashed ${images.length===0?C.red:C.line}`,background:images.length===0?C.redLight:C.bg,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,color:images.length===0?C.red:C.ink4}}><Ic d={I.img} s={20} c={images.length===0?C.red:C.ink4}/><span style={{fontSize:10,fontFamily:"'Sarabun',sans-serif",fontWeight:images.length===0?800:400}}>{images.length===0?"แนบรูป *":"เพิ่มรูป"}</span></button>
         </div>
         <input ref={fileRef} type="file" accept="image/*" multiple onChange={onFiles} style={{display:"none"}}/>
       </div>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,marginTop:14,borderTop:`1px solid ${C.line}`}}>
         <Btn v="ghost" onClick={closeRecord}>ปิด</Btn>
-        <Btn v="danger" onClick={save} loading={saving} disabled={saving||uploading>0} icon={I.check}>บันทึก</Btn>
+        <Btn v="danger" onClick={save} loading={saving} disabled={saving||uploading>0||images.length===0} icon={I.check}>บันทึก</Btn>
       </div>
     </Modal>}
     <div>
