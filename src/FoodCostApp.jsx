@@ -3073,7 +3073,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         <div style={{fontSize:36,marginBottom:6,opacity:.5}}>🔍</div>
         <div style={{fontSize:13}}>ไม่พบวัตถุดิบ</div>
       </div>}
-      {filtered.slice(0,200).map(ing=>{
+      {filtered.map(ing=>{
         const cur=branchStock(ing,currentBranch.id);
         const editVal=edits[ing.id];
         const newVal=editVal!==undefined&&editVal!==""?+editVal||0:cur;
@@ -3107,7 +3107,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
           </div>
         </div>;
       })}
-      {filtered.length>200&&<div style={{textAlign:"center",padding:10,color:C.ink4,fontSize:11,fontFamily:"'Sarabun',sans-serif"}}>+ อีก {filtered.length-200} รายการ — กรุณาค้นหาเฉพาะเจาะจง</div>}
+      {filtered.length>0&&<div style={{textAlign:"center",padding:10,color:C.ink4,fontSize:11,fontFamily:"'Sarabun',sans-serif"}}>— แสดงทั้งหมด {filtered.length} รายการ (เลื่อนดูได้ทุกตัว) —</div>}
     </div>
     {/* Footer actions */}
     <div style={{display:"flex",gap:8,paddingTop:10,borderTop:`1px solid ${C.line}`,background:C.white}}>
