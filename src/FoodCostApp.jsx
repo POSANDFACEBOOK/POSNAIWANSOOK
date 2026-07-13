@@ -2210,9 +2210,26 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
   function closeRecord(){setShowRecord(false);loadLogs();}   // close popup → land on the (refreshed) history page
   const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false&&inScope(b.id)),[branches,allowed]);// eslint-disable-line react-hooks/exhaustive-deps
   const shownLogs=useMemo(()=>logs.filter(l=>!fBranch||+l.branch_id===+fBranch),[logs,fBranch]);
+  // ── report dashboard ──
+  const[wasteTab,setWasteTab]=useState("history");   // history | report
+  const[range,setRange]=useState("month");           // month | 30d | year | all
+  const report=useMemo(()=>{
+    const ingById=new Map(ings.map(i=>[+i.id,i]));const menuById=new Map(menus.map(m=>[+m.id,m]));
+    const catOf=l=>{const m=l.item_type==="menu"?menuById.get(+l.ingredient_id):ingById.get(+l.ingredient_id);return (m&&(m.category||"").trim())||"ไม่ระบุหมวด";};
+    const ym=todayBkk().slice(0,7),yr=todayBkk().slice(0,4),cutoff=Date.now()-30*864e5;
+    const inR=l=>{const ld=String(l.log_date||"");if(range==="all")return true;if(range==="month")return ld.slice(0,7)===ym;if(range==="year")return ld.slice(0,4)===yr;if(range==="30d"){const d=parseAnyDate(ld);return d?d.getTime()>=cutoff:true;}return true;};
+    const rows=shownLogs.filter(inR);
+    const total=rows.reduce((s,l)=>s+(+l.total||0),0);
+    const agg=fn=>{const m=new Map();rows.forEach(l=>{const k=fn(l)||"—";const e=m.get(k)||{name:k,value:0,count:0};e.value+=(+l.total||0);e.count++;m.set(k,e);});return[...m.values()].sort((a,b)=>b.value-a.value);};
+    const monthTotal=shownLogs.filter(l=>String(l.log_date||"").slice(0,7)===ym).reduce((s,l)=>s+(+l.total||0),0);
+    return{total,count:rows.length,cats:agg(catOf),reasons:agg(l=>(l.reason||"").trim()||"ไม่ระบุเหตุผล"),items:agg(l=>l.ingredient_name||"—").slice(0,10),types:agg(l=>l.item_type==="menu"?"เมนู":"วัตถุดิบ"),monthTotal};
+  },[shownLogs,ings,menus,range]);
   async function delLog(l){if(!await confirmDlg({title:"ลบรายการของเสีย",message:`ลบ "${l.ingredient_name}" (${l.qty} ${l.unit||""}) ?`,danger:true}))return;try{await api.deleteWasteLog(l.id);loadLogs();}catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}}
   return <div>
-    <div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
+      <div style={{display:"flex",gap:6,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`}}>
+        {[{id:"history",l:"📋 ประวัติ"},{id:"report",l:"📊 รายงาน"}].map(t=><button key={t.id} onClick={()=>setWasteTab(t.id)} style={{padding:"7px 16px",borderRadius:9,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:wasteTab===t.id?800:600,background:wasteTab===t.id?C.white:"transparent",color:wasteTab===t.id?C.red:C.ink3,boxShadow:wasteTab===t.id?"0 1px 4px rgba(15,23,42,.1)":"none"}}>{t.l}</button>)}
+      </div>
       <Btn onClick={()=>setShowRecord(true)} icon={I.plus} s={{background:`linear-gradient(135deg,${C.red},#B91C1C)`,color:C.white,boxShadow:`0 4px 16px ${C.red}44`}}>บันทึกของเสีย</Btn>
     </div>
     {showRecord&&<Modal title="🗑️ บันทึกของเสีย" onClose={closeRecord} wide>
@@ -2251,7 +2268,8 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
     </Modal>}
     <div>
       {scopeBranches.length>1&&<div style={{marginBottom:12,maxWidth:280}}><Sel label="กรองสาขา" value={fBranch} onChange={e=>setFBranch(e.target.value)} options={[{v:"",l:"ทุกสาขา (ที่ดูแล)"},...scopeBranches.map(b=>({v:String(b.id),l:b.name}))]}/></div>}
-      {loadingLogs?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
+      {wasteTab==="report"?<WasteReport report={report} range={range} setRange={setRange}/>
+      :loadingLogs?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
       :shownLogs.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีรายการของเสีย</div>
       :<div style={{display:"grid",gridTemplateColumns:`repeat(${wasteCols},minmax(0,1fr))`,gap:12,maxHeight:"64vh",overflowY:"auto",paddingRight:4,paddingBottom:4}}>
         {shownLogs.map(l=>{const imgs=Array.isArray(l.images)?l.images:[];const clamp2={display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"};
@@ -2512,6 +2530,46 @@ function RptCard({icon,emoji,label,value,sub,accent=C.brand,tint,onClick}){
     <div style={{fontSize:20,fontWeight:900,color:accent,lineHeight:1.15,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:2}}>{value}</div>
     {sub&&<div style={{fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sub}</div>}
   </button>;
+}
+// Waste report dashboard — value + category donut (with %) + reason/top-item/type bars.
+function WasteReport({report,range,setRange}){
+  const{total,count,cats,reasons,items,types,monthTotal}=report;
+  const seg=(()=>{const top=cats.slice(0,8).map((c,i)=>({name:c.name,value:c.value,color:RPT_COLORS[i%RPT_COLORS.length]}));const other=cats.slice(8).reduce((s,c)=>s+c.value,0);return other>0?[...top,{name:"อื่นๆ",value:other,color:C.ink4}]:top;})();
+  const topCat=cats[0];const avg=count>0?total/count:0;
+  const RANGES=[["month","เดือนนี้"],["30d","30 วัน"],["year","ปีนี้"],["all","ทั้งหมด"]];
+  const sect={fontSize:13,fontWeight:800,color:C.ink2,margin:"18px 0 10px",fontFamily:"'Sarabun',sans-serif"};
+  const box={background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:16};
+  return <div style={{fontFamily:"'Sarabun',sans-serif"}}>
+    <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+      {RANGES.map(([v,l])=><button key={v} onClick={()=>setRange(v)} style={{padding:"6px 14px",borderRadius:18,border:`1.5px solid ${range===v?C.red:C.line}`,background:range===v?C.redLight:C.white,color:range===v?C.red:C.ink3,fontWeight:range===v?800:600,fontSize:12.5,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{l}</button>)}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
+      <RptCard emoji="💸" label="มูลค่าของเสียรวม" value={`฿${rB(total)}`} sub={`${count} ครั้ง`} accent={C.red} tint={C.redLight}/>
+      <RptCard emoji="📅" label="เดือนนี้" value={`฿${rB(monthTotal)}`} accent={C.brand}/>
+      <RptCard emoji="🧾" label="เฉลี่ย/ครั้ง" value={`฿${rB(avg)}`} accent={C.purple}/>
+      <RptCard emoji="📂" label="หมวดเสียมากสุด" value={topCat?topCat.name:"—"} sub={topCat?`฿${rB(topCat.value)} · ${(topCat.value/(total||1)*100).toFixed(0)}%`:""} accent={C.teal}/>
+    </div>
+    {total<=0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4}}>— ยังไม่มีของเสียในช่วงนี้ —</div>:<>
+    <div style={sect}>🍩 สัดส่วนมูลค่าของเสียตามหมวดหมู่</div>
+    <div style={{...box,display:"flex",gap:20,alignItems:"center",flexWrap:"wrap"}}>
+      <RptDonut segments={seg.length?seg:[{name:"-",value:1,color:C.lineLight}]} size={150}/>
+      <div style={{flex:1,minWidth:210,display:"flex",flexDirection:"column",gap:8}}>
+        {seg.map((s,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5}}>
+          <span style={{width:12,height:12,borderRadius:3,background:s.color,flexShrink:0}}/>
+          <span style={{color:C.ink2,fontWeight:600,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</span>
+          <span style={{color:C.ink,fontWeight:800,whiteSpace:"nowrap"}}>฿{rB(s.value)}</span>
+          <span style={{color:C.ink4,fontSize:11,minWidth:38,textAlign:"right",fontWeight:700}}>{(s.value/(total||1)*100).toFixed(0)}%</span>
+        </div>)}
+      </div>
+    </div>
+    <div style={sect}>📝 ตามสาเหตุที่เสีย</div>
+    <div style={box}><RptBars rows={reasons.slice(0,10).map((r,i)=>({name:r.name,value:r.value,count:r.count,color:RPT_COLORS[i%RPT_COLORS.length]}))} color={C.red}/></div>
+    <div style={sect}>🏆 วัตถุดิบ/เมนู ที่เสียมูลค่าสูงสุด</div>
+    <div style={box}><RptBars rows={items.map((r,i)=>({name:r.name,value:r.value,count:r.count,color:RPT_COLORS[i%RPT_COLORS.length]}))} color={C.brand}/></div>
+    <div style={sect}>🍽 วัตถุดิบ vs เมนู</div>
+    <div style={box}><RptBars rows={types.map(r=>({name:r.name,value:r.value,count:r.count,color:r.name==="เมนู"?C.brand:C.teal}))}/></div>
+    </>}
+  </div>;
 }
 // Detail popup for one report metric
 function IngReportModal({kind,scope,data,currentBranch,onClose}){
