@@ -7482,6 +7482,16 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     }
   }
 
+  // Merged "สั่งของ/คัดลอก": one tap copies the LINE order text AND flips pending → sent-to-supplier.
+  async function orderAndCopy(order){
+    await copyOrderText(order);                  // clipboard ready to paste in LINE
+    if(order.status==="pending"){
+      try{await api.updateOrderIfStatus(order.id,"pending",{status:"approved"});}
+      catch(e){console.error("status flip after สั่งของ/คัดลอก failed",e);}
+      await reload();
+    }
+  }
+
   // For central, `orders` is unfiltered (getOrders(null) = every branch), so "ครัวกลาง"
   // must explicitly keep only central's own external orders; "ทุกสาขา" shows all.
   const displayOrders=isCentral?(view==="all"?allOrders:(orders||[]).filter(o=>+o.branch_id===+currentBranch.id)):orders;
@@ -7745,7 +7755,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           {/* 5. สถานะ */}
           <div style={{minWidth:100,display:"flex",justifyContent:"center"}} onClick={stopBubble}>
             {order.status==="pending"&&canEditOrder(order)
-              ?<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="ส่งใบสั่งซื้อให้ซัพพลาย (พิมพ์ + เปลี่ยนสถานะ)" style={{padding:"6px 14px",borderRadius:18,border:"none",cursor:printingId===order.id?"not-allowed":"pointer",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,fontSize:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5,boxShadow:`0 2px 6px ${C.brand}55`,opacity:printingId===order.id?0.6:1,transition:"transform .12s"}} onMouseEnter={e=>{if(printingId!==order.id)e.currentTarget.style.transform="translateY(-1px)";}} onMouseLeave={e=>{e.currentTarget.style.transform="";}}>🛒 สั่งของ</button>
+              ?<button onClick={()=>orderAndCopy(order)} title="คัดลอกรายการ (วางในไลน์ซัพพลาย) + เปลี่ยนเป็นส่งซัพพลายแล้ว" style={{padding:"6px 14px",borderRadius:18,border:"none",cursor:"pointer",background:copiedId===order.id?`linear-gradient(135deg,${C.green},#059669)`:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,fontSize:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5,boxShadow:`0 2px 6px ${C.brand}55`,transition:"transform .12s"}} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";}} onMouseLeave={e=>{e.currentTarget.style.transform="";}}>{copiedId===order.id?"✓ คัดลอกแล้ว":"🛒 สั่งของ/คัดลอก"}</button>
               :<span style={{fontSize:11,fontWeight:800,color:stColor,background:stBg,padding:"4px 10px",borderRadius:18,whiteSpace:"nowrap",border:`1px solid ${stColor}33`,fontFamily:"'Sarabun',sans-serif"}}>{statusLabel[order.status]||order.status}</span>}
           </div>
           {/* 6. จัดการ — flow ใหม่:
@@ -7758,8 +7768,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               // Locked until Area approves — staff can do NOTHING with the order yet.
               ?<span style={{fontSize:11,color:C.ink4,fontStyle:"italic",fontFamily:"'Sarabun',sans-serif",display:"inline-flex",alignItems:"center",gap:4}}><Ic d={I.clock} s={12} c={C.ink4}/>รอ Area อนุมัติก่อน</span>
               :<>
-            {/* คัดลอก — เฉพาะที่ Area อนุมัติแล้ว (ไม่โชว์เมื่อถูกตีกลับ) */}
-            {order.status!=="rejected"&&<button onClick={()=>copyOrderText(order)} title="คัดลอกข้อความ (สำหรับวางในไลน์ซัพพลาย)" style={{background:copiedId===order.id?C.greenLight:C.tealLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:copiedId===order.id?C.green:C.teal,transition:"background .15s"}}>
+            {/* คัดลอก — แยกไว้เฉพาะหลังส่งซัพแล้ว (approved/delivered); ตอน pending รวมอยู่ในปุ่ม "สั่งของ/คัดลอก" · ตีกลับ = ไม่มี */}
+            {order.status!=="rejected"&&order.status!=="pending"&&<button onClick={()=>copyOrderText(order)} title="คัดลอกข้อความ (สำหรับวางในไลน์ซัพพลาย)" style={{background:copiedId===order.id?C.greenLight:C.tealLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:copiedId===order.id?C.green:C.teal,transition:"background .15s"}}>
               <Ic d={copiedId===order.id?I.check:I.copy} s={12} c={copiedId===order.id?C.green:C.teal}/>
               {copiedId===order.id?"คัดลอกแล้ว":"คัดลอก"}
             </button>}
