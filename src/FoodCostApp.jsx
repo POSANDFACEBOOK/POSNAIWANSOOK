@@ -7441,6 +7441,12 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const[expandedOrders,setExpandedOrders]=useState({});
   const toggleExpand=(id)=>setExpandedOrders(e=>({...e,[id]:!e[id]}));
   const[editingQty,setEditingQty]=useState(null);    // { order, items:[mutable copies] }
+  const[editAddQ,setEditAddQ]=useState("");          // ingredient search when adding a row in the edit modal
+  function addEditItem(g){
+    const price=+g.buy_price||0;
+    setEditingQty(s=>s?({...s,items:[...s.items,{_key:"n"+g.id+"-"+s.items.length,ingId:g.id,name:g.name,unit:g.buy_unit||"หน่วย",qtyNeeded:1,pricePerUnit:price,estimatedCost:Math.round(price*100)/100,supplierName:s.supplierName||""}]}):s);
+    setEditAddQ("");
+  }
   const[receivingOrder,setReceivingOrder]=useState(null); // { order, items:[copies with receivedQty] }
   const[recvImages,setRecvImages]=useState([]);const[recvUploading,setRecvUploading]=useState(0);  // receive photos (Drive)
   const[recvDeliveryFee,setRecvDeliveryFee]=useState("0");  // ค่าจัดส่งของออเดอร์นี้ (0 = ไม่มี)
@@ -7537,9 +7543,11 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
 
   // ─ Edit qty
   function startEditQty(order){
+    setEditAddQ("");
     setEditingQty({
       orderId:order.id,
       orderStatus:order.status,
+      supplierName:order.supplier_name,
       items:(order.items||[]).map((it,i)=>({...it,_key:i})),
     });
   }
@@ -7554,10 +7562,19 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       .filter(it=>+it.qtyNeeded>0)
       .map(({_key,...rest})=>rest);
     if(cleaned.length===0){alert("ต้องมีรายการอย่างน้อย 1 รายการ");return;}
+    const wasRejected=editingQty.orderStatus==="rejected";
     try{
-      await api.updateOrder(editingQty.orderId,{items:cleaned});
+      if(wasRejected){
+        // Edited a rejected order → send it back to Area for re-approval.
+        const patch={items:cleaned,status:"pending_approval",reject_reason:null,rejected_by:null,revised_at:new Date().toISOString()};
+        try{await api.updateOrderIfStatus(editingQty.orderId,"rejected",patch);}
+        catch(e){if(/PGRST204|column|revised_at/i.test(String((e&&e.message)||e))){const{revised_at,...p2}=patch;await api.updateOrderIfStatus(editingQty.orderId,"rejected",p2);}else throw e;}
+      }else{
+        await api.updateOrder(editingQty.orderId,{items:cleaned});
+      }
       setEditingQty(null);
       await reload();
+      if(wasRejected)alert("✅ แก้ไขแล้ว — ส่งให้ Area อนุมัติใหม่");
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
   }
 
@@ -7736,10 +7753,13 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               // Locked until Area approves — staff can do NOTHING with the order yet.
               ?<span style={{fontSize:11,color:C.ink4,fontStyle:"italic",fontFamily:"'Sarabun',sans-serif",display:"inline-flex",alignItems:"center",gap:4}}><Ic d={I.clock} s={12} c={C.ink4}/>รอ Area อนุมัติก่อน</span>
               :<>
-            <button onClick={()=>copyOrderText(order)} title="คัดลอกข้อความ (สำหรับวางในไลน์ซัพพลาย)" style={{background:copiedId===order.id?C.greenLight:C.tealLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:copiedId===order.id?C.green:C.teal,transition:"background .15s"}}>
+            {/* คัดลอก — เฉพาะที่ Area อนุมัติแล้ว (ไม่โชว์เมื่อถูกตีกลับ) */}
+            {order.status!=="rejected"&&<button onClick={()=>copyOrderText(order)} title="คัดลอกข้อความ (สำหรับวางในไลน์ซัพพลาย)" style={{background:copiedId===order.id?C.greenLight:C.tealLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:copiedId===order.id?C.green:C.teal,transition:"background .15s"}}>
               <Ic d={copiedId===order.id?I.check:I.copy} s={12} c={copiedId===order.id?C.green:C.teal}/>
               {copiedId===order.id?"คัดลอกแล้ว":"คัดลอก"}
-            </button>
+            </button>}
+            {/* ตีกลับ → แก้ไขรายการ (เพิ่ม/ลบ/แก้จำนวน) แล้วส่งให้ Area อนุมัติใหม่ */}
+            {order.status==="rejected"&&canEditOrder(order)&&<button onClick={()=>startEditQty(order)} title="แก้ไขรายการ + ส่งอนุมัติใหม่" style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,border:"none",borderRadius:7,padding:"5px 11px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:800,color:C.white,boxShadow:`0 2px 6px ${C.brand}55`}}><Ic d={I.pencil} s={12} c={C.white}/>แก้ไข</button>}
             {/* แก้ไขจำนวนถูกล็อก: ออเดอร์ที่ Area อนุมัติแล้ว (pending = รอส่งซัพ) แก้ไม่ได้ — ถ้าต้องแก้ให้ Area ตีกลับก่อน */}
             {(order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="พิมพ์ซ้ำ" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>}
             {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
@@ -7777,7 +7797,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     </>}
 
     {/* Edit qty modal */}
-    {editingQty&&<Modal title="✏️ แก้ไขจำนวนวัตถุดิบ" onClose={()=>setEditingQty(null)} wide>
+    {editingQty&&<Modal title={editingQty.orderStatus==="rejected"?"✏️ แก้ไขรายการ + ส่งอนุมัติใหม่":"✏️ แก้ไขรายการสั่งซื้อ"} onClose={()=>setEditingQty(null)} wide>
       <div style={{maxHeight:"50vh",overflowY:"auto",marginBottom:14}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
           <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","หน่วย","จำนวน","ราคา/หน่วย","รวม","ลบ"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
@@ -7798,13 +7818,22 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           })}</tbody>
         </table>
       </div>
+      {/* ➕ เพิ่มวัตถุดิบเข้ารายการ */}
+      <div style={{position:"relative",marginBottom:14}}>
+        <input value={editAddQ} onChange={e=>setEditAddQ(e.target.value)} placeholder="➕ เพิ่มวัตถุดิบ — พิมพ์ชื่อเพื่อค้นหา..." style={{...iS,fontSize:14}}/>
+        {editAddQ.trim()&&(()=>{const ql=editAddQ.trim().toLowerCase();const matches=(ings||[]).filter(g=>(g.name||"").toLowerCase().includes(ql)&&!editingQty.items.some(x=>+x.ingId===+g.id)).slice(0,25);return <div style={{position:"absolute",top:"100%",left:0,right:0,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,marginTop:4,maxHeight:240,overflowY:"auto",zIndex:10,boxShadow:"0 8px 24px rgba(0,0,0,.14)"}}>
+          {matches.length===0?<div style={{padding:12,color:C.ink4,fontSize:12,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>ไม่พบวัตถุดิบ (หรือมีในรายการแล้ว)</div>
+          :matches.map(g=><div key={g.id} onClick={()=>addEditItem(g)} style={{padding:"9px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,borderBottom:`1px solid ${C.lineLight}`,fontFamily:"'Sarabun',sans-serif"}} onMouseEnter={e=>e.currentTarget.style.background=C.bg} onMouseLeave={e=>e.currentTarget.style.background=C.white}><span style={{fontSize:13,fontWeight:600,color:C.ink}}>{g.name}</span><span style={{fontSize:11,color:C.ink4,whiteSpace:"nowrap"}}>{g.category||""} · ฿{(+g.buy_price||0).toLocaleString()}/{g.buy_unit||"หน่วย"}</span></div>)}
+        </div>;})()}
+      </div>
+      {editingQty.orderStatus==="rejected"&&<div style={{fontSize:12,color:"#B45309",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,padding:"8px 12px",marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>📌 แก้ไขเสร็จกด “บันทึก + ส่งอนุมัติใหม่” — รายการจะกลับไปให้ Area อนุมัติอีกครั้ง</div>}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
         <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>ยอดรวม</span>
         <span style={{fontSize:16,fontWeight:900,color:C.green}}>฿{editingQty.items.reduce((s,it)=>s+((+it.qtyNeeded||0)*(+it.pricePerUnit||0)),0).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
       </div>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={()=>setEditingQty(null)}>ยกเลิก</Btn>
-        <Btn onClick={saveEditQty} icon={I.check}>บันทึก</Btn>
+        <Btn onClick={saveEditQty} icon={I.check}>{editingQty.orderStatus==="rejected"?"บันทึก + ส่งอนุมัติใหม่":"บันทึก"}</Btn>
       </div>
     </Modal>}
 
