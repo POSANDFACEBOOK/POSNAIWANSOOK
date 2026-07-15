@@ -5322,10 +5322,13 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     }
     if(!extRecvImages||extRecvImages.length===0){alert("📷 กรุณาแนบรูปตอนรับสินค้าอย่างน้อย 1 รูป ก่อนยืนยันรับ (สต๊อกจะยังไม่วิ่งเข้า)");return;}
     if(extRecvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
+    const notRecv2=itemsWithReceived.filter(it=>+it.receivedQty===0);
+    const warn2=notRecv2.length?`⚠️ มีสินค้า ${notRecv2.length} รายการที่ระบุว่า "ไม่ได้รับ" (จำนวน 0):\n${notRecv2.map(it=>`   • ${it.name}`).join("\n")}\n\nรายการเหล่านี้จะไม่ถูกเพิ่มเข้าสต๊อก — ยืนยันว่าไม่ได้รับจริงใช่ไหม?\n\n`:"";
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
-      message:`ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?`,
+      message:`${warn2}ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?`,
       confirmLabel:"✅ ยืนยัน + เพิ่มสต๊อก",
+      danger:notRecv2.length>0,
     }))return;
     try{
       const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
@@ -6169,7 +6172,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                 <div>{it.name}</div>
                 <div style={{fontSize:10,color:C.ink4,fontWeight:500}}>{it.unit||""}</div>
               </td>
-              <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{ordered} {it.unit||""}{short&&<div style={{fontSize:10,color:"#92400E",fontWeight:800,marginTop:2}}>ขาด {(ordered-got).toFixed(2)}</div>}</td>
+              <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{ordered} {it.unit||""}{got===0?<div style={{fontSize:10,color:C.red,fontWeight:800,marginTop:2}}>❌ ไม่ได้รับ</div>:short?<div style={{fontSize:10,color:"#92400E",fontWeight:800,marginTop:2}}>ขาด {(ordered-got).toFixed(2)}</div>:null}</td>
               <td style={{padding:"7px 10px"}}>
                 <NumStepper value={it.receivedQty} onChange={v=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={ordered}/>
               </td>
@@ -7698,10 +7701,13 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     }
     if(!recvImages||recvImages.length===0){alert("📷 กรุณาแนบรูปตอนรับสินค้าอย่างน้อย 1 รูป ก่อนยืนยันรับ (สต๊อกจะยังไม่วิ่งเข้า)");return;}
     if(recvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
+    const notRecv1=itemsWithReceived.filter(it=>+it.receivedQty===0);
+    const warn1=notRecv1.length?`⚠️ มีสินค้า ${notRecv1.length} รายการที่ระบุว่า "ไม่ได้รับ" (จำนวน 0):\n${notRecv1.map(it=>`   • ${it.name}`).join("\n")}\n\nรายการเหล่านี้จะไม่ถูกเพิ่มเข้าสต็อก — ยืนยันว่าไม่ได้รับจริงใช่ไหม?\n\n`:"";
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
-      message:`ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต็อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?`,
+      message:`${warn1}ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต็อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?`,
       confirmLabel:"✅ ยืนยัน + เพิ่มสต็อก",
+      danger:notRecv1.length>0,
     }))return;
     try{
       // Lock first; only proceed if status matches what we read
@@ -7931,7 +7937,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
                 <div>{it.name}</div>
                 <div style={{fontSize:10,color:C.ink4,fontWeight:500}}>{it.unit||""}</div>
               </td>
-              <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{ordered} {it.unit||""}{short&&<div style={{fontSize:10,color:"#92400E",fontWeight:800,marginTop:2}}>ขาด {(ordered-got).toFixed(2)}</div>}</td>
+              <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{ordered} {it.unit||""}{got===0?<div style={{fontSize:10,color:C.red,fontWeight:800,marginTop:2}}>❌ ไม่ได้รับ</div>:short?<div style={{fontSize:10,color:"#92400E",fontWeight:800,marginTop:2}}>ขาด {(ordered-got).toFixed(2)}</div>:null}</td>
               <td style={{padding:"7px 10px"}}>
                 <NumStepper value={it.receivedQty} onChange={v=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={ordered}/>
               </td>
