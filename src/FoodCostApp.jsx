@@ -5316,10 +5316,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       const price=Math.max(0,+it.pricePerUnit||0);
       return{...it,receivedQty:qty,pricePerUnit:price,estimatedCost:Math.round(qty*price*100)/100};
     });
-    if(!itemsWithReceived.some(it=>+it.receivedQty>0)){
-      alert("ยังไม่ได้ระบุจำนวนที่รับเข้าจริง");
-      return;
-    }
+    // อนุญาตให้ทุกรายการเป็น 0 ได้ (ไม่ได้รับของเลย) — หน้าต่างเตือนด้านล่างจะให้ยืนยันก่อน
     if(!extRecvImages||extRecvImages.length===0){alert("📷 กรุณาแนบรูปตอนรับสินค้าอย่างน้อย 1 รูป ก่อนยืนยันรับ (สต๊อกจะยังไม่วิ่งเข้า)");return;}
     if(extRecvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
     const notRecv2=itemsWithReceived.filter(it=>+it.receivedQty===0);
@@ -7695,10 +7692,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         estimatedCost:Math.round(qty*price*100)/100,
       };
     });
-    if(!itemsWithReceived.some(it=>+it.receivedQty>0)){
-      alert("ยังไม่ได้ระบุจำนวนที่รับเข้าจริง");
-      return;
-    }
+    // อนุญาตให้ทุกรายการเป็น 0 ได้ (ไม่ได้รับของเลย) — หน้าต่างเตือนด้านล่างจะให้ยืนยันก่อน
     if(!recvImages||recvImages.length===0){alert("📷 กรุณาแนบรูปตอนรับสินค้าอย่างน้อย 1 รูป ก่อนยืนยันรับ (สต๊อกจะยังไม่วิ่งเข้า)");return;}
     if(recvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
     const notRecv1=itemsWithReceived.filter(it=>+it.receivedQty===0);
