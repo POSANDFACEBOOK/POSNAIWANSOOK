@@ -6981,6 +6981,10 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
 
   async function save(){
     if(items.length===0){alert("กรุณาเพิ่มรายการอย่างน้อย 1 รายการ");return;}
+    // HARD LOCK: an existing PO may only have its items edited while "open" (before
+    // approval / shipping). Blocks even a stale cached bundle that managed to open the
+    // editor on an approved/received PO. (The data-layer guard below enforces it too.)
+    if(editPO&&editPO.status!=="open"){alert("🔒 เอกสารนี้อนุมัติ/ดำเนินการไปแล้ว — แก้ไขรายการไม่ได้\n\nถ้าต้องการเปลี่ยน ให้ Area ตีกลับก่อน หรือลบใบนี้แล้วสร้างใหม่");return;}
     setSaving(true);
     try{
       // Editing preserves status — to actually accept a dispute the creator uses the dedicated
@@ -7008,11 +7012,12 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
         updated_at:new Date().toISOString(),
       };
       if(editPO){
-        // Optimistic lock: only PATCH while the row is STILL in the status it had
-        // when the edit form opened. Without it, saving after another device pressed
-        // "🚚 จัดส่ง" would rewrite status back to open/requested — the shipped
-        // deduction would be invisible and the PO could be shipped (deducted) twice.
-        await api.patchPOIfStatus(editPO.id,editPO.status,payload);
+        // Data-layer lock: only PATCH while the row is STILL "open". This does two jobs:
+        //  (1) blocks edits to any approved/shipped/received PO regardless of how the
+        //      editor was opened (stale bundle, bug, direct call) — the row won't match;
+        //  (2) prevents a race where another device shipped it meanwhile.
+        // An approved PO permanently leaves "open", so its items can never be rewritten.
+        await api.patchPOIfStatus(editPO.id,"open",payload);
         // Edit path — items changed on a moved PO requires delta math; out of scope
         // for now. Force user to cancel+recreate at moved statuses by blocking edit
         // upstream (startEdit only allows "requested" / "open").
