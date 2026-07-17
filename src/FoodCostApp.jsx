@@ -902,11 +902,19 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
       // credit can never half-apply even if the connection drops between them.
       let applied=!!(toId&&fromId&&await rpcStockTransfer(ingId,fromId,toId,add));
       if(!applied){
-        // Path #2: atomic per-branch deltas (server adds/subtracts under a row
-        // lock) → concurrent moves on the same ingredient can't clobber each other.
+        // Path #2: atomic per-branch deltas (server adds/subtracts under a row lock)
+        // → concurrent moves can't clobber each other. BUT two SEPARATE deltas are only
+        // safe for a SINGLE-slot move: for a both-slots move without the single-tx
+        // transfer RPC, the credit could commit and the debit then throw on a transient
+        // error → stock minted/destroyed. So a both-slots move skips the two-delta and
+        // falls straight to the single-PATCH below, which writes both slots in ONE
+        // updateIng (atomic across slots — conservation beats row-lock in this fallback).
         let viaRpc=true;
-        if(toId&&!(await rpcStockDelta(ingId,toId,+add)))viaRpc=false;
-        if(viaRpc&&fromId&&!(await rpcStockDelta(ingId,fromId,-add)))viaRpc=false;
+        if(toId&&fromId){viaRpc=false;}
+        else{
+          if(toId&&!(await rpcStockDelta(ingId,toId,+add)))viaRpc=false;
+          if(viaRpc&&fromId&&!(await rpcStockDelta(ingId,fromId,-add)))viaRpc=false;
+        }
         if(!viaRpc){
           // Fallback (RPC not installed yet): read-modify-write whole-column PATCH.
           // branchStockExact (baseline 0, no legacy global) + write-back avoid the
@@ -1012,33 +1020,9 @@ async function _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,ac
   }
 }
 
-// Reconcile stock that was already moved (at create time) against actual received.
-// For each item: delta = received_qty − qty
-//   delta > 0 (got more) → debit sender extra, credit receiver extra
-//   delta < 0 (got less) → credit sender back, debit receiver back
-// Items array shape: same as transfer; reads received_qty/receivedQty per row.
-async function applyReceiveDelta({senderId,receiverId,items,ings}){
-  if(!senderId||!receiverId)return;
-  const pos=[],neg=[];
-  for(const it of (items||[])){
-    const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
-    if(!ingId)continue;
-    const orig=+(it.qty!=null?it.qty:it.qtyNeeded)||0;
-    const recvRaw=it.received_qty!=null?it.received_qty:it.receivedQty;
-    const recv=recvRaw!=null?+recvRaw||0:orig;
-    const delta=recv-orig;
-    if(delta>0)pos.push({ingredient_id:ingId,qty:delta});
-    else if(delta<0)neg.push({ingredient_id:ingId,qty:Math.abs(delta)});
-  }
-  // received more → extra needs to leave sender and arrive at receiver
-  if(pos.length>0){
-    await transferStockBetweenBranches({fromBranchId:senderId,toBranchId:receiverId,items:pos,ings,autoVisible:false});
-  }
-  // received less → undo the surplus that was credited at create time
-  if(neg.length>0){
-    await transferStockBetweenBranches({fromBranchId:receiverId,toBranchId:senderId,items:neg,ings,autoVisible:false});
-  }
-}
+// (removed applyReceiveDelta — it was dead code encoding the OLD "moved at create"
+//  model with an UN-clamped over-receive branch that would mint stock if ever reused.
+//  The live acceptDispute inlines its own credit+variance logic clamped to <= ordered.)
 // Ingredient visibility resolver:
 //   visible_branches = null/undefined → visible to all branches (legacy default)
 //   visible_branches = []              → explicitly visible to NO branch (user "untick all")
@@ -2188,15 +2172,18 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
       // Deduct on-hand for a wasted INGREDIENT (menus have no stock). Direct atomic
       // delta — NOT transferStockBetweenBranches — so we don't SOP-cascade into the
       // wasted item's sub-ingredients (we threw away the item itself, not its recipe).
+      let stockOk=true;
       if(!isMenu){
         try{
           if(!await rpcStockDelta(sel.id,currentBranch.id,-(+qty))){
             const next=setBranchStockInJson(sel.stock_by_branch,currentBranch.id,Math.round((branchStockExact(sel,currentBranch.id)-(+qty))*1000)/1000);
             await api.updateIng(sel.id,{stock_by_branch:next});
           }
-        }catch(e2){alert("⚠️ บันทึกของเสียแล้ว แต่หักสต๊อกไม่สำเร็จ: "+(e2&&e2.message||e2)+"\nกรุณาปรับสต๊อกในหน้านับสต็อก");}
+        }catch(e2){stockOk=false;alert("⚠️ บันทึกของเสียแล้ว แต่หักสต๊อกไม่สำเร็จ: "+(e2&&e2.message||e2)+"\nกรุณาปรับสต๊อกในหน้านับสต็อก");}
       }
-      posToast("✅ บันทึกของเสีย + หักสต๊อกแล้ว","ok");
+      // Never claim success when the deduct failed — a green toast would make the operator
+      // think stock was reduced and re-do it, over-deducting.
+      posToast(stockOk?"✅ บันทึกของเสีย + หักสต๊อกแล้ว":"⚠️ บันทึกของเสียแล้ว แต่หักสต๊อกไม่สำเร็จ — ปรับที่หน้านับสต็อก",stockOk?"ok":"warn");
       setSel(null);setQ("");setQty("");setPrice("");setReason("");setImages([]);loadLogs();// reset for next entry + refresh history behind
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
     savingRef.current=false;
@@ -5574,8 +5561,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     if(!await confirmDlg({title:"ยอมรับการแก้ไข",message:`ยอมรับจำนวนที่ปลายทางแจ้งใน ${po.po_number||"PO นี้"}?\n\n• ระบบจะปรับ delta สต็อก: คืนของส่วนที่ขาดให้ผู้ส่ง / หรือตัดเพิ่มถ้ารับเกิน\n• ยอดรวมจะถูกปรับตามจำนวนที่รับจริง\n• เปลี่ยนสถานะเป็น "รอชำระเงิน"`,confirmLabel:"✅ ยอมรับการแก้ไข"}))return;
     setConfirming(po.id);
     try{
-      // Compute delta BEFORE mutating items so applyReceiveDelta sees both original
-      // qty and the receiver-reported received_qty per row.
+      // Compute delta BEFORE mutating items so the variance settlement sees both the
+      // original qty and the receiver-reported received_qty per row.
       const originalItems=po.items||[];
       // Pricing recompute uses received qty (clamped to original)
       const subtotal=round2(originalItems.reduce((s,it)=>{
