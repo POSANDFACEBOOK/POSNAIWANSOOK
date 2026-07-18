@@ -33,6 +33,15 @@ function billedQty(it){
   if(rec!=null)return +rec||0;
   return +(it.qty!=null?it.qty:(it.qtyNeeded!=null?it.qtyNeeded:0))||0;
 }
+// An "asset PO" is a central→branch delivery of assets/equipment (issued from an approved
+// asset PR), NOT ingredients. It must NEVER touch ingredient stock (no
+// transferStockBetweenBranches); on receive it creates/increments rows in the `assets`
+// table instead. Detected purely by the item marker — every line carries kind
+// 'asset'|'other'; ordinary ingredient items have no `kind`, so this never misfires on them.
+function isAssetPO(po){
+  const its=po&&po.items;
+  return Array.isArray(its)&&its.length>0&&its.every(it=>it&&(it.kind==="asset"||it.kind==="other"));
+}
 // Currency formatter (Thai Baht, always 2 decimals)
 const fmtTHB = (n) => `฿${(+n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 // Today in Asia/Bangkok (YYYY-MM-DD) — avoids UTC off-by-one near midnight
@@ -5194,7 +5203,9 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
   // would be un-shippable (shipPO refuses same branch) and strand the request.
   const approvedPRs=useMemo(()=>(prs||[]).filter(p=>p.status==="approved"&&p.type==="ingredient"&&+p.branch_id!==+currentBranch?.id),[prs,currentBranch]);
   const pool=useMemo(()=>{const m=new Map();for(const p of approvedPRs){for(const it of (p.items||[])){const id=+it.ingredient_id;if(!id||!(+it.qty>0))continue;const e=m.get(id)||{ingredient_id:id,name:it.name,unit:it.unit,total:0,byBranch:[]};e.total=round2(e.total+(+it.qty||0));const bId=+p.branch_id;const ex=e.byBranch.find(b=>+b.branchId===bId);if(ex)ex.qty=round2(ex.qty+(+it.qty||0));else e.byBranch.push({branchId:bId,branch:p.branch_name||branchName(p.branch_id),qty:+it.qty||0});m.set(id,e);}}return[...m.values()].sort((a,b)=>a.name.localeCompare(b.name));},[approvedPRs]);// eslint-disable-line react-hooks/exhaustive-deps
-  const[consolidating,setConsolidating]=useState(false);const consolidatingRef=useRef(false);
+  // Approved ASSET/equipment PRs waiting for central to issue an asset delivery PO.
+  const approvedAssetPRs=useMemo(()=>(prs||[]).filter(p=>p.status==="approved"&&p.type==="asset"&&+p.branch_id!==+currentBranch?.id),[prs,currentBranch]);
+  const[consolidating,setConsolidating]=useState(false);const consolidatingRef=useRef(false);const assetDistRef=useRef(false);
   // PR fulfillment = "จัดส่งให้สาขา": issue an internal delivery PO (ครัวกลาง→สาขา) per
   // requesting branch. NO stock moves here — the PO lands at "open"; central ships it from
   // the PO tab ("🚚 จัดส่ง") which is where the atomic stock deduct/credit happens.
@@ -5243,6 +5254,48 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     }catch(e){alert("จัดส่งไม่สำเร็จ: "+(e.message||e));if(reloadOrders)reloadOrders();await load();}
     consolidatingRef.current=false;setConsolidating(false);
   }
+  // Issue asset/equipment delivery POs from approved asset PRs — one PO per requesting
+  // branch, marked as an asset PO (items carry `kind`). Mirrors distributeToBranches'
+  // claim-first pattern, but the PO has NO prices (total 0) and NEVER moves ingredient
+  // stock; assets are created/incremented when the branch confirms receipt.
+  async function distributeAssets(){
+    if(assetDistRef.current)return;
+    const candidates=approvedAssetPRs.filter(p=>+p.branch_id&&(p.items||[]).some(it=>+it.qty>0));
+    if(candidates.length===0){alert("ยังไม่มีใบขอซื้อสินทรัพย์ที่อนุมัติแล้วให้จัดส่ง");return;}
+    assetDistRef.current=true;
+    const branchCount=new Set(candidates.map(p=>+p.branch_id)).size;
+    if(!await confirmDlg({title:"ออกใบส่งสินทรัพย์/อุปกรณ์",message:`ออกใบส่ง (ครัวกลาง→สาขา) จาก ${candidates.length} ใบขอซื้อสินทรัพย์ที่อนุมัติแล้ว?\n\n• แยกใบต่อสาขา (${branchCount} สาขา)\n• 📦 ไม่ตัดสต๊อกวัตถุดิบ — ตอนสาขากดรับ ระบบจะสร้าง/เพิ่มสินทรัพย์ให้อัตโนมัติ\n• ใบส่งจะอยู่สถานะ "รอจัดส่ง" — ไปกด "🚚 จัดส่ง" ที่แท็บ PO`,confirmLabel:"ออกใบส่งสินทรัพย์"})){assetDistRef.current=false;return;}
+    setConsolidating(true);
+    const ref=`ใบส่งสินทรัพย์ · ${fmtD(todayStr())}`;
+    const claimed=[],claimSkipped=[];
+    try{
+      // Claim PRs first (approved→converted) so a retry/second device issues no duplicates.
+      for(const p of candidates){
+        try{await api.updatePRIfStatus(p.id,"approved",{status:"converted",converted_ref:ref,converted_at:new Date().toISOString(),updated_at:new Date().toISOString()});claimed.push(p);}
+        catch{claimSkipped.push(p);}
+      }
+      if(claimed.length===0)throw new Error("ไม่มีใบที่จัดส่งได้ (อาจถูกอีกเครื่องทำไปแล้ว) — รีเฟรชแล้วลองใหม่");
+      const byBranch={};
+      for(const p of claimed){
+        const bid=+p.branch_id;if(!bid)continue;
+        if(!byBranch[bid])byBranch[bid]={branch_id:bid,items:[]};
+        for(const it of (p.items||[])){
+          if(!(+it.qty>0))continue;
+          byBranch[bid].items.push({kind:it.kind==="other"?"other":"asset",asset_id:it.asset_id||null,name:it.name,unit:it.unit||"ชิ้น",qty:+it.qty,price_per_unit:0,line_total:0,note:it.note||null,image:it.image||null,current_qty:it.current_qty!=null?it.current_qty:null});
+        }
+      }
+      const poFailed=[];
+      for(const g of Object.values(byBranch)){
+        if(!g.items.length)continue;
+        try{await api.addPO({po_number:genPONumber(currentBranch?.id),branch_id:g.branch_id,from_branch_id:currentBranch?.id,po_date:todayStr(),status:"open",items:g.items,subtotal:0,vat:0,total:0,notes:`ใบส่งสินทรัพย์/อุปกรณ์ (${fmtD(todayStr())})`,created_by:currentUser?.username||currentUser?.name||"",updated_at:new Date().toISOString()});}
+        catch{poFailed.push(branchName(g.branch_id));}
+      }
+      if(poFailed.length>0)alert(`⚠️ ออกใบส่งไม่สำเร็จ ${poFailed.length} สาขา: ${poFailed.join(", ")}\n\nใบขอซื้อปิดแล้ว แต่สาขานี้ยังไม่มีใบส่ง — สร้าง PO เองที่แท็บ PO`);
+      else posToast(`✅ ออกใบส่งสินทรัพย์ ${Object.keys(byBranch).length} สาขาแล้ว — ไปกด "🚚 จัดส่ง" ที่แท็บเอกสาร PO${claimSkipped.length?` (ข้าม ${claimSkipped.length} ใบที่ทำไปแล้ว)`:""}`,"ok");
+      if(reloadOrders)reloadOrders();await load();
+    }catch(e){alert("จัดส่งไม่สำเร็จ: "+(e.message||e));if(reloadOrders)reloadOrders();await load();}
+    assetDistRef.current=false;setConsolidating(false);
+  }
   const list=prs||[];
   const canDel=currentUser?.role==="admin";
   const filtered=useMemo(()=>{let l=prs||[];
@@ -5274,7 +5327,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     </div>}
     {prs===null?<Loading text="โหลดใบขอซื้อ..."/>
     :err?<div style={{textAlign:"center",padding:"36px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>โหลดไม่สำเร็จ<div style={{marginTop:10}}><Btn v="ghost" onClick={load}>↻ ลองใหม่</Btn></div></div>
-    :(isCentral&&view==="pool")?<Card style={{overflow:"hidden"}}>
+    :(isCentral&&view==="pool")?<><Card style={{overflow:"hidden"}}>
       <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.line}`,background:C.tealLight,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:14,fontWeight:900,color:"#0F6E56"}}>🧺 รอจัดส่ง — ยอดที่อนุมัติแล้ว แยกตามวัตถุดิบ/สาขา</div><div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>{approvedPRs.length} ใบขอซื้อ · {pool.length} วัตถุดิบ</div></div>
         {pool.length>0&&<Btn onClick={distributeToBranches} loading={consolidating} icon={I.truck} s={{background:`linear-gradient(135deg,${C.teal},#0F766E)`,color:C.white}}>📦 ออกใบส่งให้สาขา</Btn>}
@@ -5293,6 +5346,18 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         </tr>)}</tbody>
       </table></div>}
     </Card>
+      <Card style={{overflow:"hidden",marginTop:14}}>
+        <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.line}`,background:"#FFF7ED",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:14,fontWeight:900,color:"#7C2D12"}}>🛒 สินทรัพย์/อุปกรณ์ รอออกใบส่ง</div><div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>{approvedAssetPRs.length} ใบขอซื้อสินทรัพย์ที่อนุมัติแล้ว</div></div>
+          {approvedAssetPRs.length>0&&<Btn onClick={distributeAssets} loading={consolidating} icon={I.truck} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>📦 ออกใบส่งสินทรัพย์</Btn>}
+        </div>
+        {approvedAssetPRs.length===0?<div style={{textAlign:"center",padding:"30px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีใบขอซื้อสินทรัพย์ที่อนุมัติแล้วรอส่ง</div>
+        :<div>{approvedAssetPRs.map(p=><div key={p.id} style={{padding:"9px 14px",borderTop:`1px solid ${C.lineLight}`,fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{display:"flex",justifyContent:"space-between",gap:8}}><span style={{fontWeight:800,color:C.ink,fontSize:13.5}}>🏪 {branchName(p.branch_id)}</span><span style={{fontSize:11.5,color:C.ink4}}>{(p.items||[]).length} รายการ · {p.pr_number||("PR#"+p.id)}</span></div>
+          <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:5}}>{(p.items||[]).map((it,j)=><span key={j} style={{fontSize:11,background:it.kind==="other"?C.tealLight:C.bg,border:`1px solid ${C.line}`,borderRadius:12,padding:"2px 9px",color:C.ink3,whiteSpace:"nowrap"}}>{it.kind==="other"?"🆕 ":""}{it.name} <b style={{color:C.ink}}>×{it.qty}</b></span>)}</div>
+        </div>)}</div>}
+      </Card>
+    </>
     :<><div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
       {statusChips.map(d=>{const active=fStatus===d.v;return <button key={d.v} onClick={()=>setFStatus(d.v)} style={{padding:"7px 16px",borderRadius:10,border:`2px solid ${active?d.c:C.line}`,background:active?`${d.c}15`:C.white,color:active?d.c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:active?800:600,fontSize:13,transition:"all .15s"}}>{d.l}</button>;})}
     </div>
@@ -5672,6 +5737,18 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   async function shipPO(po){
     if(!isCreator(po)&&!isCentralBranch){alert("เฉพาะผู้ออกเอกสารหรือครัวกลางเท่านั้นที่จัดส่งได้");return;}
     if(po.status!=="open"){alert("เอกสารนี้ไม่ได้อยู่ในสถานะรอจัดส่ง");return;}
+    // Asset PO — a delivery of assets/equipment, NOT ingredients. Central doesn't stock
+    // assets, so shipping is a pure status change (no transferStockBetweenBranches). The
+    // branch's assets are created/incremented when it confirms receipt (confirmReceive).
+    if(isAssetPO(po)){
+      const recip=(branchById[po.branch_id]||{}).name||"ปลายทาง";
+      if(!await confirmDlg({title:"จัดส่งสินทรัพย์/อุปกรณ์",message:`จัดส่งใบ ${po.po_number||"นี้"} ไปยัง "${recip}"?\n\n• 📦 เป็นการส่งสินทรัพย์ — ไม่ตัดสต๊อกวัตถุดิบ\n• เมื่อสาขาปลายทางกด "✅ ยืนยันรับ" ระบบจะเพิ่ม/สร้างสินทรัพย์ให้อัตโนมัติ`,confirmLabel:"🚚 จัดส่งสินทรัพย์"}))return;
+      setConfirming(po.id);
+      try{ await api.patchPOIfStatus(po.id,"open",{status:"shipped",updated_at:new Date().toISOString()}); await load(); }
+      catch(e){ showErr("จัดส่งไม่สำเร็จ",e); }
+      setConfirming(null);
+      return;
+    }
     // Pre-flight: guarantee at least one shippable item so we don't flip
     // status to "shipped" and leave the stock untouched.
     if(+po.from_branch_id===+po.branch_id){
@@ -5781,8 +5858,58 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     setConfirming(null);
   }
 
+  // Receive an ASSET PO: no ingredient stock is touched. Existing assets (kind:'asset')
+  // get their quantity incremented; free-form items (kind:'other') become brand-new asset
+  // rows for THIS branch with the submitted name/image/note. Best-effort per line — a line
+  // that fails is reported so it can be added manually (no silent loss).
+  async function receiveAssetPO(po){
+    const recip=currentBranch?.name||"สาขา";
+    const its=(po.items||[]).filter(it=>+it.qty>0);
+    const nNew=its.filter(it=>it.kind==="other").length,nExist=its.filter(it=>it.kind==="asset").length;
+    if(!await confirmDlg({title:"ยืนยันรับสินทรัพย์/อุปกรณ์",message:`ยืนยันรับตามใบ ${po.po_number||"นี้"}?\n\n• เพิ่มจำนวนสินทรัพย์เดิม ${nExist} รายการ\n• สร้างสินทรัพย์ใหม่ ${nNew} รายการ (พร้อมรูป/รายละเอียด)\n• เข้าเป็นสินทรัพย์ของ "${recip}"`,confirmLabel:"✅ ยืนยันรับ"}))return;
+    setConfirming(po.id);
+    try{
+      const receivedAt=new Date().toISOString();
+      // Load assets BEFORE claiming the receive: if it fails we abort with the PO still
+      // 'shipped' (retryable) instead of creating duplicate rows off an empty snapshot.
+      const assetsNow=await api.getAssets();
+      const now=Array.isArray(assetsNow)?assetsNow:[];
+      // Merge existing-asset lines by asset_id so each asset row is incremented exactly ONCE
+      // (a PO can carry the same asset on several lines — from one cart or several PRs).
+      // Free-form 'other' lines each become their own new asset row.
+      const byAsset=new Map(),others=[];
+      for(const it of its){
+        const qty=+it.qty||0;if(qty<=0)continue;
+        if(it.kind==="asset"&&it.asset_id){const k=+it.asset_id;const e=byAsset.get(k)||{asset_id:k,name:it.name,image:it.image||null,note:it.note||null,qty:0};e.qty=round2(e.qty+qty);byAsset.set(k,e);}
+        else{others.push({name:it.name,image:it.image||null,note:it.note||null,qty});}
+      }
+      // Claim the receive (0 rows if already received elsewhere) BEFORE mutating assets.
+      await api.patchPOIfStatus(po.id,"shipped",{status:"awaiting_payment",received_at:receivedAt,received_by:currentUser?.username||currentUser?.name||null,updated_at:receivedAt});
+      const failed=[];
+      for(const e of byAsset.values()){
+        try{
+          const cur=now.find(a=>+a.id===e.asset_id&&+a.branch_id===+po.branch_id);
+          if(cur){ await api.updateAssetIfQty(cur.id,cur.quantity,{quantity:round2((+cur.quantity||0)+e.qty)}); }  // atomic — a racing edit fails safely into `failed`
+          else{ await api.addAsset({branch_id:po.branch_id,name:e.name,image:e.image,quantity:e.qty,status:"active",acquired_date:todayStr(),note:e.note}); }
+        }catch{ failed.push(e.name||"(ไม่มีชื่อ)"); }
+      }
+      for(const o of others){
+        try{ await api.addAsset({branch_id:po.branch_id,name:o.name,image:o.image,quantity:o.qty,status:"active",acquired_date:todayStr(),note:o.note}); }
+        catch{ failed.push(o.name||"(ไม่มีชื่อ)"); }
+      }
+      await load();setViewPO(null);
+      if(failed.length)setTimeout(()=>alert(`✅ รับแล้ว แต่เพิ่มสินทรัพย์ไม่สำเร็จ ${failed.length} รายการ:\n${failed.slice(0,6).join(", ")}\n\nไปที่แท็บสินทรัพย์เพื่อเพิ่ม/ปรับเองได้`),0);
+      else posToast("✅ รับสินทรัพย์แล้ว — เพิ่มเข้าสินทรัพย์ของสาขาเรียบร้อย","ok");
+    }catch(e){
+      if(/ถูกแก้ไขโดยผู้ใช้อื่น/.test(String((e&&e.message)||""))){await load();setViewPO(null);alert("เอกสารนี้น่าจะถูกรับไปแล้ว หรือสถานะเปลี่ยน — รีเฟรชให้แล้ว");}
+      else showErr("รับสินทรัพย์ไม่สำเร็จ (ลองใหม่อีกครั้ง)",e);
+    }
+    setConfirming(null);
+  }
   async function confirmReceive(po,images){
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ยืนยันรับสินค้าได้");return;}
+    // Asset delivery → create/increment assets, never ingredient stock.
+    if(isAssetPO(po)){ await receiveAssetPO(po); return; }
     if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• 📦 สต๊อก ${currentBranch.name} จะถูกเพิ่มทันทีตามจำนวนในใบสั่ง\n• ของที่ "ลอยอยู่ระหว่างทาง" จะเข้าสต๊อกปลายทางอย่างถาวร\n• ถ้ารับไม่ครบ ให้กด "สินค้าไม่ครบ" แทน เพื่อปรับจำนวนก่อน\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
@@ -5823,6 +5950,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   }
   async function submitDispute(po,updatedItems,note){
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ส่งกลับได้");return;}
+    // Asset POs never enter the ingredient dispute/stock path — they can only be received
+    // (full). If quantities differ, adjust the asset count on the สินทรัพย์ tab afterwards.
+    if(isAssetPO(po)){alert("ใบสินทรัพย์/อุปกรณ์รับได้เต็มจำนวน — ถ้าจำนวนไม่ตรง ปรับที่แท็บ \"สินทรัพย์\" ภายหลังได้");return;}
     setConfirming(po.id);
     try{
       // Clamp received_qty to [0, original qty] to prevent fraud, and recompute each
@@ -5975,7 +6105,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     // even though received_at is null; received/awaiting_payment moved both sides.
     // Cancelling MUST reverse it or the deducted stock is silently stranded.
     const STOCK_MOVED=new Set(["shipped","disputed","transfer_shipped","awaiting_payment","received","transfer_done"]);
-    const willRefund=STOCK_MOVED.has(po.status);
+    // Asset POs never moved ingredient stock, so never run the stock rollback for them
+    // (it would strand a phantom stock_pending on items that have no ingredient_id).
+    const willRefund=!isAssetPO(po)&&STOCK_MOVED.has(po.status);
     const wasReceived=!!po.received_at;
     const msg=willRefund
       ?`ยกเลิก ${po.po_number||"PO นี้"}?\n\n⚠️ สต๊อกถูกตัดไปแล้ว — ระบบจะคืนสต็อกให้:\n`+(wasReceived
@@ -6028,7 +6160,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       // instead of silently stranding its deduction). Rollback runs on the RETURNED
       // row, so it reads fresh items/branch_ids, not the stale list row.
       const deleted=await api.deletePOIfStatus(po.id,po.status);
-      if(wasReceived)await rollbackPOStock(deleted||po);
+      if(wasReceived&&!isAssetPO(po))await rollbackPOStock(deleted||po);   // asset POs never touched ingredient stock
       // Deleted for good → no future re-sync can ever match this external_id, so
       // void its accounting row now (idempotent). Covers cancelled-then-deleted POs.
       if(wasReceived)pushPOToSlipTrack(deleted||po,branches,{voided:true}).then(r=>recordSlipSync((deleted||po).id,r));
@@ -6126,6 +6258,10 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   function startCreate(){setPickedBranch(null);setEditPO(null);setStep('pick-branch');}
   function pickBranch(b){setPickedBranch(b);setStep('form');}
   function startEdit(po){
+    // Asset POs must NOT be opened in the ingredient editor — adding an ingredient line
+    // there would strip the PO's asset identity (isAssetPO=false) and reroute it onto real
+    // ingredient stock. Adjust the delivered asset quantities on the สินทรัพย์ tab instead.
+    if(isAssetPO(po)){alert("ใบสินทรัพย์/อุปกรณ์แก้ไขที่นี่ไม่ได้ (ฟอร์มนี้เป็นของวัตถุดิบ)\nถ้าต้องการเปลี่ยน ให้ลบใบนี้แล้วออกใหม่จากใบขอซื้อสินทรัพย์");return;}
     // Editing items is safe only when stock hasn't moved yet:
     //   • "open" — central accepted / distribution PO, before "🚚 จัดส่ง" (central's working doc)
     // A requester's document is LOCKED once Area approves it (status leaves pending_approval,
@@ -6417,7 +6553,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                       {label:"ดูรายละเอียด",icon:I.eye,onClick:()=>setViewPO(po)},
                       !["requested","transfer_pending","transfer_shipped","transfer_done"].includes(po.status)&&{label:"พิมพ์เอกสาร",icon:I.print,color:C.blue,onClick:()=>printPO(po,toB?.name,'print',fromB?.name)},
                       (isCreator(po)||isCentralBranch)&&hasPO&&{label:"คัดลอก",icon:I.copy,color:"#7C3AED",onClick:()=>duplicatePO(po)},
-                      canEditPO(po)&&po.status==="open"&&{label:"แก้ไข",icon:I.pencil,color:"#92400E",onClick:()=>startEdit(po)},
+                      canEditPO(po)&&po.status==="open"&&!isAssetPO(po)&&{label:"แก้ไข",icon:I.pencil,color:"#92400E",onClick:()=>startEdit(po)},
                       canDeletePO(po)&&{label:"ลบ",icon:I.trash,danger:true,onClick:()=>delPO(po)},
                     ]}/>
                     {Array.isArray(po.stock_pending)&&po.stock_pending.length>0&&<button onClick={()=>retryPendingPO(po)} disabled={retryingPOId===po.id} title="เพิ่มสต๊อกที่ค้าง (บางรายการเพิ่มไม่สำเร็จตอนรับ)" style={{background:retryingPOId===po.id?C.lineLight:`linear-gradient(135deg,#F59E0B,#D97706)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:retryingPOId===po.id?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:4,fontSize:11,color:retryingPOId===po.id?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,whiteSpace:"nowrap"}}>🔁 สต๊อกค้าง {po.stock_pending.reduce((s,g)=>s+((g&&g.items&&g.items.length)||0),0)}</button>}
@@ -7029,7 +7165,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const canDispute=isReceiver&&po.status==="shipped";
   const canAcceptDispute=canManage&&po.status==="disputed";
   // Items can only be edited where stock hasn't moved yet (requested, open).
-  const canEditFromView=canManage&&po.status==="open";   // อนุมัติแล้ว (requested ขึ้นไป) ล็อกแก้ไข
+  const canEditFromView=canManage&&po.status==="open"&&!isAssetPO(po);   // อนุมัติแล้ว (requested ขึ้นไป) ล็อกแก้ไข · ใบสินทรัพย์แก้ที่นี่ไม่ได้ (ฟอร์มเป็นของวัตถุดิบ)
   const canPayNow=canManage&&po.status==="awaiting_payment";
   const canCancelPO=canManage&&po.status!=="paid"&&po.status!=="cancelled";
 
