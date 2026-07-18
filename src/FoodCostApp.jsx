@@ -886,7 +886,7 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     const qty=it.received_qty!=null?+it.received_qty:+(it.qty!=null?it.qty:it.qtyNeeded);
     if(!qty||qty<=0){zeroQty.push({ingId,name:it.name||"#"+ingId});continue;}
     const row=(ings||[]).find(x=>+x.id===ingId);
-    if(!row){notFound.push({ingId,name:it.name||"#"+ingId,reason:"ไม่พบในรายการวัตถุดิบ"});continue;}
+    if(!row){notFound.push({ingId,name:it.name||"#"+ingId,reason:"ไม่พบในรายการวัตถุดิบ",qty});continue;}
     const e=agg.get(ingId)||{add:0,row};
     e.add+=qty;agg.set(ingId,e);
   }
@@ -930,7 +930,7 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     catch(err){
       console.error("transferStock failed",ingId,err);
       levelFailed.add(+ingId);
-      failedUpdates.push({ingId,name:row.name||"#"+ingId,reason:err&&err.message||String(err)});
+      failedUpdates.push({ingId,name:row.name||"#"+ingId,reason:err&&err.message||String(err),qty:add});
       continue;   // stock write failed → skip the visibility tick too
     }
     // visible_branches tick — OUTSIDE the stock try/catch: the stock move above
@@ -979,6 +979,29 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     lines.push("ให้ปรับเฉพาะรายการข้างบนในหน้า \"นับสต็อก\" หรือแจ้งแอดมิน");
     setTimeout(()=>alert(lines.join("\n")),200);
   }
+  return acc;   // callers inspect {notFound,failedUpdates,zeroQty} to record un-credited lines for a targeted retry
+}
+// Build a retryable "stock pending" group from a transfer accumulator: the lines that
+// were NOT credited (row missing from ings, or the write threw) — each with its qty +
+// the direction (from/to) so it can be re-run later without touching the succeeded lines.
+function pendingFromAcc(acc,from,to){
+  if(!acc)return null;
+  const fails=[...(acc.notFound||[]).filter(x=>x.ingId),...(acc.failedUpdates||[])];
+  const items=fails.map(x=>({ingredient_id:+x.ingId,name:x.name||("#"+x.ingId),qty:+x.qty||0})).filter(i=>i.ingredient_id&&i.qty>0);
+  return items.length?{from:from!=null?+from:null,to:to!=null?+to:null,items}:null;
+}
+// Re-run the stock credit for ONLY the pending lines. Idempotent: succeeded lines are
+// never in `pending`, so nothing double-applies. Returns the groups that STILL failed.
+async function retryStockPending(pending,ings){
+  const groups=Array.isArray(pending)?pending:(pending?[pending]:[]);
+  const remain=[];
+  for(const g of groups){
+    if(!g||!Array.isArray(g.items)||!g.items.length)continue;
+    const acc=await transferStockBetweenBranches({fromBranchId:g.from,toBranchId:g.to,items:g.items.map(i=>({ingredient_id:i.ingredient_id,received_qty:i.qty})),ings,autoVisible:true});
+    const still=pendingFromAcc(acc,g.from,g.to);
+    if(still)remain.push(still);
+  }
+  return remain;   // [] = everything cleared
 }
 async function _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,acc,levelFailed}){
   const cascadeItems=[];
@@ -5204,6 +5227,19 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[editPO,setEditPO]=useState(null);
   const[viewPO,setViewPO]=useState(null);
   const[confirming,setConfirming]=useState(null);
+  const[retryingPOId,setRetryingPOId]=useState(null);   // PO whose pending stock is being re-added
+  async function retryPendingPO(po){
+    if(retryingPOId)return;
+    setRetryingPOId(po.id);
+    try{
+      const remain=await retryStockPending(po.stock_pending,ings);
+      try{await api.updatePO(po.id,{stock_pending:remain.length?remain:null});}catch{}
+      if(reloadIngs)await reloadIngs();
+      await load();
+      alert(remain.length?"⚠️ ยังมีบางรายการเพิ่มสต๊อกไม่สำเร็จ — ลองอีกครั้ง หรือปรับในหน้านับสต็อก":"✅ เพิ่มสต๊อกที่ค้างเข้าครบแล้ว");
+    }catch(e){alert("ไม่สำเร็จ: "+((e&&e.message)||e));}
+    setRetryingPOId(null);
+  }
   const[transferForm,setTransferForm]=useState(null);     // null | { toBranchId, items, notes }
   const[receivingTransfer,setReceivingTransfer]=useState(null); // null | { po, items[receivedQty] }
   const[receivingExtOrder,setReceivingExtOrder]=useState(null);  // null | { orderId, supplierName, items[receivedQty,pricePerUnit] }
@@ -5268,13 +5304,15 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   // auto-ticking the receiver on each ingredient's visible_branches list.
   // Called after the receiver confirms a PO (open → awaiting_payment).
   async function depositPOItemsToBranch(po,itemsToDeposit){
-    await transferStockBetweenBranches({
+    const acc=await transferStockBetweenBranches({
       fromBranchId:po.from_branch_id,
       toBranchId:po.branch_id,
       items:itemsToDeposit||po.items||[],
       ings,
       autoVisible:true,
     });
+    const pend=pendingFromAcc(acc,po.from_branch_id,po.branch_id);
+    if(pend){try{await api.updatePO(po.id,{stock_pending:[pend]});}catch{}}
     if(reloadIngs)await reloadIngs();
   }
 
@@ -5317,13 +5355,15 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     try{
       const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
       await deliverOrderWithPhotos(receivingExtOrder.orderId,receivingExtOrder.orderStatus,payloadItems,extRecvImages,+extDeliveryFee||0);
-      await transferStockBetweenBranches({
+      const acc=await transferStockBetweenBranches({
         fromBranchId:null,
         toBranchId:currentBranch.id,
         items:payloadItems.map(it=>({...it,ingredient_id:it.ingId,received_qty:it.receivedQty})),
         ings,
         autoVisible:true,
       });
+      const pend=pendingFromAcc(acc,null,currentBranch.id);
+      if(pend){try{await api.updateOrder(receivingExtOrder.orderId,{stock_pending:[pend]});}catch{}}
       if(reloadIngs)await reloadIngs();
       if(reloadOrders)await reloadOrders();
       setReceivingExtOrder(null);
@@ -5586,31 +5626,35 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       // End of in-transit: credit receiver with received_qty (what they actually got),
       // and return any variance (ordered − received) back to the sender.
       // Receiver credit (uses received_qty by default via transferStockBetweenBranches)
+      const pendGroups=[];
       const itemsToCredit=newItems
         .filter(it=>+it.received_qty>0)
         .map(it=>({ingredient_id:it.ingredient_id||it.ingId,name:it.name,received_qty:+it.received_qty||0}));
       if(itemsToCredit.length>0){
-        await transferStockBetweenBranches({
+        const acc1=await transferStockBetweenBranches({
           fromBranchId:null,
           toBranchId:po.branch_id,
           items:itemsToCredit,
           ings,
           autoVisible:true,
         });
+        const p1=pendingFromAcc(acc1,null,po.branch_id);if(p1)pendGroups.push(p1);
       }
       // Variance return to sender — items where received < ordered.
       const variance=newItems
         .map(it=>{const orig=+it.qty||0;const recv=+it.received_qty||0;return{ingredient_id:it.ingredient_id||it.ingId,name:it.name,qty:Math.max(0,Math.round((orig-recv)*1000)/1000)};})
         .filter(it=>it.qty>0);
       if(variance.length>0){
-        await transferStockBetweenBranches({
+        const acc2=await transferStockBetweenBranches({
           fromBranchId:null,
           toBranchId:po.from_branch_id,
           items:variance,
           ings,
           autoVisible:false,
         });
+        const p2=pendingFromAcc(acc2,null,po.from_branch_id);if(p2)pendGroups.push(p2);
       }
+      if(pendGroups.length){try{await api.updatePO(po.id,{stock_pending:pendGroups});}catch{}}
       if(reloadIngs)await reloadIngs();
       // Stage 1 (revised) → SlipTrack: re-POST with same external_id; server updates the pending row's amount/items
       pushPOToSlipTrack({...po,status:"awaiting_payment",items:newItems,subtotal,vat,total,received_at:receivedAt},branches);
@@ -5871,30 +5915,34 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         updated_at:receivedAt,
       });
       // End of in-transit: credit receiver with received_qty, return variance to sender.
+      const pendGroups=[];
       const itemsToCredit=itemsWithReceived
         .filter(it=>+it.received_qty>0)
         .map(it=>({ingredient_id:it.ingredient_id||it.ingId,name:it.name,received_qty:+it.received_qty||0}));
       if(itemsToCredit.length>0){
-        await transferStockBetweenBranches({
+        const acc1=await transferStockBetweenBranches({
           fromBranchId:null,
           toBranchId:po.branch_id,
           items:itemsToCredit,
           ings,
           autoVisible:true,
         });
+        const p1=pendingFromAcc(acc1,null,po.branch_id);if(p1)pendGroups.push(p1);
       }
       const variance=itemsWithReceived
         .map(it=>{const orig=+it.qty||0;const recv=+it.received_qty||0;return{ingredient_id:it.ingredient_id||it.ingId,name:it.name,qty:Math.max(0,Math.round((orig-recv)*1000)/1000)};})
         .filter(it=>it.qty>0);
       if(variance.length>0){
-        await transferStockBetweenBranches({
+        const acc2=await transferStockBetweenBranches({
           fromBranchId:null,
           toBranchId:po.from_branch_id,
           items:variance,
           ings,
           autoVisible:false,
         });
+        const p2=pendingFromAcc(acc2,null,po.from_branch_id);if(p2)pendGroups.push(p2);
       }
+      if(pendGroups.length){try{await api.updatePO(po.id,{stock_pending:pendGroups});}catch{}}
       if(reloadIngs)await reloadIngs();
       setReceivingTransfer(null);
       await load();
@@ -6065,6 +6113,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                       canEditPO(po)&&po.status==="open"&&{label:"แก้ไข",icon:I.pencil,color:"#92400E",onClick:()=>startEdit(po)},
                       canDeletePO(po)&&{label:"ลบ",icon:I.trash,danger:true,onClick:()=>delPO(po)},
                     ]}/>
+                    {Array.isArray(po.stock_pending)&&po.stock_pending.length>0&&<button onClick={()=>retryPendingPO(po)} disabled={retryingPOId===po.id} title="เพิ่มสต๊อกที่ค้าง (บางรายการเพิ่มไม่สำเร็จตอนรับ)" style={{background:retryingPOId===po.id?C.lineLight:`linear-gradient(135deg,#F59E0B,#D97706)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:retryingPOId===po.id?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:4,fontSize:11,color:retryingPOId===po.id?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,whiteSpace:"nowrap"}}>🔁 สต๊อกค้าง {po.stock_pending.reduce((s,g)=>s+((g&&g.items&&g.items.length)||0),0)}</button>}
                     {isReceiver(po)&&po.status==="requested"&&<button onClick={()=>acceptRequest(po)} disabled={confirming===po.id} title="ปริ้นใบจัดของ + รับเอกสาร" style={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.purple}55`}}>🖨 ปริ้นเอกสาร</button>}
                     {iCreator&&po.status==="open"&&<button onClick={()=>shipPO(po)} disabled={confirming===po.id} title="จัดส่ง + ตัดสต๊อกครัวกลาง" style={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px rgba(14,165,233,.35)`}}>🚚 จัดส่ง</button>}
                     {iCreator&&po.status==="transfer_pending"&&<button onClick={()=>shipTransfer(po)} disabled={confirming===po.id} title="จัดส่ง + ตัดสต๊อก" style={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px rgba(14,165,233,.35)`}}>🚚 จัดส่ง</button>}
@@ -7507,6 +7556,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const[recvDeliveryFee,setRecvDeliveryFee]=useState("0");  // ค่าจัดส่งของออเดอร์นี้ (0 = ไม่มี)
   const[photoEditOrder,setPhotoEditOrder]=useState(null);  // delivered order whose receive photos are being viewed/added retroactively
   const[copiedId,setCopiedId]=useState(null);          // shows ✓ briefly after copy succeeds
+  const[retryingId,setRetryingId]=useState(null);      // order whose pending stock is being re-added
 
   // Plain-text list for LINE chat: "1. name qty unit"
   async function copyOrderText(order){
@@ -7700,17 +7750,35 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
       await deliverOrderWithPhotos(receivingOrder.orderId,receivingOrder.orderStatus,payloadItems,recvImages,+recvDeliveryFee||0);
       // External supplier → credit-only (no source deduction)
-      await transferStockBetweenBranches({
+      const acc=await transferStockBetweenBranches({
         fromBranchId:null,
         toBranchId:receivingOrder.branchId,
         items:payloadItems.map(it=>({...it,ingredient_id:it.ingId,received_qty:it.receivedQty})),
         ings,
         autoVisible:true,
       });
+      // Record any line that didn't credit (row missing / write failed) so it can be
+      // re-added with one click instead of being silently lost on this delivered order.
+      const pend=pendingFromAcc(acc,null,receivingOrder.branchId);
+      if(pend){try{await api.updateOrder(receivingOrder.orderId,{stock_pending:[pend]});}catch{}}
       if(reloadIngs)await reloadIngs();
       setReceivingOrder(null);
       await reload();
     }catch(e){alert("ยืนยันไม่สำเร็จ: "+(e.message||e));}
+  }
+  // Re-credit ONLY the lines that failed to add stock (kept in order.stock_pending).
+  // Idempotent: succeeded lines were never recorded, so nothing double-adds.
+  async function retryPendingOrder(order){
+    if(retryingId)return;
+    setRetryingId(order.id);
+    try{
+      const remain=await retryStockPending(order.stock_pending,ings);
+      try{await api.updateOrder(order.id,{stock_pending:remain.length?remain:null});}catch{}
+      if(reloadIngs)await reloadIngs();
+      await reload();
+      alert(remain.length?"⚠️ ยังมีบางรายการเพิ่มสต๊อกไม่สำเร็จ — ลองอีกครั้ง หรือปรับในหน้านับสต็อก":"✅ เพิ่มสต๊อกที่ค้างเข้าครบแล้ว");
+    }catch(e){alert("ไม่สำเร็จ: "+((e&&e.message)||e));}
+    setRetryingId(null);
   }
 
   // ─ Delete — blocked outright once status hits "delivered" because the
@@ -7837,6 +7905,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         </div>
         {/* Area's reject reason — always visible on the row so the branch knows what to fix */}
         {order.status==="rejected"&&order.reject_reason&&<div style={{margin:"0 14px 10px",padding:"8px 12px",background:C.redLight,border:`1px solid ${C.red}44`,borderRadius:10,fontSize:12.5,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>❌ <b>ตีกลับ:</b> {order.reject_reason}{order.rejected_by&&<span style={{color:C.ink4,fontSize:11}}> — โดย {order.rejected_by}</span>}</div>}
+        {/* Stock that failed to credit at receive — one-click targeted re-add (idempotent) */}
+        {Array.isArray(order.stock_pending)&&order.stock_pending.length>0&&(()=>{const items=order.stock_pending.flatMap(g=>(g&&g.items)||[]);const cnt=items.length;return <div style={{margin:"0 14px 10px",padding:"9px 12px",background:"#FEF3C7",border:`1px solid #F59E0B`,borderRadius:10,fontSize:12.5,color:"#92400E",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}><span style={{flex:1,minWidth:180,lineHeight:1.5}}>⚠️ <b>สต๊อกค้าง {cnt} รายการ</b> ยังไม่ได้เพิ่มเข้าตอนรับ (เพิ่มไม่สำเร็จ) — {items.map(i=>i.name).slice(0,4).join(", ")}{cnt>4?" ...":""}</span><button onClick={()=>retryPendingOrder(order)} disabled={retryingId===order.id} style={{background:retryingId===order.id?C.lineLight:`linear-gradient(135deg,#F59E0B,#D97706)`,border:"none",borderRadius:8,padding:"7px 14px",cursor:retryingId===order.id?"wait":"pointer",color:retryingId===order.id?C.ink4:C.white,fontWeight:800,fontSize:12,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{retryingId===order.id?"กำลังเพิ่ม...":"🔁 เพิ่มสต๊อกที่ค้าง"}</button></div>;})()}
         {/* Items table — only when expanded */}
         {isExpanded&&<div style={{padding:"4px 14px 12px",borderTop:`1px solid ${C.lineLight}`}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,marginTop:8}}>
