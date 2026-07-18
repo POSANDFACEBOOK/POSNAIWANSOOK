@@ -14192,7 +14192,7 @@ function CRMJoinPage({initialBranchId,initialGo}){
   useEffect(()=>{let alive=true;api.getBranches().then(bs=>{if(!alive)return;const list=(Array.isArray(bs)?bs:[]).filter(b=>b.active!==false&&b.type!=="central");setBranches(list);if(initialBranchId){const b=list.find(x=>+x.id===+initialBranchId);if(b){setBranch(b);crmLogEvent(b.id,"visit",{via:"qr"});
     // Deep-link from the LINE bot menu: ?go=book jumps straight to booking, ?go=join/claim to the points/bill form.
     if(initialGo==="book")setView("booking");else if(initialGo==="join"||initialGo==="claim")setView("claim");}}}).catch(()=>{if(alive)setBranches([]);});return()=>{alive=false;};},[initialBranchId,initialGo]);
-  function pickBranch(b){setBranch(b);setView("hub");crmLogEvent(b.id,"visit",{via:"select"});}
+  function pickBranch(b){setBranch(b);setView(initialGo==="book"?"booking":(initialGo==="join"||initialGo==="claim")?"claim":"hub");crmLogEvent(b.id,"visit",{via:"select"});}
   function openLine(){if(!branch)return;crmLogEvent(branch.id,"line_click");if(branch.line_url)window.open(branch.line_url,"_blank","noopener");else alert("สาขานี้ยังไม่ได้ตั้งค่าลิงก์ไลน์ กรุณาแจ้งร้าน");}
 
   const wrap=children=><div style={{minHeight:"100vh",background:"linear-gradient(160deg,#FFF7ED,#FEF2F2 55%,#F5F3FF)",fontFamily:"'Sarabun',sans-serif",paddingBottom:40}}>
