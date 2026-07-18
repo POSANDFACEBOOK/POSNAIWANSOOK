@@ -96,9 +96,10 @@ async function reply(token, replyToken, messages) {
   if (!r.ok) console.error("LINE reply failed", r.status, (await r.text()).slice(0, 300));
 }
 
-// Reply the menu only on a follow, a postback, or a menu-ish keyword — so the bot never
-// talks over a human admin who is chatting with the customer.
-const MENU_RE = /(เมนู|menu|จอง|สมัคร|แต้ม|สะสม|สาขา|ข้อมูล|สวัสดี|hello|hi|เริ่ม|start)/i;
+// Reply ONLY when the whole message is the trigger word (with an optional polite particle) —
+// on a LIVE OA with human admins we must NOT interject when a customer types "จอง"/"สวัสดี"
+// etc. inside a normal conversation. Only follow / postback / an exact "เมนู" trigger the card.
+const MENU_RE = /^(เมนู|เมนูบริการ|menu|เริ่ม|เริ่มต้น|start)\s*(ค่ะ|คะ|ครับ|คับ|จ้า|จ้ะ|ๆ|!|\.)*$/i;
 
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.setHeader("Allow", "POST"); return res.status(405).end("POST only"); }
@@ -126,7 +127,7 @@ export default async function handler(req, res) {
       if (uid) storeUser(bid, uid).catch(() => {});
       const isFollow = ev.type === "follow";
       const isPostback = ev.type === "postback";
-      const isMenuText = ev.type === "message" && ev.message && ev.message.type === "text" && MENU_RE.test(ev.message.text || "");
+      const isMenuText = ev.type === "message" && ev.message && ev.message.type === "text" && MENU_RE.test((ev.message.text || "").trim());
       if ((isFollow || isPostback || isMenuText) && ev.replyToken && token) {
         if (title == null) title = bid ? await branchNameOf(bid) : BRAND;
         await reply(token, ev.replyToken, [menuFlex(bid, title)]);
