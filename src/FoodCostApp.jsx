@@ -446,7 +446,26 @@ const api = {
 // same `external_id` so SlipTrack updates the existing rows in place.
 // The Bearer token lives only in /api/sliptrack-push; helper fires-and-forgets
 // so a SlipTrack outage never blocks the user.
+//
+// BRANCH NAMES: SlipTrack filters transactions by EXACT branch name (chars + spaces
+// must match its master list). We therefore map our branch name → the SlipTrack
+// canonical name before sending. Special case: the shared kitchen unit exists in
+// two forms here — "คุณนายตื่นสาย/แจ่วฮ้อน" (paired) and "คุณนายแจ่วฮ้อน" (split) —
+// but accounting consolidates ALL of that unit's POs under "คุณนายตื่นสาย", so both
+// map to it. If a branch is renamed/added, update the alias map below.
 // ───────────────────────────────────────────────────────────────────────
+const SLIPTRACK_CANON_BRANCHES=["กาญจนบุรี","ครัวกลาง","คลองสาม","บางใหญ่","อยุธยา","คุณนายตื่นสาย","คุณนายแจ่วฮ้อน"];
+const SLIPTRACK_BRANCH_ALIAS={
+  "คุณนายตื่นสาย/แจ่วฮ้อน":"คุณนายตื่นสาย", // paired form  → canonical
+  "คุณนายแจ่วฮ้อน":"คุณนายตื่นสาย",        // split form   → canonical (unit merged at accounting)
+};
+function sliptrackBranchName(name){
+  const n=String(name||"").trim();
+  const canon=SLIPTRACK_BRANCH_ALIAS[n]||n;
+  // Non-blocking heads-up: a name accounting doesn't know will silently fail its filter.
+  if(canon&&!SLIPTRACK_CANON_BRANCHES.includes(canon))console.warn("SlipTrack: branch name not in canonical list →",canon);
+  return canon;
+}
 async function pushPOToSlipTrack(po, branches, opts={}){
   // Returns {ok, status?, error?, skipped?}; existing callers ignore the value
   // (fire-and-forget). Bulk-sync uses the return value to count successes.
@@ -455,8 +474,11 @@ async function pushPOToSlipTrack(po, branches, opts={}){
     const fromB=branches.find(b=>+b.id===+po.from_branch_id);
     const toB=branches.find(b=>+b.id===+po.branch_id);
     if(!fromB||!toB)return{ok:false,skipped:"unknown-branch"};
-    const fromName=String(fromB.name||"").trim();
-    const toName=String(toB.name||"").trim();
+    // Send SlipTrack's canonical branch names (exact-match filter on their side).
+    const fromName=sliptrackBranchName(fromB.name);
+    const toName=sliptrackBranchName(toB.name);
+    // Same canonical name = intra-unit movement (e.g. within the คุณนายตื่นสาย kitchen)
+    // → no cross-branch payable, skip. Also covers legitimately empty names.
     if(!fromName||!toName||fromName===toName)return{ok:false,skipped:"same-branch"};
     const amount=Number(po.total||0);
     if(!(amount>0))return{ok:false,skipped:"zero-amount"};
