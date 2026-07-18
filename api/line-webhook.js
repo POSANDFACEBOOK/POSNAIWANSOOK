@@ -87,6 +87,36 @@ function menuFlex(bid, title) {
   };
 }
 
+// Resolve a channel access token for replying. Priority:
+//   1) per-branch LINE_TOKENS[bid] (multi-OA mode)
+//   2) a static long-lived LINE_BOT_TOKEN (if you issued one in the Developers Console)
+//   3) issue a short-lived v2.0 token from LINE_BOT_ID + LINE_BOT_SECRET on the fly — so you
+//      only need the Channel ID + Channel secret shown right in OA Manager, NO Developers
+//      Console access required. Cached ~25 min across warm invocations.
+let _tok = null, _tokExp = 0;
+async function issueToken(id, secret) {
+  const now = Date.now();
+  if (_tok && now < _tokExp) return _tok;
+  try {
+    const r = await fetch("https://api.line.me/v2/oauth/accessToken", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `grant_type=client_credentials&client_id=${encodeURIComponent(id)}&client_secret=${encodeURIComponent(secret)}`,
+    });
+    if (!r.ok) { console.error("token issue failed", r.status, (await r.text()).slice(0, 200)); return ""; }
+    const j = await r.json();
+    _tok = j.access_token; _tokExp = now + 25 * 60 * 1000;
+    return _tok;
+  } catch (e) { console.error("token issue error", e && e.message); return ""; }
+}
+async function resolveToken(bid) {
+  const perBranch = bid && jmap(process.env.LINE_TOKENS)[bid];
+  if (perBranch) return perBranch;
+  if (process.env.LINE_BOT_TOKEN) return process.env.LINE_BOT_TOKEN;
+  const id = process.env.LINE_BOT_ID, secret = process.env.LINE_BOT_SECRET;
+  if (id && secret) return await issueToken(id, secret);
+  return "";
+}
 async function reply(token, replyToken, messages) {
   const r = await fetch("https://api.line.me/v2/bot/message/reply", {
     method: "POST",
@@ -108,7 +138,6 @@ export default async function handler(req, res) {
 
   // Single main OA by default (LINE_BOT_*). Per-branch only if ?b= maps to a configured channel.
   const secret = (bid && jmap(process.env.LINE_SECRETS)[bid]) || process.env.LINE_BOT_SECRET || "";
-  const token = (bid && jmap(process.env.LINE_TOKENS)[bid]) || process.env.LINE_BOT_TOKEN || "";
 
   // Verify the LINE signature. If no secret is configured we still 200 (so the console's
   // "Verify" passes) but do nothing — set LINE_BOT_SECRET to activate.
@@ -119,7 +148,7 @@ export default async function handler(req, res) {
 
   let body = {}; try { body = JSON.parse(raw || "{}"); } catch {}
   const events = Array.isArray(body.events) ? body.events : []; // empty on LINE's webhook-verify ping
-  let title = null;
+  let title = null, token = null;
 
   for (const ev of events) {
     try {
@@ -128,9 +157,12 @@ export default async function handler(req, res) {
       const isFollow = ev.type === "follow";
       const isPostback = ev.type === "postback";
       const isMenuText = ev.type === "message" && ev.message && ev.message.type === "text" && MENU_RE.test((ev.message.text || "").trim());
-      if ((isFollow || isPostback || isMenuText) && ev.replyToken && token) {
-        if (title == null) title = bid ? await branchNameOf(bid) : BRAND;
-        await reply(token, ev.replyToken, [menuFlex(bid, title)]);
+      if ((isFollow || isPostback || isMenuText) && ev.replyToken) {
+        if (token === null) token = await resolveToken(bid);
+        if (token) {
+          if (title == null) title = bid ? await branchNameOf(bid) : BRAND;
+          await reply(token, ev.replyToken, [menuFlex(bid, title)]);
+        }
       }
     } catch (e) { console.error("event error", e && e.message); }
   }
