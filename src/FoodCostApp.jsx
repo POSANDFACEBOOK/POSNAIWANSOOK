@@ -481,12 +481,16 @@ async function pushPOToSlipTrack(po, branches, opts={}){
       // Stage 1: include description + items so the new rows are descriptive
       payload.description=po.notes?`ซื้อวัตถุดิบ — ${po.notes}`:`ซื้อวัตถุดิบ ${externalId}`;
       payload.reference_no=po.po_number||externalId;
+      // Bill the ACTUAL received qty, not the ordered qty: on a disputed/short PO the
+      // amount (po.total) is recomputed from received_qty, so the item breakdown must use
+      // received_qty too or the lines won't reconcile with the payable. Not-received (0)
+      // lines are dropped — they aren't billed.
       const items=(po.items||[]).map(it=>({
         name:String(it.name||"").trim(),
-        qty:+it.qty||0,
+        qty:(it.received_qty!=null?+it.received_qty:(+it.qty||0)),
         unit:String(it.unit||"หน่วย"),
         unit_price:+it.price_per_unit||0,
-      })).filter(x=>x.name);
+      })).filter(x=>x.name&&x.qty>0);
       if(items.length)payload.items=items;
     }
     const r=await fetch("/api/sliptrack-push",{
