@@ -302,6 +302,11 @@ const api = {
   getCRMFeedback: (bid) => sb(`crm_feedback?order=id.desc${bid?`&branch_id=eq.${bid}`:""}&limit=200`),
   addCRMFeedback: (d) => sb("crm_feedback", {method:"POST", body:JSON.stringify(d)}),
   getCRMReservations: (bid) => sb(`crm_reservations?order=reserved_at.asc${bid?`&branch_id=eq.${bid}`:""}`),
+  // Booking requests from the LINE bot (customer tapped "จองโต๊ะ"); admin fills details + confirms.
+  getCRMBookingRequests: () => sb(`crm_booking_requests?status=eq.requested&order=created_at.desc&limit=200`).catch(()=>[]),
+  updateCRMBookingRequest: (id,d) => sb(`crm_booking_requests?id=eq.${id}`, {method:"PATCH", headers:{Prefer:"return=minimal"}, body:JSON.stringify(d)}),
+  // Push a Flex card to one customer's LINE (booking confirmation) via serverless (gated by BROADCAST_KEY).
+  pushLineCard: async (payload) => { const r=await fetch("/api/line-push",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); const j=await r.json().catch(()=>({})); if(!r.ok)throw new Error(j.error||("HTTP "+r.status)); return j; },
   addCRMReservation: (d) => sb("crm_reservations", {method:"POST", body:JSON.stringify(d)}),
   updateCRMReservation: (id,d) => sb(`crm_reservations?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deleteCRMReservation: (id) => sb(`crm_reservations?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
@@ -9901,7 +9906,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
       return{...f,allowed_branches:next};
     });
   }
-  const bF0={name:"",type:"branch",active:true,line_url:""};
+  const bF0={name:"",type:"branch",active:true,line_url:"",address:"",map_url:"",open_hours:"",phone:""};
   const[branchForm,setBranchForm]=useState(bF0);const[editBID,setEditBID]=useState(null);const[showBranch,setShowBranch]=useState(false);
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
@@ -10015,8 +10020,16 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     try{
       // Branch-level perm gating removed — permissions are managed per-user only.
       // Send allowed_perms:null to clear any legacy data so the column doesn't gate visibility anymore.
-      const payload={name:branchForm.name,type:branchForm.type,active:branchForm.active,allowed_perms:null,line_url:branchForm.line_url||null};
-      if(editBID)await api.updateBranch(editBID,payload);else await api.addBranch(payload);
+      const payload={name:branchForm.name,type:branchForm.type,active:branchForm.active,allowed_perms:null,line_url:branchForm.line_url||null,address:branchForm.address||null,map_url:branchForm.map_url||null,open_hours:branchForm.open_hours||null,phone:branchForm.phone||null};
+      try{ if(editBID)await api.updateBranch(editBID,payload);else await api.addBranch(payload); }
+      catch(err){
+        // Branch-info columns (address/map_url/open_hours/phone) may not exist yet — retry
+        // without them so branch editing still works before the ALTER TABLE is run.
+        if(/address|map_url|open_hours|phone|PGRST204|column/i.test(String((err&&err.message)||err))){
+          const{address,map_url,open_hours,phone,...base}=payload;
+          if(editBID)await api.updateBranch(editBID,base);else await api.addBranch(base);
+        } else throw err;
+      }
       await reloadBranches();
       setBranchForm(bF0);setEditBID(null);
     }catch(e){showErr("บันทึกไม่สำเร็จ",e);}
@@ -10056,7 +10069,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
               </div>
             </div>
             {isAdmin&&<div style={{display:"flex",gap:3,flexShrink:0}}>
-              <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active,line_url:b.line_url||""});setEditBID(b.id);setShowBranch(true);}} title="แก้ไข" style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+              <button onClick={()=>{setBranchForm({name:b.name,type:b.type,active:b.active,line_url:b.line_url||"",address:b.address||"",map_url:b.map_url||"",open_hours:b.open_hours||"",phone:b.phone||""});setEditBID(b.id);setShowBranch(true);}} title="แก้ไข" style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
               {b.type!=="central"&&<button onClick={async()=>{
                 if(!await confirmDlg({title:b.active?"ปิดใช้งานสาขา":"เปิดใช้งานสาขา",message:b.active?`ปิดใช้งาน "${b.name}"?\n\nสาขาจะไม่ปรากฏใน picker, การสแกน QR ของสาขานี้จะถูกปฏิเสธ\n(ข้อมูลทั้งหมดจะยังอยู่ — ไม่ลบจริง)`:`เปิดใช้งาน "${b.name}" อีกครั้ง?`,danger:b.active,confirmLabel:b.active?"ปิดใช้งาน":"เปิดใช้งาน"}))return;
                 try{await api.updateBranch(b.id,{active:!b.active});await reloadBranches();}
@@ -10073,6 +10086,13 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
       <Inp label="ชื่อสาขา *" value={branchForm.name} onChange={e=>setBranchForm(f=>({...f,name:e.target.value}))} placeholder="เช่น คลองสาม, สีลม, ครัวกลาง" autoFocus/>
       <Inp label="🟢 ลิงก์แอดไลน์ของสาขา (LINE OA)" value={branchForm.line_url} onChange={e=>setBranchForm(f=>({...f,line_url:e.target.value}))} placeholder="https://lin.ee/xxxxxxx"/>
       <div style={{fontSize:11,color:C.ink4,marginTop:-6,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เอาจาก LINE OA Manager &gt; เพิ่มเพื่อน &gt; คัดลอกลิงก์ — ลูกค้าที่สแกน QR สาขานี้จะกดแอดไลน์นี้</div>
+      <div style={{fontSize:12,fontWeight:800,color:C.ink3,margin:"8px 0 2px",fontFamily:"'Sarabun',sans-serif"}}>📍 ข้อมูลสาขา (โชว์ในการ์ด "ข้อมูลสาขา" ของบอท LINE)</div>
+      <Inp label="ที่อยู่" value={branchForm.address} onChange={e=>setBranchForm(f=>({...f,address:e.target.value}))} placeholder="เช่น 123 ถ.xxx ต.xxx อ.xxx จ.xxx"/>
+      <Inp label="🗺️ ลิงก์ Google Maps" value={branchForm.map_url} onChange={e=>setBranchForm(f=>({...f,map_url:e.target.value}))} placeholder="https://maps.app.goo.gl/xxxx"/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <Inp label="🕒 เวลาเปิด" value={branchForm.open_hours} onChange={e=>setBranchForm(f=>({...f,open_hours:e.target.value}))} placeholder="เช่น 11:00–22:00 ทุกวัน"/>
+        <Inp label="📞 เบอร์โทร" value={branchForm.phone} onChange={e=>setBranchForm(f=>({...f,phone:e.target.value}))} placeholder="0xx-xxx-xxxx"/>
+      </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <Field label="ประเภท"><select value={branchForm.type} onChange={e=>setBranchForm(f=>({...f,type:e.target.value}))} style={{...iS,appearance:"none"}}><option value="branch">🏢 สาขา</option><option value="central">🏛 ครัวกลาง</option></select></Field>
         <Field label="สถานะ"><select value={branchForm.active?"true":"false"} onChange={e=>setBranchForm(f=>({...f,active:e.target.value==="true"}))} style={{...iS,appearance:"none"}}><option value="true">✅ เปิดใช้งาน</option><option value="false">⏸ ปิดใช้งาน</option></select></Field>
@@ -10704,6 +10724,7 @@ function CRMTab({currentBranch,currentUser,menus}){
   const[vouchers,setVouchers]=useState([]);
   const[feedback,setFeedback]=useState([]);
   const[reservations,setReservations]=useState([]);
+  const[bookingRequests,setBookingRequests]=useState([]);   // จองโต๊ะ requests จากบอท LINE (รอแอดมินจอง)
   const[claims,setClaims]=useState([]);const[events,setEvents]=useState([]);const[promotions,setPromotions]=useState([]);
   const[loading,setLoading]=useState(false);
   const[err,setErr]=useState("");
@@ -10732,7 +10753,7 @@ function CRMTab({currentBranch,currentUser,menus}){
   async function loadAll(){
     setLoading(true);setErr("");
     try{
-      const[c,tx,v,fb,res,cl,ev,pr]=await Promise.all([
+      const[c,tx,v,fb,res,cl,ev,pr,br]=await Promise.all([
         api.getCRMCustomers(currentBranch.id),
         api.getCRMTransactions(currentBranch.id),
         api.getCRMVouchers(currentBranch.id),
@@ -10741,8 +10762,9 @@ function CRMTab({currentBranch,currentUser,menus}){
         api.getCRMPointClaims(currentBranch.id).catch(()=>[]),
         api.getCRMEvents(currentBranch.id).catch(()=>[]),
         api.getCRMPromotions().catch(()=>[]),
+        api.getCRMBookingRequests().catch(()=>[]),
       ]);
-      setCustomers(c);setTransactions(tx);setVouchers(v);setFeedback(fb);setReservations(res);setClaims(cl||[]);setEvents(ev||[]);setPromotions(pr||[]);
+      setCustomers(c);setTransactions(tx);setVouchers(v);setFeedback(fb);setReservations(res);setClaims(cl||[]);setEvents(ev||[]);setPromotions(pr||[]);setBookingRequests(br||[]);
     }catch(e){setErr(e.message);}
     setLoading(false);
   }
@@ -10797,7 +10819,7 @@ function CRMTab({currentBranch,currentUser,menus}){
     {subTab==="broadcast"&&<CRMBroadcast currentUser={currentUser}/>}
 
     {/* ── RESERVATIONS ── */}
-    {subTab==="reservations"&&<CRMReservations reservations={reservations} customers={customers} showResForm={showResForm} setShowResForm={setShowResForm} editRes={editRes} setEditRes={setEditRes} resFilter={resFilter} setResFilter={setResFilter} canEdit={canEdit} currentBranch={currentBranch} reload={loadAll}/>}
+    {subTab==="reservations"&&<CRMReservations reservations={reservations} bookingRequests={bookingRequests} customers={customers} showResForm={showResForm} setShowResForm={setShowResForm} editRes={editRes} setEditRes={setEditRes} resFilter={resFilter} setResFilter={setResFilter} canEdit={canEdit} currentBranch={currentBranch} reload={loadAll}/>}
 
     {/* ── FEEDBACK ── */}
     {subTab==="feedback"&&<CRMFeedback feedback={feedback} customers={customers} showFeedForm={showFeedForm} setShowFeedForm={setShowFeedForm} canEdit={canEdit} currentBranch={currentBranch} reload={loadAll}/>}
@@ -11108,22 +11130,52 @@ function CRMloyalty({customers,transactions,vouchers,setVouchers,showVoucherForm
 }
 
 // ── CRM Reservations sub-component ──
-function CRMReservations({reservations,customers,showResForm,setShowResForm,editRes,setEditRes,resFilter,setResFilter,canEdit,currentBranch,reload}){
-  const[form,setForm]=useState({customer_id:"",reserved_at:"",party_size:"2",table_pref:"",special_req:"",status:"pending"});
+function CRMReservations({reservations,bookingRequests=[],customers,showResForm,setShowResForm,editRes,setEditRes,resFilter,setResFilter,canEdit,currentBranch,reload}){
+  const[form,setForm]=useState({customer_id:"",reserved_at:"",party_size:"2",table_pref:"",special_req:"",status:"pending",line_user_id:"",customer_name:"",_reqId:null,_fromReq:false});
   const[saving,setSaving]=useState(false);
 
   useEffect(()=>{
-    if(editRes)setForm({customer_id:String(editRes.customer_id||""),reserved_at:editRes.reserved_at?editRes.reserved_at.slice(0,16):"",party_size:String(editRes.party_size||2),table_pref:editRes.table_pref||"",special_req:editRes.special_req||"",status:editRes.status||"pending"});
-    else setForm({customer_id:"",reserved_at:"",party_size:"2",table_pref:"",special_req:"",status:"pending"});
+    if(editRes)setForm({customer_id:String(editRes.customer_id||""),reserved_at:editRes.reserved_at?editRes.reserved_at.slice(0,16):"",party_size:String(editRes.party_size||2),table_pref:editRes.table_pref||"",special_req:editRes.special_req||"",status:editRes.status||"pending",line_user_id:editRes.line_user_id||"",customer_name:editRes.customer_name||"",_reqId:null,_fromReq:false});
+    // Preserve a request's prefill (bookForRequest sets _fromReq) when the open-effect fires.
+    else setForm(f=>(f&&f._fromReq)?{...f,_fromReq:false}:{customer_id:"",reserved_at:"",party_size:"2",table_pref:"",special_req:"",status:"pending",line_user_id:"",customer_name:"",_reqId:null,_fromReq:false});
   },[editRes,showResForm]);
+
+  // "จองให้" a LINE request → prefill the customer's LINE identity, open the form set to confirm.
+  function bookForRequest(req){
+    setEditRes(null);
+    setForm({customer_id:"",reserved_at:"",party_size:"2",table_pref:"",special_req:"",status:"confirmed",line_user_id:req.line_user_id||"",customer_name:req.customer_name||"",_reqId:req.id,_fromReq:true});
+    setShowResForm(true);
+  }
+
+  // Push the booking-confirmation Flex card to the customer's LINE (needs BROADCAST_KEY, set
+  // once in the broadcast tab / prompted here). Returns true on success.
+  async function pushCard(res){
+    const uid=res.line_user_id;
+    if(!uid){alert("การจองนี้ไม่มี LINE ของลูกค้า (ลูกค้าต้องกด \"จองโต๊ะ\" จากบอทก่อน จึงจะส่งการ์ดได้)");return false;}
+    let key="";try{key=localStorage.getItem("nw_broadcast_key")||"";}catch{}
+    if(!key){const k=prompt("ใส่รหัส BROADCAST_KEY (ตั้งไว้ใน Vercel env) เพื่อส่งการ์ด LINE:");if(!k)return false;key=k.trim();try{localStorage.setItem("nw_broadcast_key",key);}catch{}}
+    try{
+      await api.pushLineCard({key,userId:uid,kind:"booking_confirm",branch_id:currentBranch.id,data:{name:res.customer_name||"",branch_name:currentBranch.name,when:res.reserved_at?fmtDT(res.reserved_at):"",party_size:res.party_size,note:res.special_req||""}});
+      return true;
+    }catch(e){alert("ส่งการ์ดไม่สำเร็จ: "+(e.message||e));return false;}
+  }
 
   async function saveRes(){
     if(!form.reserved_at)return alert("กรุณาเลือกวันเวลาจอง");
     setSaving(true);
     try{
-      const d={customer_id:form.customer_id?parseInt(form.customer_id):null,branch_id:currentBranch.id,reserved_at:new Date(form.reserved_at).toISOString(),party_size:parseInt(form.party_size)||2,table_pref:form.table_pref,special_req:form.special_req,status:form.status};
+      const d={customer_id:form.customer_id?parseInt(form.customer_id):null,branch_id:currentBranch.id,reserved_at:new Date(form.reserved_at).toISOString(),party_size:parseInt(form.party_size)||2,table_pref:form.table_pref,special_req:form.special_req,status:form.status,customer_name:form.customer_name||null};
+      if(form.line_user_id)d.line_user_id=form.line_user_id;   // only touch the new column when there's a LINE customer (normal bookings work before the ALTER TABLE)
       if(editRes)await api.updateCRMReservation(editRes.id,d);
       else await api.addCRMReservation({...d,created_at:new Date().toISOString()});
+      // Tied to a LINE customer + becoming confirmed for the FIRST time → push the confirmation
+      // card & close the request. Editing an already-confirmed booking must NOT re-send it (use
+      // the manual "📤 ส่งการ์ด" button for a deliberate resend).
+      if(form.line_user_id&&form.status==="confirmed"&&(!editRes||editRes.status!=="confirmed")){
+        const ok=await pushCard(d);
+        if(ok&&form._reqId){try{await api.updateCRMBookingRequest(form._reqId,{status:"done"});}catch{}}
+        if(ok)posToast("✅ บันทึก + ส่งการ์ดยืนยันให้ลูกค้าใน LINE แล้ว","ok");
+      }
       await reload();setShowResForm(false);setEditRes(null);
     }catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
     setSaving(false);
@@ -11151,6 +11203,19 @@ function CRMReservations({reservations,customers,showResForm,setShowResForm,edit
       {canEdit&&<Btn icon={I.plus} onClick={()=>{setEditRes(null);setShowResForm(true);}}>เพิ่มการจอง</Btn>}
     </div>
 
+    {bookingRequests.length>0&&<div style={{marginBottom:16,background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 14px"}}>
+      <div style={{fontSize:13.5,fontWeight:900,color:"#7C2D12",marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>📩 คำขอจองโต๊ะจาก LINE ({bookingRequests.length}) — รอแอดมินจองให้</div>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {bookingRequests.map(req=><div key={req.id} style={{display:"flex",alignItems:"center",gap:10,background:"#fff",border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 12px"}}>
+          <div style={{flex:1,minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{fontWeight:700,fontSize:13.5,color:C.ink}}>💬 {req.customer_name||"ลูกค้า LINE"}</div>
+            <div style={{fontSize:11,color:C.ink4}}>ขอเมื่อ {fmtDT(req.created_at)}</div>
+          </div>
+          {canEdit&&<Btn onClick={()=>bookForRequest(req)} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,padding:"6px 12px",fontSize:12}}>จองให้ →</Btn>}
+        </div>)}
+      </div>
+    </div>}
+
     <div style={{display:"flex",flexDirection:"column",gap:8}}>
       {filtered.map(res=>{
         const cust=customers.find(c=>c.id===res.customer_id);
@@ -11172,6 +11237,7 @@ function CRMReservations({reservations,customers,showResForm,setShowResForm,edit
               <button onClick={()=>updateStatus(res,"confirmed")} style={{padding:"5px 10px",border:"1px solid "+C.green,borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ยืนยัน</button>
               <button onClick={()=>updateStatus(res,"cancelled")} style={{padding:"5px 10px",border:"1px solid "+C.red,borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ยกเลิก</button>
             </>}
+            {canEdit&&res.status==="confirmed"&&res.line_user_id&&<button onClick={async()=>{if(await pushCard(res))posToast("📤 ส่งการ์ดยืนยันให้ลูกค้าใน LINE แล้ว","ok");}} style={{padding:"5px 10px",border:"1px solid #06C755",borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:"#06C755",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>📤 ส่งการ์ด</button>}
             {canEdit&&res.status==="confirmed"&&<button onClick={()=>updateStatus(res,"done")} style={{padding:"5px 10px",border:"1px solid "+C.teal,borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>เสร็จสิ้น</button>}
             {canEdit&&<div style={{display:"flex",gap:4}}>
               <button onClick={()=>{setEditRes(res);setShowResForm(true);}} style={{padding:"5px",border:"1px solid "+C.line,borderRadius:6,background:"#fff",cursor:"pointer"}}><Ic d={I.pencil} s={12} c={C.ink3}/></button>
@@ -11183,8 +11249,9 @@ function CRMReservations({reservations,customers,showResForm,setShowResForm,edit
       {filtered.length===0&&<div style={{textAlign:"center",padding:40,color:C.ink4}}>ไม่มีการจองในหมวดนี้</div>}
     </div>
 
-    {showResForm&&<Modal title={editRes?"แก้ไขการจอง":"เพิ่มการจองใหม่"} onClose={()=>{setShowResForm(false);setEditRes(null);}}>
+    {showResForm&&<Modal title={editRes?"แก้ไขการจอง":form.line_user_id?"จองโต๊ะให้ลูกค้า LINE":"เพิ่มการจองใหม่"} onClose={()=>{setShowResForm(false);setEditRes(null);}}>
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {form.line_user_id&&<div style={{background:"#F0FDF4",border:"1px solid #86EFAC",borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:13,color:"#166534",fontWeight:800}}>💬 จองให้ลูกค้า LINE: {form.customer_name||"(ไม่มีชื่อ)"}</div><div style={{fontSize:11,marginTop:2,color:"#15803D"}}>กดบันทึกตอนสถานะ "ยืนยันแล้ว" → ระบบส่งการ์ดยืนยันให้ลูกค้าใน LINE อัตโนมัติ</div></div>}
         <Field label="ลูกค้า">
           <select value={form.customer_id} onChange={e=>setForm(f=>({...f,customer_id:e.target.value}))} style={{width:"100%",padding:"8px 10px",border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none"}}>
             <option value="">-- ลูกค้าทั่วไป --</option>

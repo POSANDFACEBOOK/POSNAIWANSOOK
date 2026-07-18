@@ -61,6 +61,69 @@ async function storeUser(bid, userId) {
   } catch { /* table missing / duplicate — ignore */ }
 }
 
+// Fetch the customer's LINE display name (for the booking request + confirmation card).
+async function getProfile(token, userId) {
+  try {
+    const r = await fetch(`https://api.line.me/v2/bot/profile/${encodeURIComponent(userId)}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) return null;
+    return await r.json(); // { displayName, pictureUrl, ... }
+  } catch { return null; }
+}
+
+async function getBranches() {
+  try { return await sb(`branches?type=neq.central&select=id,name,active,address,map_url,open_hours,phone,line_url&order=id.asc`); }
+  catch { return []; }
+}
+
+// Build a safe URI-action button, or null if the URI can't be made valid. LINE rejects the
+// ENTIRE message (HTTP 400) if any one button's uri is malformed, so a bad field must drop only
+// its own button — never the whole carousel. Callers pass a `tel:`-prefixed string for phones
+// and raw links (with or without scheme) for maps / LINE.
+function uriButton(label, rawUri, style, color) {
+  let uri = String(rawUri || "").trim();
+  if (!uri) return null;
+  if (/^tel:/i.test(uri)) {
+    const digits = uri.replace(/[^0-9+]/g, "");
+    if (!/\d/.test(digits)) return null;        // "-" / "ไม่มี" → no digits → drop button
+    uri = "tel:" + digits;
+  } else if (!/^(https?|line):/i.test(uri)) {
+    uri = "https://" + uri.replace(/^\/+/, ""); // scheme-less link (maps.app.goo.gl/…) → https
+  }
+  if (!/^(https?|tel|line):.+/i.test(uri)) return null;
+  const btn = { type: "button", height: "sm", style: style || "secondary", action: { type: "uri", label, uri } };
+  if (color) btn.color = color;
+  return btn;
+}
+
+// A customer tapped "จองโต๊ะ": record a lightweight request (admin fills branch/date & confirms
+// later, then pushes the confirmation card). Silent no-op if the table isn't created yet.
+async function createBookingRequest(userId, name) {
+  try {
+    await sb(`crm_booking_requests`, {
+      method: "POST", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ line_user_id: userId, customer_name: name || null, status: "requested", created_at: new Date().toISOString() }),
+    });
+    return true;
+  } catch (e) { console.error("booking request insert failed", e && e.message); return false; }
+}
+
+function branchesCarousel(branches) {
+  const bubbles = (branches || []).filter((b) => b && b.active !== false).slice(0, 11).map((b) => {
+    const body = [{ type: "text", text: b.name || "สาขา", weight: "bold", size: "lg", wrap: true, color: "#0F172A" }];
+    if (b.address) body.push({ type: "text", text: `📍 ${b.address}`, size: "sm", color: "#64748B", wrap: true, margin: "sm" });
+    if (b.open_hours) body.push({ type: "text", text: `🕒 ${b.open_hours}`, size: "sm", color: "#64748B", wrap: true });
+    if (b.phone) body.push({ type: "text", text: `📞 ${b.phone}`, size: "sm", color: "#64748B", wrap: true });
+    const footer = [
+      uriButton("🗺️ ดูแผนที่", b.map_url, "primary", "#FF6B35"),
+      uriButton("📞 โทร", b.phone ? `tel:${b.phone}` : "", "secondary"),
+      uriButton("➕ แอดไลน์สาขา", b.line_url, "secondary"),
+    ].filter(Boolean);
+    return { type: "bubble", size: "kilo", body: { type: "box", layout: "vertical", spacing: "sm", contents: body }, ...(footer.length ? { footer: { type: "box", layout: "vertical", spacing: "sm", contents: footer } } : {}) };
+  });
+  if (!bubbles.length) return { type: "text", text: "ยังไม่มีข้อมูลสาขาในระบบค่ะ 🙏 (แอดมินยังไม่ได้กรอก)" };
+  return { type: "flex", altText: "ข้อมูลสาขา", contents: { type: "carousel", contents: bubbles } };
+}
+
 function menuFlex(bid, title) {
   // With one OA (no branch) the base has no &branch, so the web page shows the branch picker
   // first; ?go=book|join is honoured the moment the customer picks a branch.
@@ -78,9 +141,9 @@ function menuFlex(bid, title) {
       },
       footer: {
         type: "box", layout: "vertical", spacing: "sm", contents: [
-          { type: "button", style: "primary", height: "sm", color: "#FF6B35", action: { type: "uri", label: "📅 จองโต๊ะ", uri: `${base}&go=book` } },
+          { type: "button", style: "primary", height: "sm", color: "#FF6B35", action: { type: "postback", label: "📅 จองโต๊ะ", data: "action=book", displayText: "ขอจองโต๊ะค่ะ" } },
           { type: "button", style: "primary", height: "sm", color: "#10B981", action: { type: "uri", label: "⭐ สมัคร / สะสมแต้ม", uri: `${base}&go=join` } },
-          { type: "button", style: "secondary", height: "sm", action: { type: "uri", label: "📍 ข้อมูลสาขา", uri: base } },
+          { type: "button", style: "secondary", height: "sm", action: { type: "postback", label: "📍 ข้อมูลสาขา", data: "action=branches", displayText: "ขอดูข้อมูลสาขา" } },
         ],
       },
     },
@@ -150,19 +213,34 @@ export default async function handler(req, res) {
   const events = Array.isArray(body.events) ? body.events : []; // empty on LINE's webhook-verify ping
   let title = null, token = null;
 
+  const menu = async (rt) => { if (title == null) title = bid ? await branchNameOf(bid) : BRAND; await reply(token, rt, [menuFlex(bid, title)]); };
+
   for (const ev of events) {
     try {
       const uid = ev.source && ev.source.userId;
       if (uid) storeUser(bid, uid).catch(() => {});
-      const isFollow = ev.type === "follow";
-      const isPostback = ev.type === "postback";
+      const rt = ev.replyToken;
+      if (!rt) continue;
       const isMenuText = ev.type === "message" && ev.message && ev.message.type === "text" && MENU_RE.test((ev.message.text || "").trim());
-      if ((isFollow || isPostback || isMenuText) && ev.replyToken) {
-        if (token === null) token = await resolveToken(bid);
-        if (token) {
-          if (title == null) title = bid ? await branchNameOf(bid) : BRAND;
-          await reply(token, ev.replyToken, [menuFlex(bid, title)]);
+      if (!(ev.type === "follow" || ev.type === "postback" || isMenuText)) continue; // ignore everything else (admin chats etc.)
+      if (token === null) token = await resolveToken(bid);
+      if (!token) continue;
+      if (ev.type === "postback") {
+        const data = (ev.postback && ev.postback.data) || "";
+        if (/(^|&)action=book(&|$)/.test(data)) {
+          const prof = uid ? await getProfile(token, uid) : null;
+          const name = (prof && prof.displayName) || null;
+          const ok = uid ? await createBookingRequest(uid, name) : false;
+          await reply(token, rt, [{ type: "text", text: ok
+            ? `รับเรื่องจองโต๊ะแล้วค่ะ 🙏\nแอดมินจะติดต่อยืนยัน (สาขา / วันเวลา) ให้เร็ว ๆ นี้นะคะ`
+            : `ขออภัยค่ะ ระบบจองยังไม่พร้อมชั่วคราว 🙏\nรบกวนพิมพ์แชทแจ้งแอดมินได้เลย หรือกดเมนู "ข้อมูลสาขา" เพื่อโทรจองกับสาขาโดยตรงนะคะ` }]);
+        } else if (/(^|&)action=branches(&|$)/.test(data)) {
+          await reply(token, rt, [branchesCarousel(await getBranches())]);
+        } else {
+          await menu(rt);
         }
+      } else {
+        await menu(rt); // follow or "เมนู"
       }
     } catch (e) { console.error("event error", e && e.message); }
   }
