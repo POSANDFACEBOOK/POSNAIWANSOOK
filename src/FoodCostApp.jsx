@@ -649,7 +649,7 @@ const TRANSLATIONS={
     "tab.sop":"SOP",
     "tab.summary":"สรุปต้นทุน",
     "tab.fssales":"ยอดขายรายเมนู\nตามระบบ FOODSTORY",
-    "tab.po":"สร้างเอกสารสั่งซื้อวัตถุดิบ",
+    "tab.po":"สร้างเอกสารสั่งซื้อ",
     "tab.orders":"สั่งวัตถุดิบ",
     "tab.history":"ประวัติต้นทุน",
     "tab.suppliers":"ซัพพลาย",
@@ -796,7 +796,7 @@ const ALL_PERMS=[
   {id:"sop",label:"SOP"},
   {id:"summary",label:"สรุปต้นทุน"},
   {id:"fs_sales",label:"ยอดขาย FoodStory"},
-  {id:"po",label:"สร้างเอกสารสั่งซื้อวัตถุดิบ"},
+  {id:"po",label:"สร้างเอกสารสั่งซื้อ"},
   {id:"orders",label:"สั่งวัตถุดิบ"},
   {id:"history",label:"ประวัติต้นทุน"},
   {id:"suppliers",label:"ซัพพลาย"},
@@ -5033,6 +5033,110 @@ const PR_STATUS={
   rejected:{l:"❌ ตีกลับ",c:"#B91C1C",bg:"#FEE2E2"},
   cancelled:{l:"ยกเลิก",c:"#64748B",bg:"#F1F5F9"},
 };
+// ── สั่งซื้อสินทรัพย์ / อุปกรณ์อื่นๆ → สร้าง PR ชนิด "asset" (รออนุมัติเหมือนวัตถุดิบ) ──
+// แถบ 1 "สินทรัพย์": ค้นหาสินทรัพย์ของสาขาตัวเอง (โชว์รูป + จำนวนปัจจุบัน) → ใส่จำนวน + หมายเหตุ → เพิ่มรายบรรทัด
+// แถบ 2 "อุปกรณ์อื่นๆ": สินทรัพย์ที่ยังไม่มีในระบบ — พิมพ์รายละเอียด + แนบรูปตัวอย่าง + จำนวน + หมายเหตุ
+// ตะกร้ารวมสองแถบในหน้าเดียว. กด "สั่งซื้อ" → PR pending_approval + เตือน "แจ้งบอสในไลน์ก่อน".
+function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
+  const[tab,setTab]=useState("asset");
+  const[assets,setAssets]=useState(null);
+  const[cart,setCart]=useState([]);
+  const[q,setQ]=useState("");const[picked,setPicked]=useState(null);
+  const[aQty,setAQty]=useState("");const[aNote,setANote]=useState("");
+  const[oName,setOName]=useState("");const[oQty,setOQty]=useState("");const[oNote,setONote]=useState("");const[oImage,setOImage]=useState("");
+  const[saving,setSaving]=useState(false);const savingRef=useRef(false);
+  useEffect(()=>{let ok=true;(async()=>{try{const a=await api.getAssets();if(ok)setAssets((Array.isArray(a)?a:[]).filter(x=>+x.branch_id===+currentBranch?.id));}catch{if(ok)setAssets([]);}})();return()=>{ok=false;};},[currentBranch?.id]);
+  const matches=useMemo(()=>{const ql=q.trim().toLowerCase();if(!ql||!Array.isArray(assets))return[];return assets.filter(a=>(a.name||"").toLowerCase().includes(ql)).slice(0,15);},[assets,q]);
+  const inputSt={width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box"};
+  function addAsset(){
+    if(!picked){alert("เลือกสินทรัพย์จากช่องค้นหาก่อน");return;}
+    const qty=+aQty;if(!(qty>0)){alert("ใส่จำนวนที่ต้องการมากกว่า 0");return;}
+    setCart(c=>[...c,{kind:"asset",asset_id:picked.id,name:picked.name,unit:"ชิ้น",qty,note:(aNote||"").trim()||null,image:picked.image||null,current_qty:+picked.quantity||0}]);
+    setPicked(null);setQ("");setAQty("");setANote("");
+  }
+  function addOther(){
+    const nm=(oName||"").trim();if(!nm){alert("ใส่รายละเอียดอุปกรณ์");return;}
+    const qty=+oQty;if(!(qty>0)){alert("ใส่จำนวนมากกว่า 0");return;}
+    setCart(c=>[...c,{kind:"other",name:nm,unit:"ชิ้น",qty,note:(oNote||"").trim()||null,image:oImage||null}]);
+    setOName("");setOQty("");setONote("");setOImage("");
+  }
+  async function submit(){
+    if(savingRef.current)return;
+    if(!cart.length){alert("ยังไม่มีรายการ — เพิ่มอย่างน้อย 1 รายการ");return;}
+    const nAsset=cart.filter(x=>x.kind==="asset").length,nOther=cart.filter(x=>x.kind==="other").length;
+    const lines=cart.map(x=>`• ${x.kind==="other"?"[ใหม่] ":""}${x.name} × ${x.qty} ชิ้น`).join("\n");
+    if(!await confirmDlg({title:"ยืนยันสั่งซื้อสินทรัพย์/อุปกรณ์",message:`${lines}\n\nรวม ${cart.length} รายการ (สินทรัพย์ ${nAsset} · อุปกรณ์อื่น ${nOther})\n\n⚠️ กรุณาแจ้งบอสในไลน์ก่อน — เป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะอนุมัติได้`,confirmLabel:"สั่งซื้อ"}))return;
+    savingRef.current=true;setSaving(true);
+    try{
+      await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"asset",items:cart,reason:null,status:"pending_approval",created_by:currentUser?.username||currentUser?.name||"",updated_at:new Date().toISOString()});
+      posToast("✅ ส่งใบขอซื้อสินทรัพย์แล้ว — รอ Area อนุมัติ","ok");
+      if(onSubmitted)await onSubmitted();
+      onClose();
+      setTimeout(()=>alert("⚠️ รายการสินทรัพย์/อุปกรณ์นี้ กรุณา \"แจ้งบอสในไลน์ก่อน\"\nเป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะกดอนุมัติได้"),300);
+    }catch(e){alert("ส่งไม่สำเร็จ: "+((e&&e.message)||e));}
+    savingRef.current=false;setSaving(false);
+  }
+  return <Modal title="🛒 สั่งซื้อสินทรัพย์ / อุปกรณ์อื่นๆ" onClose={onClose} wide>
+    <div style={{fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{display:"flex",gap:6,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,marginBottom:14}}>
+        {[{id:"asset",l:"📦 สินทรัพย์ (มีในระบบ)"},{id:"other",l:"🆕 อุปกรณ์อื่นๆ"}].map(s=>{const on=tab===s.id;return <button key={s.id} onClick={()=>setTab(s.id)} style={{flex:1,padding:"9px 12px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?C.brand:"transparent",color:on?C.white:C.ink3}}>{s.l}</button>;})}
+      </div>
+      {tab==="asset"?<div>
+        <div style={{position:"relative",marginBottom:10}}>
+          <input value={q} onChange={e=>{setQ(e.target.value);setPicked(null);}} placeholder="🔍 ค้นหาสินทรัพย์ของสาขา..." style={inputSt}/>
+          {q.trim()&&!picked&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:20,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,marginTop:4,maxHeight:260,overflowY:"auto",boxShadow:"0 8px 24px rgba(0,0,0,.12)"}}>
+            {assets===null?<div style={{padding:14,color:C.ink4}}>กำลังโหลด...</div>
+            :matches.length===0?<div style={{padding:14,color:C.ink4}}>ไม่พบสินทรัพย์ "{q}" ในสาขานี้</div>
+            :matches.map(a=><div key={a.id} onClick={()=>{setPicked(a);setQ(a.name);}} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",cursor:"pointer",borderBottom:`1px solid ${C.lineLight}`}}>
+              <Thumb src={a.image} size={40} radius={8} icon={I.box} iconBg={C.bg} iconColor={C.line} iconSize={18}/>
+              <div style={{flex:1,minWidth:0}}><div style={{fontWeight:700,color:C.ink,fontSize:13.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.name}</div><div style={{fontSize:11.5,color:C.ink4}}>มีอยู่ {(+a.quantity||0).toLocaleString()} ชิ้น</div></div>
+            </div>)}
+          </div>}
+        </div>
+        {picked&&<div style={{border:`1.5px solid ${C.brandBorder}`,background:C.brandLight,borderRadius:12,padding:12,marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+            <Thumb src={picked.image} size={56} radius={10} icon={I.box} iconBg={C.white} iconColor={C.line} iconSize={26}/>
+            <div style={{flex:1}}><div style={{fontWeight:800,color:C.ink,fontSize:15}}>{picked.name}</div><div style={{fontSize:12,color:C.ink3}}>มีปัจจุบัน <b>{(+picked.quantity||0).toLocaleString()}</b> ชิ้น</div></div>
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <input value={aQty} onChange={e=>setAQty(e.target.value.replace(/[^0-9.]/g,""))} inputMode="decimal" placeholder="จำนวนที่ต้องการ" style={{...inputSt,flex:"1 1 130px"}}/>
+            <input value={aNote} onChange={e=>setANote(e.target.value)} placeholder="หมายเหตุ (ถ้ามี)" style={{...inputSt,flex:"2 1 180px"}}/>
+          </div>
+          <Btn onClick={addAsset} icon={I.plus} s={{marginTop:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,width:"100%"}}>เพิ่มรายการ</Btn>
+        </div>}
+      </div>:<div>
+        <div style={{border:`1.5px solid ${C.line}`,borderRadius:12,padding:12,marginBottom:10}}>
+          <input value={oName} onChange={e=>setOName(e.target.value)} placeholder="รายละเอียดอุปกรณ์ (เช่น ชั้นวางสแตนเลส 4 ชั้น)" style={{...inputSt,marginBottom:8}}/>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
+            <input value={oQty} onChange={e=>setOQty(e.target.value.replace(/[^0-9.]/g,""))} inputMode="decimal" placeholder="จำนวน" style={{...inputSt,flex:"1 1 120px"}}/>
+            <input value={oNote} onChange={e=>setONote(e.target.value)} placeholder="หมายเหตุ (ถ้ามี)" style={{...inputSt,flex:"2 1 180px"}}/>
+          </div>
+          <ImgUp label="📎 แนบรูปตัวอย่าง (ถ้ามี)" value={oImage} onChange={setOImage} compact/>
+          <Btn onClick={addOther} icon={I.plus} s={{marginTop:10,background:`linear-gradient(135deg,${C.teal},#0B7C6F)`,color:C.white,width:"100%"}}>เพิ่มรายการ</Btn>
+        </div>
+      </div>}
+      <div style={{marginTop:6}}>
+        <div style={{fontSize:13,fontWeight:800,color:C.ink,marginBottom:8}}>🧺 รายการที่จะสั่ง ({cart.length})</div>
+        {cart.length===0?<div style={{textAlign:"center",padding:"20px",color:C.ink4,fontSize:13,background:C.bg,borderRadius:10}}>ยังไม่มีรายการ — เพิ่มจากด้านบน (สลับแถบเพิ่มได้ทั้ง 2 แบบ)</div>
+        :<div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {cart.map((x,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:C.white,border:`1px solid ${C.line}`,borderRadius:10}}>
+            <Thumb src={x.image} size={38} radius={8} icon={I.box} iconBg={C.bg} iconColor={C.line} iconSize={16}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:700,color:C.ink,fontSize:13.5}}>{x.kind==="other"&&<span style={{fontSize:10.5,color:C.teal,fontWeight:800,marginRight:5}}>🆕 ใหม่</span>}{x.name}</div>
+              <div style={{fontSize:11.5,color:C.ink4}}>× {x.qty} ชิ้น{x.current_qty!=null?` · มีอยู่ ${x.current_qty}`:""}{x.note?` · ${x.note}`:""}</div>
+            </div>
+            <button onClick={()=>setCart(c=>c.filter((_,j)=>j!==i))} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:16,padding:4}}>✕</button>
+          </div>)}
+        </div>}
+      </div>
+      <div style={{marginTop:14,padding:"10px 12px",background:C.yellowLight,border:`1px solid ${C.yellow}`,borderRadius:10,fontSize:12.5,color:"#92600A"}}>⚠️ เมื่อกดสั่งซื้อ กรุณา <b>แจ้งบอสในไลน์ก่อน</b> — เป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะกดอนุมัติได้</div>
+      <div style={{display:"flex",gap:8,marginTop:14}}>
+        <Btn onClick={onClose} s={{background:C.bg,color:C.ink3}}>ยกเลิก</Btn>
+        <Btn onClick={submit} loading={saving} disabled={saving||!cart.length} icon={I.check} s={{flex:1,background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สั่งซื้อ ({cart.length})</Btn>
+      </div>
+    </div>
+  </Modal>;
+}
 function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,currentUser,reloadOrders,onOrderMaterials,onCreatePO,onTransfer}){
   const isCentral=currentBranch?.type==="central";
   const canSeeAll=isCentral||currentUser?.role==="admin"||currentUser?.role==="area";
@@ -5041,6 +5145,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
   const[prs,setPrs]=useState(null);const[err,setErr]=useState(false);
   const[view,setView]=useState(isCentral?"pool":"list");
   const[showForm,setShowForm]=useState(false);
+  const[showAssetOrder,setShowAssetOrder]=useState(false);
   // filters (cloned from the เอกสาร PO screen, adapted to PR)
   const[fStatus,setFStatus]=useState("");const[fBranch,setFBranch]=useState("");const[fFrom,setFFrom]=useState("");const[fTo,setFTo]=useState("");
   const aliveRef=useRef(true);
@@ -5158,6 +5263,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {onOrderMaterials&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOrderMaterials} icon={I.truck}>สั่งวัตถุดิบเปิดPR</Btn>}
+        {!isCentral&&hasPerm(currentUser,"orders")&&<Btn onClick={()=>setShowAssetOrder(true)} icon={I.box} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>สั่งซื้อสินทรัพย์/อุปกรณ์อื่นๆ</Btn>}
         {onTransfer&&hasPO&&<Btn v="purple" onClick={onTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {false&&onCreatePO&&hasPO&&<Btn onClick={onCreatePO} icon={I.plus}>สร้างเอกสาร PO</Btn>}{/* ซ่อนไว้ก่อนตามที่ผู้ใช้ขอ — เปลี่ยน false กลับเป็นเงื่อนไขเดิมเพื่อเปิดคืน */}
         {false&&<Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สร้างใบขอซื้อ</Btn>}{/* ซ่อนไว้ตามที่ผู้ใช้ขอ — PR สร้างผ่านปุ่ม "สั่งวัตถุดิบเปิดPR" แทน */}
@@ -5268,6 +5374,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
       {pr.status==="converted"&&pr.converted_ref&&<div style={{padding:"9px 13px",background:C.blueLight,border:`1px solid ${C.blue}44`,borderRadius:10,fontSize:13,color:"#185FA5",fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>📦 {pr.converted_ref}</div>}
       {mine&&pr.status==="rejected"&&<div style={{display:"flex",justifyContent:"flex-end",marginTop:8}}><Btn onClick={()=>{setDetailPR(null);editPR(pr);}} icon={I.pencil} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>แก้ไข + ส่งใหม่</Btn></div>}
     </Modal>;})()}
+    {showAssetOrder&&<AssetOrderModal currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowAssetOrder(false)} onSubmitted={load}/>}
     {showForm&&<Modal title={editingPR?"✏️ แก้ไขใบขอซื้อ + ส่งใหม่":"📝 สร้างใบขอซื้อ (PR)"} onClose={()=>{setShowForm(false);setEditingPR(null);}} wide>
       <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12,background:C.bg,borderRadius:9,padding:"9px 12px",border:`1px solid ${C.line}`}}>สาขา: <b style={{color:C.ink}}>{currentBranch?.name||"—"}</b> · ใบนี้เป็น<b>คำขอ</b> ยังไม่ตัดสต๊อก — Area อนุมัติแล้วครัวกลางจะออกใบส่งให้</div>
       <div style={{marginBottom:12,position:"relative"}}>
@@ -9513,11 +9620,16 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
               <div style={{fontSize:22,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif",lineHeight:1.15,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🏪 {branchName(o.branch_id)}</div>
               <div style={{fontSize:11.5,color:C.ink4,marginTop:3,fontFamily:"'Sarabun',sans-serif"}}>📝 {o.pr_number||("PR#"+o.id)} · โดย {o.requested_by||"-"}</div>
             </div>
-            <Chip color={o.revised_at?"yellow":"green"}>{o.revised_at?"🔄 แก้ไขมา":"ใบขอซื้อ"}</Chip>
+            <Chip color={o.revised_at?"yellow":"green"}>{o.revised_at?"🔄 แก้ไขมา":o.type==="asset"?"🛒 สินทรัพย์":"ใบขอซื้อ"}</Chip>
           </div>
           {o.revised_at&&<div style={{margin:"0 0 8px",padding:"7px 11px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:9,fontSize:12,color:"#92400E",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>🔄 ใบนี้ถูกแก้ไข + ส่งกลับมาใหม่ (เคยถูกตีกลับ) · แก้เมื่อ {fmtDT(o.revised_at)}</div>}
-          <div style={{fontSize:13,fontWeight:800,color:"#0F6E56",background:C.greenLight,borderRadius:8,padding:"7px 11px",margin:"2px 0 6px",fontFamily:"'Sarabun',sans-serif"}}>🧾 ขอวัตถุดิบ {itemsOf(o).length} รายการ</div>
-          <div style={{margin:"0 0 8px",maxHeight:240,overflowY:"auto",fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,borderBottom:`1px dashed ${C.lineLight}`,padding:"6px 0"}}><span style={{color:C.ink,fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}{it.note?<span style={{color:C.ink4,fontSize:11,fontWeight:600}}> ★{it.note}</span>:""}</span><span style={{color:C.green,fontWeight:800,fontSize:14,whiteSpace:"nowrap"}}>{it.qty||0} {it.unit||""}</span></div>)}</div>
+          {o.type==="asset"
+            ?<div style={{margin:"2px 0 8px"}}>
+              <div style={{fontSize:13,fontWeight:800,color:"#7C2D12",background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:8,padding:"7px 11px",fontFamily:"'Sarabun',sans-serif"}}>🛒 ขอสินทรัพย์/อุปกรณ์ {itemsOf(o).length} รายการ</div>
+              <div style={{marginTop:6,padding:"8px 11px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,fontSize:12,color:"#991B1B",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>⚠️ รายการสินทรัพย์ — โปรดตรวจว่า <u>บอสอนุมัติในไลน์แล้ว</u> ก่อนกดอนุมัติ (เป็นบอสเท่านั้นที่พิจารณา)</div>
+            </div>
+            :<div style={{fontSize:13,fontWeight:800,color:"#0F6E56",background:C.greenLight,borderRadius:8,padding:"7px 11px",margin:"2px 0 6px",fontFamily:"'Sarabun',sans-serif"}}>🧾 ขอวัตถุดิบ {itemsOf(o).length} รายการ</div>}
+          <div style={{margin:"0 0 8px",maxHeight:240,overflowY:"auto",fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,borderBottom:`1px dashed ${C.lineLight}`,padding:"6px 0"}}><span style={{color:C.ink,fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.kind==="other"&&<span style={{color:C.teal,fontSize:10.5,fontWeight:800,marginRight:4}}>🆕</span>}{it.name}{it.note?<span style={{color:C.ink4,fontSize:11,fontWeight:600}}> ★{it.note}</span>:""}</span><span style={{color:C.green,fontWeight:800,fontSize:14,whiteSpace:"nowrap"}}>{it.qty||0} {it.unit||""}</span></div>)}</div>
           {o.needed_by&&<div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>📅 ต้องการภายใน {fmtD(o.needed_by)}</div>}
           {o.reason&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:4}}>📝 {o.reason}</div>}
         </div>
