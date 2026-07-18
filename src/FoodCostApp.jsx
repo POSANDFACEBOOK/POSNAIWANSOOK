@@ -471,6 +471,18 @@ async function pushPOToSlipTrack(po, branches, opts={}){
   // (fire-and-forget). Bulk-sync uses the return value to count successes.
   try{
     if(!po)return{ok:false,skipped:"no-po"};
+    // Void path — a PO that was already pushed is cancelled/deleted here. SlipTrack
+    // catches `voided` before validation, so no branch/amount/datetime is needed;
+    // it soft-cancels both the income+expense rows (external_id) and is idempotent.
+    if(opts.voided===true){
+      const externalId=`PO-${po.po_number||po.id}`;
+      const r=await fetch("/api/sliptrack-push",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({external_id:externalId,voided:true}),
+      });
+      if(!r.ok){const data=await r.json().catch(()=>({}));console.error("SlipTrack void failed",r.status,data);return{ok:false,status:r.status,error:data&&data.error};}
+      return{ok:true,status:r.status,voided:true};
+    }
     const fromB=branches.find(b=>+b.id===+po.from_branch_id);
     const toB=branches.find(b=>+b.id===+po.branch_id);
     if(!fromB||!toB)return{ok:false,skipped:"unknown-branch"};
@@ -5736,6 +5748,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       // `po` still holds the PRE-cancel status, which rollbackPOStock routes on
       // (NOT_MOVED statuses are a safe no-op inside it).
       if(willRefund)await rollbackPOStock(po);
+      // If this PO was received it was already synced to accounting — void that row
+      // or it lingers as an orphan. Idempotent (never-synced → cancelled:0). F&F.
+      if(wasReceived)pushPOToSlipTrack(po,branches,{voided:true});
       await load();setViewPO(null);
     }catch(e){showErr("ยกเลิกไม่สำเร็จ",e);}
   }
@@ -5769,6 +5784,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       // row, so it reads fresh items/branch_ids, not the stale list row.
       const deleted=await api.deletePOIfStatus(po.id,po.status);
       if(wasReceived)await rollbackPOStock(deleted||po);
+      // Deleted for good → no future re-sync can ever match this external_id, so
+      // void its accounting row now (idempotent). Covers cancelled-then-deleted POs.
+      if(wasReceived)pushPOToSlipTrack(deleted||po,branches,{voided:true});
       await load();setViewPO(null);
     }catch(e){alert("ลบไม่สำเร็จ: "+e.message);}
   }

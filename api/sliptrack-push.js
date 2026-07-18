@@ -27,6 +27,37 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
 
+  // ── Void path ─────────────────────────────────────────────────────────────
+  // A PO already synced here is cancelled/deleted in Food Cost. SlipTrack catches
+  // `voided` BEFORE its own validation, so we forward only source/kind/external_id
+  // (no amount/branch). It soft-cancels both the _in and _out rows and is
+  // idempotent (voiding a never-synced or already-void PO returns cancelled:0).
+  const isVoid =
+    body.voided === true ||
+    body.void === true ||
+    String(body.status || "").toLowerCase() === "cancelled";
+  if (isVoid) {
+    if (!body.external_id) {
+      return res.status(400).json({ error: "Missing required field: external_id" });
+    }
+    try {
+      const r = await fetch(SLIPTRACK_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "food_cost",
+          kind: "food_cost_po",
+          external_id: String(body.external_id),
+          voided: true,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      return res.status(r.status).json(data);
+    } catch (err) {
+      return res.status(502).json({ error: "Upstream fetch failed", message: err && err.message });
+    }
+  }
+
   // Hard-required fields per SlipTrack spec (both stages)
   const required = ["external_id", "datetime", "amount", "from_branch", "to_branch"];
   for (const k of required) {
@@ -64,7 +95,10 @@ export default async function handler(req, res) {
   }
 
   try {
-    const r = await fetch(SLIPTRACK_URL, {
+    // ?upsert=1 → SlipTrack updates the existing row by external_id instead of
+    // inserting a duplicate. Required for re-pushes (bulk re-sync, Stage-1 retry);
+    // harmless on first insert. (paid:true also auto-upserts, but we send it always.)
+    const r = await fetch(`${SLIPTRACK_URL}?upsert=1`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
