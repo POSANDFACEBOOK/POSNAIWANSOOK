@@ -23,6 +23,16 @@ async function sb(path, opts = {}) {
 // === Production-grade helpers ============================================
 // Money: round to 2 decimals using "banker's-safe" half-away-from-zero
 const round2 = (n) => Math.round((+n||0)*100)/100;
+// The quantity a document line is actually billed at: the received qty once it's known,
+// otherwise the ordered qty. Keeps printed/exported "จำนวน × ราคา" reconciled with the
+// received-based line_total after a short-receive/dispute. Handles PO items (qty/
+// received_qty) and external-order items (qtyNeeded/receivedQty).
+function billedQty(it){
+  if(!it)return 0;
+  const rec=it.received_qty!=null?it.received_qty:(it.receivedQty!=null?it.receivedQty:null);
+  if(rec!=null)return +rec||0;
+  return +(it.qty!=null?it.qty:(it.qtyNeeded!=null?it.qtyNeeded:0))||0;
+}
 // Currency formatter (Thai Baht, always 2 decimals)
 const fmtTHB = (n) => `฿${(+n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 // Today in Asia/Bangkok (YYYY-MM-DD) — avoids UTC off-by-one near midnight
@@ -1063,6 +1073,18 @@ async function retryStockPending(pending,ings){
     if(still)remain.push(still);
   }
   return remain;   // [] = everything cleared
+}
+// Persist newly-failed stock moves onto the PO for the 🔁 retry button. MERGES with the
+// row's CURRENT stock_pending (re-read from DB, not a possibly-stale snapshot) so:
+//   • a ship-time deduct failure survives the later receive (which must not erase it), and
+//   • an already-retried+cleared line is NOT re-added (which would double-apply on retry).
+// If nothing newly failed, it leaves existing pending untouched. Best-effort (never throws).
+async function persistPending(poId,...groups){
+  const fresh=groups.filter(g=>g&&Array.isArray(g.items)&&g.items.length);
+  if(!fresh.length)return;
+  let existing=[];
+  try{ const row=await api.getPO(poId); if(Array.isArray(row)&&row[0]&&Array.isArray(row[0].stock_pending))existing=row[0].stock_pending; }catch{}
+  try{ await api.updatePO(poId,{stock_pending:[...existing,...fresh]}); }catch{}
 }
 async function _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,acc,levelFailed}){
   const cascadeItems=[];
@@ -4188,7 +4210,7 @@ function buildPOHTML(po,toBranchName,fromBranchName){
     <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${i+1}</td>
     <td style="padding:6px 10px;border:1px solid #ddd">${esc(it.name)}${it.note?`<br/><span style="font-size:11px;color:#888">★ ${esc(it.note)}</span>`:""}</td>
     <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${esc(it.unit||"-")}</td>
-    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${fmt(it.qty)}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${fmt(billedQty(it))}</td>
     <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${fmt(it.price_per_unit)}</td>
     <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:700">฿${fmt(it.line_total)}</td>
   </tr>`).join("");
@@ -4308,7 +4330,8 @@ async function exportPOsToExcel(pos,branchById){
         "ลำดับ":idx+1,
         "รายการ":it.name,
         "หน่วย":it.unit||"",
-        "จำนวน":+it.qty||0,
+        "จำนวนสั่ง":+it.qty||0,
+        "จำนวนรับจริง":billedQty(it),
         "ราคา/หน่วย":+it.price_per_unit||0,
         "รวม":+it.line_total||0,
         "หมายเหตุ":it.note||"",
@@ -4319,7 +4342,7 @@ async function exportPOsToExcel(pos,branchById){
   const ws1=XLSX.utils.json_to_sheet(summary);
   const ws2=XLSX.utils.json_to_sheet(details);
   ws1["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:18},{wch:12},{wch:8},{wch:14},{wch:10},{wch:14},{wch:14},{wch:14},{wch:18},{wch:30}];
-  ws2["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:18},{wch:6},{wch:24},{wch:10},{wch:10},{wch:14},{wch:14},{wch:24}];
+  ws2["!cols"]=[{wch:18},{wch:12},{wch:18},{wch:18},{wch:6},{wch:24},{wch:10},{wch:10},{wch:10},{wch:14},{wch:14},{wch:24}];
   XLSX.utils.book_append_sheet(wb,ws1,"สรุป PO");
   XLSX.utils.book_append_sheet(wb,ws2,"รายการรายบรรทัด");
   XLSX.writeFile(wb,`PO_Export_${todayBkk()}.xlsx`);
@@ -5059,7 +5082,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
     savingRef.current=false;setSaving(false);
   }
-  async function cancelPR(pr){if(!await confirmDlg({title:"ยกเลิกใบขอซื้อ",message:`ยกเลิก ${pr.pr_number||"ใบนี้"}?`,danger:true,confirmLabel:"ยกเลิก"}))return;try{await api.updatePR(pr.id,{status:"cancelled",updated_at:new Date().toISOString()});await load();}catch(e){alert("ไม่สำเร็จ: "+(e.message||e));}}
+  async function cancelPR(pr){if(!await confirmDlg({title:"ยกเลิกใบขอซื้อ",message:`ยกเลิก ${pr.pr_number||"ใบนี้"}?`,danger:true,confirmLabel:"ยกเลิก"}))return;try{await api.updatePRIfStatus(pr.id,"pending_approval",{status:"cancelled",updated_at:new Date().toISOString()});await load();}catch(e){alert("ยกเลิกไม่สำเร็จ — ใบขอซื้ออาจถูกอนุมัติ/เปลี่ยนสถานะโดยผู้ใช้อื่นแล้ว กรุณารีเฟรช\n\n"+(e.message||e));}}
   async function delPR(pr){if(!await confirmDlg({title:"ลบใบขอซื้อ",message:`ลบ ${pr.pr_number||"ใบนี้"} ถาวร?`,danger:true,confirmLabel:"ลบ"}))return;try{await api.deletePR(pr.id);await load();}catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}}
   // central consolidation pool
   // Exclude central-self PRs: central is the SUPPLIER, so a central→central delivery PO
@@ -5464,36 +5487,43 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   // New flow: stock moves at create/acceptRequest, not at receive. So rollback is
   // triggered by status, not by received_at. We undo whatever the row currently
   // represents — qty if items have no received_qty yet, otherwise received_qty.
+  // Returns any reversal lines that FAILED (as stock_pending groups) so the caller can
+  // persist them for the 🔁 retry button. [] = fully reversed. (delPO can't persist — its
+  // row is already gone — so a failed reversal there stays alert-only, fixable by count.)
   async function rollbackPOStock(po){
-    if(!po)return;
+    if(!po)return[];
     // Statuses where stock has NOT been moved yet → nothing to roll back.
     const NOT_MOVED=new Set(["requested","open","cancelled","transfer_pending"]);
-    if(NOT_MOVED.has(po.status))return;
+    if(NOT_MOVED.has(po.status))return[];
+    const pend=[];
     // In-transit: only sender was deducted; receiver was never credited.
     // → Return ordered_qty to sender (use qty, not received_qty).
     const IN_TRANSIT=new Set(["shipped","disputed","transfer_shipped"]);
     if(IN_TRANSIT.has(po.status)){
       // Strip received_qty so transferStockBetweenBranches falls back to qty.
       const itemsByOrdered=(po.items||[]).map(it=>{const{received_qty,...rest}=it||{};return rest;});
-      await transferStockBetweenBranches({
+      const acc=await transferStockBetweenBranches({
         fromBranchId:null,
         toBranchId:po.from_branch_id,
         items:itemsByOrdered,
         ings,
         autoVisible:false,
       });
+      const p=pendingFromAcc(acc,null,po.from_branch_id);if(p)pend.push(p);
     }else{
       // Both sides moved (awaiting_payment, paid, received, transfer_done):
       // reverse with whatever quantity is recorded (received_qty if set, else qty).
-      await transferStockBetweenBranches({
+      const acc=await transferStockBetweenBranches({
         fromBranchId:po.branch_id,
         toBranchId:po.from_branch_id,
         items:po.items||[],
         ings,
         autoVisible:false,
       });
+      const p=pendingFromAcc(acc,po.branch_id,po.from_branch_id);if(p)pend.push(p);
     }
     if(reloadIngs)await reloadIngs();
+    return pend;
   }
 
   // Central accepts the branch's stock-check order (status=requested).
@@ -5571,13 +5601,17 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       const shippedAt=new Date().toISOString();
       await api.patchPOIfStatus(po.id,"open",{status:"shipped",updated_at:shippedAt});
       // In-transit: deduct from sender only. Receiver is credited at confirmReceive.
-      await transferStockBetweenBranches({
+      const acc=await transferStockBetweenBranches({
         fromBranchId:po.from_branch_id,
         toBranchId:null,
         items:po.items||[],
         ings,
         autoVisible:false,
       });
+      // A line that failed to deduct here (transient write / missing ingredient) is recorded
+      // so the 🔁 retry button re-runs it — else the sender stays un-debited while
+      // confirmReceive credits the receiver → minted stock with no in-app recovery.
+      await persistPending(po.id,pendingFromAcc(acc,po.from_branch_id,null));
       if(reloadIngs)await reloadIngs();
       await load();
     }catch(e){showErr("จัดส่งไม่สำเร็จ",e);}
@@ -5624,13 +5658,16 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       const shippedAt=new Date().toISOString();
       await api.patchPOIfStatus(po.id,"transfer_pending",{status:"transfer_shipped",updated_at:shippedAt});
       // In-transit: deduct from sender only.
-      await transferStockBetweenBranches({
+      const acc=await transferStockBetweenBranches({
         fromBranchId:po.from_branch_id,
         toBranchId:null,
         items:po.items||[],
         ings,
         autoVisible:false,
       });
+      // Record any deduct failure so it can be retried (else confirmReceiveTransfer credits
+      // the receiver a qty the sender was never debited for → minted stock).
+      await persistPending(po.id,pendingFromAcc(acc,po.from_branch_id,null));
       if(reloadIngs)await reloadIngs();
       await load();
     }catch(e){showErr("จัดส่งไม่สำเร็จ",e);}
@@ -5649,13 +5686,16 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       try{ await api.patchPOIfStatus(po.id,"shipped",{...recvPatch,receive_images:imgs}); }
       catch(err){ if(imgs.length&&/receive_images/.test(String((err&&err.message)||""))){ await api.patchPOIfStatus(po.id,"shipped",recvPatch); setTimeout(()=>alert("✅ รับสินค้าสำเร็จ แต่ยังบันทึกรูปไม่ได้\nผู้ดูแลระบบต้องเพิ่มคอลัมน์ receive_images ใน purchase_orders ก่อน"),0); } else throw err; }
       // End of in-transit: credit receiver with the full ordered qty.
-      await transferStockBetweenBranches({
+      const acc=await transferStockBetweenBranches({
         fromBranchId:null,
         toBranchId:po.branch_id,
         items:po.items||[],
         ings,
         autoVisible:true,
       });
+      // A credit that failed here would strand stock (sender already debited at ship) —
+      // record it for the 🔁 retry button (merges with any un-cleared ship-side pending).
+      await persistPending(po.id,pendingFromAcc(acc,null,po.branch_id));
       if(reloadIngs)await reloadIngs();
       // Stage 1 → SlipTrack: create รายการค้างจ่าย (paid:false). Non-blocking, but record
       // the outcome so a swallowed failure is retried by load()'s self-heal.
@@ -5678,9 +5718,17 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ส่งกลับได้");return;}
     setConfirming(po.id);
     try{
-      // Clamp received_qty to [0, original qty] to prevent fraud
-      const safeItems=(updatedItems||[]).map(it=>{const orig=+it.qty||0;const got=Math.max(0,Math.min(orig,+it.received_qty||0));return{...it,received_qty:got};});
-      await api.patchPOIfStatus(po.id,"shipped",{items:safeItems,status:"disputed",dispute_note:note||null,dispute_at:new Date().toISOString(),dispute_by:currentUser?.username||null,updated_at:new Date().toISOString()});
+      // Clamp received_qty to [0, original qty] to prevent fraud, and recompute each
+      // line_total + the header totals from received_qty NOW (same math acceptDispute uses
+      // later) so a PO printed/exported while it sits in "disputed" reconciles — qty shown
+      // = billedQty = received_qty, and line_total/subtotal/total match it. (No stock/
+      // accounting effect: nothing is pushed until receive/accept; acceptDispute recomputes
+      // the identical values idempotently.)
+      const safeItems=(updatedItems||[]).map(it=>{const orig=+it.qty||0;const got=Math.max(0,Math.min(orig,+it.received_qty||0));return{...it,received_qty:got,line_total:round2(got*(+it.price_per_unit||0))};});
+      const dSub=round2(safeItems.reduce((s,it)=>s+(+it.line_total||0),0));
+      const dVatRate=(+po.subtotal||0)>0?(+po.vat||0)/(+po.subtotal):0;
+      const dVat=round2(dSub*dVatRate);
+      await api.patchPOIfStatus(po.id,"shipped",{items:safeItems,subtotal:dSub,vat:dVat,total:round2(dSub+dVat),status:"disputed",dispute_note:note||null,dispute_at:new Date().toISOString(),dispute_by:currentUser?.username||null,updated_at:new Date().toISOString()});
       await load();setViewPO(null);
     }catch(e){showErr("ส่งกลับไม่สำเร็จ",e);}
     setConfirming(null);
@@ -5751,7 +5799,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         });
         const p2=pendingFromAcc(acc2,null,po.from_branch_id);if(p2)pendGroups.push(p2);
       }
-      if(pendGroups.length){try{await api.updatePO(po.id,{stock_pending:pendGroups});}catch{}}
+      await persistPending(po.id,...pendGroups);   // merge (don't clobber ship-side pending)
       if(reloadIngs)await reloadIngs();
       // Stage 1 (revised) → SlipTrack: re-POST with same external_id; server updates the
       // pending row's amount/items. Skip entirely when nothing was received (cancelled).
@@ -5834,8 +5882,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       // expected status, surfaced as "เอกสารถูกแก้ไขโดยผู้ใช้อื่นแล้ว".
       await api.patchPOIfStatus(po.id,po.status,{status:"cancelled",updated_at:new Date().toISOString()});
       // `po` still holds the PRE-cancel status, which rollbackPOStock routes on
-      // (NOT_MOVED statuses are a safe no-op inside it).
-      if(willRefund)await rollbackPOStock(po);
+      // (NOT_MOVED statuses are a safe no-op inside it). Persist any reversal line that
+      // failed so the 🔁 retry button can complete the refund (the row survives as cancelled).
+      if(willRefund){const pend=await rollbackPOStock(po);if(pend.length)await persistPending(po.id,...pend);}
       // If this PO was received it was already synced to accounting — void that row
       // or it lingers as an orphan. Idempotent (never-synced → cancelled:0). Record the
       // outcome so the flag reflects reality (a failed void stays 'failed' → re-voided).
@@ -5930,13 +5979,21 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         let qty=+rest.qty||+rest.qtyNeeded||0;
         if(qty<=0&&+received_qty>0)qty=+received_qty;
         if(!(qty>0))return null;
-        return{...rest,ingredient_id,qty};
+        // Recompute line_total from the restored ordered qty — the source row's line_total
+        // may be a shrunk received-based value (post-dispute) that would ride along on ...rest
+        // and understate the copy.
+        return{...rest,ingredient_id,qty,line_total:round2(qty*(+rest.price_per_unit||0))};
       }).filter(Boolean);
       if(cleanItems.length===0){
         alert("ไม่สามารถคัดลอกได้ — รายการในเอกสารต้นฉบับไม่มีจำนวนหรือไม่ผูกวัตถุดิบ");
         setCopyBusy(false);
         return;
       }
+      // Derive fresh totals from the recomputed (ordered-qty) lines, preserving the source's
+      // effective VAT rate — never copy the source's received-shrunk subtotal/vat/total.
+      const cSubtotal=round2(cleanItems.reduce((s,it)=>s+(+it.line_total||0),0));
+      const cVatRate=(+po.subtotal||0)>0?(+po.vat||0)/(+po.subtotal):0;
+      const cVat=round2(cSubtotal*cVatRate);
       const newPO={
         po_number:genPONumber(newFromId),
         branch_id:newToId,
@@ -5944,9 +6001,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         po_date:todayBkk(),
         status:newStatus,
         items:cleanItems,
-        subtotal:+po.subtotal||0,
-        vat:+po.vat||0,
-        total:+po.total||0,
+        subtotal:cSubtotal,
+        vat:cVat,
+        total:round2(cSubtotal+cVat),
         notes:po.notes?`${po.notes} (คัดลอกจาก ${po.po_number||"PO"})`:`คัดลอกจาก ${po.po_number||"PO"}`,
         created_by:currentUser?.username||null,
         updated_at:new Date().toISOString(),
@@ -6085,7 +6142,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         });
         const p2=pendingFromAcc(acc2,null,po.from_branch_id);if(p2)pendGroups.push(p2);
       }
-      if(pendGroups.length){try{await api.updatePO(po.id,{stock_pending:pendGroups});}catch{}}
+      await persistPending(po.id,...pendGroups);   // merge (don't clobber ship-side pending)
       if(reloadIngs)await reloadIngs();
       setReceivingTransfer(null);
       await load();
@@ -8793,12 +8850,15 @@ function SupplierStatsModal({supplier,orders,onClose}){
       const d=parseSupplierOrderDate(o.requested_at);
       if(d&&(!latestDate||d>latestDate))latestDate=d;
       (o.items||[]).forEach(it=>{
-        const cost=+it.estimatedCost||((+it.qtyNeeded||0)*(+it.pricePerUnit||+it.buyPrice||0));
+        // Use the stored estimatedCost when present (incl. 0 for a not-received line) so it
+        // stays on the SAME basis as cur.qty (billedQty); only fall back to a computed cost
+        // when it's genuinely absent — else a received=0 line shows qty 0 with a positive cost.
+        const cost=(it.estimatedCost!=null?+it.estimatedCost:billedQty(it)*(+it.pricePerUnit||+it.buyPrice||0));
         amount+=cost;
         items++;
         const key=it.ingId||it.name;
         const cur=byIng.get(key)||{name:it.name||"-",unit:it.unit||"",qty:0,cost:0,times:0};
-        cur.qty+=(+it.qtyNeeded||0);
+        cur.qty+=billedQty(it);   // received qty for delivered orders → matches `cost` basis
         cur.cost+=cost;
         cur.times+=1;
         byIng.set(key,cur);
@@ -9195,7 +9255,7 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(300px,100%),1fr))",gap:14}}>
       {filtered.map(a=>{const d=assetDeprec(a);const st=stOf(a.status||"active");return <Card key={a.id} style={{overflow:"hidden"}}>
         <div style={{display:"flex",gap:12,padding:"12px 14px"}}>
-          {a.image?<img src={driveImgSrc(a.image)} alt="" loading="lazy" decoding="async" style={{width:74,height:74,objectFit:"cover",borderRadius:12,border:`1px solid ${C.line}`,flexShrink:0}}/>:<div style={{width:74,height:74,borderRadius:12,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.box} s={28} c={C.line}/></div>}
+          <Thumb src={a.image} alt={a.name||""} size={74} radius={12} icon={I.box} iconBg={C.bg} iconColor={C.line} iconSize={28} imgStyle={{border:`1px solid ${C.line}`}}/>
           <div style={{minWidth:0,flex:1}}>
             <div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"flex-start"}}>
               <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</div>
