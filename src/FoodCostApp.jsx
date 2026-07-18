@@ -492,7 +492,22 @@ async function pushPOToSlipTrack(po, branches, opts={}){
     // Same canonical name = intra-unit movement (e.g. within the คุณนายตื่นสาย kitchen)
     // → no cross-branch payable, skip. Also covers legitimately empty names.
     if(!fromName||!toName||fromName===toName)return{ok:false,skipped:"same-branch"};
-    const amount=Number(po.total||0);
+    // Bill the ACTUAL received value, not the ordered po.total. Build the item lines
+    // once from received_qty (clamped to ordered, exactly like acceptDispute) and derive
+    // the header amount from the SAME lines + proportional VAT, so the header amount
+    // always equals Σ(item lines). This fixes short-received POs — and legacy POs whose
+    // stored po.total was never recomputed — from over-billing accounting. Falls back to
+    // po.total only when the lines can't be priced.
+    const recvLines=(po.items||[]).map(it=>{
+      const orig=+it.qty||0;
+      const recv=it.received_qty!=null?Math.max(0,Math.min(orig,+it.received_qty||0)):orig;
+      return{name:String(it.name||"").trim(),qty:recv,unit:String(it.unit||"หน่วย"),unit_price:+it.price_per_unit||0};
+    });
+    const recvSubtotal=round2(recvLines.reduce((s,l)=>s+l.qty*l.unit_price,0));
+    const vatRate=(+po.subtotal||0)>0?(+po.vat||0)/(+po.subtotal):0; // original effective VAT rate
+    const recvVat=round2(recvSubtotal*vatRate);
+    const recvAmount=round2(recvSubtotal+recvVat);
+    const amount=(recvLines.some(l=>l.unit_price>0)&&recvSubtotal>0)?recvAmount:Number(po.total||0);
     if(!(amount>0))return{ok:false,skipped:"zero-amount"};
     const externalId=`PO-${po.po_number||po.id}`;
     const isPaid=opts.paid===true;
@@ -512,19 +527,12 @@ async function pushPOToSlipTrack(po, branches, opts={}){
       if(opts.slipUrl)payload.slip_url=opts.slipUrl;
       if(opts.paymentNote)payload.payment_note=opts.paymentNote;
     }else{
-      // Stage 1: include description + items so the new rows are descriptive
+      // Stage 1: include description + items so the new rows are descriptive.
       payload.description=po.notes?`ซื้อวัตถุดิบ — ${po.notes}`:`ซื้อวัตถุดิบ ${externalId}`;
       payload.reference_no=po.po_number||externalId;
-      // Bill the ACTUAL received qty, not the ordered qty: on a disputed/short PO the
-      // amount (po.total) is recomputed from received_qty, so the item breakdown must use
-      // received_qty too or the lines won't reconcile with the payable. Not-received (0)
-      // lines are dropped — they aren't billed.
-      const items=(po.items||[]).map(it=>({
-        name:String(it.name||"").trim(),
-        qty:(it.received_qty!=null?+it.received_qty:(+it.qty||0)),
-        unit:String(it.unit||"หน่วย"),
-        unit_price:+it.price_per_unit||0,
-      })).filter(x=>x.name&&x.qty>0);
+      // Same received-qty lines the header `amount` was derived from (0-qty lines dropped
+      // — they aren't billed), so the SlipTrack lines always reconcile with the header.
+      const items=recvLines.filter(x=>x.name&&x.qty>0);
       if(items.length)payload.items=items;
     }
     const r=await fetch("/api/sliptrack-push",{
