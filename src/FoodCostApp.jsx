@@ -3127,7 +3127,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
       }
       if(reload)await reload();
       // Keep only the rows that FAILED to save — never wipe an un-saved typed count,
-      // so the counter can retry without re-entering (mirrors saveStockCounts).
+      // so the counter can retry without re-entering the quantity.
       const okSet=new Set(ok.map(String));
       setEdits(e=>Object.fromEntries(Object.entries(e).filter(([id])=>!okSet.has(String(id)))));
       const failed=entries.length-ok.length;
@@ -5009,7 +5009,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
   // Exclude central-self PRs: central is the SUPPLIER, so a central→central delivery PO
   // would be un-shippable (shipPO refuses same branch) and strand the request.
   const approvedPRs=useMemo(()=>(prs||[]).filter(p=>p.status==="approved"&&p.type==="ingredient"&&+p.branch_id!==+currentBranch?.id),[prs,currentBranch]);
-  const pool=useMemo(()=>{const m=new Map();for(const p of approvedPRs){for(const it of (p.items||[])){const id=+it.ingredient_id;if(!id||!(+it.qty>0))continue;const e=m.get(id)||{ingredient_id:id,name:it.name,unit:it.unit,total:0,byBranch:[]};e.total=round2(e.total+(+it.qty||0));e.byBranch.push({branch:p.branch_name||branchName(p.branch_id),qty:+it.qty||0});m.set(id,e);}}return[...m.values()].sort((a,b)=>a.name.localeCompare(b.name));},[approvedPRs]);// eslint-disable-line react-hooks/exhaustive-deps
+  const pool=useMemo(()=>{const m=new Map();for(const p of approvedPRs){for(const it of (p.items||[])){const id=+it.ingredient_id;if(!id||!(+it.qty>0))continue;const e=m.get(id)||{ingredient_id:id,name:it.name,unit:it.unit,total:0,byBranch:[]};e.total=round2(e.total+(+it.qty||0));const bId=+p.branch_id;const ex=e.byBranch.find(b=>+b.branchId===bId);if(ex)ex.qty=round2(ex.qty+(+it.qty||0));else e.byBranch.push({branchId:bId,branch:p.branch_name||branchName(p.branch_id),qty:+it.qty||0});m.set(id,e);}}return[...m.values()].sort((a,b)=>a.name.localeCompare(b.name));},[approvedPRs]);// eslint-disable-line react-hooks/exhaustive-deps
   const[consolidating,setConsolidating]=useState(false);const consolidatingRef=useRef(false);
   // PR fulfillment = "จัดส่งให้สาขา": issue an internal delivery PO (ครัวกลาง→สาขา) per
   // requesting branch. NO stock moves here — the PO lands at "open"; central ships it from
@@ -8054,11 +8054,8 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   const canOrder=hasPerm(currentUser,"orders");
   const[q,setQ]=useState("");
   const[supFilter,setSupFilter]=useState("");  // "" = ทุกซัพพลาย, "none" = ไม่ระบุ, else supplier id
-  const[onHand,setOnHand]=useState({});  // {ingId: number} — staff's count
-  const[orderQty,setOrderQty]=useState({});  // {ingId: number} — manually overridden order qty
+  const[orderQty,setOrderQty]=useState({});  // {ingId: number} — order qty (manual entry)
   const[saving,setSaving]=useState(false);
-  const[savingStock,setSavingStock]=useState(false);
-  const savingStockRef=useRef(false);   // synchronous double-tap guard (state lags a frame)
   const[submitResult,setSubmitResult]=useState(null);  // { poList, extList, skippedList, totalItems, totalCost } — shown in result modal
   const[safetyEdit,setSafetyEdit]=useState({});  // { ingId: stringValue } — local edit before commit
   const safetyTimers=useRef({});                  // { ingId: timeoutId } — debounce per-row
@@ -8133,16 +8130,8 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[visibleIngs,suppliers,currentBranch,isCentral]);
 
-  // Compute order qty for an ingredient (auto unless overridden) — uses per-branch stock + per-branch safety
-  // Both `have` and `safety` honor IN-PROGRESS edits (typed but not yet blurred/saved)
-  // so the "สั่ง" column updates live as the user types into เหลือ(นับ) or safety.
-  function autoOrderQty(ing){
-    const haveEdit=onHand[ing.id];
-    const have=(haveEdit!=null&&haveEdit!=="")?+haveEdit||0:branchStock(ing,currentBranch?.id);
-    const safetyDraft=safetyEdit[ing.id];
-    const safety=(safetyDraft!=null&&safetyDraft!=="")?+safetyDraft||0:branchSafety(ing,currentBranch?.id);
-    return Math.max(0,round2(safety-have));
-  }
+  // The "สั่ง" column is MANUAL entry only (staff type how much to order). Counting
+  // stock lives in the separate 📦 นับสต็อก popup, not on this ordering screen.
   function getOrderQty(ing){
     // Manual entry only — return whatever staff typed, defaulting to 0.
     return +orderQty[ing.id]||0;
@@ -8157,43 +8146,8 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     visibleIngs.forEach(i=>{const q2=getOrderQty(i);if(q2>0){itemCount++;totalCost+=q2*(+i.buy_price||0);}});
     return{totalCost:round2(totalCost),itemCount};
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[visibleIngs,onHand,orderQty,safetyEdit]);
-
-  // Save updated stock counts back to ingredients (per-branch)
-  async function saveStockCounts(){
-    if(savingStockRef.current)return;   // double-tap → would double-write + duplicate logs
-    const entries=Object.entries(onHand).filter(([id,v])=>v!==""&&v!=null);
-    if(entries.length===0){alert("ยังไม่ได้ใส่จำนวน");return;}
-    savingStockRef.current=true;
-    try{
-      if(!await confirmDlg({title:"บันทึกสต็อกที่นับ",message:`อัปเดตสต็อกของ ${entries.length} รายการในสาขา "${currentBranch?.name}"?`,confirmLabel:"อัปเดต"}))return;
-      setSavingStock(true);
-      const failed=[];const failedIds=new Set();
-      for(const[id,v]of entries){
-        const ing=ings.find(x=>+x.id===+id);if(!ing)continue;
-        try{
-          const prev=branchStock(ing,currentBranch.id);
-          // Atomic per-branch SET — same path as the นับสต็อก popup. The old code
-          // PATCHed the whole stock_by_branch map from the page-load cache, which
-          // silently reverted every move other branches made since loading.
-          if(!await rpcStockSet(+id,currentBranch.id,+v||0)){
-            await api.updateIng(+id,{stock_by_branch:setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0)});
-          }
-          api.addStockLog({ingredient_id:+id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:currentUser?.username||currentUser?.name||""}).catch(()=>{});
-        }catch(e){failed.push(`${ing.name}: ${e.message||e}`);failedIds.add(String(id));}
-      }
-      if(reloadIngs)await reloadIngs();
-      if(failed.length>0){
-        alert(`⚠️ บันทึกไม่สำเร็จ ${failed.length} รายการ:\n${failed.slice(0,8).join("\n")}${failed.length>8?"\n...":""}\n\nรายการอื่นบันทึกแล้ว — แก้เฉพาะรายการข้างบนแล้วบันทึกใหม่`);
-        // Keep ONLY the failed entries in the form so a retry can't double-save the rest
-        setOnHand(prev=>Object.fromEntries(Object.entries(prev).filter(([id])=>failedIds.has(String(id)))));
-      }else{
-        setOnHand({});
-        alert(`✅ อัปเดตสต็อกของสาขา "${currentBranch?.name}" เรียบร้อย`);
-      }
-    }catch(e){alert("ไม่สำเร็จ: "+e.message);}
-    finally{savingStockRef.current=false;setSavingStock(false);}
-  }
+  },[visibleIngs,orderQty,safetyEdit]);
+  // (removed dead saveStockCounts/onHand — stock counting lives in the 📦 นับสต็อก popup)
 
   // Submit orders — group by supplier, then route each group:
   //   • supplier name matches a central branch → create a PO (from central → this branch)
