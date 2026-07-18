@@ -1127,8 +1127,9 @@ function NumPad({value,onChange,onClose,integer,title}){
   const vref=useRef(v);vref.current=v;
   const press=useCallback(k=>{setV(cur=>{
     if(k==="⌫")return cur.slice(0,-1);
+    if(k==="C")return "";                   // Clear (integer keypad) — must reset, not append the letter
     if(k===".")return integer||cur.includes(".")?cur:(cur===""?"0.":cur+".");
-    if(cur==="0")return k;                 // replace a lone leading zero
+    if(cur==="0"&&k!==".")return k;         // replace a lone leading zero (but keep "0." for decimals)
     return cur+k;
   });},[integer]);
   const done=()=>{onChange(vref.current);onClose();};
@@ -1325,7 +1326,7 @@ function NumStepper({value,onChange,onBlur,step=1,min=0,max,placeholder,inputSty
   const btn={minWidth:34,minHeight:34,padding:0,background:btnBg,border:`1.5px solid ${C.line}`,borderRadius:8,cursor:disabled?"not-allowed":"pointer",fontSize:18,fontWeight:900,color:disabled?C.ink4:btnColor,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,userSelect:"none",lineHeight:1,touchAction:"manipulation"};
   return <div style={{display:"inline-flex",alignItems:"center",gap:3}}>
     <button type="button" tabIndex={-1} onMouseDown={e=>e.preventDefault()} onClick={()=>bump(-step)} disabled={disabled} aria-label="ลด" style={btn}>−</button>
-    <input type="text" inputMode="decimal" min={min} max={max} step={step} value={v} onChange={e=>onChange(e.target.value)} onBlur={onBlur} placeholder={placeholder} disabled={disabled} style={{...iS,padding:"6px 6px",fontSize:13,fontWeight:800,textAlign:"center",width,minHeight:34,...inputStyle}}/>
+    <input type="text" inputMode="decimal" min={min} max={max} step={step} value={v} onChange={e=>onChange(e.target.value)} onBlur={e=>{const raw=e.target.value;if(raw!==""&&raw!=="."&&raw!=="-"){let n=+raw;if(!isNaN(n)){if(min!=null&&n<min)n=min;if(max!=null&&n>max)n=max;n=Math.round(n*1000)/1000;if(String(n)!==raw)onChange(String(n));}}if(onBlur)onBlur(e);}} placeholder={placeholder} disabled={disabled} style={{...iS,padding:"6px 6px",fontSize:13,fontWeight:800,textAlign:"center",width,minHeight:34,...inputStyle}}/>
     <button type="button" tabIndex={-1} onMouseDown={e=>e.preventDefault()} onClick={()=>bump(step)} disabled={disabled} aria-label="เพิ่ม" style={btn}>+</button>
   </div>;
 }
@@ -3125,8 +3126,12 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         finally{delete savingRef.current[id];}
       }
       if(reload)await reload();
-      setEdits({});
-      alert(`✅ บันทึกสต็อก ${ok.length} รายการสำเร็จ`);
+      // Keep only the rows that FAILED to save — never wipe an un-saved typed count,
+      // so the counter can retry without re-entering (mirrors saveStockCounts).
+      const okSet=new Set(ok.map(String));
+      setEdits(e=>Object.fromEntries(Object.entries(e).filter(([id])=>!okSet.has(String(id)))));
+      const failed=entries.length-ok.length;
+      alert(failed>0?`✅ บันทึก ${ok.length} รายการ\n⚠️ ${failed} รายการยังบันทึกไม่สำเร็จ — ยังค้างในฟอร์ม กดบันทึกใหม่ได้`:`✅ บันทึกสต็อก ${ok.length} รายการสำเร็จ`);
     }finally{savingAllRef.current=false;setSavingAll(false);}
   }
 
@@ -5603,7 +5608,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   }
   async function acceptDispute(po){
     if(!isCreator(po)&&!isCentralBranch){alert("เฉพาะผู้ออกเอกสารหรือครัวกลางเท่านั้นที่ยอมรับได้");return;}
-    if(!await confirmDlg({title:"ยอมรับการแก้ไข",message:`ยอมรับจำนวนที่ปลายทางแจ้งใน ${po.po_number||"PO นี้"}?\n\n• ระบบจะปรับ delta สต็อก: คืนของส่วนที่ขาดให้ผู้ส่ง / หรือตัดเพิ่มถ้ารับเกิน\n• ยอดรวมจะถูกปรับตามจำนวนที่รับจริง\n• เปลี่ยนสถานะเป็น "รอชำระเงิน"`,confirmLabel:"✅ ยอมรับการแก้ไข"}))return;
+    if(!await confirmDlg({title:"ยอมรับการแก้ไข",message:`ยอมรับจำนวนที่ปลายทางแจ้งใน ${po.po_number||"PO นี้"}?\n\n• ระบบจะปรับ delta สต็อก: คืนของส่วนที่ขาดให้ผู้ส่ง (รับได้ไม่เกินจำนวนที่สั่ง)\n• ยอดรวมจะถูกปรับตามจำนวนที่รับจริง\n• เปลี่ยนสถานะเป็น "รอชำระเงิน"`,confirmLabel:"✅ ยอมรับการแก้ไข"}))return;
     setConfirming(po.id);
     try{
       // Compute delta BEFORE mutating items so the variance settlement sees both the
@@ -6212,7 +6217,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
               </td>
               <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{ordered} {it.unit||""}{got===0?<div style={{fontSize:10,color:C.red,fontWeight:800,marginTop:2}}>❌ ไม่ได้รับ</div>:short?<div style={{fontSize:10,color:"#92400E",fontWeight:800,marginTop:2}}>ขาด {(ordered-got).toFixed(2)}</div>:null}</td>
               <td style={{padding:"7px 10px"}}>
-                <NumStepper value={it.receivedQty} onChange={v=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={ordered}/>
+                <NumStepper value={it.receivedQty} onChange={v=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70}/>
               </td>
               <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>
                 <div style={{display:"inline-flex",alignItems:"center",gap:5}}>
@@ -7847,7 +7852,9 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     :<div style={{display:"flex",flexDirection:"column",gap:8}}>
       {displayOrders.map(order=>{
         const itemsTotal=(order.items||[]).reduce((s,it)=>s+(+it.estimatedCost||0),0);
-        const itemsCount=(order.items||[]).length;
+        // On a delivered order count only lines actually received (>0) — matches the ฿ total
+        // and the reprinted receipt, which both drop not-received (0) lines.
+        const itemsCount=order.status==="delivered"?(order.items||[]).filter(it=>{const r=it.receivedQty!=null?+it.receivedQty:(it.received_qty!=null?+it.received_qty:null);return (r==null?(+it.qtyNeeded||0):r)>0;}).length:(order.items||[]).length;
         const stColor={pending:"#F59E0B",approved:"#10B981",rejected:"#EF4444",delivered:"#3B82F6"}[order.status]||C.ink3;
         const stBg={pending:"#FEF3C7",approved:"#D1FAE5",rejected:"#FEE2E2",delivered:"#DBEAFE"}[order.status]||C.lineLight;
         const isExpanded=!!expandedOrders[order.id];
@@ -8000,7 +8007,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               </td>
               <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{ordered} {it.unit||""}{got===0?<div style={{fontSize:10,color:C.red,fontWeight:800,marginTop:2}}>❌ ไม่ได้รับ</div>:short?<div style={{fontSize:10,color:"#92400E",fontWeight:800,marginTop:2}}>ขาด {(ordered-got).toFixed(2)}</div>:null}</td>
               <td style={{padding:"7px 10px"}}>
-                <NumStepper value={it.receivedQty} onChange={v=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={ordered}/>
+                <NumStepper value={it.receivedQty} onChange={v=>setReceivingOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70}/>
               </td>
               <td style={{padding:"7px 10px",whiteSpace:"nowrap"}}>
                 <div style={{display:"inline-flex",alignItems:"center",gap:5}}>
@@ -8538,12 +8545,12 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
       (m.ingredients||[]).forEach(mi=>{
         const ing=ings.find(g=>g.id===mi.ingredientId);
         if(!ing)return;
-        const totalGram=mi.amountGram*qty;
+        const totalGram=(+mi.amountGram||0)*qty;
         if(!ingMap[ing.id])ingMap[ing.id]={ingId:ing.id,name:ing.name,unit:ing.buy_unit,pricePerGram:ing.price_per_gram,buyPrice:ing.buy_price,convertToGram:ing.convert_to_gram,supplierId:ing.supplier_id,supplierName:ing.supplier_name||"ไม่ระบุ",totalGram:0};
         ingMap[ing.id].totalGram+=totalGram;
       });
     });
-    const orderItems=Object.values(ingMap).map(i=>({...i,qtyNeeded:+(i.totalGram/i.convertToGram).toFixed(2),estimatedCost:+(i.totalGram*i.pricePerGram).toFixed(2)}));
+    const orderItems=Object.values(ingMap).map(i=>({...i,qtyNeeded:+(i.totalGram/(+i.convertToGram||1000)).toFixed(2),estimatedCost:+(i.totalGram*(+i.pricePerGram||0)).toFixed(2)}));
     if(!orderItems.length){alert("ไม่มีวัตถุดิบที่ต้องสั่ง");return;}
     const supMap={};
     orderItems.forEach(i=>{const k=i.supplierId||"none";if(!supMap[k])supMap[k]={supplierId:i.supplierId,supplierName:i.supplierName,items:[]};supMap[k].items.push(i);});
