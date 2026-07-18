@@ -165,6 +165,11 @@ const api = {
   approveStockSession: (id, by) => sb(`stock_count_sessions?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ status: "approved", approved_by: by || "", approved_at: new Date().toISOString() }) }),
   addAsset: (d) => sb("assets", { method: "POST", body: JSON.stringify(d) }),
   updateAsset: (id, d) => sb(`assets?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
+  // Reduce a source asset ONLY while its quantity is still EXACTLY what the split was
+  // computed from (optimistic lock). Guarding on equality — not >= — is essential: the
+  // new quantity is an absolute value (have−n) derived from `expectedQty`, so a concurrent
+  // change must abort or we'd overwrite it with a wrong count (mint/lose units).
+  updateAssetIfQty: async (id, expectedQty, d) => { const r = await sb(`assets?id=eq.${id}&quantity=eq.${expectedQty}`, { method: "PATCH", headers: { "Prefer": "return=representation" }, body: JSON.stringify(d) }); if (!Array.isArray(r) || r.length === 0) throw new Error("จำนวนสินทรัพย์ต้นทางเปลี่ยนไปแล้ว — รีเฟรชแล้วลองใหม่"); return r; },
   deleteAsset: (id) => sb(`assets?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   getCostHist: (bid) => sb(`cost_history?order=id.desc&limit=50${bid ? `&branch_id=eq.${bid}` : ""}`),
   addCostHist: (d) => sb("cost_history", { method: "POST", body: JSON.stringify(d) }),
@@ -8953,6 +8958,46 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
   const[fStatus,setFStatus]=useState("all");
   const canE=hasPerm(currentUser,"assets");
   const myList=useMemo(()=>assets.filter(a=>+a.branch_id===+currentBranch?.id),[assets,currentBranch]);
+  // ── asset transfer to another branch (splits qty + value proportionally) ──
+  const[xfer,setXfer]=useState(null);const[xferBranch,setXferBranch]=useState("");const[xferQty,setXferQty]=useState("1");const[xferBusy,setXferBusy]=useState(false);
+  function openTransfer(a){setXfer(a);setXferBranch("");setXferQty(String(a.quantity==null?1:Math.max(1,Math.floor(+a.quantity||1))));}
+  const xferDestBranches=useMemo(()=>branches.filter(b=>b.active!==false&&+b.id!==+currentBranch?.id),[branches,currentBranch]);
+  async function doTransfer(){
+    if(xferBusy||!xfer)return;
+    const destId=+xferBranch;const have=Math.max(0,Math.floor(+xfer.quantity||1));const n=Math.floor(+xferQty||0);
+    if(!destId){alert("เลือกสาขาปลายทาง");return;}
+    if(destId===+currentBranch?.id){alert("ปลายทางต้องเป็นคนละสาขา");return;}
+    if(!(n>0)||n>have){alert(`จำนวนที่โอนต้องอยู่ระหว่าง 1–${have}`);return;}
+    const destName=(branches.find(b=>+b.id===destId)||{}).name||"สาขาปลายทาง";
+    const perUnit=+xfer.cost||0;
+    if(!await confirmDlg({title:"ยืนยันโอนย้ายสินทรัพย์",message:`ย้าย "${xfer.name}" ${n} ชิ้น (มูลค่าทุน ฿${assetMoney(perUnit*n)}) ไปสาขา "${destName}"?\n${n>=have?"(ย้ายทั้งหมด — ต้นทางจะไม่เหลือ)":`ต้นทางเหลือ ${have-n} ชิ้น`}`,confirmLabel:"🔄 ยืนยันโอน"}))return;
+    setXferBusy(true);
+    try{
+      const totalSalvage=+xfer.salvage_value||0;
+      const salvageMoved=have>0?round2(totalSalvage*n/have):0;
+      const note=(xfer.note?xfer.note+" · ":"")+`โอนมาจาก ${currentBranch?.name||"?"} ${fmtD(todayBkk())}`;
+      if(n>=have){
+        await api.updateAsset(xfer.id,{branch_id:destId,note});
+      }else{
+        // partial: create the destination row, THEN reduce the source under a qty guard.
+        // Create-first + guarded-reduce means a failure can duplicate (recoverable) but
+        // never silently lose value; on a guard miss we roll the new row back.
+        const destRow={name:xfer.name,category:xfer.category||null,image:xfer.image||null,quantity:n,cost:perUnit,salvage_value:salvageMoved,acquired_date:xfer.acquired_date||null,useful_life_years:+xfer.useful_life_years||0,status:xfer.status||"active",assignee:xfer.assignee||null,location:xfer.location||null,vendor:xfer.vendor||null,lead_time:xfer.lead_time||null,width_cm:xfer.width_cm??null,length_cm:xfer.length_cm??null,height_cm:xfer.height_cm??null,weight_kg:xfer.weight_kg??null,note,branch_id:destId};
+        const created=await api.addAsset(destRow);
+        const newId=(Array.isArray(created)?created[0]:created||{}).id;
+        try{
+          // Guard on the EXACT quantity we split from (have), not on n.
+          await api.updateAssetIfQty(xfer.id,have,{quantity:have-n,salvage_value:round2(totalSalvage-salvageMoved)});
+        }catch(e){
+          if(newId){try{await api.deleteAsset(newId);}catch{}}
+          throw new Error("จำนวนต้นทางเปลี่ยน — ยกเลิกการสร้างปลายทางแล้ว");
+        }
+      }
+      setXfer(null);await reloadAssets();
+      alert("✅ โอนย้ายสินทรัพย์สำเร็จ");
+    }catch(e){alert("โอนไม่สำเร็จ: "+((e&&e.message)||e));}
+    setXferBusy(false);
+  }
   const[selCat,setSelCat]=useState("ทั้งหมด");
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");
   const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
@@ -9061,6 +9106,7 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
             <div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"flex-start"}}>
               <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</div>
               {canE&&<div style={{display:"flex",gap:4,flexShrink:0}}>
+                {xferDestBranches.length>0&&<button onClick={()=>openTransfer(a)} title="โอนย้ายไปสาขาอื่น" style={{background:`${C.teal}1A`,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.truck} s={12} c={C.teal}/></button>}
                 <button onClick={()=>openEdit(a)} title="แก้ไข" style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>
                 <button onClick={()=>del(a)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>
               </div>}
@@ -9084,6 +9130,22 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
         </div>}
       </Card>;})}
     </div>}
+    {xfer&&(()=>{const have=Math.max(1,Math.floor(+xfer.quantity||1));const perUnit=+xfer.cost||0;const nRaw=Math.floor(+xferQty||0);const over=nRaw>have;const n=Math.min(have,Math.max(0,nRaw));const okQty=nRaw>=1&&nRaw<=have;return <Modal title={`🔄 โอนย้ายสินทรัพย์ — ${xfer.name}`} onClose={()=>{if(!xferBusy)setXfer(null);}}>
+      <div style={{background:C.bg,borderRadius:12,padding:"12px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink2}}>
+        มีอยู่ <b style={{color:C.brand}}>{have}</b> ชิ้น · ราคาทุน <b>฿{assetMoney(perUnit)}</b>/ชิ้น (รวม ฿{assetMoney(perUnit*have)})
+      </div>
+      <Field label="🏪 สาขาปลายทาง *"><select value={xferBranch} onChange={e=>setXferBranch(e.target.value)} style={{...iS,appearance:"none"}}><option value="">— เลือกสาขา —</option>{xferDestBranches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></Field>
+      <Field label={`🔢 จำนวนที่โอน (1–${have})`}><NumInput value={xferQty} onValue={setXferQty} integer placeholder="1" style={{...iS,...(over?{border:`2px solid ${C.red}`}:{})}}/></Field>
+      {over&&<div style={{fontSize:12,color:C.red,fontWeight:700,marginTop:-8,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เกินจำนวนที่มี (สูงสุด {have} ชิ้น)</div>}
+      <div style={{background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:10,padding:"10px 14px",fontFamily:"'Sarabun',sans-serif",fontSize:13,marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span>จะโอนไป</span><b style={{color:C.brand}}>{n>0?n:"—"} ชิ้น · ฿{assetMoney(perUnit*n)}</b></div>
+        <div style={{display:"flex",justifyContent:"space-between",color:C.ink4}}><span>ต้นทางเหลือ</span><b>{Math.max(0,have-n)} ชิ้น · ฿{assetMoney(perUnit*Math.max(0,have-n))}</b></div>
+      </div>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+        <Btn v="ghost" onClick={()=>{if(!xferBusy)setXfer(null);}} disabled={xferBusy}>ยกเลิก</Btn>
+        <Btn onClick={doTransfer} loading={xferBusy} disabled={xferBusy||!xferBranch||!okQty} icon={I.check} s={{background:`linear-gradient(135deg,${C.teal},#0D9488)`}}>ยืนยันโอน</Btn>
+      </div>
+    </Modal>;})()}
     {showForm&&<Modal title={editId?"✏️ แก้ไขสินทรัพย์":"➕ เพิ่มสินทรัพย์"} onClose={closeForm} wide>
       <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><ImgUp label="" value={form.image} onChange={v=>setForm(f=>({...f,image:v}))}/></div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
