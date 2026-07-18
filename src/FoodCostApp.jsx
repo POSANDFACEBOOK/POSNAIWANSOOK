@@ -366,6 +366,7 @@ const api = {
     if(filters.dateTo)q.push(`po_date=lte.${filters.dateTo}`);
     return sb(`purchase_orders?${q.join("&")}`);
   },
+  getPO: (id) => sb(`purchase_orders?id=eq.${id}&limit=1`),
   addPO: (d) => sb("purchase_orders", {method:"POST", body:JSON.stringify(d)}),
   updatePO: (id,d) => sb(`purchase_orders?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   // PATCH only when the row is in an expected status. If 0 rows return, the row was changed by someone else.
@@ -552,6 +553,15 @@ async function pushPOToSlipTrack(po, branches, opts={}){
     return{ok:false,error:err&&err.message};
   }
 }
+
+// Record the last SlipTrack push outcome on the PO so a silently-swallowed failure
+// becomes visible + auto-retryable (see the load() self-heal). 'ok' = synced,
+// 'skip' = correctly not billable (transfer/zero/same-branch), 'failed' = retry.
+// Best-effort: patches ONLY sliptrack_sync (never updated_at, so it can't disturb an
+// optimistic lock) and if the column doesn't exist yet the PATCH throws and we ignore
+// it — the whole feature degrades to a no-op until the column is added.
+function slipSyncFlag(res){ return !res?"failed":res.ok?"ok":res.skipped?"skip":"failed"; }
+async function recordSlipSync(poId,res){ try{ await api.updatePO(poId,{sliptrack_sync:slipSyncFlag(res)}); }catch{} }
 
 const C = {
   brand:"#FF6B35",brandDark:"#E85520",brandLight:"#FFF4F0",brandBorder:"#FFD4C2",
@@ -5304,6 +5314,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[showPurchaseSummary,setShowPurchaseSummary]=useState(false);
   const[copyPO,setCopyPO]=useState(null);          // null | po — copy-target branch picker
   const[copyBusy,setCopyBusy]=useState(false);     // true while addPO for a copy is in-flight
+  const slipHealRef=useRef(false);                 // guards load()'s SlipTrack self-heal from overlapping
+  const slipHealedRef=useRef(new Set());           // PO ids already auto-retried this mount (≤1 each — no spam)
   const isCentralBranch=currentBranch?.type==="central";
   const hasPO=hasPerm(currentUser,"po")||hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
   // Per-PO permissions
@@ -5344,6 +5356,26 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         ));
         const fixedIds=new Set(stranded.map(p=>p.id));
         data=data.map(p=>fixedIds.has(p.id)?{...p,status:"requested"}:p);
+      }
+      // ── Self-heal failed accounting syncs ────────────────────────────────
+      // Re-push POs whose last SlipTrack push failed (sliptrack_sync='failed') so
+      // accounting converges without waiting for the manual bulk-sync. Idempotent
+      // (?upsert=1), bounded to 15, guarded against overlap, and detached so it never
+      // delays this stock screen. Legacy POs (null flag) are left to the bulk-sync —
+      // we only retry rows a push actually recorded as failed.
+      if(!slipHealRef.current){
+        // Retry only docs a push left 'failed' AND still in a state we sync:
+        // awaiting_payment/paid → re-bill, cancelled → re-void (NEVER resurrect a
+        // cancelled PO as a payable). Cap ≤1 auto-retry per PO per mount so a
+        // permanently-failing row can't spam on every filter toggle (bulk-sync is the
+        // manual escape hatch).
+        const toHeal=data.filter(p=>p.sliptrack_sync==="failed"
+          &&(p.status==="awaiting_payment"||p.status==="paid"||p.status==="cancelled")
+          &&!slipHealedRef.current.has(p.id)).slice(0,15);
+        if(toHeal.length){
+          slipHealRef.current=true;
+          (async()=>{try{for(const po of toHeal){slipHealedRef.current.add(po.id);await resyncPOToSlipTrack(po);}}finally{slipHealRef.current=false;}})();
+        }
       }
       if(partnerFilter){
         const pid=+partnerFilter;
@@ -5625,8 +5657,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         autoVisible:true,
       });
       if(reloadIngs)await reloadIngs();
-      // Stage 1 → SlipTrack: create รายการค้างจ่าย (paid:false). Fire-and-forget.
-      pushPOToSlipTrack({...po,status:"awaiting_payment",received_at:receivedAt},branches);
+      // Stage 1 → SlipTrack: create รายการค้างจ่าย (paid:false). Non-blocking, but record
+      // the outcome so a swallowed failure is retried by load()'s self-heal.
+      pushPOToSlipTrack({...po,status:"awaiting_payment",received_at:receivedAt},branches).then(r=>recordSlipSync(po.id,r));
       await load();
       setViewPO(null);   // close the doc so a stale "shipped" view can't be re-confirmed
     }catch(e){
@@ -5678,7 +5711,15 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         return{...it,received_qty:recv,line_total:round2(recv*(+it.price_per_unit||0))};
       });
       const receivedAt=new Date().toISOString();
-      await api.patchPOIfStatus(po.id,"disputed",{items:newItems,subtotal,vat,total,status:"awaiting_payment",received_at:receivedAt,received_by:po.dispute_by||null,updated_at:receivedAt});
+      // If the receiver got 0 of everything, there's no payable — cancel the PO instead
+      // of creating a ฿0 "awaiting_payment" doc (which the accounting push skips as
+      // zero-amount, leaving a phantom payable with no SlipTrack row). Stock still
+      // settles below: nothing is credited, the full ordered qty returns to the sender.
+      // Cancel only when there's BOTH no payable AND nothing physically received. A
+      // zero-priced-but-genuinely-received line (free/sample) must NOT be mislabelled
+      // "cancelled" — it moved real stock; it stays a (SlipTrack-skipped) awaiting_payment.
+      const nothingReceived=!(total>0)&&!newItems.some(it=>+it.received_qty>0);
+      await api.patchPOIfStatus(po.id,"disputed",{items:newItems,subtotal,vat,total,status:nothingReceived?"cancelled":"awaiting_payment",received_at:nothingReceived?null:receivedAt,received_by:nothingReceived?null:(po.dispute_by||null),updated_at:receivedAt});
       // End of in-transit: credit receiver with received_qty (what they actually got),
       // and return any variance (ordered − received) back to the sender.
       // Receiver credit (uses received_qty by default via transferStockBetweenBranches)
@@ -5712,8 +5753,13 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       }
       if(pendGroups.length){try{await api.updatePO(po.id,{stock_pending:pendGroups});}catch{}}
       if(reloadIngs)await reloadIngs();
-      // Stage 1 (revised) → SlipTrack: re-POST with same external_id; server updates the pending row's amount/items
-      pushPOToSlipTrack({...po,status:"awaiting_payment",items:newItems,subtotal,vat,total,received_at:receivedAt},branches);
+      // Stage 1 (revised) → SlipTrack: re-POST with same external_id; server updates the
+      // pending row's amount/items. Skip entirely when nothing was received (cancelled).
+      if(nothingReceived){
+        setTimeout(()=>alert("รับสินค้า 0 ทุกรายการ — เอกสารถูกยกเลิกอัตโนมัติ (ไม่มียอดค้างจ่าย)"),0);
+      }else{
+        pushPOToSlipTrack({...po,status:"awaiting_payment",items:newItems,subtotal,vat,total,received_at:receivedAt},branches).then(r=>recordSlipSync(po.id,r));
+      }
       await load();setViewPO(null);
     }catch(e){showErr("ยอมรับไม่สำเร็จ",e);}
     setConfirming(null);
@@ -5728,9 +5774,43 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       let signedSlipUrl=null;
       try{signedSlipUrl=await api.getSlipSignedUrl(slipUrl,31536000);if(signedSlipUrl&&signedSlipUrl.startsWith("/"))signedSlipUrl=location.origin+signedSlipUrl;}catch{}
       // Stage 2 → SlipTrack: flip the same external_id from pending → confirmed (จ่ายแล้ว)
-      pushPOToSlipTrack(po,branches,{paid:true,paidAt,slipUrl:signedSlipUrl,paymentNote:note});
+      pushPOToSlipTrack(po,branches,{paid:true,paidAt,slipUrl:signedSlipUrl,paymentNote:note}).then(r=>recordSlipSync(po.id,r));
       await load();setViewPO(null);
     }catch(e){showErr("บันทึกการชำระไม่สำเร็จ",e);throw e;}
+  }
+  // Re-push one PO to SlipTrack for load()'s self-heal (mirrors the manual bulk-sync's
+  // per-stage flow) and re-records the outcome. Idempotent via ?upsert=1, so a retry
+  // never duplicates. pushPOToSlipTrack self-skips transfers/zero/same-branch → recorded
+  // as 'skip' so they stop being retried.
+  async function resyncPOToSlipTrack(po){
+    // The self-heal loop is detached and can run seconds after load()'s snapshot, so
+    // re-read the row's CURRENT status before deciding what to push — otherwise a
+    // concurrent cancel/pay could be silently overwritten by a stale-status bill
+    // (resurrecting a voided payable, or flipping a just-paid bill back to pending).
+    // Invariant: heal on FRESH data or skip this round (retry next mount). Falling back
+    // to the stale snapshot would re-open the race precisely when the network is flaky
+    // (which is exactly when a row is 'failed'), so a failed/empty read just returns.
+    let cur;
+    try{ const fresh=await api.getPO(po.id); if(!Array.isArray(fresh)||!fresh.length)return; cur=fresh[0]; }catch{ return; }
+    let res;
+    if(cur.status==="cancelled"){
+      // Never re-bill a cancelled PO — re-void it instead (idempotent; heals a failed void).
+      res=await pushPOToSlipTrack(cur,branches,{voided:true});
+    }else if(cur.status==="paid"){
+      const r1=await pushPOToSlipTrack({...cur},branches);       // Stage 1 — ensure pending row + item lines exist
+      let signedSlipUrl=null;
+      if(cur.payment_slip_url){try{signedSlipUrl=await api.getSlipSignedUrl(cur.payment_slip_url,31536000);if(signedSlipUrl&&signedSlipUrl.startsWith("/"))signedSlipUrl=location.origin+signedSlipUrl;}catch{}}
+      const r2=await pushPOToSlipTrack({...cur},branches,{paid:true,paidAt:cur.payment_at||new Date().toISOString(),slipUrl:signedSlipUrl,paymentNote:cur.payment_note});
+      // Only mark 'ok' if BOTH stages landed — else keep 'failed' so Stage 1's lines get backfilled next time.
+      res=(r1&&(r1.ok||r1.skipped))?r2:{ok:false,error:"stage1-failed"};
+    }else if(cur.status==="awaiting_payment"){
+      res=await pushPOToSlipTrack({...cur},branches);            // Stage 1 (bill)
+    }else{
+      // Any other status (shipped/disputed/open/…) is not billable — leave it untouched
+      // and don't mark it 'ok' (a later push in the proper state will record the truth).
+      return;
+    }
+    await recordSlipSync(cur.id,res);
   }
   async function cancelPO(po){
     if(!isCreator(po)&&!isCentralBranch){alert("เฉพาะผู้ออกเอกสารหรือครัวกลางเท่านั้นที่ยกเลิกได้");return;}
@@ -5757,8 +5837,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       // (NOT_MOVED statuses are a safe no-op inside it).
       if(willRefund)await rollbackPOStock(po);
       // If this PO was received it was already synced to accounting — void that row
-      // or it lingers as an orphan. Idempotent (never-synced → cancelled:0). F&F.
-      if(wasReceived)pushPOToSlipTrack(po,branches,{voided:true});
+      // or it lingers as an orphan. Idempotent (never-synced → cancelled:0). Record the
+      // outcome so the flag reflects reality (a failed void stays 'failed' → re-voided).
+      if(wasReceived)pushPOToSlipTrack(po,branches,{voided:true}).then(r=>recordSlipSync(po.id,r));
       await load();setViewPO(null);
     }catch(e){showErr("ยกเลิกไม่สำเร็จ",e);}
   }
@@ -5794,7 +5875,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       if(wasReceived)await rollbackPOStock(deleted||po);
       // Deleted for good → no future re-sync can ever match this external_id, so
       // void its accounting row now (idempotent). Covers cancelled-then-deleted POs.
-      if(wasReceived)pushPOToSlipTrack(deleted||po,branches,{voided:true});
+      if(wasReceived)pushPOToSlipTrack(deleted||po,branches,{voided:true}).then(r=>recordSlipSync((deleted||po).id,r));
       await load();setViewPO(null);
     }catch(e){alert("ลบไม่สำเร็จ: "+e.message);}
   }
@@ -9543,6 +9624,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     let ok=0,fail=0;
     for(const po of pendingTargets){
       const res=await pushPOToSlipTrack({...po},branches);
+      await recordSlipSync(po.id,res);
       if(res&&res.ok)ok++;else fail++;
       setSlipSyncing(s=>({...s,done:s.done+1,ok,fail}));
     }
@@ -9558,6 +9640,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         slipUrl:signedSlipUrl,
         paymentNote:po.payment_note,
       });
+      await recordSlipSync(po.id,r2);
       if(r2&&r2.ok)ok++;else fail++;
       setSlipSyncing(s=>({...s,done:s.done+1,ok,fail}));
     }
