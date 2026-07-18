@@ -12557,7 +12557,7 @@ export default function App(){
   if(params.get("pos")==="1"&&params.get("branch")){return <><style>{globalStyle}</style><POSPinGate branchId={params.get("branch")}/><ConfirmDlg/></>;}
 
   // Public CRM landing (?join=1): one QR, customer picks branch → add LINE / book / collect points.
-  if(params.get("join")==="1"){return <><style>{globalStyle}</style><CRMJoinPage initialBranchId={params.get("branch")}/><ConfirmDlg/></>;}
+  if(params.get("join")==="1"){return <><style>{globalStyle}</style><CRMJoinPage initialBranchId={params.get("branch")} initialGo={params.get("go")}/><ConfirmDlg/></>;}
 
   if(!currentUser)return <><style>{globalStyle}</style><LoginPage onLogin={u=>{setCurrentUser(u);}}/></>;
   if(!currentBranch)return <><style>{globalStyle}</style><BranchSelectorWithLoad user={currentUser} onSelect={b=>setCurrentBranch(b)} onLogout={()=>setCurrentUser(null)}/></>;
@@ -14185,11 +14185,13 @@ function CRMJoinClaim({branch,onDone,onBack}){
   </>;
 }
 
-function CRMJoinPage({initialBranchId}){
+function CRMJoinPage({initialBranchId,initialGo}){
   const[branches,setBranches]=useState(null);
   const[branch,setBranch]=useState(null);
   const[view,setView]=useState("hub");
-  useEffect(()=>{let alive=true;api.getBranches().then(bs=>{if(!alive)return;const list=(Array.isArray(bs)?bs:[]).filter(b=>b.active!==false&&b.type!=="central");setBranches(list);if(initialBranchId){const b=list.find(x=>+x.id===+initialBranchId);if(b){setBranch(b);crmLogEvent(b.id,"visit",{via:"qr"});}}}).catch(()=>{if(alive)setBranches([]);});return()=>{alive=false;};},[initialBranchId]);
+  useEffect(()=>{let alive=true;api.getBranches().then(bs=>{if(!alive)return;const list=(Array.isArray(bs)?bs:[]).filter(b=>b.active!==false&&b.type!=="central");setBranches(list);if(initialBranchId){const b=list.find(x=>+x.id===+initialBranchId);if(b){setBranch(b);crmLogEvent(b.id,"visit",{via:"qr"});
+    // Deep-link from the LINE bot menu: ?go=book jumps straight to booking, ?go=join/claim to the points/bill form.
+    if(initialGo==="book")setView("booking");else if(initialGo==="join"||initialGo==="claim")setView("claim");}}}).catch(()=>{if(alive)setBranches([]);});return()=>{alive=false;};},[initialBranchId,initialGo]);
   function pickBranch(b){setBranch(b);setView("hub");crmLogEvent(b.id,"visit",{via:"select"});}
   function openLine(){if(!branch)return;crmLogEvent(branch.id,"line_click");if(branch.line_url)window.open(branch.line_url,"_blank","noopener");else alert("สาขานี้ยังไม่ได้ตั้งค่าลิงก์ไลน์ กรุณาแจ้งร้าน");}
 
