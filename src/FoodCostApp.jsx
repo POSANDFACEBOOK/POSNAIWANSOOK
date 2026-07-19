@@ -329,6 +329,10 @@ const api = {
   broadcastLine: async (payload) => { const r=await fetch("/api/line-broadcast",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}); const j=await r.json().catch(()=>({})); if(!r.ok)throw new Error(j.error||("HTTP "+r.status)); return j; },
   getCRMBroadcasts: () => sb(`crm_broadcasts?order=id.desc&limit=50`),
   runBroadcastCron: (key) => fetch("/api/broadcast-cron?key="+encodeURIComponent(key||""),{method:"POST"}).then(r=>r.json().catch(()=>({}))).catch(()=>({})),
+  // Data backup — audit history + manual "backup now" + safe restore (all via serverless).
+  getBackups: () => sb(`backups?order=started_at.desc&limit=30`).catch(()=>[]),
+  runBackupNow: async (key) => { const r=await fetch("/api/backup?key="+encodeURIComponent(key||""),{method:"POST"}); const j=await r.json().catch(()=>({})); if(!r.ok)throw new Error(j.error||("HTTP "+r.status)); return j; },
+  backupRestore: async ({key,driveId,apply,confirm}) => { const r=await fetch("/api/backup-restore",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,driveId,apply:apply?"1":"0",confirm:confirm||""})}); const j=await r.json().catch(()=>({})); if(!r.ok)throw new Error(j.error||("HTTP "+r.status)); return j; },
   // POS Shifts & Cash Drawer
   getActiveShift: (bid) => sb(`pos_shifts?branch_id=eq.${bid}&status=eq.open&order=opened_at.desc&limit=1`),
   getShifts: (bid,limit=50) => sb(`pos_shifts?branch_id=eq.${bid}&order=opened_at.desc&limit=${limit}`),
@@ -9893,6 +9897,157 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   </div>;
 }
 
+// ── DATA BACKUP PANEL (Settings → สำรองข้อมูล, admin only) ──────────────
+// Shows the daily-backup audit history from the `backups` table, a manual "backup now"
+// button, per-run per-table completeness, download links, and a guarded restore. Green
+// only when the latest run is success + verified + fresh; loud red banner otherwise.
+function fmtBytesTH(n){ n=+n||0; if(n<1024)return n+" B"; if(n<1048576)return Math.round(n/1024)+" KB"; return (n/1048576).toFixed(1)+" MB"; }
+const BK_ST={success:{l:"สำเร็จ",c:C.green,bg:C.greenLight},degraded:{l:"สำเร็จ (มีเตือน)",c:"#B45309",bg:"#FEF3C7"},failed:{l:"ล้มเหลว",c:C.red,bg:C.redLight},running:{l:"กำลังทำ...",c:C.ink3,bg:C.lineLight}};
+function BackupPanel(){
+  const[hist,setHist]=useState(null);
+  const[busy,setBusy]=useState(false);
+  const[openId,setOpenId]=useState(null);
+  const[showRestore,setShowRestore]=useState(false);
+  const[rSel,setRSel]=useState("");          // drive_id chosen to restore
+  const[rPlan,setRPlan]=useState(null);       // dry-run plan
+  const[rBusy,setRBusy]=useState(false);
+  function load(){ api.getBackups().then(h=>setHist(Array.isArray(h)?h:[])).catch(()=>setHist([])); }
+  useEffect(()=>{ load(); },[]);
+  function backupKey(){ let k="";try{k=localStorage.getItem("nw_backup_key")||"";}catch{} if(!k){const v=prompt("ใส่รหัส BACKUP_ADMIN_KEY (ตั้งไว้ใน Vercel env):");if(!v)return "";k=v.trim();try{localStorage.setItem("nw_backup_key",k);}catch{}} return k; }
+  function restoreKey(){ let k="";try{k=localStorage.getItem("nw_restore_key")||"";}catch{} if(!k){const v=prompt("ใส่รหัส RESTORE_ADMIN_KEY (ตั้งไว้ใน Vercel env):");if(!v)return "";k=v.trim();try{localStorage.setItem("nw_restore_key",k);}catch{}} return k; }
+  async function backupNow(){
+    const k=backupKey(); if(!k)return;
+    setBusy(true);
+    try{
+      const r=await api.runBackupNow(k);
+      if(r.status==="success")alert(`✅ สำรองสำเร็จ • ${r.totalRows} แถว • ${r.gzKB} KB • ตรวจอ่านกลับแล้ว`);
+      else if(r.status==="degraded")alert(`⚠️ ข้อมูลครบและตรวจแล้ว แต่มีเตือน:\n${(r.missing_tables||[]).length?("ตารางใหม่ที่ยังไม่อยู่ในลิสต์: "+r.missing_tables.join(", ")):"การลบไฟล์เก่า (rotation) มีปัญหา"}`);
+      else alert(`❌ สำรองไม่สำเร็จ — ข้อมูลไม่ครบ ไม่ถูกบันทึกเป็นไฟล์ที่ใช้ได้:\n${(r.failures||[]).map(f=>f.t+": "+f.error).join("\n")||r.error||""}`);
+    }catch(e){
+      const msg=String(e&&e.message||e);
+      alert("สำรองไม่สำเร็จ: "+msg);
+      if(/401|unauthor|รหัส/i.test(msg)){try{localStorage.removeItem("nw_backup_key");}catch{}}
+    }
+    setBusy(false); load();
+  }
+  async function doDryRun(){
+    if(!rSel){alert("เลือกไฟล์สำรองก่อน");return;}
+    const k=restoreKey(); if(!k)return;
+    setRBusy(true); setRPlan(null);
+    try{ const r=await api.backupRestore({key:k,driveId:rSel,apply:false}); setRPlan(r); }
+    catch(e){ alert("ตรวจสอบไม่สำเร็จ: "+(e.message||e)); if(/401|รหัส/i.test(String(e.message))){try{localStorage.removeItem("nw_restore_key");}catch{}} }
+    setRBusy(false);
+  }
+  async function doApply(){
+    if(!rPlan||!rSel)return;
+    const token=rPlan.confirmToken||"";
+    const typed=prompt(`ยืนยันการกู้คืน — ระบบจะ "เพิ่มข้อมูลเข้าตารางที่ว่างเท่านั้น" (ไม่ลบ/ไม่ทับของเดิม)\n\nพิมพ์ข้อความนี้เป๊ะๆ เพื่อยืนยัน:\n${token}`);
+    if(typed==null)return;
+    if(typed.trim()!==token){alert("ข้อความยืนยันไม่ตรง — ยกเลิก");return;}
+    const k=restoreKey(); if(!k)return;
+    setRBusy(true);
+    try{ const r=await api.backupRestore({key:k,driveId:rSel,apply:true,confirm:token});
+      const wrote=Object.entries(r.written||{}).map(([t,n])=>`${t}: ${n}`).join("\n")||"ไม่มีตารางที่ว่างให้เติม";
+      if(r.status==="done")alert(`✅ กู้คืนสำเร็จ:\n${wrote}`);
+      else if(r.status==="incomplete"){const na=r.needsAttention||{};alert(`⚠️ เพิ่มข้อมูลลงตารางที่ว่างแล้ว:\n${wrote}\n\nแต่ยังมีตารางที่ต้องซ่อมเอง (ยังไม่ครบ):\n${[...(na.partial||[]),...(na.tooLarge||[]),...(na.appliedSkipped||[])].join("\n")||"-"}\nใช้ scripts/restore.mjs ในเครื่องเพื่อซ่อมส่วนที่เหลือ`);}
+      else alert(`⛔ หยุดกลางคัน ที่ตาราง ${r.failedTable||"?"}: ${r.error||""}\nที่เขียนไปแล้ว:\n${wrote}`);
+    }catch(e){ alert("กู้คืนไม่สำเร็จ: "+(e.message||e)); }
+    setRBusy(false); setRPlan(null); load();
+  }
+
+  const last=hist&&hist[0];
+  const ageH=last&&last.started_at?(Date.now()-new Date(last.started_at).getTime())/3600000:Infinity;
+  const stuck=last&&last.status==="running"&&ageH>0.17;              // running > ~10 min = crashed
+  const effStatus=stuck?"failed":(last&&last.status)||null;
+  const fresh=effStatus==="success"&&last&&last.verified&&ageH<26;
+  const alarm=!last||effStatus==="failed"||(effStatus==="success"&&ageH>48)||(last&&last.status==="running"&&stuck);
+  const successRuns=(hist||[]).filter(h=>(h.status==="success"||h.status==="degraded")&&h.drive_id);
+
+  return <div style={{fontFamily:"'Sarabun',sans-serif"}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:12}}>
+      <h3 style={{fontSize:15,fontWeight:800,color:C.ink,margin:0}}>สำรองข้อมูล → Google Drive</h3>
+      <Btn icon={I.cloud} onClick={backupNow} loading={busy}>สำรองข้อมูลตอนนี้</Btn>
+    </div>
+    <div style={{fontSize:12.5,color:C.ink3,marginBottom:14,lineHeight:1.6}}>สำรองอัตโนมัติทุกวันตี 2 (เก็บทุกตาราง ครบทุกแถว ตรวจอ่านกลับแล้ว) เก็บไฟล์ไว้ใน Google Drive ของร้าน — เผื่อฐานข้อมูลเสียหายจะกู้คืนได้ <b>สำคัญมากถ้าจะลดแผน Supabase เป็นฟรี</b> (แผนฟรีไม่มี backup ให้)</div>
+
+    {hist===null?<Loading text="โหลดประวัติสำรอง..."/>:<>
+      {/* Status banner */}
+      <div style={{background:fresh?C.greenLight:(alarm?C.redLight:"#FEF3C7"),border:`1.5px solid ${fresh?C.green:(alarm?C.red:"#F59E0B")}`,borderRadius:12,padding:"12px 16px",marginBottom:14}}>
+        {!last?<div style={{color:C.red,fontWeight:700}}>⚠️ ยังไม่เคยมีการสำรองข้อมูลเลย — กด "สำรองข้อมูลตอนนี้" เพื่อเริ่ม</div>
+        :<div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <div style={{fontSize:22}}>{fresh?"🛡️":(alarm?"🚨":"⚠️")}</div>
+          <div style={{flex:1,minWidth:200}}>
+            <div style={{fontWeight:800,color:fresh?C.green:(alarm?C.red:"#B45309"),fontSize:14}}>
+              {fresh?"ข้อมูลปลอดภัย — สำรองล่าสุดสมบูรณ์":stuck?"การสำรองค้าง (น่าจะล้มเหลว)":effStatus==="failed"?"การสำรองล่าสุดล้มเหลว":effStatus==="degraded"?"สำรองสำเร็จ แต่มีคำเตือน":ageH>48?"สำรองล่าสุดเก่าเกิน 48 ชม.":"สำรองล่าสุด"}
+            </div>
+            <div style={{fontSize:12,color:C.ink3,marginTop:2}}>
+              {fmtDT(last.started_at)} • {last.total_rows!=null?`${last.total_rows.toLocaleString()} แถว`:"-"} • {fmtBytesTH(last.gz_size_bytes)} • {last.table_count||"-"} ตาราง • {last.trigger==="manual"?"กดเอง":"อัตโนมัติ"} {last.verified?"• ✓ ตรวจอ่านกลับแล้ว":""}
+            </div>
+            {(last.missing_tables&&last.missing_tables.length>0)&&<div style={{fontSize:11.5,color:C.red,marginTop:3,fontWeight:700}}>‼️ มีตารางใหม่ที่ยังไม่ถูกสำรอง: {last.missing_tables.join(", ")} — แจ้งผู้ดูแลระบบ</div>}
+          </div>
+        </div>}
+      </div>
+
+      {/* History */}
+      <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,margin:"4px 0 8px"}}>ประวัติการสำรอง ({hist.length})</div>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {hist.length===0&&<div style={{textAlign:"center",padding:24,color:C.ink4,fontSize:12}}>ยังไม่มีประวัติ</div>}
+        {hist.map(h=>{
+          const s=BK_ST[h.status==="running"&&(Date.now()-new Date(h.started_at).getTime())>600000?"failed":h.status]||BK_ST.running;
+          const tabs=h.tables&&typeof h.tables==="object"?Object.entries(h.tables):[];
+          const bad=tabs.filter(([,v])=>v&&!v.complete);
+          return <div key={h.id} style={{border:`1px solid ${C.line}`,borderRadius:10,background:C.white,overflow:"hidden"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",cursor:tabs.length?"pointer":"default"}} onClick={()=>tabs.length&&setOpenId(openId===h.id?null:h.id)}>
+              <span style={{fontSize:11,fontWeight:800,padding:"3px 9px",borderRadius:20,background:s.bg,color:s.c,whiteSpace:"nowrap"}}>{s.l}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12.5,color:C.ink,fontWeight:600}}>{fmtDT(h.started_at)} {h.trigger==="manual"&&<span style={{fontSize:10,color:C.ink4}}>• กดเอง</span>}</div>
+                <div style={{fontSize:11,color:C.ink4}}>{h.total_rows!=null?`${h.total_rows.toLocaleString()} แถว`:"-"} • {fmtBytesTH(h.gz_size_bytes)}{bad.length?` • ${bad.length} ตารางไม่ครบ`:""}</div>
+              </div>
+              {h.drive_id&&<a href={`/api/drive-view?id=${encodeURIComponent(h.drive_id)}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{fontSize:11,fontWeight:700,color:C.brand,textDecoration:"none",padding:"5px 10px",border:`1px solid ${C.brandBorder||C.line}`,borderRadius:7,whiteSpace:"nowrap"}}>⬇ ดาวน์โหลด</a>}
+              {tabs.length>0&&<Ic d={I.chevD} s={13} c={C.ink4}/>}
+            </div>
+            {openId===h.id&&tabs.length>0&&<div style={{borderTop:`1px solid ${C.line}`,padding:"8px 12px",background:C.bg,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:"3px 12px",maxHeight:260,overflowY:"auto"}}>
+              {tabs.sort((a,b)=>(b[1]?.count||0)-(a[1]?.count||0)).map(([t,v])=><div key={t} style={{fontSize:11,display:"flex",justifyContent:"space-between",gap:6,color:v&&!v.complete?C.red:C.ink3}}>
+                <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{v&&v.complete?"✓":"✗"} {t}</span>
+                <span style={{fontWeight:700,flexShrink:0}} title={v&&v.error||""}>{v?`${v.fetched}/${v.count}`:"-"}</span>
+              </div>)}
+            </div>}
+          </div>;
+        })}
+      </div>
+
+      {/* Advanced restore */}
+      <div style={{marginTop:18,borderTop:`1px dashed ${C.line}`,paddingTop:12}}>
+        <div onClick={()=>setShowRestore(v=>!v)} style={{cursor:"pointer",fontSize:12.5,fontWeight:800,color:C.ink2,display:"flex",alignItems:"center",gap:6}}>
+          <Ic d={I.chevD} s={13} c={C.ink4} style={{transform:showRestore?"none":"rotate(-90deg)",transition:"transform .15s"}}/>กู้คืนข้อมูล (ขั้นสูง)
+        </div>
+        {showRestore&&<div style={{marginTop:10,background:C.bg,border:`1px solid ${C.line}`,borderRadius:10,padding:"12px 14px"}}>
+          <div style={{fontSize:11.5,color:C.ink3,lineHeight:1.6,marginBottom:10}}>
+            การกู้คืนจะ <b>เพิ่มข้อมูลเข้าเฉพาะตารางที่ว่างเปล่าเท่านั้น</b> — ไม่ลบและไม่ทับข้อมูลที่มีอยู่ (ปลอดภัยกับข้อมูลจริง). ใช้ตอนย้าย/สร้างฐานข้อมูลใหม่ที่ยังว่าง. ต้องตั้ง <code>RESTORE_ADMIN_KEY</code> ใน Vercel ก่อน (ถ้ายังไม่ตั้งจะขึ้นว่า "restore not enabled"). สำหรับกู้แบบเขียนทับทั้งหมด ใช้ <code>scripts/restore.mjs</code> ในเครื่อง
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+            <select value={rSel} onChange={e=>{setRSel(e.target.value);setRPlan(null);}} style={{flex:1,minWidth:200,padding:"8px 10px",borderRadius:8,border:`1px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:12.5}}>
+              <option value="">— เลือกไฟล์สำรอง (เฉพาะที่สำเร็จ) —</option>
+              {successRuns.map(h=><option key={h.id} value={h.drive_id}>{fmtDT(h.started_at)} • {h.total_rows!=null?h.total_rows.toLocaleString()+" แถว":""} {h.file_name||""}</option>)}
+            </select>
+            <Btn v="ghost" onClick={doDryRun} loading={rBusy} disabled={!rSel}>ตรวจสอบ (ดูก่อน)</Btn>
+          </div>
+          {rPlan&&<div style={{marginTop:10}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.ink2,marginBottom:6}}>แผนการกู้คืน: จะเพิ่ม {rPlan.summary?.tablesToInsert||0} ตาราง ({(rPlan.summary?.rowsToInsert||0).toLocaleString()} แถว) • ข้ามตารางที่มีข้อมูลแล้ว {rPlan.summary?.skippedNonEmpty||0} ตาราง</div>
+            <div style={{maxHeight:180,overflowY:"auto",background:C.white,border:`1px solid ${C.line}`,borderRadius:8,padding:"6px 10px"}}>
+              {(rPlan.plan||[]).map(p=><div key={p.table} style={{fontSize:11,display:"flex",justifyContent:"space-between",gap:8,color:p.action==="insert"?C.green:(p.action==="skip-nonempty"?C.ink4:C.ink3),padding:"1px 0"}}>
+                <span>{p.action==="insert"?"➕":p.action==="skip-nonempty"?"⏭️":"·"} {p.table}</span>
+                <span style={{fontWeight:700}}>{p.action==="insert"?`+${p.backupRows}`:p.action==="skip-nonempty"?`มีอยู่ ${p.liveRows}`:p.action}</span>
+              </div>)}
+            </div>
+            {(rPlan.summary?.tablesToInsert>0)&&<div style={{marginTop:10,textAlign:"right"}}><Btn v="danger" onClick={doApply} loading={rBusy}>กู้คืน (เพิ่มลงตารางที่ว่าง)</Btn></div>}
+          </div>}
+        </div>}
+      </div>
+    </>}
+  </div>;
+}
+
 function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,reloadBranches,suppliers,reloadSuppliers,currentUser,printers=[],reloadPrinters,currentBranch}){
   const[section,setSection]=useState("branches");
   const[showUser,setShowUser]=useState(false);const[editUID,setEditUID]=useState(null);const[saving,setSaving]=useState(false);
@@ -10046,7 +10201,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     setPSaving(false);
   }
 
-  const sections=[{id:"branches",label:"สาขา",icon:I.branch},{id:"users",label:"ผู้ใช้",icon:I.users},{id:"integrations",label:"การเชื่อมต่อ",icon:I.refresh}];
+  const sections=[{id:"branches",label:"สาขา",icon:I.branch},{id:"users",label:"ผู้ใช้",icon:I.users},{id:"integrations",label:"การเชื่อมต่อ",icon:I.refresh},...(isAdmin?[{id:"backup",label:"สำรองข้อมูล",icon:I.cloud}]:[])];
 
   return <div style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:16,minHeight:480}}>
     <Card style={{padding:8,height:"fit-content"}}>
@@ -10321,6 +10476,8 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         </Card>
       </div>
     </div>}
+
+    {section==="backup"&&isAdmin&&<BackupPanel/>}
     </div>
 
     {showUser&&<Modal title={editUID?"✏️ แก้ไขผู้ใช้":"➕ เพิ่มผู้ใช้ใหม่"} onClose={()=>setShowUser(false)} extraWide>
