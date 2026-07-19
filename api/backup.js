@@ -36,10 +36,11 @@ const TABLES = [
   "branches", "app_users", "suppliers", "categories", "expense_categories", "ingredients",
   "menus", "assets", "table_zones", "tables", "printers", { name: "pos_settings", pk: "branch_id" },
   "pos_shifts", "cash_movements", "purchase_orders", "purchase_requisitions", "order_requests",
-  "orders", "external_sales", "stock_count_sessions", "stock_logs", "waste_logs", "approval_log",
-  "action_history", "cost_history", "cost_snapshots", "crm_customers", "crm_transactions",
-  "crm_vouchers", "crm_reservations", "crm_booking_requests", "crm_feedback", "crm_point_claims",
-  "crm_promotions", "crm_broadcasts", "crm_events", "promotions", "push_subscriptions", "backups",
+  "orders", "order_items", "external_sales", "stock_count_sessions", "stock_logs", "waste_logs",
+  "approval_log", "action_history", "cost_history", "cost_snapshots", "crm_customers",
+  "crm_transactions", "crm_vouchers", "crm_reservations", "crm_booking_requests", "crm_feedback",
+  "crm_point_claims", "crm_promotions", "crm_broadcasts", "crm_events", "crm_line_users",
+  "promotions", "push_subscriptions", "backups",
 ].map((t) => (typeof t === "string" ? { name: t, pk: "id" } : { name: t.name, pk: t.pk || "id" }));
 
 // Postgres system/internal tables that legitimately live in `public` but are not app data.

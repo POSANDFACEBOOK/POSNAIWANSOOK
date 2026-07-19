@@ -34,11 +34,11 @@ const RESTORE_ORDER = [
   "branches", "app_users", "suppliers", "categories", "expense_categories", "table_zones",
   "printers", "pos_settings", "ingredients", "menus", "assets", "tables", "pos_shifts",
   "purchase_orders", "purchase_requisitions", "order_requests", "stock_count_sessions",
-  "orders", "external_sales", "cash_movements", "stock_logs", "waste_logs", "approval_log",
-  "action_history", "cost_history", "cost_snapshots", "crm_customers", "crm_promotions",
-  "crm_vouchers", "crm_transactions", "crm_point_claims", "crm_reservations",
-  "crm_booking_requests", "crm_feedback", "crm_broadcasts", "crm_events", "promotions",
-  "push_subscriptions",
+  "orders", "order_items", "external_sales", "cash_movements", "stock_logs", "waste_logs",
+  "approval_log", "action_history", "cost_history", "cost_snapshots", "crm_customers",
+  "crm_promotions", "crm_vouchers", "crm_transactions", "crm_point_claims", "crm_reservations",
+  "crm_booking_requests", "crm_feedback", "crm_broadcasts", "crm_events", "crm_line_users",
+  "promotions", "push_subscriptions",
 ];
 
 function loadSA() {
