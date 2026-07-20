@@ -172,8 +172,14 @@ const api = {
   // Fixed assets (ทะเบียนสินทรัพย์) — per branch
   getAssets: () => sb("assets?order=id.desc&limit=1000"),
   addWasteLog: (d) => sb("waste_logs", { method: "POST", body: JSON.stringify(d) }),
+  // Flags that this waste row's stock deduct actually landed, so deleting it later knows whether
+  // it may credit the stock back. Best-effort: silently no-ops until the column exists.
+  markWasteStockApplied: async (id) => { try{ await sb(`waste_logs?id=eq.${id}`, {method:"PATCH", headers:{Prefer:"return=minimal"}, body:JSON.stringify({stock_applied:true})}); }catch{} },
   getWasteLogs: (bid) => sb(`waste_logs?order=log_date.desc,id.desc&limit=2000${bid ? `&branch_id=eq.${bid}` : ""}`),
-  deleteWasteLog: (id) => sb(`waste_logs?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
+  // Returns the rows it actually deleted (default Prefer: return=representation) — delLog uses
+  // that as a CLAIM: only the caller that really removed the row may credit the stock back, so a
+  // second device / double-confirm can't restore the same waste twice.
+  deleteWasteLog: (id) => sb(`waste_logs?id=eq.${id}`, { method: "DELETE" }),
   addStockLog: (d) => sb("stock_logs", { method: "POST", body: JSON.stringify(d) }),
   getStockLogs: (ingId, bid) => sb(`stock_logs?ingredient_id=eq.${ingId}&branch_id=eq.${bid}&order=counted_at.desc&limit=200`),
   addStockSession: (d) => sb("stock_count_sessions", { method: "POST", body: JSON.stringify(d) }),
@@ -1823,6 +1829,7 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
     if(!selected.length)return;
     setSaving(true);setProgress(0);
     let done=0,added=0,updated=0,failed=0;
+    const skippedCtg=[];   // rows whose "รวมทั้งหมด (กรัม)" cell was 0/blank — ignored, not written
     for(const row of selected){
       try{
         const sup=row.supplier_name?suppliers.find(s=>s.name===row.supplier_name||(row.supplier_name&&s.name.includes(row.supplier_name))||(row.supplier_name&&row.supplier_name.includes(s.name))):null;
@@ -1844,14 +1851,21 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
         if(row.buy_unit!==undefined)item.buy_unit=row.buy_unit;
         if(row.buy_amount!==undefined)item.buy_amount=row.buy_amount;
         if(row.buy_price!==undefined)item.buy_price=row.buy_price;
-        if(row.convert_to_gram!==undefined)item.convert_to_gram=row.convert_to_gram;
+        // A supplied-but-non-positive gram conversion is BAD INPUT, not data: writing it would
+        // zero out this ingredient's cost (and, once received, blow up avg cost). Ignore that
+        // cell and keep whatever the ingredient already has.
+        const badCtg=row.convert_to_gram!==undefined&&!(+row.convert_to_gram>0);
+        if(row.convert_to_gram!==undefined&&!badCtg)item.convert_to_gram=row.convert_to_gram;
+        if(badCtg)skippedCtg.push(row.name||row.code||"(ไม่มีชื่อ)");
         if(row.note!==undefined)item.note=row.note;
         // Recompute price_per_gram whenever price OR convert_to_gram is being updated
         // (always wins over whatever the user might have typed in the file).
-        if(row.buy_price!==undefined||row.convert_to_gram!==undefined){
+        if(row.buy_price!==undefined||(row.convert_to_gram!==undefined&&!badCtg)){
           const bp=row.buy_price!==undefined?+row.buy_price:+(existing?.buy_price||0);
-          const ctg=row.convert_to_gram!==undefined?+row.convert_to_gram:+(existing?.convert_to_gram||1000);
-          item.price_per_gram=bp>0?+(bp/(ctg||1)).toFixed(4):0;
+          const ctg=(row.convert_to_gram!==undefined&&!badCtg)?+row.convert_to_gram:+(existing?.convert_to_gram||1000);
+          // No ÷1 fallback: a 0/blank gram conversion must yield 0, not price-per-single-unit
+          // misread as price-per-GRAM (~1000× too high once it feeds menu costing).
+          item.price_per_gram=(bp>0&&ctg>0)?+(bp/ctg).toFixed(4):0;
         }
         if(row.supplier_name!==undefined){
           item.supplier_id=sup?.id||null;
@@ -1881,7 +1895,9 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
           if(item.buy_price==null)item.buy_price=0;
           if(item.convert_to_gram==null)item.convert_to_gram=1000;
           if(item.price_per_gram==null){
-            item.price_per_gram=item.buy_price>0?+(item.buy_price/(item.convert_to_gram||1)).toFixed(4):0;
+            // Same rule as the update path: no ÷1 fallback — a missing gram conversion means the
+            // per-gram cost is unknown (0), never "price of one whole buy-unit per gram".
+            item.price_per_gram=(+item.buy_price>0&&+item.convert_to_gram>0)?+(item.buy_price/item.convert_to_gram).toFixed(4):0;
           }
           if(!("note" in item))item.note="";
           if(!("supplier_id" in item)){item.supplier_id=null;item.supplier_name="";}
@@ -1893,6 +1909,7 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
     setSaving(false);
     setResult({added,updated,failed});
     setStep(3);
+    if(skippedCtg.length)setTimeout(()=>alert(`⚠️ ข้าม "รวมทั้งหมด (กรัม)" ของ ${skippedCtg.length} รายการ เพราะกรอกเป็น 0 หรือว่าง:\n\n${skippedCtg.slice(0,10).join(", ")}${skippedCtg.length>10?` ...และอีก ${skippedCtg.length-10}`:""}\n\nค่าเดิมในระบบถูกเก็บไว้ — ถ้าเขียนทับด้วย 0 ต้นทุนของวัตถุดิบเหล่านี้จะกลายเป็น 0`),0);
     onDone();
   }
 
@@ -2299,6 +2316,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
   const[images,setImages]=useState([]);const[uploading,setUploading]=useState(0);const[saving,setSaving]=useState(false);
   const fileRef=useRef();
   const savingRef=useRef(false);   // synchronous double-tap guard — React `saving` state lags a frame; a ghost-click would deduct stock twice
+  const delBusy=useRef(new Set()); // waste-log ids whose delete is in flight — a double-confirm must not credit stock twice
   const[kind,setKind]=useState("ing");                       // ing | menu — ของเสียเป็นวัตถุดิบหรือเมนู
   const isMenu=kind==="menu";
   const pool=isMenu?menus:ings;
@@ -2322,7 +2340,8 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
     savingRef.current=true;
     setSaving(true);
     try{
-      await api.addWasteLog({branch_id:currentBranch.id,branch_name:currentBranch.name,log_date:date,item_type:isMenu?"menu":"ingredient",ingredient_id:sel.id,ingredient_name:sel.name,unit,qty:+qty,unit_price:unitPrice,total:price===""?round2((+qty||0)*unitPrice):+price,reason:(reason||"").trim()||null,images,created_by:currentUser?.username||currentUser?.name||""});
+      const inserted=await api.addWasteLog({branch_id:currentBranch.id,branch_name:currentBranch.name,log_date:date,item_type:isMenu?"menu":"ingredient",ingredient_id:sel.id,ingredient_name:sel.name,unit,qty:+qty,unit_price:unitPrice,total:price===""?round2((+qty||0)*unitPrice):+price,reason:(reason||"").trim()||null,images,created_by:currentUser?.username||currentUser?.name||""});
+      const newLogId=(Array.isArray(inserted)&&inserted[0]&&inserted[0].id)||null;
       // Deduct on-hand for a wasted INGREDIENT (menus have no stock). Direct atomic
       // delta — NOT transferStockBetweenBranches — so we don't SOP-cascade into the
       // wasted item's sub-ingredients (we threw away the item itself, not its recipe).
@@ -2334,6 +2353,9 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
             await api.updateIng(sel.id,{stock_by_branch:next});
           }
         }catch(e2){stockOk=false;alert("⚠️ บันทึกของเสียแล้ว แต่หักสต๊อกไม่สำเร็จ: "+(e2&&e2.message||e2)+"\nกรุณาปรับสต๊อกในหน้านับสต็อก");}
+        // Record that the deduct landed — delLog only credits back rows carrying this flag, so a
+        // legacy row (or this row when the deduct failed) can never mint stock on delete.
+        if(stockOk&&newLogId)await api.markWasteStockApplied(newLogId);
       }
       // Never claim success when the deduct failed — a green toast would make the operator
       // think stock was reduced and re-do it, over-deducting.
@@ -2366,7 +2388,50 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
     const monthTotal=shownLogs.filter(l=>String(l.log_date||"").slice(0,7)===ym).reduce((s,l)=>s+(+l.total||0),0);
     return{total,count:rows.length,cats:agg(catOf),reasons:agg(l=>(l.reason||"").trim()||"ไม่ระบุเหตุผล"),items:agg(l=>l.ingredient_name||"—").slice(0,10),types:agg(l=>l.item_type==="menu"?"เมนู":"วัตถุดิบ"),monthTotal};
   },[shownLogs,ings,menus,range]);
-  async function delLog(l){if(!await confirmDlg({title:"ลบรายการของเสีย",message:`ลบ "${l.ingredient_name}" (${l.qty} ${l.unit||""}) ?`,danger:true}))return;try{await api.deleteWasteLog(l.id);loadLogs();}catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}}
+  // Deleting a waste log must UNDO the on-hand it deducted, or the stock stays short forever with
+  // no record explaining why. Order matters: delete FIRST (that claims the row, so a second click
+  // or a second device can't restore twice), then credit the log's OWN branch. If the credit fails
+  // we say exactly how much to put back by hand rather than silently leaving a shortage.
+  const canDelWaste=["admin","manager","area"].includes(currentUser?.role);
+  async function delLog(l){
+    if(!canDelWaste){alert("เฉพาะผู้จัดการ / Area / Admin เท่านั้นที่ลบรายการของเสียได้");return;}
+    if(!inScope(l.branch_id)){alert("ลบได้เฉพาะรายการของสาขาที่คุณดูแล");return;}
+    const isMenuLog=l.item_type==="menu";
+    const q=+l.qty||0;
+    const bName=l.branch_name||(branches.find(b=>+b.id===+l.branch_id)||{}).name||l.branch_id;
+    const willRestore=!isMenuLog&&q>0&&l.stock_applied===true;   // only rows whose deduct actually landed
+    if(!await confirmDlg({title:"ลบรายการของเสีย",message:`ลบ "${l.ingredient_name}" (${l.qty} ${l.unit||""}) ?`+(willRestore?`\n\n📦 สต๊อกที่หักไป ${q} ${l.unit||""} จะถูกคืนกลับให้สาขา "${bName}"`:(isMenuLog||q<=0?"":`\n\n(รายการนี้ไม่ได้หักสต๊อกไว้ จึงไม่มีการคืนสต๊อก)`)),danger:true,confirmLabel:"ลบ"}))return;
+    if(delBusy.current.has(l.id))return;   // synchronous re-entry guard (double-confirm on one device)
+    delBusy.current.add(l.id);
+    try{
+      // The DELETE is the claim: PostgREST returns the rows it actually removed. 0 rows ⇒ someone
+      // else already deleted it ⇒ we must NOT credit (that would restore the stock twice).
+      const del=await api.deleteWasteLog(l.id);
+      const row=Array.isArray(del)&&del.length===1?del[0]:null;
+      if(!row){ loadLogs(); posToast("รายการนี้ถูกลบไปแล้ว — รีเฟรชรายการให้แล้ว","warn"); return; }
+      // Credit from the RETURNED row (authoritative), not the stale card. Legacy rows and rows
+      // whose deduct failed carry stock_applied!==true and must NOT be credited — they never lost
+      // the stock in the first place.
+      const applied=row.stock_applied===true;
+      const rq=+row.qty||0, rMenu=row.item_type==="menu";
+      if(!rMenu&&rq>0&&applied){
+        let ok=false;
+        try{
+          ok=await rpcStockDelta(row.ingredient_id,row.branch_id,rq);
+          if(!ok){
+            const ing=(ings||[]).find(i=>+i.id===+row.ingredient_id);
+            if(ing){const next=setBranchStockInJson(ing.stock_by_branch,row.branch_id,Math.round((branchStockExact(ing,row.branch_id)+rq)*1000)/1000);await api.updateIng(ing.id,{stock_by_branch:next});ok=true;}
+          }
+        }catch{ok=false;}
+        if(!ok)alert(`⚠️ ลบรายการแล้ว แต่คืนสต๊อกไม่สำเร็จ\n\nกรุณาเพิ่ม "${row.ingredient_name}" ให้สาขา "${bName}" อีก ${rq} ${row.unit||""} เองที่หน้านับสต็อก`);
+        else posToast("🗑️ ลบรายการ + คืนสต๊อกแล้ว","ok");
+      }else{
+        posToast(rMenu?"🗑️ ลบรายการแล้ว":"🗑️ ลบรายการแล้ว (รายการนี้ไม่ได้หักสต๊อกไว้ จึงไม่ต้องคืน)","ok");
+      }
+      loadLogs();
+    }catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}
+    finally{delBusy.current.delete(l.id);}
+  }
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
       <div style={{display:"flex",gap:6,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`}}>
@@ -2854,8 +2919,19 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     }catch{}
     setStockBtnLoading(false);setShowStockGate(true);
   }
-  function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||1);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
-  async function save(){if(!form.name||!form.buy_price)return;setSaving(true);try{
+  function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||0);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
+  async function save(){if(!form.name||!form.buy_price)return;
+    // Without a gram conversion every cost derived from this ingredient is 0 (and ~1000× too high
+    // the moment it is received), so block NEW rows outright. For an EXISTING row that is already
+    // 0 (legacy data) don't trap the user out of editing other fields — warn once and let them
+    // save, as long as they aren't making a good value bad.
+    if(!(+form.convert_to_gram>0)){
+      const storedCtg=editId?+((ings.find(x=>+x.id===+editId)||{}).convert_to_gram||0):0;
+      const msg='กรุณากรอก "รวมทั้งหมด (กรัม)" ให้มากกว่า 0\n\nคือน้ำหนักรวมจริงต่อ 1 หน่วยที่ซื้อ เช่น ซื้อเป็นขวด 1 ขวด = 700 กรัม ให้ใส่ 700\n(ถ้าไม่มีค่านี้ ระบบคำนวณต้นทุนต่อกรัมไม่ได้ — ต้นทุนเมนูที่ใช้วัตถุดิบนี้จะเป็น 0)';
+      if(!editId||storedCtg>0){alert(msg);return;}
+      if(!await confirmDlg({title:"ยังไม่ได้ใส่จำนวนกรัม",message:msg+"\n\nบันทึกต่อโดยที่ต้นทุนของวัตถุดิบนี้จะยังเป็น 0?",danger:true,confirmLabel:"บันทึกต่อ"}))return;
+    }
+    setSaving(true);try{
     // Pull existing safety_by_branch from the row being edited (if any) so we
     // only mutate the current branch's slot — safety is per-branch.
     const existingIng=editId?ings.find(x=>+x.id===+editId):null;
@@ -2865,7 +2941,20 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}
     await reload();setOpen(false);
   }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
-  async function del(id,name){if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
+  async function del(id,name){
+    // A deleted ingredient that menus still reference is silently SKIPPED by menuCost, so every
+    // affected menu's cost drops with no warning (margins look better than reality). Refuse the
+    // delete and name the references so the user removes them deliberately.
+    const usedByMenus=(menus||[]).filter(m=>Array.isArray(m.ingredients)&&m.ingredients.some(x=>+x.ingredientId===+id)).map(m=>m.name);
+    const usedBySop=(ings||[]).filter(i=>+i.id!==+id&&Array.isArray(i.ingredients)&&i.ingredients.some(x=>+x.ingredientId===+id)).map(i=>i.name);
+    if(usedByMenus.length||usedBySop.length){
+      const lines=[...usedByMenus.map(n=>"• เมนู: "+n),...usedBySop.map(n=>"• สูตร (SOP): "+n)];
+      alert(`ลบ "${name}" ไม่ได้ — ยังถูกใช้อยู่ ${lines.length} รายการ:\n\n${lines.slice(0,12).join("\n")}${lines.length>12?`\n... และอีก ${lines.length-12} รายการ`:""}\n\nถ้าลบทั้งที่ยังถูกใช้ ต้นทุนของรายการเหล่านี้จะลดลงเงียบๆ โดยไม่มีการเตือน\nกรุณาเอาวัตถุดิบนี้ออกจากสูตรก่อน แล้วค่อยลบ`);
+      return;
+    }
+    if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;
+    try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}
+  }
   async function exportXlsx(){
     if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
     const XLSX=await loadXLSX();
@@ -4399,6 +4488,10 @@ async function exportPOsToExcel(pos,branchById){
 // ── FOODSTORY SALES IMPORT ───────────────────────────
 // ══════════════════════════════════════════════════════
 function FSImportModal({branches,currentUser,onClose,onDone}){
+  // The import deletes the chosen branch+date before inserting, so the picker must only ever
+  // offer branches this user is allowed to touch (admin = all).
+  const fsAllowed=useMemo(()=>currentUser?.role==="admin"?null:normalizeBranchIds(currentUser?.allowed_branches),[currentUser]);
+  const fsBranchOpts=useMemo(()=>(branches||[]).filter(b=>b.active!==false&&(fsAllowed==null||fsAllowed.map(x=>+x).includes(+b.id))),[branches,fsAllowed]);
   const[step,setStep]=useState("pick");  // pick | preview
   const[parsed,setParsed]=useState(null);  // {rows, branchHint}
   const today=todayBkk();
@@ -4446,6 +4539,9 @@ function FSImportModal({branches,currentUser,onClose,onDone}){
   async function save(){
     if(!branchId){alert("กรุณาเลือกสาขา");return;}
     if(!saleDate){alert("กรุณาเลือกวันที่");return;}
+    // This import HARD-DELETES the target branch+date before inserting. Re-check the scope here,
+    // not just in the picker, so it can never wipe another branch's sales.
+    if(fsAllowed!=null&&!fsAllowed.map(x=>+x).includes(+branchId)){alert("คุณไม่มีสิทธิ์นำเข้ายอดขายของสาขานี้");return;}
     setBusy(true);
     try{
       // Replace any previous import for this (branch, date) — clean re-import
@@ -4509,7 +4605,7 @@ function FSImportModal({branches,currentUser,onClose,onDone}){
         <Field label="🏢 สาขา *">
           <select value={branchId} onChange={e=>setBranchId(e.target.value)} style={{...iS,appearance:"none",fontSize:14}}>
             <option value="">— เลือกสาขา —</option>
-            {branches.filter(b=>b.active!==false).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+            {fsBranchOpts.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
         </Field>
       </div>
@@ -4617,6 +4713,10 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
   const[search,setSearch]=useState("");
   const[showCost,setShowCost]=useState(true);
   const canImport=hasPerm(currentUser,"fs_sales");
+  // Central users legitimately READ every branch here, but the two destructive paths below
+  // (hard-delete external_sales / write a cost snapshot) must stay inside allowed_branches.
+  const fsAllowed=useMemo(()=>currentUser?.role==="admin"?null:normalizeBranchIds(currentUser?.allowed_branches),[currentUser]);
+  const fsInScope=(bid)=>fsAllowed==null||fsAllowed.map(x=>+x).includes(+bid);
 
   // Build menu lookup by normalized name (trim + lowercase, also strip parenthesized tails)
   const menusByName=useMemo(()=>{
@@ -4712,6 +4812,9 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
   const canCreateMenu=hasPerm(currentUser,"menus");
 
   async function saveBatchSnapshot(branchId,date){
+    // Must come BEFORE generateCostSnapshot — otherwise a wrong-branch snapshot is written even
+    // if the delete below is blocked.
+    if(!fsInScope(branchId)){alert("คุณไม่มีสิทธิ์บันทึกสรุปต้นทุน/ลบยอดขายของสาขานี้");return;}
     const br=branches.find(x=>+x.id===+branchId);
     // Pre-compute totals to show in the confirm dialog
     const batchRows=rows.filter(r=>+r.branch_id===+branchId&&r.sale_date===date);
@@ -4800,6 +4903,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
   }
 
   async function delDate(b,d){
+    if(!fsInScope(b)){alert("คุณไม่มีสิทธิ์ลบยอดขายของสาขานี้");return;}
     if(!await confirmDlg({title:"ลบยอดของวันนี้",message:`ลบยอดขายของสาขา/วันนี้ออกจากระบบ?\n(ลบเฉพาะที่ import เข้ามา ไม่กระทบ FoodStory)`,danger:true}))return;
     try{await api.deleteExternalSalesBy(b,d);await load();}
     catch(e){showErr("ลบไม่สำเร็จ",e);}
@@ -4856,7 +4960,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
       <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
         {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);return <div key={`${b.branch_id}-${b.sale_date}`} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 10px",fontSize:11,fontFamily:"'Sarabun',sans-serif",color:C.ink2,display:"flex",alignItems:"center",gap:6}}>
           <span><b>{fmtD(b.sale_date)}</b> · {br?.name||"—"} · {b.count} เมนู / {b.qtySum} ครั้ง</span>
-          {canImport&&<button onClick={()=>delDate(b.branch_id,b.sale_date)} title="ลบยอดของวันนี้" style={{background:C.redLight,border:"none",borderRadius:5,padding:"2px 6px",cursor:"pointer",color:C.red,fontSize:10,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>×</button>}
+          {canImport&&fsInScope(b.branch_id)&&<button onClick={()=>delDate(b.branch_id,b.sale_date)} title="ลบยอดของวันนี้" style={{background:C.redLight,border:"none",borderRadius:5,padding:"2px 6px",cursor:"pointer",color:C.red,fontSize:10,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>×</button>}
         </div>;})}
       </div>
     </div>}
@@ -5029,7 +5133,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
         </div>
         {/* Save buttons */}
         {canImport&&<div style={{display:"flex",gap:isMobile?6:8,flexWrap:"wrap",justifyContent:isMobile?"stretch":"flex-end",width:isMobile?"100%":"auto"}}>
-          {batches.map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <button key={`save-${b.branch_id}-${b.sale_date}`} onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title={`บันทึกสรุปต้นทุน ${fmtD(b.sale_date)} · ${br?.name||"—"} → ไปแสดงในแท็บ "สรุปต้นทุน"`} style={{background:busy?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:9,padding:isMobile?"9px 14px":"9px 18px",cursor:busy?"not-allowed":"pointer",color:C.white,fontSize:isMobile?12:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif",boxShadow:busy?"none":"0 4px 14px rgba(16,185,129,0.42)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,letterSpacing:.2,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:38}}>
+          {batches.filter(b=>fsInScope(b.branch_id)).map(b=>{const br=branches.find(x=>+x.id===+b.branch_id);const busy=savingSnap===`${b.branch_id}|${b.sale_date}`;return <button key={`save-${b.branch_id}-${b.sale_date}`} onClick={()=>saveBatchSnapshot(b.branch_id,b.sale_date)} disabled={busy} title={`บันทึกสรุปต้นทุน ${fmtD(b.sale_date)} · ${br?.name||"—"} → ไปแสดงในแท็บ "สรุปต้นทุน"`} style={{background:busy?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:9,padding:isMobile?"9px 14px":"9px 18px",cursor:busy?"not-allowed":"pointer",color:C.white,fontSize:isMobile?12:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif",boxShadow:busy?"none":"0 4px 14px rgba(16,185,129,0.42)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,letterSpacing:.2,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:38}}>
             <span style={{fontSize:isMobile?13:14}}>{busy?"⏳":"💾"}</span>
             <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>{busy?"กำลังบันทึก...":`บันทึกสรุป — ${fmtD(b.sale_date)}${batches.length>1?` · ${br?.name||"—"}`:""}`}</span>
           </button>;})}
@@ -12809,7 +12913,12 @@ export default function App(){
       const s=stats.get(+ing.id);
       if(!s||!(s.qty>0))return ing;
       const avgPrice=s.wsum/s.qty;   // weighted average cost = Σ(price×qty) / Σqty
-      const ctg=+ing.convert_to_gram||1;
+      // NEVER fall back to ÷1 — an ingredient with no gram conversion would get a per-gram cost
+      // ~1000× too high (฿250/ขวด read as ฿250/gram) and menuCost prefers avg over catalog.
+      // Without a valid conversion we simply don't publish avg_price_per_gram; menuCost then
+      // falls back to price_per_gram, which ppg() already keeps at 0 for the same reason.
+      const ctg=+ing.convert_to_gram;
+      if(!(ctg>0))return{...ing,avg_price:+avgPrice.toFixed(4),avg_price_count:s.count};
       return{...ing,avg_price:+avgPrice.toFixed(4),avg_price_per_gram:+(avgPrice/ctg).toFixed(6),avg_price_count:s.count};
     });
   },[rawIngs,orders,allOrders,currentBranch?.type]);
@@ -13292,7 +13401,10 @@ function printKitchenWindow(item,tableNum,printer){
   const title=printer?printer.name:"ใบสั่งอาหาร";
   const w=openPrintWindow(350,500);
   if(!w)return;
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - โต๊ะ ${tableNum}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:6px;color:#000}.hdr{text-align:center;font-size:13px;font-weight:700;margin:2px 0}.tbl{text-align:center;font-size:54px;font-weight:900;line-height:1;margin:6px 0;letter-spacing:1px;border:3px solid #000;padding:8px 0;border-radius:8px}.tm{text-align:center;font-size:11px;color:#444;margin:2px 0}.sep{border:0;border-top:2px dashed #000;margin:8px 0}.menu{text-align:center;font-size:24px;font-weight:900;line-height:1.2;margin:8px 0;padding:6px 4px}.qty{display:inline-block;background:#000;color:#fff;padding:2px 12px;border-radius:6px;font-size:24px;font-weight:900;margin-right:6px}.note{margin-top:8px;background:#FEF3C7;border:2px solid #000;border-radius:6px;padding:8px;font-size:15px;font-weight:700;text-align:center}.foot{text-align:center;font-size:10px;color:#666;margin-top:6px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><div class="hdr">🍳 ${title}</div><div class="tbl">โต๊ะ ${tableNum}</div><div class="tm">${fmtDT()}</div><hr class="sep"/><div class="menu"><span class="qty">${item.qty}x</span>${item.name}</div>${item.options&&item.options.length?`<div style="text-align:center;font-size:18px;font-weight:800;color:#0D9488;margin:-2px 0 6px">+ ${esc(optionsText(item.options))}</div>`:""}${item.note?`<div class="note">★ ${item.note}</div>`:""}<hr class="sep"/><div class="foot">--- สิ้นสุดรายการ ---</div><script>window.onload=()=>setTimeout(()=>window.print(),200);<\/script></body></html>`);
+  // Every interpolated value is escaped: item.name/item.note originate on the UNAUTHENTICATED
+  // ?scan page (a diner types the note), and this markup is written into a same-origin window —
+  // an unescaped note is script execution inside the staff app.
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)} - โต๊ะ ${esc(tableNum)}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;width:72mm;margin:0 auto;padding:6px;color:#000}.hdr{text-align:center;font-size:13px;font-weight:700;margin:2px 0}.tbl{text-align:center;font-size:54px;font-weight:900;line-height:1;margin:6px 0;letter-spacing:1px;border:3px solid #000;padding:8px 0;border-radius:8px}.tm{text-align:center;font-size:11px;color:#444;margin:2px 0}.sep{border:0;border-top:2px dashed #000;margin:8px 0}.menu{text-align:center;font-size:24px;font-weight:900;line-height:1.2;margin:8px 0;padding:6px 4px}.qty{display:inline-block;background:#000;color:#fff;padding:2px 12px;border-radius:6px;font-size:24px;font-weight:900;margin-right:6px}.note{margin-top:8px;background:#FEF3C7;border:2px solid #000;border-radius:6px;padding:8px;font-size:15px;font-weight:700;text-align:center}.foot{text-align:center;font-size:10px;color:#666;margin-top:6px}@media print{@page{margin:0;size:72mm auto}}</style></head><body><div class="hdr">🍳 ${esc(title)}</div><div class="tbl">โต๊ะ ${esc(tableNum)}</div><div class="tm">${esc(fmtDT())}</div><hr class="sep"/><div class="menu"><span class="qty">${+item.qty||0}x</span>${esc(item.name)}</div>${item.options&&item.options.length?`<div style="text-align:center;font-size:18px;font-weight:800;color:#0D9488;margin:-2px 0 6px">+ ${esc(optionsText(item.options))}</div>`:""}${item.note?`<div class="note">★ ${esc(item.note)}</div>`:""}<hr class="sep"/><div class="foot">--- สิ้นสุดรายการ ---</div><script>window.onload=()=>setTimeout(()=>window.print(),200);<\/script></body></html>`);
   w.document.close();addPrintClose(w);
 }
 // Resolve which printer should handle this kitchen item.
