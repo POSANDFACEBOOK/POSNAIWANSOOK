@@ -113,6 +113,8 @@ function branchesCarousel(branches) {
     if (b.address) body.push({ type: "text", text: `📍 ${b.address}`, size: "sm", color: "#64748B", wrap: true, margin: "sm" });
     if (b.open_hours) body.push({ type: "text", text: `🕒 ${b.open_hours}`, size: "sm", color: "#64748B", wrap: true });
     if (b.phone) body.push({ type: "text", text: `📞 ${b.phone}`, size: "sm", color: "#64748B", wrap: true });
+    // No details filled in for this branch yet → don't show a bare name-only card.
+    if (body.length === 1) body.push({ type: "text", text: "ทักแชทสอบถามที่อยู่ / เวลาเปิด-ปิด ได้เลยค่ะ 🙏", size: "sm", color: "#94A3B8", wrap: true, margin: "sm" });
     const footer = [
       uriButton("🗺️ ดูแผนที่", b.map_url, "primary", "#FF6B35"),
       uriButton("📞 โทร", b.phone ? `tel:${b.phone}` : "", "secondary"),
@@ -122,6 +124,49 @@ function branchesCarousel(branches) {
   });
   if (!bubbles.length) return { type: "text", text: "ยังไม่มีข้อมูลสาขาในระบบค่ะ 🙏 (แอดมินยังไม่ได้กรอก)" };
   return { type: "flex", altText: "ข้อมูลสาขา", contents: { type: "carousel", contents: bubbles } };
+}
+
+// ── Promotions the customer can actually use right now ────────────────────────
+async function getPromos() {
+  try { return await sb(`crm_promotions?active=eq.true&order=id.desc&limit=30`); }
+  catch { return []; }
+}
+const thDate = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || "")); return m ? `${m[3]}/${m[2]}/${+m[1] + 543}` : String(d || ""); };
+function promoDeal(p) {
+  const v = p && p.value;
+  switch ((p && p.type) || "") {
+    case "percent": return `ลด ${v}%`;
+    case "fixed": return `ลด ${v} บาท`;
+    case "points_x": return `รับแต้ม x${v}`;
+    case "free_item": return `รับฟรี: ${v || "ของแถม"}`;
+    default: return v ? String(v) : "";
+  }
+}
+// Only show promos that are active, in-date and not quota-exhausted — never advertise
+// something the customer will be refused at the counter.
+function promosCarousel(promos, branchNameById) {
+  const today = new Date().toISOString().slice(0, 10);
+  const live = (promos || []).filter((p) => {
+    if (!p || p.active === false) return false;
+    if (p.start_date && String(p.start_date).slice(0, 10) > today) return false;
+    if (p.end_date && String(p.end_date).slice(0, 10) < today) return false;
+    if (p.quota != null && +p.used_count >= +p.quota) return false;
+    return true;
+  }).slice(0, 11);
+  if (!live.length) return { type: "text", text: "ตอนนี้ยังไม่มีโปรโมชั่นที่ใช้ได้ค่ะ 🙏\nกดติดตามไว้ มีโปรใหม่จะแจ้งให้ทราบนะคะ 😊" };
+  const bubbles = live.map((p) => {
+    const body = [{ type: "text", text: p.name || "โปรโมชั่น", weight: "bold", size: "lg", wrap: true, color: "#0F172A" }];
+    const deal = promoDeal(p);
+    if (deal) body.push({ type: "text", text: `🎁 ${deal}`, size: "md", weight: "bold", color: "#FF6B35", wrap: true, margin: "sm" });
+    if (p.description) body.push({ type: "text", text: p.description, size: "sm", color: "#64748B", wrap: true, margin: "sm" });
+    if (+p.min_spend > 0) body.push({ type: "text", text: `ขั้นต่ำ ${(+p.min_spend).toLocaleString()} บาท`, size: "xs", color: "#94A3B8", wrap: true, margin: "sm" });
+    if (p.end_date) body.push({ type: "text", text: `ใช้ได้ถึง ${thDate(p.end_date)}`, size: "xs", color: "#94A3B8", wrap: true });
+    const bl = Array.isArray(p.branch_ids) ? p.branch_ids.map((id) => branchNameById[+id]).filter(Boolean) : [];
+    if (bl.length) body.push({ type: "text", text: `เฉพาะสาขา: ${bl.join(", ")}`, size: "xs", color: "#94A3B8", wrap: true });
+    if (p.code) body.push({ type: "text", text: `โค้ด: ${p.code}`, size: "sm", weight: "bold", color: "#0F172A", wrap: true, margin: "md" });
+    return { type: "bubble", size: "kilo", body: { type: "box", layout: "vertical", spacing: "none", contents: body } };
+  });
+  return { type: "flex", altText: "โปรโมชั่น", contents: { type: "carousel", contents: bubbles } };
 }
 
 function menuFlex(bid, title) {
@@ -143,6 +188,7 @@ function menuFlex(bid, title) {
         type: "box", layout: "vertical", spacing: "sm", contents: [
           { type: "button", style: "primary", height: "sm", color: "#FF6B35", action: { type: "postback", label: "📅 จองโต๊ะ", data: "action=book", displayText: "ขอจองโต๊ะค่ะ" } },
           { type: "button", style: "primary", height: "sm", color: "#10B981", action: { type: "uri", label: "⭐ สมัคร / สะสมแต้ม", uri: `${base}&go=join` } },
+          { type: "button", style: "secondary", height: "sm", action: { type: "postback", label: "🎁 โปรโมชั่นตอนนี้", data: "action=promos", displayText: "ขอดูโปรโมชั่น" } },
           { type: "button", style: "secondary", height: "sm", action: { type: "postback", label: "📍 ข้อมูลสาขา", data: "action=branches", displayText: "ขอดูข้อมูลสาขา" } },
         ],
       },
@@ -236,6 +282,10 @@ export default async function handler(req, res) {
             : `ขออภัยค่ะ ระบบจองยังไม่พร้อมชั่วคราว 🙏\nรบกวนพิมพ์แชทแจ้งแอดมินได้เลย หรือกดเมนู "ข้อมูลสาขา" เพื่อโทรจองกับสาขาโดยตรงนะคะ` }]);
         } else if (/(^|&)action=branches(&|$)/.test(data)) {
           await reply(token, rt, [branchesCarousel(await getBranches())]);
+        } else if (/(^|&)action=promos(&|$)/.test(data)) {
+          const [promos, brs] = await Promise.all([getPromos(), getBranches()]);
+          const nameById = {}; for (const b of brs || []) nameById[+b.id] = b.name;
+          await reply(token, rt, [promosCarousel(promos, nameById)]);
         } else {
           await menu(rt);
         }
