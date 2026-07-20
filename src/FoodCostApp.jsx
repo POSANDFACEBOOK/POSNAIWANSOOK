@@ -892,6 +892,16 @@ function hasPerm(user,perm){
 }
 const ROLES={admin:{label:"Admin",color:"purple"},area:{label:"Area / พื้นที่",color:"orange"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"}};
 const ppg=(price,gram)=>(gram>0?price/gram:0);
+// Recipe amounts are stored CANONICALLY in grams (amountGram) because every cost path multiplies
+// them by a price-per-GRAM. The picker lets the operator type in กก./ลิตร/ช้อน etc., so convert at
+// write time — storing "1" for "1 กก." made that ingredient cost 1/1000 of reality.
+// Units with no mass equivalence (ชิ้น / custom) stay 1:1 — the operator is expected to type grams.
+const UNIT_G={"กรัม":1,"ก.":1,"g":1,"มล.":1,"ml":1,"ช้อนชา":5,"ช้อนโต๊ะ":15,"ถ้วย":240,"กก.":1000,"kg":1000,"ลิตร":1000,"l":1000};
+const toGrams=(amt,unit)=>round2((+amt||0)*(UNIT_G[String(unit||"").trim()]||1));
+// A menu that exists but has NO recipe has an UNKNOWN cost, not a zero cost. Every costing site
+// must use this so its revenue is never booked as 100%-margin profit (single source of truth —
+// the previous partial fix left the snapshot, its editor and the daily table disagreeing).
+const hasRecipe=(m)=>!!m&&Array.isArray(m.ingredients)&&m.ingredients.length>0;
 const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);if(!i)return s;const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;return s+ppg*x.amountGram;},0);
 // Per-branch stock helpers — falls back to legacy ingredient.stock when no branch entry exists
 function branchStock(ing,branchId){
@@ -3787,7 +3797,11 @@ window.addEventListener('load',async()=>{
     if(!ingPopup||!String(ingPopup.amount).trim())return;
     const amt=parseFloat(ingPopup.amount);
     if(isNaN(amt)||amt<=0)return;
-    setEditIngs(f=>{const idx=f.findIndex(x=>x.ingredientId===ingPopup.ing.id);return idx>=0?f.map((x,i)=>i===idx?{...x,amountGram:amt,unit:ingPopup.unit||"กรัม"}:x):[...f,{ingredientId:ingPopup.ing.id,amountGram:amt,unit:ingPopup.unit||"กรัม"}];});
+    // Store canonical grams; keep what the operator actually typed for display.
+    const u=ingPopup.unit||"กรัม";
+    const grams=toGrams(amt,u);
+    const entry={amountGram:grams,unit:"กรัม",displayAmount:amt,displayUnit:u};
+    setEditIngs(f=>{const idx=f.findIndex(x=>x.ingredientId===ingPopup.ing.id);return idx>=0?f.map((x,i)=>i===idx?{...x,...entry}:x):[...f,{ingredientId:ingPopup.ing.id,...entry}];});
     setIngPopup(null);
   }
   function addCustomUnit(){
@@ -4058,7 +4072,11 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
     if(!ingPopup||!String(ingPopup.amount).trim())return;
     const amt=parseFloat(ingPopup.amount);
     if(isNaN(amt)||amt<=0)return;
-    setEditIngs(f=>{const idx=f.findIndex(x=>x.ingredientId===ingPopup.ing.id);return idx>=0?f.map((x,i)=>i===idx?{...x,amountGram:amt,unit:ingPopup.unit||"กรัม"}:x):[...f,{ingredientId:ingPopup.ing.id,amountGram:amt,unit:ingPopup.unit||"กรัม"}];});
+    // Store canonical grams; keep what the operator actually typed for display.
+    const u=ingPopup.unit||"กรัม";
+    const grams=toGrams(amt,u);
+    const entry={amountGram:grams,unit:"กรัม",displayAmount:amt,displayUnit:u};
+    setEditIngs(f=>{const idx=f.findIndex(x=>x.ingredientId===ingPopup.ing.id);return idx>=0?f.map((x,i)=>i===idx?{...x,...entry}:x):[...f,{ingredientId:ingPopup.ing.id,...entry}];});
     setIngPopup(null);
   }
   function addCustomUnit(){
@@ -4652,15 +4670,21 @@ async function generateCostSnapshot({branchId,date,menus,ings,currentUser}){
   menus.forEach(m=>{const k=norm(m.name);if(k&&!byName.has(k))byName.set(k,m);});
   const items=rows.map(r=>{
     const m=byName.get(norm(r.menu_name));
-    const cu=m?round2(menuCost(m,ings)):0;
+    const costed=hasRecipe(m);
     const qty=+r.qty||0;
-    const cost=round2(cu*qty);
     const revenue=round2(+r.net_total||0);
-    return{menu_name:r.menu_name,category:r.category||null,qty,revenue,cost,profit:round2(revenue-cost),matched:!!m,price_avg:+r.price_avg||0};
+    // cost/profit stay NULL when the cost is unknown — writing 0 made the whole revenue look
+    // like profit and dragged the headline food-cost % down.
+    const cost=costed?round2(round2(menuCost(m,ings))*qty):null;
+    return{menu_name:r.menu_name,category:r.category||null,qty,revenue,cost,profit:cost==null?null:round2(revenue-cost),matched:costed,no_recipe:!!m&&!costed,price_avg:+r.price_avg||0};
   });
   const total_revenue=round2(items.reduce((s,i)=>s+i.revenue,0));
-  const total_cost=round2(items.reduce((s,i)=>s+i.cost,0));
-  const cost_pct=total_revenue>0?round2(total_cost/total_revenue*100):0;
+  const total_cost=round2(items.reduce((s,i)=>s+(i.cost||0),0));
+  // % must be measured against the revenue we could actually cost, else it flatters food cost.
+  // (kept out of the persisted columns so no migration is needed — items[] carries cost:null,
+  //  which is enough for any reader to re-derive the split.)
+  const costed_revenue=round2(items.filter(i=>i.cost!=null).reduce((s,i)=>s+i.revenue,0));
+  const cost_pct=costed_revenue>0?round2(total_cost/costed_revenue*100):0;
   const total_qty=round2(items.reduce((s,i)=>s+i.qty,0));
   return await api.upsertCostSnapshot({
     branch_id:+branchId,
@@ -4676,17 +4700,21 @@ async function exportSnapshotXlsx(snapshot,branchName){
   const XLSX=await loadXLSX();
   const items=Array.isArray(snapshot.items)?snapshot.items:[];
   const rows=items.map((it,i)=>{
-    const rev=+it.revenue||0,cost=+it.cost||0;
+    const rev=+it.revenue||0;
+    // cost null (menu exists but has no recipe) = UNKNOWN. Printing 0 would show the whole
+    // revenue as profit at 0% food cost — write "—" instead so the gap is visible.
+    const unknown=it.cost==null;
+    const cost=unknown?null:(+it.cost||0);
     return{
       "ลำดับ":i+1,
       "เมนู":it.menu_name||"",
       "หมวด":it.category||"",
-      "จับคู่ระบบ":it.matched?"✅":"❌",
+      "จับคู่ระบบ":it.matched?"✅":(it.no_recipe?"⚠ ยังไม่ใส่วัตถุดิบ":"❌"),
       "จำนวนที่ขาย":+it.qty||0,
       "ยอดขาย":rev,
-      "ต้นทุน":cost,
-      "กำไร":+it.profit||round2(rev-cost),
-      "% ต้นทุน":rev>0?round2(cost/rev*100):0,
+      "ต้นทุน":unknown?"—":cost,
+      "กำไร":unknown?"—":(it.profit!=null?+it.profit:round2(rev-cost)),
+      "% ต้นทุน":unknown?"—":(rev>0?round2(cost/rev*100):0),
     };
   });
   // Append summary row
@@ -4759,8 +4787,11 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
       let row=m.get(r.menu_name);
       if(!row){
         const matched=findMenu(r.menu_name);
-        const costPerUnit=matched?round2(menuCost(matched,ings)):null;
-        row={menu_name:r.menu_name,category:r.category||"",cells:new Map(),totalQty:0,totalNet:0,matched,costPerUnit};
+        // A menu that exists but has NO recipe costs 0 — that is "unknown", not "free". Treat it
+        // as a third state so its revenue is never booked as 100%-margin profit.
+        const noRecipe=!!matched&&!hasRecipe(matched);
+        const costPerUnit=hasRecipe(matched)?round2(menuCost(matched,ings)):null;
+        row={menu_name:r.menu_name,category:r.category||"",cells:new Map(),totalQty:0,totalNet:0,matched,noRecipe,costPerUnit};
         m.set(r.menu_name,row);
       }
       row.cells.set(r.sale_date,(row.cells.get(r.sale_date)||0)+(+r.qty||0));
@@ -4781,15 +4812,19 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
   const grandTotalNet=round2(pivot.reduce((s,r)=>s+r.totalNet,0));
   // Costs only for matched menus
   const costSummary=useMemo(()=>{
-    let totalCost=0,matchedRevenue=0,unmatchedRevenue=0,matchedCount=0,unmatchedCount=0;
+    let totalCost=0,matchedRevenue=0,unmatchedRevenue=0,matchedCount=0,unmatchedCount=0,noRecipeCount=0,noRecipeRevenue=0;
     pivot.forEach(r=>{
-      if(r.matched){matchedCount++;totalCost+=r.totalCost||0;matchedRevenue+=r.totalNet||0;}
+      // Menus with no recipe have an UNKNOWN cost — keeping their revenue in matchedRevenue with
+      // cost 0 would report them as pure profit and drag the whole branch margin up. They get
+      // their OWN bucket; folding them into unmatchedRevenue too would double-report the baht.
+      if(r.noRecipe){noRecipeCount++;noRecipeRevenue+=r.totalNet||0;}
+      else if(r.matched){matchedCount++;totalCost+=r.totalCost||0;matchedRevenue+=r.totalNet||0;}
       else{unmatchedCount++;unmatchedRevenue+=r.totalNet||0;}
     });
-    totalCost=round2(totalCost);matchedRevenue=round2(matchedRevenue);unmatchedRevenue=round2(unmatchedRevenue);
+    totalCost=round2(totalCost);matchedRevenue=round2(matchedRevenue);unmatchedRevenue=round2(unmatchedRevenue);noRecipeRevenue=round2(noRecipeRevenue);
     const profit=round2(matchedRevenue-totalCost);
     const margin=matchedRevenue>0?round2(profit/matchedRevenue*100):null;
-    return{totalCost,matchedRevenue,unmatchedRevenue,matchedCount,unmatchedCount,profit,margin};
+    return{totalCost,matchedRevenue,unmatchedRevenue,matchedCount,unmatchedCount,profit,margin,noRecipeCount,noRecipeRevenue};
   },[pivot]);
   const unmatchedMenus=useMemo(()=>pivot.filter(r=>!r.matched).map(r=>r.menu_name),[pivot]);
   // Map menu_name → {category, price_avg, totalQty} for quick auto-create
@@ -4973,6 +5008,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
         {l:"📈 กำไรรวม",v:`฿${costSummary.profit.toLocaleString(undefined,{minimumFractionDigits:2})}`,c:costSummary.profit>=0?C.green:C.red,sub:costSummary.margin!=null?`${costSummary.margin.toFixed(1)}% margin`:"—"},
         {l:"✅ จับคู่ระบบได้",v:`${costSummary.matchedCount}/${pivot.length}`,c:C.green,sub:`฿${costSummary.matchedRevenue.toLocaleString(undefined,{minimumFractionDigits:2})}`},
         ...(costSummary.unmatchedCount>0?[{l:"⚠️ ยังไม่จับคู่",v:`${costSummary.unmatchedCount} เมนู`,c:"#EA580C",sub:`฿${costSummary.unmatchedRevenue.toLocaleString(undefined,{minimumFractionDigits:2})}`}]:[]),
+        ...(costSummary.noRecipeCount>0?[{l:"⚠️ ยังไม่ใส่วัตถุดิบ",v:`${costSummary.noRecipeCount} เมนู`,c:"#9A3412",sub:`฿${costSummary.noRecipeRevenue.toLocaleString(undefined,{minimumFractionDigits:2})} — ยังคิดต้นทุนไม่ได้`}]:[]),
       ].map(s=><Card key={s.l} style={{padding:"12px 14px"}}>
         <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700,marginBottom:4}}>{s.l}</div>
         <div style={{fontSize:18,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif",lineHeight:1.2}}>{s.v}</div>
@@ -5023,6 +5059,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
                     <span title="เมนูนี้ยังไม่อยู่ในระบบ — คำนวณต้นทุนไม่ได้" style={{fontSize:10,background:"#FEF3C7",color:"#92400E",padding:"1px 6px",borderRadius:8,fontWeight:700}}>⚠ ยังไม่จับคู่</span>
                     {canCreateMenu&&<button onClick={()=>autoCreateMenu(p.menu_name)} disabled={!!creating} title="สร้างเมนูนี้ในระบบ" style={{background:creating===p.menu_name?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:6,padding:"2px 9px",cursor:creating?"not-allowed":"pointer",fontSize:10,fontWeight:800,color:creating===p.menu_name?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{creating===p.menu_name?"⏳":"+ สร้างเมนูนี้"}</button>}
                   </>}
+                  {p.noRecipe&&<span title="มีเมนูนี้ในระบบแล้ว แต่ยังไม่ได้ใส่วัตถุดิบ — คำนวณต้นทุนไม่ได้ (ยอดขายนี้จึงไม่ถูกนับรวมในกำไร)" style={{fontSize:10,background:"#FFEDD5",color:"#9A3412",padding:"1px 6px",borderRadius:8,fontWeight:700}}>⚠ ยังไม่ใส่วัตถุดิบ</span>}
                 </span>
               </td>
               <td style={{padding:"9px 12px",fontSize:11,color:C.ink3}}>{p.category||"—"}</td>
@@ -5047,7 +5084,8 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
           <tbody>
             {filtered.map((r,i)=>{
               const matched=findMenu(r.menu_name);
-              const cu=matched?round2(menuCost(matched,ings)):null;
+              const rowNoRecipe=!!matched&&!hasRecipe(matched);
+              const cu=hasRecipe(matched)?round2(menuCost(matched,ings)):null;   // no recipe ⇒ cost unknown, not 0
               const cost=cu!=null?round2(cu*(+r.qty||0)):null;
               const profit=cost!=null?round2((+r.net_total||0)-cost):null;
               return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`,background:i%2===0?C.white:"#FAFBFC"}}>
@@ -5060,6 +5098,7 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
                       <span title="ยังไม่จับคู่กับเมนูในระบบ" style={{fontSize:10,background:"#FEF3C7",color:"#92400E",padding:"1px 6px",borderRadius:8,fontWeight:700}}>⚠ ยังไม่จับคู่</span>
                       {canCreateMenu&&<button onClick={()=>autoCreateMenu(r.menu_name)} disabled={!!creating} title="สร้างเมนูนี้ในระบบ" style={{background:creating===r.menu_name?C.lineLight:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:6,padding:"2px 8px",cursor:creating?"not-allowed":"pointer",fontSize:10,fontWeight:800,color:creating===r.menu_name?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{creating===r.menu_name?"⏳":"+ สร้างเมนูนี้"}</button>}
                     </>}
+                    {rowNoRecipe&&<span title="มีเมนูนี้ในระบบแล้ว แต่ยังไม่ได้ใส่วัตถุดิบ — คำนวณต้นทุนไม่ได้" style={{fontSize:10,background:"#FFEDD5",color:"#9A3412",padding:"1px 6px",borderRadius:8,fontWeight:700}}>⚠ ยังไม่ใส่วัตถุดิบ</span>}
                   </span>
                 </td>
                 <td style={{padding:"8px 12px",fontSize:11,color:C.ink3}}>{r.category||"—"}</td>
@@ -7985,8 +8024,11 @@ function EditSnapshotModal({snapshot,branches,menus,ings,currentUser,reloadMenus
       const m=menuByName.get(norm(it.menu_name));
       // Prefer current menu price/cost if matched; fall back to snapshot data
       const pricePerUnit=m?(+m.price||0):(+it.price_avg||(oldQty>0?oldRev/oldQty:0));
-      const costPerUnit=m?round2(menuCost(m,ings)):(oldQty>0?oldCost/oldQty:0);
-      return{...it,price_per_unit:pricePerUnit,cost_per_unit:costPerUnit,matched:!!m};
+      // A matched menu with NO recipe has an unknown unit cost — don't recompute it to 0 and
+      // don't flip matched to true, or re-saving this snapshot books its revenue as pure profit.
+      const costed=hasRecipe(m);
+      const costPerUnit=costed?round2(menuCost(m,ings)):(oldQty>0&&it.cost!=null?oldCost/oldQty:null);
+      return{...it,price_per_unit:pricePerUnit,cost_per_unit:costPerUnit,matched:costed,no_recipe:!!m&&!costed};
     });
   });
   const[saving,setSaving]=useState(false);
@@ -8026,8 +8068,9 @@ function EditSnapshotModal({snapshot,branches,menus,ings,currentUser,reloadMenus
         branch_id:snapshot.branch_id||null,
       });
       if(reloadMenus)await reloadMenus();
-      // Mark as matched in local items (cost stays 0 until ingredients added)
-      setItems(arr=>arr.map(x=>x.menu_name===menuName?{...x,matched:true}:x));
+      // The new menu has NO recipe yet, so its cost is UNKNOWN — mark it as such, never matched
+      // (matched:true with cost 0 would report this menu's whole revenue as profit).
+      setItems(arr=>arr.map(x=>x.menu_name===menuName?{...x,matched:false,no_recipe:true,cost:null,cost_per_unit:null,profit:null}:x));
       alert("✅ สร้างเมนูเรียบร้อย — ไปแท็บ \"เมนู\" เพื่อใส่วัตถุดิบ");
     }catch(e){alert("สร้างเมนูไม่สำเร็จ: "+e.message);}
     setCreating(null);
@@ -8037,19 +8080,30 @@ function EditSnapshotModal({snapshot,branches,menus,ings,currentUser,reloadMenus
   const totRev=round2(items.reduce((s,i)=>s+(+i.revenue||0),0));
   const totCost=round2(items.reduce((s,i)=>s+(+i.cost||0),0));
   const totQty=round2(items.reduce((s,i)=>s+(+i.qty||0),0));
-  const totProfit=round2(totRev-totCost);
-  const totPct=totRev>0?round2(totCost/totRev*100):0;
+  // Measure % against the revenue we could actually cost — rows with an unknown cost would
+  // otherwise dilute it and flatter the food-cost number.
+  const costedRev=round2(items.filter(i=>i.cost!=null).reduce((s,i)=>s+(+i.revenue||0),0));
+  const uncostedRev=round2(totRev-costedRev);
+  const totProfit=round2(costedRev-totCost);
+  const totPct=costedRev>0?round2(totCost/costedRev*100):0;
   const pctColor=totPct<=30?C.green:totPct<=40?C.yellow:totPct<=50?"#EA580C":C.red;
 
   async function save(){
     setSaving(true);
     try{
       // Strip helper fields before saving
-      const cleanItems=items.map(it=>({
-        menu_name:it.menu_name,category:it.category||null,
-        qty:+it.qty||0,revenue:+it.revenue||0,cost:+it.cost||0,
-        profit:+it.profit||0,matched:!!it.matched,price_avg:+it.price_per_unit||0,
-      }));
+      const cleanItems=items.map(it=>{
+        // Preserve the "cost unknown" state — coercing it to 0 here is exactly what re-booked
+        // no-recipe menus as 100% margin on every re-save.
+        const unknown=it.cost==null;
+        return{
+          menu_name:it.menu_name,category:it.category||null,
+          qty:+it.qty||0,revenue:+it.revenue||0,
+          cost:unknown?null:(+it.cost||0),
+          profit:unknown?null:(+it.profit||0),
+          matched:!!it.matched,no_recipe:!!it.no_recipe,price_avg:+it.price_per_unit||0,
+        };
+      });
       await api.upsertCostSnapshot({
         branch_id:snapshot.branch_id,
         snapshot_date:snapshot.snapshot_date,
@@ -14226,12 +14280,23 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   }
   function reprintReceipt(){
     if(!existingOrder?.id)return;
+    const paid=existingOrder.status==="paid";
     const pm=existingOrder.payment_method||payMethod;
-    // Pull stored breakdown if available, otherwise use live computation
-    const data={...existingOrder,items,subtotal,discount:existingOrder.discount??totalDiscount,total:existingOrder.total??total,payment_method:pm,
-      service_charge:existingOrder.service_charge??sc,vat:existingOrder.vat??vat,vat_rate:existingOrder.vat_rate??vatRate,vat_included:existingOrder.vat_included!=null?existingOrder.vat_included:vatIncluded,
-      promo_amount:existingOrder.promo_amount??promoDiscount,promo_name:existingOrder.promo_name??selectedPromo?.name,cash_received:existingOrder.cash_received??(pm==="cash"?(+cashRcv||total):null)};
-    smartPrintReceipt(data,table.table_number,existingOrder.status==="paid");
+    // NEVER mix generations. An UNPAID row only carries the raw item subtotal (posAppendItems
+    // never computes service charge / exclusive VAT), so taking `total` from it while falling
+    // back to the LIVE service_charge/vat printed a bill — and a PromptPay QR — for less than
+    // the customer owes. Stored breakdown is authoritative only once the sale is paid.
+    // The slip prints "ส่วนลดรวม" AND a separate promo line, so `discount` must carry only the
+    // MANUAL part — passing the combined total double-deducts the promo on paper.
+    const data=paid
+      ? {...existingOrder,items,payment_method:pm,discount:round2(Math.max(0,(+existingOrder.discount||0)-(+existingOrder.promo_amount||0)))}
+      : {...existingOrder,items,payment_method:pm,
+         subtotal,discount:round2(manualDiscount),total,
+         service_charge:sc,service_charge_rate:scRate,vat,vat_rate:vatRate,vat_included:vatIncluded,
+         subtotal_after_disc:subAfterDisc,
+         promo_amount:promoDiscount,promo_name:selectedPromo?.name||null,
+         cash_received:pm==="cash"?(+cashRcv||total):null};
+    smartPrintReceipt(data,table.table_number,paid);
   }
 
   async function saveOrder(){
@@ -14261,16 +14326,44 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived};
       let row;
       try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,fullPayload);}
-      catch(err){console.error("save full order failed — retrying base fields (run the breakdown migration to persist VAT/SC/promo)",err);row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,basePayload);}
-      if(!row){alert("⚠️ มีการเพิ่ม/แก้รายการของโต๊ะนี้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — ยังไม่ได้ตัดเงิน\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อตรวจสอบยอดล่าสุดก่อนชำระเงิน");setSaving(false);onDone();onClose();return;}
+      catch(err){
+        // ONLY retry with the reduced payload when the breakdown columns are missing. Retrying a
+        // network/timeout failure with the SAME stale token matches 0 rows and would report a
+        // committed payment as "not charged".
+        const schemaErr=/column .* does not exist|PGRST204|schema cache/i.test(String((err&&err.message)||err));
+        if(schemaErr){
+          console.error("save full order failed — retrying base fields (run the breakdown migration to persist VAT/SC/promo)",err);
+          // The retry itself can also lose its response — fall through to the same reconcile
+          // rather than reporting a possibly-committed payment as "not charged".
+          try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,basePayload);}
+          catch(err2){console.error("base-payload retry failed — will reconcile",err2);row=null;}
+        }
+        else {console.error("checkout PATCH failed — will reconcile",err);row=null;}
+      }
+      if(!row){
+        // The write may have COMMITTED and only the response was lost (wifi blip). Re-read before
+        // telling the cashier nothing was charged — otherwise the bill is paid in the DB while the
+        // drawer, the receipt and the Z-report all disagree.
+        let fresh=null;
+        try{const r=await api.getPOSOrderById(existingOrder.id);fresh=Array.isArray(r)?r[0]:r;}catch{}
+        const committed=fresh&&fresh.status==="paid"&&Math.abs((+fresh.total||0)-round2(total))<0.01;
+        if(committed){row=fresh;}
+        else{alert("⚠️ มีการเพิ่ม/แก้รายการของโต๊ะนี้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — ยังไม่ได้ตัดเงิน\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อตรวจสอบยอดล่าสุดก่อนชำระเงิน");setSaving(false);onDone();onClose();return;}
+      }
       verRef.current=row.updated_at;
-      // record cash movement if cash payment
+      // record cash movement if cash payment — skip if one already exists for this order (the
+      // reconcile path above can re-enter after a lost response; a duplicate would inflate the
+      // shift's expected cash).
       if(payMethod==="cash"&&shift){
         try{
-          await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"sale",amount:total,reason:`ขายโต๊ะ ${table.table_number}`,order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
+          const existingMoves=await api.getCashMovements(shift.id).catch(()=>[]);
+          const already=Array.isArray(existingMoves)&&existingMoves.some(m=>m&&m.type==="sale"&&+m.order_id===+existingOrder.id);
+          if(!already)await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"sale",amount:total,reason:`ขายโต๊ะ ${table.table_number}`,order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
         }catch(err){console.error("บันทึก cash movement ไม่สำเร็จ:",err);}
       }
-      await smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:totalDiscount,total,payment_method:payMethod,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
+      // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
+      // passing the combined figure would deduct the promotion twice on the printed receipt.
+      await smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,payment_method:payMethod,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
       onDone();onClose();
     }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSaving(false);
   }
