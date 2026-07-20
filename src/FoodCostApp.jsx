@@ -292,6 +292,22 @@ const api = {
   getCRMCustomers: (bid) => sb(`crm_customers?order=id.desc&limit=5000${bid?`&branch_id=eq.${bid}`:""}`),
   addCRMCustomer: (d) => sb("crm_customers", {method:"POST", body:JSON.stringify(d)}),
   updateCRMCustomer: (id,d) => sb(`crm_customers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  // Atomic points increment (row-locked RPC) so concurrent awards to one customer can't clobber
+  // each other. Returns the new balance. Falls back to read-modify-write if the RPC isn't
+  // installed yet (pre-SQL) — that fallback is NOT concurrency-safe, so run sql/audit-fixes.sql.
+  applyCRMPointsDelta: async (id,delta) => {
+    const d=Math.round(+delta||0);
+    try{ const r=await sb(`rpc/apply_crm_points_delta`,{method:"POST",body:JSON.stringify({p_id:+id,p_delta:d})}); return typeof r==="number"?r:(Array.isArray(r)?r[0]:null); }
+    catch(e){ if(!/PGRST202|404|not exist|function/i.test(String((e&&e.message)||e)))throw e;
+      const row=await sb(`crm_customers?id=eq.${+id}&select=points`); const cur=Math.max(0,+(row&&row[0]&&row[0].points)||0); const np=Math.max(0,cur+d); await sb(`crm_customers?id=eq.${+id}`,{method:"PATCH",body:JSON.stringify({points:np})}); return np; }
+  },
+  // Best-effort duplicate-claim guard: is there already a pending/approved claim for this
+  // bill (same branch+phone+bill_number)? Used to stop a double-submitted receipt double-awarding.
+  hasDupPointClaim: async (branchId,phone,bill) => {
+    if(!bill)return false;
+    try{ const r=await sb(`crm_point_claims?branch_id=eq.${+branchId}&phone=eq.${encodeURIComponent(phone)}&bill_number=eq.${encodeURIComponent(bill)}&status=in.(pending,approved)&select=id&limit=1`); return Array.isArray(r)&&r.length>0; }
+    catch{ return false; }
+  },
   deleteCRMCustomer: (id) => sb(`crm_customers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   getCRMTransactions: (bid) => sb(`crm_transactions?order=id.desc${bid?`&branch_id=eq.${bid}`:""}&limit=500`),
   addCRMTransaction: (d) => sb("crm_transactions", {method:"POST", body:JSON.stringify(d)}),
@@ -397,6 +413,19 @@ const api = {
   getPO: (id) => sb(`purchase_orders?id=eq.${id}&limit=1`),
   addPO: (d) => sb("purchase_orders", {method:"POST", body:JSON.stringify(d)}),
   updatePO: (id,d) => sb(`purchase_orders?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  // Atomically claim + clear a doc's stock_pending (row-locked RPC) so only ONE 🔁 retry can
+  // apply the stranded lines. Returns the claimed pending array (null if nothing/already claimed).
+  // Falls back to a best-effort read+clear if the RPC isn't installed yet (pre-SQL).
+  claimPOPending: async (id) => {
+    try{ const r=await sb(`rpc/claim_po_pending`,{method:"POST",body:JSON.stringify({p_id:+id})}); return Array.isArray(r)?r:(r||null); }
+    catch(e){ if(!/PGRST202|404|not exist|function/i.test(String((e&&e.message)||e)))throw e;
+      const row=await sb(`purchase_orders?id=eq.${+id}&select=stock_pending`); const p=row&&row[0]&&row[0].stock_pending; if(!p)return null; await sb(`purchase_orders?id=eq.${+id}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({stock_pending:null})}); return p; }
+  },
+  claimOrderPending: async (id) => {
+    try{ const r=await sb(`rpc/claim_order_pending`,{method:"POST",body:JSON.stringify({p_id:+id})}); return Array.isArray(r)?r:(r||null); }
+    catch(e){ if(!/PGRST202|404|not exist|function/i.test(String((e&&e.message)||e)))throw e;
+      const row=await sb(`order_requests?id=eq.${+id}&select=stock_pending`); const p=row&&row[0]&&row[0].stock_pending; if(!p)return null; await sb(`order_requests?id=eq.${+id}`,{method:"PATCH",headers:{Prefer:"return=minimal"},body:JSON.stringify({stock_pending:null})}); return p; }
+  },
   // PATCH only when the row is in an expected status. If 0 rows return, the row was changed by someone else.
   patchPOIfStatus: async (id,expectedStatus,d) => {
     const res=await sb(`purchase_orders?id=eq.${id}&status=eq.${encodeURIComponent(expectedStatus)}`, {method:"PATCH", body:JSON.stringify(d)});
@@ -5502,8 +5531,14 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     if(retryingPOId)return;
     setRetryingPOId(po.id);
     try{
-      const remain=await retryStockPending(po.stock_pending,ings);
-      try{await api.updatePO(po.id,{stock_pending:remain.length?remain:null});}catch{}
+      // CLAIM the pending atomically (row-locked) and apply exactly what we claimed — so two
+      // devices can't both re-credit the same stranded lines (double-apply / minted stock).
+      const claimed=await api.claimPOPending(po.id);
+      if(!claimed||!(Array.isArray(claimed)?claimed.length:true)){ await load(); alert("ไม่มีรายการค้าง หรือถูกดำเนินการไปแล้ว"); setRetryingPOId(null); return; }
+      let remain=[];
+      try{ remain=await retryStockPending(claimed,ings); }
+      catch(applyErr){ await persistPending(po.id,...(Array.isArray(claimed)?claimed:[claimed])); throw applyErr; }   // re-persist on failure so nothing is lost
+      if(remain.length)await persistPending(po.id,...remain);   // merge-safe re-persist of still-failed lines
       if(reloadIngs)await reloadIngs();
       await load();
       alert(remain.length?"⚠️ ยังมีบางรายการเพิ่มสต๊อกไม่สำเร็จ — ลองอีกครั้ง หรือปรับในหน้านับสต็อก":"✅ เพิ่มสต๊อกที่ค้างเข้าครบแล้ว");
@@ -5676,32 +5711,47 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     // Statuses where stock has NOT been moved yet → nothing to roll back.
     const NOT_MOVED=new Set(["requested","open","cancelled","transfer_pending"]);
     if(NOT_MOVED.has(po.status))return[];
+    // Only reverse what ACTUALLY moved. Any line still in stock_pending was NEVER applied, so
+    // reversing it would mint stock (a failed ship-deduct refunded) or push a receiver negative
+    // (a failed receive-credit debited). Read the row's CURRENT pending (fresh, else the passed
+    // row for delPO where it's already deleted) and split by direction:
+    //   • deduct-failure  {from:X, to:null}  → the qty never LEFT the sender  → skip the sender-credit
+    //   • credit-failure  {from:null, to:Y}  → the qty never REACHED receiver → skip the receiver-debit
+    let pendingGroups=[];
+    try{ const row=await api.getPO(po.id); const r=Array.isArray(row)?row[0]:row; if(r&&Array.isArray(r.stock_pending))pendingGroups=r.stock_pending; }catch{}
+    if(!pendingGroups.length&&Array.isArray(po.stock_pending))pendingGroups=po.stock_pending;
+    // A credit-failure {from:null} can target EITHER the receiver (a failed receive-credit) OR the
+    // sender (a failed dispute-variance RETURN, acceptDispute {from:null,to:from_branch_id}). They
+    // reverse oppositely, so bucket by g.to: notCreditedRecv reduces the receiver debit;
+    // notCreditedSend is ADDED BACK to the sender credit (a failed return left the sender more negative).
+    const notDeducted={},notCreditedRecv={},notCreditedSend={};
+    for(const g of pendingGroups){
+      if(!g||!Array.isArray(g.items))continue;
+      for(const it of g.items){
+        const id=+it.ingredient_id,q=+it.qty||0;if(!id||q<=0)continue;
+        if(g.to==null){notDeducted[id]=(notDeducted[id]||0)+q;}
+        else if(g.from==null){
+          if(+g.to===+po.from_branch_id)notCreditedSend[id]=(notCreditedSend[id]||0)+q;
+          else notCreditedRecv[id]=(notCreditedRecv[id]||0)+q;
+        }
+        else{notDeducted[id]=(notDeducted[id]||0)+q;notCreditedRecv[id]=(notCreditedRecv[id]||0)+q;} // two-sided (rare)
+      }
+    }
+    const idOf=it=>+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id)||0);
     const pend=[];
-    // In-transit: only sender was deducted; receiver was never credited.
-    // → Return ordered_qty to sender (use qty, not received_qty).
     const IN_TRANSIT=new Set(["shipped","disputed","transfer_shipped"]);
     if(IN_TRANSIT.has(po.status)){
-      // Strip received_qty so transferStockBetweenBranches falls back to qty.
-      const itemsByOrdered=(po.items||[]).map(it=>{const{received_qty,...rest}=it||{};return rest;});
-      const acc=await transferStockBetweenBranches({
-        fromBranchId:null,
-        toBranchId:po.from_branch_id,
-        items:itemsByOrdered,
-        ings,
-        autoVisible:false,
-      });
-      const p=pendingFromAcc(acc,null,po.from_branch_id);if(p)pend.push(p);
+      // Only the sender was deducted (by ordered qty). Credit back = deducted − notDeducted.
+      const items=(po.items||[]).map(it=>{const{received_qty,...rest}=it||{};const id=idOf(it);const q=Math.max(0,round2((+rest.qty||+rest.qtyNeeded||0)-(notDeducted[id]||0)));return{...rest,qty:q};}).filter(it=>(+it.qty||0)>0);
+      if(items.length){const acc=await transferStockBetweenBranches({fromBranchId:null,toBranchId:po.from_branch_id,items,ings,autoVisible:false});const p=pendingFromAcc(acc,null,po.from_branch_id);if(p)pend.push(p);}
     }else{
-      // Both sides moved (awaiting_payment, paid, received, transfer_done):
-      // reverse with whatever quantity is recorded (received_qty if set, else qty).
-      const acc=await transferStockBetweenBranches({
-        fromBranchId:po.branch_id,
-        toBranchId:po.from_branch_id,
-        items:po.items||[],
-        ings,
-        autoVisible:false,
-      });
-      const p=pendingFromAcc(acc,po.branch_id,po.from_branch_id);if(p)pend.push(p);
+      // Both sides moved. Reverse each side independently by what ACTUALLY moved:
+      //   debit receiver  = recorded − notCredited   ·   credit sender = recorded − notDeducted
+      const base=it=>it.received_qty!=null?+it.received_qty:(+it.qty||+it.qtyNeeded||0);
+      const recvItems=(po.items||[]).map(it=>{const id=idOf(it);return{ingredient_id:id,received_qty:Math.max(0,round2(base(it)-(notCreditedRecv[id]||0)))};}).filter(it=>it.ingredient_id&&it.received_qty>0);
+      const sendItems=(po.items||[]).map(it=>{const id=idOf(it);return{ingredient_id:id,received_qty:Math.max(0,round2(base(it)-(notDeducted[id]||0)+(notCreditedSend[id]||0)))};}).filter(it=>it.ingredient_id&&it.received_qty>0);
+      if(recvItems.length){const acc=await transferStockBetweenBranches({fromBranchId:po.branch_id,toBranchId:null,items:recvItems,ings,autoVisible:false});const p=pendingFromAcc(acc,po.branch_id,null);if(p)pend.push(p);}
+      if(sendItems.length){const acc=await transferStockBetweenBranches({fromBranchId:null,toBranchId:po.from_branch_id,items:sendItems,ings,autoVisible:false});const p=pendingFromAcc(acc,null,po.from_branch_id);if(p)pend.push(p);}
     }
     if(reloadIngs)await reloadIngs();
     return pend;
@@ -6123,16 +6173,20 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
           ?`• สาขา "${(branchById[po.branch_id]||{}).name||po.branch_id}" จะถูกหักออก\n• ต้นทาง "${(branchById[po.from_branch_id]||{}).name||po.from_branch_id}" จะถูกคืนเข้า`
           :`• ของที่ "ลอยอยู่ระหว่างทาง" จะถูกคืนเข้าต้นทาง "${(branchById[po.from_branch_id]||{}).name||po.from_branch_id}"`)
       :`ยกเลิก ${po.po_number||"PO นี้"}?`;
-    if(!await confirmDlg({title:"ยกเลิก PO",message:msg,danger:true,confirmLabel:willRefund?"ยกเลิก + คืนสต็อก":"ยกเลิก PO"}))return;
+    // Asset POs never touched ingredient stock, so no refund — but if the branch already
+    // confirmed receipt, the asset QUANTITY was added and is NOT auto-reversed. Warn explicitly.
+    const assetWarn=isAssetPO(po)&&po.received_at?`\n\n⚠️ ใบนี้เป็นสินทรัพย์ที่ "ยืนยันรับแล้ว" — จำนวนถูกเพิ่มเข้าสินทรัพย์ของสาขาไปแล้ว ระบบจะไม่ลบ/คืนให้อัตโนมัติ กรุณาไปปรับจำนวนเองที่แท็บ "สินทรัพย์"`:"";
+    if(!await confirmDlg({title:"ยกเลิก PO",message:msg+assetWarn,danger:true,confirmLabel:willRefund?"ยกเลิก + คืนสต็อก":"ยกเลิก PO"}))return;
     try{
       // Race-safe — abort if another user/tab changed status while we were
       // reading the row. patchPOIfStatus throws if 0 rows match the
       // expected status, surfaced as "เอกสารถูกแก้ไขโดยผู้ใช้อื่นแล้ว".
       await api.patchPOIfStatus(po.id,po.status,{status:"cancelled",updated_at:new Date().toISOString()});
       // `po` still holds the PRE-cancel status, which rollbackPOStock routes on
-      // (NOT_MOVED statuses are a safe no-op inside it). Persist any reversal line that
-      // failed so the 🔁 retry button can complete the refund (the row survives as cancelled).
-      if(willRefund){const pend=await rollbackPOStock(po);if(pend.length)await persistPending(po.id,...pend);}
+      // (NOT_MOVED statuses are a safe no-op inside it). REPLACE stock_pending with the reversal
+      // result: this clears the now-accounted-for original pending (so the 🔁 button can't re-fire
+      // a refunded deduct on the cancelled row) and records any reversal line that itself failed.
+      if(willRefund){const pend=await rollbackPOStock(po);try{await api.updatePO(po.id,{stock_pending:pend.length?pend:null});}catch{}}
       // If this PO was received it was already synced to accounting — void that row
       // or it lingers as an orphan. Idempotent (never-synced → cancelled:0). Record the
       // outcome so the flag reflects reality (a failed void stays 'failed' → re-voided).
@@ -6162,7 +6216,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     }else{
       msg=`ต้องการลบ ${po.po_number||"PO นี้"} ใช่หรือไม่?`;
     }
-    if(!await confirmDlg({title:isPaid?"⚠️ ลบเอกสารที่ชำระแล้ว":"ลบเอกสาร PO",message:msg,danger:true,confirmLabel:isPaid?"ลบทิ้งถาวร":(wasReceived?"ลบ + คืนสต็อก":"ลบ")}))return;
+    // Received asset PO: the asset quantity was already added and is NOT auto-reversed on delete.
+    const assetWarnDel=isAssetPO(po)&&wasReceived?`\n\n⚠️ สินทรัพย์ที่ "ยืนยันรับแล้ว" ถูกเพิ่มเข้าสาขาไปแล้ว ระบบจะไม่ลบจำนวนให้อัตโนมัติ — ปรับเองที่แท็บ "สินทรัพย์"`:"";
+    if(!await confirmDlg({title:isPaid?"⚠️ ลบเอกสารที่ชำระแล้ว":"ลบเอกสาร PO",message:msg+assetWarnDel,danger:true,confirmLabel:isPaid?"ลบทิ้งถาวร":(wasReceived?"ลบ + คืนสต็อก":"ลบ")}))return;
     try{
       // Conditional DELETE first — claims the row only if its status is still what
       // this screen showed (a concurrent "🚚 จัดส่ง" on another device aborts here
@@ -8224,7 +8280,13 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     if(retryingId)return;
     setRetryingId(order.id);
     try{
-      const remain=await retryStockPending(order.stock_pending,ings);
+      // Claim-first (row-locked) so two devices can't double-apply the same stranded lines.
+      const claimed=await api.claimOrderPending(order.id);
+      if(!claimed||!(Array.isArray(claimed)?claimed.length:true)){ await reload(); alert("ไม่มีรายการค้าง หรือถูกดำเนินการไปแล้ว"); setRetryingId(null); return; }
+      const groups=Array.isArray(claimed)?claimed:[claimed];
+      let remain=[];
+      try{ remain=await retryStockPending(groups,ings); }
+      catch(applyErr){ try{await api.updateOrder(order.id,{stock_pending:groups});}catch{} throw applyErr; }
       try{await api.updateOrder(order.id,{stock_pending:remain.length?remain:null});}catch{}
       if(reloadIngs)await reloadIngs();
       await reload();
@@ -8501,6 +8563,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   const[submitResult,setSubmitResult]=useState(null);  // { poList, extList, skippedList, totalItems, totalCost } — shown in result modal
   const[safetyEdit,setSafetyEdit]=useState({});  // { ingId: stringValue } — local edit before commit
   const safetyTimers=useRef({});                  // { ingId: timeoutId } — debounce per-row
+  const writtenRef=useRef(new Set());             // idempotency keys for order writes this session — a retry after a partial failure won't re-insert an already-written supplier order / PR
   async function saveSafety(ing,raw){
     const v=raw===""||raw==null?0:+raw;
     if(isNaN(v)||v<0)return;
@@ -8644,35 +8707,48 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
           // supplier when central restocks its own inventory
           skippedList.push({supplierName:sup.supplierName,itemCount:sup.items.length});
         }else{
-          // → order_request grouped by external supplier
-          await api.addOrder({
-            branch_id:currentBranch.id,branch_name:currentBranch.name,
-            supplier_id:sup.supplierId,supplier_name:sup.supplierName,
-            items:sup.items,status:"pending_approval",   // hold: Area Manager approves → released to "pending"
-            requested_by:currentUser.username,requested_at:nowStr(),
-            note:`นับสต็อก ${fmtD(todayStr())}`,
-          });
+          // → order_request grouped by external supplier. Idempotency key on (branch,supplier,
+          //   items) so a retry after a later step failed doesn't create a SECOND identical order.
+          const extKey=`ext|${currentBranch.id}|${sup.supplierId||"none"}|`+JSON.stringify(sup.items.map(it=>[it.ingId,it.qtyNeeded]));
+          if(!writtenRef.current.has(extKey)){
+            await api.addOrder({
+              branch_id:currentBranch.id,branch_name:currentBranch.name,
+              supplier_id:sup.supplierId,supplier_name:sup.supplierName,
+              items:sup.items,status:"pending_approval",   // hold: Area Manager approves → released to "pending"
+              requested_by:currentUser.username,requested_at:nowStr(),
+              note:`นับสต็อก ${fmtD(todayStr())}`,
+            });
+            writtenRef.current.add(extKey);
+          }
           extList.push({supplierName:sup.supplierName,items:sup.items,total:subtotal});
         }
       }
       if(centralItems.length>0){
-        const prNumber=genPRNumber(currentBranch.id);
-        await api.addPR({
-          pr_number:prNumber,
-          branch_id:currentBranch.id,branch_name:currentBranch.name,
-          requested_by:currentUser.username,
-          type:"ingredient",
-          items:centralItems.map(it=>({ingredient_id:it.ingId,name:it.name,unit:it.unit,qty:+it.qtyNeeded||0,note:null})),
-          reason:`สั่งจากนับสต็อก ${fmtD(todayStr())}`,
-          needed_by:null,
-          status:"pending_approval",
-          created_by:currentUser.username,
-          updated_at:new Date().toISOString(),
-        });
+        // Same idempotency guard for the central PR — a retry won't create a duplicate PR.
+        const prKey=`pr|${currentBranch.id}|`+JSON.stringify(centralItems.map(it=>[it.ingId,it.qtyNeeded]));
+        let prNumber="(ส่งแล้ว)";
+        if(!writtenRef.current.has(prKey)){
+          prNumber=genPRNumber(currentBranch.id);
+          await api.addPR({
+            pr_number:prNumber,
+            branch_id:currentBranch.id,branch_name:currentBranch.name,
+            requested_by:currentUser.username,
+            type:"ingredient",
+            items:centralItems.map(it=>({ingredient_id:it.ingId,name:it.name,unit:it.unit,qty:+it.qtyNeeded||0,note:null})),
+            reason:`สั่งจากนับสต็อก ${fmtD(todayStr())}`,
+            needed_by:null,
+            status:"pending_approval",
+            created_by:currentUser.username,
+            updated_at:new Date().toISOString(),
+          });
+          writtenRef.current.add(prKey);
+        }
         poList.push({poNumber:prNumber,centralName:[...centralNames].join(", ")||"ครัวกลาง",items:centralItems,total:round2(centralItems.reduce((s,it)=>s+(+it.estimatedCost||0),0))});
       }
-      // Reset overrides
+      // Reset overrides. Full success → clear idempotency keys so a later, genuinely-new order
+      // of the same items isn't mistaken for a retry.
       setOrderQty({});
+      writtenRef.current.clear();
       if(reload)await reload();
       // Notify the Area Manager(s) of this branch that an order is waiting for approval (Web Push, fire-and-forget)
       if(poList.length||extList.length){try{fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({branch_id:currentBranch.id,branchName:currentBranch.name})});}catch{}}
@@ -10583,8 +10659,10 @@ function CRMPoints({currentBranch,currentUser,customers,claims,events,canEdit,re
       const cust=await findOrCreate(qPhone,qName);
       if(!cust||!cust.id)throw new Error("สร้าง/ค้นหาลูกค้าไม่สำเร็จ");
       const pts=pointsFromAmount(+qAmt);
-      await api.updateCRMCustomer(cust.id,{points:Math.max(0,(+cust.points||0)+pts)});
-      await api.addCRMTransaction({customer_id:cust.id,branch_id:currentBranch.id,amount:+qAmt||0,points_earned:pts,points_redeemed:0,note:`แคชเชียร์เพิ่มแต้ม · ${who}`,created_at:new Date().toISOString()});
+      await api.applyCRMPointsDelta(cust.id,pts);   // atomic increment — concurrent awards can't clobber
+      // Points are already credited; the delta RPC is NOT idempotent, so a log-only failure must
+      // NOT surface as an error (the cashier would re-tap → double award). Swallow it.
+      try{ await api.addCRMTransaction({customer_id:cust.id,branch_id:currentBranch.id,amount:+qAmt||0,points_earned:pts,points_redeemed:0,note:`แคชเชียร์เพิ่มแต้ม · ${who}`,created_at:new Date().toISOString()}); }catch{}
       setQPhone("");setQName("");setQAmt("");
       alert(`✅ เพิ่ม ${pts} แต้มให้ ${cust.name} แล้ว`);
       await reload();
@@ -10601,8 +10679,12 @@ function CRMPoints({currentBranch,currentUser,customers,claims,events,canEdit,re
       if(!cust||!cust.id)throw new Error("ค้นหา/สร้างลูกค้าไม่สำเร็จ");
       // claim-first guard: only one approver awards, prevents double points
       await api.updateCRMPointClaimIfStatus(cl.id,"pending",{status:"approved",points:pts,customer_id:cust.id,approved_by:who,approved_at:new Date().toISOString()});
-      await api.updateCRMCustomer(cust.id,{points:Math.max(0,(+cust.points||0)+pts)});
-      await api.addCRMTransaction({customer_id:cust.id,branch_id:currentBranch.id,amount:+cl.amount||0,points_earned:pts,points_redeemed:0,note:`อนุมัติบิล ${cl.bill_number||("#"+cl.id)} · ${who}`,created_at:new Date().toISOString()});
+      // Award atomically. If the points credit itself fails, REVERT the claim to pending so the
+      // approval is retryable (else the claim is stuck approved-but-uncredited). A later log-only
+      // failure (addCRMTransaction) is ignored — points are already in, reverting would double them.
+      try{ await api.applyCRMPointsDelta(cust.id,pts); }
+      catch(inner){ try{await api.updateCRMPointClaimIfStatus(cl.id,"approved",{status:"pending",points:null,approved_by:null,approved_at:null});}catch{} throw inner; }
+      try{ await api.addCRMTransaction({customer_id:cust.id,branch_id:currentBranch.id,amount:+cl.amount||0,points_earned:pts,points_redeemed:0,note:`อนุมัติบิล ${cl.bill_number||("#"+cl.id)} · ${who}`,created_at:new Date().toISOString()}); }catch{}
       await reload();
     }catch(e){alert("อนุมัติไม่สำเร็จ: "+((e&&e.message)||e));await reload();}
     setBusyId(null);
@@ -11022,13 +11104,15 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
     const amt=parseInt(ptForm.amount);
     if(isNaN(amt)||amt<=0)return alert("กรุณาใส่จำนวนคะแนน");
     const delta=ptForm.type==="earn"?amt:-amt;
-    const newPts=Math.max(0,(selCust.points||0)+delta);
     setPtSaving(true);
     try{
-      await api.updateCRMCustomer(selCust.id,{points:newPts});
-      await api.addCRMTransaction({customer_id:selCust.id,branch_id:currentBranch.id,amount:0,points_earned:ptForm.type==="earn"?amt:0,points_redeemed:ptForm.type==="redeem"?amt:0,note:ptForm.note,created_at:new Date().toISOString()});
+      // Atomic delta (never derive the new balance from the possibly-stale selCust snapshot).
+      const nb=await api.applyCRMPointsDelta(selCust.id,delta);
+      // Points already applied (non-idempotent delta) → a log-only failure must not throw and
+      // re-open the retry path (would double-apply).
+      try{ await api.addCRMTransaction({customer_id:selCust.id,branch_id:currentBranch.id,amount:0,points_earned:ptForm.type==="earn"?amt:0,points_redeemed:ptForm.type==="redeem"?amt:0,note:ptForm.note,created_at:new Date().toISOString()}); }catch{}
       await reload();setShowPoints(false);setPtForm({amount:"",type:"earn",note:""});
-      setSelCust(prev=>prev?{...prev,points:newPts}:prev);
+      setSelCust(prev=>prev?{...prev,points:(nb!=null?nb:Math.max(0,(prev.points||0)+delta))}:prev);
     }catch(e){alert("เกิดข้อผิดพลาด: "+e.message);}
     setPtSaving(false);
   }
@@ -14387,6 +14471,9 @@ function CRMJoinClaim({branch,onDone,onBack}){
   async function submit(){
     if(!ready)return;setSaving(true);
     try{
+      // Stop a double-submitted receipt from becoming two claims that each award points.
+      const bn=bill.trim();
+      if(bn&&await api.hasDupPointClaim(branch.id,phone.trim(),bn)){ alert("บิลนี้ถูกส่งไปแล้ว กำลังรอทีมงานตรวจ/อนุมัติอยู่ 🙏 ไม่ต้องส่งซ้ำนะคะ"); setSaving(false); return; }
       await api.addCRMPointClaim({branch_id:+branch.id,customer_name:name.trim(),phone:phone.trim(),bill_number:bill.trim(),amount:+amount||0,receipt_image:img||null,status:"pending",created_at:new Date().toISOString()});
       crmLogEvent(branch.id,"point_claim",{amount:+amount||0});
       onDone();
