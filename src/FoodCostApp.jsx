@@ -8839,14 +8839,19 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         });
       });
 
-      // A supplier counts as "central kitchen" if its name matches a branch with type=central.
-      // Re-using branch name for the supplier record is the simplest convention without
-      // needing a schema flag.
+      // A supplier counts as "central kitchen" when its name CONTAINS a central branch's name.
+      // It used to require an exact match, so renaming the supplier (e.g. "ครัวกลาง" →
+      // "ครัวกลาง ในวันสุข หมูกระทะ") silently routed every branch order to an external supplier
+      // instead of the central kitchen. Containment means any name carrying "ครัวกลาง" goes to
+      // the central kitchen, which is the rule the shop actually wants.
       const centralBranches=(branches||[]).filter(b=>b&&b.type==="central");
       const matchCentralSupplier=(supName)=>{
-        const t=(supName||"").trim();
+        const t=(supName||"").replace(/\s+/g," ").trim();
         if(!t)return null;
-        return centralBranches.find(b=>(b.name||"").trim()===t)||null;
+        return centralBranches.find(b=>{
+          const bn=(b.name||"").replace(/\s+/g," ").trim();
+          return bn&&t.includes(bn);
+        })||null;
       };
 
       const poList=[],extList=[],skippedList=[];
@@ -9456,7 +9461,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
   </Modal>;
 }
 
-function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders=[],allOrders=[],branches=[]}){
+function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders=[],allOrders=[],branches=[],ings=[],reloadIngs}){
   const supF0={name:"",contact:"",phone:"",note:"",active:true,central_only:false,delivery_info:"",min_order:"",invoice_type:"receipt",credit_term:""};
   const[supForm,setSupForm]=useState(supF0);
   const[editSID,setEditSID]=useState(null);
@@ -9492,8 +9497,24 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
     if(!supForm.name)return;
     try{
       const payload={...supForm,min_order:(supForm.min_order===""||supForm.min_order==null)?null:+supForm.min_order};
+      const oldName=editSID?((suppliers.find(s=>+s.id===+editSID)||{}).name||"").trim():"";
+      const newName=(supForm.name||"").trim();
       if(editSID)await api.updateSupplier(editSID,payload);
       else await api.addSupplier({...payload,branch_id:currentBranch.id,visible_branches:[]});
+      // Ingredients keep a DENORMALISED copy of the supplier name (ing.supplier_name) that the
+      // order screen groups by. The binding itself is by id, so a rename must carry over or the
+      // ingredient keeps showing (and ordering under) the old name.
+      if(editSID&&oldName&&newName&&oldName!==newName){
+        const bound=(ings||[]).filter(i=>{
+          if(+i.supplier_id===+editSID)return true;
+          const map=i.supplier_by_branch||{};
+          return Object.values(map).some(v=>+v===+editSID);
+        });
+        let ok=0,fail=0;
+        for(const i of bound){ try{ await api.updateIng(i.id,{supplier_name:newName}); ok++; }catch{ fail++; } }
+        if(bound.length)setTimeout(()=>alert(`เปลี่ยนชื่อซัพเป็น "${newName}" แล้ว\n\nอัปเดตชื่อบนวัตถุดิบที่ผูกไว้ ${ok} รายการ${fail?` (ไม่สำเร็จ ${fail})`:""}`),0);
+        if(reloadIngs)await reloadIngs();
+      }
       await reloadSuppliers();
       closeForm();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -13205,7 +13226,7 @@ export default function App(){
             </>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
-            {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders} branches={branches}/>}
+            {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders} branches={branches} ings={ings} reloadIngs={reload.ings}/>}
             {tab==="approve"&&<ApprovalTab currentUser={currentUser} currentBranch={currentBranch} branches={branches} reloadOrders={reload.orders} ings={ings}/>}
             {tab==="assets"&&<AssetsTab assets={assets} reloadAssets={reload.assets} currentUser={currentUser} currentBranch={currentBranch} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
