@@ -276,14 +276,26 @@ const api = {
   // an append. Falls back gracefully (just creates) if that index isn't there yet.
   posAppendItems: async ({branch_id, table_id, table_number, newItems, ordered_by}) => {
     const sum = (arr) => Math.round((arr||[]).reduce((s,i)=>s+(+i.price||0)*(+i.qty||0),0)*100)/100;
-    for(let attempt=0; attempt<6; attempt++){
+    // Every cart line carries a globally-unique line_uid minted when the diner tapped it. Re-sending
+    // the same cart (lost response, offline retry, double-tap) must therefore be a NO-OP, not a
+    // duplicate dish: drop any incoming line whose uid is already on the order before merging.
+    const dedupe = (existing, incoming) => {
+      const seen = new Set((existing||[]).map(i=>i&&i.line_uid).filter(Boolean));
+      return (incoming||[]).filter(i=>!(i&&i.line_uid&&seen.has(i.line_uid)));
+    };
+    for(let attempt=0; attempt<10; attempt++){
       const ex = await sb(`orders?table_id=eq.${table_id}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`);
       if(Array.isArray(ex)&&ex.length>0){
-        const cur=ex[0]; const merged=[...(cur.items||[]),...newItems]; const s=sum(merged);
+        const cur=ex[0];
+        const fresh=dedupe(cur.items,newItems);
+        if(fresh.length===0)return cur;                       // already recorded — nothing to do
+        const merged=[...(cur.items||[]),...fresh]; const s=sum(merged);
         const guard = cur.updated_at==null ? "is.null" : `eq.${encodeURIComponent(cur.updated_at)}`;
         const res=await sb(`orders?id=eq.${cur.id}&updated_at=${guard}`, { method:"PATCH", body:JSON.stringify({items:merged,subtotal:s,total:s,updated_at:new Date().toISOString()}) });
         if(Array.isArray(res)&&res.length>0)return res[0];
-        // lost the compare-and-set race → re-read fresh and retry
+        // lost the compare-and-set race → back off a random beat so contending diners don't
+        // re-collide in lockstep, then re-read fresh and retry
+        await new Promise(r=>setTimeout(r,60*(attempt+1)+Math.floor(Math.random()*120)));
       }else{
         try{
           const s=sum(newItems);
@@ -14176,7 +14188,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const sentKey=i=>`${i.menu_id}|${i.note||""}|${optionsText(i.options)}`;
   // จำนวนที่ "ส่งครัวไปแล้ว" ต่อเมนู (จาก existingOrder) — ใช้แยกสีรายการที่ส่งแล้ว/ยังไม่ส่ง และเปิด/ปิดปุ่มส่ง
   const sentBaseMap=useMemo(()=>{const m=new Map();(existingOrder?.items||[]).forEach(i=>m.set(sentKey(i),(m.get(sentKey(i))||0)+i.qty));return m;},[existingOrder]);
-  const hasNewItems=useMemo(()=>{for(const i of items){if(i.qty>(sentBaseMap.get(sentKey(i))||0))return true;}return false;},[items,sentBaseMap]);
+  // The same dish can occupy SEVERAL rows (each append adds an array element, it never merges), so
+  // everything below must compare per-menu TOTALS. Comparing one row's qty against the per-menu
+  // aggregate made a repeat helping look already-sent: the button went dead, the kitchen never got
+  // it, and checkout still billed it.
+  const wantMap=useMemo(()=>{const m=new Map();items.forEach(i=>m.set(sentKey(i),(m.get(sentKey(i))||0)+(+i.qty||0)));return m;},[items]);
+  const hasNewItems=useMemo(()=>{for(const[k,want]of wantMap){if(want>(sentBaseMap.get(k)||0))return true;}return false;},[wantMap,sentBaseMap]);
   const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
   const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
   const manualDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0);
@@ -14209,20 +14226,23 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const cashChange=round2(Math.max(0,(+cashRcv||0)-total));
 
   const optionLib=posSettings?.option_library||[];   // resolve referenced option groups
-  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:(m.local_categories||{})[branch?.id]||m.category||null}];});}
+  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:(m.local_categories||{})[branch?.id]||m.category||null}];});}
   // Tap a menu: if it has add-on options for this branch, open the picker; else add directly.
   const[optPick,setOptPick]=useState(null);  // menu awaiting option selection
   function pickOrAdd(m){if(menuHasOptions(m,branch?.id,optionLib))setOptPick(m);else addItem(m);}
   function addItemWithOptions(m,chosen,qty){
     const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);
-    setItems(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:(m.local_categories||{})[branch?.id]||m.category||null}]);
+    setItems(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:(m.local_categories||{})[branch?.id]||m.category||null}]);
     setOptPick(null);
   }
   function chQty(idx,d){
     const it=items[idx];if(!it)return;
     // floor = จำนวนที่ "ส่งครัวไปแล้ว" ของเมนูนี้ — ลดต่ำกว่านี้ด้วยปุ่ม − ไม่ได้ (ต้องปัดซ้ายยกเลิก เพื่อให้ครัว/QR ตรงกัน)
     const base=new Map();(existingOrder?.items||[]).forEach(b=>base.set(sentKey(b),(base.get(sentKey(b))||0)+b.qty));
-    const floor=base.get(sentKey(it))||0;
+    // This row may hold only PART of what was sent for this dish — the floor is whatever the other
+    // rows of the same dish don't already cover, else a row gets pinned above its true sent amount.
+    const otherQty=items.reduce((s,x,j)=>(j!==idx&&sentKey(x)===sentKey(it))?s+(+x.qty||0):s,0);
+    const floor=Math.max(0,(base.get(sentKey(it))||0)-otherQty);
     if(d<0&&it.qty<=floor){posToast("รายการนี้ส่งครัวแล้ว — ลดจำนวนไม่ได้ · ปัดซ้ายเพื่อยกเลิกทั้งรายการ","warn");return;}
     setItems(p=>p.map((x,j)=>j===idx?{...x,qty:Math.max(floor,x.qty+d)}:x).filter(x=>x.qty>0));
   }
@@ -14326,10 +14346,26 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     try{
       // ส่งเฉพาะ "รายการใหม่ที่ยังไม่ได้ส่ง" (delta เหนือจำนวนที่ส่งครัวไปแล้ว) แบบ append atomic
       // — ไม่เขียนทับทั้งก้อน เพื่อไม่ลบรายการที่ลูกค้า/อุปกรณ์อื่นเพิ่งสั่งเพิ่มเข้ามาพร้อมกัน
+      // Delta on per-menu TOTALS (a dish can span several rows), one line per menu.
+      // Each delta line gets a FRESH uid: deriving it from the panel state made two devices holding
+      // the same snapshot mint identical uids, so one waiter's plate was silently deduped away while
+      // both saw "sent". A fresh uid means the append can never mistake a real helping for a replay.
       const delta=[];
-      for(const it of items){const sent=sentBaseMap.get(sentKey(it))||0;const extra=(+it.qty||0)-sent;if(extra>0)delta.push({...it,qty:extra});}
+      const rep=new Map();items.forEach(i=>{if(!rep.has(sentKey(i)))rep.set(sentKey(i),i);});
+      for(const[k,want]of wantMap){
+        const sent=sentBaseMap.get(k)||0;const extra=want-sent;
+        if(extra>0)delta.push({...rep.get(k),qty:extra,line_uid:uuidv4()});
+      }
       if(existingOrder?.id&&!delta.length){posToast("ไม่มีรายการใหม่ที่ต้องส่ง","warn");setSaving(false);return;}
-      await api.posAppendItems({branch_id:branch.id,table_id:table.id,table_number:table.table_number,newItems:existingOrder?.id?delta:items,ordered_by:currentUser.username});
+      const toSend=existingOrder?.id?delta:items;
+      const before=(existingOrder?.items||[]).length;
+      const row=await api.posAppendItems({branch_id:branch.id,table_id:table.id,table_number:table.table_number,newItems:toSend,ordered_by:currentUser.username});
+      // Never claim success blind: if the append deduped everything away, the kitchen got nothing.
+      const after=Array.isArray(row?.items)?row.items.length:before+toSend.length;
+      if(existingOrder?.id&&after<=before){
+        posToast("⚠️ รายการนี้ถูกส่งไปแล้วก่อนหน้า — ไม่ได้ส่งซ้ำ (ตรวจใบครัวก่อนสั่งเพิ่ม)","warn");
+        onDone();onClose();setSaving(false);return;
+      }
       // NOTE: ไม่พิมพ์ที่นี่ — "ตัวพิมพ์ (agent)" ที่ร้าน poll ออเดอร์แล้วพิมพ์รายการใหม่เอง (จุดเดียว กันพิมพ์ซ้ำ + ใช้ได้กับ iPad)
       posToast("✅ ส่งรายการแล้ว — ตัวพิมพ์กำลังพิมพ์ใบครัว","ok");
       onDone();onClose();
@@ -14791,6 +14827,20 @@ function CustomerPage({branchId,tableId,token}){
   const[branch,setBranch]=useState(null);const[table,setTable]=useState(null);const[menus,setMenus]=useState([]);
   const[cart,setCart]=useState([]);const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[step,setStep]=useState("menu");const[sending,setSending]=useState(false);const[done,setDone]=useState(false);
+  // ── OUTBOX ─────────────────────────────────────────────────────────────
+  // A diner who loses wifi mid-submit must never lose the order they just built. The cart is
+  // written to localStorage BEFORE the request goes out and only cleared once the server has it,
+  // so a refresh, a backgrounded tab or a dead connection all recover. Re-sending is safe because
+  // every line carries a line_uid the append dedupes on.
+  const OUTBOX_KEY=`fc_outbox_${tableId}`;
+  // Every line_uid this device has successfully handed to the server. A line in here must never be
+  // re-sent or have its qty bumped in place — its uid is already recorded, so an increment would be
+  // deduped away and the extra plate lost.
+  const sentUidsRef=useRef(new Set());
+  const[outbox,setOutbox]=useState(null);      // null | {lines,at}
+  const[outboxBusy,setOutboxBusy]=useState(false);
+  const readOutbox=()=>{try{const r=localStorage.getItem(OUTBOX_KEY);const o=r?JSON.parse(r):null;return (o&&Array.isArray(o.lines)&&o.lines.length)?o:null;}catch{return null;}};
+  const writeOutbox=(o)=>{try{o?localStorage.setItem(OUTBOX_KEY,JSON.stringify(o)):localStorage.removeItem(OUTBOX_KEY);}catch{}setOutbox(o);};
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
   const[myOrder,setMyOrder]=useState(null);
   const[optionLib,setOptionLib]=useState([]);   // branch option-group library (to resolve bound refs)
@@ -14834,11 +14884,18 @@ function CustomerPage({branchId,tableId,token}){
   }),[menus,selCat,search,branchId]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const itemCount=cart.reduce((s,i)=>s+i.qty,0);
-  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:(m.local_categories||{})[branchId]||m.category||null}];});}
+  // line_uid identifies this cart line for its whole life. Re-sending a cart (lost response,
+  // offline retry, double-tap) is then a no-op instead of a duplicate dish. Bumping the qty of an
+  // UNSENT line keeps its uid; a genuinely new line mints a new one.
+  // NEVER bump the qty of a line that has already been handed to the server (or is sitting in the
+  // outbox): its uid is already recorded, so the increment would be deduped away and the plate
+  // silently lost. Such a tap starts a FRESH line with a new uid instead.
+  const isLineLocked=(uid)=>!!uid&&(sentUidsRef.current.has(uid)||((outbox?.lines)||[]).some(l=>l&&l.line_uid===uid));
+  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length)&&!isLineLocked(i.line_uid));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:(m.local_categories||{})[branchId]||m.category||null}];});}
   // Add-on options: open the picker if the menu has any for this branch.
   const[optPick,setOptPick]=useState(null);
   function pickOrAddCart(m){if(menuHasOptions(m,branchId,optionLib))setOptPick(m);else addToCart(m);}
-  function addToCartWithOptions(m,chosen,qty){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:(m.local_categories||{})[branchId]||m.category||null}]);setOptPick(null);}
+  function addToCartWithOptions(m,chosen,qty){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:(m.local_categories||{})[branchId]||m.category||null}]);setOptPick(null);}
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
   async function placeOrder(){
@@ -14852,13 +14909,58 @@ function CustomerPage({branchId,tableId,token}){
         alert("QR ของโต๊ะนี้ถูกอัพเดทใหม่ — กรุณาขอ QR ปัจจุบันจากพนักงาน");
         return;
       }
+      // Persist BEFORE the request: if this device dies mid-flight the order is still recoverable.
+      // Handing the lines to the outbox also REMOVES them from the cart, so the cart only ever
+      // holds not-yet-sent lines. That is what makes it impossible to bump the qty of a line that
+      // is already in flight (its uid is spoken for, so the increment would be deduped away).
+      const sending=cart;
+      const sendingUids=new Set(sending.map(l=>l&&l.line_uid).filter(Boolean));
+      writeOutbox({lines:sending,at:Date.now()});
+      setCart(p=>p.filter(l=>!(l&&l.line_uid&&sendingUids.has(l.line_uid))));
       // Atomic append (compare-and-set + retry) — สั่งพร้อมกันหลายคนโต๊ะเดียวไม่ทับกัน, ไม่มีรายการหาย
-      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:cart,ordered_by:"customer"});
+      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:sending,ordered_by:"customer"});
+      markSent(sending);
+      writeOutbox(null);
       setDone(true);
       loadMyOrder();
-    }catch(e){console.error("placeOrder",e);alert("สั่งไม่สำเร็จ: "+friendlyError(e));}
+    }catch(e){
+      console.error("placeOrder",e);
+      // Do NOT clear the cart and do NOT drop the outbox — it retries on reconnect. Re-sending is
+      // safe: the append ignores any line_uid the order already carries.
+      setOutbox(readOutbox());
+    }
     setSending(false);
   }
+  // Once the server has a line, drop it from the on-screen cart and remember its uid — but keep
+  // anything the diner added while we were offline (those lines were never sent).
+  function markSent(lines){
+    const uids=new Set((lines||[]).map(l=>l&&l.line_uid).filter(Boolean));
+    uids.forEach(u=>sentUidsRef.current.add(u));
+    setCart(p=>p.filter(l=>!(l&&l.line_uid&&uids.has(l.line_uid))));
+  }
+  // Retry whatever is stuck in the outbox: on mount, whenever the browser says we're back online,
+  // and when the diner taps "ลองอีกครั้ง".
+  const flushingRef=useRef(false);
+  async function flushOutbox(){
+    const o=readOutbox();
+    if(!o||flushingRef.current)return;      // ref, not state — the interval/online/mount triggers
+    flushingRef.current=true;               // can otherwise all pass a stale `outboxBusy` at once
+    setOutboxBusy(true);
+    try{
+      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:o.lines,ordered_by:"customer"});
+      markSent(o.lines);
+      writeOutbox(null);setDone(true);loadMyOrder();
+    }catch(e){console.error("flushOutbox",e);}
+    flushingRef.current=false;
+    setOutboxBusy(false);
+  }
+  useEffect(()=>{
+    setOutbox(readOutbox());
+    const onOnline=()=>flushOutbox();
+    window.addEventListener("online",onOnline);
+    const t=setInterval(()=>{if(navigator.onLine!==false)flushOutbox();},15000);   // also self-heal on a flaky link
+    return()=>{window.removeEventListener("online",onOnline);clearInterval(t);};
+  },[tableId]);// eslint-disable-line react-hooks/exhaustive-deps
   if(gateLoading)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{textAlign:"center"}}><div style={{width:40,height:40,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 12px"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กำลังตรวจสอบ QR...</p></div></div>;
   if(gateError){
     const messages={
@@ -14885,6 +14987,18 @@ function CustomerPage({branchId,tableId,token}){
   </div>;
   const myOrderItemCount=myOrder?(myOrder.items||[]).reduce((s,i)=>s+i.qty,0):0;
   return <div style={{minHeight:"100vh",background:C.bg,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column"}}>
+    {/* Order stuck in the outbox — the diner must know it is NOT lost and that we keep retrying. */}
+    {outbox&&<div style={{background:"#FEF3C7",borderBottom:"2px solid #F59E0B",padding:"10px 14px",fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
+      <div style={{fontSize:13.5,fontWeight:800,color:"#92400E",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+        <span>{outboxBusy?"⏳ กำลังส่งออเดอร์...":"📶 ออเดอร์ยังไม่ถึงครัว — ระบบกำลังลองส่งให้เอง"}</span>
+        <button onClick={flushOutbox} disabled={outboxBusy} style={{marginLeft:"auto",background:"#F59E0B",border:"none",borderRadius:8,padding:"5px 12px",color:"#fff",fontWeight:800,fontSize:12,cursor:outboxBusy?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",opacity:outboxBusy?.6:1}}>ลองอีกครั้ง</button>
+      </div>
+      <div style={{fontSize:11.5,color:"#92400E",marginTop:4,lineHeight:1.5}}>
+        {Date.now()-(outbox.at||0)>60000
+          ? <>⚠️ ส่งไม่สำเร็จเกิน 1 นาที — กรุณาแจ้งพนักงาน (รหัส <b>{String((outbox.lines?.[0]?.line_uid)||"").slice(0,4).toUpperCase()}</b>)</>
+          : <>อย่าปิดหน้านี้ · รายการจะไม่หาย และจะไม่ถูกสั่งซ้ำ</>}
+      </div>
+    </div>}
     <div style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,padding:"14px 16px",flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
       <div>
         <div style={{fontWeight:900,fontSize:17,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>{branch.name}</div>
