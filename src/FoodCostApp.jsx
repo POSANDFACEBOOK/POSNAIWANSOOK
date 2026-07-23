@@ -182,6 +182,10 @@ const api = {
   deleteWasteLog: (id) => sb(`waste_logs?id=eq.${id}`, { method: "DELETE" }),
   addStockLog: (d) => sb("stock_logs", { method: "POST", body: JSON.stringify(d) }),
   getStockLogs: (ingId, bid) => sb(`stock_logs?ingredient_id=eq.${ingId}&branch_id=eq.${bid}&order=counted_at.desc&limit=200`),
+  // Observational movement log — every non-count stock change with a reason. Best-effort:
+  // never throws (a failed log must never break a stock move) and no-ops until the table exists.
+  addStockMovements: async (rows) => { if(!Array.isArray(rows)||!rows.length)return; try{ await sb("stock_movements", {method:"POST", headers:{Prefer:"return=minimal"}, body:JSON.stringify(rows)}); }catch{} },
+  getStockMovements: (ingId, bid) => sb(`stock_movements?ingredient_id=eq.${ingId}&branch_id=eq.${bid}&order=created_at.desc&limit=100`).catch(()=>[]),
   addStockSession: (d) => sb("stock_count_sessions", { method: "POST", body: JSON.stringify(d) }),
   getStockSessions: (bid) => sb(`stock_count_sessions?order=started_at.desc,id.desc&limit=300${bid ? `&branch_id=eq.${bid}` : ""}`),
   getStockLogsBySession: (sid) => sb(`stock_logs?session_id=eq.${sid}&order=counted_at.asc,id.asc&limit=500`),
@@ -1023,7 +1027,7 @@ function setBranchSafetyInJson(existing,branchId,value){
 //   subStock = parentQty × sub.amountGram / parentIng.convert_to_gram
 // — i.e. how many sub-stock units are consumed/produced per one parent stock unit.
 // Recursion is capped at 3 levels to defend against cycles in mis-configured SOPs.
-async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible,_depth=0,_acc=null}){
+async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible,reason=null,refType=null,refId=null,by=null,_depth=0,_acc=null}){
   const toId=toBranchId!=null?(+toBranchId||null):null;
   const fromId=fromBranchId!=null?(+fromBranchId||null):null;
   if(!toId&&!fromId){
@@ -1037,7 +1041,8 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
   // Failure accumulator shared down the SOP-cascade recursion so problems at
   // ANY depth surface in the single top-level alert (a silently-skipped
   // sub-ingredient is still a wrong stock number).
-  const acc=_acc||{notFound:[],zeroQty:[],failedUpdates:[]};
+  const acc=_acc||{notFound:[],zeroQty:[],failedUpdates:[],moves:[]};
+  if(!acc.moves)acc.moves=[];
   const{notFound,zeroQty,failedUpdates}=acc;
   const agg=new Map();
   for(const it of (items||[])){
@@ -1047,11 +1052,11 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     if(!qty||qty<=0){zeroQty.push({ingId,name:it.name||"#"+ingId});continue;}
     const row=(ings||[]).find(x=>+x.id===ingId);
     if(!row){notFound.push({ingId,name:it.name||"#"+ingId,reason:"ไม่พบในรายการวัตถุดิบ",qty});continue;}
-    const e=agg.get(ingId)||{add:0,row};
-    e.add+=qty;agg.set(ingId,e);
+    const e=agg.get(ingId)||{add:0,row,_reason:it._reason||null};   // _reason set by the SOP cascade
+    e.add+=qty;if(it._reason&&!e._reason)e._reason=it._reason;agg.set(ingId,e);
   }
   const levelFailed=new Set();   // parents whose OWN write failed → don't cascade their children
-  for(const[ingId,{add:addRaw,row}]of agg.entries()){
+  for(const[ingId,{add:addRaw,row,_reason}]of agg.entries()){
     // Round the delta ONCE and reuse for both slots: rounding +add and −add
     // independently is asymmetric at exact .0005 boundaries (Math.round half-up)
     // and would credit slightly more than it debits.
@@ -1093,6 +1098,13 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
       failedUpdates.push({ingId,name:row.name||"#"+ingId,reason:err&&err.message||String(err),qty:add});
       continue;   // stock write failed → skip the visibility tick too
     }
+    // Write succeeded → record the movement(s) for the trace log. A transfer touches BOTH slots
+    // (−from, +to); a one-sided move (receive / ship / rollback) touches one. Best-effort only.
+    {
+      const mvReason=_reason||reason||null;
+      if(fromId)acc.moves.push({branch_id:fromId,ingredient_id:+ingId,ingredient_name:row.name||null,unit:row.buy_unit||null,delta:-add,reason:mvReason,ref_type:_reason?"sop":(refType||"transfer"),ref_id:refId||null,by_user:by||null});
+      if(toId)acc.moves.push({branch_id:toId,ingredient_id:+ingId,ingredient_name:row.name||null,unit:row.buy_unit||null,delta:+add,reason:mvReason,ref_type:_reason?"sop":(refType||"transfer"),ref_id:refId||null,by_user:by||null});
+    }
     // visible_branches tick — OUTSIDE the stock try/catch: the stock move above
     // already committed, so a failure here must NOT be reported as a failed stock
     // save (the "ลองใหม่" advice would double-apply the move). Cosmetic only.
@@ -1113,7 +1125,7 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
   // levels so a circular SOP (X uses Y, Y uses X) can't melt the API.
   // Parents whose own write failed are excluded — their transfer didn't happen,
   // so moving their children would desync (and a retry would double-move them).
-  if(_depth<3)await _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,acc,levelFailed});
+  if(_depth<3)await _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,acc,levelFailed,reason,refType,refId,by});
 
   // Top-level callers only: surface anything that silently fell through AT ANY
   // DEPTH so the user doesn't end up with a PO marked "จัดส่งแล้ว" but no stock move.
@@ -1139,6 +1151,8 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     lines.push("ให้ปรับเฉพาะรายการข้างบนในหน้า \"นับสต็อก\" หรือแจ้งแอดมิน");
     setTimeout(()=>alert(lines.join("\n")),200);
   }
+  // Top level only: flush the movement trace once (best-effort — a failed log never affects stock).
+  if(_depth===0&&acc.moves&&acc.moves.length)api.addStockMovements(acc.moves);
   return acc;   // callers inspect {notFound,failedUpdates,zeroQty} to record un-credited lines for a targeted retry
 }
 // Build a retryable "stock pending" group from a transfer accumulator: the lines that
@@ -1175,7 +1189,7 @@ async function persistPending(poId,...groups){
   try{ const row=await api.getPO(poId); if(Array.isArray(row)&&row[0]&&Array.isArray(row[0].stock_pending))existing=row[0].stock_pending; }catch{}
   try{ await api.updatePO(poId,{stock_pending:[...existing,...fresh]}); }catch{}
 }
-async function _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,acc,levelFailed}){
+async function _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,acc,levelFailed,reason=null,refType=null,refId=null,by=null}){
   const cascadeItems=[];
   for(const it of (items||[])){
     const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
@@ -1200,7 +1214,9 @@ async function _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,ac
       const gramsTotal=parentQty*(+sub.amountGram||0);
       const subStockUnits=gramsTotal/(+subIng.convert_to_gram||1000);
       if(!subStockUnits||subStockUnits<=0)continue;
-      cascadeItems.push({ingredient_id:subIngId,qty:subStockUnits});
+      // Tag the child with which SOP consumed it, so the trace log reads "SOP: ผลิต ซอสกะเพรา"
+      // instead of an unexplained fractional drop.
+      cascadeItems.push({ingredient_id:subIngId,qty:subStockUnits,_reason:`SOP: ผลิต ${parent.name||"#"+ingId}`});
     }
   }
   if(cascadeItems.length>0){
@@ -1209,6 +1225,7 @@ async function _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,ac
       items:cascadeItems,
       ings,
       autoVisible:false,                 // sub-ingredient visibility doesn't auto-toggle
+      reason,refType,refId,by,
       _depth:_depth+1,
       _acc:acc,                          // child failures bubble into the top-level alert
     });
@@ -2392,6 +2409,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
         // Record that the deduct landed — delLog only credits back rows carrying this flag, so a
         // legacy row (or this row when the deduct failed) can never mint stock on delete.
         if(stockOk&&newLogId)await api.markWasteStockApplied(newLogId);
+        if(stockOk)api.addStockMovements([{branch_id:currentBranch.id,ingredient_id:sel.id,ingredient_name:sel.name,unit,delta:-(+qty),reason:`ของเสีย${(reason||"").trim()?" ("+reason.trim()+")":""}`,ref_type:"waste",ref_id:newLogId?String(newLogId):null,by_user:currentUser?.username||currentUser?.name||null}]);
       }
       // Never claim success when the deduct failed — a green toast would make the operator
       // think stock was reduced and re-do it, over-deducting.
@@ -2460,7 +2478,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
           }
         }catch{ok=false;}
         if(!ok)alert(`⚠️ ลบรายการแล้ว แต่คืนสต๊อกไม่สำเร็จ\n\nกรุณาเพิ่ม "${row.ingredient_name}" ให้สาขา "${bName}" อีก ${rq} ${row.unit||""} เองที่หน้านับสต็อก`);
-        else posToast("🗑️ ลบรายการ + คืนสต๊อกแล้ว","ok");
+        else{posToast("🗑️ ลบรายการ + คืนสต๊อกแล้ว","ok");api.addStockMovements([{branch_id:row.branch_id,ingredient_id:row.ingredient_id,ingredient_name:row.ingredient_name,unit:row.unit||null,delta:+rq,reason:"คืนสต๊อก (ลบรายการของเสีย)",ref_type:"waste",ref_id:String(l.id),by_user:currentUser?.username||currentUser?.name||null}]);}
       }else{
         posToast(rMenu?"🗑️ ลบรายการแล้ว":"🗑️ ลบรายการแล้ว (รายการนี้ไม่ได้หักสต๊อกไว้ จึงไม่ต้องคืน)","ok");
       }
@@ -2676,11 +2694,16 @@ function StockHistoryModal({ing,currentBranch,branches=[],onClose}){
       // internal PO/transfer in/out, and waste. (Derived live — covers past data.)
       const oneShot=p=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),12000))]);
       const sbq=q=>sb(q).then(r=>Array.isArray(r)?r:[]).catch(()=>[]);
-      const [logs,waste,ext,pos]=await oneShot(Promise.all([
+      const [logs,waste,ext,pos,mv]=await oneShot(Promise.all([
         api.getStockLogs(ingId,bid).then(r=>Array.isArray(r)?r:[]).catch(()=>[]),
         sbq(`waste_logs?select=id,qty,unit,reason,created_at,log_date,created_by,item_type&ingredient_id=eq.${ingId}&branch_id=eq.${bid}&order=id.desc&limit=300`),
         sbq(`order_requests?select=id,supplier_name,requested_at,requested_by,status,items&branch_id=eq.${bid}&status=eq.delivered&order=id.desc&limit=400`),
         sbq(`purchase_orders?select=id,po_number,from_branch_id,branch_id,status,received_at,received_by,updated_at,po_date,items&or=(branch_id.eq.${bid},from_branch_id.eq.${bid})&order=id.desc&limit=400`),
+        // The SOP cascade (sub-ingredients consumed by the gram) is NOT reconstructable from any
+        // document above — it only lives in the movement log. Pull just those to fill the gap that
+        // made a counted-as-integer item look fractional the next day. (Empty until the table + a
+        // move exist; other ref_types are already derived above so we skip them to avoid double-count.)
+        sbq(`stock_movements?select=delta,reason,by_user,created_at&ingredient_id=eq.${ingId}&branch_id=eq.${bid}&ref_type=eq.sop&order=created_at.desc&limit=300`),
       ]));
       if(!aliveRef.current)return;
       const evs=[];
@@ -2699,13 +2722,15 @@ function StockHistoryModal({ing,currentBranch,branches=[],onClose}){
           const q=+it.qty||0;if(q>0)evs.push({k:"po_out",at:toMs(p.received_at||p.updated_at||p.po_date),delta:-q,ref:(p.po_number||"PO")+" · ไป "+branchName(p.branch_id),unit:it.unit||U});
         }
       }));
+      // 5) SOP cascade — the previously-invisible consumption of sub-ingredients
+      mv.forEach(m=>{const q=+m.delta||0;if(q!==0)evs.push({k:"sop",at:toMs(m.created_at),delta:round2(q),ref:m.reason||"SOP",by:m.by_user,unit:U});});
       evs.sort((a,b)=>b.at-a.at);
       if(aliveRef.current)setRows(evs);
     }catch{ if(aliveRef.current){setErr(true);setRows([]);} }
   }
   useEffect(()=>{load();},[ing.id,currentBranch?.id]);// eslint-disable-line react-hooks/exhaustive-deps
   const fmtDt=ms=>fmtDT(ms);
-  const META={count:{ic:I.clock,c:C.brand,bg:C.brandLight,l:"📋 นับสต็อก"},recv_ext:{ic:I.truck,c:C.teal,bg:C.tealLight,l:"📥 รับจากซัพพลายนอก"},po_in:{ic:I.box,c:C.green,bg:C.greenLight,l:"📥 รับเข้า"},po_out:{ic:I.send,c:C.blue,bg:C.blueLight,l:"📤 ส่งออก"},waste:{ic:I.trash,c:C.red,bg:C.redLight,l:"🗑️ ของเสีย"}};
+  const META={count:{ic:I.clock,c:C.brand,bg:C.brandLight,l:"📋 นับสต็อก"},recv_ext:{ic:I.truck,c:C.teal,bg:C.tealLight,l:"📥 รับจากซัพพลายนอก"},po_in:{ic:I.box,c:C.green,bg:C.greenLight,l:"📥 รับเข้า"},po_out:{ic:I.send,c:C.blue,bg:C.blueLight,l:"📤 ส่งออก"},waste:{ic:I.trash,c:C.red,bg:C.redLight,l:"🗑️ ของเสีย"},sop:{ic:I.leaf,c:C.purple,bg:"#F5F3FF",l:"🍲 ใช้ผลิตตามสูตร (SOP)"}};
   return <Modal title={`🕘 ประวัติการเคลื่อนไหวสต็อก — ${ing.name}`} onClose={onClose} wide>
     <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>สาขา: <b style={{color:C.ink2}}>{currentBranch?.name||"—"}</b> · รวมทุกการเปลี่ยนแปลง: นับสต็อก · รับจากซัพ · รับ/ส่ง PO · ของเสีย</div>
     {rows===null?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
@@ -6019,6 +6044,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         items:po.items||[],
         ings,
         autoVisible:false,
+        reason:`จัดส่ง ${po.po_number||"PO"}`,refType:"po",refId:po.po_number||String(po.id),by:currentUser?.username||null,
       });
       // A line that failed to deduct here (transient write / missing ingredient) is recorded
       // so the 🔁 retry button re-runs it — else the sender stays un-debited while
@@ -6154,6 +6180,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         items:po.items||[],
         ings,
         autoVisible:true,
+        reason:`รับเข้า ${po.po_number||"PO"}`,refType:"po",refId:po.po_number||String(po.id),by:currentUser?.username||null,
       });
       // A credit that failed here would strand stock (sender already debited at ship) —
       // record it for the 🔁 retry button (merges with any un-cleared ship-side pending).
