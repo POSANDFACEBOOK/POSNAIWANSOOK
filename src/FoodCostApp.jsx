@@ -2949,9 +2949,21 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(c.id);await reloadCats();if(cat===c.name)setCat("ทุกหมวด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
   const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return ings.filter(i=>{const matchB=ingVisibleAt(i,currentBranch?.id,isCentral);const matchQ=!ql||i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql);return matchQ&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;});},[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
-  // Table view sorts by ingredient code, natural order (V013 before V0105; no-code rows last).
-  const codeCmp=(a,b)=>{const ca=(a.code||"").trim(),cb=(b.code||"").trim();if(!ca&&!cb)return (a.name||"").localeCompare(b.name||"","th");if(!ca)return 1;if(!cb)return -1;return ca.localeCompare(cb,undefined,{numeric:true,sensitivity:"base"});};
-  const tableRows=useMemo(()=>[...filtered].sort(codeCmp).slice(0,pg*PG),[filtered,pg]);
+  // Table view — click a header to sort by it, click again to flip direction.
+  const[sortBy,setSortBy]=useState("code");const[sortDir,setSortDir]=useState("asc");
+  const clickSort=(id)=>{if(!id)return;if(sortBy===id)setSortDir(d=>d==="asc"?"desc":"asc");else{setSortBy(id);setSortDir("asc");}};
+  const colNum={buy:it=>+it.buy_price||0,ppg:it=>+it.price_per_gram||0,stock:it=>branchStock(it,currentBranch?.id),safety:it=>branchSafety(it,currentBranch?.id)};
+  const colStr={name:it=>it.name||"",cat:it=>it.category||"",sup:it=>branchSupplierName(it,currentBranch?.id,suppliers)||it.supplier_name||""};
+  const tableRows=useMemo(()=>{
+    const dir=sortDir==="desc"?-1:1;
+    const cmp=(a,b)=>{
+      if(sortBy==="code"){const ca=(a.code||"").trim(),cb=(b.code||"").trim();if(!ca&&!cb)return (a.name||"").localeCompare(b.name||"","th");if(!ca)return 1;if(!cb)return -1;return ca.localeCompare(cb,undefined,{numeric:true,sensitivity:"base"})*dir;}   // no-code always last, regardless of dir
+      if(colNum[sortBy])return (colNum[sortBy](a)-colNum[sortBy](b))*dir;
+      if(colStr[sortBy])return String(colStr[sortBy](a)).localeCompare(String(colStr[sortBy](b)),"th",{numeric:true})*dir;
+      return 0;
+    };
+    return [...filtered].sort(cmp).slice(0,pg*PG);
+  },[filtered,pg,sortBy,sortDir,currentBranch,suppliers]);
   // นับสต็อก: ถ้ามีครั้งนับที่ "ยังไม่อนุมัติ" (open) ของสาขานี้อยู่ → นับต่อในครั้งเดิม (ไม่ต้องถ่ายใหม่)
   // ถ้าไม่มี (ครั้งก่อนอนุมัติไปแล้ว หรือยังไม่เคยนับ) → ขอถ่ายรูป+ลงชื่อใหม่ (เปิด session ใหม่)
   async function startStockCount(){
@@ -3209,7 +3221,10 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       <div style={{overflowX:"auto",border:`1px solid ${C.line}`,borderRadius:12,background:C.white}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:820}}>
           <thead><tr style={{background:"#0F172A",position:"sticky",top:0}}>
-            {["รหัส","วัตถุดิบ","หมวด","ซัพพลาย","ซื้อมา","ราคา/กรัม",`สต๊อก (${currentBranch?.name||"—"})`,"safety",""].map((h,i)=><th key={i} style={{padding:"10px 12px",textAlign:i>=4&&i<=7?"right":"left",fontSize:11.5,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap"}}>{h}</th>)}
+            {[{id:"code",l:"รหัส",a:"left"},{id:"name",l:"วัตถุดิบ",a:"left"},{id:"cat",l:"หมวด",a:"left"},{id:"sup",l:"ซัพพลาย",a:"left"},{id:"buy",l:"ซื้อมา",a:"right"},{id:"ppg",l:"ราคา/กรัม",a:"right"},{id:"stock",l:`สต๊อก (${currentBranch?.name||"—"})`,a:"right"},{id:"safety",l:"safety",a:"right"},{id:null,l:"",a:"right"}].map((h,i)=>{
+              const active=h.id&&sortBy===h.id;
+              return <th key={i} onClick={()=>clickSort(h.id)} title={h.id?"กดเพื่อเรียง":""} style={{padding:"10px 12px",textAlign:h.a,fontSize:11.5,fontWeight:700,color:active?"#FDBA74":"#F8FAFC",whiteSpace:"nowrap",cursor:h.id?"pointer":"default",userSelect:"none"}}>{h.l}{active?(sortDir==="asc"?" ▲":" ▼"):(h.id?<span style={{opacity:.35}}> ⇅</span>:"")}</th>;
+            })}
           </tr></thead>
           <tbody>
             {tableRows.map((item,ri)=>{
