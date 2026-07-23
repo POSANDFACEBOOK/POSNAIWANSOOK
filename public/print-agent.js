@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 26;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 27;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -422,6 +422,27 @@ async function pingPrinters(force) {
   } catch {} finally { pinging = false; }
 }
 
+// ── HEARTBEAT ──────────────────────────────────────────────────────────────
+// The agent proves it is ALIVE by stamping agentSeen/agentVer onto ONE printer row of the branch
+// (the lowest id) every ~45s. The app reads it: if agentSeen is stale the kitchen is silently
+// getting nothing, and staff see a "เปิดโปรแกรมตัวพิมพ์ที่ PC" banner. No new table needed — this
+// piggybacks on printers.description, read-latest-before-write so it can't clobber app commands.
+let hbBusy = false;
+async function heartbeat() {
+  if (hbBusy) return; hbBusy = true;
+  try {
+    const ps = (await getPrinters()).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false);
+    if (!ps.length) return;                       // no printer configured → nowhere to beat (and nothing to print)
+    const target = ps.slice().sort((a, b) => +a.id - +b.id)[0];
+    const online = ps.filter(p => !isBluetooth(p) && p.ip).length;
+    // read the freshest description right before writing so we merge, not clobber, live commands
+    let d = {}; try { const r = await sb(`printers?id=eq.${target.id}&select=description`); if (r && r[0]) { try { d = JSON.parse(r[0].description || "{}"); } catch {} } }
+    catch { try { d = JSON.parse(target.description || "{}"); } catch {} }
+    d.agentSeen = Date.now(); d.agentVer = AGENT_VERSION; d.agentPrinters = online;
+    try { await patchPrinter(target.id, { description: JSON.stringify(d) }); } catch {}
+  } catch {} finally { hbBusy = false; }
+}
+
 (async () => {
   console.log("════════════════════════════════════════");
   console.log(" FOODCOST — ตัวพิมพ์ผ่านคลาวด์ (Print Agent)");
@@ -443,6 +464,8 @@ async function pingPrinters(force) {
   setInterval(greetNewPrinters, 30 * 1000);
   await pingPrinters();                       // เช็คออนไลน์/ออฟไลน์ครั้งแรก
   setInterval(pingPrinters, 30 * 1000);       // แล้วเช็คทุก 30 วิ → แอปโชว์จุดเขียว/แดง
+  await heartbeat();                           // บอกแอปว่า agent ยังมีชีวิต (ครั้งแรกทันที)
+  setInterval(heartbeat, 45 * 1000);          // แล้วเต้นทุก 45 วิ → แอปเตือนถ้า agent/PC ดับ
   // สแกนหาเครื่องพิมพ์ใหม่ในวง LAN ทุก 2 นาที (เครื่องที่เสียบเพิ่มทีหลังจะถูกเพิ่มเองอัตโนมัติ — เร็วพอให้ปุ่ม "ค้นหาเครื่องพิมพ์" ในแอปเห็นผลไว)
   setInterval(async () => { try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {} }, 2 * 60 * 1000);
   // เช็คเวอร์ชันใหม่ทุก 5 นาที → อัปเดตเองโดยไม่ต้องแตะ Termux (เช็คตอนเริ่มด้วย)

@@ -914,6 +914,20 @@ const toGrams=(amt,unit)=>round2((+amt||0)*(UNIT_G[String(unit||"").trim()]||1))
 // must use this so its revenue is never booked as 100%-margin profit (single source of truth —
 // the previous partial fix left the snapshot, its editor and the daily table disagreeing).
 const hasRecipe=(m)=>!!m&&Array.isArray(m.ingredients)&&m.ingredients.length>0;
+// Print-agent liveness for a branch, read from the heartbeat the agent stamps onto a printer's
+// description (agentSeen/agentVer). Stale (or missing) = the shop's print program is down and the
+// kitchen is silently getting nothing → staff must reopen it on the PC.
+function agentHealth(printers,branchId){
+  let seen=0,ver=null;
+  for(const p of (printers||[])){
+    if(branchId!=null&&p.branch_id!=null&&+p.branch_id!==+branchId)continue;
+    let d={};try{d=JSON.parse(p.description||"{}");}catch{}
+    if(+d.agentSeen>seen){seen=+d.agentSeen;ver=d.agentVer!=null?+d.agentVer:ver;}
+  }
+  if(!seen)return{state:"unknown",seen:0,ver:null,ageSec:null};        // never heard from (old agent / never ran)
+  const ageSec=Math.round((Date.now()-seen)/1000);
+  return{state:ageSec>120?"down":"ok",seen,ver,ageSec};                // >2min silence = treat as down
+}
 const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);if(!i)return s;const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;return s+ppg*x.amountGram;},0);
 // Per-branch stock helpers — falls back to legacy ingredient.stock when no branch entry exists
 function branchStock(ing,branchId){
@@ -10631,6 +10645,14 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
           </div>
         </div>
       </div>
+
+      {/* ── Print-agent liveness ── */}
+      {printers.length>0&&(()=>{
+        const h=agentHealth(printers,currentBranch?.id);
+        if(h.state==="ok")return <div style={{marginBottom:12,background:C.greenLight,border:`1px solid ${C.green}`,borderRadius:10,padding:"9px 14px",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:"#065F46",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}><b>🟢 โปรแกรมตัวพิมพ์ที่ร้านทำงานปกติ</b><span style={{color:C.ink4}}>เห็นล่าสุด {h.ageSec} วินาทีที่แล้ว{h.ver!=null?` · v${h.ver}`:""}</span></div>;
+        if(h.state==="down")return <div style={{marginBottom:12,background:C.redLight,border:`2px solid ${C.red}`,borderRadius:10,padding:"11px 14px",fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:14,fontWeight:900,color:C.red}}>⛔ โปรแกรมตัวพิมพ์ที่ร้านไม่ตอบสนอง ({h.ageSec>=120?Math.round(h.ageSec/60)+" นาที":"เมื่อสักครู่"})</div><div style={{fontSize:12,color:"#991B1B",marginTop:3}}>ใบครัวอาจไม่ถูกพิมพ์ — กรุณาไปเปิด/รีสตาร์ทโปรแกรมตัวพิมพ์ที่เครื่อง PC ที่ร้าน</div></div>;
+        return <div style={{marginBottom:12,background:"#FFFBEB",border:`1px solid #F59E0B`,borderRadius:10,padding:"9px 14px",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:"#92400E"}}>⚠️ ยังไม่ได้รับสัญญาณจากโปรแกรมตัวพิมพ์ (อาจเป็นเวอร์ชันเก่า หรือยังไม่เปิด) — อัปเดต/เปิดโปรแกรมที่ PC เพื่อดูสถานะ</div>;
+      })()}
 
       {/* ── Printer Grid ── */}
       <div style={{marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
