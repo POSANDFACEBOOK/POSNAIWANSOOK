@@ -2949,6 +2949,9 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(c.id);await reloadCats();if(cat===c.name)setCat("ทุกหมวด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
   const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return ings.filter(i=>{const matchB=ingVisibleAt(i,currentBranch?.id,isCentral);const matchQ=!ql||i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql);return matchQ&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;});},[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
+  // Table view sorts by ingredient code, natural order (V013 before V0105; no-code rows last).
+  const codeCmp=(a,b)=>{const ca=(a.code||"").trim(),cb=(b.code||"").trim();if(!ca&&!cb)return (a.name||"").localeCompare(b.name||"","th");if(!ca)return 1;if(!cb)return -1;return ca.localeCompare(cb,undefined,{numeric:true,sensitivity:"base"});};
+  const tableRows=useMemo(()=>[...filtered].sort(codeCmp).slice(0,pg*PG),[filtered,pg]);
   // นับสต็อก: ถ้ามีครั้งนับที่ "ยังไม่อนุมัติ" (open) ของสาขานี้อยู่ → นับต่อในครั้งเดิม (ไม่ต้องถ่ายใหม่)
   // ถ้าไม่มี (ครั้งก่อนอนุมัติไปแล้ว หรือยังไม่เคยนับ) → ขอถ่ายรูป+ลงชื่อใหม่ (เปิด session ใหม่)
   async function startStockCount(){
@@ -3206,20 +3209,20 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       <div style={{overflowX:"auto",border:`1px solid ${C.line}`,borderRadius:12,background:C.white}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:820}}>
           <thead><tr style={{background:"#0F172A",position:"sticky",top:0}}>
-            {["วัตถุดิบ","หมวด","ซัพพลาย","ซื้อมา","ราคา/กรัม",`สต๊อก (${currentBranch?.name||"—"})`,"safety",""].map((h,i)=><th key={i} style={{padding:"10px 12px",textAlign:i>=3&&i<=6?"right":"left",fontSize:11.5,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap"}}>{h}</th>)}
+            {["รหัส","วัตถุดิบ","หมวด","ซัพพลาย","ซื้อมา","ราคา/กรัม",`สต๊อก (${currentBranch?.name||"—"})`,"safety",""].map((h,i)=><th key={i} style={{padding:"10px 12px",textAlign:i>=4&&i<=7?"right":"left",fontSize:11.5,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap"}}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {paged.map((item,ri)=>{
+            {tableRows.map((item,ri)=>{
               const bs=branchStock(item,currentBranch?.id);const safety=branchSafety(item,currentBranch?.id);
               const neg=bs<-1e-9;const low=safety>0&&bs<safety;
               const supN=branchSupplierName(item,currentBranch?.id,suppliers)||item.supplier_name||"—";
               return <tr key={item.id} style={{borderTop:`1px solid ${C.lineLight}`,background:neg?"#FEF2F2":ri%2===0?C.white:"#FAFBFC"}}>
+                <td style={{padding:"9px 12px",fontSize:12,fontWeight:800,color:item.code?C.ink2:C.ink4,whiteSpace:"nowrap",fontFamily:"'Sarabun',sans-serif"}}>{item.code||"—"}</td>
                 <td style={{padding:"9px 12px"}}>
                   <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
                     <Thumb src={item.image} size={30} radius={7}/>
                     <div style={{minWidth:0}}>
-                      <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:220}}>{item.name}{item.has_sop&&<span style={{fontSize:9,color:C.purple,marginLeft:5,fontWeight:800}}>SOP</span>}</div>
-                      {item.code&&<div style={{fontSize:10,color:C.ink4}}>{item.code}</div>}
+                      <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:240}}>{item.name}{item.has_sop&&<span style={{fontSize:9,color:C.purple,marginLeft:5,fontWeight:800}}>SOP</span>}</div>
                     </div>
                   </div>
                 </td>
@@ -3240,7 +3243,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
           </tbody>
         </table>
       </div>
-      {paged.length<filtered.length&&<div style={{textAlign:"center",marginTop:16}}><Btn v="ghost" onClick={()=>setPg(p=>p+1)}>โหลดเพิ่ม ({filtered.length-paged.length})</Btn></div>}
+      {tableRows.length<filtered.length&&<div style={{textAlign:"center",marginTop:16}}><Btn v="ghost" onClick={()=>setPg(p=>p+1)}>โหลดเพิ่ม ({filtered.length-tableRows.length})</Btn></div>}
     </>:<>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(310px,100%),1fr))",gap:14}}>
         {paged.map(item=><Card key={item.id} hover style={{overflow:"hidden"}}>
