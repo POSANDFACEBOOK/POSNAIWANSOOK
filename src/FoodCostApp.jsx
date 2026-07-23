@@ -2912,6 +2912,10 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
   const[priceHistoryItem,setPriceHistoryItem]=useState(null);
   const[stockHistItem,setStockHistItem]=useState(null);
+  const[viewMode,setViewMode]=useState(()=>{try{return localStorage.getItem("nw_ing_view")||"card";}catch{return "card";}});
+  const setView=(m)=>{setViewMode(m);try{localStorage.setItem("nw_ing_view",m);}catch{}};
+  // Load an ingredient into the edit form (shared by the card and the table view).
+  function openEdit(item){setForm({name:item.name,code:item.code||"",category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,safety_stock:branchSafety(item,currentBranch?.id)||"",image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}
   const ef={name:"",code:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
   const[form,setForm]=useState(ef);
   const isCentral=currentBranch?.type==="central";
@@ -3190,8 +3194,54 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       {currentUser?.role==="admin"&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {currentUser?.role==="admin"&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
     </div>
-    <div style={{fontSize:12,color:C.ink4,marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>แสดง {paged.length} จาก {filtered.length} รายการ</div>
-    {paged.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.warning} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่พบวัตถุดิบ</p></div>:<>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+      <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>แสดง {paged.length} จาก {filtered.length} รายการ</div>
+      <div style={{display:"flex",gap:4,background:C.bg,padding:4,borderRadius:10,border:`1px solid ${C.line}`}}>
+        {[{id:"card",l:"🔲 การ์ด"},{id:"table",l:"📋 ตาราง"}].map(v=><button key={v.id} onClick={()=>setView(v.id)} style={{padding:"5px 12px",borderRadius:7,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:viewMode===v.id?800:600,background:viewMode===v.id?C.white:"transparent",color:viewMode===v.id?C.brand:C.ink3,boxShadow:viewMode===v.id?"0 1px 4px rgba(15,23,42,.1)":"none"}}>{v.l}</button>)}
+      </div>
+    </div>
+    {paged.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.warning} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ไม่พบวัตถุดิบ</p></div>
+    :viewMode==="table"?<>
+      {/* Table view — one row per ingredient, stock emphasised */}
+      <div style={{overflowX:"auto",border:`1px solid ${C.line}`,borderRadius:12,background:C.white}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:820}}>
+          <thead><tr style={{background:"#0F172A",position:"sticky",top:0}}>
+            {["วัตถุดิบ","หมวด","ซัพพลาย","ซื้อมา","ราคา/กรัม",`สต๊อก (${currentBranch?.name||"—"})`,"safety",""].map((h,i)=><th key={i} style={{padding:"10px 12px",textAlign:i>=3&&i<=6?"right":"left",fontSize:11.5,fontWeight:700,color:"#F8FAFC",whiteSpace:"nowrap"}}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {paged.map((item,ri)=>{
+              const bs=branchStock(item,currentBranch?.id);const safety=branchSafety(item,currentBranch?.id);
+              const neg=bs<-1e-9;const low=safety>0&&bs<safety;
+              const supN=branchSupplierName(item,currentBranch?.id,suppliers)||item.supplier_name||"—";
+              return <tr key={item.id} style={{borderTop:`1px solid ${C.lineLight}`,background:neg?"#FEF2F2":ri%2===0?C.white:"#FAFBFC"}}>
+                <td style={{padding:"9px 12px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                    <Thumb src={item.image} size={30} radius={7}/>
+                    <div style={{minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:220}}>{item.name}{item.has_sop&&<span style={{fontSize:9,color:C.purple,marginLeft:5,fontWeight:800}}>SOP</span>}</div>
+                      {item.code&&<div style={{fontSize:10,color:C.ink4}}>{item.code}</div>}
+                    </div>
+                  </div>
+                </td>
+                <td style={{padding:"9px 12px",fontSize:12,color:C.ink3,whiteSpace:"nowrap"}}>{item.category||"—"}</td>
+                <td style={{padding:"9px 12px",fontSize:12,color:C.ink3,whiteSpace:"nowrap",maxWidth:160,overflow:"hidden",textOverflow:"ellipsis"}}>{supN}</td>
+                <td style={{padding:"9px 12px",fontSize:12,color:C.ink2,textAlign:"right",whiteSpace:"nowrap"}}>฿{(+item.buy_price||0).toLocaleString()}<span style={{fontSize:10,color:C.ink4}}> /{item.buy_amount} {item.buy_unit}</span></td>
+                <td style={{padding:"9px 12px",fontSize:12,color:C.green,textAlign:"right",whiteSpace:"nowrap"}}>฿{(+item.price_per_gram||0).toFixed(3)}</td>
+                <td style={{padding:"9px 12px",textAlign:"right",whiteSpace:"nowrap"}}><span style={{fontSize:15,fontWeight:900,color:neg?C.red:low?"#EA580C":C.green}}>{round2(bs)}</span><span style={{fontSize:10,color:C.ink4}}> {item.buy_unit}</span>{neg&&" ⚠️"}</td>
+                <td style={{padding:"9px 12px",fontSize:11,color:C.ink4,textAlign:"right",whiteSpace:"nowrap"}}>{safety>0?safety:"—"}</td>
+                <td style={{padding:"9px 12px",whiteSpace:"nowrap"}}>
+                  <div style={{display:"flex",gap:4,justifyContent:"flex-end"}}>
+                    <button onClick={()=>setStockHistItem(item)} title="ประวัติสต๊อก" style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:6,padding:"4px 7px",cursor:"pointer",display:"inline-flex"}}><Ic d={I.clock} s={13} c={C.ink3}/></button>
+                    {canE&&<button onClick={()=>openEdit(item)} title="แก้ไข" style={{background:C.blueLight,border:"none",borderRadius:6,padding:"4px 7px",cursor:"pointer",display:"inline-flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
+                  </div>
+                </td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
+      {paged.length<filtered.length&&<div style={{textAlign:"center",marginTop:16}}><Btn v="ghost" onClick={()=>setPg(p=>p+1)}>โหลดเพิ่ม ({filtered.length-paged.length})</Btn></div>}
+    </>:<>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(310px,100%),1fr))",gap:14}}>
         {paged.map(item=><Card key={item.id} hover style={{overflow:"hidden"}}>
           <div style={{display:"flex"}}>
