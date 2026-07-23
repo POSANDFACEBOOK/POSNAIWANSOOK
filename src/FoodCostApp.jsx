@@ -3348,11 +3348,18 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   // Don't auto-pop the native keyboard on mobile (it shoves the layout around); desktop only.
   useEffect(()=>{if(isMobile)return;const t=setTimeout(()=>inputRef.current?.focus(),100);return()=>clearTimeout(t);},[]);// eslint-disable-line react-hooks/exhaustive-deps
 
+  // Ingredients whose CURRENT stock is below 0 at this branch. Negative = more went out (ship /
+  // SOP / waste) than was ever counted in — a count error to correct, not a real quantity. Surfaced
+  // so whoever is counting fixes it, instead of it lingering invisibly.
+  const negatives=useMemo(()=>ings.filter(i=>branchStock(i,currentBranch.id)<-1e-9),[ings,currentBranch?.id]);
+  const[showNegOnly,setShowNegOnly]=useState(false);
   const filtered=useMemo(()=>{
-    if(!q.trim())return ings;
+    let list=ings;
+    if(showNegOnly)list=negatives;
+    if(!q.trim())return list;
     const ql=q.toLowerCase();
-    return ings.filter(i=>i.name.toLowerCase().includes(ql)||(i.category||"").toLowerCase().includes(ql)||(i.supplier_name||"").toLowerCase().includes(ql));
-  },[ings,q]);
+    return list.filter(i=>i.name.toLowerCase().includes(ql)||(i.category||"").toLowerCase().includes(ql)||(i.supplier_name||"").toLowerCase().includes(ql));
+  },[ings,q,showNegOnly,negatives]);
 
   async function saveOne(ing){
     if(savingRef.current[ing.id])return;   // already saving this item — ignore double-tap/ghost-click
@@ -3423,6 +3430,13 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อวัตถุดิบ / หมวด / ซัพพลาย..." style={{...iS,paddingLeft:40,fontSize:16,padding:"11px 14px 11px 40px"}}/>
       </div>
       <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:6}}>พบ <b style={{color:C.brand}}>{filtered.length}</b> รายการ {Object.keys(edits).length>0&&<span style={{color:C.green,marginLeft:8}}>· แก้ไขค้างไว้ {Object.keys(edits).length} รายการ</span>}</div>
+      {negatives.length>0&&<div style={{marginTop:8,background:C.redLight,border:`1.5px solid ${C.red}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:180}}>
+          <div style={{fontSize:13,fontWeight:900,color:C.red}}>⚠️ สต๊อกติดลบ {negatives.length} รายการ</div>
+          <div style={{fontSize:11,color:"#991B1B",marginTop:1}}>ถูกตัดออกมากกว่าที่เคยนับเข้า — ควรนับ/เติมให้ถูกต้อง</div>
+        </div>
+        <button onClick={()=>setShowNegOnly(v=>!v)} style={{background:showNegOnly?C.red:C.white,border:`1.5px solid ${C.red}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",color:showNegOnly?C.white:C.red,fontWeight:800,fontSize:12,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{showNegOnly?"↩ ดูทั้งหมด":"ดูเฉพาะที่ติดลบ"}</button>
+      </div>}
     </div>
     {/* Result list — card per ingredient (mobile-friendly) */}
     <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
@@ -3447,7 +3461,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
               <div style={{fontSize:15,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.25}}>{ing.name}</div>
               <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",display:"flex",gap:10,flexWrap:"wrap",marginTop:2}}>
                 {ing.category&&<span>{ing.category}</span>}
-                <span>เดิม <b style={{color:C.ink2}}>{cur}</b> {ing.buy_unit}</span>
+                <span>เดิม <b style={{color:cur<-1e-9?C.red:C.ink2}}>{round2(cur)}{cur<-1e-9?" ⚠️":""}</b> {ing.buy_unit}</span>
                 {safety>0&&<span style={{color:lowStock?"#92400E":C.ink4,fontWeight:lowStock?700:400}}>safety {safety}</span>}
               </div>
             </div>
