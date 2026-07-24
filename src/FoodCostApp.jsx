@@ -915,7 +915,17 @@ const ppg=(price,gram)=>(gram>0?price/gram:0);
 // the current max in its category (per the one-time recoding). Codes are a LABEL, never a key,
 // so a rare collision is harmless — but we still read the max live from the DB before assigning
 // so two admins adding at once don't reuse a number.
-const catCodePrefix=(cat)=>{const m=/\(([A-Za-z]\d{2})\)\s*$/.exec(cat||"");return m?m[1]:null;};
+// Accept 2+ digits so a group that grows past 99 (…(M100)) still parses as coded instead of
+// silently falling out of the scheme and breaking ingredient auto-numbering.
+const catCodePrefix=(cat)=>{const m=/\(([A-Za-z]\d{2,})\)\s*$/.exec(cat||"");return m?m[1]:null;};
+// A category's main-group LETTER (first char of its code): "วัตถุดิบ (M01)" → "M". null if uncoded.
+const catCodeLetter=(cat)=>{const p=catCodePrefix(cat);return p?p[0].toUpperCase():null;};
+// The readable category name with its trailing "(M01)" code stripped, for chip display.
+const catNameNoCode=(cat)=>String(cat||"").replace(/\s*\([A-Za-z]\d{2,}\)\s*$/,"").trim();
+// Distinct accent per main-group letter so each column reads as its own group. Unknown → slate.
+// All shades hit ≥4.5:1 against white so the small 10px code badge stays legible on a tablet.
+const CAT_LETTER_COLORS={M:"#2563EB",D:"#B45309",B:"#7C3AED",C:"#0F766E",E:"#BE123C",A:"#047857",F:"#BE185D",G:"#0E7490"};
+const catLetterColor=(l)=>CAT_LETTER_COLORS[String(l||"").toUpperCase()]||"#64748B";
 // Largest existing number for a prefix across a list of ingredient rows (0 if none). Robust to
 // unpadded/legacy codes because it compares NUMERICALLY, not lexically.
 function maxIngCodeNum(prefix,list){
@@ -2938,7 +2948,21 @@ function IngReportModal({kind,scope,data,currentBranch,onClose}){
 }
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[],menus=[]}){
   const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);const[showStockGate,setShowStockGate]=useState(false);const[stockCounter,setStockCounter]=useState(null);const[showSessionHist,setShowSessionHist]=useState(false);const[stockBtnLoading,setStockBtnLoading]=useState(false);
-  const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
+  const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");
+  // Which column is in "add" mode: a main-group letter ("M"…"E"), the "__new__" sentinel for the
+  // new-main-group form, or null. Per-column add lets each group mint its own next code, so a new
+  // category always continues that column's sequence.
+  const[addingCat,setAddingCat]=useState(null);
+  const[newGroupLetter,setNewGroupLetter]=useState("");   // letter typed in the "new main group" form
+  // Distinguishes an Escape-cancel from a real save when the rename input unmounts (blur-on-unmount
+  // would otherwise re-fire saveCatRename and persist the abandoned edit).
+  const cancelRenameRef=useRef(false);
+  // Open the rename editor for one chip, closing any open add form so two autoFocus inputs can't
+  // co-exist. Reset the cancel flag on open so a prior Escape whose blur never fired can't leak in
+  // and silently drop this rename.
+  const openRename=(c)=>{cancelRenameRef.current=false;setAddingCat(null);setEditingCatId(c.id);setEditingCatName(c.name);};
+  // Open an add form (a column letter or "__new__"), closing any open rename for the same reason.
+  const openAdd=(key)=>{setEditingCatId(null);setNewCatName("");setNewGroupLetter("");setAddingCat(key);};
   const[priceHistoryItem,setPriceHistoryItem]=useState(null);
   const[stockHistItem,setStockHistItem]=useState(null);
   const[viewMode,setViewMode]=useState(()=>{try{return localStorage.getItem("nw_ing_view")||"card";}catch{return "card";}});
@@ -2973,9 +2997,85 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     }
     return map;
   },[orders,allOrders,isCentral]);
-  async function addCat(){if(!newCatName.trim())return;try{await api.addCat({type:"ingredient",name:newCatName.trim()});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
-  async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;try{await api.updateCat(editingCatId,{name:editingCatName.trim()});await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
+  // Next code for a main-group letter ("M" → "M06" when M05 is the current max). Pads to a MINIMUM
+  // of 2 digits but never truncates, so past 99 it yields "M100" (still a valid 2+-digit code).
+  function nextCatCode(letter){
+    const L=String(letter||"").toUpperCase();let mx=0;
+    for(const c of ingCats){if(catCodeLetter(c.name)===L){const n=+catCodePrefix(c.name).slice(1)||0;if(n>mx)mx=n;}}
+    return L+String(mx+1).padStart(2,"0");
+  }
+  // Add a category into a coded column: strip any code the user typed and append THIS column's
+  // canonical next code, so the group's numbering stays sequential and unique.
+  async function addCat(letter){
+    const raw=(newCatName||"").trim();if(!raw)return;
+    const base=catNameNoCode(raw);if(!base)return;
+    const L=String(letter||"").toUpperCase();if(!/^[A-Z]$/.test(L)){alert("รหัสกลุ่มต้องเป็นตัวอักษร A–Z ตัวเดียว");return;}
+    const code=nextCatCode(L),name=`${base} (${code})`;
+    // Reject if the minted code or the full name already exists (defence-in-depth; nextCatCode is
+    // max+1 so this normally never fires, but it closes same-list collisions).
+    if(ingCats.some(c=>catCodePrefix(c.name)===code)){alert(`รหัส ${code} ถูกใช้แล้ว — ลองใหม่อีกครั้ง`);return;}
+    if(ingCats.some(c=>(c.name||"").trim()===name)){alert("มีหมวดนี้อยู่แล้ว");return;}
+    try{await api.addCat({type:"ingredient",name});await reloadCats();setNewCatName("");setNewGroupLetter("");setAddingCat(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+  }
+  // The "กลุ่มใหม่" form promises a BRAND-NEW main-group letter, so reject a letter that already has
+  // a column (that path is the per-column "เพิ่มหมวด" button, not this one).
+  async function addNewGroup(){
+    const L=(newGroupLetter||"").trim().toUpperCase();
+    if(!/^[A-Z]$/.test(L)){alert("รหัสกลุ่มต้องเป็นตัวอักษร A–Z ตัวเดียว");return;}
+    if(ingCats.some(c=>catCodeLetter(c.name)===L)){alert(`คอลัมน์ ${L} มีอยู่แล้ว — ถ้าต้องการเพิ่มในกลุ่มนี้ ใช้ปุ่ม "เพิ่มหมวด" ในคอลัมน์นั้น`);return;}
+    await addCat(L);
+  }
+  async function saveCatRename(){
+    // Escape unmounts the input, which fires onBlur → this function. Bail on a cancel so the
+    // abandoned edit is never persisted.
+    if(cancelRenameRef.current){cancelRenameRef.current=false;return;}
+    const id=editingCatId;   // capture: a save that resolves after the user opened ANOTHER chip's
+    const clearIfStillMine=()=>setEditingCatId(cur=>cur===id?null:cur);  // editor must not close it
+    const typed=(editingCatName||"").trim();if(!typed||!id){clearIfStillMine();return;}
+    const orig=ingCats.find(c=>c.id===id);
+    const origCode=orig?catCodePrefix(orig.name):null;
+    // A coded category's PREFIX is immutable via rename: strip whatever code the user typed and always
+    // re-attach the original. A rename changes only the readable label — never the code, which
+    // ingredient auto-numbering is keyed on (mutating it would orphan every ingredient already
+    // numbered under the old prefix and free the old code to collide with a future category).
+    let name=typed;
+    if(origCode){
+      const base=typed.replace(/\s*\([^)]*\)\s*$/,"").trim()||catNameNoCode(orig.name)||typed;
+      name=`${base} (${origCode})`;
+    }
+    if(orig&&(orig.name||"").trim()===name){clearIfStillMine();return;}   // no-op → skip the write
+    if(ingCats.some(c=>c.id!==id&&(c.name||"").trim()===name)){alert("มีหมวดชื่อนี้อยู่แล้ว");return;}
+    // An UNCODED category the user coded inline must not collide with an existing prefix.
+    const newCode=catCodePrefix(name);
+    if(newCode&&ingCats.some(c=>c.id!==id&&catCodePrefix(c.name)===newCode)){alert(`รหัส ${newCode} ถูกใช้กับหมวดอื่นแล้ว`);return;}
+    try{await api.updateCat(id,{name});await reloadCats();clearIfStillMine();}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+  }
   async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(c.id);await reloadCats();if(cat===c.name)setCat("ทุกหมวด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
+  // Group the ingredient categories into one column per main-group letter (M/D/B/C/E…), each
+  // sorted by its 2-digit number; uncoded legacy categories fall into their own last column.
+  // `label[L]` is the leading "X - …" segment shared by every category in the column (or "").
+  const catGroups=useMemo(()=>{
+    const groups={},uncoded=[];
+    for(const c of ingCats){
+      const L=catCodeLetter(c.name),code=catCodePrefix(c.name);
+      if(L){(groups[L]=groups[L]||[]).push({c,code,num:+code.slice(1)||0});}
+      else uncoded.push({c});
+    }
+    const label={};
+    Object.keys(groups).forEach(L=>{
+      groups[L].sort((a,b)=>a.num-b.num||a.code.localeCompare(b.code));
+      const segs=groups[L].map(({c})=>catNameNoCode(c.name).split(" - ")[0].trim());
+      label[L]=segs.length&&segs.every(s=>s===segs[0])?segs[0]:"";
+    });
+    return {groups,letters:Object.keys(groups).sort(),uncoded,label};
+  },[ingCats]);
+  // Visible-ingredient count per category name (respects branch visibility, ignores text/cat
+  // filter) — shown as a small tally on each category chip.
+  const catCounts=useMemo(()=>{
+    const m={};
+    for(const i of ings){if(!ingVisibleAt(i,currentBranch?.id,isCentral))continue;const k=i.category||"";m[k]=(m[k]||0)+1;}
+    return m;
+  },[ings,currentBranch,isCentral]);
   const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return ings.filter(i=>{const matchB=ingVisibleAt(i,currentBranch?.id,isCentral);const matchQ=!ql||i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql);return matchQ&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;});},[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   // Table view — click a header to sort by it, click again to flip direction.
@@ -3220,30 +3320,76 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       </div>
     </div>
     {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>วัตถุดิบจัดการโดยสาขาครัวกลางเท่านั้น • สาขานี้ดูข้อมูลได้อย่างเดียว</span></div>}
-    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-      <button onClick={()=>{setCat("ทุกหมวด");setPg(1);}} style={{padding:"7px 18px",borderRadius:20,border:`2px solid ${cat==="ทุกหมวด"?C.brand:C.line}`,background:cat==="ทุกหมวด"?C.brand:"transparent",color:cat==="ทุกหมวด"?C.white:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .15s"}}>ทุกหมวด</button>
-      {ingCats.map(c=>{const active=cat===c.name;
-        // New coded categories end with a "(M01)"-style code; tint them light blue so the new
-        // scheme is visually distinct from the legacy categories.
-        const isNew=/\([A-Za-z]\d{2}\)\s*$/.test(c.name||"");
-        return editingCatId===c.id?
-        <input key={c.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape")setEditingCatId(null);}} autoFocus style={{...iS,width:110,padding:"6px 12px",fontSize:13,borderRadius:20,border:`2px solid ${C.brand}`,fontWeight:700}}/>
-        :<div key={c.id} onClick={()=>{setCat(c.name);setPg(1);}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:20,border:`2px solid ${active?C.brand:isNew?"#7DD3FC":C.line}`,background:active?C.brand:isNew?"#E0F2FE":"transparent",cursor:"pointer",transition:"all .15s"}}>
-          <span style={{fontSize:13,fontWeight:700,color:active?C.white:isNew?"#0369A1":C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{c.name}</span>
-          {canE&&<div style={{display:"flex",gap:2,marginLeft:2}} onClick={e=>e.stopPropagation()}>
-            <button onClick={()=>{setEditingCatId(c.id);setEditingCatName(c.name);}} style={{background:active?"rgba(255,255,255,0.25)":"rgba(0,0,0,0.06)",border:"none",borderRadius:6,width:20,height:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.pencil} s={10} c={active?C.white:C.ink3}/></button>
-            <button onClick={()=>delCat(c)} style={{background:active?"rgba(255,255,255,0.25)":"rgba(239,68,68,0.1)",border:"none",borderRadius:6,width:20,height:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={10} c={active?C.white:C.red}/></button>
-          </div>}
-        </div>;
-      })}
-      {canE&&(addingCat?
-        <div style={{display:"flex",gap:6,alignItems:"center"}}>
-          <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addCat();if(e.key==="Escape"){setAddingCat(false);setNewCatName("");}}} autoFocus placeholder="ชื่อหมวดหมู่..." style={{...iS,width:130,padding:"6px 14px",fontSize:13,borderRadius:20,border:`2px solid ${C.brand}`,fontWeight:600}}/>
-          <button onClick={addCat} style={{padding:"7px 14px",borderRadius:20,background:C.brand,color:C.white,border:"none",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ตกลง</button>
-          <button onClick={()=>{setAddingCat(false);setNewCatName("");}} style={{padding:"7px 12px",borderRadius:20,background:"transparent",color:C.ink3,border:`1px solid ${C.line}`,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>ยกเลิก</button>
-        </div>
-        :<button onClick={()=>setAddingCat(true)} style={{padding:"7px 14px",borderRadius:20,border:`2px dashed ${C.line}`,background:"transparent",color:C.ink3,cursor:"pointer",fontSize:13,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:5,transition:"all .15s"}}><Ic d={I.plus} s={12} c={C.ink3}/>เพิ่มหมวด</button>
-      )}
+    <div style={{marginBottom:16}}>
+      {/* Show-all filter + hint + new-main-group control */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+        <button onClick={()=>{setCat("ทุกหมวด");setPg(1);}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 16px",borderRadius:20,border:`2px solid ${cat==="ทุกหมวด"?C.brand:C.line}`,background:cat==="ทุกหมวด"?C.brand:"transparent",color:cat==="ทุกหมวด"?C.white:C.ink3,cursor:"pointer",fontSize:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif",transition:"all .15s"}}><Ic d={I.tag} s={13} c={cat==="ทุกหมวด"?C.white:C.ink3}/>ทุกหมวด</button>
+        <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>แยกคอลัมน์ตามรหัสหมวดหลัก • คลิกหมวดเพื่อกรอง</span>
+        {canE&&<div style={{marginLeft:"auto"}}>
+          {addingCat==="__new__"
+            ?<div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",background:C.bg,border:`1px solid ${C.line}`,borderRadius:12,padding:"7px 9px"}}>
+              <span style={{fontSize:12,fontWeight:800,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กลุ่มใหม่</span>
+              <input value={newGroupLetter} onChange={e=>setNewGroupLetter(e.target.value.replace(/[^A-Za-z]/g,"").slice(0,1).toUpperCase())} autoFocus placeholder="รหัส" title="ตัวอักษร A–Z ตัวเดียว" style={{...iS,width:52,textAlign:"center",padding:"6px 6px",fontSize:14,borderRadius:9,fontWeight:800}}/>
+              <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addNewGroup();if(e.key==="Escape"){setAddingCat(null);setNewCatName("");setNewGroupLetter("");}}} placeholder="ชื่อหมวด..." style={{...iS,width:150,padding:"6px 10px",fontSize:13,borderRadius:9}}/>
+              {/^[A-Z]$/.test(newGroupLetter)&&(ingCats.some(c=>catCodeLetter(c.name)===newGroupLetter)
+                ?<span style={{fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>คอลัมน์ {newGroupLetter} มีแล้ว</span>
+                :<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>→ <b style={{color:catLetterColor(newGroupLetter),fontFamily:"ui-monospace,monospace"}}>{nextCatCode(newGroupLetter)}</b></span>)}
+              <button onClick={addNewGroup} style={{padding:"6px 12px",borderRadius:9,background:C.brand,color:"#fff",border:"none",cursor:"pointer",fontSize:12.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>เพิ่ม</button>
+              <button onClick={()=>{setAddingCat(null);setNewCatName("");setNewGroupLetter("");}} style={{padding:"6px 10px",borderRadius:9,background:"transparent",color:C.ink3,border:`1px solid ${C.line}`,cursor:"pointer",fontSize:12.5,fontFamily:"'Sarabun',sans-serif"}}>ยกเลิก</button>
+            </div>
+            :<button onClick={()=>openAdd("__new__")} title="สร้างกลุ่มหมวดหลักใหม่ด้วยรหัสตัวอักษรใหม่" style={{display:"flex",alignItems:"center",gap:5,padding:"7px 14px",borderRadius:20,border:`2px dashed ${C.line}`,background:"transparent",color:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}><Ic d={I.plus} s={12} c={C.ink3}/>กลุ่มใหม่</button>}
+        </div>}
+      </div>
+      {/* One column per main-group letter (M/D/B/C/E…), plus an uncoded column last */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:14,alignItems:"start"}}>
+        {[...catGroups.letters.map(L=>({letter:L,items:catGroups.groups[L],label:catGroups.label[L]})),
+          ...(catGroups.uncoded.length?[{letter:null,items:catGroups.uncoded,label:""}]:[])
+        ].map(col=>{
+          const accent=col.letter?catLetterColor(col.letter):"#64748B";
+          const title=col.letter?(col.label||`หมวด ${col.letter}`):"ไม่มีรหัส";
+          return <div key={col.letter||"_none"} style={{border:`1px solid ${C.line}`,borderTop:`3px solid ${accent}`,borderRadius:14,background:C.white,padding:12,display:"flex",flexDirection:"column",gap:7,boxShadow:"0 1px 3px rgba(15,23,42,.05)"}}>
+            {/* column header */}
+            <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:1}}>
+              <div style={{width:30,height:30,borderRadius:9,background:accent,color:"#fff",fontWeight:800,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>{col.letter||"–"}</div>
+              <div style={{minWidth:0,flex:1}}>
+                <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{title}</div>
+                <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{col.items.length} หมวด</div>
+              </div>
+            </div>
+            {/* category chips (sorted by code) */}
+            {col.items.map(({c,code})=>{
+              const active=cat===c.name;const cnt=catCounts[c.name]||0;
+              const full=catNameNoCode(c.name)||c.name;
+              // The shared leading segment is already in the column header, so drop it from the chip
+              // and show only the distinguishing tail (frees width in a narrow column).
+              const disp=(col.label&&full.startsWith(col.label+" - "))?full.slice((col.label+" - ").length):full;
+              return editingCatId===c.id?
+                <input key={c.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape"){cancelRenameRef.current=true;setEditingCatId(null);}}} autoFocus style={{...iS,width:"100%",padding:"7px 10px",fontSize:13,borderRadius:10,border:`2px solid ${accent}`,fontWeight:700}}/>
+                :<div key={c.id} onClick={()=>{setCat(c.name);setPg(1);}} title={c.name} style={{display:"flex",alignItems:"center",gap:7,padding:"7px 9px",borderRadius:10,border:`1.5px solid ${active?accent:C.line}`,background:active?accent+"14":C.white,cursor:"pointer",transition:"all .12s"}}>
+                  {code&&<span style={{fontSize:10,fontWeight:800,color:"#fff",background:accent,borderRadius:5,padding:"2px 5px",fontFamily:"ui-monospace,SFMono-Regular,monospace",flexShrink:0,letterSpacing:.3}}>{code}</span>}
+                  <span style={{fontSize:12.5,fontWeight:active?800:600,color:active?accent:C.ink2,fontFamily:"'Sarabun',sans-serif",flex:1,minWidth:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{disp}</span>
+                  <span title="จำนวนวัตถุดิบในหมวดนี้" style={{fontSize:11,color:active?accent:C.ink4,fontWeight:700,fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>{cnt}</span>
+                  {canE&&<div style={{display:"flex",gap:2}} onClick={e=>e.stopPropagation()}>
+                    <button title="แก้ชื่อ" onClick={()=>openRename(c)} style={{background:"rgba(0,0,0,0.05)",border:"none",borderRadius:6,width:20,height:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.pencil} s={10} c={C.ink3}/></button>
+                    <button title="ลบหมวด" onClick={()=>delCat(c)} style={{background:"rgba(239,68,68,0.1)",border:"none",borderRadius:6,width:20,height:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.x} s={10} c={C.red}/></button>
+                  </div>}
+                </div>;
+            })}
+            {/* per-column add — coded columns mint their own next code */}
+            {canE&&col.letter&&(addingCat===col.letter?
+              <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:1}}>
+                <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>รหัสใหม่: <b style={{color:accent,fontFamily:"ui-monospace,monospace"}}>{nextCatCode(col.letter)}</b></div>
+                <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addCat(col.letter);if(e.key==="Escape"){setAddingCat(null);setNewCatName("");}}} autoFocus placeholder="ชื่อหมวด..." style={{...iS,width:"100%",padding:"7px 10px",fontSize:13,borderRadius:10,border:`2px solid ${accent}`,fontWeight:600}}/>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>addCat(col.letter)} style={{flex:1,padding:"7px 10px",borderRadius:9,background:accent,color:"#fff",border:"none",cursor:"pointer",fontSize:12.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>เพิ่ม</button>
+                  <button onClick={()=>{setAddingCat(null);setNewCatName("");}} style={{padding:"7px 12px",borderRadius:9,background:"transparent",color:C.ink3,border:`1px solid ${C.line}`,cursor:"pointer",fontSize:12.5,fontFamily:"'Sarabun',sans-serif"}}>ยกเลิก</button>
+                </div>
+              </div>
+              :<button onClick={()=>openAdd(col.letter)} style={{marginTop:1,padding:"7px 10px",borderRadius:9,border:`1.5px dashed ${accent}66`,background:accent+"0D",color:accent,cursor:"pointer",fontSize:12.5,fontWeight:700,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:5,transition:"all .12s"}}><Ic d={I.plus} s={12} c={accent}/>เพิ่มหมวด</button>
+            )}
+          </div>;
+        })}
+      </div>
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
