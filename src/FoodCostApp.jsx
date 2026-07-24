@@ -908,6 +908,28 @@ function hasPerm(user,perm){
 }
 const ROLES={admin:{label:"Admin",color:"purple"},area:{label:"Area / พื้นที่",color:"orange"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"}};
 const ppg=(price,gram)=>(gram>0?price/gram:0);
+// === Ingredient category codes ===========================================
+// Categories carry a 3-char code in trailing parens, e.g. "เนื้อสัตว์ (M01)". Every
+// ingredient in a coded category gets a sequential code "<prefix>-<00001>". These helpers
+// derive the prefix and compute the NEXT code so a newly-created ingredient continues from
+// the current max in its category (per the one-time recoding). Codes are a LABEL, never a key,
+// so a rare collision is harmless — but we still read the max live from the DB before assigning
+// so two admins adding at once don't reuse a number.
+const catCodePrefix=(cat)=>{const m=/\(([A-Za-z]\d{2})\)\s*$/.exec(cat||"");return m?m[1]:null;};
+// Largest existing number for a prefix across a list of ingredient rows (0 if none). Robust to
+// unpadded/legacy codes because it compares NUMERICALLY, not lexically.
+function maxIngCodeNum(prefix,list){
+  let mx=0;const re=new RegExp("^"+prefix+"-(\\d+)$");
+  (Array.isArray(list)?list:[]).forEach(r=>{const m=re.exec((r&&r.code||"").trim());if(m){const n=+m[1];if(Number.isFinite(n)&&n>mx)mx=n;}});
+  return mx;
+}
+const fmtIngCode=(prefix,num)=>`${prefix}-${String(num).padStart(5,"0")}`;
+// Next code for a prefix, reading the current max straight from the DB (fresh, avoids a stale
+// page cache). Throws on network failure so callers can fall back to their local list.
+async function nextIngCodeForPrefix(prefix){
+  const rows=await sb(`ingredients?select=code&code=like.${prefix}-*`);
+  return fmtIngCode(prefix,maxIngCodeNum(prefix,rows)+1);
+}
 // Recipe amounts are stored CANONICALLY in grams (amountGram) because every cost path multiplies
 // them by a price-per-GRAM. The picker lets the operator type in กก./ลิตร/ช้อน etc., so convert at
 // write time — storing "1" for "1 กก." made that ingredient cost 1/1000 of reality.
@@ -1883,6 +1905,11 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
     setSaving(true);setProgress(0);
     let done=0,added=0,updated=0,failed=0;
     const skippedCtg=[];   // rows whose "รวมทั้งหมด (กรัม)" cell was 0/blank — ignored, not written
+    // Running per-category code counter for NEW rows that arrive without a code but land in a
+    // coded category ("...(M01)"). Seeded from the loaded list's current max, then bumped in-batch
+    // so several new rows in the same category get consecutive codes (no within-batch collision).
+    const codeCounter=new Map();
+    const nextBatchCode=(pf)=>{const cur=codeCounter.has(pf)?codeCounter.get(pf):maxIngCodeNum(pf,ings);const n=cur+1;codeCounter.set(pf,n);return fmtIngCode(pf,n);};
     for(const row of selected){
       try{
         const sup=row.supplier_name?suppliers.find(s=>s.name===row.supplier_name||(row.supplier_name&&s.name.includes(row.supplier_name))||(row.supplier_name&&row.supplier_name.includes(s.name))):null;
@@ -1954,6 +1981,8 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
           }
           if(!("note" in item))item.note="";
           if(!("supplier_id" in item)){item.supplier_id=null;item.supplier_name="";}
+          // No code in the file but the category is coded → continue the category's sequence.
+          if(!item.code){const pf=catCodePrefix(item.category);if(pf)item.code=nextBatchCode(pf);}
           await api.addIng({...item,image:null});added++;
         }
       }catch(e){console.error("skip:",row.name,e.message);failed++;}
@@ -3012,11 +3041,22 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       if(!await confirmDlg({title:"ยังไม่ได้ใส่จำนวนกรัม",message:msg+"\n\nบันทึกต่อโดยที่ต้นทุนของวัตถุดิบนี้จะยังเป็น 0?",danger:true,confirmLabel:"บันทึกต่อ"}))return;
     }
     setSaving(true);try{
+    // Auto-assign a sequential category code for a NEW ingredient whose category is coded
+    // ("...(M01)") and where the user didn't type one manually — continue from the current max.
+    // Read live so concurrent adds don't reuse a number; fall back to the loaded list on failure.
+    let codeToSave=(form.code||"").trim();
+    if(!editId&&!codeToSave){
+      const pf=catCodePrefix(form.category);
+      if(pf){
+        try{codeToSave=await nextIngCodeForPrefix(pf);}
+        catch{codeToSave=fmtIngCode(pf,maxIngCodeNum(pf,ings)+1);}
+      }
+    }
     // Pull existing safety_by_branch from the row being edited (if any) so we
     // only mutate the current branch's slot — safety is per-branch.
     const existingIng=editId?ings.find(x=>+x.id===+editId):null;
     const nextSafety=setBranchSafetyInJson(existingIng?.safety_by_branch,currentBranch.id,+form.safety_stock||0);
-    const item={...form,code:(form.code||"").trim()||null,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,safety_by_branch:nextSafety,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};
+    const item={...form,code:codeToSave||null,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,safety_by_branch:nextSafety,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};
     delete item.safety_stock; // legacy column — no longer touched from the form
     if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}
     await reload();setOpen(false);
