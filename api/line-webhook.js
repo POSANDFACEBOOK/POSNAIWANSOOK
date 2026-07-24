@@ -257,6 +257,17 @@ export default async function handler(req, res) {
 
   let body = {}; try { body = JSON.parse(raw || "{}"); } catch {}
   const events = Array.isArray(body.events) ? body.events : []; // empty on LINE's webhook-verify ping
+
+  // AUTO-REPLY KILL SWITCH. The bot is still in soft launch, so by default it stays SILENT — it
+  // accepts the webhook (200, so LINE keeps delivering) and still remembers followers' userIds for
+  // later, but sends NO card/menu/booking reply, leaving the conversation entirely to human admins.
+  // Flip it on only when officially launching: set Vercel env LINE_BOT_ENABLED = 1 (or "on"/"true").
+  const botEnabled = /^(1|true|on|yes)$/i.test(String(process.env.LINE_BOT_ENABLED || ""));
+  if (!botEnabled) {
+    for (const ev of events) { const uid = ev.source && ev.source.userId; if (uid) storeUser(bid, uid).catch(() => {}); }
+    return res.status(200).json({ ok: true, silent: true });
+  }
+
   let title = null, token = null;
 
   const menu = async (rt) => { if (title == null) title = bid ? await branchNameOf(bid) : BRAND; await reply(token, rt, [menuFlex(bid, title)]); };
