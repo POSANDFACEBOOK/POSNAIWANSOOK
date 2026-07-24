@@ -3182,10 +3182,14 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>วัตถุดิบจัดการโดยสาขาครัวกลางเท่านั้น • สาขานี้ดูข้อมูลได้อย่างเดียว</span></div>}
     <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
       <button onClick={()=>{setCat("ทุกหมวด");setPg(1);}} style={{padding:"7px 18px",borderRadius:20,border:`2px solid ${cat==="ทุกหมวด"?C.brand:C.line}`,background:cat==="ทุกหมวด"?C.brand:"transparent",color:cat==="ทุกหมวด"?C.white:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .15s"}}>ทุกหมวด</button>
-      {ingCats.map(c=>{const active=cat===c.name;return editingCatId===c.id?
+      {ingCats.map(c=>{const active=cat===c.name;
+        // New coded categories end with a "(M01)"-style code; tint them light blue so the new
+        // scheme is visually distinct from the legacy categories.
+        const isNew=/\([A-Za-z]\d{2}\)\s*$/.test(c.name||"");
+        return editingCatId===c.id?
         <input key={c.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape")setEditingCatId(null);}} autoFocus style={{...iS,width:110,padding:"6px 12px",fontSize:13,borderRadius:20,border:`2px solid ${C.brand}`,fontWeight:700}}/>
-        :<div key={c.id} onClick={()=>{setCat(c.name);setPg(1);}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:20,border:`2px solid ${active?C.brand:C.line}`,background:active?C.brand:"transparent",cursor:"pointer",transition:"all .15s"}}>
-          <span style={{fontSize:13,fontWeight:700,color:active?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{c.name}</span>
+        :<div key={c.id} onClick={()=>{setCat(c.name);setPg(1);}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:20,border:`2px solid ${active?C.brand:isNew?"#7DD3FC":C.line}`,background:active?C.brand:isNew?"#E0F2FE":"transparent",cursor:"pointer",transition:"all .15s"}}>
+          <span style={{fontSize:13,fontWeight:700,color:active?C.white:isNew?"#0369A1":C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{c.name}</span>
           {canE&&<div style={{display:"flex",gap:2,marginLeft:2}} onClick={e=>e.stopPropagation()}>
             <button onClick={()=>{setEditingCatId(c.id);setEditingCatName(c.name);}} style={{background:active?"rgba(255,255,255,0.25)":"rgba(0,0,0,0.06)",border:"none",borderRadius:6,width:20,height:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.pencil} s={10} c={active?C.white:C.ink3}/></button>
             <button onClick={()=>delCat(c)} style={{background:active?"rgba(255,255,255,0.25)":"rgba(239,68,68,0.1)",border:"none",borderRadius:6,width:20,height:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={10} c={active?C.white:C.red}/></button>
