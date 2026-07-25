@@ -5998,6 +5998,124 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     </Modal>}
   </div>;
 }
+// Report: for one ingredient, how much each branch ordered via internal POs (grouped by the
+// RECEIVING branch = "สาขาที่สั่ง"), filterable by date range and the PO's opening branch.
+function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
+  const[ingQ,setIngQ]=useState("");
+  const[selIng,setSelIng]=useState(null);
+  const[from,setFrom]=useState(defaultFrom);
+  const[to,setTo]=useState(defaultTo);
+  const[fromBranch,setFromBranch]=useState("");   // opener filter (from_branch_id)
+  const[busy,setBusy]=useState(false);
+  const[result,setResult]=useState(null);         // {rows,unit,capped,scanned}
+  const[err,setErr]=useState("");
+  const branchName=(id)=>{const b=(branches||[]).find(x=>+x.id===+id);return b?b.name:("สาขา "+id);};
+  const sugg=useMemo(()=>{
+    const q=ingQ.trim().toLowerCase();if(!q||selIng)return[];
+    return (ings||[]).filter(i=>(i.name||"").toLowerCase().includes(q)||(i.code||"").toLowerCase().includes(q)).slice(0,8);
+  },[ingQ,ings,selIng]);
+  async function run(){
+    if(!selIng){setErr("กรุณาเลือกวัตถุดิบก่อน");return;}
+    if(from>to){setErr("ช่วงวันที่ไม่ถูกต้อง (วันเริ่มมากกว่าวันสิ้นสุด)");return;}
+    setErr("");setBusy(true);setResult(null);
+    try{
+      const filters={dateFrom:from,dateTo:to};
+      if(fromBranch)filters.fromBranchId=+fromBranch;
+      const raw=await api.getPOs(filters);
+      const list=Array.isArray(raw)?raw:[];
+      const byBranch=new Map();let unit="";
+      // Match by ingredient_id; fall back to exact name for legacy items with no id.
+      const matchIng=(it)=>!!it&&((+it.ingredient_id===+selIng.id)||(it.ingredient_id==null&&(it.name||"").trim()===(selIng.name||"").trim()));
+      for(const po of list){
+        if(po.status==="cancelled")continue;                 // cancelled = ไม่ได้สั่งจริง
+        for(const it of (Array.isArray(po.items)?po.items:[])){
+          if(!matchIng(it))continue;
+          const bid=+po.branch_id;if(!unit)unit=it.unit||"";
+          const cur=byBranch.get(bid)||{branchId:bid,qty:0,recv:0,value:0,pos:new Set()};
+          cur.qty+=(+it.qty||0);
+          cur.recv+=(it.received_qty!=null?(+it.received_qty||0):0);
+          cur.value+=(+it.line_total||0);
+          cur.pos.add(po.id);byBranch.set(bid,cur);
+        }
+      }
+      const rows=[...byBranch.values()].map(r=>({...r,branchName:branchName(r.branchId),poCount:r.pos.size})).sort((a,b)=>b.qty-a.qty);
+      setResult({rows,unit,capped:list.length>=1000,scanned:list.length});
+    }catch(e){setErr("โหลดข้อมูลไม่สำเร็จ: "+((e&&e.message)||e));}
+    setBusy(false);
+  }
+  async function doExport(){
+    if(!result||!result.rows.length)return;
+    const XLSX=await loadXLSX();
+    const data=result.rows.map((r,i)=>({"ลำดับ":i+1,"สาขา":r.branchName,"จำนวนสั่ง":round2(r.qty),"หน่วย":result.unit,"รับแล้ว":round2(r.recv),"จำนวนใบ PO":r.poCount,"มูลค่า (฿)":round2(r.value)}));
+    const t=result.rows.reduce((s,r)=>({qty:s.qty+r.qty,recv:s.recv+r.recv,value:s.value+r.value,po:s.po+r.poCount}),{qty:0,recv:0,value:0,po:0});
+    data.push({"ลำดับ":"","สาขา":"รวมทั้งหมด","จำนวนสั่ง":round2(t.qty),"หน่วย":result.unit,"รับแล้ว":round2(t.recv),"จำนวนใบ PO":t.po,"มูลค่า (฿)":round2(t.value)});
+    const ws=XLSX.utils.json_to_sheet(data);ws["!cols"]=[{wch:6},{wch:24},{wch:12},{wch:8},{wch:12},{wch:12},{wch:14}];
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"รายงาน");
+    const safe=String(selIng.name||"วัตถุดิบ").replace(/[\\/?*\[\]:]/g,"_").slice(0,24);
+    XLSX.writeFile(wb,`รายงาน_${safe}_${from}_${to}.xlsx`);
+  }
+  const tot=result?result.rows.reduce((s,r)=>({qty:s.qty+r.qty,recv:s.recv+r.recv,value:s.value+r.value,po:s.po+r.poCount}),{qty:0,recv:0,value:0,po:0}):null;
+  const lbl={fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"};
+  const nf=(n)=>(+n||0).toLocaleString(undefined,{maximumFractionDigits:2});
+  return <Modal title="📊 รายงานตามวัตถุดิบ (สั่งซื้อรายสาขา)" onClose={onClose} wide>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(180px,100%),1fr))",gap:10,alignItems:"end",marginBottom:12}}>
+      <div style={{position:"relative"}}>
+        <div style={lbl}>วัตถุดิบ *</div>
+        <input value={ingQ} onChange={e=>{setIngQ(e.target.value);setSelIng(null);}} placeholder="พิมพ์ชื่อ/รหัสวัตถุดิบ..." style={{...iS,fontSize:13,padding:"8px 10px"}}/>
+        {sugg.length>0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:20,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,marginTop:4,boxShadow:"0 8px 24px rgba(15,23,42,.12)",maxHeight:240,overflowY:"auto"}}>
+          {sugg.map(i=><button key={i.id} onClick={()=>{setSelIng(i);setIngQ(i.name);}} style={{display:"flex",gap:8,alignItems:"center",width:"100%",padding:"8px 12px",background:"none",border:"none",borderBottom:`1px solid ${C.lineLight}`,cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
+            {i.code&&<span style={{fontSize:10,fontWeight:800,color:"#fff",background:C.ink3,borderRadius:5,padding:"2px 5px",fontFamily:"ui-monospace,monospace",flexShrink:0}}>{i.code}</span>}
+            <span style={{fontSize:13,color:C.ink2}}>{i.name}</span>
+          </button>)}
+        </div>}
+      </div>
+      <div><div style={lbl}>ตั้งแต่วันที่</div><input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/></div>
+      <div><div style={lbl}>ถึง</div><input type="date" value={to} onChange={e=>setTo(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/></div>
+      <div>
+        <div style={lbl}>สาขาที่เปิด PO</div>
+        <select value={fromBranch} onChange={e=>setFromBranch(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
+          <option value="">— ทุกสาขา —</option>
+          {(branches||[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+      </div>
+      <Btn v="primary" onClick={run} loading={busy} icon={I.search} s={{padding:"9px 16px"}}>ดูรายงาน</Btn>
+    </div>
+    {selIng&&<div style={{fontSize:12,color:C.ink3,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>วัตถุดิบ: <b style={{color:C.ink}}>{selIng.name}</b>{selIng.code?` (${selIng.code})`:""}</div>}
+    {err&&<div style={{background:C.redLight,border:`1px solid ${C.red}55`,borderRadius:10,padding:"8px 12px",marginBottom:10,fontSize:12.5,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>{err}</div>}
+    {result&&(result.rows.length===0
+      ?<div style={{textAlign:"center",padding:"40px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:14}}>ไม่พบการสั่งวัตถุดิบนี้ในช่วง/สาขาที่เลือก (สแกน {result.scanned} เอกสาร)</div>
+      :<div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+          <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{result.rows.length} สาขา · สแกน {result.scanned} เอกสาร{result.capped?" (ครบ 1000 — อาจมีมากกว่านี้ ลองแคบช่วงวันที่)":""}</div>
+          <Btn v="success" onClick={doExport} s={{padding:"7px 14px",fontSize:12}}>📥 Export Excel</Btn>
+        </div>
+        <div style={{overflowX:"auto",border:`1px solid ${C.line}`,borderRadius:12,background:C.white}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:560}}>
+            <thead><tr style={{background:"#0F172A"}}>
+              {[["สาขา","left"],["จำนวนสั่ง","right"],["รับแล้ว","right"],["ใบ PO","right"],["มูลค่า (฿)","right"]].map((h,i)=><th key={i} style={{padding:"10px 12px",fontSize:12,fontWeight:800,color:"#fff",textAlign:h[1]}}>{h[0]}</th>)}
+            </tr></thead>
+            <tbody>
+              {result.rows.map((r,i)=><tr key={r.branchId} style={{background:i%2?C.bg:C.white,borderTop:`1px solid ${C.lineLight}`}}>
+                <td style={{padding:"9px 12px",fontSize:13,color:C.ink2,fontWeight:600}}>{r.branchName}</td>
+                <td style={{padding:"9px 12px",fontSize:13,color:C.ink,fontWeight:800,textAlign:"right"}}>{nf(r.qty)} <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>{result.unit}</span></td>
+                <td style={{padding:"9px 12px",fontSize:12.5,color:C.ink3,textAlign:"right"}}>{nf(r.recv)}</td>
+                <td style={{padding:"9px 12px",fontSize:12.5,color:C.ink3,textAlign:"right"}}>{r.poCount}</td>
+                <td style={{padding:"9px 12px",fontSize:12.5,color:C.ink2,textAlign:"right"}}>{nf(r.value)}</td>
+              </tr>)}
+            </tbody>
+            {tot&&<tfoot><tr style={{background:C.brandLight,borderTop:`2px solid ${C.brand}`}}>
+              <td style={{padding:"10px 12px",fontSize:13,fontWeight:800,color:C.brand}}>รวมทั้งหมด</td>
+              <td style={{padding:"10px 12px",fontSize:13,fontWeight:800,color:C.brand,textAlign:"right"}}>{nf(tot.qty)} <span style={{fontSize:11,fontWeight:600}}>{result.unit}</span></td>
+              <td style={{padding:"10px 12px",fontSize:12.5,fontWeight:800,color:C.brand,textAlign:"right"}}>{nf(tot.recv)}</td>
+              <td style={{padding:"10px 12px",fontSize:12.5,fontWeight:800,color:C.brand,textAlign:"right"}}>{tot.po}</td>
+              <td style={{padding:"10px 12px",fontSize:12.5,fontWeight:800,color:C.brand,textAlign:"right"}}>{nf(tot.value)}</td>
+            </tr></tfoot>}
+          </table>
+        </div>
+      </div>)}
+  </Modal>;
+}
+
 function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders,orders=[],reloadOrders,initialAction,onConsumeAction}){
   // Every branch (central or otherwise) can issue a PO to any other branch
   // and only ever sees POs it's involved in (as sender or receiver).
@@ -6013,6 +6131,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[filterStatus,setFilterStatus]=useState("");
   const[dateFrom,setDateFrom]=useState(ago);
   const[dateTo,setDateTo]=useState(today);
+  const[showIngReport,setShowIngReport]=useState(false);
   const[step,setStep]=useState(null);
   const[pickedBranch,setPickedBranch]=useState(null);
   const[editPO,setEditPO]=useState(null);
@@ -7087,7 +7206,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
           <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ถึง</div>
           <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/>
         </div>
-        <Btn v="ghost" onClick={load} icon={I.refresh} s={{padding:"8px 14px",fontSize:12}}>รีเฟรช</Btn>
+        <Btn v="info" onClick={()=>setShowIngReport(true)} s={{padding:"8px 14px",fontSize:12,whiteSpace:"nowrap"}}>📊 รายงานตามวัตถุดิบ</Btn>
       </div>
       {pos.length>0&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.line}`,display:"flex",justifyContent:"space-between",fontSize:12,fontFamily:"'Sarabun',sans-serif",color:C.ink3}}>
         <span>📑 พบ <b style={{color:C.ink}}>{pos.length}</b> เอกสาร</span>
@@ -7347,6 +7466,8 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       onDelete={()=>delPO(viewPO)}
     />}
     {payPO&&<POPaymentModal po={payPO} fromBranch={branchById[payPO.from_branch_id]} toBranch={branchById[payPO.branch_id]} onClose={()=>setPayPO(null)} onSubmit={(url,note)=>{submitPayment(payPO,url,note);setPayPO(null);}}/>}
+
+    {showIngReport&&<IngPOReportModal branches={branches} ings={ings} defaultFrom={dateFrom} defaultTo={dateTo} onClose={()=>setShowIngReport(false)}/>}
 
     {/* Transfer creation — pick destination + items + qty, no price */}
     {transferForm&&(()=>{
