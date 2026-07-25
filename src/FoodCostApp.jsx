@@ -56,7 +56,21 @@ function bkkNowMinutes(){
   }catch{const d=new Date();return d.getHours()*60+d.getMinutes();}
 }
 // Allowed stock-count window (Asia/Bangkok, minutes-of-day). Branch 16:00–23:30 · Central 12:00–16:00.
-function stockCountWindow(isCentral){ return isCentral?{s:12*60,e:16*60,lbl:"12:00–16:00"}:{s:16*60,e:23*60+30,lbl:"16:00–23:30"}; }
+// Day of week in Asia/Bangkok (0=Sun … 6=Sat), regardless of device timezone.
+function bkkWeekday(){
+  try{
+    const wd=new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Bangkok",weekday:"short"}).format(new Date());
+    const map={Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6};
+    return wd in map?map[wd]:new Date().getDay();
+  }catch{return new Date().getDay();}
+}
+// Allowed stock-count window (Asia/Bangkok, end exclusive). Branch 16:00–23:30 every day.
+// Central 12:00–16:00 — EXCEPT Saturday, when central shifts to 13:00–18:00.
+function stockCountWindow(isCentral){
+  if(!isCentral)return{s:16*60,e:23*60+30,lbl:"16:00–23:30"};
+  if(bkkWeekday()===6)return{s:13*60,e:18*60,lbl:"13:00–18:00"};
+  return{s:12*60,e:16*60,lbl:"12:00–16:00"};
+}
 const hhmmOfMin=m=>`${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
 // Friendly error mapping (avoid leaking Postgres internals to cashiers)
 function friendlyError(err){
