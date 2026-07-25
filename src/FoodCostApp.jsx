@@ -6057,7 +6057,7 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
   const tot=result?result.rows.reduce((s,r)=>({qty:s.qty+r.qty,recv:s.recv+r.recv,value:s.value+r.value,po:s.po+r.poCount}),{qty:0,recv:0,value:0,po:0}):null;
   const lbl={fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"};
   const nf=(n)=>(+n||0).toLocaleString(undefined,{maximumFractionDigits:2});
-  return <Modal title="📊 รายงานตามวัตถุดิบ (สั่งซื้อรายสาขา)" onClose={onClose} wide>
+  return <Modal title="📊 รายงานตามวัตถุดิบ (สั่งซื้อรายสาขา)" onClose={onClose} extraWide>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(180px,100%),1fr))",gap:10,alignItems:"end",marginBottom:12}}>
       <div style={{position:"relative"}}>
         <div style={lbl}>วัตถุดิบ *</div>
