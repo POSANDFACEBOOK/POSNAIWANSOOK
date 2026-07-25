@@ -6005,7 +6005,7 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
   const[selIng,setSelIng]=useState(null);
   const[from,setFrom]=useState(defaultFrom);
   const[to,setTo]=useState(defaultTo);
-  const[fromBranch,setFromBranch]=useState("");   // opener filter (from_branch_id)
+  const[pickBranch,setPickBranch]=useState("");   // narrow to one ORDERING branch (branch_id = recipient)
   const[busy,setBusy]=useState(false);
   const[result,setResult]=useState(null);         // {rows,unit,capped,scanned}
   const[err,setErr]=useState("");
@@ -6020,7 +6020,7 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
     setErr("");setBusy(true);setResult(null);
     try{
       const filters={dateFrom:from,dateTo:to};
-      if(fromBranch)filters.fromBranchId=+fromBranch;
+      if(pickBranch)filters.toBranchId=+pickBranch;   // the ORDERING branch is the RECEIVER of the PO
       const raw=await api.getPOs(filters);
       const list=Array.isArray(raw)?raw:[];
       const byBranch=new Map();let unit="";
@@ -6072,8 +6072,8 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
       <div><div style={lbl}>ตั้งแต่วันที่</div><input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/></div>
       <div><div style={lbl}>ถึง</div><input type="date" value={to} onChange={e=>setTo(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/></div>
       <div>
-        <div style={lbl}>สาขาที่เปิด PO</div>
-        <select value={fromBranch} onChange={e=>setFromBranch(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
+        <div style={lbl}>สาขาที่สั่ง (ผู้รับของ)</div>
+        <select value={pickBranch} onChange={e=>setPickBranch(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
           <option value="">— ทุกสาขา —</option>
           {(branches||[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
