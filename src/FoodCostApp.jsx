@@ -641,6 +641,17 @@ async function pushPOToSlipTrack(po, branches, opts={}){
 // it — the whole feature degrades to a no-op until the column is added.
 function slipSyncFlag(res){ return !res?"failed":res.ok?"ok":res.skipped?"skip":"failed"; }
 async function recordSlipSync(poId,res){ try{ await api.updatePO(poId,{sliptrack_sync:slipSyncFlag(res)}); }catch{} }
+// A PO whose accounting row hasn't confirmed-synced and needs a (re)push. Shared by the client
+// self-heal, the "ค้างซิงค์" badge, and the server cron sweep so all three agree EXACTLY:
+//  • flag is null (unrecorded push) or 'failed' (push that errored) — 'ok'/'skip' are done, and
+//  • received_at is set — an unreceived PO never touched accounting, so nothing to (un)post, and
+//  • status is a real accounting action: awaiting_payment/paid → (re)bill, cancelled → (re)void.
+// resyncPOToSlipTrack / the server sweep re-read live status and route bill-vs-void accordingly;
+// a void on a never-billed row is a harmless no-op (SlipTrack returns cancelled:0).
+const poNeedsSlipSync=(p)=>!!p
+  &&(p.sliptrack_sync==null||p.sliptrack_sync==="failed")
+  &&!!p.received_at
+  &&(p.status==="awaiting_payment"||p.status==="paid"||p.status==="cancelled");
 
 const C = {
   brand:"#FF6B35",brandDark:"#E85520",brandLight:"#FFF4F0",brandBorder:"#FFD4C2",
@@ -5981,6 +5992,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const today=todayBkk();
   const ago=(d=>{const t=new Date();t.setDate(t.getDate()-d);return t.toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});})(30);
   const[pos,setPOs]=useState([]);
+  const[slipFixing,setSlipFixing]=useState(false);   // manual "ส่งเข้าบัญชีเดี๋ยวนี้" in progress
   const[loading,setLoading]=useState(false);
   const[direction,setDirection]=useState("all");  // all | sent | received
   const[partnerFilter,setPartnerFilter]=useState("");  // other party
@@ -6062,21 +6074,21 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         const fixedIds=new Set(stranded.map(p=>p.id));
         data=data.map(p=>fixedIds.has(p.id)?{...p,status:"requested"}:p);
       }
-      // ── Self-heal failed accounting syncs ────────────────────────────────
-      // Re-push POs whose last SlipTrack push failed (sliptrack_sync='failed') so
-      // accounting converges without waiting for the manual bulk-sync. Idempotent
-      // (?upsert=1), bounded to 15, guarded against overlap, and detached so it never
-      // delays this stock screen. Legacy POs (null flag) are left to the bulk-sync —
-      // we only retry rows a push actually recorded as failed.
+      // ── Self-heal unsynced accounting rows ───────────────────────────────
+      // Accounting data must never be silently dropped, so re-push any billable PO that
+      // hasn't confirmed-synced — both an explicit 'failed' AND a null flag (a push whose
+      // result was never recorded: the tab closed mid-request, or it predates the flag).
+      // The null case is exactly what stranded real June POs. Idempotent (?upsert=1),
+      // bounded, overlap-guarded, detached so it never delays this screen. The server-side
+      // cron sweep (api/sliptrack-sweep) is the cross-branch guarantee; this is the fast,
+      // when-the-screen-is-open layer.
       if(!slipHealRef.current){
-        // Retry only docs a push left 'failed' AND still in a state we sync:
-        // awaiting_payment/paid → re-bill, cancelled → re-void (NEVER resurrect a
-        // cancelled PO as a payable). Cap ≤1 auto-retry per PO per mount so a
-        // permanently-failing row can't spam on every filter toggle (bulk-sync is the
-        // manual escape hatch).
-        const toHeal=data.filter(p=>p.sliptrack_sync==="failed"
-          &&(p.status==="awaiting_payment"||p.status==="paid"||p.status==="cancelled")
-          &&!slipHealedRef.current.has(p.id)).slice(0,15);
+        // 'failed' billable/cancelled → re-bill or re-void (never resurrect a cancelled PO
+        // as payable — resyncPOToSlipTrack re-reads live status first). A null flag only
+        // heals a RECEIVED billable PO (a null cancelled/open row was never pushed → nothing
+        // to void/bill). Cap ≤1 auto-retry per PO per mount so a permanently-failing row
+        // can't spam on every filter toggle.
+        const toHeal=data.filter(p=>poNeedsSlipSync(p)&&!slipHealedRef.current.has(p.id)).slice(0,15);
         if(toHeal.length){
           slipHealRef.current=true;
           (async()=>{try{for(const po of toHeal){slipHealedRef.current.add(po.id);await resyncPOToSlipTrack(po);}}finally{slipHealRef.current=false;}})();
@@ -6649,7 +6661,13 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       // Race-safe — abort if another user/tab changed status while we were
       // reading the row. patchPOIfStatus throws if 0 rows match the
       // expected status, surfaced as "เอกสารถูกแก้ไขโดยผู้ใช้อื่นแล้ว".
-      await api.patchPOIfStatus(po.id,po.status,{status:"cancelled",updated_at:new Date().toISOString()});
+      // Reset sliptrack_sync when this PO already reached accounting (received → billed): the void
+      // below is best-effort and can be DROPPED (tab close mid-request) without recording a flag.
+      // Clearing to null here — atomically with the cancel — means a dropped void leaves the row
+      // re-selectable by the server sweep / self-heal (which re-read status=cancelled → re-void),
+      // instead of staying 'ok' and stranding a phantom payable forever. A successful void below
+      // sets it back to 'ok'.
+      await api.patchPOIfStatus(po.id,po.status,{status:"cancelled",updated_at:new Date().toISOString(),...(wasReceived&&{sliptrack_sync:null})});
       // `po` still holds the PRE-cancel status, which rollbackPOStock routes on
       // (NOT_MOVED statuses are a safe no-op inside it). REPLACE stock_pending with the reversal
       // result: this clears the now-accounted-for original pending (so the 🔁 button can't re-fire
@@ -6688,15 +6706,23 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     const assetWarnDel=isAssetPO(po)&&wasReceived?`\n\n⚠️ สินทรัพย์ที่ "ยืนยันรับแล้ว" ถูกเพิ่มเข้าสาขาไปแล้ว ระบบจะไม่ลบจำนวนให้อัตโนมัติ — ปรับเองที่แท็บ "สินทรัพย์"`:"";
     if(!await confirmDlg({title:isPaid?"⚠️ ลบเอกสารที่ชำระแล้ว":"ลบเอกสาร PO",message:msg+assetWarnDel,danger:true,confirmLabel:isPaid?"ลบทิ้งถาวร":(wasReceived?"ลบ + คืนสต็อก":"ลบ")}))return;
     try{
-      // Conditional DELETE first — claims the row only if its status is still what
-      // this screen showed (a concurrent "🚚 จัดส่ง" on another device aborts here
-      // instead of silently stranding its deduction). Rollback runs on the RETURNED
-      // row, so it reads fresh items/branch_ids, not the stale list row.
+      // A received PO already has an accounting row. Once this PO is DELETED, nothing — not even
+      // the server sweep — can ever re-void it (there's no row left to find). So void FIRST and
+      // require it to confirm; if it doesn't land, abort and keep the PO (the operator can retry,
+      // or use "ยกเลิก" which leaves a re-voidable tombstone). This closes the dropped-void →
+      // phantom-payable hole that a fire-and-forget void after an irreversible delete would leave.
+      // Void for ANY received PO (assets included — confirmReceive bills them too; the void is
+      // idempotent by external_id, so a never-billed one just returns cancelled:0 → ok, and won't
+      // block the delete).
+      if(wasReceived){
+        const rv=await pushPOToSlipTrack(po,branches,{voided:true});
+        if(!rv.ok){alert('ยกเลิกรายการในระบบบัญชีไม่สำเร็จ — ยังไม่ได้ลบเอกสาร\nกรุณาลองใหม่อีกครั้ง หรือกด "ยกเลิก" แทน (ระบบจะตามส่งให้บัญชีอัตโนมัติ)');return;}
+      }
+      // Conditional DELETE — claims the row only if its status is still what this screen showed
+      // (a concurrent "🚚 จัดส่ง" on another device aborts here instead of silently stranding its
+      // deduction). Rollback runs on the RETURNED row, so it reads fresh items/branch_ids.
       const deleted=await api.deletePOIfStatus(po.id,po.status);
       if(wasReceived&&!isAssetPO(po))await rollbackPOStock(deleted||po);   // asset POs never touched ingredient stock
-      // Deleted for good → no future re-sync can ever match this external_id, so
-      // void its accounting row now (idempotent). Covers cancelled-then-deleted POs.
-      if(wasReceived)pushPOToSlipTrack(deleted||po,branches,{voided:true}).then(r=>recordSlipSync((deleted||po).id,r));
       await load();setViewPO(null);
     }catch(e){alert("ลบไม่สำเร็จ: "+e.message);}
   }
@@ -6980,6 +7006,19 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     if(reloadOrders)await reloadOrders();
   }
 
+  // Billable POs in view that haven't confirmed-synced to accounting — surfaced so a row that
+  // keeps failing (e.g. a branch-name accounting doesn't know) is VISIBLE, not retried forever
+  // in silence. The auto layers (self-heal + server sweep) fix the transient ones; this button
+  // is the manual "do it now".
+  const slipStuck=useMemo(()=>(pos||[]).filter(poNeedsSlipSync),[pos]);
+  async function fixStuckSlips(){
+    if(slipFixing||!slipStuck.length)return;
+    setSlipFixing(true);
+    try{ for(const po of slipStuck){ await resyncPOToSlipTrack(po); } await load(); }
+    catch(e){ showErr("ส่งเข้าบัญชีไม่สำเร็จ",e); }
+    finally{ setSlipFixing(false); }
+  }
+
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10}}>
       <div>
@@ -6992,6 +7031,11 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         {/* สั่งวัตถุดิบ / โอนวัตถุดิบ / สร้างเอกสาร PO ย้ายไปหัวแถบ "ใบขอซื้อ" แล้ว */}
       </div>
     </div>
+
+    {isCentralBranch&&slipStuck.length>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:12,padding:"10px 14px",marginBottom:14}}>
+      <span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>⏳ มี {slipStuck.length} PO ที่ยังไม่เข้าระบบบัญชี — ระบบกำลังส่งให้อัตโนมัติ</span>
+      <button onClick={fixStuckSlips} disabled={slipFixing} style={{padding:"7px 14px",borderRadius:9,border:"none",background:slipFixing?C.lineLight:"#D97706",color:slipFixing?C.ink3:"#fff",cursor:slipFixing?"not-allowed":"pointer",fontSize:12.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{slipFixing?"กำลังส่ง...":"📤 ส่งเข้าบัญชีเดี๋ยวนี้"}</button>
+    </div>}
 
     <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
       {[
