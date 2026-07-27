@@ -12,6 +12,8 @@
 -- ยิงซ้ำได้ทุกวัน (idempotent) — ฝั่งบัญชีทับยอดเดิมของงวดนั้นให้
 --
 -- ก่อนรัน:
+--   0. ⚠️ ต้องตั้ง "ยอดยกมา" ของงวดแรกก่อน ไม่งั้นต้นทุนวัตถุดิบงวดแรกจะต่ำกว่าจริงทั้งก้อน
+--      → รัน sql/sliptrack-opening.sql แล้วยิง capture ครั้งเดียวตามที่อธิบายในไฟล์นั้น
 --   1. ต้อง deploy โค้ดที่มี /api/sliptrack-sweep?job=daily ขึ้น production แล้ว
 --   2. env ที่ Vercel ต้องมี SLIPTRACK_API_KEY (มีอยู่แล้ว) และ SLIPTRACK_SWEEP_KEY (ตั้งไว้ตอนทำ PO sweep)
 --   3. แทน <YOUR_SWEEP_KEY> ด้านล่างด้วยค่าเดียวกับ SLIPTRACK_SWEEP_KEY
