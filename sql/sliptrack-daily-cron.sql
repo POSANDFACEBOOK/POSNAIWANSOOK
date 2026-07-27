@@ -12,7 +12,7 @@
 -- ยิงซ้ำได้ทุกวัน (idempotent) — ฝั่งบัญชีทับยอดเดิมของงวดนั้นให้
 --
 -- ก่อนรัน:
---   1. ต้อง deploy โค้ดที่มี /api/sliptrack-daily ขึ้น production แล้ว
+--   1. ต้อง deploy โค้ดที่มี /api/sliptrack-sweep?job=daily ขึ้น production แล้ว
 --   2. env ที่ Vercel ต้องมี SLIPTRACK_API_KEY (มีอยู่แล้ว) และ SLIPTRACK_SWEEP_KEY (ตั้งไว้ตอนทำ PO sweep)
 --   3. แทน <YOUR_SWEEP_KEY> ด้านล่างด้วยค่าเดียวกับ SLIPTRACK_SWEEP_KEY
 --      ⚠️ repo เป็น PUBLIC — อย่า commit คีย์จริง ใส่ตอนวางใน SQL editor เท่านั้น
@@ -34,7 +34,7 @@ select cron.schedule(
   '45 16 * * *',      -- 16:45 UTC = 23:45 น. เวลาไทย ทุกวัน
   $$
     select net.http_post(
-      url := 'https://foodcost-eta.vercel.app/api/sliptrack-daily?key=<YOUR_SWEEP_KEY>',
+      url := 'https://foodcost-eta.vercel.app/api/sliptrack-sweep?job=daily&key=<YOUR_SWEEP_KEY>',
       headers := '{"Content-Type":"application/json"}'::jsonb,
       timeout_milliseconds := 55000
     );
@@ -47,5 +47,5 @@ select cron.schedule(
 -- หยุดชั่วคราว:      select cron.unschedule('sliptrack-daily');
 --
 -- ลองด้วยมือก่อนได้ (ไม่ส่งจริง แค่คำนวณให้ดู):
---   https://foodcost-eta.vercel.app/api/sliptrack-daily?key=<YOUR_SWEEP_KEY>&dry=1
+--   https://foodcost-eta.vercel.app/api/sliptrack-sweep?job=daily&key=<YOUR_SWEEP_KEY>&dry=1
 -- ส่งเฉพาะบางส่วน:  &only=stock  หรือ  &only=assets

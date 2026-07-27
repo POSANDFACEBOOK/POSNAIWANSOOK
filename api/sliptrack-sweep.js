@@ -164,6 +164,13 @@ export default async function handler(req, res) {
   const apiKey = process.env.SLIPTRACK_API_KEY;
   if (!apiKey) return res.status(500).json({ error: "SLIPTRACK_API_KEY not configured" });
 
+  // ?job=daily → งานรายวันคนละชุด: ส่งยอดตรวจนับสต๊อก (ม.87) + ทะเบียนทรัพย์สิน (ค่าเสื่อม)
+  // อยู่รวมกับ endpoint นี้เพราะแพลน Vercel จำกัดจำนวน serverless function ต่อ deployment
+  if (String((req.query && req.query.job) || "") === "daily") {
+    const { runDaily } = await import("../lib/sliptrack-daily.js");
+    return runDaily(req, res, apiKey);
+  }
+
   const base = process.env.PUBLIC_BASE_URL
     || (req.headers["x-forwarded-host"] ? `https://${req.headers["x-forwarded-host"]}` : "https://foodcost-eta.vercel.app");
 
