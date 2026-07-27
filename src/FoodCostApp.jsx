@@ -214,6 +214,20 @@ const api = {
   // change must abort or we'd overwrite it with a wrong count (mint/lose units).
   updateAssetIfQty: async (id, expectedQty, d) => { const r = await sb(`assets?id=eq.${id}&quantity=eq.${expectedQty}`, { method: "PATCH", headers: { "Prefer": "return=representation" }, body: JSON.stringify(d) }); if (!Array.isArray(r) || r.length === 0) throw new Error("จำนวนสินทรัพย์ต้นทางเปลี่ยนไปแล้ว — รีเฟรชแล้วลองใหม่"); return r; },
   deleteAsset: (id) => sb(`assets?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
+  // ส่งทะเบียนทรัพย์สินเข้าระบบบัญชี (ค่าเสื่อม ม.65 ทวิ). ส่งแค่ id — เซิร์ฟเวอร์อ่านแถวจริง
+  // แล้วสร้าง payload เอง จึงมีสูตรชุดเดียว ไม่ต้องคอยไล่ให้ตรงกับ cron รายวัน
+  // dispose=true → แจ้งบัญชีตัดออกจากทะเบียน (ไม่ลบประวัติ) · คืน {ok:false} แทน throw
+  pushAssetToSlipTrack: async (assetId, opts = {}) => {
+    try {
+      const r = await fetch("/api/sliptrack-push", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "fixed_asset", asset_id: +assetId, ...(opts.dispose ? { dispose: true } : {}) }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, status: r.status, error: (d && (d.error || d.message)) || `HTTP ${r.status}` };
+      return { ok: true, data: d };
+    } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  },
   getCostHist: (bid) => sb(`cost_history?order=id.desc&limit=50${bid ? `&branch_id=eq.${bid}` : ""}`),
   addCostHist: (d) => sb("cost_history", { method: "POST", body: JSON.stringify(d) }),
   deleteCostHistItem: (id) => sb(`cost_history?id=eq.${id}`, {method:"DELETE", prefer:"return=minimal"}),
@@ -10141,6 +10155,7 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
       const totalSalvage=+xfer.salvage_value||0;
       const salvageMoved=have>0?round2(totalSalvage*n/have):0;
       const note=(xfer.note?xfer.note+" · ":"")+`โอนมาจาก ${currentBranch?.name||"?"} ${fmtD(todayBkk())}`;
+      let movedId=null;   // แถวใหม่ที่เกิดจากการแยก (ถ้ามี) — ต้องแจ้งบัญชีด้วย
       if(n>=have){
         await api.updateAsset(xfer.id,{branch_id:destId,note});
       }else{
@@ -10154,10 +10169,20 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
           // Guard on the EXACT quantity we split from (have), not on n.
           await api.updateAssetIfQty(xfer.id,have,{quantity:have-n,salvage_value:round2(totalSalvage-salvageMoved)});
         }catch(e){
-          if(newId){try{await api.deleteAsset(newId);}catch{}}
-          throw new Error("จำนวนต้นทางเปลี่ยน — ยกเลิกการสร้างปลายทางแล้ว");
+          // ย้อนแถวปลายทางที่เพิ่งสร้าง — ถ้าลบไม่สำเร็จด้วย จะเหลือแถวซ้ำค้างอยู่จริง
+          // ต้องบอกผู้ใช้ตามความจริง ไม่ใช่บอกว่า "ยกเลิกแล้ว" ทั้งที่ยังอยู่
+          let rolledBack=true;
+          if(newId){try{await api.deleteAsset(newId);}catch{rolledBack=false;}}
+          throw new Error(rolledBack
+            ?"จำนวนต้นทางเปลี่ยน — ยกเลิกการสร้างปลายทางแล้ว"
+            :`จำนวนต้นทางเปลี่ยน และลบแถวปลายทางที่สร้างไว้ไม่สำเร็จ\n\n⚠️ มีสินทรัพย์ซ้ำค้างอยู่ที่ปลายทาง (id ${newId}) กรุณาลบเองที่แท็บสินทรัพย์`);
         }
+        movedId=newId;
       }
+      // แจ้งทะเบียนบัญชีทันที: การโอนย้ายเปลี่ยน "สาขาที่ถือครอง" และการแยกแถวทำให้เกิดทะเบียนใหม่
+      // ถ้ารอ cron รอบดึก ทะเบียนรายสาขาจะผิดทั้งวัน (และถ้าข้ามวันปิดงวดจะแก้ไม่ได้อีก)
+      api.pushAssetToSlipTrack(xfer.id);
+      if(movedId)api.pushAssetToSlipTrack(movedId);
       setXfer(null);await reloadAssets();
       alert("✅ โอนย้ายสินทรัพย์สำเร็จ");
     }catch(e){alert("โอนไม่สำเร็จ: "+((e&&e.message)||e));}
@@ -10183,6 +10208,14 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
   function closeForm(){setShowForm(false);setForm(A0);setEditId(null);}
   async function save(){
     if(!form.name.trim()){alert("กรุณาใส่ชื่อสินทรัพย์");return;}
+    // เปลี่ยนสถานะกลับจาก "จำหน่ายแล้ว" → ระบบบัญชียังไม่มีคำสั่งนำกลับเข้าทะเบียน
+    // ต้องเตือนก่อน ไม่ให้เข้าใจผิดว่าแก้แล้วบัญชีจะกลับมาเอง
+    if(editId){
+      const before=(assets||[]).find(x=>+x.id===+editId);
+      if(before&&before.status==="disposed"&&(form.status||"active")!=="disposed"){
+        if(!await confirmDlg({title:"นำทรัพย์สินกลับมาใช้",message:`"${form.name}" เคยถูกแจ้ง "จำหน่ายแล้ว" เข้าระบบบัญชีไปแล้ว\n\nระบบบัญชียังไม่รองรับการนำกลับเข้าทะเบียนอัตโนมัติ — ถ้าบันทึกต่อ ต้องแจ้งฝ่ายบัญชีให้นำกลับเข้าทะเบียนเอง\n\nบันทึกต่อหรือไม่?`,confirmLabel:"บันทึกต่อ",danger:true}))return;
+      }
+    }
     setSaving(true);
     try{
       const row={name:form.name.trim(),category:form.category||null,image:form.image||null,quantity:+form.quantity||1,acquired_date:form.acquired_date||null,cost:+form.cost||0,salvage_value:+form.salvage_value||0,useful_life_years:+form.useful_life_years||0,status:form.status||"active",assignee:form.assignee||null,location:form.location||null,note:form.note||null};
@@ -10194,13 +10227,30 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
       if(form.weight_kg!=="")row.weight_kg=+form.weight_kg||0;
       if((form.vendor||"").trim())row.vendor=form.vendor.trim();
       if((form.lead_time||"").trim())row.lead_time=form.lead_time.trim();
+      let savedId=editId;
       if(editId)await api.updateAsset(editId,row);
-      else await api.addAsset({...row,branch_id:currentBranch.id});
+      else{const created=await api.addAsset({...row,branch_id:currentBranch.id});savedId=Array.isArray(created)?(created[0]||{}).id:null;}
+      // ส่งเข้าทะเบียนบัญชีทันที (ไม่รอผล — cron รายวันตามเก็บให้อยู่แล้วถ้าพลาด)
+      if(savedId)api.pushAssetToSlipTrack(savedId);
       await reloadAssets();closeForm();posToast("✅ บันทึกสินทรัพย์แล้ว","ok");
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
     setSaving(false);
   }
-  async function del(a){if(!await confirmDlg({title:"ลบสินทรัพย์",message:`ต้องการลบ "${a.name}" ใช่หรือไม่?`,danger:true}))return;try{await api.deleteAsset(a.id);await reloadAssets();}catch(e){alert("ลบไม่สำเร็จ: "+(e&&e.message||e));}}
+  async function del(a){
+    if(!await confirmDlg({title:"ลบสินทรัพย์",message:`ต้องการลบ "${a.name}" ใช่หรือไม่?`,danger:true}))return;
+    try{
+      // ทรัพย์สินที่เคยลงทะเบียนบัญชีไว้ ถ้าลบทิ้งโดยไม่แจ้ง จะค้างเป็นรายการผีคิดค่าเสื่อมต่อไปเรื่อยๆ
+      // และเมื่อลบแล้วไม่มีแถวให้ cron ตามแจ้งได้อีก → ต้องแจ้งตัดออก "ให้สำเร็จก่อน" แล้วค่อยลบ
+      // (idempotent: ถ้าไม่เคยส่งเข้าบัญชีมาก่อน ฝั่งนั้นตอบสำเร็จพร้อม updated:0)
+      const rv=await api.pushAssetToSlipTrack(a.id,{dispose:true});
+      if(!rv.ok){alert("แจ้งตัดทรัพย์สินออกจากระบบบัญชีไม่สำเร็จ — ยังไม่ได้ลบ\nกรุณาลองใหม่อีกครั้ง\n\n"+(rv.error||""));return;}
+      await api.deleteAsset(a.id);await reloadAssets();
+    }catch(e){
+      // แจ้งบัญชีตัดออกไปแล้วแต่ลบในระบบนี้ไม่สำเร็จ → สองระบบไม่ตรงกัน และระบบกู้เองไม่ได้
+      // (ฝั่งบัญชียังไม่มีคำสั่ง "ยกเลิกการจำหน่าย") ต้องบอกให้ชัดว่าต้องทำอะไรต่อ
+      alert(`ลบไม่สำเร็จ: ${(e&&e.message)||e}\n\n⚠️ แต่ได้แจ้งระบบบัญชีตัด "${a.name}" ออกจากทะเบียนไปแล้ว\nถ้ายังต้องการใช้ทรัพย์สินนี้ต่อ กรุณาแจ้งฝ่ายบัญชีให้นำกลับเข้าทะเบียน แล้วลองลบใหม่อีกครั้ง`);
+    }
+  }
   const stOf=v=>ASSET_STATUS.find(s=>s.v===v)||ASSET_STATUS[0];
   const prev=assetDeprec(form);
   // Export the CURRENTLY-FILTERED assets (category/status/search) to Excel — every

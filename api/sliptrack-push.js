@@ -12,6 +12,9 @@
 
 const SLIPTRACK_URL = "https://sliptrack-pro.vercel.app/api/ingest";
 
+const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
+const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -26,6 +29,60 @@ export default async function handler(req, res) {
   }
 
   const body = req.body || {};
+
+  // ── ทรัพย์สิน (fixed_asset) ───────────────────────────────────────────────
+  // หน้าเว็บส่งมาแค่ { kind:'fixed_asset', asset_id } (หรือ + dispose:true) — เซิร์ฟเวอร์
+  // อ่านแถวจริงจาก DB แล้วสร้าง payload เอง เพื่อให้มีโค้ดสร้าง payload "ชุดเดียว"
+  // (บทเรียนจาก PO: มี 2 ชุดแล้วต้องคอยไล่ให้ตรงกัน พลาดง่าย)
+  if (String(body.kind || "") === "fixed_asset") {
+    const id = +body.asset_id;
+    if (!(id > 0)) return res.status(400).json({ error: "Missing asset_id" });
+    const { assetPayload, disposePayload } = await import("./_sliptrack-assets.js");
+    let row;
+    try {
+      const r = await fetch(`${SUPA_URL}/rest/v1/assets?id=eq.${id}&select=id,name,category,branch_id,acquired_date,cost,quantity,salvage_value,useful_life_years,status,note`, {
+        headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` },
+      });
+      const rows = await r.json();
+      row = Array.isArray(rows) ? rows[0] : null;
+    } catch (err) {
+      return res.status(502).json({ error: "read asset failed", message: err && err.message });
+    }
+    // ลบไปแล้ว/ไม่พบ + สั่ง dispose → ยังต้องแจ้งบัญชีให้ตัดออกด้วย external_id
+    if (!row && !body.dispose) return res.status(404).json({ error: "asset not found" });
+
+    let payload;
+    if (body.dispose) {
+      payload = disposePayload(row || { id });
+      if (body.disposed_amount != null) payload.disposed_amount = Number(body.disposed_amount) || 0;
+    } else {
+      // สถานะ "จำหน่ายแล้ว" ในแอป = แจ้งตัดออกจากทะเบียนบัญชี
+      if (row.status === "disposed") payload = disposePayload(row);
+      else {
+        try {
+          const bres = await fetch(`${SUPA_URL}/rest/v1/branches?id=eq.${+row.branch_id}&select=name`, { headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` } });
+          const brows = await bres.json();
+          const { branchNameForAccounting } = await import("./_sliptrack-map.js");
+          row._branchName = branchNameForAccounting((Array.isArray(brows) && brows[0] && brows[0].name) || "");
+        } catch { /* ไม่มีชื่อสาขาก็ยังส่งได้ (branch เป็น optional) */ }
+        const built = assetPayload(row);
+        // ยังไม่มีราคาทุน/วันที่ได้มา = ยังไม่พร้อมลงทะเบียนบัญชี ไม่ใช่ error ของผู้ใช้
+        if (built.skip) return res.status(200).json({ ok: true, skipped: built.skip });
+        payload = built.payload;
+      }
+    }
+    try {
+      const r = await fetch(SLIPTRACK_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+      return res.status(r.status).json(data);
+    } catch (err) {
+      return res.status(502).json({ error: "Upstream fetch failed", message: err && err.message });
+    }
+  }
 
   // ── Void path ─────────────────────────────────────────────────────────────
   // A PO already synced here is cancelled/deleted in Food Cost. SlipTrack catches
