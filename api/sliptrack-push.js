@@ -37,7 +37,7 @@ export default async function handler(req, res) {
   if (String(body.kind || "") === "fixed_asset") {
     const id = +body.asset_id;
     if (!(id > 0)) return res.status(400).json({ error: "Missing asset_id" });
-    const { assetPayload, disposePayload } = await import("./_sliptrack-assets.js");
+    const { assetPayload, disposePayload } = await import("../lib/sliptrack-assets.js");
     let row;
     try {
       const r = await fetch(`${SUPA_URL}/rest/v1/assets?id=eq.${id}&select=id,name,category,branch_id,acquired_date,cost,quantity,salvage_value,useful_life_years,status,note`, {
@@ -62,7 +62,7 @@ export default async function handler(req, res) {
         try {
           const bres = await fetch(`${SUPA_URL}/rest/v1/branches?id=eq.${+row.branch_id}&select=name`, { headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` } });
           const brows = await bres.json();
-          const { branchNameForAccounting } = await import("./_sliptrack-map.js");
+          const { branchNameForAccounting } = await import("../lib/sliptrack-map.js");
           row._branchName = branchNameForAccounting((Array.isArray(brows) && brows[0] && brows[0].name) || "");
         } catch { /* ไม่มีชื่อสาขาก็ยังส่งได้ (branch เป็น optional) */ }
         const built = assetPayload(row);

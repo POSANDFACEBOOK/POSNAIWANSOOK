@@ -11,8 +11,8 @@
 //
 // env ที่ต้องมี: SLIPTRACK_API_KEY (คีย์เดิมที่ใช้ส่ง PO) · SLIPTRACK_SWEEP_KEY (คีย์เรียกมือ/cron)
 // ══════════════════════════════════════════════════════════════════════════
-import { accountFor, branchNameForAccounting, ALL_ACCOUNTS } from "./_sliptrack-map.js";
-import { assetPayload, disposePayload } from "./_sliptrack-assets.js";
+import { accountFor, branchNameForAccounting, ALL_ACCOUNTS } from "../lib/sliptrack-map.js";
+import { assetPayload, disposePayload } from "../lib/sliptrack-assets.js";
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
