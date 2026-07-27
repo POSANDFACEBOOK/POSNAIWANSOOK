@@ -238,9 +238,6 @@ export async function buildInventoryPayloads() {
   return { payloads, negatives, unmapped: [...unmapped.entries()].map(([cat, v]) => ({ category: cat, ...v })), period, inTransitValue: round2(inTransitValue), inTransitLines, hiddenWithStock };
 }
 
-// งานนี้ยิงเข้าบัญชีเป็นร้อยครั้งต่อรอบ — ขอเวลาทำงานยาวกว่าค่าเริ่มต้น (Vercel ตัดที่ 10 วิ)
-export const config = { maxDuration: 60 };
-
 export default async function handler(req, res) {
   const CRON = process.env.CRON_SECRET || "";
   const KEY = process.env.SLIPTRACK_SWEEP_KEY || "";
@@ -267,7 +264,7 @@ export default async function handler(req, res) {
       const errors = [];
       if (!dry) {
         // ยิงพร้อมกันทีละ 6 — ~110 ช่องถ้ายิงเรียงทีละอันจะเกินเวลาที่ Vercel ให้ แล้วถูกตัดกลางคัน
-        const rs = await mapPool(payloads, 6, (p) => pushToSlipTrack(p, apiKey));
+        const rs = await mapPool(payloads, 10, (p) => pushToSlipTrack(p, apiKey));
         rs.forEach((r, i) => {
           if (r.ok) sent++;
           else if (r.status === 409) closed++;                  // งวดปิดแล้ว — ข้าม ไม่ retry
@@ -312,7 +309,7 @@ export default async function handler(req, res) {
       if (dry) {
         jobs.forEach((j) => { sent++; previews.push(j.payload); });
       } else {
-        const rs = await mapPool(jobs, 6, (j) => pushToSlipTrack(j.payload, apiKey));
+        const rs = await mapPool(jobs, 10, (j) => pushToSlipTrack(j.payload, apiKey));
         rs.forEach((r, i) => {
           if (r.ok) sent++;
           else if (r.status === 409) closed++;      // งวดปิดแล้ว — ข้าม ไม่ retry (เหมือนฝั่งสต๊อก)
