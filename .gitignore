@@ -7,3 +7,8 @@ dist/
 package-lock.json
 *.log
 .DS_Store
+
+# Vercel CLI link (project/org ids — must not reach the public repo)
+.vercel
+
+.vercel
