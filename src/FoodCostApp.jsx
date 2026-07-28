@@ -1061,6 +1061,11 @@ function branchSupplierId(ing,branchId){
   if(v!=null&&v!=="")return +v||null;
   return ing.supplier_id?+ing.supplier_id:null;
 }
+// สาขาที่ยังเปิดใช้งาน — ใช้กับทุกที่ที่ "ให้เลือกสาขา" หรือ "โชว์สต๊อกรายสาขา"
+// สาขาที่ปิดแล้ว (active=false) ต้องไม่โผล่ให้เลือกและไม่โชว์บนการ์ดวัตถุดิบ
+// แต่ห้ามกรองออกจาก branchById ที่ใช้หาชื่อ ไม่งั้นเอกสารเก่าจะแสดงปลายทางเป็นค่าว่าง
+const activeBranches=(branches)=>(branches||[]).filter(b=>b&&b.active!==false);
+
 function branchSupplierName(ing,branchId,suppliers){
   const sid=branchSupplierId(ing,branchId);
   if(!sid)return ing.supplier_name||"";
@@ -3583,11 +3588,11 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
           {isCentral&&<div style={{padding:"8px 14px 10px",borderTop:`1px solid ${C.lineLight}`,background:"#F8FAFC"}}>
             <div style={{fontSize:10,color:C.ink4,marginBottom:5,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>แสดงที่สาขา:</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-              {branches.filter(b=>b.type!=="central").length===0?<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>
-              :branches.filter(b=>b.type!=="central").map(b=>{const isOn=ingVisibleAt(item,b.id,false);return <button key={b.id} onClick={()=>toggleVBIng(item,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
+              {activeBranches(branches).filter(b=>b.type!=="central").length===0?<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>
+              :activeBranches(branches).filter(b=>b.type!=="central").map(b=>{const isOn=ingVisibleAt(item,b.id,false);return <button key={b.id} onClick={()=>toggleVBIng(item,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
             </div>
             {/* Per-branch stock readout — shows current stock for every branch that can see this ingredient */}
-            {(()=>{const visBranches=branches.filter(b=>b.type!=="central"&&ingVisibleAt(item,b.id,false));if(visBranches.length===0)return null;return <div style={{marginTop:7,paddingTop:7,borderTop:`1px dashed ${C.line}`}}>
+            {(()=>{const visBranches=activeBranches(branches).filter(b=>b.type!=="central"&&ingVisibleAt(item,b.id,false));if(visBranches.length===0)return null;return <div style={{marginTop:7,paddingTop:7,borderTop:`1px dashed ${C.line}`}}>
               <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.box} s={10} c={C.ink4}/>สต็อกตามสาขา:</div>
               <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
                 {visBranches.map(b=>{const bs=branchStock(item,b.id);const sf=branchSafety(item,b.id);const low=sf>0&&bs<sf;return <span key={b.id} title={sf>0?`safety ${sf}`:""} style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:6,background:low?"#FEF2F2":C.bg,color:low?C.red:C.ink2,border:`1px solid ${low?"#FECACA":C.line}`,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{b.name}: {bs}{item.buy_unit?` ${item.buy_unit}`:""}</span>;})}
@@ -6136,7 +6141,7 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
         <div style={lbl}>สาขาที่สั่ง (ผู้รับของ)</div>
         <select value={pickBranch} onChange={e=>setPickBranch(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
           <option value="">— ทุกสาขา —</option>
-          {(branches||[]).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+          {activeBranches(branches).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
       </div>
       <Btn v="primary" onClick={run} loading={busy} icon={I.search} s={{padding:"9px 16px"}}>ดูรายงาน</Btn>
@@ -7173,7 +7178,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     const isAdmin=currentUser?.role==="admin";
     // Central kitchen has cross-branch visibility — always show every branch.
     const isOnCentral=currentBranch?.type==="central";
-    const list=branches.filter(b=>{
+    const list=activeBranches(branches).filter(b=>{
       if(isAdmin||isOnCentral)return true;
       if(allowed==null)return true;
       return (allowed||[]).map(x=>+x).includes(+b.id);
