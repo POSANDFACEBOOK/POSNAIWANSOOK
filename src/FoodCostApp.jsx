@@ -6551,7 +6551,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     const recip=currentBranch?.name||"สาขา";
     const its=(po.items||[]).filter(it=>+it.qty>0);
     const nNew=its.filter(it=>it.kind==="other").length,nExist=its.filter(it=>it.kind==="asset").length;
-    if(!await confirmDlg({title:"ยืนยันรับสินทรัพย์/อุปกรณ์",message:`ยืนยันรับตามใบ ${po.po_number||"นี้"}?\n\n• เพิ่มจำนวนสินทรัพย์เดิม ${nExist} รายการ\n• สร้างสินทรัพย์ใหม่ ${nNew} รายการ (พร้อมรูป/รายละเอียด)\n• เข้าเป็นสินทรัพย์ของ "${recip}"`,confirmLabel:"✅ ยืนยันรับ"}))return;
+    if(!await confirmDlg({title:"ยืนยันรับสินทรัพย์/อุปกรณ์",message:`ยืนยันรับตามใบ ${po.po_number||"นี้"}?\n\n• บันทึกเป็นสินทรัพย์รายการใหม่ ${nExist+nNew} รายการ ของสาขา "${recip}"\n• แต่ละรายการใช้ราคาและวันที่ได้มาของรอบนี้ (ไม่รวมเข้ากับของเดิม เพื่อให้ค่าเสื่อมราคาถูกต้อง)`,confirmLabel:"✅ ยืนยันรับ"}))return;
     setConfirming(po.id);
     try{
       const receivedAt=new Date().toISOString();
@@ -6565,23 +6565,38 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       const byAsset=new Map(),others=[];
       for(const it of its){
         const qty=+it.qty||0;if(qty<=0)continue;
-        if(it.kind==="asset"&&it.asset_id){const k=+it.asset_id;const e=byAsset.get(k)||{asset_id:k,name:it.name,image:it.image||null,note:it.note||null,qty:0};e.qty=round2(e.qty+qty);byAsset.set(k,e);}
-        else{others.push({name:it.name,image:it.image||null,note:it.note||null,qty});}
+        const price=+it.price_per_unit||0;
+        if(it.kind==="asset"&&it.asset_id){const k=+it.asset_id;const e=byAsset.get(k)||{asset_id:k,name:it.name,image:it.image||null,note:it.note||null,qty:0,cost:price};e.qty=round2(e.qty+qty);if(price>0)e.cost=price;byAsset.set(k,e);}
+        else{others.push({name:it.name,image:it.image||null,note:it.note||null,qty,cost:price});}
       }
       // Claim the receive (0 rows if already received elsewhere) BEFORE mutating assets.
       await api.patchPOIfStatus(po.id,"shipped",{status:"awaiting_payment",received_at:receivedAt,received_by:currentUser?.username||currentUser?.name||null,updated_at:receivedAt});
-      const failed=[];
-      for(const e of byAsset.values()){
+      const failed=[],createdIds=[];
+      // ของที่ซื้อเพิ่มแต่ละครั้ง = ทรัพย์สิน "แถวใหม่" เสมอ ไม่เอาไปบวกจำนวนในแถวเดิม
+      // เพราะค่าเสื่อมราคาต้องเริ่มนับจากวันที่ได้มาของแต่ละล็อต และใช้ราคาทุนของล็อตนั้น
+      // (ถ้าบวกรวมแถวเดิม ของใหม่จะถูกตีด้วยราคาเก่าและลงวันที่เก่า → ค่าเสื่อมผิดทั้งแถว)
+      const mk=async(row,label)=>{
         try{
-          const cur=now.find(a=>+a.id===e.asset_id&&+a.branch_id===+po.branch_id);
-          if(cur){ await api.updateAssetIfQty(cur.id,cur.quantity,{quantity:round2((+cur.quantity||0)+e.qty)}); }  // atomic — a racing edit fails safely into `failed`
-          else{ await api.addAsset({branch_id:po.branch_id,name:e.name,image:e.image,quantity:e.qty,status:"active",acquired_date:todayStr(),note:e.note}); }
-        }catch{ failed.push(e.name||"(ไม่มีชื่อ)"); }
+          const created=await api.addAsset(row);
+          const id=(Array.isArray(created)?created[0]:created||{}).id;
+          if(id)createdIds.push(id);
+        }catch{ failed.push(label||"(ไม่มีชื่อ)"); }
+      };
+      for(const e of byAsset.values()){
+        // สืบทอดหมวด/อายุการใช้งานจากแถวเดิม เพื่อให้คิดค่าเสื่อมด้วยเกณฑ์เดียวกัน
+        const src=now.find(a=>+a.id===e.asset_id)||{};
+        await mk({branch_id:po.branch_id,name:e.name,image:e.image,quantity:e.qty,cost:e.cost||0,
+          category:src.category||null,useful_life_years:+src.useful_life_years||0,
+          status:"active",acquired_date:todayStr(),
+          note:[e.note,`รับตาม ${po.po_number||"PO"}`].filter(Boolean).join(" · ")},e.name);
       }
       for(const o of others){
-        try{ await api.addAsset({branch_id:po.branch_id,name:o.name,image:o.image,quantity:o.qty,status:"active",acquired_date:todayStr(),note:o.note}); }
-        catch{ failed.push(o.name||"(ไม่มีชื่อ)"); }
+        await mk({branch_id:po.branch_id,name:o.name,image:o.image,quantity:o.qty,cost:o.cost||0,
+          status:"active",acquired_date:todayStr(),
+          note:[o.note,`รับตาม ${po.po_number||"PO"}`].filter(Boolean).join(" · ")},o.name);
       }
+      // แจ้งทะเบียนบัญชีทันที (ไม่รอผล — cron รายวันตามเก็บให้ถ้าพลาด)
+      createdIds.forEach(id=>api.pushAssetToSlipTrack(id));
       await load();setViewPO(null);
       if(failed.length)setTimeout(()=>alert(`✅ รับแล้ว แต่เพิ่มสินทรัพย์ไม่สำเร็จ ${failed.length} รายการ:\n${failed.slice(0,6).join(", ")}\n\nไปที่แท็บสินทรัพย์เพื่อเพิ่ม/ปรับเองได้`),0);
       else posToast("✅ รับสินทรัพย์แล้ว — เพิ่มเข้าสินทรัพย์ของสาขาเรียบร้อย","ok");
@@ -10208,14 +10223,6 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
   function closeForm(){setShowForm(false);setForm(A0);setEditId(null);}
   async function save(){
     if(!form.name.trim()){alert("กรุณาใส่ชื่อสินทรัพย์");return;}
-    // เปลี่ยนสถานะกลับจาก "จำหน่ายแล้ว" → ระบบบัญชียังไม่มีคำสั่งนำกลับเข้าทะเบียน
-    // ต้องเตือนก่อน ไม่ให้เข้าใจผิดว่าแก้แล้วบัญชีจะกลับมาเอง
-    if(editId){
-      const before=(assets||[]).find(x=>+x.id===+editId);
-      if(before&&before.status==="disposed"&&(form.status||"active")!=="disposed"){
-        if(!await confirmDlg({title:"นำทรัพย์สินกลับมาใช้",message:`"${form.name}" เคยถูกแจ้ง "จำหน่ายแล้ว" เข้าระบบบัญชีไปแล้ว\n\nระบบบัญชียังไม่รองรับการนำกลับเข้าทะเบียนอัตโนมัติ — ถ้าบันทึกต่อ ต้องแจ้งฝ่ายบัญชีให้นำกลับเข้าทะเบียนเอง\n\nบันทึกต่อหรือไม่?`,confirmLabel:"บันทึกต่อ",danger:true}))return;
-      }
-    }
     setSaving(true);
     try{
       const row={name:form.name.trim(),category:form.category||null,image:form.image||null,quantity:+form.quantity||1,acquired_date:form.acquired_date||null,cost:+form.cost||0,salvage_value:+form.salvage_value||0,useful_life_years:+form.useful_life_years||0,status:form.status||"active",assignee:form.assignee||null,location:form.location||null,note:form.note||null};

@@ -37,7 +37,7 @@ export default async function handler(req, res) {
   if (String(body.kind || "") === "fixed_asset") {
     const id = +body.asset_id;
     if (!(id > 0)) return res.status(400).json({ error: "Missing asset_id" });
-    const { assetPayload, disposePayload } = await import("../lib/sliptrack-assets.js");
+    const { assetPayload, disposePayload, removedPayload } = await import("../lib/sliptrack-assets.js");
     let row;
     try {
       const r = await fetch(`${SUPA_URL}/rest/v1/assets?id=eq.${id}&select=id,name,category,branch_id,acquired_date,cost,quantity,salvage_value,useful_life_years,status,note`, {
@@ -66,9 +66,13 @@ export default async function handler(req, res) {
           row._branchName = branchNameForAccounting((Array.isArray(brows) && brows[0] && brows[0].name) || "");
         } catch { /* ไม่มีชื่อสาขาก็ยังส่งได้ (branch เป็น optional) */ }
         const built = assetPayload(row);
-        // ยังไม่มีราคาทุน/วันที่ได้มา = ยังไม่พร้อมลงทะเบียนบัญชี ไม่ใช่ error ของผู้ใช้
-        if (built.skip) return res.status(200).json({ ok: true, skipped: built.skip });
-        payload = built.payload;
+        // ไม่มีราคาทุน/วันที่ได้มา → ส่ง removed:true แทนการเงียบ
+        // ถ้าเคยลงทะเบียนไว้แล้วแล้วราคาถูกลบทีหลัง การเงียบจะทำให้บัญชีค้างมูลค่าเดิมและ
+        // คิดค่าเสื่อมต่อไปเรื่อยๆ. removed เป็น idempotent — ถ้าไม่เคยส่งมาก่อนก็ไม่มีผลอะไร
+        // (ห้ามใช้ disposed:true เพราะจะสร้างผลขาดทุนจากการจำหน่ายปลอมๆ ในงบ)
+        payload = built.skip
+          ? removedPayload(row, built.skip === "no-cost" ? "ยังไม่ได้กรอกราคาทุนที่ระบบอาหาร" : "ยังไม่ได้ระบุวันที่ได้มาที่ระบบอาหาร")
+          : built.payload;
       }
     }
     try {
