@@ -166,6 +166,16 @@ const api = {
   deleteMenu: (id) => sb(`menus?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   getCats: () => sb("categories?order=id.asc"),
   addCat: (d) => sb("categories", { method: "POST", body: JSON.stringify(d) }),
+  // วัตถุดิบผูกกับหมวดด้วย "ชื่อ" (ings.category เป็น text ไม่ใช่ id) — เปลี่ยนชื่อหมวดแล้ว
+  // ต้องตามไปแก้ทุกแถวด้วย ไม่งั้นวัตถุดิบทั้งหมวดจะกำพร้า: หายจากตัวกรอง จำนวนบนชิปเป็น 0
+  // และหลุดจากรายงาน. คืนจำนวนแถวที่แก้ เพื่อให้ผู้เรียกยืนยันได้ว่าตามไปครบ
+  renameIngCategory: async (oldName, newName) => {
+    const rows = await sb(`ingredients?category=eq.${encodeURIComponent(oldName)}`, {
+      method: "PATCH", headers: { Prefer: "return=representation" },
+      body: JSON.stringify({ category: newName }),
+    });
+    return Array.isArray(rows) ? rows.length : 0;
+  },
   deleteCat: (id) => sb(`categories?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" }),
   updateCat: (id,d) => sb(`categories?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   getUsers: () => sb("app_users?order=id.asc"),
@@ -2998,6 +3008,30 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   // category always continues that column's sequence.
   const[addingCat,setAddingCat]=useState(null);
   const[newGroupLetter,setNewGroupLetter]=useState("");   // letter typed in the "new main group" form
+  const[editingGroup,setEditingGroup]=useState(null);     // ตัวอักษรคอลัมน์ที่กำลังแก้ชื่อกลุ่ม
+  const[groupNameDraft,setGroupNameDraft]=useState("");
+  const[groupBusy,setGroupBusy]=useState(false);
+  // ตั้งชื่อกลุ่ม (หัวคอลัมน์) = เปลี่ยน "คำนำหน้า" ของทุกหมวดในคอลัมน์นั้นให้เหมือนกัน
+  // หัวคอลัมน์ถูกคิดจากคำนำหน้าร่วมอยู่แล้ว (เช่น "ของใช้สิ้นเปลือง - บรรจุภัณฑ์ (C01)" → หัวคอลัมน์
+  // "ของใช้สิ้นเปลือง") จึงไม่ต้องเก็บชื่อกลุ่มแยก และรหัสหมวดคงเดิมทุกตัว
+  async function saveGroupName(letter,items){
+    const label=(groupNameDraft||"").trim();
+    setGroupBusy(true);
+    try{
+      let movedTotal=0;
+      for(const{c,code} of items){
+        const base=catNameNoCode(c.name);
+        const tail=base.includes(" - ")?base.split(" - ").slice(1).join(" - ").trim():base;
+        const next=(label?`${label} - ${tail}`:tail)+(code?` (${code})`:"");
+        if(next===(c.name||"").trim())continue;
+        movedTotal+=await renameCatCascade(c,next);
+      }
+      await reloadCats();
+      setEditingGroup(null);setGroupNameDraft("");
+      posToast(label?`✅ ตั้งชื่อกลุ่มเป็น "${label}" แล้ว (ย้ายวัตถุดิบตาม ${movedTotal} รายการ)`:`✅ ล้างชื่อกลุ่มแล้ว`,"ok");
+    }catch(e){alert("เปลี่ยนชื่อกลุ่มไม่สำเร็จ: "+((e&&e.message)||e));}
+    setGroupBusy(false);
+  }
   // Distinguishes an Escape-cancel from a real save when the rename input unmounts (blur-on-unmount
   // would otherwise re-fire saveCatRename and persist the abandoned edit).
   const cancelRenameRef=useRef(false);
@@ -3092,7 +3126,20 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     // An UNCODED category the user coded inline must not collide with an existing prefix.
     const newCode=catCodePrefix(name);
     if(newCode&&ingCats.some(c=>c.id!==id&&catCodePrefix(c.name)===newCode)){alert(`รหัส ${newCode} ถูกใช้กับหมวดอื่นแล้ว`);return;}
-    try{await api.updateCat(id,{name});await reloadCats();clearIfStillMine();}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+    try{await renameCatCascade(orig,name);await reloadCats();clearIfStillMine();}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
+  }
+  // เปลี่ยนชื่อหมวด + ตามไปแก้ ings.category ให้ครบ (แก้ชื่อหมวดอย่างเดียวไม่พอ — ดู api.renameIngCategory)
+  // ลำดับสำคัญ: ย้ายวัตถุดิบก่อน แล้วค่อยเปลี่ยนชื่อหมวด — ถ้าพังกลางทางวัตถุดิบจะไปอยู่ชื่อใหม่
+  // ที่ยังไม่มีหมวดรองรับ (มองเห็นได้ แก้ตามได้) ดีกว่าเปลี่ยนหมวดก่อนแล้ววัตถุดิบค้างชื่อเก่าที่หายไปแล้ว
+  async function renameCatCascade(catRow,newName){
+    const oldName=(catRow&&catRow.name||"").trim();
+    if(!catRow||!newName||oldName===newName)return 0;
+    let moved=0;
+    try{moved=await api.renameIngCategory(oldName,newName);}
+    catch(e){throw new Error(`ย้ายวัตถุดิบไปชื่อหมวดใหม่ไม่สำเร็จ — ยังไม่ได้เปลี่ยนชื่อหมวด\n${(e&&e.message)||e}`);}
+    await api.updateCat(catRow.id,{name:newName});
+    await reload();          // โหลดวัตถุดิบใหม่ ให้ตัวกรอง/จำนวนบนชิปตรงกับชื่อใหม่ทันที
+    return moved;
   }
   async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(c.id);await reloadCats();if(cat===c.name)setCat("ทุกหมวด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
   // Group the ingredient categories into one column per main-group letter (M/D/B/C/E…), each
@@ -3219,98 +3266,32 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;
     try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}
   }
+  // Export วัตถุดิบของ "สาขาที่กำลังดูอยู่" — เอาแค่คอลัมน์ที่ใช้ตรวจของหน้างานจริง
+  // ช่วงราคา = ราคาต่ำสุด–สูงสุดที่ซื้อได้จริงจากใบสั่งซื้อซัพนอกที่รับของแล้ว (priceRangeByIng)
+  // ไม่ใช่ราคาตั้งต้นในแคตตาล็อก เพราะราคาของสดขึ้นลงตลอด
   async function exportXlsx(){
     if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
     const XLSX=await loadXLSX();
-    const branchName=currentBranch?.name||"";
-    const stockCol=`📦 สต๊อก${branchName?` (${branchName})`:""}`;
-    const colWidths=[{wch:6},{wch:14},{wch:32},{wch:18},{wch:10},{wch:11},{wch:12},{wch:14},{wch:12},{wch:18},{wch:20},{wch:25}];
-    const buildRows=arr=>arr.map((it,i)=>({
-      "ลำดับ":i+1,
-      "🔖 รหัส":it.code||"",
-      "ชื่อวัตถุดิบ":it.name||"",
-      "หมวดหมู่":it.category||"",
-      "หน่วยที่ซื้อ":it.buy_unit||"",
-      "จำนวนที่ซื้อ":+it.buy_amount||0,
-      "ราคาที่ซื้อ":+it.buy_price||0,
-      "รวมทั้งหมด (กรัม)":+it.convert_to_gram||0,
-      "ราคา/กรัม":+(+it.price_per_gram||0).toFixed(4),
-      [stockCol]:+branchStock(it,currentBranch?.id)||0,
-      "ซัพพลายเออร์":it.supplier_name||"",
-      "หมายเหตุ":it.note||"",
-    }));
-    // Group by category — one sheet per category. Empty/missing category falls
-    // into a "ไม่ระบุหมวดหมู่" bucket.
-    const groups=new Map();
-    filtered.forEach(it=>{
-      const cat=(it.category||"").trim()||"ไม่ระบุหมวดหมู่";
-      if(!groups.has(cat))groups.set(cat,[]);
-      groups.get(cat).push(it);
+    const money=n=>Math.round((+n||0)*100)/100;
+    const rows=filtered.map(it=>{
+      const pr=priceRangeByIng.get(+it.id);
+      const range=pr&&pr.count>0
+        ?(Math.abs(pr.min-pr.max)<0.005?`${money(pr.min)}`:`${money(pr.min)} - ${money(pr.max)}`)
+        :(+it.buy_price>0?`${money(it.buy_price)}`:"");
+      return{
+        "รหัส":it.code||"",
+        "ชื่อวัตถุดิบ":it.name||"",
+        "จำนวนสต๊อก":Math.round((+branchStock(it,currentBranch?.id)||0)*1000)/1000,
+        "ซัพพลาย":branchSupplierName(it,currentBranch?.id,suppliers)||it.supplier_name||"",
+        "ช่วงราคา":range,
+      };
     });
-    const sortedCats=[...groups.keys()].sort((a,b)=>a.localeCompare(b,"th"));
+    const ws=XLSX.utils.json_to_sheet(rows);
+    ws["!cols"]=[{wch:13},{wch:34},{wch:12},{wch:24},{wch:16}];
     const wb=XLSX.utils.book_new();
-    const usedNames=new Set();
-    // Excel sheet name: max 31 chars; cannot contain \ / ? * [ ] :
-    const sanitize=(name)=>{
-      let safe=String(name).replace(/[\\/?*\[\]:]/g,"_").slice(0,31)||"_";
-      let final=safe,n=1;
-      while(usedNames.has(final)){final=safe.slice(0,28)+"_"+(++n);}
-      usedNames.add(final);
-      return final;
-    };
-    for(const cat of sortedCats){
-      const items=groups.get(cat);
-      const ws=XLSX.utils.json_to_sheet(buildRows(items));
-      ws["!cols"]=colWidths;
-      XLSX.utils.book_append_sheet(wb,ws,sanitize(cat));
-    }
-    XLSX.writeFile(wb,`Ingredients_${(currentBranch?.name||"all").replace(/[^\w]+/g,"_")}_${todayStr()}.xlsx`);
-  }
-  // Export วัตถุดิบทั้งหมด แยก "หนึ่งชีตต่อหนึ่งสาขา" — สต๊อก/safety/ซัพพลาย เป็นค่าของสาขานั้นๆ
-  // (ต่างจาก Export ปกติที่แยกตามหมวดและใช้สต๊อกของสาขาที่กำลังดูอยู่เท่านั้น)
-  async function exportAllBranchesXlsx(){
-    const bs=(branches||[]).filter(b=>b&&b.id!=null);
-    if(bs.length===0){alert("ไม่พบข้อมูลสาขา");return;}
-    const XLSX=await loadXLSX();
-    const wb=XLSX.utils.book_new();
-    const colWidths=[{wch:6},{wch:14},{wch:32},{wch:22},{wch:10},{wch:11},{wch:12},{wch:12},{wch:11},{wch:14},{wch:20}];
-    const used=new Set();
-    const sheetName=(name)=>{
-      let safe=String(name).replace(/[\\/?*\[\]:]/g,"_").slice(0,31)||"_";
-      let out=safe,n=1;
-      while(used.has(out)){const suf=`~${n++}`;out=safe.slice(0,31-suf.length)+suf;}
-      used.add(out);return out;
-    };
-    let totalRows=0;
-    for(const b of bs){
-      const isC=b.type==="central";
-      // เอาเฉพาะวัตถุดิบที่ "มีอยู่" ที่สาขานั้น ตามกติกาเดียวกับหน้าจอ
-      const list=(ings||[]).filter(i=>ingVisibleAt(i,b.id,isC))
-        .sort((x,y)=>(x.code||"￿").localeCompare(y.code||"￿",undefined,{numeric:true})||(x.name||"").localeCompare(y.name||"","th"));
-      const rows=list.map((it,i)=>{
-        const qty=+branchStock(it,b.id)||0;
-        const price=+it.buy_price||0;
-        return{
-          "ลำดับ":i+1,
-          "🔖 รหัส":it.code||"",
-          "ชื่อวัตถุดิบ":it.name||"",
-          "หมวดหมู่":it.category||"",
-          "หน่วย":it.buy_unit||"",
-          "ราคาที่ซื้อ":price,
-          "📦 สต๊อกคงเหลือ":Math.round(qty*1000)/1000,
-          "มูลค่าคงเหลือ":Math.round(qty*price*100)/100,
-          "safety":+branchSafety(it,b.id)||0,
-          "ซัพพลายเออร์":branchSupplierName(it,b.id,suppliers)||it.supplier_name||"",
-          "หมายเหตุ":it.note||"",
-        };
-      });
-      totalRows+=rows.length;
-      const ws=XLSX.utils.json_to_sheet(rows.length?rows:[{"ลำดับ":"","ชื่อวัตถุดิบ":"(ไม่มีวัตถุดิบที่สาขานี้)"}]);
-      ws["!cols"]=colWidths;
-      XLSX.utils.book_append_sheet(wb,ws,sheetName(b.name||`สาขา ${b.id}`));
-    }
-    if(totalRows===0){alert("ไม่มีข้อมูลให้ Export");return;}
-    XLSX.writeFile(wb,`วัตถุดิบทุกสาขา_${todayStr()}.xlsx`);
+    XLSX.utils.book_append_sheet(wb,ws,"วัตถุดิบ");
+    const safe=String(currentBranch?.name||"สาขา").replace(/[\/?*[]:]/g,"_").slice(0,20);
+    XLSX.writeFile(wb,`วัตถุดิบ_${safe}_${todayStr()}.xlsx`);
   }
   async function toggleVBIng(item,branchId){
     // null = all visible (legacy default) · [] = none visible · [ids] = explicit list
@@ -3442,7 +3423,19 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
             <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:1}}>
               <div style={{width:30,height:30,borderRadius:9,background:accent,color:"#fff",fontWeight:800,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>{col.letter||"–"}</div>
               <div style={{minWidth:0,flex:1}}>
-                <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{title}</div>
+                {editingGroup===col.letter
+                  ?<div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <input value={groupNameDraft} onChange={e=>setGroupNameDraft(e.target.value)}
+                      onKeyDown={e=>{if(e.key==="Enter")saveGroupName(col.letter,col.items);if(e.key==="Escape"){setEditingGroup(null);setGroupNameDraft("");}}}
+                      autoFocus placeholder="ชื่อกลุ่ม (เว้นว่าง = ไม่มี)" style={{...iS,width:"100%",padding:"5px 8px",fontSize:12.5,borderRadius:8,border:`2px solid ${accent}`,fontWeight:700}}/>
+                    <button onClick={()=>saveGroupName(col.letter,col.items)} disabled={groupBusy} title="บันทึก" style={{background:accent,color:"#fff",border:"none",borderRadius:6,width:24,height:24,cursor:groupBusy?"wait":"pointer",flexShrink:0,fontSize:12,fontWeight:900}}>✓</button>
+                    <button onClick={()=>{setEditingGroup(null);setGroupNameDraft("");}} title="ยกเลิก" style={{background:"rgba(0,0,0,0.06)",border:"none",borderRadius:6,width:24,height:24,cursor:"pointer",flexShrink:0,fontSize:12}}>✕</button>
+                  </div>
+                  :<div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{title}</div>
+                    {/* ตั้ง/แก้ชื่อกลุ่ม — เปลี่ยนคำนำหน้าของทุกหมวดในคอลัมน์นี้พร้อมกัน รหัสหมวดคงเดิม */}
+                    {canE&&col.letter&&<button onClick={()=>{setEditingGroup(col.letter);setGroupNameDraft(col.label||"");}} title="ตั้ง/แก้ชื่อกลุ่มนี้" style={{background:"rgba(0,0,0,0.05)",border:"none",borderRadius:6,width:22,height:22,cursor:"pointer",display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.pencil} s={11} c={C.ink3}/></button>}
+                  </div>}
                 <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{col.items.length} หมวด</div>
               </div>
             </div>
@@ -3487,7 +3480,6 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       <Btn v="ghost" onClick={()=>setShowSessionHist(true)} icon={I.clock}>🕘 ประวัติการนับ</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {currentUser?.role==="admin"&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
-      {currentUser?.role==="admin"&&<Btn v="teal" onClick={exportAllBranchesXlsx} title="วัตถุดิบทั้งหมด แยกหนึ่งชีตต่อหนึ่งสาขา">📗 Export ทุกสาขา</Btn>}
       {currentUser?.role==="admin"&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
     </div>
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:14,flexWrap:"wrap"}}>
