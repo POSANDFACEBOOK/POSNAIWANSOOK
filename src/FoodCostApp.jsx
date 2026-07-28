@@ -3261,6 +3261,52 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     }
     XLSX.writeFile(wb,`Ingredients_${(currentBranch?.name||"all").replace(/[^\w]+/g,"_")}_${todayStr()}.xlsx`);
   }
+  // Export วัตถุดิบทั้งหมด แยก "หนึ่งชีตต่อหนึ่งสาขา" — สต๊อก/safety/ซัพพลาย เป็นค่าของสาขานั้นๆ
+  // (ต่างจาก Export ปกติที่แยกตามหมวดและใช้สต๊อกของสาขาที่กำลังดูอยู่เท่านั้น)
+  async function exportAllBranchesXlsx(){
+    const bs=(branches||[]).filter(b=>b&&b.id!=null);
+    if(bs.length===0){alert("ไม่พบข้อมูลสาขา");return;}
+    const XLSX=await loadXLSX();
+    const wb=XLSX.utils.book_new();
+    const colWidths=[{wch:6},{wch:14},{wch:32},{wch:22},{wch:10},{wch:11},{wch:12},{wch:12},{wch:11},{wch:14},{wch:20}];
+    const used=new Set();
+    const sheetName=(name)=>{
+      let safe=String(name).replace(/[\\/?*\[\]:]/g,"_").slice(0,31)||"_";
+      let out=safe,n=1;
+      while(used.has(out)){const suf=`~${n++}`;out=safe.slice(0,31-suf.length)+suf;}
+      used.add(out);return out;
+    };
+    let totalRows=0;
+    for(const b of bs){
+      const isC=b.type==="central";
+      // เอาเฉพาะวัตถุดิบที่ "มีอยู่" ที่สาขานั้น ตามกติกาเดียวกับหน้าจอ
+      const list=(ings||[]).filter(i=>ingVisibleAt(i,b.id,isC))
+        .sort((x,y)=>(x.code||"￿").localeCompare(y.code||"￿",undefined,{numeric:true})||(x.name||"").localeCompare(y.name||"","th"));
+      const rows=list.map((it,i)=>{
+        const qty=+branchStock(it,b.id)||0;
+        const price=+it.buy_price||0;
+        return{
+          "ลำดับ":i+1,
+          "🔖 รหัส":it.code||"",
+          "ชื่อวัตถุดิบ":it.name||"",
+          "หมวดหมู่":it.category||"",
+          "หน่วย":it.buy_unit||"",
+          "ราคาที่ซื้อ":price,
+          "📦 สต๊อกคงเหลือ":Math.round(qty*1000)/1000,
+          "มูลค่าคงเหลือ":Math.round(qty*price*100)/100,
+          "safety":+branchSafety(it,b.id)||0,
+          "ซัพพลายเออร์":branchSupplierName(it,b.id,suppliers)||it.supplier_name||"",
+          "หมายเหตุ":it.note||"",
+        };
+      });
+      totalRows+=rows.length;
+      const ws=XLSX.utils.json_to_sheet(rows.length?rows:[{"ลำดับ":"","ชื่อวัตถุดิบ":"(ไม่มีวัตถุดิบที่สาขานี้)"}]);
+      ws["!cols"]=colWidths;
+      XLSX.utils.book_append_sheet(wb,ws,sheetName(b.name||`สาขา ${b.id}`));
+    }
+    if(totalRows===0){alert("ไม่มีข้อมูลให้ Export");return;}
+    XLSX.writeFile(wb,`วัตถุดิบทุกสาขา_${todayStr()}.xlsx`);
+  }
   async function toggleVBIng(item,branchId){
     // null = all visible (legacy default) · [] = none visible · [ids] = explicit list
     const nonCB=branches.filter(b=>b.type!=="central").map(b=>b.id);
@@ -3436,6 +3482,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       <Btn v="ghost" onClick={()=>setShowSessionHist(true)} icon={I.clock}>🕘 ประวัติการนับ</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {currentUser?.role==="admin"&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
+      {currentUser?.role==="admin"&&<Btn v="teal" onClick={exportAllBranchesXlsx} title="วัตถุดิบทั้งหมด แยกหนึ่งชีตต่อหนึ่งสาขา">📗 Export ทุกสาขา</Btn>}
       {currentUser?.role==="admin"&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
     </div>
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:14,flexWrap:"wrap"}}>
@@ -7607,10 +7654,14 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
   // partner/direction filter set on the PO list. Re-fetch on demand so the
   // count is always current with the database, not the UI's filter view.
   const[pos,setPos]=useState([]);
+  const[prs,setPrs]=useState([]);          // ใบขอซื้อที่อนุมัติแล้วแต่ยังไม่ได้ออกไปซื้อ
   const[loading,setLoading]=useState(true);
   const[loadErr,setLoadErr]=useState("");
   const[refreshTick,setRefreshTick]=useState(0);
   const[creating,setCreating]=useState(false);
+  // จำนวนที่พนักงานปรับเอง (ต่อวัตถุดิบ) — ของที่ไปซื้อมักมีขั้นต่ำในการสั่ง
+  // เช่นระบบคำนวณว่าต้องซื้อ 7 ถุง แต่ซัพขายขั้นต่ำ 10 ถุง ก็แก้เป็น 10 ได้
+  const[qtyEdit,setQtyEdit]=useState({});
   const creatingRef=useRef(false);   // sync guard against double-submit (loop of addOrder takes seconds)
   useEffect(()=>{
     if(currentBranch?.id==null)return;
@@ -7624,6 +7675,13 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
         if(!alive)return;
         // Pre-filter to PENDING here so downstream code only sees relevant rows.
         setPos((data||[]).filter(p=>PENDING.has(p.status)));
+        // ใบขอซื้อวัตถุดิบที่ "อนุมัติแล้ว" = ครัวกลางรับคำขอไว้แล้วแต่ยังไม่ได้ออกไปซื้อ
+        // ต้องนับเป็นความต้องการด้วย ไม่งั้นสรุปจะขาดของที่สาขาขอมาและอนุมัติไปแล้ว
+        // (ใบที่ status 'converted' ถูกแปลงเป็น PO แล้ว จึงไม่นับซ้ำ)
+        try{
+          const prRows=await sb(`purchase_requisitions?status=eq.approved&type=eq.ingredient&order=id.desc&limit=300`);
+          if(alive)setPrs(Array.isArray(prRows)?prRows:[]);
+        }catch{ if(alive)setPrs([]); }   // อ่านใบขอซื้อไม่ได้ = แสดงเท่าที่มี ดีกว่าพังทั้งหน้า
       }catch(e){
         if(!alive)return;
         setLoadErr(e&&e.message||String(e));
@@ -7660,12 +7718,28 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
         addNeed(+(it.ingredient_id||it.ingId),+it.qty||0,0);
       });
     });
+    // ใบขอซื้อที่อนุมัติแล้ว (ยังไม่แปลงเป็น PO) = ของที่ครัวกลางรับปากจะจัดให้สาขา
+    const pendingPRs=[];
+    (prs||[]).forEach(pr=>{
+      pendingPRs.push(pr);
+      (pr.items||[]).forEach(it=>{
+        const id=+(it.ingredient_id||it.ingId);
+        if(!id)return;                                  // บรรทัดของใช้/สินทรัพย์ ไม่ใช่วัตถุดิบ
+        addNeed(id,+it.qty||0,0);
+      });
+    });
     // Build rows: only ingredients short of stock
     const rows=[];
+    const negStock=[];      // สต๊อกติดลบ = ข้อมูลนับเพี้ยน ต้องเตือนให้ไปนับใหม่
     for(const[ingId,info]of need.entries()){
       const ing=ingById.get(+ingId);
       if(!ing)continue;
-      const onHand=branchStock(ing,currentBranch?.id);
+      const rawOnHand=branchStock(ing,currentBranch?.id);
+      // สต๊อกติดลบเกิดจากนับผิด/ตัดเกิน ไม่ใช่ "ของขาดจริง" — ถ้าเอาค่าลบไปคิดตรงๆ
+      // ยอดต้องซื้อจะพุ่ง (เช่น น้ำเปล่าติดลบ 193 กก. กลายเป็นต้องซื้อ 195 กก. ทั้งที่ขอมา 1.6)
+      // → คิดเป็น 0 แล้วเตือนให้ไปนับสต๊อกใหม่แทน
+      const onHand=Math.max(0,rawOnHand);
+      if(rawOnHand<0)negStock.push({name:ing.name,code:ing.code,qty:Math.round(rawOnHand*1000)/1000,unit:ing.buy_unit||""});
       const totalNeed=Math.round(info.qty*1000)/1000;
       const shortBy=Math.max(0,Math.round((info.qty-onHand)*1000)/1000);
       if(shortBy<=0)continue;
@@ -7696,13 +7770,18 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       (a.category||"").localeCompare(b.category||"","th")||
       (a.name||"").localeCompare(b.name||"","th")
     ));
-    return{rows,pendingOrders};
-  },[pos,ingById,currentBranch]);
+    return{rows,pendingOrders,pendingPRs,negStock};
+  },[pos,prs,ingById,currentBranch]);
 
-  // Group by supplier for the card layout
+  // Group by supplier for the card layout.
+  // จำนวนที่พนักงานแก้เอง (qtyEdit) ทับค่าที่ระบบคำนวณ แล้วคิดราคาใหม่ตามนั้น
+  // เขียนกลับลงช่อง shortBy/estCost เพื่อให้ทั้งใบสั่งซื้อที่สร้างและใบที่ปริ้นใช้เลขเดียวกัน
   const groups=useMemo(()=>{
     const g=new Map();
-    for(const r of summary.rows){
+    for(const r0 of summary.rows){
+      const ov=qtyEdit[r0.ingId];
+      const eff=(ov!=null&&ov!==""&&+ov>=0)?Math.round(+ov*1000)/1000:r0.shortBy;
+      const r={...r0,shortBy:eff,baseShortBy:r0.shortBy,estCost:Math.round(eff*(+r0.buy_price||0)*100)/100,edited:eff!==r0.shortBy};
       if(!g.has(r.supplier))g.set(r.supplier,[]);
       g.get(r.supplier).push(r);
     }
@@ -7711,11 +7790,11 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       rows,
       subtotal:Math.round(rows.reduce((s,r)=>s+r.estCost,0)*100)/100,
     }));
-  },[summary.rows]);
+  },[summary.rows,qtyEdit]);
 
-  const totalCost=Math.round(summary.rows.reduce((s,r)=>s+r.estCost,0)*100)/100;
-  const distinctIngs=summary.rows.length;
-  const orderCount=summary.pendingOrders.length;
+  const totalCost=Math.round(groups.reduce((s,g)=>s+g.subtotal,0)*100)/100;
+  const distinctIngs=groups.reduce((s,g)=>s+g.rows.filter(r=>r.shortBy>0).length,0);
+  const orderCount=summary.pendingOrders.length+summary.pendingPRs.length;
 
   async function createAndPrint(){
     if(!onCreateOrders){printShoppingList();return;}
@@ -7804,10 +7883,20 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
     </div>:<>
       <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-          <Btn v="ghost" onClick={printShoppingList} icon={I.print} s={{padding:"8px 12px",fontSize:12}}>🖨 พิมพ์เฉยๆ</Btn>
-          {onCreateOrders&&<Btn v="success" onClick={createAndPrint} loading={creating} disabled={creating} s={{padding:"8px 14px",fontSize:12}}>🛒 สร้างรายการ + พิมพ์</Btn>}
+          <Btn v="ghost" onClick={printShoppingList} icon={I.print} s={{padding:"8px 12px",fontSize:12}}>🖨 ปริ้น</Btn>
+          {onCreateOrders&&<Btn v="success" onClick={createAndPrint} loading={creating} disabled={creating} s={{padding:"8px 14px",fontSize:12}}>🛒 สร้างรายการ</Btn>}
         </div>
       </div>
+
+      {/* สต๊อกติดลบ = ข้อมูลนับเพี้ยน ระบบคิดเป็น 0 ให้แล้ว แต่ต้องบอกให้ไปนับใหม่
+          ไม่งั้นยอดต้องซื้อจะพองจากความผิดพลาดของข้อมูล */}
+      {summary.negStock.length>0&&<div style={{background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:12,padding:"12px 14px",marginBottom:16,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:13,fontWeight:800,color:"#92400E",marginBottom:5}}>⚠️ มี {summary.negStock.length} รายการที่สต๊อกติดลบ — ระบบคิดเป็น 0 ให้แล้ว</div>
+        <div style={{fontSize:11.5,color:"#92400E",lineHeight:1.6}}>
+          ตัวเลขติดลบเกิดจากนับผิดหรือตัดสต๊อกเกิน ไม่ใช่ของขาดจริง ถ้าเอาไปคิดตรงๆ ยอดต้องซื้อจะพองเกินจริง
+          <br/>กรุณาไปนับสต๊อกรายการเหล่านี้ใหม่: <b>{summary.negStock.slice(0,6).map(n=>`${n.name} (${n.qty}${n.unit})`).join(" · ")}</b>{summary.negStock.length>6?` และอีก ${summary.negStock.length-6} รายการ`:""}
+        </div>
+      </div>}
 
       {/* One supplier per card — item name on its own full-width line, stats in a grid below, never overlap */}
       <div style={{display:"flex",flexDirection:"column",gap:18}}>
@@ -7851,9 +7940,18 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
                   <div style={{fontSize:10,color:r.onHand>0?C.green:C.ink4,fontWeight:700,letterSpacing:.3}}>มีอยู่</div>
                   <div style={{fontSize:14,fontWeight:700,color:r.onHand>0?C.green:C.ink4,marginTop:2}}>{r.onHand} <span style={{fontSize:10,opacity:.8,fontWeight:600}}>{r.unit}</span></div>
                 </div>
-                <div style={{padding:"6px 12px",background:`linear-gradient(135deg,${C.redLight},#FEE2E2)`,borderRadius:8,border:`2px solid ${C.red}55`}}>
-                  <div style={{fontSize:10,color:"#7F1D1D",fontWeight:900,letterSpacing:.3}}>ต้องซื้อ</div>
-                  <div style={{fontSize:18,fontWeight:900,color:C.red,lineHeight:1.1,marginTop:2}}>{r.shortBy} <span style={{fontSize:11,color:"#7F1D1D",fontWeight:700}}>{r.unit}</span></div>
+                <div style={{padding:"6px 12px",background:r.edited?`linear-gradient(135deg,#FEF3C7,#FDE68A)`:`linear-gradient(135deg,${C.redLight},#FEE2E2)`,borderRadius:8,border:`2px solid ${r.edited?"#F59E0B":C.red+"55"}`}}>
+                  <div style={{fontSize:10,color:r.edited?"#92400E":"#7F1D1D",fontWeight:900,letterSpacing:.3}}>ต้องซื้อ {r.edited?"(แก้แล้ว)":"— แก้ได้"}</div>
+                  <div style={{display:"flex",alignItems:"center",gap:5,marginTop:2}}>
+                    {/* แก้จำนวนได้เอง เพราะของที่ไปซื้อมักมีขั้นต่ำในการสั่ง (type=text + inputMode ให้ iOS ขึ้นแป้นเลข) */}
+                    <input type="text" inputMode="decimal" value={qtyEdit[r.ingId]!=null?qtyEdit[r.ingId]:String(r.shortBy)}
+                      onChange={e=>{const v=e.target.value;if(v===""||/^\d*\.?\d*$/.test(v))setQtyEdit(q=>({...q,[r.ingId]:v}));}}
+                      onFocus={e=>e.target.select()}
+                      style={{width:78,padding:"2px 6px",fontSize:18,fontWeight:900,color:r.edited?"#B45309":C.red,background:C.white,border:`1.5px solid ${r.edited?"#F59E0B":C.red+"55"}`,borderRadius:6,fontFamily:"'Sarabun',sans-serif",textAlign:"center"}}/>
+                    <span style={{fontSize:11,color:r.edited?"#92400E":"#7F1D1D",fontWeight:700}}>{r.unit}</span>
+                    {r.edited&&<button onClick={()=>setQtyEdit(q=>{const n={...q};delete n[r.ingId];return n;})} title="กลับไปใช้จำนวนที่ระบบคำนวณ" style={{background:"none",border:"none",cursor:"pointer",fontSize:11,color:"#92400E",textDecoration:"underline",padding:0,fontFamily:"'Sarabun',sans-serif"}}>คืนค่า</button>}
+                  </div>
+                  {r.edited&&<div style={{fontSize:9,color:"#92400E",marginTop:1}}>ระบบคำนวณ {r.baseShortBy}</div>}
                 </div>
                 <div style={{padding:"6px 10px",background:C.brandLight,borderRadius:8,border:`1px solid ${C.brandBorder}`}}>
                   <div style={{fontSize:10,color:C.brand,fontWeight:700,letterSpacing:.3}}>ราคาประมาณ</div>
