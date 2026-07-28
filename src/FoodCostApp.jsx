@@ -6182,7 +6182,7 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
   </Modal>;
 }
 
-function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders,orders=[],reloadOrders,initialAction,onConsumeAction}){
+function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders,orders=[],reloadOrders,initialAction,onConsumeAction,summaryOnly=false}){
   // Every branch (central or otherwise) can issue a PO to any other branch
   // and only ever sees POs it's involved in (as sender or receiver).
   // - "from_branch_id" = creator (sender)
@@ -6227,7 +6227,6 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   const[receivingExtOrder,setReceivingExtOrder]=useState(null);  // null | { orderId, supplierName, items[receivedQty,pricePerUnit] }
   const[extRecvImages,setExtRecvImages]=useState([]);const[extRecvUploading,setExtRecvUploading]=useState(0);  // receive photos (Drive)
   const[extDeliveryFee,setExtDeliveryFee]=useState("0");  // ค่าจัดส่งของออเดอร์นี้ (0 = ไม่มี)
-  const[showPurchaseSummary,setShowPurchaseSummary]=useState(false);
   const[copyPO,setCopyPO]=useState(null);          // null | po — copy-target branch picker
   const[copyBusy,setCopyBusy]=useState(false);     // true while addPO for a copy is in-flight
   const slipHealRef=useRef(false);                 // guards load()'s SlipTrack self-heal from overlapping
@@ -7233,6 +7232,10 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     finally{ setSlipFixing(false); }
   }
 
+  // แสดง "สรุปต้องซื้อวันนี้" เป็นแท็บในหน้า (แทนหน้าต่างเด้ง) — วางที่นี่เพราะต้องใช้
+  // createPurchaseOrdersFromSummary ที่ผูกกับสาขา/สิทธิ์ของหน้านี้ จะได้ไม่ต้องมีโค้ดสร้างใบซ้ำอีกชุด
+  if(summaryOnly)return <PurchaseSummaryModal inline ings={ings} branchById={branchById} currentBranch={currentBranch} currentUser={currentUser} onCreateOrders={isCentralBranch?createPurchaseOrdersFromSummary:null} onClose={()=>{}}/>;
+
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10}}>
       <div>
@@ -7241,7 +7244,6 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         </h3>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        {isCentralBranch&&<Btn v="success" onClick={()=>setShowPurchaseSummary(true)} s={{padding:"8px 14px",fontSize:13}}>📋 สรุปต้องซื้อวันนี้</Btn>}
         {/* สั่งวัตถุดิบ / โอนวัตถุดิบ / สร้างเอกสาร PO ย้ายไปหัวแถบ "ใบขอซื้อ" แล้ว */}
       </div>
     </div>
@@ -7643,7 +7645,6 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       </div>
     </Modal>}
 
-    {showPurchaseSummary&&<PurchaseSummaryModal ings={ings} branchById={branchById} currentBranch={currentBranch} currentUser={currentUser} onCreateOrders={isCentralBranch?createPurchaseOrdersFromSummary:null} onClose={()=>setShowPurchaseSummary(false)}/>}
   </div>;
 }
 
@@ -7651,7 +7652,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
 // based on pending branch orders (status requested/open) vs central's own stock.
 // SOP cascade is applied so if a branch ordered a compound ingredient that
 // central has to produce, the sub-ingredients are counted toward the need.
-function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreateOrders,onClose}){
+function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreateOrders,onClose,inline=false}){
   const PENDING=new Set(["requested","open"]);
   const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
   // SELF-CONTAINED FETCH — bypass parent's filtered `pos` state so the summary
@@ -7848,7 +7849,18 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
     printHtml(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการต้องซื้อ ${fmtD(todayStr())}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 4px}.meta{font-size:12px;color:#64748B;margin:2px 0}@media print{.noprint{display:none}}</style></head><body><h2>📋 รายการที่ครัวกลางต้องไปซื้อวันนี้</h2><p class="meta">วันที่: <b>${esc(fmtD(todayStr()))}</b> · สาขา: <b>${esc(currentBranch?.name||"ครัวกลาง")}</b> · คำสั่งซื้อค้าง: <b>${orderCount}</b> ใบ</p>${groupHtml}<div style="margin-top:18px;padding:12px;background:#FEF3C7;border:2px solid #F59E0B;border-radius:10px;font-size:14px"><b>รวมทั้งสิ้นประมาณ: <span style="color:#FF6B35;font-size:18px">฿${totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span></b></div><br/></body></html>`);
   }
 
-  return <Modal title={`📋 สรุปวัตถุดิบที่ต้องซื้อวันนี้ (${fmtD(todayStr())})`} onClose={onClose} extraWide>
+  // ใช้ได้ 2 แบบ: เป็นแท็บในหน้า (inline) หรือเป็นหน้าต่างเด้ง — เนื้อหาชุดเดียวกัน
+  const title=`📋 สรุปวัตถุดิบที่ต้องซื้อวันนี้ (${fmtD(todayStr())})`;
+  const Shell=inline
+    ?({children})=><div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+          <div style={{fontSize:18,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{title}</div>
+          <Btn v="ghost" onClick={()=>setRefreshTick(t=>t+1)} icon={I.refresh} s={{padding:"7px 12px",fontSize:12}}>รีเฟรช</Btn>
+        </div>
+        {children}
+      </div>
+    :({children})=><Modal title={title} onClose={onClose} extraWide>{children}</Modal>;
+  return <Shell>
     {/* Loading / error / data states — loading guards against the empty "stock
         sufficient" message showing before the fetch completes. */}
     {loading?<div style={{padding:"60px 20px"}}><Loading text="กำลังโหลด PO ค้างจ่าย..."/></div>:
@@ -7979,7 +7991,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       </div>
     </>}
     </>}
-  </Modal>;
+  </Shell>;
 }
 
 // Full-screen PO view with status-aware actions
@@ -13885,13 +13897,15 @@ export default function App(){
             {tab==="po"&&<>
               {/* Top toggle [เอกสาร PO | ซัพพลายนอก]. Hidden on the "create order" sub-page
                   (reached via the สั่งวัตถุดิบ button) which has its own back link. */}
-              {hasPerm(currentUser,"orders")&&poSubTab!=="create"&&<div style={{display:"flex",gap:6,marginBottom:16,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:560}}>
-                {[{id:"pr",l:"📝 ใบขอซื้อ",c:C.green},{id:"po",l:"📄 เอกสาร PO",c:C.brand},{id:"ext",l:"🚚 ซัพพลายนอก",c:C.teal}].map(s=>{const on=poSubTab===s.id;return <button key={s.id} onClick={()=>setPoSubTab(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3,transition:"all .15s"}}>{s.l}</button>;})}
+              {hasPerm(currentUser,"orders")&&poSubTab!=="create"&&<div style={{display:"flex",gap:6,marginBottom:16,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:760}}>
+                {[{id:"pr",l:"📝 ใบขอซื้อ PR",c:C.green},{id:"po",l:"📄 เอกสาร PO",c:C.brand},{id:"ext",l:"🚚 ซัพพลายนอก",c:C.teal},...(currentBranch?.type==="central"?[{id:"buy",l:"📋 สรุปต้องซื้อวันนี้",c:C.purple}]:[])].map(s=>{const on=poSubTab===s.id;return <button key={s.id} onClick={()=>setPoSubTab(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3,transition:"all .15s"}}>{s.l}</button>;})}
               </div>}
               {poSubTab==="create"&&hasPerm(currentUser,"orders")
                 ?<OrderTab forcedMode="check" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setPoSubTab("po")}/>
                 :poSubTab==="pr"
                 ?<RequisitionView branches={branches} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reloadOrders={reload.orders} onOrderMaterials={()=>setPoSubTab("create")} onCreatePO={()=>{setPoAction("create");setPoSubTab("po");}} onTransfer={()=>{setPoAction("transfer");setPoSubTab("po");}}/>
+                :poSubTab==="buy"&&hasPerm(currentUser,"orders")&&currentBranch?.type==="central"
+                ?<POSection summaryOnly branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} orders={orders} reloadOrders={reload.orders}/>
                 :poSubTab==="ext"&&hasPerm(currentUser,"orders")
                 ?<OrderTab forcedMode="list" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser}/>
                 :<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setPoSubTab("create")} orders={orders} reloadOrders={reload.orders} initialAction={poAction} onConsumeAction={()=>setPoAction(null)}/>}
