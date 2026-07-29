@@ -4815,19 +4815,175 @@ function buildPOHTML(po,toBranchName,fromBranchName){
 </div>
 </div>`;
 }
-function printPO(po,toBranchName,action='print',fromBranchName){
+// ── ใบตรวจรับสินค้า (Goods Receipt Note) ────────────────────────────────────
+// ระบบมีข้อมูลการรับครบอยู่แล้ว (ใครรับ เมื่อไหร่ รับจริงกี่หน่วย รูปตอนรับ) แต่ไม่มีเอกสาร
+// ให้เซ็น/เก็บ ซึ่งเป็นหลักฐานที่ผู้สอบบัญชีขอดู และใช้ยันกับซัพเวลาเถียงว่าส่งครบไม่ครบ
+// เลขที่อ้างจากเลข PO เพื่อให้ตามรอยกันได้ (GRN-<เลข PO>)
+function grnNumber(po){ return `GRN-${po.po_number||po.id}`; }
+function buildGRNHTML(po,toBranchName,fromBranchName){
+  const fmt=(v)=>(+v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const q3=(v)=>{const n=Math.round((+v||0)*1000)/1000;return n.toLocaleString(undefined,{maximumFractionDigits:3});};
+  const items=(po.items||[]);
+  let nShort=0,nOver=0,shortValue=0;
+  const rows=items.map((it,i)=>{
+    const ord=+it.qty||0;
+    const rec=it.received_qty!=null?+it.received_qty||0:ord;   // ไม่ได้กรอก = ถือว่ารับครบ
+    const diff=Math.round((rec-ord)*1000)/1000;
+    if(diff<0){nShort++;shortValue+=Math.abs(diff)*(+it.price_per_unit||0);}
+    if(diff>0)nOver++;
+    const bg=diff<0?"#FEF2F2":diff>0?"#FFFBEB":"";
+    const diffTxt=diff===0?`<span style="color:#16A34A;font-weight:700">ครบ</span>`
+      :`<span style="color:${diff<0?"#DC2626":"#B45309"};font-weight:800">${diff>0?"+":""}${q3(diff)}</span>`;
+    return `<tr style="background:${bg}">
+      <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${i+1}</td>
+      <td style="padding:6px 10px;border:1px solid #ddd">${esc(it.name)}${it.note?`<br/><span style="font-size:11px;color:#888">★ ${esc(it.note)}</span>`:""}</td>
+      <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${esc(it.unit||"-")}</td>
+      <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${q3(ord)}</td>
+      <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:800">${q3(rec)}</td>
+      <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${diffTxt}</td>
+    </tr>`;
+  }).join("");
+  const imgs=(Array.isArray(po.receive_images)?po.receive_images:[]).slice(0,4);
+  const imgHtml=imgs.length?`<div style="margin-top:16px">
+    <div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:6px">รูปถ่ายตอนรับสินค้า (${imgs.length})</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${imgs.map(u=>`<img src="${esc(driveImgAbs(u))}" style="width:150px;height:150px;object-fit:cover;border:1px solid #ddd;border-radius:6px"/>`).join("")}</div>
+  </div>`:"";
+  const verdict=nShort>0
+    ?`<span style="background:#FEF2F2;color:#DC2626;border:1px solid #FCA5A5;padding:3px 10px;border-radius:6px;font-weight:800">⚠️ รับไม่ครบ ${nShort} รายการ (ขาดเป็นมูลค่า ฿${fmt(shortValue)})</span>`
+    :nOver>0?`<span style="background:#FFFBEB;color:#B45309;border:1px solid #FDE68A;padding:3px 10px;border-radius:6px;font-weight:800">รับเกิน ${nOver} รายการ</span>`
+    :`<span style="background:#F0FDF4;color:#16A34A;border:1px solid #86EFAC;padding:3px 10px;border-radius:6px;font-weight:800">✅ รับครบทุกรายการ</span>`;
+  return `<div id="po-doc" style="font-family:'Sarabun',sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto;background:#fff">
+<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0D9488;padding-bottom:14px;margin-bottom:18px">
+  <div>
+    <h1 style="margin:0;font-size:26px;color:#0D9488;letter-spacing:.5px">📥 ใบตรวจรับสินค้า</h1>
+    <div style="font-size:12px;color:#64748B;margin-top:2px">Goods Receipt Note</div>
+    <div style="margin-top:6px;font-size:13px;color:#475569">${esc(fromBranchName||"-")} <span style="color:#0D9488;font-weight:700">→</span> ${esc(toBranchName||"-")}</div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:17px;font-weight:900">${esc(grnNumber(po))}</div>
+    <div style="font-size:12px;color:#475569;margin-top:4px">อ้างใบสั่งซื้อ ${esc(po.po_number||"-")}</div>
+    <div style="font-size:12px;color:#475569">วันที่สั่ง ${esc(fmtD(po.po_date)||"-")}</div>
+  </div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;font-size:13px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:12px 14px">
+  <div><b style="color:#475569;font-weight:600">วันเวลาที่รับ:</b> ${esc(po.received_at?fmtDT(po.received_at):"—")}</div>
+  <div><b style="color:#475569;font-weight:600">ผู้รับสินค้า:</b> ${esc(po.received_by||"—")}</div>
+  <div><b style="color:#475569;font-weight:600">สถานที่รับ:</b> ${esc(toBranchName||"-")}</div>
+  <div><b style="color:#475569;font-weight:600">จำนวนรายการ:</b> ${items.length}</div>
+  <div style="grid-column:1/3;padding-top:4px">${verdict}</div>
+  ${po.dispute_reason?`<div style="grid-column:1/3"><b style="color:#475569;font-weight:600">เหตุผลที่รับไม่ครบ:</b> ${esc(po.dispute_reason)}</div>`:""}
+</div>
+<table style="width:100%;border-collapse:collapse;margin:12px 0">
+  <thead><tr>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:center;width:36px">#</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:left">รายการ</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:center;width:60px">หน่วย</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:right;width:80px">สั่ง</th>
+    <th style="background:#0D9488;color:#fff;padding:8px;font-size:12px;text-align:right;width:80px">รับจริง</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:center;width:80px">ส่วนต่าง</th>
+  </tr></thead>
+  <tbody>${rows||`<tr><td colspan="6" style="text-align:center;padding:20px;color:#94A3B8">— ไม่มีรายการ —</td></tr>`}</tbody>
+</table>
+${imgHtml}
+<div style="margin-top:36px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:12px">
+  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:52px;color:#64748B">ผู้ส่งสินค้า / วันที่</div></div>
+  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:52px;color:#64748B">ผู้ตรวจรับ / วันที่<br/><span style="font-size:11px;color:#94A3B8">${esc(po.received_by||"")}</span></div></div>
+</div>
+</div>`;
+}
+
+// ── ใบลดหนี้ / ใบปรับปรุงยอด (Credit Note) ──────────────────────────────────
+// ออกเมื่อรับของน้อยกว่าที่สั่ง — ยอดหนี้ในใบสั่งซื้อลดลง เอกสารนี้อธิบายว่าลดเพราะอะไร
+// เท่าไร รายการไหน เพื่อให้กระทบยอดกับบิลของซัพและงบบัญชีได้ (เดิมยอดเปลี่ยนโดยไม่มีร่องรอย)
+function buildCreditNoteHTML(po,toBranchName,fromBranchName){
+  const fmt=(v)=>(+v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const q3=(v)=>{const n=Math.round((+v||0)*1000)/1000;return n.toLocaleString(undefined,{maximumFractionDigits:3});};
+  const short=[];
+  for(const it of (po.items||[])){
+    const ord=+it.qty||0;
+    const rec=it.received_qty!=null?+it.received_qty||0:ord;
+    if(rec<ord-1e-9)short.push({...it,ord,rec,missing:Math.round((ord-rec)*1000)/1000,price:+it.price_per_unit||0});
+  }
+  const subCredit=Math.round(short.reduce((s,x)=>s+x.missing*x.price,0)*100)/100;
+  // VAT ตามสัดส่วนเดิมของใบ เพื่อให้ยอดลดหนี้สอดคล้องกับที่ตั้งหนี้ไว้
+  const vatRate=(+po.subtotal||0)>0?(+po.vat||0)/(+po.subtotal):0;
+  const vatCredit=Math.round(subCredit*vatRate*100)/100;
+  const totalCredit=Math.round((subCredit+vatCredit)*100)/100;
+  const rows=short.map((x,i)=>`<tr>
+    <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${i+1}</td>
+    <td style="padding:6px 10px;border:1px solid #ddd">${esc(x.name)}</td>
+    <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${esc(x.unit||"-")}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${q3(x.ord)}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${q3(x.rec)}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:800;color:#DC2626">${q3(x.missing)}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${fmt(x.price)}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:800">฿${fmt(x.missing*x.price)}</td>
+  </tr>`).join("");
+  return `<div id="po-doc" style="font-family:'Sarabun',sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:820px;margin:0 auto;background:#fff">
+<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #DC2626;padding-bottom:14px;margin-bottom:18px">
+  <div>
+    <h1 style="margin:0;font-size:26px;color:#DC2626;letter-spacing:.5px">📉 ใบลดหนี้ / ใบปรับปรุงยอด</h1>
+    <div style="font-size:12px;color:#64748B;margin-top:2px">Credit Note</div>
+    <div style="margin-top:6px;font-size:13px;color:#475569">${esc(fromBranchName||"-")} <span style="color:#DC2626;font-weight:700">→</span> ${esc(toBranchName||"-")}</div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:17px;font-weight:900">CN-${esc(po.po_number||po.id)}</div>
+    <div style="font-size:12px;color:#475569;margin-top:4px">อ้างใบสั่งซื้อ ${esc(po.po_number||"-")}</div>
+    <div style="font-size:12px;color:#475569">วันที่รับของ ${esc(po.received_at?fmtD(po.received_at):"-")}</div>
+  </div>
+</div>
+<div style="background:#FEF2F2;border:1px solid #FCA5A5;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px">
+  <b>เหตุผลการลดหนี้:</b> ได้รับสินค้าน้อยกว่าจำนวนที่สั่งซื้อ ${short.length} รายการ${po.dispute_reason?` — ${esc(po.dispute_reason)}`:""}
+  <div style="margin-top:4px;font-size:12px;color:#7F1D1D">ยอดตามใบสั่งซื้อเดิม ฿${fmt((+po.total||0)+totalCredit)} · ลดหนี้ ฿${fmt(totalCredit)} · <b>ยอดที่ต้องชำระจริง ฿${fmt(po.total)}</b></div>
+</div>
+<table style="width:100%;border-collapse:collapse;margin:12px 0">
+  <thead><tr>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:center;width:34px">#</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:left">รายการ</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:center;width:56px">หน่วย</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:right;width:70px">สั่ง</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:right;width:70px">รับจริง</th>
+    <th style="background:#DC2626;color:#fff;padding:8px;font-size:12px;text-align:right;width:70px">ขาด</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:right;width:80px">ราคา/หน่วย</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:right;width:100px">ลดหนี้</th>
+  </tr></thead>
+  <tbody>
+    ${rows||`<tr><td colspan="8" style="text-align:center;padding:20px;color:#94A3B8">— รับครบทุกรายการ ไม่มียอดลดหนี้ —</td></tr>`}
+    <tr><td colspan="7" style="text-align:right;padding:8px 12px;border:1px solid #ddd;font-weight:600">รวมมูลค่าที่ลด</td><td style="text-align:right;padding:8px;border:1px solid #ddd;font-weight:700">฿${fmt(subCredit)}</td></tr>
+    ${vatCredit>0?`<tr><td colspan="7" style="text-align:right;padding:8px 12px;border:1px solid #ddd;font-weight:600">VAT ที่ลดตามสัดส่วน</td><td style="text-align:right;padding:8px;border:1px solid #ddd;font-weight:700">฿${fmt(vatCredit)}</td></tr>`:""}
+    <tr style="font-size:15px;font-weight:900;background:#FEF2F2;color:#DC2626"><td colspan="7" style="text-align:right;padding:10px 12px;border:1px solid #ddd">ยอดลดหนี้ทั้งสิ้น</td><td style="text-align:right;padding:10px;border:1px solid #ddd">฿${fmt(totalCredit)}</td></tr>
+  </tbody>
+</table>
+<div style="margin-top:36px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:12px">
+  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:52px;color:#64748B">ผู้จัดทำ / วันที่</div></div>
+  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:52px;color:#64748B">ผู้อนุมัติ / วันที่</div></div>
+</div>
+</div>`;
+}
+
+// มีรายการที่รับน้อยกว่าสั่งไหม — ใช้ตัดสินว่าควรโชว์ปุ่มใบลดหนี้
+function poHasShortReceive(po){
+  return (po&&po.items||[]).some(it=>{
+    const ord=+it.qty||0;
+    const rec=it.received_qty!=null?+it.received_qty||0:ord;
+    return rec<ord-1e-9;
+  });
+}
+
+// ตัวกลางเปิดหน้าต่างเอกสาร (แถบเครื่องมือ + ฟอนต์ + ปุ่มบันทึก PDF) — ใบ PO / ใบตรวจรับ /
+// ใบลดหนี้ ใช้เชลล์เดียวกัน ต่างกันแค่เนื้อเอกสาร จะได้ไม่ต้องดูแลโค้ดหน้าต่างพิมพ์หลายชุด
+function printDocWindow(docHtml,{filename,title,headline,accent="#FF6B35",action="print"}){
   const w=openPrintWindow(860,950);
   if(!w)return;
-  const filename=(po.po_number||`PO-${po.id}`).replace(/[^\w\-]/g,"_")+".pdf";
-  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${po.po_number||"PO"}</title>
+  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title||"เอกสาร")}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;900&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.2/dist/html2pdf.bundle.min.js"><\/script>
+<script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.2/dist/html2pdf.bundle.min.js"></script>
 <style>
   body{font-family:'Sarabun',sans-serif;margin:0;background:#F1F5F9}
   .toolbar{position:sticky;top:0;background:#0F172A;color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.18)}
   .tools{display:flex;gap:8px}
-  .tools button{background:#FF6B35;color:#fff;border:none;border-radius:8px;padding:7px 16px;cursor:pointer;font-family:'Sarabun',sans-serif;font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px}
+  .tools button{background:${accent};color:#fff;border:none;border-radius:8px;padding:7px 16px;cursor:pointer;font-family:'Sarabun',sans-serif;font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px}
   .tools button.alt{background:#3B82F6}
   .tools button.ghost{background:rgba(255,255,255,.12)}
   .tools button:hover{opacity:.85}
@@ -4835,14 +4991,14 @@ function printPO(po,toBranchName,action='print',fromBranchName){
 </style>
 </head><body>
 <div class="toolbar">
-  <div style="font-weight:800;font-size:14px">📄 ${esc(po.po_number||"PO")} — ${esc(fromBranchName||"-")} → ${esc(toBranchName||"-")}</div>
+  <div style="font-weight:800;font-size:14px">${esc(headline||title||"เอกสาร")}</div>
   <div class="tools">
     <button onclick="window.print()">🖨 พิมพ์</button>
     <button class="alt" onclick="savePDF()" id="pdfBtn">💾 ดาวน์โหลด PDF</button>
     <button class="ghost" onclick="window.close()">✕ ปิด</button>
   </div>
 </div>
-${buildPOHTML(po,toBranchName,fromBranchName)}
+${docHtml}
 <script>
 function savePDF(){
   var btn=document.getElementById('pdfBtn');
@@ -4850,11 +5006,28 @@ function savePDF(){
   btn.textContent='⏳ กำลังสร้าง PDF...';btn.disabled=true;
   html2pdf().set({margin:[8,8,8,8],filename:'${filename}',image:{type:'jpeg',quality:.98},html2canvas:{scale:2,useCORS:true,backgroundColor:'#ffffff'},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(document.getElementById('po-doc')).save().then(function(){btn.textContent='💾 ดาวน์โหลด PDF';btn.disabled=false;}).catch(function(e){alert('สร้าง PDF ไม่สำเร็จ: '+e.message);btn.textContent='💾 ดาวน์โหลด PDF';btn.disabled=false;});
 }
-${action==='print'?"setTimeout(function(){window.print();},400);":""}
-${action==='pdf'?"window.addEventListener('load',function(){setTimeout(savePDF,400);});":""}
-<\/script>
+${action==="print"?"setTimeout(function(){window.print();},400);":""}
+${action==="pdf"?"window.addEventListener('load',function(){setTimeout(savePDF,400);});":""}
+</script>
 </body></html>`;
   w.document.write(html);w.document.close();addPrintClose(w);
+}
+const docFile=(prefix,po)=>`${prefix}-${(po.po_number||po.id)}`.replace(/[^w-]/g,"_")+".pdf";
+
+function printPO(po,toBranchName,action="print",fromBranchName){
+  printDocWindow(buildPOHTML(po,toBranchName,fromBranchName),{
+    filename:docFile("PO",po),title:po.po_number||"PO",
+    headline:`📄 ${po.po_number||"PO"} — ${fromBranchName||"-"} → ${toBranchName||"-"}`,action});
+}
+function printGRN(po,toBranchName,action="print",fromBranchName){
+  printDocWindow(buildGRNHTML(po,toBranchName,fromBranchName),{
+    filename:docFile("GRN",po),title:grnNumber(po),accent:"#0D9488",
+    headline:`📥 ใบตรวจรับ ${grnNumber(po)} — ${fromBranchName||"-"} → ${toBranchName||"-"}`,action});
+}
+function printCreditNote(po,toBranchName,action="print",fromBranchName){
+  printDocWindow(buildCreditNoteHTML(po,toBranchName,fromBranchName),{
+    filename:docFile("CN",po),title:`CN-${po.po_number||po.id}`,accent:"#DC2626",
+    headline:`📉 ใบลดหนี้ CN-${po.po_number||po.id} — ${fromBranchName||"-"} → ${toBranchName||"-"}`,action});
 }
 
 // Export PO list to Excel
@@ -6174,6 +6347,29 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
   </Modal>;
 }
 
+// ประวัติราคาที่ซื้อได้จริงต่อวัตถุดิบ จากใบสั่งซื้อซัพนอกที่รับของแล้ว — คีย์แยกตาม "หน่วย"
+// เพราะของบางตัวซื้อคละหน่วย (กก./ลัง) ถ้าเทียบข้ามหน่วยตัวเลขจะหลงทาง
+// ใช้ร่วมกันทั้งหน้ารับของใน POSection และ OrderTab (ซัพพลายนอก) จะได้ไม่มีสูตรสองชุด
+function buildPriceHistoryMap(orders){
+  const m=new Map();   // `${ingId}|${unit}` → {last,lastAt,min,max,n}
+  const src=(orders||[]).filter(o=>o&&o.status==="delivered");
+  const sorted=src.slice().sort((a,b)=>new Date(a.requested_at||a.created_at||0)-new Date(b.requested_at||b.created_at||0));
+  for(const o of sorted){
+    for(const it of (o.items||[])){
+      const id=+(it.ingId||it.ingredient_id);
+      const price=+it.pricePerUnit||+it.buyPrice||0;
+      if(!id||!(price>0))continue;
+      const key=`${id}|${String(it.unit||"").trim()}`;
+      const cur=m.get(key)||{last:0,lastAt:null,min:Infinity,max:0,n:0};
+      cur.last=price;cur.lastAt=o.requested_at||o.created_at||null;   // เรียงเก่า→ใหม่ ตัวท้ายคือครั้งล่าสุด
+      cur.min=Math.min(cur.min,price);cur.max=Math.max(cur.max,price);cur.n++;
+      m.set(key,cur);
+    }
+  }
+  return m;
+}
+const priceHistLookup=(map,ingId,unit)=>(map&&map.get(`${+ingId}|${String(unit||"").trim()}`))||null;
+
 function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders,orders=[],reloadOrders,initialAction,onConsumeAction,summaryOnly=false}){
   // Every branch (central or otherwise) can issue a PO to any other branch
   // and only ever sees POs it's involved in (as sender or receiver).
@@ -7158,6 +7354,12 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
   }
 
   const branchById=Object.fromEntries(branches.map(b=>[b.id,b]));
+  // ราคาที่ "ซื้อได้จริงครั้งก่อน" ต่อวัตถุดิบ จากใบสั่งซื้อซัพนอกที่รับของแล้ว
+  // ใช้โชว์ตอนกรอกราคาตอนรับของ ให้เห็นทันทีว่าครั้งนี้แพงขึ้น/ถูกลงกี่ % — เป็นการควบคุมภายใน
+  // กันซื้อแพงกว่าเดิมโดยไม่มีใครสังเกต (ของสดราคาขึ้นลงตลอด คนรับของไม่ได้จำราคาเก่า)
+  // เก็บแยกตาม "หน่วย" ด้วย เพราะของบางตัวซื้อคละหน่วย (กก./ลัง) ถ้าเทียบข้ามหน่วยจะหลงทาง
+  const priceHistByIng=useMemo(()=>buildPriceHistoryMap(orders),[orders]);
+  const lastPriceOf=(ingId,unit)=>priceHistLookup(priceHistByIng,ingId,unit);
   // Transfers don't have a money value — exclude them from the running total
   const totalAll=pos.reduce((s,p)=>p.status==="transfer_pending"||p.status==="transfer_shipped"||p.status==="transfer_done"?s:s+(+p.total||0),0);
   // PO filter dropdown — restricted to the branches THIS user has access to
@@ -7336,7 +7538,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                       :<>
                     <RowMenu items={[
                       {label:"ดูรายละเอียด",icon:I.eye,onClick:()=>setViewPO(po)},
-                      !["requested","transfer_pending","transfer_shipped","transfer_done"].includes(po.status)&&{label:"พิมพ์เอกสาร",icon:I.print,color:C.blue,onClick:()=>printPO(po,toB?.name,'print',fromB?.name)},
+                      !["requested","transfer_pending","transfer_shipped","transfer_done"].includes(po.status)&&{label:"พิมพ์ใบสั่งซื้อ",icon:I.print,color:C.blue,onClick:()=>printPO(po,toB?.name,'print',fromB?.name)},
+                      !!po.received_at&&{label:"พิมพ์ใบตรวจรับ",icon:I.print,color:C.teal,onClick:()=>printGRN(po,toB?.name,'print',fromB?.name)},
+                      !!po.received_at&&poHasShortReceive(po)&&{label:"พิมพ์ใบลดหนี้",icon:I.print,color:C.red,onClick:()=>printCreditNote(po,toB?.name,'print',fromB?.name)},
                       (isCreator(po)||isCentralBranch)&&hasPO&&{label:"คัดลอก",icon:I.copy,color:"#7C3AED",onClick:()=>duplicatePO(po)},
                       canEditPO(po)&&po.status==="open"&&!isAssetPO(po)&&{label:"แก้ไข",icon:I.pencil,color:"#92400E",onClick:()=>startEdit(po)},
                       canDeletePO(po)&&{label:"ลบ",icon:I.trash,danger:true,onClick:()=>delPO(po)},
@@ -7444,6 +7648,22 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                   <span style={{fontSize:11,color:C.ink4}}>/{it.unit||"หน่วย"}</span>
                 </div>
                 {needPrice&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>⚠ กรุณากรอกราคา</div>}
+                {/* ราคาครั้งก่อน + ส่วนต่าง — จับกรณีซื้อแพงขึ้นผิดปกติได้ตั้งแต่ตอนรับของ */}
+                {(()=>{
+                  const h=lastPriceOf(it.ingId||it.ingredient_id,it.unit);
+                  if(!h||!(h.last>0))return <div style={{fontSize:10,color:C.ink4,marginTop:2}}>— ยังไม่มีประวัติราคา —</div>;
+                  const d=price>0?price-h.last:0;
+                  const pct=h.last>0?(d/h.last*100):0;
+                  const up=d>0.004,down=d<-0.004;
+                  return <div style={{fontSize:10,marginTop:3,lineHeight:1.5}}>
+                    <span style={{color:C.ink4}}>ครั้งก่อน </span>
+                    <b style={{color:C.ink2}}>฿{h.last.toLocaleString(undefined,{maximumFractionDigits:2})}</b>
+                    {h.lastAt?<span style={{color:C.ink4}}> ({fmtD(h.lastAt)})</span>:null}
+                    {h.n>1&&h.min<h.max?<span style={{color:C.ink4}}> · เคย ฿{h.min.toLocaleString(undefined,{maximumFractionDigits:2})}–{h.max.toLocaleString(undefined,{maximumFractionDigits:2})}</span>:null}
+                    {price>0&&(up||down)?<div style={{marginTop:1,fontWeight:800,color:up?"#DC2626":"#16A34A"}}>{up?"▲ แพงขึ้น":"▼ ถูกลง"} ฿{Math.abs(d).toLocaleString(undefined,{maximumFractionDigits:2})} ({Math.abs(pct).toFixed(1)}%)</div>
+                     :price>0?<div style={{marginTop:1,color:"#16A34A",fontWeight:700}}>= ราคาเดิม</div>:null}
+                  </div>;
+                })()}
               </td>
               <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:lineTotal>0?C.green:C.ink4,whiteSpace:"nowrap"}}>฿{lineTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
             </tr>;
@@ -8152,8 +8372,12 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         <Btn v="success" onClick={submitDisputeNow} disabled={busy||allMatch} loading={busy} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 22px",fontWeight:900}}>{allMatch?"ไม่มีรายการที่ขาด":"📤 ส่งกลับให้ต้นทางตรวจสอบ"}</Btn>
       </>:<>
         <Btn v="ghost" onClick={onClose}>ปิด</Btn>
-        {po.status!=="requested"&&<Btn v="info" icon={I.print} onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์</Btn>}
-        {po.status!=="requested"&&<Btn v="success" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)} s={{padding:"10px 16px"}}>💾 ดาวน์โหลด PDF</Btn>}
+        {po.status!=="requested"&&<Btn v="info" icon={I.print} onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์ใบสั่งซื้อ</Btn>}
+        {po.status!=="requested"&&<Btn v="success" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)} s={{padding:"10px 16px"}}>💾 PDF</Btn>}
+        {/* ใบตรวจรับ — ออกได้เมื่อรับของแล้วเท่านั้น (ก่อนนั้นยังไม่มีอะไรให้ตรวจรับ) */}
+        {!!po.received_at&&<Btn v="teal" icon={I.print} onClick={()=>printGRN(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>📥 ใบตรวจรับ</Btn>}
+        {/* ใบลดหนี้ — โชว์เฉพาะใบที่รับของน้อยกว่าที่สั่ง (ยอดหนี้ลดลงจริง จึงต้องมีเอกสารอธิบาย) */}
+        {!!po.received_at&&poHasShortReceive(po)&&<Btn v="danger" icon={I.print} onClick={()=>printCreditNote(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>📉 ใบลดหนี้</Btn>}
         {canCancelPO&&<Btn v="danger" onClick={onCancel} s={{padding:"10px 16px"}}>❌ ยกเลิก PO</Btn>}
         {canDelete&&<Btn onClick={onDelete} icon={I.trash} s={{padding:"10px 16px",background:C.redLight,color:C.red,border:`1.5px solid #FECACA`}}>🗑 ลบทิ้งถาวร</Btn>}
         {canEditFromView&&<Btn v="ghost" onClick={onEdit} icon={I.pencil} s={{padding:"10px 16px",background:"#FEF3C7",color:"#92400E"}}>✏️ แก้ไข</Btn>}
@@ -8838,6 +9062,9 @@ function SumTab({menus,ings,currentBranch,reloadHistory,reloadOrders,currentUser
 // ══════════════════════════════════════════════════════
 function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBranch,currentUser,reloadIngs,onBack,forcedMode,hideModeTabs}){
   const isCentral=currentBranch.type==="central";
+  // ประวัติราคาที่ซื้อได้จริง — ครัวกลางใช้ภาพรวมทุกสาขา (allOrders) เพื่อให้ฐานเทียบกว้างสุด
+  const priceHistByIng=useMemo(()=>buildPriceHistoryMap(isCentral&&(allOrders||[]).length?allOrders:orders),[orders,allOrders,isCentral]);
+  const lastPriceOf=(ingId,unit)=>priceHistLookup(priceHistByIng,ingId,unit);
   const[mode,setMode]=useState(forcedMode||"check");  // "check" = stock check / new order; "list" = existing orders
   const[view,setView]=useState("mine");  // central defaults to its OWN orders; toggle to "all" for oversight
   const[saving,setSaving]=useState(false);
@@ -9318,6 +9545,22 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
                   <span style={{fontSize:11,color:C.ink4}}>/{it.unit||"หน่วย"}</span>
                 </div>
                 {needPrice&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>⚠ กรุณากรอกราคา</div>}
+                {/* ราคาครั้งก่อน + ส่วนต่าง — จับกรณีซื้อแพงขึ้นผิดปกติได้ตั้งแต่ตอนรับของ */}
+                {(()=>{
+                  const h=lastPriceOf(it.ingId||it.ingredient_id,it.unit);
+                  if(!h||!(h.last>0))return <div style={{fontSize:10,color:C.ink4,marginTop:2}}>— ยังไม่มีประวัติราคา —</div>;
+                  const d=price>0?price-h.last:0;
+                  const pct=h.last>0?(d/h.last*100):0;
+                  const up=d>0.004,down=d<-0.004;
+                  return <div style={{fontSize:10,marginTop:3,lineHeight:1.5}}>
+                    <span style={{color:C.ink4}}>ครั้งก่อน </span>
+                    <b style={{color:C.ink2}}>฿{h.last.toLocaleString(undefined,{maximumFractionDigits:2})}</b>
+                    {h.lastAt?<span style={{color:C.ink4}}> ({fmtD(h.lastAt)})</span>:null}
+                    {h.n>1&&h.min<h.max?<span style={{color:C.ink4}}> · เคย ฿{h.min.toLocaleString(undefined,{maximumFractionDigits:2})}–{h.max.toLocaleString(undefined,{maximumFractionDigits:2})}</span>:null}
+                    {price>0&&(up||down)?<div style={{marginTop:1,fontWeight:800,color:up?"#DC2626":"#16A34A"}}>{up?"▲ แพงขึ้น":"▼ ถูกลง"} ฿{Math.abs(d).toLocaleString(undefined,{maximumFractionDigits:2})} ({Math.abs(pct).toFixed(1)}%)</div>
+                     :price>0?<div style={{marginTop:1,color:"#16A34A",fontWeight:700}}>= ราคาเดิม</div>:null}
+                  </div>;
+                })()}
               </td>
               <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:lineTotal>0?C.green:C.ink4,whiteSpace:"nowrap"}}>฿{lineTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
             </tr>;
