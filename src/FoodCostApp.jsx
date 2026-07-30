@@ -224,6 +224,10 @@ const api = {
   // change must abort or we'd overwrite it with a wrong count (mint/lose units).
   updateAssetIfQty: async (id, expectedQty, d) => { const r = await sb(`assets?id=eq.${id}&quantity=eq.${expectedQty}`, { method: "PATCH", headers: { "Prefer": "return=representation" }, body: JSON.stringify(d) }); if (!Array.isArray(r) || r.length === 0) throw new Error("จำนวนสินทรัพย์ต้นทางเปลี่ยนไปแล้ว — รีเฟรชแล้วลองใหม่"); return r; },
   deleteAsset: (id) => sb(`assets?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
+  // ใบโอนย้ายสินทรัพย์ — บันทึกเชิงประวัติ (ตาราง assets ยังเป็นตัวจริงของยอดคงเหลือ)
+  // best-effort: ถ้ายังไม่ได้สร้างตาราง การโอนต้องไม่ล้ม แค่ไม่มีใบให้ปริ้น/ดูย้อนหลัง
+  addAssetTransfer: async (d) => { try { const r = await sb("asset_transfers", { method: "POST", body: JSON.stringify(d) }); return Array.isArray(r) ? r[0] : r; } catch { return null; } },
+  getAssetTransfers: (branchId) => sb(`asset_transfers?order=created_at.desc&limit=200${branchId ? `&or=(from_branch_id.eq.${branchId},to_branch_id.eq.${branchId})` : ""}`),
   // ส่งทะเบียนทรัพย์สินเข้าระบบบัญชี (ค่าเสื่อม ม.65 ทวิ). ส่งแค่ id — เซิร์ฟเวอร์อ่านแถวจริง
   // แล้วสร้าง payload เอง จึงมีสูตรชุดเดียว ไม่ต้องคอยไล่ให้ตรงกับ cron รายวัน
   // dispose=true → แจ้งบัญชีตัดออกจากทะเบียน (ไม่ลบประวัติ) · คืน {ok:false} แทน throw
@@ -4815,6 +4819,61 @@ function buildPOHTML(po,toBranchName,fromBranchName){
 </div>
 </div>`;
 }
+// ── ใบโอนย้ายสินทรัพย์ระหว่างสาขา ───────────────────────────────────────────
+// ของที่ย้ายข้ามสาขาต้องมีใบเซ็นรับ-ส่ง ไม่งั้นของหายระหว่างทางแล้วไม่รู้ว่าใครรับผิดชอบ
+function assetTransferNumber(branchId){
+  const d=new Date(),ym=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}`;
+  return `AT-${ym}-${branchId?`B${branchId}-`:""}${Math.random().toString(36).slice(2,7).toUpperCase()}`;
+}
+function buildAssetTransferHTML(t){
+  const fmt=(v)=>(+v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const items=Array.isArray(t.items)?t.items:[];
+  const rows=items.map((it,i)=>`<tr>
+    <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${i+1}</td>
+    <td style="padding:6px 10px;border:1px solid #ddd">${esc(it.name)}${it.category?`<br/><span style="font-size:11px;color:#888">${esc(it.category)}</span>`:""}</td>
+    <td style="text-align:center;padding:6px 8px;border:1px solid #ddd">${(+it.qty||0).toLocaleString()}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${fmt(it.cost_per_unit)}</td>
+    <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:700">฿${fmt(it.total_cost)}</td>
+  </tr>`).join("");
+  const totalQty=items.reduce((s,x)=>s+(+x.qty||0),0);
+  return `<div id="po-doc" style="font-family:'Sarabun',sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto;background:#fff">
+<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #7C3AED;padding-bottom:14px;margin-bottom:18px">
+  <div>
+    <h1 style="margin:0;font-size:26px;color:#7C3AED;letter-spacing:.5px">🔄 ใบโอนย้ายสินทรัพย์</h1>
+    <div style="font-size:12px;color:#64748B;margin-top:2px">Asset Transfer Note</div>
+    <div style="margin-top:6px;font-size:13px;color:#475569">${esc(t.from_branch_name||"-")} <span style="color:#7C3AED;font-weight:700">→</span> ${esc(t.to_branch_name||"-")}</div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:17px;font-weight:900">${esc(t.transfer_no||"-")}</div>
+    <div style="font-size:12px;color:#475569;margin-top:4px">วันที่ ${esc(t.created_at?fmtDT(t.created_at):"-")}</div>
+    <div style="font-size:12px;color:#475569">ผู้ทำรายการ ${esc(t.transferred_by||"-")}</div>
+  </div>
+</div>
+<div style="background:#F5F3FF;border:1px solid #DDD6FE;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px">
+  <b>ต้นทาง:</b> ${esc(t.from_branch_name||"-")} &nbsp;·&nbsp; <b>ปลายทาง:</b> ${esc(t.to_branch_name||"-")}
+  <div style="margin-top:4px;font-size:12px;color:#5B21B6">รวม ${items.length} รายการ · ${totalQty.toLocaleString()} ชิ้น · มูลค่าทุนรวม ฿${fmt(t.total_cost)}</div>
+  ${t.note?`<div style="margin-top:4px;font-size:12px;color:#475569"><b>หมายเหตุ:</b> ${esc(t.note)}</div>`:""}
+</div>
+<table style="width:100%;border-collapse:collapse;margin:12px 0">
+  <thead><tr>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:center;width:36px">#</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:left">สินทรัพย์</th>
+    <th style="background:#7C3AED;color:#fff;padding:8px;font-size:12px;text-align:center;width:80px">จำนวน</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:right;width:100px">ทุน/ชิ้น</th>
+    <th style="background:#0F172A;color:#fff;padding:8px;font-size:12px;text-align:right;width:110px">มูลค่าทุน</th>
+  </tr></thead>
+  <tbody>
+    ${rows||`<tr><td colspan="5" style="text-align:center;padding:20px;color:#94A3B8">— ไม่มีรายการ —</td></tr>`}
+    <tr style="font-size:14px;font-weight:900;background:#F5F3FF;color:#7C3AED"><td colspan="4" style="text-align:right;padding:10px 12px;border:1px solid #ddd">มูลค่าทุนรวมทั้งสิ้น</td><td style="text-align:right;padding:10px;border:1px solid #ddd">฿${fmt(t.total_cost)}</td></tr>
+  </tbody>
+</table>
+<div style="margin-top:36px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:12px">
+  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:52px;color:#64748B">ผู้ส่งมอบ / วันที่<br/><span style="font-size:11px;color:#94A3B8">${esc(t.from_branch_name||"")}</span></div></div>
+  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:52px;color:#64748B">ผู้รับมอบ / วันที่<br/><span style="font-size:11px;color:#94A3B8">${esc(t.to_branch_name||"")}</span></div></div>
+</div>
+</div>`;
+}
+
 // ── ใบตรวจรับสินค้า (Goods Receipt Note) ────────────────────────────────────
 // ระบบมีข้อมูลการรับครบอยู่แล้ว (ใครรับ เมื่อไหร่ รับจริงกี่หน่วย รูปตอนรับ) แต่ไม่มีเอกสาร
 // ให้เซ็น/เก็บ ซึ่งเป็นหลักฐานที่ผู้สอบบัญชีขอดู และใช้ยันกับซัพเวลาเถียงว่าส่งครบไม่ครบ
@@ -5023,6 +5082,11 @@ function printGRN(po,toBranchName,action="print",fromBranchName){
   printDocWindow(buildGRNHTML(po,toBranchName,fromBranchName),{
     filename:docFile("GRN",po),title:grnNumber(po),accent:"#0D9488",
     headline:`📥 ใบตรวจรับ ${grnNumber(po)} — ${fromBranchName||"-"} → ${toBranchName||"-"}`,action});
+}
+function printAssetTransfer(t,action="print"){
+  printDocWindow(buildAssetTransferHTML(t),{
+    filename:`${t.transfer_no||"AT"}`.replace(/[^\w\-]/g,"_")+".pdf",title:t.transfer_no||"ใบโอนย้ายสินทรัพย์",accent:"#7C3AED",
+    headline:`🔄 ${t.transfer_no||"ใบโอนย้าย"} — ${t.from_branch_name||"-"} → ${t.to_branch_name||"-"}`,action});
 }
 function printCreditNote(po,toBranchName,action="print",fromBranchName){
   printDocWindow(buildCreditNoteHTML(po,toBranchName,fromBranchName),{
@@ -10510,8 +10574,113 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
   const myList=useMemo(()=>assets.filter(a=>+a.branch_id===+currentBranch?.id),[assets,currentBranch]);
   // ── asset transfer to another branch (splits qty + value proportionally) ──
   const[xfer,setXfer]=useState(null);const[xferBranch,setXferBranch]=useState("");const[xferQty,setXferQty]=useState("1");const[xferBusy,setXferBusy]=useState(false);
+  // โอนหลายรายการพร้อมกัน — ปลายทางเดียว เลือกได้หลายชิ้น ระบุจำนวนต่อชิ้น ออกใบโอนใบเดียว
+  const[bulkOpen,setBulkOpen]=useState(false);
+  const[bulkDest,setBulkDest]=useState("");
+  const[bulkPick,setBulkPick]=useState({});      // assetId → จำนวนที่จะโอน (string)
+  const[bulkNote,setBulkNote]=useState("");
+  const[bulkBusy,setBulkBusy]=useState(false);
+  const[bulkQ,setBulkQ]=useState("");
+  const[xferHist,setXferHist]=useState(null);    // null=ปิด · array=ประวัติที่โหลดมา
+  const[histBusy,setHistBusy]=useState(false);
+  async function openXferHistory(){
+    setHistBusy(true);
+    try{ const rows=await api.getAssetTransfers(currentBranch?.id); setXferHist(Array.isArray(rows)?rows:[]); }
+    catch(e){ alert("โหลดประวัติไม่สำเร็จ — ถ้ายังไม่ได้สร้างตาราง asset_transfers ให้รัน sql/asset-transfers.sql ก่อน\n\n"+((e&&e.message)||e)); }
+    setHistBusy(false);
+  }
+  async function doBulkTransfer(){
+    if(bulkBusy)return;
+    const destId=+bulkDest;
+    if(!destId){alert("เลือกสาขาปลายทาง");return;}
+    if(destId===+currentBranch?.id){alert("ปลายทางต้องเป็นคนละสาขา");return;}
+    const picks=Object.entries(bulkPick)
+      .map(([id,q])=>({a:(myList||[]).find(x=>+x.id===+id),n:Math.floor(+q||0)}))
+      .filter(x=>x.a&&x.n>0);
+    if(picks.length===0){alert("เลือกสินทรัพย์ที่จะโอน และระบุจำนวนอย่างน้อย 1 ชิ้น");return;}
+    const over=picks.find(x=>x.n>Math.max(0,Math.floor(+x.a.quantity||1)));
+    if(over){alert(`"${over.a.name}" มีอยู่ ${over.a.quantity} ชิ้น โอน ${over.n} ไม่ได้`);return;}
+    const destName=(branches.find(b=>+b.id===destId)||{}).name||"สาขาปลายทาง";
+    const totalCost=picks.reduce((s,x)=>s+(+x.a.cost||0)*x.n,0);
+    if(!await confirmDlg({title:"ยืนยันโอนย้ายหลายรายการ",message:`โอน ${picks.length} รายการ (${picks.reduce((s,x)=>s+x.n,0)} ชิ้น · มูลค่าทุน ฿${assetMoney(totalCost)})\nจาก "${currentBranch?.name}" ไป "${destName}"?`,confirmLabel:"🔄 ยืนยันโอนทั้งหมด"}))return;
+    setBulkBusy(true);
+    // ทำทีละรายการ เก็บที่สำเร็จไว้ลงใบ — ถ้ามีตัวใดพลาด ตัวที่โอนไปแล้วต้องยังถูกบันทึก
+    // ไม่ใช่ทิ้งทั้งใบ (ของย้ายไปจริงแล้ว เอกสารต้องตรงกับของ)
+    const lines=[],failed=[];
+    for(const{a,n} of picks){
+      try{ lines.push(await transferOneAsset(a,destId,n)); }
+      catch(e){ failed.push((e&&e.message)||String(e)); }
+    }
+    try{
+      if(lines.length>0){
+        const doc=await recordTransferDoc(destId,lines,bulkNote.trim()||null);
+        setBulkOpen(false);setBulkPick({});setBulkNote("");setBulkQ("");
+        await reloadAssets();
+        const msg=`${doc.transfer_no}\nโอนสำเร็จ ${lines.length} รายการ`+(failed.length?`\n\n⚠️ ไม่สำเร็จ ${failed.length} รายการ:\n${failed.slice(0,4).join("\n")}`:"");
+        if(await confirmDlg({title:failed.length?"⚠️ โอนสำเร็จบางส่วน":"✅ โอนย้ายสำเร็จ",message:msg+"\n\nพิมพ์ใบโอนย้ายเลยไหม?",confirmLabel:"🖨 พิมพ์ใบโอนย้าย",cancelLabel:"ไว้ทีหลัง"}))printAssetTransfer(doc);
+      }else{
+        alert("โอนไม่สำเร็จทั้งหมด:\n"+failed.slice(0,5).join("\n"));
+      }
+    }catch(e){alert("บันทึกใบโอนไม่สำเร็จ: "+((e&&e.message)||e));await reloadAssets();}
+    setBulkBusy(false);
+  }
   function openTransfer(a){setXfer(a);setXferBranch("");setXferQty(String(a.quantity==null?1:Math.max(1,Math.floor(+a.quantity||1))));}
   const xferDestBranches=useMemo(()=>branches.filter(b=>b.active!==false&&+b.id!==+currentBranch?.id),[branches,currentBranch]);
+  // โอนสินทรัพย์ 1 แถว — ใช้ร่วมกันทั้งการโอนเดี่ยวและโอนหลายรายการ จะได้ไม่มีตรรกะแยกกัน 2 ชุด
+  // คืนข้อมูลบรรทัดสำหรับลงใบโอน (หรือ throw ถ้าทำไม่สำเร็จ)
+  async function transferOneAsset(a,destId,n){
+    const have=Math.max(0,Math.floor(+a.quantity||1));
+    if(!(n>0)||n>have)throw new Error(`"${a.name}" จำนวนที่โอนต้องอยู่ระหว่าง 1–${have}`);
+    const perUnit=+a.cost||0;
+    const totalSalvage=+a.salvage_value||0;
+    const salvageMoved=have>0?round2(totalSalvage*n/have):0;
+    const note=(a.note?a.note+" · ":"")+`โอนมาจาก ${currentBranch?.name||"?"} ${fmtD(todayBkk())}`;
+    let movedId=null;
+    if(n>=have){
+      await api.updateAsset(a.id,{branch_id:destId,note});
+    }else{
+      // partial: สร้างแถวปลายทางก่อน แล้วลดต้นทางแบบมี guard — พลาดแล้วซ้ำได้ (กู้ได้)
+      // แต่จะไม่ทำให้มูลค่าหายไปเงียบๆ
+      const destRow={name:a.name,category:a.category||null,image:a.image||null,quantity:n,cost:perUnit,salvage_value:salvageMoved,acquired_date:a.acquired_date||null,useful_life_years:+a.useful_life_years||0,status:a.status||"active",assignee:a.assignee||null,location:a.location||null,vendor:a.vendor||null,lead_time:a.lead_time||null,width_cm:a.width_cm??null,length_cm:a.length_cm??null,height_cm:a.height_cm??null,weight_kg:a.weight_kg??null,note,branch_id:destId};
+      const created=await api.addAsset(destRow);
+      const newId=(Array.isArray(created)?created[0]:created||{}).id;
+      try{
+        await api.updateAssetIfQty(a.id,have,{quantity:have-n,salvage_value:round2(totalSalvage-salvageMoved)});
+      }catch(err){
+        // ย้อนแถวปลายทาง — ถ้าลบไม่สำเร็จด้วยจะเหลือแถวซ้ำจริง ต้องบอกตามความจริง
+        let rolledBack=true;
+        if(newId){try{await api.deleteAsset(newId);}catch{rolledBack=false;}}
+        throw new Error(rolledBack
+          ?`"${a.name}" จำนวนต้นทางเปลี่ยน — ยกเลิกการสร้างปลายทางแล้ว`
+          :`"${a.name}" จำนวนต้นทางเปลี่ยน และลบแถวปลายทางที่สร้างไว้ไม่สำเร็จ
+
+⚠️ มีสินทรัพย์ซ้ำค้างที่ปลายทาง (id ${newId}) กรุณาลบเองที่แท็บสินทรัพย์`);
+      }
+      movedId=newId;
+    }
+    // แจ้งทะเบียนบัญชีทันที — การโอนเปลี่ยนสาขาที่ถือครอง และการแยกแถวทำให้เกิดทะเบียนใหม่
+    // ถ้ารอ cron รอบดึก ทะเบียนรายสาขาจะผิดทั้งวัน (และถ้าคาบวันปิดงวดจะแก้ไม่ได้)
+    api.pushAssetToSlipTrack(a.id);
+    if(movedId)api.pushAssetToSlipTrack(movedId);
+    return {asset_id:a.id,new_asset_id:movedId,name:a.name,category:a.category||null,qty:n,cost_per_unit:perUnit,total_cost:round2(perUnit*n)};
+  }
+
+  // บันทึกใบโอน (best-effort) — ถ้ายังไม่ได้สร้างตาราง การโอนต้องไม่ล้ม แค่ไม่มีใบให้ปริ้น
+  async function recordTransferDoc(destId,lines,note){
+    const destName=(branches.find(b=>+b.id===+destId)||{}).name||"";
+    const doc={
+      transfer_no:assetTransferNumber(currentBranch?.id),
+      from_branch_id:currentBranch?.id??null,to_branch_id:destId,
+      from_branch_name:currentBranch?.name||"",to_branch_name:destName,
+      items:lines,total_cost:round2(lines.reduce((s,x)=>s+(+x.total_cost||0),0)),
+      note:note||null,transferred_by:currentUser?.username||null,
+    };
+    const saved=await api.addAssetTransfer(doc);
+    // ไม่มีตาราง → ยังคืนเอกสารในหน่วยความจำให้ปริ้นได้ทันที (แค่ดูย้อนหลังไม่ได้)
+    // ใส่ created_at เองด้วย ไม่งั้นใบที่ปริ้นจะไม่มีวันที่
+    return saved||{...doc,created_at:new Date().toISOString()};
+  }
+
   async function doTransfer(){
     if(xferBusy||!xfer)return;
     const destId=+xferBranch;const have=Math.max(0,Math.floor(+xfer.quantity||1));const n=Math.floor(+xferQty||0);
@@ -10520,42 +10689,17 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
     if(!(n>0)||n>have){alert(`จำนวนที่โอนต้องอยู่ระหว่าง 1–${have}`);return;}
     const destName=(branches.find(b=>+b.id===destId)||{}).name||"สาขาปลายทาง";
     const perUnit=+xfer.cost||0;
-    if(!await confirmDlg({title:"ยืนยันโอนย้ายสินทรัพย์",message:`ย้าย "${xfer.name}" ${n} ชิ้น (มูลค่าทุน ฿${assetMoney(perUnit*n)}) ไปสาขา "${destName}"?\n${n>=have?"(ย้ายทั้งหมด — ต้นทางจะไม่เหลือ)":`ต้นทางเหลือ ${have-n} ชิ้น`}`,confirmLabel:"🔄 ยืนยันโอน"}))return;
+    if(!await confirmDlg({title:"ยืนยันโอนย้ายสินทรัพย์",message:`ย้าย "${xfer.name}" ${n} ชิ้น (มูลค่าทุน ฿${assetMoney(perUnit*n)}) ไปสาขา "${destName}"?
+${n>=have?"(ย้ายทั้งหมด — ต้นทางจะไม่เหลือ)":`ต้นทางเหลือ ${have-n} ชิ้น`}`,confirmLabel:"🔄 ยืนยันโอน"}))return;
     setXferBusy(true);
     try{
-      const totalSalvage=+xfer.salvage_value||0;
-      const salvageMoved=have>0?round2(totalSalvage*n/have):0;
-      const note=(xfer.note?xfer.note+" · ":"")+`โอนมาจาก ${currentBranch?.name||"?"} ${fmtD(todayBkk())}`;
-      let movedId=null;   // แถวใหม่ที่เกิดจากการแยก (ถ้ามี) — ต้องแจ้งบัญชีด้วย
-      if(n>=have){
-        await api.updateAsset(xfer.id,{branch_id:destId,note});
-      }else{
-        // partial: create the destination row, THEN reduce the source under a qty guard.
-        // Create-first + guarded-reduce means a failure can duplicate (recoverable) but
-        // never silently lose value; on a guard miss we roll the new row back.
-        const destRow={name:xfer.name,category:xfer.category||null,image:xfer.image||null,quantity:n,cost:perUnit,salvage_value:salvageMoved,acquired_date:xfer.acquired_date||null,useful_life_years:+xfer.useful_life_years||0,status:xfer.status||"active",assignee:xfer.assignee||null,location:xfer.location||null,vendor:xfer.vendor||null,lead_time:xfer.lead_time||null,width_cm:xfer.width_cm??null,length_cm:xfer.length_cm??null,height_cm:xfer.height_cm??null,weight_kg:xfer.weight_kg??null,note,branch_id:destId};
-        const created=await api.addAsset(destRow);
-        const newId=(Array.isArray(created)?created[0]:created||{}).id;
-        try{
-          // Guard on the EXACT quantity we split from (have), not on n.
-          await api.updateAssetIfQty(xfer.id,have,{quantity:have-n,salvage_value:round2(totalSalvage-salvageMoved)});
-        }catch(e){
-          // ย้อนแถวปลายทางที่เพิ่งสร้าง — ถ้าลบไม่สำเร็จด้วย จะเหลือแถวซ้ำค้างอยู่จริง
-          // ต้องบอกผู้ใช้ตามความจริง ไม่ใช่บอกว่า "ยกเลิกแล้ว" ทั้งที่ยังอยู่
-          let rolledBack=true;
-          if(newId){try{await api.deleteAsset(newId);}catch{rolledBack=false;}}
-          throw new Error(rolledBack
-            ?"จำนวนต้นทางเปลี่ยน — ยกเลิกการสร้างปลายทางแล้ว"
-            :`จำนวนต้นทางเปลี่ยน และลบแถวปลายทางที่สร้างไว้ไม่สำเร็จ\n\n⚠️ มีสินทรัพย์ซ้ำค้างอยู่ที่ปลายทาง (id ${newId}) กรุณาลบเองที่แท็บสินทรัพย์`);
-        }
-        movedId=newId;
-      }
-      // แจ้งทะเบียนบัญชีทันที: การโอนย้ายเปลี่ยน "สาขาที่ถือครอง" และการแยกแถวทำให้เกิดทะเบียนใหม่
-      // ถ้ารอ cron รอบดึก ทะเบียนรายสาขาจะผิดทั้งวัน (และถ้าข้ามวันปิดงวดจะแก้ไม่ได้อีก)
-      api.pushAssetToSlipTrack(xfer.id);
-      if(movedId)api.pushAssetToSlipTrack(movedId);
+      const line=await transferOneAsset(xfer,destId,n);
+      const doc=await recordTransferDoc(destId,[line],null);
       setXfer(null);await reloadAssets();
-      alert("✅ โอนย้ายสินทรัพย์สำเร็จ");
+      if(await confirmDlg({title:"✅ โอนย้ายสำเร็จ",message:`${doc.transfer_no}
+${currentBranch?.name} → ${destName}
+
+พิมพ์ใบโอนย้ายให้เซ็นรับ-ส่งเลยไหม?`,confirmLabel:"🖨 พิมพ์ใบโอนย้าย",cancelLabel:"ไว้ทีหลัง"}))printAssetTransfer(doc);
     }catch(e){alert("โอนไม่สำเร็จ: "+((e&&e.message)||e));}
     setXferBusy(false);
   }
@@ -10644,6 +10788,8 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
         <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>ค่าเสื่อมราคาแบบเส้นตรง — แต่ละสาขาเก็บสินทรัพย์ของตัวเอง</div>
       </div>
       {canE&&<Btn onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มสินทรัพย์</Btn>}
+      {canE&&xferDestBranches.length>0&&<Btn v="purple" onClick={()=>{setBulkOpen(true);setBulkDest("");setBulkPick({});setBulkNote("");setBulkQ("");}} s={{padding:"8px 14px",fontSize:13}}>🔄 โอนย้ายสินทรัพย์</Btn>}
+      <Btn v="ghost" onClick={openXferHistory} loading={histBusy} s={{padding:"8px 14px",fontSize:13}}>🕘 ประวัติการโอนย้าย</Btn>
       <Btn v="success" onClick={exportXlsx} disabled={filtered.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export</Btn>
     </div>
     {(canE||assetCats.length>0)&&<div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap",alignItems:"center",padding:"10px 14px",background:C.bg,borderRadius:14,border:`1px solid ${C.line}`}}>
@@ -10724,6 +10870,85 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
         <Btn onClick={doTransfer} loading={xferBusy} disabled={xferBusy||!xferBranch||!okQty} icon={I.check} s={{background:`linear-gradient(135deg,${C.teal},#0D9488)`}}>ยืนยันโอน</Btn>
       </div>
     </Modal>;})()}
+    {/* โอนหลายรายการพร้อมกัน — ปลายทางเดียว ออกใบโอนใบเดียว */}
+    {bulkOpen&&(()=>{
+      const q=bulkQ.trim().toLowerCase();
+      const pool=(myList||[]).filter(a=>Math.floor(+a.quantity||1)>0&&(!q||(a.name||"").toLowerCase().includes(q)||(a.category||"").toLowerCase().includes(q)));
+      const picked=Object.entries(bulkPick).filter(([,v])=>+v>0);
+      const sumQty=picked.reduce((s,[,v])=>s+Math.floor(+v||0),0);
+      const sumCost=picked.reduce((s,[id,v])=>{const a=(myList||[]).find(x=>+x.id===+id);return s+(+((a||{}).cost)||0)*Math.floor(+v||0);},0);
+      return <Modal title="🔄 โอนย้ายสินทรัพย์ (หลายรายการ)" onClose={()=>setBulkOpen(false)} extraWide>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(220px,100%),1fr))",gap:10,marginBottom:12}}>
+          <Field label="สาขาปลายทาง *">
+            <select value={bulkDest} onChange={e=>setBulkDest(e.target.value)} style={{...iS,appearance:"none"}}>
+              <option value="">— เลือกสาขา —</option>
+              {xferDestBranches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </Field>
+          <Field label="หมายเหตุ (ไม่บังคับ)"><input value={bulkNote} onChange={e=>setBulkNote(e.target.value)} placeholder="เช่น ย้ายไปสาขาใหม่" style={iS}/></Field>
+          <Field label="ค้นหาสินทรัพย์"><input value={bulkQ} onChange={e=>setBulkQ(e.target.value)} placeholder="ชื่อ / หมวด" style={iS}/></Field>
+        </div>
+        <div style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:10,padding:"10px 12px",marginBottom:10,fontSize:12.5,fontFamily:"'Sarabun',sans-serif",color:C.ink3}}>
+          เลือกแล้ว <b style={{color:C.purple}}>{picked.length}</b> รายการ · {sumQty} ชิ้น · มูลค่าทุน <b style={{color:C.purple}}>฿{assetMoney(sumCost)}</b>
+          {picked.length>0&&<button onClick={()=>setBulkPick({})} style={{marginLeft:10,background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:12,textDecoration:"underline",fontFamily:"'Sarabun',sans-serif"}}>ล้างที่เลือก</button>}
+        </div>
+        <div style={{maxHeight:"46vh",overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10}}>
+          {pool.length===0?<div style={{padding:"30px",textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>ไม่พบสินทรัพย์</div>
+          :pool.map((a,i)=>{
+            const have=Math.floor(+a.quantity||1);
+            const val=bulkPick[a.id]??"";
+            const on=+val>0;
+            return <div key={a.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderTop:i>0?`1px solid ${C.lineLight}`:"none",background:on?"#F5F3FF":(i%2?C.bg:C.white)}}>
+              <input type="checkbox" checked={on} onChange={e=>setBulkPick(p=>{const n={...p};if(e.target.checked)n[a.id]=String(have);else delete n[a.id];return n;})} style={{width:17,height:17,accentColor:C.purple,cursor:"pointer",flexShrink:0}}/>
+              <div style={{flex:1,minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
+                <div style={{fontSize:13.5,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.name}</div>
+                <div style={{fontSize:11,color:C.ink4}}>{a.category||"ไม่มีหมวด"} · มีอยู่ {have} ชิ้น{+a.cost>0?` · ทุน/ชิ้น ฿${assetMoney(+a.cost)}`:" · ยังไม่กรอกราคาทุน"}</div>
+              </div>
+              <input type="text" inputMode="numeric" value={val} onChange={e=>{const v=e.target.value;if(v===""||/^\d+$/.test(v))setBulkPick(p=>({...p,[a.id]:v}));}}
+                placeholder="0" title={`โอนได้ไม่เกิน ${have}`}
+                style={{...iS,width:70,textAlign:"center",padding:"6px 8px",fontSize:14,fontWeight:800,flexShrink:0,border:`2px solid ${+val>have?C.red:(on?C.purple:C.line)}`,color:+val>have?C.red:C.ink}}/>
+              <span style={{fontSize:11,color:C.ink4,width:28,flexShrink:0}}>/{have}</span>
+            </div>;
+          })}
+        </div>
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14,flexWrap:"wrap"}}>
+          <Btn v="ghost" onClick={()=>setBulkOpen(false)}>ยกเลิก</Btn>
+          <Btn v="purple" onClick={doBulkTransfer} loading={bulkBusy} disabled={bulkBusy||picked.length===0||!bulkDest}>🔄 โอนย้าย {picked.length>0?`${picked.length} รายการ`:""}</Btn>
+        </div>
+      </Modal>;
+    })()}
+
+    {/* ประวัติการโอนย้าย — ปริ้นใบเก่าย้อนหลังได้ */}
+    {xferHist!==null&&<Modal title="🕘 ประวัติการโอนย้ายสินทรัพย์" onClose={()=>setXferHist(null)} extraWide>
+      {xferHist.length===0
+        ?<div style={{textAlign:"center",padding:"46px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{fontSize:42}}>📭</div>
+          <p style={{marginTop:10,fontSize:15}}>ยังไม่มีประวัติการโอนย้าย</p>
+          <p style={{fontSize:12}}>การโอนย้ายที่ทำหลังจากนี้จะถูกบันทึกเป็นใบโอนให้อัตโนมัติ</p>
+        </div>
+        :<div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {xferHist.map(t=><div key={t.id||t.transfer_no} style={{border:`1px solid ${C.line}`,borderLeft:`4px solid ${C.purple}`,borderRadius:10,padding:"11px 14px",background:C.white}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
+              <div style={{minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
+                <div style={{fontSize:14,fontWeight:900,color:C.ink}}>{t.transfer_no}</div>
+                <div style={{fontSize:12,color:C.ink3,marginTop:2}}>{t.from_branch_name||"—"} <b style={{color:C.purple}}>→</b> {t.to_branch_name||"—"}</div>
+                <div style={{fontSize:11,color:C.ink4,marginTop:2}}>{t.created_at?fmtDT(t.created_at):"—"}{t.transferred_by?` · โดย ${t.transferred_by}`:""}</div>
+                {t.note?<div style={{fontSize:11,color:C.ink4,marginTop:2}}>📝 {t.note}</div>:null}
+              </div>
+              <div style={{textAlign:"right",flexShrink:0}}>
+                <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{(Array.isArray(t.items)?t.items:[]).length} รายการ · {(Array.isArray(t.items)?t.items:[]).reduce((s,x)=>s+(+x.qty||0),0)} ชิ้น</div>
+                <div style={{fontSize:16,fontWeight:900,color:C.purple,fontFamily:"'Sarabun',sans-serif"}}>฿{assetMoney(+t.total_cost||0)}</div>
+                <Btn v="ghost" onClick={()=>printAssetTransfer(t)} s={{padding:"5px 11px",fontSize:11.5,marginTop:5}}>🖨 พิมพ์ใบโอน</Btn>
+              </div>
+            </div>
+            <div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed ${C.line}`,fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>
+              {(Array.isArray(t.items)?t.items:[]).slice(0,6).map((x,i)=><span key={i}>{i>0?" · ":""}{x.name} ×{x.qty}</span>)}
+              {(Array.isArray(t.items)?t.items:[]).length>6?` · และอีก ${t.items.length-6} รายการ`:""}
+            </div>
+          </div>)}
+        </div>}
+    </Modal>}
+
     {showForm&&<Modal title={editId?"✏️ แก้ไขสินทรัพย์":"➕ เพิ่มสินทรัพย์"} onClose={closeForm} wide>
       <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><ImgUp label="" value={form.image} onChange={v=>setForm(f=>({...f,image:v}))}/></div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
