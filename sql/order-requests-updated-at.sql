@@ -29,7 +29,9 @@ alter table public.order_requests
 
 -- 2) trigger: แก้แถวไหนก็ประทับเวลาใหม่อัตโนมัติ ไม่ต้องแก้โค้ดแอปทุกจุดที่เขียน
 --    (สำคัญ — ถ้าให้แอปเซ็ตเอง จุดที่ลืมจะกลายเป็นการเปลี่ยนแปลงที่มองไม่เห็น)
-create or replace function public.touch_updated_at()
+--    ตั้งชื่อเจาะจงตารางโดยเจตนา: ชื่อกลางๆ อย่าง touch_updated_at() ถ้าตารางอื่นใช้อยู่
+--    คำสั่ง create or replace จะทับตรรกะของเขาทิ้งเงียบๆ
+create or replace function public.order_requests_touch_updated_at()
 returns trigger language plpgsql as $$
 begin
   new.updated_at := now();
@@ -39,7 +41,7 @@ end $$;
 drop trigger if exists order_requests_touch on public.order_requests;
 create trigger order_requests_touch
   before update on public.order_requests
-  for each row execute function public.touch_updated_at();
+  for each row execute function public.order_requests_touch_updated_at();
 
 -- 3) index สำหรับคำถาม "มีอะไรใหม่กว่าเวลานี้ไหม" — ให้เป็นการมองแค่ปลาย index
 --    ไม่ใช่ไล่อ่าน 1,583 แถว (ไม่มี index = การประหยัดจะหายไปเกือบหมด)
