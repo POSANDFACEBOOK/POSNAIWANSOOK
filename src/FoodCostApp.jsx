@@ -354,6 +354,11 @@ const api = {
   addActionHist: (d) => sb("action_history", { method: "POST", body: JSON.stringify(d) }),
   clearActionHist: () => sb("action_history?id=gt.0", { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   getOrders: (bid) => sb(`order_requests?order=id.desc&limit=400${bid ? `&branch_id=eq.${bid}` : ""}`),
+  // "มีอะไรเปลี่ยนไปหรือยัง" แบบถูกที่สุด — ดึงแค่แถวที่ถูกแก้ล่าสุด 1 แถว (~60 ไบต์)
+  // แทนการดึงทั้งก้อน 1,158 KB ทุก 20 วินาที ซึ่งเป็นตัวกินเครดิต Disk IO ตัวจริง
+  // (ครัวกลางเปิดหน้าค้าง 1 ชม. = อ่าน 204 MB) ต้องรัน sql/order-requests-updated-at.sql
+  // ก่อน ถ้ายังไม่รัน คำขอนี้จะ error แล้วผู้เรียกจะถอยไปใช้วิธีเดิมเอง
+  getOrdersChangeMark: (bid) => sb(`order_requests?select=id,updated_at&order=updated_at.desc&limit=1${bid ? `&branch_id=eq.${bid}` : ""}`),
   // Area-approval inbox: rows held at "pending_approval" in both order tables
   getPendingApprovalOrders: () => sb(`order_requests?status=eq.pending_approval&order=id.desc`),
   getPendingApprovalPOs: () => sb(`purchase_orders?status=eq.pending_approval&order=id.desc`),
@@ -9318,10 +9323,44 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const pollSkipRef=useRef(false);
   pollSkipRef.current=!!(editingQty||receivingOrder||saving||printingId);
   const waitingApproval=displayOrders.some(o=>o.status==="pending_approval");
+  // เดิม tick นี้ดึงรายการทั้งก้อนใหม่ทุกครั้ง (ครัวกลาง = 1,158 KB ต่อครั้ง เพราะดึงทั้ง
+  // getOrders 400 แถว และ getAllOrders 600 แถว พร้อมคอลัมน์ items ที่ใหญ่ที่สุด) เปิดหน้า
+  // ค้างไว้ 1 ชั่วโมง = อ่านฐานข้อมูล ~204 MB ทั้งที่ 99% ของครั้งไม่มีอะไรเปลี่ยน — นี่คือ
+  // ตัวกินเครดิต Disk IO ตัวจริงที่ทำระบบล่ม 30 ก.ค. 69
+  //
+  // ตอนนี้ถามก่อนว่า "แถวที่ถูกแก้ล่าสุดคือเมื่อไหร่" (~60 ไบต์ มองแค่ปลาย index) แล้วดึง
+  // ของจริงเฉพาะเมื่อเวลานั้นขยับ ซึ่งเกิดไม่กี่ครั้งต่อชั่วโมง
+  const markRef=useRef(null);
+  const probeFailedRef=useRef(false);
+  const fullAtRef=useRef(Date.now());
   useEffect(()=>{
     if(mode!=="list")return;
     let alive=true;
-    const tick=()=>{if(alive&&!document.hidden&&!pollSkipRef.current&&reloadRef.current)reloadRef.current();};
+    const doFull=()=>{fullAtRef.current=Date.now();if(reloadRef.current)reloadRef.current();};
+    const tick=async()=>{
+      if(!alive||document.hidden||pollSkipRef.current)return;
+      // ตาข่ายกันพลาด: ดึงเต็มทุก 10 นาทีอยู่ดี เผื่อมีการ "ลบ" แถว (ซึ่งการเทียบเวลาแก้ล่าสุด
+      // จับไม่ได้) หรือกรณีที่คิดไม่ถึง — ยังถูกกว่าเดิม 30 เท่า
+      if(Date.now()-fullAtRef.current > 600000){
+        probeFailedRef.current=false;   // ลองใช้ทางประหยัดใหม่ทุก 10 นาที — ไม่งั้นถ้า probe
+        doFull();return;               // ล้มครั้งเดียว (เช่นยังไม่ได้รัน SQL) จะติดโหมดเดิม
+      }                                // ตลอดไปแม้รัน SQL แล้ว จนกว่าผู้ใช้จะรีเฟรชหน้า
+      if(probeFailedRef.current){doFull();return;}   // ยังไม่ได้รัน SQL → ใช้วิธีเดิมไปก่อน
+      try{
+        const r=await api.getOrdersChangeMark(isCentral?null:currentBranch?.id);
+        if(!alive)return;
+        const mark=(r&&r[0])?`${r[0].id}|${r[0].updated_at}`:"empty";
+        // ครั้งแรกต้องดึงเต็มด้วย ไม่ใช่จำค่าไว้เฉยๆ — ระหว่างที่หน้าโหลดเสร็จจนถึงรอบตรวจแรก
+        // (20-60 วิ) อาจมีคนแก้ไปแล้ว ถ้าเอาค่านั้นเป็นฐานเทียบเงียบๆ การแก้นั้นจะหายไปเลย
+        if(markRef.current===null){markRef.current=mark;doFull();return;}
+        if(mark!==markRef.current){markRef.current=mark;doFull();}
+      }catch{
+        // คอลัมน์ updated_at ยังไม่มี (ยังไม่รัน SQL) หรือเครือข่ายสะดุด — ถอยไปวิธีเดิม
+        // ทั้งรอบนี้และรอบต่อไป ดีกว่าเงียบแล้วผู้ใช้เห็นข้อมูลเก่าโดยไม่รู้ตัว
+        probeFailedRef.current=true;
+        doFull();
+      }
+    };
     const id=setInterval(tick,waitingApproval?20000:60000);
     const onVis=()=>{if(!document.hidden)tick();};
     document.addEventListener("visibilitychange",onVis);
