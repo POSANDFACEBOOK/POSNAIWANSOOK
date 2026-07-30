@@ -3676,7 +3676,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
       if(rem<=15&&rem>5&&!warnedRef.current.a){warnedRef.current.a=true;alert(`⏰ ใกล้หมดเวลานับสต็อก — เหลืออีกประมาณ ${rem} นาที (ถึง ${hhmmOfMin(_winEnd)} น.)\nกรุณาบันทึกรายการที่นับให้ทันเวลา`);}
       if(rem<=5&&rem>0&&!warnedRef.current.b){warnedRef.current.b=true;alert("⏰ เหลือเวลานับสต็อกอีกไม่ถึง 5 นาที!\nรีบกด \"บันทึกทั้งหมด\" ก่อนหมดเวลา");}
     };
-    tick();const id=setInterval(tick,30000);return()=>clearInterval(id);
+    tick();const id=setInterval(tick,60000);return()=>clearInterval(id);
   },[_winEnd]);
   const[q,setQ]=useState("");
   const[edits,setEdits]=useState({});  // {ingId: stringValue}
@@ -9215,7 +9215,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     if(mode!=="list")return;
     let alive=true;
     const tick=()=>{if(alive&&!document.hidden&&!pollSkipRef.current&&reloadRef.current)reloadRef.current();};
-    const id=setInterval(tick,waitingApproval?10000:30000);
+    const id=setInterval(tick,waitingApproval?20000:60000);
     const onVis=()=>{if(!document.hidden)tick();};
     document.addEventListener("visibilitychange",onVis);
     return()=>{alive=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};
@@ -11064,7 +11064,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
     }catch{}
     if(aliveRef.current&&!silent)setLoading(false);
   }
-  useEffect(()=>{aliveRef.current=true;prevRef.current=-1;load();const id=setInterval(()=>{if(!document.hidden)load(true);},30000);const onVis=()=>{if(!document.hidden)load(true);};document.addEventListener("visibilitychange",onVis);return()=>{aliveRef.current=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};},[]);// eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{aliveRef.current=true;prevRef.current=-1;load();const id=setInterval(()=>{if(!document.hidden)load(true);},60000);const onVis=()=>{if(!document.hidden)load(true);};document.addEventListener("visibilitychange",onVis);return()=>{aliveRef.current=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};},[]);// eslint-disable-line react-hooks/exhaustive-deps
   async function approveReq(o){setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"pending"});await logDecision("approved","ext",o);posToast("✅ อนุมัติแล้ว — สาขาส่งให้ซัพพลายต่อได้","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   async function approvePO(o){setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"requested",updated_at:new Date().toISOString()});await logDecision("approved","po",o);posToast("✅ อนุมัติแล้ว — ส่งให้ครัวกลางต่อ","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   // Reject flow: reason is REQUIRED — the branch must always know WHY their
@@ -14101,7 +14101,7 @@ export default function App(){
         }
       }catch{/* ignore transient network */}
     };
-    const id=setInterval(tick,60000);
+    const id=setInterval(tick,180000);   // heartbeat ไม่ต้องถี่ — แค่กันเซสชันค้าง
     return()=>clearInterval(id);
   },[currentUser?.id]);
 
@@ -16007,7 +16007,7 @@ function CustomerPage({branchId,tableId,token}){
         setGateError(null);
         // Only start polling order state AFTER the gate passes — don't leak existence of orders to bad-token visitors
         loadMyOrder();
-        pollId=setInterval(()=>{if(!document.hidden)loadMyOrder();},30000);
+        pollId=setInterval(()=>{if(!document.hidden)loadMyOrder();},45000);
       }catch(e){console.error("scan gate",e);setGateError("bad_token");}
       setGateLoading(false);
     })();
@@ -17878,7 +17878,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     stationPrimedRef.current=false;   // re-prime on mount and whenever station mode flips
     loadAll();
     // The print station polls faster (6s) so kitchen tickets come out quickly; other devices stay light (20s).
-    const period=printStation?6000:20000;
+    const period=printStation?10000:30000;   // ลดโหลดฐานข้อมูล — เดิม 6s/20s กินเครดิต Disk IO จนล่ม
     timerRef.current=setInterval(()=>{if(!document.hidden)loadOrders();},period);
     const onVis=()=>{if(!document.hidden)loadOrders();};
     document.addEventListener("visibilitychange",onVis);
@@ -18003,7 +18003,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   useEffect(()=>{if(!loading)printers.forEach(p=>checkStatus(p));// eslint-disable-next-line
   },[loading,printers]);
   // รีเฟรชอัตโนมัติทุก 15 วิ ขณะเปิดหน้านี้ → จุดเขียว/แดงอัปเดตสดตามที่ตัวพิมพ์รายงาน
-  useEffect(()=>{const t=setInterval(()=>{if(aliveRef.current&&!document.hidden)loadSilent();},30000);return ()=>clearInterval(t);// eslint-disable-next-line
+  useEffect(()=>{const t=setInterval(()=>{if(aliveRef.current&&!document.hidden)loadSilent();},60000);return ()=>clearInterval(t);// eslint-disable-next-line
   },[]);
   // เปิดผ่าน https (Vercel/iPad) → เบราว์เซอร์ต่อ http://printer:9100 ไม่ได้ (mixed content) → เช็ค/ทดสอบฝั่งเบราว์เซอร์ใช้ไม่ได้ จึงให้ตัวพิมพ์ (agent) จัดการแทน
   const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
