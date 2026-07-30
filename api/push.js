@@ -26,6 +26,10 @@ export default async function handler(req, res) {
     if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
     const branchId = +body.branch_id || null;
     const branchName = body.branchName || "สาขา";
+    // scope 'admin' → only subscribers who cover EVERY branch (allowed_branches null).
+    // Used by the database health alert: an infrastructure problem is the owner's to act
+    // on, so it must not spam the area managers who only watch one branch.
+    const adminOnly = body.scope === "admin";
 
     webpush.setVapidDetails("mailto:naiwansook@gmail.com", VAPID_PUBLIC, VAPID_PRIVATE);
 
@@ -34,12 +38,16 @@ export default async function handler(req, res) {
     const targets = (subs || []).filter(s => {
       const ab = s.allowed_branches;
       if (ab == null) return true;
+      if (adminOnly) return false;
       try { const arr = Array.isArray(ab) ? ab : JSON.parse(ab); return arr.map(Number).includes(branchId); } catch { return true; }
     });
+    // Default text is the order-approval alert the two original callers rely on; a caller
+    // may override all three fields (health alerts do). Kept as an override rather than a
+    // separate endpoint because the Vercel plan caps this project at 12 functions.
     const payload = JSON.stringify({
-      title: "🔔 คำสั่งซื้อรออนุมัติ",
-      body: `${branchName} ส่งคำสั่งซื้อมารออนุมัติ`,
-      url: "/?approve=1",
+      title: body.title || "🔔 คำสั่งซื้อรออนุมัติ",
+      body:  body.body  || `${branchName} ส่งคำสั่งซื้อมารออนุมัติ`,
+      url:   body.url   || "/?approve=1",
     });
     let sent = 0, removed = 0;
     await Promise.allSettled(targets.map(async s => {

@@ -9,15 +9,119 @@ const loadXLSX=async()=>{ if(!_xlsxMod){ const m=await import("xlsx"); _xlsxMod=
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
 
+// ═══ ตัวเฝ้าระวังสุขภาพฐานข้อมูล ════════════════════════════════════════════
+// 30 ก.ค. 69 ฐานข้อมูลใช้เครดิต Disk IO หมดกลางวันทำการ สาขาล็อกอินไม่ได้ และเรารู้
+// ก็ตอนที่สาขาโทรมาแจ้ง — ซึ่งสายไปแล้ว ตัวนี้อ่านผลจากคำขอที่แอปยิงอยู่แล้วทุกครั้ง
+// (ไม่ยิงเพิ่มเลยแม้แต่ครั้งเดียว — สำคัญ เพราะตัวเฝ้าระวังที่เพิ่มภาระคือการยิงเท้าตัวเอง)
+// แล้วเตือนตอน "ยังตอบได้แต่เริ่มช้า" ซึ่งเป็นจังหวะที่ยังกู้ทันก่อนล่มจริง
+//
+// จับเฉพาะสัญญาณที่เป็นปัญหาโครงสร้างจริง: ตอบช้าเกิน 4 วินาที, HTTP 5xx, หรือยิงไม่ออก
+// ไม่นับ 4xx (นั่นคือบั๊กของแอปเราเอง ไม่ใช่ฐานข้อมูลป่วย) และไม่นับตอนเน็ตผู้ใช้หลุด
+// แยกอาการเป็น 3 ระดับ ไม่ใช่ ดี/ไม่ดี เพราะ "ช้า" กับ "พัง" มีน้ำหนักต่างกันมาก:
+// ช้าอาจเป็นเน็ตมือถือของผู้ใช้เอง (ไม่ใช่ความผิดฐานข้อมูล) แต่ 5xx/ยิงไม่ออกคือปัญหาจริง
+// จึงตั้งเกณฑ์ให้ "พัง 3 ครั้ง" เตือนเลย ส่วน "ช้า" ต้องช้าติดกันถึง 6 ครั้งจึงเตือน
+const DBH = {
+  ring: [], WINDOW: 12, ERR_TRIGGER: 3, SLOW_TRIGGER: 6,
+  SLOW_MS: 4000, HANG_MS: 8000,
+  degraded: false, listeners: new Set(), lastMs: 0,
+};
+const nowMs = () => ((typeof performance!=="undefined"&&performance.now)?performance.now():Date.now());
+const dbhSubscribe = (fn) => { DBH.listeners.add(fn); return () => DBH.listeners.delete(fn); };
+// เตือนซ้ำได้ไม่เกินทุก 30 นาที (เก็บใน localStorage จึงไม่รีเซ็ตตอนรีเฟรชหน้า)
+// ถ้าไม่คุมไว้ การล่ม 2 ชั่วโมงจะยิงแจ้งเตือนเป็นร้อยครั้งจนคนปิดการแจ้งเตือนทิ้ง
+function dbhCanAlert(kind){
+  try{
+    const k=`fc_dbh_${kind}_at`, last=+(localStorage.getItem(k)||0);
+    if(Date.now()-last < 30*60*1000) return false;
+    localStorage.setItem(k,String(Date.now()));
+    return true;
+  }catch{ return false; }   // โหมดส่วนตัวเขียนไม่ได้ → ไม่ยิง ดีกว่ายิงรัว
+}
+function dbhAlert(kind){
+  if(!dbhCanAlert(kind))return;
+  const msg = kind==="down"
+    ? { title:"⚠️ ฐานข้อมูลเริ่มตอบช้า", body:`ระบบยังใช้งานได้แต่ช้ากว่าปกติ (${Math.round(DBH.lastMs)} มิลลิวินาที) — ถ้ามีการนับสต๊อกอยู่ควรเลื่อนออกไปก่อน` }
+    : { title:"✅ ฐานข้อมูลกลับมาปกติ",  body:"ความเร็วกลับมาปกติแล้ว ใช้งานได้ตามปกติ" };
+  // ยิงผ่าน Vercel (คนละเครื่องกับฐานข้อมูล) จึงยังส่งได้ตอนฐานข้อมูลเริ่มป่วย
+  try{ fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({...msg, scope:"admin", url:"/"}),keepalive:true}); }catch{}
+}
+// kind: "ok" | "slow" | "err"
+function dbhRecord(kind, ms){
+  try{
+    // เน็ตของผู้ใช้หลุด ≠ ฐานข้อมูลป่วย — ถ้าเหมารวมจะเตือนผิดทุกครั้งที่ไวไฟสาขาสะดุด
+    if(kind!=="ok" && typeof navigator!=="undefined" && navigator.onLine===false) return;
+    if(ms) DBH.lastMs = ms;
+    DBH.ring.push(kind);
+    if(DBH.ring.length > DBH.WINDOW) DBH.ring.shift();
+    const errs = DBH.ring.filter(k=>k==="err").length;
+    const slows= DBH.ring.filter(k=>k==="slow").length;
+    // ทุกตัวอย่างที่มีล้วนไม่ผ่าน — คือกรณี "ล่มตอนล็อกอิน" ที่เจอวันที่ 30 ก.ค. 69:
+    // แอปยิงแค่ 2-3 คำขอแล้วค้างที่หน้าล็อกอิน ไม่มีทางครบ 12 ตัวอย่าง ถ้ารอให้ครบก่อน
+    // จะไม่เตือนเลยในสถานการณ์ที่ต้องเตือนที่สุด
+    const allBad = DBH.ring.length >= 3 && (errs + slows) === DBH.ring.length;
+    // "พัง" ไม่ต้องรอครบหน้าต่าง (3 ครั้งใน 12 ครั้งล่าสุดคือสัญญาณชัดอยู่แล้ว)
+    // ส่วน "ช้า" ต้องรอครบ เพราะช้าอาจมาจากเน็ตผู้ใช้ ไม่ใช่ฐานข้อมูล
+    const next = errs >= DBH.ERR_TRIGGER || allBad
+              || (DBH.ring.length >= DBH.WINDOW && slows >= DBH.SLOW_TRIGGER);
+    if(next === DBH.degraded) return;
+    DBH.degraded = next;
+    DBH.listeners.forEach(fn=>{try{fn(next);}catch{}});
+    dbhAlert(next ? "down" : "up");
+  }catch{}   // ตัวเฝ้าระวังต้องไม่ทำให้คำขอจริงพัง ไม่ว่าเกิดอะไรขึ้น
+}
+
+// แถบเตือนบนสุดของจอ — เขียนลง DOM ตรงๆ ไม่ผ่าน React โดยตั้งใจ เพื่อให้โชว์ได้ทุกหน้า
+// รวมถึง "หน้าล็อกอิน" ซึ่งเป็นจุดที่สาขาเจอปัญหาจริงตอนฐานข้อมูลป่วย (ล็อกอินไม่ผ่าน)
+// ถ้าผูกกับ React tree หน้าล็อกอินจะไม่ได้แถบนี้ = พลาดจุดที่สำคัญที่สุด
+if(typeof document!=="undefined"){
+  let dismissed=false;
+  dbhSubscribe((bad)=>{
+    try{
+      const ID="fc-dbh-bar", old=document.getElementById(ID);
+      if(!bad){ dismissed=false; if(old)old.remove(); return; }   // หายป่วย → ล้างสถานะปิดแถบ
+      if(dismissed||old)return;
+      const bar=document.createElement("div");
+      bar.id=ID; bar.setAttribute("role","status"); bar.setAttribute("aria-live","polite");
+      bar.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b45309;color:#fff;font:600 14px/1.45 system-ui,sans-serif;padding:9px 44px 9px 14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.25)";
+      bar.textContent="⚠️ ระบบตอบสนองช้ากว่าปกติ — ยังใช้งานได้ แต่ถ้ากำลังบันทึกอยู่ กรุณารอให้ขึ้นว่าสำเร็จก่อนปิดหน้าจอ";
+      const x=document.createElement("button");
+      x.textContent="✕"; x.setAttribute("aria-label","ปิดข้อความแจ้งเตือน");
+      x.style.cssText="position:absolute;top:4px;right:8px;background:none;border:none;color:#fff;font-size:18px;font-weight:800;cursor:pointer;padding:4px 8px;line-height:1";
+      x.onclick=()=>{dismissed=true;bar.remove();};
+      bar.appendChild(x);
+      document.body.appendChild(bar);
+    }catch{}
+  });
+}
+
 async function sb(path, opts = {}) {
   const {headers:extraH, prefer, ...fetchOpts} = opts;
-  const res = await fetch(`${SUPA_URL}/rest/v1/${path}`, {
-    ...fetchOpts,
-    headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": "application/json", "Prefer": prefer || "return=representation", ...extraH },
-  });
-  if (!res.ok) throw new Error(await res.text());
-  const text = await res.text();
-  return text ? JSON.parse(text) : [];
+  const t0 = nowMs();
+  // นับผลได้ครั้งเดียวต่อคำขอ (กันนับซ้ำระหว่างตัวจับค้างกับตอนคำขอเสร็จ)
+  let logged = false;
+  const mark = (kind, ms) => { if(logged)return; logged=true; dbhRecord(kind, ms); };
+  // ฐานข้อมูลที่ป่วยหนักมัก "ค้างไม่ตอบ" ไม่ใช่ "ตอบ error" และ fetch ไม่มีเวลาหมดในตัว
+  // (ค้างได้เป็นนาที) จึงต้องนับตอนค้างเกิน 8 วินาทีทันทีโดยไม่รอผล — ไม่ยกเลิกคำขอ
+  // เพราะงานหนักบางอย่าง (ส่งออก Excel, ดึงรายงาน) ใช้เวลานานได้ตามปกติ
+  const hang = setTimeout(()=>mark("slow", DBH.HANG_MS), DBH.HANG_MS);
+  try{
+    const res = await fetch(`${SUPA_URL}/rest/v1/${path}`, {
+      ...fetchOpts,
+      headers: { "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}`, "Content-Type": "application/json", "Prefer": prefer || "return=representation", ...extraH },
+    });
+    clearTimeout(hang);
+    const ms = nowMs() - t0;
+    // 5xx = ฝั่งเซิร์ฟเวอร์/ฐานข้อมูลมีปัญหา · 4xx = คำขอของเราเองผิด ไม่ใช่อาการป่วย
+    mark(res.status >= 500 ? "err" : (ms > DBH.SLOW_MS ? "slow" : "ok"), ms);
+    if (!res.ok) throw new Error(await res.text());
+    const text = await res.text();
+    return text ? JSON.parse(text) : [];
+  }catch(e){
+    clearTimeout(hang);
+    mark("err", nowMs() - t0);   // ยิงไม่ออก/เน็ตขาด — ถ้าเป็น 4xx จะถูกนับไปแล้วข้างบน
+    throw e;
+  }
 }
 
 // === Production-grade helpers ============================================

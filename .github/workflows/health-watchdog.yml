@@ -1,0 +1,84 @@
+# ══════════════════════════════════════════════════════════════════════════
+# ตัวเฝ้าระวังจากภายนอก — ทำงานบนเครื่องของ GitHub ไม่ใช่ของเรา
+#
+# ทำไมต้องมีทั้งที่แอปมีตัวจับอยู่แล้ว: ตัวจับในแอปส่งแจ้งเตือนโดยอ่านรายชื่อผู้รับ
+# จากฐานข้อมูล ดังนั้นถ้าฐานข้อมูล "ตายสนิท" มันก็ส่งไม่ได้ — ซึ่งคือเหตุการณ์ที่เราอยาก
+# รู้มากที่สุด ตัวนี้อยู่นอกระบบทั้งหมด (ไม่พึ่ง Supabase ไม่พึ่ง Vercel) จึงรายงานได้
+# แม้ทุกอย่างดับ  เมื่องานนี้ล้ม GitHub จะส่งอีเมลหาเจ้าของ repo ให้เอง
+#
+# ทำไมไม่ใช้ Vercel cron: แผนฟรีรันได้แค่วันละครั้ง และโปรเจกต์นี้ใช้ serverless
+# function เต็ม 12/12 แล้ว (แตะ 13 = deploy ล้มเงียบๆ) — GitHub Actions บน repo
+# สาธารณะฟรีไม่จำกัด และไม่กินโควตาอะไรของเราเลย
+#
+# ไม่ต้องตั้ง secret ใดๆ: คีย์ที่ใช้อ่านเป็น publishable key ที่อยู่ในโค้ดหน้าเว็บ
+# (เปิดเผยอยู่แล้วโดยการออกแบบ) และดึงจากไฟล์ต้นทางตอนรัน จึงไม่มีสำเนาที่ 2 ให้ลืมอัปเดต
+# ══════════════════════════════════════════════════════════════════════════
+name: Health watchdog
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"     # ทุก 10 นาที (GitHub อาจเลื่อนได้ 5-10 นาทีตอนคิวแน่น)
+  workflow_dispatch:            # กดรันเองได้จากแท็บ Actions
+
+# ถ้ารอบก่อนยังค้างอยู่ ให้ยกเลิกแล้วใช้รอบใหม่ — ไม่ต้องต่อคิวสะสม
+concurrency:
+  group: health-watchdog
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ตรวจฐานข้อมูลและเว็บ
+        run: |
+          set -uo pipefail
+
+          SUPA_URL=$(grep -oE 'https://[a-z0-9]+\.supabase\.co' src/FoodCostApp.jsx | head -1)
+          SUPA_KEY=$(grep -oE 'sb_publishable_[A-Za-z0-9_-]+' src/FoodCostApp.jsx | head -1)
+          SITE="https://foodcost-eta.vercel.app"
+
+          if [ -z "$SUPA_URL" ] || [ -z "$SUPA_KEY" ]; then
+            echo "::error::อ่านค่า Supabase จาก src/FoodCostApp.jsx ไม่ได้ — โครงสร้างไฟล์เปลี่ยนไปหรือไม่? แก้ตัวดึงค่าใน workflow นี้"
+            exit 1
+          fi
+
+          # ยิง 3 ครั้ง ห่างกัน 20 วินาที — กันเตือนผิดจากอาการสะดุดชั่วขณะ
+          # ถือว่า "ป่วย" เฉพาะเมื่อทั้ง 3 ครั้งไม่ผ่าน หรือทั้ง 3 ครั้งช้าเกิน 5 วินาที
+          FAIL=0; SLOW=0
+          for i in 1 2 3; do
+            OUT=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" --max-time 15 \
+              "$SUPA_URL/rest/v1/branches?select=id&limit=1" \
+              -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" || echo "000 15")
+            CODE=$(echo "$OUT" | cut -d' ' -f1)
+            SECS=$(echo "$OUT" | cut -d' ' -f2)
+            echo "ครั้งที่ $i: HTTP $CODE ใช้เวลา ${SECS}s"
+            [ "$CODE" != "200" ] && FAIL=$((FAIL+1))
+            awk -v s="$SECS" 'BEGIN{exit !(s>5)}' && SLOW=$((SLOW+1))
+            [ "$i" != "3" ] && sleep 20
+          done
+
+          # เว็บเสิร์ฟหน้าเพจได้ไหม (แยกจากฐานข้อมูล — ช่วยบอกว่าปัญหาอยู่ฝั่งไหน)
+          WEB=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$SITE/?cb=$RANDOM" || echo "000")
+          echo "หน้าเว็บ: HTTP $WEB"
+
+          echo "── สรุป: ฐานข้อมูลไม่ผ่าน $FAIL/3 · ช้า $SLOW/3 · เว็บ $WEB ──"
+
+          if [ "$FAIL" -ge 3 ]; then
+            echo "::error::🔴 ฐานข้อมูลไม่ตอบสนองทั้ง 3 ครั้ง — ระบบใช้งานไม่ได้ ตรวจ Supabase → Reports → Disk IO และกด Restart ถ้าจำเป็น"
+            exit 1
+          fi
+          if [ "$SLOW" -ge 3 ]; then
+            echo "::error::🟠 ฐานข้อมูลช้าเกิน 5 วินาทีทั้ง 3 ครั้ง — เครดิต Disk IO อาจใกล้หมด ควรลดการใช้งานหนัก (เลื่อนนับสต๊อก/ปิดแท็บที่ไม่ใช้)"
+            exit 1
+          fi
+          if [ "$WEB" != "200" ]; then
+            echo "::error::🔴 เว็บไม่เสิร์ฟหน้าเพจ (HTTP $WEB) — ตรวจสถานะ deploy ที่ Vercel"
+            exit 1
+          fi
+          if [ "$FAIL" -gt 0 ] || [ "$SLOW" -gt 0 ]; then
+            echo "::warning::ผ่าน แต่มีบางครั้งไม่นิ่ง (ไม่ผ่าน $FAIL/3 · ช้า $SLOW/3) — ยังไม่ต้องทำอะไร แค่จับตาไว้"
+          fi
+          echo "✅ ปกติ"
