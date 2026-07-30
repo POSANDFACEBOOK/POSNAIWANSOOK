@@ -9,14 +9,31 @@ const VAPID_PUBLIC  = process.env.VAPID_PUBLIC || "BILnJiPdqZ_-7I0uwEoYHWWwPoi_F
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE || "";
 
 async function sbFetch(path, opts = {}) {
-  const r = await fetch(`${SUPA_URL}/rest/v1/${path}`, {
-    ...opts,
-    headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}`, "Content-Type": "application/json", ...(opts.headers || {}) },
-  });
-  if (!r.ok) throw new Error(await r.text());
-  const t = await r.text();
-  return t ? JSON.parse(t) : [];
+  // Hard timeout. A database in trouble does not answer with an error — it stops answering
+  // at all, and fetch has no timeout of its own. Without this, a health alert raised while
+  // the database is hanging would sit here until Vercel killed the function, so the one
+  // alert that mattered most would be the one that never went out.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), +opts.timeoutMs || 6000);
+  try {
+    const r = await fetch(`${SUPA_URL}/rest/v1/${path}`, {
+      ...opts,
+      signal: ac.signal,
+      headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}`, "Content-Type": "application/json", ...(opts.headers || {}) },
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const t = await r.text();
+    return t ? JSON.parse(t) : [];
+  } finally { clearTimeout(timer); }
 }
+
+// Recipients live in the database — the very thing that is broken when a health alert
+// needs to go out. Vercel keeps a warm instance alive for minutes between calls, so the
+// list fetched during normal traffic is usually still here when the database goes quiet.
+// Not a guarantee (a cold start has no cache), but it turns "silent for certain" into
+// "delivered most of the time" for free, with no extra storage.
+let SUBS_CACHE = { at: 0, rows: null };
+const SUBS_CACHE_TTL = 30 * 60 * 1000;
 
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.setHeader("Allow", "POST"); return res.status(405).json({ error: "POST only" }); }
@@ -33,7 +50,15 @@ export default async function handler(req, res) {
 
     webpush.setVapidDetails("mailto:naiwansook@gmail.com", VAPID_PUBLIC, VAPID_PRIVATE);
 
-    const subs = await sbFetch("push_subscriptions?select=*");
+    let subs, staleList = false;
+    try {
+      subs = await sbFetch("push_subscriptions?select=*");
+      SUBS_CACHE = { at: Date.now(), rows: subs };
+    } catch (e) {
+      const fresh = SUBS_CACHE.rows && (Date.now() - SUBS_CACHE.at) < SUBS_CACHE_TTL;
+      if (!fresh) throw e;          // no usable cache — nothing we can do but report it
+      subs = SUBS_CACHE.rows; staleList = true;
+    }
     // notify subscribers whose scope is "all" (allowed_branches null) or includes this branch
     const targets = (subs || []).filter(s => {
       const ab = s.allowed_branches;
@@ -62,7 +87,7 @@ export default async function handler(req, res) {
         }
       }
     }));
-    return res.status(200).json({ ok: true, targets: targets.length, sent, removed });
+    return res.status(200).json({ ok: true, targets: targets.length, sent, removed, staleList });
   } catch (e) {
     return res.status(500).json({ error: String((e && e.message) || e) });
   }

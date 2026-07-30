@@ -3587,7 +3587,10 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       <Btn v="success" onClick={startStockCount} loading={stockBtnLoading} icon={I.box}>📦 นับสต็อก</Btn>
       <Btn v="ghost" onClick={()=>setShowSessionHist(true)} icon={I.clock}>🕘 ประวัติการนับ</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
-      {currentUser?.role==="admin"&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
+      {/* Export เปิดให้ทุก user — สาขาต้องดึงรายการวัตถุดิบของตัวเองไปใช้หน้างานได้เอง
+          โดยไม่ต้องรอส่วนกลาง (ไฟล์มีแค่ รหัส/ชื่อ/สต๊อกของสาขานั้น/ซัพพลาย/ช่วงราคา)
+          Import ยังจำกัดที่ admin ตามเดิม — เขียนทับข้อมูลวัตถุดิบทั้งระบบได้ */}
+      <Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>
       {currentUser?.role==="admin"&&<Btn v="info" onClick={()=>setShowImport(true)} icon={I.ul}>Import</Btn>}
     </div>
     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:14,flexWrap:"wrap"}}>
