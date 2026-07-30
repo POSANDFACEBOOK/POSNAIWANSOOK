@@ -6501,6 +6501,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       items:itemsToDeposit||po.items||[],
       ings,
       autoVisible:true,
+      reason:`รับเข้า ${po.po_number||"PO"}`,refType:"po",refId:po.po_number||String(po.id),by:currentUser?.username||null,
     });
     const pend=pendingFromAcc(acc,po.from_branch_id,po.branch_id);
     if(pend){try{await api.updatePO(po.id,{stock_pending:[pend]});}catch{}}
@@ -6547,11 +6548,15 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
       const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
       await deliverOrderWithPhotos(receivingExtOrder.orderId,receivingExtOrder.orderStatus,payloadItems,extRecvImages,+extDeliveryFee||0);
       const acc=await transferStockBetweenBranches({
-        fromBranchId:null,
+        fromBranchId:null,          // ของเข้าจากนอกบริษัท — ไม่มีสาขาไหนถูกหัก (ถูกต้อง ไม่ใช่การโอน)
         toBranchId:currentBranch.id,
         items:payloadItems.map(it=>({...it,ingredient_id:it.ingId,received_qty:it.receivedQty})),
         ings,
         autoVisible:true,
+        // ติดป้ายให้ตรงความจริง ไม่งั้นประวัติสต๊อกจะขึ้นว่า "โอนย้าย" ทั้งที่เป็นการซื้อเข้า
+        // ทำให้ตอบไม่ได้ว่าของมาจากไหน (และเคยทำให้ตรวจยอดเข้า-ออกดูเหมือนไม่สมดุล)
+        reason:`รับจากซัพพลายนอก${receivingExtOrder.supplierName?` — ${receivingExtOrder.supplierName}`:""}`,
+        refType:"recv_ext",refId:String(receivingExtOrder.orderId||""),by:currentUser?.username||null,
       });
       const pend=pendingFromAcc(acc,null,currentBranch.id);
       if(pend){try{await api.updateOrder(receivingExtOrder.orderId,{stock_pending:[pend]});}catch{}}
@@ -6772,6 +6777,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
         items:po.items||[],
         ings,
         autoVisible:false,
+        reason:`โอนออก ${po.po_number||"ใบโอน"}`,refType:"transfer",refId:po.po_number||String(po.id),by:currentUser?.username||null,
       });
       // Record any deduct failure so it can be retried (else confirmReceiveTransfer credits
       // the receiver a qty the sender was never debited for → minted stock).

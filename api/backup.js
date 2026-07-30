@@ -41,6 +41,10 @@ const TABLES = [
   "crm_transactions", "crm_vouchers", "crm_reservations", "crm_booking_requests", "crm_feedback",
   "crm_point_claims", "crm_promotions", "crm_broadcasts", "crm_events", "crm_line_users",
   "promotions", "push_subscriptions", "backups",
+  // ⚠️ เพิ่มตารางใหม่ในระบบเมื่อไหร่ ต้องมาเพิ่มที่นี่ด้วย ไม่งั้น backup จะรายงาน failed
+  // (โดยเจตนา — ดีกว่าบอกว่าสำเร็จแล้วแอบข้ามตารางไป) ดู missing_tables ในตาราง backups
+  "stock_movements",     // log ทุกการขยับสต๊อก — ใช้สืบว่าของถูกตัดไปตอนไหน
+  "sliptrack_opening",   // ยอดยกมางวดแรกที่ส่งเข้าระบบบัญชี — จับภาพครั้งเดียว หายแล้วสร้างใหม่ไม่ได้
 ].map((t) => (typeof t === "string" ? { name: t, pk: "id" } : { name: t.name, pk: t.pk || "id" }));
 
 // Postgres system/internal tables that legitimately live in `public` but are not app data.
