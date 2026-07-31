@@ -20,8 +20,11 @@
 alter table public.order_requests
   add column if not exists updated_at timestamptz;
 
+-- หมายเหตุ: อย่าใส่ requested_at ใน coalesce — คอลัมน์นั้นเป็น **text** (เก็บ ISO string)
+-- ไม่ใช่ timestamptz จะได้ error 42804 "COALESCE types cannot be matched"
+-- ตรวจแล้วว่า created_at มีค่าครบทุกแถว (ไม่มี null เลย) จึงไม่ต้องมี fallback อื่น
 update public.order_requests
-   set updated_at = coalesce(created_at, requested_at, now())
+   set updated_at = coalesce(created_at, now())
  where updated_at is null;
 
 alter table public.order_requests
