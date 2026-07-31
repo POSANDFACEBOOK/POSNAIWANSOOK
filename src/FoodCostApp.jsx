@@ -6140,7 +6140,11 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
   const approvedPRs=useMemo(()=>(prs||[]).filter(p=>p.status==="approved"&&p.type==="ingredient"&&+p.branch_id!==+currentBranch?.id),[prs,currentBranch]);
   const pool=useMemo(()=>{const m=new Map();for(const p of approvedPRs){for(const it of (p.items||[])){const id=+it.ingredient_id;if(!id||!(+it.qty>0))continue;const e=m.get(id)||{ingredient_id:id,name:it.name,unit:it.unit,total:0,byBranch:[]};e.total=round2(e.total+(+it.qty||0));const bId=+p.branch_id;const ex=e.byBranch.find(b=>+b.branchId===bId);if(ex)ex.qty=round2(ex.qty+(+it.qty||0));else e.byBranch.push({branchId:bId,branch:p.branch_name||branchName(p.branch_id),qty:+it.qty||0});m.set(id,e);}}return[...m.values()].sort((a,b)=>a.name.localeCompare(b.name));},[approvedPRs]);// eslint-disable-line react-hooks/exhaustive-deps
   // Approved ASSET/equipment PRs waiting for central to issue an asset delivery PO.
-  const approvedAssetPRs=useMemo(()=>(prs||[]).filter(p=>p.status==="approved"&&p.type==="asset"&&+p.branch_id!==+currentBranch?.id),[prs,currentBranch]);
+  // รวมใบของครัวกลางเองด้วย (เดิมตัดออกด้วย branch_id!==currentBranch) ไม่งั้นใบที่ครัวกลาง
+  // ขอซื้อให้ตัวเองจะค้างสถานะ "อนุมัติแล้ว" ตลอดไป ไม่มีทางเข้าทะเบียนทรัพย์สิน
+  // ใบส่งถึงตัวเองปลอดภัย: ใบสินทรัพย์ตอน "จัดส่ง" เป็นแค่การเปลี่ยนสถานะ ไม่แตะสต๊อกวัตถุดิบ
+  // (ดู shipPO) และตอน "ยืนยันรับ" จะสร้างแถวสินทรัพย์ให้ผู้รับ ซึ่งก็คือครัวกลาง
+  const approvedAssetPRs=useMemo(()=>(prs||[]).filter(p=>p.status==="approved"&&p.type==="asset"),[prs]);
   const[consolidating,setConsolidating]=useState(false);const consolidatingRef=useRef(false);const assetDistRef=useRef(false);
   // PR fulfillment = "จัดส่งให้สาขา": issue an internal delivery PO (ครัวกลาง→สาขา) per
   // requesting branch. NO stock moves here — the PO lands at "open"; central ships it from
@@ -6200,7 +6204,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     if(candidates.length===0){alert("ยังไม่มีใบขอซื้อสินทรัพย์ที่อนุมัติแล้วให้จัดส่ง");return;}
     assetDistRef.current=true;
     const branchCount=new Set(candidates.map(p=>+p.branch_id)).size;
-    if(!await confirmDlg({title:"ออกใบส่งสินทรัพย์/อุปกรณ์",message:`ออกใบส่ง (ครัวกลาง→สาขา) จาก ${candidates.length} ใบขอซื้อสินทรัพย์ที่อนุมัติแล้ว?\n\n• แยกใบต่อสาขา (${branchCount} สาขา)\n• 📦 ไม่ตัดสต๊อกวัตถุดิบ — ตอนสาขากดรับ ระบบจะสร้าง/เพิ่มสินทรัพย์ให้อัตโนมัติ\n• ใบส่งจะอยู่สถานะ "รอจัดส่ง" — ไปกด "🚚 จัดส่ง" ที่แท็บ PO`,confirmLabel:"ออกใบส่งสินทรัพย์"})){assetDistRef.current=false;return;}
+    if(!await confirmDlg({title:"ออกใบส่งสินทรัพย์/อุปกรณ์",message:`ออกใบส่งจาก ${candidates.length} ใบขอซื้อสินทรัพย์ที่อนุมัติแล้ว?\n\n• แยกใบต่อสาขา (${branchCount} สาขา — รวมของครัวกลางเองถ้ามี)\n• 📦 ไม่ตัดสต๊อกวัตถุดิบ — ตอนผู้รับกดรับ ระบบจะสร้าง/เพิ่มสินทรัพย์ให้อัตโนมัติ\n• ใบส่งจะอยู่สถานะ "รอจัดส่ง" — ไปกด "🚚 จัดส่ง" ที่แท็บ PO`,confirmLabel:"ออกใบส่งสินทรัพย์"})){assetDistRef.current=false;return;}
     setConsolidating(true);
     const ref=`ใบส่งสินทรัพย์ · ${fmtD(todayStr())}`;
     const claimed=[],claimSkipped=[];
@@ -6248,11 +6252,13 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
       <div style={{fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:18,fontWeight:900,color:C.ink}}>📝 ใบขอซื้อ (PR)</div>
-        <div style={{fontSize:12,color:C.ink4,marginTop:2}}>สาขาขอ → Area อนุมัติ → ครัวกลางออกใบส่งให้สาขา · <b style={{color:C.ink3}}>ไม่ตัดสต๊อก</b></div>
+        <div style={{fontSize:12,color:C.ink4,marginTop:2}}>ทุกสาขา (รวมครัวกลาง) ขอ → Area อนุมัติ → ครัวกลางออกใบส่ง · <b style={{color:C.ink3}}>ไม่ตัดสต๊อก</b></div>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {onOrderMaterials&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOrderMaterials} icon={I.truck}>สั่งวัตถุดิบเปิดPR</Btn>}
-        {!isCentral&&hasPerm(currentUser,"orders")&&<Btn onClick={()=>setShowAssetOrder(true)} icon={I.box} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>สั่งซื้อสินทรัพย์/อุปกรณ์อื่นๆ</Btn>}
+        {/* ทุกสาขา "รวมครัวกลาง" — ครัวกลางก็ซื้อของเข้าครัวตัวเองและต้องผ่านการอนุมัติเหมือนกัน
+            เดิมล็อกไว้ที่ !isCentral ครัวกลางจึงไม่มีทางขอซื้อสินทรัพย์ผ่านระบบได้เลย */}
+        {hasPerm(currentUser,"orders")&&<Btn onClick={()=>setShowAssetOrder(true)} icon={I.box} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>สั่งซื้อสินทรัพย์/อุปกรณ์อื่นๆ</Btn>}
         {onTransfer&&hasPO&&<Btn v="purple" onClick={onTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {false&&onCreatePO&&hasPO&&<Btn onClick={onCreatePO} icon={I.plus}>สร้างเอกสาร PO</Btn>}{/* ซ่อนไว้ก่อนตามที่ผู้ใช้ขอ — เปลี่ยน false กลับเป็นเงื่อนไขเดิมเพื่อเปิดคืน */}
         {false&&<Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สร้างใบขอซื้อ</Btn>}{/* ซ่อนไว้ตามที่ผู้ใช้ขอ — PR สร้างผ่านปุ่ม "สั่งวัตถุดิบเปิดPR" แทน */}
@@ -6846,7 +6852,13 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
     // branch's assets are created/incremented when it confirms receipt (confirmReceive).
     if(isAssetPO(po)){
       const recip=(branchById[po.branch_id]||{}).name||"ปลายทาง";
-      if(!await confirmDlg({title:"จัดส่งสินทรัพย์/อุปกรณ์",message:`จัดส่งใบ ${po.po_number||"นี้"} ไปยัง "${recip}"?\n\n• 📦 เป็นการส่งสินทรัพย์ — ไม่ตัดสต๊อกวัตถุดิบ\n• เมื่อสาขาปลายทางกด "✅ ยืนยันรับ" ระบบจะเพิ่ม/สร้างสินทรัพย์ให้อัตโนมัติ`,confirmLabel:"🚚 จัดส่งสินทรัพย์"}))return;
+      // ครัวกลางซื้อของเข้าครัวตัวเอง → ต้นทาง=ปลายทาง ไม่มีการขนส่งจริง เป็นแค่ขั้นตอนเอกสาร
+      // ก่อนกดรับเข้าทะเบียน ถ้าใช้ข้อความ "จัดส่งไปยังครัวกลาง" ผู้ใช้จะงงว่าส่งไปไหน
+      const self=+po.from_branch_id===+po.branch_id;
+      const msg=self
+        ? `ใบนี้เป็นของที่ "${recip}" ซื้อเข้าใช้เอง จึงไม่มีการขนส่งจริง\n\n• กดเพื่อเปิดให้ "✅ ยืนยันรับ" ในขั้นถัดไป\n• 📦 ไม่ตัดสต๊อกวัตถุดิบ\n• เมื่อกดยืนยันรับ ระบบจะบันทึกเข้าทะเบียนทรัพย์สินให้อัตโนมัติ`
+        : `จัดส่งใบ ${po.po_number||"นี้"} ไปยัง "${recip}"?\n\n• 📦 เป็นการส่งสินทรัพย์ — ไม่ตัดสต๊อกวัตถุดิบ\n• เมื่อสาขาปลายทางกด "✅ ยืนยันรับ" ระบบจะเพิ่ม/สร้างสินทรัพย์ให้อัตโนมัติ`;
+      if(!await confirmDlg({title:self?"เปิดรับเข้าทะเบียน (ซื้อใช้เอง)":"จัดส่งสินทรัพย์/อุปกรณ์",message:msg,confirmLabel:self?"➡️ ไปขั้นยืนยันรับ":"🚚 จัดส่งสินทรัพย์"}))return;
       setConfirming(po.id);
       try{ await api.patchPOIfStatus(po.id,"open",{status:"shipped",updated_at:new Date().toISOString()}); await load(); }
       catch(e){ showErr("จัดส่งไม่สำเร็จ",e); }
