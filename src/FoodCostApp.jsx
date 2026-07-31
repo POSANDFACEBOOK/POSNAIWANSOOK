@@ -6256,9 +6256,10 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {onOrderMaterials&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOrderMaterials} icon={I.truck}>สั่งวัตถุดิบเปิดPR</Btn>}
-        {/* ทุกสาขา "รวมครัวกลาง" — ครัวกลางก็ซื้อของเข้าครัวตัวเองและต้องผ่านการอนุมัติเหมือนกัน
-            เดิมล็อกไว้ที่ !isCentral ครัวกลางจึงไม่มีทางขอซื้อสินทรัพย์ผ่านระบบได้เลย */}
-        {hasPerm(currentUser,"orders")&&<Btn onClick={()=>setShowAssetOrder(true)} icon={I.box} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>สั่งซื้อสินทรัพย์/อุปกรณ์อื่นๆ</Btn>}
+        {/* เปิดให้ทุกสาขา (รวมครัวกลาง) และทุก user — เดิมล็อก 2 ชั้นคือ !isCentral และสิทธิ์ orders
+            ปุ่มนี้แค่ "ยื่นขอ" ไม่ได้ใช้เงิน ใบที่สร้างเป็น pending_approval เสมอและ Area ต้องอนุมัติ
+            ก่อนเกิดผลใดๆ การล็อกไว้จึงกันแค่คนหน้างานที่เห็นของชำรุดจริงไม่ให้แจ้งเข้าระบบ */}
+        <Btn onClick={()=>setShowAssetOrder(true)} icon={I.box} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>สั่งซื้อสินทรัพย์/อุปกรณ์อื่นๆ</Btn>
         {onTransfer&&hasPO&&<Btn v="purple" onClick={onTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {false&&onCreatePO&&hasPO&&<Btn onClick={onCreatePO} icon={I.plus}>สร้างเอกสาร PO</Btn>}{/* ซ่อนไว้ก่อนตามที่ผู้ใช้ขอ — เปลี่ยน false กลับเป็นเงื่อนไขเดิมเพื่อเปิดคืน */}
         {false&&<Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สร้างใบขอซื้อ</Btn>}{/* ซ่อนไว้ตามที่ผู้ใช้ขอ — PR สร้างผ่านปุ่ม "สั่งวัตถุดิบเปิดPR" แทน */}
@@ -10725,6 +10726,9 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
   const[form,setForm]=useState(A0);
   const[editId,setEditId]=useState(null);
   const[showForm,setShowForm]=useState(false);
+  // ขอซื้อสินทรัพย์จากหน้านี้ได้ด้วย — คนที่เห็นว่าของชำรุด/ไม่พอ มักเปิดหน้าทะเบียนนี้อยู่แล้ว
+  // ไม่ใช่หน้าใบขอซื้อ (ซึ่งต้องมีสิทธิ์ po จึงจะเข้าถึงได้) จึงวางปุ่มเดียวกันไว้ทั้งสองที่
+  const[showAssetOrder,setShowAssetOrder]=useState(false);
   const[saving,setSaving]=useState(false);
   const[q,setQ]=useState("");
   const[fStatus,setFStatus]=useState("all");
@@ -10945,6 +10949,9 @@ ${currentBranch?.name} → ${destName}
         <div style={{fontSize:13,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>สินทรัพย์ของสาขา: {currentBranch?.name||"—"} <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>({myList.length})</span></div>
         <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:1}}>ค่าเสื่อมราคาแบบเส้นตรง — แต่ละสาขาเก็บสินทรัพย์ของตัวเอง</div>
       </div>
+      {/* ไม่ผูกสิทธิ์ใดๆ ตามที่ผู้ใช้สั่ง — ปุ่มนี้แค่ยื่นขอ ใบที่ได้เป็น pending_approval เสมอ
+          และ Area ต้องอนุมัติก่อนจึงจะเกิดผล ไม่มีทางใช้เงินหรือแก้ทะเบียนได้จากปุ่มนี้ */}
+      <Btn onClick={()=>setShowAssetOrder(true)} icon={I.box} s={{padding:"8px 14px",fontSize:13,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>🛒 สั่งซื้อสินทรัพย์/อุปกรณ์</Btn>
       {canE&&<Btn onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มสินทรัพย์</Btn>}
       {canE&&xferDestBranches.length>0&&<Btn v="purple" onClick={()=>{setBulkOpen(true);setBulkDest("");setBulkPick({});setBulkNote("");setBulkQ("");}} s={{padding:"8px 14px",fontSize:13}}>🔄 โอนย้ายสินทรัพย์</Btn>}
       <Btn v="ghost" onClick={openXferHistory} loading={histBusy} s={{padding:"8px 14px",fontSize:13}}>🕘 ประวัติการโอนย้าย</Btn>
@@ -11029,6 +11036,7 @@ ${currentBranch?.name} → ${destName}
       </div>
     </Modal>;})()}
     {/* โอนหลายรายการพร้อมกัน — ปลายทางเดียว ออกใบโอนใบเดียว */}
+    {showAssetOrder&&<AssetOrderModal currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowAssetOrder(false)} onSubmitted={reloadAssets}/>}
     {bulkOpen&&(()=>{
       const q=bulkQ.trim().toLowerCase();
       const pool=(myList||[]).filter(a=>Math.floor(+a.quantity||1)>0&&(!q||(a.name||"").toLowerCase().includes(q)||(a.category||"").toLowerCase().includes(q)));
