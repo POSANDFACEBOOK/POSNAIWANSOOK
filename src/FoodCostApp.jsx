@@ -6553,7 +6553,107 @@ function buildPriceHistoryMap(orders){
 }
 const priceHistLookup=(map,ingId,unit)=>(map&&map.get(`${+ingId}|${String(unit||"").trim()}`))||null;
 
-function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrders,orders=[],reloadOrders,initialAction,onConsumeAction,summaryOnly=false}){
+// ── กล่อง "สั่งเพิ่มกับซัพพลายทีหลัง" ในหน้ายืนยันรับสินค้า ────────────────────
+// ของจริงหน้างานมักโทร/ไลน์สั่งเพิ่มกับซัพพลายหลังเปิดใบไปแล้ว แล้วของมาพร้อมรอบส่งเดียวกัน
+// ถ้าใบรับเพิ่มรายการไม่ได้ ของจะเข้าครัวโดยไม่มีในระบบ = สต๊อกขาดและต้นทุนหาย
+//
+// ใช้ร่วมกันทั้ง 2 หน้ารับของ (สาขาผ่าน OrderTab · ครัวกลางผ่าน POSection) โดยเจตนา —
+// สองหน้านั้นเป็นโค้ดคนละชุดอยู่แล้ว ถ้าก็อปกล่องนี้ไปอีกชุดจะกลายเป็นกฎเรื่องหน่วย/
+// การกันซ้ำ 2 ที่ที่ต้องแก้ตามกันตลอดไป ซึ่งเป็นแบบที่พลาดง่ายที่สุด
+function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],lastPriceOf,onAdd}){
+  const[q,setQ]=useState("");
+  const[pick,setPick]=useState(null);
+  const[qty,setQty]=useState("");
+  const[price,setPrice]=useState("");
+  const[showAll,setShowAll]=useState(false);
+  // ใบเก็บชื่อซัพพลาย ไม่ใช่ id — จับกลับเป็น id เพื่อกรองวัตถุดิบ
+  const supplierId=useMemo(()=>{
+    const nm=(supplierName||"").trim();
+    const s=(suppliers||[]).find(x=>(x.name||"").trim()===nm);
+    return s?+s.id:null;
+  },[supplierName,suppliers]);
+  const matches=useMemo(()=>{
+    const ql=q.trim().toLowerCase();
+    if(!ql)return[];
+    return (ings||[]).filter(i=>{
+      if(!(i.name||"").toLowerCase().includes(ql))return false;
+      if(showAll||!supplierId)return true;
+      return branchSupplierId(i,branchId)===supplierId;
+    }).slice(0,12);
+  },[ings,q,showAll,supplierId,branchId]);
+
+  async function add(){
+    if(!pick){alert("เลือกวัตถุดิบจากช่องค้นหาก่อน");return;}
+    const n=Math.round((+qty||0)*1000)/1000;
+    if(!(n>0)){alert("ใส่จำนวนที่รับจริง มากกว่า 0");return;}
+    const p=Math.round((+price||0)*100)/100;
+    if(!(p>0)){alert("ใส่ราคา/หน่วยที่จ่ายจริง มากกว่า 0");return;}
+    const dup=(items||[]).findIndex(x=>+(x.ingId||x.ingredient_id)===+pick.id);
+    if(dup>=0&&!await confirmDlg({
+      title:"รายการนี้มีอยู่แล้วในใบ",
+      message:`"${pick.name}" อยู่ในใบนี้แล้ว (แถวที่ ${dup+1})\n\n• ถ้าเป็นของล็อตเดียวกัน ควรกลับไปแก้จำนวนที่แถวเดิม\n• ถ้าเป็นคนละล็อต/คนละราคา เพิ่มเป็นแถวใหม่ได้ ระบบจะถัวเฉลี่ยให้\n\nต้องการเพิ่มเป็นแถวใหม่ไหม?`,
+      confirmLabel:"เพิ่มเป็นแถวใหม่",cancelLabel:"ยกเลิก"}))return;
+    onAdd({
+      ingId:pick.id,
+      name:pick.name,
+      // ต้องเป็น buy_unit เท่านั้น — ต้นทุนถัวเฉลี่ยนับเฉพาะบรรทัดที่หน่วยตรงกับ
+      // ingredients.buy_unit ถ้าหน่วยเพี้ยน บรรทัดนี้จะหายจากการคิดต้นทุนโดยไม่มี error
+      unit:pick.buy_unit||"",
+      qtyNeeded:0,                 // ไม่ได้อยู่ในใบสั่งเดิม
+      receivedQty:n,
+      pricePerUnit:p,
+      estimatedCost:Math.round(n*p*100)/100,
+      addedAtReceive:true,         // ธงให้ UI/เอกสารแยกออกว่าไม่ใช่ของที่สั่งไว้แต่แรก
+      _key:`add-${(items||[]).length}-${Date.now()}`,
+    });
+    setPick(null);setQ("");setQty("");setPrice("");
+  }
+
+  return <div style={{background:C.tealLight,border:`1px solid ${C.teal}44`,borderRadius:12,padding:"12px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>
+    <div style={{fontSize:13,fontWeight:800,color:C.ink2,marginBottom:2}}>➕ สั่งเพิ่มกับซัพพลายทีหลัง?</div>
+    <div style={{fontSize:11.5,color:C.ink4,marginBottom:9}}>เพิ่มรายการที่ไม่ได้อยู่ในใบสั่งเดิมได้ที่นี่ — ระบบจะเพิ่มสต๊อกและเก็บราคาให้เหมือนรายการอื่น</div>
+    {!pick?<>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder={`ค้นหาวัตถุดิบของ "${supplierName||"ซัพพลาย"}"...`}
+        style={{width:"100%",padding:"9px 12px",borderRadius:10,border:`1.5px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:13.5,boxSizing:"border-box"}}/>
+      {q.trim()&&<div style={{marginTop:7,maxHeight:170,overflowY:"auto",background:C.white,border:`1px solid ${C.line}`,borderRadius:10}}>
+        {matches.length===0
+          ?<div style={{padding:"10px 12px",fontSize:12,color:C.ink4}}>ไม่พบ{showAll?"":` — อาจไม่ได้ตั้งซัพพลายนี้ให้วัตถุดิบดังกล่าว ลองติ๊ก "แสดงทั้งหมด" ด้านล่าง`}</div>
+          :matches.map(m=><button key={m.id} onClick={()=>{setPick(m);const h=lastPriceOf?lastPriceOf(m.id,m.buy_unit):null;setPrice(h&&h.last>0?String(h.last):"");}}
+              style={{display:"block",width:"100%",textAlign:"left",padding:"8px 12px",border:"none",borderBottom:`1px solid ${C.lineLight}`,background:"transparent",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
+              <b style={{color:C.ink}}>{m.name}</b> <span style={{color:C.ink4,fontSize:11}}>· {m.buy_unit||"ไม่ระบุหน่วย"}</span>
+            </button>)}
+      </div>}
+      <label style={{display:"inline-flex",alignItems:"center",gap:6,marginTop:8,fontSize:11.5,color:C.ink4,cursor:"pointer"}}>
+        <input type="checkbox" checked={showAll} onChange={e=>setShowAll(e.target.checked)}/>
+        แสดงวัตถุดิบทั้งหมด (ไม่จำกัดเฉพาะซัพพลายรายนี้)
+      </label>
+    </>:<div style={{background:C.white,border:`1px solid ${C.teal}55`,borderRadius:10,padding:"10px 12px"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:9}}>
+        <div><b style={{color:C.ink,fontSize:14}}>{pick.name}</b> <span style={{color:C.ink4,fontSize:11.5}}>· ต่อ {pick.buy_unit||"หน่วย"}</span></div>
+        <button onClick={()=>{setPick(null);setQty("");setPrice("");}} style={{background:"none",border:"none",color:C.ink4,fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>
+      </div>
+      {!pick.buy_unit&&<div style={{fontSize:11,color:"#B45309",fontWeight:700,marginBottom:8}}>⚠️ วัตถุดิบนี้ยังไม่ได้ตั้ง "หน่วยซื้อ" — ควรไปตั้งที่แท็บวัตถุดิบก่อน ไม่งั้นราคาจะไม่ถูกนำไปคิดต้นทุนเฉลี่ย</div>}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
+        <div style={{flex:"1 1 120px"}}>
+          <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:3}}>จำนวนที่รับจริง</div>
+          <input type="text" inputMode="decimal" value={qty} onChange={e=>setQty(e.target.value)} placeholder="0"
+            style={{width:"100%",padding:"9px 12px",borderRadius:10,border:`1.5px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box"}}/>
+        </div>
+        <div style={{flex:"1 1 140px"}}>
+          <div style={{fontSize:11,color:C.brand,fontWeight:800,marginBottom:3}}>💰 ราคา/หน่วยที่จ่ายจริง</div>
+          <input type="text" inputMode="decimal" value={price} onChange={e=>setPrice(e.target.value)} placeholder="0.00"
+            style={{width:"100%",padding:"9px 12px",borderRadius:10,border:`1.5px solid ${C.brand}77`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box"}}/>
+        </div>
+        <Btn v="teal" onClick={add} s={{padding:"9px 16px",fontSize:13}}>เพิ่มเข้าใบ</Btn>
+      </div>
+      {(()=>{const a=+qty||0,b=+price||0;return a>0&&b>0
+        ?<div style={{marginTop:8,fontSize:12.5,color:C.ink3}}>รวมรายการนี้ <b style={{color:C.green,fontSize:14}}>฿{(a*b).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</b></div>
+        :null;})()}
+    </div>}
+  </div>;
+}
+
+function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadIngs,onOpenOrders,orders=[],reloadOrders,initialAction,onConsumeAction,summaryOnly=false}){
   // Every branch (central or otherwise) can issue a PO to any other branch
   // and only ever sees POs it's involved in (as sender or receiver).
   // - "from_branch_id" = creator (sender)
@@ -7832,7 +7932,7 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
                 <div>{it.name}</div>
                 <div style={{fontSize:10,color:C.ink4,fontWeight:500}}>{it.unit||""}</div>
               </td>
-              <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{ordered} {it.unit||""}{got===0?<div style={{fontSize:10,color:C.red,fontWeight:800,marginTop:2}}>❌ ไม่ได้รับ</div>:short?<div style={{fontSize:10,color:"#92400E",fontWeight:800,marginTop:2}}>ขาด {(ordered-got).toFixed(2)}</div>:null}</td>
+              <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{it.addedAtReceive?<><span style={{fontSize:10.5,fontWeight:800,color:C.teal,background:C.tealLight,border:`1px solid ${C.teal}44`,borderRadius:8,padding:"2px 7px"}}>➕ สั่งเพิ่มทีหลัง</span><button onClick={()=>setReceivingExtOrder(s=>({...s,items:s.items.filter((_,j)=>j!==idx)}))} title="เอาแถวนี้ออก" style={{display:"block",marginTop:4,background:"none",border:"none",color:C.red,fontSize:10.5,fontWeight:700,cursor:"pointer",padding:0,fontFamily:"'Sarabun',sans-serif"}}>✕ เอาออก</button></>:<>{ordered} {it.unit||""}{got===0?<div style={{fontSize:10,color:C.red,fontWeight:800,marginTop:2}}>❌ ไม่ได้รับ</div>:short?<div style={{fontSize:10,color:"#92400E",fontWeight:800,marginTop:2}}>ขาด {(ordered-got).toFixed(2)}</div>:null}</>}</td>
               <td style={{padding:"7px 10px"}}>
                 <NumStepper value={it.receivedQty} onChange={v=>setReceivingExtOrder(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70}/>
               </td>
@@ -7865,6 +7965,9 @@ function POSection({branches,ings,currentBranch,currentUser,reloadIngs,onOpenOrd
           })}</tbody>
         </table>
       </div>
+      <ReceiveAddLine key={receivingExtOrder.orderId} ings={ings} suppliers={suppliers} supplierName={receivingExtOrder.supplierName}
+        branchId={currentBranch?.id} items={receivingExtOrder.items} lastPriceOf={lastPriceOf}
+        onAdd={ln=>setReceivingExtOrder(s=>({...s,items:[...s.items,ln]}))}/>
       {(()=>{const itemsTotal=receivingExtOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0);const fee=+extDeliveryFee||0;return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,color:C.ink3,marginBottom:8}}><span>ยอดค่าสินค้า</span><span style={{fontWeight:700,color:C.ink2}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
@@ -9282,14 +9385,6 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const[receivingOrder,setReceivingOrder]=useState(null); // { order, items:[copies with receivedQty] }
   const[recvImages,setRecvImages]=useState([]);const[recvUploading,setRecvUploading]=useState(0);  // receive photos (Drive)
   const[recvDeliveryFee,setRecvDeliveryFee]=useState("0");  // ค่าจัดส่งของออเดอร์นี้ (0 = ไม่มี)
-  // เพิ่มรายการตอนรับของ — ของจริงหน้างานมักสั่งเพิ่มกับซัพพลายทีหลังทางไลน์/โทร
-  // แล้วมาพร้อมรอบส่งเดียวกัน ถ้าใบรับเพิ่มรายการไม่ได้ ของจะเข้าครัวโดยไม่มีในระบบ
-  // = สต๊อกขาดและต้นทุนหาย ซึ่งแย่กว่าการยอมให้เพิ่มรายการ
-  const[recvAddQ,setRecvAddQ]=useState("");
-  const[recvAddPick,setRecvAddPick]=useState(null);
-  const[recvAddQty,setRecvAddQty]=useState("");
-  const[recvAddPrice,setRecvAddPrice]=useState("");
-  const[recvAddAll,setRecvAddAll]=useState(false);   // เปิดดูวัตถุดิบนอกรายชื่อของซัพพลายรายนี้
   const[photoEditOrder,setPhotoEditOrder]=useState(null);  // delivered order whose receive photos are being viewed/added retroactively
   const[copiedId,setCopiedId]=useState(null);          // shows ✓ briefly after copy succeeds
   const[retryingId,setRetryingId]=useState(null);      // order whose pending stock is being re-added
@@ -9477,8 +9572,6 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   function startReceive(order){
     setRecvImages(Array.isArray(order.receive_images)?order.receive_images:[]);setRecvUploading(0);
     setRecvDeliveryFee(order.delivery_fee!=null?String(order.delivery_fee):"0");
-    // ล้างฟอร์มเพิ่มรายการทุกครั้ง ไม่ให้ของที่พิมพ์ค้างจากใบก่อนหลุดไปลงใบใหม่
-    setRecvAddQ("");setRecvAddPick(null);setRecvAddQty("");setRecvAddPrice("");setRecvAddAll(false);
     setReceivingOrder({
       orderId:order.id,
       orderStatus:order.status,
@@ -9492,56 +9585,6 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       })),
     });
   }
-  // ซัพพลายของใบนี้ (จับจากชื่อ เพราะใบเก็บ supplier_name ไม่ใช่ id)
-  const recvSupplierId=useMemo(()=>{
-    if(!receivingOrder)return null;
-    const nm=(receivingOrder.supplierName||"").trim();
-    const s=(suppliers||[]).find(x=>(x.name||"").trim()===nm);
-    return s?+s.id:null;
-  },[receivingOrder,suppliers]);
-  // รายชื่อให้เลือกเพิ่ม — จำกัดเฉพาะวัตถุดิบของซัพพลายรายนี้ (ตามที่ผู้ใช้ต้องการ)
-  // ใช้สาขา "ผู้รับ" ไม่ใช่สาขาที่กำลังเปิดดู เพราะครัวกลางกดรับแทนสาขาได้
-  const recvAddMatches=useMemo(()=>{
-    if(!receivingOrder)return[];
-    const ql=recvAddQ.trim().toLowerCase();
-    if(!ql)return[];
-    const bid=receivingOrder.branchId;
-    return (ings||[]).filter(i=>{
-      if(!(i.name||"").toLowerCase().includes(ql))return false;
-      if(recvAddAll||!recvSupplierId)return true;
-      return branchSupplierId(i,bid)===recvSupplierId;
-    }).slice(0,12);
-  },[ings,recvAddQ,recvAddAll,recvSupplierId,receivingOrder]);
-
-  async function addReceiveLine(){
-    if(!receivingOrder)return;
-    const ing=recvAddPick;
-    if(!ing){alert("เลือกวัตถุดิบจากช่องค้นหาก่อน");return;}
-    const qty=Math.round((+recvAddQty||0)*1000)/1000;
-    if(!(qty>0)){alert("ใส่จำนวนที่รับจริง มากกว่า 0");return;}
-    const price=Math.round((+recvAddPrice||0)*100)/100;
-    if(!(price>0)){alert("ใส่ราคา/หน่วยที่จ่ายจริง มากกว่า 0");return;}
-    const dup=receivingOrder.items.findIndex(x=>+(x.ingId||x.ingredient_id)===+ing.id);
-    if(dup>=0&&!await confirmDlg({
-      title:"รายการนี้มีอยู่แล้วในใบ",
-      message:`"${ing.name}" อยู่ในใบนี้แล้ว (แถวที่ ${dup+1})\n\n• ถ้าเป็นของล็อตเดียวกัน ควรกลับไปแก้จำนวนที่แถวเดิม\n• ถ้าเป็นคนละล็อต/คนละราคา เพิ่มเป็นแถวใหม่ได้\n\nต้องการเพิ่มเป็นแถวใหม่ไหม?`,
-      confirmLabel:"เพิ่มเป็นแถวใหม่",cancelLabel:"ยกเลิก"}))return;
-    setReceivingOrder(s=>({...s,items:[...s.items,{
-      ingId:ing.id,
-      name:ing.name,
-      // ต้องใช้ buy_unit เท่านั้น — การคิดต้นทุนถัวเฉลี่ยนับเฉพาะบรรทัดที่หน่วยตรงกับ
-      // ingredients.buy_unit ถ้าใส่หน่วยอื่น บรรทัดนี้จะถูกข้ามตอนคิดต้นทุนแบบเงียบๆ
-      unit:ing.buy_unit||"",
-      qtyNeeded:0,                 // ไม่ได้อยู่ในใบสั่งเดิม
-      receivedQty:qty,
-      pricePerUnit:price,
-      estimatedCost:Math.round(qty*price*100)/100,
-      addedAtReceive:true,         // ธงไว้ให้ UI/เอกสารแยกออกว่าไม่ใช่ของที่สั่งไว้แต่แรก
-      _key:`add-${s.items.length}-${Date.now()}`,
-    }]}));
-    setRecvAddPick(null);setRecvAddQ("");setRecvAddQty("");setRecvAddPrice("");
-  }
-
   async function confirmReceiveExternal(){
     if(!receivingOrder)return;
     const itemsWithReceived=receivingOrder.items.map(it=>{
@@ -9860,50 +9903,9 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           </tr></tfoot>
         </table>
       </div>
-      {/* ── สั่งเพิ่มกับซัพพลายทีหลัง แล้วของมาพร้อมรอบเดียวกัน ────────────────────
-          ถ้าเพิ่มตรงนี้ไม่ได้ ของจะเข้าครัวโดยไม่มีในระบบ = สต๊อกขาดและต้นทุนหาย */}
-      <div style={{background:C.tealLight,border:`1px solid ${C.teal}44`,borderRadius:12,padding:"12px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>
-        <div style={{fontSize:13,fontWeight:800,color:C.ink2,marginBottom:2}}>➕ สั่งเพิ่มกับซัพพลายทีหลัง?</div>
-        <div style={{fontSize:11.5,color:C.ink4,marginBottom:9}}>เพิ่มรายการที่ไม่ได้อยู่ในใบสั่งเดิมได้ที่นี่ — ระบบจะเพิ่มสต๊อกและเก็บราคาให้เหมือนรายการอื่น</div>
-        {!recvAddPick?<>
-          <input value={recvAddQ} onChange={e=>setRecvAddQ(e.target.value)} placeholder={`ค้นหาวัตถุดิบของ "${receivingOrder.supplierName}"...`}
-            style={{width:"100%",padding:"9px 12px",borderRadius:10,border:`1.5px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:13.5,boxSizing:"border-box"}}/>
-          {recvAddQ.trim()&&<div style={{marginTop:7,maxHeight:170,overflowY:"auto",background:C.white,border:`1px solid ${C.line}`,borderRadius:10}}>
-            {recvAddMatches.length===0
-              ?<div style={{padding:"10px 12px",fontSize:12,color:C.ink4}}>ไม่พบ{recvAddAll?"":` — อาจไม่ได้ตั้งซัพพลายนี้ให้วัตถุดิบดังกล่าว ลองติ๊ก "แสดงทั้งหมด" ด้านล่าง`}</div>
-              :recvAddMatches.map(m=><button key={m.id} onClick={()=>{setRecvAddPick(m);setRecvAddPrice(String(lastPriceOf(m.id,m.buy_unit)?.last||""));}}
-                  style={{display:"block",width:"100%",textAlign:"left",padding:"8px 12px",border:"none",borderBottom:`1px solid ${C.lineLight}`,background:"transparent",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
-                  <b style={{color:C.ink}}>{m.name}</b> <span style={{color:C.ink4,fontSize:11}}>· {m.buy_unit||"ไม่ระบุหน่วย"}</span>
-                </button>)}
-          </div>}
-          <label style={{display:"inline-flex",alignItems:"center",gap:6,marginTop:8,fontSize:11.5,color:C.ink4,cursor:"pointer"}}>
-            <input type="checkbox" checked={recvAddAll} onChange={e=>setRecvAddAll(e.target.checked)}/>
-            แสดงวัตถุดิบทั้งหมด (ไม่จำกัดเฉพาะซัพพลายรายนี้)
-          </label>
-        </>:<div style={{background:C.white,border:`1px solid ${C.teal}55`,borderRadius:10,padding:"10px 12px"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:9}}>
-            <div><b style={{color:C.ink,fontSize:14}}>{recvAddPick.name}</b> <span style={{color:C.ink4,fontSize:11.5}}>· ต่อ {recvAddPick.buy_unit||"หน่วย"}</span></div>
-            <button onClick={()=>{setRecvAddPick(null);setRecvAddQty("");setRecvAddPrice("");}} style={{background:"none",border:"none",color:C.ink4,fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>
-          </div>
-          {!recvAddPick.buy_unit&&<div style={{fontSize:11,color:"#B45309",fontWeight:700,marginBottom:8}}>⚠️ วัตถุดิบนี้ยังไม่ได้ตั้ง "หน่วยซื้อ" — ควรไปตั้งที่แท็บวัตถุดิบก่อน ไม่งั้นราคาจะไม่ถูกนำไปคิดต้นทุนเฉลี่ย</div>}
-          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
-            <div style={{flex:"1 1 120px"}}>
-              <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:3}}>จำนวนที่รับจริง</div>
-              <input type="text" inputMode="decimal" value={recvAddQty} onChange={e=>setRecvAddQty(e.target.value)} placeholder="0"
-                style={{width:"100%",padding:"9px 12px",borderRadius:10,border:`1.5px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box"}}/>
-            </div>
-            <div style={{flex:"1 1 140px"}}>
-              <div style={{fontSize:11,color:C.brand,fontWeight:800,marginBottom:3}}>💰 ราคา/หน่วยที่จ่ายจริง</div>
-              <input type="text" inputMode="decimal" value={recvAddPrice} onChange={e=>setRecvAddPrice(e.target.value)} placeholder="0.00"
-                style={{width:"100%",padding:"9px 12px",borderRadius:10,border:`1.5px solid ${C.brand}77`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box"}}/>
-            </div>
-            <Btn v="teal" onClick={addReceiveLine} s={{padding:"9px 16px",fontSize:13}}>เพิ่มเข้าใบ</Btn>
-          </div>
-          {(()=>{const q=+recvAddQty||0,p=+recvAddPrice||0;return q>0&&p>0
-            ?<div style={{marginTop:8,fontSize:12.5,color:C.ink3}}>รวมรายการนี้ <b style={{color:C.green,fontSize:14}}>฿{(q*p).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</b></div>
-            :null;})()}
-        </div>}
-      </div>
+      <ReceiveAddLine key={receivingOrder.orderId} ings={ings} suppliers={suppliers} supplierName={receivingOrder.supplierName}
+        branchId={receivingOrder.branchId} items={receivingOrder.items} lastPriceOf={lastPriceOf}
+        onAdd={ln=>setReceivingOrder(s=>({...s,items:[...s.items,ln]}))}/>
       {(()=>{const itemsTotal=receivingOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0);const fee=+recvDeliveryFee||0;return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
           <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>🚚 ค่าจัดส่ง <span style={{fontSize:11,fontWeight:400,color:C.ink4}}>(ไม่มีใส่ 0)</span></span>
@@ -14641,10 +14643,10 @@ export default function App(){
                 :poSubTab==="pr"
                 ?<RequisitionView branches={branches} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reloadOrders={reload.orders} onOrderMaterials={()=>setPoSubTab("create")} onCreatePO={()=>{setPoAction("create");setPoSubTab("po");}} onTransfer={()=>{setPoAction("transfer");setPoSubTab("po");}}/>
                 :poSubTab==="buy"&&hasPerm(currentUser,"orders")&&currentBranch?.type==="central"
-                ?<POSection summaryOnly branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} orders={orders} reloadOrders={reload.orders}/>
+                ?<POSection summaryOnly branches={branches} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} orders={orders} reloadOrders={reload.orders}/>
                 :poSubTab==="ext"&&hasPerm(currentUser,"orders")
                 ?<OrderTab forcedMode="list" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser}/>
-                :<POSection branches={branches} ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setPoSubTab("create")} orders={orders} reloadOrders={reload.orders} initialAction={poAction} onConsumeAction={()=>setPoAction(null)}/>}
+                :<POSection branches={branches} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setPoSubTab("create")} orders={orders} reloadOrders={reload.orders} initialAction={poAction} onConsumeAction={()=>setPoAction(null)}/>}
             </>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
             {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
