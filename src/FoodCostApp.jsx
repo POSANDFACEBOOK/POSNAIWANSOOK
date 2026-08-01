@@ -6,8 +6,30 @@ import { useState, useEffect, useCallback, useMemo, useRef, createContext, useCo
 let _xlsxMod;
 const loadXLSX=async()=>{ if(!_xlsxMod){ const m=await import("xlsx"); _xlsxMod=(m&&m.utils)?m:((m&&m.default)||m); } return _xlsxMod; };
 
+// นำเข้าผ่าน Vite เพื่อให้ได้ชื่อไฟล์ติดแฮช — เปลี่ยนโลโก้แล้วเครื่องที่เคยเข้าจะเห็นของใหม่ทันที
+// ไม่ติดแคชเบราว์เซอร์ (ไฟล์ใน public/ ใช้ชื่อคงที่ จึงเหมาะกับ favicon/manifest ที่ต้องอยู่ path ตายตัว)
+import logoUrl from "./assets/logo.png";
+
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
+
+// ── โลโก้แบรนด์ ────────────────────────────────────────────────────────────
+// ไม่มีกรอบ ไม่มีพื้นหลัง ตามที่สั่ง — ความ "ยกนูน" มาจาก drop-shadow ซึ่งวาดเงาตาม
+// รูปทรงจริงของลายเส้น (ตาม alpha ของภาพ) ต่างจาก box-shadow ที่วาดเงาเป็นสี่เหลี่ยม
+// รอบภาพ ซึ่งจะเห็นเป็นขอบกล่องทันทีบนพื้นสีอ่อน
+//
+// dark = พื้นเข้ม (แถบเมนู #1E2738) เส้นโลโก้เป็นน้ำตาลเข้ม วางลงไปตรงๆ จะจมหายไปกับพื้น
+// จึงพลิกเป็นสีขาวล้วน ซึ่งเป็นวิธีมาตรฐานของโลโก้บนพื้นมืดและยังคงรูปทรงเดิมครบ
+function BrandLogo({size=120,dark=false,style}){
+  return <img src={logoUrl} alt="ในวันสุข Mookata & Cafe" width={size} height={size} decoding="async"
+    style={{
+      width:size,height:size,objectFit:"contain",display:"block",userSelect:"none",
+      filter:dark
+        ? "brightness(0) invert(1) drop-shadow(0 3px 7px rgba(0,0,0,.55))"
+        : "drop-shadow(0 8px 18px rgba(94,66,45,.26)) drop-shadow(0 2px 5px rgba(94,66,45,.18))",
+      ...style,
+    }}/>;
+}
 
 // ═══ ตัวเฝ้าระวังสุขภาพฐานข้อมูล ════════════════════════════════════════════
 // 30 ก.ค. 69 ฐานข้อมูลใช้เครดิต Disk IO หมดกลางวันทำการ สาขาล็อกอินไม่ได้ และเรารู้
@@ -1883,7 +1905,7 @@ function LoginPage({onLogin}){
   return <div style={{minHeight:"100vh",background:`linear-gradient(135deg,${C.brandLight} 0%,#FEF3C7 50%,${C.blueLight} 100%)`,display:"flex",alignItems:"center",justifyContent:"center"}}>
     <div style={{background:C.white,borderRadius:24,padding:"44px 40px",width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 32px 80px rgba(15,23,42,.15)",animation:"mIn .4s cubic-bezier(.34,1.56,.64,1)"}}>
       <div style={{textAlign:"center",marginBottom:36}}>
-        <div style={{width:64,height:64,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px",boxShadow:`0 8px 24px ${C.brand}44`}}><Ic d={I.fire} s={30} c={C.white} sw={2}/></div>
+        <BrandLogo size={172} style={{margin:"0 auto 10px"}}/>
         <h1 style={{fontSize:20,fontWeight:900,color:C.ink,marginBottom:2,fontFamily:"'Sarabun',sans-serif"}}>NAIWANSOOK FOODCOST</h1>
         <p style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",letterSpacing:1.5}}>BY BOSSMAX</p>
       </div>
@@ -1912,7 +1934,7 @@ function BranchSelector({branches,onSelect,user,onLogout}){
   return <div style={{minHeight:"100vh",background:`linear-gradient(135deg,#f0fdf4,#eff6ff)`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Sarabun',sans-serif"}}>
     <div style={{width:"100%",maxWidth:"min(95vw,600px)",padding:24}}>
       <div style={{textAlign:"center",marginBottom:32}}>
-        <div style={{width:56,height:56,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:16,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}><Ic d={I.fire} s={26} c={C.white} sw={2}/></div>
+        <BrandLogo size={132} style={{margin:"0 auto 8px"}}/>
         <h2 style={{fontSize:22,fontWeight:900,color:C.ink,marginBottom:4}}>เลือกสาขา</h2>
         <p style={{fontSize:14,color:C.ink3}}>สวัสดีครับ <b>{user.name||user.username}</b> กรุณาเลือกสาขาที่ต้องการเข้าใช้งาน</p>
       </div>
@@ -14526,15 +14548,17 @@ export default function App(){
 
         {/* Brand header (โลโก้ + ป้ายสาขา) — เรืองส้มจางๆ ด้านบนเป็น brand moment */}
         <div style={{background:`linear-gradient(180deg,${accentColor}1A,transparent)`,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>
-          {/* Logo */}
-          <div style={{padding:"20px 16px 14px",display:"flex",alignItems:"center",gap:11}}>
-            <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${accentColor},${accentDark})`,boxShadow:`0 3px 12px ${accentColor}55`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-              <Ic d={isCentral?I.shop:I.fire} s={18} c="#fff" sw={2}/>
-            </div>
-            <div>
-              <div style={{fontSize:14,fontWeight:800,color:"#F1F5F9",letterSpacing:-.2,lineHeight:1.15}}>NAIWANSOOK</div>
-              <div style={{fontSize:9.5,fontWeight:700,color:"#8B97AC",letterSpacing:2,textTransform:"uppercase",marginTop:1}}>FOODCOST</div>
-            </div>
+          {/* Logo — โลโก้เป็นเส้นน้ำตาลเข้มบนรูปทรงสีอ่อน วางบนพื้นแถบ #1E2738 ตรงๆ ตัวบ้านจะจมหาย
+              และถ้าพลิกเป็นขาวล้วน ก้อนสีพีชหลังตัวอักษรจะกลายเป็นขาวทึบกลืนคำว่า "ในวันสุข" หายไปเลย
+              จึงปูครีมไล่เฉดจนจางหายสนิทแทน — ได้สีแบรนด์ครบและไม่มีเส้นขอบให้เห็น ตามที่สั่งว่าไร้ขอบ */}
+          {/* จุดที่ครีมเริ่มจางต้องอยู่ "ต่ำกว่า" ตัวโลโก้ ไม่ใช่ตรงกลางโลโก้ ไม่งั้นบรรทัดล่างสุด
+              (Mookata & cafe ตัวเล็กสีอ่อน) จะตกไปอยู่ช่วงจางจนอ่านไม่ออก */}
+          <div style={{padding:"20px 16px 34px",display:"flex",justifyContent:"center",
+            background:"linear-gradient(180deg,rgba(255,248,240,.98) 0%,rgba(255,248,240,.94) 62%,rgba(255,248,240,.78) 78%,rgba(255,248,240,.24) 92%,rgba(255,248,240,0) 100%)"}}>
+            <BrandLogo size={104}/>
+          </div>
+          <div style={{textAlign:"center",padding:"2px 0 12px"}}>
+            <div style={{fontSize:10,fontWeight:800,color:"#8B97AC",letterSpacing:3.2,textTransform:"uppercase"}}>FoodCost</div>
           </div>
           {/* Branch badge */}
           <div style={{padding:"0 14px 14px"}}>

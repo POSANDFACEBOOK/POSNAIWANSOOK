@@ -8,8 +8,9 @@ self.addEventListener("push", (e) => {
   const title = d.title || "แจ้งเตือน FOODCOST";
   e.waitUntil(self.registration.showNotification(title, {
     body: d.body || "",
-    icon: "/favicon.ico",
-    badge: "/favicon.ico",
+    // เคยชี้ /favicon.ico ซึ่งไม่เคยมีไฟล์อยู่จริง — แจ้งเตือนบนมือถือจึงขึ้นไอคอนเปล่ามาตลอด
+    icon: "/icon-192.png",
+    badge: "/favicon-32.png",
     tag: d.tag || "approval",
     renotify: true,
     requireInteraction: false,
