@@ -14,21 +14,17 @@ const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
 
 // ── โลโก้แบรนด์ ────────────────────────────────────────────────────────────
-// ไม่มีกรอบ ไม่มีพื้นหลัง ตามที่สั่ง — ความ "ยกนูน" มาจาก drop-shadow ซึ่งวาดเงาตาม
-// รูปทรงจริงของลายเส้น (ตาม alpha ของภาพ) ต่างจาก box-shadow ที่วาดเงาเป็นสี่เหลี่ยม
-// รอบภาพ ซึ่งจะเห็นเป็นขอบกล่องทันทีบนพื้นสีอ่อน
+// ไม่มีกรอบ ไม่มีพื้นหลัง ไม่มีเงา — วางลายเส้นล้วนๆ ตามที่สั่ง
 //
-// dark = พื้นเข้ม (แถบเมนู #1E2738) เส้นโลโก้เป็นน้ำตาลเข้ม วางลงไปตรงๆ จะจมหายไปกับพื้น
-// จึงพลิกเป็นสีขาวล้วน ซึ่งเป็นวิธีมาตรฐานของโลโก้บนพื้นมืดและยังคงรูปทรงเดิมครบ
-function BrandLogo({size=120,dark=false,style}){
+// ⚠️ อย่าเติมเงากลับเข้ามา: เคยใส่ drop-shadow เพื่อให้ดูยกนูน แล้วผลจริงคือเงาเทา
+// ใต้ลายเส้นบางๆ ทำให้โลโก้ดูมัวและทึม ไม่สง่า — ลายเส้นคมๆ บนพื้นสะอาดเด่นกว่า
+//
+// ⚠️ อย่าทำเวอร์ชันพลิกสีขาวสำหรับพื้นเข้ม: โลโก้นี้เป็นเส้นน้ำตาลเข้มวางบนก้อนสีพีช
+// พอ brightness(0) invert(1) ก้อนพีชจะกลายเป็นขาวทึบแล้วกลืนคำว่า "ในวันสุข" หายทั้งคำ
+// (ทดสอบแล้วเมื่อ 1 ส.ค. 69) พื้นเข้มให้ปูครีมไล่เฉดจนจางหายแทน — ดูที่หัวแถบเมนู
+function BrandLogo({size=120,style}){
   return <img src={logoUrl} alt="ในวันสุข Mookata & Cafe" width={size} height={size} decoding="async"
-    style={{
-      width:size,height:size,objectFit:"contain",display:"block",userSelect:"none",
-      filter:dark
-        ? "brightness(0) invert(1) drop-shadow(0 3px 7px rgba(0,0,0,.55))"
-        : "drop-shadow(0 8px 18px rgba(94,66,45,.26)) drop-shadow(0 2px 5px rgba(94,66,45,.18))",
-      ...style,
-    }}/>;
+    style={{width:size,height:size,objectFit:"contain",display:"block",userSelect:"none",...style}}/>;
 }
 
 // ═══ ตัวเฝ้าระวังสุขภาพฐานข้อมูล ════════════════════════════════════════════
