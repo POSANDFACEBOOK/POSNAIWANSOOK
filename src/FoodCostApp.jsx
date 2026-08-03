@@ -6870,7 +6870,9 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
   const tot=result?result.rows.reduce((s,r)=>({qty:s.qty+r.qty,recv:s.recv+r.recv,value:s.value+r.value,po:s.po+r.poCount}),{qty:0,recv:0,value:0,po:0}):null;
   const lbl={fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"};
   const nf=(n)=>(+n||0).toLocaleString(undefined,{maximumFractionDigits:2});
-  const MODES=[{id:"ing",l:"วัตถุดิบเดียว"},{id:"cat",l:"ทั้งหมวดหมู่"},{id:"all",l:"ทุกวัตถุดิบ"}];
+  // ชื่อแถบสื่อว่า "ดูตามอะไร" ไม่ใช่ "ขอบเขตกว้างแค่ไหน" — แถบที่ 3 คู่กับตัวกรองสาขา
+  // จึงเป็นการดูของสาขาเดียวทั้งหมด ชื่อ "ตามสาขา" ตรงกับสิ่งที่คนใช้อยากได้จริง
+  const MODES=[{id:"ing",l:"ตามชื่อวัตถุดิบ"},{id:"cat",l:"ตามหมวดหมู่"},{id:"all",l:"ตามสาขา"}];
 
   return <Modal title="📊 รายงานการสั่งซื้อ (ใบ PO ครัวกลาง→สาขา)" onClose={onClose} extraWide>
     <div style={{display:"flex",gap:5,marginBottom:12,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:430}}>
