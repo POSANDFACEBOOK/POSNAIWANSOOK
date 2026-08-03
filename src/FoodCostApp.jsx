@@ -14865,9 +14865,11 @@ export default function App(){
   const ingCats=useMemo(()=>allCats.filter(c=>c.type==="ingredient"),[allCats]);
   const menuCats=useMemo(()=>allCats.filter(c=>c.type==="menu"),[allCats]);
 
-  async function loadAll(){
+  // silent=true → โหลดข้อมูลใหม่ทั้งชุดโดยไม่สลับเป็นหน้าจอโหลด (ใช้กับปุ่มรีเฟรชบนแถบหัว)
+  async function loadAll(silent){
     if(!currentBranch)return;
-    setLoading(true);setInitErr("");
+    if(!silent)setLoading(true);
+    setInitErr("");
     try{
       const isCentral=currentBranch.type==="central";
       const[i,m,c,u,b,s,ch,ah,o,pr]=await Promise.all([
@@ -14884,7 +14886,15 @@ export default function App(){
       try{const as=await api.getAssets();setAssets(as);}catch{}
       if(isCentral){const ao=await api.getAllOrders();setAllOrders(ao);}
     }catch(e){setInitErr("เชื่อมต่อ Supabase ไม่ได้: "+e.message);}
-    setLoading(false);
+    if(!silent)setLoading(false);
+  }
+  // ปุ่มรีเฟรชบนแถบหัว — เดิมมีเฉพาะบางแท็บที่ใส่เอง หน้าอย่าง "ตั้งค่า" จึงไม่มีเลย
+  // ทั้งที่เป็นหน้าที่ต้องดูข้อมูลล่าสุดบ่อย (เช่นหลังแก้สิทธิ์ผู้ใช้) วางไว้ที่แถบหัวจึงมีครบทุกแท็บ
+  const[refreshing,setRefreshing]=useState(false);
+  async function refreshAll(){
+    if(refreshing)return;
+    setRefreshing(true);
+    try{await loadAll(true);}finally{setRefreshing(false);}
   }
 
   useEffect(()=>{if(currentBranch)loadAll();},[currentBranch]);
@@ -15180,6 +15190,13 @@ export default function App(){
             </div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+            <button onClick={refreshAll} disabled={refreshing} title="โหลดข้อมูลล่าสุดจากเซิร์ฟเวอร์"
+              style={{display:"inline-flex",alignItems:"center",gap:6,background:C.white,border:`1px solid ${C.line}`,borderRadius:8,
+                padding:isMobile?"5px 8px":"5px 12px",cursor:refreshing?"default":"pointer",color:refreshing?C.ink4:C.ink2,
+                fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?10:11.5,fontWeight:700,opacity:refreshing?.65:1}}>
+              <span style={{display:"inline-block",fontSize:isMobile?12:13,lineHeight:1,animation:refreshing?"spin .9s linear infinite":"none"}}>⟳</span>
+              {!isMobile&&(refreshing?"กำลังโหลด...":"รีเฟรช")}
+            </button>
             <div style={{background:`linear-gradient(135deg,${accentColor}18,${accentColor}0a)`,border:`1px solid ${accentColor}30`,borderRadius:8,padding:isMobile?"4px 8px":"5px 12px",display:"flex",alignItems:"center",gap:5}}>
               <div style={{width:7,height:7,borderRadius:"50%",background:accentColor}}/>
               <span style={{fontSize:isMobile?10:11,fontWeight:700,color:accentColor,fontFamily:"'Sarabun',sans-serif"}}>{isMobile?"BOSSMAX":"BY BOSSMAX"}</span>
@@ -15189,7 +15206,7 @@ export default function App(){
 
         {/* Page content */}
         <div style={{flex:1,padding:isMobile?"14px 12px 56px":"24px 28px 56px",minWidth:0}}>
-          {initErr&&<ErrBox msg={initErr} onRetry={loadAll}/>}
+          {initErr&&<ErrBox msg={initErr} onRetry={()=>loadAll()}/>}
           {loading?<Loading text="กำลังโหลดข้อมูลจาก Cloud..."/>:<>
             {tab==="crm"&&<CRMTab currentBranch={currentBranch} currentUser={currentUser} menus={menus}/>}
             {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats} orders={orders} allOrders={allOrders} menus={menus}/>}
