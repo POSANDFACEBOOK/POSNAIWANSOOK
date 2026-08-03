@@ -184,6 +184,18 @@ function bkkNowMinutes(){
     return (h%24)*60+m;
   }catch{const d=new Date();return d.getHours()*60+d.getMinutes();}
 }
+// เวลาไทยแบบ HH:MM — ใช้ติดป้าย "รอบ" ให้ใบที่สร้างจากสรุปต้องซื้อในการกดครั้งเดียวกัน
+function bkkHHMM(){
+  try{
+    const p=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Bangkok",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(new Date());
+    const g=t=>(p.find(x=>x.type===t)||{}).value||"00";
+    return `${g("hour")}:${g("minute")}`;
+  }catch{const d=new Date();return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;}
+}
+// คำนำหน้า note ของใบที่เกิดจากปุ่ม "สร้างรายการ" ในแท็บสรุปต้องซื้อ — ใช้ทั้งตอนเขียนและ
+// ตอนค้นประวัติ ห้ามแก้ข้อความนี้เฉยๆ ไม่งั้นใบเก่าจะหลุดจากประวัติ (ค้นด้วยคำนำหน้านี้)
+const SUMMARY_BATCH_PREFIX="สรุปต้องซื้อวันนี้";
+
 // Allowed stock-count window (Asia/Bangkok, minutes-of-day). Branch 16:00–23:30 · Central 12:00–16:00.
 // Day of week in Asia/Bangkok (0=Sun … 6=Sat), regardless of device timezone.
 function bkkWeekday(){
@@ -411,6 +423,9 @@ const api = {
     return res[0];
   },
   getAllOrders: () => sb("order_requests?order=id.desc&limit=600"),
+  // ประวัติการกด "สร้างรายการ" จากแท็บสรุปต้องซื้อ — ค้นจาก note ที่ติดคำนำหน้าไว้
+  // ใช้ใบสั่งซื้อจริงเป็นประวัติ ไม่เก็บภาพนิ่งแยก จึงเห็นสถานะล่าสุดด้วยว่าอนุมัติ/รับของหรือยัง
+  getSummaryBatches: (bid) => sb(`order_requests?select=id,supplier_name,items,status,note,created_at,requested_by&note=like.${encodeURIComponent(SUMMARY_BATCH_PREFIX+"*")}${bid?`&branch_id=eq.${bid}`:""}&order=created_at.desc&limit=600`),
   // POS
   getPOSTables: (bid) => sb(`tables?order=table_number.asc&branch_id=eq.${bid}&active=eq.true`),
   // Rotate QR token for a single table (cuts off any leaked / stale QRs)
@@ -7703,6 +7718,10 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   // order per vendor, then OrderTab handles ยืนยันรับ + actual price + stock+.
   async function createPurchaseOrdersFromSummary(groups){
     if(!groups||!groups.length)return;
+    // ป้ายรอบเดียวกันทุกใบในการกดครั้งนี้ — ใช้จับกลุ่มตอนย้อนดูประวัติ ถ้ามีแต่วันที่
+    // การกด 2 รอบในวันเดียวกันจะปนกันจนแยกไม่ออกว่าซื้ออะไรไปรอบไหน
+    // เก็บในคอลัมน์ note ที่มีอยู่แล้ว จึงไม่ต้องเพิ่มตารางหรือคอลัมน์ใหม่
+    const batchNote=`${SUMMARY_BATCH_PREFIX} (${fmtD(todayStr())}) · รอบ ${bkkHHMM()}`;
     for(const g of groups){
       const supplierId=g.rows[0]?.supplier_id||null;
       const items=g.rows.map(r=>({
@@ -7725,7 +7744,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         status:"pending_approval",   // hold for Area approval — same as the normal สร้างคำสั่งซื้อ flow
         requested_by:currentUser.username,
         requested_at:nowStr(),
-        note:`สรุปต้องซื้อวันนี้ (${fmtD(todayStr())})`,
+        note:batchNote,
       });
     }
     // Notify the Area manager(s) that central's purchases are waiting for approval (fire-and-forget).
@@ -8187,6 +8206,138 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
 // based on pending branch orders (status requested/open) vs central's own stock.
 // SOP cascade is applied so if a branch ordered a compound ingredient that
 // central has to produce, the sub-ingredients are counted toward the need.
+// ── ประวัติการกด "สร้างรายการ" จากแท็บสรุปต้องซื้อ ────────────────────────────
+// พอกดสร้างรายการแล้ว รายการจะหายไปจากหน้าสรุป (เพราะกลายเป็นใบสั่งซื้อที่รออนุมัติ)
+// หน้านี้จึงไว้ย้อนดูว่าวันไหนสั่งอะไรไปบ้าง
+//
+// ไม่ได้เก็บภาพนิ่งแยกเป็นตารางใหม่ แต่อ่านจาก "ใบสั่งซื้อจริง" ที่ถูกสร้างขึ้น โดยจับกลุ่ม
+// จาก note ที่ติดป้ายรอบไว้ — ได้ประวัติที่บอกสถานะล่าสุดด้วย (รออนุมัติ/รับของแล้ว/ยกเลิก)
+// ซึ่งภาพนิ่งบอกไม่ได้ และไม่ต้องเพิ่มตารางใหม่ให้ต้องมาลงทะเบียนใน backup อีก
+const ORDER_ST={
+  pending_approval:{l:"รออนุมัติ",c:"#B45309",bg:"#FEF3C7"},
+  pending:{l:"รอสั่งซัพพลาย",c:"#1D4ED8",bg:"#EFF6FF"},
+  approved:{l:"อนุมัติแล้ว",c:"#0F766E",bg:"#F0FDFA"},
+  ordered:{l:"สั่งแล้ว",c:"#1D4ED8",bg:"#EFF6FF"},
+  delivered:{l:"รับของแล้ว",c:"#047857",bg:"#ECFDF5"},
+  cancelled:{l:"ยกเลิก",c:"#B91C1C",bg:"#FEF2F2"},
+  rejected:{l:"ไม่อนุมัติ",c:"#B91C1C",bg:"#FEF2F2"},
+};
+const orderSt=(s)=>ORDER_ST[s]||{l:s||"—",c:"#64748B",bg:"#F1F5F9"};
+
+function SummaryHistoryModal({currentBranch,onClose}){
+  const[rows,setRows]=useState(null);
+  const[err,setErr]=useState("");
+  const[open,setOpen]=useState(null);
+  const aliveRef=useRef(true);
+  useEffect(()=>{aliveRef.current=true;(async()=>{
+    try{const d=await api.getSummaryBatches(currentBranch?.id);if(aliveRef.current)setRows(Array.isArray(d)?d:[]);}
+    catch(e){if(aliveRef.current){setErr((e&&e.message)||String(e));setRows([]);}}
+  })();return()=>{aliveRef.current=false;};},[currentBranch?.id]);
+
+  // จับกลุ่มตาม note (= 1 ครั้งที่กดสร้างรายการ) เรียงใหม่สุดขึ้นก่อน
+  const batches=useMemo(()=>{
+    const m=new Map();
+    for(const o of (rows||[])){
+      const k=o.note||"(ไม่ระบุรอบ)";
+      if(!m.has(k))m.set(k,{note:k,at:o.created_at,by:o.requested_by,orders:[]});
+      const b=m.get(k);
+      b.orders.push(o);
+      if(o.created_at&&(!b.at||o.created_at<b.at))b.at=o.created_at;   // ใช้เวลาที่เร็วที่สุดของรอบ
+    }
+    return [...m.values()].map(b=>{
+      let items=0,total=0;
+      for(const o of b.orders)for(const it of (o.items||[])){
+        items++;
+        total+=(+it.estimatedCost||((+it.qtyNeeded||0)*(+it.pricePerUnit||0)));
+      }
+      return {...b,items,total:Math.round(total*100)/100};
+    }).sort((a,b)=>String(b.at||"").localeCompare(String(a.at||"")));
+  },[rows]);
+
+  function printBatch(b){
+    const rowsHtml=b.orders.map(o=>`
+      <h3 style="margin:16px 0 6px;color:#0F172A;border-bottom:2px solid #FF6B35;padding-bottom:4px">${esc(o.supplier_name||"—")}</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:#F1F5F9">
+          <th style="border:1px solid #ddd;padding:6px;width:34px">#</th>
+          <th style="border:1px solid #ddd;padding:6px;text-align:left">วัตถุดิบ</th>
+          <th style="border:1px solid #ddd;padding:6px;text-align:right;width:90px">จำนวน</th>
+          <th style="border:1px solid #ddd;padding:6px;text-align:right;width:100px">ราคาประมาณ</th>
+        </tr></thead>
+        <tbody>${(o.items||[]).map((it,i)=>`<tr>
+          <td style="border:1px solid #ddd;padding:6px;text-align:center">${i+1}</td>
+          <td style="border:1px solid #ddd;padding:6px">${esc(it.name||"")}</td>
+          <td style="border:1px solid #ddd;padding:6px;text-align:right">${(+it.qtyNeeded||0).toLocaleString()} ${esc(it.unit||"")}</td>
+          <td style="border:1px solid #ddd;padding:6px;text-align:right">฿${(+it.estimatedCost||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+        </tr>`).join("")}</tbody>
+      </table>`).join("");
+    printHtml(`<html><head><meta charset="utf-8"><title>${esc(b.note)}</title>
+      <style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}</style></head><body>
+      <h2 style="margin:0 0 2px">${esc(b.note)}</h2>
+      <div style="font-size:12px;color:#64748B;margin-bottom:4px">สาขา ${esc(currentBranch?.name||"")} · ${b.orders.length} ซัพพลาย · ${b.items} รายการ</div>
+      <div style="font-size:15px;font-weight:800;margin-bottom:8px">ยอดประมาณรวม ฿${b.total.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+      ${rowsHtml}</body></html>`);
+  }
+
+  return <Modal title="🕘 ประวัติการสร้างรายการซื้อ" onClose={onClose} wide>
+    {rows===null?<div style={{padding:"50px 20px"}}><Loading text="กำลังโหลดประวัติ..."/></div>
+     :err?<div style={{padding:"30px 20px",textAlign:"center",background:C.redLight,borderRadius:12,fontFamily:"'Sarabun',sans-serif"}}>
+       <div style={{fontSize:14,fontWeight:800,color:C.red,marginBottom:4}}>โหลดประวัติไม่สำเร็จ</div>
+       <div style={{fontSize:12,color:C.ink3,wordBreak:"break-word"}}>{err}</div>
+     </div>
+     :batches.length===0?<div style={{padding:"46px 20px",textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
+       <div style={{fontSize:40,marginBottom:8,opacity:.5}}>🕘</div>
+       <div style={{fontSize:15,fontWeight:800,color:C.ink,marginBottom:4}}>ยังไม่มีประวัติ</div>
+       <div style={{fontSize:12.5,color:C.ink3}}>กด "สร้างรายการ" ในแท็บสรุปต้องซื้อ แล้วรอบนั้นจะมาแสดงที่นี่</div>
+     </div>
+     :<div style={{fontFamily:"'Sarabun',sans-serif"}}>
+       <div style={{fontSize:12,color:C.ink4,marginBottom:10}}>ทั้งหมด {batches.length} รอบ · เรียงใหม่สุดขึ้นก่อน · สถานะอัปเดตตามใบสั่งซื้อจริง</div>
+       {batches.map(b=>{
+         const isOpen=open===b.note;
+         return <div key={b.note} style={{border:`1px solid ${C.line}`,borderRadius:12,marginBottom:10,overflow:"hidden",background:C.white}}>
+           <div onClick={()=>setOpen(isOpen?null:b.note)} style={{padding:"11px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",background:isOpen?C.bg:C.white}}>
+             <div style={{flex:"1 1 200px",minWidth:0}}>
+               <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{b.note}</div>
+               <div style={{fontSize:11,color:C.ink4,marginTop:2}}>
+                 {fmtDT(b.at)} · {b.orders.length} ซัพพลาย · {b.items} รายการ{b.by?` · โดย ${b.by}`:""}
+               </div>
+             </div>
+             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+               {[...new Set(b.orders.map(o=>o.status))].map(s=>{const st=orderSt(s);
+                 const n=b.orders.filter(o=>o.status===s).length;
+                 return <span key={s} style={{fontSize:10,fontWeight:800,color:st.c,background:st.bg,border:`1px solid ${st.c}33`,borderRadius:8,padding:"2px 8px",whiteSpace:"nowrap"}}>{st.l} {n}</span>;})}
+             </div>
+             <div style={{textAlign:"right",whiteSpace:"nowrap"}}>
+               <div style={{fontSize:16,fontWeight:900,color:C.brand}}>฿{b.total.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+             </div>
+             <span style={{fontSize:13,color:C.ink4}}>{isOpen?"▲":"▼"}</span>
+           </div>
+           {isOpen&&<div style={{borderTop:`1px solid ${C.lineLight}`,padding:"10px 14px",background:C.bg}}>
+             <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}>
+               <Btn v="ghost" onClick={()=>printBatch(b)} s={{padding:"5px 12px",fontSize:12}}>🖨 ปริ้นรอบนี้</Btn>
+             </div>
+             {b.orders.map(o=>{const st=orderSt(o.status);return <div key={o.id} style={{marginBottom:10,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,overflow:"hidden"}}>
+               <div style={{padding:"7px 12px",background:C.lineLight,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                 <b style={{fontSize:13,color:C.ink}}>{o.supplier_name||"—"}</b>
+                 <span style={{fontSize:10,fontWeight:800,color:st.c,background:st.bg,border:`1px solid ${st.c}33`,borderRadius:8,padding:"2px 8px"}}>{st.l}</span>
+               </div>
+               <div style={{padding:"4px 0"}}>
+                 {(o.items||[]).map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:10,padding:"4px 12px",fontSize:12.5,borderTop:i>0?`1px solid ${C.lineLight}`:"none"}}>
+                   <span style={{color:C.ink2,minWidth:0,wordBreak:"break-word"}}>{it.name}</span>
+                   <span style={{whiteSpace:"nowrap",color:C.ink3}}>
+                     <b style={{color:C.ink}}>{(+it.qtyNeeded||0).toLocaleString()}</b> {it.unit||""}
+                     <b style={{color:C.brand,marginLeft:8}}>฿{(+it.estimatedCost||0).toLocaleString(undefined,{minimumFractionDigits:2})}</b>
+                   </span>
+                 </div>)}
+               </div>
+             </div>;})}
+           </div>}
+         </div>;
+       })}
+     </div>}
+  </Modal>;
+}
+
 function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreateOrders,onClose,inline=false}){
   const PENDING=new Set(["requested","open"]);
   const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
@@ -8194,6 +8345,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
   // never misses pending POs because the user happened to have a status/date/
   // partner/direction filter set on the PO list. Re-fetch on demand so the
   // count is always current with the database, not the UI's filter view.
+  const[showHistory,setShowHistory]=useState(false);   // หน้าย้อนดูรอบที่เคยกดสร้างรายการ
   const[pos,setPos]=useState([]);
   const[prs,setPrs]=useState([]);          // ใบขอซื้อที่อนุมัติแล้วแต่ยังไม่ได้ออกไปซื้อ
   const[loading,setLoading]=useState(true);
@@ -8430,6 +8582,9 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
     </div>:<>
       <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",marginBottom:14,gap:10,flexWrap:"wrap"}}>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {/* พอกดสร้างรายการแล้วรายการจะหายไปจากหน้านี้ (กลายเป็นใบสั่งซื้อรออนุมัติ)
+              ปุ่มนี้จึงเป็นทางย้อนกลับไปดูว่าแต่ละรอบสั่งอะไรไปบ้าง */}
+          <Btn v="ghost" onClick={()=>setShowHistory(true)} icon={I.clock} s={{padding:"8px 12px",fontSize:12}}>🕘 ประวัติ</Btn>
           <Btn v="ghost" onClick={printShoppingList} icon={I.print} s={{padding:"8px 12px",fontSize:12}}>🖨 ปริ้น</Btn>
           {onCreateOrders&&<Btn v="success" onClick={createAndPrint} loading={creating} disabled={creating} s={{padding:"8px 14px",fontSize:12}}>🛒 สร้างรายการ</Btn>}
         </div>
@@ -8514,6 +8669,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       </div>
     </>}
     </>}
+    {showHistory&&<SummaryHistoryModal currentBranch={currentBranch} onClose={()=>setShowHistory(false)}/>}
   </>;
 
   // ใช้ได้ 2 แบบ: เป็นแท็บในหน้า (inline) หรือเป็นหน้าต่างเด้ง — เนื้อหาชุดเดียวกัน
