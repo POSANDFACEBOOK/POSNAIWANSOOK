@@ -345,6 +345,9 @@ const api = {
   getStockLogs: (ingId, bid) => sb(`stock_logs?ingredient_id=eq.${ingId}&branch_id=eq.${bid}&order=counted_at.desc&limit=200`),
   // Observational movement log — every non-count stock change with a reason. Best-effort:
   // never throws (a failed log must never break a stock move) and no-ops until the table exists.
+  // ประวัติการผลิต — อ่านจากความเคลื่อนไหวสต๊อกที่ ref_type=production
+  // ใช้ข้อมูลจริงที่ทำให้สต๊อกขยับ ตัวเลขในประวัติจึงตรงกับสต๊อกเสมอ ไม่มีทางหลุดจากกัน
+  getProductionMoves: (bid) => sb(`stock_movements?select=id,ingredient_id,ingredient_name,unit,delta,reason,ref_id,by_user,created_at&ref_type=eq.production${bid?`&branch_id=eq.${bid}`:""}&order=created_at.desc&limit=1500`),
   addStockMovements: async (rows) => { if(!Array.isArray(rows)||!rows.length)return; try{ await sb("stock_movements", {method:"POST", headers:{Prefer:"return=minimal"}, body:JSON.stringify(rows)}); }catch{} },
   getStockMovements: (ingId, bid) => sb(`stock_movements?ingredient_id=eq.${ingId}&branch_id=eq.${bid}&order=created_at.desc&limit=100`).catch(()=>[]),
   addStockSession: (d) => sb("stock_count_sessions", { method: "POST", body: JSON.stringify(d) }),
@@ -4205,6 +4208,326 @@ const COST_BUCKETS=[
   {id:"high",   label:"🟠 สูง",          short:"41-50%",range:[41,50],   color:"#EA580C", bg:"#FFEDD5"},
   {id:"crit",   label:"🔴 วิกฤต",        short:">50%",  range:[51,9999], color:"#EF4444", bg:"#FEE2E2"},
 ];
+// ══════════════════════════════════════════════════════════════════════════
+// ── การผลิต (ครัวกลางเท่านั้น) ────────────────────────────────────────────
+// ผลิตของที่มีสูตร SOP เช่นผงน้ำซุป/น้ำจิ้ม: เพิ่มสต๊อกของที่ผลิตได้ และตัดวัตถุดิบที่เอามาผสม
+// ตามสูตรในคราวเดียว
+//
+// สูตรเก็บเป็นกรัมต่อ "1 หน่วยซื้อของตัวแม่" (sub.amountGram) เหมือนที่ตัวกระจายสูตรใน
+// transferStockBetweenBranches ใช้ — ตรงนี้จึงคำนวณด้วยสูตรเดียวกันเป๊ะ ไม่คิดเองใหม่
+// ให้เลขสองที่ตรงกันเสมอ
+//
+// ⚠️ ห้ามเรียก transferStockBetweenBranches มาทำงานนี้: ตัวนั้นย้ายทุกอย่าง "ทิศทางเดียวกัน"
+// ระหว่าง 2 สาขา แต่การผลิตคือของแม่ "เพิ่ม" ส่วนผสม "ลด" ที่สาขาเดียวกัน คนละโจทย์กัน
+// ══════════════════════════════════════════════════════════════════════════
+
+// กรัมของส่วนผสมที่ใช้ผลิตของแม่ 1 หน่วยซื้อ → แปลงเป็นจำนวนหน่วยสต๊อกของส่วนผสมนั้น
+// (คัดสูตรจากตัวกระจายสูตรเดิม ห้ามแก้ให้ต่างกัน ไม่งั้นผลิตกับโอนย้ายจะตัดไม่เท่ากัน)
+function sopConsumption(parentIng, qty, ingById){
+  const subs=Array.isArray(parentIng?.ingredients)?parentIng.ingredients:[];
+  // รวมกรัมของส่วนผสมตัวเดียวกันก่อนแปลงหน่วย — สูตรบางอันใส่ของซ้ำหลายบรรทัด
+  // (เช่นเกลือ 2 ครั้งในคนละขั้นตอน) ถ้าไม่รวมก่อน จะกลายเป็นเขียนสต๊อกตัวเดียวกัน 2 ครั้ง
+  // ซึ่งทางที่ต้องอ่านค่าเดิมมาบวก (ตอนไม่มี RPC) จะอ่านค่าเก่าซ้ำแล้วตัดหายไปหนึ่งครั้ง
+  const byId=new Map();
+  for(const sub of subs){
+    const id=+sub.ingredientId;if(!id)continue;
+    byId.set(id,(byId.get(id)||0)+(+sub.amountGram||0));
+  }
+  const out=[];
+  for(const[id,amountGram] of byId){
+    const ing=ingById.get(id);if(!ing)continue;
+    const grams=(+qty||0)*amountGram;
+    const units=grams/(+ing.convert_to_gram||1000);
+    const use=Math.round(units*1000)/1000;
+    if(!(use>0))continue;
+    out.push({ing,ingId:id,name:ing.name,unit:ing.buy_unit||"",amountGram,grams,use});
+  }
+  return out;
+}
+
+function ProductionTab({ings,currentBranch,currentUser,reloadIngs}){
+  const[sub,setSub]=useState("make");           // make | history
+  const[q,setQ]=useState("");
+  const[pick,setPick]=useState(null);
+  const[qty,setQty]=useState("");
+  const[busy,setBusy]=useState(false);
+  const runRef=useRef(false);                   // กันกดซ้ำ/กดรัวระหว่างกำลังบันทึก
+  const bid=currentBranch?.id;
+  const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
+  // เลือกได้เฉพาะตัวที่มีขั้นตอน SOP จริง — ของที่ไม่มีสูตรไม่ถือว่า "ผลิต" ได้
+  const producible=useMemo(()=>(ings||[]).filter(i=>Array.isArray(i.sop)&&i.sop.length>0),[ings]);
+  const matches=useMemo(()=>{
+    const ql=q.trim().toLowerCase();
+    const base=producible;
+    if(!ql)return base.slice(0,40);
+    return base.filter(i=>(i.name||"").toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql)).slice(0,40);
+  },[producible,q]);
+
+  const n=Math.round((+qty||0)*1000)/1000;
+  const uses=useMemo(()=>pick&&n>0?sopConsumption(pick,n,ingById):[],[pick,n,ingById]);
+  const short=uses.filter(u=>branchStockExact(u.ing,bid)-u.use<0);
+
+  // ── ปุ่มผลิต — จุดเดียวในฟีเจอร์นี้ที่แตะสต๊อกจริง ────────────────────────────
+  async function produce(){
+    if(runRef.current)return;
+    if(!pick){alert("เลือกวัตถุดิบที่จะผลิตก่อน");return;}
+    if(!(n>0)){alert("ใส่จำนวนที่ผลิตได้ มากกว่า 0");return;}
+    const lines=uses.map(u=>`   • ${u.name} −${u.use} ${u.unit}`).join("\n");
+    const warn=short.length?`\n\n⚠️ ส่วนผสม ${short.length} รายการจะติดลบหลังตัด:\n${short.map(u=>`   • ${u.name} (เหลือ ${round2(branchStockExact(u.ing,bid)-u.use)})`).join("\n")}\n(ผลิตต่อได้ แต่ควรไปนับสต็อกให้ตรงก่อน)`:"";
+    if(!await confirmDlg({
+      title:"ยืนยันผลิตเสร็จ",
+      message:`ผลิต "${pick.name}" จำนวน ${n} ${pick.buy_unit||""}\n\n📦 เพิ่มสต๊อก\n   • ${pick.name} +${n} ${pick.buy_unit||""}\n\n${uses.length?`✂️ ตัดส่วนผสมตามสูตร\n${lines}`:"⚠️ วัตถุดิบนี้ยังไม่ได้ใส่สูตรส่วนผสม — จะเพิ่มของที่ผลิตอย่างเดียว ไม่ตัดอะไร"}${warn}`,
+      confirmLabel:"✅ ผลิตเสร็จ + เพิ่มสต๊อก",
+      danger:short.length>0,
+    }))return;
+
+    // ของแม่ห้ามเป็นส่วนผสมของตัวเอง — จะกลายเป็นเขียนสต๊อกตัวเดียวกัน 2 ทิศทางในรอบเดียว
+    // ผลลัพธ์ขึ้นกับลำดับการเขียน = ตัวเลขไม่แน่นอน ต้องให้ไปแก้สูตรก่อน ไม่ใช่เดาให้
+    if(uses.some(u=>+u.ingId===+pick.id)){
+      alert(`สูตรของ "${pick.name}" ใส่ตัวมันเองเป็นส่วนผสม — แก้สูตรที่แท็บ SOP ก่อนจึงจะผลิตได้`);
+      return;
+    }
+    runRef.current=true;setBusy(true);
+    const batch=`PRD-${todayBkk().replace(/-/g,"")}-${bkkHHMM().replace(":","")}-${randId().slice(0,4)}`;
+    const applied=[];                 // {ing,delta} ที่ลงไปแล้วจริง — ไว้ย้อนกลับถ้าพังกลางทาง
+    const local=new Map();            // ค่าสต๊อกล่าสุดที่ "เรา" เขียนไป
+    // ทาง RPC เป็น atomic บวก/ลบให้ที่ฐานข้อมูลเลย แต่ทางสำรอง (ไม่มี RPC) ต้องอ่านค่าเดิมมาบวกเอง
+    // ซึ่งอ่านจาก ings ที่ค้างอยู่ในหน้าจอ = ค่าก่อนหน้าที่เราเพิ่งเขียนไป ถ้าแตะตัวเดิมซ้ำจะทับกันเอง
+    // จึงจำค่าล่าสุดไว้ใน local แล้วคิดต่อจากตรงนั้น
+    const write=async(ing,delta)=>{
+      if(await rpcStockDelta(ing.id,bid,delta))return;
+      const cur=local.has(+ing.id)?local.get(+ing.id):branchStockExact(ing,bid);
+      const next=Math.round((cur+delta)*1000)/1000;
+      await api.updateIng(ing.id,{stock_by_branch:setBranchStockInJson(ing.stock_by_branch,bid,next)});
+      local.set(+ing.id,next);
+    };
+    const put=async(ing,delta)=>{ await write(ing,delta); applied.push({ing,delta}); };
+    try{
+      // ตัดส่วนผสมก่อน แล้วค่อยเพิ่มของที่ผลิต — ถ้าส่วนผสมตัดไม่ผ่านจะได้ยังไม่มีของงอกขึ้นมาจากอากาศ
+      for(const u of uses)await put(u.ing,-u.use);
+      await put(pick,n);
+    }catch(e){
+      // ย้อนกลับตามลำดับย้อนหลัง ถ้าย้อนไม่สำเร็จต้องบอกให้ชัดว่าตัวไหนค้าง ห้ามเงียบ
+      const stuck=[];
+      for(const a of applied.slice().reverse()){
+        try{await write(a.ing,-a.delta);}catch{stuck.push(`${a.ing.name} ${a.delta>0?"+":""}${a.delta}`);}
+      }
+      setBusy(false);runRef.current=false;
+      alert(stuck.length
+        ? `⚠️ ผลิตไม่สำเร็จ และคืนสต๊อกกลับไม่ครบ\n\nรายการที่ยังค้างอยู่ ต้องไปแก้จำนวนเองที่แท็บวัตถุดิบ:\n${stuck.map(s=>"   • "+s).join("\n")}\n\n${(e&&e.message)||e}`
+        : `ผลิตไม่สำเร็จ — คืนสต๊อกกลับให้ครบแล้ว ไม่มีรายการไหนค้างครึ่งทาง\n\n${(e&&e.message)||e}`);
+      return;
+    }
+    // บันทึกประวัติ — ใช้ ref_id เดียวกันทั้งชุด จะได้จับกลุ่มเป็น "1 รอบการผลิต" ตอนย้อนดู
+    const by=currentUser?.username||currentUser?.name||null;
+    const moves=[
+      {branch_id:bid,ingredient_id:pick.id,ingredient_name:pick.name,unit:pick.buy_unit||null,delta:n,
+       reason:`ผลิต ${pick.name}`,ref_type:"production",ref_id:batch,by_user:by},
+      ...uses.map(u=>({branch_id:bid,ingredient_id:u.ingId,ingredient_name:u.name,unit:u.unit||null,delta:-u.use,
+       reason:`ใช้ผลิต ${pick.name}`,ref_type:"production",ref_id:batch,by_user:by})),
+    ];
+    try{await api.addStockMovements(moves);}catch{}   // ประวัติพลาดไม่ควรทำให้สต๊อกที่ลงไปแล้วเป็นโมฆะ
+    if(reloadIngs)await reloadIngs();
+    setBusy(false);runRef.current=false;
+    setQty("");
+    posToast(`✅ ผลิต ${pick.name} ${n} ${pick.buy_unit||""} — เพิ่มสต๊อกแล้ว${uses.length?` · ตัดส่วนผสม ${uses.length} รายการ`:""}`,"ok");
+  }
+
+  function printSOP(){
+    if(!pick){alert("เลือกวัตถุดิบก่อน");return;}
+    const steps=Array.isArray(pick.sop)?pick.sop:[];
+    const useRows=uses.length?uses:sopConsumption(pick,1,ingById);
+    const perLabel=uses.length?`${n} ${pick.buy_unit||""}`:`1 ${pick.buy_unit||""}`;
+    printHtml(`<html><head><meta charset="utf-8"><title>ขั้นตอนการผลิต ${esc(pick.name)}</title>
+      <style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}
+       h1{font-size:22px;margin:0 0 2px}.sub{color:#64748B;font-size:13px;margin-bottom:14px}
+       table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px}
+       th,td{border:1px solid #ddd;padding:6px 8px}th{background:#F1F5F9;text-align:left}
+       .st{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #eee;page-break-inside:avoid}
+       .no{flex:0 0 30px;height:30px;border-radius:15px;background:#FF6B35;color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center}
+       .st img{width:120px;height:90px;object-fit:cover;border-radius:8px;border:1px solid #ddd}</style></head><body>
+      <h1>🏭 ขั้นตอนการผลิต — ${esc(pick.name)}</h1>
+      <div class="sub">${esc(pick.code||"")} · หน่วย ${esc(pick.buy_unit||"")} · สำหรับผลิต <b>${esc(perLabel)}</b> · พิมพ์ ${esc(fmtDT(new Date().toISOString()))}</div>
+      ${useRows.length?`<table><thead><tr><th>#</th><th>ส่วนผสม</th><th style="text-align:right">ใช้</th></tr></thead><tbody>
+        ${useRows.map((u,i)=>`<tr><td style="text-align:center">${i+1}</td><td>${esc(u.name)}</td><td style="text-align:right">${u.use} ${esc(u.unit)}</td></tr>`).join("")}
+      </tbody></table>`:""}
+      ${steps.length?steps.map((s,i)=>`<div class="st">
+        <div class="no">${s.step||i+1}</div>
+        <div style="flex:1">
+          ${s.title?`<div style="font-weight:800;margin-bottom:2px">${esc(s.title)}</div>`:""}
+          <div style="font-size:13px;color:#334155;white-space:pre-line">${esc(s.desc||"")}</div>
+        </div>
+        ${s.image?`<img src="${esc(driveImgAbs(s.image))}"/>`:""}
+      </div>`).join(""):`<div style="color:#94A3B8">ยังไม่มีขั้นตอน SOP</div>`}
+      </body></html>`);
+  }
+
+  const iSt={width:"100%",padding:"9px 12px",borderRadius:10,border:`1.5px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box"};
+  return <div>
+    <div style={{display:"flex",gap:6,marginBottom:16,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:400}}>
+      {[{id:"make",l:"🏭 สร้างการผลิต"},{id:"history",l:"🕘 ประวัติการผลิต"}].map(s=>{const on=sub===s.id;
+        return <button key={s.id} onClick={()=>setSub(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?C.brand:"transparent",color:on?C.white:C.ink3}}>{s.l}</button>;})}
+    </div>
+
+    {sub==="history"?<ProductionHistory currentBranch={currentBranch}/>:<>
+      {producible.length===0
+        ?<Card><div style={{textAlign:"center",padding:"46px 20px",fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{fontSize:42,marginBottom:8,opacity:.5}}>🏭</div>
+            <div style={{fontSize:15,fontWeight:800,color:C.ink,marginBottom:4}}>ยังไม่มีวัตถุดิบที่ผลิตได้</div>
+            <div style={{fontSize:12.5,color:C.ink3}}>ผลิตได้เฉพาะวัตถุดิบที่ใส่ขั้นตอน SOP ไว้แล้ว — ไปเพิ่มที่แท็บ SOP ก่อน</div>
+          </div></Card>
+        :<div style={{display:"grid",gridTemplateColumns:"minmax(0,340px) minmax(0,1fr)",gap:14,alignItems:"start"}}>
+          <Card>
+            <div style={{fontSize:13,fontWeight:800,color:C.ink,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เลือกสิ่งที่จะผลิต <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>({producible.length} รายการ)</span></div>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อ/รหัส..." style={{...iSt,marginBottom:8}}/>
+            <div style={{maxHeight:420,overflowY:"auto",display:"flex",flexDirection:"column",gap:5}}>
+              {matches.map(i=>{const on=pick&&+pick.id===+i.id;
+                return <button key={i.id} onClick={()=>{setPick(i);setQty("");}} style={{textAlign:"left",padding:"9px 11px",borderRadius:10,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",
+                  border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white}}>
+                  <div style={{fontSize:13.5,fontWeight:on?800:700,color:C.ink}}>{i.name}</div>
+                  <div style={{fontSize:10.5,color:C.ink4,marginTop:2}}>
+                    {i.code?i.code+" · ":""}มีอยู่ {round2(branchStockExact(i,bid))} {i.buy_unit||""} · {(i.sop||[]).length} ขั้นตอน · ส่วนผสม {(i.ingredients||[]).length}
+                  </div>
+                </button>;})}
+              {matches.length===0&&<div style={{padding:"20px 0",textAlign:"center",fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบรายการที่ค้นหา</div>}
+            </div>
+          </Card>
+
+          <Card>
+            {!pick?<div style={{textAlign:"center",padding:"60px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:14}}>← เลือกวัตถุดิบที่จะผลิตจากรายการด้านซ้าย</div>:<>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:12}}>
+                <div style={{fontFamily:"'Sarabun',sans-serif"}}>
+                  <div style={{fontSize:18,fontWeight:900,color:C.ink}}>{pick.name}</div>
+                  <div style={{fontSize:12,color:C.ink4,marginTop:2}}>{pick.code?pick.code+" · ":""}มีอยู่ตอนนี้ <b style={{color:C.ink2}}>{round2(branchStockExact(pick,bid))} {pick.buy_unit||""}</b></div>
+                </div>
+                <Btn v="ghost" onClick={printSOP} icon={I.print} s={{padding:"7px 12px",fontSize:12}}>🖨 ปริ้นขั้นตอนการผลิต</Btn>
+              </div>
+
+              <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap",marginBottom:14}}>
+                <div style={{flex:"1 1 180px"}}>
+                  <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>จำนวนที่ผลิตได้ ({pick.buy_unit||"หน่วย"})</div>
+                  <input type="text" inputMode="decimal" value={qty} onChange={e=>{const v=e.target.value;if(v===""||/^\d*\.?\d*$/.test(v))setQty(v);}} placeholder="0"
+                    style={{...iSt,fontSize:20,fontWeight:900,color:C.brand,textAlign:"center",borderColor:C.brand+"66"}}/>
+                </div>
+                <Btn v="success" onClick={produce} loading={busy} disabled={busy||!(n>0)} s={{padding:"11px 20px",fontSize:14}}>✅ ผลิตเสร็จ + เพิ่มสต๊อก</Btn>
+              </div>
+
+              {n>0&&<div style={{border:`1px solid ${C.line}`,borderRadius:12,overflow:"hidden",marginBottom:12}}>
+                <div style={{padding:"8px 12px",background:C.greenLight,borderBottom:`1px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,color:"#047857"}}>
+                  📦 เพิ่ม {pick.name} <b>+{n}</b> {pick.buy_unit||""} → เหลือ {round2(branchStockExact(pick,bid)+n)}
+                </div>
+                {uses.length===0
+                  ?<div style={{padding:"12px",fontSize:12.5,color:"#92400E",background:"#FFFBEB",fontFamily:"'Sarabun',sans-serif"}}>⚠️ ยังไม่ได้ใส่สูตรส่วนผสมให้วัตถุดิบนี้ — กดผลิตจะเพิ่มของที่ผลิตอย่างเดียว ไม่ตัดอะไรเลย</div>
+                  :<table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:12.5}}>
+                    <thead><tr style={{background:C.bg}}>
+                      {["ส่วนผสมที่จะถูกตัด","ใช้","มีอยู่","เหลือ"].map((h,i)=><th key={h} style={{padding:"7px 12px",textAlign:i?"right":"left",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}
+                    </tr></thead>
+                    <tbody>{uses.map(u=>{const have=branchStockExact(u.ing,bid),left=Math.round((have-u.use)*1000)/1000;
+                      return <tr key={u.ingId} style={{borderTop:`1px solid ${C.lineLight}`,background:left<0?"#FEF2F2":"transparent"}}>
+                        <td style={{padding:"7px 12px",color:C.ink2,fontWeight:600}}>{u.name}</td>
+                        <td style={{padding:"7px 12px",textAlign:"right",color:C.red,fontWeight:800,whiteSpace:"nowrap"}}>−{u.use} <span style={{fontSize:10,color:C.ink4,fontWeight:600}}>{u.unit}</span></td>
+                        <td style={{padding:"7px 12px",textAlign:"right",color:C.ink3}}>{round2(have)}</td>
+                        <td style={{padding:"7px 12px",textAlign:"right",fontWeight:800,color:left<0?C.red:C.ink2}}>{round2(left)}</td>
+                      </tr>;})}</tbody>
+                  </table>}
+              </div>}
+
+              {Array.isArray(pick.sop)&&pick.sop.length>0&&<div>
+                <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ขั้นตอนการผลิต ({pick.sop.length} ขั้น)</div>
+                <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:280,overflowY:"auto"}}>
+                  {pick.sop.map((s,i)=><div key={i} style={{display:"flex",gap:9,alignItems:"flex-start",padding:"8px 10px",background:C.bg,borderRadius:9,fontFamily:"'Sarabun',sans-serif"}}>
+                    <div style={{minWidth:22,height:22,borderRadius:11,background:C.brand,color:C.white,fontSize:11,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{s.step||i+1}</div>
+                    <div style={{minWidth:0,flex:1}}>
+                      {s.title&&<div style={{fontSize:12.5,fontWeight:800,color:C.ink}}>{s.title}</div>}
+                      <div style={{fontSize:12,color:C.ink3,whiteSpace:"pre-line",wordBreak:"break-word"}}>{s.desc||""}</div>
+                    </div>
+                    {s.image&&<img src={driveImgSrc(s.image)} alt="" loading="lazy" style={{width:54,height:42,objectFit:"cover",borderRadius:7,border:`1px solid ${C.line}`,flexShrink:0}}/>}
+                  </div>)}
+                </div>
+              </div>}
+            </>}
+          </Card>
+        </div>}
+    </>}
+  </div>;
+}
+
+// ประวัติการผลิต — อ่านจาก stock_movements ที่ ref_type=production จับกลุ่มด้วย ref_id
+// (1 ref_id = 1 ครั้งที่กดผลิต) ไม่ได้เก็บตารางแยก ตัวเลขจึงตรงกับสต๊อกที่ขยับจริงเสมอ
+function ProductionHistory({currentBranch}){
+  const[rows,setRows]=useState(null);
+  const[err,setErr]=useState("");
+  const aliveRef=useRef(true);
+  useEffect(()=>{aliveRef.current=true;(async()=>{
+    try{const d=await api.getProductionMoves(currentBranch?.id);if(aliveRef.current)setRows(Array.isArray(d)?d:[]);}
+    catch(e){if(aliveRef.current){setErr((e&&e.message)||String(e));setRows([]);}}
+  })();return()=>{aliveRef.current=false;};},[currentBranch?.id]);
+
+  const batches=useMemo(()=>{
+    const m=new Map();
+    for(const r of (rows||[])){
+      const k=r.ref_id||`(ไม่มีรหัสรอบ) ${r.created_at}`;
+      if(!m.has(k))m.set(k,{ref:k,at:r.created_at,by:r.by_user,made:null,used:[]});
+      const b=m.get(k);
+      if(r.created_at&&r.created_at<b.at)b.at=r.created_at;
+      if(+r.delta>0)b.made={name:r.ingredient_name,qty:+r.delta,unit:r.unit||""};
+      else b.used.push({name:r.ingredient_name,qty:Math.abs(+r.delta),unit:r.unit||""});
+    }
+    return [...m.values()].sort((a,b)=>String(b.at||"").localeCompare(String(a.at||"")));
+  },[rows]);
+
+  function printReport(){
+    if(!batches.length)return;
+    printHtml(`<html><head><meta charset="utf-8"><title>รายงานการผลิต</title>
+      <style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}
+       table{width:100%;border-collapse:collapse;font-size:12.5px}
+       th,td{border:1px solid #ddd;padding:6px 8px;vertical-align:top}th{background:#F1F5F9;text-align:left}</style></head><body>
+      <h2 style="margin:0 0 2px">🏭 รายงานการผลิต — ${esc(currentBranch?.name||"")}</h2>
+      <div style="font-size:12px;color:#64748B;margin-bottom:10px">${batches.length} รอบ · พิมพ์ ${esc(fmtDT(new Date().toISOString()))}</div>
+      <table><thead><tr><th style="width:34px">#</th><th style="width:130px">วันเวลา</th><th>ผลิตได้</th><th>ส่วนผสมที่ใช้</th><th style="width:90px">ผู้ทำ</th></tr></thead><tbody>
+      ${batches.map((b,i)=>`<tr>
+        <td style="text-align:center">${i+1}</td>
+        <td>${esc(fmtDT(b.at))}</td>
+        <td><b>${esc(b.made?.name||"—")}</b> ${b.made?`+${b.made.qty} ${esc(b.made.unit)}`:""}</td>
+        <td>${b.used.length?b.used.map(u=>`${esc(u.name)} −${u.qty} ${esc(u.unit)}`).join("<br/>"):"—"}</td>
+        <td>${esc(b.by||"—")}</td></tr>`).join("")}
+      </tbody></table></body></html>`);
+  }
+
+  if(rows===null)return <Card><div style={{padding:"46px 20px"}}><Loading text="กำลังโหลดประวัติการผลิต..."/></div></Card>;
+  if(err)return <Card><div style={{padding:"28px 20px",textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
+    <div style={{fontSize:14,fontWeight:800,color:C.red,marginBottom:4}}>โหลดประวัติไม่สำเร็จ</div>
+    <div style={{fontSize:12,color:C.ink3,wordBreak:"break-word"}}>{err}</div></div></Card>;
+  if(!batches.length)return <Card><div style={{textAlign:"center",padding:"46px 20px",fontFamily:"'Sarabun',sans-serif"}}>
+    <div style={{fontSize:42,marginBottom:8,opacity:.5}}>🕘</div>
+    <div style={{fontSize:15,fontWeight:800,color:C.ink,marginBottom:4}}>ยังไม่มีประวัติการผลิต</div>
+    <div style={{fontSize:12.5,color:C.ink3}}>กด "ผลิตเสร็จ" ในแท็บสร้างการผลิต แล้วรอบนั้นจะมาแสดงที่นี่</div></div></Card>;
+
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+      <div style={{fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{batches.length} รอบการผลิต · เรียงใหม่สุดขึ้นก่อน</div>
+      <Btn v="ghost" onClick={printReport} icon={I.print} s={{padding:"7px 13px",fontSize:12}}>🖨 ปริ้นรายงาน</Btn>
+    </div>
+    <div style={{display:"flex",flexDirection:"column",gap:9}}>
+      {batches.map(b=><Card key={b.ref}>
+        <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-start",fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{flex:"1 1 200px",minWidth:0}}>
+            <div style={{fontSize:15,fontWeight:900,color:C.ink}}>{b.made?.name||"—"} <span style={{color:C.green}}>+{b.made?.qty??0} {b.made?.unit||""}</span></div>
+            <div style={{fontSize:11,color:C.ink4,marginTop:2}}>{fmtDT(b.at)}{b.by?` · โดย ${b.by}`:""} · {b.ref}</div>
+          </div>
+          <div style={{flex:"1 1 260px",minWidth:0}}>
+            <div style={{fontSize:10.5,color:C.ink4,fontWeight:800,marginBottom:3}}>ส่วนผสมที่ใช้ ({b.used.length})</div>
+            {b.used.length===0?<div style={{fontSize:12,color:C.ink4}}>— ไม่ได้ตัดส่วนผสม —</div>
+              :<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                {b.used.map((u,i)=><span key={i} style={{fontSize:11.5,background:C.redLight,border:`1px solid ${C.red}33`,color:"#7F1D1D",borderRadius:8,padding:"2px 8px",whiteSpace:"nowrap"}}>{u.name} −{u.qty} {u.unit}</span>)}
+              </div>}
+          </div>
+        </div>
+      </Card>)}
+    </div>
+  </div>;
+}
+
 function SOPTab(props){
   // Top-level chooser: ingredient SOP vs menu SOP
   const[sopMode,setSopMode]=useState(null); // null=show chooser, "menu"=menu SOPs, "ingredient"=ingredient SOPs
@@ -14665,6 +14988,7 @@ export default function App(){
     {id:"menus",l:t("tab.menus"),icon:I.fire,perm:"menus"},
     {id:"waste",l:"บันทึกของเสีย",icon:I.trash,perm:"ingredients"},
     {id:"sop",l:t("tab.sop"),icon:I.sop,perm:"sop"},
+    {id:"production",l:"การผลิต",icon:I.fire,perm:"sop"},   // เฉพาะครัวกลาง — กรองด้านล่าง
     {id:"summary",l:t("tab.summary"),icon:I.chart,perm:"summary"},
     {id:"fssales",l:t("tab.fssales"),icon:I.chart,perm:"fs_sales"},
     {id:"po",l:t("tab.po"),icon:I.bill,perm:"po"},
@@ -14682,6 +15006,9 @@ export default function App(){
     if(!currentUser)return false;
     // ครัวกลางไม่ได้ขายหน้าร้าน → ไม่มีแท็บ "ขายหน้าร้าน" (ครอบทุก role รวม admin)
     if(t.id==="pos"&&currentBranch?.type==="central")return false;
+    // ผลิตที่ครัวกลางที่เดียว สาขาไม่มีสูตร/ไม่ได้ผลิตเอง — ต้องกรองก่อนเช็คสิทธิ์
+    // ไม่งั้น admin (ที่ผ่านทุกสิทธิ์) จะเห็นแท็บนี้ตอนเข้าดูสาขาด้วย
+    if(t.id==="production"&&currentBranch?.type!=="central")return false;
     if(currentUser.role==="admin")return true;
     return hasPerm(currentUser,t.perm);
   });
@@ -14864,6 +15191,7 @@ export default function App(){
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
             {tab==="waste"&&<WasteView ings={ings} menus={menus} currentBranch={currentBranch} currentUser={currentUser} branches={branches}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
+            {tab==="production"&&<ProductionTab ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="fssales"&&<FSSalesTab branches={branches} currentBranch={currentBranch} currentUser={currentUser} menus={menus} ings={ings} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
             {tab==="po"&&<>
@@ -19053,4 +19381,4 @@ function BranchSelectorWithLoad({user,onSelect,onLogout}){
   return <BranchSelector branches={branches} onSelect={onSelect} user={user} onLogout={onLogout}/>;
 }
 
-const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html,body{max-width:100vw;overflow-x:hidden}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}@keyframes shakeX{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-9px)}40%,80%{transform:translateX(9px)}}@keyframes navSheen{0%{transform:translateX(-140%)}100%{transform:translateX(140%)}}.navitem{position:relative;overflow:hidden;transition:transform .16s cubic-bezier(.2,.7,.3,1),box-shadow .16s ease,background .14s ease}.navitem::after{content:"";position:absolute;top:0;bottom:0;left:0;width:55%;pointer-events:none;opacity:0;z-index:0;background:linear-gradient(100deg,transparent 0%,rgba(255,255,255,.85) 50%,transparent 100%);transform:translateX(-140%)}.navitem>*{position:relative;z-index:1}.navitem:hover{transform:translateY(-2px);box-shadow:0 6px 14px rgba(74,59,51,.16),0 1px 3px rgba(74,59,51,.10)}.navitem:hover::after{opacity:1;animation:navSheen 1.9s ease-in-out infinite}.navitem:active{transform:translateY(0);box-shadow:0 2px 5px rgba(74,59,51,.14)}@media(prefers-reduced-motion:reduce){.navitem:hover{transform:none}.navitem:hover::after{animation:none;opacity:0}}*{scrollbar-color:${C.ink4} ${C.lineLight};scrollbar-width:auto}::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:${C.lineLight};border-radius:999px}::-webkit-scrollbar-thumb{background:${C.ink4};border-radius:999px;border:2px solid ${C.lineLight};min-height:40px}::-webkit-scrollbar-thumb:hover{background:${C.brand};border-color:${C.brandLight}}::-webkit-scrollbar-thumb:active{background:${C.brandDark}}::-webkit-scrollbar-corner{background:transparent}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input,select,textarea{min-height:40px;font-size:16px!important}input[type=checkbox],input[type=radio]{min-height:auto}table{font-size:12px}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{border-width:1px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}`;
+const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html,body{max-width:100vw;overflow-x:hidden}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}@keyframes shakeX{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-9px)}40%,80%{transform:translateX(9px)}}@keyframes navSheen{0%{transform:translateX(-140%)}100%{transform:translateX(140%)}}.navitem{position:relative;overflow:hidden;transition:transform .16s cubic-bezier(.2,.7,.3,1),box-shadow .16s ease,background .14s ease}.navitem::after{content:"";position:absolute;top:0;bottom:0;left:0;width:55%;pointer-events:none;opacity:0;z-index:0;background:linear-gradient(100deg,transparent 0%,rgba(255,255,255,.85) 50%,transparent 100%);transform:translateX(-140%)}.navitem>*{position:relative;z-index:1}.navitem:hover{transform:translateY(-6px) scale(1.035);box-shadow:0 16px 28px rgba(74,59,51,.26),0 6px 10px rgba(74,59,51,.16);z-index:2}.navitem:hover::after{opacity:1;animation:navSheen 1.9s ease-in-out infinite}.navitem:active{transform:translateY(-1px) scale(.99);box-shadow:0 2px 6px rgba(74,59,51,.18)}@media(prefers-reduced-motion:reduce){.navitem:hover{transform:none}.navitem:hover::after{animation:none;opacity:0}}*{scrollbar-color:${C.ink4} ${C.lineLight};scrollbar-width:auto}::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:${C.lineLight};border-radius:999px}::-webkit-scrollbar-thumb{background:${C.ink4};border-radius:999px;border:2px solid ${C.lineLight};min-height:40px}::-webkit-scrollbar-thumb:hover{background:${C.brand};border-color:${C.brandLight}}::-webkit-scrollbar-thumb:active{background:${C.brandDark}}::-webkit-scrollbar-corner{background:transparent}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input,select,textarea{min-height:40px;font-size:16px!important}input[type=checkbox],input[type=radio]{min-height:auto}table{font-size:12px}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{border-width:1px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}`;
