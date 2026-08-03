@@ -19,19 +19,15 @@ const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
 // ⚠️ อย่าเติมเงากลับเข้ามา: เคยใส่ drop-shadow เพื่อให้ดูยกนูน แล้วผลจริงคือเงาเทา
 // ใต้ลายเส้นบางๆ ทำให้โลโก้ดูมัวและทึม ไม่สง่า — ลายเส้นคมๆ บนพื้นสะอาดเด่นกว่า
 //
-// dark = พื้นเข้ม (แถบเมนู #1E2738) โลโก้เป็นเส้นน้ำตาลเข้มวางบน "ก้อนสีพีช" ซึ่งทำให้
-// วิธีปกติใช้ไม่ได้ 2 แบบ (ทดสอบด้วยการเรนเดอร์ดูจริงแล้วทั้งคู่):
-//   ✗ brightness(0) invert(1) → ทุกอย่างขาวเท่ากัน ก้อนพีชกลายเป็นขาวทึบ กลืนคำว่า
-//     "ในวันสุข" หายทั้งคำ (พังที่สุด แต่เป็นวิธีที่ดู "ถูกต้อง" ที่สุดถ้าไม่ลอง)
-//   ✗ ปูครีมไล่เฉดหลังโลโก้ → อ่านออกดี แต่กลายเป็นแผงสีอ่อนแปะอยู่บนแถบเมนู ไม่กลมกลืน
-// ที่ใช้ได้คือ grayscale ก่อนแล้วค่อย invert: ความสว่างสลับกัน เส้นเข้ม→สว่าง
-// ก้อนพีชอ่อน→เข้มจนจมหายไปกับพื้นแถบพอดี ตัวหนังสือจึงลอยอ่านออก sepia เล็กน้อย
-// ดึงโทนกลับมาอุ่นให้เข้ากับแบรนด์ แทนที่จะเป็นเทาด้าน
-function BrandLogo({size=120,dark=false,style}){
+// ⚠️ อย่าวางโลโก้นี้บนพื้นสีเข้ม: มันเป็นเส้นน้ำตาลเข้มวางบน "ก้อนสีพีช" ซึ่งทำให้ทุกวิธี
+// ดัดสีให้เข้ากับพื้นมืดพังหมด (ลองมาแล้วทั้ง 3 แบบ เรนเดอร์ดูจริงทุกแบบ):
+//   ✗ brightness(0) invert(1) → ก้อนพีชกลายเป็นขาวทึบ กลืนคำว่า "ในวันสุข" หายทั้งคำ
+//   ✗ ปูครีมไล่เฉดหลังโลโก้ → อ่านออก แต่เป็นแผงสีอ่อนแปะบนแถบ ไม่กลมกลืน
+//   ✗ grayscale+invert → ก้อนพีชกลายเป็นคราบดำหลังตัวหนังสือ ยังมองยากอยู่ดี
+// ทางที่ถูกคือเปลี่ยน "พื้นหลัง" ให้สว่าง ไม่ใช่ดัดตัวโลโก้ — แถบเมนูจึงเป็นเบจอ่อนแล้ว
+function BrandLogo({size=120,style}){
   return <img src={logoUrl} alt="ในวันสุข Mookata & Cafe" width={size} height={size} decoding="async"
-    style={{width:size,height:size,objectFit:"contain",display:"block",userSelect:"none",
-      ...(dark?{filter:"grayscale(1) invert(1) contrast(1.35) brightness(1.12) sepia(.18)"}:null),
-      ...style}}/>;
+    style={{width:size,height:size,objectFit:"contain",display:"block",userSelect:"none",...style}}/>;
 }
 
 // ═══ ตัวเฝ้าระวังสุขภาพฐานข้อมูล ════════════════════════════════════════════
@@ -14701,25 +14697,26 @@ export default function App(){
       {isMobile&&mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",backdropFilter:"blur(3px)",zIndex:199,animation:"mIn .2s ease"}}/>}
 
       {/* ── SIDEBAR ── */}
-      <aside style={{width:sidebarW,background:"#1E2738",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",fontFamily:"'Sarabun',sans-serif",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
+      <aside style={{width:sidebarW,background:"#F2EBE3",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",fontFamily:"'Sarabun',sans-serif",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
 
         {/* Brand header (โลโก้ + ป้ายสาขา) — เรืองส้มจางๆ ด้านบนเป็น brand moment */}
-        <div style={{background:`linear-gradient(180deg,${accentColor}1A,transparent)`,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>
-          {/* Logo — พื้นแถบเข้ม จึงส่ง dark ให้ BrandLogo สลับความสว่าง (ดูเหตุผลที่นิยาม)
-              ไม่ปูสีพื้นใดๆ ไว้ข้างหลัง โลโก้จึงอยู่บนพื้นแถบเดียวกับเมนู = กลมกลืนไปด้วยกัน */}
+        <div style={{background:`linear-gradient(180deg,${accentColor}1A,transparent)`,borderBottom:"1px solid rgba(74,59,51,0.14)"}}>
+          {/* Logo — แถบเมนูเปลี่ยนเป็นพื้นเบจอ่อนแล้ว (3 ส.ค. 69) จึงวางโลโก้สีจริงได้ตรงๆ
+              ไม่ต้องดัดสีใดๆ ก่อนหน้านี้พื้นเป็นกรมท่าเข้ม เลยต้องพลิกความสว่างซึ่งทำให้
+              ก้อนสีพีชกลายเป็นคราบดำหลังตัวหนังสือ — แก้ที่พื้นหลังตรงจุดกว่าดัดที่ตัวโลโก้ */}
           <div style={{padding:"18px 16px 10px",display:"flex",justifyContent:"center"}}>
-            <BrandLogo size={104} dark/>
+            <BrandLogo size={104}/>
           </div>
           <div style={{textAlign:"center",padding:"2px 0 12px"}}>
-            <div style={{fontSize:10,fontWeight:800,color:"#8B97AC",letterSpacing:3.2,textTransform:"uppercase"}}>FoodCost</div>
+            <div style={{fontSize:10,fontWeight:800,color:"#75634F",letterSpacing:3.2,textTransform:"uppercase"}}>FoodCost</div>
           </div>
           {/* Branch badge */}
           <div style={{padding:"0 14px 14px"}}>
-            <div style={{background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"9px 12px"}}>
-              <div style={{fontSize:9,fontWeight:700,color:"#8B97AC",letterSpacing:1.2,textTransform:"uppercase",marginBottom:3}}>{t("branch.current")}</div>
+            <div style={{background:"rgba(74,59,51,0.055)",border:"1px solid rgba(74,59,51,0.14)",borderRadius:10,padding:"9px 12px"}}>
+              <div style={{fontSize:9,fontWeight:700,color:"#75634F",letterSpacing:1.2,textTransform:"uppercase",marginBottom:3}}>{t("branch.current")}</div>
               <div style={{display:"flex",alignItems:"center",gap:6}}>
                 <Ic d={isCentral?I.shop:I.branch} s={13} c={accentColor}/>
-                <span style={{fontSize:13,fontWeight:700,color:"#F1F5F9",fontFamily:"'Sarabun',sans-serif"}}>{currentBranch.name}</span>
+                <span style={{fontSize:13,fontWeight:700,color:"#3B2E27",fontFamily:"'Sarabun',sans-serif"}}>{currentBranch.name}</span>
               </div>
             </div>
           </div>
@@ -14727,7 +14724,7 @@ export default function App(){
 
         {/* Nav label */}
         <div style={{padding:"14px 18px 6px"}}>
-          <span style={{fontSize:10,fontWeight:700,color:"#8B97AC",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
+          <span style={{fontSize:10,fontWeight:700,color:"#75634F",letterSpacing:1.5,textTransform:"uppercase"}}>{t("nav.menu")}</span>
         </div>
 
         {/* Nav items — ดาร์กสเลท: ตัวอักษรอ่อน, active = พื้น accent-tint + แถบ accent ชิดซ้าย + ไอคอน accent, state นิ่งไม่ยกตัว */}
@@ -14735,42 +14732,42 @@ export default function App(){
           {visibleTabs.map(t2=>{
             const active=tab===t2.id;
             return <button key={t2.id} onClick={()=>setTab(t2.id)}
-              onMouseEnter={e=>{if(active)return;e.currentTarget.style.background="rgba(255,255,255,0.06)";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#F1F5F9";}}
-              onMouseLeave={e=>{if(active)return;e.currentTarget.style.background="transparent";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#AEB8C8";}}
+              onMouseEnter={e=>{if(active)return;e.currentTarget.style.background="rgba(74,59,51,0.055)";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#3B2E27";}}
+              onMouseLeave={e=>{if(active)return;e.currentTarget.style.background="transparent";const sp=e.currentTarget.querySelector("span");if(sp)sp.style.color="#5C4A3F";}}
               style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"9px 11px 9px 14px",marginBottom:1,borderRadius:8,border:"none",cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif",transition:"background .14s ease,color .14s ease",background:active?`${accentColor}29`:"transparent",boxShadow:active?`inset 3px 0 0 0 ${accentColor}`:"none"}}>
               <div style={{width:28,height:28,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"background .14s ease",background:active?`${accentColor}33`:"transparent"}}>
-                <Ic d={t2.icon} s={14} c={active?accentColor:"#8B97AC"}/>
+                <Ic d={t2.icon} s={14} c={active?accentColor:"#75634F"}/>
               </div>
-              <span style={{fontSize:13,color:active?"#FFFFFF":"#AEB8C8",fontWeight:active?700:500,whiteSpace:"pre-line",lineHeight:1.25,transition:"color .14s ease"}}>{t2.l}</span>
+              <span style={{fontSize:13,color:active?"#B33A08":"#5C4A3F",fontWeight:active?700:500,whiteSpace:"pre-line",lineHeight:1.25,transition:"color .14s ease"}}>{t2.l}</span>
             </button>;
           })}
         </nav>
 
         {/* Language switcher */}
         <div style={{padding:"6px 14px 10px"}}>
-          <div style={{fontSize:9,fontWeight:700,color:"#8B97AC",letterSpacing:1.2,textTransform:"uppercase",marginBottom:6}}>{t("lang.label")}</div>
+          <div style={{fontSize:9,fontWeight:700,color:"#75634F",letterSpacing:1.2,textTransform:"uppercase",marginBottom:6}}>{t("lang.label")}</div>
           <div style={{display:"flex",gap:5}}>
-            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .14s ease",background:sel?accentColor:"rgba(255,255,255,0.06)",border:sel?`1px solid ${accentColor}`:"1px solid rgba(255,255,255,0.1)",color:sel?"#fff":"#AEB8C8",boxShadow:sel?`0 1px 6px ${accentColor}66`:"none"}}>{L.l}</button>;})}
+            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .14s ease",background:sel?accentColor:"rgba(74,59,51,0.055)",border:sel?`1px solid ${accentColor}`:"1px solid rgba(74,59,51,0.16)",color:sel?"#fff":"#5C4A3F",boxShadow:sel?`0 1px 6px ${accentColor}66`:"none"}}>{L.l}</button>;})}
           </div>
         </div>
 
         {/* User section */}
-        <div style={{padding:"12px 14px 18px",borderTop:"1px solid rgba(255,255,255,0.08)"}}>
-          <div style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,marginBottom:8}}>
+        <div style={{padding:"12px 14px 18px",borderTop:"1px solid rgba(74,59,51,0.14)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:9,padding:"8px 10px",background:"rgba(74,59,51,0.045)",border:"1px solid rgba(74,59,51,0.14)",borderRadius:10,marginBottom:8}}>
             <div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg,${accentColor},${accentDark})`,boxShadow:`0 3px 12px ${accentColor}55`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <Ic d={I.user} s={14} c="#fff"/>
             </div>
             <div style={{minWidth:0}}>
-              <div style={{fontSize:12.5,fontWeight:700,color:"#F1F5F9",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{currentUser.name||currentUser.username}</div>
-              <div style={{fontSize:10,fontWeight:500,color:"#8B97AC"}}>{ROLES[currentUser.role]?.label||currentUser.role}</div>
+              <div style={{fontSize:12.5,fontWeight:700,color:"#3B2E27",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{currentUser.name||currentUser.username}</div>
+              <div style={{fontSize:10,fontWeight:500,color:"#75634F"}}>{ROLES[currentUser.role]?.label||currentUser.role}</div>
             </div>
           </div>
           <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:8,padding:"7px 0",cursor:"pointer",fontSize:11,fontWeight:600,color:"#AEB8C8",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .14s"}}>
-              <Ic d={I.branch} s={11} c="#8B97AC"/>{t("branch.switch")}
+            <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"rgba(74,59,51,0.055)",border:"1px solid rgba(74,59,51,0.16)",borderRadius:8,padding:"7px 0",cursor:"pointer",fontSize:11,fontWeight:600,color:"#5C4A3F",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .14s"}}>
+              <Ic d={I.branch} s={11} c="#75634F"/>{t("branch.switch")}
             </button>
             <button onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} title="ออกจากระบบ" style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.28)",borderRadius:8,padding:"7px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .14s"}}>
-              <Ic d={I.logout} s={13} c="#F87171"/>
+              <Ic d={I.logout} s={13} c="#C81E1E"/>
             </button>
           </div>
         </div>
