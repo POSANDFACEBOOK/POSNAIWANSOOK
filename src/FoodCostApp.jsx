@@ -19,12 +19,19 @@ const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
 // ⚠️ อย่าเติมเงากลับเข้ามา: เคยใส่ drop-shadow เพื่อให้ดูยกนูน แล้วผลจริงคือเงาเทา
 // ใต้ลายเส้นบางๆ ทำให้โลโก้ดูมัวและทึม ไม่สง่า — ลายเส้นคมๆ บนพื้นสะอาดเด่นกว่า
 //
-// ⚠️ อย่าทำเวอร์ชันพลิกสีขาวสำหรับพื้นเข้ม: โลโก้นี้เป็นเส้นน้ำตาลเข้มวางบนก้อนสีพีช
-// พอ brightness(0) invert(1) ก้อนพีชจะกลายเป็นขาวทึบแล้วกลืนคำว่า "ในวันสุข" หายทั้งคำ
-// (ทดสอบแล้วเมื่อ 1 ส.ค. 69) พื้นเข้มให้ปูครีมไล่เฉดจนจางหายแทน — ดูที่หัวแถบเมนู
-function BrandLogo({size=120,style}){
+// dark = พื้นเข้ม (แถบเมนู #1E2738) โลโก้เป็นเส้นน้ำตาลเข้มวางบน "ก้อนสีพีช" ซึ่งทำให้
+// วิธีปกติใช้ไม่ได้ 2 แบบ (ทดสอบด้วยการเรนเดอร์ดูจริงแล้วทั้งคู่):
+//   ✗ brightness(0) invert(1) → ทุกอย่างขาวเท่ากัน ก้อนพีชกลายเป็นขาวทึบ กลืนคำว่า
+//     "ในวันสุข" หายทั้งคำ (พังที่สุด แต่เป็นวิธีที่ดู "ถูกต้อง" ที่สุดถ้าไม่ลอง)
+//   ✗ ปูครีมไล่เฉดหลังโลโก้ → อ่านออกดี แต่กลายเป็นแผงสีอ่อนแปะอยู่บนแถบเมนู ไม่กลมกลืน
+// ที่ใช้ได้คือ grayscale ก่อนแล้วค่อย invert: ความสว่างสลับกัน เส้นเข้ม→สว่าง
+// ก้อนพีชอ่อน→เข้มจนจมหายไปกับพื้นแถบพอดี ตัวหนังสือจึงลอยอ่านออก sepia เล็กน้อย
+// ดึงโทนกลับมาอุ่นให้เข้ากับแบรนด์ แทนที่จะเป็นเทาด้าน
+function BrandLogo({size=120,dark=false,style}){
   return <img src={logoUrl} alt="ในวันสุข Mookata & Cafe" width={size} height={size} decoding="async"
-    style={{width:size,height:size,objectFit:"contain",display:"block",userSelect:"none",...style}}/>;
+    style={{width:size,height:size,objectFit:"contain",display:"block",userSelect:"none",
+      ...(dark?{filter:"grayscale(1) invert(1) contrast(1.35) brightness(1.12) sepia(.18)"}:null),
+      ...style}}/>;
 }
 
 // ═══ ตัวเฝ้าระวังสุขภาพฐานข้อมูล ════════════════════════════════════════════
@@ -8379,16 +8386,11 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
 
   // ใช้ได้ 2 แบบ: เป็นแท็บในหน้า (inline) หรือเป็นหน้าต่างเด้ง — เนื้อหาชุดเดียวกัน
   const title=`📋 สรุปวัตถุดิบที่ต้องซื้อวันนี้ (${fmtD(todayStr())})`;
-  const Shell=inline
-    ?({children})=><div>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:14,flexWrap:"wrap"}}>
-          <div style={{fontSize:18,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{title}</div>
-          <Btn v="ghost" onClick={()=>setRefreshTick(t=>t+1)} icon={I.refresh} s={{padding:"7px 12px",fontSize:12}}>รีเฟรช</Btn>
-        </div>
-        {children}
-      </div>
-    :({children})=><Modal title={title} onClose={onClose} extraWide>{children}</Modal>;
-  return <Shell>
+  // ⚠️ ห้ามประกาศ component ตรงนี้ (เช่น const Shell=({children})=>...) — ทุกครั้งที่ render
+  // จะได้ฟังก์ชันตัวใหม่ React จึงถือว่าเป็น component คนละชนิด แล้วรื้อ DOM ทั้งก้อนสร้างใหม่
+  // ผลคือพิมพ์เลข 1 ตัวแล้วช่องหลุดโฟกัสและกล่องเลื่อนดีดกลับบนสุด (เจอจริง 3 ส.ค. 69)
+  // เขียนเนื้อหาเป็น element ธรรมดาแล้วค่อยเลือกกรอบตอน return แทน
+  const body=<>
     {/* Loading / error / data states — loading guards against the empty "stock
         sufficient" message showing before the fetch completes. */}
     {loading?<div style={{padding:"60px 20px"}}><Loading text="กำลังโหลด PO ค้างจ่าย..."/></div>:
@@ -8465,43 +8467,36 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
 
           {/* Each item: number + full-width name on top line, four stats in a wrapping grid below */}
           <div>
-            {g.rows.map((r,i)=><div key={r.ingId} style={{padding:"14px 16px",borderTop:i>0?`1px solid ${C.lineLight}`:"none",background:i%2===0?C.white:"#FAFBFC"}}>
-              <div style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:10}}>
-                <div style={{minWidth:28,height:28,borderRadius:14,background:C.brandLight,color:C.brand,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:900,fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>{i+1}</div>
-                <div style={{flex:1,minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
-                  <div style={{fontSize:15,fontWeight:800,color:C.ink,wordBreak:"break-word",lineHeight:1.35}}>{r.name}</div>
-                  <div style={{fontSize:11,color:C.ink4,display:"flex",gap:6,alignItems:"center",marginTop:3,flexWrap:"wrap"}}>
+            {/* แถวเดียวจบ: ลำดับ+ชื่อ ซ้าย · ตัวเลขทั้งหมด ขวา
+                เดิมแยกเป็น 2 ชั้น (ชื่อบน + การ์ด 4 ใบล่าง) สูงแถวละ ~120px พอมี 20-30 รายการ
+                ต้องเลื่อนยาวมากจนหาของไม่เจอ แบบนี้เหลือ ~52px ข้อมูลยังครบทุกตัวเท่าเดิม */}
+            {g.rows.map((r,i)=><div key={r.ingId} style={{padding:"7px 12px",borderTop:i>0?`1px solid ${C.lineLight}`:"none",background:i%2===0?C.white:"#FAFBFC",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",fontFamily:"'Sarabun',sans-serif"}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flex:"1 1 200px",minWidth:0}}>
+                <div style={{minWidth:22,height:22,borderRadius:11,background:C.brandLight,color:C.brand,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:10.5,fontWeight:900,flexShrink:0}}>{i+1}</div>
+                <div style={{minWidth:0}}>
+                  <div style={{fontSize:13.5,fontWeight:800,color:C.ink,lineHeight:1.3,wordBreak:"break-word"}}>{r.name}</div>
+                  <div style={{fontSize:10,color:C.ink4,display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",marginTop:1}}>
                     <span>{r.category}</span>
-                    {r.cascaded&&<span style={{background:"#F5F3FF",color:"#7C3AED",padding:"1px 8px",borderRadius:6,fontWeight:800}}>📋 จาก SOP</span>}
+                    {r.cascaded&&<span style={{background:"#F5F3FF",color:"#7C3AED",padding:"0 5px",borderRadius:5,fontWeight:800}}>📋 SOP</span>}
                   </div>
                 </div>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(120px,100%),1fr))",gap:8,fontFamily:"'Sarabun',sans-serif"}}>
-                <div style={{padding:"6px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.line}`}}>
-                  <div style={{fontSize:10,color:C.ink4,fontWeight:700,letterSpacing:.3}}>สั่งมา</div>
-                  <div style={{fontSize:14,fontWeight:700,color:C.ink2,marginTop:2}}>{r.totalNeed} <span style={{fontSize:10,color:C.ink4,fontWeight:600}}>{r.unit}</span></div>
+              <div style={{display:"flex",alignItems:"center",gap:9,flexShrink:0,flexWrap:"wrap"}}>
+                <div style={{fontSize:11,color:C.ink3,whiteSpace:"nowrap"}}>สั่งมา <b style={{fontSize:12.5,color:C.ink2}}>{r.totalNeed}</b></div>
+                <div style={{fontSize:11,color:r.onHand>0?C.green:C.ink4,whiteSpace:"nowrap"}}>มีอยู่ <b style={{fontSize:12.5}}>{r.onHand}</b></div>
+                {/* ช่องแก้จำนวน — ของที่ไปซื้อมักมีขั้นต่ำในการสั่ง (type=text + inputMode เพราะ iOS เมิน inputMode บน type=number) */}
+                <div style={{display:"flex",alignItems:"center",gap:4,padding:"3px 7px",borderRadius:7,background:r.edited?"#FEF3C7":C.redLight,border:`1.5px solid ${r.edited?"#F59E0B":C.red+"55"}`,whiteSpace:"nowrap"}}>
+                  <span style={{fontSize:9.5,color:r.edited?"#92400E":"#7F1D1D",fontWeight:900}}>ต้องซื้อ</span>
+                  <input type="text" inputMode="decimal" value={qtyEdit[r.ingId]!=null?qtyEdit[r.ingId]:String(r.shortBy)}
+                    onChange={e=>{const v=e.target.value;if(v===""||/^\d*\.?\d*$/.test(v))setQtyEdit(q=>({...q,[r.ingId]:v}));}}
+                    onFocus={e=>e.target.select()}
+                    style={{width:58,padding:"1px 5px",fontSize:15,fontWeight:900,color:r.edited?"#B45309":C.red,background:C.white,border:`1px solid ${r.edited?"#F59E0B":C.red+"44"}`,borderRadius:5,fontFamily:"'Sarabun',sans-serif",textAlign:"center"}}/>
+                  <span style={{fontSize:10,color:r.edited?"#92400E":"#7F1D1D",fontWeight:700}}>{r.unit}</span>
+                  {r.edited&&<button onClick={()=>setQtyEdit(q=>{const n={...q};delete n[r.ingId];return n;})} title={`กลับไปใช้จำนวนที่ระบบคำนวณ (${r.baseShortBy})`} style={{background:"none",border:"none",color:"#92400E",fontSize:9.5,fontWeight:800,cursor:"pointer",textDecoration:"underline",padding:0}}>คืนค่า {r.baseShortBy}</button>}
                 </div>
-                <div style={{padding:"6px 10px",background:r.onHand>0?C.greenLight:C.bg,borderRadius:8,border:`1px solid ${r.onHand>0?C.green+"33":C.line}`}}>
-                  <div style={{fontSize:10,color:r.onHand>0?C.green:C.ink4,fontWeight:700,letterSpacing:.3}}>มีอยู่</div>
-                  <div style={{fontSize:14,fontWeight:700,color:r.onHand>0?C.green:C.ink4,marginTop:2}}>{r.onHand} <span style={{fontSize:10,opacity:.8,fontWeight:600}}>{r.unit}</span></div>
-                </div>
-                <div style={{padding:"6px 12px",background:r.edited?`linear-gradient(135deg,#FEF3C7,#FDE68A)`:`linear-gradient(135deg,${C.redLight},#FEE2E2)`,borderRadius:8,border:`2px solid ${r.edited?"#F59E0B":C.red+"55"}`}}>
-                  <div style={{fontSize:10,color:r.edited?"#92400E":"#7F1D1D",fontWeight:900,letterSpacing:.3}}>ต้องซื้อ {r.edited?"(แก้แล้ว)":"— แก้ได้"}</div>
-                  <div style={{display:"flex",alignItems:"center",gap:5,marginTop:2}}>
-                    {/* แก้จำนวนได้เอง เพราะของที่ไปซื้อมักมีขั้นต่ำในการสั่ง (type=text + inputMode ให้ iOS ขึ้นแป้นเลข) */}
-                    <input type="text" inputMode="decimal" value={qtyEdit[r.ingId]!=null?qtyEdit[r.ingId]:String(r.shortBy)}
-                      onChange={e=>{const v=e.target.value;if(v===""||/^\d*\.?\d*$/.test(v))setQtyEdit(q=>({...q,[r.ingId]:v}));}}
-                      onFocus={e=>e.target.select()}
-                      style={{width:78,padding:"2px 6px",fontSize:18,fontWeight:900,color:r.edited?"#B45309":C.red,background:C.white,border:`1.5px solid ${r.edited?"#F59E0B":C.red+"55"}`,borderRadius:6,fontFamily:"'Sarabun',sans-serif",textAlign:"center"}}/>
-                    <span style={{fontSize:11,color:r.edited?"#92400E":"#7F1D1D",fontWeight:700}}>{r.unit}</span>
-                    {r.edited&&<button onClick={()=>setQtyEdit(q=>{const n={...q};delete n[r.ingId];return n;})} title="กลับไปใช้จำนวนที่ระบบคำนวณ" style={{background:"none",border:"none",cursor:"pointer",fontSize:11,color:"#92400E",textDecoration:"underline",padding:0,fontFamily:"'Sarabun',sans-serif"}}>คืนค่า</button>}
-                  </div>
-                  {r.edited&&<div style={{fontSize:9,color:"#92400E",marginTop:1}}>ระบบคำนวณ {r.baseShortBy}</div>}
-                </div>
-                <div style={{padding:"6px 10px",background:C.brandLight,borderRadius:8,border:`1px solid ${C.brandBorder}`}}>
-                  <div style={{fontSize:10,color:C.brand,fontWeight:700,letterSpacing:.3}}>ราคาประมาณ</div>
-                  <div style={{fontSize:14,fontWeight:900,color:C.brand,marginTop:2}}>฿{r.estCost.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
-                  <div style={{fontSize:9,color:C.ink4,marginTop:1}}>฿{r.buy_price.toLocaleString(undefined,{minimumFractionDigits:2})}/{r.unit}</div>
+                <div style={{textAlign:"right",whiteSpace:"nowrap",minWidth:76}}>
+                  <div style={{fontSize:13,fontWeight:900,color:C.brand}}>฿{r.estCost.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+                  <div style={{fontSize:9,color:C.ink4}}>฿{r.buy_price.toLocaleString(undefined,{minimumFractionDigits:2})}/{r.unit}</div>
                 </div>
               </div>
             </div>)}
@@ -8519,7 +8514,17 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       </div>
     </>}
     </>}
-  </Shell>;
+  </>;
+
+  // ใช้ได้ 2 แบบ: เป็นแท็บในหน้า (inline) หรือเป็นหน้าต่างเด้ง — เนื้อหาชุดเดียวกัน
+  // ชนิดของ element ตรงนี้คงที่ตลอดอายุ component จึงไม่เกิดการรื้อ DOM ตอน re-render
+  // ไม่ใส่ปุ่มรีเฟรชตรงนี้ — เนื้อหามีปุ่มรีเฟรชของตัวเองอยู่แล้ว (ใช้ได้ทั้ง 2 โหมด)
+  // ถ้าใส่ซ้ำจะเห็นปุ่มรีเฟรช 2 อันซ้อนกันในโหมด inline
+  if(inline)return <div>
+    <div style={{fontSize:18,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>{title}</div>
+    {body}
+  </div>;
+  return <Modal title={title} onClose={onClose} extraWide>{body}</Modal>;
 }
 
 // Full-screen PO view with status-aware actions
@@ -14544,14 +14549,10 @@ export default function App(){
 
         {/* Brand header (โลโก้ + ป้ายสาขา) — เรืองส้มจางๆ ด้านบนเป็น brand moment */}
         <div style={{background:`linear-gradient(180deg,${accentColor}1A,transparent)`,borderBottom:"1px solid rgba(255,255,255,0.08)"}}>
-          {/* Logo — โลโก้เป็นเส้นน้ำตาลเข้มบนรูปทรงสีอ่อน วางบนพื้นแถบ #1E2738 ตรงๆ ตัวบ้านจะจมหาย
-              และถ้าพลิกเป็นขาวล้วน ก้อนสีพีชหลังตัวอักษรจะกลายเป็นขาวทึบกลืนคำว่า "ในวันสุข" หายไปเลย
-              จึงปูครีมไล่เฉดจนจางหายสนิทแทน — ได้สีแบรนด์ครบและไม่มีเส้นขอบให้เห็น ตามที่สั่งว่าไร้ขอบ */}
-          {/* จุดที่ครีมเริ่มจางต้องอยู่ "ต่ำกว่า" ตัวโลโก้ ไม่ใช่ตรงกลางโลโก้ ไม่งั้นบรรทัดล่างสุด
-              (Mookata & cafe ตัวเล็กสีอ่อน) จะตกไปอยู่ช่วงจางจนอ่านไม่ออก */}
-          <div style={{padding:"20px 16px 34px",display:"flex",justifyContent:"center",
-            background:"linear-gradient(180deg,rgba(255,248,240,.98) 0%,rgba(255,248,240,.94) 62%,rgba(255,248,240,.78) 78%,rgba(255,248,240,.24) 92%,rgba(255,248,240,0) 100%)"}}>
-            <BrandLogo size={104}/>
+          {/* Logo — พื้นแถบเข้ม จึงส่ง dark ให้ BrandLogo สลับความสว่าง (ดูเหตุผลที่นิยาม)
+              ไม่ปูสีพื้นใดๆ ไว้ข้างหลัง โลโก้จึงอยู่บนพื้นแถบเดียวกับเมนู = กลมกลืนไปด้วยกัน */}
+          <div style={{padding:"18px 16px 10px",display:"flex",justifyContent:"center"}}>
+            <BrandLogo size={104} dark/>
           </div>
           <div style={{textAlign:"center",padding:"2px 0 12px"}}>
             <div style={{fontSize:10,fontWeight:800,color:"#8B97AC",letterSpacing:3.2,textTransform:"uppercase"}}>FoodCost</div>
