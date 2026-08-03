@@ -4382,35 +4382,35 @@ function ProductionTab({ings,currentBranch,currentUser,reloadIngs}){
             <div style={{fontSize:12.5,color:C.ink3}}>ผลิตได้เฉพาะวัตถุดิบที่ใส่ขั้นตอน SOP ไว้แล้ว — ไปเพิ่มที่แท็บ SOP ก่อน</div>
           </div></Card>
         :<div style={{display:"grid",gridTemplateColumns:isMobile?"minmax(0,1fr)":"minmax(0,340px) minmax(0,1fr)",gap:14,alignItems:"start"}}>
-          <Card>
-            <div style={{fontSize:13,fontWeight:800,color:C.ink,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เลือกสิ่งที่จะผลิต <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>({producible.length} รายการ)</span></div>
+          <Card style={{padding:16}}>
+            <div style={{fontSize:13.5,fontWeight:800,color:C.ink,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>เลือกสิ่งที่จะผลิต <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>({producible.length} รายการ)</span></div>
             <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อ/รหัส..." style={{...iSt,marginBottom:8}}/>
             <div style={{maxHeight:"min(52vh,460px)",overflowY:"auto",display:"flex",flexDirection:"column",gap:5}}>
               {matches.map(i=>{const on=pick&&+pick.id===+i.id;
-                return <button key={i.id} onClick={()=>{setPickId(i.id);setQty("");}} style={{textAlign:"left",padding:"9px 11px",borderRadius:10,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",
+                return <button key={i.id} onClick={()=>{setPickId(i.id);setQty("");}} style={{textAlign:"left",padding:"11px 13px",borderRadius:11,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",
                   border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white}}>
-                  <div style={{fontSize:13.5,fontWeight:on?800:700,color:C.ink}}>{i.name}</div>
-                  <div style={{fontSize:10.5,color:C.ink4,marginTop:2}}>
-                    {i.code?i.code+" · ":""}มีอยู่ {round2(branchStockExact(i,bid))} {i.buy_unit||""} · {(i.sop||[]).length} ขั้นตอน · ส่วนผสม {(i.ingredients||[]).length}
+                  <div style={{fontSize:13.5,fontWeight:on?800:700,color:C.ink,lineHeight:1.4,wordBreak:"break-word"}}>{i.name}</div>
+                  <div style={{fontSize:10.5,color:C.ink4,marginTop:3,lineHeight:1.5}}>
+                    {i.code?i.code+" · ":""}มีอยู่ <b style={{color:branchStockExact(i,bid)<0?C.red:C.ink3}}>{round2(branchStockExact(i,bid))}</b> {i.buy_unit||""} · {(i.sop||[]).length} ขั้นตอน · ส่วนผสม {(i.ingredients||[]).length}
                   </div>
                 </button>;})}
               {matches.length===0&&<div style={{padding:"20px 0",textAlign:"center",fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบรายการที่ค้นหา</div>}
             </div>
           </Card>
 
-          <Card>
+          <Card style={{padding:18}}>
             {!pick?<div style={{textAlign:"center",padding:"60px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:14}}>← เลือกวัตถุดิบที่จะผลิตจากรายการด้านซ้าย</div>:<>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:12}}>
-                <div style={{fontFamily:"'Sarabun',sans-serif"}}>
-                  <div style={{fontSize:18,fontWeight:900,color:C.ink}}>{pick.name}</div>
-                  <div style={{fontSize:12,color:C.ink4,marginTop:2}}>{pick.code?pick.code+" · ":""}มีอยู่ตอนนี้ <b style={{color:C.ink2}}>{round2(branchStockExact(pick,bid))} {pick.buy_unit||""}</b></div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:16,paddingBottom:14,borderBottom:`1px solid ${C.lineLight}`}}>
+                <div style={{fontFamily:"'Sarabun',sans-serif",minWidth:0}}>
+                  <div style={{fontSize:18,fontWeight:900,color:C.ink,lineHeight:1.35,wordBreak:"break-word"}}>{pick.name}</div>
+                  <div style={{fontSize:12,color:C.ink4,marginTop:3}}>{pick.code?pick.code+" · ":""}มีอยู่ตอนนี้ <b style={{color:branchStockExact(pick,bid)<0?C.red:C.ink2}}>{round2(branchStockExact(pick,bid))} {pick.buy_unit||""}</b>{branchStockExact(pick,bid)<0&&<span style={{color:C.red,fontWeight:700}}> — ติดลบ ควรนับสต็อกก่อน</span>}</div>
                 </div>
                 <Btn v="ghost" onClick={printSOP} s={{padding:"7px 12px",fontSize:12}}>🖨 ปริ้นขั้นตอนการผลิต</Btn>
               </div>
 
-              <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap",marginBottom:14}}>
+              <div style={{display:"flex",gap:12,alignItems:"flex-end",flexWrap:"wrap",marginBottom:18,padding:"14px 16px",background:C.bg,borderRadius:12,border:`1px solid ${C.line}`}}>
                 <div style={{flex:"0 1 200px",minWidth:150}}>
-                  <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>จำนวนที่ผลิตได้ ({pick.buy_unit||"หน่วย"})</div>
+                  <div style={{fontSize:11.5,color:C.ink3,fontWeight:700,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>จำนวนที่ผลิตได้ ({pick.buy_unit||"หน่วย"})</div>
                   <input type="text" inputMode="decimal" value={qty} onChange={e=>{const v=e.target.value;if(v===""||/^\d*\.?\d*$/.test(v))setQty(v);}} placeholder="0"
                     style={{...iSt,fontSize:20,fontWeight:900,color:C.brand,textAlign:"center",borderColor:C.brand+"66"}}/>
                 </div>
@@ -4438,15 +4438,15 @@ function ProductionTab({ings,currentBranch,currentUser,reloadIngs}){
               </div>}
 
               {Array.isArray(pick.sop)&&pick.sop.length>0&&<div>
-                <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ขั้นตอนการผลิต ({pick.sop.length} ขั้น)</div>
-                <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:280,overflowY:"auto"}}>
-                  {pick.sop.map((s,i)=><div key={i} style={{display:"flex",gap:9,alignItems:"flex-start",padding:"8px 10px",background:C.bg,borderRadius:9,fontFamily:"'Sarabun',sans-serif"}}>
-                    <div style={{minWidth:22,height:22,borderRadius:11,background:C.brand,color:C.white,fontSize:11,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{s.step||i+1}</div>
+                <div style={{fontSize:13,fontWeight:800,color:C.ink2,marginBottom:9,fontFamily:"'Sarabun',sans-serif"}}>ขั้นตอนการผลิต ({pick.sop.length} ขั้น)</div>
+                <div style={{display:"flex",flexDirection:"column",gap:8,maxHeight:"min(58vh,560px)",overflowY:"auto",paddingRight:4}}>
+                  {pick.sop.map((s,i)=><div key={i} style={{display:"flex",gap:12,alignItems:"flex-start",padding:"11px 13px",background:C.bg,borderRadius:11,border:`1px solid ${C.lineLight}`,fontFamily:"'Sarabun',sans-serif"}}>
+                    <div style={{minWidth:24,height:24,borderRadius:12,background:C.brand,color:C.white,fontSize:11.5,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{s.step||i+1}</div>
                     <div style={{minWidth:0,flex:1}}>
-                      {s.title&&<div style={{fontSize:12.5,fontWeight:800,color:C.ink}}>{s.title}</div>}
-                      <div style={{fontSize:12,color:C.ink3,whiteSpace:"pre-line",wordBreak:"break-word"}}>{s.desc||""}</div>
+                      {s.title&&<div style={{fontSize:12.5,fontWeight:800,color:C.ink,marginBottom:2}}>{s.title}</div>}
+                      <div style={{fontSize:12.5,color:C.ink3,whiteSpace:"pre-line",wordBreak:"break-word",lineHeight:1.6}}>{s.desc||""}</div>
                     </div>
-                    {s.image&&<img src={driveImgSrc(s.image)} alt="" loading="lazy" style={{width:54,height:42,objectFit:"cover",borderRadius:7,border:`1px solid ${C.line}`,flexShrink:0}}/>}
+                    {s.image&&<img src={driveImgSrc(s.image)} alt="" loading="lazy" style={{width:64,height:50,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,flexShrink:0}}/>}
                   </div>)}
                 </div>
               </div>}
@@ -4514,7 +4514,7 @@ function ProductionHistory({currentBranch}){
       <Btn v="ghost" onClick={printReport} s={{padding:"7px 13px",fontSize:12}}>🖨 ปริ้นรายงาน</Btn>
     </div>
     <div style={{display:"flex",flexDirection:"column",gap:9}}>
-      {batches.map(b=><Card key={b.ref}>
+      {batches.map(b=><Card key={b.ref} style={{padding:15}}>
         <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-start",fontFamily:"'Sarabun',sans-serif"}}>
           <div style={{flex:"1 1 200px",minWidth:0}}>
             <div style={{fontSize:15,fontWeight:900,color:C.ink}}>{b.made?.name||"—"} <span style={{color:C.green}}>+{b.made?.qty??0} {b.made?.unit||""}</span></div>
