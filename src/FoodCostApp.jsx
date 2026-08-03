@@ -6448,24 +6448,34 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     </Modal>}
   </div>;
 }
-// Report: for one ingredient, how much each branch ordered via internal POs (grouped by the
-// RECEIVING branch = "สาขาที่สั่ง"), filterable by date range and the PO's opening branch.
+// รายงานการสั่งซื้อจากใบ PO ภายใน (ครัวกลาง→สาขา) ดูได้ 3 ขอบเขต:
+//   • วัตถุดิบ 1 ตัว  → แยกผลตาม "สาขา"    (ใครสั่งของตัวนี้ไปเท่าไร)
+//   • ทั้งหมวดหมู่    → แยกผลตาม "วัตถุดิบ" (ในหมวดนี้ตัวไหนสั่งเยอะ)
+//   • ทุกวัตถุดิบ     → แยกผลตาม "วัตถุดิบ" (ใช้คู่กับตัวกรองสาขา = ดูของสาขาเดียวทั้งหมด)
+// หน่วยเก็บรายแถว ไม่ใช่ค่าเดียวทั้งรายงาน เพราะพอดูหลายวัตถุดิบพร้อมกันหน่วยจะต่างกัน
+// (กก./ลัง/ขวด) ถ้าใช้หน่วยเดียวทั้งตารางตัวเลขจะสื่อผิดทันที
 function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
+  const[mode,setMode]=useState("ing");            // ing | cat | all
   const[ingQ,setIngQ]=useState("");
   const[selIng,setSelIng]=useState(null);
+  const[selCat,setSelCat]=useState("");
   const[from,setFrom]=useState(defaultFrom);
   const[to,setTo]=useState(defaultTo);
   const[pickBranch,setPickBranch]=useState("");   // narrow to one ORDERING branch (branch_id = recipient)
   const[busy,setBusy]=useState(false);
-  const[result,setResult]=useState(null);         // {rows,unit,capped,scanned}
+  const[result,setResult]=useState(null);         // {rows,byBranch,capped,scanned}
   const[err,setErr]=useState("");
   const branchName=(id)=>{const b=(branches||[]).find(x=>+x.id===+id);return b?b.name:("สาขา "+id);};
+  const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
+  const cats=useMemo(()=>[...new Set((ings||[]).map(i=>(i.category||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"th")),[ings]);
   const sugg=useMemo(()=>{
     const q=ingQ.trim().toLowerCase();if(!q||selIng)return[];
     return (ings||[]).filter(i=>(i.name||"").toLowerCase().includes(q)||(i.code||"").toLowerCase().includes(q)).slice(0,8);
   },[ingQ,ings,selIng]);
+
   async function run(){
-    if(!selIng){setErr("กรุณาเลือกวัตถุดิบก่อน");return;}
+    if(mode==="ing"&&!selIng){setErr("กรุณาเลือกวัตถุดิบก่อน");return;}
+    if(mode==="cat"&&!selCat){setErr("กรุณาเลือกหมวดหมู่ก่อน");return;}
     if(from>to){setErr("ช่วงวันที่ไม่ถูกต้อง (วันเริ่มมากกว่าวันสิ้นสุด)");return;}
     setErr("");setBusy(true);setResult(null);
     try{
@@ -6473,52 +6483,90 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
       if(pickBranch)filters.toBranchId=+pickBranch;   // the ORDERING branch is the RECEIVER of the PO
       const raw=await api.getPOs(filters);
       const list=Array.isArray(raw)?raw:[];
-      const byBranch=new Map();let unit="";
-      // Match by ingredient_id; fall back to exact name for legacy items with no id.
-      const matchIng=(it)=>!!it&&((+it.ingredient_id===+selIng.id)||(it.ingredient_id==null&&(it.name||"").trim()===(selIng.name||"").trim()));
+      // เลือกบรรทัดที่เข้าเงื่อนไขตามขอบเขตที่เลือก
+      const pick=(it)=>{
+        if(!it)return false;
+        if(mode==="ing")return (+it.ingredient_id===+selIng.id)||(it.ingredient_id==null&&(it.name||"").trim()===(selIng.name||"").trim());
+        const ing=it.ingredient_id!=null?ingById.get(+it.ingredient_id):null;
+        if(mode==="cat")return !!ing&&(ing.category||"").trim()===selCat;
+        return true;   // all
+      };
+      const byBranchSet=new Set();
+      const g=new Map();
       for(const po of list){
         if(po.status==="cancelled")continue;                 // cancelled = ไม่ได้สั่งจริง
         for(const it of (Array.isArray(po.items)?po.items:[])){
-          if(!matchIng(it))continue;
-          const bid=+po.branch_id;if(!unit)unit=it.unit||"";
-          const cur=byBranch.get(bid)||{branchId:bid,qty:0,recv:0,value:0,pos:new Set()};
+          if(!pick(it))continue;
+          byBranchSet.add(+po.branch_id);
+          // ขอบเขต "วัตถุดิบเดียว" อยากรู้ว่าสาขาไหนสั่ง · ขอบเขตอื่นอยากรู้ว่าวัตถุดิบตัวไหนถูกสั่ง
+          const key=mode==="ing"?`b${+po.branch_id}`:`i${it.ingredient_id!=null?+it.ingredient_id:"n:"+(it.name||"").trim()}`;
+          const cur=g.get(key)||{
+            key,
+            label:mode==="ing"?branchName(+po.branch_id):((it.name||"").trim()||"(ไม่มีชื่อ)"),
+            code:mode==="ing"?"":((it.ingredient_id!=null&&ingById.get(+it.ingredient_id)?.code)||""),
+            unit:it.unit||"",qty:0,recv:0,value:0,pos:new Set(),
+          };
+          if(!cur.unit&&it.unit)cur.unit=it.unit;
           cur.qty+=(+it.qty||0);
           cur.recv+=(it.received_qty!=null?(+it.received_qty||0):0);
           cur.value+=(+it.line_total||0);
-          cur.pos.add(po.id);byBranch.set(bid,cur);
+          cur.pos.add(po.id);g.set(key,cur);
         }
       }
-      const rows=[...byBranch.values()].map(r=>({...r,branchName:branchName(r.branchId),poCount:r.pos.size})).sort((a,b)=>b.qty-a.qty);
-      setResult({rows,unit,capped:list.length>=1000,scanned:list.length});
+      const rows=[...g.values()].map(r=>({...r,poCount:r.pos.size})).sort((a,b)=>b.value-a.value||b.qty-a.qty);
+      setResult({rows,branchCount:byBranchSet.size,capped:list.length>=1000,scanned:list.length});
     }catch(e){setErr("โหลดข้อมูลไม่สำเร็จ: "+((e&&e.message)||e));}
     setBusy(false);
   }
+
+  const scopeLabel=mode==="ing"?(selIng?.name||"วัตถุดิบ"):mode==="cat"?selCat:"ทุกวัตถุดิบ";
+  const col1=mode==="ing"?"สาขา":"วัตถุดิบ";
+
   async function doExport(){
     if(!result||!result.rows.length)return;
     const XLSX=await loadXLSX();
-    const data=result.rows.map((r,i)=>({"ลำดับ":i+1,"สาขา":r.branchName,"จำนวนสั่ง":round2(r.qty),"หน่วย":result.unit,"รับแล้ว":round2(r.recv),"จำนวนใบ PO":r.poCount,"มูลค่า (฿)":round2(r.value)}));
+    const data=result.rows.map((r,i)=>({
+      "ลำดับ":i+1,[col1]:r.label,"รหัส":r.code||"","จำนวนสั่ง":round2(r.qty),"หน่วย":r.unit,
+      "รับแล้ว":round2(r.recv),"ใบ PO":r.poCount,"มูลค่า (บาท)":round2(r.value),
+    }));
     const t=result.rows.reduce((s,r)=>({qty:s.qty+r.qty,recv:s.recv+r.recv,value:s.value+r.value,po:s.po+r.poCount}),{qty:0,recv:0,value:0,po:0});
-    data.push({"ลำดับ":"","สาขา":"รวมทั้งหมด","จำนวนสั่ง":round2(t.qty),"หน่วย":result.unit,"รับแล้ว":round2(t.recv),"จำนวนใบ PO":t.po,"มูลค่า (฿)":round2(t.value)});
-    const ws=XLSX.utils.json_to_sheet(data);ws["!cols"]=[{wch:6},{wch:24},{wch:12},{wch:8},{wch:12},{wch:12},{wch:14}];
+    // รวม "จำนวน" เฉพาะตอนดูวัตถุดิบตัวเดียว — คนละหน่วยบวกกันไม่ได้ (3 กก. + 2 ลัง ไม่ใช่ 5)
+    data.push({"ลำดับ":"",[col1]:"รวมทั้งหมด","รหัส":"","จำนวนสั่ง":mode==="ing"?round2(t.qty):"—","หน่วย":mode==="ing"?(result.rows[0]?.unit||""):"",
+      "รับแล้ว":mode==="ing"?round2(t.recv):"—","ใบ PO":t.po,"มูลค่า (บาท)":round2(t.value)});
+    const ws=XLSX.utils.json_to_sheet(data);ws["!cols"]=[{wch:6},{wch:26},{wch:12},{wch:12},{wch:8},{wch:12},{wch:8},{wch:14}];
     const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"รายงาน");
-    const safe=String(selIng.name||"วัตถุดิบ").replace(/[\\/?*\[\]:]/g,"_").slice(0,24);
+    const safe=String(scopeLabel).replace(/[\\/?*\[\]:]/g,"_").slice(0,24);
     XLSX.writeFile(wb,`รายงาน_${safe}_${from}_${to}.xlsx`);
   }
+
   const tot=result?result.rows.reduce((s,r)=>({qty:s.qty+r.qty,recv:s.recv+r.recv,value:s.value+r.value,po:s.po+r.poCount}),{qty:0,recv:0,value:0,po:0}):null;
   const lbl={fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"};
   const nf=(n)=>(+n||0).toLocaleString(undefined,{maximumFractionDigits:2});
-  return <Modal title="📊 รายงานตามวัตถุดิบ (สั่งซื้อรายสาขา)" onClose={onClose} extraWide>
+  const MODES=[{id:"ing",l:"วัตถุดิบเดียว"},{id:"cat",l:"ทั้งหมวดหมู่"},{id:"all",l:"ทุกวัตถุดิบ"}];
+
+  return <Modal title="📊 รายงานการสั่งซื้อ (ใบ PO ครัวกลาง→สาขา)" onClose={onClose} extraWide>
+    <div style={{display:"flex",gap:5,marginBottom:12,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:430}}>
+      {MODES.map(m=>{const on=mode===m.id;return <button key={m.id} onClick={()=>{setMode(m.id);setResult(null);setErr("");}}
+        style={{flex:1,padding:"8px 12px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:on?C.brand:"transparent",color:on?C.white:C.ink3}}>{m.l}</button>;})}
+    </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(180px,100%),1fr))",gap:10,alignItems:"end",marginBottom:12}}>
-      <div style={{position:"relative"}}>
+      {mode==="ing"&&<div style={{position:"relative"}}>
         <div style={lbl}>วัตถุดิบ *</div>
         <input value={ingQ} onChange={e=>{setIngQ(e.target.value);setSelIng(null);}} placeholder="พิมพ์ชื่อ/รหัสวัตถุดิบ..." style={{...iS,fontSize:13,padding:"8px 10px"}}/>
-        {sugg.length>0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:20,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,marginTop:4,boxShadow:"0 8px 24px rgba(15,23,42,.12)",maxHeight:240,overflowY:"auto"}}>
-          {sugg.map(i=><button key={i.id} onClick={()=>{setSelIng(i);setIngQ(i.name);}} style={{display:"flex",gap:8,alignItems:"center",width:"100%",padding:"8px 12px",background:"none",border:"none",borderBottom:`1px solid ${C.lineLight}`,cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
+        {sugg.length>0&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:20,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,marginTop:4,boxShadow:"0 8px 24px rgba(15,23,42,.14)",overflow:"hidden",maxHeight:230,overflowY:"auto"}}>
+          {sugg.map(i=><button key={i.id} onClick={()=>{setSelIng(i);setIngQ(i.name);}} style={{display:"flex",gap:8,alignItems:"center",width:"100%",padding:"8px 12px",background:"transparent",border:"none",borderBottom:`1px solid ${C.lineLight}`,cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}}>
             {i.code&&<span style={{fontSize:10,fontWeight:800,color:"#fff",background:C.ink3,borderRadius:5,padding:"2px 5px",fontFamily:"ui-monospace,monospace",flexShrink:0}}>{i.code}</span>}
             <span style={{fontSize:13,color:C.ink2}}>{i.name}</span>
           </button>)}
         </div>}
-      </div>
+      </div>}
+      {mode==="cat"&&<div>
+        <div style={lbl}>หมวดหมู่ *</div>
+        <select value={selCat} onChange={e=>setSelCat(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
+          <option value="">— เลือกหมวดหมู่ —</option>
+          {cats.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>}
       <div><div style={lbl}>ตั้งแต่วันที่</div><input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/></div>
       <div><div style={lbl}>ถึง</div><input type="date" value={to} onChange={e=>setTo(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/></div>
       <div>
@@ -6530,24 +6578,33 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
       </div>
       <Btn v="primary" onClick={run} loading={busy} icon={I.search} s={{padding:"9px 16px"}}>ดูรายงาน</Btn>
     </div>
-    {selIng&&<div style={{fontSize:12,color:C.ink3,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>วัตถุดิบ: <b style={{color:C.ink}}>{selIng.name}</b>{selIng.code?` (${selIng.code})`:""}</div>}
-    {err&&<div style={{background:C.redLight,border:`1px solid ${C.red}55`,borderRadius:10,padding:"8px 12px",marginBottom:10,fontSize:12.5,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>{err}</div>}
+    <div style={{fontSize:12,color:C.ink3,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>
+      ขอบเขต: <b style={{color:C.ink}}>{scopeLabel}</b>
+      {pickBranch?<> · สาขา <b style={{color:C.ink}}>{branchName(pickBranch)}</b></>:<> · ทุกสาขา</>}
+    </div>
+    {err&&<div style={{background:C.redLight,border:`1px solid ${C.red}55`,borderRadius:10,padding:"8px 12px",marginBottom:10,fontSize:12.5,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{err}</div>}
     {result&&(result.rows.length===0
-      ?<div style={{textAlign:"center",padding:"40px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:14}}>ไม่พบการสั่งวัตถุดิบนี้ในช่วง/สาขาที่เลือก (สแกน {result.scanned} เอกสาร)</div>
+      ?<div style={{textAlign:"center",padding:"40px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:14}}>ไม่พบการสั่งซื้อในช่วงเวลาที่เลือก</div>
       :<div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
-          <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{result.rows.length} สาขา · สแกน {result.scanned} เอกสาร{result.capped?" (ครบ 1000 — อาจมีมากกว่านี้ ลองแคบช่วงวันที่)":""}</div>
+          <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
+            {result.rows.length} {mode==="ing"?"สาขา":"รายการ"}{mode!=="ing"?` · ${result.branchCount} สาขา`:""} · สแกน {result.scanned} เอกสาร{result.capped?" (ครบเพดาน 1000 — ลองแคบช่วงวันที่)":""}
+          </div>
           <Btn v="success" onClick={doExport} s={{padding:"7px 14px",fontSize:12}}>📥 Export Excel</Btn>
         </div>
         <div style={{overflowX:"auto",border:`1px solid ${C.line}`,borderRadius:12,background:C.white}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:560}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:620}}>
             <thead><tr style={{background:"#0F172A"}}>
-              {[["สาขา","left"],["จำนวนสั่ง","right"],["รับแล้ว","right"],["ใบ PO","right"],["มูลค่า (฿)","right"]].map((h,i)=><th key={i} style={{padding:"10px 12px",fontSize:12,fontWeight:800,color:"#fff",textAlign:h[1]}}>{h[0]}</th>)}
+              {[[col1,"left"],["จำนวนสั่ง","right"],["รับแล้ว","right"],["ใบ PO","right"],["มูลค่า (฿)","right"]].map(([h,a])=>
+                <th key={h} style={{padding:"9px 12px",textAlign:a,fontSize:11.5,fontWeight:800,color:"#E2E8F0",whiteSpace:"nowrap"}}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {result.rows.map((r,i)=><tr key={r.branchId} style={{background:i%2?C.bg:C.white,borderTop:`1px solid ${C.lineLight}`}}>
-                <td style={{padding:"9px 12px",fontSize:13,color:C.ink2,fontWeight:600}}>{r.branchName}</td>
-                <td style={{padding:"9px 12px",fontSize:13,color:C.ink,fontWeight:800,textAlign:"right"}}>{nf(r.qty)} <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>{result.unit}</span></td>
+              {result.rows.map((r,i)=><tr key={r.key} style={{background:i%2?C.bg:C.white,borderTop:`1px solid ${C.lineLight}`}}>
+                <td style={{padding:"9px 12px",fontSize:13,color:C.ink2,fontWeight:600}}>
+                  {r.code&&<span style={{fontSize:9.5,fontWeight:800,color:"#fff",background:C.ink3,borderRadius:4,padding:"1px 5px",fontFamily:"ui-monospace,monospace",marginRight:6}}>{r.code}</span>}
+                  {r.label}
+                </td>
+                <td style={{padding:"9px 12px",fontSize:13,color:C.ink,fontWeight:800,textAlign:"right",whiteSpace:"nowrap"}}>{nf(r.qty)} <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>{r.unit}</span></td>
                 <td style={{padding:"9px 12px",fontSize:12.5,color:C.ink3,textAlign:"right"}}>{nf(r.recv)}</td>
                 <td style={{padding:"9px 12px",fontSize:12.5,color:C.ink3,textAlign:"right"}}>{r.poCount}</td>
                 <td style={{padding:"9px 12px",fontSize:12.5,color:C.ink2,textAlign:"right"}}>{nf(r.value)}</td>
@@ -6555,8 +6612,11 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
             </tbody>
             {tot&&<tfoot><tr style={{background:C.brandLight,borderTop:`2px solid ${C.brand}`}}>
               <td style={{padding:"10px 12px",fontSize:13,fontWeight:800,color:C.brand}}>รวมทั้งหมด</td>
-              <td style={{padding:"10px 12px",fontSize:13,fontWeight:800,color:C.brand,textAlign:"right"}}>{nf(tot.qty)} <span style={{fontSize:11,fontWeight:600}}>{result.unit}</span></td>
-              <td style={{padding:"10px 12px",fontSize:12.5,fontWeight:800,color:C.brand,textAlign:"right"}}>{nf(tot.recv)}</td>
+              {/* บวกจำนวนข้ามวัตถุดิบไม่ได้ — คนละหน่วยกัน (3 กก. + 2 ลัง ไม่มีความหมาย) โชว์เฉพาะมูลค่า */}
+              <td style={{padding:"10px 12px",fontSize:13,fontWeight:800,color:C.brand,textAlign:"right",whiteSpace:"nowrap"}}>
+                {mode==="ing"?<>{nf(tot.qty)} <span style={{fontSize:11,fontWeight:600}}>{result.rows[0]?.unit||""}</span></>:<span style={{fontSize:11,fontWeight:600,color:C.ink4}}>คนละหน่วย</span>}
+              </td>
+              <td style={{padding:"10px 12px",fontSize:12.5,fontWeight:800,color:C.brand,textAlign:"right"}}>{mode==="ing"?nf(tot.recv):"—"}</td>
               <td style={{padding:"10px 12px",fontSize:12.5,fontWeight:800,color:C.brand,textAlign:"right"}}>{tot.po}</td>
               <td style={{padding:"10px 12px",fontSize:12.5,fontWeight:800,color:C.brand,textAlign:"right"}}>{nf(tot.value)}</td>
             </tr></tfoot>}
