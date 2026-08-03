@@ -1062,8 +1062,10 @@ const ALL_PERMS=[
   {id:"pos",label:"ขายหน้าร้าน"},
   {id:"crm",label:"CRM ลูกค้า"},
   {id:"ingredients",label:"วัตถุดิบ"},
+  {id:"waste",label:"บันทึกของเสีย"},
   {id:"menus",label:"เมนู"},
   {id:"sop",label:"SOP"},
+  {id:"production",label:"การผลิต (ครัวกลาง)"},
   {id:"summary",label:"สรุปต้นทุน"},
   {id:"fs_sales",label:"ยอดขาย FoodStory"},
   {id:"po",label:"สร้างเอกสารสั่งซื้อ"},
@@ -1078,8 +1080,8 @@ const ALL_PERMS=[
 const ROLE_DEFAULT_PERMS={
   admin:ALL_PERMS.map(p=>p.id),
   area:["approve","po","orders","summary","history"],
-  manager:["pos","crm","ingredients","menus","sop","summary","fs_sales","po","orders","history","suppliers","assets","approve"],
-  staff:["pos","crm","ingredients","menus","sop","summary","fs_sales","po","orders","history","suppliers"],
+  manager:["pos","crm","ingredients","waste","menus","sop","production","summary","fs_sales","po","orders","history","suppliers","assets","approve"],
+  staff:["pos","crm","ingredients","waste","menus","sop","summary","fs_sales","po","orders","history","suppliers"],
   viewer:["pos","menus","sop"],
 };
 // Coerce a value to an array (handles JSON string from legacy DB rows, null = treat as null sentinel)
@@ -4248,12 +4250,15 @@ function sopConsumption(parentIng, qty, ingById){
 function ProductionTab({ings,currentBranch,currentUser,reloadIngs}){
   const[sub,setSub]=useState("make");           // make | history
   const[q,setQ]=useState("");
-  const[pick,setPick]=useState(null);
+  const[pickId,setPickId]=useState(null);
   const[qty,setQty]=useState("");
   const[busy,setBusy]=useState(false);
   const runRef=useRef(false);                   // กันกดซ้ำ/กดรัวระหว่างกำลังบันทึก
   const bid=currentBranch?.id;
+  const isMobile=useIsMobile();
   const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
+  // ดึงตัวจริงจากรายการล่าสุดเสมอ (ดูเหตุผลที่ setPickId) — null ได้ถ้าวัตถุดิบถูกลบไประหว่างเปิดหน้าอยู่
+  const pick=pickId!=null?(ingById.get(+pickId)||null):null;
   // เลือกได้เฉพาะตัวที่มีขั้นตอน SOP จริง — ของที่ไม่มีสูตรไม่ถือว่า "ผลิต" ได้
   const producible=useMemo(()=>(ings||[]).filter(i=>Array.isArray(i.sop)&&i.sop.length>0),[ings]);
   const matches=useMemo(()=>{
@@ -4376,13 +4381,13 @@ function ProductionTab({ings,currentBranch,currentUser,reloadIngs}){
             <div style={{fontSize:15,fontWeight:800,color:C.ink,marginBottom:4}}>ยังไม่มีวัตถุดิบที่ผลิตได้</div>
             <div style={{fontSize:12.5,color:C.ink3}}>ผลิตได้เฉพาะวัตถุดิบที่ใส่ขั้นตอน SOP ไว้แล้ว — ไปเพิ่มที่แท็บ SOP ก่อน</div>
           </div></Card>
-        :<div style={{display:"grid",gridTemplateColumns:"minmax(0,340px) minmax(0,1fr)",gap:14,alignItems:"start"}}>
+        :<div style={{display:"grid",gridTemplateColumns:isMobile?"minmax(0,1fr)":"minmax(0,340px) minmax(0,1fr)",gap:14,alignItems:"start"}}>
           <Card>
             <div style={{fontSize:13,fontWeight:800,color:C.ink,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>เลือกสิ่งที่จะผลิต <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>({producible.length} รายการ)</span></div>
             <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อ/รหัส..." style={{...iSt,marginBottom:8}}/>
-            <div style={{maxHeight:420,overflowY:"auto",display:"flex",flexDirection:"column",gap:5}}>
+            <div style={{maxHeight:"min(52vh,460px)",overflowY:"auto",display:"flex",flexDirection:"column",gap:5}}>
               {matches.map(i=>{const on=pick&&+pick.id===+i.id;
-                return <button key={i.id} onClick={()=>{setPick(i);setQty("");}} style={{textAlign:"left",padding:"9px 11px",borderRadius:10,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",
+                return <button key={i.id} onClick={()=>{setPickId(i.id);setQty("");}} style={{textAlign:"left",padding:"9px 11px",borderRadius:10,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",
                   border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white}}>
                   <div style={{fontSize:13.5,fontWeight:on?800:700,color:C.ink}}>{i.name}</div>
                   <div style={{fontSize:10.5,color:C.ink4,marginTop:2}}>
@@ -4400,11 +4405,11 @@ function ProductionTab({ings,currentBranch,currentUser,reloadIngs}){
                   <div style={{fontSize:18,fontWeight:900,color:C.ink}}>{pick.name}</div>
                   <div style={{fontSize:12,color:C.ink4,marginTop:2}}>{pick.code?pick.code+" · ":""}มีอยู่ตอนนี้ <b style={{color:C.ink2}}>{round2(branchStockExact(pick,bid))} {pick.buy_unit||""}</b></div>
                 </div>
-                <Btn v="ghost" onClick={printSOP} icon={I.print} s={{padding:"7px 12px",fontSize:12}}>🖨 ปริ้นขั้นตอนการผลิต</Btn>
+                <Btn v="ghost" onClick={printSOP} s={{padding:"7px 12px",fontSize:12}}>🖨 ปริ้นขั้นตอนการผลิต</Btn>
               </div>
 
               <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap",marginBottom:14}}>
-                <div style={{flex:"1 1 180px"}}>
+                <div style={{flex:"0 1 200px",minWidth:150}}>
                   <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>จำนวนที่ผลิตได้ ({pick.buy_unit||"หน่วย"})</div>
                   <input type="text" inputMode="decimal" value={qty} onChange={e=>{const v=e.target.value;if(v===""||/^\d*\.?\d*$/.test(v))setQty(v);}} placeholder="0"
                     style={{...iSt,fontSize:20,fontWeight:900,color:C.brand,textAlign:"center",borderColor:C.brand+"66"}}/>
@@ -4506,7 +4511,7 @@ function ProductionHistory({currentBranch}){
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
       <div style={{fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{batches.length} รอบการผลิต · เรียงใหม่สุดขึ้นก่อน</div>
-      <Btn v="ghost" onClick={printReport} icon={I.print} s={{padding:"7px 13px",fontSize:12}}>🖨 ปริ้นรายงาน</Btn>
+      <Btn v="ghost" onClick={printReport} s={{padding:"7px 13px",fontSize:12}}>🖨 ปริ้นรายงาน</Btn>
     </div>
     <div style={{display:"flex",flexDirection:"column",gap:9}}>
       {batches.map(b=><Card key={b.ref}>
@@ -6981,7 +6986,7 @@ const priceHistLookup=(map,ingId,unit)=>(map&&map.get(`${+ingId}|${String(unit||
 // การกันซ้ำ 2 ที่ที่ต้องแก้ตามกันตลอดไป ซึ่งเป็นแบบที่พลาดง่ายที่สุด
 function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],lastPriceOf,onAdd}){
   const[q,setQ]=useState("");
-  const[pick,setPick]=useState(null);
+  const[pickId,setPickId]=useState(null);
   const[qty,setQty]=useState("");
   const[price,setPrice]=useState("");
   const[showAll,setShowAll]=useState(false);
@@ -8964,7 +8969,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
           {/* พอกดสร้างรายการแล้วรายการจะหายไปจากหน้านี้ (กลายเป็นใบสั่งซื้อรออนุมัติ)
               ปุ่มนี้จึงเป็นทางย้อนกลับไปดูว่าแต่ละรอบสั่งอะไรไปบ้าง */}
           <Btn v="ghost" onClick={()=>setShowHistory(true)} icon={I.clock} s={{padding:"8px 12px",fontSize:12}}>🕘 ประวัติ</Btn>
-          <Btn v="ghost" onClick={printShoppingList} icon={I.print} s={{padding:"8px 12px",fontSize:12}}>🖨 ปริ้น</Btn>
+          <Btn v="ghost" onClick={printShoppingList} s={{padding:"8px 12px",fontSize:12}}>🖨 ปริ้น</Btn>
           {onCreateOrders&&<Btn v="success" onClick={createAndPrint} loading={creating} disabled={creating} s={{padding:"8px 14px",fontSize:12}}>🛒 สร้างรายการ</Btn>}
         </div>
       </div>
@@ -14986,9 +14991,9 @@ export default function App(){
     {id:"crm",l:t("tab.crm"),icon:I.users,perm:"crm"},
     {id:"ingredients",l:t("tab.ingredients"),icon:I.leaf,perm:"ingredients"},
     {id:"menus",l:t("tab.menus"),icon:I.fire,perm:"menus"},
-    {id:"waste",l:"บันทึกของเสีย",icon:I.trash,perm:"ingredients"},
+    {id:"waste",l:"บันทึกของเสีย",icon:I.trash,perm:"waste"},
     {id:"sop",l:t("tab.sop"),icon:I.sop,perm:"sop"},
-    {id:"production",l:"การผลิต",icon:I.fire,perm:"sop"},   // เฉพาะครัวกลาง — กรองด้านล่าง
+    {id:"production",l:"การผลิต",icon:I.fire,perm:"production"},   // เฉพาะครัวกลาง — กรองด้านล่าง
     {id:"summary",l:t("tab.summary"),icon:I.chart,perm:"summary"},
     {id:"fssales",l:t("tab.fssales"),icon:I.chart,perm:"fs_sales"},
     {id:"po",l:t("tab.po"),icon:I.bill,perm:"po"},
