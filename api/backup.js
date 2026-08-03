@@ -265,9 +265,19 @@ export default async function handler(req, res) {
     // Readback verify: only trust a backup we can re-download, gunzip, parse, and whose per-table
     // lengths match what we claim. Retry a few times first — a Shared Drive read right after upload
     // can be transiently inconsistent, and a false "unverified" would delete a genuinely-good file.
-    let verified = false;
+    //
+    // ⏱ งบเวลา: ฟังก์ชันถูกตัดที่ 60 วินาที และตอนถูกตัด "ไม่มีอะไรเหลือเลย" — ไม่ได้เขียนผลลง
+    // ตาราง backups และแถวก็ค้างสถานะ running ตลอดไป (เกิดจริง 3 ส.ค. 69 ตอนกดสำรองกลางวัน)
+    // ขั้นตรวจสอบนี้คือขั้นที่แพงที่สุด (ดาวน์โหลดกลับ + คลายบีบอัด 16 MB + parse × ได้ถึง 3 รอบ)
+    // จึงกันเวลาไว้ปิดงานเสมอ: ถ้าใกล้หมดเวลาให้ "ข้ามการตรวจ" แล้วบันทึกว่าข้ามเพราะเวลาไม่พอ
+    // ดีกว่าโดนฆ่าทิ้งทั้งรอบ — ไฟล์สำรองที่ยังไม่ได้ตรวจ ยังมีค่ากว่าไม่มีไฟล์เลยมาก
+    const VERIFY_DEADLINE_MS = 42000;   // วัดจริง: ดึงข้อมูล ~10 วิ · ตรวจสอบ ~10-25 วิ · เผื่อปิดงาน 15 วิ
+    const elapsed = () => Date.now() - new Date(started).getTime();
+    let verified = false, verifySkipped = false;
     if (dataComplete) {
       for (let attempt = 0; attempt < 3 && !verified; attempt++) {
+        // เช็คก่อน "ทุกครั้ง" ไม่ใช่เฉพาะรอบแรก — รอบที่ 2-3 คือรอบที่พาไปชนเพดานบ่อยที่สุด
+        if (elapsed() > VERIFY_DEADLINE_MS) { verifySkipped = !verified; break; }
         if (attempt) await sleep(1500 * attempt);
         try {
           const p = JSON.parse(gunzipSync(await driveDownload(driveId)).toString());
@@ -284,8 +294,10 @@ export default async function handler(req, res) {
     // Neutralize it so no untrustworthy artifact survives under a good name: delete it (retried);
     // if delete keeps failing, RENAME to a FAILED- name so it no longer matches NAME_RE (rotation
     // drops it) and a human sees the marker. Only if BOTH fail do we flag the danger in the audit.
+    // แยก 2 กรณีให้ขาด: "ตรวจแล้วอ่านไม่ออก" = ไฟล์เสีย ต้องทำลายทิ้ง ห้ามให้ restore หยิบไปใช้
+    // ส่วน "ยังไม่ได้ตรวจเพราะเวลาไม่พอ" = ไม่รู้ว่าดีหรือเสีย ต้องเก็บไว้ ลบทิ้งคือทำลายของที่อาจใช้ได้
     let storedName = name, storedDrive = driveId;
-    if (dataComplete && !verified) {
+    if (dataComplete && !verified && !verifySkipped) {
       let neutralized = false;
       for (let a = 0; a < 3 && !neutralized; a++) { if (a) await sleep(1000 * a); neutralized = await driveDelete(driveId); }
       if (neutralized) { storedName = `(deleted unverified) ${name}`; storedDrive = null; }
@@ -300,6 +312,7 @@ export default async function handler(req, res) {
     // Status + rotation. success requires dataComplete AND verified. Rotation is cron-only.
     let status, rotation = null;
     if (!dataComplete) status = "failed";
+    else if (verifySkipped) status = "degraded";         // ไฟล์ครบและเก็บไว้แล้ว แต่ยังไม่ได้อ่านกลับมายืนยัน (เวลาไม่พอ)
     else if (!verified) status = "failed";               // complete but unreadable → not trustworthy (file deleted above)
     else status = driftClean ? "success" : "degraded";
     if (status === "success" && isCron) {
@@ -310,7 +323,9 @@ export default async function handler(req, res) {
     await auditPatch(auditId, {
       finished_at: new Date().toISOString(), status, file_name: storedName, drive_id: storedDrive,
       gz_size_bytes: gz.length, raw_size_bytes: raw.length, total_rows: totalRows, table_count: TABLES.length,
-      complete: dataComplete, verified, tables: manifestOut, missing_tables: missing, extra_tables: extra,
+      complete: dataComplete, verified: verifySkipped ? null : verified,
+      error: verifySkipped ? "ข้ามขั้นตรวจสอบไฟล์เพราะใกล้หมดเวลาทำงาน (60 วิ) — ไฟล์สำรองถูกเก็บไว้ครบและดาวน์โหลดได้ แต่ยังไม่ได้อ่านกลับมายืนยัน ควรกดสำรองใหม่ตอนที่ระบบว่าง" : null,
+      tables: manifestOut, missing_tables: missing, extra_tables: extra,
       rotation, duration_ms: Date.now() - new Date(started).getTime(),
     });
     return res.status(200).json({
