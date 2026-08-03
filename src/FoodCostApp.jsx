@@ -6986,7 +6986,7 @@ const priceHistLookup=(map,ingId,unit)=>(map&&map.get(`${+ingId}|${String(unit||
 // การกันซ้ำ 2 ที่ที่ต้องแก้ตามกันตลอดไป ซึ่งเป็นแบบที่พลาดง่ายที่สุด
 function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],lastPriceOf,onAdd}){
   const[q,setQ]=useState("");
-  const[pickId,setPickId]=useState(null);
+  const[pick,setPick]=useState(null);   // ตัวที่เลือกในช่องค้นหาชั่วคราว ไม่ต้องเก็บเป็น id (ต่างจาก ProductionTab)
   const[qty,setQty]=useState("");
   const[price,setPrice]=useState("");
   const[showAll,setShowAll]=useState(false);
