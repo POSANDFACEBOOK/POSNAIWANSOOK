@@ -3154,6 +3154,79 @@ function IngReportModal({kind,scope,data,currentBranch,onClose}){
     {body}
   </Modal>;
 }
+// ── ช่องเลือกซัพพลายแบบพิมพ์ค้นหาได้ ──────────────────────────────────────────
+// วัตถุดิบเก็บซัพพลายไว้ 2 ช่อง: supplier_id (ตัวจริง) และ supplier_name (ข้อความ)
+// ซึ่ง "ขัดกันเองได้" และเคยขัดกันจริง — การ์ดวัตถุดิบอ่านชื่อ ฟอร์มแก้ไขอ่าน id
+// พอสองช่องไม่ตรง ผู้ใช้เห็นชื่อซัพพลายบนการ์ด แต่ฟอร์มขึ้น "ไม่ระบุ"
+//
+// สาเหตุ: มีผู้เขียนสองที่ที่แต่ละที่อัปเดตช่องเดียว
+//   • ฟอร์มแก้วัตถุดิบ (dropdown เดิม) อัปเดตแค่ supplier_id → ชื่อค้างของเก่า
+//   • ตอนเปลี่ยนชื่อซัพพลาย cascade อัปเดตแค่ supplier_name → id ยังชี้ที่เดิม (อันนี้ถูก)
+//
+// ตัวนี้แก้ที่ต้นทาง: เลือกครั้งเดียว "เขียนทั้งสองช่องพร้อมกันเสมอ" จึงขัดกันไม่ได้อีก
+// และตอนแสดงผลจะยึด id เป็นหลัก (ตัวจริง) ใช้ชื่อเป็นตัวสำรองเฉพาะแถวเก่าที่ยังไม่มี id
+function SupplierPicker({suppliers=[],valueId,valueName,onPick,placeholder="พิมพ์ค้นหาชื่อซัพพลาย..."}){
+  const[open,setOpen]=useState(false);
+  const[q,setQ]=useState("");
+  const boxRef=useRef(null);
+  // ปิดเมื่อคลิกที่อื่น — ไม่ใช้ onBlur เพราะการคลิกรายการจะทำให้ blur ยิงก่อนจนเลือกไม่ติด
+  useEffect(()=>{
+    if(!open)return;
+    const away=(e)=>{if(boxRef.current&&!boxRef.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",away);
+    return()=>document.removeEventListener("mousedown",away);
+  },[open]);
+
+  const cur=(suppliers||[]).find(s=>+s.id===+valueId);
+  // แถวเก่าที่มีแต่ชื่อ ยังไม่ได้ผูก id — ต้องโชว์ชื่อนั้นไว้ ไม่ใช่กลืนเป็น "ไม่ระบุ"
+  const orphanName=!cur&&valueName&&String(valueName).trim()?String(valueName).trim():"";
+  const shown=cur?cur.name:orphanName;
+
+  const list=useMemo(()=>{
+    const ql=q.trim().toLowerCase();
+    const act=(suppliers||[]).filter(s=>s.active!==false);
+    if(!ql)return act.slice(0,60);
+    return act.filter(s=>(s.name||"").toLowerCase().includes(ql)).slice(0,60);
+  },[suppliers,q]);
+
+  const iSt={width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box",background:C.white};
+  return <div ref={boxRef} style={{position:"relative"}}>
+    {!open
+      ?<button type="button" onClick={()=>{setOpen(true);setQ("");}}
+        style={{...iSt,textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+        <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:shown?C.ink:C.ink4}}>
+          {shown||"— ไม่ระบุ —"}
+        </span>
+        <span style={{flexShrink:0,color:C.ink4,fontSize:11}}>▼</span>
+      </button>
+      :<>
+        <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder={placeholder} style={iSt}
+          onKeyDown={e=>{
+            if(e.key==="Escape"){setOpen(false);return;}
+            // Enter เลือกตัวเดียวที่เหลือ — พิมพ์แล้วกด Enter จบ ไม่ต้องขยับเมาส์
+            if(e.key==="Enter"&&list.length===1){onPick({id:list[0].id,name:list[0].name});setOpen(false);}
+          }}/>
+        <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:30,marginTop:4,background:C.white,border:`1px solid ${C.line}`,
+          borderRadius:10,boxShadow:"0 10px 30px rgba(15,23,42,.16)",maxHeight:240,overflowY:"auto"}}>
+          <button type="button" onClick={()=>{onPick({id:"",name:""});setOpen(false);}}
+            style={{display:"block",width:"100%",textAlign:"left",padding:"9px 12px",border:"none",borderBottom:`1px solid ${C.lineLight}`,
+              background:"transparent",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4}}>— ไม่ระบุ —</button>
+          {list.length===0
+            ?<div style={{padding:"11px 12px",fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบซัพพลายที่ค้นหา</div>
+            :list.map(s=>{const on=+s.id===+valueId;
+              return <button key={s.id} type="button" onClick={()=>{onPick({id:s.id,name:s.name});setOpen(false);}}
+                style={{display:"block",width:"100%",textAlign:"left",padding:"9px 12px",border:"none",borderBottom:`1px solid ${C.lineLight}`,
+                  background:on?C.brandLight:"transparent",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,
+                  color:C.ink,fontWeight:on?800:500}}>{s.name}{on?" ✓":""}</button>;})}
+        </div>
+      </>}
+    {/* แถวเก่าที่ชื่อไม่ผูกกับซัพพลายไหนเลย — บอกให้รู้ ไม่ปล่อยให้เข้าใจว่าผูกแล้ว */}
+    {!open&&orphanName&&<div style={{fontSize:10.5,color:"#B45309",fontWeight:700,marginTop:4,fontFamily:"'Sarabun',sans-serif"}}>
+      ⚠️ ชื่อนี้ยังไม่ได้ผูกกับซัพพลายในระบบ — เลือกจากรายการเพื่อผูกให้ถูกต้อง
+    </div>}
+  </div>;
+}
+
 function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,branches=[],reloadCats,orders=[],allOrders=[],menus=[]}){
   const[q,setQ]=useState("");const[cat,setCat]=useState("ทุกหมวด");const[open,setOpen]=useState(false);const[editId,setEditId]=useState(null);const[saving,setSaving]=useState(false);const[pg,setPg]=useState(1);const PG=18;const[showImport,setShowImport]=useState(false);const[showStockCheck,setShowStockCheck]=useState(false);const[showStockGate,setShowStockGate]=useState(false);const[stockCounter,setStockCounter]=useState(null);const[showSessionHist,setShowSessionHist]=useState(false);const[stockBtnLoading,setStockBtnLoading]=useState(false);
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");const[newCatName,setNewCatName]=useState("");
@@ -3703,7 +3776,11 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
                 </div>
               </div>
               {isCentral
-                ?(item.supplier_name&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.truck} s={10} c={C.teal}/>ซัพพลาย: {item.supplier_name}</div>)
+                ?((()=>{
+                  // ยึด supplier_id เป็นตัวจริง ใช้ supplier_name เฉพาะแถวเก่าที่ยังไม่ผูก id
+                  // ก่อนหน้านี้อ่านชื่อตรงๆ แถวที่ชื่อค้างของเก่าจึงโชว์ซัพพลายผิดคน
+                  const sn=(suppliers||[]).find(x=>+x.id===+item.supplier_id)?.name||item.supplier_name;
+                  return sn&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.truck} s={10} c={C.teal}/>ซัพพลาย: {sn}</div>;})())
                 :<div style={{display:"flex",alignItems:"center",gap:5,marginTop:4}}>
                   <Ic d={I.truck} s={11} c={C.teal}/>
                   <select value={branchSupplierId(item,currentBranch?.id)||""} onChange={e=>assignBranchSupplier(item,e.target.value||null)} style={{...iS,fontSize:11,padding:"4px 8px",height:26,appearance:"none",flex:1,minWidth:0,background:branchSupplierId(item,currentBranch?.id)?C.tealLight:C.white,color:branchSupplierId(item,currentBranch?.id)?C.teal:C.ink4,fontWeight:700,border:`1px solid ${branchSupplierId(item,currentBranch?.id)?C.teal+"55":C.line}`}}>
@@ -3764,7 +3841,12 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <Field label="หมวดหมู่"><select value={form.category} onChange={e=>upd("category",e.target.value)} style={{...iS,appearance:"none"}}>{ingCats.map(c=><option key={c.id}>{c.name}</option>)}</select></Field>
-        <Field label="ซัพพลาย"><select value={form.supplier_id} onChange={e=>upd("supplier_id",e.target.value)} style={{...iS,appearance:"none"}}><option value="">-- ไม่ระบุ --</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
+        {/* เขียนทั้ง supplier_id และ supplier_name พร้อมกันเสมอ — dropdown เดิมอัปเดตแค่ id
+            ทำให้ชื่อค้างของเก่า แล้วการ์ด (อ่านชื่อ) กับฟอร์ม (อ่าน id) โชว์ไม่ตรงกัน */}
+        <Field label="ซัพพลาย" hint="พิมพ์ค้นหาได้">
+          <SupplierPicker suppliers={suppliers} valueId={form.supplier_id} valueName={form.supplier_name}
+            onPick={({id,name})=>setForm(f=>({...f,supplier_id:id===""?"":String(id),supplier_name:name||""}))}/>
+        </Field>
       </div>
       <div style={{background:C.lineLight,borderRadius:12,padding:"16px",marginBottom:16}}>
         <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:12,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:6}}><Ic d={I.tag} s={14} c={C.brand}/>ข้อมูลการซื้อ</div>
