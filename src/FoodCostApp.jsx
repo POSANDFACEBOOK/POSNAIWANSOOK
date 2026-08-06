@@ -6914,6 +6914,8 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
             key,
             label:mode==="ing"?branchName(+po.branch_id):((it.name||"").trim()||"(ไม่มีชื่อ)"),
             code:mode==="ing"?"":((it.ingredient_id!=null&&ingById.get(+it.ingredient_id)?.code)||""),
+            // เก็บหมวดหมู่ไว้ตั้งแต่ตอนรวมยอด ใช้จัดกลุ่มตอน export — ไม่ต้องไปหาใหม่ทีหลัง
+            category:mode==="ing"?"":((it.ingredient_id!=null&&ingById.get(+it.ingredient_id)?.category)||"(ไม่ระบุหมวดหมู่)"),
             unit:it.unit||"",qty:0,recv:0,value:0,pos:new Set(),
             // ยอดแยกรายสาขาในแถวเดียวกัน — ตอบว่า "ของตัวนี้ สาขาไหนสั่งไปเท่าไร"
             // เก็บตอนรวมยอดเลย จะได้ไม่ต้องวนอ่านเอกสารซ้ำอีกรอบตอนแสดงผล
@@ -6951,21 +6953,51 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
     const XLSX=await loadXLSX();
     // ไฟล์ต้องมีคอลัมน์รายสาขาเหมือนที่เห็นบนจอ ไม่งั้น export ออกมาแล้วตอบไม่ได้ว่าสาขาไหนสั่งเท่าไร
     const bc=splitBranches?result.branchCols:[];
-    const data=result.rows.map((r,i)=>{
-      const row={"ลำดับ":i+1,[col1]:r.label,"รหัส":r.code||"","จำนวนสั่ง":round2(r.qty),"หน่วย":r.unit};
+    const blank=()=>{const r={};for(const k of cols)r[k]="";return r;};
+    const mkRow=(r,i)=>{
+      const row={"ลำดับ":i,[col1]:r.label,"รหัส":r.code||"","จำนวนสั่ง":round2(r.qty),"หน่วย":r.unit};
       // ช่องว่างใส่ 0 ไม่ใช่ค่าว่าง — Excel จะได้เอาไปบวก/กรอง/ทำ pivot ต่อได้ทันที
       for(const b2 of bc)row[b2.name]=round2(r.perBranch?.get(b2.id)?.qty||0);
       row["รับแล้ว"]=round2(r.recv);row["ใบ PO"]=r.poCount;row["มูลค่า (บาท)"]=round2(r.value);
       return row;
-    });
+    };
+    // ชุดคอลัมน์ที่แน่นอน — ต้องประกาศไว้ก่อน เพราะแถวว่าง/แถวหัวข้อต้องมีคีย์ครบเท่ากัน
+    // ไม่งั้น json_to_sheet จะจัดคอลัมน์เพี้ยนตามแถวแรกที่มันเจอ
+    const cols=["ลำดับ",col1,"รหัส","จำนวนสั่ง","หน่วย",...bc.map(x=>x.name),"รับแล้ว","ใบ PO","มูลค่า (บาท)"];
+    let data=[];
+    if(mode==="ing"){
+      // แถวเป็น "สาขา" ไม่ใช่วัตถุดิบ — จัดกลุ่มตามหมวดหมู่ไม่ได้ (ทุกแถวคือของชิ้นเดียวกัน)
+      data=result.rows.map((r,i)=>mkRow(r,i+1));
+    }else{
+      // จัดกลุ่มตามหมวดหมู่ + คั่นด้วยแถวว่าง ให้อ่านง่ายตอนเปิดใน Excel
+      const byCat=new Map();
+      for(const r of result.rows){
+        const c=r.category||"(ไม่ระบุหมวดหมู่)";
+        if(!byCat.has(c))byCat.set(c,[]);
+        byCat.get(c).push(r);
+      }
+      // เรียงหมวดตามมูลค่ารวมมากไปน้อย ให้หมวดที่ใช้เงินเยอะสุดอยู่บนสุด
+      const cats=[...byCat.entries()]
+        .map(([c,rs])=>({c,rs,value:rs.reduce((t,r)=>t+r.value,0)}))
+        .sort((x,y)=>y.value-x.value);
+      let n=0;
+      for(const {c,rs,value} of cats){
+        data.push({...blank(),[col1]:"▍ "+c});                       // หัวข้อหมวด
+        for(const r of rs)data.push(mkRow(r,++n));
+        // ยอดรวมของหมวดใส่เฉพาะมูลค่า — จำนวนข้ามวัตถุดิบคนละหน่วย บวกกันไม่มีความหมาย
+        data.push({...blank(),[col1]:"รวมหมวด "+c,"มูลค่า (บาท)":round2(value)});
+        data.push(blank());                                          // เว้นบรรทัดคั่นหมวด
+      }
+      if(data.length)data.pop();   // ไม่ต้องมีบรรทัดว่างค้างก่อนแถวรวมทั้งหมด
+    }
     const t=result.rows.reduce((s,r)=>({qty:s.qty+r.qty,recv:s.recv+r.recv,value:s.value+r.value,po:s.po+r.poCount}),{qty:0,recv:0,value:0,po:0});
     // รวม "จำนวน" เฉพาะตอนดูวัตถุดิบตัวเดียว — คนละหน่วยบวกกันไม่ได้ (3 กก. + 2 ลัง ไม่ใช่ 5)
-    const totalRow={"ลำดับ":"",[col1]:"รวมทั้งหมด","รหัส":"","จำนวนสั่ง":mode==="ing"?round2(t.qty):"—","หน่วย":mode==="ing"?(result.rows[0]?.unit||""):""};
+    const totalRow={...blank(),"ลำดับ":"",[col1]:"รวมทั้งหมด","รหัส":"","จำนวนสั่ง":mode==="ing"?round2(t.qty):"—","หน่วย":mode==="ing"?(result.rows[0]?.unit||""):""};
     // แถวรวมของคอลัมน์สาขาใส่ "มูลค่า" ไม่ใช่จำนวน — จำนวนข้ามวัตถุดิบคนละหน่วย บวกกันไม่มีความหมาย
     for(const b2 of bc)totalRow[b2.name]=round2(result.rows.reduce((s2,r)=>s2+((r.perBranch?.get(b2.id)?.value)||0),0));
     totalRow["รับแล้ว"]=mode==="ing"?round2(t.recv):"—";totalRow["ใบ PO"]=t.po;totalRow["มูลค่า (บาท)"]=round2(t.value);
     data.push(totalRow);
-    const ws=XLSX.utils.json_to_sheet(data);
+    const ws=XLSX.utils.json_to_sheet(data,{header:cols});
     ws["!cols"]=[{wch:6},{wch:26},{wch:12},{wch:12},{wch:8},...bc.map(()=>({wch:13})),{wch:12},{wch:8},{wch:14}];
     const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"รายงาน");
     const safe=String(scopeLabel).replace(/[\\/?*\[\]:]/g,"_").slice(0,24);
