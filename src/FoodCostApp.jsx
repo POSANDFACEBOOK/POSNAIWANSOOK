@@ -6915,8 +6915,16 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
             label:mode==="ing"?branchName(+po.branch_id):((it.name||"").trim()||"(ไม่มีชื่อ)"),
             code:mode==="ing"?"":((it.ingredient_id!=null&&ingById.get(+it.ingredient_id)?.code)||""),
             unit:it.unit||"",qty:0,recv:0,value:0,pos:new Set(),
+            // ยอดแยกรายสาขาในแถวเดียวกัน — ตอบว่า "ของตัวนี้ สาขาไหนสั่งไปเท่าไร"
+            // เก็บตอนรวมยอดเลย จะได้ไม่ต้องวนอ่านเอกสารซ้ำอีกรอบตอนแสดงผล
+            perBranch:new Map(),
           };
           if(!cur.unit&&it.unit)cur.unit=it.unit;
+          {const b=+po.branch_id,pb=cur.perBranch.get(b)||{qty:0,recv:0,value:0};
+           pb.qty+=(+it.qty||0);
+           pb.recv+=(it.received_qty!=null?(+it.received_qty||0):0);
+           pb.value+=(+it.line_total||0);
+           cur.perBranch.set(b,pb);}
           cur.qty+=(+it.qty||0);
           cur.recv+=(it.received_qty!=null?(+it.received_qty||0):0);
           cur.value+=(+it.line_total||0);
@@ -6924,26 +6932,41 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
         }
       }
       const rows=[...g.values()].map(r=>({...r,poCount:r.pos.size})).sort((a,b)=>b.value-a.value||b.qty-a.qty);
-      setResult({rows,branchCount:byBranchSet.size,capped:list.length>=1000,scanned:list.length});
+      const bTotals=new Map();
+      for(const r of rows)for(const[b,v] of r.perBranch)bTotals.set(b,(bTotals.get(b)||0)+v.value);
+      const branchCols=[...bTotals.entries()].sort((a,b)=>b[1]-a[1]).map(([id])=>({id,name:branchName(id)}));
+      setResult({rows,branchCols,branchCount:byBranchSet.size,capped:list.length>=1000,scanned:list.length});
     }catch(e){setErr("โหลดข้อมูลไม่สำเร็จ: "+((e&&e.message)||e));}
     setBusy(false);
   }
 
   const scopeLabel=mode==="ing"?(selIng?.name||"วัตถุดิบ"):mode==="cat"?selCat:"ทุกวัตถุดิบ";
+  // แตกยอดรายสาขาเมื่อ "แถวเป็นวัตถุดิบ" และ "ดูทุกสาขา" — โหมดตามชื่อวัตถุดิบแถวเป็นสาขาอยู่แล้ว
+  // และถ้าเจาะจงสาขาเดียว คอลัมน์จะมีแค่ช่องเดียวซ้ำกับยอดรวม ไม่ได้อะไรเพิ่ม
+  const splitBranches=mode!=="ing"&&!pickBranch&&(result?.branchCols?.length||0)>1;
   const col1=mode==="ing"?"สาขา":"วัตถุดิบ";
 
   async function doExport(){
     if(!result||!result.rows.length)return;
     const XLSX=await loadXLSX();
-    const data=result.rows.map((r,i)=>({
-      "ลำดับ":i+1,[col1]:r.label,"รหัส":r.code||"","จำนวนสั่ง":round2(r.qty),"หน่วย":r.unit,
-      "รับแล้ว":round2(r.recv),"ใบ PO":r.poCount,"มูลค่า (บาท)":round2(r.value),
-    }));
+    // ไฟล์ต้องมีคอลัมน์รายสาขาเหมือนที่เห็นบนจอ ไม่งั้น export ออกมาแล้วตอบไม่ได้ว่าสาขาไหนสั่งเท่าไร
+    const bc=splitBranches?result.branchCols:[];
+    const data=result.rows.map((r,i)=>{
+      const row={"ลำดับ":i+1,[col1]:r.label,"รหัส":r.code||"","จำนวนสั่ง":round2(r.qty),"หน่วย":r.unit};
+      // ช่องว่างใส่ 0 ไม่ใช่ค่าว่าง — Excel จะได้เอาไปบวก/กรอง/ทำ pivot ต่อได้ทันที
+      for(const b2 of bc)row[b2.name]=round2(r.perBranch?.get(b2.id)?.qty||0);
+      row["รับแล้ว"]=round2(r.recv);row["ใบ PO"]=r.poCount;row["มูลค่า (บาท)"]=round2(r.value);
+      return row;
+    });
     const t=result.rows.reduce((s,r)=>({qty:s.qty+r.qty,recv:s.recv+r.recv,value:s.value+r.value,po:s.po+r.poCount}),{qty:0,recv:0,value:0,po:0});
     // รวม "จำนวน" เฉพาะตอนดูวัตถุดิบตัวเดียว — คนละหน่วยบวกกันไม่ได้ (3 กก. + 2 ลัง ไม่ใช่ 5)
-    data.push({"ลำดับ":"",[col1]:"รวมทั้งหมด","รหัส":"","จำนวนสั่ง":mode==="ing"?round2(t.qty):"—","หน่วย":mode==="ing"?(result.rows[0]?.unit||""):"",
-      "รับแล้ว":mode==="ing"?round2(t.recv):"—","ใบ PO":t.po,"มูลค่า (บาท)":round2(t.value)});
-    const ws=XLSX.utils.json_to_sheet(data);ws["!cols"]=[{wch:6},{wch:26},{wch:12},{wch:12},{wch:8},{wch:12},{wch:8},{wch:14}];
+    const totalRow={"ลำดับ":"",[col1]:"รวมทั้งหมด","รหัส":"","จำนวนสั่ง":mode==="ing"?round2(t.qty):"—","หน่วย":mode==="ing"?(result.rows[0]?.unit||""):""};
+    // แถวรวมของคอลัมน์สาขาใส่ "มูลค่า" ไม่ใช่จำนวน — จำนวนข้ามวัตถุดิบคนละหน่วย บวกกันไม่มีความหมาย
+    for(const b2 of bc)totalRow[b2.name]=round2(result.rows.reduce((s2,r)=>s2+((r.perBranch?.get(b2.id)?.value)||0),0));
+    totalRow["รับแล้ว"]=mode==="ing"?round2(t.recv):"—";totalRow["ใบ PO"]=t.po;totalRow["มูลค่า (บาท)"]=round2(t.value);
+    data.push(totalRow);
+    const ws=XLSX.utils.json_to_sheet(data);
+    ws["!cols"]=[{wch:6},{wch:26},{wch:12},{wch:12},{wch:8},...bc.map(()=>({wch:13})),{wch:12},{wch:8},{wch:14}];
     const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"รายงาน");
     const safe=String(scopeLabel).replace(/[\\/?*\[\]:]/g,"_").slice(0,24);
     XLSX.writeFile(wb,`รายงาน_${safe}_${from}_${to}.xlsx`);
@@ -7007,8 +7030,9 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
         <div style={{overflowX:"auto",border:`1px solid ${C.line}`,borderRadius:12,background:C.white}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:620}}>
             <thead><tr style={{background:"#0F172A"}}>
-              {[[col1,"left"],["จำนวนสั่ง","right"],["รับแล้ว","right"],["ใบ PO","right"],["มูลค่า (฿)","right"]].map(([h,a])=>
-                <th key={h} style={{padding:"9px 12px",textAlign:a,fontSize:11.5,fontWeight:800,color:"#E2E8F0",whiteSpace:"nowrap"}}>{h}</th>)}
+              {[[col1,"left"],["จำนวนสั่ง","right"],...(splitBranches?result.branchCols.map(b=>[b.name,"right",true]):[]),["รับแล้ว","right"],["ใบ PO","right"],["มูลค่า (฿)","right"]].map(([h,a,isB])=>
+                <th key={h} style={{padding:"9px 12px",textAlign:a,fontSize:11.5,fontWeight:800,color:isB?"#FDBA74":"#E2E8F0",whiteSpace:"nowrap",
+                  background:isB?"rgba(255,255,255,.06)":"transparent"}}>{h}</th>)}
             </tr></thead>
             <tbody>
               {result.rows.map((r,i)=><tr key={r.key} style={{background:i%2?C.bg:C.white,borderTop:`1px solid ${C.lineLight}`}}>
@@ -7017,6 +7041,9 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
                   {r.label}
                 </td>
                 <td style={{padding:"9px 12px",fontSize:13,color:C.ink,fontWeight:800,textAlign:"right",whiteSpace:"nowrap"}}>{nf(r.qty)} <span style={{fontSize:11,color:C.ink4,fontWeight:600}}>{r.unit}</span></td>
+                {splitBranches&&result.branchCols.map(b=>{const v=r.perBranch?.get(b.id);
+                  return <td key={b.id} style={{padding:"9px 12px",fontSize:12.5,textAlign:"right",whiteSpace:"nowrap",background:"#FFF9F5",
+                    color:v?C.ink2:C.line,fontWeight:v?700:400}}>{v?nf(v.qty):"–"}</td>;})}
                 <td style={{padding:"9px 12px",fontSize:12.5,color:C.ink3,textAlign:"right"}}>{nf(r.recv)}</td>
                 <td style={{padding:"9px 12px",fontSize:12.5,color:C.ink3,textAlign:"right"}}>{r.poCount}</td>
                 <td style={{padding:"9px 12px",fontSize:12.5,color:C.ink2,textAlign:"right"}}>{nf(r.value)}</td>
@@ -7028,6 +7055,10 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
               <td style={{padding:"10px 12px",fontSize:13,fontWeight:800,color:C.brand,textAlign:"right",whiteSpace:"nowrap"}}>
                 {mode==="ing"?<>{nf(tot.qty)} <span style={{fontSize:11,fontWeight:600}}>{result.rows[0]?.unit||""}</span></>:<span style={{fontSize:11,fontWeight:600,color:C.ink4}}>คนละหน่วย</span>}
               </td>
+              {splitBranches&&result.branchCols.map(b=>{
+                // รวมได้เฉพาะ "มูลค่า" — จำนวนข้ามวัตถุดิบคนละหน่วย บวกกันไม่มีความหมาย
+                const v=result.rows.reduce((s2,r)=>s2+((r.perBranch?.get(b.id)?.value)||0),0);
+                return <td key={b.id} style={{padding:"10px 12px",fontSize:11.5,fontWeight:800,color:C.brand,textAlign:"right",whiteSpace:"nowrap",background:"#FFF4EC"}}>฿{nf(v)}</td>;})}
               <td style={{padding:"10px 12px",fontSize:12.5,fontWeight:800,color:C.brand,textAlign:"right"}}>{mode==="ing"?nf(tot.recv):"—"}</td>
               <td style={{padding:"10px 12px",fontSize:12.5,fontWeight:800,color:C.brand,textAlign:"right"}}>{tot.po}</td>
               <td style={{padding:"10px 12px",fontSize:12.5,fontWeight:800,color:C.brand,textAlign:"right"}}>{nf(tot.value)}</td>
