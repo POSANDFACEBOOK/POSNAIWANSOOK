@@ -135,7 +135,22 @@ async function sb(path, opts = {}) {
     const ms = nowMs() - t0;
     // 5xx = ฝั่งเซิร์ฟเวอร์/ฐานข้อมูลมีปัญหา · 4xx = คำขอของเราเองผิด ไม่ใช่อาการป่วย
     mark(res.status >= 500 ? "err" : (ms > DBH.SLOW_MS ? "slow" : "ok"), ms);
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) {
+      const body = await res.text();
+      // 42501 = ตารางนั้นเปิด Row Level Security ไว้แต่ไม่มี policy ให้เขียน
+      // ระบบนี้ออกแบบให้ปิด RLS ทุกตาราง (คุมสิทธิ์ที่ชั้นแอป) ตารางที่ยังเปิดอยู่คือของที่หลุด
+      // Supabase เปิด RLS ให้อัตโนมัติตอนสร้างตารางใหม่ — เจอซ้ำมาหลายรอบแล้ว
+      // แปลเป็นข้อความที่บอกได้ว่าต้องทำอะไร แทนที่จะโยน JSON ดิบใส่หน้าผู้ใช้
+      if (/42501|row-level security/i.test(body)) {
+        // ตัว body เป็น JSON ชื่อตารางจึงถูกครอบด้วย \" (แบ็กสแลชนำหน้า) — ต้องเผื่อทั้งมีและไม่มี
+        const t = (body.match(/table\s+\\?"([a-z_]+)\\?"/i) || [])[1] || "ตารางนี้";
+        throw new Error(`บันทึกไม่ได้เพราะตาราง "${t}" ยังเปิดระบบล็อกแถว (RLS) อยู่
+
+ผู้ดูแลระบบต้องรันใน Supabase → SQL Editor:
+alter table public.${t} disable row level security;`);
+      }
+      throw new Error(body);
+    }
     const text = await res.text();
     return text ? JSON.parse(text) : [];
   }catch(e){
