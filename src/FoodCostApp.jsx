@@ -8245,6 +8245,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     return list.slice().sort((a,b)=>(a.type==="central"?-1:b.type==="central"?1:0));
   })();
 
+  const destOptions=branchOptions.filter(b=>+b.id!==+currentBranch?.id);
+
   // Central kitchen flow: turn the PurchaseSummary into one external-supplier
   // order per vendor, then OrderTab handles ยืนยันรับ + actual price + stock+.
   async function createPurchaseOrdersFromSummary(groups){
@@ -8308,7 +8310,12 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         </h3>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        {/* สั่งวัตถุดิบ / โอนวัตถุดิบ / สร้างเอกสาร PO ย้ายไปหัวแถบ "ใบขอซื้อ" แล้ว */}
+        {/* เปิด PO ส่งของจากครัวกลางไปสาขา — ใช้ startCreate ตัวเดิมที่แท็บใบขอซื้อเรียกอยู่แล้ว
+            (initialAction="create") จึงเป็นขั้นตอนเดียวกันทุกอย่าง: เลือกสาขาปลายทาง → กรอกรายการ
+            ครัวกลางเท่านั้น เพราะเป็นการส่งของ "จาก" คลังครัวกลาง สาขาส่งให้กันเองไม่ได้ */}
+        {isCentralBranch&&hasPO&&<Btn onClick={startCreate} icon={I.plus}
+          s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,padding:"9px 16px",fontSize:13}}>
+          เปิด PO สั่งของให้สาขา</Btn>}
       </div>
     </div>
 
@@ -8560,9 +8567,9 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
 
     {/* Step 1: Pick branch */}
     {step==='pick-branch'&&<Modal title={`🏢 เลือกสาขาปลายทาง — ส่งจาก "${currentBranch.name}" ไปยัง...`} onClose={()=>setStep(null)}>
-      {branchOptions.length===0?<div style={{padding:30,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีสาขาอื่นในระบบ — เพิ่มสาขาในแท็บ "ตั้งค่า" ก่อน</div>:
+      {destOptions.length===0?<div style={{padding:30,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีสาขาอื่นในระบบ — เพิ่มสาขาในแท็บ "ตั้งค่า" ก่อน</div>:
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(220px,100%),1fr))",gap:10}}>
-        {branchOptions.map(b=><button key={b.id} onClick={()=>pickBranch(b)} style={{padding:"18px 16px",border:`2px solid ${C.line}`,borderRadius:14,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .15s",minHeight:64}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
+        {destOptions.map(b=><button key={b.id} onClick={()=>pickBranch(b)} style={{padding:"18px 16px",border:`2px solid ${C.line}`,borderRadius:14,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .15s",minHeight:64}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background=C.white;}}>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
             <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.branch} s={16} c={C.white}/></div>
             <div style={{minWidth:0,flex:1}}>
