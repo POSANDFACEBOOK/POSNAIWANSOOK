@@ -8899,7 +8899,9 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
   // partner/direction filter set on the PO list. Re-fetch on demand so the
   // count is always current with the database, not the UI's filter view.
   const[showHistory,setShowHistory]=useState(false);
-  const[unpicked,setUnpicked]=useState(()=>new Set());   // ชื่อซัพพลายที่ติ๊กออก   // หน้าย้อนดูรอบที่เคยกดสร้างรายการ
+  // ชื่อซัพพลายที่ "ติ๊กเลือกไว้" — เริ่มต้นว่างเปล่าโดยเจตนา ต้องติ๊กเองก่อนถึงจะสร้างรายการได้
+  // (เดิมเก็บกลับกันคือติ๊กมาให้ทุกเจ้าแล้วให้ติ๊กออก ซึ่งเสี่ยงกดสร้างยกชุดทั้งที่ตั้งใจซื้อไม่กี่เจ้า)
+  const[pickedSups,setPickedSups]=useState(()=>new Set());   // หน้าย้อนดูรอบที่เคยกดสร้างรายการ
   const[pos,setPos]=useState([]);
   const[prs,setPrs]=useState([]);          // ใบขอซื้อที่อนุมัติแล้วแต่ยังไม่ได้ออกไปซื้อ
   const[loading,setLoading]=useState(true);
@@ -9041,7 +9043,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
 
   const totalCost=Math.round(groups.reduce((s,g)=>s+g.subtotal,0)*100)/100;
   // เลือกไว้กี่เจ้า — ใช้กับทั้งปุ่มสร้างและปุ่มปริ้น ให้พิมพ์ออกมาตรงกับที่จะสั่งจริง
-  const pickedGroups=groups.filter(g=>!unpicked.has(g.name));
+  const pickedGroups=groups.filter(g=>pickedSups.has(g.name));
   const pickedTotal=Math.round(pickedGroups.reduce((s,g)=>s+g.subtotal,0)*100)/100;
   const pickedIngs=pickedGroups.reduce((s,g)=>s+g.rows.filter(r=>r.shortBy>0).length,0);
   const allPicked=groups.length>0&&pickedGroups.length===groups.length;
@@ -9148,7 +9150,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
               ปุ่มนี้จึงเป็นทางย้อนกลับไปดูว่าแต่ละรอบสั่งอะไรไปบ้าง */}
           <div style={{display:"flex",alignItems:"center",gap:8,marginRight:4,fontFamily:"'Sarabun',sans-serif"}}>
             <span style={{fontSize:12,color:C.ink3}}>เลือก <b style={{color:C.ink}}>{pickedGroups.length}</b>/{groups.length} เจ้า · <b style={{color:C.brand}}>฿{pickedTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</b></span>
-            <button onClick={()=>setUnpicked(allPicked?new Set(groups.map(g=>g.name)):new Set())}
+            <button onClick={()=>setPickedSups(allPicked?new Set():new Set(groups.map(g=>g.name)))}
               style={{background:"transparent",border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 10px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11.5,fontWeight:700,color:C.ink3}}>
               {allPicked?"ล้างทั้งหมด":"เลือกทั้งหมด"}</button>
           </div>
@@ -9171,13 +9173,13 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       {/* One supplier per card — item name on its own full-width line, stats in a grid below, never overlap */}
       <div style={{display:"flex",flexDirection:"column",gap:18}}>
         {groups.map((g,gIdx)=><div key={g.name} style={{borderRadius:14,overflow:"hidden",border:`2px solid ${C.teal}33`,boxShadow:"0 2px 10px rgba(13,148,136,0.08)",background:C.white,
-          opacity:unpicked.has(g.name)?.5:1,transition:"opacity .15s"}}>
+          opacity:pickedSups.has(g.name)?1:.5,transition:"opacity .15s"}}>
           {/* Supplier header — teal gradient, numbered, big subtotal */}
           <div style={{padding:"14px 18px",background:`linear-gradient(135deg,${C.teal} 0%,#0F766E 100%)`,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
             <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0,flex:1}}>
               {/* ติ๊กเลือกว่าจะสั่งเจ้านี้ไหม — เจ้าที่ไม่ติ๊กจะยังค้างอยู่ในหน้านี้ ไม่หายไปไหน */}
-              <input type="checkbox" checked={!unpicked.has(g.name)} aria-label={`เลือกสั่งจาก ${g.name}`}
-                onChange={e=>setUnpicked(prev=>{const n=new Set(prev);if(e.target.checked)n.delete(g.name);else n.add(g.name);return n;})}
+              <input type="checkbox" checked={pickedSups.has(g.name)} aria-label={`เลือกสั่งจาก ${g.name}`}
+                onChange={e=>setPickedSups(prev=>{const n=new Set(prev);if(e.target.checked)n.add(g.name);else n.delete(g.name);return n;})}
                 style={{width:20,height:20,flexShrink:0,cursor:"pointer",accentColor:"#FFFFFF"}}/>
               <div style={{width:34,height:34,borderRadius:10,background:"rgba(255,255,255,0.2)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                 <Ic d={I.truck} s={18} c={C.white}/>
@@ -12179,7 +12181,10 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
         <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:8,padding:"0 14px 12px"}}><Btn v="success" onClick={()=>approveReq(o)} loading={busy===k} icon={I.check} s={{flex:1,padding:"9px",fontSize:13}}>อนุมัติ</Btn><Btn v="danger" onClick={()=>rejectReq(o)} disabled={busy===k} s={{padding:"9px 14px",fontSize:13}}>ตีกลับ</Btn></div>
       </Card>;})}
       {prPend.map(o=>{const k="pr"+o.id;return <Card key={k} style={{overflow:"hidden",borderLeft:`4px solid ${o.revised_at?"#F59E0B":C.green}`}}>
-        <div style={{padding:"12px 14px"}}>
+        {/* แตะที่ตัวการ์ดเพื่อดูรายละเอียดเต็ม — สำคัญกับใบขอสินทรัพย์เป็นพิเศษ เพราะเหตุผล
+            ที่ขอ (note) กับรูปของจริงถูกตัดจนอ่านไม่จบในการ์ด แต่เป็นข้อมูลที่ต้องใช้ตัดสินใจอนุมัติ
+            ปุ่มอนุมัติ/ตีกลับอยู่นอก div นี้ จึงกดแล้วไม่เผลอเปิดป๊อปอัปแทน */}
+        <div onClick={()=>setDetailCard({kind:"pr",o})} title="แตะดูรายละเอียด + รูปภาพ" style={{padding:"12px 14px",cursor:"pointer"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8}}>
             <div style={{minWidth:0,flex:1}}>
               <div style={{fontSize:11,color:C.ink4,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ใบขอซื้อจากสาขา</div>
@@ -12219,31 +12224,54 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
     })()}
     {detailCard&&(()=>{
       const o=detailCard.o,kind=detailCard.kind;
+      const isPR=kind==="pr", isAssetPR=isPR&&o.type==="asset";
       const bid=kind==="po"?o.from_branch_id:o.branch_id;
-      const title=kind==="po"?`🏢 ครัวกลาง · ${o.po_number||""}`:`🚚 ${o.supplier_name||"ซัพพลายนอก"}`;
+      const title=kind==="po"?`🏢 ครัวกลาง · ${o.po_number||""}`
+        :isPR?`${isAssetPR?"🛒":"📝"} ${o.pr_number||("PR#"+o.id)}`
+        :`🚚 ${o.supplier_name||"ซัพพลายนอก"}`;
       const list=itemsOf(o);
       const grand=kind==="po"?(o.total||sumItems(o)):sumItems(o);
       const ingOf=it=>ingById.get(+(it.ingId||it.ingredient_id));
-      const accent=kind==="po"?C.blue:C.teal;
+      const accent=kind==="po"?C.blue:isAssetPR?C.purple:isPR?C.green:C.teal;
+      // ใบขอสินทรัพย์ไม่มีราคา (ครัวกลางไปหาซื้อแล้วค่อยรู้ราคา) — โชว์ ฿0 จะสื่อผิดว่าของฟรี
+      const showMoney=!isAssetPR&&list.some(it=>(+(it.estimatedCost||it.line_total)||0)>0);
       return <Modal title={title} onClose={()=>setDetailCard(null)} extraWide>
         <div style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>จากสาขา <b style={{color:C.ink}}>{branchName(bid)}</b> · โดย {kind==="po"?(o.created_by||"-"):(o.requested_by||"-")} · <b style={{color:C.ink2}}>{list.length}</b> รายการ</div>
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {list.map((it,i)=>{const ing=ingOf(it);const st=stockOfItem(it,bid);const qty=it.qtyNeeded||it.qty||0;const price=it.estimatedCost||it.line_total||0;const low=st!=null&&st<=0;return <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,fontFamily:"'Sarabun',sans-serif"}}>
-            <div onClick={ing?.image?(()=>imgView(driveImgSrc(ing.image))):undefined} style={{cursor:ing?.image?"pointer":"default",flexShrink:0}}><Thumb src={ing?.image} alt={it.name} size={58} radius={10} iconBg={C.brandLight} iconColor={C.brand} iconSize={24}/></div>
+          {list.map((it,i)=>{const ing=ingOf(it);
+            // ใบขอสินทรัพย์แนบรูปมาในตัวรายการเอง (it.image) เพราะของที่ขออาจยังไม่มีในทะเบียน
+            // ส่วนใบวัตถุดิบไม่มี ต้องไปเอารูปจากตัววัตถุดิบ — เผื่อทั้งสองทาง
+            const img=it.image||ing?.image||null;
+            // "คงเหลือ" ของสินทรัพย์คือจำนวนที่สาขามีอยู่แล้ว ณ ตอนขอ (current_qty)
+            // ไม่ใช่สต๊อกวัตถุดิบ — ถ้าไปอ่านสต๊อกวัตถุดิบจะได้ค่าของคนละของ
+            const st=isAssetPR?(it.current_qty!=null?+it.current_qty:null):stockOfItem(it,bid);
+            const qty=it.qtyNeeded||it.qty||0;const price=it.estimatedCost||it.line_total||0;const low=st!=null&&st<=0;return <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,fontFamily:"'Sarabun',sans-serif"}}>
+            <div onClick={img?(()=>imgView(driveImgSrc(img))):undefined} style={{cursor:img?"pointer":"default",flexShrink:0}}><Thumb src={img} alt={it.name} size={58} radius={10} iconBg={C.brandLight} iconColor={C.brand} iconSize={24}/></div>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:15,fontWeight:800,color:C.ink,wordBreak:"break-word"}}>{it.name}</div>
-              <div style={{fontSize:12.5,color:low?C.red:C.ink4,marginTop:4}}>📦 คงเหลือ <b style={{color:low?C.red:C.ink2}}>{st!=null?st:"-"}</b> {it.unit||""}</div>
+              <div style={{fontSize:15,fontWeight:800,color:C.ink,wordBreak:"break-word"}}>
+                {it.kind==="other"&&<span style={{fontSize:10.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:6,padding:"2px 6px",marginRight:6}}>🆕 ของใหม่</span>}
+                {it.name}
+              </div>
+              <div style={{fontSize:12.5,color:low?C.red:C.ink4,marginTop:4}}>📦 {isAssetPR?"มีอยู่เดิม":"คงเหลือ"} <b style={{color:low?C.red:C.ink2}}>{st!=null?st:"-"}</b> {it.unit||""}</div>
+              {/* เหตุผลที่ขอ — ในการ์ดถูกตัดจนอ่านไม่จบ ทั้งที่เป็นข้อมูลหลักที่ใช้ตัดสินใจอนุมัติ ตรงนี้โชว์เต็ม */}
+              {it.note&&<div style={{fontSize:12.5,color:C.ink2,marginTop:6,padding:"7px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.lineLight}`,whiteSpace:"pre-line",wordBreak:"break-word",lineHeight:1.55}}>★ {it.note}</div>}
             </div>
             <div style={{textAlign:"right",flexShrink:0}}>
               <div style={{fontSize:22,fontWeight:900,color:accent,lineHeight:1.1}}>{qty} <span style={{fontSize:12,fontWeight:600,color:C.ink4}}>{it.unit||""}</span></div>
-              <div style={{fontSize:12,color:C.ink3,marginTop:3}}>฿{money(price)}</div>
+              {showMoney&&<div style={{fontSize:12,color:C.ink3,marginTop:3}}>฿{money(price)}</div>}
             </div>
           </div>;})}
         </div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14,paddingTop:12,borderTop:`2px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif"}}>
-          <span style={{fontSize:15,fontWeight:800,color:C.ink2}}>รวมทั้งสิ้น</span>
-          <span style={{fontSize:26,fontWeight:900,color:C.brand}}>฿{money(grand)}</span>
-        </div>
+        {/* ใบขอสินทรัพย์ยังไม่มีราคา — โชว์ "รวมทั้งสิ้น ฿0" จะอ่านได้ว่าของฟรี ซึ่งผิด
+            แทนที่ด้วยการบอกตรงๆ ว่าราคาจะรู้ตอนครัวกลางไปหาซื้อ */}
+        {showMoney
+          ?<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14,paddingTop:12,borderTop:`2px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif"}}>
+            <span style={{fontSize:15,fontWeight:800,color:C.ink2}}>รวมทั้งสิ้น</span>
+            <span style={{fontSize:26,fontWeight:900,color:C.brand}}>฿{money(grand)}</span>
+          </div>
+          :<div style={{marginTop:14,paddingTop:12,borderTop:`2px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink4,textAlign:"center"}}>
+            ยังไม่มีราคา — ครัวกลางจะกรอกตอนไปซื้อจริง
+          </div>}
         <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center",marginTop:10}}>แตะรูปเพื่อขยายเต็มจอ · กดอนุมัติ/ตีกลับได้ที่การ์ดด้านหลัง</div>
       </Modal>;
     })()}
