@@ -1884,6 +1884,324 @@ function driveImgSrc(ref){ if(!ref)return ""; return /^drive:/.test(ref)?`/api/d
 // Absolute form — for images embedded in printed windows (their about:blank base
 // can't resolve the relative /api/drive-view proxy path).
 function driveImgAbs(ref){ if(!ref)return ""; const s=driveImgSrc(ref); return /^https?:/i.test(s)?s:(publicBaseUrl().replace(/\/+$/,"")+s); }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ใบ SOP มาตรฐาน — A4 แนวตั้ง "แผ่นเดียวจบ" ต่อ 1 เมนู/วัตถุดิบ
+// (แพทเทิร์นที่เจ้าของกำหนด 7 ส.ค. 69)
+//
+//   ┌─ แถบหัวสีอิฐ: คู่มือปฏิบัติงานมาตรฐาน + ชื่อ + ป้ายหมวดหมู่/เวลา ─────┐
+//   │ ซ้าย 38%                │ ขวา 62%                                  │
+//   │  รูปจานเสร็จ             │  ขั้นตอนการทำ (N ขั้นตอน)                  │
+//   │  วัตถุดิบและส่วนผสม       │   การ์ดขั้นตอน เรียงเป็นกริด                │
+//   │  บรรจุภัณฑ์              │                                          │
+//   └─ แถบท้ายสีกรมท่า: ชื่อ · คำอธิบาย · เวลารวม ──────────────────────┘
+//
+// ── สองโหมดของคอลัมน์ขวา (สำคัญ อย่าตัดทิ้ง) ──
+// แพทเทิร์นต้นแบบวางอยู่บน "รูปประกอบทุกขั้นตอน" แต่ข้อมูลจริงวันที่ทำ (7 ส.ค. 69)
+// คือ 381 ขั้นตอนใน 123 เมนู ไม่มีรูปเลยสักขั้น ถ้าลอกแพทเทิร์นมาตรง ๆ ทุกใบจะพิมพ์
+// ออกมาเป็นกล่องเทา "ไม่มีรูป" เรียงกัน — แย่กว่าของเดิม จึงแยกเป็น
+//   โหมดรูป (มีรูปอย่างน้อย 1 ขั้น) → การ์ดรูปบน-ข้อความล่าง ตามแพทเทิร์นเป๊ะ
+//   โหมดข้อความ (ไม่มีรูปเลย)      → การ์ดข้อความล้วน ตัวโตอ่านง่าย เต็มพื้นที่
+// วันไหนครัวเริ่มถ่ายรูปขั้นตอน ใบจะสลับเป็นโหมดรูปเองโดยไม่ต้องแก้โค้ด
+//
+// ⚠️ กติกาข้อเดียวที่ห้ามแหก: ต้องจบใน A4 หน้าเดียว "เสมอ"
+// ใบนี้พิมพ์ไปติดผนังครัว — ขั้นตอนที่ไหลไปหน้า 2 คือขั้นตอนที่ไม่มีใครเห็น
+// จึงใช้วิธี "วัดแล้วย่อ" ในหน้าต่างพิมพ์จริง (สคริปต์ fit() ท้ายไฟล์)
+// ไล่ย่อทีละขั้นจนพอดี แทนการเดาขนาดล่วงหน้าซึ่งพลาดเมื่อข้อความยาวผิดคาด
+//
+// ใช้ร่วมกันทั้ง SOP เมนู และ SOP วัตถุดิบ — อย่าแตกเป็นสองก๊อปปี้อีก
+// ของเดิมมี printSOP() เขียน HTML คนละชุด แก้ที่หนึ่งไม่ไปอีกที่
+// ═══════════════════════════════════════════════════════════════════════════════
+// subj = เมนู หรือ วัตถุดิบ  ต้องมี {name, image, category, sop[], ingredients[]}
+// ings = คลังวัตถุดิบทั้งหมด (ไว้แปลง ingredientId → ชื่อ)
+function buildSopSheetHTML(subj,ings,opt){
+  const o=opt||{};
+  const kindLabel=o.kind==="ing"?"วัตถุดิบ":"เมนู";
+  const steps=Array.isArray(subj.sop)?subj.sop:[];
+  const hasImg=steps.some(s=>s.image);
+  const rows=(Array.isArray(subj.ingredients)?subj.ingredients:[]).map(mi=>{
+    const g=(ings||[]).find(i=>+i.id===+mi.ingredientId);
+    return g?{name:g.name,amt:mi.amountGram,unit:mi.unit||"กรัม"}:null;
+  }).filter(Boolean);
+
+  const chip=(label,val)=>val?`<span class="chip">${esc(label)}: <b>${esc(val)}</b></span>`:"";
+  // ขึ้นบรรทัดใหม่ในคำอธิบายมีความหมาย (มักเป็นข้อย่อย 1. 2. 3.) — เก็บไว้เป็น <br>
+  const body=t=>esc(String(t||"").replace(/\n{2,}/g,"\n").trim()).replace(/\n/g,"<br/>");
+  const stepTiles=steps.map((s,i)=>`
+      <div class="st">
+        <div class="stimg">${s.image
+          ?`<img src="${esc(driveImgAbs(s.image))}" alt=""/>`:""}<span class="pnum">${i+1}</span></div>
+        <div class="sttx">
+          <div class="stt"><span class="tnum">${i+1}</span>${esc(s.title||("ขั้นที่ "+(s.step||i+1)))}</div>
+          ${s.desc?`<div class="std">${body(s.desc)}</div>`:""}
+        </div>
+      </div>`).join("");
+  const ingRows=rows.map(r=>
+    `<tr><td>${esc(r.name)}</td><td class="n">${esc(r.amt)}</td><td class="u">${esc(r.unit)}</td></tr>`).join("");
+  // ใบของเมนู ปริมาณคือ "ต่อ 1 จาน" แต่ใบของวัตถุดิบคือ "ต่อ 1 หน่วยซื้อของตัวแม่"
+  // ไม่บอกไว้คนอ่านจะตวงผิดสเกลทั้งสูตร
+  const basis=o.kind==="ing"&&subj.unit?`ต่อ 1 ${subj.unit}`:"";
+
+  return `<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8">
+<title>SOP - ${esc(subj.name)}</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');
+@page{size:A4 portrait;margin:0}
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--stcols:2;--stimg:104px;--stfs:9.6pt;--stclamp:5;--ingfs:9.5pt;--heroh:150px}
+html,body{background:#EDE7DE}
+body{font-family:'Sarabun',system-ui,sans-serif;color:#2B3440;
+  -webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+/* กรอบ A4 เป๊ะ — สูง 296.5 ไม่ใช่ 297 เพราะปัดเศษของ Chrome ทำให้ล้นไปหน้า 2 ที่ 297 พอดี */
+.pg{width:210mm;height:296.5mm;overflow:hidden;margin:0 auto;background:#F4F0E9;
+  padding:8mm 8mm 7mm;display:flex;flex-direction:column;gap:4.5mm}
+
+/* ── แถบหัว ── */
+.hd{background:linear-gradient(135deg,#C2410C 0%,#9A3412 100%);border-radius:6mm;
+  padding:5.5mm 7mm;display:flex;justify-content:space-between;align-items:center;gap:6mm;color:#fff}
+.hd h1{font-size:22pt;font-weight:900;line-height:1.08;letter-spacing:-.3px}
+.hd .sub{font-size:13pt;font-weight:600;opacity:.95;margin-top:1.2mm}
+.chips{display:flex;flex-direction:column;gap:2mm;align-items:flex-end;flex-shrink:0}
+.chip{background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.34);border-radius:99px;
+  padding:1.5mm 4mm;font-size:9.5pt;font-weight:600;white-space:nowrap}
+
+/* ── ตัวหน้า 2 คอลัมน์ ── min-height:0 ทุกชั้น ไม่งั้น flex ไม่ยอมหด แล้ววัดความล้นไม่ได้ */
+.body{flex:1;display:flex;gap:4.5mm;min-height:0}
+.colL{width:38%;display:flex;flex-direction:column;gap:3.5mm;min-height:0}
+.colR{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.card{background:#fff;border:1px solid #E4DED4;border-radius:4mm;padding:3.5mm 4mm;
+  box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.card h2{font-size:11.5pt;font-weight:800;color:#C2410C;padding-bottom:1.8mm;margin-bottom:2.5mm;
+  border-bottom:2px solid #F2E8DA;display:flex;align-items:baseline;justify-content:space-between;gap:2mm}
+.basis{font-size:8.5pt;font-weight:700;color:#8A9099;white-space:nowrap}
+
+.herocard{padding:3mm;flex-shrink:0}
+.hero{height:var(--heroh);border-radius:2.5mm;overflow:hidden;background:#EBE5DB;
+  display:flex;align-items:center;justify-content:center}
+.hero img{width:100%;height:100%;object-fit:cover;display:block}
+.hero span{color:#B7AD9C;font-size:10pt;font-weight:600;text-align:center;padding:0 3mm}
+
+.ingcard{flex:1;min-height:0;display:flex;flex-direction:column}
+.ingwrap{flex:1;min-height:0;overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:var(--ingfs)}
+th{text-align:left;font-weight:800;color:#6B7280;font-size:calc(var(--ingfs) - .8pt);
+  border-bottom:1.5px solid #E4DED4;padding:0 0 1.2mm}
+td{padding:1.1mm 0;border-bottom:1px solid #F3EFE8;line-height:1.28}
+th.n,td.n{text-align:right;width:15mm;white-space:nowrap}
+th.u,td.u{text-align:right;width:13mm;color:#6B7280;white-space:nowrap}
+/* วัตถุดิบยาวมาก → หั่นเป็น 2 คอลัมน์ (ทิ้งหัวตาราง ใช้แถวแบบ flex แทน)
+   ⚠️ ต้องล้าง width ของ .n/.u ด้วย — ความกว้างคงที่ 15mm+13mm จากโหมดตารางกินพื้นที่
+   จนคอลัมน์ชื่อเหลือ 0 แล้วชื่อวัตถุดิบหายทั้งใบ (บั๊คที่เจอตอนทดสอบ 34 วัตถุดิบ) */
+.ingwrap.two{column-count:2;column-gap:4mm}
+.ingwrap.two table,.ingwrap.two tbody,.ingwrap.two tr{display:block}
+.ingwrap.two thead{display:none}
+.ingwrap.two tr{display:flex;align-items:baseline;gap:1.5mm;
+  border-bottom:1px solid #F3EFE8;padding:.9mm 0;break-inside:avoid}
+.ingwrap.two td{border:0;padding:0}
+.ingwrap.two td.n,.ingwrap.two td.u{width:auto;flex:0 0 auto}
+.ingwrap.two td:first-child{flex:1 1 auto;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+
+.packcard{flex-shrink:0}
+.pack{display:flex;align-items:center;gap:3mm;font-size:10pt;font-weight:600}
+.pack .ic{font-size:14pt;line-height:1}
+.none{color:#A0A6AD;font-weight:500;font-style:italic;font-size:9.5pt}
+
+/* ── การ์ดขั้นตอน ── */
+.stepcard{flex:1;min-height:0;display:flex;flex-direction:column}
+.steps{flex:1;min-height:0;overflow:hidden;display:grid;
+  grid-template-columns:repeat(var(--stcols),1fr);gap:2.8mm;align-content:start}
+.steps.fill{align-content:stretch}
+/* ⚠️ ต้องเป็น clip ไม่ใช่ hidden: hidden ทำให้การ์ดเป็น scroll container แล้วขนาดต่ำสุด
+   อัตโนมัติกลายเป็น 0 → แถวกริดยุบลงมาให้พอดีกล่องเสมอ ตัววัดเลยไม่เคยเห็นว่าล้น
+   ผลคือข้อความโดนตัดกลางบรรทัดทุกใบโดยบันไดย่อไม่ทำงาน (วัดเจอ 14/14 ใบตอนทดสอบ)
+   clip คลิปเหมือนกันแต่ไม่เป็น scroll container ขนาดต่ำสุดจึงยังเท่าเนื้อหาจริง */
+.st{border:1px solid #EEE8DE;border-radius:2.5mm;overflow:clip;background:#FCFAF7;
+  display:flex;flex-direction:column;break-inside:avoid}
+.stimg{height:var(--stimg);background:#EBE5DB;overflow:hidden;flex-shrink:0;position:relative;
+  border-radius:2.5mm 2.5mm 0 0}
+.stimg img{width:100%;height:100%;object-fit:cover;display:block}
+.pnum{position:absolute;top:1.6mm;left:1.6mm;min-width:5.4mm;height:5.4mm;padding:0 1.2mm;
+  border-radius:99px;background:#C2410C;color:#fff;font-size:8pt;font-weight:900;
+  display:flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.sttx{padding:2mm 2.4mm;min-width:0}
+.stt{font-size:var(--stfs);font-weight:800;color:#C2410C;line-height:1.3;
+  display:flex;align-items:baseline;gap:1.6mm}
+.std{font-size:var(--stfs);line-height:1.42;color:#3F4750;margin-top:.8mm;
+  display:-webkit-box;-webkit-line-clamp:var(--stclamp);-webkit-box-orient:vertical;overflow:hidden}
+.tnum{display:none}
+
+/* โหมดข้อความ: ไม่มีรูปขั้นตอนเลย → ทิ้งกล่องรูป ใช้เลขวงกลมนำหน้าชื่อขั้นแทน */
+body.txt .stimg{display:none}
+body.txt .st{background:#fff;border-color:#E9E2D7}
+body.txt .sttx{padding:2.6mm 3mm}
+body.txt .tnum{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;
+  width:5.6mm;height:5.6mm;border-radius:99px;background:#C2410C;color:#fff;
+  font-size:8.5pt;font-weight:900;align-self:flex-start}
+/* โหมดรูป แต่บางขั้นไม่มีรูป → กล่องเทาโล่งพร้อมเลข ให้กริดยังเรียงตรงกัน */
+body:not(.txt) .stimg:not(:has(img)){background:repeating-linear-gradient(45deg,#EDE7DD,#EDE7DD 6px,#E7E0D5 6px,#E7E0D5 12px)}
+
+.more{grid-column:1/-1;text-align:center;font-size:8.5pt;font-weight:700;color:#9A3412;
+  background:#FDF1E7;border:1px dashed #E7C3A6;border-radius:2mm;padding:1.5mm}
+
+/* ── แถบท้าย ── */
+.ft{background:#2B3440;border-radius:6mm;padding:4.5mm 7mm;display:flex;gap:6mm;color:#fff;
+  align-items:flex-start;flex-shrink:0}
+.ft .f{flex:1;min-width:0}
+.ft .f.r{flex:0 0 44mm;text-align:right}
+.ft .lb{font-size:7.5pt;font-weight:700;color:#98A3B2;letter-spacing:.4px;margin-bottom:.8mm}
+.ft .vl{font-size:10.5pt;font-weight:700;line-height:1.32;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ft .dim{color:#7C8694;font-weight:500}
+</style></head><body class="${hasImg?"":"txt"}">
+<div class="pg">
+
+  <div class="hd">
+    <div>
+      <h1>คู่มือปฏิบัติงานมาตรฐาน</h1>
+      <div class="sub">${esc(kindLabel)}${esc(subj.name)}</div>
+    </div>
+    <div class="chips">
+      ${chip("หมวดหมู่",subj.category)}
+      ${chip("เวลา",subj.prep_time)}
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="colL">
+      <div class="card herocard" id="hc">
+        <div class="hero">${subj.image
+          ?`<img src="${esc(driveImgAbs(subj.image))}" alt=""/>`
+          :`<span>ยังไม่มีรูป${esc(kindLabel)}</span>`}</div>
+      </div>
+
+      <div class="card ingcard">
+        <h2>วัตถุดิบและส่วนผสม${basis?`<span class="basis">${esc(basis)}</span>`:""}</h2>
+        <div class="ingwrap" id="iw">${rows.length
+          ?`<table><thead><tr><th>วัตถุดิบ</th><th class="n">ปริมาณ</th><th class="u">หน่วย</th></tr></thead><tbody>${ingRows}</tbody></table>`
+          :`<div class="none">ยังไม่ได้ใส่ส่วนผสม</div>`}</div>
+      </div>
+
+      <div class="card packcard">
+        <h2>บรรจุภัณฑ์</h2>
+        <div class="pack"><span class="ic">🍽</span><span>${subj.packaging
+          ?esc(subj.packaging):`<span class="none">ยังไม่ได้ระบุ</span>`}</span></div>
+      </div>
+    </div>
+
+    <div class="colR">
+      <div class="card stepcard">
+        <h2>ขั้นตอนการทำ (${steps.length} ขั้นตอน)</h2>
+        <div class="steps" id="sw">${steps.length?stepTiles:`<div class="none">ยังไม่ได้ใส่ขั้นตอน</div>`}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ft">
+    <div class="f"><div class="lb">ชื่อ${esc(kindLabel)}</div>
+      <div class="vl">${esc(subj.name)}</div></div>
+    <div class="f"><div class="lb">คำอธิบาย (DESCRIPTION)</div>
+      <div class="vl">${subj.description?esc(subj.description):'<span class="dim">—</span>'}</div></div>
+    <div class="f r"><div class="lb">เวลาปฏิบัติงานรวม</div>
+      <div class="vl">⏱ ${subj.prep_time?esc(subj.prep_time):'<span class="dim">—</span>'}</div></div>
+  </div>
+
+</div>
+<script>
+// ── วัดแล้วย่อจนพอดีหน้าเดียว ──────────────────────────────────────────────
+// ไล่ลงบันไดทีละขั้น หยุดขั้นแรกที่ไม่ล้น  ขั้นสุดท้ายเล็กมากจนแทบไม่มีทางไม่พอดี
+// แต่ถ้ายังล้นจริง ๆ จะซ่อนการ์ดท้าย ๆ แล้วบอกจำนวนที่ซ่อน — ยอมบอกตรง ๆ
+// ดีกว่าตัดทิ้งเงียบ ๆ ให้คนครัวเข้าใจว่าทำครบแล้วทั้งที่ยังไม่ครบ
+var R=document.documentElement, S=document.getElementById('sw'), W=document.getElementById('iw');
+var TXT=document.body.classList.contains('txt');
+function over(el){ return el && el.scrollHeight > el.clientHeight + 1; }
+function setv(k,v){ R.style.setProperty(k,v); }
+// ที่ว่างท้ายกริด — ใช้ scrollHeight วัดไม่ได้ เพราะกริดคืนค่าอย่างน้อยเท่า clientHeight
+// เสมอ (ไม่เคยน้อยกว่า) ต้องวัดจากขอบล่างจริงของการ์ดใบล่างสุดแทน
+function room(el){
+  var kids=el.children, top=el.getBoundingClientRect().top, low=top;
+  for(var i=0;i<kids.length;i++){
+    var b=kids[i].getBoundingClientRect().bottom; if(b>low) low=b;
+  }
+  return el.clientHeight - (low - top);
+}
+// ไล่ค่าขึ้นจนล้น แล้วถอยกลับหนึ่งขั้น — ใช้คืนพื้นที่ที่เหลือให้เนื้อหา
+function grow(name,vals,unit,el){
+  var best=vals[0];
+  for(var i=1;i<vals.length;i++){ setv(name,vals[i]+unit); if(over(el))break; best=vals[i]; }
+  setv(name,best+unit); return best;
+}
+
+// ซ้าย: [สูงรูปจาน, ขนาดอักษรตาราง, แบ่ง 2 คอลัมน์?]  0 = ซ่อนการ์ดรูปจาน
+var LEFT=[[150,9.5,0],[132,9.2,0],[114,8.8,0],[96,8.4,0],[96,8.4,1],[82,8,1],[70,7.6,1],[58,7.2,1],[0,7,1]];
+// ขวาโหมดรูป: [คอลัมน์, สูงรูปขั้นตอน, อักษร, บรรทัดสูงสุด]
+var IMG=[[2,104,9.6,5],[2,92,9.3,4],[2,80,9,4],[2,68,8.6,3],[3,64,8.2,3],[3,54,7.9,3],
+         [3,46,7.5,2],[3,38,7.2,2],[4,32,6.9,2]];
+// ขวาโหมดข้อความ: ตัวโตกว่า ปล่อยบรรทัดยาวก่อน แล้วค่อยหั่นคอลัมน์
+var TX=[[1,11,99],[1,10.4,99],[1,9.8,99],[1,9.2,14],[2,9.6,12],[2,9,10],[2,8.5,8],
+        [2,8,6],[2,7.6,5],[3,7.2,4],[3,6.8,3]];
+
+function fit(){
+  var i,r;
+  var hasHero=!!document.querySelector('.hero img');
+  for(i=0;i<LEFT.length;i++){
+    r=LEFT[i];
+    document.getElementById('hc').style.display = r[0]?'':'none';
+    setv('--heroh', r[0]+'px');
+    setv('--ingfs', r[1]+'pt');
+    W.classList.toggle('two', !!r[2]);
+    if(!over(W)) break;
+  }
+  if(!hasHero){
+    // กล่อง "ยังไม่มีรูป" ไม่ได้ให้ข้อมูลอะไร อย่ากินพื้นที่เท่ารูปจริง
+    setv('--heroh','86px');
+  }else if(i===0){
+    // ตารางวัตถุดิบสั้น เหลือที่ว่างเยอะ → ขยายรูปจานกินที่ว่างแทนปล่อยโล่ง
+    grow('--heroh',[150,180,210,240,270,300,330],'px',W);
+  }
+  var L = TXT ? TX : IMG;
+  for(i=0;i<L.length;i++){
+    r=L[i];
+    setv('--stcols', r[0]);
+    if(TXT){ setv('--stfs', r[1]+'pt'); setv('--stclamp', r[2]); }
+    else   { setv('--stimg', r[1]+'px'); setv('--stfs', r[2]+'pt'); setv('--stclamp', r[3]); }
+    if(!over(S)) break;
+  }
+  // ── คืนพื้นที่ที่เหลือให้เนื้อหา (บันไดข้างบนหยุดทันทีที่ "พอดี" ซึ่งมักเหลือที่ว่าง) ──
+  if(!over(S)){
+    // 1) คืนบรรทัดคำอธิบายที่ถูกย่อทิ้ง — ข้อความหายบนใบที่ติดผนังครัวคือของจริงที่หายไป
+    grow('--stclamp',[+getComputedStyle(R).getPropertyValue('--stclamp').trim()||3,
+                      4,5,6,8,10,14,20,99],'',S);
+    // 2) โหมดรูป: ที่ยังเหลือให้รูปขั้นตอนใหญ่ขึ้น (รูปคือหัวใจของแพทเทิร์นนี้)
+    if(!TXT) grow('--stimg',[+getComputedStyle(R).getPropertyValue('--stimg').trim().replace('px','')||104,
+                             120,140,160,180,200],'px',S);
+    // 3) ยังเหลืออีก → ยืดการ์ดให้เต็มคอลัมน์ ดูตั้งใจกว่าปล่อยโล่งครึ่งหน้า
+    if(room(S)>40) S.classList.add('fill');
+  }
+  // กันเหนียวขั้นสุดท้าย: ยังล้นอยู่ → ซ่อนการ์ดท้าย ๆ แล้วบอกจำนวน
+  if(over(S)){
+    var tiles=[].slice.call(S.querySelectorAll('.st')), hid=0;
+    var note=document.createElement('div'); note.className='more'; S.appendChild(note);
+    for(var j=tiles.length-1;j>=1 && over(S);j--){ tiles[j].style.display='none'; hid++;
+      note.textContent='+ อีก '+hid+' ขั้นตอน — ดูในระบบ'; }
+    if(!hid) note.remove();
+  }
+}
+function ready(){
+  var imgs=[].slice.call(document.images), left=imgs.length, fired=false, done=0;
+  var go=function(){ if(fired)return; fired=true; fit(); if(window.__afterFit) window.__afterFit();
+    if(!window.__noAutoPrint) setTimeout(function(){try{window.print();}catch(e){}},250); };
+  if(!left) return go();
+  var tick=function(){ if(++done>=left) go(); };
+  imgs.forEach(function(im){ im.complete ? tick() : (im.onload=im.onerror=tick); });
+  // รูปจาก Drive ช้า/โหลดไม่ขึ้นก็ต้องพิมพ์ได้ ไม่ปล่อยให้ค้าง
+  setTimeout(go, 4000);
+}
+if(document.readyState==='complete') ready(); else window.addEventListener('load', ready);
+</script>
+</body></html>`;
+}
 // <img> that shows a tidy placeholder instead of the browser's broken-image icon when
 // the photo can't load (e.g. legacy HEIC uploads that non-Safari browsers can't render).
 function ImgOrFallback({src,onClick,style,note="เปิดรูปไม่ได้"}){
@@ -4160,9 +4478,13 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const[selCat,setSelCat]=useState("ทั้งหมด");
   const[editingCatId,setEditingCatId]=useState(null);const[editingCatName,setEditingCatName]=useState("");
   const[newCatName,setNewCatName]=useState("");const[addingCat,setAddingCat]=useState(false);
-  const[form,setForm]=useState({name:"",code:"",category:"",price:"",description:"",image:null,ingredients:[],sop:[]});
+  const[form,setForm]=useState({name:"",code:"",category:"",price:"",description:"",image:null,ingredients:[],sop:[],prep_time:"",packaging:""});
   const[ingQ,setIngQ]=useState("");const[ni,setNi]=useState({ingredientId:"",amountGram:""});
   const isCentral=currentBranch?.type==="central";
+  // เวลา/บรรจุภัณฑ์ เป็นคอลัมน์ที่เพิ่มทีหลังเพื่อใบ SOP (รัน sql/menu-sop-meta.sql)
+  // ถ้ายังไม่ได้รัน แล้วส่งสองคีย์นี้ไป PostgREST ตอบ PGRST204 → เซฟเมนูพังทั้งใบ
+  // จึงเช็กจากข้อมูลที่โหลดมาแล้ว (select=* คืนทุกคอลัมน์) แทนการยิงถามสคีมาเพิ่ม
+  const hasSopMeta=useMemo(()=>menus.some(m=>"prep_time" in m),[menus]);
   const isMobile=useIsMobile();
   const canE=hasPerm(currentUser,"menus")&&isCentral;const canD=hasPerm(currentUser,"menus")&&isCentral;
   const localCats=useMemo(()=>allCats.filter(c=>c.type==="menu"&&(isCentral?!c.branch_id:c.branch_id===currentBranch?.id)),[allCats,isCentral,currentBranch]);
@@ -4211,7 +4533,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     setNi({ingredientId:"",amountGram:""});
     setIngQ("");  // clear the search box so the list resets too
   }
-  async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,code:(form.code||"").trim()||null,category:form.category||selCat||"",price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{await api.addMenu(item);addH(`เพิ่มเมนู: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,code:(form.code||"").trim()||null,category:form.category||selCat||"",price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,...(hasSopMeta?{prep_time:(form.prep_time||"").trim()||null,packaging:(form.packaging||"").trim()||null}:{})};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{await api.addMenu(item);addH(`เพิ่มเมนู: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบเมนู",message:`ต้องการลบเมนู "${name}" ใช่หรือไม่?`}))return;try{await api.deleteMenu(id);addH(`ลบเมนู: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   async function exportXlsx(){
     if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
@@ -4257,7 +4579,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20}}>
       <div style={{position:"relative",flex:1}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:40}}/></div>
-      {canE&&selCat!=="ทั้งหมด"&&<Btn onClick={()=>{setForm({name:"",code:"",category:selCat,price:"",description:"",image:null,ingredients:[],sop:[]});setEditId(null);setIngQ("");setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
+      {canE&&selCat!=="ทั้งหมด"&&<Btn onClick={()=>{setForm({name:"",code:"",category:selCat,price:"",description:"",image:null,ingredients:[],sop:[],prep_time:"",packaging:""});setEditId(null);setIngQ("");setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
       {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImportMenu(true)} icon={I.ul}>Import</Btn>}
     </div>
@@ -4274,7 +4596,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
             <div><div style={{fontWeight:800,fontSize:16,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{menu.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>{canE?<select value={menu.category||""} onClick={e=>e.stopPropagation()} onChange={async e=>{try{await api.updateMenu(menu.id,{category:e.target.value});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} title="เปลี่ยนหมวดหมู่ของเมนูนี้" style={{fontSize:11,fontWeight:800,color:C.blue,background:C.blueLight,border:`1px solid ${C.blue}40`,borderRadius:20,padding:"3px 9px",fontFamily:"'Sarabun',sans-serif",cursor:"pointer",maxWidth:160}}><option value="">— ไม่มีหมวด —</option>{localCats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}{menu.category&&!localCats.some(c=>c.name===menu.category)&&<option value={menu.category}>{menu.category}</option>}</select>:<Chip color="blue">{menu.category}</Chip>}{menu.code&&<span style={{fontSize:10,fontWeight:800,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"1px 7px",borderRadius:8,fontFamily:"monospace",whiteSpace:"nowrap"}}>🔖 {menu.code}</span>}</div></div>
             <div style={{display:"flex",gap:4}}>
               {canE&&<button onClick={async()=>{try{const newPos=menu.quick_key_pos!=null?null:(menus.reduce((m,x)=>Math.max(m,x.quick_key_pos||0),0)+1);await api.updateMenu(menu.id,{quick_key_pos:newPos});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} title={menu.quick_key_pos!=null?"ยกเลิกปักหมุด":"ปักหมุดเป็น Quick Key"} style={{background:menu.quick_key_pos!=null?"#FEF3C7":C.lineLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><span style={{fontSize:13}}>{menu.quick_key_pos!=null?"⭐":"☆"}</span></button>}
-              {canE&&<button onClick={()=>{setForm({name:menu.name,code:menu.code||"",category:menu.category,price:menu.price,description:menu.description||"",image:menu.image,ingredients:menu.ingredients||[],sop:menu.sop||[]});setEditId(menu.id);setIngQ("");setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
+              {canE&&<button onClick={()=>{setForm({name:menu.name,code:menu.code||"",category:menu.category,price:menu.price,description:menu.description||"",image:menu.image,ingredients:menu.ingredients||[],sop:menu.sop||[],prep_time:menu.prep_time||"",packaging:menu.packaging||""});setEditId(menu.id);setIngQ("");setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
               {canD&&<button onClick={()=>del(menu.id,menu.name)} style={{background:C.redLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
             </div>
           </div>
@@ -4313,6 +4635,12 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
             <Inp label="ราคาขาย (฿)" type="number" value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value}))} placeholder="0"/>
           </div>
           <TA label="รายละเอียดเมนู" rows={3} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="อธิบายเมนูสั้นๆ"/>
+          {/* สองช่องนี้ขึ้นบนใบ SOP ที่พิมพ์ไปติดผนังครัว — ซ่อนไว้จนกว่าจะรัน sql/menu-sop-meta.sql
+              (ถ้าโชว์ทั้งที่ยังไม่มีคอลัมน์ ผู้ใช้จะกรอกแล้วหาย งงว่าทำไมไม่ขึ้น) */}
+          {hasSopMeta&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Inp label="⏱ เวลาทำ" hint="ขึ้นบนใบ SOP" value={form.prep_time} onChange={e=>setForm(f=>({...f,prep_time:e.target.value}))} placeholder="เช่น 5 นาที"/>
+            <Inp label="🍽 บรรจุภัณฑ์" hint="ขึ้นบนใบ SOP" value={form.packaging} onChange={e=>setForm(f=>({...f,packaging:e.target.value}))} placeholder="เช่น จานของทอดใหญ่"/>
+          </div>}
         </div>
         <div>
           <div style={{fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>วัตถุดิบ</div>
@@ -4749,95 +5077,19 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
   const allUnits=useMemo(()=>["กรัม","มล.","ชิ้น","ช้อนโต๊ะ","ช้อนชา","ถ้วย","กก.","ลิตร",...customUnits],[customUnits]);
   const ing=useMemo(()=>sopIngs.find(i=>i.id===sel),[sopIngs,sel]);
   const canE=hasPerm(currentUser,"sop")&&isCentral;
-  useEffect(()=>{if(ing){setSop(Array.isArray(ing.sop)?[...ing.sop.map(s=>({...s}))]:[]);setEditIngs(Array.isArray(ing.ingredients)?[...ing.ingredients]:[]);setEdit(false);}},[sel]);
+  // เวลา/บรรจุภัณฑ์ ขึ้นบนใบ SOP ที่พิมพ์ (ดู buildSopSheetHTML) — ต้องรัน sql/menu-sop-meta.sql ก่อน
+  const[meta,setMeta]=useState({prep_time:"",packaging:""});
+  const hasSopMeta=useMemo(()=>ings.some(g=>"prep_time" in g),[ings]);
+  const loadMeta=g=>setMeta({prep_time:g?.prep_time||"",packaging:g?.packaging||""});
+  useEffect(()=>{if(ing){setSop(Array.isArray(ing.sop)?[...ing.sop.map(s=>({...s}))]:[]);setEditIngs(Array.isArray(ing.ingredients)?[...ing.ingredients]:[]);loadMeta(ing);setEdit(false);}},[sel]);
   useEffect(()=>{if(sel!=null&&!sopIngs.find(i=>i.id===sel))setSel(sopIngs[0]?.id??null);},[sopIngs,sel]);
-  async function saveSop(){setSaving(true);try{await api.updateIng(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr()});if(reloadIngs)await reloadIngs();else if(reload)await reload();setEdit(false);alert("✅ บันทึก SOP วัตถุดิบสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function saveSop(){setSaving(true);try{await api.updateIng(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr(),...(hasSopMeta?{prep_time:meta.prep_time.trim()||null,packaging:meta.packaging.trim()||null}:{})});if(reloadIngs)await reloadIngs();else if(reload)await reload();setEdit(false);alert("✅ บันทึก SOP วัตถุดิบสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   function printSOP(){
     if(!ing)return;
-    const ingChips=(ing.ingredients||[]).map(mi=>{const i2=ings.find(g=>g.id===mi.ingredientId);return i2?`<span class="ic"><b>${i2.name}</b>&nbsp;${mi.amountGram}&nbsp;${mi.unit||'กรัม'}</span>`:''}).join('');
-    const steps=(ing.sop||[]).map((s,idx)=>`
-      <div class="step${s.image?' has-img':''}">
-        <div class="num">${idx+1}</div>
-        <div class="sbody">
-          <div class="stext">
-            ${s.title?`<div class="stitle">${s.title}</div>`:''}
-            ${s.desc?`<div class="sdesc">${s.desc.replace(/\n/g,'<br/>')}</div>`:''}
-          </div>
-          ${s.image?`<img src="${driveImgAbs(s.image)}" class="simg"/>`:''}
-        </div>
-      </div>`).join('');
-    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>SOP วัตถุดิบ - ${ing.name}</title>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700;800;900&display=swap');
-@page{size:A4 portrait;margin:10mm 12mm}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-#wrap{width:100%}
-.header{padding-bottom:10px;border-bottom:3px solid #10B981;margin-bottom:12px;display:flex;gap:14px;align-items:center}
-.hmain{flex:1}
-.hlabel{font-size:9px;font-weight:800;color:#10B981;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px}
-.htitle{font-size:26px;font-weight:900;color:#0F172A;line-height:1.15}
-.hsub{font-size:11px;color:#64748B;margin-top:3px;font-weight:600}
-.himg{width:90px;height:90px;object-fit:cover;border-radius:12px;border:2px solid #E2E8F0;flex-shrink:0}
-.sec-label{font-size:9px;font-weight:800;color:#94A3B8;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px}
-.ings{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
-.ic{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:3px 9px;font-size:11px;color:#334155}
-.ic b{color:#0F172A}
-.cost-row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
-.cost-card{flex:1;min-width:120px;background:#F0FDF4;border:1px solid #10B98144;border-radius:8px;padding:8px 12px}
-.cost-card .lbl{font-size:9px;font-weight:800;color:#10B981;letter-spacing:.6px;text-transform:uppercase;margin-bottom:2px}
-.cost-card .val{font-size:15px;font-weight:900;color:#10B981}
-.cost-card.brand{background:#FFF7ED;border-color:#FFD3BC}
-.cost-card.brand .lbl{color:#FF6B35}
-.cost-card.brand .val{color:#FF6B35}
-.cost-card.gray{background:#F8FAFC;border-color:#E2E8F0}
-.cost-card.gray .lbl{color:#64748B}
-.cost-card.gray .val{color:#0F172A}
-.steps{display:flex;flex-direction:column;gap:10px}
-.step{display:flex;gap:12px;align-items:flex-start}
-.num{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#10B981,#059669);color:#fff;font-size:14px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
-.sbody{flex:1;background:#F8FAFC;border-radius:10px;padding:10px 14px;border:1px solid #E2E8F0}
-.step.has-img .sbody{display:flex;gap:12px;align-items:flex-start}
-.stext{flex:1;min-width:0}
-.stitle{font-size:14px;font-weight:900;color:#0F172A;margin-bottom:4px}
-.sdesc{font-size:12px;color:#334155;line-height:1.65;white-space:pre-wrap}
-.simg{width:220px;min-width:220px;max-width:220px;height:160px;object-fit:cover;border-radius:9px;border:2px solid #E2E8F0;display:block;flex-shrink:0}
-.step:not(.has-img) .simg{width:100%;max-width:100%;height:auto;max-height:260px;min-width:unset}
-.footer{margin-top:12px;padding-top:8px;border-top:1px solid #E2E8F0;display:flex;justify-content:space-between;font-size:9px;color:#94A3B8}
-</style></head><body>
-<div id="wrap">
-  <div class="header">
-    ${ing.image?`<img src="${driveImgAbs(ing.image)}" class="himg"/>`:''}
-    <div class="hmain">
-      <div class="hlabel">SOP วัตถุดิบ · Ingredient Standard Operating Procedure</div>
-      <div class="htitle">${ing.name}</div>
-      <div class="hsub">${ing.category||''}${ing.buy_unit?` · ${ing.buy_unit}`:''}</div>
-    </div>
-  </div>
-  ${/* Cost row removed from print — prices live in the on-screen view only */""}
-  ${ingChips?`<div class="sec-label">ส่วนผสมที่ใช้</div><div class="ings">${ingChips}</div>`:''}
-  <div class="sec-label">ขั้นตอนการเตรียม / จัดการ &nbsp;(${(ing.sop||[]).length} ขั้นตอน)</div>
-  <div class="steps">${steps}</div>
-  <div class="footer"><span>NAIWANSOOK · ห้องครัว</span><span>พิมพ์วันที่ ${fmtD()}</span></div>
-</div>
-<script>
-async function waitImgs(){
-  const imgs=[...document.images];
-  await Promise.all(imgs.map(img=>img.complete?Promise.resolve():new Promise(r=>{img.onload=img.onerror=r;})));
-}
-window.addEventListener('load',async()=>{
-  await waitImgs();
-  await new Promise(r=>setTimeout(r,100));
-  const A4H=(297-20)*3.7795;
-  const w=document.getElementById('wrap');
-  const h=w.offsetHeight;
-  if(h>A4H){document.body.style.zoom=(A4H/h).toFixed(4);}
-  setTimeout(()=>window.print(),300);
-});
-</script></body></html>`;
-    const win=openPrintWindow(800,700);
+    const win=openPrintWindow(880,780);
     if(!win)return;
-    win.document.write(html);win.document.close();addPrintClose(win);
+    win.document.write(buildSopSheetHTML(ing,ings,{kind:"ing"}));
+    win.document.close();addPrintClose(win);
   }
   const filtered=useMemo(()=>q.trim()?sopIngs.filter(i=>i.name.toLowerCase().includes(q.toLowerCase())):sopIngs,[sopIngs,q]);
   // Pickable ingredients = all ingredients except SELF (prevent self-reference)
@@ -4936,9 +5188,14 @@ window.addEventListener('load',async()=>{
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {!edit&&<Btn v="ghost" onClick={printSOP} icon={I.print} s={{padding:"8px 14px"}}>พิมพ์</Btn>}
-              {canE&&<>{edit?<><Btn v="ghost" onClick={()=>{setSop(Array.isArray(ing.sop)?[...ing.sop]:[]);setEditIngs(Array.isArray(ing.ingredients)?[...ing.ingredients]:[]);setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>:<Btn v="info" onClick={()=>setEdit(true)} icon={I.pencil} s={{padding:"8px 14px"}}>แก้ไข SOP</Btn>}</>}
+              {canE&&<>{edit?<><Btn v="ghost" onClick={()=>{setSop(Array.isArray(ing.sop)?[...ing.sop]:[]);setEditIngs(Array.isArray(ing.ingredients)?[...ing.ingredients]:[]);loadMeta(ing);setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>:<Btn v="info" onClick={()=>setEdit(true)} icon={I.pencil} s={{padding:"8px 14px"}}>แก้ไข SOP</Btn>}</>}
             </div>
           </div>
+
+          {edit&&hasSopMeta&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+            <Inp label="⏱ เวลาทำ" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={meta.prep_time} onChange={e=>setMeta(m=>({...m,prep_time:e.target.value}))} placeholder="เช่น 20 นาที"/>
+            <Inp label="🍽 บรรจุภัณฑ์" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={meta.packaging} onChange={e=>setMeta(m=>({...m,packaging:e.target.value}))} placeholder="เช่น ถังพลาสติก 5 ลิตร"/>
+          </div>}
 
           {/* Cost summary */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(160px,100%),1fr))",gap:10,marginBottom:18}}>
@@ -5104,8 +5361,13 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
   },[visibleMenus,menuMeta,sopStatus,costBucket,menuQ]);
   const menu=useMemo(()=>visibleMenus.find(m=>m.id===sel),[visibleMenus,sel]);
   const canE=hasPerm(currentUser,"sop")&&isCentral;
-  useEffect(()=>{if(menu){setSop(menu.sop?[...menu.sop.map(s=>({...s}))]:[]); setEditIngs(menu.ingredients?[...menu.ingredients]:[]); setEdit(false);}}, [sel]);
-  async function saveSop(){setSaving(true);try{await api.updateMenu(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr()});await reload();setEdit(false);alert("✅ บันทึก SOP เมนูสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  // เวลา/บรรจุภัณฑ์ ขึ้นบนใบ SOP ที่พิมพ์ — คนทำ SOP ทำงานอยู่หน้านี้ จึงให้กรอกที่นี่ได้เลย
+  // ต้องรัน sql/menu-sop-meta.sql ก่อน ไม่งั้นส่งไปแล้ว PostgREST ตอบ PGRST204 เซฟพังทั้งใบ
+  const[meta,setMeta]=useState({prep_time:"",packaging:""});
+  const hasSopMeta=useMemo(()=>menus.some(m=>"prep_time" in m),[menus]);
+  const loadMeta=m=>setMeta({prep_time:m?.prep_time||"",packaging:m?.packaging||""});
+  useEffect(()=>{if(menu){setSop(menu.sop?[...menu.sop.map(s=>({...s}))]:[]); setEditIngs(menu.ingredients?[...menu.ingredients]:[]); loadMeta(menu); setEdit(false);}}, [sel]);
+  async function saveSop(){setSaving(true);try{await api.updateMenu(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr(),...(hasSopMeta?{prep_time:meta.prep_time.trim()||null,packaging:meta.packaging.trim()||null}:{})});await reload();setEdit(false);alert("✅ บันทึก SOP เมนูสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   // Total ingredient cost for the menu — averaged purchase price when
   // available, catalog price otherwise. Mirrors menuCost / IngSOPView.
   const totalCost=useMemo(()=>{
@@ -5139,78 +5401,10 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
   }
   function printSOP(){
     if(!menu)return;
-    const ingChips=(menu.ingredients||[]).map(mi=>{const ing=ings.find(i=>i.id===mi.ingredientId);return ing?`<span class="ic"><b>${ing.name}</b>&nbsp;${mi.amountGram}&nbsp;${mi.unit||'กรัม'}</span>`:''}).join('');
-    const hasAnyImg=(menu.sop||[]).some(s=>s.image);
-    const steps=(menu.sop||[]).map((s,idx)=>`
-      <div class="step${s.image?' has-img':''}">
-        <div class="num">${idx+1}</div>
-        <div class="sbody">
-          <div class="stext">
-            ${s.title?`<div class="stitle">${s.title}</div>`:''}
-            ${s.desc?`<div class="sdesc">${s.desc.replace(/\n/g,'<br/>')}</div>`:''}
-          </div>
-          ${s.image?`<img src="${driveImgAbs(s.image)}" class="simg"/>`:''}
-        </div>
-      </div>`).join('');
-    const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>SOP - ${menu.name}</title>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700;800;900&display=swap');
-@page{size:A4 portrait;margin:10mm 12mm}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Sarabun',sans-serif;color:#0F172A;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-#wrap{width:100%}
-.header{padding-bottom:10px;border-bottom:3px solid #FF6B35;margin-bottom:12px;display:flex;gap:14px;align-items:center}
-.hmain{flex:1}
-.hlabel{font-size:9px;font-weight:800;color:#FF6B35;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px}
-.htitle{font-size:26px;font-weight:900;color:#0F172A;line-height:1.15}
-.himg{width:90px;height:90px;object-fit:cover;border-radius:12px;border:2px solid #E2E8F0;flex-shrink:0}
-.sec-label{font-size:9px;font-weight:800;color:#94A3B8;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:6px}
-.ings{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
-.ic{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:6px;padding:3px 9px;font-size:11px;color:#334155}
-.ic b{color:#0F172A}
-.steps{display:flex;flex-direction:column;gap:10px}
-.step{display:flex;gap:12px;align-items:flex-start}
-.num{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#FF6B35,#E85520);color:#fff;font-size:14px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
-.sbody{flex:1;background:#F8FAFC;border-radius:10px;padding:10px 14px;border:1px solid #E2E8F0}
-.step.has-img .sbody{display:flex;gap:12px;align-items:flex-start}
-.stext{flex:1;min-width:0}
-.stitle{font-size:14px;font-weight:900;color:#0F172A;margin-bottom:4px}
-.sdesc{font-size:12px;color:#334155;line-height:1.65;white-space:pre-wrap}
-.simg{width:220px;min-width:220px;max-width:220px;height:160px;object-fit:cover;border-radius:9px;border:2px solid #E2E8F0;display:block;flex-shrink:0}
-.step:not(.has-img) .simg{width:100%;max-width:100%;height:auto;max-height:260px;min-width:unset}
-.footer{margin-top:12px;padding-top:8px;border-top:1px solid #E2E8F0;display:flex;justify-content:space-between;font-size:9px;color:#94A3B8}
-</style></head><body>
-<div id="wrap">
-  <div class="header">
-    ${menu.image?`<img src="${driveImgAbs(menu.image)}" class="himg"/>`:''}
-    <div class="hmain">
-      <div class="hlabel">ขั้นตอนการทำ · Standard Operating Procedure</div>
-      <div class="htitle">${menu.name}</div>
-    </div>
-  </div>
-  ${ingChips?`<div class="sec-label">วัตถุดิบที่ใช้</div><div class="ings">${ingChips}</div>`:''}
-  <div class="sec-label">ขั้นตอนการทำ &nbsp;(${(menu.sop||[]).length} ขั้นตอน)</div>
-  <div class="steps">${steps}</div>
-  <div class="footer"><span>NAIWANSOOK · ห้องครัว</span><span>พิมพ์วันที่ ${fmtD()}</span></div>
-</div>
-<script>
-async function waitImgs(){
-  const imgs=[...document.images];
-  await Promise.all(imgs.map(img=>img.complete?Promise.resolve():new Promise(r=>{img.onload=img.onerror=r;})));
-}
-window.addEventListener('load',async()=>{
-  await waitImgs();
-  await new Promise(r=>setTimeout(r,100));
-  const A4H=(297-20)*3.7795;
-  const w=document.getElementById('wrap');
-  const h=w.offsetHeight;
-  if(h>A4H){document.body.style.zoom=(A4H/h).toFixed(4);}
-  setTimeout(()=>window.print(),300);
-});
-</script></body></html>`;
-    const win=openPrintWindow(800,700);
+    const win=openPrintWindow(880,780);
     if(!win)return;
-    win.document.write(html);win.document.close();addPrintClose(win);
+    win.document.write(buildSopSheetHTML(menu,ings,{kind:"menu"}));
+    win.document.close();addPrintClose(win);
   }
   return <>
   {/* Header bar */}
@@ -5277,10 +5471,14 @@ window.addEventListener('load',async()=>{
           </div>
           <div style={{display:"flex",gap:8}}>
             {!edit&&<Btn v="ghost" onClick={printSOP} icon={I.print} s={{padding:"8px 14px"}}>พิมพ์</Btn>}
-            {canE&&<>{edit?<><Btn v="ghost" onClick={()=>{setSop(menu.sop?[...menu.sop]:[]); setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>
+            {canE&&<>{edit?<><Btn v="ghost" onClick={()=>{setSop(menu.sop?[...menu.sop]:[]); loadMeta(menu); setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>
             :<Btn v="info" onClick={()=>setEdit(true)} icon={I.pencil} s={{padding:"8px 14px"}}>แก้ไข SOP</Btn>}</>}
           </div>
         </div>
+        {edit&&hasSopMeta&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+          <Inp label="⏱ เวลาทำ" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={meta.prep_time} onChange={e=>setMeta(m=>({...m,prep_time:e.target.value}))} placeholder="เช่น 5 นาที (ทอด 4 นาที)"/>
+          <Inp label="🍽 บรรจุภัณฑ์" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={meta.packaging} onChange={e=>setMeta(m=>({...m,packaging:e.target.value}))} placeholder="เช่น จานของทอดใหญ่"/>
+        </div>}
         {edit&&<div style={{marginBottom:14}}>
           <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ค้นหาวัตถุดิบ</div>
           <div style={{position:"relative",marginBottom:8}}><span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={13} c={C.ink4}/></span><input value={ingQ} onChange={e=>setIngQ(e.target.value)} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:32,fontSize:13,padding:"8px 12px 8px 32px"}}/></div>
