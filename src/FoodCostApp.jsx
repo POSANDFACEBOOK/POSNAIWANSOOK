@@ -1811,6 +1811,72 @@ async function uploadImageToDrive(file){
   if(!j.id)throw new Error("อัปโหลดไม่สำเร็จ");
   return `drive:${j.id}`;
 }
+// อัปไฟล์อะไรก็ได้ขึ้น Drive แบบไม่บีบอัด (PDF ใบเสนอราคา สเปคสินค้า ฯลฯ)
+// ต่างจาก uploadImageToDrive ที่บีบผ่าน canvas — เอกสารต้องได้ไฟล์เดิมเป๊ะ ห้ามแปลงเป็น jpg
+// ฝั่ง api/drive-upload กับ drive-view รองรับทุก content-type อยู่แล้ว ไม่ต้องแก้เซิร์ฟเวอร์
+const MAX_UPLOAD_MB=4;   // เพดาน body ของ serverless — เกินนี้ต้องบอกผู้ใช้ ไม่ใช่ปล่อยให้ล้มเงียบ
+async function uploadFileToDrive(file){
+  if(file.size>MAX_UPLOAD_MB*1024*1024)
+    throw new Error(`ไฟล์ใหญ่เกิน ${MAX_UPLOAD_MB} MB (${(file.size/1048576).toFixed(1)} MB) — ย่อไฟล์ก่อนแล้วลองใหม่`);
+  const type=file.type||"application/octet-stream";
+  const safe=String(file.name||"file").replace(/[\r\n"\\/]/g,"_").slice(0,120);
+  const res=await fetch(`/api/drive-upload?name=${encodeURIComponent(`${Date.now()}-${safe}`)}`,
+    {method:"POST",headers:{"Content-Type":type},body:file});
+  if(!res.ok)throw new Error(await res.text());
+  const j=await res.json().catch(()=>({}));
+  if(!j.id)throw new Error("อัปโหลดไม่สำเร็จ");
+  return {ref:`drive:${j.id}`,name:file.name||safe,type};
+}
+const isImgType=t=>/^image\//i.test(t||"");
+
+// กล่องแนบไฟล์ไม่จำกัดจำนวน — รับทั้งรูปและไฟล์เอกสาร
+// รูปบีบอัดก่อนอัป (ประหยัดพื้นที่ Drive) ส่วนไฟล์อื่นอัปดิบ ๆ ห้ามแตะ
+// เก็บเป็น [{ref,name,type}] ไม่ใช่สตริงล้วน เพราะไฟล์ที่ไม่ใช่รูปต้องรู้ชื่อกับชนิดถึงจะแสดงผลได้
+function AttachBox({files,setFiles,label="📎 แนบรูป / ไฟล์ (ไม่จำกัด)"}){
+  const ref=useRef();
+  const[busy,setBusy]=useState(0);
+  async function onPick(e){
+    const list=Array.from(e.target.files||[]);e.target.value="";if(!list.length)return;
+    setBusy(b=>b+list.length);
+    for(const f of list){
+      try{
+        const item=isImgType(f.type)
+          ? {ref:await uploadImageToDrive(f),name:f.name||"รูป",type:f.type||"image/jpeg"}
+          : await uploadFileToDrive(f);
+        setFiles(prev=>[...prev,item]);
+      }catch(err){alert(`แนบ "${f.name||"ไฟล์"}" ไม่สำเร็จ: ${(err&&err.message)||err}`);}
+      finally{setBusy(b=>b-1);}
+    }
+  }
+  const n=(files||[]).length;
+  return <div>
+    <div style={{fontSize:12.5,fontWeight:700,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+      <span>{label}</span>
+      {n>0&&<span style={{fontSize:11,fontWeight:800,padding:"2px 9px",borderRadius:12,background:C.greenLight,color:C.green}}>{n} ไฟล์</span>}
+      {busy>0&&<span style={{color:C.brand,fontSize:12,fontWeight:700}}>⏳ กำลังอัป {busy}...</span>}
+    </div>
+    <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+      {(files||[]).map((f,i)=><div key={i} style={{position:"relative"}}>
+        {isImgType(f.type)
+          ?<img src={driveImgSrc(f.ref)} alt={f.name} loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(f.ref))}
+             style={{width:72,height:72,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`,cursor:"zoom-in",display:"block"}}/>
+          :<a href={driveImgSrc(f.ref)} target="_blank" rel="noreferrer" title={f.name}
+             style={{width:72,height:72,borderRadius:10,border:`1px solid ${C.line}`,background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,textDecoration:"none",padding:4,boxSizing:"border-box"}}>
+             <span style={{fontSize:22}}>📄</span>
+             <span style={{fontSize:9,color:C.ink3,textAlign:"center",lineHeight:1.2,wordBreak:"break-all",maxHeight:24,overflow:"hidden"}}>{f.name}</span>
+           </a>}
+        <button onClick={()=>setFiles(prev=>prev.filter((_,j)=>j!==i))} aria-label={`ลบ ${f.name}`}
+          style={{position:"absolute",top:-6,right:-6,width:22,height:22,borderRadius:11,border:"2px solid #fff",background:C.red,color:"#fff",fontSize:12,fontWeight:800,cursor:"pointer",lineHeight:1,padding:0}}>✕</button>
+      </div>)}
+      <button onClick={()=>ref.current?.click()}
+        style={{width:72,height:72,borderRadius:10,border:`2px dashed ${C.line}`,background:C.bg,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:11}}>
+        <span style={{fontSize:20}}>＋</span>แนบไฟล์
+      </button>
+    </div>
+    <input ref={ref} type="file" multiple onChange={onPick} style={{display:"none"}}/>
+  </div>;
+}
+
 // Resolve an image ref (drive:<id> or a plain URL) to a viewable <img src>.
 function driveImgSrc(ref){ if(!ref)return ""; return /^drive:/.test(ref)?`/api/drive-view?id=${encodeURIComponent(ref.slice(6))}`:ref; }
 // Absolute form — for images embedded in printed windows (their about:blank base
@@ -6449,22 +6515,34 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
   const[cart,setCart]=useState([]);
   const[q,setQ]=useState("");const[picked,setPicked]=useState(null);
   const[aQty,setAQty]=useState("");const[aNote,setANote]=useState("");
-  const[oName,setOName]=useState("");const[oQty,setOQty]=useState("");const[oNote,setONote]=useState("");const[oImage,setOImage]=useState("");
+  const[oName,setOName]=useState("");const[oQty,setOQty]=useState("");const[oNote,setONote]=useState("");
+  // ราคาต่อหน่วยที่สาขาประเมินมา (ไม่บังคับ) — เดินต่อไปถึงตอนครัวกลางกดรับเข้าทะเบียน
+  // จึงเป็นทางเดียวที่ทำให้สินทรัพย์มี "ราคาทุน" ตั้งแต่แรก แทนที่จะว่างแล้วคิดค่าเสื่อมไม่ได้
+  const[aPrice,setAPrice]=useState("");const[oPrice,setOPrice]=useState("");
+  // แนบได้ทั้งรูปและไฟล์ ไม่จำกัดจำนวน (เดิมแนบรูปได้ใบเดียวเฉพาะแถบอุปกรณ์อื่น)
+  const[aFiles,setAFiles]=useState([]);const[oFiles,setOFiles]=useState([]);
   const[saving,setSaving]=useState(false);const savingRef=useRef(false);
   useEffect(()=>{let ok=true;(async()=>{try{const a=await api.getAssets();if(ok)setAssets((Array.isArray(a)?a:[]).filter(x=>+x.branch_id===+currentBranch?.id));}catch{if(ok)setAssets([]);}})();return()=>{ok=false;};},[currentBranch?.id]);
   const matches=useMemo(()=>{const ql=q.trim().toLowerCase();if(!ql||!Array.isArray(assets))return[];return assets.filter(a=>(a.name||"").toLowerCase().includes(ql)).slice(0,15);},[assets,q]);
   const inputSt={width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box"};
+  // เก็บ image (รูปแรก) ไว้ด้วยเสมอ เพื่อให้จอเดิมที่อ่าน it.image ยังแสดงรูปได้เหมือนเดิม
+  // ส่วน files คือรายการเต็มที่แนบมา — ของใหม่ อ่านโดยหน้ารายละเอียด
+  const firstImg=fs=>(fs.find(f=>isImgType(f.type))||{}).ref||null;
   function addAsset(){
     if(!picked){alert("เลือกสินทรัพย์จากช่องค้นหาก่อน");return;}
     const qty=+aQty;if(!(qty>0)){alert("ใส่จำนวนที่ต้องการมากกว่า 0");return;}
-    setCart(c=>[...c,{kind:"asset",asset_id:picked.id,name:picked.name,unit:"ชิ้น",qty,note:(aNote||"").trim()||null,image:picked.image||null,current_qty:+picked.quantity||0}]);
-    setPicked(null);setQ("");setAQty("");setANote("");
+    setCart(c=>[...c,{kind:"asset",asset_id:picked.id,name:picked.name,unit:"ชิ้น",qty,note:(aNote||"").trim()||null,
+      price_per_unit:Math.max(0,Math.round((+aPrice||0)*100)/100),
+      files:aFiles,image:firstImg(aFiles)||picked.image||null,current_qty:+picked.quantity||0}]);
+    setPicked(null);setQ("");setAQty("");setANote("");setAPrice("");setAFiles([]);
   }
   function addOther(){
     const nm=(oName||"").trim();if(!nm){alert("ใส่รายละเอียดอุปกรณ์");return;}
     const qty=+oQty;if(!(qty>0)){alert("ใส่จำนวนมากกว่า 0");return;}
-    setCart(c=>[...c,{kind:"other",name:nm,unit:"ชิ้น",qty,note:(oNote||"").trim()||null,image:oImage||null}]);
-    setOName("");setOQty("");setONote("");setOImage("");
+    setCart(c=>[...c,{kind:"other",name:nm,unit:"ชิ้น",qty,note:(oNote||"").trim()||null,
+      price_per_unit:Math.max(0,Math.round((+oPrice||0)*100)/100),
+      files:oFiles,image:firstImg(oFiles)}]);
+    setOName("");setOQty("");setONote("");setOPrice("");setOFiles([]);
   }
   async function submit(){
     if(savingRef.current)return;
@@ -6506,8 +6584,10 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             <input value={aQty} onChange={e=>setAQty(e.target.value.replace(/[^0-9.]/g,""))} inputMode="decimal" placeholder="จำนวนที่ต้องการ" style={{...inputSt,flex:"1 1 130px"}}/>
+            <input value={aPrice} onChange={e=>setAPrice(e.target.value.replace(/[^0-9.]/g,""))} inputMode="decimal" placeholder="ราคา/หน่วย (ถ้าทราบ)" style={{...inputSt,flex:"1 1 150px"}}/>
             <input value={aNote} onChange={e=>setANote(e.target.value)} placeholder="หมายเหตุ (ถ้ามี)" style={{...inputSt,flex:"2 1 180px"}}/>
           </div>
+          <div style={{marginTop:10}}><AttachBox files={aFiles} setFiles={setAFiles} label="📎 แนบรูป / ไฟล์ (ใบเสนอราคา รูปของที่ชำรุด — ไม่จำกัดจำนวน)"/></div>
           <Btn onClick={addAsset} icon={I.plus} s={{marginTop:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,width:"100%"}}>เพิ่มรายการ</Btn>
         </div>}
       </div>:<div>
@@ -6515,9 +6595,10 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
           <input value={oName} onChange={e=>setOName(e.target.value)} placeholder="รายละเอียดอุปกรณ์ (เช่น ชั้นวางสแตนเลส 4 ชั้น)" style={{...inputSt,marginBottom:8}}/>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
             <input value={oQty} onChange={e=>setOQty(e.target.value.replace(/[^0-9.]/g,""))} inputMode="decimal" placeholder="จำนวน" style={{...inputSt,flex:"1 1 120px"}}/>
+            <input value={oPrice} onChange={e=>setOPrice(e.target.value.replace(/[^0-9.]/g,""))} inputMode="decimal" placeholder="ราคา/หน่วย (ถ้าทราบ)" style={{...inputSt,flex:"1 1 150px"}}/>
             <input value={oNote} onChange={e=>setONote(e.target.value)} placeholder="หมายเหตุ (ถ้ามี)" style={{...inputSt,flex:"2 1 180px"}}/>
           </div>
-          <ImgUp label="📎 แนบรูปตัวอย่าง (ถ้ามี)" value={oImage} onChange={setOImage} compact/>
+          <AttachBox files={oFiles} setFiles={setOFiles} label="📎 แนบรูป / ไฟล์ (ใบเสนอราคา สเปค — ไม่จำกัดจำนวน)"/>
           <Btn onClick={addOther} icon={I.plus} s={{marginTop:10,background:`linear-gradient(135deg,${C.teal},#0B7C6F)`,color:C.white,width:"100%"}}>เพิ่มรายการ</Btn>
         </div>
       </div>}
@@ -6529,7 +6610,9 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
             <Thumb src={x.image} size={38} radius={8} icon={I.box} iconBg={C.bg} iconColor={C.line} iconSize={16}/>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontWeight:700,color:C.ink,fontSize:13.5}}>{x.kind==="other"&&<span style={{fontSize:10.5,color:C.teal,fontWeight:800,marginRight:5}}>🆕 ใหม่</span>}{x.name}</div>
-              <div style={{fontSize:11.5,color:C.ink4}}>× {x.qty} ชิ้น{x.current_qty!=null?` · มีอยู่ ${x.current_qty}`:""}{x.note?` · ${x.note}`:""}</div>
+              <div style={{fontSize:11.5,color:C.ink4}}>× {x.qty} ชิ้น{x.current_qty!=null?` · มีอยู่ ${x.current_qty}`:""}
+                {+x.price_per_unit>0?<> · <b style={{color:C.green}}>฿{(+x.price_per_unit).toLocaleString(undefined,{maximumFractionDigits:2})}/หน่วย</b> (รวม ฿{(x.price_per_unit*x.qty).toLocaleString(undefined,{maximumFractionDigits:2})})</>:" · ยังไม่ระบุราคา"}
+                {(x.files||[]).length>0?` · 📎 ${x.files.length} ไฟล์`:""}{x.note?` · ${x.note}`:""}</div>
             </div>
             <button onClick={()=>setCart(c=>c.filter((_,j)=>j!==i))} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:16,padding:4}}>✕</button>
           </div>)}
@@ -6682,7 +6765,15 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         if(!byBranch[bid])byBranch[bid]={branch_id:bid,items:[]};
         for(const it of (p.items||[])){
           if(!(+it.qty>0))continue;
-          byBranch[bid].items.push({kind:it.kind==="other"?"other":"asset",asset_id:it.asset_id||null,name:it.name,unit:it.unit||"ชิ้น",qty:+it.qty,price_per_unit:0,line_total:0,note:it.note||null,image:it.image||null,current_qty:it.current_qty!=null?it.current_qty:null});
+          // ส่งราคาที่สาขาประเมินมาต่อเข้าใบส่งด้วย (เดิมทิ้งเป็น 0 เสมอ)
+          // ตอนกดรับ receiveAssetPO เอา price_per_unit ไปตั้งเป็น "ราคาทุน" ของสินทรัพย์ตรงๆ
+          // ที่ผ่านมาจึงได้ทุน 0 ทุกตัว = คิดค่าเสื่อมไม่ได้ (1,108 จาก 1,120 แถวไม่มีราคาทุน)
+          // ถ้าราคาจริงต่างจากที่ประเมิน แก้ได้ที่แท็บสินทรัพย์หลังรับเข้าทะเบียน
+          const pu=Math.max(0,+it.price_per_unit||0);
+          byBranch[bid].items.push({kind:it.kind==="other"?"other":"asset",asset_id:it.asset_id||null,name:it.name,unit:it.unit||"ชิ้น",qty:+it.qty,
+            price_per_unit:pu,line_total:Math.round(pu*(+it.qty||0)*100)/100,
+            note:it.note||null,image:it.image||null,files:Array.isArray(it.files)?it.files:null,
+            current_qty:it.current_qty!=null?it.current_qty:null});
         }
       }
       const poFailed=[];
@@ -12255,6 +12346,15 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
               <div style={{fontSize:12.5,color:low?C.red:C.ink4,marginTop:4}}>📦 {isAssetPR?"มีอยู่เดิม":"คงเหลือ"} <b style={{color:low?C.red:C.ink2}}>{st!=null?st:"-"}</b> {it.unit||""}</div>
               {/* เหตุผลที่ขอ — ในการ์ดถูกตัดจนอ่านไม่จบ ทั้งที่เป็นข้อมูลหลักที่ใช้ตัดสินใจอนุมัติ ตรงนี้โชว์เต็ม */}
               {it.note&&<div style={{fontSize:12.5,color:C.ink2,marginTop:6,padding:"7px 10px",background:C.bg,borderRadius:8,border:`1px solid ${C.lineLight}`,whiteSpace:"pre-line",wordBreak:"break-word",lineHeight:1.55}}>★ {it.note}</div>}
+              {/* ไฟล์แนบทั้งหมด (ใบเสนอราคา รูปของชำรุด) — แนบมาแล้วต้องเห็น ไม่งั้นแนบไปก็เท่านั้น */}
+              {(it.files||[]).length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:7}}>
+                {it.files.map((f,fi)=>isImgType(f.type)
+                  ?<img key={fi} src={driveImgSrc(f.ref)} alt={f.name} loading="lazy" decoding="async" onClick={()=>imgView(driveImgSrc(f.ref))}
+                     style={{width:52,height:52,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,cursor:"zoom-in"}}/>
+                  :<a key={fi} href={driveImgSrc(f.ref)} target="_blank" rel="noreferrer" title={f.name}
+                     style={{display:"inline-flex",alignItems:"center",gap:5,padding:"6px 10px",borderRadius:8,background:C.blueLight,border:`1px solid ${C.blue}33`,color:C.blue,fontSize:11.5,fontWeight:700,textDecoration:"none",maxWidth:190}}>
+                     📄 <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</span></a>)}
+              </div>}
             </div>
             <div style={{textAlign:"right",flexShrink:0}}>
               <div style={{fontSize:22,fontWeight:900,color:accent,lineHeight:1.1}}>{qty} <span style={{fontSize:12,fontWeight:600,color:C.ink4}}>{it.unit||""}</span></div>
