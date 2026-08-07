@@ -1940,7 +1940,10 @@ function buildSopSheetHTML(subj,ings,opt){
     `<tr><td>${esc(r.name)}</td><td class="n">${esc(r.amt)}</td><td class="u">${esc(r.unit)}</td></tr>`).join("");
   // ใบของเมนู ปริมาณคือ "ต่อ 1 จาน" แต่ใบของวัตถุดิบคือ "ต่อ 1 หน่วยซื้อของตัวแม่"
   // ไม่บอกไว้คนอ่านจะตวงผิดสเกลทั้งสูตร
-  const basis=o.kind==="ing"&&subj.unit?`ต่อ 1 ${subj.unit}`:"";
+  const basis=o.kind==="ing"&&subj.buy_unit?`ต่อ 1 ${subj.buy_unit}`:"";
+  // เมนูเก็บคำอธิบายใน description ส่วนวัตถุดิบเก็บใน note — คนละชื่อคอลัมน์
+  // ใบเก่าของวัตถุดิบเคยพิมพ์ note ออกมา ใบใหม่อ่าน description ที่ไม่มีจริงเลยว่างตลอด
+  const note=subj.description||subj.note||"";
 
   return `<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8">
 <title>SOP - ${esc(subj.name)}</title>
@@ -2102,7 +2105,7 @@ body:not(.txt) .stimg:not(:has(img)){background:repeating-linear-gradient(45deg,
     <div class="f"><div class="lb">ชื่อ${esc(kindLabel)}</div>
       <div class="vl">${esc(subj.name)}</div></div>
     <div class="f"><div class="lb">คำอธิบาย (DESCRIPTION)</div>
-      <div class="vl">${subj.description?esc(subj.description):'<span class="dim">—</span>'}</div></div>
+      <div class="vl">${note?esc(note):'<span class="dim">—</span>'}</div></div>
     <div class="f r"><div class="lb">เวลาปฏิบัติงานรวม</div>
       <div class="vl">⏱ ${subj.prep_time?esc(subj.prep_time):'<span class="dim">—</span>'}</div></div>
   </div>
@@ -2116,6 +2119,10 @@ body:not(.txt) .stimg:not(:has(img)){background:repeating-linear-gradient(45deg,
 var R=document.documentElement, S=document.getElementById('sw'), W=document.getElementById('iw');
 var TXT=document.body.classList.contains('txt');
 function over(el){ return el && el.scrollHeight > el.clientHeight + 1; }
+// ⚠️ ตารางวัตถุดิบตอนหั่น 2 คอลัมน์ (column-count) ล้น "ออกทางข้าง" ไม่ใช่ทางล่าง
+// scrollHeight จึงไม่ขยับเลย ใช้ over() ตัวเดียววัดแล้วไม่มีวันเจอ — วัดจริงพบว่า
+// 60 วัตถุดิบหาย 10 แถว / 150 วัตถุดิบหาย 100 แถว เงียบ ๆ และบันไดขั้น 5-8 ไม่เคยถูกใช้
+function overX(el){ return el && (el.scrollHeight>el.clientHeight+1 || el.scrollWidth>el.clientWidth+1); }
 function setv(k,v){ R.style.setProperty(k,v); }
 // ที่ว่างท้ายกริด — ใช้ scrollHeight วัดไม่ได้ เพราะกริดคืนค่าอย่างน้อยเท่า clientHeight
 // เสมอ (ไม่เคยน้อยกว่า) ต้องวัดจากขอบล่างจริงของการ์ดใบล่างสุดแทน
@@ -2127,9 +2134,15 @@ function room(el){
   return el.clientHeight - (low - top);
 }
 // ไล่ค่าขึ้นจนล้น แล้วถอยกลับหนึ่งขั้น — ใช้คืนพื้นที่ที่เหลือให้เนื้อหา
-function grow(name,vals,unit,el){
-  var best=vals[0];
-  for(var i=1;i<vals.length;i++){ setv(name,vals[i]+unit); if(over(el))break; best=vals[i]; }
+// vals[0] คือค่าที่บันไดพิสูจน์มาแล้วว่าพอดี ห้ามลงเอยต่ำกว่านั้นเด็ดขาด:
+// รายการค่าที่ไล่ขึ้นไม่ได้มีทุกค่าที่บันไดใช้ (เช่น clamp 12 ไม่อยู่ใน 4,5,6,8,10,...)
+// ถ้าไม่ข้ามค่าที่เล็กกว่า ตัวที่ควร "คืนบรรทัด" จะกลายเป็นตัวตัดบรรทัดทิ้งแทน
+function grow(name,vals,unit,el,chk){
+  var test=chk||over, best=vals[0];
+  for(var i=1;i<vals.length;i++){
+    if(vals[i]<=best) continue;
+    setv(name,vals[i]+unit); if(test(el))break; best=vals[i];
+  }
   setv(name,best+unit); return best;
 }
 
@@ -2148,17 +2161,33 @@ function fit(){
   for(i=0;i<LEFT.length;i++){
     r=LEFT[i];
     document.getElementById('hc').style.display = r[0]?'':'none';
-    setv('--heroh', r[0]+'px');
+    // กล่อง "ยังไม่มีรูป" ไม่ได้ให้ข้อมูลอะไร อย่ากินพื้นที่เท่ารูปจริง — แต่ต้องหนีบตรงนี้
+    // ไม่ใช่ไปเซ็ต 86px ทีหลัง เพราะบันไดขั้นท้าย ๆ เตี้ยกว่า 86 การเซ็ตทีหลังจะแอบ
+    // ขยายกลับแล้วดันแถววัตถุดิบตกขอบโดยไม่มีใครวัดซ้ำ
+    setv('--heroh', (hasHero?r[0]:Math.min(r[0],86))+'px');
     setv('--ingfs', r[1]+'pt');
     W.classList.toggle('two', !!r[2]);
-    if(!over(W)) break;
+    if(!overX(W)) break;
   }
-  if(!hasHero){
-    // กล่อง "ยังไม่มีรูป" ไม่ได้ให้ข้อมูลอะไร อย่ากินพื้นที่เท่ารูปจริง
-    setv('--heroh','86px');
-  }else if(i===0){
+  if(hasHero && i===0){
     // ตารางวัตถุดิบสั้น เหลือที่ว่างเยอะ → ขยายรูปจานกินที่ว่างแทนปล่อยโล่ง
-    grow('--heroh',[150,180,210,240,270,300,330],'px',W);
+    grow('--heroh',[150,180,210,240,270,300,330],'px',W,overX);
+  }
+  // วัตถุดิบยาวเกินกว่าจะย่อไหว → บอกจำนวนที่ไม่ได้พิมพ์ ห้ามหายเงียบ
+  // (ฝั่งขั้นตอนมีตาข่ายนี้อยู่แล้ว ฝั่งวัตถุดิบเพิ่งมี)
+  if(overX(W)){
+    var nn=document.createElement('div'); nn.className='more'; nn.style.marginTop='1.5mm';
+    // ⚠️ ต้องใส่ข้อความก่อนวัด: ป้ายเปล่าสูงไม่เท่าป้ายที่มีตัวหนังสือ ถ้าวัดก่อนแล้วค่อย
+    // ใส่ข้อความ ตัวป้ายเองจะดันแถวตกขอบเพิ่มอีก แล้วเลขที่บอกจะน้อยกว่าที่หายจริง
+    nn.textContent='+ อีก 0 รายการ — ดูในระบบ';
+    W.parentNode.appendChild(nn);
+    // นับ "แถวที่พิมพ์ออกมาจริง" แล้วลบออก — อย่านับแถวที่หายโดยตรง เพราะแถวที่โผล่
+    // ครึ่งเดียวจะตกร่องระหว่างสองนิยาม แล้วป้ายจะบอกน้อยกว่าที่หายจริง
+    var wb=W.getBoundingClientRect(), rs=[].slice.call(W.querySelectorAll('tbody tr')), shown=0;
+    for(var q=0;q<rs.length;q++){ var rb=rs[q].getBoundingClientRect();
+      if(rb.width>0&&rb.height>0&&rb.bottom<=wb.bottom+1&&rb.right<=wb.right+1) shown++; }
+    var gone=rs.length-shown;
+    if(gone>0) nn.textContent='+ อีก '+gone+' รายการ — ดูในระบบ'; else nn.remove();
   }
   var L = TXT ? TX : IMG;
   for(i=0;i<L.length;i++){
@@ -2176,8 +2205,11 @@ function fit(){
     // 2) โหมดรูป: ที่ยังเหลือให้รูปขั้นตอนใหญ่ขึ้น (รูปคือหัวใจของแพทเทิร์นนี้)
     if(!TXT) grow('--stimg',[+getComputedStyle(R).getPropertyValue('--stimg').trim().replace('px','')||104,
                              120,140,160,180,200],'px',S);
-    // 3) ยังเหลืออีก → ยืดการ์ดให้เต็มคอลัมน์ ดูตั้งใจกว่าปล่อยโล่งครึ่งหน้า
-    if(room(S)>40) S.classList.add('fill');
+    // 3) ยังเหลืออีกนิดหน่อย → ยืดการ์ดปิดช่องว่าง ดูตั้งใจกว่าเหลือขอบล่างแหว่ง
+    //    แต่ถ้าเหลือเยอะ (เมนู 1-2 ขั้นสั้น ๆ) ห้ามยืด ไม่งั้นได้การ์ดสูงครึ่งหน้า
+    //    ที่มีข้อความบรรทัดเดียวลอยอยู่ข้างบน — ปล่อยให้การ์ดเป็นขนาดจริงสวยกว่า
+    var left=room(S);
+    if(left>40 && left<S.clientHeight*0.3) S.classList.add('fill');
   }
   // กันเหนียวขั้นสุดท้าย: ยังล้นอยู่ → ซ่อนการ์ดท้าย ๆ แล้วบอกจำนวน
   if(over(S)){
@@ -2187,16 +2219,33 @@ function fit(){
       note.textContent='+ อีก '+hid+' ขั้นตอน — ดูในระบบ'; }
     if(!hid) note.remove();
   }
+  // ขั้นตอนอยู่ครบ แต่คำอธิบายบางขั้นถูก clamp ตัดบรรทัดท้ายทิ้ง — ก็คือเนื้อหาหายเหมือนกัน
+  // ต้องบอก ไม่งั้นคนครัวอ่านจบแล้วเข้าใจว่าทำครบทั้งที่ยังขาดท่อนท้าย
+  var cut=[].slice.call(S.querySelectorAll('.std')).filter(function(y){
+    return y.scrollHeight>y.clientHeight+1; }).length;
+  if(cut && !S.querySelector('.more')){
+    var cn=document.createElement('div'); cn.className='more';
+    cn.textContent='คำอธิบาย '+cut+' ขั้นถูกย่อให้พอดีหน้า — อ่านฉบับเต็มในระบบ';
+    S.appendChild(cn);
+  }
 }
 function ready(){
-  var imgs=[].slice.call(document.images), left=imgs.length, fired=false, done=0;
+  var fired=false;
   var go=function(){ if(fired)return; fired=true; fit(); if(window.__afterFit) window.__afterFit();
     if(!window.__noAutoPrint) setTimeout(function(){try{window.print();}catch(e){}},250); };
-  if(!left) return go();
-  var tick=function(){ if(++done>=left) go(); };
-  imgs.forEach(function(im){ im.complete ? tick() : (im.onload=im.onerror=tick); });
-  // รูปจาก Drive ช้า/โหลดไม่ขึ้นก็ต้องพิมพ์ได้ ไม่ปล่อยให้ค้าง
-  setTimeout(go, 4000);
+  var imgsDone=new Promise(function(res){
+    var imgs=[].slice.call(document.images), left=imgs.length, done=0;
+    if(!left) return res();
+    var tick=function(){ if(++done>=left) res(); };
+    imgs.forEach(function(im){ im.complete ? tick() : (im.onload=im.onerror=tick); });
+  });
+  // ⚠️ ต้องรอฟอนต์ด้วย: เว็บฟอนต์ไม่หน่วง event load ถ้าวัดตอนยังเป็นฟอนต์สำรอง
+  // ความสูงบรรทัดคนละค่ากับ Sarabun → ย่อผิดขั้น พอฟอนต์จริงมาแทนก็ไม่มีใครวัดใหม่
+  // (.pg เป็น overflow:hidden ผลคือเนื้อหาโดนตัดเงียบ ไม่ใช่ไหลไปหน้า 2 ให้เห็น)
+  var fontsDone=(document.fonts&&document.fonts.ready)?document.fonts.ready:Promise.resolve();
+  Promise.all([imgsDone,fontsDone]).then(go);
+  // รูปจาก Drive หรือฟอนต์จาก Google ช้า/ไม่มาก็ต้องพิมพ์ได้ ไม่ปล่อยให้ค้าง
+  setTimeout(go, 5000);
 }
 if(document.readyState==='complete') ready(); else window.addEventListener('load', ready);
 </script>
@@ -5078,12 +5127,12 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
   const ing=useMemo(()=>sopIngs.find(i=>i.id===sel),[sopIngs,sel]);
   const canE=hasPerm(currentUser,"sop")&&isCentral;
   // เวลา/บรรจุภัณฑ์ ขึ้นบนใบ SOP ที่พิมพ์ (ดู buildSopSheetHTML) — ต้องรัน sql/menu-sop-meta.sql ก่อน
-  const[meta,setMeta]=useState({prep_time:"",packaging:""});
+  const[sopMeta,setSopMeta]=useState({prep_time:"",packaging:""});
   const hasSopMeta=useMemo(()=>ings.some(g=>"prep_time" in g),[ings]);
-  const loadMeta=g=>setMeta({prep_time:g?.prep_time||"",packaging:g?.packaging||""});
+  const loadMeta=g=>setSopMeta({prep_time:g?.prep_time||"",packaging:g?.packaging||""});
   useEffect(()=>{if(ing){setSop(Array.isArray(ing.sop)?[...ing.sop.map(s=>({...s}))]:[]);setEditIngs(Array.isArray(ing.ingredients)?[...ing.ingredients]:[]);loadMeta(ing);setEdit(false);}},[sel]);
   useEffect(()=>{if(sel!=null&&!sopIngs.find(i=>i.id===sel))setSel(sopIngs[0]?.id??null);},[sopIngs,sel]);
-  async function saveSop(){setSaving(true);try{await api.updateIng(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr(),...(hasSopMeta?{prep_time:meta.prep_time.trim()||null,packaging:meta.packaging.trim()||null}:{})});if(reloadIngs)await reloadIngs();else if(reload)await reload();setEdit(false);alert("✅ บันทึก SOP วัตถุดิบสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function saveSop(){setSaving(true);try{await api.updateIng(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr(),...(hasSopMeta?{prep_time:sopMeta.prep_time.trim()||null,packaging:sopMeta.packaging.trim()||null}:{})});if(reloadIngs)await reloadIngs();else if(reload)await reload();setEdit(false);alert("✅ บันทึก SOP วัตถุดิบสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   function printSOP(){
     if(!ing)return;
     const win=openPrintWindow(880,780);
@@ -5193,8 +5242,8 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
           </div>
 
           {edit&&hasSopMeta&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-            <Inp label="⏱ เวลาทำ" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={meta.prep_time} onChange={e=>setMeta(m=>({...m,prep_time:e.target.value}))} placeholder="เช่น 20 นาที"/>
-            <Inp label="🍽 บรรจุภัณฑ์" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={meta.packaging} onChange={e=>setMeta(m=>({...m,packaging:e.target.value}))} placeholder="เช่น ถังพลาสติก 5 ลิตร"/>
+            <Inp label="⏱ เวลาทำ" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={sopMeta.prep_time} onChange={e=>setSopMeta(m=>({...m,prep_time:e.target.value}))} placeholder="เช่น 20 นาที"/>
+            <Inp label="🍽 บรรจุภัณฑ์" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={sopMeta.packaging} onChange={e=>setSopMeta(m=>({...m,packaging:e.target.value}))} placeholder="เช่น ถังพลาสติก 5 ลิตร"/>
           </div>}
 
           {/* Cost summary */}
@@ -5363,11 +5412,11 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
   const canE=hasPerm(currentUser,"sop")&&isCentral;
   // เวลา/บรรจุภัณฑ์ ขึ้นบนใบ SOP ที่พิมพ์ — คนทำ SOP ทำงานอยู่หน้านี้ จึงให้กรอกที่นี่ได้เลย
   // ต้องรัน sql/menu-sop-meta.sql ก่อน ไม่งั้นส่งไปแล้ว PostgREST ตอบ PGRST204 เซฟพังทั้งใบ
-  const[meta,setMeta]=useState({prep_time:"",packaging:""});
+  const[sopMeta,setSopMeta]=useState({prep_time:"",packaging:""});
   const hasSopMeta=useMemo(()=>menus.some(m=>"prep_time" in m),[menus]);
-  const loadMeta=m=>setMeta({prep_time:m?.prep_time||"",packaging:m?.packaging||""});
+  const loadMeta=m=>setSopMeta({prep_time:m?.prep_time||"",packaging:m?.packaging||""});
   useEffect(()=>{if(menu){setSop(menu.sop?[...menu.sop.map(s=>({...s}))]:[]); setEditIngs(menu.ingredients?[...menu.ingredients]:[]); loadMeta(menu); setEdit(false);}}, [sel]);
-  async function saveSop(){setSaving(true);try{await api.updateMenu(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr(),...(hasSopMeta?{prep_time:meta.prep_time.trim()||null,packaging:meta.packaging.trim()||null}:{})});await reload();setEdit(false);alert("✅ บันทึก SOP เมนูสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  async function saveSop(){setSaving(true);try{await api.updateMenu(sel,{sop,ingredients:editIngs,edit_by:currentUser.username,edit_at:nowStr(),...(hasSopMeta?{prep_time:sopMeta.prep_time.trim()||null,packaging:sopMeta.packaging.trim()||null}:{})});await reload();setEdit(false);alert("✅ บันทึก SOP เมนูสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   // Total ingredient cost for the menu — averaged purchase price when
   // available, catalog price otherwise. Mirrors menuCost / IngSOPView.
   const totalCost=useMemo(()=>{
@@ -5471,13 +5520,13 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
           </div>
           <div style={{display:"flex",gap:8}}>
             {!edit&&<Btn v="ghost" onClick={printSOP} icon={I.print} s={{padding:"8px 14px"}}>พิมพ์</Btn>}
-            {canE&&<>{edit?<><Btn v="ghost" onClick={()=>{setSop(menu.sop?[...menu.sop]:[]); loadMeta(menu); setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>
+            {canE&&<>{edit?<><Btn v="ghost" onClick={()=>{setSop(menu.sop?[...menu.sop]:[]); setEditIngs(menu.ingredients?[...menu.ingredients]:[]); loadMeta(menu); setEdit(false);}} s={{padding:"8px 14px"}}>ยกเลิก</Btn><Btn v="success" onClick={saveSop} icon={I.check} loading={saving} s={{padding:"8px 14px"}}>บันทึก SOP</Btn></>
             :<Btn v="info" onClick={()=>setEdit(true)} icon={I.pencil} s={{padding:"8px 14px"}}>แก้ไข SOP</Btn>}</>}
           </div>
         </div>
         {edit&&hasSopMeta&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-          <Inp label="⏱ เวลาทำ" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={meta.prep_time} onChange={e=>setMeta(m=>({...m,prep_time:e.target.value}))} placeholder="เช่น 5 นาที (ทอด 4 นาที)"/>
-          <Inp label="🍽 บรรจุภัณฑ์" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={meta.packaging} onChange={e=>setMeta(m=>({...m,packaging:e.target.value}))} placeholder="เช่น จานของทอดใหญ่"/>
+          <Inp label="⏱ เวลาทำ" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={sopMeta.prep_time} onChange={e=>setSopMeta(m=>({...m,prep_time:e.target.value}))} placeholder="เช่น 5 นาที (ทอด 4 นาที)"/>
+          <Inp label="🍽 บรรจุภัณฑ์" hint="ขึ้นบนใบ SOP ที่พิมพ์" value={sopMeta.packaging} onChange={e=>setSopMeta(m=>({...m,packaging:e.target.value}))} placeholder="เช่น จานของทอดใหญ่"/>
         </div>}
         {edit&&<div style={{marginBottom:14}}>
           <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ค้นหาวัตถุดิบ</div>
