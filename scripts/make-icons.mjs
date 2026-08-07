@@ -1,10 +1,16 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// สร้างชุดไอคอนทั้งหมดจากโลโก้ต้นฉบับไฟล์เดียว — รันซ้ำได้ ผลลัพธ์เหมือนเดิมทุกครั้ง
+// สร้างชุดไอคอนทั้งหมด — รันซ้ำได้ ผลลัพธ์เหมือนเดิมทุกครั้ง
 //   node scripts/make-icons.mjs
 //
-// ทำไมต้องเป็นสคริปต์ ไม่ใช่ลากไฟล์ใส่เอง: ไอคอนมี 8 ขนาดและมีกฎต่างกันต่อแพลตฟอร์ม
-// (iOS ห้ามพื้นโปร่ง · Android ต้องเผื่อขอบให้ระบบครอปวงกลม) ถ้าทำมือครั้งหน้าจะลืมกฎ
-// พอเปลี่ยนโลโก้ก็แค่ทับ src/assets/logo.png แล้วรันใหม่
+// ⚠️ การตัดสินใจของเจ้าของ (6 ส.ค. 69): "ไอคอนแอปไม่ใช้โลโก้ร้าน" — โลโก้ลายเส้น
+// ในวันสุขใช้เฉพาะในแอป (หน้าล็อกอิน/แถบเมนู) ส่วนไอคอนติดตั้งทุกแพลตฟอร์มเป็น
+// สัญลักษณ์วาดใหม่: "ชาม + กราฟขั้นบันได + เหรียญ" บนพื้นส้มไล่เฉด (เลือกจาก 22 แบบ)
+// เหตุผล: ลายเส้นโลโก้เบลอที่ขนาดเล็ก และต้องการสีเฉพาะที่มองปุ๊บรู้ว่าระบบอาหาร
+// ห้ามเรียงแท่งกราฟแบบ "กลางสูงสุดสมมาตร" — ดูเป็นการชูนิ้วกลาง ให้เรียงขั้นบันไดเสมอ
+//
+// กฎต่อแพลตฟอร์มที่ห้ามลืม: iOS ห้ามพื้นโปร่ง (จะถูกถมดำ) และ iOS ครอปมุมเอง —
+// ส่งเต็มจัตุรัสทึบ · Android maskable ครอปวงกลม ต้องย่อสัญลักษณ์เหลือ ~66% ·
+// favicon/PWA "any" ใส่มุมมนโปร่งได้ ดูเป็นแอปบนทาสก์บาร์
 // ═══════════════════════════════════════════════════════════════════════════
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 import fs from "node:fs";
@@ -79,21 +85,48 @@ function ico(png) {
   return Buffer.concat([h, e, png]);
 }
 
+// ── ไอคอนแอป: ชาม + กราฟขั้นบันได + เหรียญ (วาดเป็นเวกเตอร์ คมทุกขนาด) ──────
+// rounded  = รัศมีมุมมนเป็นสัดส่วนของด้าน (0 = เต็มจัตุรัส สำหรับ iOS/maskable)
+// glyphK   = สัดส่วนขนาดสัญลักษณ์ (maskable ต้องย่อเหลือ ~0.66 กัน Android ครอปวงกลมแหว่ง)
+function drawAppIcon(size, { rounded = 0, glyphK = 0.86 } = {}) {
+  const c = createCanvas(size, size);
+  const x = c.getContext("2d");
+  x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
+  const rr = (bx, by, w, h, r) => { x.beginPath(); x.roundRect(bx, by, w, h, r); };
+  if (rounded > 0) { rr(0, 0, size, size, size * rounded); x.clip(); }
+  // พื้นส้มไล่เฉด — สีประจำระบบอาหาร (จงใจไม่ใช้เขียว กันสับสนกับระบบบัญชี SlipTrack)
+  const g = x.createLinearGradient(0, 0, 0, size);
+  g.addColorStop(0, "#FF8A3D"); g.addColorStop(1, "#F0560A");
+  x.fillStyle = g; x.fillRect(0, 0, size, size);
+
+  const s = size * glyphK, cx = size / 2, cy = size * 0.52;
+  // แท่งกราฟ "ขั้นบันได" เตี้ย→สูง — ห้ามกลับไปแบบกลางสูงสุด (ดูเป็นการชูนิ้วกลาง)
+  x.fillStyle = "#FFFFFF";
+  const bars = [[-0.17, 0.26], [0, 0.36], [0.17, 0.48]];
+  for (const [dx, h] of bars) { rr(cx + dx * s - s * .055, cy + s * .06 - h * s, s * .11, h * s, s * .04); x.fill(); }
+  // เหรียญทองบนยอดแท่งสูงสุด — ใบ้ความเป็น "ต้นทุน/มูลค่า"
+  x.fillStyle = "#FFD08A";
+  x.beginPath(); x.arc(cx + 0.17 * s, cy + s * .06 - 0.48 * s - s * .075, s * .062, 0, Math.PI * 2); x.fill();
+  // ชามทับโคนแท่ง + ฐานชาม
+  x.fillStyle = "#FFFFFF";
+  x.beginPath(); x.arc(cx, cy + s * .08, s * .34, 0, Math.PI); x.closePath(); x.fill();
+  rr(cx - s * .11, cy + s * .40, s * .22, s * .08, s * .04); x.fill();
+  return c.toBuffer("image/png");
+}
+
 const files = [
-  // ในแอป — พื้นโปร่ง วางบนพื้นสีอะไรก็ได้
-  // ใช้ "ขนาดเนื้อหาจริง" ไม่ขยายเกินต้นฉบับ: การขยายไม่ได้เพิ่มรายละเอียดสักพิกเซล
-  // มีแต่ทำให้ไฟล์บวม (512 = 293KB เทียบกับ ~90KB) และหน้าเว็บโหลดช้าลงทุกครั้ง
+  // โลโก้ร้าน — ใช้ "ในแอป" เท่านั้น (ผู้ใช้สั่ง 6 ส.ค. 69: ไอคอนไม่เอาโลโก้ร้าน)
+  // ขนาดเนื้อหาจริง ไม่ขยายเกินต้นฉบับ: ขยายไม่ได้เพิ่มรายละเอียด มีแต่ไฟล์บวม
   ["logo.png",              render(Math.max(box.w, box.h), { pad: 0 })],
-  // favicon — พื้นโปร่ง เบราว์เซอร์จัดการเอง
-  ["favicon-16.png",        render(16,  { pad: 0.02 })],
-  ["favicon-32.png",        render(32,  { pad: 0.02 })],
-  // iOS: พื้นโปร่งจะถูกแทนด้วยสีดำ จึงต้องใส่พื้นทึบเสมอ
-  ["apple-touch-icon.png",  render(180, { bg: BG, pad: 0.10 })],
-  // PWA ปกติ
-  ["icon-192.png",          render(192, { bg: BG, pad: 0.10 })],
-  ["icon-512.png",          render(512, { bg: BG, pad: 0.10 })],
-  // Android adaptive: ระบบครอปเป็นวงกลม/สี่เหลี่ยมมน ต้องเผื่อขอบ 20% ไม่งั้นโดนตัด
-  ["icon-maskable-512.png", render(512, { bg: BG, pad: 0.22 })],
+  // favicon + PWA "any" — มุมมนโปร่ง ดูเป็นแอปบนแท็บ/ทาสก์บาร์ (เบราว์เซอร์ไม่ครอปให้)
+  ["favicon-16.png",        drawAppIcon(16,  { rounded: 0.22 })],
+  ["favicon-32.png",        drawAppIcon(32,  { rounded: 0.22 })],
+  ["icon-192.png",          drawAppIcon(192, { rounded: 0.22 })],
+  ["icon-512.png",          drawAppIcon(512, { rounded: 0.22 })],
+  // iOS: ต้องเต็มจัตุรัสทึบ — พื้นโปร่งถูกถมดำ และ iOS ครอปมุมเองอยู่แล้ว
+  ["apple-touch-icon.png",  drawAppIcon(180, { rounded: 0 })],
+  // Android adaptive: ระบบครอปวงกลม/มน — พื้นเต็มขอบ สัญลักษณ์ย่ออยู่ในเขตปลอดภัย
+  ["icon-maskable-512.png", drawAppIcon(512, { rounded: 0, glyphK: 0.62 })],
 ];
 
 fs.mkdirSync(OUT, { recursive: true });
@@ -101,7 +134,7 @@ for (const [name, buf] of files) {
   fs.writeFileSync(path.join(OUT, name), buf);
   console.log(`  ${name.padEnd(24)} ${(buf.length / 1024).toFixed(1)} KB`);
 }
-const icoBuf = ico(render(48, { pad: 0.02 }));
+const icoBuf = ico(drawAppIcon(48, { rounded: 0.22 }));
 fs.writeFileSync(path.join(OUT, "favicon.ico"), icoBuf);
 console.log(`  ${"favicon.ico".padEnd(24)} ${(icoBuf.length / 1024).toFixed(1)} KB`);
-console.log(`\nต้นฉบับ ${img.width}×${img.height} · เนื้อหาจริง ${box.w}×${box.h} ที่ (${box.x},${box.y})`);
+console.log(`\nโลโก้ร้าน (ในแอป) ${img.width}×${img.height} · เนื้อหาจริง ${box.w}×${box.h} ที่ (${box.x},${box.y})`);
