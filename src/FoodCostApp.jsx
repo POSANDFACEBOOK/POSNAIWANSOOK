@@ -8898,7 +8898,8 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
   // never misses pending POs because the user happened to have a status/date/
   // partner/direction filter set on the PO list. Re-fetch on demand so the
   // count is always current with the database, not the UI's filter view.
-  const[showHistory,setShowHistory]=useState(false);   // หน้าย้อนดูรอบที่เคยกดสร้างรายการ
+  const[showHistory,setShowHistory]=useState(false);
+  const[unpicked,setUnpicked]=useState(()=>new Set());   // ชื่อซัพพลายที่ติ๊กออก   // หน้าย้อนดูรอบที่เคยกดสร้างรายการ
   const[pos,setPos]=useState([]);
   const[prs,setPrs]=useState([]);          // ใบขอซื้อที่อนุมัติแล้วแต่ยังไม่ได้ออกไปซื้อ
   const[loading,setLoading]=useState(true);
@@ -9039,6 +9040,11 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
   },[summary.rows,qtyEdit]);
 
   const totalCost=Math.round(groups.reduce((s,g)=>s+g.subtotal,0)*100)/100;
+  // เลือกไว้กี่เจ้า — ใช้กับทั้งปุ่มสร้างและปุ่มปริ้น ให้พิมพ์ออกมาตรงกับที่จะสั่งจริง
+  const pickedGroups=groups.filter(g=>!unpicked.has(g.name));
+  const pickedTotal=Math.round(pickedGroups.reduce((s,g)=>s+g.subtotal,0)*100)/100;
+  const pickedIngs=pickedGroups.reduce((s,g)=>s+g.rows.filter(r=>r.shortBy>0).length,0);
+  const allPicked=groups.length>0&&pickedGroups.length===groups.length;
   const distinctIngs=groups.reduce((s,g)=>s+g.rows.filter(r=>r.shortBy>0).length,0);
   const orderCount=summary.pendingOrders.length+summary.pendingPRs.length;
 
@@ -9047,15 +9053,17 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
     if(creatingRef.current)return;   // already creating — ignore double-tap
     creatingRef.current=true;        // claim before the async confirm so a 2nd click can't slip through
     try{
+      // กันกดทั้งที่ยังไม่ได้ติ๊กเจ้าไหน — ถ้าปล่อยผ่านจะสร้าง 0 ใบแล้วปิดหน้าไปเฉยๆ เหมือนทำสำเร็จ
+      if(pickedGroups.length===0){alert("ยังไม่ได้เลือกซัพพลาย — ติ๊กอย่างน้อย 1 เจ้าก่อนกดสร้างรายการ");return;}
       if(!await confirmDlg({
         title:"สร้างรายการสั่งซื้อ + พิมพ์",
-        message:`สร้างรายการสั่งซื้อ ${distinctIngs} วัตถุดิบ จาก ${groups.length} ซัพพลาย สำหรับ "${currentBranch?.name||"ครัวกลาง"}" และพิมพ์ใบรายการซื้อ?
+        message:`สร้างรายการสั่งซื้อ ${pickedIngs} วัตถุดิบ จาก ${pickedGroups.length} ซัพพลาย สำหรับ "${currentBranch?.name||"ครัวกลาง"}" และพิมพ์ใบรายการซื้อ?${groups.length>pickedGroups.length?`\n\n⏭ ข้าม ${groups.length-pickedGroups.length} เจ้าที่ไม่ได้ติ๊ก — ยังค้างอยู่ในหน้านี้ สั่งทีหลังได้`:""}
 \n• รายการจะส่งให้ Area อนุมัติก่อน (แท็บ "อนุมัติการสั่งของ")
 • อนุมัติแล้ว → ส่งซัพพลาย → กด "ยืนยันรับ" + กรอกราคาจริง`,
         confirmLabel:"🛒 สร้าง + พิมพ์",
       }))return;
       setCreating(true);
-      await onCreateOrders(groups);
+      await onCreateOrders(pickedGroups);
       printShoppingList();   // iframe-based — prints fine even though it runs after the await above
       if(onClose)onClose();
     }catch(e){
@@ -9064,7 +9072,8 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
   }
 
   function printShoppingList(){
-    const groupHtml=groups.map(g=>`
+    // ปริ้นเฉพาะเจ้าที่ติ๊กไว้ ให้ใบที่ถือไปซื้อตรงกับรายการที่สร้างจริง
+    const groupHtml=pickedGroups.map(g=>`
       <h3 style="margin:18px 0 6px;color:#0F172A;border-bottom:2px solid #FF6B35;padding-bottom:4px">${esc(g.name)}</h3>
       <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:#F1F5F9">
         <th style="border:1px solid #ddd;padding:6px;text-align:center;width:36px">#</th>
@@ -9086,7 +9095,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       <td style="border:1px solid #ddd;padding:6px;text-align:right;font-weight:900;color:#FF6B35">฿${g.subtotal.toLocaleString(undefined,{minimumFractionDigits:2})}</td></tr>
       </tbody></table>
     `).join("");
-    printHtml(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการต้องซื้อ ${fmtD(todayStr())}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 4px}.meta{font-size:12px;color:#64748B;margin:2px 0}@media print{.noprint{display:none}}</style></head><body><h2>📋 รายการที่ครัวกลางต้องไปซื้อวันนี้</h2><p class="meta">วันที่: <b>${esc(fmtD(todayStr()))}</b> · สาขา: <b>${esc(currentBranch?.name||"ครัวกลาง")}</b> · คำสั่งซื้อค้าง: <b>${orderCount}</b> ใบ</p>${groupHtml}<div style="margin-top:18px;padding:12px;background:#FEF3C7;border:2px solid #F59E0B;border-radius:10px;font-size:14px"><b>รวมทั้งสิ้นประมาณ: <span style="color:#FF6B35;font-size:18px">฿${totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span></b></div><br/></body></html>`);
+    printHtml(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>รายการต้องซื้อ ${fmtD(todayStr())}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 4px}.meta{font-size:12px;color:#64748B;margin:2px 0}@media print{.noprint{display:none}}</style></head><body><h2>📋 รายการที่ครัวกลางต้องไปซื้อวันนี้</h2><p class="meta">วันที่: <b>${esc(fmtD(todayStr()))}</b> · สาขา: <b>${esc(currentBranch?.name||"ครัวกลาง")}</b> · คำสั่งซื้อค้าง: <b>${orderCount}</b> ใบ</p>${groupHtml}<div style="margin-top:18px;padding:12px;background:#FEF3C7;border:2px solid #F59E0B;border-radius:10px;font-size:14px"><b>รวมทั้งสิ้นประมาณ: <span style="color:#FF6B35;font-size:18px">฿${pickedTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</span></b></div><br/></body></html>`);
   }
 
   // ใช้ได้ 2 แบบ: เป็นแท็บในหน้า (inline) หรือเป็นหน้าต่างเด้ง — เนื้อหาชุดเดียวกัน
@@ -9137,9 +9146,15 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           {/* พอกดสร้างรายการแล้วรายการจะหายไปจากหน้านี้ (กลายเป็นใบสั่งซื้อรออนุมัติ)
               ปุ่มนี้จึงเป็นทางย้อนกลับไปดูว่าแต่ละรอบสั่งอะไรไปบ้าง */}
+          <div style={{display:"flex",alignItems:"center",gap:8,marginRight:4,fontFamily:"'Sarabun',sans-serif"}}>
+            <span style={{fontSize:12,color:C.ink3}}>เลือก <b style={{color:C.ink}}>{pickedGroups.length}</b>/{groups.length} เจ้า · <b style={{color:C.brand}}>฿{pickedTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</b></span>
+            <button onClick={()=>setUnpicked(allPicked?new Set(groups.map(g=>g.name)):new Set())}
+              style={{background:"transparent",border:`1px solid ${C.line}`,borderRadius:8,padding:"5px 10px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11.5,fontWeight:700,color:C.ink3}}>
+              {allPicked?"ล้างทั้งหมด":"เลือกทั้งหมด"}</button>
+          </div>
           <Btn v="ghost" onClick={()=>setShowHistory(true)} icon={I.clock} s={{padding:"8px 12px",fontSize:12}}>🕘 ประวัติ</Btn>
           <Btn v="ghost" onClick={printShoppingList} s={{padding:"8px 12px",fontSize:12}}>🖨 ปริ้น</Btn>
-          {onCreateOrders&&<Btn v="success" onClick={createAndPrint} loading={creating} disabled={creating} s={{padding:"8px 14px",fontSize:12}}>🛒 สร้างรายการ</Btn>}
+          {onCreateOrders&&<Btn v="success" onClick={createAndPrint} loading={creating} disabled={creating||pickedGroups.length===0} s={{padding:"8px 14px",fontSize:12}}>🛒 สร้างรายการ ({pickedGroups.length} เจ้า)</Btn>}
         </div>
       </div>
 
@@ -9155,10 +9170,15 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
 
       {/* One supplier per card — item name on its own full-width line, stats in a grid below, never overlap */}
       <div style={{display:"flex",flexDirection:"column",gap:18}}>
-        {groups.map((g,gIdx)=><div key={g.name} style={{borderRadius:14,overflow:"hidden",border:`2px solid ${C.teal}33`,boxShadow:"0 2px 10px rgba(13,148,136,0.08)",background:C.white}}>
+        {groups.map((g,gIdx)=><div key={g.name} style={{borderRadius:14,overflow:"hidden",border:`2px solid ${C.teal}33`,boxShadow:"0 2px 10px rgba(13,148,136,0.08)",background:C.white,
+          opacity:unpicked.has(g.name)?.5:1,transition:"opacity .15s"}}>
           {/* Supplier header — teal gradient, numbered, big subtotal */}
           <div style={{padding:"14px 18px",background:`linear-gradient(135deg,${C.teal} 0%,#0F766E 100%)`,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
             <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0,flex:1}}>
+              {/* ติ๊กเลือกว่าจะสั่งเจ้านี้ไหม — เจ้าที่ไม่ติ๊กจะยังค้างอยู่ในหน้านี้ ไม่หายไปไหน */}
+              <input type="checkbox" checked={!unpicked.has(g.name)} aria-label={`เลือกสั่งจาก ${g.name}`}
+                onChange={e=>setUnpicked(prev=>{const n=new Set(prev);if(e.target.checked)n.delete(g.name);else n.add(g.name);return n;})}
+                style={{width:20,height:20,flexShrink:0,cursor:"pointer",accentColor:"#FFFFFF"}}/>
               <div style={{width:34,height:34,borderRadius:10,background:"rgba(255,255,255,0.2)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                 <Ic d={I.truck} s={18} c={C.white}/>
               </div>
