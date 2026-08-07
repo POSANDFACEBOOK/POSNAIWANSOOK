@@ -1865,7 +1865,9 @@ function AttachBox({files,setFiles,label="📎 แนบรูป / ไฟล์
              <span style={{fontSize:22}}>📄</span>
              <span style={{fontSize:9,color:C.ink3,textAlign:"center",lineHeight:1.2,wordBreak:"break-all",maxHeight:24,overflow:"hidden"}}>{f.name}</span>
            </a>}
-        <button onClick={()=>setFiles(prev=>prev.filter((_,j)=>j!==i))} aria-label={`ลบ ${f.name}`}
+        {/* ลบด้วย ref ไม่ใช่ตำแหน่ง — ระหว่างที่ยังอัปไฟล์อื่นค้างอยู่ รายการจะยาวขึ้นเรื่อย ๆ
+            ตำแหน่งที่จำไว้ตอน render จึงเลื่อน แล้วจะลบผิดไฟล์ */}
+        <button onClick={()=>setFiles(prev=>prev.filter(z=>z.ref!==f.ref))} aria-label={`ลบ ${f.name}`}
           style={{position:"absolute",top:-6,right:-6,width:22,height:22,borderRadius:11,border:"2px solid #fff",background:C.red,color:"#fff",fontSize:12,fontWeight:800,cursor:"pointer",lineHeight:1,padding:0}}>✕</button>
       </div>)}
       <button onClick={()=>ref.current?.click()}
@@ -12324,8 +12326,14 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
       const grand=kind==="po"?(o.total||sumItems(o)):sumItems(o);
       const ingOf=it=>ingById.get(+(it.ingId||it.ingredient_id));
       const accent=kind==="po"?C.blue:isAssetPR?C.purple:isPR?C.green:C.teal;
-      // ใบขอสินทรัพย์ไม่มีราคา (ครัวกลางไปหาซื้อแล้วค่อยรู้ราคา) — โชว์ ฿0 จะสื่อผิดว่าของฟรี
-      const showMoney=!isAssetPR&&list.some(it=>(+(it.estimatedCost||it.line_total)||0)>0);
+      // ราคาของแต่ละชนิดเอกสารเก็บคนละคีย์ — ใบขอซื้อเก็บ "ต่อหน่วย" (price_per_unit)
+      // ส่วน PO/ออเดอร์นอกเก็บ "ยอดต่อบรรทัด" ต้องเผื่อครบทุกทางให้ตรงกับ sumItems
+      // ถ้าอ่านแค่ 2 คีย์แรก ราคาที่สาขากรอกมาจะหายไปทั้งที่บันทึกไว้แล้ว (บั๊กที่เพิ่งเจอ)
+      const qtyOf=it=>+(it.qtyNeeded||it.qty||0)||0;
+      const unitOf=it=>+it.price_per_unit||0;
+      const lineOf=it=>(+it.estimatedCost||+it.line_total||(unitOf(it)*qtyOf(it)))||0;
+      // ไม่มีราคาเลยจริง ๆ ค่อยซ่อน — ไม่ผูกกับชนิดเอกสาร เพราะตอนนี้ใบสินทรัพย์ก็กรอกราคาได้แล้ว
+      const showMoney=list.some(it=>lineOf(it)>0);
       return <Modal title={title} onClose={()=>setDetailCard(null)} extraWide>
         <div style={{fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>จากสาขา <b style={{color:C.ink}}>{branchName(bid)}</b> · โดย {kind==="po"?(o.created_by||"-"):(o.requested_by||"-")} · <b style={{color:C.ink2}}>{list.length}</b> รายการ</div>
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
@@ -12336,7 +12344,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
             // "คงเหลือ" ของสินทรัพย์คือจำนวนที่สาขามีอยู่แล้ว ณ ตอนขอ (current_qty)
             // ไม่ใช่สต๊อกวัตถุดิบ — ถ้าไปอ่านสต๊อกวัตถุดิบจะได้ค่าของคนละของ
             const st=isAssetPR?(it.current_qty!=null?+it.current_qty:null):stockOfItem(it,bid);
-            const qty=it.qtyNeeded||it.qty||0;const price=it.estimatedCost||it.line_total||0;const low=st!=null&&st<=0;return <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,fontFamily:"'Sarabun',sans-serif"}}>
+            const qty=qtyOf(it);const price=lineOf(it);const unit=unitOf(it);const low=st!=null&&st<=0;return <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,fontFamily:"'Sarabun',sans-serif"}}>
             <div onClick={img?(()=>imgView(driveImgSrc(img))):undefined} style={{cursor:img?"pointer":"default",flexShrink:0}}><Thumb src={img} alt={it.name} size={58} radius={10} iconBg={C.brandLight} iconColor={C.brand} iconSize={24}/></div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:15,fontWeight:800,color:C.ink,wordBreak:"break-word"}}>
@@ -12358,7 +12366,9 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
             </div>
             <div style={{textAlign:"right",flexShrink:0}}>
               <div style={{fontSize:22,fontWeight:900,color:accent,lineHeight:1.1}}>{qty} <span style={{fontSize:12,fontWeight:600,color:C.ink4}}>{it.unit||""}</span></div>
-              {showMoney&&<div style={{fontSize:12,color:C.ink3,marginTop:3}}>฿{money(price)}</div>}
+              {showMoney&&price>0&&<div style={{fontSize:12,color:C.ink3,marginTop:3}}>
+                ฿{money(price)}{unit>0&&qty>1?<span style={{color:C.ink4}}> ({money(unit)}/{it.unit||"หน่วย"})</span>:null}
+              </div>}
             </div>
           </div>;})}
         </div>
