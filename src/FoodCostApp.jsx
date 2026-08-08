@@ -11062,6 +11062,11 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   const[saving,setSaving]=useState(false);
   const[submitResult,setSubmitResult]=useState(null);  // { poList, extList, skippedList, totalItems, totalCost } — shown in result modal
   const[safetyEdit,setSafetyEdit]=useState({});  // { ingId: stringValue } — local edit before commit
+  // ซัพพลายที่ติ๊กว่า "จะสั่งวันนี้" — เริ่มจากว่างเปล่าโดยตั้งใจ เจ้าของเคยสั่งไว้ว่า
+  // อย่าติ๊กรอไว้ให้ ให้ติ๊กเลือกเอง (กันสั่งเจ้าที่ไม่ได้ตั้งใจสั่งไปทั้งชุด)
+  const[pickedSups,setPickedSups]=useState(()=>new Set());
+  const supKeyOf=ing=>`s_${strictBranchSupplierId(ing)}`;
+  const isPicked=ing=>pickedSups.has(supKeyOf(ing));
   const safetyTimers=useRef({});                  // { ingId: timeoutId } — debounce per-row
   const writtenRef=useRef(new Set());             // idempotency keys for order writes this session — a retry after a partial failure won't re-insert an already-written supplier order / PR
   async function saveSafety(ing,raw){
@@ -11135,11 +11140,38 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[visibleIngs,suppliers,currentBranch,isCentral]);
 
-  // The "สั่ง" column is MANUAL entry only (staff type how much to order). Counting
-  // stock lives in the separate 📦 นับสต็อก popup, not on this ordering screen.
+  // ── ตัวเลขแนะนำในคอลัมน์ "สั่ง" ────────────────────────────────────────────
+  // สูตร: ขาดอยู่เท่าไรถึงจะถึง safety ของ "สาขาที่กำลังใช้งานอยู่" = safety − สต็อก
+  //
+  // จุดที่ต้องระวัง และเหตุผลที่เลือกแบบนี้:
+  //  · safety อ่านจาก safety_by_branch ของสาขานี้เท่านั้น ไม่มี fallback ไปค่ากลาง
+  //    (branchSafety เป็นแบบนั้นอยู่แล้ว) — ไม่ได้ตั้ง = 0 = ไม่มีสัญญาณ จึงแนะนำ 0
+  //    ห้ามเดาแทน ไม่งั้นสาขาที่ยังไม่ตั้ง safety จะโดนสั่งของมั่วทั้งใบ
+  //  · ระหว่างที่ยังพิมพ์แก้ safety อยู่ ให้ใช้ค่าที่พิมพ์ค้างในช่อง (safetyEdit)
+  //    ตัวเลขแนะนำจะได้ขยับตามทันที ไม่ต้องรอเซฟ
+  //  · สต็อกอ่านด้วย branchStock = สาขานี้ ถ้าสาขายังไม่มีช่องของตัวเองจะตกไปใช้
+  //    ยอดรวม ing.stock ซึ่งเป็นพฤติกรรมเดียวกับเลขที่โชว์ในคอลัมน์ "สต็อกปัจจุบัน"
+  //    ตรงหน้าจอ — ตัวเลขแนะนำกับตัวเลขที่ตาเห็นจึงมาจากฐานเดียวกันเสมอ
+  //  · สต็อกติดลบ (มีอยู่จริงหลายตัว) → safety−(−n) = safety+n คือสั่งกลบส่วนที่ติดลบ
+  //    ด้วย ซึ่งถูกตามเลข แต่ควรไปแก้ยอดติดลบที่ต้นเหตุ ไม่ใช่สั่งของกลบทุกวัน
+  //  · ปัดทศนิยม 2 ตำแหน่ง ไม่ปัดขึ้นเป็นจำนวนเต็ม เพราะหน่วยซื้อมีทั้ง กก./ลิตร
+  //    ที่สั่งเศษได้ การปัดขึ้นทุกตัวจะกลายเป็นสั่งเกินเงียบ ๆ ทุกใบ
+  function safetyNow(ing){
+    const e=safetyEdit[ing.id];
+    return e!==undefined&&e!=="" ? (+e||0) : branchSafety(ing,currentBranch?.id);
+  }
+  function suggestQty(ing){
+    const s2=safetyNow(ing);
+    if(!(s2>0))return 0;
+    const cur=branchStock(ing,currentBranch?.id);
+    const need=s2-cur;
+    return need>0?Math.round(need*100)/100:0;
+  }
   function getOrderQty(ing){
-    // Manual entry only — return whatever staff typed, defaulting to 0.
-    return +orderQty[ing.id]||0;
+    // undefined = ยังไม่แตะแถวนี้ → ใช้ตัวเลขแนะนำ
+    // ถ้าพนักงานพิมพ์เองแล้ว (รวมถึงตั้งใจใส่ 0) ต้องใช้ค่าที่พิมพ์ ห้ามเขียนทับ
+    const v=orderQty[ing.id];
+    return v===undefined?suggestQty(ing):(+v||0);
   }
   function lineCost(ing){
     return round2(getOrderQty(ing)*(+ing.buy_price||0));
@@ -11148,10 +11180,10 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   // Totals across all visible items that need ordering
   const totals=useMemo(()=>{
     let totalCost=0,itemCount=0;
-    visibleIngs.forEach(i=>{const q2=getOrderQty(i);if(q2>0){itemCount++;totalCost+=q2*(+i.buy_price||0);}});
+    visibleIngs.forEach(i=>{if(!isPicked(i))return;const q2=getOrderQty(i);if(q2>0){itemCount++;totalCost+=q2*(+i.buy_price||0);}});
     return{totalCost:round2(totalCost),itemCount};
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[visibleIngs,orderQty,safetyEdit]);
+  },[visibleIngs,orderQty,safetyEdit,pickedSups]);
   // (removed dead saveStockCounts/onHand — stock counting lives in the 📦 นับสต็อก popup)
 
   // Submit orders — group by supplier, then route each group:
@@ -11160,15 +11192,22 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   //   • external supplier → create an order_request (one per supplier) so the PDF
   //     can be exported and sent out to the vendor
   async function submitOrder(){
-    const items=visibleIngs.map(i=>{const q2=getOrderQty(i);return{ing:i,qty:q2};}).filter(x=>x.qty>0);
-    if(items.length===0){alert("ไม่มีรายการที่ต้องสั่ง");return;}
+    // ติ๊กซัพพลายก่อน แล้วค่อยเอาเฉพาะแถวที่มีจำนวน — เรียงลำดับนี้เพื่อให้ข้อความ
+    // ที่บอกผู้ใช้ตรงกับสาเหตุจริง (ยังไม่ติ๊ก vs ติ๊กแล้วแต่ทุกแถวเป็น 0)
+    const items=visibleIngs.filter(isPicked).map(i=>{const q2=getOrderQty(i);return{ing:i,qty:q2};}).filter(x=>x.qty>0);
+    if(items.length===0){
+      alert(pickedSups.size===0
+        ? "ยังไม่ได้เลือกซัพพลาย — ติ๊กช่องหน้าชื่อซัพพลายที่จะสั่งวันนี้ก่อน"
+        : "ซัพพลายที่เลือกไว้ไม่มีรายการที่ต้องสั่ง (จำนวนเป็น 0 ทุกแถว)");
+      return;
+    }
     if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\n• ของจากครัวกลาง → จะสร้างเป็น "ใบขอซื้อ (PR)" รอ Area อนุมัติ\n• ของจากซัพพลายภายนอก → จะแยกเป็นใบสั่งตามซัพพลาย (พิมพ์ PDF ส่งได้)`,confirmLabel:"ส่งคำสั่งซื้อ"}))return;
     setSaving(true);
     try{
       // Group items by per-branch supplier
       const supMap={};
       items.forEach(({ing,qty})=>{
-        const sid=branchSupplierId(ing,currentBranch?.id);
+        const sid=strictBranchSupplierId(ing);
         const sname=sid?(suppliers.find(s=>+s.id===+sid)?.name||ing.supplier_name||"ไม่ระบุ"):(ing.supplier_name||"ไม่ระบุ");
         const k=sid||"none";
         if(!supMap[k])supMap[k]={supplierId:sid||null,supplierName:sname,items:[]};
@@ -11253,6 +11292,10 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       // Reset overrides. Full success → clear idempotency keys so a later, genuinely-new order
       // of the same items isn't mistaken for a retry.
       setOrderQty({});
+      // ⚠️ ต้องล้างติ๊กด้วย ไม่งั้นพอ orderQty ว่าง ทุกแถวจะกลับไปใช้เลขแนะนำทันที
+      // ยอดรวมเด้งกลับเท่าเดิม ปุ่มส่งกลับมากดได้ และ writtenRef เพิ่งถูกล้าง
+      // = กดอีกครั้งเดียวได้ใบสั่งซื้อซ้ำทั้งใบ (ของเดิมปลอดภัยเพราะ {} แปลว่า 0 ทุกแถว)
+      setPickedSups(new Set());
       writtenRef.current.clear();
       if(reload)await reload();
       // Notify the Area Manager(s) of this branch that an order is waiting for approval (Web Push, fire-and-forget)
@@ -11303,12 +11346,19 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       {grouped.map(g=>{
         const supTotal=g.items.reduce((s,i)=>s+lineCost(i),0);
         const orderCount=g.items.filter(i=>getOrderQty(i)>0).length;
-        return <Card key={g.key} style={{padding:0,overflow:"hidden"}}>
+        const on=pickedSups.has(g.key);
+        const toggle=()=>setPickedSups(p=>{const n=new Set(p);n.has(g.key)?n.delete(g.key):n.add(g.key);return n;});
+        return <Card key={g.key} style={{padding:0,overflow:"hidden",outline:on?`2px solid ${C.brand}`:"none"}}>
           <div style={{padding:"10px 16px",background:`linear-gradient(135deg,${C.tealLight},${C.brandLight})`,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
+            {/* ติ๊กว่าจะสั่งเจ้านี้วันนี้ไหม — ทั้งแถบกดได้ ไม่ต้องเล็งช่องเล็ก ๆ บนแท็บเล็ต */}
+            <div onClick={toggle} title={on?"เอาออกจากคำสั่งซื้อวันนี้":"เลือกสั่งเจ้านี้วันนี้"}
+              style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",userSelect:"none"}}>
+              <span style={{width:20,height:20,borderRadius:6,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
+                border:`2px solid ${on?C.brand:C.ink4}`,background:on?C.brand:C.white,color:C.white,fontSize:13,fontWeight:900}}>{on?"✓":""}</span>
               <Ic d={I.truck} s={16} c={C.teal}/>
               <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>{g.name}</span>
               <span style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>· {g.items.length} รายการ</span>
+              {orderCount>0&&<span style={{fontSize:11,fontWeight:800,color:on?C.brand:C.ink4,opacity:on?1:.55,fontFamily:"'Sarabun',sans-serif"}}>· ต้องสั่ง {orderCount} รายการ{on?"":" (ยังไม่ได้เลือก)"}</span>}
             </div>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
               {orderCount>0&&<span style={{fontSize:11,color:C.brand,fontFamily:"'Sarabun',sans-serif",fontWeight:800,background:C.brandLight,padding:"3px 9px",borderRadius:10,border:`1px solid ${C.brandBorder}`}}>{orderCount} ต้องสั่ง</span>}
@@ -11327,6 +11377,9 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
                   const safety=branchSafety(ing,currentBranch?.id);
                   const curStock=branchStock(ing,currentBranch?.id);
                   const order=getOrderQty(ing);
+                  // เส้นประ = ตัวเลขที่ระบบคำนวณให้ ยังไม่มีคนยืนยัน · เส้นทึบ = คนพิมพ์เอง
+                  // คนตรวจใบสั่งซื้อต้องแยกออกว่าเลขไหนมีคนดูแล้ว เลขไหนเครื่องเดาให้
+                  const isSug=orderQty[ing.id]===undefined&&order>0;
                   const cost=lineCost(ing);
                   const curLow=safety>0&&curStock<safety;
                   const rowBg=idx%2===0?C.white:"#FAFBFC";
@@ -11350,7 +11403,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
                       :<span style={{fontSize:13,fontWeight:800,color:safety>0?"#92400E":C.ink4,background:safety>0?"#FFFBEB":"transparent",border:safety>0?`1px solid ${C.yellow}55`:"none",padding:safety>0?"3px 10px":0,borderRadius:8,display:"inline-block",minWidth:34,textAlign:"center"}}>{safety||"—"}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder?<NumStepper value={orderQty[ing.id]??""} onChange={v=>setOrderQty(q2=>({...q2,[ing.id]:v}))} placeholder="0" btnColor={order>0?C.green:C.brand} btnBg={order>0?C.greenLight:C.bg} inputStyle={{border:`2px solid ${order>0?C.green+"55":C.line}`,background:order>0?C.greenLight:C.white,color:order>0?C.green:C.ink}} width={62}/>
+                      {canOrder?<NumStepper value={orderQty[ing.id]!==undefined?orderQty[ing.id]:(order||"")} onChange={v=>setOrderQty(q2=>({...q2,[ing.id]:v}))} placeholder="0" btnColor={order>0?C.green:C.brand} btnBg={order>0?C.greenLight:C.bg} inputStyle={{border:`2px ${isSug?"dashed":"solid"} ${order>0?C.green+"55":C.line}`,background:order>0?C.greenLight:C.white,color:order>0?C.green:C.ink}} width={62}/>
                       :<span style={{fontSize:13,fontWeight:900,color:order>0?C.green:C.ink4}}>{order||"—"}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right",fontSize:12,color:C.ink3,whiteSpace:"nowrap"}}>฿{(+ing.buy_price||0).toFixed(2)}</td>
@@ -11470,7 +11523,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
           <div style={{flex:isMobile?"none":"1 1 0",width:isMobile?"100%":"auto",display:"flex",alignItems:"center",gap:isMobile?8:14,flexWrap:"wrap"}}>
             <span style={{fontSize:18}}>📋</span>
             <div style={{display:"inline-flex",alignItems:"baseline",gap:6,whiteSpace:"nowrap"}}>
-              <span style={{fontSize:isMobile?10:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>รายการต้องสั่ง</span>
+              <span style={{fontSize:isMobile?10:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{pickedSups.size===0?"ยังไม่ได้เลือกซัพพลาย":"รายการต้องสั่ง"}</span>
               <span style={{fontSize:isMobile?14:16,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:900}}>{totals.itemCount}</span>
               <span style={{fontSize:isMobile?9:10,color:"#64748B",fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>รายการ</span>
             </div>
