@@ -1171,6 +1171,11 @@ const UNIT_G={"กรัม":1,"ก.":1,"g":1,"มล.":1,"ml":1,"มิลล�
 // ของเดิมในฐานข้อมูลมี 41 หน่วย (กก. 187 · ชิ้น 37 · กล่อง 25 · แกลลอน 17 …) ห้ามไปแก้
 // ให้คงค่าเดิมไว้ทั้งหมด แค่ตอนกดเปลี่ยนถึงจะเห็นเฉพาะ 9 หน่วยนี้
 const STD_UNITS=["กิโลกรัม","กรัม","ถุง","แพ็ค","แผง","ลัง","ขวด","ลิตร","มิลลิลิตร"];
+// ช่อง "รวมทั้งหมด" (convert_to_gram) เก็บเป็น "กรัม" เสมอ เพราะทุกอย่างท้ายน้ำหารด้วยมัน
+// (ต้นทุนต่อกรัม · การตัดสต๊อกตอนผลิต · การกระจายของเข้าสาขา) จึงรับได้เฉพาะหน่วยที่
+// แปลงเป็นกรัมได้จริง — ถุง/แพ็ค/ลัง/แผง/ขวด ไม่มีน้ำหนัก ใส่ตรงนี้แล้วไม่มีความหมาย
+// ("1 ขวด = 3 ขวด" แปลงเป็นกรัมไม่ได้) จึงไม่อยู่ในรายการของช่องนี้
+const MASS_UNITS=["กรัม","กิโลกรัม","มิลลิลิตร","ลิตร"];
 // ── แปลงจำนวนในสูตร → กรัม ───────────────────────────────────────────────────
 // ดรอปดาวน์มาตรฐานมีหน่วยบรรจุภัณฑ์ (ถุง แพ็ค แผง ลัง ขวด) ซึ่งไม่มีค่าน้ำหนักใน UNIT_G
 // ของเดิมจะตกไปคูณ 1 = "2 ขวด" ถูกบันทึกเป็น 2 กรัม ทั้งที่จริง 1 ขวดอาจ 700 กรัม
@@ -1193,7 +1198,8 @@ const toGrams=(amt,unit)=>round2((+amt||0)*(UNIT_G[String(unit||"").trim()]||1))
 // ตัวเลือกหน่วย — ใช้ <select> ธรรมดาไม่ได้ เพราะค่าเดิมที่ไม่อยู่ใน 9 หน่วย (เช่น "กก.")
 // จะทำให้ select แสดงว่าง แล้วพนักงานเผลอเซฟทับจนหน่วยหาย จึงต้องแยก
 // "ค่าที่แสดง" (อะไรก็ได้ตามที่เก็บไว้) ออกจาก "ตัวเลือกที่กดได้" (9 หน่วยเท่านั้น)
-function UnitPicker({value,onChange,placeholder="เลือกหน่วย"}){
+// options = จำกัดรายการเฉพาะบางที่ได้ เช่นช่อง "รวมทั้งหมด" ที่รับได้แต่หน่วยที่มีน้ำหนักจริง
+function UnitPicker({value,onChange,placeholder="เลือกหน่วย",options=STD_UNITS}){
   const[open,setOpen]=useState(false);
   const box=useRef(null);
   useEffect(()=>{
@@ -1203,7 +1209,7 @@ function UnitPicker({value,onChange,placeholder="เลือกหน่วย"
     return()=>document.removeEventListener("mousedown",away);
   },[open]);
   const cur=String(value||"").trim();
-  const legacy=cur&&!STD_UNITS.includes(cur);
+  const legacy=cur&&!options.includes(cur);
   return <div ref={box} style={{position:"relative"}}>
     <button type="button" onClick={()=>setOpen(o=>!o)}
       style={{...iS,textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
@@ -1216,7 +1222,7 @@ function UnitPicker({value,onChange,placeholder="เลือกหน่วย"
     </button>
     {open&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:40,marginTop:4,background:C.white,
       border:`1px solid ${C.line}`,borderRadius:10,boxShadow:"0 10px 30px rgba(15,23,42,.16)",maxHeight:280,overflowY:"auto"}}>
-      {STD_UNITS.map(u=>{const on=u===cur;
+      {options.map(u=>{const on=u===cur;
         return <button key={u} type="button" onClick={()=>{onChange(u);setOpen(false);}}
           style={{display:"block",width:"100%",textAlign:"left",padding:"10px 12px",border:"none",
             borderBottom:`1px solid ${C.lineLight}`,background:on?C.brandLight:"transparent",cursor:"pointer",
@@ -2629,7 +2635,7 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
       const brand=parts[2]||"";
       const supName=parts[3]||"";
       const note=parts[5]||"";
-      parsed.push({_kid:randId(),name,buy_price:price,category:currentCat,supplier_name:supName.trim(),brand:brand.trim(),note:note.trim(),buy_unit:"กก.",buy_amount:1,convert_to_gram:1000,price_per_gram:price>0?price/1000:0,stock:0,selected:true});
+      parsed.push({_kid:randId(),name,buy_price:price,category:currentCat,supplier_name:supName.trim(),brand:brand.trim(),note:note.trim(),buy_unit:"กิโลกรัม",buy_amount:1,convert_to_gram:1000,price_per_gram:price>0?price/1000:0,stock:0,selected:true});
     });
     return parsed.filter(r=>r.name&&r.name.length>=2);
   }
@@ -2723,7 +2729,7 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
           // New ingredient — fill in required defaults for fields the file didn't supply
           if(!item.name)continue;
           if(!item.category)item.category="อื่นๆ";
-          if(!item.buy_unit)item.buy_unit="กก.";
+          if(!item.buy_unit)item.buy_unit="กิโลกรัม";
           if(item.buy_amount==null)item.buy_amount=1;
           if(item.buy_price==null)item.buy_price=0;
           if(item.convert_to_gram==null)item.convert_to_gram=1000;
@@ -3814,7 +3820,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   const setView=(m)=>{setViewMode(m);try{localStorage.setItem("nw_ing_view",m);}catch{}};
   // Load an ingredient into the edit form (shared by the card and the table view).
   function openEdit(item){setForm({name:item.name,code:item.code||"",category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,safety_stock:branchSafety(item,currentBranch?.id)||"",image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}
-  const ef={name:"",code:"",category:ingCats[0]?.name||"",buy_unit:"กก.",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
+  const ef={name:"",code:"",category:ingCats[0]?.name||"",buy_unit:"กิโลกรัม",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
   const[form,setForm]=useState(ef);
   const isCentral=currentBranch?.type==="central";
   const canE=hasPerm(currentUser,"ingredients")&&isCentral;const canD=hasPerm(currentUser,"ingredients")&&isCentral;
@@ -3987,6 +3993,12 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     setStockBtnLoading(false);setShowStockGate(true);
   }
   function upd(k,val){setForm(f=>{const n={...f,[k]:val};if(k==="buy_price"||k==="convert_to_gram")n.price_per_gram=ppg(+(k==="buy_price"?val:n.buy_price)||0,+(k==="convert_to_gram"?val:n.convert_to_gram)||0);if(k==="supplier_id"){const sup=suppliers.find(s=>String(s.id)===String(val));n.supplier_name=sup?sup.name:"";}return n;});}
+  // หน่วยที่ใช้ "แสดง" ในช่องรวมทั้งหมด — ค่าที่เก็บลงฐานข้อมูลยังเป็นกรัมเสมอ
+  // เริ่มที่ "กรัม" เพื่อให้ตรงกับตัวเลขที่เคยเห็น ไม่เซอร์ไพรส์ของเดิม 818 รายการ
+  const[ctgUnit,setCtgUnit]=useState("กรัม");
+  const ctgFactor=UNIT_G[ctgUnit]||1;
+  const ctgShown=form.convert_to_gram===""||form.convert_to_gram==null?""
+    :String(Math.round((+form.convert_to_gram/ctgFactor)*1000)/1000);
   async function save(){if(!form.name||!form.buy_price)return;
     // Without a gram conversion every cost derived from this ingredient is 0 (and ~1000× too high
     // the moment it is received), so block NEW rows outright. For an EXISTING row that is already
@@ -4401,9 +4413,18 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
         <Inp label="ราคาที่ซื้อมา (บาท)" type="number" value={form.buy_price} onChange={e=>upd("buy_price",e.target.value)} placeholder="0"/>
       </div>
       <div style={{background:C.brandLight,borderRadius:12,padding:"16px",marginBottom:16,border:`1px solid ${C.brandBorder}`}}>
-        <Inp label="รวมทั้งหมดกี่กรัม" hint="แปลงเป็นกรัม" type="number" value={form.convert_to_gram} onChange={e=>upd("convert_to_gram",e.target.value)} placeholder="1000"/>
+        <div style={{display:"grid",gridTemplateColumns:"1.6fr 1fr",gap:10,alignItems:"end",marginBottom:12}}>
+          <Inp label={`1 ${form.buy_unit||"หน่วยที่ซื้อ"} = เท่าไร`} hint="SOP หยิบของตามนี้" type="text" inputMode="decimal"
+            value={ctgShown}
+            onChange={e=>{const v=e.target.value;
+              upd("convert_to_gram", v===""?"":Math.round((parseFloat(v)||0)*ctgFactor*1000)/1000);}}
+            placeholder={ctgUnit==="กรัม"?"1000":"1"}/>
+          <Field label="หน่วย">
+            <UnitPicker value={ctgUnit} options={MASS_UNITS} onChange={setCtgUnit}/>
+          </Field>
+        </div>
         <div style={{background:C.white,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.brandBorder}`,textAlign:"center"}}>
-          <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>ราคาต่อกรัม</div>
+          <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>ราคาต่อกรัม{ctgUnit!=="กรัม"&&+form.convert_to_gram>0?` · เก็บเป็น ${+form.convert_to_gram} กรัม`:""}</div>
           <div style={{fontSize:24,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{form.buy_price&&form.convert_to_gram?ppg(+form.buy_price,+form.convert_to_gram).toFixed(4):"0.0000"}<span style={{fontSize:12,fontWeight:500,color:C.ink3,marginLeft:4}}>/ กรัม</span></div>
         </div>
       </div>
