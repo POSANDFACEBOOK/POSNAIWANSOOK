@@ -1162,8 +1162,68 @@ async function nextIngCodeForPrefix(prefix){
 // them by a price-per-GRAM. The picker lets the operator type in กก./ลิตร/ช้อน etc., so convert at
 // write time — storing "1" for "1 กก." made that ingredient cost 1/1000 of reality.
 // Units with no mass equivalence (ชิ้น / custom) stay 1:1 — the operator is expected to type grams.
-const UNIT_G={"กรัม":1,"ก.":1,"g":1,"มล.":1,"ml":1,"ช้อนชา":5,"ช้อนโต๊ะ":15,"ถ้วย":240,"กก.":1000,"kg":1000,"ลิตร":1000,"l":1000};
+// ⚠️ คีย์ในตารางนี้คือ "ข้อความหน่วย" ตรง ๆ ตัวไหนไม่อยู่ในตารางจะถูกคูณ 1
+// เดิมมีแต่ "กก." พอดรอปดาวน์มาตรฐานส่งคำว่า "กิโลกรัม" เข้ามาจะกลายเป็นคูณ 1
+// = 1 กิโลกรัมถูกคิดเป็น 1 กรัม ต้นทุนและการตัดสต๊อกเพี้ยน 1000 เท่า
+// (คอมเมนต์ข้างบนบันทึกไว้ว่าบั๊คนี้เคยเกิดจริงมาแล้ว) จึงต้องใส่ชื่อเต็มเป็นคีย์คู่กันไว้ด้วย
+const UNIT_G={"กรัม":1,"ก.":1,"g":1,"มล.":1,"ml":1,"มิลลิลิตร":1,"ช้อนชา":5,"ช้อนโต๊ะ":15,"ถ้วย":240,"กก.":1000,"kg":1000,"กิโลกรัม":1000,"ลิตร":1000,"l":1000};
+// หน่วยมาตรฐานที่เจ้าของกำหนด (8 ส.ค. 69) — ดรอปดาวน์ทุกที่ให้เลือกได้แค่ 9 ตัวนี้
+// ของเดิมในฐานข้อมูลมี 41 หน่วย (กก. 187 · ชิ้น 37 · กล่อง 25 · แกลลอน 17 …) ห้ามไปแก้
+// ให้คงค่าเดิมไว้ทั้งหมด แค่ตอนกดเปลี่ยนถึงจะเห็นเฉพาะ 9 หน่วยนี้
+const STD_UNITS=["กิโลกรัม","กรัม","ถุง","แพ็ค","แผง","ลัง","ขวด","ลิตร","มิลลิลิตร"];
+// ── แปลงจำนวนในสูตร → กรัม ───────────────────────────────────────────────────
+// ดรอปดาวน์มาตรฐานมีหน่วยบรรจุภัณฑ์ (ถุง แพ็ค แผง ลัง ขวด) ซึ่งไม่มีค่าน้ำหนักใน UNIT_G
+// ของเดิมจะตกไปคูณ 1 = "2 ขวด" ถูกบันทึกเป็น 2 กรัม ทั้งที่จริง 1 ขวดอาจ 700 กรัม
+// ผลคือต้นทุนต่ำกว่าจริง 700 เท่า และตอนผลิตก็ตัดสต๊อกแทบไม่ลด ของค้างในระบบตลอดไป
+//
+// ทางออก: วัตถุดิบแต่ละตัวมีช่อง "รวมทั้งหมดกี่กรัม" (convert_to_gram) อยู่แล้ว
+// ซึ่งแปลว่า "กรัมต่อ 1 หน่วยที่ซื้อ" ถ้าหน่วยในสูตรตรงกับหน่วยที่ซื้อของตัวนั้น
+// ก็ใช้ค่านั้นแปลงได้ตรง ๆ — 2 ขวด × 700 = 1400 กรัม ถูกต้องทั้งต้นทุนและสต๊อก
+//
+// เหลือกรณีที่ยังไม่รู้จริง ๆ (หน่วยบรรจุภัณฑ์ที่ไม่ตรงกับหน่วยซื้อ หรือยังไม่ได้ตั้งน้ำหนัก)
+// อันนั้นคงพฤติกรรมเดิมคือคิดเป็นกรัมตรง ๆ แต่ต้องถามยืนยันก่อน ห้ามบันทึกเงียบ ๆ
+function recipeGrams(amt,unit,ing){
+  const u=String(unit||"").trim(), n=+amt||0;
+  if(UNIT_G[u])return{grams:round2(n*UNIT_G[u]),exact:true};
+  const bu=String(ing&&ing.buy_unit||"").trim(), per=+(ing&&ing.convert_to_gram)||0;
+  if(u&&bu&&u===bu&&per>0)return{grams:round2(n*per),exact:true,per};
+  return{grams:round2(n),exact:false};
+}
 const toGrams=(amt,unit)=>round2((+amt||0)*(UNIT_G[String(unit||"").trim()]||1));
+// ตัวเลือกหน่วย — ใช้ <select> ธรรมดาไม่ได้ เพราะค่าเดิมที่ไม่อยู่ใน 9 หน่วย (เช่น "กก.")
+// จะทำให้ select แสดงว่าง แล้วพนักงานเผลอเซฟทับจนหน่วยหาย จึงต้องแยก
+// "ค่าที่แสดง" (อะไรก็ได้ตามที่เก็บไว้) ออกจาก "ตัวเลือกที่กดได้" (9 หน่วยเท่านั้น)
+function UnitPicker({value,onChange,placeholder="เลือกหน่วย"}){
+  const[open,setOpen]=useState(false);
+  const box=useRef(null);
+  useEffect(()=>{
+    if(!open)return;
+    const away=e=>{if(box.current&&!box.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",away);
+    return()=>document.removeEventListener("mousedown",away);
+  },[open]);
+  const cur=String(value||"").trim();
+  const legacy=cur&&!STD_UNITS.includes(cur);
+  return <div ref={box} style={{position:"relative"}}>
+    <button type="button" onClick={()=>setOpen(o=>!o)}
+      style={{...iS,textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+      <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:cur?C.ink:C.ink4}}>{cur||placeholder}</span>
+      <span style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+        {legacy&&<span title="หน่วยเดิมที่ไม่อยู่ในรายการมาตรฐาน — ยังใช้ได้ กดเลือกใหม่เพื่อเปลี่ยน"
+          style={{fontSize:9.5,fontWeight:800,color:"#B45309",background:"#FEF3C7",borderRadius:5,padding:"1px 5px"}}>เดิม</span>}
+        <Ic d={I.chevD} s={14} c={C.ink3}/>
+      </span>
+    </button>
+    {open&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:40,marginTop:4,background:C.white,
+      border:`1px solid ${C.line}`,borderRadius:10,boxShadow:"0 10px 30px rgba(15,23,42,.16)",maxHeight:280,overflowY:"auto"}}>
+      {STD_UNITS.map(u=>{const on=u===cur;
+        return <button key={u} type="button" onClick={()=>{onChange(u);setOpen(false);}}
+          style={{display:"block",width:"100%",textAlign:"left",padding:"10px 12px",border:"none",
+            borderBottom:`1px solid ${C.lineLight}`,background:on?C.brandLight:"transparent",cursor:"pointer",
+            fontFamily:"'Sarabun',sans-serif",fontSize:13.5,color:C.ink,fontWeight:on?800:500}}>{u}{on?" ✓":""}</button>;})}
+    </div>}
+  </div>;
+}
 // A menu that exists but has NO recipe has an UNKNOWN cost, not a zero cost. Every costing site
 // must use this so its revenue is never booked as 100%-margin profit (single source of truth —
 // the previous partial fix left the snapshot, its editor and the daily table disagreeing).
@@ -4337,7 +4397,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       </div>
       <div style={{background:C.lineLight,borderRadius:12,padding:"16px",marginBottom:16}}>
         <div style={{fontSize:13,fontWeight:700,color:C.ink2,marginBottom:12,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:6}}><Ic d={I.tag} s={14} c={C.brand}/>ข้อมูลการซื้อ</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Inp label="จำนวนที่ซื้อ" type="number" value={form.buy_amount} onChange={e=>upd("buy_amount",e.target.value)} placeholder="1"/><Inp label="หน่วยที่ซื้อ" value={form.buy_unit} onChange={e=>upd("buy_unit",e.target.value)} placeholder="กก., ขวด, แผง"/></div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Inp label="จำนวนที่ซื้อ" type="number" value={form.buy_amount} onChange={e=>upd("buy_amount",e.target.value)} placeholder="1"/><Field label="หน่วยที่ซื้อ"><UnitPicker value={form.buy_unit} onChange={v=>upd("buy_unit",v)}/></Field></div>
         <Inp label="ราคาที่ซื้อมา (บาท)" type="number" value={form.buy_price} onChange={e=>upd("buy_price",e.target.value)} placeholder="0"/>
       </div>
       <div style={{background:C.brandLight,borderRadius:12,padding:"16px",marginBottom:16,border:`1px solid ${C.brandBorder}`}}>
@@ -5158,9 +5218,7 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
   const[q,setQ]=useState("");
   const[ingQ,setIngQ]=useState("");
   const[ingPopup,setIngPopup]=useState(null);
-  const[newUnit,setNewUnit]=useState("");
-  const[customUnits,setCustomUnits]=useState(()=>{try{return JSON.parse(localStorage.getItem("fc_custom_units")||"[]");}catch{return[];}});
-  const allUnits=useMemo(()=>["กรัม","มล.","ชิ้น","ช้อนโต๊ะ","ช้อนชา","ถ้วย","กก.","ลิตร",...customUnits],[customUnits]);
+
   const ing=useMemo(()=>sopIngs.find(i=>i.id===sel),[sopIngs,sel]);
   const canE=hasPerm(currentUser,"sop")&&isCentral;
   // เวลา/บรรจุภัณฑ์ ขึ้นบนใบ SOP ที่พิมพ์ (ดู buildSopSheetHTML) — ต้องรัน sql/menu-sop-meta.sql ก่อน
@@ -5182,23 +5240,23 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
   const pickableIngs=useMemo(()=>ings.filter(i=>i.id!==sel),[ings,sel]);
   const filteredIngs=useMemo(()=>pickableIngs.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[pickableIngs,ingQ]);
   function pickIng(target){setIngPopup({ing:target,amount:"",unit:"กรัม"});}
-  function confirmIngPick(){
+  async function confirmIngPick(){
     if(!ingPopup||!String(ingPopup.amount).trim())return;
     const amt=parseFloat(ingPopup.amount);
     if(isNaN(amt)||amt<=0)return;
     // Store canonical grams; keep what the operator actually typed for display.
     const u=ingPopup.unit||"กรัม";
-    const grams=toGrams(amt,u);
+    const conv=recipeGrams(amt,u,ingPopup.ing);
+    // ระบบไม่รู้ว่าหน่วยนี้หนักเท่าไร → จะบันทึกตัวเลขเป็นกรัมตรง ๆ ต้องให้คนยืนยันก่อน
+    // ปล่อยผ่านเงียบ ๆ คือต้นทุนกับสต๊อกเพี้ยนโดยไม่มีใครรู้
+    if(!conv.exact&&!await confirmDlg({
+      title:"ระบบไม่รู้น้ำหนักของหน่วยนี้",
+      message:`วัตถุดิบ "${ingPopup.ing?.name||""}" ซื้อเป็นหน่วย "${ingPopup.ing?.buy_unit||"-"}" แต่สูตรเลือกหน่วย "${u}"\n\nระบบจะบันทึกเป็น ${round2(amt)} กรัม ตามตัวเลขที่กรอก และคิดต้นทุน/ตัดสต๊อกจากตัวเลขนี้\n\nถ้าไม่ใช่ที่ต้องการ ให้กดยกเลิกแล้วเปลี่ยนเป็น "กรัม" หรือไปตั้งช่อง "รวมทั้งหมดกี่กรัม" ของวัตถุดิบตัวนี้ก่อน`,
+      confirmLabel:"บันทึกตามนี้"}))return;
+    const grams=conv.grams;
     const entry={amountGram:grams,unit:"กรัม",displayAmount:amt,displayUnit:u};
     setEditIngs(f=>{const idx=f.findIndex(x=>x.ingredientId===ingPopup.ing.id);return idx>=0?f.map((x,i)=>i===idx?{...x,...entry}:x):[...f,{ingredientId:ingPopup.ing.id,...entry}];});
     setIngPopup(null);
-  }
-  function addCustomUnit(){
-    if(!newUnit.trim())return;
-    const u=newUnit.trim();
-    const next=customUnits.includes(u)?customUnits:[...customUnits,u];
-    setCustomUnits(next);localStorage.setItem("fc_custom_units",JSON.stringify(next));
-    setIngPopup(p=>({...p,unit:u}));setNewUnit("");
   }
   // Cost from sub-ingredients — uses avg_price_per_gram (computed from
   // delivered receive prices) when available, falls back to the catalog
@@ -5384,9 +5442,7 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
             <div>
               <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>หน่วย</div>
               <div style={{position:"relative"}}>
-                <select value={ingPopup.unit} onChange={e=>setIngPopup(p=>({...p,unit:e.target.value}))} style={{...iS,cursor:"pointer",appearance:"none",paddingRight:36}}>
-                  {allUnits.map(u=><option key={u} value={u}>{u}</option>)}
-                </select>
+                <UnitPicker value={ingPopup.unit} onChange={v=>setIngPopup(p=>({...p,unit:v}))}/>
                 <span style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><Ic d={I.chevD} s={16} c={C.ink3}/></span>
               </div>
             </div>
@@ -5394,8 +5450,6 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
           <div style={{background:C.bg,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`,marginBottom:16}}>
             <div style={{fontSize:11,fontWeight:700,color:C.ink4,marginBottom:8,fontFamily:"'Sarabun',sans-serif",letterSpacing:.5}}>+ เพิ่มหน่วยใหม่</div>
             <div style={{display:"flex",gap:8}}>
-              <input value={newUnit} onChange={e=>setNewUnit(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCustomUnit()} placeholder="เช่น แผง / หัว..." style={{...iS,fontSize:13,padding:"7px 10px",flex:1}}/>
-              <Btn v="ghost" onClick={addCustomUnit} disabled={!newUnit.trim()} s={{padding:"7px 14px",fontSize:12}}>เพิ่ม</Btn>
             </div>
           </div>
           <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
@@ -5414,9 +5468,7 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
   const[sel,setSel]=useState(visibleMenus[0]?.id??null);const[edit,setEdit]=useState(false);const[sop,setSop]=useState([]);const[saving,setSaving]=useState(false);const[ingQ,setIngQ]=useState("");const[menuQ,setMenuQ]=useState("");
   const[editIngs,setEditIngs]=useState([]);
   const[ingPopup,setIngPopup]=useState(null);
-  const[newUnit,setNewUnit]=useState("");
-  const[customUnits,setCustomUnits]=useState(()=>{try{return JSON.parse(localStorage.getItem("fc_custom_units")||"[]");}catch{return[];}});
-  const allUnits=useMemo(()=>["กรัม","มล.","ชิ้น","ช้อนโต๊ะ","ช้อนชา","ถ้วย","กก.","ลิตร",...customUnits],[customUnits]);
+
   // Filters: SOP presence + (when "has SOP") cost % bucket
   const[sopStatus,setSopStatus]=useState("all");  // all | has | none
   const[costBucket,setCostBucket]=useState("all");  // all | low | normal | high | crit
@@ -5467,23 +5519,23 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
   },[edit,editIngs,menu,ings]);
   const filteredIngs=useMemo(()=>ings.filter(i=>i.name.toLowerCase().includes(ingQ.toLowerCase())),[ings,ingQ]);
   function pickIng(ing){setIngPopup({ing,amount:"",unit:"กรัม"});}
-  function confirmIngPick(){
+  async function confirmIngPick(){
     if(!ingPopup||!String(ingPopup.amount).trim())return;
     const amt=parseFloat(ingPopup.amount);
     if(isNaN(amt)||amt<=0)return;
     // Store canonical grams; keep what the operator actually typed for display.
     const u=ingPopup.unit||"กรัม";
-    const grams=toGrams(amt,u);
+    const conv=recipeGrams(amt,u,ingPopup.ing);
+    // ระบบไม่รู้ว่าหน่วยนี้หนักเท่าไร → จะบันทึกตัวเลขเป็นกรัมตรง ๆ ต้องให้คนยืนยันก่อน
+    // ปล่อยผ่านเงียบ ๆ คือต้นทุนกับสต๊อกเพี้ยนโดยไม่มีใครรู้
+    if(!conv.exact&&!await confirmDlg({
+      title:"ระบบไม่รู้น้ำหนักของหน่วยนี้",
+      message:`วัตถุดิบ "${ingPopup.ing?.name||""}" ซื้อเป็นหน่วย "${ingPopup.ing?.buy_unit||"-"}" แต่สูตรเลือกหน่วย "${u}"\n\nระบบจะบันทึกเป็น ${round2(amt)} กรัม ตามตัวเลขที่กรอก และคิดต้นทุน/ตัดสต๊อกจากตัวเลขนี้\n\nถ้าไม่ใช่ที่ต้องการ ให้กดยกเลิกแล้วเปลี่ยนเป็น "กรัม" หรือไปตั้งช่อง "รวมทั้งหมดกี่กรัม" ของวัตถุดิบตัวนี้ก่อน`,
+      confirmLabel:"บันทึกตามนี้"}))return;
+    const grams=conv.grams;
     const entry={amountGram:grams,unit:"กรัม",displayAmount:amt,displayUnit:u};
     setEditIngs(f=>{const idx=f.findIndex(x=>x.ingredientId===ingPopup.ing.id);return idx>=0?f.map((x,i)=>i===idx?{...x,...entry}:x):[...f,{ingredientId:ingPopup.ing.id,...entry}];});
     setIngPopup(null);
-  }
-  function addCustomUnit(){
-    if(!newUnit.trim())return;
-    const u=newUnit.trim();
-    const next=customUnits.includes(u)?customUnits:[...customUnits,u];
-    setCustomUnits(next);localStorage.setItem("fc_custom_units",JSON.stringify(next));
-    setIngPopup(p=>({...p,unit:u}));setNewUnit("");
   }
   function printSOP(){
     if(!menu)return;
@@ -5658,18 +5710,9 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
           <div>
             <div style={{fontSize:12,fontWeight:700,color:C.ink3,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>หน่วย</div>
             <div style={{position:"relative"}}>
-              <select value={ingPopup.unit} onChange={e=>setIngPopup(p=>({...p,unit:e.target.value}))} style={{...iS,cursor:"pointer",appearance:"none",paddingRight:36}}>
-                {allUnits.map(u=><option key={u} value={u}>{u}</option>)}
-              </select>
+              <UnitPicker value={ingPopup.unit} onChange={v=>setIngPopup(p=>({...p,unit:v}))}/>
               <span style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",pointerEvents:"none"}}><Ic d={I.chevD} s={16} c={C.ink3}/></span>
             </div>
-          </div>
-        </div>
-        <div style={{background:C.bg,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`,marginBottom:16}}>
-          <div style={{fontSize:11,fontWeight:700,color:C.ink4,marginBottom:8,fontFamily:"'Sarabun',sans-serif",letterSpacing:.5}}>+ เพิ่มหน่วยใหม่</div>
-          <div style={{display:"flex",gap:8}}>
-            <input value={newUnit} onChange={e=>setNewUnit(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addCustomUnit();}}} placeholder="ชื่อหน่วย เช่น ฝา, แพ็ค..." style={{...iS,fontSize:13,padding:"7px 12px",flex:1}}/>
-            <button onClick={addCustomUnit} style={{background:`linear-gradient(135deg,${C.teal},#0F766E)`,color:C.white,border:"none",borderRadius:10,padding:"7px 16px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,whiteSpace:"nowrap"}}>เพิ่ม</button>
           </div>
         </div>
         <div style={{display:"flex",gap:10}}>
