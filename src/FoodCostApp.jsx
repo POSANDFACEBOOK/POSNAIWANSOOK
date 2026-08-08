@@ -3353,7 +3353,7 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
   const inScope=bid=>!allowed||allowed.map(x=>+x).includes(+bid);
   const[sessions,setSessions]=useState(null);const[err,setErr]=useState(false);const[fBranch,setFBranch]=useState("");
   const[openId,setOpenId]=useState(null);const[items,setItems]=useState({});
-  const[exportingId,setExportingId]=useState(null);
+  const[exportingId,setExportingId]=useState(null);const[exportingAll,setExportingAll]=useState(false);
   const aliveRef=useRef(true);
   useEffect(()=>{aliveRef.current=true;return()=>{aliveRef.current=false;};},[]);
   async function load(){
@@ -3408,8 +3408,100 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
   const shown=(sessions||[]).filter(s=>!fBranch||+s.branch_id===+fBranch);
   const fmtDt=s=>fmtDT(s);
   const openImg=ref=>{if(ref)imgView(driveImgSrc(ref));};
+
+  // ── Export รวมทุกครั้งที่นับ เป็นตารางเดียว: แถว = วัตถุดิบ · คอลัมน์ = วันที่ ──
+  // กติกาที่ต้องชัด ไม่งั้นอ่านเลขผิด:
+  //  · วันเดียวกันนับซ้ำหลายรอบ → เอา "รอบล่าสุดของวันนั้น" เพราะการนับทีหลังคือการแก้
+  //    ของจริงมี 79 ช่องแบบนี้ที่คลองสาขาเดียว (เช่นผักกาดหอม 07:21 นับได้ 1 แล้ว 15:56 นับใหม่ได้ 0)
+  //  · ช่องว่าง = "วันนั้นไม่ได้นับตัวนี้" ซึ่งคนละเรื่องกับ 0 = "นับแล้วไม่มีของ"
+  //    ห้ามเติม 0 ให้ช่องว่างเด็ดขาด ไม่งั้นกลายเป็นบอกว่าของหมดทั้งที่ไม่ได้นับ
+  async function exportPivot(){
+    if(exportingAll)return;
+    if(!shown.length){alert("ยังไม่มีประวัติการนับให้ Export");return;}
+    setExportingAll(true);
+    try{
+      // ดึงเฉพาะรอบที่อยู่ในตัวกรองปัจจุบัน — ผูกด้วย session_id จึงได้ขอบเขตตรงกับที่เห็นบนจอ
+      // และไม่หลุดไปสาขาที่ผู้ใช้ไม่มีสิทธิ์ดู
+      const ids=shown.map(x=>+x.id).filter(Boolean);
+      const rows=[];let last=0;
+      for(let guard=0;guard<80;guard++){
+        const d=await sb(`stock_logs?select=id,ingredient_id,ingredient_name,unit,new_qty,counted_at,session_id,branch_id&session_id=in.(${ids.join(",")})&id=gt.${last}&order=id.asc&limit=1000`);
+        if(!Array.isArray(d)||!d.length)break;
+        rows.push(...d);last=d[d.length-1].id;
+        if(d.length<1000)break;
+      }
+      if(!rows.length){alert("ไม่พบรายการนับในช่วงที่เลือก");return;}
+
+      const sessById=new Map(shown.map(x=>[+x.id,x]));
+      const dayOf=r=>String(r.counted_at||"").slice(0,10);
+      const perBranch=!fBranch;                     // ไม่ได้กรองสาขา → ต้องแยกแถวตามสาขาด้วย ไม่งั้นเลขคนละสาขาทับกัน
+      const cells=new Map();                        // key → {qty, at}
+      const meta=new Map();                         // key → {name, unit, branch}
+      const days=new Set(), pendingDays=new Set();
+      for(const r of rows){
+        const day=dayOf(r); if(!day)continue;
+        days.add(day);
+        const ss=sessById.get(+r.session_id);
+        if(ss&&ss.status!=="approved")pendingDays.add(day);
+        const rowKey=(perBranch?`${r.branch_id}|`:"")+r.ingredient_id;
+        const k=rowKey+"@"+day, prev=cells.get(k);
+        // rows เรียงตาม id อยู่แล้ว แต่เทียบเวลาตรง ๆ ปลอดภัยกว่า เผื่อ id กับเวลาไม่เรียงตรงกัน
+        if(!prev||String(r.counted_at)>String(prev.at))cells.set(k,{qty:+r.new_qty||0,at:r.counted_at});
+        meta.set(rowKey,{name:r.ingredient_name||`#${r.ingredient_id}`,unit:r.unit||ingById.get(+r.ingredient_id)?.buy_unit||"",
+          branch:(sessById.get(+r.session_id)||{}).branch_name||""});
+      }
+      const dayList=[...days].sort();
+      const label=d=>fmtD(d)+(pendingDays.has(d)?" (รออนุมัติ)":"");
+      const cols=[...(perBranch?["สาขา"]:[]),"วัตถุดิบ","หน่วย","จำนวนวันที่นับ",...dayList.map(label)];
+      const body=[...meta.entries()]
+        .sort((a,b)=>(a[1].branch||"").localeCompare(b[1].branch||"","th")||a[1].name.localeCompare(b[1].name,"th"))
+        .map(([rowKey,m])=>{
+          const o={};
+          if(perBranch)o["สาขา"]=m.branch;
+          o["วัตถุดิบ"]=m.name;o["หน่วย"]=m.unit;
+          let counted=0;
+          for(const d of dayList){
+            const c=cells.get(rowKey+"@"+d);
+            o[label(d)]=c?c.qty:"";        // ว่าง = ไม่ได้นับวันนั้น (ห้ามใส่ 0)
+            if(c)counted++;
+          }
+          o["จำนวนวันที่นับ"]=counted;
+          return o;
+        });
+
+      const XLSX=await loadXLSX();
+      const bName=fBranch?(scopeBranches.find(b=>+b.id===+fBranch)||{}).name||"":"ทุกสาขาที่ดูแล";
+      const info=[
+        {"ข้อมูล":"สาขา","ค่า":bName},
+        {"ข้อมูล":"ช่วงวันที่","ค่า":`${fmtD(dayList[0])} – ${fmtD(dayList[dayList.length-1])}`},
+        {"ข้อมูล":"จำนวนวันที่มีการนับ","ค่า":dayList.length},
+        {"ข้อมูล":"จำนวนวัตถุดิบ","ค่า":body.length},
+        {"ข้อมูล":"จำนวนรอบการนับ","ค่า":shown.length},
+        {"ข้อมูล":"","ค่า":""},
+        {"ข้อมูล":"ช่องว่างหมายถึง","ค่า":"วันนั้นไม่ได้นับวัตถุดิบตัวนี้ (ไม่ใช่นับได้ 0)"},
+        {"ข้อมูล":"เลข 0 หมายถึง","ค่า":"นับแล้วไม่มีของเหลือ"},
+        {"ข้อมูล":"วันที่นับซ้ำหลายรอบ","ค่า":"ใช้ค่าของรอบล่าสุดของวันนั้น"},
+        {"ข้อมูล":"หัวคอลัมน์ (รออนุมัติ)","ค่า":"วันนั้นมีรอบที่ยังไม่ได้อนุมัติ ตัวเลขอาจเปลี่ยน"},
+      ];
+      const wb=XLSX.utils.book_new();
+      const wsInfo=XLSX.utils.json_to_sheet(info);wsInfo["!cols"]=[{wch:22},{wch:52}];
+      XLSX.utils.book_append_sheet(wb,wsInfo,"คำอธิบาย");
+      const ws=XLSX.utils.json_to_sheet(body,{header:cols});
+      ws["!cols"]=cols.map((c,i)=>({wch:c==="วัตถุดิบ"?34:c==="สาขา"?18:c==="หน่วย"?9:c==="จำนวนวันที่นับ"?13:11}));
+      ws["!freeze"]={xSplit:perBranch?4:3,ySplit:1};
+      XLSX.utils.book_append_sheet(wb,ws,"นับได้รายวัน");
+      const safe=(bName||"สาขา").replace(/[^\w฀-๿]+/g,"_");
+      XLSX.writeFile(wb,`นับสต็อกรายวัน_${safe}_${todayStr()}.xlsx`);
+    }catch(e){alert("Export ไม่สำเร็จ: "+((e&&e.message)||e));}
+    finally{if(aliveRef.current)setExportingAll(false);}
+  }
   return <Modal title="🕘 ประวัติการนับสต็อก (รายครั้ง)" onClose={onClose} wide>
-    {scopeBranches.length>1&&<div style={{marginBottom:12,maxWidth:280}}><Sel label="กรองสาขา" value={fBranch} onChange={e=>setFBranch(e.target.value)} options={[{v:"",l:"ทุกสาขา (ที่ดูแล)"},...scopeBranches.map(b=>({v:String(b.id),l:b.name}))]}/></div>}
+    <div style={{display:"flex",alignItems:"flex-end",gap:12,flexWrap:"wrap",marginBottom:12}}>
+      {scopeBranches.length>1&&<div style={{flex:"1 1 220px",maxWidth:280}}><Sel label="กรองสาขา" value={fBranch} onChange={e=>setFBranch(e.target.value)} options={[{v:"",l:"ทุกสาขา (ที่ดูแล)"},...scopeBranches.map(b=>({v:String(b.id),l:b.name}))]}/></div>}
+      {shown.length>0&&<Btn v="success" onClick={exportPivot} loading={exportingAll} s={{padding:"10px 16px"}}>
+        📊 Export รวมทุกครั้ง (แถว=วัตถุดิบ · คอลัมน์=วันที่)
+      </Btn>}
+    </div>
     {sessions===null?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
     :err?<div style={{textAlign:"center",padding:"36px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>โหลดไม่สำเร็จ<div style={{marginTop:10}}><Btn v="ghost" onClick={load}>↻ ลองใหม่</Btn></div></div>
     :shown.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการนับ</div>
