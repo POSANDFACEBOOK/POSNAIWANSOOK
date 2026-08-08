@@ -3640,7 +3640,9 @@ function IngReportModal({kind,scope,data,currentBranch,onClose}){
 //
 // ตัวนี้แก้ที่ต้นทาง: เลือกครั้งเดียว "เขียนทั้งสองช่องพร้อมกันเสมอ" จึงขัดกันไม่ได้อีก
 // และตอนแสดงผลจะยึด id เป็นหลัก (ตัวจริง) ใช้ชื่อเป็นตัวสำรองเฉพาะแถวเก่าที่ยังไม่มี id
-function SupplierPicker({suppliers=[],valueId,valueName,onPick,placeholder="พิมพ์ค้นหาชื่อซัพพลาย..."}){
+// clearLabel = ข้อความของตัวเลือกบนสุดที่ล้างค่า — ตอนใช้ผูกซัพพลายให้วัตถุดิบมันคือ
+// "ไม่ระบุ" แต่ตอนใช้เป็นตัวกรองมันคือ "ทุกซัพพลาย" ซึ่งคนละความหมายกันคนละเรื่อง
+function SupplierPicker({suppliers=[],valueId,valueName,onPick,placeholder="พิมพ์ค้นหาชื่อซัพพลาย...",clearLabel="— ไม่ระบุ —"}){
   const[open,setOpen]=useState(false);
   const[q,setQ]=useState("");
   const boxRef=useRef(null);
@@ -3670,7 +3672,7 @@ function SupplierPicker({suppliers=[],valueId,valueName,onPick,placeholder="พ�
       ?<button type="button" onClick={()=>{setOpen(true);setQ("");}}
         style={{...iSt,textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
         <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:shown?C.ink:C.ink4}}>
-          {shown||"— ไม่ระบุ —"}
+          {shown||clearLabel}
         </span>
         <span style={{flexShrink:0,color:C.ink4,fontSize:11}}>▼</span>
       </button>
@@ -3685,7 +3687,7 @@ function SupplierPicker({suppliers=[],valueId,valueName,onPick,placeholder="พ�
           borderRadius:10,boxShadow:"0 10px 30px rgba(15,23,42,.16)",maxHeight:240,overflowY:"auto"}}>
           <button type="button" onClick={()=>{onPick({id:"",name:""});setOpen(false);}}
             style={{display:"block",width:"100%",textAlign:"left",padding:"9px 12px",border:"none",borderBottom:`1px solid ${C.lineLight}`,
-              background:"transparent",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4}}>— ไม่ระบุ —</button>
+              background:"transparent",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink4}}>{clearLabel}</button>
           {list.length===0
             ?<div style={{padding:"11px 12px",fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบซัพพลายที่ค้นหา</div>
             :list.map(s=>{const on=+s.id===+valueId;
@@ -3693,6 +3695,9 @@ function SupplierPicker({suppliers=[],valueId,valueName,onPick,placeholder="พ�
                 style={{display:"block",width:"100%",textAlign:"left",padding:"9px 12px",border:"none",borderBottom:`1px solid ${C.lineLight}`,
                   background:on?C.brandLight:"transparent",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,
                   color:C.ink,fontWeight:on?800:500}}>{s.name}{on?" ✓":""}</button>;})}
+          {list.length>=60&&<div style={{padding:"8px 12px",fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",background:C.bg}}>
+            แสดง 60 รายการแรก — พิมพ์เพื่อค้นหารายการที่เหลือ
+          </div>}
         </div>
       </>}
     {/* แถวเก่าที่ชื่อไม่ผูกกับซัพพลายไหนเลย — บอกให้รู้ ไม่ปล่อยให้เข้าใจว่าผูกแล้ว */}
@@ -11283,10 +11288,9 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         </div>
         <div>
           <div style={{fontSize:11,color:C.ink4,fontWeight:800,marginBottom:5,fontFamily:"'Sarabun',sans-serif",letterSpacing:.3,textTransform:"uppercase"}}>ซัพพลายเออร์</div>
-          <select value={supFilter} onChange={e=>setSupFilter(e.target.value)} style={{...iS,fontSize:13,padding:"9px 12px",appearance:"none"}}>
-            <option value="">— ทุกซัพพลาย —</option>
-            {visibleSuppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          <SupplierPicker suppliers={visibleSuppliers} valueId={supFilter}
+            clearLabel="— ทุกซัพพลาย —" placeholder="พิมพ์ชื่อซัพพลายเพื่อค้นหา..."
+            onPick={o=>setSupFilter(o.id===""?"":String(o.id))}/>
         </div>
       </div>
     </Card>
