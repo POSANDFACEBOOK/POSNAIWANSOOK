@@ -3499,7 +3499,7 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
     <div style={{display:"flex",alignItems:"flex-end",gap:12,flexWrap:"wrap",marginBottom:12}}>
       {scopeBranches.length>1&&<div style={{flex:"1 1 220px",maxWidth:280}}><Sel label="กรองสาขา" value={fBranch} onChange={e=>setFBranch(e.target.value)} options={[{v:"",l:"ทุกสาขา (ที่ดูแล)"},...scopeBranches.map(b=>({v:String(b.id),l:b.name}))]}/></div>}
       {shown.length>0&&<Btn v="success" onClick={exportPivot} loading={exportingAll} s={{padding:"10px 16px"}}>
-        📊 Export รวมทุกครั้ง (แถว=วัตถุดิบ · คอลัมน์=วันที่)
+        📊 Export รวม
       </Btn>}
     </div>
     {sessions===null?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
