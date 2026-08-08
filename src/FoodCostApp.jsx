@@ -1953,7 +1953,7 @@ function buildSopSheetHTML(subj,ings,opt){
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--stcols:2;--stimg:104px;--stfs:9.6pt;--stclamp:5;--ingfs:9.5pt;--heroh:150px;--h1fs:32pt}
 html,body{background:#EDE7DE}
-body{font-family:'Sarabun',system-ui,sans-serif;color:#2B3440;
+body{font-family:'Sarabun',system-ui,sans-serif;color:#2B3440;line-height:1.5;
   -webkit-print-color-adjust:exact;print-color-adjust:exact}
 
 /* กรอบ A4 เป๊ะ — สูง 296.5 ไม่ใช่ 297 เพราะปัดเศษของ Chrome ทำให้ล้นไปหน้า 2 ที่ 297 พอดี */
@@ -1964,11 +1964,11 @@ body{font-family:'Sarabun',system-ui,sans-serif;color:#2B3440;
 .hd{background:linear-gradient(135deg,#C2410C 0%,#9A3412 100%);border-radius:6mm;
   padding:5.5mm 7mm;display:flex;justify-content:space-between;align-items:center;gap:6mm;color:#fff}
 .hdl{flex:1;min-width:0}
-.hd h1{font-size:var(--h1fs);font-weight:900;line-height:1.12;letter-spacing:-.4px;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hd h1{font-size:var(--h1fs);font-weight:900;line-height:1.5;letter-spacing:-.4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:.4mm 0}
 .chips{display:flex;flex-direction:column;gap:2mm;align-items:flex-end;flex-shrink:0}
 .chip{background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.34);border-radius:99px;
-  padding:1.5mm 4mm;font-size:9.5pt;font-weight:600;white-space:nowrap}
+  padding:1.4mm 4mm;font-size:9.5pt;font-weight:600;white-space:nowrap;line-height:1.5}
 
 /* ── ตัวหน้า 2 คอลัมน์ ── min-height:0 ทุกชั้น ไม่งั้น flex ไม่ยอมหด แล้ววัดความล้นไม่ได้ */
 .body{flex:1;display:flex;gap:4.5mm;min-height:0}
@@ -1976,14 +1976,14 @@ body{font-family:'Sarabun',system-ui,sans-serif;color:#2B3440;
 .colR{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
 .card{background:#fff;border:1px solid #E4DED4;border-radius:4mm;padding:3.5mm 4mm;
   box-shadow:0 1px 2px rgba(0,0,0,.04)}
-.card h2{font-size:11.5pt;font-weight:800;color:#C2410C;padding-bottom:1.8mm;margin-bottom:2.5mm;
+.card h2{font-size:11.5pt;font-weight:800;color:#C2410C;line-height:1.45;padding-bottom:2.2mm;margin-bottom:2.5mm;
   border-bottom:2px solid #F2E8DA;display:flex;align-items:baseline;justify-content:space-between;gap:2mm}
 .basis{font-size:8.5pt;font-weight:700;color:#8A9099;white-space:nowrap}
 
 .herocard{padding:3mm;flex-shrink:0}
-.hero{height:var(--heroh);border-radius:2.5mm;overflow:hidden;background:#EBE5DB;
+.hero{height:var(--heroh);max-height:var(--heroh);border-radius:2.5mm;overflow:hidden;background:#fff;
   display:flex;align-items:center;justify-content:center}
-.hero img{width:100%;height:100%;object-fit:cover;display:block}
+.hero img{width:100%;height:100%;object-fit:contain;display:block}
 .hero span{color:#B7AD9C;font-size:10pt;font-weight:600;text-align:center;padding:0 3mm}
 
 .ingcard{flex:1;min-height:0;display:flex;flex-direction:column}
@@ -1991,7 +1991,7 @@ body{font-family:'Sarabun',system-ui,sans-serif;color:#2B3440;
 table{width:100%;border-collapse:collapse;font-size:var(--ingfs)}
 th{text-align:left;font-weight:800;color:#6B7280;font-size:calc(var(--ingfs) - .8pt);
   border-bottom:1.5px solid #E4DED4;padding:0 0 1.2mm}
-td{padding:1.1mm 0;border-bottom:1px solid #F3EFE8;line-height:1.28}
+td{padding:1.3mm 0;border-bottom:1px solid #F3EFE8;line-height:1.5}
 th.n,td.n{text-align:right;width:15mm;white-space:nowrap}
 th.u,td.u{text-align:right;width:13mm;color:#6B7280;white-space:nowrap}
 /* วัตถุดิบยาวมาก → หั่นเป็น 2 คอลัมน์ (ทิ้งหัวตาราง ใช้แถวแบบ flex แทน)
@@ -2005,7 +2005,7 @@ th.u,td.u{text-align:right;width:13mm;color:#6B7280;white-space:nowrap}
 .ingwrap.two td{border:0;padding:0}
 .ingwrap.two td.n,.ingwrap.two td.u{width:auto;flex:0 0 auto}
 .ingwrap.two td:first-child{flex:1 1 auto;min-width:0;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
+  text-overflow:ellipsis;white-space:nowrap;line-height:1.55}
 
 .packcard{flex-shrink:0}
 .pack{display:flex;align-items:center;gap:3mm;font-size:10pt;font-weight:600}
@@ -2023,16 +2023,16 @@ th.u,td.u{text-align:right;width:13mm;color:#6B7280;white-space:nowrap}
    clip คลิปเหมือนกันแต่ไม่เป็น scroll container ขนาดต่ำสุดจึงยังเท่าเนื้อหาจริง */
 .st{border:1px solid #EEE8DE;border-radius:2.5mm;overflow:clip;background:#FCFAF7;
   display:flex;flex-direction:column;break-inside:avoid}
-.stimg{height:var(--stimg);background:#EBE5DB;overflow:hidden;flex-shrink:0;position:relative;
-  border-radius:2.5mm 2.5mm 0 0}
-.stimg img{width:100%;height:100%;object-fit:cover;display:block}
+.stimg{height:var(--stimg);max-height:var(--stimg);background:#fff;overflow:hidden;flex-shrink:0;
+  position:relative;border-radius:2.5mm 2.5mm 0 0;border-bottom:1px solid #EEE8DE}
+.stimg img{width:100%;height:100%;object-fit:contain;display:block}
 .pnum{position:absolute;top:1.6mm;left:1.6mm;min-width:5.4mm;height:5.4mm;padding:0 1.2mm;
   border-radius:99px;background:#C2410C;color:#fff;font-size:8pt;font-weight:900;
   display:flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.3)}
 .sttx{padding:2mm 2.4mm;min-width:0}
-.stt{font-size:var(--stfs);font-weight:800;color:#C2410C;line-height:1.3;
+.stt{font-size:var(--stfs);font-weight:800;color:#C2410C;line-height:1.5;
   display:flex;align-items:baseline;gap:1.6mm}
-.std{font-size:var(--stfs);line-height:1.42;color:#3F4750;margin-top:.8mm;
+.std{font-size:var(--stfs);line-height:1.62;color:#3F4750;margin-top:1mm;
   display:-webkit-box;-webkit-line-clamp:var(--stclamp);-webkit-box-orient:vertical;overflow:hidden}
 .tnum{display:none}
 
@@ -2055,7 +2055,7 @@ body:not(.txt) .stimg:not(:has(img)){background:repeating-linear-gradient(45deg,
 .ft .f{flex:1;min-width:0}
 .ft .f.r{flex:0 0 44mm;text-align:right}
 .ft .lb{font-size:7.5pt;font-weight:700;color:#98A3B2;letter-spacing:.4px;margin-bottom:.8mm}
-.ft .vl{font-size:10.5pt;font-weight:700;line-height:1.32;
+.ft .vl{font-size:10.5pt;font-weight:700;line-height:1.5;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .ft .dim{color:#7C8694;font-weight:500}
 </style></head><body class="${hasImg?"":"txt"}">
@@ -2157,6 +2157,16 @@ var TX=[[1,11,99],[1,10.4,99],[1,9.8,99],[1,9.2,14],[2,9.6,12],[2,9,10],[2,8.5,8
 
 function fit(){
   var i,r;
+  // ให้กล่องรูปรับสัดส่วนของรูปจริงแต่ละใบ — เลิกครอบตัดแล้ว (object-fit:contain)
+  // ถ้ากล่องยังเป็นสี่เหลี่ยมตายตัว รูปแนวตั้งจะเหลือแถบเล็ก ๆ กลางกล่องขาวโล่ง
+  // ความสูงยังถูกคุมด้วย max-height จากบันไดย่อ ใบจึงยังจบหน้าเดียวเหมือนเดิม
+  [].slice.call(document.querySelectorAll('.stimg img,.hero img')).forEach(function(im){
+    if(im.naturalWidth>0 && im.naturalHeight>0){
+      var box=im.parentNode;
+      box.style.height='auto';
+      box.style.aspectRatio=im.naturalWidth+' / '+im.naturalHeight;
+    }
+  });
   var H=document.getElementById('h1'), TITLE=[32,30,28,26,24,22,20,18,16,14];
   for(i=0;i<TITLE.length;i++){ setv('--h1fs',TITLE[i]+'pt');
     if(H.scrollWidth<=H.clientWidth+1) break; }
@@ -2192,14 +2202,14 @@ function fit(){
     var gone=rs.length-shown;
     if(gone>0) nn.textContent='+ อีก '+gone+' รายการ — ดูในระบบ'; else nn.remove();
   }
-  var L = TXT ? TX : IMG;
-  for(i=0;i<L.length;i++){
-    r=L[i];
-    setv('--stcols', r[0]);
-    if(TXT){ setv('--stfs', r[1]+'pt'); setv('--stclamp', r[2]); }
-    else   { setv('--stimg', r[1]+'px'); setv('--stfs', r[2]+'pt'); setv('--stclamp', r[3]); }
-    if(!over(S)) break;
+  var L = TXT ? TX : IMG, li=0;
+  function applyR(k){ var q=L[k];
+    setv('--stcols', q[0]);
+    if(TXT){ setv('--stfs', q[1]+'pt'); setv('--stclamp', q[2]); }
+    else   { setv('--stimg', q[1]+'px'); setv('--stfs', q[2]+'pt'); setv('--stclamp', q[3]); }
   }
+  for(li=0;li<L.length;li++){ applyR(li); if(!over(S)) break; }
+  if(li>=L.length) li=L.length-1;
   // ── คืนพื้นที่ที่เหลือให้เนื้อหา (บันไดข้างบนหยุดทันทีที่ "พอดี" ซึ่งมักเหลือที่ว่าง) ──
   if(!over(S)){
     // 1) คืนบรรทัดคำอธิบายที่ถูกย่อทิ้ง — ข้อความหายบนใบที่ติดผนังครัวคือของจริงที่หายไป
@@ -2230,6 +2240,15 @@ function fit(){
     var cn=document.createElement('div'); cn.className='more';
     cn.textContent='คำอธิบาย '+cut+' ขั้นถูกย่อให้พอดีหน้า — อ่านฉบับเต็มในระบบ';
     S.appendChild(cn);
+    // ⚠️ ป้ายนี้กินที่จริง ยัดท้ายแล้วจบเลยไม่ได้ — วัดแล้วพบว่ามันดันการ์ดใบท้าย
+    // ตกขอบไป 36px แบบเงียบ ๆ ป้ายที่มีไว้กันเนื้อหาหายกลายเป็นตัวทำให้หายเสียเอง
+    // จึงต้องไล่บันไดต่อจนพอดีอีกครั้ง แล้วถ้ายังไม่พอค่อยซ่อนการ์ดพร้อมบอกจำนวน
+    while(over(S) && li<L.length-1){ li++; applyR(li); }
+    if(over(S)){
+      var t2=[].slice.call(S.querySelectorAll('.st')), h2=0;
+      for(var k2=t2.length-1;k2>=1 && over(S);k2--){ t2[k2].style.display='none'; h2++; }
+      if(h2) cn.textContent='+ อีก '+h2+' ขั้นตอน และคำอธิบายบางส่วน — ดูในระบบ';
+    }
   }
 }
 function ready(){
