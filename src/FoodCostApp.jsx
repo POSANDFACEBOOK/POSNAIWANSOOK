@@ -4054,11 +4054,18 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     }
     // ── organisation-wide aggregate (across all branches) ──
     function buildOrg(){
+      // รายงาน "ทั้งองค์กร" = ภาพสถานะปัจจุบัน ต้องนับเฉพาะสาขาที่ยังเปิด
+      // สาขาที่ปิดแล้วยังมีค่าค้างใน stock_by_branch/safety_by_branch (การปิดสาขา
+      // แก้แค่ธง active ไม่ได้ล้างตัวเลข) ถ้าไม่กรองมันจะโผล่เป็นแถบมูลค่าและถูก
+      // นับเป็นอีก 1 สาขาในการ์ด KPI ปนกับสาขาที่ยังขายอยู่ — พนักงานอ่านแล้วเข้าใจว่า
+      // ยังต้องเติมของให้สาขานั้น  (หมายเหตุ: มูลค่ารวมทั้งองค์กรจะลดลงตามของที่ตัดออก
+      // ซึ่งถูกต้องแล้ว ของในสาขาที่ปิดไม่ใช่สต๊อกที่ใช้ขายได้)
+      const liveBranches=activeBranches(branches);
       let totalValue=0,lowCount=0;const byCat={},bySup={},branchAgg={};const perIng=new Map();const lowItems=[];
-      for(const b of branches)branchAgg[b.id]={id:b.id,name:b.name,type:b.type,value:0,count:0,lowCount:0};
+      for(const b of liveBranches)branchAgg[b.id]={id:b.id,name:b.name,type:b.type,value:0,count:0,lowCount:0};
       for(const i of ings){
         const price=+i.buy_price||0,c=i.category||"ไม่มีหมวด",sn=i.supplier_name||"ไม่ระบุซัพพลาย";let ingQty=0,ingVal=0;
-        for(const b of branches){
+        for(const b of liveBranches){
           if(!ingVisibleAt(i,b.id,b.type==="central"))continue;
           const qty=branchStock(i,b.id),sf=branchSafety(i,b.id);
           if(qty>0){const v=qty*price;ingQty+=qty;ingVal+=v;branchAgg[b.id].value+=v;branchAgg[b.id].count++;(byCat[c]||(byCat[c]={name:c,value:0,count:0})).value+=v;}
