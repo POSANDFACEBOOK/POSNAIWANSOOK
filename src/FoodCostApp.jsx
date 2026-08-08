@@ -4685,8 +4685,8 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
           {isCentral&&<div style={{marginTop:6,padding:"8px 0 2px",borderTop:`1px solid ${C.lineLight}`}}>
             <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>แสดงที่สาขา:</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-              {branches.filter(b=>b.type!=="central").length===0?<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>
-              :branches.filter(b=>b.type!=="central").map(b=>{const vb=menu.visible_branches||[];const isOn=vb.length===0||vb.includes(b.id);return <button key={b.id} onClick={()=>toggleVBMenu(menu,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
+              {activeBranches(branches).filter(b=>b.type!=="central").length===0?<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>
+              :activeBranches(branches).filter(b=>b.type!=="central").map(b=>{const vb=menu.visible_branches||[];const isOn=vb.length===0||vb.includes(b.id);return <button key={b.id} onClick={()=>toggleVBMenu(menu,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
             </div>
           </div>}
         </div>
@@ -11886,8 +11886,8 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
         {isCentral&&canE&&+s.branch_id===+currentBranch?.id&&<div onClick={e=>e.stopPropagation()} style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.lineLight}`}}>
           <div style={{fontSize:10,color:C.ink4,marginBottom:5,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>เปิดให้สาขา:</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-            {branches.filter(b=>b.type!=="central").map(b=>{const isOn=Array.isArray(s.visible_branches)&&s.visible_branches.map(Number).includes(+b.id);return <button key={b.id} onClick={()=>toggleVBSup(s,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
-            {branches.filter(b=>b.type!=="central").length===0&&<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>}
+            {activeBranches(branches).filter(b=>b.type!=="central").map(b=>{const isOn=Array.isArray(s.visible_branches)&&s.visible_branches.map(Number).includes(+b.id);return <button key={b.id} onClick={()=>toggleVBSup(s,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
+            {activeBranches(branches).filter(b=>b.type!=="central").length===0&&<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>}
           </div>
         </div>}
       </Card>)}
