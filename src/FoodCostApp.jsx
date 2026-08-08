@@ -1951,7 +1951,7 @@ function buildSopSheetHTML(subj,ings,opt){
 @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');
 @page{size:A4 portrait;margin:0}
 *{margin:0;padding:0;box-sizing:border-box}
-:root{--stcols:2;--stimg:104px;--stfs:9.6pt;--stclamp:5;--ingfs:9.5pt;--heroh:150px}
+:root{--stcols:2;--stimg:104px;--stfs:9.6pt;--stclamp:5;--ingfs:9.5pt;--heroh:150px;--h1fs:32pt}
 html,body{background:#EDE7DE}
 body{font-family:'Sarabun',system-ui,sans-serif;color:#2B3440;
   -webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -1963,8 +1963,9 @@ body{font-family:'Sarabun',system-ui,sans-serif;color:#2B3440;
 /* ── แถบหัว ── */
 .hd{background:linear-gradient(135deg,#C2410C 0%,#9A3412 100%);border-radius:6mm;
   padding:5.5mm 7mm;display:flex;justify-content:space-between;align-items:center;gap:6mm;color:#fff}
-.hd h1{font-size:22pt;font-weight:900;line-height:1.08;letter-spacing:-.3px}
-.hd .sub{font-size:13pt;font-weight:600;opacity:.95;margin-top:1.2mm}
+.hdl{flex:1;min-width:0}
+.hd h1{font-size:var(--h1fs);font-weight:900;line-height:1.12;letter-spacing:-.4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chips{display:flex;flex-direction:column;gap:2mm;align-items:flex-end;flex-shrink:0}
 .chip{background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.34);border-radius:99px;
   padding:1.5mm 4mm;font-size:9.5pt;font-weight:600;white-space:nowrap}
@@ -2061,9 +2062,8 @@ body:not(.txt) .stimg:not(:has(img)){background:repeating-linear-gradient(45deg,
 <div class="pg">
 
   <div class="hd">
-    <div>
-      <h1>คู่มือปฏิบัติงานมาตรฐาน</h1>
-      <div class="sub">${esc(kindLabel)}${esc(subj.name)}</div>
+    <div class="hdl">
+      <h1 id="h1">SOP ${esc(subj.name)}</h1>
     </div>
     <div class="chips">
       ${chip("หมวดหมู่",subj.category)}
@@ -2157,6 +2157,9 @@ var TX=[[1,11,99],[1,10.4,99],[1,9.8,99],[1,9.2,14],[2,9.6,12],[2,9,10],[2,8.5,8
 
 function fit(){
   var i,r;
+  var H=document.getElementById('h1'), TITLE=[32,30,28,26,24,22,20,18,16,14];
+  for(i=0;i<TITLE.length;i++){ setv('--h1fs',TITLE[i]+'pt');
+    if(H.scrollWidth<=H.clientWidth+1) break; }
   var hasHero=!!document.querySelector('.hero img');
   for(i=0;i<LEFT.length;i++){
     r=LEFT[i];
