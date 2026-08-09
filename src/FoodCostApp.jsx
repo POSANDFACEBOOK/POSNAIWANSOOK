@@ -1234,6 +1234,18 @@ function UnitPicker({value,onChange,placeholder="เลือกหน่วย"
 // must use this so its revenue is never booked as 100%-margin profit (single source of truth —
 // the previous partial fix left the snapshot, its editor and the daily table disagreeing).
 const hasRecipe=(m)=>!!m&&Array.isArray(m.ingredients)&&m.ingredients.length>0;
+// หมวดหมู่ของเมนู — ครัวกลางเป็นเจ้าของคนเดียว ทุกสาขาเห็นเหมือนกัน (เจ้าของสั่ง 8 ส.ค. 69)
+// เดิมแต่ละสาขาจัดหมวดเองได้ผ่าน local_categories เมนูตัวเดียวกันจึงอยู่คนละหมวดในแต่ละสาขา
+// และสาขายังสร้างหมวดของตัวเองได้ ทำให้ควบคุมจากที่เดียวไม่ได้
+// ตอนนี้ทุกที่อ่าน menus.category อย่างเดียว · คอลัมน์ local_categories ยังคงอยู่ในฐานข้อมูล
+// ไม่ได้ลบทิ้ง เผื่อต้องย้อนกลับ แต่ไม่มีโค้ดไหนอ่านมันแล้ว
+const menuCatOf=(m)=>{const c=String((m&&m.category)||"").trim();return c||null;};
+// เมนูนี้เปิดให้สาขานี้ขายไหม — ว่าง/ไม่ได้ตั้ง = ทุกสาขา (ค่าเดิมของระบบ)
+// ⚠️ ตัวนี้คือตัวกรองสาขาที่แท้จริง และต้องเรียกใช้ตรง ๆ เสมอ
+// ก่อนหน้านี้หน้าขายกับหน้าลูกค้าไม่ได้เรียกมัน แต่รอด "โดยบังเอิญ" เพราะกรองด้วย
+// หมวดรายสาขา (ไม่จัดหมวด = ไม่โชว์) พอเปลี่ยนมาใช้หมวดกลางซึ่งมีค่าทุกเมนู
+// ตัวกรองบังเอิญนั้นก็หายไป ทำให้ทุกสาขาเห็นเมนูทั้งเครือ 384 รายการ
+const menuVisibleAt=(m,bid)=>{const vb=(m&&m.visible_branches)||[];return vb.length===0||vb.map(Number).includes(+bid);};
 // Print-agent liveness for a branch, read from the heartbeat the agent stamps onto a printer's
 // description (agentSeen/agentVer). Stale (or missing) = the shop's print program is down and the
 // kitchen is silently getting nothing → staff must reopen it on the PC.
@@ -4748,8 +4760,13 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const canE=hasPerm(currentUser,"menus")&&isCentral;const canD=hasPerm(currentUser,"menus")&&isCentral;
   const localCats=useMemo(()=>allCats.filter(c=>c.type==="menu"&&(isCentral?!c.branch_id:c.branch_id===currentBranch?.id)),[allCats,isCentral,currentBranch]);
   async function toggleVBMenu(menu,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(menu.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateMenu(menu.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
-  async function assignLocalCat(menuId,catName){const menu=menus.find(m=>m.id===menuId);const lc={...(menu.local_categories||{})};if(catName)lc[currentBranch.id]=catName;else delete lc[currentBranch.id];try{await api.updateMenu(menuId,{local_categories:lc});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
-  async function addCat(){if(!newCatName.trim())return;try{await api.addCat({type:"menu",name:newCatName.trim(),branch_id:isCentral?null:currentBranch?.id});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
+  async function assignLocalCat(menuId,catName){
+    // หมวดหมู่คุมจากครัวกลางที่เดียว — เขียนลง menus.category ไม่ใช่หมวดรายสาขาอีกแล้ว
+    if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาแก้ไม่ได้");return;}
+    try{await api.updateMenu(menuId,{category:catName||""});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
+  async function addCat(){if(!newCatName.trim())return;
+    if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาสร้างหมวดใหม่ไม่ได้");return;}
+    try{await api.addCat({type:"menu",name:newCatName.trim(),branch_id:null});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;try{await api.updateCat(editingCatId,{name:editingCatName.trim()});await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function delCat(cat){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${cat.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(cat.id);await reloadCats();if(selCat===cat.name)setSelCat("ทั้งหมด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
   const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return menus.filter(m=>{
@@ -4758,7 +4775,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     if(!matchB||(ql&&!m.name.toLowerCase().includes(ql)&&!(m.code||"").toLowerCase().includes(ql)))return false;
     if(selCat==="ทั้งหมด")return true;
     if(isCentral)return m.category===selCat;
-    return (m.local_categories||{})[currentBranch?.id]===selCat;
+    return menuCatOf(m)===selCat;
   });},[menus,q,isCentral,currentBranch,selCat]);
   // Per-menu cost memoized: build an id→ingredient Map once, then a menu.id→cost
   // Map. The card grid used to re-run an O(menus×ings) `ings.find` scan on every
@@ -4865,7 +4882,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
           <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}><Chip color={mg>=60?"green":mg>=40?"yellow":"red"}>{marginLabel(mg)}</Chip><EditedBy username={menu.edit_by} editAt={menu.edit_at}/></div>
           {!isCentral&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.lineLight}`}}>
             <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>จัดเข้าหมวดหมู่:</div>
-            <select value={(menu.local_categories||{})[currentBranch?.id]||""} onChange={e=>assignLocalCat(menu.id,e.target.value)} style={{...iS,fontSize:12,padding:"4px 8px",height:28,width:"100%"}}>
+            <select value={menuCatOf(menu)||""} disabled={!isCentral} onChange={e=>assignLocalCat(menu.id,e.target.value)} style={{...iS,fontSize:12,padding:"4px 8px",height:28,width:"100%"}}>
               <option value="">— ยังไม่กำหนดหมวด —</option>
               {localCats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
@@ -16983,23 +17000,22 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const[showSplitBill,setShowSplitBill]=useState(false);
   const[splitSel,setSplitSel]=useState({});
 
-  // Category tabs follow THIS branch's own categorisation (m.local_categories[branchId]),
+  // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // matching the Menu management screen — NOT central's global m.category. A branch with
   // no local categories shows only "ทั้งหมด".
   // NOTE: the order item still carries m.category for kitchen-printer routing (resolvePrinter) — unchanged.
-  // Category = the branch's own assignment (local_categories[branchId]) for EVERY branch type,
-  // matching the category manager (which writes local_categories) — so central is consistent too.
+  // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
+  // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   const bidSale=branch?.id;
   const cats=useMemo(()=>{
-    const get=m=>(m.local_categories||{})[bidSale]||null;
-    return ["ทั้งหมด",...new Set(menus.map(get).filter(Boolean))];
+    return ["ทั้งหมด",...new Set(menus.filter(m=>menuVisibleAt(m,bidSale)).map(menuCatOf).filter(Boolean))];
   },[menus,bidSale]);
   const filtered=useMemo(()=>{
-    const get=m=>(m.local_categories||{})[bidSale]||null;
     return menus.filter(m=>{
+      if(!menuVisibleAt(m,bidSale))return false;            // สาขานี้ไม่ได้เปิดขายเมนูนี้
       if((m.availability||{})[bidSale]==="hidden")return false;  // ตั้ง "ซ่อน" → ไม่ขึ้นหน้าขาย (ตรงกับหน้าลูกค้า)
-      const c=get(m);
-      if(!c)return false;                                  // ยังไม่จัดหมวด → ไม่ขึ้นในหน้าขายเลย (รวม "ทั้งหมด")
+      const c=menuCatOf(m);
+      if(!c)return false;                                  // ครัวกลางยังไม่ได้จัดหมวด → ไม่ขึ้นในหน้าขาย
       if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
       return m.name.toLowerCase().includes(search.toLowerCase());
     });
@@ -17047,13 +17063,13 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const cashChange=round2(Math.max(0,(+cashRcv||0)-total));
 
   const optionLib=posSettings?.option_library||[];   // resolve referenced option groups
-  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:(m.local_categories||{})[branch?.id]||m.category||null}];});}
+  function addItem(m){setItems(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:menuCatOf(m)}];});}
   // Tap a menu: if it has add-on options for this branch, open the picker; else add directly.
   const[optPick,setOptPick]=useState(null);  // menu awaiting option selection
   function pickOrAdd(m){if(menuHasOptions(m,branch?.id,optionLib))setOptPick(m);else addItem(m);}
   function addItemWithOptions(m,chosen,qty){
     const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);
-    setItems(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:(m.local_categories||{})[branch?.id]||m.category||null}]);
+    setItems(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:menuCatOf(m)}]);
     setOptPick(null);
   }
   function chQty(idx,d){
@@ -17683,7 +17699,8 @@ function CustomerPage({branchId,tableId,token}){
         const t=matches[0];
         const[ms,ps]=await Promise.all([api.getMenus(),api.getPOSSettings(branchId)]);
         setBranch(b);setTable(t);
-        setMenus(ms.filter(m=>m.price>0&&(m.availability||{})[branchId]!=="hidden"));
+        // กรองที่ตอนโหลด ลูกค้าจะได้ไม่เห็นเมนูของสาขาอื่นแม้แต่ในข้อมูลที่ส่งไป
+        setMenus(ms.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
         {const s=ps&&ps[0]?ps[0]:null;setOptionLib(Array.isArray(s&&s.option_library)?s.option_library:[]);}
         setGateError(null);
         // Only start polling order state AFTER the gate passes — don't leak existence of orders to bad-token visitors
@@ -17694,11 +17711,11 @@ function CustomerPage({branchId,tableId,token}){
     })();
     return()=>{if(pollId)clearInterval(pollId);};
   },[branchId,tableId,token]);
-  // Customers see THIS branch's own categories (m.local_categories[branchId]) — same as
+  // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // the Menu screen for this branch. No local categories → only "ทั้งหมด".
-  const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(m=>(m.local_categories||{})[branchId]||null).filter(Boolean))],[menus,branchId]);
+  const cats=useMemo(()=>["ทั้งหมด",...new Set(menus.map(menuCatOf).filter(Boolean))],[menus]);
   const filtered=useMemo(()=>menus.filter(m=>{
-    const c=(m.local_categories||{})[branchId]||null;
+    const c=menuCatOf(m);
     if(!c)return false;                                    // ยังไม่จัดหมวด → ลูกค้าไม่เห็น
     if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
     return m.name.toLowerCase().includes(search.toLowerCase());
@@ -17712,11 +17729,11 @@ function CustomerPage({branchId,tableId,token}){
   // outbox): its uid is already recorded, so the increment would be deduped away and the plate
   // silently lost. Such a tap starts a FRESH line with a new uid instead.
   const isLineLocked=(uid)=>!!uid&&(sentUidsRef.current.has(uid)||((outbox?.lines)||[]).some(l=>l&&l.line_uid===uid));
-  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length)&&!isLineLocked(i.line_uid));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:(m.local_categories||{})[branchId]||m.category||null}];});}
+  function addToCart(m){setCart(p=>{const ex=p.find(i=>i.menu_id===m.id&&!i.note&&!(i.options&&i.options.length)&&!isLineLocked(i.line_uid));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:menuCatOf(m)}];});}
   // Add-on options: open the picker if the menu has any for this branch.
   const[optPick,setOptPick]=useState(null);
   function pickOrAddCart(m){if(menuHasOptions(m,branchId,optionLib))setOptPick(m);else addToCart(m);}
-  function addToCartWithOptions(m,chosen,qty){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:(m.local_categories||{})[branchId]||m.category||null}]);setOptPick(null);}
+  function addToCartWithOptions(m,chosen,qty){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:menuCatOf(m)}]);setOptPick(null);}
   function chQty(idx,d){setCart(p=>p.map((i,j)=>j===idx?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));}
   function rmCart(idx){setCart(p=>p.filter((_,i)=>i!==idx));}
   async function placeOrder(){
@@ -18945,7 +18962,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
         {visible.map(m=>{const cur=(m.availability||{})[currentBranch.id]||"";const nOpt=getMenuOptions(m,currentBranch.id,lib).length;return <div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",border:`1px solid ${C.line}`,borderRadius:12,background:C.white,flexWrap:"wrap",opacity:busyId===m.id?.6:1}}>
           <div style={{minWidth:140,flex:"1 1 140px"}}>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{m.name}</div>
-            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink4}}>฿{(+m.price||0).toLocaleString()}{(m.local_categories||{})[currentBranch.id]?` · ${(m.local_categories||{})[currentBranch.id]}`:""}</div>
+            <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink4}}>฿{(+m.price||0).toLocaleString()}{menuCatOf(m)?` · ${menuCatOf(m)}`:""}</div>
           </div>
           <div style={{display:"flex",gap:4}}>
             {AVS.map(a=><button key={a.v} onClick={()=>setAvail(m,a.v)} style={{padding:"5px 11px",borderRadius:8,border:`1.5px solid ${cur===a.v?a.c:C.line}`,background:cur===a.v?a.c:C.white,color:cur===a.v?C.white:C.ink3,cursor:"pointer",fontSize:11.5,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{a.l}</button>)}
@@ -19013,12 +19030,23 @@ function POSLocalCatManager({currentBranch,onClose}){
   const[selCat,setSelCat]=useState(null);const[q,setQ]=useState("");
   async function load(){setLoading(true);try{const[all,ms]=await Promise.all([api.getCats(),api.getMenus()]);setCats((all||[]).filter(c=>c.type==="menu"&&(isCentral?!c.branch_id:+c.branch_id===+currentBranch.id)));setMenus(ms||[]);}catch(e){console.error("catMgr",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
-  const catOf=(m)=>(m.local_categories||{})[currentBranch.id]||"";
+  const catOf=(m)=>menuCatOf(m)||"";
   const visibleMenus=menus.filter(m=>{const vb=m.visible_branches||[];const okB=isCentral||vb.length===0||vb.includes(currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
-  async function add(){const n=newName.trim();if(!n)return;if(cats.some(c=>c.name===n))return alert("มีหมวดนี้แล้ว");setBusy(true);try{await api.addCat({type:"menu",name:n,branch_id:isCentral?null:currentBranch.id});setNewName("");await load();}catch(e){alert("เพิ่มไม่สำเร็จ: "+e.message);}setBusy(false);}
-  async function rename(){const n=editName.trim();if(!n||!editId)return;const old=cats.find(c=>c.id===editId)?.name;setBusy(true);try{await api.updateCat(editId,{name:n});if(old&&old!==n){for(const m of menus.filter(x=>catOf(x)===old)){const lc={...(m.local_categories||{})};lc[currentBranch.id]=n;await api.updateMenu(m.id,{local_categories:lc});}}setEditId(null);setEditName("");if(selCat===old)setSelCat(n);await load();}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusy(false);}
-  async function del(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ลบหมวด "${c.name}"? เมนูในหมวดนี้จะกลายเป็นไม่มีหมวด`}))return;setBusy(true);try{await api.deleteCat(c.id);if(selCat===c.name)setSelCat(null);await load();}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}setBusy(false);}
-  async function toggleMenu(m,catName){const lc={...(m.local_categories||{})};if(lc[currentBranch.id]===catName)delete lc[currentBranch.id];else lc[currentBranch.id]=catName;try{await api.updateMenu(m.id,{local_categories:lc});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,local_categories:lc}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
+  async function add(){const n=newName.trim();if(!n)return;if(cats.some(c=>c.name===n))return alert("มีหมวดนี้แล้ว");
+    if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาสร้างหมวดใหม่ไม่ได้");return;}
+    setBusy(true);try{await api.addCat({type:"menu",name:n,branch_id:isCentral?null:currentBranch.id});setNewName("");await load();}catch(e){alert("เพิ่มไม่สำเร็จ: "+e.message);}setBusy(false);}
+  async function rename(){const n=editName.trim();if(!n||!editId)return;
+    if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาแก้ชื่อหมวดไม่ได้");return;}
+    const old=cats.find(c=>c.id===editId)?.name;setBusy(true);try{await api.updateCat(editId,{name:n});if(old&&old!==n){for(const m of menus.filter(x=>catOf(x)===old)){await api.updateMenu(m.id,{category:n});}}setEditId(null);setEditName("");if(selCat===old)setSelCat(n);await load();}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusy(false);}
+  async function del(c){
+    // หมวดเป็นของครัวกลาง สาขาลบไม่ได้ — ลบทีเดียวหายทุกสาขา
+    if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาลบหมวดไม่ได้");return;}
+    if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ลบหมวด "${c.name}"? เมนูในหมวดนี้จะกลายเป็นไม่มีหมวด`}))return;setBusy(true);try{await api.deleteCat(c.id);if(selCat===c.name)setSelCat(null);await load();}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}setBusy(false);}
+  async function toggleMenu(m,catName){
+    // หมวดเป็นของครัวกลาง สาขาแก้ไม่ได้ ไม่งั้นย้ายหมวดที่สาขาหนึ่งแล้วอีกหกสาขาเปลี่ยนตาม
+    if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาแก้ไม่ได้");return;}
+    const nextCat=(menuCatOf(m)===catName)?null:catName;
+    try{await api.updateMenu(m.id,{category:nextCat||""});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,category:nextCat||""}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   return <Modal title="📂 จัดการหมวดหมู่ & จัดเมนูเข้าหมวด" onClose={onClose} extraWide>
     {loading?<Loading text="โหลดหมวดหมู่..."/>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(260px,100%),1fr))",gap:16}}>
       {/* Left: categories */}
@@ -19180,21 +19208,21 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[]}
   const[catSaving,setCatSaving]=useState(false);
   const[openCats,setOpenCats]=useState(()=>new Set());  // category names expanded to show per-menu checkboxes
   function toggleOpenCat(c){setOpenCats(prev=>{const n=new Set(prev);if(n.has(c))n.delete(c);else n.add(c);return n;});}
-  // แสดงเฉพาะหมวดที่ "สาขาของเครื่องพิมพ์นี้สร้างไว้" (local_categories[branch]) เท่านั้น
+  // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // สาขาไหนยังไม่ได้สร้างหมวด → ว่าง (ขึ้นข้อความให้ไปสร้างก่อน) · เครื่อง branch=null = รวมทุกสาขา
   const allCategories=useMemo(()=>{
     if(!catEditP)return [];
     const bid=catEditP.branch_id;
     const s=new Set();
     menus.forEach(m=>{
-      const lc=m.local_categories||{};
-      if(bid!=null){const v=lc[bid];if(v&&String(v).trim())s.add(String(v).trim());}
-      else Object.values(lc).forEach(v=>{if(v&&String(v).trim())s.add(String(v).trim());});
+      // หมวดเป็นของครัวกลางแล้ว ทุกสาขาชุดเดียวกัน ไม่ต้องแยกตาม branch_id ของเครื่องพิมพ์
+      const c0=menuCatOf(m);
+      if(c0)s.add(c0);
     });
     return [...s].sort();
   },[menus,catEditP]);
-  // เมนูในหมวด c (เทียบจาก local_categories ของสาขานั้น)
-  const menusInCat=(c)=>menus.filter(m=>{const lc=m.local_categories||{};return (catEditP&&catEditP.branch_id!=null)?lc[catEditP.branch_id]===c:Object.values(lc).includes(c);});
+  // เมนูในหมวด c (หมวดของครัวกลาง)
+  const menusInCat=(c)=>menus.filter(m=>menuCatOf(m)===c);
   function openCatEdit(p){
     setCatEditP(p);
     setCatSel(p.categories===undefined||p.categories===null?null:[...p.categories]);
@@ -19787,9 +19815,9 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   // เพิ่มใช้งานเครื่องที่ค้นเจอ — รีเซ็ตชื่อเป็นค่าเริ่มต้น (เลข IP) เสมอ เผื่อเป็นเครื่องที่เคยลบแล้วชื่อเดิมค้างอยู่ · ผู้ใช้ค่อยตั้งชื่อใหม่ตามตำแหน่งจริง
   async function addDiscovered(p){try{await api.updatePrinter(p.id,{name:`เครื่องพิมพ์ ${p.ip||""}`.trim(),active:true,description:""});await load();posToast("✅ เพิ่มเครื่องพิมพ์เข้าระบบแล้ว — ตั้งชื่อตามจุดที่วางได้ที่ \"กำหนดการพิมพ์\"");}catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}}
   async function ignoreDiscovered(p){try{await api.updatePrinter(p.id,{description:JSON.stringify({d:1,ig:1})});await load();}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}
-  // แสดงเฉพาะหมวดที่ "สาขานี้สร้างไว้เอง" (local_categories[สาขา]) เท่านั้น — ไม่ดึงหมวดรวม (global)
+  // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // เมนูที่ยังไม่ได้ตั้งหมวดของสาขานี้จะไม่ขึ้นในตัวเลือก และจะพิมพ์ออกเครื่อง "พิมพ์ทุกหมวด" (catch-all)
-  const effCat=(m)=>{const lc=m.local_categories||{};const bid=currentBranch&&currentBranch.id;const v=lc[bid];return (v&&String(v).trim())?String(v).trim():null;};
+  const effCat=menuCatOf;
   const branchCategories=useMemo(()=>{const s=new Set();(menus||[]).forEach(m=>{const e=effCat(m);if(e)s.add(e);});return [...s].sort();},[menus,currentBranch]);
   const menusInCat=(c)=>(menus||[]).filter(m=>effCat(m)===c);
   function openSettings(p){
