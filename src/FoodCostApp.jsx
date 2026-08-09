@@ -4769,8 +4769,12 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   async function addCat(){if(!newCatName.trim())return;
     if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาสร้างหมวดใหม่ไม่ได้");return;}
     try{await api.addCat({type:"menu",name:newCatName.trim(),branch_id:null});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
-  async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;try{await api.updateCat(editingCatId,{name:editingCatName.trim()});await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
-  async function delCat(cat){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${cat.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(cat.id);await reloadCats();if(selCat===cat.name)setSelCat("ทั้งหมด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
+  async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;
+    if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาแก้ชื่อหมวดไม่ได้");setEditingCatId(null);return;}
+    try{await api.updateCat(editingCatId,{name:editingCatName.trim()});await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
+  async function delCat(cat){
+    if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาลบหมวดไม่ได้");return;}
+    if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${cat.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(cat.id);await reloadCats();if(selCat===cat.name)setSelCat("ทั้งหมด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
   const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return menus.filter(m=>{
     const vb=m.visible_branches||[];
     const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);
@@ -4835,15 +4839,15 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   }
   const catTabBtn=(label,active,onClick)=><button onClick={onClick} style={{padding:"6px 14px",borderRadius:20,border:`1.5px solid ${active?C.brand:C.line}`,background:active?C.brandLight:"transparent",color:active?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{label}</button>;
   return <div>
-    {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>เมนูจัดการโดยครัวกลางเท่านั้น • สาขานี้กำหนดหมวดหมู่และสถานะสินค้าได้</span></div>}
+    {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>เมนูจัดการโดยครัวกลางเท่านั้น • หมวดหมู่ก็มาจากครัวกลาง • สาขานี้กำหนดสถานะสินค้าได้</span></div>}
     <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap",alignItems:"center",padding:"10px 14px",background:C.bg,borderRadius:14,border:`1px solid ${C.line}`}}>
       {catTabBtn("ทั้งหมด",selCat==="ทั้งหมด",()=>setSelCat("ทั้งหมด"))}
       {localCats.map(cat=>editingCatId===cat.id
         ?<input key={cat.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape")setEditingCatId(null);}} autoFocus style={{...iS,width:110,padding:"5px 10px",fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
         :<div key={cat.id} style={{display:"flex",alignItems:"center"}}>
           {catTabBtn(cat.name,selCat===cat.name,()=>setSelCat(cat.name))}
-          <button onClick={()=>{setEditingCatId(cat.id);setEditingCatName(cat.name);}} style={{marginLeft:2,background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.pencil} s={11} c={C.ink4}/></button>
-          <button onClick={()=>delCat(cat)} style={{background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.trash} s={11} c={C.red}/></button>
+          {isCentral&&<button onClick={()=>{setEditingCatId(cat.id);setEditingCatName(cat.name);}} style={{marginLeft:2,background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.pencil} s={11} c={C.ink4}/></button>}
+          {isCentral&&<button onClick={()=>delCat(cat)} style={{background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.trash} s={11} c={C.red}/></button>}
         </div>
       )}
       {addingCat
