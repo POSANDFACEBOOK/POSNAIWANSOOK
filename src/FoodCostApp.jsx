@@ -4758,7 +4758,9 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const hasSopMeta=useMemo(()=>menus.some(m=>"prep_time" in m),[menus]);
   const isMobile=useIsMobile();
   const canE=hasPerm(currentUser,"menus")&&isCentral;const canD=hasPerm(currentUser,"menus")&&isCentral;
-  const localCats=useMemo(()=>allCats.filter(c=>c.type==="menu"&&(isCentral?!c.branch_id:c.branch_id===currentBranch?.id)),[allCats,isCentral,currentBranch]);
+  // หมวดเมนูเป็นของครัวกลางชุดเดียว ทุกสาขาเห็นเหมือนกัน (branch_id เป็น null)
+  // หมวดเก่าที่สาขาเคยสร้างไว้ (branch_id มีค่า) ไม่เอามาแสดงแล้ว
+  const localCats=useMemo(()=>allCats.filter(c=>c.type==="menu"&&!c.branch_id),[allCats]);
   async function toggleVBMenu(menu,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(menu.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateMenu(menu.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   async function assignLocalCat(menuId,catName){
     // หมวดหมู่คุมจากครัวกลางที่เดียว — เขียนลง menus.category ไม่ใช่หมวดรายสาขาอีกแล้ว
@@ -4850,7 +4852,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
           <Btn v="success" onClick={addCat} s={{padding:"5px 12px",fontSize:12}}>ตกลง</Btn>
           <Btn v="ghost" onClick={()=>{setAddingCat(false);setNewCatName("");}} s={{padding:"5px 10px",fontSize:12}}>ยกเลิก</Btn>
         </div>
-        :<button onClick={()=>setAddingCat(true)} style={{padding:"6px 12px",borderRadius:20,border:`1.5px dashed ${C.line}`,background:"transparent",color:C.ink4,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.plus} s={11} c={C.ink4}/>เพิ่มหมวด</button>
+        :isCentral&&<button onClick={()=>setAddingCat(true)} style={{padding:"6px 12px",borderRadius:20,border:`1.5px dashed ${C.line}`,background:"transparent",color:C.ink4,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.plus} s={11} c={C.ink4}/>เพิ่มหมวด</button>
       }
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20}}>
@@ -4882,10 +4884,10 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
           <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}><Chip color={mg>=60?"green":mg>=40?"yellow":"red"}>{marginLabel(mg)}</Chip><EditedBy username={menu.edit_by} editAt={menu.edit_at}/></div>
           {!isCentral&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.lineLight}`}}>
             <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>จัดเข้าหมวดหมู่:</div>
-            <select value={menuCatOf(menu)||""} disabled={!isCentral} onChange={e=>assignLocalCat(menu.id,e.target.value)} style={{...iS,fontSize:12,padding:"4px 8px",height:28,width:"100%"}}>
-              <option value="">— ยังไม่กำหนดหมวด —</option>
-              {localCats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
-            </select>
+            {/* บล็อกนี้อยู่ใน !isCentral อยู่แล้ว — สาขาดูได้อย่างเดียว ครัวกลางเป็นคนจัด */}
+            <div style={{fontSize:12,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif",padding:"4px 0"}}>
+              {menuCatOf(menu)||"— ยังไม่กำหนดหมวด —"}
+            </div>
           </div>}
           {isCentral&&<div style={{marginTop:6,padding:"8px 0 2px",borderTop:`1px solid ${C.lineLight}`}}>
             <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>แสดงที่สาขา:</div>
