@@ -1822,7 +1822,7 @@ function Thumb({src,alt="",w,h,size=32,radius=7,iconBg,iconColor,icon,iconSize,s
   const[err,setErr]=useState(false);
   const ph=<div style={{width:W,height:H,borderRadius:radius,background:iconBg||C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,...style}}><Ic d={icon||I.leaf} s={iconSize||Math.max(12,Math.round(Math.min(W,H)*0.5))} c={iconColor||C.green}/></div>;
   if(!src||err)return ph;
-  return <img src={driveImgSrc(src)} alt={alt} loading="lazy" decoding="async" onError={()=>setErr(true)} style={{width:W,height:H,objectFit:"cover",borderRadius:radius,flexShrink:0,...imgStyle}}/>;
+  return <img src={driveImgSrc(src,Math.max(W,H))} alt={alt} loading="lazy" decoding="async" onError={()=>setErr(true)} style={{width:W,height:H,objectFit:"cover",borderRadius:radius,flexShrink:0,...imgStyle}}/>;
 }
 
 // Number stepper — left = decrement, right = increment, center = direct input.
@@ -1958,7 +1958,20 @@ function AttachBox({files,setFiles,label="📎 แนบรูป / ไฟล์
 }
 
 // Resolve an image ref (drive:<id> or a plain URL) to a viewable <img src>.
-function driveImgSrc(ref){ if(!ref)return ""; return /^drive:/.test(ref)?`/api/drive-view?id=${encodeURIComponent(ref.slice(6))}`:ref; }
+// ชุดขนาดรูปย่อ ต้องตรงกับ ALLOWED_W ใน api/drive-view.js เป๊ะ
+// ค่านอกชุดจะถูกเมินและได้ไฟล์เต็มกลับมา (ไม่พัง แค่ไม่ได้ประหยัด)
+const IMG_W=[64,128,192,320,640];
+// px = ขนาดที่จะแสดงจริงบนจอ · คูณ 2 ให้จอความละเอียดสูงแล้วปัดขึ้นหาค่าในชุด
+const imgW=(px)=>{const need=(+px||0)*2;return IMG_W.find(w=>w>=need)||0;};
+// w = 0/ไม่ส่ง → ได้ไฟล์เต็ม (ใช้กับตัวดูรูปเต็มจอและงานพิมพ์)
+// รูปเก็บที่ 1280px ~45KB แต่การ์ดแสดงแค่ 30-88px การขอไฟล์เต็มมาย่อในเบราว์เซอร์
+// คือจ่ายแบนด์วิดท์เกินจำเป็น 15-25 เท่าทุกครั้ง — และนั่นคือสิ่งที่ทำให้โควตาหมด
+function driveImgSrc(ref,px){
+  if(!ref)return "";
+  if(!/^drive:/.test(ref))return ref;
+  const w=px?imgW(px):0;
+  return `/api/drive-view?id=${encodeURIComponent(ref.slice(6))}${w?`&w=${w}`:""}`;
+}
 // Absolute form — for images embedded in printed windows (their about:blank base
 // can't resolve the relative /api/drive-view proxy path).
 function driveImgAbs(ref){ if(!ref)return ""; const s=driveImgSrc(ref); return /^https?:/i.test(s)?s:(publicBaseUrl().replace(/\/+$/,"")+s); }

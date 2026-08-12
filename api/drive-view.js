@@ -10,6 +10,9 @@ import { JWT } from "google-auth-library";
 
 const SA_B64 = process.env.GOOGLE_SA_KEY_B64 || "";
 const VIEW_TOKEN = process.env.DRIVE_VIEW_TOKEN || "";
+// ขนาดรูปย่อที่ยอมให้ขอได้ — ฝั่งแอปปัดขึ้นมาหาค่าที่ใกล้ที่สุดในชุดนี้
+// ต้องเป็นชุดจำกัด ไม่ใช่ตัวเลขอิสระ ไม่งั้น CDN แคชแตกเป็นชิ้นเล็กชิ้นน้อยจนไม่ช่วยอะไร
+const ALLOWED_W = new Set([64, 128, 192, 320, 640]);
 
 // Accept the SA key as EITHER base64-encoded JSON OR raw JSON pasted directly.
 function loadSA() {
@@ -35,8 +38,35 @@ export default async function handler(req, res) {
   const id = String(req.query.id || "");
   if (!/^[A-Za-z0-9_-]{10,}$/.test(id)) return res.status(400).end("bad id");
   if (VIEW_TOKEN && req.query.t !== VIEW_TOKEN) return res.status(403).end("forbidden");
+  // ?w=<px> → ส่งรูปย่อแทนไฟล์เต็ม รูปในระบบเก็บที่ 1280px (~45 KB) แต่การ์ด/รายการ
+  // แสดงจริงแค่ 30–88 px คือใหญ่เกินจำเป็นราว 15–25 เท่า และนั่นคือทั้งไบต์และ CPU
+  // จำกัดเป็นชุดค่าตายตัว ไม่รับตัวเลขอิสระ เพราะทุกค่าที่ต่างกันคือ cache entry ใหม่
+  // ปล่อยให้ใส่อะไรก็ได้ = แคชแตกเป็นพันชิ้น แล้วก็กลับไปวิ่งหา origin เหมือนเดิม
+  const W = ALLOWED_W.has(+req.query.w) ? +req.query.w : 0;
   try {
     const tok = await accessToken();
+    // รูปย่อ: ขอ thumbnailLink จาก metadata แล้วเปลี่ยนขนาดท้าย URL (=s220 → =s<W>)
+    // ถ้าพลาดตรงไหนก็ตาม ให้ตกไปใช้ไฟล์เต็มเสมอ — รูปไม่ขึ้นแย่กว่ารูปใหญ่ไป
+    if (W) {
+      try {
+        const m = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=thumbnailLink&supportsAllDrives=true`, {
+          headers: { Authorization: `Bearer ${tok}` },
+        });
+        if (m.ok) {
+          const link = (await m.json()).thumbnailLink || "";
+          if (link) {
+            const sized = link.replace(/=s\d+(-c)?$/, `=s${W}`);
+            const t = await fetch(sized);
+            if (t.ok) {
+              res.setHeader("Content-Type", t.headers.get("content-type") || "image/jpeg");
+              res.setHeader("Content-Disposition", "inline");
+              res.setHeader("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable");
+              return res.status(200).end(Buffer.from(await t.arrayBuffer()));
+            }
+          }
+        }
+      } catch { /* ตกไปใช้ไฟล์เต็มด้านล่าง */ }
+    }
     const r = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`, {
       headers: { Authorization: `Bearer ${tok}` },
     });
