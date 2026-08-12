@@ -2,5 +2,53 @@
   "crons": [
     { "path": "/api/backup", "schedule": "0 19 * * *" },
     { "path": "/api/broadcast-cron", "schedule": "0 10 * * *" }
+  ],
+
+  "//": [
+    "headers = ตัวคุม Fast Origin Transfer และ Fluid CPU ของแพ็กเกจฟรี",
+    "Vercel นับ 'Fast Origin Transfer' = ไบต์ที่วิ่งจาก origin (ฟังก์ชัน/ไฟล์) ไปยัง CDN",
+    "อะไรที่ CDN แคชได้ จะไม่วิ่งไป origin ซ้ำ = ไม่นับ และไม่กิน CPU ของฟังก์ชันด้วย",
+    "9 ส.ค. 69 บัญชีถูกหยุดเพราะ CPU 11h57m/4h และ Origin Transfer 28.21GB/10GB",
+    "ตัวการหลักคือ /api/drive-view ที่เคยส่ง Cache-Control: private (CDN ห้ามแคช)"
+  ],
+
+  "headers": [
+    {
+      "//": "ไฟล์ที่ Vite ใส่ hash ในชื่อไว้แล้ว เนื้อหาเปลี่ยน = ชื่อเปลี่ยน จึงแคชยาวได้ปลอดภัย",
+      "source": "/assets/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, s-maxage=31536000, immutable" }
+      ]
+    },
+    {
+      "//": "ไอคอน/manifest ชื่อไม่มี hash เปลี่ยนได้ จึงไม่ใส่ immutable แต่ให้ CDN เก็บยาว",
+      "source": "/(favicon.ico|favicon-16.png|favicon-32.png|apple-touch-icon.png|icon-192.png|icon-512.png|icon-maskable-512.png|logo.png|manifest.webmanifest)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=86400, s-maxage=2592000, stale-while-revalidate=86400" }
+      ]
+    },
+    {
+      "//": "service worker ห้ามแคชนาน ไม่งั้นเครื่องที่ติดตั้ง PWA ไว้จะค้างตัวเก่า",
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    },
+    {
+      "//": [
+        "index.html ชี้ไปยังชื่อไฟล์ JS ที่มี hash เบราว์เซอร์จึงต้องไม่แคชไว้เอง (max-age=0)",
+        "แต่ให้ CDN ตอบแทนได้ 5 นาที ตัดการวิ่งไป origin ทุกครั้งที่มีคนเปิด/รีเฟรช",
+        "5 นาทีไม่ยาวจนแก้บั๊คแล้วคนยังเห็นของเก่า และ Vercel ล้างแคชให้เองทุกครั้งที่ deploy ใหม่",
+        "",
+        "⚠️ ต้องตัด api/ assets/ sw.js และไอคอน ออกจาก pattern นี้ให้ครบ",
+        "ไม่ใช่หวังว่า rule ที่เจาะจงกว่าจะชนะ — Vercel ใส่ให้ทุก rule ที่ match แล้วตัวท้ายทับตัวหน้า",
+        "ถ้าปล่อยให้ตัวนี้ครอบ /assets/ ด้วย immutable ที่ตั้งไว้ข้างบนจะถูกทับเป็น 5 นาที",
+        "= ก้อน JS 1.5 MB วิ่งกลับไป origin ทุก 5 นาที ซึ่งคือปัญหาเดิมที่กำลังแก้อยู่"
+      ],
+      "source": "/((?!api/|assets/|sw\\.js|favicon|apple-touch-icon|icon-|logo\\.png|manifest\\.webmanifest).*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, s-maxage=300, stale-while-revalidate=3600" }
+      ]
+    }
   ]
 }
