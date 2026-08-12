@@ -43,7 +43,17 @@ export default async function handler(req, res) {
     if (!r.ok) return res.status(r.status).end(await r.text());
     res.setHeader("Content-Type", r.headers.get("content-type") || "application/octet-stream");
     res.setHeader("Content-Disposition", "inline");
-    res.setHeader("Cache-Control", "private, max-age=300");
+    // ⚠️ เคยเป็น "private, max-age=300" ซึ่งสั่งไม่ให้ CDN แคชเลย แคชแค่ในเบราว์เซอร์ 5 นาที
+    // ผลคือรูปทุกใบในระบบ (846 รูป) วิ่งผ่านฟังก์ชันนี้ใหม่แทบทุกครั้งที่มีคนเปิดหน้า
+    // ฟังก์ชันต้องไปดึงจาก Drive → โหลดทั้งไฟล์เข้าหน่วยความจำ → ส่งออก
+    // = กิน Fluid Active CPU และ Fast Origin Transfer มหาศาล จน Vercel หยุดให้บริการ
+    // (9 ส.ค. 69: CPU 11h57m/4h · Origin Transfer 28.21GB/10GB — เกินเพดานฟรีทั้งคู่)
+    //
+    // public + immutable ให้ CDN แคชแทน ฟังก์ชันจึงถูกเรียกครั้งเดียวต่อรูปต่อ edge
+    // ปลอดภัยเท่าเดิม เพราะโมเดลของ endpoint นี้คือ "URL เดารหัสไม่ได้" อยู่แล้ว
+    // (ดูคอมเมนต์หัวไฟล์) ใครมี URL ก็เปิดได้อยู่แล้วตั้งแต่ต้น การแคชไม่ได้เปิดอะไรเพิ่ม
+    // immutable ใช้ได้เพราะไฟล์ใน Drive หนึ่ง id = เนื้อหาเดิมเสมอ เปลี่ยนรูป = อัปไฟล์ใหม่ได้ id ใหม่
+    res.setHeader("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable");
     return res.status(200).end(Buffer.from(await r.arrayBuffer()));
   } catch (e) {
     return res.status(500).end(String((e && e.message) || e));
