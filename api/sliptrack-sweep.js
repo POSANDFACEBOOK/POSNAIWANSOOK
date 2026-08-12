@@ -175,10 +175,6 @@ export default async function handler(req, res) {
     || (req.headers["x-forwarded-host"] ? `https://${req.headers["x-forwarded-host"]}` : "https://foodcost-eta.vercel.app");
 
   try {
-    const branches = await sbFetch(`branches?select=id,name`);
-    const branchById = {};
-    for (const b of branches) branchById[+b.id] = b;
-
     // Candidate POs that haven't confirmed-synced (null or 'failed'), received between (now-90d)
     // and (now-2min). received_at both restricts to POs that actually touched accounting (a null
     // received_at fails `lt`, so it's excluded — a never-received PO has no bill to post/void) AND
@@ -194,6 +190,19 @@ export default async function handler(req, res) {
     // row, so it can never monopolise the batch and starve fresh POs out of the sync guarantee.
     const filter = `status=in.(awaiting_payment,paid,cancelled)&received_at=lt.${encodeURIComponent(cutoff)}&received_at=gt.${encodeURIComponent(floor)}&or=(sliptrack_sync.is.null,sliptrack_sync.eq.failed)&order=sliptrack_sync.asc.nullsfirst,received_at.desc&limit=${BATCH}`;
     const candidates = await sbFetch(`purchase_orders?select=${cols}&${filter}`);
+
+    // ── ไม่มีงาน → จบตรงนี้เลย ────────────────────────────────────────────────
+    // นี่คือเส้นทางของ "แทบทุกรอบ" ที่ cron ยิงมา (ตรวจจริง 12 ส.ค. 69: ค้าง 0 ใบ)
+    // เดิมดึงตาราง branches มาก่อนเสมอ แม้ไม่มีใบให้ทำ = เสีย HTTP round-trip + CPU ฟรีๆ
+    // ทุกรอบตลอด 24 ชม. ย้ายมาดึงหลังรู้ว่ามีงานจริง ทำให้รอบเปล่าเหลือคิวรีเดียว
+    if (!Array.isArray(candidates) || !candidates.length) {
+      return res.status(200).json({ ok: true, scanned: 0, synced: 0, failed: 0, skipped: 0, results: [] });
+    }
+
+    // ดึงชื่อสาขาเฉพาะตอนมีใบให้ผลักจริง — ใช้ทำ alias ที่ฝั่งบัญชีต้องเห็นตรงกับของเบราว์เซอร์
+    const branches = await sbFetch(`branches?select=id,name`);
+    const branchById = {};
+    for (const b of branches) branchById[+b.id] = b;
 
     let ok = 0, failed = 0, skipped = 0;
     const results = [];

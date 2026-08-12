@@ -12,7 +12,10 @@ const SA_B64 = process.env.GOOGLE_SA_KEY_B64 || "";
 const VIEW_TOKEN = process.env.DRIVE_VIEW_TOKEN || "";
 // ขนาดรูปย่อที่ยอมให้ขอได้ — ฝั่งแอปปัดขึ้นมาหาค่าที่ใกล้ที่สุดในชุดนี้
 // ต้องเป็นชุดจำกัด ไม่ใช่ตัวเลขอิสระ ไม่งั้น CDN แคชแตกเป็นชิ้นเล็กชิ้นน้อยจนไม่ช่วยอะไร
-const ALLOWED_W = new Set([64, 128, 192, 320, 640]);
+// ไม่มี 640 โดยตั้งใจ — วัดจริง 12 ส.ค. 69: thumbnail w=640 ได้ 53,454 B แต่ไฟล์เต็ม 46,567 B
+// รูปต้นทางเก็บที่ 1280px ซึ่ง Google เข้ารหัสไว้ดีกว่า thumbnail ขนาดใหญ่ ขอ 640 จึงได้ทั้ง
+// ไบต์มากกว่าและความละเอียดน้อยกว่า = แย่กว่าทั้งสองทาง ค่าที่หลุดชุดนี้จะตกไปใช้ไฟล์เต็มเอง
+const ALLOWED_W = new Set([64, 128, 192, 320]);
 
 // Accept the SA key as EITHER base64-encoded JSON OR raw JSON pasted directly.
 function loadSA() {
