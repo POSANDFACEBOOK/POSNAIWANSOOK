@@ -11861,7 +11861,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
 // ══════════════════════════════════════════════════════
 // ── HISTORY TAB ───────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,currentBranch,reloadOrders,currentUser}){
+function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,currentBranch,reloadOrders,currentUser,suppliers=[],branches=[]}){
   const[view,setView]=useState("cost");const[selSnap,setSelSnap]=useState(null);const[sendingOrder,setSendingOrder]=useState(null);
   const[editSnap,setEditSnap]=useState(null); // {id, date_from, date_to, items:[...]}
   const[editSaving,setEditSaving]=useState(false);
@@ -11889,16 +11889,55 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
         const ing=ings.find(g=>g.id===mi.ingredientId);
         if(!ing)return;
         const totalGram=(+mi.amountGram||0)*qty;
-        if(!ingMap[ing.id])ingMap[ing.id]={ingId:ing.id,name:ing.name,unit:ing.buy_unit,pricePerGram:ing.price_per_gram,buyPrice:ing.buy_price,convertToGram:ing.convert_to_gram,supplierId:ing.supplier_id,supplierName:ing.supplier_name||"ไม่ระบุ",totalGram:0};
+        if(!ingMap[ing.id]){
+          // ── หาซัพของ "สาขานี้" ไม่ใช่ซัพในทะเบียนกลาง ──────────────────────
+          // เดิมใช้ ing.supplier_id ตรงๆ ซึ่งเป็นซัพที่ครัวกลางตั้งไว้ในทะเบียน
+          // สาขาที่กดปุ่มนี้จะได้ซัพของครัวกลางติดมา ไม่ใช่เจ้าที่สาขาสั่งจริง
+          // เส้นทางสั่งของอื่นๆ ใช้ตัวหาซัพต่อสาขาอยู่แล้ว ตรงนี้เป็นที่เดียวที่หลุด
+          const sid=branchSupplierId(ing,currentBranch?.id);
+          const sRec=sid?(suppliers||[]).find(x=>+x.id===+sid):null;
+          ingMap[ing.id]={ingId:ing.id,name:ing.name,unit:ing.buy_unit,pricePerGram:ing.price_per_gram,buyPrice:ing.buy_price,convertToGram:ing.convert_to_gram,
+            supplierId:sid,supplierName:(sRec&&sRec.name)||ing.supplier_name||"ไม่ระบุ",
+            supWarn:supplierScopeWarn(sRec,currentBranch?.id,branches),totalGram:0};
+        }
         ingMap[ing.id].totalGram+=totalGram;
       });
     });
     const orderItems=Object.values(ingMap).map(i=>({...i,qtyNeeded:+(i.totalGram/(+i.convertToGram||1000)).toFixed(2),estimatedCost:+(i.totalGram*(+i.pricePerGram||0)).toFixed(2)}));
     if(!orderItems.length){alert("ไม่มีวัตถุดิบที่ต้องสั่ง");return;}
+    // ── ไม่สร้างใบที่ไม่มีซัพ ─────────────────────────────────────────────────
+    // เดิมจับของที่หาซัพไม่ได้รวมไว้ใต้คีย์ "none" แล้วส่งออกเป็นใบที่ supplier_id ว่าง
+    // = ใบที่ไม่รู้จะส่งให้ใคร ซึ่งไปโผล่ในคิวแล้วต้องมาตามแก้ทีหลัง
+    const sendable=orderItems.filter(i=>i.supplierId);
+    const noSup=orderItems.filter(i=>!i.supplierId);
+    if(!sendable.length){alert(`วัตถุดิบทั้ง ${orderItems.length} รายการยังไม่ได้ตั้งซัพพลายของ ${currentBranch?.name||"สาขานี้"}\n\nไปตั้งที่การ์ดวัตถุดิบก่อน แล้วกดส่งอีกครั้ง`);return;}
     const supMap={};
-    orderItems.forEach(i=>{const k=i.supplierId||"none";if(!supMap[k])supMap[k]={supplierId:i.supplierId,supplierName:i.supplierName,items:[]};supMap[k].items.push(i);});
+    sendable.forEach(i=>{const k=String(i.supplierId);if(!supMap[k])supMap[k]={supplierId:i.supplierId,supplierName:i.supplierName,supWarn:i.supWarn,items:[]};supMap[k].items.push(i);});
+    const sups=Object.values(supMap);
+    // ⚠️ ซัพที่ถูกตั้งไว้ให้สาขาอื่น — เตือนให้เห็นก่อนส่ง (ไม่บล็อค ดู supplierScopeWarn)
+    const warned=sups.filter(s=>s.supWarn);
+    if(!await confirmDlg({
+      title:"ส่งรายการสั่งวัตถุดิบ",
+      message:`ส่ง ${sendable.length} วัตถุดิบ จาก ${sups.length} ซัพพลาย ในชื่อสาขา "${currentBranch?.name||""}"`
+        +(noSup.length?`\n\n⏭ ข้าม ${noSup.length} รายการที่ยังไม่ได้ตั้งซัพของสาขานี้:\n${noSup.slice(0,6).map(i=>"• "+i.name).join("\n")}${noSup.length>6?`\n• … อีก ${noSup.length-6} รายการ`:""}`:"")
+        +(warned.length?`\n\n⚠️ ซัพที่ตั้งไว้ให้สาขาอื่น — เช็คก่อนว่าถูกเจ้า:\n${warned.map(s=>`• ${s.supplierName} (ตั้งไว้ให้ ${s.supWarn})`).join("\n")}`:"")
+        +`\n\n• รายการจะส่งให้ Area อนุมัติก่อน (แท็บ "อนุมัติการสั่งของ")`,
+      confirmLabel:"ส่งให้ Area อนุมัติ",
+    }))return;
     setSendingOrder(snap.id);
-    try{for(const sup of Object.values(supMap)){await api.addOrder({branch_id:currentBranch.id,branch_name:currentBranch.name,supplier_id:sup.supplierId,supplier_name:sup.supplierName,items:sup.items,status:"pending",requested_by:currentUser.username,requested_at:nowStr(),note:`${snap.date_from} - ${snap.date_to}`});}await reloadOrders();alert("✅ ส่งรายการสั่งวัตถุดิบไปครัวกลางสำเร็จ!");}
+    try{
+      for(const sup of sups){
+        await api.addOrder({branch_id:currentBranch.id,branch_name:currentBranch.name,supplier_id:sup.supplierId,supplier_name:sup.supplierName,items:sup.items,
+          // ⚠️ ต้องเป็น pending_approval — เดิมเขียน "pending" ซึ่งคือสถานะ "อนุมัติแล้ว"
+          // ปุ่มนี้จึงสร้างใบสั่งของที่ข้ามการอนุมัติของ Area ไปทั้งขั้น ต่างจากทุกเส้นทางอื่น
+          // (ตรวจ 13/08/2569: ยังไม่เคยมีใบไหนมาจากปุ่มนี้เลย 0 จาก 2,062 ใบ — แก้ก่อนถูกใช้)
+          status:"pending_approval",
+          requested_by:currentUser.username,requested_at:nowStr(),
+          note:`ประวัติต้นทุน ${snap.date_from} - ${snap.date_to}`});
+      }
+      await reloadOrders();
+      alert(`✅ ส่งแล้ว ${sups.length} ใบ — รอ Area อนุมัติที่แท็บ "อนุมัติการสั่งของ"`);
+    }
     catch(e){alert("ส่งไม่สำเร็จ: "+e.message);}setSendingOrder(null);
   }
 
@@ -16264,7 +16303,7 @@ export default function App(){
                 :<POSection branches={branches} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders={()=>setPoSubTab("create")} orders={orders} reloadOrders={reload.orders} initialAction={poAction} onConsumeAction={()=>setPoAction(null)}/>}
             </>}
             {tab==="orders"&&<OrderTab orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setTab("po")}/>}
-            {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser}/>}
+            {tab==="history"&&<HisTab costHistory={costHistory} actionHistory={actionHistory} reloadHistory={reload.history} reloadAction={reload.action} ings={ings} currentBranch={currentBranch} reloadOrders={reload.orders} currentUser={currentUser} suppliers={suppliers} branches={branches}/>}
             {tab==="suppliers"&&<SupplierTab suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} currentBranch={currentBranch} orders={orders} allOrders={allOrders} branches={branches} ings={ings} reloadIngs={reload.ings}/>}
             {tab==="approve"&&<ApprovalTab currentUser={currentUser} currentBranch={currentBranch} branches={branches} reloadOrders={reload.orders} ings={ings}/>}
             {tab==="assets"&&<AssetsTab assets={assets} reloadAssets={reload.assets} currentUser={currentUser} currentBranch={currentBranch} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
