@@ -412,10 +412,14 @@ const api = {
   getOrdersChangeMark: (bid) => sb(`order_requests?select=id,updated_at&order=updated_at.desc&limit=1${bid ? `&branch_id=eq.${bid}` : ""}`),
   // Area-approval inbox: rows held at "pending_approval" in both order tables
   getPendingApprovalOrders: () => sb(`order_requests?status=eq.pending_approval&order=id.desc`),
-  // ใบที่ผ่านอนุมัติแล้วแต่ของยังไม่เข้า (pending = รอส่งซัพ · approved = ส่งซัพแล้วรอของ)
-  // ใช้ตรวจว่าใบที่กำลังจะอนุมัติ ซ้ำกับใบที่อนุมัติไปก่อนหน้าหรือเปล่า — ใบแฝดมักมาคนละวัน
-  // จำกัด 400 ใบล่าสุดและเลือกเฉพาะฟิลด์ที่ใช้ทำลายนิ้วมือ (ตารางนี้มี 2,000+ แถว)
-  getOpenOrdersForDupCheck: () => sb(`order_requests?status=in.(pending,approved)&select=id,branch_id,supplier_id,supplier_name,status,requested_at,items&order=id.desc&limit=400`),
+  // ── ใบสั่งซัพนอกที่ "ยังเปิดอยู่" ทั้งหมด ────────────────────────────────────
+  // pending_approval = รออนุมัติ · pending = อนุมัติแล้วรอส่งซัพ · approved = รอของ
+  // ใช้ 2 งาน: ตรวจใบซ้ำในหน้าอนุมัติ · หักออกจากยอดที่ต้องซื้อ (ของที่สั่งแล้วยังไม่เข้า)
+  //
+  // ⚠️ ห้ามเปลี่ยนไปใช้ getOrders/getAllOrders ที่เอา 400/600 ใบล่าสุด — ใบค้างเก่า
+  //    จะหลุดออกไปเงียบๆ (มีใบค้างจริงถึง 127 วัน) แล้วหักไม่ครบ = ยังสั่งซ้ำอยู่ดี
+  //    กรองด้วยสถานะเบากว่าด้วย: เปิดอยู่ ~183 ใบ จากทั้งตาราง 2,062 ใบ
+  getOpenOrders: () => sb(`order_requests?status=in.(pending_approval,pending,approved)&select=id,branch_id,supplier_id,supplier_name,status,requested_at,items&order=id.desc&limit=1000`),
   getPendingApprovalPOs: () => sb(`purchase_orders?status=eq.pending_approval&order=id.desc`),
   // Approval history log (one row per approve/reject decision)
   addApprovalLog: (d) => sb("approval_log", { method:"POST", body:JSON.stringify(d), headers:{ "Prefer":"return=minimal" } }),
@@ -1357,6 +1361,53 @@ function orderFingerprint(o){
     .map(it=>[+(it.ingId??it.ingredient_id)||0,+(it.qtyNeeded??it.qty)||0])
     .sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
   return `${+o.branch_id||0}|${+o.supplier_id||0}|${JSON.stringify(items)}`;
+}
+// ── ของที่ "สั่งไปแล้วแต่ยังไม่เข้า" ต่อวัตถุดิบ ────────────────────────────────
+// นับจากใบสั่งซัพนอกที่ยังเปิดอยู่ ของสาขาที่ระบุเท่านั้น (branchId=null = ทุกสาขา)
+// คืน Map: ingId → {qty, orders:[id], unitMismatch}
+//
+// ทำไมต้องมี: ใบขอซื้อของสาขาปิดตอน "ของถึงสาขา" ไม่ใช่ตอนครัวกลางออกไปซื้อ
+// (ตัดสินใจไว้แบบนั้นเพราะซื้อแล้วของอาจไม่มา ปิดตอนซื้อจะทำให้ใบหายทั้งที่ของยังไม่ถึง)
+// ผลข้างเคียงคือความต้องการเดิมค้างอยู่ในระบบทุกวันจนของถึง ถ้าไม่หักของที่สั่งไปแล้วออก
+// ระบบจะเสนอให้ซื้อซ้ำทุกวัน — เคสจริง #2199 (03/08) กับ #2255 (04/08) เบียร์ชุดเดียวกัน
+// ฿2,656 ทั้งคู่ นอนรออนุมัติพร้อมกัน 8-9 วัน
+//
+// ⚠️ หน่วยต้องตรงกับ buy_unit เท่านั้น ไม่ตรง = ไม่หัก แล้วตั้งธง unitMismatch ให้คนเห็น
+//    หักข้ามหน่วยผิดครั้งเดียว (เช่น 2 ลัง ไปหักกับ 2 ขวด) = สั่งของขาดจนหมดหน้าร้าน
+//    ซึ่งแย่กว่าสั่งเกิน จึงเลือกไม่หักเมื่อไม่มั่นใจ แล้วให้คนตัดสิน
+//
+// ⚠️ และไม่นับใบที่เก่าเกิน ON_ORDER_MAX_AGE_DAYS — เหตุผลเดียวกัน:
+//    วัดจริง 13/08/2569 มีใบค้างเกิน 7 วันอยู่ 39 ใบ รวม ฿94,678 เก่าสุด 127 วัน
+//    ใบพวกนี้คือใบที่ถูกลืม/ทิ้ง ของไม่มาแล้ว ถ้าเอามาหักยอดซื้อวันนี้ = สั่งของขาด
+//    ซัพส่งสัปดาห์ละ 2 รอบ 14 วันจึงครอบ 4 รอบส่ง เกินกว่านั้นถือว่าไม่มาแล้ว
+//    ใบที่ถูกข้ามจะถูกรายงานกลับใน stale เพื่อให้คนไปตีกลับหรือกดรับของให้จบ
+// คืน {qtyByIng:Map, stale:[orderId]}
+const ON_ORDER_MAX_AGE_DAYS=14;
+function onOrderQtyByIng(openOrders,branchId,ingById,maxAgeDays=ON_ORDER_MAX_AGE_DAYS){
+  const m=new Map();
+  const stale=[];
+  const cutoff=maxAgeDays>0?Date.now()-maxAgeDays*864e5:null;
+  for(const o of openOrders||[]){
+    if(branchId!=null&&+o.branch_id!==+branchId)continue;
+    if(cutoff&&o.requested_at){
+      const t=new Date(o.requested_at).getTime();   // requested_at เป็น ISO เสมอ (nowStr)
+      if(isFinite(t)&&t<cutoff){stale.push(o.id);continue;}
+    }
+    for(const it of (Array.isArray(o.items)?o.items:[])){
+      const id=+(it.ingId??it.ingredient_id);
+      if(!id)continue;
+      const left=round2(Math.max(0,(+it.qtyNeeded||0)-(+it.receivedQty||0)));
+      if(!(left>0))continue;
+      const rec=m.get(id)||{qty:0,orders:[],unitMismatch:false};
+      const bu=String((ingById&&ingById.get(id)||{}).buy_unit||"").trim();
+      const u=String(it.unit||"").trim();
+      if(bu&&u&&u!==bu)rec.unitMismatch=true;   // ไม่หัก แต่จำไว้เตือน
+      else rec.qty=round2(rec.qty+left);
+      if(!rec.orders.includes(o.id))rec.orders.push(o.id);
+      m.set(id,rec);
+    }
+  }
+  return{qtyByIng:m,stale};
 }
 // สาขาที่ยังเปิดใช้งาน — ใช้กับทุกที่ที่ "ให้เลือกสาขา" หรือ "โชว์สต๊อกรายสาขา"
 // สาขาที่ปิดแล้ว (active=false) ต้องไม่โผล่ให้เลือกและไม่โชว์บนการ์ดวัตถุดิบ
@@ -9535,6 +9586,7 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
   const[pickedSups,setPickedSups]=useState(()=>new Set());   // หน้าย้อนดูรอบที่เคยกดสร้างรายการ
   const[pos,setPos]=useState([]);
   const[prs,setPrs]=useState([]);          // ใบขอซื้อที่อนุมัติแล้วแต่ยังไม่ได้ออกไปซื้อ
+  const[openOrders,setOpenOrders]=useState([]);   // ใบสั่งซัพนอกที่ยังเปิด = ของที่สั่งแล้วรอเข้า
   const[loading,setLoading]=useState(true);
   const[loadErr,setLoadErr]=useState("");
   const[refreshTick,setRefreshTick]=useState(0);
@@ -9562,6 +9614,14 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
           const prRows=await sb(`purchase_requisitions?status=eq.approved&type=eq.ingredient&order=id.desc&limit=300`);
           if(alive)setPrs(Array.isArray(prRows)?prRows:[]);
         }catch{ if(alive)setPrs([]); }   // อ่านใบขอซื้อไม่ได้ = แสดงเท่าที่มี ดีกว่าพังทั้งหน้า
+        // ── ของที่สั่งไปแล้วแต่ยังไม่เข้า ────────────────────────────────────
+        // ต้องหักออกจากยอดที่ต้องซื้อ ไม่งั้นความต้องการเดิม (ที่ค้างอยู่จนของถึงสาขา)
+        // จะถูกเสนอให้ซื้อซ้ำทุกวัน — ต้นตอของใบแฝด #2199/#2255 ฿2,656
+        // อ่านไม่ได้ = หักไม่ได้ = กลับไปเสนอซ้ำเหมือนเดิม จึงต้องเตือนคน ไม่ใช่เงียบ
+        try{
+          const oo=await api.getOpenOrders();
+          if(alive)setOpenOrders(Array.isArray(oo)?oo:[]);
+        }catch{ if(alive)setOpenOrders(null); }   // null = อ่านไม่สำเร็จ (ต่างจาก [] = ไม่มีใบเปิด)
       }catch(e){
         if(!alive)return;
         setLoadErr(e&&e.message||String(e));
@@ -9617,8 +9677,15 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
         addNeed(id,+it.qty||0,0,pr.branch_id!=null?+pr.branch_id:null);
       });
     });
+    // ของที่สั่งไปแล้วแต่ยังไม่เข้า ของครัวกลางเอง — หักออกจากยอดที่ต้องซื้อ
+    // (นับเฉพาะสาขาที่กำลังซื้อ ใบของสาขาอื่นไม่ได้ช่วยเติมคลังครัวกลาง)
+    const oor=onOrderQtyByIng(openOrders||[],currentBranch?.id,ingById);
+    const onOrder=oor.qtyByIng;
+    const staleOrders=oor.stale;   // ใบเก่าเกิน 14 วัน ไม่เอามาหัก — ต้องบอกให้ไปเคลียร์
     // Build rows: only ingredients short of stock
     const rows=[];
+    const covered=[];       // ไม่ต้องซื้อเพราะสั่งไปแล้วรอของ — ต้องบอก ไม่ใช่หายเงียบ
+    const unitWarn=[];      // หน่วยในใบที่สั่งไว้ไม่ตรง buy_unit → ไม่หัก ให้คนตัดสิน
     const negStock=[];      // สต๊อกติดลบ = ข้อมูลนับเพี้ยน ต้องเตือนให้ไปนับใหม่
     for(const[ingId,info]of need.entries()){
       const ing=ingById.get(+ingId);
@@ -9630,8 +9697,16 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
       const onHand=Math.max(0,rawOnHand);
       if(rawOnHand<0)negStock.push({name:ing.name,code:ing.code,qty:Math.round(rawOnHand*1000)/1000,unit:ing.buy_unit||""});
       const totalNeed=Math.round(info.qty*1000)/1000;
-      const shortBy=Math.max(0,Math.round((info.qty-onHand)*1000)/1000);
-      if(shortBy<=0)continue;
+      // ── หักของที่สั่งไปแล้วแต่ยังไม่เข้า ──────────────────────────────────
+      const oo=onOrder.get(+ingId);
+      if(oo&&oo.unitMismatch)unitWarn.push({name:ing.name,unit:ing.buy_unit||"",orders:oo.orders});
+      const already=oo&&!oo.unitMismatch?(+oo.qty||0):0;
+      const shortBy=Math.max(0,Math.round((info.qty-onHand-already)*1000)/1000);
+      if(shortBy<=0){
+        // สั่งไปแล้วครบ → ไม่ต้องซื้อซ้ำ แต่ห้ามหายเงียบ เก็บไปโชว์ให้เห็นว่าไปไหน
+        if(already>0)covered.push({name:ing.name,need:totalNeed,onHand:Math.round(onHand*1000)/1000,already,unit:ing.buy_unit||"",orders:oo.orders});
+        continue;
+      }
       const buyQty=Math.round(shortBy*1000)/1000;
       // Cost = qty × price — same convention as the order line this creates,
       // StockCheckView, and the PO (price_per_unit). (Previously divided by
@@ -9660,6 +9735,8 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
         supplier_id:sid,
         supWarn,
         byBranch:info.byBranch||{},
+        onOrder:already,                            // สั่งไปแล้วรอของ (หักออกจากยอดซื้อแล้ว)
+        onOrderOrders:oo?oo.orders:[],
         totalNeed,
         onHand:Math.round(onHand*1000)/1000,
         shortBy:buyQty,
@@ -9673,9 +9750,10 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
       (a.category||"").localeCompare(b.category||"","th")||
       (a.name||"").localeCompare(b.name||"","th")
     ));
-    return{rows,pendingOrders,pendingPRs,negStock};
-  // suppliers/branches อยู่ใน deps ด้วย เพราะธงเตือนซัพคำนวณจากสองตัวนี้
-  },[pos,prs,ingById,currentBranch,suppliers,branches]);
+    return{rows,pendingOrders,pendingPRs,negStock,covered,unitWarn,staleOrders,onOrderFailed:openOrders===null};
+  // suppliers/branches อยู่ใน deps เพราะธงเตือนซัพคำนวณจากสองตัวนี้
+  // openOrders อยู่ใน deps เพราะยอดที่ต้องซื้อหักของที่สั่งไปแล้วออก
+  },[pos,prs,ingById,currentBranch,suppliers,branches,openOrders]);
 
   // Group by supplier for the card layout.
   // จำนวนที่พนักงานแก้เอง (qtyEdit) ทับค่าที่ระบบคำนวณ แล้วคิดราคาใหม่ตามนั้น
@@ -9831,6 +9909,45 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
         </div>
       </div>}
 
+      {/* ── อ่านใบที่สั่งค้างไม่สำเร็จ = หักของที่สั่งแล้วไม่ได้ = เสี่ยงเสนอซื้อซ้ำ ──
+          ห้ามเงียบ เพราะยอดที่โชว์จะดูปกติทั้งที่ยังไม่ได้หัก */}
+      {summary.onOrderFailed&&<div style={{background:"#FEF2F2",border:`1.5px solid ${C.red}55`,borderRadius:12,padding:"12px 14px",marginBottom:16,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ อ่านรายการที่สั่งค้างไว้ไม่สำเร็จ</div>
+        <div style={{fontSize:11.5,color:"#7F1D1D",lineHeight:1.6}}>ยอด "ต้องซื้อ" ด้านล่าง <b>ยังไม่ได้หักของที่สั่งไปแล้วแต่ยังไม่เข้า</b> — อาจเสนอซื้อซ้ำ กดรีเฟรชก่อนสร้างรายการ</div>
+      </div>}
+
+      {/* หน่วยในใบที่สั่งค้างไม่ตรงกับหน่วยซื้อ → ระบบไม่หักให้ ให้คนเช็คเอง
+          เจตนาเลือกไม่หักเมื่อไม่มั่นใจ เพราะหักผิดหน่วย = สั่งขาดจนของหมดหน้าร้าน */}
+      {summary.unitWarn.length>0&&<div style={{background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:12,padding:"12px 14px",marginBottom:16,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:13,fontWeight:800,color:"#92400E",marginBottom:4}}>⚠️ {summary.unitWarn.length} รายการมีใบสั่งค้างที่หน่วยไม่ตรงกัน — ระบบไม่หักให้</div>
+        <div style={{fontSize:11.5,color:"#92400E",lineHeight:1.6}}>
+          หน่วยซื้อไม่ตรงกับหน่วยในใบที่สั่งไว้ หักข้ามหน่วยอาจทำให้สั่งขาด จึงไม่หักให้ — เช็คใบเหล่านี้เองก่อนสั่ง:
+          <br/><b>{summary.unitWarn.slice(0,6).map(w=>`${w.name} (ใบ #${w.orders.join(", #")})`).join(" · ")}</b>{summary.unitWarn.length>6?` และอีก ${summary.unitWarn.length-6} รายการ`:""}
+        </div>
+      </div>}
+
+      {/* ของที่ไม่ต้องซื้อเพราะสั่งไปแล้ว — เดิมรายการจะหายไปเงียบๆ จนดูเหมือนระบบลืม
+          ต้องบอกว่าไปไหน ไม่งั้นพนักงานจะสั่งเพิ่มเองเพราะไม่เห็นในลิสต์ */}
+      {summary.covered.length>0&&<div style={{background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:12,padding:"12px 14px",marginBottom:16,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:13,fontWeight:800,color:C.brandDark,marginBottom:4}}>📦 {summary.covered.length} รายการไม่ต้องซื้อ — สั่งไปแล้วรอของเข้า</div>
+        <div style={{fontSize:11.5,color:C.ink2,lineHeight:1.7}}>
+          {summary.covered.slice(0,8).map((c,i)=><span key={i} style={{display:"inline-block",marginRight:10}}>
+            <b>{c.name}</b> ขอ {c.need} · มี {c.onHand} · <b style={{color:C.brandDark}}>สั่งแล้ว {c.already} {c.unit}</b> (ใบ #{c.orders.join(", #")})
+          </span>)}
+          {summary.covered.length>8?<span> และอีก {summary.covered.length-8} รายการ</span>:null}
+        </div>
+      </div>}
+
+      {/* ใบค้างเก่าเกิน 14 วัน — ไม่เอามาหักยอดซื้อ เพราะของน่าจะไม่มาแล้ว
+          ถ้าเอามาหักจะสั่งของขาด แต่ก็ต้องบอกให้ไปเคลียร์ ไม่ใช่ปล่อยค้างไว้เฉยๆ */}
+      {summary.staleOrders.length>0&&<div style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:12,padding:"11px 14px",marginBottom:16,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,marginBottom:3}}>🕘 มีใบสั่งค้างเก่าเกิน {ON_ORDER_MAX_AGE_DAYS} วัน {summary.staleOrders.length} ใบ — ไม่ได้เอามาหักยอดซื้อ</div>
+        <div style={{fontSize:11,color:C.ink3,lineHeight:1.6}}>
+          ใบเก่าขนาดนี้ของมักไม่มาแล้ว ถ้าเอามาหักจะทำให้สั่งของขาด — ควรไปกด "ยืนยันรับ" หรือ "ตีกลับ" ให้จบ
+          <br/>ใบ #{summary.staleOrders.slice(0,12).join(", #")}{summary.staleOrders.length>12?` และอีก ${summary.staleOrders.length-12} ใบ`:""}
+        </div>
+      </div>}
+
       {/* One supplier per card — item name on its own full-width line, stats in a grid below, never overlap */}
       <div style={{display:"flex",flexDirection:"column",gap:18}}>
         {groups.map((g,gIdx)=><div key={g.name} style={{borderRadius:14,overflow:"hidden",border:`2px solid ${C.teal}33`,boxShadow:"0 2px 10px rgba(13,148,136,0.08)",background:C.white,
@@ -9890,6 +10007,8 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
               <div style={{display:"flex",alignItems:"center",gap:9,flexShrink:0,flexWrap:"wrap"}}>
                 <div style={{fontSize:11,color:C.ink3,whiteSpace:"nowrap"}}>สั่งมา <b style={{fontSize:12.5,color:C.ink2}}>{r.totalNeed}</b></div>
                 <div style={{fontSize:11,color:r.onHand>0?C.green:C.ink4,whiteSpace:"nowrap"}}>มีอยู่ <b style={{fontSize:12.5}}>{r.onHand}</b></div>
+                {/* หักไปแล้วจากยอด "ต้องซื้อ" — ต้องโชว์ ไม่งั้นเลขที่ลดลงจะดูเหมือนคำนวณผิด */}
+                {r.onOrder>0&&<div title={`สั่งไปแล้วในใบ #${r.onOrderOrders.join(", #")} — หักออกจากยอดต้องซื้อแล้ว`} style={{fontSize:11,color:C.brandDark,whiteSpace:"nowrap",background:C.brandLight,padding:"1px 6px",borderRadius:6}}>สั่งแล้ว <b style={{fontSize:12.5}}>{r.onOrder}</b></div>}
                 {/* ช่องแก้จำนวน — ของที่ไปซื้อมักมีขั้นต่ำในการสั่ง (type=text + inputMode เพราะ iOS เมิน inputMode บน type=number) */}
                 <div style={{display:"flex",alignItems:"center",gap:4,padding:"3px 7px",borderRadius:7,background:r.edited?"#FEF3C7":C.redLight,border:`1.5px solid ${r.edited?"#F59E0B":C.red+"55"}`,whiteSpace:"nowrap"}}>
                   <span style={{fontSize:9.5,color:r.edited?"#92400E":"#7F1D1D",fontWeight:900}}>ต้องซื้อ</span>
@@ -11368,6 +11487,23 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   const[saving,setSaving]=useState(false);
   const[submitResult,setSubmitResult]=useState(null);  // { poList, extList, skippedList, totalItems, totalCost } — shown in result modal
   const[safetyEdit,setSafetyEdit]=useState({});  // { ingId: stringValue } — local edit before commit
+  // ── ของที่สั่งไปแล้วแต่ยังไม่เข้า ─────────────────────────────────────────────
+  // เลขแนะนำต้องหักตัวนี้ออก ไม่งั้นสาขากดสั่งวันนี้ พรุ่งนี้เปิดมาเห็นเลขเดิมอีก
+  // (สต๊อกยังไม่ขึ้นเพราะของยังไม่ถึง) แล้วก็สั่งซ้ำ — เป็นวงจรเดียวกับใบแฝดของครัวกลาง
+  // null = อ่านไม่สำเร็จ (ต่างจาก [] = ไม่มีใบค้าง) เพื่อเตือนคนได้ว่ายังไม่ได้หัก
+  const[openOrders,setOpenOrders]=useState([]);
+  useEffect(()=>{
+    if(currentBranch?.id==null)return;
+    let alive=true;
+    (async()=>{
+      try{const oo=await api.getOpenOrders();if(alive)setOpenOrders(Array.isArray(oo)?oo:[]);}
+      catch{if(alive)setOpenOrders(null);}
+    })();
+    return()=>{alive=false;};
+  },[currentBranch?.id]);
+  const ingByIdSC=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
+  const onOrderRes=useMemo(()=>onOrderQtyByIng(openOrders||[],currentBranch?.id,ingByIdSC),[openOrders,currentBranch,ingByIdSC]);
+  const onOrderMap=onOrderRes.qtyByIng;
   // ซัพพลายที่ติ๊กว่า "จะสั่งวันนี้" — เริ่มจากว่างเปล่าโดยตั้งใจ เจ้าของเคยสั่งไว้ว่า
   // อย่าติ๊กรอไว้ให้ ให้ติ๊กเลือกเอง (กันสั่งเจ้าที่ไม่ได้ตั้งใจสั่งไปทั้งชุด)
   const[pickedSups,setPickedSups]=useState(()=>new Set());
@@ -11470,11 +11606,18 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     const e=safetyEdit[ing.id];
     return e!==undefined&&e!=="" ? (+e||0) : branchSafety(ing,currentBranch?.id);
   }
+  //  · หัก "ของที่สั่งไปแล้วแต่ยังไม่เข้า" ออกด้วย ไม่งั้นกดสั่งวันนี้ พรุ่งนี้เปิดมา
+  //    สต๊อกยังไม่ขึ้น (ของยังไม่ถึง) เลขแนะนำก็เท่าเดิม แล้วก็สั่งซ้ำทุกวัน
+  //    หน่วยไม่ตรง buy_unit = ไม่หัก (ดู onOrderQtyByIng) เพราะหักผิดหน่วยทำให้ของขาด
+  function onOrderOf(ing){
+    const r=onOrderMap.get(+ing.id);
+    return r&&!r.unitMismatch?(+r.qty||0):0;
+  }
   function suggestQty(ing){
     const s2=safetyNow(ing);
     if(!(s2>0))return 0;
     const cur=branchStock(ing,currentBranch?.id);
-    const need=s2-cur;
+    const need=s2-cur-onOrderOf(ing);
     return need>0?Math.round(need*100)/100:0;
   }
   function getOrderQty(ing){
@@ -11697,6 +11840,8 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
                   const cost=lineCost(ing);
                   const curLow=safety>0&&curStock<safety;
                   const rowBg=idx%2===0?C.white:"#FAFBFC";
+                  const onOrdRec=onOrderMap.get(+ing.id);
+                  const onOrd=onOrdRec&&!onOrdRec.unitMismatch?(+onOrdRec.qty||0):0;
                   return <tr key={ing.id} style={{borderTop:`1px solid ${C.lineLight}`,background:rowBg}}>
                     <td style={{padding:"9px 10px",fontSize:11,color:C.ink4,fontWeight:700}}>{idx+1}</td>
                     <td style={{padding:"9px 10px",position:"sticky",left:0,background:rowBg,zIndex:1,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)",maxWidth:isMobile?180:undefined}}>
@@ -11710,6 +11855,10 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
                       <span style={{fontSize:13,fontWeight:800,color:curLow?C.red:C.ink}}>{curStock}</span>
+                      {/* สั่งไปแล้วรอของ — หักจากเลขแนะนำแล้ว ต้องโชว์ ไม่งั้นเลขที่ลดลงดูเหมือนคำนวณผิด */}
+                      {onOrd>0&&<div title={`สั่งไปแล้วในใบ #${(onOrdRec.orders||[]).join(", #")} — หักจากเลขแนะนำแล้ว`} style={{fontSize:9.5,color:C.brandDark,fontWeight:800,background:C.brandLight,borderRadius:5,padding:"0 4px",marginTop:2,display:"inline-block",whiteSpace:"nowrap"}}>สั่งแล้ว {onOrd}</div>}
+                      {/* หน่วยในใบที่สั่งค้างไม่ตรง buy_unit → ไม่หักให้ ให้คนเช็คเอง */}
+                      {onOrdRec&&onOrdRec.unitMismatch&&<div title={`ใบ #${(onOrdRec.orders||[]).join(", #")} ใช้หน่วยไม่ตรงกับ "${ing.buy_unit}" — ระบบไม่หักให้ เช็คเอง`} style={{fontSize:9.5,color:"#92400E",fontWeight:800,background:"#FFFBEB",borderRadius:5,padding:"0 4px",marginTop:2,display:"inline-block",whiteSpace:"nowrap"}}>⚠️ หน่วยไม่ตรง</div>}
                     </td>
                     <td style={{padding:"9px 10px",fontSize:12,color:C.ink3,fontWeight:600,whiteSpace:"nowrap"}}>{ing.buy_unit}</td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
@@ -12848,7 +12997,8 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   const dupMap=useMemo(()=>{
     const byFp=new Map();
     const push=(fp,rec)=>{if(!fp)return;if(!byFp.has(fp))byFp.set(fp,[]);byFp.get(fp).push(rec);};
-    for(const o of reqs)push(orderFingerprint(o),{id:o.id,status:"pending_approval",at:o.requested_at});
+    // openOrders ครอบ pending_approval อยู่แล้ว จึงไม่ต้องใส่ reqs เข้าไปอีก (จะนับซ้ำ)
+    // และ openOrders ไม่ถูกกรอง inScope โดยเจตนา — ใบแฝดต้องถูกจับได้แม้อยู่นอกสิทธิ์คนที่ดู
     for(const o of openOrders)push(orderFingerprint(o),{id:o.id,status:o.status,at:o.requested_at});
     const m=new Map();
     for(const o of reqs){
@@ -12880,7 +13030,7 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   async function load(silent){
     if(!silent)setLoading(true);
     try{
-      const[r,p,ss,pr,oo]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[]),api.getOpenStockSessions().catch(()=>[]),api.getPendingApprovalPRs().catch(()=>[]),api.getOpenOrdersForDupCheck().catch(()=>[])]);
+      const[r,p,ss,pr,oo]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[]),api.getOpenStockSessions().catch(()=>[]),api.getPendingApprovalPRs().catch(()=>[]),api.getOpenOrders().catch(()=>[])]);
       if(!aliveRef.current)return;
       const rr=(Array.isArray(r)?r:[]).filter(o=>inScope(o.branch_id));
       const pp=(Array.isArray(p)?p:[]).filter(o=>inScope(o.from_branch_id));
