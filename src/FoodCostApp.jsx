@@ -1269,20 +1269,32 @@ function agentHealth(printers,branchId){
   return{state:ageSec>120?"down":"ok",seen,ver,ageSec};                // >2min silence = treat as down
 }
 const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);if(!i)return s;const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;return s+ppg*x.amountGram;},0);
-// Per-branch stock helpers — falls back to legacy ingredient.stock when no branch entry exists
+// ── สต๊อกของสาขา ────────────────────────────────────────────────────────────
+// สาขาที่ยังไม่มีช่องของตัวเองใน stock_by_branch = 0 เสมอ
+//
+// ⚠️ เดิมตกไปใช้ ing.stock (ยอดรวมเก่าจากก่อนแยกรายสาขา) ซึ่งทำให้ "สาขาที่ไม่เคย
+//    นับของชิ้นนี้" โชว์เลขของยุคก่อนเป็นสต๊อกตัวเอง วัดจริง 13/08/2569:
+//      · ing.stock ที่ยังไม่เป็น 0 มี 21 รายการ · 19 ใน 21 เป็นเศษค้างล้วนๆ
+//        (เช่น แครอท ยอดเก่า 6 แต่รายสาขารวมจริง 34.2 — ยอดเก่าไม่มีความหมายแล้ว)
+//      · สาขา 8 (The River) ไม่มีช่องเลยทั้ง 815 รายการ → โชว์ผิด 21 รายการ ฿9,316
+//      · ครัวกลาง 4 รายการ "ดูเหมือนมีของ" ทั้งที่ช่องตัวเองว่าง → หักออกจากยอด
+//        ที่ต้องซื้อเกินไป = สั่งของขาด
+//    เลข 0 คือความจริง (ไม่มีใครนับของชิ้นนี้ที่สาขานี้) ส่วนยอดรวมเก่าไม่ใช่ของสาขาไหน
 function branchStock(ing,branchId){
   if(!ing||branchId==null)return 0;
   const map=ing.stock_by_branch||{};
   const k=String(branchId);
-  if(map[k]!=null&&map[k]!=="")return +map[k]||0;
-  return +ing.stock||0;
+  return (map[k]!=null&&map[k]!=="")?(+map[k]||0):0;
 }
 function setBranchStockInJson(existing,branchId,value){
   return {...(existing||{}),[String(branchId)]:+value||0};
 }
-// Per-branch on-hand WITHOUT the legacy global-stock fallback. Used for the WRITE
-// math in stock moves: a branch with no slot yet must start from 0, never the global
-// ing.stock (which would seed phantom units into that branch's slot on first touch).
+// เดิมตัวนี้ต่างจาก branchStock ตรงที่ "ไม่มี fallback ไปยอดรวมเก่า" — ใช้กับคณิตศาสตร์
+// ฝั่งเขียนของการย้าย/ตัดสต๊อก ที่สาขายังไม่มีช่องต้องเริ่มจาก 0 ไม่ใช่ยอดรวม
+// (ไม่งั้นการแตะครั้งแรกจะเสกของเข้าช่องสาขานั้น)
+// ตอนนี้ branchStock ก็ไม่มี fallback แล้ว ทั้งสองจึงเป็นตัวเดียวกัน
+// คงชื่อไว้เพราะจุดเรียกใช้สื่อเจตนาว่า "นี่คือเลขสำหรับคำนวณก่อนเขียน" — และถ้าวันหน้า
+// ใครเผลอเติม fallback กลับเข้า branchStock อีก ฝั่งเขียนจะยังปลอดภัยอยู่
 function branchStockExact(ing,branchId){
   if(!ing||branchId==null)return 0;
   const map=ing.stock_by_branch||{};
@@ -4238,6 +4250,11 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     const nextSafety=setBranchSafetyInJson(existingIng?.safety_by_branch,currentBranch.id,+form.safety_stock||0);
     const item={...form,code:codeToSave||null,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,safety_by_branch:nextSafety,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};
     delete item.safety_stock; // legacy column — no longer touched from the form
+    // stock ก็เหมือนกัน: เป็นคอลัมน์รวมยุคก่อนแยกรายสาขา ฟอร์มไม่แตะแล้ว
+    // สต๊อกเปลี่ยนได้ทางเดียวคือ นับสต็อก / รับของ / ของเสีย ซึ่งเขียนผ่าน RPC ที่ล็อกแถว
+    // (apply_branch_stock_delta / set_branch_stock) การเขียนตรงจากฟอร์มจะข้ามการล็อก
+    // = ทับกันเองเมื่อมีคนแก้พร้อมกัน และยังลงผิดช่อง (รวม ไม่ใช่ของสาขา) อีกด้วย
+    delete item.stock;
     if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}
     await reload();setOpen(false);
   }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
@@ -4639,7 +4656,18 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
         </div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-        <Inp label="สต็อกปัจจุบัน" type="number" value={form.stock} onChange={e=>upd("stock",e.target.value)} placeholder="0"/>
+        {/* สต๊อกแก้จากตรงนี้ไม่ได้แล้ว — เดิมช่องนี้เขียนลงคอลัมน์ stock (ยอดรวมยุคก่อน
+            แยกรายสาขา) ไม่ใช่ช่องของสาขา และเขียนตรงโดยข้าม RPC ที่ล็อกแถวกันคนแก้พร้อมกัน
+            ผลคือเลขที่กรอกไปโผล่เป็น "สต๊อก" ของทุกสาขาที่ยังไม่เคยนับของชิ้นนี้
+            โชว์อย่างเดียวพอ ของจริงต้องมาจาก นับสต็อก / รับของ / ของเสีย */}
+        <div style={{background:C.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${C.line}`}}>
+          <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>สต็อกปัจจุบัน ({currentBranch?.name||"—"})</div>
+          <div style={{fontSize:20,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3}}>
+            {editId?round2(branchStock((ings||[]).find(x=>+x.id===+editId),currentBranch?.id)):0}
+            <span style={{fontSize:12,fontWeight:600,color:C.ink3,marginLeft:5}}>{form.buy_unit||""}</span>
+          </div>
+          <div style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:3,lineHeight:1.5}}>แก้ตรงนี้ไม่ได้ — เปลี่ยนผ่าน "นับสต็อก" · รับของ · ของเสีย เท่านั้น</div>
+        </div>
         <Inp label={`🛡️ Safety Stock (${currentBranch?.name||"—"})`} hint={`เฉพาะสาขานี้ · เตือนเมื่อต่ำกว่านี้ (${form.buy_unit||"หน่วย"})`} type="number" value={form.safety_stock} onChange={e=>upd("safety_stock",e.target.value)} placeholder="0"/>
       </div>
 
