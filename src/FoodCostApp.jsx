@@ -412,6 +412,10 @@ const api = {
   getOrdersChangeMark: (bid) => sb(`order_requests?select=id,updated_at&order=updated_at.desc&limit=1${bid ? `&branch_id=eq.${bid}` : ""}`),
   // Area-approval inbox: rows held at "pending_approval" in both order tables
   getPendingApprovalOrders: () => sb(`order_requests?status=eq.pending_approval&order=id.desc`),
+  // ใบที่ผ่านอนุมัติแล้วแต่ของยังไม่เข้า (pending = รอส่งซัพ · approved = ส่งซัพแล้วรอของ)
+  // ใช้ตรวจว่าใบที่กำลังจะอนุมัติ ซ้ำกับใบที่อนุมัติไปก่อนหน้าหรือเปล่า — ใบแฝดมักมาคนละวัน
+  // จำกัด 400 ใบล่าสุดและเลือกเฉพาะฟิลด์ที่ใช้ทำลายนิ้วมือ (ตารางนี้มี 2,000+ แถว)
+  getOpenOrdersForDupCheck: () => sb(`order_requests?status=in.(pending,approved)&select=id,branch_id,supplier_id,supplier_name,status,requested_at,items&order=id.desc&limit=400`),
   getPendingApprovalPOs: () => sb(`purchase_orders?status=eq.pending_approval&order=id.desc`),
   // Approval history log (one row per approve/reject decision)
   addApprovalLog: (d) => sb("approval_log", { method:"POST", body:JSON.stringify(d), headers:{ "Prefer":"return=minimal" } }),
@@ -1317,6 +1321,42 @@ function branchSupplierId(ing,branchId){
   const v=map[String(branchId)];
   if(v!=null&&v!=="")return +v||null;
   return ing.supplier_id?+ing.supplier_id:null;
+}
+// ซัพตัวนี้ "ถูกระบุไว้ให้สาขาอื่นสั่ง" หรือเปล่า
+// คืนชื่อสาขาที่มันถูกระบุไว้ (string) เพื่อเอาไปขึ้นคำเตือน · null = ไม่มีอะไรต้องเตือน
+//
+// ⚠️ ตั้งใจไม่เรียก supVisibleAt() (บรรทัด ~1628) และห้าม "ลดรูป" มาเรียกมันแทน:
+//    supVisibleAt มี shortcut ว่า s.branch_id===branchId → เห็นได้ ซึ่งถูกสำหรับ
+//    "ใครมีสิทธิ์เลือกซัพนี้" แต่ใช้ตรวจเรื่องนี้ไม่ได้ เพราะซัพทั้ง 99 ตัวใน DB
+//    เป็น branch_id=1 หมด (วัดจริง 13/08/2569) → ครัวกลางจะ "เห็นได้" ทุกเจ้าเสมอ
+//    คำเตือนก็จะไม่ยิงเลยแม้แต่ครั้งเดียว ซึ่งคือเคสที่ต้องจับพอดี
+//    เงื่อนไขที่ต้องการคือ "มีการระบุสาขาไว้ชัดเจน แต่สาขาที่กำลังซื้อไม่อยู่ในนั้น"
+//
+// ⚠️ และตั้งใจให้เป็น "คำเตือน" ไม่ใช่ "ตัวบล็อค" — วัดจริง 13/08/2569:
+//    supplier_by_branch ไม่มีช่องของครัวกลางเลยแม้แต่รายการเดียว (0 จาก 814)
+//    ครัวกลางจึงพึ่ง ing.supplier_id ล้วนๆ และ 365/814 รายการจะเข้าเงื่อนไขนี้ทันที
+//    ถ้าบล็อค แท็บสรุปต้องซื้อจะใช้งานไม่ได้ครึ่งหน้า ซึ่งไม่ใช่เพราะ "ของผิด" แต่เพราะ
+//    visible_branches ไม่เคยถูกตั้งให้ครบ — ลงโทษคนใช้จากข้อมูลที่ไม่ครบไม่ถูก
+//    เป้าหมายคือให้คน "เห็น" ก่อนกด (เคสจริง: เบียร์ของกาญจนบุรี ไปโผล่เป็นใบครัวกลาง)
+function supplierScopeWarn(sup,branchId,branches){
+  if(!sup||branchId==null)return null;
+  const vb=Array.isArray(sup.visible_branches)?sup.visible_branches.map(Number):[];
+  if(!vb.length)return null;                  // ไม่ได้ระบุสาขาไว้ = ไม่มีข้อมูลให้เตือน
+  if(vb.includes(+branchId))return null;      // สาขาที่ซื้ออยู่ในรายชื่อ = ถูกต้องแล้ว
+  return vb.map(id=>{
+    const b=(branches||[]).find(x=>+x.id===+id);
+    return (b&&b.name)||`#${id}`;
+  }).join(", ")||null;
+}
+// ลายนิ้วมือของใบสั่งซัพนอก = สาขา + ซัพ + (วัตถุดิบ,จำนวน) เรียงแล้ว
+// ใบสองใบที่ได้ค่านี้เท่ากัน = สั่งของชุดเดียวกันซ้ำ (เคสจริง #2199 กับ #2255 ฿2,656 ทั้งคู่)
+// เรียงก่อนต่อสตริงเสมอ ไม่งั้นสลับลำดับรายการก็หลุดการตรวจจับ
+function orderFingerprint(o){
+  if(!o)return "";
+  const items=(Array.isArray(o.items)?o.items:[])
+    .map(it=>[+(it.ingId??it.ingredient_id)||0,+(it.qtyNeeded??it.qty)||0])
+    .sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  return `${+o.branch_id||0}|${+o.supplier_id||0}|${JSON.stringify(items)}`;
 }
 // สาขาที่ยังเปิดใช้งาน — ใช้กับทุกที่ที่ "ให้เลือกสาขา" หรือ "โชว์สต๊อกรายสาขา"
 // สาขาที่ปิดแล้ว (active=false) ต้องไม่โผล่ให้เลือกและไม่โชว์บนการ์ดวัตถุดิบ
@@ -8842,7 +8882,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     // เก็บในคอลัมน์ note ที่มีอยู่แล้ว จึงไม่ต้องเพิ่มตารางหรือคอลัมน์ใหม่
     const batchNote=`${SUMMARY_BATCH_PREFIX} (${fmtD(todayStr())}) · รอบ ${bkkHHMM()}`;
     for(const g of groups){
-      const supplierId=g.rows[0]?.supplier_id||null;
+      const supplierId=g.supplier_id||g.rows[0]?.supplier_id||null;
       const items=g.rows.map(r=>({
         ingId:r.ingId,
         name:r.name,
@@ -8853,17 +8893,32 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         estimatedCost:r.estCost,
         supplierId:supplierId,
         supplierName:g.name,
+        // ── สาขาที่ขอของชิ้นนี้ + จำนวนที่ขอ ─────────────────────────────────
+        // เก็บลง DB จริง ไม่ใช่แค่โชว์บนจอ เพราะคนอนุมัติเปิดดูทีหลัง (บางทีหลายวัน)
+        // ตอนนั้นยอด PO/PR ต้นทางอาจถูกแปลงไปแล้ว คำนวณย้อนไม่ได้อีก
+        // {"5":2,"3":3} = กาญจนบุรีขอ 2 · อยุธยาขอ 3 (หน่วยเดียวกับ unit ของแถวนี้)
+        forBranches:r.byBranch&&Object.keys(r.byBranch).length?r.byBranch:undefined,
       }));
+      // ต่อท้าย note ว่าชุดนี้ซื้อให้สาขาไหน — คนอนุมัติเห็นทันทีบนการ์ดโดยไม่ต้องกดเข้าไป
+      // เดิม note มีแค่ "สรุปต้องซื้อวันนี้ (วันที่) · รอบ HH:MM" ซึ่งไม่บอกว่าเพื่อใคร
+      const forNames=[...new Set(g.rows.flatMap(r=>Object.keys(r.byBranch||{})))]
+        .map(Number).sort((a,b)=>a-b).map(id=>(branchById[id]||{}).name||`#${id}`);
+      // ธงเตือนซัพผูกสาขาอื่น ติดไปกับใบด้วย — ตัว suppliers อาจถูกแก้ทีหลัง
+      // ถ้าไม่บันทึกไว้ ตอนคนอนุมัติเปิดดูอาจไม่เห็นว่าตอนสร้างมันผิดเจ้า
+      const note=[batchNote,
+        forNames.length?`ขอมาจาก: ${forNames.join(", ")}`:"",
+        g.warn?`⚠️ ซัพนี้ตั้งไว้ให้สาขา ${g.warn}`:"",
+      ].filter(Boolean).join(" · ");
       await api.addOrder({
-        branch_id:currentBranch.id,
-        branch_name:currentBranch.name,
+        branch_id:currentBranch.id,     // ครัวกลางเป็นคนจ่ายเงินซื้อจริง = เจ้าของใบ
+        branch_name:currentBranch.name, // "ซื้อให้ใคร" อยู่ใน items[].forBranches + note
         supplier_id:supplierId,
         supplier_name:g.name,
         items,
         status:"pending_approval",   // hold for Area approval — same as the normal สร้างคำสั่งซื้อ flow
         requested_by:currentUser.username,
         requested_at:nowStr(),
-        note:batchNote,
+        note,
       });
     }
     // Notify the Area manager(s) that central's purchases are waiting for approval (fire-and-forget).
@@ -8886,7 +8941,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
 
   // แสดง "สรุปต้องซื้อวันนี้" เป็นแท็บในหน้า (แทนหน้าต่างเด้ง) — วางที่นี่เพราะต้องใช้
   // createPurchaseOrdersFromSummary ที่ผูกกับสาขา/สิทธิ์ของหน้านี้ จะได้ไม่ต้องมีโค้ดสร้างใบซ้ำอีกชุด
-  if(summaryOnly)return <PurchaseSummaryModal inline ings={ings} branchById={branchById} currentBranch={currentBranch} currentUser={currentUser} onCreateOrders={isCentralBranch?createPurchaseOrdersFromSummary:null} onClose={()=>{}}/>;
+  if(summaryOnly)return <PurchaseSummaryModal inline ings={ings} branchById={branchById} branches={branches} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} onCreateOrders={isCentralBranch?createPurchaseOrdersFromSummary:null} onClose={()=>{}}/>;
 
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18,flexWrap:"wrap",gap:10}}>
@@ -9462,9 +9517,14 @@ function SummaryHistoryModal({currentBranch,onClose}){
   </Modal>;
 }
 
-function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreateOrders,onClose,inline=false}){
+function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentBranch,currentUser,onCreateOrders,onClose,inline=false}){
   const PENDING=new Set(["requested","open"]);
   const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
+  const bName=id=>((branchById||{})[+id]||{}).name||`สาขา #${id}`;
+  // "ขอมาจาก: กาญจนบุรี 2 · อยุธยา 3" — จำนวนคือยอดที่สาขาขอ (ไม่ใช่ยอดที่ต้องซื้อ
+  // ซึ่งหักสต๊อกครัวกลางแล้วและพนักงานแก้เองได้) จึงเขียนหัวข้อว่า "ขอมาจาก" ไม่ใช่ "ซื้อให้"
+  const byBranchText=(m)=>Object.entries(m||{}).filter(([,q])=>+q>0)
+    .sort((a,b)=>b[1]-a[1]).map(([id,q])=>`${bName(id)} ${round2(+q)}`).join(" · ");
   // SELF-CONTAINED FETCH — bypass parent's filtered `pos` state so the summary
   // never misses pending POs because the user happened to have a status/date/
   // partner/direction filter set on the PO list. Re-fetch on demand so the
@@ -9515,11 +9575,17 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
     // Aggregate "needed" qty per ingredient across all pending POs +
     // recurse into SOP sub-ingredients (depth ≤ 3 to defend against cycles).
     const need=new Map();
-    function addNeed(ingId,qty,depth){
+    // srcBid = สาขาที่ "ต้องการของ" ชิ้นนี้ — ต้องส่งต่อลงไปทุกชั้นของ SOP ด้วย
+    function addNeed(ingId,qty,depth,srcBid){
       if(depth>3||!ingId||!(qty>0))return;
-      const cur=need.get(+ingId)||{qty:0,fromOrders:0};
+      const cur=need.get(+ingId)||{qty:0,fromOrders:0,byBranch:{}};
       cur.qty+=qty;
       if(depth===0)cur.fromOrders+=qty;        // direct ask vs cascaded
+      // เก็บ "สาขาไหนขอเท่าไหร่" ไว้ด้วย — เดิมยุบทิ้งเหลือแต่ยอดรวมต่อวัตถุดิบ
+      // ทำให้ใบที่สร้างออกมาตอบไม่ได้ว่าซื้อให้ใคร คนอนุมัติเห็นแค่ "ครัวกลาง"
+      // แล้วตรวจต่อไม่ได้ (เคสจริง: เบียร์ที่กาญจนบุรีขอ ไปโผล่เป็นใบของครัวกลาง)
+      // ต้องเก็บที่ชั้น cascade ด้วย ไม่งั้นของที่มาจากสูตร SOP จะไม่มีเจ้าของ
+      if(srcBid!=null)cur.byBranch[String(srcBid)]=round2((cur.byBranch[String(srcBid)]||0)+qty);
       need.set(+ingId,cur);
       const parent=ingById.get(+ingId);
       if(!parent||!parent.has_sop)return;
@@ -9527,7 +9593,7 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
         const subIng=ingById.get(+sub.ingredientId);
         if(!subIng)continue;
         const subQty=qty*(+sub.amountGram||0)/(+subIng.convert_to_gram||1000);
-        addNeed(+sub.ingredientId,subQty,depth+1);
+        addNeed(+sub.ingredientId,subQty,depth+1,srcBid);
       }
     }
     const pendingOrders=[];
@@ -9535,7 +9601,9 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       if(!PENDING.has(po.status))return;
       pendingOrders.push(po);
       (po.items||[]).forEach(it=>{
-        addNeed(+(it.ingredient_id||it.ingId),+it.qty||0,0);
+        // branch_id = ผู้รับ · from_branch_id = ผู้ส่ง (ยืนยันจาก PO ค้างจริงทั้ง 23 ใบ: 1→2/3/4/5/6)
+        // สาขาที่ต้องการของจึงเป็น branch_id ห้ามสลับ ไม่งั้นจะโชว์ว่าซื้อให้ครัวกลางเองทุกใบ
+        addNeed(+(it.ingredient_id||it.ingId),+it.qty||0,0,po.branch_id!=null?+po.branch_id:null);
       });
     });
     // ใบขอซื้อที่อนุมัติแล้ว (ยังไม่แปลงเป็น PO) = ของที่ครัวกลางรับปากจะจัดให้สาขา
@@ -9545,7 +9613,8 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       (pr.items||[]).forEach(it=>{
         const id=+(it.ingredient_id||it.ingId);
         if(!id)return;                                  // บรรทัดของใช้/สินทรัพย์ ไม่ใช่วัตถุดิบ
-        addNeed(id,+it.qty||0,0);
+        // ใบขอซื้อ: branch_id = สาขาที่ขอ (ยืนยันจาก PR#29 → branch_id 5 / branch_name "กาญจนบุรี")
+        addNeed(id,+it.qty||0,0,pr.branch_id!=null?+pr.branch_id:null);
       });
     });
     // Build rows: only ingredients short of stock
@@ -9568,6 +9637,18 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       // StockCheckView, and the PO (price_per_unit). (Previously divided by
       // buy_amount → cost didn't match the qty shown on the same row.)
       const estCost=Math.round(buyQty*(+ing.buy_price||0)*100)/100;
+      // ── หาซัพให้สาขาที่กำลังจะซื้อ แล้วผูก "ชื่อ" กับ "id" ให้มาจากตัวเดียวกัน ──
+      // เดิม id มาจาก branchSupplierId() แต่ชื่อ (ซึ่งใช้เป็นคีย์จัดกลุ่ม + เขียนลงใบ)
+      // มาจาก ing.supplier_name ตรงๆ สองค่านี้แยกทางกันได้ = ใบเดียวมีชื่อซัพเจ้าหนึ่ง
+      // แต่ supplier_id เป็นอีกเจ้า ตอนนี้ยังไม่เกิดเพราะแท็บนี้ใช้ที่ครัวกลางที่เดียว
+      // (ครัวกลางไม่มี supplier_by_branch จึงตกมาใช้ ing.supplier_id ซึ่งตรงกับชื่ออยู่แล้ว)
+      // แต่ปล่อยไว้คือรอวันพลาด — ดึงชื่อจากตัวซัพที่ resolve ได้จริงเสมอ
+      const sid=branchSupplierId(ing,currentBranch?.id);
+      const supRec=sid?(suppliers||[]).find(x=>+x.id===+sid):null;
+      const supName=(supRec&&supRec.name)||ing.supplier_name||"ไม่ระบุ";
+      // ธงเตือน: ซัพตัวนี้ถูกตั้งไว้ให้สาขาอื่นสั่ง ไม่ใช่สาขาที่กำลังซื้อ
+      // เตือนอย่างเดียว ไม่บล็อค — เหตุผลอยู่ที่ supplierScopeWarn()
+      const supWarn=supplierScopeWarn(supRec,currentBranch?.id,branches);
       rows.push({
         ingId:+ingId,
         name:ing.name,
@@ -9575,8 +9656,10 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
         unit:ing.buy_unit||"หน่วย",
         buy_amount:+ing.buy_amount||1,
         buy_price:+ing.buy_price||0,
-        supplier:ing.supplier_name||"ไม่ระบุ",
-        supplier_id:branchSupplierId(ing,currentBranch?.id)||(ing.supplier_id?+ing.supplier_id:null),
+        supplier:supName,
+        supplier_id:sid,
+        supWarn,
+        byBranch:info.byBranch||{},
         totalNeed,
         onHand:Math.round(onHand*1000)/1000,
         shortBy:buyQty,
@@ -9591,7 +9674,8 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       (a.name||"").localeCompare(b.name||"","th")
     ));
     return{rows,pendingOrders,pendingPRs,negStock};
-  },[pos,prs,ingById,currentBranch]);
+  // suppliers/branches อยู่ใน deps ด้วย เพราะธงเตือนซัพคำนวณจากสองตัวนี้
+  },[pos,prs,ingById,currentBranch,suppliers,branches]);
 
   // Group by supplier for the card layout.
   // จำนวนที่พนักงานแก้เอง (qtyEdit) ทับค่าที่ระบบคำนวณ แล้วคิดราคาใหม่ตามนั้น
@@ -9609,6 +9693,12 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
       name,
       rows,
       subtotal:Math.round(rows.reduce((s,r)=>s+r.estCost,0)*100)/100,
+      // ธงเตือนระดับเจ้า — ทุกแถวในกลุ่มเป็นซัพเจ้าเดียวกัน จึงได้ค่าเดียวกัน
+      warn:(rows.find(r=>r.supWarn)||{}).supWarn||null,
+      supplier_id:(rows.find(r=>r.supplier_id)||{}).supplier_id||null,
+      // สาขาที่ขอของในกลุ่มนี้ (เอาแต่รายชื่อ ไม่รวมจำนวน เพราะแต่ละวัตถุดิบหน่วยไม่เหมือนกัน
+      // บวกข้ามหน่วยจะได้เลขที่ไม่มีความหมาย — จำนวนต่อสาขาไปโชว์ที่ระดับแถวแทน)
+      branchIds:[...new Set(rows.flatMap(r=>Object.keys(r.byBranch||{})))].map(Number).sort((a,b)=>a-b),
     }));
   },[summary.rows,qtyEdit]);
 
@@ -9758,6 +9848,10 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
               <div style={{minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
                 <div style={{fontSize:16,fontWeight:900,wordBreak:"break-word",lineHeight:1.3}}>{gIdx+1}. {g.name}</div>
                 <div style={{fontSize:11,opacity:.9,marginTop:2}}>{g.rows.length} รายการที่ต้องซื้อ</div>
+                {/* ขอมาจากสาขาไหน — คนกดต้องเห็นว่าซื้อชุดนี้ไปเพื่อใคร ก่อนหน้านี้ไม่มีเลย */}
+                {g.branchIds.length>0&&<div style={{fontSize:10.5,opacity:.95,marginTop:3,lineHeight:1.5}}>
+                  🏬 ขอมาจาก: <b>{g.branchIds.map(bName).join(" · ")}</b>
+                </div>}
               </div>
             </div>
             <div style={{textAlign:"right",fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
@@ -9765,6 +9859,15 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
               <div style={{fontSize:22,fontWeight:900,letterSpacing:.5}}>฿{g.subtotal.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
             </div>
           </div>
+
+          {/* ⚠️ ซัพเจ้านี้ถูกตั้งไว้ให้สาขาอื่นสั่ง ไม่ใช่สาขาที่กำลังซื้อ
+              เตือนแต่ไม่บล็อค (เหตุผลอยู่ที่ supplierScopeWarn) — เคสจริงที่ทำให้ต้องมีอันนี้:
+              เบียร์ของสาขากาญจนบุรี (ซัพ "สิงห์กาญจน์" เห็นได้แค่กาญจนบุรี) ไปโผล่เป็นใบของ
+              ครัวกลาง 2 ใบซ้ำ ฿2,656 เพราะครัวกลางไม่มีซัพของตัวเองจึงตกไปใช้ซัพของสาขา */}
+          {g.warn&&<div style={{margin:"0 10px 8px",padding:"8px 11px",background:"#FFFBEB",border:"1.5px solid #FDE68A",borderRadius:9,fontSize:11.5,color:"#92400E",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
+            ⚠️ ซัพ <b>{g.name}</b> ถูกตั้งไว้ให้สาขา <b>{g.warn}</b> สั่ง ไม่ใช่ <b>{currentBranch?.name||"สาขานี้"}</b>
+            <div style={{fontSize:10.5,opacity:.85,marginTop:2}}>สั่งต่อได้ แต่เช็คก่อนว่าถูกเจ้า — ถ้าผิด ให้ไปตั้งซัพของ{currentBranch?.name||"สาขานี้"} ที่การ์ดวัตถุดิบ</div>
+          </div>}
 
           {/* Each item: number + full-width name on top line, four stats in a wrapping grid below */}
           <div>
@@ -9779,6 +9882,8 @@ function PurchaseSummaryModal({ings,branchById,currentBranch,currentUser,onCreat
                   <div style={{fontSize:10,color:C.ink4,display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",marginTop:1}}>
                     <span>{r.category}</span>
                     {r.cascaded&&<span style={{background:"#F5F3FF",color:"#7C3AED",padding:"0 5px",borderRadius:5,fontWeight:800}}>📋 SOP</span>}
+                    {/* จำนวนต่อสาขาที่ขอมา — ทำให้ตรวจได้ทีละรายการว่าของนี้ของใคร */}
+                    {byBranchText(r.byBranch)&&<span style={{background:C.brandLight,color:C.brandDark,padding:"0 5px",borderRadius:5,fontWeight:700}}>🏬 {byBranchText(r.byBranch)}</span>}
                   </div>
                 </div>
               </div>
@@ -11333,8 +11438,12 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     visibleIngs.forEach(i=>{
       const sid=strictBranchSupplierId(i);
       const supKey=`s_${sid}`;
-      const supName=suppliers.find(s=>+s.id===+sid)?.name||"—";
-      if(!groups.has(supKey))groups.set(supKey,{key:supKey,name:supName,supplier_id:sid,items:[]});
+      const supRec=suppliers.find(s=>+s.id===+sid);
+      const supName=supRec?.name||"—";
+      // ธงเตือน "ซัพเจ้านี้ตั้งไว้ให้สาขาอื่น" — เส้นทางนี้เขียนใบเหมือนแท็บสรุปต้องซื้อ
+      // (strictBranchSupplierId ที่ครัวกลางคืน ing.supplier_id ตรงๆ โดยไม่เช็คขอบเขตซัพ)
+      // จึงต้องเตือนที่นี่ด้วย ไม่ใช่เตือนแค่ที่แท็บสรุป ไม่งั้นปิดรูได้แค่ทางเดียว
+      if(!groups.has(supKey))groups.set(supKey,{key:supKey,name:supName,supplier_id:sid,items:[],warn:supplierScopeWarn(supRec,currentBranch?.id,branches)});
       groups.get(supKey).items.push(i);
     });
     return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name,"th"));
@@ -11566,6 +11675,10 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
               <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.brand}}>฿{round2(supTotal).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
             </div>
           </div>
+          {/* ⚠️ ซัพเจ้านี้ถูกระบุไว้ให้สาขาอื่นสั่ง — เตือนแต่ไม่บล็อค (ดู supplierScopeWarn) */}
+          {g.warn&&<div style={{padding:"7px 14px",background:"#FFFBEB",borderBottom:`1px solid #FDE68A`,fontSize:11.5,color:"#92400E",fontFamily:"'Sarabun',sans-serif",lineHeight:1.55}}>
+            ⚠️ ซัพ <b>{g.name}</b> ตั้งไว้ให้สาขา <b>{g.warn}</b> ไม่ใช่ <b>{currentBranch?.name||"สาขานี้"}</b> — สั่งได้ แต่เช็คก่อนว่าถูกเจ้า
+          </div>}
           <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:isMobile?880:undefined}}>
               <thead>
@@ -12661,6 +12774,7 @@ async function enablePushNotifications(user){
 async function pushIsOn(){if(!pushSupported())return false;try{if(Notification.permission!=="granted")return false;const reg=await navigator.serviceWorker.getRegistration();const sub=reg&&await reg.pushManager.getSubscription();return !!sub;}catch{return false;}}
 function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]}){
   const[reqs,setReqs]=useState([]);const[pos,setPos]=useState([]);const[stockSess,setStockSess]=useState([]);const[prPend,setPrPend]=useState([]);
+  const[openOrders,setOpenOrders]=useState([]);   // อนุมัติแล้วแต่ของยังไม่เข้า — ใช้ตรวจใบซ้ำ
   const[sessItems,setSessItems]=useState({});const[openSess,setOpenSess]=useState(null);
   const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(null);
   const[pushOn,setPushOn]=useState(false);const[pushBusy,setPushBusy]=useState(false);
@@ -12678,6 +12792,33 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   const ingById=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
   // Item carries the ingredient id as `ingId` (external orders) OR `ingredient_id` (PO requests) — accept both so PO cards/popups still show the real on-hand stock.
   const stockOfItem=(it,bid)=>{const ing=it&&ingById.get(+(it.ingId??it.ingredient_id));return ing?branchStock(ing,bid):null;};
+  // ── "ซื้อให้สาขาไหน" ────────────────────────────────────────────────────────
+  // ใบที่ครัวกลางสร้างจากแท็บสรุปต้องซื้อ จะพา forBranches มากับ items แต่ละบรรทัด
+  // ใบเก่าที่สร้างก่อนแก้เรื่องนี้จะไม่มี → คืน [] แล้วการ์ดก็ไม่ต้องโชว์อะไร (ไม่พัง)
+  const forBranchesOf=o=>{
+    const acc={};
+    for(const it of itemsOf(o))for(const[bid,q]of Object.entries(it&&it.forBranches||{}))acc[bid]=(acc[bid]||0)+(+q||0);
+    return Object.keys(acc).map(Number).sort((a,b)=>a-b);
+  };
+  // ── ใบซ้ำ ──────────────────────────────────────────────────────────────────
+  // เคสจริง 13/08/2569: #2199 (03/08) กับ #2255 (04/08) เหมือนกันเป๊ะ ฿2,656 ทั้งคู่
+  // รออนุมัติพร้อมกัน — อนุมัติทั้งคู่ = เบียร์ 4 ลัง/ยี่ห้อ จ่าย ฿5,312
+  // api.updateOrderIfStatus กันได้แค่ "ใบเดียวกัน" ถูกกดซ้ำจากสองเครื่อง (compare-and-set)
+  // ไม่ได้กัน "ใบต่างใบที่เนื้อหาเหมือนกัน" ซึ่งเป็นเคสนี้ — จึงต้องมีตัวนี้
+  // ตรวจสองชั้น: ซ้ำกันในคิวนี้เอง · และซ้ำกับใบที่อนุมัติไปแล้วแต่ของยังไม่เข้า
+  const dupMap=useMemo(()=>{
+    const byFp=new Map();
+    const push=(fp,rec)=>{if(!fp)return;if(!byFp.has(fp))byFp.set(fp,[]);byFp.get(fp).push(rec);};
+    for(const o of reqs)push(orderFingerprint(o),{id:o.id,status:"pending_approval",at:o.requested_at});
+    for(const o of openOrders)push(orderFingerprint(o),{id:o.id,status:o.status,at:o.requested_at});
+    const m=new Map();
+    for(const o of reqs){
+      const twins=(byFp.get(orderFingerprint(o))||[]).filter(x=>+x.id!==+o.id);
+      if(twins.length)m.set(+o.id,twins);
+    }
+    return m;
+  },[reqs,openOrders]);
+  const dupLabel=t=>`#${t.id}${t.status==="pending_approval"?" (รออนุมัติ)":t.status==="pending"?" (อนุมัติแล้ว รอส่งซัพ)":" (ส่งซัพแล้ว รอของ)"}${t.at?` · ${fmtD(String(t.at).slice(0,10))||""}`:""}`;
   // ── ประวัติการอนุมัติ ──
   const[view,setView]=useState("pending");          // pending | history
   const[detailCard,setDetailCard]=useState(null);   // {kind:'po'|'ext', o} → full-screen detail popup with item images
@@ -12700,13 +12841,16 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   async function load(silent){
     if(!silent)setLoading(true);
     try{
-      const[r,p,ss,pr]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[]),api.getOpenStockSessions().catch(()=>[]),api.getPendingApprovalPRs().catch(()=>[])]);
+      const[r,p,ss,pr,oo]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[]),api.getOpenStockSessions().catch(()=>[]),api.getPendingApprovalPRs().catch(()=>[]),api.getOpenOrdersForDupCheck().catch(()=>[])]);
       if(!aliveRef.current)return;
       const rr=(Array.isArray(r)?r:[]).filter(o=>inScope(o.branch_id));
       const pp=(Array.isArray(p)?p:[]).filter(o=>inScope(o.from_branch_id));
       const sCount=(Array.isArray(ss)?ss:[]).filter(s=>inScope(s.branch_id));
       const prr=(Array.isArray(pr)?pr:[]).filter(o=>inScope(o.branch_id));
       setReqs(rr);setPos(pp);setStockSess(sCount);setPrPend(prr);
+      // ไม่กรอง inScope กับตัวตรวจใบซ้ำ — ใบแฝดต้องถูกจับได้แม้อยู่นอกสิทธิ์ของคนที่ดูอยู่
+      // (จับได้แล้วแค่ "เตือน" ไม่ได้เปิดเผยรายละเอียดใบนั้น จึงไม่ข้ามขอบเขตสิทธิ์)
+      setOpenOrders(Array.isArray(oo)?oo:[]);
       const total=rr.length+pp.length+sCount.length+prr.length;
       if(prevRef.current>=0&&total>prevRef.current)approvalBeep();
       prevRef.current=total;
@@ -12714,7 +12858,21 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
     if(aliveRef.current&&!silent)setLoading(false);
   }
   useEffect(()=>{aliveRef.current=true;prevRef.current=-1;load();const id=setInterval(()=>{if(!document.hidden)load(true);},60000);const onVis=()=>{if(!document.hidden)load(true);};document.addEventListener("visibilitychange",onVis);return()=>{aliveRef.current=false;clearInterval(id);document.removeEventListener("visibilitychange",onVis);};},[]);// eslint-disable-line react-hooks/exhaustive-deps
-  async function approveReq(o){setBusy("r"+o.id);try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"pending"});await logDecision("approved","ext",o);posToast("✅ อนุมัติแล้ว — สาขาส่งให้ซัพพลายต่อได้","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
+  async function approveReq(o){
+    // ── ถามก่อนถ้าใบนี้ซ้ำกับใบอื่น ─────────────────────────────────────────
+    // ถามก่อน setBusy เพื่อให้กดยกเลิกแล้วปุ่มไม่ค้างหมุน
+    const twins=dupMap.get(+o.id);
+    if(twins&&twins.length){
+      if(!await confirmDlg({
+        title:"⚠️ ใบนี้ซ้ำกับใบอื่น",
+        message:`"${String(o.supplier_name||"ซัพพลายนอก").trim()}" ของ ${branchName(o.branch_id)} มีใบที่สั่งของชุดเดียวกัน (วัตถุดิบและจำนวนตรงกันทุกบรรทัด) อยู่แล้ว:\n\n${twins.map(t=>"• "+dupLabel(t)).join("\n")}\n\nอนุมัติใบนี้เพิ่ม = สั่งของชุดเดิมอีกรอบ · ยอดใบนี้ ฿${money(sumItems(o))}\n\nถ้าไม่ได้ตั้งใจสั่งเพิ่ม ให้กดยกเลิกแล้ว "ตีกลับ" ใบที่ไม่ต้องการ`,
+        confirmLabel:"เข้าใจแล้ว อนุมัติเลย",
+      }))return;
+    }
+    setBusy("r"+o.id);
+    try{await api.updateOrderIfStatus(o.id,"pending_approval",{status:"pending"});await logDecision("approved","ext",o);posToast("✅ อนุมัติแล้ว — สาขาส่งให้ซัพพลายต่อได้","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}
+    await load(true);if(reloadOrders)reloadOrders();setBusy(null);
+  }
   async function approvePO(o){setBusy("p"+o.id);try{await api.patchPOIfStatus(o.id,"pending_approval",{status:"requested",updated_at:new Date().toISOString()});await logDecision("approved","po",o);posToast("✅ อนุมัติแล้ว — ส่งให้ครัวกลางต่อ","ok");}catch(e){alert("อนุมัติไม่สำเร็จ: "+(e.message||e));}await load(true);if(reloadOrders)reloadOrders();setBusy(null);}
   // Reject flow: reason is REQUIRED — the branch must always know WHY their
   // order was sent back. Reason is stored on the document itself (reject_reason/
@@ -12798,6 +12956,16 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
         <div onClick={()=>setDetailCard({kind:"ext",o})} title="แตะดูรายละเอียด + รูปภาพ" style={{padding:"12px 14px",cursor:"pointer"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}><span style={{fontWeight:900,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🚚 {o.supplier_name||"ซัพพลายนอก"}</span><Chip color="teal">ซัพพลายนอก</Chip></div>
           <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>จากสาขา <b style={{color:C.ink}}>{branchName(o.branch_id)}</b> · โดย {o.requested_by||"-"}</div>
+          {/* ซื้อให้สาขาไหน — ใบที่ครัวกลางสร้างจากสรุปต้องซื้อจะพา forBranches มากับ items
+              ใบเก่าก่อนแก้เรื่องนี้ไม่มีข้อมูล จะไม่โชว์บรรทัดนี้ (ไม่ได้เดาให้) */}
+          {(()=>{const fb=forBranchesOf(o);return fb.length?<div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:3}}>🏬 ซื้อให้: <b style={{color:C.brandDark}}>{fb.map(branchName).join(" · ")}</b></div>:null;})()}
+          {/* ⚠️ ใบซ้ำ — ต้องเห็นบนการ์ดก่อนกด ไม่ใช่เห็นตอนกดแล้ว
+              เคสจริง 13/08/2569: #2199 กับ #2255 ฿2,656 ทั้งคู่ นอนคู่กันในคิวนี้ 8-9 วัน
+              การ์ดสองใบหน้าตาเหมือนกันเป๊ะจนแยกไม่ออกว่าเป็นสองใบ */}
+          {(()=>{const tw=dupMap.get(+o.id);return tw&&tw.length?<div style={{marginTop:7,padding:"7px 10px",background:"#FEF2F2",border:`1.5px solid ${C.red}55`,borderRadius:8,fontSize:11.5,color:"#7F1D1D",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
+            ⚠️ <b>ซ้ำกับใบอื่น</b> — ของชุดเดียวกันทุกบรรทัด: {tw.map(t=>dupLabel(t)).join(" · ")}
+            <div style={{fontSize:10.5,opacity:.85,marginTop:1}}>อนุมัติทั้งคู่ = สั่งซ้ำ ฿{money(sumItems(o))} เพิ่ม</div>
+          </div>:null;})()}
           <div style={{margin:"8px 0",maxHeight:200,overflowY:"auto",overflowX:"hidden",paddingRight:12,scrollbarGutter:"stable",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>{itemsOf(o).map((it,i)=>{const st=stockOfItem(it,o.branch_id);return <div key={i} style={{borderBottom:`1px dashed ${C.lineLight}`,padding:"4px 0"}}><div style={{display:"flex",justifyContent:"space-between",gap:8}}><span style={{color:C.ink2,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</span><span style={{color:C.ink3,whiteSpace:"nowrap"}}>฿{money(it.estimatedCost||it.line_total)}</span></div><div style={{display:"flex",gap:10,marginTop:2,fontSize:11,flexWrap:"wrap"}}><span style={{color:st!=null&&st<=0?C.red:C.ink4}}>📦 คงเหลือ <b style={{color:st!=null&&st<=0?C.red:C.ink2}}>{st!=null?st:"-"}</b> {it.unit||""}</span><span style={{color:C.teal,fontWeight:700}}>🛒 สั่ง {it.qtyNeeded||it.qty||0} {it.unit||""}</span></div></div>;})}</div>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}><span style={{fontSize:11,fontWeight:600,color:C.teal}}>🔍 แตะดูรายละเอียด + รูป</span><span>รวม ฿{money(sumItems(o))}</span></div>
         </div>
