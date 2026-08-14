@@ -4665,14 +4665,24 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       </div>
       <div style={{background:C.brandLight,borderRadius:12,padding:"16px",marginBottom:16,border:`1px solid ${C.brandBorder}`}}>
         <div style={{display:"grid",gridTemplateColumns:"1.6fr 1fr",gap:10,alignItems:"end",marginBottom:12}}>
-          <Inp label={`1 ${form.buy_unit||"หน่วยที่ซื้อ"} = เท่าไร`} hint="SOP หยิบของตามนี้" type="text" inputMode="decimal"
+          {/* ⚠️ ช่องนี้คือ "1 หน่วยที่ซื้อ หนักกี่กรัม" ไม่ใช่ตัวเลือกหน่วยของสูตร SOP
+              ค่าที่เก็บลง convert_to_gram เป็น "กรัม" เสมอ และ ctgFactor มาจาก UNIT_G[ctgUnit]||1
+              ถ้าเปิดให้เลือกหน่วยนับ (แผง/ลัง/ขวด/ถุง/แพ็ค) ตรงนี้ UNIT_G จะไม่มีคีย์ → ตก ||1
+              คนพิมพ์ "1 แผง = 1 แผง" จะถูกเก็บเป็น 1 กรัม → ไข่ 1 แผง ฿120 กลายเป็น ฿120/กรัม
+              จากที่ควรเป็น ฿0.12/กรัม = ผิด 1,000 เท่า และลามไปทุกเมนูที่ใช้ไข่
+              (ป้ายเดิมเขียนว่า "SOP หยิบของตามนี้" ทำให้เข้าใจว่าเป็นหน่วยของสูตร) */}
+          <Inp label={`1 ${form.buy_unit||"หน่วยที่ซื้อ"} หนักเท่าไร`} hint="ใช้คิดราคาต่อกรัม" type="text" inputMode="decimal"
             value={ctgShown}
             onChange={e=>{const v=e.target.value;
               upd("convert_to_gram", v===""?"":Math.round((parseFloat(v)||0)*ctgFactor*1000)/1000);}}
             placeholder={ctgUnit==="กรัม"?"1000":"1"}/>
-          <Field label="หน่วย">
+          <Field label="หน่วยน้ำหนัก/ปริมาตร">
             <UnitPicker value={ctgUnit} options={MASS_UNITS} onChange={setCtgUnit}/>
           </Field>
+        </div>
+        <div style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.7,marginBottom:10}}>
+          ช่องนี้มีให้เลือกแค่หน่วยน้ำหนัก/ปริมาตร เพราะระบบเก็บเป็น <b>กรัม</b> ไว้คิดต้นทุน — ใส่ แผง/ลัง/ขวด ตรงนี้ไม่ได้ เพราะจะกลายเป็น 1 กรัม
+          <br/>📋 <b>หน่วยในสูตร SOP เลือกได้ครบทั้ง 9 หน่วยอยู่แล้ว</b> (ที่หน้าใส่สูตร) รวมถึง <b>{form.buy_unit||"หน่วยที่ซื้อ"}</b> ด้วย — ตั้งช่องนี้ให้ถูก แล้วสูตรจะคิดต้นทุนจาก {form.buy_unit||"หน่วยที่ซื้อ"} ได้เลย
         </div>
         <div style={{background:C.white,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.brandBorder}`,textAlign:"center"}}>
           <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>ราคาต่อกรัม{ctgUnit!=="กรัม"&&+form.convert_to_gram>0?` · เก็บเป็น ${+form.convert_to_gram} กรัม`:""}</div>
