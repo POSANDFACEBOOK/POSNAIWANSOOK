@@ -1195,12 +1195,35 @@ const MASS_UNITS=["กรัม","กิโลกรัม","มิลลิล�
 //
 // เหลือกรณีที่ยังไม่รู้จริง ๆ (หน่วยบรรจุภัณฑ์ที่ไม่ตรงกับหน่วยซื้อ หรือยังไม่ได้ตั้งน้ำหนัก)
 // อันนั้นคงพฤติกรรมเดิมคือคิดเป็นกรัมตรง ๆ แต่ต้องถามยืนยันก่อน ห้ามบันทึกเงียบ ๆ
+// เพิ่มทางที่สาม: "หน่วยย่อย" — ซื้อมาเป็นลัง แต่สูตรหยิบเป็นขวด
+// เดิมมีแค่ 2 ทาง (หน่วยน้ำหนัก · หน่วยที่ซื้อ) เคสซื้อยกลังแล้วใช้ทีละขวดจึงตกท่อ
+// วัดจริง 14/08/2569: เบียร์ลีโอ ซื้อ ฿640/ลัง สูตรใส่ "1 ขวด" ได้ต้นทุน ฿0.64
+// ทั้งที่ควรเป็น ฿53.33 (1 ลัง 12 ขวด) = ผิด 83 เท่า
+//
+// สูตรแปลง: กรัม = จำนวน × (กรัมต่อ 1 หน่วยที่ซื้อ ÷ จำนวนหน่วยย่อยต่อ 1 หน่วยที่ซื้อ)
+// ข้อดีที่สำคัญ: ต้นทุนถูกเสมอแม้ค่า convert_to_gram จะไม่ใช่น้ำหนักจริง เพราะ
+//   ต้นทุน = กรัม × ราคาต่อกรัม = n×(per/subPer) × (ราคาซื้อ/per) = n × ราคาซื้อ/subPer
+// ตัว per ตัดกันหมด → ได้ "ราคาซื้อ ÷ จำนวนต่อลัง" ตรงๆ เสมอ
+// และตอนตัดสต๊อกก็ถูกด้วย เพราะระบบแปลงกรัมกลับเป็นหน่วยที่ซื้อ: 12 ขวด = 1 ลัง พอดี
 function recipeGrams(amt,unit,ing){
   const u=String(unit||"").trim(), n=+amt||0;
   if(UNIT_G[u])return{grams:round2(n*UNIT_G[u]),exact:true};
   const bu=String(ing&&ing.buy_unit||"").trim(), per=+(ing&&ing.convert_to_gram)||0;
   if(u&&bu&&u===bu&&per>0)return{grams:round2(n*per),exact:true,per};
+  const su=String(ing&&ing.sub_unit||"").trim(), subPer=+(ing&&ing.sub_per_buy)||0;
+  // ⚠️ ทางนี้ปัด 6 ตำแหน่ง ไม่ใช่ round2 เหมือนทางอื่น เพราะ per/subPer มักเป็นเศษไม่ลงตัว
+  //    (1000÷12 = 83.333…) แล้วต้นทุนคำนวณจาก กรัม × ราคาต่อกรัม — ปัดกรัมทิ้งก่อนคูณ
+  //    ทำให้ error ถูกขยายด้วยราคาต่อกรัม ยิ่งราคาต่อกรัมสูงยิ่งเพี้ยนมาก
+  //    ทดสอบจริง: ปัด 2 ตำแหน่ง ทำให้ ฿53.33/ขวด กลายเป็น ฿51.20 (เพี้ยน ฿2.13/ขวด)
+  //    6 ตำแหน่งทำให้ error เล็กกว่าเศษสตางค์ในทุกกรณีที่เป็นไปได้
+  if(u&&su&&u===su&&subPer>0&&per>0)return{grams:Math.round(n*(per/subPer)*1e6)/1e6,exact:true,per:per/subPer,sub:true};
   return{grams:round2(n),exact:false};
+}
+// กรัมต่อ 1 หน่วยย่อย · null = ยังไม่ได้ตั้งหน่วยย่อย (ใช้โชว์ในฟอร์มและคิดราคาต่อหน่วยย่อย)
+function subUnitGrams(ing){
+  const per=+(ing&&ing.convert_to_gram)||0, subPer=+(ing&&ing.sub_per_buy)||0;
+  if(!(per>0)||!(subPer>0)||!String(ing&&ing.sub_unit||"").trim())return null;
+  return round2(per/subPer);
 }
 const toGrams=(amt,unit)=>round2((+amt||0)*(UNIT_G[String(unit||"").trim()]||1));
 // ตัวเลือกหน่วย — ใช้ <select> ธรรมดาไม่ได้ เพราะค่าเดิมที่ไม่อยู่ใน 9 หน่วย (เช่น "กก.")
@@ -4221,6 +4244,11 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   const ctgFactor=UNIT_G[ctgUnit]||1;
   const ctgShown=form.convert_to_gram===""||form.convert_to_gram==null?""
     :String(Math.round((+form.convert_to_gram/ctgFactor)*1000)/1000);
+  // หน่วยย่อย (ซื้อยกลัง สูตรหยิบทีละขวด) — โชว์ผลลัพธ์สดให้เห็นก่อนเซฟ
+  // ต้นทุนต่อหน่วยย่อย = ราคาซื้อ ÷ จำนวนต่อหน่วยที่ซื้อ (ไม่ขึ้นกับค่ากรัมเลย ดู recipeGrams)
+  const subSet=!!String(form.sub_unit||"").trim()&&+form.sub_per_buy>0;
+  const subG=subSet&&+form.convert_to_gram>0?Math.round((+form.convert_to_gram/+form.sub_per_buy)*1000)/1000:null;
+  const subCost=subSet&&+form.buy_price>0?Math.round((+form.buy_price/+form.sub_per_buy)*100)/100:null;
   async function save(){if(!form.name||!form.buy_price)return;
     // Without a gram conversion every cost derived from this ingredient is 0 (and ~1000× too high
     // the moment it is received), so block NEW rows outright. For an EXISTING row that is already
@@ -4255,7 +4283,24 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     // (apply_branch_stock_delta / set_branch_stock) การเขียนตรงจากฟอร์มจะข้ามการล็อก
     // = ทับกันเองเมื่อมีคนแก้พร้อมกัน และยังลงผิดช่อง (รวม ไม่ใช่ของสาขา) อีกด้วย
     delete item.stock;
-    if(editId){await api.updateIng(editId,item);addH(`แก้ไขวัตถุดิบ: ${form.name}`);}else{await api.addIng(item);addH(`เพิ่มวัตถุดิบ: ${form.name}`);}
+    // หน่วยย่อย — เก็บเป็นตัวเลข/ข้อความสะอาด ไม่ใช่สตริงจากช่องกรอก
+    // ตั้งไม่ครบ (มีหน่วยแต่ไม่มีจำนวน หรือกลับกัน) = ถือว่าไม่ได้ตั้ง เคลียร์ทั้งคู่
+    // ไม่งั้น recipeGrams จะเจอครึ่งๆ แล้วตกไปนับเป็นกรัมตรงๆ โดยที่ฟอร์มดูเหมือนตั้งแล้ว
+    const _su=String(form.sub_unit||"").trim(), _sp=+form.sub_per_buy||0;
+    const _ok=!!_su&&_sp>0;
+    item.sub_unit=_ok?_su:null;
+    item.sub_per_buy=_ok?round2(_sp):null;
+    const write=async(payload)=>{ if(editId)await api.updateIng(editId,payload); else await api.addIng(payload); };
+    try{ await write(item); }
+    catch(e){
+      // ยังไม่ได้เพิ่มคอลัมน์ในฐานข้อมูล → บันทึกส่วนที่เหลือให้ก่อน ดีกว่าเซฟไม่ได้ทั้งใบ
+      if(/PGRST204|column/i.test(String((e&&e.message)||e))){
+        const {sub_unit,sub_per_buy,...rest}=item;
+        await write(rest);
+        if(_ok)alert(`บันทึกแล้ว แต่ "หน่วยย่อย" ยังไม่ถูกเก็บ\n\nฐานข้อมูลยังไม่มีคอลัมน์นี้ — ให้รันไฟล์ sql/sub-unit.sql ใน Supabase ก่อน แล้วค่อยตั้งหน่วยย่อยอีกครั้ง`);
+      } else throw e;
+    }
+    addH(editId?`แก้ไขวัตถุดิบ: ${form.name}`:`เพิ่มวัตถุดิบ: ${form.name}`);
     await reload();setOpen(false);
   }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){
@@ -4681,9 +4726,40 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
           </Field>
         </div>
         <div style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.7,marginBottom:10}}>
-          ช่องนี้มีให้เลือกแค่หน่วยน้ำหนัก/ปริมาตร เพราะระบบเก็บเป็น <b>กรัม</b> ไว้คิดต้นทุน — ใส่ แผง/ลัง/ขวด ตรงนี้ไม่ได้ เพราะจะกลายเป็น 1 กรัม
-          <br/>📋 <b>หน่วยในสูตร SOP เลือกได้ครบทั้ง 9 หน่วยอยู่แล้ว</b> (ที่หน้าใส่สูตร) รวมถึง <b>{form.buy_unit||"หน่วยที่ซื้อ"}</b> ด้วย — ตั้งช่องนี้ให้ถูก แล้วสูตรจะคิดต้นทุนจาก {form.buy_unit||"หน่วยที่ซื้อ"} ได้เลย
+          ช่องบนมีให้เลือกแค่หน่วยน้ำหนัก/ปริมาตร เพราะระบบเก็บเป็น <b>กรัม</b> ไว้คิดต้นทุน — ใส่ ลัง/ขวด ตรงนั้นไม่ได้ จะกลายเป็น 1 กรัม
         </div>
+
+        {/* ── หน่วยย่อย: ซื้อยกลัง แต่สูตรหยิบทีละขวด ────────────────────────────
+            เดิมไม่มีช่องนี้ สูตรที่ใส่ "1 ขวด" ทั้งที่ซื้อเป็น "ลัง" จะถูกนับเป็น 1 กรัม
+            (วัดจริง 14/08/2569: เบียร์ลีโอ ฿640/ลัง → สูตร 1 ขวด ได้ ฿0.64 ควรเป็น ฿53.33)
+            เว้นว่างได้ถ้าไม่มีหน่วยย่อย — ไม่บังคับ */}
+        <div style={{display:"grid",gridTemplateColumns:"1.6fr 1fr",gap:10,alignItems:"end",marginBottom:8}}>
+          <Inp label={`1 ${form.buy_unit||"หน่วยที่ซื้อ"} มีกี่หน่วยย่อย`} hint="ถ้าสูตรหยิบทีละชิ้น" type="text" inputMode="decimal"
+            value={form.sub_per_buy==null?"":String(form.sub_per_buy)}
+            onChange={e=>{const v=e.target.value;if(v===""||/^\d*\.?\d*$/.test(v))upd("sub_per_buy",v===""?"":v);}}
+            placeholder="เช่น 12"/>
+          <Field label="หน่วยย่อย">
+            <UnitPicker value={form.sub_unit||""} placeholder="— ไม่มี —" onChange={v=>upd("sub_unit",v)}/>
+          </Field>
+        </div>
+        {subSet
+          ?<div style={{background:C.white,borderRadius:10,padding:"9px 13px",border:`1px solid ${C.brandBorder}`,marginBottom:10,fontFamily:"'Sarabun',sans-serif",lineHeight:1.7}}>
+            <div style={{fontSize:12,fontWeight:800,color:C.ink2}}>
+              ✅ สูตร SOP หยิบเป็น <b style={{color:C.brand}}>{form.sub_unit}</b> ได้แล้ว
+            </div>
+            <div style={{fontSize:11,color:C.ink3}}>
+              1 {form.buy_unit||"หน่วยที่ซื้อ"} = {form.sub_per_buy} {form.sub_unit}
+              {subG!=null?` · 1 ${form.sub_unit} ≈ ${subG} กรัม`:""}
+              {subCost!=null?<> · ต้นทุน <b style={{color:C.brand}}>฿{subCost.toLocaleString()}</b>/{form.sub_unit}</>:null}
+            </div>
+            {(String(form.sub_unit||"").trim()===String(form.buy_unit||"").trim())&&<div style={{fontSize:10.5,color:"#92400E",marginTop:3}}>⚠️ หน่วยย่อยซ้ำกับหน่วยที่ซื้อ — ไม่มีผลอะไร ลบออกได้</div>}
+            <button type="button" onClick={()=>{upd("sub_unit","");upd("sub_per_buy","");}}
+              style={{background:"none",border:"none",color:C.ink4,fontSize:10.5,fontWeight:700,cursor:"pointer",textDecoration:"underline",padding:"3px 0 0"}}>ล้างหน่วยย่อย</button>
+          </div>
+          :<div style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.7,marginBottom:10}}>
+            💡 ซื้อเป็น <b>{form.buy_unit||"หน่วยที่ซื้อ"}</b> แต่สูตรหยิบทีละชิ้น? ใส่ตรงนี้ เช่น เบียร์ 1 ลัง = 12 ขวด แล้วสูตรจะเลือก "ขวด" ได้ และคิดต้นทุนถูก
+            <br/>ไม่ใส่ก็ได้ — สูตรยังใช้ กรัม/กก./มล./ลิตร และ <b>{form.buy_unit||"หน่วยที่ซื้อ"}</b> ได้ตามปกติ
+          </div>}
         <div style={{background:C.white,borderRadius:10,padding:"10px 14px",border:`1px solid ${C.brandBorder}`,textAlign:"center"}}>
           <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>ราคาต่อกรัม{ctgUnit!=="กรัม"&&+form.convert_to_gram>0?` · เก็บเป็น ${+form.convert_to_gram} กรัม`:""}</div>
           <div style={{fontSize:24,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{form.buy_price&&form.convert_to_gram?ppg(+form.buy_price,+form.convert_to_gram).toFixed(4):"0.0000"}<span style={{fontSize:12,fontWeight:500,color:C.ink3,marginLeft:4}}>/ กรัม</span></div>
@@ -5555,7 +5631,7 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
     // ปล่อยผ่านเงียบ ๆ คือต้นทุนกับสต๊อกเพี้ยนโดยไม่มีใครรู้
     if(!conv.exact&&!await confirmDlg({
       title:"ระบบไม่รู้น้ำหนักของหน่วยนี้",
-      message:`วัตถุดิบ "${ingPopup.ing?.name||""}" ซื้อเป็นหน่วย "${ingPopup.ing?.buy_unit||"-"}" แต่สูตรเลือกหน่วย "${u}"\n\nระบบจะบันทึกเป็น ${round2(amt)} กรัม ตามตัวเลขที่กรอก และคิดต้นทุน/ตัดสต๊อกจากตัวเลขนี้\n\nถ้าไม่ใช่ที่ต้องการ ให้กดยกเลิกแล้วเปลี่ยนเป็น "กรัม" หรือไปตั้งช่อง "รวมทั้งหมดกี่กรัม" ของวัตถุดิบตัวนี้ก่อน`,
+      message:`วัตถุดิบ "${ingPopup.ing?.name||""}" ซื้อเป็นหน่วย "${ingPopup.ing?.buy_unit||"-"}" แต่สูตรเลือกหน่วย "${u}"\n\nระบบจะบันทึกเป็น ${round2(amt)} กรัม ตามตัวเลขที่กรอก และคิดต้นทุน/ตัดสต๊อกจากตัวเลขนี้\n\nถ้าไม่ใช่ที่ต้องการ ให้กดยกเลิกแล้วไปที่การ์ดวัตถุดิบ ตั้ง "หน่วยย่อย" เป็น "${u}" พร้อมจำนวนต่อ 1 ${ingPopup.ing?.buy_unit||"หน่วยที่ซื้อ"} (เช่น 1 ลัง = 12 ขวด) แล้วกลับมาเลือก "${u}" ใหม่ ระบบจะคิดต้นทุนให้ถูกเอง`,
       confirmLabel:"บันทึกตามนี้"}))return;
     const grams=conv.grams;
     const entry={amountGram:grams,unit:"กรัม",displayAmount:amt,displayUnit:u};
@@ -5834,7 +5910,7 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
     // ปล่อยผ่านเงียบ ๆ คือต้นทุนกับสต๊อกเพี้ยนโดยไม่มีใครรู้
     if(!conv.exact&&!await confirmDlg({
       title:"ระบบไม่รู้น้ำหนักของหน่วยนี้",
-      message:`วัตถุดิบ "${ingPopup.ing?.name||""}" ซื้อเป็นหน่วย "${ingPopup.ing?.buy_unit||"-"}" แต่สูตรเลือกหน่วย "${u}"\n\nระบบจะบันทึกเป็น ${round2(amt)} กรัม ตามตัวเลขที่กรอก และคิดต้นทุน/ตัดสต๊อกจากตัวเลขนี้\n\nถ้าไม่ใช่ที่ต้องการ ให้กดยกเลิกแล้วเปลี่ยนเป็น "กรัม" หรือไปตั้งช่อง "รวมทั้งหมดกี่กรัม" ของวัตถุดิบตัวนี้ก่อน`,
+      message:`วัตถุดิบ "${ingPopup.ing?.name||""}" ซื้อเป็นหน่วย "${ingPopup.ing?.buy_unit||"-"}" แต่สูตรเลือกหน่วย "${u}"\n\nระบบจะบันทึกเป็น ${round2(amt)} กรัม ตามตัวเลขที่กรอก และคิดต้นทุน/ตัดสต๊อกจากตัวเลขนี้\n\nถ้าไม่ใช่ที่ต้องการ ให้กดยกเลิกแล้วไปที่การ์ดวัตถุดิบ ตั้ง "หน่วยย่อย" เป็น "${u}" พร้อมจำนวนต่อ 1 ${ingPopup.ing?.buy_unit||"หน่วยที่ซื้อ"} (เช่น 1 ลัง = 12 ขวด) แล้วกลับมาเลือก "${u}" ใหม่ ระบบจะคิดต้นทุนให้ถูกเอง`,
       confirmLabel:"บันทึกตามนี้"}))return;
     const grams=conv.grams;
     const entry={amountGram:grams,unit:"กรัม",displayAmount:amt,displayUnit:u};
