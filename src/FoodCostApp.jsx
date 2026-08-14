@@ -7282,6 +7282,42 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
   // would be un-shippable (shipPO refuses same branch) and strand the request.
   const approvedPRs=useMemo(()=>(prs||[]).filter(p=>p.status==="approved"&&p.type==="ingredient"&&+p.branch_id!==+currentBranch?.id),[prs,currentBranch]);
   const pool=useMemo(()=>{const m=new Map();for(const p of approvedPRs){for(const it of (p.items||[])){const id=+it.ingredient_id;if(!id||!(+it.qty>0))continue;const e=m.get(id)||{ingredient_id:id,name:it.name,unit:it.unit,total:0,byBranch:[]};e.total=round2(e.total+(+it.qty||0));const bId=+p.branch_id;const ex=e.byBranch.find(b=>+b.branchId===bId);if(ex)ex.qty=round2(ex.qty+(+it.qty||0));else e.byBranch.push({branchId:bId,branch:p.branch_name||branchName(p.branch_id),qty:+it.qty||0});m.set(id,e);}}return[...m.values()].sort((a,b)=>a.name.localeCompare(b.name));},[approvedPRs]);// eslint-disable-line react-hooks/exhaustive-deps
+  // ── ธง "ตอนนี้ไม่ควรขอจากครัวกลางแล้ว" ─────────────────────────────────────
+  // ใบขอซื้อถูกสร้างตอนที่วัตถุดิบนั้นตั้งซัพเป็น "ครัวกลาง" ที่สาขานั้น แล้วมีคน
+  // ไปเปลี่ยนซัพเป็นซัพนอกทีหลัง ใบเก่ายังค้างในคิวโดยไม่มีอะไรบอกว่าเส้นทางเปลี่ยนแล้ว
+  //
+  // เคสจริง 14/08/2569: PR-202608-B5-Z7FIZ ขอ "ปีกปลายไก่ (ไม่ต้ม)" 20 กก. จากครัวกลาง
+  //   · 10/08 16:12 naamfhon กดส่งจากหน้านับสต็อก — ตอนนั้นซัพที่กาญจนบุรีคือ #33 ครัวกลาง
+  //     → ตัวแยกทางทำงานถูกต้องแล้ว ณ ตอนนั้น
+  //   · 12/08 07:38 oil แก้วัตถุดิบ เปลี่ยนซัพเป็น #17 เบทาโกร (ซัพนอก)
+  //   · ใบยังบอกว่าขอครัวกลาง แต่การ์ดวัตถุดิบบอกว่าซัพนอก — คนอ่านแล้วงงว่าอันไหนจริง
+  //     และสต๊อกครัวกลางของตัวนี้ติดลบ 27 อยู่ ส่งให้ไม่ได้อยู่แล้ว
+  //
+  // ⚠️ ต้องใช้กฎเดียวกับ matchCentralSupplier ในหน้าสร้างคำสั่งซื้อเป๊ะ ("ชื่อซัพมีคำว่า
+  //    ชื่อสาขาครัวกลาง") ไม่งั้นธงนี้จะเตือนคนละเรื่องกับที่ระบบใช้แยกทางจริง
+  const centralBranchNames=useMemo(()=>(branches||[])
+    .filter(b=>b&&b.type==="central")
+    .map(b=>String(b.name||"").replace(/\s+/g," ").trim())
+    .filter(Boolean),[branches]);
+  const supIsCentral=(name)=>{
+    const t=String(name||"").replace(/\s+/g," ").trim();
+    return !!t&&centralBranchNames.some(bn=>t.includes(bn));
+  };
+  // คืนชื่อซัพนอกที่ "ตอนนี้" ผูกไว้ · null = ยังถูกต้อง (เป็นครัวกลาง หรือไม่ได้ตั้งซัพ
+  // ซึ่งกรณีไม่ได้ตั้งจะตกไปครัวกลางตามเดิมอยู่แล้ว จึงไม่ถือว่าเพี้ยน)
+  const staleRoute=(ingId,branchId)=>{
+    const ing=(ings||[]).find(x=>+x.id===+ingId);
+    if(!ing)return null;
+    const sid=(ing.supplier_by_branch||{})[String(branchId)];
+    if(sid==null||sid==="")return null;
+    const rec=(suppliers||[]).find(s=>+s.id===+sid);
+    const nm=String((rec&&rec.name)||"").trim();
+    return supIsCentral(nm)?null:(nm||`ซัพ #${sid}`);
+  };
+  const staleCount=useMemo(()=>pool.reduce((n,r)=>n+r.byBranch.filter(b=>staleRoute(r.ingredient_id,b.branchId)).length,0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pool,ings,suppliers,centralBranchNames]);
+
   // Approved ASSET/equipment PRs waiting for central to issue an asset delivery PO.
   // รวมใบของครัวกลางเองด้วย (เดิมตัดออกด้วย branch_id!==currentBranch) ไม่งั้นใบที่ครัวกลาง
   // ขอซื้อให้ตัวเองจะค้างสถานะ "อนุมัติแล้ว" ตลอดไป ไม่มีทางเข้าทะเบียนทรัพย์สิน
@@ -7426,6 +7462,11 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         <div style={{fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:14,fontWeight:900,color:"#0F6E56"}}>🧺 รอจัดส่ง — ยอดที่อนุมัติแล้ว แยกตามวัตถุดิบ/สาขา</div><div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>{approvedPRs.length} ใบขอซื้อ · {pool.length} วัตถุดิบ</div></div>
         {pool.length>0&&<Btn onClick={distributeToBranches} loading={consolidating} icon={I.truck} s={{background:`linear-gradient(135deg,${C.teal},#0F766E)`,color:C.white}}>📦 ออกใบส่งให้สาขา</Btn>}
       </div>
+      {/* สรุปธงเส้นทางเพี้ยนไว้บนหัวตาราง — ชิปในตารางอาจอยู่ท้ายแถวที่ต้องเลื่อนหาไม่เจอ */}
+      {staleCount>0&&<div style={{padding:"10px 16px",background:"#FFFBEB",borderBottom:`1px solid #FDE68A`,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:12.5,fontWeight:800,color:"#92400E",marginBottom:2}}>⚠️ {staleCount} รายการ ตอนนี้สาขาผูกไว้กับซัพนอกแล้ว (ดูชิปสีเหลืองในคอลัมน์ขวา)</div>
+        <div style={{fontSize:11,color:"#92400E",lineHeight:1.6}}>ใบขอซื้อพวกนี้ถูกสร้างตอนที่วัตถุดิบยังตั้งซัพเป็น "ครัวกลาง" แล้วมีคนเปลี่ยนซัพทีหลัง — ถ้าออกใบส่ง ครัวกลางจะต้องจ่ายของที่สาขาซื้อเองได้ เช็คกับสาขาก่อน หรือให้สาขาสั่งซัพนอกแทนแล้วลบบรรทัดนี้ทิ้ง</div>
+      </div>}
       {pool.length===0?<div style={{textAlign:"center",padding:"46px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีใบขอซื้อที่อนุมัติแล้วรอรวม</div>
       :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
         <thead><tr style={{background:C.bg}}>
@@ -7436,7 +7477,14 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         <tbody>{pool.map((r,i)=><tr key={r.ingredient_id} style={{borderTop:`1px solid ${C.lineLight}`,background:i%2?"#FAFBFC":C.white}}>
           <td style={{padding:"9px 14px",fontSize:13,fontWeight:700,color:C.ink}}>{r.name}</td>
           <td style={{padding:"9px 14px",textAlign:"right",fontSize:14,fontWeight:900,color:C.teal,whiteSpace:"nowrap"}}>{fmtQty(r.total)} <span style={{fontSize:10,color:C.ink4}}>{r.unit}</span></td>
-          <td style={{padding:"9px 14px"}}><div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{r.byBranch.map((b,j)=><span key={j} style={{fontSize:11,background:C.bg,border:`1px solid ${C.line}`,borderRadius:12,padding:"2px 9px",color:C.ink3,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{b.branch} <b style={{color:C.ink}}>{fmtQty(b.qty)}</b></span>)}</div></td>
+          <td style={{padding:"9px 14px"}}><div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{r.byBranch.map((b,j)=>{
+            // ธงเส้นทางเพี้ยน: ตอนสร้างใบเป็นของครัวกลาง แต่ตอนนี้สาขาผูกซัพนอกไว้แล้ว
+            const st=staleRoute(r.ingredient_id,b.branchId);
+            return <span key={j} title={st?`ตอนนี้ "${r.name}" ที่${b.branch} ผูกกับ ${st} (ซัพนอก) แล้ว — ใบนี้สร้างตอนที่ยังเป็นของครัวกลาง ถ้าออกใบส่ง ครัวกลางจะต้องจ่ายของที่สาขาซื้อเองได้`:undefined}
+              style={{fontSize:11,background:st?"#FFFBEB":C.bg,border:`1px solid ${st?"#FDE68A":C.line}`,borderRadius:12,padding:"2px 9px",color:st?"#92400E":C.ink3,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>
+              {st?"⚠️ ":""}{b.branch} <b style={{color:st?"#92400E":C.ink}}>{fmtQty(b.qty)}</b>
+            </span>;
+          })}</div></td>
         </tr>)}</tbody>
       </table></div>}
     </Card>
