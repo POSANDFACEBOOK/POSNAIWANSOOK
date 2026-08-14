@@ -4269,8 +4269,32 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       alert(`ลบ "${name}" ไม่ได้ — ยังถูกใช้อยู่ ${lines.length} รายการ:\n\n${lines.slice(0,12).join("\n")}${lines.length>12?`\n... และอีก ${lines.length-12} รายการ`:""}\n\nถ้าลบทั้งที่ยังถูกใช้ ต้นทุนของรายการเหล่านี้จะลดลงเงียบๆ โดยไม่มีการเตือน\nกรุณาเอาวัตถุดิบนี้ออกจากสูตรก่อน แล้วค่อยลบ`);
       return;
     }
-    if(!await confirmDlg({title:"ลบวัตถุดิบ",message:`ต้องการลบ "${name}" ใช่หรือไม่?`}))return;
-    try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}
+    // ── ยังมีของค้างอยู่ที่สาขาไหนบ้าง ────────────────────────────────────────
+    // ลบวัตถุดิบ = แถวหายทั้งแถว สต๊อกที่ค้างอยู่หายตามไปด้วยโดยไม่มีบันทึกว่าหายไปไหน
+    // เดิมเช็คแค่ "มีเมนู/สูตรใช้อยู่ไหม" ไม่ได้เช็คของคงเหลือเลย
+    // เคสจริง 14/08/2569: มีคนลบวัตถุดิบ 13 รายการรวดเดียวช่วง 03:21–03:41
+    // ตรวจย้อนไม่ได้แล้วว่ามีของเหลือติดไปด้วยไหม เพราะประวัติบันทึกแค่ชื่อ
+    //
+    // เตือนไม่บล็อค — ของที่เลิกใช้แล้วก็ต้องลบได้ แต่ต้องเห็นตัวเลขก่อนกด
+    const stockLeft=(branches||[])
+      .filter(b=>b&&b.active!==false)
+      .map(b=>({name:b.name,qty:branchStock(ings.find(x=>+x.id===+id),b.id)}))
+      .filter(x=>Math.abs(x.qty)>1e-9);
+    const delIng=ings.find(x=>+x.id===+id);
+    const totalQty=round2(stockLeft.reduce((s,x)=>s+x.qty,0));
+    const totalVal=round2(totalQty*(+(delIng&&delIng.buy_price)||0));
+    const unit=(delIng&&delIng.buy_unit)||"";
+    if(!await confirmDlg({
+      title:"ลบวัตถุดิบ",
+      message:`ต้องการลบ "${name}" ใช่หรือไม่?`
+        +(stockLeft.length
+          ? `\n\n⚠️ ยังมีของคงเหลืออยู่ ${totalQty} ${unit}${totalVal>0?` (มูลค่าราว ฿${totalVal.toLocaleString()})`:""}\n${stockLeft.map(x=>`   • ${x.name}: ${x.qty} ${unit}`).join("\n")}\n\nลบแล้วยอดนี้จะหายจากมูลค่าสต๊อกทันทีและกู้คืนไม่ได้\nถ้าของยังอยู่จริง ให้ไปตัดเป็น "ของเสีย" หรือนับสต๊อกเป็น 0 ก่อน จะได้มีที่มาที่ไป`
+          : `\n\n✅ ไม่มีของคงเหลือค้างที่สาขาไหน`),
+      confirmLabel:stockLeft.length?"ลบทั้งที่ยังมีของ":"ลบ",
+    }))return;
+    // บันทึกจำนวนที่หายไปกับประวัติด้วย — ไม่งั้นตรวจย้อนไม่ได้ว่าลบไปแล้วของหายเท่าไหร่
+    const note=stockLeft.length?` (ยังมีของเหลือ ${totalQty} ${unit}${totalVal>0?` ~฿${totalVal.toLocaleString()}`:""} · ${stockLeft.map(x=>`${x.name} ${x.qty}`).join(", ")})`:"";
+    try{await api.deleteIng(id);addH(`ลบวัตถุดิบ: ${name}${note}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}
   }
   // Export วัตถุดิบของ "สาขาที่กำลังดูอยู่" — เอาแค่คอลัมน์ที่ใช้ตรวจของหน้างานจริง
   // ช่วงราคา = ราคาต่ำสุด–สูงสุดที่ซื้อได้จริงจากใบสั่งซื้อซัพนอกที่รับของแล้ว (priceRangeByIng)
