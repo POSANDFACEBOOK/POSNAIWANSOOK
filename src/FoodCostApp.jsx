@@ -4314,6 +4314,37 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       alert(`ลบ "${name}" ไม่ได้ — ยังถูกใช้อยู่ ${lines.length} รายการ:\n\n${lines.slice(0,12).join("\n")}${lines.length>12?`\n... และอีก ${lines.length-12} รายการ`:""}\n\nถ้าลบทั้งที่ยังถูกใช้ ต้นทุนของรายการเหล่านี้จะลดลงเงียบๆ โดยไม่มีการเตือน\nกรุณาเอาวัตถุดิบนี้ออกจากสูตรก่อน แล้วค่อยลบ`);
       return;
     }
+    // ── เอกสารที่ยังไม่จบ / สต๊อกค้าง ที่ชี้มาที่วัตถุดิบตัวนี้ ────────────────
+    // ลบแล้วเอกสารพวกนี้พังถาวร: ตอนกดรับของ ระบบหาวัตถุดิบไม่เจอ เพิ่มสต๊อกไม่ได้
+    // และปุ่ม "ลองใหม่" ก็ไม่มีวันสำเร็จ เพราะแถวหายไปแล้ว แก้ในหน้าเว็บไม่ได้เลย
+    //
+    // เคสจริง 14/08/2569: ORD-2420 ของคลองสาม รับ "ไอติมรสช็อกโกแลต (ช็อกชิพ)" 1 ลัง
+    //   แต่วัตถุดิบ #847 ถูกลบไปเมื่อ 13/08 04:57 → ขึ้น "ตัดสต๊อกไม่ได้ 1 รายการ" ค้างถาวร
+    //   ตอนนั้นตัวกันมีแค่เช็คเมนู/สูตร SOP กับของคงเหลือ ไม่ได้เช็คเอกสารค้าง
+    //
+    // ใช้ jsonb contains ค้นในคอลัมน์ items/stock_pending โดยตรง — ไม่ต้องโหลดทั้งตาราง
+    const _cs=(v)=>encodeURIComponent(JSON.stringify(v));
+    let docRefs=null;   // null = ตรวจไม่สำเร็จ (ต่างจาก [] = ตรวจแล้วไม่มี)
+    try{
+      const [oOpen,oPend,pOpen,pPend]=await Promise.all([
+        sb(`order_requests?select=id,status&status=in.(pending_approval,pending,approved)&items=cs.${_cs([{ingId:+id}])}`),
+        sb(`order_requests?select=id,status&stock_pending=cs.${_cs([{items:[{ingredient_id:+id}]}])}`),
+        sb(`purchase_orders?select=id,po_number,status&status=in.(requested,open,shipped,transfer_pending,transfer_shipped)&items=cs.${_cs([{ingredient_id:+id}])}`),
+        sb(`purchase_orders?select=id,po_number,status&stock_pending=cs.${_cs([{items:[{ingredient_id:+id}]}])}`),
+      ]);
+      docRefs=[
+        ...(oOpen||[]).map(o=>`• ใบสั่งซัพนอก ORD-${o.id} (${o.status})`),
+        ...(oPend||[]).map(o=>`• ORD-${o.id} — มีสต๊อกค้างรอเพิ่มเข้าระบบ`),
+        ...(pOpen||[]).map(p=>`• ${p.po_number||"PO#"+p.id} (${p.status})`),
+        ...(pPend||[]).map(p=>`• ${p.po_number||"PO#"+p.id} — มีสต๊อกค้างรอเพิ่มเข้าระบบ`),
+      ];
+      docRefs=[...new Set(docRefs)];
+    }catch{ docRefs=null; }
+    if(docRefs&&docRefs.length){
+      alert(`ลบ "${name}" ไม่ได้ — ยังมีเอกสารที่ยังไม่จบอ้างถึงอยู่ ${docRefs.length} รายการ:\n\n${docRefs.slice(0,12).join("\n")}${docRefs.length>12?`\n... และอีก ${docRefs.length-12} รายการ`:""}\n\nถ้าลบตอนนี้ เอกสารพวกนี้จะเพิ่ม/ตัดสต๊อกไม่ได้ตลอดไป และแก้ในหน้าเว็บไม่ได้\nให้ปิดงานพวกนี้ก่อน (กดรับของ / ตีกลับ / ยกเลิก) แล้วค่อยลบ`);
+      return;
+    }
+
     // ── ยังมีของค้างอยู่ที่สาขาไหนบ้าง ────────────────────────────────────────
     // ลบวัตถุดิบ = แถวหายทั้งแถว สต๊อกที่ค้างอยู่หายตามไปด้วยโดยไม่มีบันทึกว่าหายไปไหน
     // เดิมเช็คแค่ "มีเมนู/สูตรใช้อยู่ไหม" ไม่ได้เช็คของคงเหลือเลย
@@ -4334,7 +4365,10 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       message:`ต้องการลบ "${name}" ใช่หรือไม่?`
         +(stockLeft.length
           ? `\n\n⚠️ ยังมีของคงเหลืออยู่ ${totalQty} ${unit}${totalVal>0?` (มูลค่าราว ฿${totalVal.toLocaleString()})`:""}\n${stockLeft.map(x=>`   • ${x.name}: ${x.qty} ${unit}`).join("\n")}\n\nลบแล้วยอดนี้จะหายจากมูลค่าสต๊อกทันทีและกู้คืนไม่ได้\nถ้าของยังอยู่จริง ให้ไปตัดเป็น "ของเสีย" หรือนับสต๊อกเป็น 0 ก่อน จะได้มีที่มาที่ไป`
-          : `\n\n✅ ไม่มีของคงเหลือค้างที่สาขาไหน`),
+          : `\n\n✅ ไม่มีของคงเหลือค้างที่สาขาไหน`)
+        +(docRefs===null
+          ? `\n\n⚠️ ตรวจเอกสารค้างไม่สำเร็จ (เครือข่ายมีปัญหา)\nถ้ามีใบที่ยังไม่จบอ้างถึงวัตถุดิบนี้ ใบนั้นจะเพิ่ม/ตัดสต๊อกไม่ได้ถาวร — ลองใหม่อีกครั้งจะปลอดภัยกว่า`
+          : `\n✅ ไม่มีเอกสารค้างที่อ้างถึง`),
       confirmLabel:stockLeft.length?"ลบทั้งที่ยังมีของ":"ลบ",
     }))return;
     // บันทึกจำนวนที่หายไปกับประวัติด้วย — ไม่งั้นตรวจย้อนไม่ได้ว่าลบไปแล้วของหายเท่าไหร่
