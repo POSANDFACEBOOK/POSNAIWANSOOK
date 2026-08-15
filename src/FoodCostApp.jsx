@@ -4930,6 +4930,10 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   },[_winEnd]);
   const[q,setQ]=useState("");
   const[edits,setEdits]=useState({});  // {ingId: stringValue}
+  // กระจกเงาของ edits ที่อ่านได้ "สดๆ" ระหว่างลูปบันทึก — ซิงก์ตอน render ไม่ใช่ใน useEffect
+  // (ไอดิอมเดียวกับ NumPad ในไฟล์นี้) ลูปบันทึกทั้งหมดกินเวลา 20-30 วิบนเน็ตสาขา
+  // ถ้าอ่านจาก snapshot ตอนกดปุ่ม ของที่พนักงานพิมพ์แก้ระหว่างนั้นจะถูกเขียนทับด้วยค่าเก่า
+  const editsRef=useRef(edits); editsRef.current=edits;
   const[saving,setSaving]=useState({});  // {ingId: bool}
   const inputRef=useRef();
   const[padFor,setPadFor]=useState(null);   // ingredient id whose on-screen number pad is open
@@ -4965,6 +4969,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
     const prev=branchStock(ing,currentBranch.id);
     savingRef.current[ing.id]=true;
     setSaving(s=>({...s,[ing.id]:true}));
+    let wrote=false;   // เขียนลงฐานข้อมูลสำเร็จหรือยัง — แยกจาก "รีเฟรชหน้าจอสำเร็จ"
     try{
       // Atomic per-branch SET (preserves other branches' slots even if another user
       // is moving stock at the same moment); falls back to a whole-column PATCH only
@@ -4974,10 +4979,21 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
       }
       // Log the count so the ingredient card can show its stock-count history (best-effort).
       api.addStockLog({ingredient_id:ing.id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:v,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
-      if(reload)await reload();
-      setEdits(e=>{const n={...e};delete n[ing.id];return n;});
+      wrote=true;
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
     finally{delete savingRef.current[ing.id];setSaving(s=>{const n={...s};delete n[ing.id];return n;});}
+    if(!wrote)return;
+    // ── รีเฟรชแยกจากการเขียน ────────────────────────────────────────────────
+    // เดิม await reload() อยู่ใน try เดียวกับการเขียน → รีเฟรชพลาดจะเด้ง
+    // "บันทึกไม่สำเร็จ" ทั้งที่เขียนลงฐานข้อมูลไปแล้ว พนักงานกดซ้ำ = ประวัติซ้ำ
+    // และ prev_qty รอบสองอ่านจากค่าเก่าค้าง ทำให้ประวัติการนับผิดไปด้วย
+    let refreshed=false;
+    try{ if(reload)await reload(); refreshed=true; }catch{}
+    // ── ล้างช่องที่พิมพ์ เฉพาะเมื่อค่ายังเป็นตัวที่เพิ่งบันทึกไป ──────────────
+    // เดิมลบทิ้งตาม id อย่างเดียว ถ้าระหว่างที่กำลังบันทึก (1-3 วิ) พนักงานเดินไปเจอ
+    // ของจริงไม่ตรงแล้วพิมพ์ใหม่ ตัวเลขใหม่จะถูกลบทิ้งเงียบๆ กลับไปโชว์ค่าเก่า
+    setEdits(e=>{ if(String(e[ing.id])!==String(raw))return e; const n={...e};delete n[ing.id];return n; });
+    if(!refreshed)alert("✅ บันทึกลงระบบเรียบร้อยแล้ว\n\nแต่รีเฟรชหน้าจอไม่สำเร็จ — ตัวเลขบนจออาจยังเป็นค่าเก่า\nไม่ต้องกดบันทึกซ้ำ (จะกลายเป็นนับซ้ำ) ให้ปิดแล้วเปิดหน้านับใหม่");
   }
   async function saveAll(){
     if(savingAllRef.current)return;   // ignore double-tap — claim the lock synchronously, BEFORE the
@@ -4987,32 +5003,82 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
       if(entries.length===0){alert("ยังไม่มีการเปลี่ยนแปลง");return;}
       if(!await confirmDlg({title:"บันทึกสต็อก",message:`บันทึก ${entries.length} รายการ?`,confirmLabel:"บันทึก"}))return;
       setSavingAll(true);
-      const ok=[];
-      for(const[id,v]of entries){
+      const ok=[];   // [[id, ค่าที่เขียนจริง], ...] — เก็บค่าด้วย ไม่ใช่แค่ id
+      let skipped=0;
+      for(const[id]of entries){
         if(savingRef.current[id])continue;   // this item already being saved individually — skip to avoid a duplicate insert
         const ing=ings.find(x=>+x.id===+id);if(!ing)continue;
+        // อ่านค่า "ล่าสุดบนจอ" ไม่ใช่ค่าตอนกดปุ่ม — พนักงานแก้ระหว่างลูปได้ตลอด 20-30 วิ
+        const live=editsRef.current[id];
+        if(live===undefined||live===""){skipped++;continue;}   // ถูกล้างไปแล้วระหว่างทาง = ไม่ต้องเขียน
         savingRef.current[id]=true;
         try{
           const prev=branchStock(ing,currentBranch.id);
-          if(!await rpcStockSet(+id,currentBranch.id,+v||0)){
-            await api.updateIng(+id,{stock_by_branch:setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+v||0)});
+          if(!await rpcStockSet(+id,currentBranch.id,+live||0)){
+            await api.updateIng(+id,{stock_by_branch:setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+live||0)});
           }
-          api.addStockLog({ingredient_id:+id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:+v||0,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
-          ok.push(id);
+          api.addStockLog({ingredient_id:+id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:+live||0,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
+          ok.push([String(id),String(live)]);
         }catch(e){alert(`บันทึก ${ing.name} ไม่สำเร็จ: ${e.message}`);}
         finally{delete savingRef.current[id];}
       }
-      if(reload)await reload();
-      // Keep only the rows that FAILED to save — never wipe an un-saved typed count,
-      // so the counter can retry without re-entering the quantity.
-      const okSet=new Set(ok.map(String));
-      setEdits(e=>Object.fromEntries(Object.entries(e).filter(([id])=>!okSet.has(String(id)))));
-      const failed=entries.length-ok.length;
-      alert(failed>0?`✅ บันทึก ${ok.length} รายการ\n⚠️ ${failed} รายการยังบันทึกไม่สำเร็จ — ยังค้างในฟอร์ม กดบันทึกใหม่ได้`:`✅ บันทึกสต็อก ${ok.length} รายการสำเร็จ`);
+      // รีเฟรชแยกจากการเขียน — รีเฟรชพลาดต้องไม่กลืนทั้งขั้นตอนที่เหลือ
+      // (เดิม reload() อยู่ก่อนการล้าง edits และก่อน alert ถ้ามันโยน ทุกอย่างหลังจากนั้นไม่ทำงาน
+      //  ใบที่เขียนสำเร็จแล้วยังค้างในฟอร์ม พนักงานกดซ้ำ = ประวัติซ้ำ + prev_qty ผิด)
+      let refreshed=false;
+      try{ if(reload)await reload(); refreshed=true; }catch{}
+      // ── ล้างเฉพาะแถวที่ "ค่ายังตรงกับที่เพิ่งเขียนไป" ────────────────────────
+      // เดิมล้างตาม id ล้วน ค่าที่พนักงานพิมพ์แก้ระหว่างลูปจึงถูกลบทิ้งเงียบๆ
+      // เทียบเป็นตัวเลข ไม่ใช่สตริง ("6.0" กับ "6" คือค่าเดียวกัน ไม่งั้นค้างเป็นแถวผีตลอด)
+      const okMap=new Map(ok);
+      setEdits(e=>Object.fromEntries(Object.entries(e).filter(([id,val])=>{
+        const saved=okMap.get(String(id));
+        if(saved===undefined)return true;                       // ไม่ได้เขียน → เก็บไว้เสมอ
+        if(String(val)===saved)return false;                    // เหมือนเดิม → ล้างได้
+        return !(val!==""&&saved!==""&&+val===+saved);          // ต่างแค่รูปแบบตัวเลข → ล้างได้
+      })));
+      const failed=entries.length-ok.length-skipped;
+      alert([
+        `✅ บันทึกสต็อก ${ok.length} รายการ`,
+        failed>0?`⚠️ ${failed} รายการยังบันทึกไม่สำเร็จ — ยังค้างในฟอร์ม กดบันทึกใหม่ได้`:"",
+        skipped>0?`⏭ ข้าม ${skipped} รายการที่ถูกล้างค่าระหว่างบันทึก`:"",
+        refreshed?"":"⚠️ รีเฟรชหน้าจอไม่สำเร็จ — ตัวเลขบนจออาจยังเป็นค่าเก่า\nไม่ต้องกดบันทึกซ้ำ (จะกลายเป็นนับซ้ำ) ให้ปิดแล้วเปิดหน้านับใหม่",
+      ].filter(Boolean).join("\n"));
     }finally{savingAllRef.current=false;setSavingAll(false);}
   }
 
-  return <Modal title={`📦 นับสต็อก — ${currentBranch?.name||"—"}`} onClose={onClose} wide>
+  // ── ปิดหน้านับ = อาจทำงานทั้งรอบหาย ต้องถามก่อนเสมอ ────────────────────────
+  // Modal เดิมปิดด้วย Esc ได้ทันที และ Esc ที่ตั้งใจกดเพื่อปิดแป้นตัวเลขก็ทะลุไปปิดทั้งหน้า
+  // ตัวเลขที่พิมพ์ค้างอยู่ทั้งหมด (อาจ 30-40 แถว) หายเงียบ ไม่มีอะไรบอก
+  // และช่วงเวลานับมีจำกัด ถ้าหมดเวลาไปแล้วก็นับใหม่ไม่ได้อีก
+  const closingRef=useRef(false);   // กัน Esc รัวๆ เปิดกล่องยืนยันซ้อนกัน
+  async function guardedClose(){
+    if(closingRef.current)return;
+    const pending=Object.values(edits).filter(v=>v!==""&&v!=null).length;
+    if(!pending){onClose&&onClose();return;}
+    closingRef.current=true;
+    try{
+      if(await confirmDlg({
+        title:"ยังมีที่นับค้างไว้",
+        message:`มี ${pending} รายการที่พิมพ์ไว้แต่ยังไม่ได้กดบันทึก\n\nถ้าปิดตอนนี้ ตัวเลขที่พิมพ์จะหายทั้งหมด ต้องเดินนับใหม่\n\nแนะนำ: กดยกเลิก แล้วกดปุ่ม "บันทึกทั้งหมด" ก่อน`,
+        confirmLabel:"ปิดทิ้งเลย",
+      }))onClose&&onClose();
+    }finally{closingRef.current=false;}
+  }
+  // Esc: ปิดแป้นตัวเลขก่อน ถ้าไม่มีแป้นเปิดอยู่ค่อยถามเรื่องปิดหน้า
+  // ใช้ capture เพื่อให้ทำงานก่อนตัวอื่น และส่ง disableEsc ให้ Modal ไม่ต้องดักซ้ำ
+  useEffect(()=>{
+    const onKey=e=>{
+      if(e.key!=="Escape")return;
+      e.stopPropagation();e.preventDefault();
+      if(padFor!=null){setPadFor(null);return;}
+      guardedClose();
+    };
+    window.addEventListener("keydown",onKey,true);
+    return()=>window.removeEventListener("keydown",onKey,true);
+  });// eslint-disable-line react-hooks/exhaustive-deps
+
+  return <Modal title={`📦 นับสต็อก — ${currentBranch?.name||"—"}`} onClose={guardedClose} disableEsc wide>
     {/* Countdown banner as the count window nears its close */}
     {remainMin<=30&&(()=>{const late=remainMin<=10;const over=remainMin<=0;return <div style={{display:"flex",alignItems:"center",gap:8,padding:"9px 12px",borderRadius:10,marginBottom:10,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,background:over||late?C.redLight:"#FFFBEB",border:`1px solid ${over||late?C.red+"55":"#FDE68A"}`,color:over||late?C.red:"#92400E"}}>
       <Ic d={I.clock} s={16} c={over||late?C.red:"#92400E"}/>
