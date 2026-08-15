@@ -5025,7 +5025,13 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
       // is moving stock at the same moment); falls back to a whole-column PATCH only
       // if the RPC isn't installed yet. Per-branch count never touches edit_by/edit_at.
       if(!await rpcStockSet(ing.id,currentBranch.id,v)){
-        await api.updateIng(ing.id,{stock_by_branch:setBranchStockInJson(ing.stock_by_branch,currentBranch.id,v)});
+        // เส้นทางสำรอง (RPC ใช้ไม่ได้ชั่วคราว) เขียนคอลัมน์ทั้งก้อน — ต้อง merge จาก
+        // แถว "สด" ที่เพิ่งอ่านจาก DB เท่านั้น ห้ามใช้ ing จาก props: ตั้งแต่เลิก reload
+        // ต่อแถว props จะเก่าลงเรื่อยๆ ทั้งรอบนับ ถ้า merge จากของเก่า สล็อตสาขาอื่น
+        // ที่เพิ่งเปลี่ยน (เช่น รับของเข้า) จะถูกเขียนทับย้อนกลับ = สต๊อกสาขาอื่นเพี้ยน
+        const fresh=await sb(`ingredients?id=eq.${ing.id}&select=stock_by_branch`);
+        const base=(Array.isArray(fresh)&&fresh[0])?fresh[0].stock_by_branch:ing.stock_by_branch;
+        await api.updateIng(ing.id,{stock_by_branch:setBranchStockInJson(base,currentBranch.id,v)});
       }
       // Log the count so the ingredient card can show its stock-count history (best-effort).
       api.addStockLog({ingredient_id:ing.id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:v,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
@@ -5062,7 +5068,10 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         try{
           const prev=curOf(ing);
           if(!await rpcStockSet(+id,currentBranch.id,+live||0)){
-            await api.updateIng(+id,{stock_by_branch:setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+live||0)});
+            // merge จากแถวสดเสมอ — เหตุผลเดียวกับ saveOne (กันทับสล็อตสาขาอื่นด้วยค่าเก่า)
+            const fresh=await sb(`ingredients?id=eq.${id}&select=stock_by_branch`);
+            const base=(Array.isArray(fresh)&&fresh[0])?fresh[0].stock_by_branch:ing.stock_by_branch;
+            await api.updateIng(+id,{stock_by_branch:setBranchStockInJson(base,currentBranch.id,+live||0)});
           }
           api.addStockLog({ingredient_id:+id,ingredient_name:ing.name,unit:ing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:+live||0,counted_by:counter?.name||currentUser?.username||currentUser?.name||"",counter_photo:counter?.photo||null,session_id:counter?.sessionId||null}).catch(()=>{});
           ok.push([String(id),String(live)]);
