@@ -4187,6 +4187,13 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   },[ings,currentBranch,isCentral]);
   const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return ings.filter(i=>{const matchB=ingVisibleAt(i,currentBranch?.id,isCentral);const matchQ=!ql||i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql);return matchQ&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;});},[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
+  // ── รายการสำหรับ "นับสต๊อก" — กรองแค่การมองเห็นของสาขา ไม่เอาช่องค้นหา/หมวด ──
+  // ⚠️ เดิมส่ง `filtered` เข้าไป ซึ่งกรองด้วย q (ช่องค้นหา) และ cat (ชิปหมวด) ด้วย
+  //    และ startStockCount ไม่ได้ล้างสองตัวนั้นก่อนเปิด → ถ้าพนักงานเลือกหมวดไว้
+  //    หรือมีคำค้างในช่องค้นหา จะเห็นแค่ส่วนนั้นในหน้านับ แล้วเข้าใจว่านับครบแล้ว
+  //    ตัวที่ไม่ได้โผล่ก็ค้างเลขเดิมไว้ กลายเป็น "ตัวเลขไม่อัปเดตเอง" ทั้งที่ไม่ได้นับ
+  //    หน้านับมีช่องค้นหาของตัวเองอยู่แล้ว จึงไม่มีอะไรเสียจากการส่งรายการเต็ม
+  const branchIngs=useMemo(()=>ings.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentral)),[ings,currentBranch,isCentral]);
   // Table view — click a header to sort by it, click again to flip direction.
   const[sortBy,setSortBy]=useState("code");const[sortDir,setSortDir]=useState("asc");
   const clickSort=(id)=>{if(!id)return;if(sortBy===id)setSortDir(d=>d==="asc"?"desc":"asc");else{setSortBy(id);setSortDir("asc");}};
@@ -4899,7 +4906,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     </Modal>}
     {showStockGate&&<StockCounterGate currentUser={currentUser} currentBranch={currentBranch} onClose={()=>setShowStockGate(false)} onConfirm={c=>{setStockCounter(c);setShowStockGate(false);setShowStockCheck(true);}}/>}
     {showSessionHist&&<StockSessionHistory currentUser={currentUser} branches={branches} ings={ings} onClose={()=>setShowSessionHist(false)}/>}
-    {showStockCheck&&<StockCheckPopup ings={filtered} currentBranch={currentBranch} currentUser={currentUser} reload={reload} counter={stockCounter} onClose={()=>setShowStockCheck(false)}/>}
+    {showStockCheck&&<StockCheckPopup ings={branchIngs} currentBranch={currentBranch} currentUser={currentUser} reload={reload} counter={stockCounter} onClose={()=>setShowStockCheck(false)}/>}
   </div>;
 }
 
