@@ -1178,7 +1178,23 @@ const UNIT_G={"กรัม":1,"ก.":1,"g":1,"มล.":1,"ml":1,"มิลล�
 // หน่วยมาตรฐานที่เจ้าของกำหนด (8 ส.ค. 69) — ดรอปดาวน์ทุกที่ให้เลือกได้แค่ 9 ตัวนี้
 // ของเดิมในฐานข้อมูลมี 41 หน่วย (กก. 187 · ชิ้น 37 · กล่อง 25 · แกลลอน 17 …) ห้ามไปแก้
 // ให้คงค่าเดิมไว้ทั้งหมด แค่ตอนกดเปลี่ยนถึงจะเห็นเฉพาะ 9 หน่วยนี้
-const STD_UNITS=["กิโลกรัม","กรัม","ถุง","แพ็ค","แผง","ลัง","ขวด","ลิตร","มิลลิลิตร"];
+// ── หน่วยมาตรฐานของระบบ ────────────────────────────────────────────────────
+// เดิมมี 9 หน่วย ซึ่งครอบไม่พอ: วัดจากข้อมูลจริง 15/08/2569 มี 33 หน่วยที่ถูกใช้
+// อยู่แล้วแต่เลือกจากดรอปดาวน์ไม่ได้ (ชิ้น 37 รายการ · กล่อง 24 · แกลลอน 17 · อัน 15 …)
+// พนักงานเลยต้องมาขอเพิ่มทีละหน่วย — คราวนี้ใส่ให้ครบทุกหน่วยที่มีใช้จริง
+//
+// ⚠️ ไม่ใส่ตัวย่อ/ตัวสะกดผิดที่ค้างในข้อมูลเก่า (กก. · กิโล · กส. · แพ็ึค · แพ็ค.)
+//    เพราะจะทำให้หน่วยเดียวกันแตกเป็นหลายชื่อจนรวมยอดไม่ได้
+//    ของเก่ายังใช้ได้ปกติ — UnitPicker โชว์ค่าเดิมพร้อมป้าย "เดิม" อยู่แล้ว
+//    และ UNIT_G ก็รู้จัก "กก." อยู่ จึงยังแปลงเป็นกรัมได้ถูกต้อง
+const UNIT_GROUPS=[
+  // กลุ่มนี้เท่านั้นที่แปลงเป็นกรัมได้เอง (ดู UNIT_G) — ต้นทุนคิดตรงได้ทันที
+  {label:"น้ำหนัก / ปริมาตร",units:["กิโลกรัม","กรัม","ลิตร","มิลลิลิตร"]},
+  {label:"บรรจุภัณฑ์",units:["ถุง","แพ็ค","ขวด","ลัง","กล่อง","แผง","ซอง","ห่อ","กระป๋อง","กระปุก","แกลลอน","ถัง","กระสอบ","ถาด","หม้อ","ม้วน","รีม"]},
+  {label:"นับเป็นชิ้น",units:["ชิ้น","อัน","ใบ","ก้อน","ลูก","ตัว","แผ่น","แท่ง","ด้าม","คู่","ชุด","เครื่อง","แถว","มัด","กำ","ผืน"]},
+];
+const STD_UNITS=UNIT_GROUPS.flatMap(g=>g.units);
+const UNIT_GROUP_OF=Object.fromEntries(UNIT_GROUPS.flatMap(g=>g.units.map(u=>[u,g.label])));
 // ช่อง "รวมทั้งหมด" (convert_to_gram) เก็บเป็น "กรัม" เสมอ เพราะทุกอย่างท้ายน้ำหารด้วยมัน
 // (ต้นทุนต่อกรัม · การตัดสต๊อกตอนผลิต · การกระจายของเข้าสาขา) จึงรับได้เฉพาะหน่วยที่
 // แปลงเป็นกรัมได้จริง — ถุง/แพ็ค/ลัง/แผง/ขวด ไม่มีน้ำหนัก ใส่ตรงนี้แล้วไม่มีความหมาย
@@ -1232,15 +1248,20 @@ const toGrams=(amt,unit)=>round2((+amt||0)*(UNIT_G[String(unit||"").trim()]||1))
 // options = จำกัดรายการเฉพาะบางที่ได้ เช่นช่อง "รวมทั้งหมด" ที่รับได้แต่หน่วยที่มีน้ำหนักจริง
 function UnitPicker({value,onChange,placeholder="เลือกหน่วย",options=STD_UNITS}){
   const[open,setOpen]=useState(false);
+  const[uq,setUq]=useState("");
   const box=useRef(null);
   useEffect(()=>{
     if(!open)return;
+    setUq("");   // เปิดใหม่ทุกครั้งเริ่มจากรายการเต็ม ไม่ค้างคำค้นเดิม
     const away=e=>{if(box.current&&!box.current.contains(e.target))setOpen(false);};
     document.addEventListener("mousedown",away);
     return()=>document.removeEventListener("mousedown",away);
   },[open]);
   const cur=String(value||"").trim();
   const legacy=cur&&!options.includes(cur);
+  // รายการยาว (37 หน่วย) — ใส่ช่องค้นหาและหัวข้อกลุ่ม ไม่งั้นต้องเลื่อนหาทีละตัว
+  const longList=options.length>12;
+  const shown=uq.trim()?options.filter(u=>u.includes(uq.trim())):options;
   return <div ref={box} style={{position:"relative"}}>
     <button type="button" onClick={()=>setOpen(o=>!o)}
       style={{...iS,textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
@@ -1252,12 +1273,28 @@ function UnitPicker({value,onChange,placeholder="เลือกหน่วย"
       </span>
     </button>
     {open&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:40,marginTop:4,background:C.white,
-      border:`1px solid ${C.line}`,borderRadius:10,boxShadow:"0 10px 30px rgba(15,23,42,.16)",maxHeight:280,overflowY:"auto"}}>
-      {options.map(u=>{const on=u===cur;
-        return <button key={u} type="button" onClick={()=>{onChange(u);setOpen(false);}}
-          style={{display:"block",width:"100%",textAlign:"left",padding:"10px 12px",border:"none",
-            borderBottom:`1px solid ${C.lineLight}`,background:on?C.brandLight:"transparent",cursor:"pointer",
-            fontFamily:"'Sarabun',sans-serif",fontSize:13.5,color:C.ink,fontWeight:on?800:500}}>{u}{on?" ✓":""}</button>;})}
+      border:`1px solid ${C.line}`,borderRadius:10,boxShadow:"0 10px 30px rgba(15,23,42,.16)",maxHeight:300,display:"flex",flexDirection:"column"}}>
+      {longList&&<div style={{padding:8,borderBottom:`1px solid ${C.line}`,flexShrink:0,background:C.bg}}>
+        <input autoFocus value={uq} onChange={e=>setUq(e.target.value)} placeholder="พิมพ์ค้นหาหน่วย…"
+          style={{...iS,padding:"7px 10px",fontSize:13}}/>
+      </div>}
+      <div style={{overflowY:"auto",flex:1}}>
+      {shown.length===0
+        ?<div style={{padding:"14px 12px",fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center"}}>ไม่พบหน่วยที่ค้นหา</div>
+        :(()=>{let lastG=null;return shown.map(u=>{
+          const on=u===cur;
+          // หัวข้อกลุ่ม — โชว์เมื่อรายการยาวและยังไม่ได้กรองด้วยคำค้น (กรองแล้วกลุ่มไม่ช่วย)
+          const g=UNIT_GROUP_OF[u];
+          const head=(longList&&!uq.trim()&&g&&g!==lastG)?g:null;
+          lastG=g;
+          return <div key={u}>
+            {head&&<div style={{padding:"6px 12px 4px",fontSize:10.5,fontWeight:900,color:C.ink4,fontFamily:"'Sarabun',sans-serif",background:C.bg,letterSpacing:.3}}>{head}</div>}
+            <button type="button" onClick={()=>{onChange(u);setOpen(false);}}
+              style={{display:"block",width:"100%",textAlign:"left",padding:"10px 12px",border:"none",
+                borderBottom:`1px solid ${C.lineLight}`,background:on?C.brandLight:"transparent",cursor:"pointer",
+                fontFamily:"'Sarabun',sans-serif",fontSize:13.5,color:C.ink,fontWeight:on?800:500}}>{u}{on?" ✓":""}</button>
+          </div>;});})()}
+      </div>
     </div>}
   </div>;
 }
