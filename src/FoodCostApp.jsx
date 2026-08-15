@@ -1329,29 +1329,39 @@ function branchStockExact(ing,branchId){
 // via RPC, false if the RPC isn't installed yet (caller then falls back to a PATCH).
 // Optimistic start; flips off on the PostgREST "function not found" error so we don't
 // re-attempt a missing RPC for every item in a big receive.
-const _rpcStock={delta:true,set:true,transfer:true};
+// ⚠️ เดิมเป็น boolean: พลาดครั้งเดียว = ปิด RPC ถาวรตลอด session
+//    ปัญหาคือ PGRST202 เกิดชั่วคราวได้ (Supabase รีโหลด schema cache หลังแก้ตาราง)
+//    พอปิดถาวรแล้ว การเขียนสต๊อกที่เหลือทั้ง session ตกไปใช้ PATCH ทั้งคอลัมน์
+//    ซึ่งไม่ atomic — สองเครื่องนับคนละวัตถุดิบที่สาขาเดียวกันจะทับสล็อตของกันเอง
+//    (อ่านทั้งคอลัมน์ → แก้ช่องตัวเอง → เขียนกลับทั้งคอลัมน์ = ของอีกฝั่งหาย)
+//    เปลี่ยนเป็นปิดชั่วคราว 60 วิแล้วลองใหม่: ถ้า RPC ไม่มีจริงก็เสียแค่คำขอละนาที
+//    ถ้าเป็นแค่ชั่วคราว ระบบกลับมาปลอดภัยเองภายในหนึ่งนาที
+const _RPC_RETRY_MS=60000;
+const _rpcOffUntil={delta:0,set:0,transfer:0};
+const _rpcReady=k=>Date.now()>=_rpcOffUntil[k];
+const _rpcOff=k=>{_rpcOffUntil[k]=Date.now()+_RPC_RETRY_MS;};
 // Narrow on purpose: ONLY the PostgREST "function not found" shape (PGRST202) may
 // downgrade to the non-atomic PATCH fallback. Any other error (permission, network,
 // transient 5xx) must THROW so the caller reports it — silently losing atomicity
 // for the rest of the session is worse than a visible failure.
 const _rpcMissing=e=>/PGRST202|find the function/i.test(String((e&&e.message)||e));
 async function rpcStockDelta(ingId,branchId,delta){
-  if(!_rpcStock.delta)return false;
+  if(!_rpcReady("delta"))return false;
   try{await sb("rpc/apply_branch_stock_delta",{method:"POST",body:JSON.stringify({p_id:+ingId,p_branch:String(branchId),p_delta:Math.round((+delta||0)*1000)/1000})});return true;}
-  catch(e){if(_rpcMissing(e)){_rpcStock.delta=false;return false;}throw e;}
+  catch(e){if(_rpcMissing(e)){_rpcOff("delta");return false;}throw e;}
 }
 async function rpcStockSet(ingId,branchId,qty){
-  if(!_rpcStock.set)return false;
+  if(!_rpcReady("set"))return false;
   try{await sb("rpc/set_branch_stock",{method:"POST",body:JSON.stringify({p_id:+ingId,p_branch:String(branchId),p_qty:Math.round((+qty||0)*1000)/1000})});return true;}
-  catch(e){if(_rpcMissing(e)){_rpcStock.set=false;return false;}throw e;}
+  catch(e){if(_rpcMissing(e)){_rpcOff("set");return false;}throw e;}
 }
 // Both slots of a branch→branch move in ONE row-locked transaction: the debit and
 // credit can never half-apply (no minted/lost stock if the connection drops between
 // them). Falls back to two apply_branch_stock_delta calls when not installed yet.
 async function rpcStockTransfer(ingId,fromId,toId,qty){
-  if(!_rpcStock.transfer)return false;
+  if(!_rpcReady("transfer"))return false;
   try{await sb("rpc/transfer_branch_stock",{method:"POST",body:JSON.stringify({p_id:+ingId,p_from:String(fromId),p_to:String(toId),p_qty:Math.round((+qty||0)*1000)/1000})});return true;}
-  catch(e){if(_rpcMissing(e)){_rpcStock.transfer=false;return false;}throw e;}
+  catch(e){if(_rpcMissing(e)){_rpcOff("transfer");return false;}throw e;}
 }
 // Per-branch supplier mapping — each branch can pick one of THEIR suppliers for each ingredient.
 function branchSupplierId(ing,branchId){
@@ -4920,9 +4930,20 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   const _winEnd=stockCountWindow(currentBranch?.type==="central").e;
   const[remainMin,setRemainMin]=useState(()=>_winEnd-bkkNowMinutes());
   const warnedRef=useRef({});
+  const overdueRef=useRef(false);   // เลยเวลาแล้วครั้งหนึ่ง = เลยตลอด ห้ามกลับไปเป็นยังไม่หมดเวลา
   useEffect(()=>{
     const tick=()=>{
-      const rem=_winEnd-bkkNowMinutes();setRemainMin(rem);
+      let rem=_winEnd-bkkNowMinutes();
+      // ── ข้ามเที่ยงคืน ────────────────────────────────────────────────────
+      // bkkNowMinutes คือ "นาทีที่เท่าไรของวัน" พอถึง 00:00 มันวนกลับเป็น 0
+      // เวลาปิดของสาขาคือ 23:30 (=1410) ตอน 23:35 จะได้ -5 = เลยเวลา (แถบแดงขึ้น)
+      // แต่พอ 00:01 จะได้ 1409 = "เหลืออีก 1409 นาที" แถบแดงหายเอง ทั้งที่ยังนับค้าง
+      // ห่างเกิน 12 ชม. เป็นไปไม่ได้ เพราะเปิดหน้านับได้เฉพาะในช่วงเวลาที่กำหนด
+      // → แปลว่าวนข้ามวันมาแล้ว ถือว่าเลยเวลา และล็อกไว้ไม่ให้กลับไปเป็นยังไม่หมด
+      if(rem>720)rem=-1;
+      if(rem<=0)overdueRef.current=true;
+      if(overdueRef.current&&rem>0)rem=-1;
+      setRemainMin(rem);
       if(rem<=15&&rem>5&&!warnedRef.current.a){warnedRef.current.a=true;alert(`⏰ ใกล้หมดเวลานับสต็อก — เหลืออีกประมาณ ${rem} นาที (ถึง ${hhmmOfMin(_winEnd)} น.)\nกรุณาบันทึกรายการที่นับให้ทันเวลา`);}
       if(rem<=5&&rem>0&&!warnedRef.current.b){warnedRef.current.b=true;alert("⏰ เหลือเวลานับสต็อกอีกไม่ถึง 5 นาที!\nรีบกด \"บันทึกทั้งหมด\" ก่อนหมดเวลา");}
     };
@@ -4952,13 +4973,31 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   // so whoever is counting fixes it, instead of it lingering invisibly.
   const negatives=useMemo(()=>ings.filter(i=>branchStock(i,currentBranch.id)<-1e-9),[ings,currentBranch?.id]);
   const[showNegOnly,setShowNegOnly]=useState(false);
+  // ── ตรึงรายชื่อ "ติดลบ" ไว้ตอนกดเข้าโหมดนี้ ────────────────────────────────
+  // เดิมลิสต์คำนวณสดจากสต๊อกปัจจุบัน พอแก้ตัวหนึ่งเสร็จ (บันทึกแล้วไม่ติดลบ)
+  // แถวนั้นหายจากลิสต์ทันที แถวล่างเลื่อนขึ้นมาแทน — นิ้วที่กำลังจะกดต่อโดนคนละตัว
+  // และถ้าแก้ครบก็เหลือหน้าว่างเปล่าจนงงว่าของหายไปไหน
+  // ตรึงแล้วแถวไม่ขยับ ตัวที่แก้แล้วยังอยู่ให้เห็น พร้อมนับความคืบหน้าให้ด้วย
+  const[negFrozen,setNegFrozen]=useState(null);   // Set ของ id ตอนกดเข้าโหมดนี้
+  function toggleNegOnly(){
+    setShowNegOnly(v=>{
+      const next=!v;
+      setNegFrozen(next?new Set(negatives.map(i=>+i.id)):null);
+      return next;
+    });
+  }
+  // เหลือติดลบจริงกี่ตัวจากที่ตรึงไว้ — ใช้โชว์ความคืบหน้า
+  const negLeft=useMemo(()=>!negFrozen?0:[...negFrozen].filter(id=>{
+    const ing=ings.find(x=>+x.id===+id);
+    return ing&&branchStock(ing,currentBranch.id)<-1e-9;
+  }).length,[negFrozen,ings,currentBranch?.id]);
   const filtered=useMemo(()=>{
     let list=ings;
-    if(showNegOnly)list=negatives;
+    if(showNegOnly)list=negFrozen?ings.filter(i=>negFrozen.has(+i.id)):negatives;
     if(!q.trim())return list;
     const ql=q.toLowerCase();
     return list.filter(i=>i.name.toLowerCase().includes(ql)||(i.category||"").toLowerCase().includes(ql)||(i.supplier_name||"").toLowerCase().includes(ql));
-  },[ings,q,showNegOnly,negatives]);
+  },[ings,q,showNegOnly,negatives,negFrozen]);
 
   async function saveOne(ing){
     if(savingRef.current[ing.id])return;   // already saving this item — ignore double-tap/ghost-click
@@ -5091,13 +5130,23 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         <input ref={inputRef} value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาชื่อวัตถุดิบ / หมวด / ซัพพลาย..." style={{...iS,paddingLeft:40,fontSize:16,padding:"11px 14px 11px 40px"}}/>
       </div>
       <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:6}}>พบ <b style={{color:C.brand}}>{filtered.length}</b> รายการ {Object.keys(edits).length>0&&<span style={{color:C.green,marginLeft:8}}>· แก้ไขค้างไว้ {Object.keys(edits).length} รายการ</span>}</div>
-      {negatives.length>0&&<div style={{marginTop:8,background:C.redLight,border:`1.5px solid ${C.red}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+      {/* ⚠️ ต้องโชว์ต่อเมื่ออยู่ในโหมด "เฉพาะติดลบ" ด้วย แม้จะแก้ครบแล้ว
+          เดิมผูกกับ negatives.length>0 อย่างเดียว พอแก้ตัวสุดท้ายเสร็จ แถบหายทั้งอัน
+          รวมปุ่ม "↩ ดูทั้งหมด" ด้วย → พนักงานติดอยู่ในโหมดกรองโดยไม่มีทางออก */}
+      {(negatives.length>0||showNegOnly)&&(()=>{
+        const total=negFrozen?negFrozen.size:negatives.length;
+        const done=showNegOnly&&negFrozen?Math.max(0,total-negLeft):0;
+        const clear=showNegOnly&&negLeft===0;
+        return <div style={{marginTop:8,background:clear?"#ECFDF5":C.redLight,border:`1.5px solid ${clear?C.green:C.red}`,borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{flex:1,minWidth:180}}>
-          <div style={{fontSize:13,fontWeight:900,color:C.red}}>⚠️ สต๊อกติดลบ {negatives.length} รายการ</div>
-          <div style={{fontSize:11,color:"#991B1B",marginTop:1}}>ถูกตัดออกมากกว่าที่เคยนับเข้า — ควรนับ/เติมให้ถูกต้อง</div>
+          {clear
+            ?<><div style={{fontSize:13,fontWeight:900,color:C.green}}>✅ แก้ครบแล้วทั้ง {total} รายการ</div>
+              <div style={{fontSize:11,color:"#065F46",marginTop:1}}>กด "ดูทั้งหมด" เพื่อกลับไปนับรายการที่เหลือ</div></>
+            :<><div style={{fontSize:13,fontWeight:900,color:C.red}}>⚠️ สต๊อกติดลบ {showNegOnly?negLeft:negatives.length} รายการ{done>0?` · แก้แล้ว ${done}`:""}</div>
+              <div style={{fontSize:11,color:"#991B1B",marginTop:1}}>{showNegOnly?"รายการที่แก้แล้วยังคาไว้ในลิสต์ ไม่หายกลางคัน แถวจะไม่ขยับ":"ถูกตัดออกมากกว่าที่เคยนับเข้า — ควรนับ/เติมให้ถูกต้อง"}</div></>}
         </div>
-        <button onClick={()=>setShowNegOnly(v=>!v)} style={{background:showNegOnly?C.red:C.white,border:`1.5px solid ${C.red}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",color:showNegOnly?C.white:C.red,fontWeight:800,fontSize:12,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{showNegOnly?"↩ ดูทั้งหมด":"ดูเฉพาะที่ติดลบ"}</button>
-      </div>}
+        <button onClick={toggleNegOnly} style={{background:showNegOnly?C.red:C.white,border:`1.5px solid ${C.red}`,borderRadius:8,padding:"6px 12px",cursor:"pointer",color:showNegOnly?C.white:C.red,fontWeight:800,fontSize:12,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{showNegOnly?"↩ ดูทั้งหมด":"ดูเฉพาะที่ติดลบ"}</button>
+      </div>;})()}
     </div>
     {/* Result list — card per ingredient (mobile-friendly) */}
     <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
