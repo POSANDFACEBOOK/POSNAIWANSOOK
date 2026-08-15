@@ -4303,17 +4303,14 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     addH(editId?`แก้ไขวัตถุดิบ: ${form.name}`:`เพิ่มวัตถุดิบ: ${form.name}`);
     await reload();setOpen(false);
   }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  // ป็อปอัพอธิบายว่าทำไมลบไม่ได้ · null = ไม่มีอะไรบล็อค
+  const[delBlock,setDelBlock]=useState(null);
   async function del(id,name){
     // A deleted ingredient that menus still reference is silently SKIPPED by menuCost, so every
     // affected menu's cost drops with no warning (margins look better than reality). Refuse the
     // delete and name the references so the user removes them deliberately.
-    const usedByMenus=(menus||[]).filter(m=>Array.isArray(m.ingredients)&&m.ingredients.some(x=>+x.ingredientId===+id)).map(m=>m.name);
-    const usedBySop=(ings||[]).filter(i=>+i.id!==+id&&Array.isArray(i.ingredients)&&i.ingredients.some(x=>+x.ingredientId===+id)).map(i=>i.name);
-    if(usedByMenus.length||usedBySop.length){
-      const lines=[...usedByMenus.map(n=>"• เมนู: "+n),...usedBySop.map(n=>"• สูตร (SOP): "+n)];
-      alert(`ลบ "${name}" ไม่ได้ — ยังถูกใช้อยู่ ${lines.length} รายการ:\n\n${lines.slice(0,12).join("\n")}${lines.length>12?`\n... และอีก ${lines.length-12} รายการ`:""}\n\nถ้าลบทั้งที่ยังถูกใช้ ต้นทุนของรายการเหล่านี้จะลดลงเงียบๆ โดยไม่มีการเตือน\nกรุณาเอาวัตถุดิบนี้ออกจากสูตรก่อน แล้วค่อยลบ`);
-      return;
-    }
+    const usedByMenus=(menus||[]).filter(m=>Array.isArray(m.ingredients)&&m.ingredients.some(x=>+x.ingredientId===+id)).map(m=>({name:m.name,gram:(m.ingredients.find(x=>+x.ingredientId===+id)||{}).amountGram}));
+    const usedBySop=(ings||[]).filter(i=>+i.id!==+id&&Array.isArray(i.ingredients)&&i.ingredients.some(x=>+x.ingredientId===+id)).map(i=>({name:i.name,gram:(i.ingredients.find(x=>+x.ingredientId===+id)||{}).amountGram}));
     // ── เอกสารที่ยังไม่จบ / สต๊อกค้าง ที่ชี้มาที่วัตถุดิบตัวนี้ ────────────────
     // ลบแล้วเอกสารพวกนี้พังถาวร: ตอนกดรับของ ระบบหาวัตถุดิบไม่เจอ เพิ่มสต๊อกไม่ได้
     // และปุ่ม "ลองใหม่" ก็ไม่มีวันสำเร็จ เพราะแถวหายไปแล้ว แก้ในหน้าเว็บไม่ได้เลย
@@ -4332,18 +4329,19 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
         sb(`purchase_orders?select=id,po_number,status&status=in.(requested,open,shipped,transfer_pending,transfer_shipped)&items=cs.${_cs([{ingredient_id:+id}])}`),
         sb(`purchase_orders?select=id,po_number,status&stock_pending=cs.${_cs([{items:[{ingredient_id:+id}]}])}`),
       ]);
-      docRefs=[
-        ...(oOpen||[]).map(o=>`• ใบสั่งซัพนอก ORD-${o.id} (${o.status})`),
-        ...(oPend||[]).map(o=>`• ORD-${o.id} — มีสต๊อกค้างรอเพิ่มเข้าระบบ`),
-        ...(pOpen||[]).map(p=>`• ${p.po_number||"PO#"+p.id} (${p.status})`),
-        ...(pPend||[]).map(p=>`• ${p.po_number||"PO#"+p.id} — มีสต๊อกค้างรอเพิ่มเข้าระบบ`),
-      ];
-      docRefs=[...new Set(docRefs)];
+      const DST={pending_approval:"รออนุมัติ",pending:"อนุมัติแล้ว รอส่งซัพ",approved:"ส่งซัพแล้ว รอของเข้า",
+        requested:"รอครัวกลางรับ",open:"รอจัดส่ง",shipped:"จัดส่งแล้ว รอผู้รับกดรับ",
+        transfer_pending:"รอจัดส่ง (โอนย้าย)",transfer_shipped:"จัดส่งแล้ว (โอนย้าย)",awaiting_payment:"รอชำระเงิน"};
+      const mk=(ref,status,stuck)=>({ref,status:DST[status]||status,stuck,
+        todo:stuck?"กดปุ่ม 🔁 ลองเพิ่มสต๊อกใหม่ที่ใบนี้ให้สำเร็จก่อน":"ปิดงานใบนี้ก่อน — กดรับของ / ตีกลับ / ยกเลิก"});
+      const seen=new Set(); const out=[];
+      const push=(r)=>{ if(seen.has(r.ref+r.stuck))return; seen.add(r.ref+r.stuck); out.push(r); };
+      (oOpen||[]).forEach(o=>push(mk(`ใบสั่งซัพนอก ORD-${o.id}`,o.status,false)));
+      (oPend||[]).forEach(o=>push(mk(`ใบสั่งซัพนอก ORD-${o.id}`,o.status,true)));
+      (pOpen||[]).forEach(p=>push(mk(p.po_number||`PO #${p.id}`,p.status,false)));
+      (pPend||[]).forEach(p=>push(mk(p.po_number||`PO #${p.id}`,p.status,true)));
+      docRefs=out;
     }catch{ docRefs=null; }
-    if(docRefs&&docRefs.length){
-      alert(`ลบ "${name}" ไม่ได้ — ยังมีเอกสารที่ยังไม่จบอ้างถึงอยู่ ${docRefs.length} รายการ:\n\n${docRefs.slice(0,12).join("\n")}${docRefs.length>12?`\n... และอีก ${docRefs.length-12} รายการ`:""}\n\nถ้าลบตอนนี้ เอกสารพวกนี้จะเพิ่ม/ตัดสต๊อกไม่ได้ตลอดไป และแก้ในหน้าเว็บไม่ได้\nให้ปิดงานพวกนี้ก่อน (กดรับของ / ตีกลับ / ยกเลิก) แล้วค่อยลบ`);
-      return;
-    }
 
     // ── ยังมีของค้างอยู่ที่สาขาไหนบ้าง ────────────────────────────────────────
     // ลบวัตถุดิบ = แถวหายทั้งแถว สต๊อกที่ค้างอยู่หายตามไปด้วยโดยไม่มีบันทึกว่าหายไปไหน
@@ -4360,6 +4358,13 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     const totalQty=round2(stockLeft.reduce((s,x)=>s+x.qty,0));
     const totalVal=round2(totalQty*(+(delIng&&delIng.buy_price)||0));
     const unit=(delIng&&delIng.buy_unit)||"";
+    // ── มีอะไรบล็อคอยู่ → เปิดป็อปอัพอธิบาย ไม่ใช่ alert ของเบราว์เซอร์ ──────────
+    // ต้องเห็นว่า "ติดใบไหน สถานะอะไร ต้องทำอะไรก่อน" ไม่ใช่แค่บอกว่าลบไม่ได้
+    if(usedByMenus.length||usedBySop.length||(docRefs&&docRefs.length)){
+      setDelBlock({id,name,unit,menus:usedByMenus,sops:usedBySop,docs:docRefs||[],
+        stock:stockLeft,totalQty,totalVal});
+      return;
+    }
     if(!await confirmDlg({
       title:"ลบวัตถุดิบ",
       message:`ต้องการลบ "${name}" ใช่หรือไม่?`
@@ -4722,6 +4727,59 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     {priceHistoryItem&&<PriceHistoryModal ing={priceHistoryItem} orders={orders} allOrders={allOrders} isCentral={isCentral} onClose={()=>setPriceHistoryItem(null)}/>}
     {stockHistItem&&<StockHistoryModal ing={stockHistItem} currentBranch={currentBranch} branches={branches} onClose={()=>setStockHistItem(null)}/>}
     {reportModal&&<IngReportModal kind={reportModal} scope={(reportScope==="org"&&report.org)?"org":"branch"} data={R} currentBranch={currentBranch} onClose={()=>setReportModal(null)}/>}
+    {/* ── ป็อปอัพ "ลบไม่ได้ เพราะอะไร" ───────────────────────────────────────
+        เดิมเป็น alert() ของเบราว์เซอร์: ข้อความก้อนเดียว อ่านยาก ตัดบรรทัดมั่ว
+        และไม่บอกว่าต้องไปทำอะไรต่อ พนักงานจึงไม่รู้วิธีเคลียร์แล้วปล่อยค้างไว้
+        เคสจริงที่ทำให้ต้องมีอันนี้: #847 ถูกลบทั้งที่ ORD-2420 ยังรอเพิ่มสต๊อก
+        → ใบนั้นขึ้น "ตัดสต๊อกไม่ได้" ค้างถาวร แก้ในหน้าเว็บไม่ได้เลย */}
+    {delBlock&&<Modal title={`ลบ "${delBlock.name}" ไม่ได้`} onClose={()=>setDelBlock(null)}>
+      {(()=>{
+        const Sec=({icon,title,tone,items,foot})=>!items.length?null:<div style={{marginBottom:15}}>
+          <div style={{fontSize:13,fontWeight:900,color:tone,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>{icon} {title} <span style={{color:C.ink4,fontWeight:700}}>({items.length})</span></div>
+          <div style={{border:`1px solid ${C.line}`,borderRadius:10,overflow:"hidden"}}>
+            {items.slice(0,10).map((node,i)=><div key={i} style={{padding:"8px 12px",borderTop:i?`1px solid ${C.lineLight}`:"none",background:i%2?"#FAFBFC":C.white,fontSize:12.5,color:C.ink2,lineHeight:1.65,fontFamily:"'Sarabun',sans-serif"}}>{node}</div>)}
+            {items.length>10&&<div style={{padding:"7px 12px",borderTop:`1px solid ${C.lineLight}`,background:C.bg,fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>… และอีก {items.length-10} รายการ</div>}
+          </div>
+          {foot&&<div style={{fontSize:11.5,color:C.ink3,marginTop:5,lineHeight:1.65,fontFamily:"'Sarabun',sans-serif"}}>{foot}</div>}
+        </div>;
+        const u=delBlock.unit;
+        return <div style={{fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{display:"flex",gap:12,padding:"13px 15px",background:"#FEF2F2",border:`1.5px solid ${C.red}44`,borderRadius:12,marginBottom:18}}>
+            <span style={{fontSize:26,lineHeight:1.1,flexShrink:0}}>🚫</span>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:900,color:"#7F1D1D",marginBottom:4}}>ยังมีรายการที่ใช้วัตถุดิบนี้อยู่ ต้องเคลียร์ให้จบก่อน</div>
+              <div style={{fontSize:12,color:"#7F1D1D",lineHeight:1.75}}>ถ้าลบตอนนี้ ระบบจะหาวัตถุดิบไม่เจอ — เอกสารที่ค้างอยู่จะ<b>เพิ่ม/ตัดสต๊อกไม่ได้ถาวร</b> และต้นทุนของเมนูที่ใช้จะ<b>หายไปเงียบๆ</b> ทำให้กำไรดูดีกว่าความจริง · แก้คืนในหน้าเว็บไม่ได้</div>
+            </div>
+          </div>
+
+          <Sec icon="📄" title="เอกสารที่ยังไม่จบ" tone="#B45309"
+            foot="ปิดงานพวกนี้ให้จบก่อน แล้วค่อยกลับมาลบ"
+            items={delBlock.docs.map((d,i)=><span key={i}>
+              <b style={{color:C.ink}}>{d.ref}</b> <span style={{color:C.ink4}}>· {d.status}</span>
+              {d.stuck?<span style={{marginLeft:6,background:"#FEF2F2",color:"#7F1D1D",border:`1px solid ${C.red}44`,borderRadius:6,padding:"1px 6px",fontSize:10.5,fontWeight:800}}>สต๊อกค้างรอเพิ่ม</span>:null}
+              <br/><span style={{fontSize:11.5,color:C.ink3}}>→ {d.todo}</span>
+            </span>)}/>
+
+          <Sec icon="🍽️" title="เมนูที่ใช้เป็นส่วนผสม" tone={C.brandDark}
+            foot="เอาวัตถุดิบนี้ออกจากสูตร หรือเปลี่ยนไปใช้ตัวอื่นก่อน"
+            items={delBlock.menus.map((m,i)=><span key={i}><b style={{color:C.ink}}>{m.name}</b>{m.gram?<span style={{color:C.ink4}}> · {m.gram} กรัม</span>:null}</span>)}/>
+
+          <Sec icon="📋" title="สูตร SOP ที่ใช้เป็นส่วนผสม" tone="#7C3AED"
+            foot="เอาออกจากสูตรก่อนเช่นกัน"
+            items={delBlock.sops.map((s,i)=><span key={i}><b style={{color:C.ink}}>{s.name}</b>{s.gram?<span style={{color:C.ink4}}> · {s.gram} กรัม</span>:null}</span>)}/>
+
+          {delBlock.stock.length>0&&<div style={{padding:"11px 14px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:11,marginBottom:6}}>
+            <div style={{fontSize:12.5,fontWeight:900,color:"#92400E",marginBottom:3}}>📦 และยังมีของคงเหลือ {delBlock.totalQty} {u}{delBlock.totalVal>0?` (~฿${delBlock.totalVal.toLocaleString()})`:""}</div>
+            <div style={{fontSize:11.5,color:"#92400E",lineHeight:1.7}}>{delBlock.stock.map(x=>`${x.name} ${x.qty}`).join(" · ")}<br/>ถ้าของหมดจริงแล้ว ให้นับสต็อกเป็น 0 หรือตัดเป็น "ของเสีย" ก่อน จะได้มีที่มาที่ไป</div>
+          </div>}
+
+          <div style={{display:"flex",justifyContent:"flex-end",marginTop:16}}>
+            <Btn onClick={()=>setDelBlock(null)} s={{padding:"9px 22px"}}>เข้าใจแล้ว</Btn>
+          </div>
+        </div>;
+      })()}
+    </Modal>}
+
     {open&&<Modal title={editId?"✏️ แก้ไขวัตถุดิบ":"➕ เพิ่มวัตถุดิบใหม่"} onClose={()=>setOpen(false)}>
       <ImgUp label="รูปวัตถุดิบ" value={form.image} onChange={v=>upd("image",v)}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:12}}>
