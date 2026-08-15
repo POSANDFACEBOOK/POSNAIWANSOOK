@@ -4955,6 +4955,17 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   // (ไอดิอมเดียวกับ NumPad ในไฟล์นี้) ลูปบันทึกทั้งหมดกินเวลา 20-30 วิบนเน็ตสาขา
   // ถ้าอ่านจาก snapshot ตอนกดปุ่ม ของที่พนักงานพิมพ์แก้ระหว่างนั้นจะถูกเขียนทับด้วยค่าเก่า
   const editsRef=useRef(edits); editsRef.current=edits;
+  // ── ค่าที่บันทึกสำเร็จแล้วในรอบนี้ {ingId: number} ─────────────────────────
+  // มีไว้เพื่อเลิกดึงตาราง ingredients ทั้งก้อนหลังบันทึกทุกแถว:
+  // ตารางเต็มหนัก ~757 KB (ไม่บีบอัด) ต่อการดึง 1 ครั้ง — เดิม saveOne เรียก reload()
+  // ทุกครั้งที่กดบันทึกทีละแถว นับ 100 รายการ = DB ต้องอ่านส่ง ~75 MB ในไม่กี่นาที
+  // คูณหลายสาขาที่นับพร้อมกันช่วงเย็น = ฐานข้อมูลอืดทั้งระบบ (ตัวเตือน "ฐานข้อมูล
+  // เริ่มตอบช้า...ถ้ามีการนับสต๊อกอยู่ควรเลื่อนออกไปก่อน" คือสัญญาณของเรื่องนี้ตรงๆ)
+  // ตอนนี้จำค่าที่เขียนสำเร็จไว้ในเครื่องแทน จอโชว์ถูกทันที แล้วรีเฟรชจริงครั้งเดียวตอนปิดหน้า
+  const[savedVals,setSavedVals]=useState({});
+  const savedRef=useRef(savedVals); savedRef.current=savedVals;
+  // สต๊อกปัจจุบัน "ที่จอควรโชว์" = ค่าที่เพิ่งบันทึกในรอบนี้ ถ้าไม่มีก็ค่าจากตาราง
+  const curOf=(ing)=>savedRef.current[ing.id]!==undefined?+savedRef.current[ing.id]:branchStock(ing,currentBranch.id);
   const[saving,setSaving]=useState({});  // {ingId: bool}
   const inputRef=useRef();
   const[padFor,setPadFor]=useState(null);   // ingredient id whose on-screen number pad is open
@@ -4964,14 +4975,14 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   const savingRef=useRef({});       // {ingId: true} while that item's save is in flight
   const savingAllRef=useRef(false);
   const[savingAll,setSavingAll]=useState(false);
-  function bumpEdit(ing,delta){setEdits(o=>{const base=(o[ing.id]!==undefined&&o[ing.id]!=="")?(+o[ing.id]||0):branchStock(ing,currentBranch.id);const next=Math.max(0,Math.round((base+delta)*1000)/1000);return{...o,[ing.id]:String(next)};});}
+  function bumpEdit(ing,delta){setEdits(o=>{const base=(o[ing.id]!==undefined&&o[ing.id]!=="")?(+o[ing.id]||0):curOf(ing);const next=Math.max(0,Math.round((base+delta)*1000)/1000);return{...o,[ing.id]:String(next)};});}
   // Don't auto-pop the native keyboard on mobile (it shoves the layout around); desktop only.
   useEffect(()=>{if(isMobile)return;const t=setTimeout(()=>inputRef.current?.focus(),100);return()=>clearTimeout(t);},[]);// eslint-disable-line react-hooks/exhaustive-deps
 
   // Ingredients whose CURRENT stock is below 0 at this branch. Negative = more went out (ship /
   // SOP / waste) than was ever counted in — a count error to correct, not a real quantity. Surfaced
   // so whoever is counting fixes it, instead of it lingering invisibly.
-  const negatives=useMemo(()=>ings.filter(i=>branchStock(i,currentBranch.id)<-1e-9),[ings,currentBranch?.id]);
+  const negatives=useMemo(()=>ings.filter(i=>curOf(i)<-1e-9),[ings,currentBranch?.id,savedVals]);// eslint-disable-line react-hooks/exhaustive-deps
   const[showNegOnly,setShowNegOnly]=useState(false);
   // ── ตรึงรายชื่อ "ติดลบ" ไว้ตอนกดเข้าโหมดนี้ ────────────────────────────────
   // เดิมลิสต์คำนวณสดจากสต๊อกปัจจุบัน พอแก้ตัวหนึ่งเสร็จ (บันทึกแล้วไม่ติดลบ)
@@ -4989,8 +5000,8 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   // เหลือติดลบจริงกี่ตัวจากที่ตรึงไว้ — ใช้โชว์ความคืบหน้า
   const negLeft=useMemo(()=>!negFrozen?0:[...negFrozen].filter(id=>{
     const ing=ings.find(x=>+x.id===+id);
-    return ing&&branchStock(ing,currentBranch.id)<-1e-9;
-  }).length,[negFrozen,ings,currentBranch?.id]);
+    return ing&&curOf(ing)<-1e-9;
+  }).length,[negFrozen,ings,currentBranch?.id,savedVals]);// eslint-disable-line react-hooks/exhaustive-deps
   const filtered=useMemo(()=>{
     let list=ings;
     if(showNegOnly)list=negFrozen?ings.filter(i=>negFrozen.has(+i.id)):negatives;
@@ -5005,7 +5016,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
     if(raw===undefined||raw===""){alert("ใส่จำนวนก่อน");return;}
     const v=+raw;
     if(isNaN(v)||v<0){alert("จำนวนไม่ถูกต้อง");return;}
-    const prev=branchStock(ing,currentBranch.id);
+    const prev=curOf(ing);
     savingRef.current[ing.id]=true;
     setSaving(s=>({...s,[ing.id]:true}));
     let wrote=false;   // เขียนลงฐานข้อมูลสำเร็จหรือยัง — แยกจาก "รีเฟรชหน้าจอสำเร็จ"
@@ -5022,17 +5033,14 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
     finally{delete savingRef.current[ing.id];setSaving(s=>{const n={...s};delete n[ing.id];return n;});}
     if(!wrote)return;
-    // ── รีเฟรชแยกจากการเขียน ────────────────────────────────────────────────
-    // เดิม await reload() อยู่ใน try เดียวกับการเขียน → รีเฟรชพลาดจะเด้ง
-    // "บันทึกไม่สำเร็จ" ทั้งที่เขียนลงฐานข้อมูลไปแล้ว พนักงานกดซ้ำ = ประวัติซ้ำ
-    // และ prev_qty รอบสองอ่านจากค่าเก่าค้าง ทำให้ประวัติการนับผิดไปด้วย
-    let refreshed=false;
-    try{ if(reload)await reload(); refreshed=true; }catch{}
-    // ── ล้างช่องที่พิมพ์ เฉพาะเมื่อค่ายังเป็นตัวที่เพิ่งบันทึกไป ──────────────
-    // เดิมลบทิ้งตาม id อย่างเดียว ถ้าระหว่างที่กำลังบันทึก (1-3 วิ) พนักงานเดินไปเจอ
-    // ของจริงไม่ตรงแล้วพิมพ์ใหม่ ตัวเลขใหม่จะถูกลบทิ้งเงียบๆ กลับไปโชว์ค่าเก่า
+    // ── ไม่ดึงตารางทั้งก้อนหลังบันทึกแล้ว ───────────────────────────────────
+    // เดิมเรียก reload() ตรงนี้ = ดึง ingredients เต็มตาราง (~757 KB) ทุกแถวที่บันทึก
+    // คือตัวที่ทำให้ฐานข้อมูลอืดช่วงนับสต๊อก — จำค่าที่เขียนสำเร็จไว้ในเครื่องแทน
+    // จอโชว์ถูกทันทีผ่าน curOf() และรีเฟรชจริงเกิดครั้งเดียวตอนปิดหน้า
+    setSavedVals(s=>({...s,[ing.id]:v}));
+    // ล้างช่องที่พิมพ์ เฉพาะเมื่อค่ายังเป็นตัวที่เพิ่งบันทึกไป — ค่าที่พนักงานพิมพ์แก้
+    // ระหว่างบันทึก (1-3 วิ) ต้องไม่ถูกลบทิ้ง
     setEdits(e=>{ if(String(e[ing.id])!==String(raw))return e; const n={...e};delete n[ing.id];return n; });
-    if(!refreshed)alert("✅ บันทึกลงระบบเรียบร้อยแล้ว\n\nแต่รีเฟรชหน้าจอไม่สำเร็จ — ตัวเลขบนจออาจยังเป็นค่าเก่า\nไม่ต้องกดบันทึกซ้ำ (จะกลายเป็นนับซ้ำ) ให้ปิดแล้วเปิดหน้านับใหม่");
   }
   async function saveAll(){
     if(savingAllRef.current)return;   // ignore double-tap — claim the lock synchronously, BEFORE the
@@ -5052,7 +5060,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         if(live===undefined||live===""){skipped++;continue;}   // ถูกล้างไปแล้วระหว่างทาง = ไม่ต้องเขียน
         savingRef.current[id]=true;
         try{
-          const prev=branchStock(ing,currentBranch.id);
+          const prev=curOf(ing);
           if(!await rpcStockSet(+id,currentBranch.id,+live||0)){
             await api.updateIng(+id,{stock_by_branch:setBranchStockInJson(ing.stock_by_branch,currentBranch.id,+live||0)});
           }
@@ -5061,11 +5069,9 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         }catch(e){alert(`บันทึก ${ing.name} ไม่สำเร็จ: ${e.message}`);}
         finally{delete savingRef.current[id];}
       }
-      // รีเฟรชแยกจากการเขียน — รีเฟรชพลาดต้องไม่กลืนทั้งขั้นตอนที่เหลือ
-      // (เดิม reload() อยู่ก่อนการล้าง edits และก่อน alert ถ้ามันโยน ทุกอย่างหลังจากนั้นไม่ทำงาน
-      //  ใบที่เขียนสำเร็จแล้วยังค้างในฟอร์ม พนักงานกดซ้ำ = ประวัติซ้ำ + prev_qty ผิด)
-      let refreshed=false;
-      try{ if(reload)await reload(); refreshed=true; }catch{}
+      // ── ไม่ดึงตารางทั้งก้อนหลังบันทึกแล้ว (เหตุผลเดียวกับ saveOne) ─────────
+      // จำค่าที่เขียนสำเร็จไว้ในเครื่อง จอโชว์ถูกทันที รีเฟรชจริงครั้งเดียวตอนปิดหน้า
+      setSavedVals(s=>{const n={...s};for(const[id,v]of ok)n[id]=+v;return n;});
       // ── ล้างเฉพาะแถวที่ "ค่ายังตรงกับที่เพิ่งเขียนไป" ────────────────────────
       // เดิมล้างตาม id ล้วน ค่าที่พนักงานพิมพ์แก้ระหว่างลูปจึงถูกลบทิ้งเงียบๆ
       // เทียบเป็นตัวเลข ไม่ใช่สตริง ("6.0" กับ "6" คือค่าเดียวกัน ไม่งั้นค้างเป็นแถวผีตลอด)
@@ -5081,7 +5087,6 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         `✅ บันทึกสต็อก ${ok.length} รายการ`,
         failed>0?`⚠️ ${failed} รายการยังบันทึกไม่สำเร็จ — ยังค้างในฟอร์ม กดบันทึกใหม่ได้`:"",
         skipped>0?`⏭ ข้าม ${skipped} รายการที่ถูกล้างค่าระหว่างบันทึก`:"",
-        refreshed?"":"⚠️ รีเฟรชหน้าจอไม่สำเร็จ — ตัวเลขบนจออาจยังเป็นค่าเก่า\nไม่ต้องกดบันทึกซ้ำ (จะกลายเป็นนับซ้ำ) ให้ปิดแล้วเปิดหน้านับใหม่",
       ].filter(Boolean).join("\n"));
     }finally{savingAllRef.current=false;setSavingAll(false);}
   }
@@ -5091,17 +5096,23 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   // ตัวเลขที่พิมพ์ค้างอยู่ทั้งหมด (อาจ 30-40 แถว) หายเงียบ ไม่มีอะไรบอก
   // และช่วงเวลานับมีจำกัด ถ้าหมดเวลาไปแล้วก็นับใหม่ไม่ได้อีก
   const closingRef=useRef(false);   // กัน Esc รัวๆ เปิดกล่องยืนยันซ้อนกัน
+  // ปิดหน้า = จุดเดียวที่รีเฟรชตาราง ingredients จริง (แทนที่จะรีเฟรชทุกครั้งที่บันทึกทีละแถว)
+  // ยิงแบบไม่รอ — หน้าปิดทันที ตารางเบื้องหลังตามมาเอง ถ้าพลาดหน้าอื่นก็มี poll ของตัวเอง
+  function finishClose(){
+    if(Object.keys(savedRef.current).length&&reload){try{reload();}catch{}}
+    onClose&&onClose();
+  }
   async function guardedClose(){
     if(closingRef.current)return;
     const pending=Object.values(edits).filter(v=>v!==""&&v!=null).length;
-    if(!pending){onClose&&onClose();return;}
+    if(!pending){finishClose();return;}
     closingRef.current=true;
     try{
       if(await confirmDlg({
         title:"ยังมีที่นับค้างไว้",
         message:`มี ${pending} รายการที่พิมพ์ไว้แต่ยังไม่ได้กดบันทึก\n\nถ้าปิดตอนนี้ ตัวเลขที่พิมพ์จะหายทั้งหมด ต้องเดินนับใหม่\n\nแนะนำ: กดยกเลิก แล้วกดปุ่ม "บันทึกทั้งหมด" ก่อน`,
         confirmLabel:"ปิดทิ้งเลย",
-      }))onClose&&onClose();
+      }))finishClose();
     }finally{closingRef.current=false;}
   }
   // Esc: ปิดแป้นตัวเลขก่อน ถ้าไม่มีแป้นเปิดอยู่ค่อยถามเรื่องปิดหน้า
@@ -5155,7 +5166,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
         <div style={{fontSize:13}}>ไม่พบวัตถุดิบ</div>
       </div>}
       {filtered.map(ing=>{
-        const cur=branchStock(ing,currentBranch.id);
+        const cur=curOf(ing);
         const editVal=edits[ing.id];
         const newVal=editVal!==undefined&&editVal!==""?+editVal||0:cur;
         const dirty=editVal!==undefined&&editVal!==""&&newVal!==cur;
@@ -13430,7 +13441,11 @@ function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]
   async function load(silent){
     if(!silent)setLoading(true);
     try{
-      const[r,p,ss,pr,oo]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[]),api.getOpenStockSessions().catch(()=>[]),api.getPendingApprovalPRs().catch(()=>[]),api.getOpenOrders().catch(()=>[])]);
+      const[r,p,ss,pr]=await Promise.all([api.getPendingApprovalOrders().catch(()=>[]),api.getPendingApprovalPOs().catch(()=>[]),api.getOpenStockSessions().catch(()=>[]),api.getPendingApprovalPRs().catch(()=>[])]);
+      if(!aliveRef.current)return;
+      // ตัวตรวจใบซ้ำ (getOpenOrders ~120 KB) ดึงเฉพาะตอนมีใบรออนุมัติจริง —
+      // หน้านี้ poll ทุก 60 วิ ส่วนใหญ่คิวว่าง ดึงไปก็ไม่มีอะไรให้เทียบ เปลืองโหลด DB เปล่า
+      const oo=(Array.isArray(r)&&r.length>0)?await api.getOpenOrders().catch(()=>[]):[];
       if(!aliveRef.current)return;
       const rr=(Array.isArray(r)?r:[]).filter(o=>inScope(o.branch_id));
       const pp=(Array.isArray(p)?p:[]).filter(o=>inScope(o.from_branch_id));
