@@ -1250,12 +1250,44 @@ function UnitPicker({value,onChange,placeholder="เลือกหน่วย"
   const[open,setOpen]=useState(false);
   const[uq,setUq]=useState("");
   const box=useRef(null);
+  const menuRef=useRef(null);
+  // ── ตำแหน่งเมนูแบบ fixed ───────────────────────────────────────────────────
+  // เดิมเมนูเป็น position:absolute อยู่ในตัว Modal ซึ่ง body มี overflowY:auto
+  // → เมนูโดนตัดที่ขอบกล่อง เห็นแค่ 1-2 บรรทัดแรก เลือกไม่ได้
+  // fixed หลุดออกจากกรอบ overflow ได้ และคำนวณเองว่าจะกางลงหรือกางขึ้น
+  const[pos,setPos]=useState(null);
+  function place(){
+    const r=box.current&&box.current.getBoundingClientRect();
+    if(!r)return;
+    const GAP=4,PAD=8;
+    const below=window.innerHeight-r.bottom-PAD;
+    const above=r.top-PAD;
+    const up=below<200&&above>below;              // ที่ข้างล่างไม่พอและข้างบนกว้างกว่า → กางขึ้น
+    setPos({left:r.left,width:r.width,
+      top:up?undefined:r.bottom+GAP,
+      bottom:up?(window.innerHeight-r.top+GAP):undefined,
+      maxH:Math.max(150,Math.min(320,up?above:below))});
+  }
   useEffect(()=>{
-    if(!open)return;
+    if(!open){setPos(null);return;}
     setUq("");   // เปิดใหม่ทุกครั้งเริ่มจากรายการเต็ม ไม่ค้างคำค้นเดิม
-    const away=e=>{if(box.current&&!box.current.contains(e.target))setOpen(false);};
+    place();
+    // เมนู fixed จะไม่เลื่อนตามเนื้อหา — ปิดไปเลยเมื่อมีการเลื่อน/หมุนจอ ดีกว่าลอยผิดที่
+    const close=()=>setOpen(false);
+    // เมนูอยู่นอก box แล้ว (fixed) จึงต้องเช็คทั้งสองกล่อง ไม่งั้นกดในเมนูแล้วเมนูปิดทันที
+    const away=e=>{
+      if(box.current&&box.current.contains(e.target))return;
+      if(menuRef.current&&menuRef.current.contains(e.target))return;
+      setOpen(false);
+    };
     document.addEventListener("mousedown",away);
-    return()=>document.removeEventListener("mousedown",away);
+    window.addEventListener("scroll",close,true);
+    window.addEventListener("resize",close);
+    return()=>{
+      document.removeEventListener("mousedown",away);
+      window.removeEventListener("scroll",close,true);
+      window.removeEventListener("resize",close);
+    };
   },[open]);
   const cur=String(value||"").trim();
   const legacy=cur&&!options.includes(cur);
@@ -1263,7 +1295,7 @@ function UnitPicker({value,onChange,placeholder="เลือกหน่วย"
   const longList=options.length>12;
   const shown=uq.trim()?options.filter(u=>u.includes(uq.trim())):options;
   return <div ref={box} style={{position:"relative"}}>
-    <button type="button" onClick={()=>setOpen(o=>!o)}
+    <button type="button" onClick={()=>{if(!open)place();setOpen(o=>!o);}}
       style={{...iS,textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
       <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:cur?C.ink:C.ink4}}>{cur||placeholder}</span>
       <span style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
@@ -1272,8 +1304,10 @@ function UnitPicker({value,onChange,placeholder="เลือกหน่วย"
         <Ic d={I.chevD} s={14} c={C.ink3}/>
       </span>
     </button>
-    {open&&<div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:40,marginTop:4,background:C.white,
-      border:`1px solid ${C.line}`,borderRadius:10,boxShadow:"0 10px 30px rgba(15,23,42,.16)",maxHeight:300,display:"flex",flexDirection:"column"}}>
+    {open&&pos&&<div ref={menuRef} style={{position:"fixed",left:pos.left,width:pos.width,
+      ...(pos.top!=null?{top:pos.top}:{bottom:pos.bottom}),
+      zIndex:4000,background:C.white,
+      border:`1px solid ${C.line}`,borderRadius:10,boxShadow:"0 12px 34px rgba(15,23,42,.22)",maxHeight:pos.maxH,display:"flex",flexDirection:"column"}}>
       {longList&&<div style={{padding:8,borderBottom:`1px solid ${C.line}`,flexShrink:0,background:C.bg}}>
         <input autoFocus value={uq} onChange={e=>setUq(e.target.value)} placeholder="พิมพ์ค้นหาหน่วย…"
           style={{...iS,padding:"7px 10px",fontSize:13}}/>
