@@ -1272,8 +1272,16 @@ function UnitPicker({value,onChange,placeholder="เลือกหน่วย"
     if(!open){setPos(null);return;}
     setUq("");   // เปิดใหม่ทุกครั้งเริ่มจากรายการเต็ม ไม่ค้างคำค้นเดิม
     place();
-    // เมนู fixed จะไม่เลื่อนตามเนื้อหา — ปิดไปเลยเมื่อมีการเลื่อน/หมุนจอ ดีกว่าลอยผิดที่
-    const close=()=>setOpen(false);
+    // ── เลื่อน "หน้าข้างหลัง" → เมนู fixed จะลอยค้างผิดที่ ต้องขยับตาม ──────────
+    // ⚠️ ห้ามปิดเมนูทิ้ง และห้ามนับการเลื่อน "ในตัวเมนูเอง" ด้วย
+    //    เดิมดัก scroll แบบ capture แล้วสั่งปิด → พอแตะเลื่อนดูรายการในเมนู
+    //    (37 หน่วยต้องเลื่อน) เมนูปิดทันที เลือกหน่วยล่างๆ ไม่ได้เลย
+    //    ตอนนี้ข้ามอีเวนต์ที่มาจากในเมนู แล้ววัดตำแหน่งใหม่แทนการปิด
+    const onScroll=e=>{
+      if(menuRef.current&&e.target instanceof Node&&menuRef.current.contains(e.target))return;
+      place();
+    };
+    const onResize=()=>place();
     // เมนูอยู่นอก box แล้ว (fixed) จึงต้องเช็คทั้งสองกล่อง ไม่งั้นกดในเมนูแล้วเมนูปิดทันที
     const away=e=>{
       if(box.current&&box.current.contains(e.target))return;
@@ -1281,12 +1289,12 @@ function UnitPicker({value,onChange,placeholder="เลือกหน่วย"
       setOpen(false);
     };
     document.addEventListener("mousedown",away);
-    window.addEventListener("scroll",close,true);
-    window.addEventListener("resize",close);
+    window.addEventListener("scroll",onScroll,true);
+    window.addEventListener("resize",onResize);
     return()=>{
       document.removeEventListener("mousedown",away);
-      window.removeEventListener("scroll",close,true);
-      window.removeEventListener("resize",close);
+      window.removeEventListener("scroll",onScroll,true);
+      window.removeEventListener("resize",onResize);
     };
   },[open]);
   const cur=String(value||"").trim();
@@ -1312,7 +1320,10 @@ function UnitPicker({value,onChange,placeholder="เลือกหน่วย"
         <input autoFocus value={uq} onChange={e=>setUq(e.target.value)} placeholder="พิมพ์ค้นหาหน่วย…"
           style={{...iS,padding:"7px 10px",fontSize:13}}/>
       </div>}
-      <div style={{overflowY:"auto",flex:1}}>
+      {/* overscrollBehavior:contain = เลื่อนสุดรายการแล้วไม่ลามไปเลื่อนหน้าข้างหลัง
+          (ถ้าลาม หน้าหลังขยับ เมนูก็ต้องขยับตาม กลายเป็นกระตุกตอนนิ้วยังลากอยู่)
+          WebkitOverflowScrolling = ให้เลื่อนลื่นแบบมีแรงส่งบน iPad */}
+      <div style={{overflowY:"auto",flex:1,overscrollBehavior:"contain",WebkitOverflowScrolling:"touch"}}>
       {shown.length===0
         ?<div style={{padding:"14px 12px",fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center"}}>ไม่พบหน่วยที่ค้นหา</div>
         :(()=>{let lastG=null;return shown.map(u=>{
