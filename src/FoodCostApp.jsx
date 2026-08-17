@@ -5320,7 +5320,21 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   const canE=hasPerm(currentUser,"menus")&&isCentral;const canD=hasPerm(currentUser,"menus")&&isCentral;
   // หมวดเมนูเป็นของครัวกลางชุดเดียว ทุกสาขาเห็นเหมือนกัน (branch_id เป็น null)
   // หมวดเก่าที่สาขาเคยสร้างไว้ (branch_id มีค่า) ไม่เอามาแสดงแล้ว
-  const localCats=useMemo(()=>allCats.filter(c=>c.type==="menu"&&!c.branch_id),[allCats]);
+  const allMenuCats=useMemo(()=>allCats.filter(c=>c.type==="menu"&&!c.branch_id),[allCats]);
+  // ── ชิปหมวด: ซ่อนหมวดที่สาขานี้ไม่มีเมนูสักตัว ───────────────────────────────
+  // หมวดเป็นชุดกลางชุดเดียวทุกสาขา แต่เมนูถูกกรองด้วย visible_branches
+  // → หมวดที่ครัวกลางเปิดไว้แต่ไม่ได้เปิดเมนูตัวไหนให้สาขานี้เลย จะเป็นชิปเปล่า
+  // กดแล้วเจอ "ยังไม่มีเมนูในหมวดนี้" วัดจริง 16/08/2569: สาขา 6 ว่าง 16 จาก 24 หมวด
+  // ทุกสาขาว่าง 10-20 หมวด — ครัวกลางยังเห็นครบเพื่อจัดหมวดให้เมนูที่ยังไม่เปิดสาขา
+  const localCats=useMemo(()=>{
+    if(isCentral)return allMenuCats;
+    const have=new Set(menus.filter(m=>menuVisibleAt(m,currentBranch?.id)).map(m=>menuCatOf(m)).filter(Boolean));
+    return allMenuCats.filter(c=>have.has(c.name));
+  },[allMenuCats,menus,isCentral,currentBranch]);
+  // หมวดที่เลือกค้างไว้แล้วสาขานี้ไม่มี → เด้งกลับ "ทั้งหมด" ไม่ให้ติดหน้าว่าง
+  useEffect(()=>{
+    if(selCat!=="ทั้งหมด"&&!localCats.some(c=>c.name===selCat))setSelCat("ทั้งหมด");
+  },[localCats,selCat]);
   async function toggleVBMenu(menu,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(menu.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateMenu(menu.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   async function assignLocalCat(menuId,catName){
     // หมวดหมู่คุมจากครัวกลางที่เดียว — เขียนลง menus.category ไม่ใช่หมวดรายสาขาอีกแล้ว
@@ -12070,6 +12084,26 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }),[ings,isCentral,currentBranch,q,supFilter]);
 
+  // ── ตัวเลือกในช่องกรองซัพ: เอาเฉพาะเจ้าที่ "มีวัตถุดิบอยู่จริงที่สาขานี้" ──
+  // เดิมใช้ visibleSuppliers ซึ่งเป็นรายชื่อซัพทั้งหมดที่สาขามองเห็น ไม่เกี่ยวกับว่า
+  // มีวัตถุดิบผูกไว้หรือเปล่า → เลือกแล้วได้หน้าว่าง ไม่มีอะไรบอกว่าทำไม
+  // วัดจริง 16/08/2569: ครัวกลาง 43 จาก 102 ตัวเลือกกดแล้วว่าง · The River ว่างทั้ง 13
+  // (คนละเรื่องกับ visibleSuppliers ที่ยังต้องใช้เต็มตอน "ผูกซัพให้วัตถุดิบ")
+  const filterSuppliers=useMemo(()=>{
+    const have=new Set();
+    for(const i of ings){
+      if(!ingVisibleAt(i,currentBranch?.id,isCentral))continue;
+      const sid=strictBranchSupplierId(i);
+      if(sid)have.add(+sid);
+    }
+    return visibleSuppliers.filter(s=>have.has(+s.id));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[ings,visibleSuppliers,currentBranch,isCentral]);
+  // ซัพที่เลือกค้างไว้แล้วไม่มีของแล้ว → เคลียร์ตัวกรอง ไม่ให้ติดหน้าว่าง
+  useEffect(()=>{
+    if(supFilter&&supFilter!=="none"&&!filterSuppliers.some(s=>String(s.id)===String(supFilter)))setSupFilter("");
+  },[filterSuppliers,supFilter]);
+
   // Group by strict per-branch supplier
   const grouped=useMemo(()=>{
     const groups=new Map();
@@ -12286,7 +12320,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         </div>
         <div>
           <div style={{fontSize:11,color:C.ink4,fontWeight:800,marginBottom:5,fontFamily:"'Sarabun',sans-serif",letterSpacing:.3,textTransform:"uppercase"}}>ซัพพลายเออร์</div>
-          <SupplierPicker suppliers={visibleSuppliers} valueId={supFilter}
+          <SupplierPicker suppliers={filterSuppliers} valueId={supFilter}
             clearLabel="— ทุกซัพพลาย —" placeholder="พิมพ์ชื่อซัพพลายเพื่อค้นหา..."
             onPick={o=>setSupFilter(o.id===""?"":String(o.id))}/>
         </div>
