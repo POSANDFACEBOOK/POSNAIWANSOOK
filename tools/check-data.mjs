@@ -114,6 +114,22 @@ const main = async () => {
     bad.length ? warn(`${bad.length} บรรทัด — ไม่ถูกหักจากยอดต้องซื้อ`, bad) : ok("ไม่มี");
   }
 
+  // ── 5.5) ส่วนผสม SOP ถูกตัดนอกการผลิต (เคสจริง: cascade ตัดซ้ำ ฿134,443) ──
+  // กติกา: ส่วนผสมย่อยถูกใช้ตอนกด "ผลิต" เท่านั้น (ref_type=production)
+  // ถ้ามีแถวที่บอกว่า "ใช้ผลิต X" แต่มาจากการส่ง/รับ PO = ตัดซ้ำกลับมาแล้ว
+  section("5.5) ส่วนผสม SOP ถูกตัด/เพิ่ม นอกเส้นทางการผลิต");
+  {
+    const mv = await gAll("stock_movements?select=id,created_at,branch_id,ingredient_name,delta,reason,ref_type,ref_id&order=id.desc", 1000).catch(() => []);
+    const bad = mv.filter((m) => m.ref_type === "sop" || (/^SOP: ผลิต/.test(m.reason || "") && m.ref_type !== "production"));
+    if (!bad.length) { ok("ไม่มี — ส่วนผสมถูกตัดที่การผลิตอย่างเดียว"); }
+    else {
+      const recent = bad.filter((m) => String(m.created_at) > "2026-08-18T12:00");
+      const docs = [...new Set(bad.map((m) => m.ref_id))];
+      warn(`${bad.length} แถว จาก ${docs.length} เอกสาร${recent.length ? ` · ⛔ ${recent.length} แถวเกิดหลังแก้บั๊ค = กลับมาแล้ว` : " (ของเก่าก่อนแก้ 18/08/2569 — ไม่ใช่ของใหม่)"}`,
+        docs.slice(0, 6).map((d) => `${d} · ${bad.filter((m) => m.ref_id === d).length} แถว`));
+    }
+  }
+
   // ── 6) ใบเปิดที่เนื้อหาซ้ำกันเป๊ะ (เคสจริง: #2199/#2255 ฿2,656 คู่แฝด) ──
   section("6) ใบเปิดที่สั่งของชุดเดียวกันซ้ำ");
   {

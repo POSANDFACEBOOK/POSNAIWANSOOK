@@ -1572,28 +1572,23 @@ function setBranchSafetyInJson(existing,branchId,value){
 //
 // items: array with { ingredient_id|ingId, qty|qtyNeeded, received_qty? }
 //
-// SOP cascade: if an item's parent ingredient has has_sop + a non-empty
-// `ingredients` array (the SOP recipe), the helper RECURSIVELY moves each
-// sub-ingredient in the same direction. The sub-quantity is computed from
-//   subStock = parentQty × sub.amountGram / parentIng.convert_to_gram
-// — i.e. how many sub-stock units are consumed/produced per one parent stock unit.
-// Recursion is capped at 3 levels to defend against cycles in mis-configured SOPs.
-async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible,reason=null,refType=null,refId=null,by=null,_depth=0,_acc=null}){
+// ย้ายเฉพาะของที่ระบุมาใน items เท่านั้น — ไม่แตะส่วนผสมย่อยตามสูตร SOP
+// ของที่ผลิตเสร็จแล้วเป็นของชิ้นใหม่ ส่งไปสาขาก็ตัดตัวมันเองพอ
+// การตัดส่วนผสมอยู่ที่ ProductionTab → sopConsumption() ที่เดียว (ดูเหตุผลท้ายฟังก์ชัน)
+async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,autoVisible,reason=null,refType=null,refId=null,by=null}){
   const toId=toBranchId!=null?(+toBranchId||null):null;
   const fromId=fromBranchId!=null?(+fromBranchId||null):null;
   if(!toId&&!fromId){
-    if(_depth===0)setTimeout(()=>alert("⚠️ ไม่ได้ตัดสต๊อก — ไม่ระบุสาขาต้นทาง/ปลายทาง (ดู console)"),200);
+    setTimeout(()=>alert("⚠️ ไม่ได้ตัดสต๊อก — ไม่ระบุสาขาต้นทาง/ปลายทาง (ดู console)"),200);
     return;
   }
   if(toId&&fromId&&toId===fromId){
-    if(_depth===0)setTimeout(()=>alert("⚠️ ไม่ได้ตัดสต๊อก — สาขาต้นทางและปลายทางเป็นสาขาเดียวกัน"),200);
+    setTimeout(()=>alert("⚠️ ไม่ได้ตัดสต๊อก — สาขาต้นทางและปลายทางเป็นสาขาเดียวกัน"),200);
     return;
   }
-  // Failure accumulator shared down the SOP-cascade recursion so problems at
-  // ANY depth surface in the single top-level alert (a silently-skipped
-  // sub-ingredient is still a wrong stock number).
-  const acc=_acc||{notFound:[],zeroQty:[],failedUpdates:[],moves:[]};
-  if(!acc.moves)acc.moves=[];
+  // ตัวเก็บความล้มเหลว — รายการที่เขียนสต๊อกไม่ผ่านต้องโผล่ในเตือนรวมครั้งเดียว
+  // (บรรทัดที่ข้ามไปเงียบๆ = ตัวเลขสต๊อกผิด)
+  const acc={notFound:[],zeroQty:[],failedUpdates:[],moves:[]};
   const{notFound,zeroQty,failedUpdates}=acc;
   const agg=new Map();
   for(const it of (items||[])){
@@ -1603,11 +1598,10 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     if(!qty||qty<=0){zeroQty.push({ingId,name:it.name||"#"+ingId});continue;}
     const row=(ings||[]).find(x=>+x.id===ingId);
     if(!row){notFound.push({ingId,name:it.name||"#"+ingId,reason:"ไม่พบในรายการวัตถุดิบ",qty});continue;}
-    const e=agg.get(ingId)||{add:0,row,_reason:it._reason||null};   // _reason set by the SOP cascade
-    e.add+=qty;if(it._reason&&!e._reason)e._reason=it._reason;agg.set(ingId,e);
+    const e=agg.get(ingId)||{add:0,row};
+    e.add+=qty;agg.set(ingId,e);
   }
-  const levelFailed=new Set();   // parents whose OWN write failed → don't cascade their children
-  for(const[ingId,{add:addRaw,row,_reason}]of agg.entries()){
+  for(const[ingId,{add:addRaw,row}]of agg.entries()){
     // Round the delta ONCE and reuse for both slots: rounding +add and −add
     // independently is asymmetric at exact .0005 boundaries (Math.round half-up)
     // and would credit slightly more than it debits.
@@ -1645,16 +1639,14 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     }
     catch(err){
       console.error("transferStock failed",ingId,err);
-      levelFailed.add(+ingId);
       failedUpdates.push({ingId,name:row.name||"#"+ingId,reason:err&&err.message||String(err),qty:add});
       continue;   // stock write failed → skip the visibility tick too
     }
     // Write succeeded → record the movement(s) for the trace log. A transfer touches BOTH slots
     // (−from, +to); a one-sided move (receive / ship / rollback) touches one. Best-effort only.
     {
-      const mvReason=_reason||reason||null;
-      if(fromId)acc.moves.push({branch_id:fromId,ingredient_id:+ingId,ingredient_name:row.name||null,unit:row.buy_unit||null,delta:-add,reason:mvReason,ref_type:_reason?"sop":(refType||"transfer"),ref_id:refId||null,by_user:by||null});
-      if(toId)acc.moves.push({branch_id:toId,ingredient_id:+ingId,ingredient_name:row.name||null,unit:row.buy_unit||null,delta:+add,reason:mvReason,ref_type:_reason?"sop":(refType||"transfer"),ref_id:refId||null,by_user:by||null});
+      if(fromId)acc.moves.push({branch_id:fromId,ingredient_id:+ingId,ingredient_name:row.name||null,unit:row.buy_unit||null,delta:-add,reason:reason||null,ref_type:refType||"transfer",ref_id:refId||null,by_user:by||null});
+      if(toId)acc.moves.push({branch_id:toId,ingredient_id:+ingId,ingredient_name:row.name||null,unit:row.buy_unit||null,delta:+add,reason:reason||null,ref_type:refType||"transfer",ref_id:refId||null,by_user:by||null});
     }
     // visible_branches tick — OUTSIDE the stock try/catch: the stock move above
     // already committed, so a failure here must NOT be reported as a failed stock
@@ -1670,17 +1662,27 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     }
   }
 
-  // ── SOP cascade ──────────────────────────────────────────────────────────
-  // For each parent ingredient that has SOP sub-ingredients, recursively move
-  // the proportional sub-quantities in the same direction. _depth caps at 3
-  // levels so a circular SOP (X uses Y, Y uses X) can't melt the API.
-  // Parents whose own write failed are excluded — their transfer didn't happen,
-  // so moving their children would desync (and a retry would double-move them).
-  if(_depth<3)await _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,acc,levelFailed,reason,refType,refId,by});
+  // ── ไม่มี SOP cascade ที่นี่ (จงใจ) ────────────────────────────────────────
+  // เดิมฟังก์ชันนี้ตัด/เพิ่ม "ส่วนผสมย่อยตามสูตร SOP" ตามไปด้วยทุกครั้งที่ของขยับ
+  // ซึ่งผิดโมเดลธุรกิจ: ส่วนผสมย่อยถูกใช้ไปตอน "ผลิต" เท่านั้น ของที่ผลิตเสร็จแล้ว
+  // เป็นของชิ้นใหม่ — ส่งไปสาขาก็ตัดตัวมันเองพอ ไม่ต้องไปแตะพริกกับกระเทียมอีก
+  //
+  // ที่เดิมพังเป็น 2 ทาง (วัดจริง 18/08/2569 จาก stock_movements 14,666 แถว):
+  //   • ครัวกลางถูกตัดส่วนผสมซ้ำ — ตอนกดผลิตครั้งหนึ่ง ตอนส่ง PO อีกครั้งหนึ่ง
+  //   • สาขาได้สต๊อกส่วนผสม "ผี" ที่ไม่เคยส่งไปจริง ฿227,932 ใน 219 คู่สาขา×วัตถุดิบ
+  //     (สาขารับน้ำจิ้ม ไม่ได้รับพริกกับกระเทียมที่อยู่ในน้ำจิ้ม)
+  // cascade มีมาตั้งแต่ 02/07/2569 ตอนยังไม่มีแท็บผลิต — พอเพิ่มแท็บผลิต 03/08/2569
+  // ก็กลายเป็นตัดสองต่อทันที ฿134,443 ในช่วง 03-18/08
+  //
+  // การตัดส่วนผสมที่ถูกต้องอยู่ที่ ProductionTab ซึ่งมีตรรกะของตัวเอง
+  // (ตัดส่วนผสม → เพิ่มของที่ผลิต → ย้อนกลับทั้งชุดถ้าพังกลางทาง) ไม่ได้เรียกฟังก์ชันนี้
+  //
+  // ⚠️ ผลที่ตามมาในการทำงานจริง: ครัวกลางต้องกดปุ่ม "ผลิต" ทุกครั้งที่ทำของ
+  // ไม่งั้นส่วนผสมจะไม่ถูกตัดเลย — ของที่ผลิตจะติดลบให้เห็นเองเมื่อส่งโดยไม่ได้ผลิต
 
   // Top-level callers only: surface anything that silently fell through AT ANY
   // DEPTH so the user doesn't end up with a PO marked "จัดส่งแล้ว" but no stock move.
-  if(_depth===0&&(notFound.length>0||failedUpdates.length>0||zeroQty.length>0)){
+  if(notFound.length>0||failedUpdates.length>0||zeroQty.length>0){
     const lines=[];
     if(zeroQty.length>0){
       lines.push(`⚠️ ข้าม ${zeroQty.length} รายการที่จำนวน = 0 (ไม่ตัดสต๊อก):`);
@@ -1703,7 +1705,7 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     setTimeout(()=>alert(lines.join("\n")),200);
   }
   // Top level only: flush the movement trace once (best-effort — a failed log never affects stock).
-  if(_depth===0&&acc.moves&&acc.moves.length)api.addStockMovements(acc.moves);
+  if(acc.moves&&acc.moves.length)api.addStockMovements(acc.moves);
   return acc;   // callers inspect {notFound,failedUpdates,zeroQty} to record un-credited lines for a targeted retry
 }
 // Build a retryable "stock pending" group from a transfer accumulator: the lines that
@@ -1740,49 +1742,6 @@ async function persistPending(poId,...groups){
   try{ const row=await api.getPO(poId); if(Array.isArray(row)&&row[0]&&Array.isArray(row[0].stock_pending))existing=row[0].stock_pending; }catch{}
   try{ await api.updatePO(poId,{stock_pending:[...existing,...fresh]}); }catch{}
 }
-async function _cascadeSopChildren({fromBranchId,toBranchId,items,ings,_depth,acc,levelFailed,reason=null,refType=null,refId=null,by=null}){
-  const cascadeItems=[];
-  for(const it of (items||[])){
-    const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
-    if(!ingId)continue;
-    if(levelFailed.has(+ingId))continue;
-    const parent=(ings||[]).find(x=>+x.id===ingId);
-    if(!parent||!parent.has_sop)continue;
-    const subs=Array.isArray(parent.ingredients)?parent.ingredients:[];
-    if(subs.length===0)continue;
-    const parentQty=it.received_qty!=null?+it.received_qty:+(it.qty!=null?it.qty:it.qtyNeeded);
-    if(!parentQty||parentQty<=0)continue;
-    const parentGramsPerUnit=+parent.convert_to_gram||1000;
-    for(const sub of subs){
-      const subIngId=+sub.ingredientId;
-      if(!subIngId)continue;
-      const subIng=(ings||[]).find(x=>+x.id===subIngId);
-      if(!subIng)continue;
-      // sub.amountGram is grams of sub used to produce ONE parent's buy_unit
-      // (e.g. "500g tomato per 1 kg of sauce"). Scale by however many parent
-      // stock-units are moving. Translate grams → sub's own stock unit via
-      // subIng.convert_to_gram (e.g. 500g / 1000g per kg = 0.5 kg of tomato).
-      const gramsTotal=parentQty*(+sub.amountGram||0);
-      const subStockUnits=gramsTotal/(+subIng.convert_to_gram||1000);
-      if(!subStockUnits||subStockUnits<=0)continue;
-      // Tag the child with which SOP consumed it, so the trace log reads "SOP: ผลิต ซอสกะเพรา"
-      // instead of an unexplained fractional drop.
-      cascadeItems.push({ingredient_id:subIngId,qty:subStockUnits,_reason:`SOP: ผลิต ${parent.name||"#"+ingId}`});
-    }
-  }
-  if(cascadeItems.length>0){
-    await transferStockBetweenBranches({
-      fromBranchId,toBranchId,
-      items:cascadeItems,
-      ings,
-      autoVisible:false,                 // sub-ingredient visibility doesn't auto-toggle
-      reason,refType,refId,by,
-      _depth:_depth+1,
-      _acc:acc,                          // child failures bubble into the top-level alert
-    });
-  }
-}
-
 // (removed applyReceiveDelta — it was dead code encoding the OLD "moved at create"
 //  model with an UN-clamped over-receive branch that would mint stock if ever reused.
 //  The live acceptDispute inlines its own credit+variance logic clamped to <= ordered.)
@@ -3824,11 +3783,11 @@ function StockHistoryModal({ing,currentBranch,branches=[],onClose}){
         sbq(`waste_logs?select=id,qty,unit,reason,created_at,log_date,created_by,item_type&ingredient_id=eq.${ingId}&branch_id=eq.${bid}&order=id.desc&limit=300`),
         sbq(`order_requests?select=id,supplier_name,requested_at,requested_by,status,items&branch_id=eq.${bid}&status=eq.delivered&order=id.desc&limit=400`),
         sbq(`purchase_orders?select=id,po_number,from_branch_id,branch_id,status,received_at,received_by,updated_at,po_date,items&or=(branch_id.eq.${bid},from_branch_id.eq.${bid})&order=id.desc&limit=400`),
-        // The SOP cascade (sub-ingredients consumed by the gram) is NOT reconstructable from any
-        // document above — it only lives in the movement log. Pull just those to fill the gap that
-        // made a counted-as-integer item look fractional the next day. (Empty until the table + a
-        // move exist; other ref_types are already derived above so we skip them to avoid double-count.)
-        sbq(`stock_movements?select=delta,reason,by_user,created_at&ingredient_id=eq.${ingId}&branch_id=eq.${bid}&ref_type=eq.sop&order=created_at.desc&limit=300`),
+        // การผลิต (ตัดส่วนผสม + เพิ่มของที่ผลิต) ไม่มีเอกสารให้ย้อนดู — อยู่ในบันทึกการเคลื่อนไหวที่เดียว
+        // ถ้าไม่ดึงมา ส่วนผสมจะหายไปจากไทม์ไลน์แบบไม่มีคำอธิบาย (อาการเดิมคือ "นับเป็นจำนวนเต็ม
+        // แต่วันรุ่งขึ้นมีเศษ") · ref_type อื่นถอดจากเอกสารข้างบนแล้ว ไม่ดึงซ้ำ
+        // sop = ของเก่าจากบั๊ค cascade ก่อน 18/08/2569 · production = การกดปุ่มผลิต (ทางเดียวที่ถูก)
+        sbq(`stock_movements?select=delta,reason,by_user,created_at,ref_type&ingredient_id=eq.${ingId}&branch_id=eq.${bid}&ref_type=in.(sop,production)&order=created_at.desc&limit=300`),
       ]));
       if(!aliveRef.current)return;
       const evs=[];
@@ -3848,14 +3807,17 @@ function StockHistoryModal({ing,currentBranch,branches=[],onClose}){
         }
       }));
       // 5) SOP cascade — the previously-invisible consumption of sub-ingredients
-      mv.forEach(m=>{const q=+m.delta||0;if(q!==0)evs.push({k:"sop",at:toMs(m.created_at),delta:round2(q),ref:m.reason||"SOP",by:m.by_user,unit:U});});
+      mv.forEach(m=>{const q=+m.delta||0;if(q===0)return;
+        // ผลิต: ยอดลบ = ส่วนผสมที่ถูกใช้ · ยอดบวก = ของที่ผลิตเสร็จเข้าสต๊อก
+        const k=m.ref_type==="production"?(q<0?"sop":"made"):"sop";
+        evs.push({k,at:toMs(m.created_at),delta:round2(q),ref:m.reason||(m.ref_type==="production"?"ผลิต":"SOP"),by:m.by_user,unit:U});});
       evs.sort((a,b)=>b.at-a.at);
       if(aliveRef.current)setRows(evs);
     }catch{ if(aliveRef.current){setErr(true);setRows([]);} }
   }
   useEffect(()=>{load();},[ing.id,currentBranch?.id]);// eslint-disable-line react-hooks/exhaustive-deps
   const fmtDt=ms=>fmtDT(ms);
-  const META={count:{ic:I.clock,c:C.brand,bg:C.brandLight,l:"📋 นับสต็อก"},recv_ext:{ic:I.truck,c:C.teal,bg:C.tealLight,l:"📥 รับจากซัพพลายนอก"},po_in:{ic:I.box,c:C.green,bg:C.greenLight,l:"📥 รับเข้า"},po_out:{ic:I.send,c:C.blue,bg:C.blueLight,l:"📤 ส่งออก"},waste:{ic:I.trash,c:C.red,bg:C.redLight,l:"🗑️ ของเสีย"},sop:{ic:I.leaf,c:C.purple,bg:"#F5F3FF",l:"🍲 ใช้ผลิตตามสูตร (SOP)"}};
+  const META={count:{ic:I.clock,c:C.brand,bg:C.brandLight,l:"📋 นับสต็อก"},recv_ext:{ic:I.truck,c:C.teal,bg:C.tealLight,l:"📥 รับจากซัพพลายนอก"},po_in:{ic:I.box,c:C.green,bg:C.greenLight,l:"📥 รับเข้า"},po_out:{ic:I.send,c:C.blue,bg:C.blueLight,l:"📤 ส่งออก"},waste:{ic:I.trash,c:C.red,bg:C.redLight,l:"🗑️ ของเสีย"},sop:{ic:I.leaf,c:C.purple,bg:"#F5F3FF",l:"🍲 ใช้ผลิตตามสูตร (SOP)"},made:{ic:I.leaf,c:C.green,bg:C.greenLight,l:"🍳 ผลิตเสร็จเข้าสต๊อก"}};
   return <Modal title={`🕘 ประวัติการเคลื่อนไหวสต็อก — ${ing.name}`} onClose={onClose} wide>
     <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>สาขา: <b style={{color:C.ink2}}>{currentBranch?.name||"—"}</b> · รวมทุกการเปลี่ยนแปลง: นับสต็อก · รับจากซัพ · รับ/ส่ง PO · ของเสีย</div>
     {rows===null?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
