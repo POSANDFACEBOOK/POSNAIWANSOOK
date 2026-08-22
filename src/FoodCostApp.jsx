@@ -325,6 +325,17 @@ async function sbAll(pathNoRange, page = 1000, maxPages = 60) {
   return out;
 }
 
+// ── อ่าน visible_branches ล่าสุดจากฐานข้อมูลก่อนเขียนทับ ────────────────────
+// ทุกที่ที่แก้ "สาขาไหนเห็นของชิ้นนี้" เคยอ่านค่าจากข้อมูลที่ค้างอยู่ในหน้าจอ
+// แล้วเขียนทั้งชุดกลับไป → ของที่คนอื่นเพิ่งเปิดให้สาขาอื่นถูกลบทิ้งเงียบๆ
+// (หน้าจอโหลดข้อมูลตอนเปิดแท็บ/สลับสาขาเท่านั้น ค่าที่ถืออยู่เก่าได้เป็นชั่วโมง)
+// โยน error ถ้าอ่านไม่ได้ — ให้ผู้ใช้ลองใหม่ ดีกว่าเขียนทับด้วยค่าเก่า
+async function freshVisibleBranches(table, id) {
+  const rows = await sb(`${table}?select=visible_branches&id=eq.${id}&limit=1`);
+  if (!Array.isArray(rows) || !rows.length) throw new Error("อ่านค่าล่าสุดไม่ได้ — ลองใหม่อีกครั้ง");
+  return rows[0].visible_branches;
+}
+
 const api = {
   getIngs: () => sb(`ingredients?order=id.asc`),
   addIng: (d) => sb("ingredients", { method: "POST", body: JSON.stringify(d) }),
@@ -1671,10 +1682,21 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     // save (the "ลองใหม่" advice would double-apply the move). Cosmetic only.
     if(autoVisible&&toId){
       try{
-        const cur=row.visible_branches;
-        if(cur!=null){
-          const arr=Array.isArray(cur)?[...cur]:[];
-          if(!arr.includes(toId)){arr.push(toId);await api.updateIng(ingId,{visible_branches:arr});row.visible_branches=arr;}
+        const cached=row.visible_branches;
+        // null = เห็นทุกสาขาอยู่แล้ว ไม่ต้องแตะ
+        // ถ้าค่าที่ถืออยู่บอกว่าเห็นแล้ว ก็ไม่ต้องเขียน (ไม่มีความเสี่ยงทับของใคร)
+        if(cached!=null&&!(Array.isArray(cached)&&cached.map(Number).includes(+toId))){
+          // จะเขียนจริงแล้ว — ต้องอ่านค่าล่าสุดมารวมก่อน ไม่งั้นสาขาที่คนอื่น
+          // เพิ่งเปิดให้ระหว่างที่หน้านี้เปิดค้างอยู่ จะถูกลบทิ้ง
+          const live=await freshVisibleBranches("ingredients",ingId);
+          if(live!=null){
+            const arr=Array.isArray(live)?live.map(Number):[];
+            if(!arr.includes(+toId)){
+              arr.push(+toId);
+              await api.updateIng(ingId,{visible_branches:arr});
+              row.visible_branches=arr;
+            }else row.visible_branches=arr;
+          }
         }
       }catch(err){console.warn("visible_branches tick failed (stock already moved OK)",ingId,err);}
     }
@@ -3385,7 +3407,15 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
   const delBusy=useRef(new Set()); // waste-log ids whose delete is in flight — a double-confirm must not credit stock twice
   const[kind,setKind]=useState("ing");                       // ing | menu — ของเสียเป็นวัตถุดิบหรือเมนู
   const isMenu=kind==="menu";
-  const pool=isMenu?menus:ings;
+  // กรองการมองเห็นเหมือนทุกจอ — เดิมไม่กรองเลย สาขาจึงเลือกของที่ครัวกลาง
+  // ไม่ได้เปิดให้ได้ แล้วการบันทึกจะไปตัดสต๊อกสร้างยอดติดลบให้ของที่ไม่ควรมี
+  const isCentralWaste=currentBranch?.type==="central";
+  const pool=useMemo(()=>{
+    const raw=isMenu?(menus||[]):(ings||[]);
+    return isMenu
+      ?raw.filter(m=>isCentralWaste||menuVisibleAt(m,currentBranch?.id))
+      :raw.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentralWaste));
+  },[isMenu,menus,ings,currentBranch,isCentralWaste]);
   const unit=isMenu?"ที่":(sel?.buy_unit||"หน่วย");
   // วัตถุดิบ: ราคา = buy_price/หน่วย · เมนู: มูลค่า = ต้นทุนเมนู (menuCost)
   const unitPrice=sel?(isMenu?round2(menuCost(sel,ings)):(+sel.buy_price||0)):0;
@@ -4492,7 +4522,10 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   async function toggleVBIng(item,branchId){
     // null = all visible (legacy default) · [] = none visible · [ids] = explicit list
     const nonCB=branches.filter(b=>b.type!=="central").map(b=>b.id);
-    const cur=item.visible_branches;
+    // อ่านค่าล่าสุดก่อนเสมอ — ห้ามคำนวณจาก item ที่ค้างอยู่ในหน้าจอ
+    let cur;
+    try{ cur=await freshVisibleBranches("ingredients",item.id); }
+    catch(e){ alert("บันทึกไม่สำเร็จ: "+((e&&e.message)||e)); return; }
     let next;
     if(cur==null){
       // Currently "all" — clicking unticks this branch → list of all-except-clicked
@@ -5318,7 +5351,12 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
   useEffect(()=>{
     if(selCat!=="ทั้งหมด"&&!localCats.some(c=>c.name===selCat))setSelCat("ทั้งหมด");
   },[localCats,selCat]);
-  async function toggleVBMenu(menu,branchId){const nonCB=branches.filter(b=>b.type!=="central");let vb=[...(menu.visible_branches||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateMenu(menu.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
+  async function toggleVBMenu(menu,branchId){const nonCB=branches.filter(b=>b.type!=="central");
+    // อ่านค่าล่าสุดก่อนเขียนทับ (เดิมใช้ค่าที่ค้างในหน้าจอ → ลบสาขาที่คนอื่นเพิ่งเปิดให้)
+    let fresh;
+    try{ fresh=await freshVisibleBranches("menus",menu.id); }
+    catch(e){ alert("บันทึกไม่สำเร็จ: "+((e&&e.message)||e)); return; }
+    let vb=[...(fresh||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateMenu(menu.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   async function assignLocalCat(menuId,catName){
     // หมวดหมู่คุมจากครัวกลางที่เดียว — เขียนลง menus.category ไม่ใช่หมวดรายสาขาอีกแล้ว
     if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาแก้ไม่ได้");return;}
@@ -8306,7 +8344,7 @@ const priceHistLookup=(map,ingId,unit)=>(map&&map.get(`${+ingId}|${String(unit||
 // ใช้ร่วมกันทั้ง 2 หน้ารับของ (สาขาผ่าน OrderTab · ครัวกลางผ่าน POSection) โดยเจตนา —
 // สองหน้านั้นเป็นโค้ดคนละชุดอยู่แล้ว ถ้าก็อปกล่องนี้ไปอีกชุดจะกลายเป็นกฎเรื่องหน่วย/
 // การกันซ้ำ 2 ที่ที่ต้องแก้ตามกันตลอดไป ซึ่งเป็นแบบที่พลาดง่ายที่สุด
-function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],lastPriceOf,onAdd}){
+function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],lastPriceOf,onAdd,isCentral=false}){
   const[q,setQ]=useState("");
   const[pick,setPick]=useState(null);   // ตัวที่เลือกในช่องค้นหาชั่วคราว ไม่ต้องเก็บเป็น id (ต่างจาก ProductionTab)
   const[qty,setQty]=useState("");
@@ -8323,6 +8361,10 @@ function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],las
     if(!ql)return[];
     return (ings||[]).filter(i=>{
       if(!(i.name||"").toLowerCase().includes(ql))return false;
+      // "แสดงทั้งหมด" = ข้ามการกรองซัพเท่านั้น ไม่ใช่ข้ามการมองเห็นของสาขา
+      // เดิมข้ามทั้งคู่ → สาขาเพิ่มของที่ครัวกลางไม่ได้เปิดให้ แล้ว autoVisible
+      // จะเปิดให้ตัวเองถาวรตอนกดรับ
+      if(!ingVisibleAt(i,branchId,isCentral))return false;
       if(showAll||!supplierId)return true;
       return branchSupplierId(i,branchId)===supplierId;
     }).slice(0,12);
@@ -9737,7 +9779,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
           })}</tbody>
         </table>
       </div>
-      <ReceiveAddLine key={receivingExtOrder.orderId} ings={ings} suppliers={suppliers} supplierName={receivingExtOrder.supplierName}
+      <ReceiveAddLine key={receivingExtOrder.orderId} isCentral={isCentral} ings={ings} suppliers={suppliers} supplierName={receivingExtOrder.supplierName}
         branchId={currentBranch?.id} items={receivingExtOrder.items} lastPriceOf={lastPriceOf}
         onAdd={ln=>setReceivingExtOrder(s=>({...s,items:[...s.items,ln]}))}/>
       {(()=>{const itemsTotal=receivingExtOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0);const fee=+extDeliveryFee||0;return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
@@ -11950,7 +11992,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           </tr></tfoot>
         </table>
       </div>
-      <ReceiveAddLine key={receivingOrder.orderId} ings={ings} suppliers={suppliers} supplierName={receivingOrder.supplierName}
+      <ReceiveAddLine key={receivingOrder.orderId} isCentral={isCentral} ings={ings} suppliers={suppliers} supplierName={receivingOrder.supplierName}
         branchId={receivingOrder.branchId} items={receivingOrder.items} lastPriceOf={lastPriceOf}
         onAdd={ln=>setReceivingOrder(s=>({...s,items:[...s.items,ln]}))}/>
       {(()=>{const itemsTotal=receivingOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0);const fee=+recvDeliveryFee||0;return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
@@ -12925,7 +12967,11 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
   // suppliers it owns (legacy) + ones central opened to it via visible_branches.
   const myList=useMemo(()=>suppliers.filter(s=>supVisibleAt(s,currentBranch?.id)),[suppliers,currentBranch]);
   async function toggleVBSup(s,branchId){
-    const cur=Array.isArray(s.visible_branches)?s.visible_branches.map(Number):[];
+    // อ่านค่าล่าสุดก่อนเขียนทับ (เดิมใช้ค่าที่ค้างในหน้าจอ)
+    let fresh;
+    try{ fresh=await freshVisibleBranches("suppliers",s.id); }
+    catch(e){ alert("บันทึกไม่สำเร็จ: "+((e&&e.message)||e)); return; }
+    const cur=Array.isArray(fresh)?fresh.map(Number):[];
     const i=cur.indexOf(+branchId);
     if(i===-1)cur.push(+branchId);else cur.splice(i,1);
     try{await api.updateSupplier(s.id,{visible_branches:cur});await reloadSuppliers();}
@@ -18238,7 +18284,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"40px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
           <Ic d={I.food} s={42} c={C.line}/>
           <p style={{marginTop:10,fontSize:13.5,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูที่จัดหมวดหมู่ไว้"}</p>
-          {!search&&<p style={{marginTop:6,fontSize:11.5,color:C.ink4,lineHeight:1.7}}>กด <b style={{color:C.brand}}>"🍔 จัดการเมนูและหมวดหมู่ → หมวดหมู่"</b> ด้านบน<br/>→ คลิกหมวด → ติ๊กเมนูเข้าหมวด · เมนูจะขึ้นที่นี่อัตโนมัติ</p>}
+          {!search&&(branch?.type==="central"
+            ?<p style={{marginTop:6,fontSize:11.5,color:C.ink4,lineHeight:1.7}}>กด <b style={{color:C.brand}}>"🍔 จัดการเมนูและหมวดหมู่ → หมวดหมู่"</b> ด้านบน<br/>→ คลิกหมวด → ติ๊กเมนูเข้าหมวด · เมนูจะขึ้นที่นี่อัตโนมัติ</p>
+            :<p style={{marginTop:6,fontSize:11.5,color:C.ink4,lineHeight:1.7}}>หมวดหมู่จัดจากครัวกลางที่เดียว<br/>แจ้งครัวกลางให้จัดเมนูเข้าหมวด แล้วจะขึ้นที่นี่เอง</p>)}
         </div>}
       </div>
     </div>
@@ -19965,7 +20013,7 @@ function POSLocalCatManager({currentBranch,onClose}){
   const[cats,setCats]=useState([]);const[menus,setMenus]=useState([]);const[loading,setLoading]=useState(true);
   const[newName,setNewName]=useState("");const[editId,setEditId]=useState(null);const[editName,setEditName]=useState("");const[busy,setBusy]=useState(false);
   const[selCat,setSelCat]=useState(null);const[q,setQ]=useState("");
-  async function load(){setLoading(true);try{const[all,ms]=await Promise.all([api.getCats(),api.getMenus()]);setCats((all||[]).filter(c=>c.type==="menu"&&(isCentral?!c.branch_id:+c.branch_id===+currentBranch.id)));setMenus(ms||[]);}catch(e){console.error("catMgr",e);}setLoading(false);}
+  async function load(){setLoading(true);try{const[all,ms]=await Promise.all([api.getCats(),api.getMenus()]);setCats((all||[]).filter(c=>c.type==="menu"&&!c.branch_id));setMenus(ms||[]);}catch(e){console.error("catMgr",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
   const catOf=(m)=>menuCatOf(m)||"";
   const visibleMenus=menus.filter(m=>{const okB=isCentral||menuVisibleAt(m,currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
