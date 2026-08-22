@@ -1756,7 +1756,10 @@ function ingVisibleAt(ing,branchId,isCentral){
   if(vb==null)return true;
   if(!Array.isArray(vb))return true;
   if(vb.length===0)return false;
-  return vb.includes(branchId);
+  // แปลงชนิดก่อนเทียบเสมอ — ถ้ามีทางเขียนไหนเก็บเป็นสตริง ("6" แทน 6)
+  // includes() จะพลาดเงียบ แล้วของที่ครัวกลางเปิดให้จะหายจากสาขา
+  // (menuVisibleAt/supVisibleAt แปลงอยู่แล้ว ตัวนี้เคยเป็นตัวเดียวที่ไม่แปลง)
+  return vb.map(Number).includes(+branchId);
 }
 // Supplier visibility (OPT-IN, unlike ingredients): a supplier is owned by the branch
 // that created it (s.branch_id) and also shows at any branch central ticked into its
@@ -5312,8 +5315,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาลบหมวดไม่ได้");return;}
     if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${cat.name}" ใช่หรือไม่?`}))return;try{await api.deleteCat(cat.id);await reloadCats();if(selCat===cat.name)setSelCat("ทั้งหมด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
   const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return menus.filter(m=>{
-    const vb=m.visible_branches||[];
-    const matchB=isCentral||vb.length===0||vb.includes(currentBranch?.id);
+    const matchB=isCentral||menuVisibleAt(m,currentBranch?.id);
     if(!matchB||(ql&&!m.name.toLowerCase().includes(ql)&&!(m.code||"").toLowerCase().includes(ql)))return false;
     if(selCat==="ทั้งหมด")return true;
     if(isCentral)return m.category===selCat;
@@ -5433,7 +5435,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
             <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>แสดงที่สาขา:</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
               {activeBranches(branches).filter(b=>b.type!=="central").length===0?<span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีสาขา</span>
-              :activeBranches(branches).filter(b=>b.type!=="central").map(b=>{const vb=menu.visible_branches||[];const isOn=vb.length===0||vb.includes(b.id);return <button key={b.id} onClick={()=>toggleVBMenu(menu,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
+              :activeBranches(branches).filter(b=>b.type!=="central").map(b=>{const isOn=menuVisibleAt(menu,b.id);return <button key={b.id} onClick={()=>toggleVBMenu(menu,b.id)} style={{padding:"2px 8px",borderRadius:6,fontSize:10,fontWeight:700,border:`1px solid ${isOn?C.green:C.line}`,background:isOn?C.greenLight:"transparent",color:isOn?C.green:C.ink4,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{isOn?"✓ ":""}{b.name}</button>;})}
             </div>
           </div>}
         </div>
@@ -6136,7 +6138,7 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
 
 function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
   const isCentral=currentBranch?.type==="central";
-  const visibleMenus=useMemo(()=>menus.filter(m=>{const vb=m.visible_branches||[];return isCentral||vb.length===0||vb.includes(currentBranch?.id);}),[menus,isCentral,currentBranch]);
+  const visibleMenus=useMemo(()=>menus.filter(m=>isCentral||menuVisibleAt(m,currentBranch?.id)),[menus,isCentral,currentBranch]);
   const[sel,setSel]=useState(visibleMenus[0]?.id??null);const[edit,setEdit]=useState(false);const[sop,setSop]=useState([]);const[saving,setSaving]=useState(false);const[ingQ,setIngQ]=useState("");const[menuQ,setMenuQ]=useState("");
   const[editIngs,setEditIngs]=useState([]);
   const[ingPopup,setIngPopup]=useState(null);
@@ -19842,7 +19844,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
   const[bulkOpen,setBulkOpen]=useState(false);const[bulkGroups,setBulkGroups]=useState({});const[bulkMenus,setBulkMenus]=useState({});const[bulkBusy,setBulkBusy]=useState(false);
   async function load(){setLoading(true);try{const[ms,ps]=await Promise.all([api.getMenus(),api.getPOSSettings(currentBranch.id)]);setMenus(ms||[]);const s=ps&&ps[0]?ps[0]:null;setLib(Array.isArray(s&&s.option_library)?s.option_library:[]);}catch(e){console.error("menuMgr",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
-  const visible=menus.filter(m=>{const vb=m.visible_branches||[];const okB=isCentral||vb.length===0||vb.includes(currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
+  const visible=menus.filter(m=>{const okB=isCentral||menuVisibleAt(m,currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
   async function setAvail(m,status){setBusyId(m.id);const avail={...(m.availability||{})};if(!status)delete avail[currentBranch.id];else avail[currentBranch.id]=status;try{await api.updateMenu(m.id,{availability:avail});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);}
   const AVS=[{v:"",l:"ขาย",c:C.green},{v:"sold_out",l:"วันนี้หมด",c:"#92400E"},{v:"hidden",l:"ซ่อน",c:C.red}];
   function openBind(m){const sel={};const raw=((m.options_by_branch||{})[String(currentBranch.id)])||[];raw.forEach(b=>{const id=(typeof b==="string"||typeof b==="number")?b:(b&&b.id);if(id)sel[id]=true;});setBindSel(sel);setBindMenu(m);}
@@ -19948,7 +19950,7 @@ function POSLocalCatManager({currentBranch,onClose}){
   async function load(){setLoading(true);try{const[all,ms]=await Promise.all([api.getCats(),api.getMenus()]);setCats((all||[]).filter(c=>c.type==="menu"&&(isCentral?!c.branch_id:+c.branch_id===+currentBranch.id)));setMenus(ms||[]);}catch(e){console.error("catMgr",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
   const catOf=(m)=>menuCatOf(m)||"";
-  const visibleMenus=menus.filter(m=>{const vb=m.visible_branches||[];const okB=isCentral||vb.length===0||vb.includes(currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
+  const visibleMenus=menus.filter(m=>{const okB=isCentral||menuVisibleAt(m,currentBranch.id);if(!okB)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;});
   async function add(){const n=newName.trim();if(!n)return;if(cats.some(c=>c.name===n))return alert("มีหมวดนี้แล้ว");
     if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาสร้างหมวดใหม่ไม่ได้");return;}
     setBusy(true);try{await api.addCat({type:"menu",name:n,branch_id:isCentral?null:currentBranch.id});setNewName("");await load();}catch(e){alert("เพิ่มไม่สำเร็จ: "+e.message);}setBusy(false);}
