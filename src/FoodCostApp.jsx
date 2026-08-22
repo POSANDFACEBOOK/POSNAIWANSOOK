@@ -12022,16 +12022,27 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   const visibleSuppliers=useMemo(()=>suppliers.filter(s=>s.active!==false&&supVisibleAt(s,currentBranch?.id)),[suppliers,currentBranch]);
   const visibleSupplierNames=useMemo(()=>new Set(visibleSuppliers.map(s=>s.name)),[visibleSuppliers]);
 
-  // Strict per-branch supplier resolver — NO fallback to central's
-  // ingredient.supplier_id. Each branch has to explicitly pick a supplier
-  // (in the ingredient card dropdown) before that ingredient is orderable.
-  // Central kitchen still uses its own supplier_id since central manages
-  // the master record.
+  // ── ซัพของวัตถุดิบ "ที่สาขานี้" ────────────────────────────────────────────
+  // ลำดับ: (1) ซัพที่สาขาตั้งเองใน supplier_by_branch → (2) ถ้าไม่ได้ตั้ง ใช้ซัพจาก
+  // ข้อมูลกลาง แต่ต่อเมื่อซัพเจ้านั้น "เปิดให้บริการสาขานี้" จริง (supVisibleAt)
+  //
+  // เดิมเข้มงวด: ไม่ตกกลับไปใช้ซัพกลางเลย สาขาต้องเลือกเองก่อนถึงจะสั่งได้
+  // แต่การ์ดวัตถุดิบโชว์ซัพจากข้อมูลกลางอยู่แล้ว → พนักงานเห็น "รีน่า STB" บนการ์ด
+  // แต่พอมากรองด้วยรีน่า STB ในหน้าสั่งซื้อกลับไม่เจอของ = สองจอพูดคนละเรื่อง
+  // วัดจริง 22/08/2569: หมวดขนมที่คุณนายตื่นสายเห็น 3 จาก 10 · The River เห็น 12 จาก 389
+  // (รวมทั้งระบบ 282 รายการที่มีซัพบนการ์ดแต่สั่งไม่ได้)
+  //
+  // การเช็ค supVisibleAt ยังกันเรื่องเดิมไว้ครบ: ซัพที่ไม่ได้เปิดให้สาขานี้
+  // จะไม่ถูกหยิบมาใช้อัตโนมัติ สาขายังตั้งทับเองได้เสมอ
   function strictBranchSupplierId(ing){
     if(isCentral)return ing.supplier_id?+ing.supplier_id:null;
-    const map=ing.supplier_by_branch||{};
-    const v=map[String(currentBranch?.id)];
-    return v!=null&&v!==""?(+v||null):null;
+    const bid=currentBranch?.id;
+    const v=(ing.supplier_by_branch||{})[String(bid)];
+    if(v!=null&&v!=="")return +v||null;
+    const g=+ing.supplier_id||0;
+    if(!g)return null;
+    const sup=suppliers.find(x=>+x.id===g);
+    return (sup&&sup.active!==false&&supVisibleAt(sup,bid))?g:null;
   }
   // Filter visible ingredients — only ones with a per-branch supplier set
   // (the stock-check view is for ordering, so no supplier = nowhere to send).
@@ -12044,13 +12055,22 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     else if(supFilter){if(String(sid)!==String(supFilter))return false;}
     return true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }),[ings,isCentral,currentBranch,q,supFilter]);
+  }),[ings,suppliers,isCentral,currentBranch,q,supFilter]);
 
   // ── ตัวเลือกในช่องกรองซัพ: เอาเฉพาะเจ้าที่ "มีวัตถุดิบอยู่จริงที่สาขานี้" ──
   // เดิมใช้ visibleSuppliers ซึ่งเป็นรายชื่อซัพทั้งหมดที่สาขามองเห็น ไม่เกี่ยวกับว่า
   // มีวัตถุดิบผูกไว้หรือเปล่า → เลือกแล้วได้หน้าว่าง ไม่มีอะไรบอกว่าทำไม
   // วัดจริง 16/08/2569: ครัวกลาง 43 จาก 102 ตัวเลือกกดแล้วว่าง · The River ว่างทั้ง 13
   // (คนละเรื่องกับ visibleSuppliers ที่ยังต้องใช้เต็มตอน "ผูกซัพให้วัตถุดิบ")
+  // ── ของที่ "สาขาเห็น แต่สั่งไม่ได้" — ต้องบอก ไม่ใช่ซ่อนเงียบ ────────────────
+  // ไม่มีซัพเลย หรือซัพที่ตั้งไว้ไม่ได้เปิดให้บริการสาขานี้ → หลุดจากทุกกลุ่ม
+  // เดิมหายไปเฉยๆ พนักงานไม่รู้ว่ามีของนี้ให้สั่ง (The River 269 รายการ)
+  const unorderable=useMemo(()=>{
+    if(isCentral)return [];
+    return ings.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentral)&&!strictBranchSupplierId(i));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[ings,suppliers,currentBranch,isCentral]);
+
   const filterSuppliers=useMemo(()=>{
     const have=new Set();
     for(const i of ings){
@@ -12060,7 +12080,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     }
     return visibleSuppliers.filter(s=>have.has(+s.id));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[ings,visibleSuppliers,currentBranch,isCentral]);
+  },[ings,suppliers,visibleSuppliers,currentBranch,isCentral]);
   // ซัพที่เลือกค้างไว้แล้วไม่มีของแล้ว → เคลียร์ตัวกรอง ไม่ให้ติดหน้าว่าง
   useEffect(()=>{
     if(supFilter&&supFilter!=="none"&&!filterSuppliers.some(s=>String(s.id)===String(supFilter)))setSupFilter("");
@@ -12288,6 +12308,23 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         </div>
       </div>
     </Card>
+
+    {unorderable.length>0&&<Card style={{padding:"11px 14px",marginBottom:14,background:C.brandLight,border:`1px solid ${C.brand}55`}}>
+      <div style={{display:"flex",alignItems:"flex-start",gap:9,flexWrap:"wrap"}}>
+        <span style={{fontSize:15,lineHeight:1.2}}>📦</span>
+        <div style={{flex:1,minWidth:220}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>
+            มีวัตถุดิบอีก {unorderable.length} รายการที่สาขานี้ใช้ แต่ยังสั่งไม่ได้
+          </div>
+          <div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:3,lineHeight:1.65}}>
+            ยังไม่ได้ตั้งซัพพลาย หรือซัพที่ตั้งไว้ไม่ได้เปิดให้บริการสาขานี้ — ไปตั้งที่การ์ดวัตถุดิบก่อน แล้วจะขึ้นมาให้สั่งเอง
+          </div>
+          <div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:5}}>
+            {unorderable.slice(0,8).map(i=>String(i.name).trim()).join(" · ")}{unorderable.length>8?` … อีก ${unorderable.length-8} รายการ`:""}
+          </div>
+        </div>
+      </div>
+    </Card>}
 
     {/* Stock check tables grouped by supplier */}
     {grouped.length===0?<Card style={{padding:"50px 20px",textAlign:"center"}}>
