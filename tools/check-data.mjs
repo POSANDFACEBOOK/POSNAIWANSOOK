@@ -169,6 +169,27 @@ const main = async () => {
     bad.length ? warn(`${bad.length} ใบ — เปิดใบแล้วกดปุ่ม 🔁 ลองเพิ่มสต๊อกใหม่`, bad) : ok("ไม่มี");
   }
 
+  // ── 10) ตารางโตเกินเพดาน 1000 แถวของ PostgREST → ข้อมูลหายเงียบ ──
+  // เคสจริง 22/08/2569: assets 1,187 แถว แต่ดึง limit=1000 → บางใหญ่เห็นสินทรัพย์
+  // 82 จาก 188 (หาย 106) ไม่มี error ไม่มีอะไรบอกว่าโดนตัด
+  section("10) ตารางที่โตจนใกล้/เกินเพดาน 1000 แถวต่อคำขอ");
+  {
+    const countOf = async (t) => {
+      const r = await fetch(`${U}/${t}?select=id&limit=1`, { headers: { ...H, Prefer: "count=exact" } });
+      return +(String(r.headers.get("content-range") || "").split("/")[1] || 0);
+    };
+    // ตารางที่แอปดึง "ทั้งตาราง" ในคำขอเดียว — ถ้าโตเกิน 1000 ต้องแบ่งหน้า
+    const WHOLE_TABLE = ["assets", "ingredients", "menus", "suppliers", "categories", "branches"];
+    const bad = [];
+    for (const t of WHOLE_TABLE) {
+      try {
+        const n = await countOf(t);
+        if (n > 900) bad.push(`${t} = ${n} แถว${n > 1000 ? " ⛔ เกินเพดานแล้ว — ต้องใช้ sbAll() แบ่งหน้า" : " ⚠️ ใกล้เพดาน"}`);
+      } catch { /* อ่านไม่ได้ก็ข้าม */ }
+    }
+    bad.length ? warn(`${bad.length} ตาราง`, bad) : ok("ทุกตารางที่ดึงทั้งก้อนยังต่ำกว่า 900 แถว");
+  }
+
   console.log(`\n${"═".repeat(50)}`);
   console.log(warns === 0 ? "✅ สะอาดทุกข้อ" : `⚠️ พบ ${warns} เรื่องที่ควรจัดการ (รายละเอียดด้านบน)`);
 };

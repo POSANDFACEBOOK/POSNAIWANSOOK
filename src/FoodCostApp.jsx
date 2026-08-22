@@ -307,6 +307,24 @@ function publicBaseUrl(){
   return raw.replace(/\/+$/,"")+"/";
 }
 
+// ── ดึงทั้งตารางแบบแบ่งหน้า ─────────────────────────────────────────────────
+// PostgREST คืนสูงสุด 1000 แถวต่อคำขอ ถ้าตารางโตเกินนั้นแล้วเราขอครั้งเดียว
+// แถวที่เหลือจะ "หายเงียบ" ไม่มี error ไม่มีอะไรบอก
+// เคสจริง 22/08/2569: assets มี 1,187 แถว ดึงมา 1,000 → บางใหญ่เห็นสินทรัพย์
+// 82 จาก 188 (หาย 106 เช่น กระทะ ×125, หม้อแจ่วฮ้อน ×40) · อยุธยา หาย 46 · คลองสาม หาย 35
+// วนขอทีละหน้าจนกว่าจะได้ไม่ครบหน้า = หมดแล้ว
+async function sbAll(pathNoRange, page = 1000, maxPages = 60) {
+  const out = [];
+  for (let i = 0; i < maxPages; i++) {
+    const sep = pathNoRange.includes("?") ? "&" : "?";
+    const chunk = await sb(`${pathNoRange}${sep}limit=${page}&offset=${i * page}`);
+    if (!Array.isArray(chunk)) break;
+    out.push(...chunk);
+    if (chunk.length < page) break;
+  }
+  return out;
+}
+
 const api = {
   getIngs: () => sb(`ingredients?order=id.asc`),
   addIng: (d) => sb("ingredients", { method: "POST", body: JSON.stringify(d) }),
@@ -346,7 +364,7 @@ const api = {
   updateSupplier: (id, d) => sb(`suppliers?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteSupplier: (id) => sb(`suppliers?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   // Fixed assets (ทะเบียนสินทรัพย์) — per branch
-  getAssets: () => sb("assets?order=id.desc&limit=1000"),
+  getAssets: () => sbAll("assets?order=id.desc"),   // แบ่งหน้า — เคยตัดที่ 1000 ทำให้สินทรัพย์เก่าหายจากสาขา
   addWasteLog: (d) => sb("waste_logs", { method: "POST", body: JSON.stringify(d) }),
   // Flags that this waste row's stock deduct actually landed, so deleting it later knows whether
   // it may credit the stock back. Best-effort: silently no-ops until the column exists.
