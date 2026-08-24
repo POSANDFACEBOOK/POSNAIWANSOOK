@@ -2281,7 +2281,7 @@ function buildSopSheetHTML(subj,ings,opt){
 *{margin:0;padding:0;box-sizing:border-box}
 :root{--stcols:2;--stimg:104px;--stfs:9.6pt;--stclamp:5;--ingfs:9.5pt;--heroh:150px;--h1fs:32pt}
 html,body{background:#EDE7DE}
-body{font-family:'Sarabun',system-ui,sans-serif;color:#2B3440;line-height:1.5;
+body{font-family:'Sarabun','Noto Sans Thai','Leelawadee UI',Thonburi,Tahoma,sans-serif;color:#2B3440;line-height:1.5;
   -webkit-print-color-adjust:exact;print-color-adjust:exact}
 
 /* กรอบ A4 เป๊ะ — สูง 296.5 ไม่ใช่ 297 เพราะปัดเศษของ Chrome ทำให้ล้นไปหน้า 2 ที่ 297 พอดี */
@@ -2292,7 +2292,7 @@ body{font-family:'Sarabun',system-ui,sans-serif;color:#2B3440;line-height:1.5;
 .hd{background:linear-gradient(135deg,#C2410C 0%,#9A3412 100%);border-radius:6mm;
   padding:5.5mm 7mm;display:flex;justify-content:space-between;align-items:center;gap:6mm;color:#fff}
 .hdl{flex:1;min-width:0}
-.hd h1{font-size:var(--h1fs);font-weight:900;line-height:1.5;letter-spacing:-.4px;
+.hd h1{font-size:var(--h1fs);font-weight:900;line-height:1.5;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:.4mm 0}
 .chips{display:flex;flex-direction:column;gap:2mm;align-items:flex-end;flex-shrink:0}
 .chip{background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.34);border-radius:99px;
@@ -2382,7 +2382,7 @@ body:not(.txt) .stimg:not(:has(img)){background:repeating-linear-gradient(45deg,
   align-items:flex-start;flex-shrink:0}
 .ft .f{flex:1;min-width:0}
 .ft .f.r{flex:0 0 44mm;text-align:right}
-.ft .lb{font-size:7.5pt;font-weight:700;color:#98A3B2;letter-spacing:.4px;margin-bottom:.8mm}
+.ft .lb{font-size:7.5pt;font-weight:700;color:#98A3B2;margin-bottom:.8mm}
 .ft .vl{font-size:10.5pt;font-weight:700;line-height:1.5;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .ft .dim{color:#7C8694;font-weight:500}
@@ -6496,10 +6496,10 @@ function buildPOHTML(po,toBranchName,fromBranchName){
     <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:700">฿${fmt(it.line_total)}</td>
   </tr>`).join("");
   const stLabel=po.status==='received'?'✅ รับสินค้าแล้ว':po.status==='cancelled'?'❌ ยกเลิก':po.status==='paid'?'✅ ชำระแล้ว':po.status==='disputed'?'⚠️ ส่งกลับ':po.status==='awaiting_payment'?'💰 รอชำระเงิน':'⏳ เปิดอยู่';
-  return `<div id="po-doc" style="font-family:'Sarabun',sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto;background:#fff">
+  return `<div id="po-doc" style="font-family:'Sarabun','Noto Sans Thai','Leelawadee UI',Thonburi,Tahoma,sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto;background:#fff">
 <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #FF6B35;padding-bottom:14px;margin-bottom:18px">
   <div>
-    <h1 style="margin:0;font-size:28px;color:#FF6B35;letter-spacing:1px">📄 ใบสั่งซื้อ (Purchase Order)</h1>
+    <h1 style="margin:0;font-size:28px;color:#FF6B35"><span style="letter-spacing:1px">📄</span> ใบสั่งซื้อ (Purchase Order)</h1>
     <div style="margin-top:6px;font-size:13px;color:#475569">${esc(fromBranchName||"-")} <span style="color:#FF6B35;font-weight:700">→</span> ${esc(toBranchName||"-")}</div>
   </div>
   <div style="text-align:right">
@@ -6553,10 +6553,10 @@ function buildAssetTransferHTML(t){
     <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:700">฿${fmt(it.total_cost)}</td>
   </tr>`).join("");
   const totalQty=items.reduce((s,x)=>s+(+x.qty||0),0);
-  return `<div id="po-doc" style="font-family:'Sarabun',sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto;background:#fff">
+  return `<div id="po-doc" style="font-family:'Sarabun','Noto Sans Thai','Leelawadee UI',Thonburi,Tahoma,sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto;background:#fff">
 <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #7C3AED;padding-bottom:14px;margin-bottom:18px">
   <div>
-    <h1 style="margin:0;font-size:26px;color:#7C3AED;letter-spacing:.5px">🔄 ใบโอนย้ายสินทรัพย์</h1>
+    <h1 style="margin:0;font-size:26px;color:#7C3AED"><span style="letter-spacing:.5px">🔄</span> ใบโอนย้ายสินทรัพย์</h1>
     <div style="font-size:12px;color:#64748B;margin-top:2px">Asset Transfer Note</div>
     <div style="margin-top:6px;font-size:13px;color:#475569">${esc(t.from_branch_name||"-")} <span style="color:#7C3AED;font-weight:700">→</span> ${esc(t.to_branch_name||"-")}</div>
   </div>
@@ -6628,10 +6628,10 @@ function buildGRNHTML(po,toBranchName,fromBranchName){
     ?`<span style="background:#FEF2F2;color:#DC2626;border:1px solid #FCA5A5;padding:3px 10px;border-radius:6px;font-weight:800">⚠️ รับไม่ครบ ${nShort} รายการ (ขาดเป็นมูลค่า ฿${fmt(shortValue)})</span>`
     :nOver>0?`<span style="background:#FFFBEB;color:#B45309;border:1px solid #FDE68A;padding:3px 10px;border-radius:6px;font-weight:800">รับเกิน ${nOver} รายการ</span>`
     :`<span style="background:#F0FDF4;color:#16A34A;border:1px solid #86EFAC;padding:3px 10px;border-radius:6px;font-weight:800">✅ รับครบทุกรายการ</span>`;
-  return `<div id="po-doc" style="font-family:'Sarabun',sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto;background:#fff">
+  return `<div id="po-doc" style="font-family:'Sarabun','Noto Sans Thai','Leelawadee UI',Thonburi,Tahoma,sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto;background:#fff">
 <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0D9488;padding-bottom:14px;margin-bottom:18px">
   <div>
-    <h1 style="margin:0;font-size:26px;color:#0D9488;letter-spacing:.5px">📥 ใบตรวจรับสินค้า</h1>
+    <h1 style="margin:0;font-size:26px;color:#0D9488"><span style="letter-spacing:.5px">📥</span> ใบตรวจรับสินค้า</h1>
     <div style="font-size:12px;color:#64748B;margin-top:2px">Goods Receipt Note</div>
     <div style="margin-top:6px;font-size:13px;color:#475569">${esc(fromBranchName||"-")} <span style="color:#0D9488;font-weight:700">→</span> ${esc(toBranchName||"-")}</div>
   </div>
@@ -6695,10 +6695,10 @@ function buildCreditNoteHTML(po,toBranchName,fromBranchName){
     <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${fmt(x.price)}</td>
     <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:800">฿${fmt(x.missing*x.price)}</td>
   </tr>`).join("");
-  return `<div id="po-doc" style="font-family:'Sarabun',sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:820px;margin:0 auto;background:#fff">
+  return `<div id="po-doc" style="font-family:'Sarabun','Noto Sans Thai','Leelawadee UI',Thonburi,Tahoma,sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:820px;margin:0 auto;background:#fff">
 <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #DC2626;padding-bottom:14px;margin-bottom:18px">
   <div>
-    <h1 style="margin:0;font-size:26px;color:#DC2626;letter-spacing:.5px">📉 ใบลดหนี้ / ใบปรับปรุงยอด</h1>
+    <h1 style="margin:0;font-size:26px;color:#DC2626"><span style="letter-spacing:.5px">📉</span> ใบลดหนี้ / ใบปรับปรุงยอด</h1>
     <div style="font-size:12px;color:#64748B;margin-top:2px">Credit Note</div>
     <div style="margin-top:6px;font-size:13px;color:#475569">${esc(fromBranchName||"-")} <span style="color:#DC2626;font-weight:700">→</span> ${esc(toBranchName||"-")}</div>
   </div>
@@ -6756,7 +6756,7 @@ function printDocWindow(docHtml,{filename,title,headline,accent="#FF6B35",action
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;900&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.2/dist/html2pdf.bundle.min.js"></script>
 <style>
-  body{font-family:'Sarabun',sans-serif;margin:0;background:#F1F5F9}
+  body{font-family:'Sarabun','Noto Sans Thai','Leelawadee UI',Thonburi,Tahoma,sans-serif;margin:0;background:#F1F5F9}
   .toolbar{position:sticky;top:0;background:#0F172A;color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;z-index:10;box-shadow:0 4px 12px rgba(0,0,0,.18)}
   .tools{display:flex;gap:8px}
   .tools button{background:${accent};color:#fff;border:none;border-radius:8px;padding:7px 16px;cursor:pointer;font-family:'Sarabun',sans-serif;font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px}
@@ -6782,8 +6782,15 @@ function savePDF(){
   btn.textContent='⏳ กำลังสร้าง PDF...';btn.disabled=true;
   html2pdf().set({margin:[8,8,8,8],filename:'${filename}',image:{type:'jpeg',quality:.98},html2canvas:{scale:2,useCORS:true,backgroundColor:'#ffffff'},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(document.getElementById('po-doc')).save().then(function(){btn.textContent='💾 ดาวน์โหลด PDF';btn.disabled=false;}).catch(function(e){alert('สร้าง PDF ไม่สำเร็จ: '+e.message);btn.textContent='💾 ดาวน์โหลด PDF';btn.disabled=false;});
 }
-${action==="print"?"setTimeout(function(){window.print();},400);":""}
-${action==="pdf"?"window.addEventListener('load',function(){setTimeout(savePDF,400);});":""}
+function whenFontsReady(fn){
+  // รอให้ฟอนต์ไทยโหลดเสร็จก่อนค่อยพิมพ์ — พิมพ์ก่อนฟอนต์มาถึงจะได้ฟอนต์สำรอง
+  // ที่อาจวางสระ/วรรณยุกต์ไม่ถูก และ PDF จะจำผลนั้นไว้ถาวร
+  var done=false, go=function(){ if(done)return; done=true; setTimeout(fn,150); };
+  try{ if(document.fonts&&document.fonts.ready){document.fonts.ready.then(go,go);} }catch(e){}
+  setTimeout(go,3000);   // กันเหนียว เน็ตล่ม/ฟอนต์โหลดไม่ได้ ก็ยังพิมพ์ได้
+}
+${action==="print"?"whenFontsReady(function(){window.print();});":""}
+${action==="pdf"?"window.addEventListener('load',function(){whenFontsReady(savePDF);});":""}
 </script>
 </body></html>`;
   w.document.write(html);w.document.close();addPrintClose(w);
