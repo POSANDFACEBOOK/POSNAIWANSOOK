@@ -2000,9 +2000,24 @@ function confirmDlg(opts){
 }
 function ConfirmDlg(){
   const[st,setSt]=useState(null);
-  useEffect(()=>{_confirmOpener=(opts,resolve)=>setSt({opts,resolve});return()=>{_confirmOpener=null;};},[]);
-  // No keyboard shortcuts — user must explicitly press a button.
-  useEffect(()=>{if(!st)return;const h=e=>{if(e.key==="Enter"){e.preventDefault();const r=st.resolve;setSt(null);r(true);}};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[st]);
+  const stRef=useRef(null);
+  stRef.current=st;
+  useEffect(()=>{
+    _confirmOpener=(opts,resolve)=>{
+      // กล่องเดิมยังเปิดค้างอยู่แล้วมีกล่องใหม่มาแทน — ต้องคืนค่า "ไม่" ให้คนที่รอ
+      // กล่องเดิมก่อน ไม่งั้น await ของเขาค้างตลอดกาล ตัวล็อกกันกดซ้ำไม่ถูกปลด
+      // แล้วปุ่มนั้นจะตายถาวรโดยไม่มี error อะไรเลย (เคสจริง: ปุ่มบันทึกทั้งหมด
+      // ในหน้านับสต็อก ตายเมื่อกด Esc ระหว่างกล่องยืนยันเปิดอยู่)
+      const prev=stRef.current;
+      if(prev&&prev.resolve){try{prev.resolve(false);}catch{}}
+      setSt({opts,resolve});
+    };
+    return()=>{_confirmOpener=null;};
+  },[]);
+  // Enter ใช้ได้เฉพาะกล่องแจ้งเพื่อทราบ (notice) ที่ไม่มีปลายทางอันตราย
+  // กล่องยืนยันปกติ danger=true เป็นค่าตั้งต้น การกด Enter ค้างมาจากการพิมพ์
+  // จะกลายเป็น "ตกลงลบ" โดยไม่ตั้งใจ — ต้องกดปุ่มเองเท่านั้น
+  useEffect(()=>{if(!st||st.opts?.notice!==true)return;const h=e=>{if(e.key==="Enter"){e.preventDefault();const r=st.resolve;setSt(null);r(true);}};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[st]);
   if(!st)return null;
   const close=v=>{const r=st.resolve;setSt(null);r(v);};
   const o=st.opts;
@@ -2699,7 +2714,9 @@ function LoginPage({onLogin}){
     for(let attempt=1;attempt<=3;attempt++){
       try{
         if(attempt>1)setErr(`⏳ กำลังปลุกเซิร์ฟเวอร์... (ครั้งที่ ${attempt}/3)`);
-        const found=await Promise.race([api.loginUser(u,p),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),12000))]);
+        // iOS เติมตัวพิมพ์ใหญ่ให้เองและมักติดช่องว่างท้ายจากการแตะแป้น
+        // ฐานข้อมูลเทียบแบบตรงตัว ("Somchai " ≠ "somchai") → เข้าไม่ได้โดยไม่รู้สาเหตุ
+        const found=await Promise.race([api.loginUser(String(u).trim(),p),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),12000))]);
         if(found&&found.length>0){setErr("");onLogin(found[0]);}
         else setErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
         setLoading(false);return;
@@ -2716,7 +2733,7 @@ function LoginPage({onLogin}){
         <h1 style={{fontSize:20,fontWeight:900,color:C.ink,marginBottom:2,fontFamily:"'Sarabun',sans-serif"}}>NAIWANSOOK FOODCOST</h1>
         <p style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",letterSpacing:1.5}}>BY BOSSMAX</p>
       </div>
-      <div style={{marginBottom:16}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ชื่อผู้ใช้</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.user} s={16} c={C.ink4}/></span><input value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} placeholder="username" style={{...iS,paddingLeft:40}} autoFocus/></div></div>
+      <div style={{marginBottom:16}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ชื่อผู้ใช้</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.user} s={16} c={C.ink4}/></span><input value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} placeholder="username" autoCapitalize="none" autoCorrect="off" autoComplete="username" spellCheck={false} style={{...iS,paddingLeft:40}} autoFocus/></div></div>
       <div style={{marginBottom:20}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>รหัสผ่าน</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.lock} s={16} c={C.ink4}/></span><input value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} type={show?"text":"password"} placeholder="password" style={{...iS,paddingLeft:40,paddingRight:44}}/><button onClick={()=>setShow(!show)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer"}}><Ic d={I.eye} s={16} c={C.ink4}/></button></div></div>
       {err&&<div style={{background:C.redLight,color:C.red,borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:600,marginBottom:16,display:"flex",alignItems:"center",gap:6}}><Ic d={I.warning} s={14} c={C.red}/>{err}</div>}
       <Btn onClick={login} full loading={loading}>เข้าสู่ระบบ</Btn>
@@ -3058,7 +3075,7 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
                 <input value={row.name??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,name:e.target.value===""?undefined:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13}}/>
               </td>
               <td style={{padding:"8px 12px"}}>
-                <input type="text" inputMode="decimal" value={row.buy_price??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,buy_price:e.target.value===""?undefined:+e.target.value}:x))} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตราคา" style={{...iS,padding:"4px 8px",fontSize:13,width:80,color:row.buy_price!==undefined?C.ink:C.ink4}}/>
+                <input type="text" inputMode="decimal" value={row.buy_price??""} onChange={e=>{const t=e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1");setRows(r=>r.map((x,i)=>i===idx?{...x,buy_price:t===""?undefined:(t.endsWith(".")?t:+t)}:x));}} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตราคา" style={{...iS,padding:"4px 8px",fontSize:13,width:80,color:row.buy_price!==undefined?C.ink:C.ink4}}/>
               </td>
               <td style={{padding:"8px 12px"}}>
                 <input type="text" inputMode="decimal" value={row.stock??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,stock:e.target.value===""?undefined:+e.target.value,stockProvided:e.target.value!==""}:x))} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตสต๊อก" style={{...iS,padding:"4px 8px",fontSize:13,width:90,fontWeight:700,color:row.stockProvided?C.green:C.ink4}}/>
@@ -3248,7 +3265,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
           <tbody>{rows.map((row,idx)=><tr key={row._kid||idx} style={{borderTop:`1px solid ${C.lineLight}`,opacity:row.selected?1:.5}}>
             <td style={{padding:"8px 12px",textAlign:"center"}}><input type="checkbox" checked={!!row.selected} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,selected:e.target.checked}:x))} style={{accentColor:C.brand,width:15,height:15}}/></td>
             <td style={{padding:"8px 12px"}}><input value={row.name} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,name:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13}}/></td>
-            <td style={{padding:"8px 12px"}}><input type="text" inputMode="decimal" value={row.price} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,price:+e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13,width:90}}/></td>
+            <td style={{padding:"8px 12px"}}><input type="text" inputMode="decimal" value={row.price} onChange={e=>{const t=e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1");setRows(r=>r.map((x,i)=>i===idx?{...x,price:t===""?"":(t.endsWith(".")?t:+t)}:x));}} style={{...iS,padding:"4px 8px",fontSize:13,width:90}}/></td>
             <td style={{padding:"8px 12px"}}><select value={row.category} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,category:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:12,appearance:"none"}}>{allMenuCatList.map(c=><option key={c}>{c}</option>)}</select></td>
             <td style={{padding:"8px 12px"}}><input value={row.description} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,description:e.target.value}:x))} placeholder="รายละเอียด..." style={{...iS,padding:"4px 8px",fontSize:12}}/></td>
           </tr>)}
@@ -3393,7 +3410,7 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
 }
 
 // 🗑️ ของเสีย — record + history of wasted ingredients. Photos go to Google Drive.
-function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
+function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[],reloadIngs}){
   const[showRecord,setShowRecord]=useState(true);            // auto-open the record popup on entering the tab
   const isMobile=useIsMobile();const isNarrow=useIsMobile(1100);// responsive card grid: 6/row desktop → 4 tablet → 2 phone
   const wasteCols=isMobile?2:isNarrow?4:6;
@@ -3457,7 +3474,8 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
       // Never claim success when the deduct failed — a green toast would make the operator
       // think stock was reduced and re-do it, over-deducting.
       posToast(stockOk?"✅ บันทึกของเสีย + หักสต๊อกแล้ว":"⚠️ บันทึกของเสียแล้ว แต่หักสต๊อกไม่สำเร็จ — ปรับที่หน้านับสต็อก",stockOk?"ok":"warn");
-      setSel(null);setQ("");setQty("");setPrice("");setReason("");setImages([]);loadLogs();// reset for next entry + refresh history behind
+      setSel(null);setQ("");setQty("");setPrice("");setReason("");setImages([]);loadLogs();
+      if(reloadIngs)reloadIngs();   // สต๊อกถูกหักในฐานข้อมูลแล้ว หน้าอื่นต้องเห็นเลขใหม่ด้วย// reset for next entry + refresh history behind
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
     savingRef.current=false;
     setSaving(false);
@@ -3526,6 +3544,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
         posToast(rMenu?"🗑️ ลบรายการแล้ว":"🗑️ ลบรายการแล้ว (รายการนี้ไม่ได้หักสต๊อกไว้ จึงไม่ต้องคืน)","ok");
       }
       loadLogs();
+      if(reloadIngs)reloadIngs();   // ลบแล้วคืนสต๊อก — ตัวเลขต้องขยับตามเช่นกัน
     }catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}
     finally{delBusy.current.delete(l.id);}
   }
@@ -3583,7 +3602,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[]}){
               ?<ImgOrFallback src={driveImgSrc(imgs[0])} onClick={()=>imgs.length>1?photoGallery(imgs,l.ingredient_name):imgView(driveImgSrc(imgs[0]))} note="HEIC" style={{width:"100%",height:"100%",objectFit:"cover",cursor:"pointer",display:"block"}}/>
               :<div style={{width:"100%",height:"100%",background:C.redLight,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={26} c={C.red+"66"}/></div>}
             {imgs.length>1&&<span style={{position:"absolute",left:6,bottom:6,background:"rgba(15,23,42,.72)",color:C.white,fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:10,pointerEvents:"none"}}>📷 {imgs.length}</span>}
-            <button onClick={e=>{e.stopPropagation();delLog(l);}} title="ลบ" style={{position:"absolute",top:6,right:6,width:26,height:26,borderRadius:"50%",background:"rgba(255,255,255,.92)",border:`1px solid ${C.line}`,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(15,23,42,.15)"}}>🗑️</button>
+            {canDelWaste&&<button onClick={e=>{e.stopPropagation();delLog(l);}} title="ลบ" style={{position:"absolute",top:6,right:6,width:26,height:26,borderRadius:"50%",background:"rgba(255,255,255,.92)",border:`1px solid ${C.line}`,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(15,23,42,.15)"}}>🗑️</button>}
             {l.item_type==="menu"&&<span style={{position:"absolute",top:6,left:6,fontSize:9,fontWeight:800,color:C.white,background:C.brand,padding:"2px 7px",borderRadius:8}}>เมนู</span>}
           </div>
           <div style={{padding:"9px 11px",display:"flex",flexDirection:"column",gap:3,flex:1}}>
@@ -5104,7 +5123,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
     let list=ings;
     if(showNegOnly)list=negFrozen?ings.filter(i=>negFrozen.has(+i.id)):negatives;
     if(!q.trim())return list;
-    const ql=q.toLowerCase();
+    const ql=q.trim().toLowerCase();   // ไม่ trim = เผลอมีช่องว่างท้ายแล้ว "ไม่พบวัตถุดิบ" ทั้งที่ของมีอยู่
     return list.filter(i=>i.name.toLowerCase().includes(ql)||(i.category||"").toLowerCase().includes(ql)||(i.supplier_name||"").toLowerCase().includes(ql));
   },[ings,q,showNegOnly,negatives,negFrozen]);
 
@@ -5310,7 +5329,7 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
     </div>
     {/* Footer actions */}
     <div style={{display:"flex",gap:8,paddingTop:10,borderTop:`1px solid ${C.line}`,background:C.white}}>
-      <Btn v="ghost" onClick={onClose} full s={{padding:"11px"}}>ปิด</Btn>
+      <Btn v="ghost" onClick={guardedClose} full s={{padding:"11px"}}>ปิด</Btn>
       {Object.keys(edits).length>0&&<Btn v="success" onClick={saveAll} disabled={savingAll} loading={savingAll} icon={I.check} full s={{padding:"11px"}}>บันทึกทั้งหมด ({Object.keys(edits).length})</Btn>}
     </div>
     {padFor!=null&&(()=>{const ing=ings.find(x=>+x.id===+padFor);const ev=edits[padFor];return <NumPad value={ev!==undefined&&ev!==""?ev:""} integer={false} title={ing?`นับ: ${ing.name}`:"นับสต็อก"} onChange={v=>setEdits(o=>({...o,[padFor]:v}))} onClose={()=>setPadFor(null)}/>;})()}
@@ -8561,6 +8580,14 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     setLoading(false);
   }
   useEffect(()=>{load();},[direction,partnerFilter,filterStatus,dateFrom,dateTo,currentBranch?.id]);
+  // พนักงานเปิดหน้านี้ค้างไว้ทั้งวันรอของ — ถ้าไม่รีเฟรชเอง จะไม่เห็นว่าอีกฝั่ง
+  // กดจัดส่ง/รับของไปแล้ว · หยุดตอนแท็บถูกซ่อนไว้ เพื่อไม่ให้ยิงฐานข้อมูลฟรีๆ
+  useEffect(()=>{
+    const t=setInterval(()=>{if(!document.hidden)load();},90000);
+    const onVis=()=>{if(!document.hidden)load();};
+    document.addEventListener("visibilitychange",onVis);
+    return()=>{clearInterval(t);document.removeEventListener("visibilitychange",onVis);};
+  });// eslint-disable-line react-hooks/exhaustive-deps
 
   // Push received qty into the receiver's stock AND deduct from the sender,
   // auto-ticking the receiver on each ingredient's visible_branches list.
@@ -8597,8 +8624,11 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   }
   // Confirm receipt: write actual qty + actual price back, flip to delivered,
   // and credit central stock via transferStockBetweenBranches(fromBranchId:null).
+  const recvExtBusyRef=useRef(false);
+  const[recvExtBusy,setRecvExtBusy]=useState(false);
   async function confirmReceiveExt(){
     if(!receivingExtOrder)return;
+    if(recvExtBusyRef.current)return;
     const itemsWithReceived=receivingExtOrder.items.map(it=>{
       const qty=Math.max(0,Math.round((+it.receivedQty||0)*1000)/1000);
       const price=Math.max(0,+it.pricePerUnit||0);
@@ -8615,6 +8645,10 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       confirmLabel:"✅ ยืนยัน + เพิ่มสต๊อก",
       danger:notRecv2.length>0,
     }))return;
+      // ฐานข้อมูลที่ป่วยจะ "ค้าง" ไม่ใช่ตอบ error — ปุ่มที่ยังกดได้ระหว่างรอทำให้
+      // พนักงานกดซ้ำ รอบสองไปชนตัวกันสถานะ แล้วเด้ง error ว่า "ผู้ใช้อื่นแก้ไขแล้ว"
+      // ทั้งที่มือตัวเองกดสำเร็จไปแล้ว — ล็อกทันทีและโชว์ว่ากำลังทำงาน
+    recvExtBusyRef.current=true;setRecvExtBusy(true);
     try{
       const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
       await deliverOrderWithPhotos(receivingExtOrder.orderId,receivingExtOrder.orderStatus,payloadItems,extRecvImages,+extDeliveryFee||0);
@@ -8635,6 +8669,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       if(reloadOrders)await reloadOrders();
       setReceivingExtOrder(null);
     }catch(e){alert("ยืนยันไม่สำเร็จ: "+(e&&e.message||e));}
+    finally{recvExtBusyRef.current=false;setRecvExtBusy(false);}
   }
 
   // Reverse the deposit when an already-received PO is cancelled or deleted:
@@ -9327,13 +9362,17 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   // "สร้างเอกสาร PO" / "โอนวัตถุดิบ" were moved to the ใบขอซื้อ (PR) tab; when tapped there
   // they switch to this PO tab with an initialAction so the matching flow opens here.
   useEffect(()=>{if(!initialAction)return;if(initialAction==="create")startCreate();else if(initialAction==="transfer")startTransfer();onConsumeAction&&onConsumeAction();},[initialAction]);// eslint-disable-line react-hooks/exhaustive-deps
+  const xferBusyRef=useRef(false);
+  const[xferBusy,setXferBusy]=useState(false);
   async function saveTransfer(){
     if(!transferForm)return;
+    if(xferBusyRef.current)return;   // กดรัว = ใบโอนซ้ำสองใบ (เลขใบสุ่มคนละเลข ระบบจับซ้ำไม่ได้)
     const toId=+transferForm.toBranchId;
     if(!toId){alert("เลือกสาขาปลายทาง");return;}
     if(+toId===+currentBranch.id){alert("สาขาปลายทางต้องไม่ใช่สาขาตัวเอง");return;}
     const valid=transferForm.items.filter(it=>+it.qty>0);
     if(valid.length===0){alert("กรุณาเพิ่มวัตถุดิบและใส่จำนวน");return;}
+    xferBusyRef.current=true;setXferBusy(true);
     try{
       const itemsPayload=valid.map(it=>({
         ingredient_id:it.ingredient_id,
@@ -9360,6 +9399,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       setTransferForm(null);
       await load();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
+    finally{xferBusyRef.current=false;setXferBusy(false);}
   }
   function startReceiveTransfer(po){
     setReceivingTransfer({
@@ -9604,7 +9644,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     {loading?<Loading text="โหลดเอกสาร PO..."/>:pos.length===0?<Card style={{padding:"50px 20px",textAlign:"center"}}>
       <div style={{fontSize:48,marginBottom:8}}>📭</div>
       <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,color:C.ink3,fontWeight:600}}>{direction==="sent"?"ยังไม่มี PO ที่คุณออก":direction==="received"?"ยังไม่มี PO ที่ส่งมาหา":"ยังไม่มีเอกสาร PO ในช่วงนี้"}</div>
-      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginTop:4}}>กดปุ่ม "+ สร้างเอกสาร PO" เพื่อเริ่มต้น</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginTop:4}}>{isCentral?'กดปุ่ม "เปิด PO สั่งของให้สาขา" ด้านบนเพื่อเริ่มต้น':"เอกสารจะขึ้นที่นี่เมื่อครัวกลางเปิด PO ส่งของมาให้สาขา"}</div>
     </Card>:<Card style={{padding:0,overflow:"hidden"}}>
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
@@ -9793,7 +9833,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       <ReceivePhotoAttach images={extRecvImages} setImages={setExtRecvImages} uploading={extRecvUploading} setUploading={setExtRecvUploading} minRequired={1}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
         <Btn v="ghost" onClick={()=>setReceivingExtOrder(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveExt} loading={extRecvUploading>0} disabled={extRecvUploading>0||extRecvImages.length===0} icon={I.check}>✅ ยืนยันรับ + เพิ่มสต๊อก</Btn>
+        <Btn v="success" onClick={confirmReceiveExt} loading={extRecvUploading>0||recvExtBusy} disabled={extRecvUploading>0||recvExtBusy||extRecvImages.length===0} icon={I.check}>✅ ยืนยันรับ + เพิ่มสต๊อก</Btn>
       </div>
     </Modal>}
 
@@ -9872,7 +9912,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       onCancel={()=>cancelPO(viewPO)}
       onDelete={()=>delPO(viewPO)}
     />}
-    {payPO&&<POPaymentModal po={payPO} fromBranch={branchById[payPO.from_branch_id]} toBranch={branchById[payPO.branch_id]} onClose={()=>setPayPO(null)} onSubmit={(url,note)=>{submitPayment(payPO,url,note);setPayPO(null);}}/>}
+    {payPO&&<POPaymentModal po={payPO} fromBranch={branchById[payPO.from_branch_id]} toBranch={branchById[payPO.branch_id]} onClose={()=>setPayPO(null)} onSubmit={async(url,note)=>{await submitPayment(payPO,url,note);setPayPO(null);}}/>}
 
     {showIngReport&&<IngPOReportModal branches={branches} ings={ings} defaultFrom={dateFrom} defaultTo={dateTo} onClose={()=>setShowIngReport(false)}/>}
 
@@ -9935,7 +9975,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         </div>
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
           <Btn v="ghost" onClick={()=>setTransferForm(null)}>ยกเลิก</Btn>
-          <Btn onClick={saveTransfer} icon={I.check} disabled={!transferForm.toBranchId||transferForm.items.length===0}>ส่งคำสั่งโอน</Btn>
+          <Btn onClick={saveTransfer} loading={xferBusy} icon={I.check} disabled={xferBusy||!transferForm.toBranchId||transferForm.items.length===0}>ส่งคำสั่งโอน</Btn>
         </div>
       </Modal>;
     })()}
@@ -9965,7 +10005,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       </div>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={()=>setReceivingTransfer(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveTransfer} icon={I.check}>✅ รับโอน + ย้ายสต็อก</Btn>
+        <Btn v="success" onClick={confirmReceiveTransfer} loading={confirming===receivingTransfer?.po?.id} disabled={confirming===receivingTransfer?.po?.id} icon={I.check}>✅ รับโอน + ย้ายสต็อก</Btn>
       </div>
     </Modal>}
 
@@ -10680,12 +10720,12 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         </div>
 
         {/* Items table */}
-        <div style={{background:C.white,borderRadius:14,overflow:"hidden",boxShadow:"0 2px 8px rgba(15,23,42,.05)",marginBottom:14}}>
+        <div style={{background:C.white,borderRadius:14,overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",boxShadow:"0 2px 8px rgba(15,23,42,.05)",marginBottom:14}}>
           <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.line}`,background:C.bg,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:15,color:C.ink}}>📋 รายการ ({(po.items||[]).length})</div>
             {mode==="dispute"&&<span style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#9A3412",background:"#FFEDD5",padding:"4px 10px",borderRadius:18,fontWeight:700}}>กำลังแก้ไขจำนวนที่ได้รับจริง</span>}
           </div>
-          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
+          <table style={{width:"100%",minWidth:560,borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
             <thead><tr style={{background:C.bg}}>
               <th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:40}}>#</th>
               <th style={{padding:"10px 12px",textAlign:"left",fontSize:11,color:C.ink3,fontWeight:700}}>รายการ</th>
@@ -11062,7 +11102,7 @@ function POFormPage({branch,fromBranch,editPO,ings,currentUser,onClose,onSaved,r
           </div>
           <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:6,alignItems:"center"}}>
             <span>VAT (%)</span>
-            <input type="text" inputMode="decimal" step="0.1" value={vatPct} onChange={e=>setVatPct(+e.target.value)} style={{...iS,fontSize:12,padding:"4px 8px",height:26,width:70,textAlign:"right"}}/>
+            <input type="text" inputMode="decimal" step="0.1" value={vatPct} onChange={e=>{const t=e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1");setVatPct(t===""?0:(t.endsWith(".")?t:+t));}} style={{...iS,fontSize:12,padding:"4px 8px",height:26,width:70,textAlign:"right"}}/>
           </div>
           {vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>
             <span>VAT</span>
@@ -11472,6 +11512,24 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     setEditAddQ("");
   }
   const[receivingOrder,setReceivingOrder]=useState(null); // { order, items:[copies with receivedQty] }
+  // ฟอร์มรับของยาวหลายสิบช่อง (จำนวนรับจริง + ราคา/หน่วย) — Esc, ปุ่ม × และปุ่ม
+  // ยกเลิกที่อยู่ห่างปุ่มยืนยันแค่ 10px เคยทิ้งทุกอย่างทันทีโดยไม่ถาม
+  // หน้านับสต็อกมีตัวกันแบบนี้อยู่แล้ว (guardedClose) หน้านี้ก็ต้องมีเหมือนกัน
+  const recvSnapRef=useRef("");
+  const recvClosingRef=useRef(false);
+  async function closeReceiveGuarded(){
+    if(recvClosingRef.current)return;
+    const now=JSON.stringify((receivingOrder&&receivingOrder.items)||[]);
+    if(now===recvSnapRef.current){setReceivingOrder(null);return;}
+    recvClosingRef.current=true;
+    try{
+      if(await confirmDlg({
+        title:"ยังกรอกค้างไว้",
+        message:"จำนวนรับจริงและราคาที่พิมพ์ไว้จะหายทั้งหมด\n\nต้องการปิดหน้านี้หรือไม่?",
+        confirmLabel:"ปิดทิ้งเลย",
+      }))setReceivingOrder(null);
+    }finally{recvClosingRef.current=false;}
+  }
   const[recvImages,setRecvImages]=useState([]);const[recvUploading,setRecvUploading]=useState(0);  // receive photos (Drive)
   const[recvDeliveryFee,setRecvDeliveryFee]=useState("0");  // ค่าจัดส่งของออเดอร์นี้ (0 = ไม่มี)
   const[photoEditOrder,setPhotoEditOrder]=useState(null);  // delivered order whose receive photos are being viewed/added retroactively
@@ -11673,9 +11731,14 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         receivedQty:it.receivedQty!=null?+it.receivedQty:(+it.qtyNeeded||0),
       })),
     });
+    // เก็บภาพตั้งต้นไว้เทียบตอนปิด — ถ้าไม่ต่างจากนี้แปลว่ายังไม่ได้แก้อะไร ปิดได้เลย
+    recvSnapRef.current=JSON.stringify((order.items||[]).map((it,i)=>({...it,_key:i,receivedQty:it.receivedQty!=null?+it.receivedQty:(+it.qtyNeeded||0)})));
   }
+  const recvBusyRef=useRef(false);
+  const[recvBusy,setRecvBusy]=useState(false);
   async function confirmReceiveExternal(){
     if(!receivingOrder)return;
+    if(recvBusyRef.current)return;
     const itemsWithReceived=receivingOrder.items.map(it=>{
       const qty=Math.max(0,Math.round((+it.receivedQty||0)*1000)/1000);
       const price=Math.max(0,+it.pricePerUnit||0);
@@ -11699,6 +11762,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       confirmLabel:"✅ ยืนยัน + เพิ่มสต็อก",
       danger:notRecv1.length>0,
     }))return;
+    recvBusyRef.current=true;setRecvBusy(true);
     try{
       // Lock first; only proceed if status matches what we read
       const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
@@ -11719,6 +11783,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       setReceivingOrder(null);
       await reload();
     }catch(e){alert("ยืนยันไม่สำเร็จ: "+(e.message||e));}
+    finally{recvBusyRef.current=false;setRecvBusy(false);}
   }
   // Re-credit ONLY the lines that failed to add stock (kept in order.stock_pending).
   // Idempotent: succeeded lines were never recorded, so nothing double-adds.
@@ -11798,7 +11863,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6,background:C.tealLight,borderRadius:8,padding:"6px 12px"}}><Ic d={I.shop} s={14} c={C.teal}/><span style={{fontSize:12,fontWeight:700,color:C.teal,fontFamily:"'Sarabun',sans-serif"}}>ครัวกลาง — รับคำสั่งซื้อจากทุกสาขา</span></div>
     </div>}
 
-    {displayOrders.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.box} s={48} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีรายการสั่งวัตถุดิบ<br/><span style={{fontSize:13}}>กดที่แท็บ "นับสต็อก & สั่งซื้อ" เพื่อเริ่ม</span></p></div>
+    {displayOrders.length===0?<div style={{textAlign:"center",padding:"80px 0",color:C.ink4}}><Ic d={I.box} s={48} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีรายการสั่งวัตถุดิบ<br/><span style={{fontSize:13}}>กดที่แท็บ "📋 สร้างคำสั่งซื้อ" เพื่อเริ่ม</span></p></div>
     :<div style={{display:"flex",flexDirection:"column",gap:8}}>
       {displayOrders.map(order=>{
         const itemsTotal=(order.items||[]).reduce((s,it)=>s+(+it.estimatedCost||0),0);
@@ -11936,7 +12001,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     </Modal>}
 
     {/* Receive confirmation modal */}
-    {receivingOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingOrder.supplierName}`} onClose={()=>setReceivingOrder(null)} wide>
+    {receivingOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingOrder.supplierName}`} onClose={closeReceiveGuarded} wide>
       <div style={{background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
         💡 <b>กรอก 2 ค่าให้ครบทุกแถว</b> ก่อนกดยืนยัน:<br/>① <b>จำนวนรับจริง</b> · ② <b>ราคา/หน่วยที่จ่ายจริง</b> — ระบบจะเพิ่มสต๊อกของสาขา "{receivingOrder.branchName}" และอัพเดทต้นทุนตามนี้
       </div>
@@ -12005,7 +12070,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading} minRequired={1}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
         <Btn v="ghost" onClick={()=>setReceivingOrder(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveExternal} loading={recvUploading>0} disabled={recvUploading>0||recvImages.length===0} icon={I.check}>ยืนยันรับ + เพิ่มสต็อก</Btn>
+        <Btn v="success" onClick={confirmReceiveExternal} loading={recvUploading>0||recvBusy} disabled={recvUploading>0||recvBusy||recvImages.length===0} icon={I.check}>ยืนยันรับ + เพิ่มสต็อก</Btn>
       </div>
     </Modal>}
 
@@ -12032,6 +12097,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   // (สต๊อกยังไม่ขึ้นเพราะของยังไม่ถึง) แล้วก็สั่งซ้ำ — เป็นวงจรเดียวกับใบแฝดของครัวกลาง
   // null = อ่านไม่สำเร็จ (ต่างจาก [] = ไม่มีใบค้าง) เพื่อเตือนคนได้ว่ายังไม่ได้หัก
   const[openOrders,setOpenOrders]=useState([]);
+  const[openOrdersTick,setOpenOrdersTick]=useState(0);   // บวกหนึ่งหลังส่งใบ = โหลดยอดที่สั่งค้างใหม่
   useEffect(()=>{
     if(currentBranch?.id==null)return;
     let alive=true;
@@ -12040,7 +12106,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       catch{if(alive)setOpenOrders(null);}
     })();
     return()=>{alive=false;};
-  },[currentBranch?.id]);
+  },[currentBranch?.id,openOrdersTick]);
   const ingByIdSC=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
   const onOrderRes=useMemo(()=>onOrderQtyByIng(openOrders||[],currentBranch?.id,ingByIdSC),[openOrders,currentBranch,ingByIdSC]);
   const onOrderMap=onOrderRes.qtyByIng;
@@ -12330,6 +12396,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       // = กดอีกครั้งเดียวได้ใบสั่งซื้อซ้ำทั้งใบ (ของเดิมปลอดภัยเพราะ {} แปลว่า 0 ทุกแถว)
       setPickedSups(new Set());
       writtenRef.current.clear();
+      setOpenOrdersTick(t=>t+1);   // ใบที่เพิ่งส่งต้องถูกนับเป็น "สั่งแล้วรอเข้า" ทันที ไม่งั้นสั่งซ้ำ
       if(reload)await reload();
       // Notify the Area Manager(s) of this branch that an order is waiting for approval (Web Push, fire-and-forget)
       if(poList.length||extList.length){try{fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({branch_id:currentBranch.id,branchName:currentBranch.name})});}catch{}}
@@ -12528,7 +12595,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             </div>
           </div>)}
         </div>
-        <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:10,padding:"9px 12px",background:C.bg,borderRadius:9,lineHeight:1.6,border:`1px solid ${C.line}`}}>💡 รอครัวกลางกด <b>"รับเอกสาร"</b> → <b>"🚚 จัดส่ง"</b> — ติดตามได้ที่แท็บ <b style={{color:C.brand}}>"📋 เอกสาร PO / สั่งของ"</b></div>
+        <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:10,padding:"9px 12px",background:C.bg,borderRadius:9,lineHeight:1.6,border:`1px solid ${C.line}`}}>💡 ใบนี้ต้องให้ <b>Area อนุมัติ</b>ก่อน แล้วครัวกลางจึงรวมยอดไปสั่งซื้อ — ติดตามได้ที่แท็บ <b style={{color:C.brand}}>"📝 ใบขอซื้อ PR"</b></div>
       </div>}
 
       {/* External section — items routed to outside suppliers */}
@@ -17036,7 +17103,7 @@ export default function App(){
             {tab==="crm"&&<CRMTab currentBranch={currentBranch} currentUser={currentUser} menus={menus}/>}
             {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats} orders={orders} allOrders={allOrders} menus={menus}/>}
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
-            {tab==="waste"&&<WasteView ings={ings} menus={menus} currentBranch={currentBranch} currentUser={currentUser} branches={branches}/>}
+            {tab==="waste"&&<WasteView ings={ings} menus={menus} currentBranch={currentBranch} currentUser={currentUser} branches={branches} reloadIngs={reload.ings}/>}
             {tab==="sop"&&<SOPTab menus={menus} reload={reload.menus} reloadIngs={reload.ings} ings={ings} currentUser={currentUser} currentBranch={currentBranch}/>}
             {tab==="production"&&<ProductionTab ings={ings} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings}/>}
             {tab==="summary"&&<SumTab menus={menus} ings={ings} currentBranch={currentBranch} reloadHistory={reload.history} reloadOrders={reload.orders} currentUser={currentUser} branches={branches} suppliers={suppliers} reloadMenus={reload.menus} reloadCats={reload.cats}/>}
@@ -17970,6 +18037,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // (compare-and-set) writes. Updated after every successful guarded write so multiple
   // ops in one session (e.g. void → checkout) don't false-conflict with themselves.
   const verRef=useRef(existingOrder?.updated_at||null);
+  // ghost-click บน iOS ยิงซ้ำภายในเฟรมเดียว — state ตามไม่ทัน ต้องใช้ ref ที่ตั้งค่าทันที
+  // (สำคัญเป็นพิเศษเพราะ line_uid สร้างใหม่ทุกครั้ง ตัวกันซ้ำฝั่งเซิร์ฟเวอร์จับไม่ได้)
+  const savingRef=useRef(false);
+  const setSavingGuard=v=>{savingRef.current=!!v;setSaving(!!v);};
   const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[noteIdx,setNoteIdx]=useState(null);const[noteText,setNoteText]=useState("");
   const[saving,setSaving]=useState(false);const[showPay,setShowPay]=useState(false);
@@ -18161,8 +18232,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   }
 
   async function saveOrder(){
+    if(savingRef.current)return;   // กดซ้ำ/ghost-click — ครัวจะได้ออเดอร์สองใบ
     if(!items.length){alert("กรุณาเลือกเมนูก่อนครับ");return;}
-    setSaving(true);
+    setSavingGuard(true);
     try{
       // ส่งเฉพาะ "รายการใหม่ที่ยังไม่ได้ส่ง" (delta เหนือจำนวนที่ส่งครัวไปแล้ว) แบบ append atomic
       // — ไม่เขียนทับทั้งก้อน เพื่อไม่ลบรายการที่ลูกค้า/อุปกรณ์อื่นเพิ่งสั่งเพิ่มเข้ามาพร้อมกัน
@@ -18176,7 +18248,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         const sent=sentBaseMap.get(k)||0;const extra=want-sent;
         if(extra>0)delta.push({...rep.get(k),qty:extra,line_uid:uuidv4()});
       }
-      if(existingOrder?.id&&!delta.length){posToast("ไม่มีรายการใหม่ที่ต้องส่ง","warn");setSaving(false);return;}
+      if(existingOrder?.id&&!delta.length){posToast("ไม่มีรายการใหม่ที่ต้องส่ง","warn");setSavingGuard(false);return;}
       const toSend=existingOrder?.id?delta:items;
       const before=(existingOrder?.items||[]).length;
       const row=await api.posAppendItems({branch_id:branch.id,table_id:table.id,table_number:table.table_number,newItems:toSend,ordered_by:currentUser.username});
@@ -18184,15 +18256,16 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const after=Array.isArray(row?.items)?row.items.length:before+toSend.length;
       if(existingOrder?.id&&after<=before){
         posToast("⚠️ รายการนี้ถูกส่งไปแล้วก่อนหน้า — ไม่ได้ส่งซ้ำ (ตรวจใบครัวก่อนสั่งเพิ่ม)","warn");
-        onDone();onClose();setSaving(false);return;
+        onDone();onClose();setSavingGuard(false);return;
       }
       // NOTE: ไม่พิมพ์ที่นี่ — "ตัวพิมพ์ (agent)" ที่ร้าน poll ออเดอร์แล้วพิมพ์รายการใหม่เอง (จุดเดียว กันพิมพ์ซ้ำ + ใช้ได้กับ iPad)
       posToast("✅ ส่งรายการแล้ว — ตัวพิมพ์กำลังพิมพ์ใบครัว","ok");
       onDone();onClose();
-    }catch(e){alert("บันทึกไม่สำเร็จ: "+friendlyError(e));}setSaving(false);
+    }catch(e){alert("บันทึกไม่สำเร็จ: "+friendlyError(e));}setSavingGuard(false);
   }
   async function checkOut(){
-    setSaving(true);
+    if(savingRef.current)return;   // กดซ้ำ = ตัดเงินสองรอบ
+    setSavingGuard(true);
     try{
       const itemsWithDisc=items.map((i,idx)=>{const d=itemDisc[idx];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};});
       const cashReceived=payMethod==="cash"?(+cashRcv||total):null;
@@ -18225,7 +18298,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         try{const r=await api.getPOSOrderById(existingOrder.id);fresh=Array.isArray(r)?r[0]:r;}catch{}
         const committed=fresh&&fresh.status==="paid"&&Math.abs((+fresh.total||0)-round2(total))<0.01;
         if(committed){row=fresh;}
-        else{alert("⚠️ มีการเพิ่ม/แก้รายการของโต๊ะนี้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — ยังไม่ได้ตัดเงิน\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อตรวจสอบยอดล่าสุดก่อนชำระเงิน");setSaving(false);onDone();onClose();return;}
+        else{alert("⚠️ มีการเพิ่ม/แก้รายการของโต๊ะนี้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — ยังไม่ได้ตัดเงิน\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อตรวจสอบยอดล่าสุดก่อนชำระเงิน");setSavingGuard(false);onDone();onClose();return;}
       }
       verRef.current=row.updated_at;
       // record cash movement if cash payment — skip if one already exists for this order (the
@@ -18242,7 +18315,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // passing the combined figure would deduct the promotion twice on the printed receipt.
       await smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,payment_method:payMethod,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
       onDone();onClose();
-    }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSaving(false);
+    }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSavingGuard(false);
   }
 
   // Split bill: compute selected subtotal
@@ -19489,7 +19562,7 @@ function POSSettingsPanel({currentBranch}){
       {settings.vat_enabled&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <div>
           <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>อัตรา VAT (%)</div>
-          <input type="text" inputMode="decimal" step="0.01" value={settings.vat_rate} onChange={e=>set('vat_rate',+e.target.value)} style={{...iS,fontSize:15,fontWeight:700}}/>
+          <input type="text" inputMode="decimal" step="0.01" value={settings.vat_rate} onChange={e=>{const t=e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1");set('vat_rate',t===""?0:(t.endsWith(".")?t:+t));}} style={{...iS,fontSize:15,fontWeight:700}}/>
         </div>
         <div>
           <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>วิธีคิด VAT</div>
@@ -19515,7 +19588,7 @@ function POSSettingsPanel({currentBranch}){
       </div>
       {settings.service_charge_enabled&&<div>
         <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>อัตรา Service Charge (%)</div>
-        <input type="text" inputMode="decimal" step="0.01" value={settings.service_charge_rate} onChange={e=>set('service_charge_rate',+e.target.value)} style={{...iS,fontSize:15,fontWeight:700,maxWidth:200}}/>
+        <input type="text" inputMode="decimal" step="0.01" value={settings.service_charge_rate} onChange={e=>{const t=e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1");set('service_charge_rate',t===""?0:(t.endsWith(".")?t:+t));}} style={{...iS,fontSize:15,fontWeight:700,maxWidth:200}}/>
       </div>}
     </Card>
 
