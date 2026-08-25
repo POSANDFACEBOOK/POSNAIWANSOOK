@@ -9651,7 +9651,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     {loading?<Loading text="โหลดเอกสาร PO..."/>:pos.length===0?<Card style={{padding:"50px 20px",textAlign:"center"}}>
       <div style={{fontSize:48,marginBottom:8}}>📭</div>
       <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,color:C.ink3,fontWeight:600}}>{direction==="sent"?"ยังไม่มี PO ที่คุณออก":direction==="received"?"ยังไม่มี PO ที่ส่งมาหา":"ยังไม่มีเอกสาร PO ในช่วงนี้"}</div>
-      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginTop:4}}>{isCentral?'กดปุ่ม "เปิด PO สั่งของให้สาขา" ด้านบนเพื่อเริ่มต้น':"เอกสารจะขึ้นที่นี่เมื่อครัวกลางเปิด PO ส่งของมาให้สาขา"}</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginTop:4}}>{isCentralBranch?'กดปุ่ม "เปิด PO สั่งของให้สาขา" ด้านบนเพื่อเริ่มต้น':"เอกสารจะขึ้นที่นี่เมื่อครัวกลางเปิด PO ส่งของมาให้สาขา"}</div>
     </Card>:<Card style={{padding:0,overflow:"hidden"}}>
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
