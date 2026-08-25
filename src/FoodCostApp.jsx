@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } from "react";
+import ErrorBoundary from "./ErrorBoundary.jsx";
 // xlsx is ~130KB gzip and only used in import/export handlers — never on first
 // paint. Load it on demand (one cached dynamic import) so it stays OUT of the
 // boot chunk that every visitor downloads, including the customer QR-scan
@@ -17106,7 +17107,10 @@ export default function App(){
         {/* Page content */}
         <div style={{flex:1,padding:isMobile?"14px 12px 56px":"24px 28px 56px",minWidth:0}}>
           {initErr&&<ErrBox msg={initErr} onRetry={()=>loadAll()}/>}
-          {loading?<Loading text="กำลังโหลดข้อมูลจาก Cloud..."/>:<>
+          {/* ครอบรายแท็บ: แท็บไหนพังก็พังแค่แท็บนั้น แท็บอื่นยังกดใช้งานต่อได้
+              (ร้านต้องขายของ/นับสต็อกได้อยู่ ถึงแม้แท็บใดแท็บหนึ่งจะมีปัญหา)
+              key={tab} = สลับแท็บแล้วรีเซ็ตสถานะ error ให้เองอัตโนมัติ */}
+          {loading?<Loading text="กำลังโหลดข้อมูลจาก Cloud..."/>:<ErrorBoundary key={tab} where={tab}>
             {tab==="crm"&&<CRMTab currentBranch={currentBranch} currentUser={currentUser} menus={menus}/>}
             {tab==="ingredients"&&<IngTab ings={ings} reload={reload.ings} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} addH={addH} branches={branches} reloadCats={reload.cats} orders={orders} allOrders={allOrders} menus={menus}/>}
             {tab==="menus"&&<MenuTab menus={menus} reload={reload.menus} ings={ings} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} addH={addH} printers={printers} branches={branches} allCats={allCats} reloadCats={reload.cats}/>}
@@ -17139,7 +17143,7 @@ export default function App(){
             {tab==="pos"&&<POSTab menus={menus} reloadMenus={reload.menus} currentBranch={currentBranch} currentUser={currentUser} printers={printers} branches={branches} reloadPrinters={reload.printers}/>}
             {tab==="kitchen3d"&&<Kitchen3DView currentBranch={currentBranch} currentUser={currentUser} branches={branches} reloadBranches={reload.branches}/>}
             {tab==="settings"&&<SettingsTab ingCats={ingCats} menuCats={menuCats} reloadCats={reload.cats} users={users} reloadUsers={reload.users} branches={branches} reloadBranches={reload.branches} suppliers={suppliers} reloadSuppliers={reload.suppliers} currentUser={currentUser} printers={printers} reloadPrinters={reload.printers} currentBranch={currentBranch}/>}
-          </>}
+          </ErrorBoundary>}
         </div>
       </main>
 
