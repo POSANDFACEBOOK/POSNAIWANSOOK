@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node tools/check-undef.mjs && vite build",
     "preview": "vite preview",
-    "lan": "vite build && vite preview"
+    "lan": "vite build && vite preview",
+    "check": "node tools/check-undef.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.65",

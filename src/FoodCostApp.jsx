@@ -9826,7 +9826,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
           })}</tbody>
         </table>
       </div>
-      <ReceiveAddLine key={receivingExtOrder.orderId} isCentral={isCentral} ings={ings} suppliers={suppliers} supplierName={receivingExtOrder.supplierName}
+      <ReceiveAddLine key={receivingExtOrder.orderId} isCentral={isCentralBranch} ings={ings} suppliers={suppliers} supplierName={receivingExtOrder.supplierName}
         branchId={currentBranch?.id} items={receivingExtOrder.items} lastPriceOf={lastPriceOf}
         onAdd={ln=>setReceivingExtOrder(s=>({...s,items:[...s.items,ln]}))}/>
       {(()=>{const itemsTotal=receivingExtOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0);const fee=+extDeliveryFee||0;return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
