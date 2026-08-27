@@ -1802,6 +1802,14 @@ function ingVisibleAt(ing,branchId,isCentral){
   // (menuVisibleAt/supVisibleAt แปลงอยู่แล้ว ตัวนี้เคยเป็นตัวเดียวที่ไม่แปลง)
   return vb.map(Number).includes(+branchId);
 }
+// "สาขานี้มีของชิ้นนี้อยู่ในมือไหม" — ใช้กับจอที่จัดการของที่ถืออยู่จริง
+// (นับสต็อก · บันทึกของเสีย · รายการวัตถุดิบ) ไม่ใช่จอสั่งซื้อ
+// เห็นได้ตามปกติ  ||  มีช่องสต๊อกของสาขานี้อยู่แล้ว (เคยรับ/เคยนับมาก่อน)
+function ingAtBranch(ing,branchId,isCentral){
+  if(ingVisibleAt(ing,branchId,isCentral))return true;
+  const v=(ing&&ing.stock_by_branch||{})[String(branchId)];
+  return v!=null&&v!=="";
+}
 // Supplier visibility (OPT-IN, unlike ingredients): a supplier is owned by the branch
 // that created it (s.branch_id) and also shows at any branch central ticked into its
 // visible_branches. Central creates + opens per branch; branches see own + opened.
@@ -3432,7 +3440,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[],reloa
     const raw=isMenu?(menus||[]):(ings||[]);
     return isMenu
       ?raw.filter(m=>isCentralWaste||menuVisibleAt(m,currentBranch?.id))
-      :raw.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentralWaste));
+      :raw.filter(i=>ingAtBranch(i,currentBranch?.id,isCentralWaste));
   },[isMenu,menus,ings,currentBranch,isCentralWaste]);
   const unit=isMenu?"ที่":(sel?.buy_unit||"หน่วย");
   // วัตถุดิบ: ราคา = buy_price/หน่วย · เมนู: มูลค่า = ต้นทุนเมนู (menuCost)
@@ -4307,10 +4315,10 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   // filter) — shown as a small tally on each category chip.
   const catCounts=useMemo(()=>{
     const m={};
-    for(const i of ings){if(!ingVisibleAt(i,currentBranch?.id,isCentral))continue;const k=i.category||"";m[k]=(m[k]||0)+1;}
+    for(const i of ings){if(!ingAtBranch(i,currentBranch?.id,isCentral))continue;const k=i.category||"";m[k]=(m[k]||0)+1;}
     return m;
   },[ings,currentBranch,isCentral]);
-  const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return ings.filter(i=>{const matchB=ingVisibleAt(i,currentBranch?.id,isCentral);const matchQ=!ql||i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql);return matchQ&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;});},[ings,q,cat,isCentral,currentBranch]);
+  const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return ings.filter(i=>{const matchB=ingAtBranch(i,currentBranch?.id,isCentral);const matchQ=!ql||i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql);return matchQ&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;});},[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   // ── รายการสำหรับ "นับสต๊อก" — กรองแค่การมองเห็นของสาขา ไม่เอาช่องค้นหา/หมวด ──
   // ⚠️ เดิมส่ง `filtered` เข้าไป ซึ่งกรองด้วย q (ช่องค้นหา) และ cat (ชิปหมวด) ด้วย
@@ -4318,7 +4326,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   //    หรือมีคำค้างในช่องค้นหา จะเห็นแค่ส่วนนั้นในหน้านับ แล้วเข้าใจว่านับครบแล้ว
   //    ตัวที่ไม่ได้โผล่ก็ค้างเลขเดิมไว้ กลายเป็น "ตัวเลขไม่อัปเดตเอง" ทั้งที่ไม่ได้นับ
   //    หน้านับมีช่องค้นหาของตัวเองอยู่แล้ว จึงไม่มีอะไรเสียจากการส่งรายการเต็ม
-  const branchIngs=useMemo(()=>ings.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentral)),[ings,currentBranch,isCentral]);
+  const branchIngs=useMemo(()=>ings.filter(i=>ingAtBranch(i,currentBranch?.id,isCentral)),[ings,currentBranch,isCentral]);
   // Table view — click a header to sort by it, click again to flip direction.
   const[sortBy,setSortBy]=useState("code");const[sortDir,setSortDir]=useState("asc");
   const clickSort=(id)=>{if(!id)return;if(sortBy===id)setSortDir(d=>d==="asc"?"desc":"asc");else{setSortBy(id);setSortDir("asc");}};
