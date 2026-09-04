@@ -39,7 +39,7 @@ const BAD_UNITS = new Set(["กก.", "กิโล", "กส.", "แพ็ึ�
 const main = async () => {
   console.log(`หมอตรวจข้อมูล FOODCOST · ${new Date().toISOString()}`);
   const [ings, menus, ords, pos, branches, sups] = await Promise.all([
-    gAll("ingredients?select=id,name,buy_unit,sub_unit,sub_per_buy,buy_price,convert_to_gram,price_per_gram,stock_by_branch,has_sop,ingredients,supplier_id,supplier_by_branch&order=id.asc"),
+    gAll("ingredients?select=id,name,buy_unit,sub_unit,sub_per_buy,buy_price,convert_to_gram,price_per_gram,stock_by_branch,has_sop,ingredients,supplier_id,supplier_by_branch,visible_branches&order=id.asc"),
     gAll("menus?select=id,name,price,category,visible_branches,ingredients&order=id.asc"),
     gAll("order_requests?select=id,branch_id,supplier_id,supplier_name,status,requested_at,items,stock_pending&order=id.asc"),
     gAll("purchase_orders?select=id,po_number,branch_id,from_branch_id,status,items,stock_pending&order=id.asc"),
@@ -167,6 +167,33 @@ const main = async () => {
     for (const o of ords) if (Array.isArray(o.stock_pending) && o.stock_pending.length) bad.push(`ORD-${o.id} [${o.status}]`);
     for (const p of pos) if (Array.isArray(p.stock_pending) && p.stock_pending.length) bad.push(`${p.po_number || "PO#" + p.id} [${p.status}]`);
     bad.length ? warn(`${bad.length} ใบ — เปิดใบแล้วกดปุ่ม 🔁 ลองเพิ่มสต๊อกใหม่`, bad) : ok("ไม่มี");
+  }
+
+  // ── 11) สาขาถือสต๊อกของที่ "ไม่ได้ติ๊กเปิดให้เห็น" (เคสจริง 27/08/2569: 816 คู่) ──
+  // ปุ่มติ๊กเป็นตัวตัดสินว่าสาขาเห็นอะไร — ของที่ไม่ได้ติ๊กจะไม่โผล่ที่สาขานั้น
+  // ถ้าสาขายังถือสต๊อกค้างอยู่ = ข้อมูลไม่สอดคล้อง นับก็ไม่ได้ ทิ้งก็บันทึกไม่ได้
+  // ครัวกลางต้องเลือก: ติ๊กเปิดให้ หรือย้าย/ล้างสต๊อกออก
+  section("11) สาขาถือสต๊อกของที่ไม่ได้ติ๊กเปิดให้เห็น");
+  {
+    const vis = (i, b) => {
+      const vb = i.visible_branches;
+      if (vb == null || !Array.isArray(vb)) return true;
+      if (!vb.length) return false;
+      return vb.map(Number).includes(+b);
+    };
+    const bad = [];
+    for (const i of ings) {
+      for (const [b, v] of Object.entries(i.stock_by_branch || {})) {
+        if (v == null || v === "") continue;
+        if (!liveBranch.has(String(b))) continue;          // ข้อ 7 ดูสาขาที่ถูกลบอยู่แล้ว
+        if (bn(b) === "ครัวกลาง") continue;                 // ครัวกลางเห็นทุกอย่างเสมอ
+        if (vis(i, b)) continue;
+        bad.push(`#${i.id} ${String(i.name).trim().slice(0, 26)} @ ${bn(b)} = ${v}`);
+      }
+    }
+    bad.length
+      ? warn(`${bad.length} คู่ — สาขาเหล่านี้นับ/ทิ้งของพวกนี้ไม่ได้เลย`, bad)
+      : ok("ไม่มี");
   }
 
   // ── 10) ตารางโตเกินเพดาน 1000 แถวของ PostgREST → ข้อมูลหายเงียบ ──

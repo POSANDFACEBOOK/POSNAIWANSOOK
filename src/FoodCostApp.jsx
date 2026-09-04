@@ -1388,7 +1388,15 @@ const menuCatOf=(m)=>{const c=String((m&&m.category)||"").trim();return c||null;
 // ก่อนหน้านี้หน้าขายกับหน้าลูกค้าไม่ได้เรียกมัน แต่รอด "โดยบังเอิญ" เพราะกรองด้วย
 // หมวดรายสาขา (ไม่จัดหมวด = ไม่โชว์) พอเปลี่ยนมาใช้หมวดกลางซึ่งมีค่าทุกเมนู
 // ตัวกรองบังเอิญนั้นก็หายไป ทำให้ทุกสาขาเห็นเมนูทั้งเครือ 384 รายการ
-const menuVisibleAt=(m,bid)=>{const vb=(m&&m.visible_branches)||[];return vb.length===0||vb.map(Number).includes(+bid);};
+// กติกาเดียวกับ ingVisibleAt — null = เปิดหมด · [] = ปิดหมด · [ids] = เฉพาะที่ระบุ
+// เดิม [] แปลว่า "เปิดหมด" ทำให้ไม่มีทางสั่ง "ปิดทุกสาขา" ได้เลย และการติ๊กออก
+// จนหมดกลายเป็นเปิดให้ทุกสาขาแทน (บั๊คที่เจอ 27/08/2569)
+const menuVisibleAt=(m,bid)=>{
+  const vb=m&&m.visible_branches;
+  if(vb==null||!Array.isArray(vb))return true;
+  if(vb.length===0)return false;
+  return vb.map(Number).includes(+bid);
+};
 // Print-agent liveness for a branch, read from the heartbeat the agent stamps onto a printer's
 // description (agentSeen/agentVer). Stale (or missing) = the shop's print program is down and the
 // kitchen is silently getting nothing → staff must reopen it on the PC.
@@ -1801,14 +1809,6 @@ function ingVisibleAt(ing,branchId,isCentral){
   // includes() จะพลาดเงียบ แล้วของที่ครัวกลางเปิดให้จะหายจากสาขา
   // (menuVisibleAt/supVisibleAt แปลงอยู่แล้ว ตัวนี้เคยเป็นตัวเดียวที่ไม่แปลง)
   return vb.map(Number).includes(+branchId);
-}
-// "สาขานี้มีของชิ้นนี้อยู่ในมือไหม" — ใช้กับจอที่จัดการของที่ถืออยู่จริง
-// (นับสต็อก · บันทึกของเสีย · รายการวัตถุดิบ) ไม่ใช่จอสั่งซื้อ
-// เห็นได้ตามปกติ  ||  มีช่องสต๊อกของสาขานี้อยู่แล้ว (เคยรับ/เคยนับมาก่อน)
-function ingAtBranch(ing,branchId,isCentral){
-  if(ingVisibleAt(ing,branchId,isCentral))return true;
-  const v=(ing&&ing.stock_by_branch||{})[String(branchId)];
-  return v!=null&&v!=="";
 }
 // Supplier visibility (OPT-IN, unlike ingredients): a supplier is owned by the branch
 // that created it (s.branch_id) and also shows at any branch central ticked into its
@@ -3440,7 +3440,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[],reloa
     const raw=isMenu?(menus||[]):(ings||[]);
     return isMenu
       ?raw.filter(m=>isCentralWaste||menuVisibleAt(m,currentBranch?.id))
-      :raw.filter(i=>ingAtBranch(i,currentBranch?.id,isCentralWaste));
+      :raw.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentralWaste));
   },[isMenu,menus,ings,currentBranch,isCentralWaste]);
   const unit=isMenu?"ที่":(sel?.buy_unit||"หน่วย");
   // วัตถุดิบ: ราคา = buy_price/หน่วย · เมนู: มูลค่า = ต้นทุนเมนู (menuCost)
@@ -4315,10 +4315,10 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   // filter) — shown as a small tally on each category chip.
   const catCounts=useMemo(()=>{
     const m={};
-    for(const i of ings){if(!ingAtBranch(i,currentBranch?.id,isCentral))continue;const k=i.category||"";m[k]=(m[k]||0)+1;}
+    for(const i of ings){if(!ingVisibleAt(i,currentBranch?.id,isCentral))continue;const k=i.category||"";m[k]=(m[k]||0)+1;}
     return m;
   },[ings,currentBranch,isCentral]);
-  const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return ings.filter(i=>{const matchB=ingAtBranch(i,currentBranch?.id,isCentral);const matchQ=!ql||i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql);return matchQ&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;});},[ings,q,cat,isCentral,currentBranch]);
+  const filtered=useMemo(()=>{const ql=q.trim().toLowerCase();return ings.filter(i=>{const matchB=ingVisibleAt(i,currentBranch?.id,isCentral);const matchQ=!ql||i.name.toLowerCase().includes(ql)||(i.code||"").toLowerCase().includes(ql);return matchQ&&(cat==="ทุกหมวด"||i.category===cat)&&matchB;});},[ings,q,cat,isCentral,currentBranch]);
   const paged=useMemo(()=>filtered.slice(0,pg*PG),[filtered,pg]);
   // ── รายการสำหรับ "นับสต๊อก" — กรองแค่การมองเห็นของสาขา ไม่เอาช่องค้นหา/หมวด ──
   // ⚠️ เดิมส่ง `filtered` เข้าไป ซึ่งกรองด้วย q (ช่องค้นหา) และ cat (ชิปหมวด) ด้วย
@@ -4326,7 +4326,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   //    หรือมีคำค้างในช่องค้นหา จะเห็นแค่ส่วนนั้นในหน้านับ แล้วเข้าใจว่านับครบแล้ว
   //    ตัวที่ไม่ได้โผล่ก็ค้างเลขเดิมไว้ กลายเป็น "ตัวเลขไม่อัปเดตเอง" ทั้งที่ไม่ได้นับ
   //    หน้านับมีช่องค้นหาของตัวเองอยู่แล้ว จึงไม่มีอะไรเสียจากการส่งรายการเต็ม
-  const branchIngs=useMemo(()=>ings.filter(i=>ingAtBranch(i,currentBranch?.id,isCentral)),[ings,currentBranch,isCentral]);
+  const branchIngs=useMemo(()=>ings.filter(i=>ingVisibleAt(i,currentBranch?.id,isCentral)),[ings,currentBranch,isCentral]);
   // Table view — click a header to sort by it, click again to flip direction.
   const[sortBy,setSortBy]=useState("code");const[sortDir,setSortDir]=useState("asc");
   const clickSort=(id)=>{if(!id)return;if(sortBy===id)setSortDir(d=>d==="asc"?"desc":"asc");else{setSortBy(id);setSortDir("asc");}};
@@ -5384,7 +5384,19 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     let fresh;
     try{ fresh=await freshVisibleBranches("menus",menu.id); }
     catch(e){ alert("บันทึกไม่สำเร็จ: "+((e&&e.message)||e)); return; }
-    let vb=[...(fresh||[])];if(vb.length===0){vb=nonCB.map(b=>b.id).filter(id=>id!==branchId);}else{const idx=vb.indexOf(branchId);if(idx===-1)vb.push(branchId);else vb.splice(idx,1);if(vb.length===nonCB.length)vb=[];}try{await api.updateMenu(menu.id,{visible_branches:vb});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
+    // fresh == null = "เปิดให้ทุกสาขา" → กดครั้งแรกคือการปิดสาขานั้น
+    // fresh == []   = "ปิดทุกสาขา"      → กดคือการเปิดเฉพาะสาขานั้น
+    const allIds=nonCB.map(b=>b.id);
+    let vb;
+    if(fresh==null||!Array.isArray(fresh)){
+      vb=allIds.filter(id=>id!==branchId);
+    }else{
+      vb=[...fresh];
+      const idx=vb.indexOf(branchId);
+      if(idx===-1)vb.push(branchId);else vb.splice(idx,1);
+    }
+    // ติ๊กครบทุกสาขา → เก็บเป็น null (เปิดหมด) · ติ๊กออกหมด → เก็บ [] (ปิดหมด ไม่ใช่เปิดหมด)
+    const next=(vb.length===allIds.length&&allIds.every(id=>vb.includes(id)))?null:vb;try{await api.updateMenu(menu.id,{visible_branches:next});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}
   async function assignLocalCat(menuId,catName){
     // หมวดหมู่คุมจากครัวกลางที่เดียว — เขียนลง menus.category ไม่ใช่หมวดรายสาขาอีกแล้ว
     if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาแก้ไม่ได้");return;}
