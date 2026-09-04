@@ -123,10 +123,17 @@ const main = async () => {
     const bad = mv.filter((m) => m.ref_type === "sop" || (/^SOP: ผลิต/.test(m.reason || "") && m.ref_type !== "production"));
     if (!bad.length) { ok("ไม่มี — ส่วนผสมถูกตัดที่การผลิตอย่างเดียว"); }
     else {
-      const recent = bad.filter((m) => String(m.created_at) > "2026-08-18T12:00");
+      const cutoff = new Date(Date.now() - 7 * 864e5).toISOString();
+      const recent = bad.filter((m) => String(m.created_at) > cutoff);
+      const last = String(bad.map((m) => m.created_at).sort().pop() || "").slice(0, 10);
       const docs = [...new Set(bad.map((m) => m.ref_id))];
-      warn(`${bad.length} แถว จาก ${docs.length} เอกสาร${recent.length ? ` · ⛔ ${recent.length} แถวเกิดหลังแก้บั๊ค = กลับมาแล้ว` : " (ของเก่าก่อนแก้ 18/08/2569 — ไม่ใช่ของใหม่)"}`,
-        docs.slice(0, 6).map((d) => `${d} · ${bad.filter((m) => m.ref_id === d).length} แถว`));
+      if (!recent.length) {
+        ok(`ไม่มีของใหม่ใน 7 วัน — แถวเก่า ${bad.length} แถว ครั้งสุดท้าย ${last}`);
+      } else {
+        const rdocs = [...new Set(recent.map((m) => m.ref_id))];
+        warn(`⛔ ${recent.length} แถวเกิดใน 7 วันล่าสุด = บั๊คกลับมาแล้ว (ของเก่ารวม ${bad.length} แถว)`,
+          rdocs.slice(0, 6).map((d) => `${d} · ${recent.filter((m) => m.ref_id === d).length} แถว`));
+      }
     }
   }
 
@@ -206,7 +213,8 @@ const main = async () => {
       return +(String(r.headers.get("content-range") || "").split("/")[1] || 0);
     };
     // ตารางที่แอปดึง "ทั้งตาราง" ในคำขอเดียว — ถ้าโตเกิน 1000 ต้องแบ่งหน้า
-    const WHOLE_TABLE = ["assets", "ingredients", "menus", "suppliers", "categories", "branches"];
+    // assets ถูกแก้ให้แบ่งหน้าด้วย sbAll() แล้ว (commit 6332a49) จึงไม่อยู่ในรายการเฝ้าอีก
+    const WHOLE_TABLE = ["ingredients", "menus", "suppliers", "categories", "branches"];
     const bad = [];
     for (const t of WHOLE_TABLE) {
       try {
