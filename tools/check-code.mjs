@@ -1239,7 +1239,9 @@ try {
       Math.round(p.payment.filter(x => x.name_th !== "พร้อมเพย์").reduce((t, x) => t + x.amount, 0) * 100) / 100, 1800);
     ck("พร้อมเพย์อยู่เป็นชั้นย่อยด้วย", p.payment.some(x => x.name_th === "พร้อมเพย์" && x.amount === 300), true);
     ck("external_id เป็นรายวันต่อสาขา (ไม่ใช่รายกะ)", p.external_id, "pos-2026-09-09-กาญจนบุรี The River");
-    ck("จำนวนบิลส่งไปเป็น number_of_guests", p.number_of_guests, 3);
+    // POS ไม่ได้เก็บจำนวนแขก ห้ามส่งจำนวนบิลไปแทน (แดชบอร์ดบัญชีนับเป็นคน)
+    ck("ไม่ส่งจำนวนแขก เพราะ POS ไม่ได้เก็บ", p.number_of_guests === undefined, true);
+    ck("ส่งยอดขายเฉลี่ยต่อบิลแทน", p.average_trans, 600);
   }
   // ② กะคร่อมวัน — ต้องแตกเป็นคนละใบ ไม่งั้นชนคีย์ UNIQUE(business_date,branch) แล้วยอดหายทั้งวัน
   {

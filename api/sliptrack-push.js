@@ -197,7 +197,9 @@ export default async function handler(req, res) {
           sub_total,
           discount,
           exclude_vat,
-          number_of_guests: list.length,   // POS ไม่ได้เก็บจำนวนคน ส่งจำนวนบิลตามที่บัญชีแมปมา
+          // ไม่ส่ง number_of_guests — ช่องนั้นคือ "จำนวนแขก" ที่ POS เราไม่ได้เก็บ
+          // ส่งจำนวนบิลไปจะทำให้ยอดแขกทั้งบริษัทบนแดชบอร์ดบัญชีต่ำกว่าความจริง
+          average_trans: r2(total_sales / list.length),   // ยอดขายเฉลี่ยต่อบิล
           payment,
         };
         try {
