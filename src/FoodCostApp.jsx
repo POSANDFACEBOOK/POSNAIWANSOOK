@@ -206,6 +206,13 @@ function isAssetPO(po){
 const fmtTHB = (n) => `฿${(+n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 // Today in Asia/Bangkok (YYYY-MM-DD) — avoids UTC off-by-one near midnight
 const todayBkk = () => new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});
+// ── ธง _new = "แถวนี้ยังไม่ได้ส่งครัว" เป็นของหน้าจอล้วนๆ ──────────────
+// ถ้ามันหลุดลงฐานข้อมูล แถวนั้นจะขึ้นสีส้มค้างตลอดทุกครั้งที่เปิดโต๊ะ
+// พนักงานเห็นส้มก็กด "ส่งรายการ" ซ้ำ → ครัวได้ใบซ้ำ ลูกค้าได้อาหารซ้ำ
+// (เกิดขึ้นจริง 10 ก.ย. 69 — ตรวจฐานเจอค้าง 1 รายการในบิลที่เปิดอยู่)
+// ล้างทั้ง "ขาเข้า" (อ่านจากฐานมาแสดง) และ "ขาออก" (ก่อนเขียนลงฐาน)
+// ขาเข้าสำคัญกว่า เพราะมันซ่อมของที่รั่วไปแล้วให้ทันทีโดยไม่ต้องแก้ข้อมูลเก่า
+const stripNewFlags=(arr)=>Array.isArray(arr)?arr.map(({_new,...r})=>r):[];
 // "2026-09-10" → ISO ของ "เที่ยงวันเวลาไทย" ของวันนั้น
 // ทำไมเที่ยงวัน ไม่ใช่เที่ยงคืน: เที่ยงคืน+07 คือ 17:00 ของ "เมื่อวาน" ในเวลา UTC
 // ระบบไหนที่ตัดวันด้วย UTC จะอ่านได้วันก่อนหน้าทันที (ข้ามเดือนได้ถ้าเป็นวันที่ 1)
@@ -579,7 +586,9 @@ const api = {
   // of silently clobbering a concurrent customer add. timestamptz eq compares by value.
   updatePOSOrderIfUnchanged: async (id, seen, d) => {
     const guard = seen==null ? "is.null" : `eq.${encodeURIComponent(seen)}`;
-    const res = await sb(`orders?id=eq.${id}&updated_at=${guard}`, { method:"PATCH", body:JSON.stringify(d) });
+    // กันธงหน้าจอหลุดลงฐานที่ปากทาง ไม่ใช่ไล่กันทีละที่เรียก — ที่เรียกใหม่ในอนาคตจะปลอดภัยเอง
+    const body = (d && Array.isArray(d.items)) ? {...d, items:stripNewFlags(d.items)} : d;
+    const res = await sb(`orders?id=eq.${id}&updated_at=${guard}`, { method:"PATCH", body:JSON.stringify(body) });
     return (Array.isArray(res)&&res.length>0)?res[0]:null;
   },
   // ── รอลูกค้าโอน (พิมพ์ QR จ่ายเงินไปแล้ว) ────────────────────────────────
@@ -621,6 +630,9 @@ const api = {
   // turn a simultaneous double-create into a duplicate-key it catches and retries as
   // an append. Falls back gracefully (just creates) if that index isn't there yet.
   posAppendItems: async ({branch_id, table_id, table_number, newItems, ordered_by, blockIfAwaiting}) => {
+    // ต้นตอของบั๊กส่งซ้ำ: ตอน "สร้างบิลใบแรก" ฝั่งจอส่ง items ดิบมาทั้งก้อนโดยไม่ได้ถอดธง
+    // ทำให้ทุกแถวของบิลใบแรกถูกบันทึกพร้อมธง _new แล้วขึ้นส้มค้างตลอด
+    newItems = stripNewFlags(newItems);
     // ชื่อโต๊ะคือสิ่งเดียวที่บอกครัวว่าอาหารไปโต๊ะไหน — ใบที่ไม่มีชื่อโต๊ะคือใบที่ส่งของไม่ได้
     // 9 ก.ย. 69 บิล #17 ออกใบครัวมาโดยไม่มีชื่อโต๊ะ: หน้าลูกค้าอ่านชื่อโต๊ะจากสถานะบนจอ
     // ซึ่งตอนส่งของค้างจากคิวออฟไลน์ สถานะนั้นยังโหลดไม่เสร็จ → ส่งค่าว่างไปเงียบๆ
@@ -18685,7 +18697,7 @@ const MenuCard=memo(function MenuCard({m,soldOut,hasOpts,onPick}){
 function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser,onClose,onDone,printers=[],shift=null,posSettings=null,promotions=[]}){
   const isMobile=useIsMobile();
   const[mobileView,setMobileView]=useState("menu"); // "menu" | "order"
-  const[items,setItems]=useState(existingOrder?.items||[]);
+  const[items,setItems]=useState(()=>stripNewFlags(existingOrder&&existingOrder.items));
   // last-known updated_at of this table's order — the token for optimistic-concurrency
   // (compare-and-set) writes. Updated after every successful guarded write so multiple
   // ops in one session (e.g. void → checkout) don't false-conflict with themselves.
@@ -18815,7 +18827,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   function chQty(idx,d){
     const it=items[idx];if(!it)return;
     // floor = จำนวนที่ "ส่งครัวไปแล้ว" ของเมนูนี้ — ลดต่ำกว่านี้ด้วยปุ่ม − ไม่ได้ (ต้องปัดซ้ายยกเลิก เพื่อให้ครัว/QR ตรงกัน)
-    const base=new Map();(existingOrder?.items||[]).forEach(b=>base.set(sentKey(b),(base.get(sentKey(b))||0)+b.qty));
+    const base=new Map();stripNewFlags(existingOrder&&existingOrder.items).forEach(b=>base.set(sentKey(b),(base.get(sentKey(b))||0)+b.qty));
     // This row may hold only PART of what was sent for this dish — the floor is whatever the other
     // rows of the same dish don't already cover, else a row gets pinned above its true sent amount.
     // แถวที่เพิ่งกดเพิ่ม (ยังไม่ส่งครัว) ลดได้ถึง 0 — ยังไม่มีใครทำ ไม่ต้องแจ้งครัว
@@ -18846,7 +18858,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     // โดยลบเฉพาะรายการที่ส่งแล้วตัวนั้นออก — ไม่ดึงรายการใหม่ที่ "ยังไม่ได้กดส่ง" ลง DB ก่อนเวลา
     if(existingOrder?.id){
       const k=sentKey(target);let removed=false;const newSent=[];
-      for(const s of(existingOrder.items||[])){if(!removed&&sentKey(s)===k){removed=true;continue;}newSent.push(s);}
+      for(const s of stripNewFlags(existingOrder.items)){if(!removed&&sentKey(s)===k){removed=true;continue;}newSent.push(s);}
       if(removed){
         try{
           const newSub=round2(newSent.reduce((s,i)=>s+i.price*i.qty,0));

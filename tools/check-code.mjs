@@ -1552,17 +1552,63 @@ try {
   const mk = (order) => {
     const calls = [];
     const sb = async (path, opt) => {
-      calls.push({ path, method: (opt && opt.method) || "GET" });
+      calls.push({ path, method: (opt && opt.method) || "GET", body: opt && opt.body });
       if (/^tables\?/.test(path)) return [{ table_number: "C7" }];
       if (!opt) return order ? [order] : [];                       // SELECT บิลที่เปิดอยู่
       if (opt.method === "PATCH") return [{ ...order, ...JSON.parse(opt.body) }];
       if (opt.method === "POST") return [{ id: 99, ...JSON.parse(opt.body) }];
       return [];
     };
-    const fn = new Function("sb", "const posAppendItems = " + expr + "; return posAppendItems;")(sb);
+    // ดึงตัวถอดธงหน้าจอ (_new) ตัวจริงมาด้วย — posAppendItems เรียกใช้มัน
+    // ถ้าเอาแค่ค่าปลอมมาใส่ ด่านจะไม่ได้ทดสอบว่าธงถูกถอดจริงหรือเปล่า
+    const stripLine = APP.split("\n").find((l) => l.startsWith("const stripNewFlags="));
+    if (!stripLine) throw new Error("ไม่เจอ stripNewFlags");
+    const fn = new Function("sb", stripLine + "\nconst posAppendItems = " + expr + "; return posAppendItems;")(sb);
     return { fn, calls };
   };
   const LINE = [{ line_uid: "new1", menu_id: 5, name: "หมูสไลด์", price: 100, qty: 1, category: "หมูกระทะ" }];
+  // ── ธง _new ห้ามหลุดลงฐานข้อมูลเด็ดขาด ────────────────────────────────
+  // ของจริง 10 ก.ย. 69: ตอน "สร้างบิลใบแรก" จอส่ง items ดิบมาทั้งก้อนโดยไม่ถอดธง
+  // แถวนั้นเลยถูกบันทึกพร้อม _new:true แล้วขึ้นสีส้ม "ยังไม่ส่ง" ค้างตลอดทุกครั้งที่เปิดโต๊ะ
+  // พนักงานเห็นส้มก็กดส่งซ้ำ → ครัวได้ใบซ้ำ ลูกค้าได้อาหารซ้ำ (ตรวจฐานเจอค้างจริง 1 รายการ)
+  // ด่านนี้เรียกฟังก์ชันตัวจริงแล้วอ่าน body ที่มันจะเขียนลงฐาน ไม่ใช่ค้นข้อความ
+  {
+    const strip = (() => {
+      const ln = APP.split("\n").find((l) => l.startsWith("const stripNewFlags="));
+      return ln ? new Function(ln + " return stripNewFlags;")() : null;
+    })();
+    ok_("ยังมีตัวถอดธงหน้าจอออกจากรายการอาหาร", !!strip);
+    if (strip) {
+      ck("ถอดธงแล้วต้องไม่เหลือ _new และข้อมูลอื่นต้องอยู่ครบ",
+        strip([{ name: "หมู", qty: 2, _new: true }, { name: "น้ำแข็ง", qty: 1 }]),
+        [{ name: "หมู", qty: 2 }, { name: "น้ำแข็ง", qty: 1 }]);
+      ck("ค่าที่ไม่ใช่รายการ ต้องได้รายการว่าง ไม่ใช่พัง", [strip(null), strip(undefined), strip("x")], [[], [], []]);
+    }
+    const DIRTY = [{ line_uid: "u1", menu_id: 1, name: "หมูหมัก", price: 79, qty: 1, _new: true }];
+    const hasNew = (body) => { try { return JSON.stringify(JSON.parse(body || "{}").items || []).includes('"_new"'); } catch { return false; } };
+    // เส้นทางที่ทำให้เกิดบั๊ก: ยังไม่มีบิล → สร้างใบใหม่ (POST)
+    {
+      const { fn, calls } = mk(null);
+      await fn({ branch_id: 8, table_id: 3, table_number: "C7", newItems: DIRTY, ordered_by: "ผึ้ง" });
+      const post = calls.find((x) => x.method === "POST");
+      ok_("สร้างบิลใบแรกแล้วมีการเขียนลงฐานจริง", !!post);
+      ck("บิลใบแรกต้องไม่มีธง _new ติดลงฐาน", post ? hasNew(post.body) : "ไม่ได้เขียน", false);
+    }
+    // เส้นทางต่อท้ายบิลเดิม (PATCH) ต้องสะอาดเหมือนกัน
+    {
+      const { fn, calls } = mk({ id: 7, items: [], status: "pending", updated_at: "t0" });
+      await fn({ branch_id: 8, table_id: 3, table_number: "C7", newItems: DIRTY, ordered_by: "ผึ้ง" });
+      const patch = calls.find((x) => x.method === "PATCH");
+      ok_("ต่อท้ายบิลเดิมแล้วมีการเขียนลงฐานจริง", !!patch);
+      ck("ต่อท้ายบิลเดิมต้องไม่มีธง _new ติดลงฐาน", patch ? hasNew(patch.body) : "ไม่ได้เขียน", false);
+    }
+  }
+  // ขาเข้า: อ่านบิลจากฐานมาแสดงต้องถอดธงทิ้งเสมอ — ตัวนี้ซ่อมบิลที่รั่วไปแล้วให้หายส้มทันที
+  ok_("เปิดจอโต๊ะแล้วถอดธงที่ค้างในฐานทิ้ง",
+    APP.includes("const[items,setItems]=useState(()=>stripNewFlags(existingOrder&&existingOrder.items));"));
+  ok_("ปากทางแก้บิลก็กันธงหลุดด้วย",
+    APP.includes("const body = (d && Array.isArray(d.items)) ? {...d, items:stripNewFlags(d.items)} : d;"));
+
   const OPEN = { id: 7, items: [], status: "pending", updated_at: "t0" };
   const WAIT = { id: 7, items: [], status: "awaiting_payment", updated_at: "t0" };
 
