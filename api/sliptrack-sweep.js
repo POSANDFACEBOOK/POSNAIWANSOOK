@@ -98,6 +98,7 @@ function buildPushPayload(po, branchById, paidCtx) {
     payload.paid_at = paidCtx.paidAt || new Date().toISOString();
     if (paidCtx.slipUrl) payload.slip_url = paidCtx.slipUrl;
     if (paidCtx.note) payload.payment_note = paidCtx.note;
+    if (paidCtx.cashSource) payload.cash_source = paidCtx.cashSource;
   } else {
     payload.description = po.notes ? `ซื้อวัตถุดิบ — ${po.notes}` : `ซื้อวัตถุดิบ ${externalId}`;
     payload.reference_no = po.po_number || externalId;
@@ -184,12 +185,22 @@ export default async function handler(req, res) {
     // VOIDED — leaving it out let a dropped void strand a phantom payable forever.
     const cutoff = new Date(Date.now() - MIN_AGE_MS).toISOString();
     const floor = new Date(Date.now() - MAX_AGE_MS).toISOString();
-    const cols = "id,po_number,status,from_branch_id,branch_id,received_at,items,subtotal,vat,total,notes,payment_at,payment_note,payment_slip_url";
+    const COLS_BASE = "id,po_number,status,from_branch_id,branch_id,received_at,items,subtotal,vat,total,notes,payment_at,payment_note,payment_slip_url";
+    const cols = COLS_BASE + ",cash_source";
     // Order null (never-attempted) before 'failed', then newest-first. A row that keeps failing
     // (e.g. a branch name accounting rejects) writes 'failed' and sinks below every un-attempted
     // row, so it can never monopolise the batch and starve fresh POs out of the sync guarantee.
     const filter = `status=in.(awaiting_payment,paid,cancelled)&received_at=lt.${encodeURIComponent(cutoff)}&received_at=gt.${encodeURIComponent(floor)}&or=(sliptrack_sync.is.null,sliptrack_sync.eq.failed)&order=sliptrack_sync.asc.nullsfirst,received_at.desc&limit=${BATCH}`;
-    const candidates = await sbFetch(`purchase_orders?select=${cols}&${filter}`);
+    // ถ้ายังไม่ได้รัน SQL เพิ่มคอลัมน์ cash_source, PostgREST ตอบ 400 ทั้งคำขอ
+    // ตัวเก็บงานค้างจะตายทั้งตัวเพราะคอลัมน์เสริมตัวเดียว ⟹ ถอยไปใช้ชุดเดิมแทน
+    // (เสียแค่ cash_source ในใบที่ต้องส่งซ้ำ ดีกว่าใบค้างไม่ถูกส่งเลยสักใบ)
+    let candidates;
+    try {
+      candidates = await sbFetch(`purchase_orders?select=${cols}&${filter}`);
+    } catch (err) {
+      if (!/column .* does not exist|PGRST204|42703|schema cache/i.test(String((err && err.message) || err))) throw err;
+      candidates = await sbFetch(`purchase_orders?select=${COLS_BASE}&${filter}`);
+    }
 
     // ── ไม่มีงาน → จบตรงนี้เลย ────────────────────────────────────────────────
     // นี่คือเส้นทางของ "แทบทุกรอบ" ที่ cron ยิงมา (ตรวจจริง 12 ส.ค. 69: ค้าง 0 ใบ)
@@ -248,7 +259,7 @@ export default async function handler(req, res) {
         // Paid PO → Stage 2 (flip to จ่ายแล้ว). Only 'ok' when Stage 2 lands, so a failed Stage 1
         // isn't masked. Same external_id + datetime, so it updates the same rows.
         const slipUrl = await signSlipUrl(po.payment_slip_url, base);
-        const paidBuilt = buildPushPayload(po, branchById, { paidAt: po.payment_at || new Date().toISOString(), slipUrl, note: po.payment_note });
+        const paidBuilt = buildPushPayload(po, branchById, { paidAt: po.payment_at || new Date().toISOString(), slipUrl, note: po.payment_note, cashSource: po.cash_source });
         if (paidBuilt.skip) { await recordFlag(po.id, "skip"); skipped++; results.push({ po: po.po_number, flag: "skip", reason: paidBuilt.skip }); continue; }
         const s2 = await pushToSlipTrack(paidBuilt.payload, apiKey);
         const flag = (s1.ok && s2.ok) ? "ok" : "failed";

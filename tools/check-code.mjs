@@ -19,6 +19,7 @@ const VERCEL = JSON.parse(fs.readFileSync(new URL("../vercel.json", import.meta.
 const SLIP = fs.readFileSync(new URL("../api/kitchen-slip.js", import.meta.url), "utf8");
 const SLIPPUSH = fs.readFileSync(new URL("../api/sliptrack-push.js", import.meta.url), "utf8");
 const BACKUP = fs.readFileSync(new URL("../api/backup.js", import.meta.url), "utf8");
+const SWEEP = fs.readFileSync(new URL("../api/sliptrack-sweep.js", import.meta.url), "utf8");
 const WATCHDOG = fs.readFileSync(new URL("../.github/workflows/health-watchdog.yml", import.meta.url), "utf8");
 
 // ── ดึงสคริปต์เลือก manifest จาก index.html มา "รันจริง" ──────────────────
@@ -1887,6 +1888,129 @@ section("หมวดของเครื่องพิมพ์ = หมว�
     APP.includes("setCatSel([...allCategories])") && APP.includes("categories:catSel||[...allCategories]"));
 }
 
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// วันที่โอนจริง + จ่ายจากบัญชีไหน (ฟอร์มชำระเงิน PO)
+// เหตุ: payment_at เคยเป็น "เวลาที่กดปุ่ม" ไม่ใช่วันที่โอนจริง — โอนวันศุกร์แล้ว
+// มากดวันจันทร์ ถ้าคร่อมสิ้นเดือนยอดไปลงผิดเดือนในบัญชี แก้ทีหลังยากกว่ามาก
+// และไม่เคยมีช่องบอกว่าเงินออกจากบัญชีธนาคารหรือเงินสด ⟹ กระทบยอดกับสเตทเมนต์ไม่ได้
+// ══════════════════════════════════════════════════════════════════════════
+section("วันที่โอนจริง + แหล่งเงินที่จ่าย PO");
+{
+  // ── ดึง bkkNoonISO ตัวจริงมารัน ────────────────────────────────────────
+  // ค้นข้อความไม่พอ: เปลี่ยน 12:00 เป็น 00:00 ข้อความยังดูถูกทุกอย่าง แต่วันเพี้ยน
+  const bkkNoonISO = (() => {
+    const st = APP.indexOf("const bkkNoonISO = (ymd) => {");
+    if (st < 0) throw new Error("ไม่เจอ bkkNoonISO");
+    let d = 0, started = false, en = -1;
+    for (let i = st; i < APP.length; i++) {
+      if (APP[i] === "{") { d++; started = true; }
+      else if (APP[i] === "}") { d--; if (started && d === 0) { en = APP.indexOf(";", i) + 1; break; } }
+    }
+    return new Function(APP.slice(st, en) + " return bkkNoonISO;")();
+  })();
+
+  // ตัวชี้ขาด: วันที่ที่พนักงานเลือก ต้องอ่านได้ "วันเดียวกัน" ทั้งเวลาไทยและ UTC
+  // 00:00+07 = 17:00 ของเมื่อวานใน UTC ⟹ ระบบที่ตัดวันด้วย UTC จะได้วันก่อนหน้า
+  // (วันที่ 1 ของเดือนจะเด้งไปเดือนก่อน ซึ่งคือความผิดพลาดที่ช่องนี้ตั้งใจมาแก้)
+  const bad = [];
+  for (const ymd of ["2026-01-01", "2026-02-28", "2026-06-15", "2026-09-10", "2026-12-31", "2027-03-01"]) {
+    const iso = bkkNoonISO(ymd);
+    if (!iso) { bad.push(ymd + ": แปลงไม่ได้"); continue; }
+    const bkk = new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+    if (bkk !== ymd) bad.push(ymd + ": เวลาไทยอ่านได้ " + bkk);
+    if (iso.slice(0, 10) !== ymd) bad.push(ymd + ": UTC อ่านได้ " + iso.slice(0, 10));
+  }
+  ck("วันที่โอนจริงอ่านได้วันเดียวกันทั้งเวลาไทยและ UTC", bad, []);
+  // รับมาจาก input วันที่ก็จริง แต่ค่าอาจมาจากที่อื่นได้ — เพี้ยนต้องคืน null
+  // ให้โค้ดถอยไปใช้เวลาปัจจุบัน ดีกว่าโยน exception กลางการบันทึกการจ่ายเงิน
+  ck("ค่าที่ไม่ใช่ YYYY-MM-DD ต้องคืน null ไม่ใช่วันเพี้ยน",
+    ["", null, undefined, "10/09/2569", "2026-9-10", "วันนี้", "2026-02-31"].map((v) => bkkNoonISO(v)),
+    [null, null, null, null, null, null, null]);
+
+  // updated_at คือ "แถวถูกแก้เมื่อไหร่" ไม่ใช่ "โอนเมื่อไหร่" — เลือกวันย้อนหลัง
+  // แล้วเขียน updated_at ย้อนตาม จะทำให้แถวดูเก่ากว่าความจริงทั้งระบบ
+  ok_("เลือกวันย้อนหลังแล้ว updated_at ยังเป็นเวลาปัจจุบัน",
+    APP.includes("const paidAt=bkkNoonISO(payDate)||now;") &&
+    APP.includes("cash_source:cashSource||null,updated_at:now};"));
+
+  // ── ค่าแหล่งเงิน: ฝั่งบัญชีเทียบ "ตรงตัวอักษร" กับคีย์ตารางกระแสเงินสดเขา ──
+  // เพี้ยนตัวเดียว/มีวรรคเกิน = เขาอ่านเป็น "ไม่ใช่เงินสด" แล้วยอดไปโผล่ผิดฝั่ง
+  const CASH = (() => {
+    const ln = APP.split("\n").find((l) => l.startsWith("const PO_CASH_SOURCES="));
+    if (!ln) throw new Error("ไม่เจอ PO_CASH_SOURCES");
+    return new Function(ln.trim() + " return PO_CASH_SOURCES;")();
+  })();
+  ck("ค่าแหล่งเงินตรงกับที่ฝั่งบัญชีกำหนดเป๊ะทุกตัวอักษร", CASH,
+    ["โอนจากบัญชีบริษัท", "เงินสดย่อย", "เงินในตู้เซฟ", "ลิ้นชักเก็บเงิน"]);
+  ck("ไม่มีช่องว่างแอบอยู่ในค่าแหล่งเงิน", CASH.filter((v) => /\s/.test(v)), []);
+  // "โอนเข้าบัญชีบริษัท" เป็นคีย์ที่มีจริงของเขา แต่เป็นเงิน "เข้า" ไม่ใช่จ่ายออก
+  // มีตัวเลือกผิดทางอยู่ในฟอร์มจ่ายเงิน = รอให้มีคนกดพลาดเท่านั้นเอง
+  ok_("ไม่มีตัวเลือกเงิน \"เข้า\" ปนในฟอร์มจ่ายเงินออก", !CASH.includes("โอนเข้าบัญชีบริษัท"));
+
+  // บังคับเลือก ไม่มีค่าตั้งต้น — ข้อมูลผิดที่ "ดูครบ" แย่กว่าข้อมูลว่างที่รู้ว่าไม่มี
+  // เพราะไม่มีใครกลับมาตรวจของที่ดูครบแล้ว
+  ok_("ช่องจ่ายจากบัญชีไหนตั้งต้นเป็นค่าว่าง", APP.includes('const[cashSource,setCashSource]=useState("");'));
+  ok_("ไม่เลือกแหล่งเงิน = กดยืนยันไม่ได้",
+    APP.includes("disabled={!slipFile||!cashSource||!payDate||saving}") &&
+    APP.includes('if(!cashSource){alert("กรุณาเลือกว่าจ่ายเงินจากบัญชีไหน");return;}'));
+  ok_("วันที่โอนตั้งต้นเป็นวันนี้ และเลือกวันในอนาคตไม่ได้",
+    APP.includes("const[payDate,setPayDate]=useState(today);") &&
+    APP.includes('if(payDate>today){alert("วันที่โอนจริงต้องไม่เกินวันนี้");return;}') &&
+    APP.includes("max={today}"));
+
+  // ── ทุกทางที่ยิง "จ่ายแล้ว" ต้องพกแหล่งเงินไปด้วย ──────────────────────
+  // ไล่จากการเรียกฟังก์ชันจริงทุกจุด (นับวงเล็บ) ไม่ใช่ค้นข้อความทีละบรรทัด
+  // เพราะจุดที่ยิงจาก "ปุ่มส่งทั้งหมด" เขียนคร่อมหลายบรรทัด ค้นบรรทัดเดียวมองไม่เห็น
+  const paidCalls = [];
+  for (let i = APP.indexOf("pushPOToSlipTrack("); i >= 0; i = APP.indexOf("pushPOToSlipTrack(", i + 1)) {
+    if (APP.slice(i - 9, i) === "function ") continue;            // ข้ามตัวประกาศฟังก์ชันเอง
+    let d = 0, en = -1;
+    for (let j = APP.indexOf("(", i); j < APP.length; j++) {
+      if (APP[j] === "(") d++;
+      else if (APP[j] === ")") { d--; if (d === 0) { en = j; break; } }
+    }
+    if (en < 0) continue;
+    const args = APP.slice(i, en + 1);
+    if (args.includes("paid:true")) paidCalls.push(args);
+  }
+  ck("เจอจุดยิง \"จ่ายแล้ว\" ครบทุกจุด", paidCalls.length, 3);
+  ck("ทุกจุดยิงจ่ายแล้วพกแหล่งเงินไปด้วย", paidCalls.filter((a) => !a.includes("cashSource")).length, 0);
+
+  // ── ฝั่งเซิร์ฟเวอร์: ดึงตัวประกอบ payload ตัวจริงจากตัวเก็บงานค้างมารัน ──
+  const buildPush = (() => {
+    const st = SWEEP.indexOf("const round2 =");
+    const fnAt = SWEEP.indexOf("function buildPushPayload(po, branchById, paidCtx) {");
+    if (st < 0 || fnAt < 0) throw new Error("ไม่เจอตัวประกอบ payload ใน sliptrack-sweep.js");
+    let d = 0, started = false, en = -1;
+    for (let i = fnAt; i < SWEEP.length; i++) {
+      if (SWEEP[i] === "{") { d++; started = true; }
+      else if (SWEEP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+    }
+    return new Function(SWEEP.slice(st, en) + " return buildPushPayload;")();
+  })();
+  const BR = { 1: { name: "ครัวกลาง" }, 8: { name: "กาญจนบุรี" } };
+  const PO_ = {
+    id: 1, po_number: "PO-TEST", from_branch_id: 8, branch_id: 1,
+    received_at: "2026-09-01T00:00:00.000Z",
+    items: [{ name: "หมู", qty: 2, unit: "กก.", price_per_unit: 100 }],
+    subtotal: 200, vat: 0, total: 200,
+    payment_at: "2026-09-05T05:00:00.000Z", payment_note: "โอนแล้ว", cash_source: "เงินในตู้เซฟ",
+  };
+  const paidBuilt = buildPush(PO_, BR, { paidAt: PO_.payment_at, slipUrl: null, note: PO_.payment_note, cashSource: PO_.cash_source });
+  ck("ตัวเก็บงานค้างบนเซิร์ฟเวอร์ส่งแหล่งเงินไปด้วย", paidBuilt.payload && paidBuilt.payload.cash_source, "เงินในตู้เซฟ");
+  ck("ใบที่ยังไม่จ่าย ไม่มีแหล่งเงินติดไปด้วย", "cash_source" in (buildPush(PO_, BR, null).payload || {}), false);
+
+  // คอลัมน์ใหม่ยังไม่ถูกเพิ่ม = ห้ามทำให้ของเดิมพัง (PostgREST ปฏิเสธทั้งคำขอ)
+  ok_("ยังไม่ได้เพิ่มคอลัมน์ cash_source แล้วตัวเก็บงานค้างต้องไม่ตายทั้งตัว",
+    SWEEP.includes('const cols = COLS_BASE + ",cash_source";') &&
+    SWEEP.includes("candidates = await sbFetch(") &&
+    SWEEP.includes("select=$" + "{COLS_BASE}&$" + "{filter}"));
+  ok_("ยังไม่ได้เพิ่มคอลัมน์ cash_source แล้วยังบันทึกการจ่ายเงินได้",
+    APP.includes("const {cash_source,...rest}=patch;") &&
+    APP.includes('await api.patchPOIfStatus(po.id,"awaiting_payment",rest);'));
+}
 
 console.log(`\n${"═".repeat(52)}`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);

@@ -206,6 +206,21 @@ function isAssetPO(po){
 const fmtTHB = (n) => `฿${(+n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 // Today in Asia/Bangkok (YYYY-MM-DD) — avoids UTC off-by-one near midnight
 const todayBkk = () => new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});
+// "2026-09-10" → ISO ของ "เที่ยงวันเวลาไทย" ของวันนั้น
+// ทำไมเที่ยงวัน ไม่ใช่เที่ยงคืน: เที่ยงคืน+07 คือ 17:00 ของ "เมื่อวาน" ในเวลา UTC
+// ระบบไหนที่ตัดวันด้วย UTC จะอ่านได้วันก่อนหน้าทันที (ข้ามเดือนได้ถ้าเป็นวันที่ 1)
+// เที่ยงวันห่างจากขอบวันทั้งสองด้าน 12 ชม. ไม่ว่าใครตัดวันด้วยโซนไหนก็ได้วันเดียวกัน
+const bkkNoonISO = (ymd) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd||""));
+  if(!m) return null;
+  const ymdStr = `${m[1]}-${m[2]}-${m[3]}`;
+  const d = new Date(`${ymdStr}T12:00:00+07:00`);
+  if(isNaN(d.getTime())) return null;
+  // เบราว์เซอร์ "ปัดวันที่เกิน" ให้เงียบๆ ไม่ได้ตอบว่าผิด — 2026-02-31 กลายเป็น 3 มี.ค.
+  // วันที่เพี้ยนแบบไม่มีใครรู้ อันตรายกว่าบันทึกไม่ได้แล้วรู้ตัว ⟹ อ่านกลับมาเทียบเสมอ
+  if(d.toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"})!==ymdStr) return null;
+  return d.toISOString();
+};
 // Current minutes-of-day in Asia/Bangkok (0–1439), regardless of the device timezone.
 function bkkNowMinutes(){
   try{
@@ -888,6 +903,13 @@ function sliptrackBranchName(name){
   if(canon&&!SLIPTRACK_CANON_BRANCHES.includes(canon))console.warn("SlipTrack: branch name not in canonical list →",canon);
   return canon;
 }
+// ── จ่ายจากบัญชีไหน ─────────────────────────────────────────────────────
+// ฝั่งบัญชีเทียบค่านี้ "ตรงตัวอักษร" กับคีย์ตารางกระแสเงินสดของเขา (isCashSourceValue)
+// สะกดเพี้ยนแม้ตัวเดียวหรือมีวรรคเกิน = เขาอ่านเป็น "ไม่ใช่เงินสด" แล้วยอดไปโผล่ผิดฝั่ง
+// ตอนกระทบยอดธนาคาร — ห้ามแก้ข้อความในนี้เอง ต้องถามฝั่งบัญชีก่อนเสมอ
+// ตัดคีย์ "โอนเข้าบัญชีบริษัท" ทิ้งทั้งที่มีจริง เพราะเป็นเงิน "เข้า" ไม่ใช่จ่ายออก
+// การมีตัวเลือกผิดทางในฟอร์มจ่ายเงิน = รอให้มีคนกดพลาดเท่านั้นเอง
+const PO_CASH_SOURCES=["โอนจากบัญชีบริษัท","เงินสดย่อย","เงินในตู้เซฟ","ลิ้นชักเก็บเงิน"];
 async function pushPOToSlipTrack(po, branches, opts={}){
   // Returns {ok, status?, error?, skipped?}; existing callers ignore the value
   // (fire-and-forget). Bulk-sync uses the return value to count successes.
@@ -948,6 +970,7 @@ async function pushPOToSlipTrack(po, branches, opts={}){
       payload.paid_at=opts.paidAt||new Date().toISOString();
       if(opts.slipUrl)payload.slip_url=opts.slipUrl;
       if(opts.paymentNote)payload.payment_note=opts.paymentNote;
+      if(opts.cashSource)payload.cash_source=opts.cashSource;   // เงินออกจากบัญชีธนาคาร หรือเงินสด — บัญชีแยกฝั่งด้วยค่านี้
     }else{
       // Stage 1: include description + items so the new rows are descriptive.
       payload.description=po.notes?`ซื้อวัตถุดิบ — ${po.notes}`:`ซื้อวัตถุดิบ ${externalId}`;
@@ -9428,17 +9451,33 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     }catch(e){showErr("ยอมรับไม่สำเร็จ",e);}
     setConfirming(null);
   }
-  async function submitPayment(po,slipUrl,note){
+  async function submitPayment(po,slipUrl,note,payDate,cashSource){
     if(!isCreator(po))throw new Error("เฉพาะผู้ออกเอกสารเท่านั้นที่ชำระเงินได้");
     try{
-      const paidAt=new Date().toISOString();
-      await api.patchPOIfStatus(po.id,"awaiting_payment",{status:"paid",payment_slip_url:slipUrl,payment_at:paidAt,payment_by:currentUser?.username||null,payment_note:note||null,updated_at:paidAt});
+      const now=new Date().toISOString();
+      // payment_at = "วันที่โอนจริง" ที่พนักงานเลือก ไม่ใช่เวลาที่กดปุ่ม
+      // โอนวันศุกร์แล้วมากดวันจันทร์เป็นเรื่องปกติ ถ้าคร่อมสิ้นเดือนยอดจะลงผิดเดือนไปเลย
+      // ไม่มีวันที่ส่งมา (โค้ดเก่า/เรียกจากที่อื่น) ค่อยถอยไปใช้เวลาปัจจุบัน
+      const paidAt=bkkNoonISO(payDate)||now;
+      // updated_at ต้องเป็น "ตอนนี้" เสมอ ห้ามผูกกับ paidAt — มันคือตัวชี้ว่าแถวถูกแก้เมื่อไหร่
+      // ถ้าเลือกวันย้อนหลังแล้วเขียน updated_at ย้อนตาม แถวจะดูเก่ากว่าความจริงทั้งระบบ
+      const patch={status:"paid",payment_slip_url:slipUrl,payment_at:paidAt,payment_by:currentUser?.username||null,payment_note:note||null,cash_source:cashSource||null,updated_at:now};
+      try{
+        await api.patchPOIfStatus(po.id,"awaiting_payment",patch);
+      }catch(e){
+        // ยังไม่ได้รัน SQL เพิ่มคอลัมน์ cash_source — การจ่ายเงินต้องบันทึกได้อยู่ดี
+        // (PostgREST ปฏิเสธทั้งคำขอเมื่อเจอคอลัมน์ที่ไม่รู้จัก ไม่ได้เขียนบางส่วน จึงยิงซ้ำได้ปลอดภัย)
+        if(!/column .* does not exist|PGRST204|schema cache/i.test(String((e&&e.message)||e)))throw e;
+        const {cash_source,...rest}=patch;
+        await api.patchPOIfStatus(po.id,"awaiting_payment",rest);
+        setTimeout(()=>alert("✅ บันทึกการชำระเงินแล้ว\n\n⚠️ แต่ยังเก็บ \"จ่ายจากบัญชีไหน\" ลงฐานข้อมูลไม่ได้\nผู้ดูแลระบบต้องเพิ่มคอลัมน์ cash_source ใน purchase_orders ก่อน\n(ยอดส่งเข้าระบบบัญชีถูกต้อง แต่ถ้าต้องส่งซ้ำภายหลัง ช่องนี้จะว่าง)"),0);
+      }
       // Sign the slip path with a 1-year expiry so SlipTrack can render the image.
       // The user can re-sign from FoodCost if it ever expires.
       let signedSlipUrl=null;
       try{signedSlipUrl=await api.getSlipSignedUrl(slipUrl,31536000);if(signedSlipUrl&&signedSlipUrl.startsWith("/"))signedSlipUrl=location.origin+signedSlipUrl;}catch{}
       // Stage 2 → SlipTrack: flip the same external_id from pending → confirmed (จ่ายแล้ว)
-      pushPOToSlipTrack(po,branches,{paid:true,paidAt,slipUrl:signedSlipUrl,paymentNote:note}).then(r=>recordSlipSync(po.id,r));
+      pushPOToSlipTrack(po,branches,{paid:true,paidAt,slipUrl:signedSlipUrl,paymentNote:note,cashSource}).then(r=>recordSlipSync(po.id,r));
       await load();setViewPO(null);
     }catch(e){showErr("บันทึกการชำระไม่สำเร็จ",e);throw e;}
   }
@@ -9464,7 +9503,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       const r1=await pushPOToSlipTrack({...cur},branches);       // Stage 1 — ensure pending row + item lines exist
       let signedSlipUrl=null;
       if(cur.payment_slip_url){try{signedSlipUrl=await api.getSlipSignedUrl(cur.payment_slip_url,31536000);if(signedSlipUrl&&signedSlipUrl.startsWith("/"))signedSlipUrl=location.origin+signedSlipUrl;}catch{}}
-      const r2=await pushPOToSlipTrack({...cur},branches,{paid:true,paidAt:cur.payment_at||new Date().toISOString(),slipUrl:signedSlipUrl,paymentNote:cur.payment_note});
+      const r2=await pushPOToSlipTrack({...cur},branches,{paid:true,paidAt:cur.payment_at||new Date().toISOString(),slipUrl:signedSlipUrl,paymentNote:cur.payment_note,cashSource:cur.cash_source});
       // Only mark 'ok' if BOTH stages landed — else keep 'failed' so Stage 1's lines get backfilled next time.
       res=(r1&&(r1.ok||r1.skipped))?r2:{ok:false,error:"stage1-failed"};
     }else if(cur.status==="awaiting_payment"){
@@ -10233,7 +10272,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       onCancel={()=>cancelPO(viewPO)}
       onDelete={()=>delPO(viewPO)}
     />}
-    {payPO&&<POPaymentModal po={payPO} fromBranch={branchById[payPO.from_branch_id]} toBranch={branchById[payPO.branch_id]} onClose={()=>setPayPO(null)} onSubmit={async(url,note)=>{await submitPayment(payPO,url,note);setPayPO(null);}}/>}
+    {payPO&&<POPaymentModal po={payPO} fromBranch={branchById[payPO.from_branch_id]} toBranch={branchById[payPO.branch_id]} onClose={()=>setPayPO(null)} onSubmit={async(url,note,payDate,cashSource)=>{await submitPayment(payPO,url,note,payDate,cashSource);setPayPO(null);}}/>}
 
     {showIngReport&&<IngPOReportModal branches={branches} ings={ings} defaultFrom={dateFrom} defaultTo={dateTo} onClose={()=>setShowIngReport(false)}/>}
 
@@ -10965,7 +11004,9 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const st=PO_STATUS[po.status]||{label:po.status,color:C.ink3,bg:C.lineLight};
   const recAt=po.received_at?fmtDT(po.received_at):null;
   const dispAt=po.dispute_at?fmtDT(po.dispute_at):null;
-  const payAt=po.payment_at?fmtDT(po.payment_at):null;
+  // payment_at คือ "วันที่โอนจริง" (ตรึงเที่ยงวันไทย) ไม่ใช่เวลาที่กดปุ่มอีกต่อไป
+  // แสดงเวลาด้วยจะกลายเป็นโชว์ 12:00 ที่ไม่ได้เกิดขึ้นจริง → แสดงเฉพาะวัน
+  const payAt=po.payment_at?fmtD(po.payment_at):null;
   const[mode,setMode]=useState("view");  // view | dispute
   const[receivedQty,setReceivedQty]=useState(()=>{const m={};(po.items||[]).forEach((it,i)=>{m[i]=it.received_qty!=null?it.received_qty:it.qty;});return m;});
   const[disputeNote,setDisputeNote]=useState(po.dispute_note||"");
@@ -11034,8 +11075,9 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
             <div style={{fontSize:13,color:"#B91C1C",fontFamily:"'Sarabun',sans-serif",fontWeight:700,lineHeight:1.6}}>{po.reject_reason}{po.rejected_by&&<span style={{color:C.ink4,fontWeight:600,fontSize:11}}> — โดย {po.rejected_by}</span>}</div>
           </div>}
           {payAt&&<div style={{background:C.greenLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.green}`}}>
-            <div style={{fontSize:11,color:C.green,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>💳 ชำระเงิน</div>
+            <div style={{fontSize:11,color:C.green,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>💳 ชำระเงิน — วันที่โอน</div>
             <div style={{fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{payAt}{po.payment_by?` · ${po.payment_by}`:""}</div>
+            {po.cash_source&&<div style={{marginTop:5,display:"inline-block",padding:"3px 9px",background:C.white,border:`1px solid ${C.green}66`,borderRadius:20,fontSize:11.5,fontWeight:800,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>🏦 {po.cash_source}</div>}
         {/* หมายเหตุการจ่าย — เก็บมาตลอดแต่ไม่เคยแสดงที่ไหนเลยทั้งระบบเรากับระบบบัญชี
             ข้อความอย่าง "โอนเกิน 50 บาท โอนคืนแล้ว" หรือ "โอนรวม 4 PO" คือคำตอบว่า
             ทำไมยอดโอนไม่ตรงยอดบิล ซึ่งเป็นสิ่งแรกที่คนกระทบยอดกับสเตทเมนต์ต้องการ */}
@@ -11148,10 +11190,15 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
 
 // Payment popup with slip upload
 function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
+  const today=todayBkk();
   const[slipFile,setSlipFile]=useState(null);
   const[preview,setPreview]=useState(null);
   const[note,setNote]=useState("");
+  const[payDate,setPayDate]=useState(today);      // วันที่โอนจริง — ตั้งต้นเป็นวันนี้ แก้ได้
+  const[cashSource,setCashSource]=useState("");   // จ่ายจากบัญชีไหน — ตั้งใจให้ว่าง บังคับเลือก
   const[saving,setSaving]=useState(false);
+  // ย้อนหลังกี่วัน — ทั้งคู่เป็น YYYY-MM-DD จึง Date.parse ได้ตรงๆ (เป็น UTC เที่ยงคืนทั้งคู่)
+  const daysBack=(payDate&&payDate<today)?Math.round((Date.parse(today)-Date.parse(payDate))/86400000):0;
   async function pickFile(e){
     const f=e.target.files?.[0];if(!f)return;
     if(f.size>5*1024*1024){alert("ไฟล์ใหญ่เกิน 5MB");return;}
@@ -11164,6 +11211,10 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
   useEffect(()=>()=>{if(preview)URL.revokeObjectURL(preview);},[]);  // eslint-disable-line
   async function submit(){
     if(!slipFile){alert("กรุณาแนบสลิปการโอนเงิน");return;}
+    // ตรวจซ้ำในโค้ดถึงแม้ปุ่มจะปิดไว้แล้ว — บางเบราว์เซอร์ไม่บังคับ max ของ input วันที่
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(payDate)){alert("กรุณาเลือกวันที่โอนจริง");return;}
+    if(payDate>today){alert("วันที่โอนจริงต้องไม่เกินวันนี้");return;}
+    if(!cashSource){alert("กรุณาเลือกว่าจ่ายเงินจากบัญชีไหน");return;}
     setSaving(true);
     try{
       const mime=await detectImageMime(slipFile);
@@ -11173,7 +11224,7 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
       const safeFile=new File([slipFile],`slip.${ext}`,{type:mime});
       // Upload to private bucket; only the storage path is returned
       const slipPath=await api.uploadSlip(safeFile,path);
-      await onSubmit(slipPath,note);
+      await onSubmit(slipPath,note,payDate,cashSource);
     }catch(e){showErr("อัพโหลดสลิปไม่สำเร็จ",e);setSaving(false);}
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",zIndex:6000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
@@ -11205,13 +11256,34 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
             <input type="file" accept="image/*" onChange={pickFile} style={{display:"none"}}/>
           </label>}
         </div>
+        {/* วันที่โอนจริง — เดิมระบบจับ "เวลาที่กดปุ่ม" เป็นวันจ่าย ซึ่งไม่ใช่วันเดียวกันเสมอ
+            โอนคืนวันศุกร์แล้วมากดวันจันทร์เป็นเรื่องปกติของหน้างาน ถ้าคร่อมสิ้นเดือน
+            ยอดจะไปลงผิดเดือนในบัญชี ซึ่งกลับมาแก้ทีหลังยากกว่าเลือกวันให้ถูกตั้งแต่แรก */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6}}>📅 วันที่โอนจริง *</div>
+          <input type="date" value={payDate} max={today} onChange={e=>setPayDate(e.target.value)} disabled={saving} style={{...iS,fontSize:13}}/>
+          {daysBack>0&&<div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.brand,fontWeight:700,marginTop:4}}>⏪ ย้อนหลัง {daysBack} วัน — ยอดจะลงบัญชีที่วันที่นี้ ไม่ใช่วันนี้</div>}
+        </div>
+        {/* จ่ายจากบัญชีไหน — บังคับเลือก ตั้งใจไม่ให้มีค่าตั้งต้น
+            ถ้าตั้งค่าเริ่มต้นไว้แล้วพนักงานกดผ่าน เราจะได้ข้อมูลผิดที่ "ดูครบ"
+            ซึ่งแย่กว่าข้อมูลว่างที่รู้ว่ายังไม่มี เพราะไม่มีใครกลับมาตรวจของที่ดูครบแล้ว */}
+        <div style={{marginBottom:14}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6}}>🏦 จ่ายจากบัญชีไหน *</div>
+          <select value={cashSource} onChange={e=>setCashSource(e.target.value)} disabled={saving} style={{...iS,fontSize:13,fontWeight:cashSource?800:600,borderColor:cashSource?undefined:C.red,background:C.white}}>
+            <option value="">— ยังไม่ได้เลือก —</option>
+            {PO_CASH_SOURCES.map(v=><option key={v} value={v}>{v}</option>)}
+          </select>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:cashSource?C.ink4:C.red,fontWeight:700,marginTop:4}}>
+            {cashSource?"ระบบบัญชีใช้ช่องนี้แยกว่าเงินออกจากบัญชีธนาคารหรือออกจากเงินสด":"ต้องเลือก — ถ้าไม่ระบุ ยอดจะกระทบยอดกับสเตทเมนต์ธนาคารไม่ได้"}
+          </div>
+        </div>
         <div style={{marginBottom:18}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6}}>หมายเหตุ (ไม่บังคับ)</div>
           <input value={note} onChange={e=>setNote(e.target.value)} placeholder="เช่น โอนผ่าน SCB เลขที่อ้างอิง..." style={{...iS,fontSize:13}}/>
         </div>
         <div style={{display:"flex",gap:8}}>
           <Btn v="ghost" onClick={onClose} disabled={saving} s={{padding:"11px 16px"}}>ยกเลิก</Btn>
-          <Btn onClick={submit} loading={saving} disabled={!slipFile||saving} full icon={I.check} s={{padding:"11px",fontSize:14,fontWeight:900,background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,boxShadow:`0 4px 14px ${C.green}55`}}>ยืนยันชำระเงิน</Btn>
+          <Btn onClick={submit} loading={saving} disabled={!slipFile||!cashSource||!payDate||saving} full icon={I.check} s={{padding:"11px",fontSize:14,fontWeight:900,background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,boxShadow:`0 4px 14px ${C.green}55`}}>ยืนยันชำระเงิน</Btn>
         </div>
       </div>
     </div>
@@ -14552,6 +14624,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         paidAt:po.payment_at||new Date().toISOString(),
         slipUrl:signedSlipUrl,
         paymentNote:po.payment_note,
+        cashSource:po.cash_source,
       });
       await recordSlipSync(po.id,r2);
       if(r2&&r2.ok)ok++;else fail++;
@@ -22252,7 +22325,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
         {selOrder?.id&&<button onClick={()=>setMoveFrom({table:selTable,order:selOrder})} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.blue}55`,background:C.blueLight,cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>🔀 ย้ายโต๊ะ</button>}
         <button onClick={()=>printTableQR(selTable,currentBranch,printers)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
-      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})} printers={printers}/>
+      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})}/>
     </Modal>}
     {moveFrom&&<MoveTableModal from={moveFrom.table} order={moveFrom.order} tables={tables} activeOrders={activeOrders} branch={currentBranch} currentUser={currentUser}
       onClose={()=>setMoveFrom(null)} onDone={()=>{setMoveFrom(null);setSelTable(null);setSelOrder(null);loadAll({silent:true});}}/>}
