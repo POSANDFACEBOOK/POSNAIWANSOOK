@@ -131,7 +131,7 @@ export default async function handler(req, res) {
       const orders = await sbGet(
         `orders?branch_id=eq.${Number(shift.branch_id)}&status=eq.paid` +
         `&created_at=gte.${from}&created_at=lt.${to}` +
-        `&select=id,total,subtotal,discount,promo_amount,service_charge,vat,round_adj,payment_method,created_at,updated_at` +
+        `&select=id,total,subtotal,discount,promo_amount,service_charge,vat,vat_rate,round_adj,payment_method,created_at,updated_at` +
         `&order=id.asc&limit=2000`
       );
 
@@ -160,6 +160,17 @@ export default async function handler(req, res) {
         // (ค่าบริการ/ปัดเศษ/VAT แบบบวกเพิ่ม จะถูกซึมอยู่ในตัวนี้ — ตั้งใจ ไม่ใช่ความบังเอิญ)
         const sub_total = r2(total_sales + discount);
         const exclude_vat = sum(list, "vat");
+        // ── ตัวเลขฝั่งภาษี ──
+        // ฝั่งบัญชีบล็อกใบที่ sales_before_vat = 0 (ออกใบขายเงินสด CA- ไม่ได้ ⟹ ไม่มีเอกสารรองรับใน ภ.พ.30)
+        // ราคาของเรารวม VAT อยู่แล้ว (แบบบวกเพิ่มก็ยังจริง) ⟹ ยอดก่อนภาษี = ยอดขาย − ภาษี เสมอ
+        const sales_before_vat = r2(total_sales - exclude_vat);
+        // บิลที่ไม่มี VAT เลย — ต้องบอกเขา ไม่งั้นเขาคิดว่าทั้งวันเป็นยอดมีภาษี แล้วด่านภาษีจะไม่ผ่าน
+        // (กะ #8 ของจริง: VAT ถูกสลับเปิด-ปิดระหว่างขาย 9 ครั้ง มีแค่ 8 ใบจาก 41 ที่มีภาษี)
+        const non_vat_sales = sum(list.filter((x) => !(Number(x.vat) > 0)), "total");
+        const vatRate = (() => {
+          const rs = list.map((x) => Number(x.vat_rate) || 0).filter((x) => x > 0);
+          return rs.length ? rs[0] : 7;
+        })();
 
         const cash = list.filter((x) => x.payment_method === "cash");
         const pp = list.filter((x) => x.payment_method === "promptpay" || x.payment_method === "transfer");
@@ -182,6 +193,16 @@ export default async function handler(req, res) {
           problems.push(`ผลรวมวิธีจ่ายชั้นหลัก (${mainSum}) ไม่เท่า total_sales (${total_sales})`);
         if (!(total_sales > 0)) problems.push(`total_sales ต้องมากกว่า 0 (ได้ ${total_sales})`);
         if (exclude_vat > total_sales) problems.push(`VAT (${exclude_vat}) มากกว่ายอดขาย (${total_sales})`);
+        // ── ด่านเดียวกับที่ฝั่งบัญชีใช้บล็อก — ส่งของที่เขาจะบล็อกไป ก็เท่ากับไม่มีเอกสารภาษี ──
+        // ฐานภาษี = sales_before_vat − non_vat_sales · ภาษีต้องเท่าฐาน × อัตรา (เขายอมคลาดได้ ฿1)
+        const taxBase = r2(sales_before_vat - non_vat_sales);
+        const expectVat = r2(taxBase * vatRate / 100);
+        if (Math.abs(expectVat - exclude_vat) > 1)
+          problems.push(`ภาษีที่ควรเป็น ${expectVat} (ฐาน ${taxBase} × ${vatRate}%) ไม่ตรงกับที่เก็บได้ ${exclude_vat}`);
+        // ปัดเศษของเขา = total_sales − sales_before_vat − exclude_vat (เกิน ฿20 = บล็อก)
+        const roundGap = r2(total_sales - sales_before_vat - exclude_vat);
+        if (Math.abs(roundGap) > 20)
+          problems.push(`ส่วนต่างปัดเศษ ${roundGap} เกิน ฿20 ที่ฝั่งบัญชียอมรับ`);
         if (problems.length) {
           results.push({ business_date, ok: false, blocked: true, problems, total_sales, bills: list.length });
           continue;   // วันที่มีปัญหาไม่ส่ง แต่วันอื่นในกะเดียวกันยังส่งได้
@@ -197,6 +218,10 @@ export default async function handler(req, res) {
           sub_total,
           discount,
           exclude_vat,
+          sales_before_vat,          // ขาดตัวนี้ = ฝั่งบัญชีออกใบขายเงินสด CA- ไม่ได้
+          non_vat_sales,             // บิลที่ไม่มี VAT — ฐานภาษีต้องหักตัวนี้ออก
+          vat_rate: vatRate,
+          total_revenue_payment: total_sales,
           // ไม่ส่ง number_of_guests — ช่องนั้นคือ "จำนวนแขก" ที่ POS เราไม่ได้เก็บ
           // ส่งจำนวนบิลไปจะทำให้ยอดแขกทั้งบริษัทบนแดชบอร์ดบัญชีต่ำกว่าความจริง
           average_trans: r2(total_sales / list.length),   // ยอดขายเฉลี่ยต่อบิล
