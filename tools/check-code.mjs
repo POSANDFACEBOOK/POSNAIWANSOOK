@@ -1454,7 +1454,7 @@ section("ผลตรวจเส้นทางเงิน: 11 ข้อที
 {
   // ── ใบเสร็จต้องบวกลงตัวทุกทาง ──
   // ทางพิมพ์มีสองเส้น: ตัวพิมพ์ (raster) กับหน้าต่างพิมพ์ (HTML) — เดิมใส่บรรทัดปัดเศษแค่เส้นเดียว
-  ok_("ใบเสร็จตอนปิดบิลพกส่วนต่างการปัดไปด้วย", APP.includes("total,round_adj:roundAdj,payment_method:payMethod,cash_received:cashReceived"));
+  ok_("ใบเสร็จตอนปิดบิลพกส่วนต่างการปัดไปด้วย", APP.includes("total,round_adj:roundAdj,payment_method:pm,cash_received:cashReceived"));
   ok_("ใบทางหน้าต่างพิมพ์มีบรรทัดปัดเศษด้วย",
     APP.includes("const roundLine=order.round_adj?") && APP.includes("${promoLine}${scLine}${vatLine}${roundLine}<div style="));
   // ปุ่มพิมพ์ใบเสร็จย้อนหลังในรายงานก็เดินทางนี้ และส่งแถวจาก DB ที่มี round_adj อยู่แล้ว
@@ -1521,7 +1521,7 @@ section("ปัดเศษท้ายบิล");
   // ปัดแล้วไม่บอก = ตัวเลขบนใบบวกไม่ลง และยอดขายในระบบไม่ตรงกับเงินที่รับมา
   ok_("ส่วนต่างจากการปัดถูกคำนวณไว้", APP.includes("const roundAdj=round2(total-rawTotal);"));
   ok_("ใบเสร็จพิมพ์บรรทัดปัดเศษ", APP.includes('if(order.round_adj)L.push({l:"ปัดเศษ"'));
-  ok_("บิลที่ปิดเก็บส่วนต่างการปัดลงฐานข้อมูล", APP.includes("total,round_adj:roundAdj,payment_method:payMethod"));
+  ok_("บิลที่ปิดเก็บส่วนต่างการปัดลงฐานข้อมูล", APP.includes("total,round_adj:roundAdj,payment_method:pm"));
   ok_("ใบแจ้งยอด/QR ก็พกส่วนต่างไปด้วย", APP.includes("promo_name:selectedPromo?.name||null,round_adj:roundAdj,"));
   // ยอดบนมือถือลูกค้ากับยอดที่พนักงานเก็บ ต้องเป็นเลขเดียวกัน
   ok_("หน้าลูกค้าสแกนเห็นยอดที่ปัดแล้วเหมือนกัน", APP.includes("let due=roundBill(rawDue,roundModeOf(posCfg));"));
@@ -1795,7 +1795,7 @@ try {
     APP.includes("if(target._new){setItems(newLocal);return;}"));
   ok_("ของที่ยังไม่ส่งลดจำนวนได้ถึงศูนย์ ของที่ส่งแล้วยังลดไม่ได้",
     APP.includes("const floor=it._new?0:Math.max(0,(base.get(sentKey(it))||0)-otherQty);"));
-  ok_("ปิดบิลแล้วธงในจอไม่ติดลงข้อมูล", APP.includes("const itemsWithDisc=items.map(clean).map((i,idx)=>{"));
+  ok_("ปิดบิลแล้วธงในจอไม่ติดลงข้อมูล", APP.includes("const itemsWithDisc=useMemo(()=>items.map(clean).map((i,idx)=>{"));
   ok_("ส่งครัวแล้วธงในจอไม่ติดลงข้อมูล", APP.includes("const delta=newRows.map(clean);"));
   // เมนูที่มีตัวเลือกไปคนละทางกับเมนูเปล่า ต้องติดธงเหมือนกัน ไม่งั้นสั่งแล้วปุ่มส่งไม่ติด
   ok_("เมนูที่มีตัวเลือกก็ติดธงของใหม่เหมือนกัน",
@@ -2243,6 +2243,54 @@ section("หน้าเว็บหลักต้องไม่ถูกแ�
   const assetRule = rules.find((r) => String(r.source || "").startsWith("/assets/"));
   ok_("ไฟล์ที่มีแฮชในชื่อยังแคชยาวได้เหมือนเดิม",
     !!assetRule && /immutable/i.test(String(((assetRule.headers || []).find((h) => /cache-control/i.test(h.key)) || {}).value || "")));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// เก็บเงิน: ถามวิธีจ่ายหลังกดยืนยัน แล้วเงินสดต้องกรอกยอดที่รับมา
+// ══════════════════════════════════════════════════════════════════════════
+section("ป็อปอัพเก็บเงิน + เงินทอน");
+{
+  // วิธีจ่ายต้องมาเป็น "ค่าที่กด" ไม่ใช่ค่าจาก state — กดปุ๊บตัดเงินปั๊บในจังหวะเดียว
+  // ถ้าอ่านจาก state จะได้ค่าเก่า (React อัปเดตทีหลัง) ⟹ บันทึกวิธีจ่ายผิด
+  // ผลคือจ่ายพร้อมเพย์แต่ระบบนับเป็นเงินสด → เงินในลิ้นชักเกินจริง หาไม่เจอตอนปิดกะ
+  ok_("ตัวปิดบิลรับวิธีจ่ายเป็นค่าที่กดมา", APP.includes("async function checkOut(methodArg){"));
+  ok_("ค่าที่กดชนะค่าใน state เสมอ", APP.includes("const pm=methodArg||payMethod;"));
+  ck("ทุกที่ในตัวปิดบิลใช้ค่าที่กด ไม่ใช่ state",
+    ["payment_method:pm,updated_at", "cashReceived=pm===\"cash\"", "if(pm===\"cash\"&&shift)", "payment_method:pm,cash_received"]
+      .filter((x) => !APP.includes(x)), []);
+  ok_("ป็อปอัพส่งวิธีจ่ายที่กดเข้าไปจริง",
+    APP.includes("onPay={async(m)=>{await checkOut(m);setShowPay(false);}}") &&
+    APP.includes("setAskPay(null);onPay(m.v);") && APP.includes('onPay("cash");'));
+
+  // เงินสดต้องกรอกยอดที่รับมา และต้องไม่น้อยกว่ายอดบิล — ดึงเงื่อนไขจริงมารัน
+  const enough = (() => {
+    const ln = APP.split("\n").find((l) => l.trim().startsWith("const enoughCash="));
+    return ln ? new Function("cashRcv", "total", ln.trim() + " return enoughCash;") : null;
+  })();
+  ok_("ยังมีเงื่อนไขกันเงินสดไม่พอ", !!enough);
+  if (enough) {
+    ck("ไม่กรอกอะไรเลย = กดยืนยันไม่ได้", enough("", 119), false);
+    ck("กรอกน้อยกว่ายอดบิล = กดยืนยันไม่ได้", [enough("100", 119), enough("118.99", 119)], [false, false]);
+    ck("กรอกพอดี/เกิน = กดยืนยันได้", [enough("119", 119), enough("500", 119)], [true, true]);
+  }
+  ok_("เงินสดกดยืนยันไม่ได้จนกว่าเงินจะพอ", APP.includes("disabled={!enoughCash||saving}"));
+
+  // ป็อปอัพเงินทอนต้องอยู่ที่จอแม่ — จอโต๊ะปิดตัวเองทันทีที่ปิดบิลเสร็จ
+  // ถ้าอยู่ในจอโต๊ะ มันจะถูกถอดออกไปพร้อมกัน แล้วพนักงานไม่เห็นยอดทอนเลย
+  ok_("ยอดทอนถูกส่งออกไปก่อนปิดจอโต๊ะ",
+    APP.includes('if(pm==="cash"&&typeof onCashChange==="function"){'));
+  ok_("จอแม่เป็นคนถือป็อปอัพเงินทอน",
+    APP.includes("const[changeDlg,setChangeDlg]=useState(null);") && APP.includes("onCashChange={setChangeDlg}"));
+
+  // ส่วนลดรายเมนูต้องไปถึงกระดาษทุกใบ ไม่ใช่เฉพาะใบที่ปิดบิลแล้ว
+  // ตัวเรนเดอร์รองรับอยู่แล้วทั้งสองทาง สิ่งที่เคยขาดคือไม่มีใครส่งข้อมูลไปให้
+  ok_("ส่วนลดรายเมนูคำนวณที่เดียว ใช้ร่วมทุกใบ",
+    APP.includes("const itemsWithDisc=useMemo(()=>items.map(clean).map((i,idx)=>{"));
+  ck("ทุกใบที่พิมพ์พกส่วนลดรายเมนูไปด้วย",
+    ["smartPrintReceipt({...(existingOrder||{}),items:itemsWithDisc,", "items:itemsWithDisc,subtotal,discount:round2(manualDiscount)"]
+      .filter((x) => !APP.includes(x)), []);
+  ok_("ตัวพิมพ์ราสเตอร์ยังพิมพ์บรรทัดส่วนลดรายเมนู",
+    APP.includes('if(disc>0)L.push({t:"   ลด "+(i.item_discount_type==="percent"?i.item_discount_value+"%":bahtR(i.item_discount_value)),size:18});'));
 }
 
 console.log(`\n${"═".repeat(52)}`);
