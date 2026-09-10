@@ -11036,6 +11036,12 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
           {payAt&&<div style={{background:C.greenLight,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.green}`}}>
             <div style={{fontSize:11,color:C.green,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>💳 ชำระเงิน</div>
             <div style={{fontSize:13,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{payAt}{po.payment_by?` · ${po.payment_by}`:""}</div>
+        {/* หมายเหตุการจ่าย — เก็บมาตลอดแต่ไม่เคยแสดงที่ไหนเลยทั้งระบบเรากับระบบบัญชี
+            ข้อความอย่าง "โอนเกิน 50 บาท โอนคืนแล้ว" หรือ "โอนรวม 4 PO" คือคำตอบว่า
+            ทำไมยอดโอนไม่ตรงยอดบิล ซึ่งเป็นสิ่งแรกที่คนกระทบยอดกับสเตทเมนต์ต้องการ */}
+        {po.payment_note&&<div style={{marginTop:6,padding:"7px 10px",background:C.white,border:`1px solid ${C.green}44`,borderRadius:9,fontSize:12.5,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,whiteSpace:"pre-line",wordBreak:"break-word"}}>
+          <span style={{color:C.green,fontWeight:800}}>📝 หมายเหตุ:</span> {po.payment_note}
+        </div>}
             {po.payment_slip_url&&<button onClick={async()=>{try{const u=await api.getSlipSignedUrl(po.payment_slip_url,300);if(u)window.open(u,"_blank","noopener");}catch(e){showErr("เปิดสลิปไม่สำเร็จ",e);}}} style={{background:"transparent",border:"none",padding:0,marginTop:4,fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700,cursor:"pointer",textDecoration:"underline"}}>📎 ดูสลิปการโอน →</button>}
           </div>}
         </div>
