@@ -9492,14 +9492,14 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       const paidAt=bkkNoonISO(payDate)||now;
       // updated_at ต้องเป็น "ตอนนี้" เสมอ ห้ามผูกกับ paidAt — มันคือตัวชี้ว่าแถวถูกแก้เมื่อไหร่
       // ถ้าเลือกวันย้อนหลังแล้วเขียน updated_at ย้อนตาม แถวจะดูเก่ากว่าความจริงทั้งระบบ
-      const patch={status:"paid",payment_slip_url:slipUrl,payment_at:paidAt,payment_by:currentUser?.username||null,payment_note:note||null,cash_source:cashSource||null,updated_at:now};
+      const patch={status:"paid",payment_slip_url:slipUrl,payment_at:paidAt,payment_by:currentUser?.username||null,payment_note:note||null,cash_source:cashSource||null,sliptrack_sync:null,updated_at:now};
       try{
         await api.patchPOIfStatus(po.id,"awaiting_payment",patch);
       }catch(e){
         // ยังไม่ได้รัน SQL เพิ่มคอลัมน์ cash_source — การจ่ายเงินต้องบันทึกได้อยู่ดี
         // (PostgREST ปฏิเสธทั้งคำขอเมื่อเจอคอลัมน์ที่ไม่รู้จัก ไม่ได้เขียนบางส่วน จึงยิงซ้ำได้ปลอดภัย)
         if(!/column .* does not exist|PGRST204|schema cache/i.test(String((e&&e.message)||e)))throw e;
-        const {cash_source,...rest}=patch;
+        const {cash_source,...rest}=patch;   // เหลือ sliptrack_sync:null ไว้ในนี้เสมอ — ตัวตามงานค้างพึ่งมัน
         await api.patchPOIfStatus(po.id,"awaiting_payment",rest);
         setTimeout(()=>alert("✅ บันทึกการชำระเงินแล้ว\n\n⚠️ แต่ยังเก็บ \"จ่ายจากบัญชีไหน\" ลงฐานข้อมูลไม่ได้\nผู้ดูแลระบบต้องเพิ่มคอลัมน์ cash_source ใน purchase_orders ก่อน\n(ยอดส่งเข้าระบบบัญชีถูกต้อง แต่ถ้าต้องส่งซ้ำภายหลัง ช่องนี้จะว่าง)"),0);
       }

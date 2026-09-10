@@ -11,16 +11,20 @@
 // ══════════════════════════════════════════════════════════════════════════
 import fs from "node:fs";
 
-const APP = fs.readFileSync("src/FoodCostApp.jsx", "utf8");
-const AGENT = fs.readFileSync("public/print-agent.js", "utf8");
-const HTML = fs.readFileSync(process.env.HTML_SRC || new URL("../index.html", import.meta.url), "utf8");
-const PUSH = fs.readFileSync(new URL("../api/push.js", import.meta.url), "utf8");
+// อ่านไฟล์แบบตัดตัวขึ้นบรรทัดให้เป็นแบบเดียวเสมอ — CRLF/LF ไม่ใช่ความหมายของด่านใดเลย
+// (worktree บนวินโดวส์เช็คเอาต์เป็น CRLF ส่วน repo หลักเป็น LF ⟹ ด่านที่จุดยึด
+//  คร่อมหลายบรรทัดจะตกทั้งที่โค้ดถูกต้องทุกอย่าง)
+const rd = (p) => fs.readFileSync(p, "utf8").split("\r\n").join("\n");
+const APP = rd("src/FoodCostApp.jsx");
+const AGENT = rd("public/print-agent.js");
+const HTML = rd(process.env.HTML_SRC || new URL("../index.html", import.meta.url));
+const PUSH = rd(new URL("../api/push.js", import.meta.url));
 const VERCEL = JSON.parse(fs.readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
-const SLIP = fs.readFileSync(new URL("../api/kitchen-slip.js", import.meta.url), "utf8");
-const SLIPPUSH = fs.readFileSync(new URL("../api/sliptrack-push.js", import.meta.url), "utf8");
-const BACKUP = fs.readFileSync(new URL("../api/backup.js", import.meta.url), "utf8");
-const SWEEP = fs.readFileSync(new URL("../api/sliptrack-sweep.js", import.meta.url), "utf8");
-const WATCHDOG = fs.readFileSync(new URL("../.github/workflows/health-watchdog.yml", import.meta.url), "utf8");
+const SLIP = rd(new URL("../api/kitchen-slip.js", import.meta.url));
+const SLIPPUSH = rd(new URL("../api/sliptrack-push.js", import.meta.url));
+const BACKUP = rd(new URL("../api/backup.js", import.meta.url));
+const SWEEP = rd(new URL("../api/sliptrack-sweep.js", import.meta.url));
+const WATCHDOG = rd(new URL("../.github/workflows/health-watchdog.yml", import.meta.url));
 
 // ── ดึงสคริปต์เลือก manifest จาก index.html มา "รันจริง" ──────────────────
 // ไม่ใช่แค่ค้นหาข้อความ — เคยพลาดมาแล้ว: แบ็กสแลชใน regex หายตอนเขียนไฟล์
@@ -1933,7 +1937,7 @@ section("วันที่โอนจริง + แหล่งเงิน�
   // แล้วเขียน updated_at ย้อนตาม จะทำให้แถวดูเก่ากว่าความจริงทั้งระบบ
   ok_("เลือกวันย้อนหลังแล้ว updated_at ยังเป็นเวลาปัจจุบัน",
     APP.includes("const paidAt=bkkNoonISO(payDate)||now;") &&
-    APP.includes("cash_source:cashSource||null,updated_at:now};"));
+    APP.includes("cash_source:cashSource||null,sliptrack_sync:null,updated_at:now};"));
 
   // ── ค่าแหล่งเงิน: ฝั่งบัญชีเทียบ "ตรงตัวอักษร" กับคีย์ตารางกระแสเงินสดเขา ──
   // เพี้ยนตัวเดียว/มีวรรคเกิน = เขาอ่านเป็น "ไม่ใช่เงินสด" แล้วยอดไปโผล่ผิดฝั่ง
@@ -2095,6 +2099,40 @@ section("วันที่โอนจริง + แหล่งเงิน�
   }
   ok_("ตัวกวาดใช้ตัวตัดสิน ไม่ใช่ตีตรา skip ตายตัว",
     SWEEP.includes("const f = flagForSkip(built.skip);") && SWEEP.includes("const f = flagForSkip(paidBuilt.skip);"));
+
+  // ── ฟิลด์ที่หน้าเว็บส่ง ต้องรอดผ่านพร็อกซีทุกตัว ──────────────────────
+  // /api/sliptrack-push ไม่ได้ "ส่งต่อ body" แต่ประกอบ payload ใหม่จากรายการที่อนุญาต
+  // ฟิลด์ที่ไม่มีบรรทัดคัดลอกจะถูกทิ้งเงียบๆ บนเซิร์ฟเวอร์เราเอง ก่อนออกไปถึงบัญชี
+  // ไม่มี error ไม่มี warning (บัญชีเตือนเฉพาะฟิลด์ที่ "ไม่รู้จัก" ไม่ใช่ฟิลด์ที่ไม่เคยได้รับ)
+  // ด่านเดิมตรวจ "หน้าเว็บส่ง" ✅ กับ "ตัวกวาดส่ง" ✅ แต่ไม่ตรวจตรงกลาง
+  // ⟹ cash_source หายทั้งที่ 565 ข้อเขียวหมด นี่คือด่านที่ควรมีตั้งแต่แรก
+  const payloadKeys = (src, head) => {
+    const st = src.indexOf(head);
+    if (st < 0) return null;
+    let d = 0, started = false, en = -1;
+    for (let i = st; i < src.length; i++) {
+      if (src[i] === "{") { d++; started = true; }
+      else if (src[i] === "}") { d--; if (started && d === 0) { en = i; break; } }
+    }
+    return [...new Set([...src.slice(st, en).matchAll(/payload\.([A-Za-z_]+)\s*=[^=]/g)].map((m) => m[1]))].sort();
+  };
+  const cliKeys = payloadKeys(APP, "async function pushPOToSlipTrack(po, branches, opts={}){");
+  const proxyKeys = payloadKeys(SLIPPUSH, "export default async function handler(req, res) {");
+  ok_("อ่านรายการฟิลด์ได้ทั้งหน้าเว็บและพร็อกซี", !!cliKeys && !!proxyKeys);
+  if (cliKeys && proxyKeys) {
+    ck("ทุกฟิลด์ที่หน้าเว็บใส่ ต้องมีบรรทัดส่งต่อในพร็อกซี",
+      cliKeys.filter((k) => !proxyKeys.includes(k)), []);
+    ok_("พร็อกซีส่งต่อแหล่งเงินจริง", proxyKeys.includes("cash_source"));
+  }
+
+  // ── กดจ่ายแล้วต้องเคลียร์ธงซิงค์ พร้อมกับเปลี่ยนสถานะในคำสั่งเดียว ──
+  // ตอนรับของธงถูกเขียนเป็น 'ok' ไปแล้ว · ขั้นยืนยันจ่ายยิงแบบไม่รอผล
+  // ถ้าคำขอนั้นหลุด ธงยังเป็น 'ok' ซึ่งทั้งสามตะแกรงอ่านว่าเรียบร้อย ⟹ เงินจริงไม่ถึงบัญชี
+  // cancelPO ทำถูกอยู่แล้ว ตอนจ่ายเงินเพิ่งตามมาทีหลัง
+  ok_("กดจ่ายเงินแล้วเคลียร์ธงซิงค์ให้ตัวตามงานค้างเห็น",
+    APP.includes("cash_source:cashSource||null,sliptrack_sync:null,updated_at:now};"));
+  ok_("ยกเลิกบิลก็ยังเคลียร์ธงเหมือนเดิม",
+    APP.includes("...(wasReceived&&{sliptrack_sync:null})"));
 
   ok_("จอปิดกะบอกด้วยว่าบัญชีไม่รับอะไรไปบ้าง",
     APP.includes("⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(\" · \")}"));

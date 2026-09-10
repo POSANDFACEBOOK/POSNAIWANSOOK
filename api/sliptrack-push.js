@@ -334,6 +334,11 @@ export default async function handler(req, res) {
     if (body.paid_at) payload.paid_at = String(body.paid_at);
     if (body.slip_url) payload.slip_url = String(body.slip_url);
     if (body.payment_note) payload.payment_note = String(body.payment_note);
+    // จ่ายจากบัญชีไหน — ฝั่งบัญชีแยกเงินออกจากธนาคาร/เงินสดด้วยค่านี้
+    // ตัวนี้เคยหายตรงนี้: หน้าเว็บส่งมาถูก ฐานเก็บถูก แต่พร็อกซีประกอบ payload ใหม่
+    // แล้วไม่มีบรรทัดคัดลอกมันมา ⟹ บัญชีไม่เคยเห็นเลย และไม่มีใครรู้เพราะไม่มี error
+    // อะไรก็ตามที่หน้าเว็บใส่ใน payload ขา paid ต้องมีบรรทัดของมันตรงนี้ด้วยเสมอ
+    if (body.cash_source) payload.cash_source = String(body.cash_source);
   } else {
     if (body.description) payload.description = String(body.description);
     if (body.category) payload.category = String(body.category);
