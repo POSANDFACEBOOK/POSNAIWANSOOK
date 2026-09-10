@@ -463,7 +463,11 @@ const api = {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) return { ok: false, status: r.status, error: (d && (d.error || d.message)) || `HTTP ${r.status}` };
-      return { ok: true, data: d };
+      // ทางนี้ยิงแบบไม่รอผลเป็นส่วนใหญ่ (สร้าง/แก้ทรัพย์สิน) ⟹ ไม่มีจอให้เด้ง
+      // อย่างน้อยต้องมีร่องรอยไว้ตาม ไม่ใช่เงียบสนิทเหมือนที่ผ่านมา
+      const aw = slipWarnings(d);
+      if (aw.length) console.warn("SlipTrack ทะเบียนทรัพย์สินรับไม่ครบ", assetId, aw);
+      return { ok: true, data: d, ...(aw.length ? { warnings: aw } : {}) };
     } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
   },
   getCostHist: (bid) => sb(`cost_history?order=id.desc&limit=50${bid ? `&branch_id=eq.${bid}` : ""}`),
@@ -896,6 +900,11 @@ const SLIPTRACK_BRANCH_ALIAS={
   "คุณนายตื่นสาย/แจ่วฮ้อน":"คุณนายตื่นสาย", // paired form  → canonical
   "คุณนายแจ่วฮ้อน":"คุณนายตื่นสาย",        // split form   → canonical (unit merged at accounting)
 };
+// ── ตัวตอบ 2xx ไม่ได้แปลว่ารับครบ ──────────────────────────────────────
+// ฝั่งบัญชีทิ้งค่าที่เขาไม่รู้จักแล้วบอกไว้ใน warnings แต่ยังตอบ 200
+// เคยหายไป 7 ฟิลด์เพราะฝั่งเราไม่เคยอ่านตัวตอบเลย — "200 + ของหาย" กับ
+// "200 + ครบ" แยกกันไม่ออกถ้าไม่อ่าน ทุกทางที่คุยกับบัญชีต้องผ่านตัวนี้
+const slipWarnings=(d)=>Array.isArray(d&&d.warnings)?d.warnings.filter(Boolean):[];
 function sliptrackBranchName(name){
   const n=String(name||"").trim();
   const canon=SLIPTRACK_BRANCH_ALIAS[n]||n;
@@ -925,7 +934,10 @@ async function pushPOToSlipTrack(po, branches, opts={}){
         body:JSON.stringify({external_id:externalId,voided:true}),
       });
       if(!r.ok){const data=await r.json().catch(()=>({}));console.error("SlipTrack void failed",r.status,data);return{ok:false,status:r.status,error:data&&data.error};}
-      return{ok:true,status:r.status,voided:true};
+      const vd=await r.json().catch(()=>({}));
+      const vw=slipWarnings(vd);
+      if(vw.length)console.warn("SlipTrack ยกเลิกบิลแล้วแต่มีคำเตือน",externalId,vw);
+      return{ok:true,status:r.status,voided:true,...(vw.length?{warnings:vw}:{})};
     }
     const fromB=branches.find(b=>+b.id===+po.from_branch_id);
     const toB=branches.find(b=>+b.id===+po.branch_id);
@@ -994,7 +1006,7 @@ async function pushPOToSlipTrack(po, branches, opts={}){
     // เคยโดนมาแล้ว: เขารับ 7 ฟิลด์มาแล้วทิ้งเงียบๆ เพราะฝั่งเราไม่เคยอ่านตัวตอบเลย
     // อาการคือค่าในฐานเขาเป็น 0/ว่าง ทั้งที่เราส่งครบ และไม่มีใครรู้จนไปไล่ดูเอง
     const done=await r.json().catch(()=>({}));
-    const warnings=Array.isArray(done&&done.warnings)?done.warnings.filter(Boolean):[];
+    const warnings=slipWarnings(done);
     if(warnings.length)console.warn("SlipTrack รับข้อมูลไม่ครบ",externalId,warnings);
     return{ok:true,status:r.status,...(warnings.length?{warnings}:{})};
   }catch(err){
@@ -20501,15 +20513,21 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         const rows=Array.isArray(acct.results)?acct.results:[];
         const good=rows.filter(r=>r.ok),bad=rows.filter(r=>!r.ok);
         const fatal=!!acct.error||(rows.length===0&&!acct.skipped);
-        const okAll=!fatal&&bad.length===0&&rows.length>0;
+        // ส่งผ่าน แต่บัญชีทิ้งบางค่า = ยอดเงินลงแล้วก็จริง แต่เอกสารไม่ครบ
+        // เดิมเคสนี้ขึ้นเขียวล้วน "ส่งเข้าระบบบัญชีแล้ว" แล้วไม่มีใครรู้ว่าขาดอะไร
+        const warnRows=rows.filter(r=>r.ok&&slipWarnings(r.reply).length);
+        const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0;
+        const partial=!fatal&&bad.length===0&&rows.length>0&&warnRows.length>0;
         return <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(94vw,460px)",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
-          <div style={{padding:"18px 20px 12px",background:okAll?C.greenLight:C.redLight,borderBottom:`1px solid ${okAll?C.green:C.red}33`}}>
-            <div style={{fontSize:32,marginBottom:4}}>{okAll?"📗":"⚠️"}</div>
-            <div style={{fontSize:17,fontWeight:900,color:okAll?"#0F6E4C":C.red}}>
-              {okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":"ยอดขายยังไม่เข้าระบบบัญชี"}
+          <div style={{padding:"18px 20px 12px",background:okAll?C.greenLight:partial?C.yellowLight:C.redLight,borderBottom:`1px solid ${okAll?C.green:partial?C.yellow:C.red}33`}}>
+            <div style={{fontSize:32,marginBottom:4}}>{okAll?"📗":partial?"📙":"⚠️"}</div>
+            <div style={{fontSize:17,fontWeight:900,color:okAll?"#0F6E4C":partial?"#92400E":C.red}}>
+              {okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":partial?"ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก":"ยอดขายยังไม่เข้าระบบบัญชี"}
             </div>
-            <div style={{fontSize:12,color:okAll?"#0F6E4C":C.red,marginTop:4,lineHeight:1.6,opacity:.95}}>
-              {okAll?"กะปิดเรียบร้อยและยอดลงสมุดบัญชีแล้ว":"กะปิดเรียบร้อยแล้ว แต่ยอดยังไม่ลงบัญชี — แจ้งผู้ดูแลระบบให้ส่งซ้ำ"}
+            <div style={{fontSize:12,color:okAll?"#0F6E4C":partial?"#92400E":C.red,marginTop:4,lineHeight:1.6,opacity:.95}}>
+              {okAll?"กะปิดเรียบร้อยและยอดลงสมุดบัญชีแล้ว"
+                :partial?"ยอดเงินลงสมุดบัญชีแล้ว แต่ระบบบัญชีไม่รับข้อมูลบางอย่าง — ดูรายละเอียดข้างล่าง แล้วแจ้งผู้ดูแลระบบ"
+                :"กะปิดเรียบร้อยแล้ว แต่ยอดยังไม่ลงบัญชี — แจ้งผู้ดูแลระบบให้ส่งซ้ำ"}
             </div>
           </div>
           <div style={{flex:1,overflowY:"auto",padding:"12px 20px",minHeight:0,fontSize:12.5,color:C.ink2,lineHeight:1.7}}>
@@ -20520,6 +20538,9 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
               </div>
               {r.ok&&r.reply&&r.reply.income&&<div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>
                 ลงบัญชี: {String(r.reply.income.status)}{r.reply.income.rows?` · ${r.reply.income.rows} แถว`:""}{r.reply.income.vat!=null?` · VAT ฿${(+r.reply.income.vat).toLocaleString()}`:""}
+              </div>}
+              {r.ok&&slipWarnings(r.reply).length>0&&<div style={{fontSize:11.5,color:"#92400E",marginTop:4,padding:"6px 8px",background:C.yellowLight,borderRadius:8,lineHeight:1.55}}>
+                ⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(" · ")}
               </div>}
               {!r.ok&&<div style={{fontSize:11.5,color:C.red,marginTop:3}}>
                 {r.blocked

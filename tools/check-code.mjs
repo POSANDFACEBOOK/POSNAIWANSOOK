@@ -2012,15 +2012,30 @@ section("วันที่โอนจริง + แหล่งเงิน�
   // เพราะฝั่งเราไม่เคยอ่านตัวตอบเลย ดึงบรรทัดที่แกะค่ามารันจริง
   // ถอดโค้ดออกแล้วต้อง "สอบตก" ให้อ่านออก ไม่ใช่โยน exception แล้วตัวตรวจตายทั้งตัว
   // (ตัวพิสูจน์ด่านมองหาบรรทัด ❌ ถ้าโปรแกรมพังก่อนพิมพ์ มันจะนับว่าด่านนี้จับไม่ได้)
-  const warnLine = APP.split("\n").find((l) => l.includes("const warnings=Array.isArray(done&&done.warnings)"));
-  ok_("ยังอ่านคำเตือนจากตัวตอบของฝั่งบัญชีอยู่", !!warnLine);
-  const parseWarn = warnLine ? new Function("done", warnLine.trim() + " return warnings;") : () => null;
+  const warnLine = APP.split("\n").find((l) => l.startsWith("const slipWarnings="));
+  ok_("ยังมีตัวแกะคำเตือนจากตัวตอบของฝั่งบัญชีอยู่", !!warnLine);
+  const parseWarn = warnLine ? new Function(warnLine.trim() + " return slipWarnings;")() : () => null;
   ck("แกะคำเตือนจากตัวตอบได้ และคัดค่าว่างทิ้ง", parseWarn({ warnings: ["ก", "", null, "ข"] }), ["ก", "ข"]);
-  ck("ไม่มีคำเตือน = รายการว่าง ไม่ใช่พัง", [parseWarn({}), parseWarn(null), parseWarn({ warnings: "พัง" })], [[], [], []]);
+  ck("ไม่มีคำเตือน = รายการว่าง ไม่ใช่พัง",
+    [parseWarn({}), parseWarn(null), parseWarn(undefined), parseWarn({ warnings: "พัง" }), parseWarn({ warnings: [] })],
+    [[], [], [], [], []]);
   ok_("คนกดจ่ายต้องรู้ทันทีถ้าบัญชีรับไม่ครบ",
     APP.includes("if(r&&r.warnings&&r.warnings.length)setTimeout(()=>alert(\"⚠️ ระบบบัญชีรับข้อมูลบางส่วนไม่ได้"));
   ok_("ตัวเก็บงานค้างบนเซิร์ฟเวอร์ก็ต้องเห็นคำเตือนเหมือนกัน",
     SWEEP.includes("const warnings = Array.isArray(done && done.warnings) ? done.warnings.filter(Boolean) : [];"));
+  // ทุกทางที่คุยกับบัญชีต้องอ่านตัวตอบ ไม่ใช่แค่ทาง PO — ไล่จากจุด fetch จริง
+  // (ท่อปิดกะคือท่อที่สำคัญที่สุด ยอดขายรายวันไปออกเอกสารภาษี)
+  const slipCalls = APP.split("\n").filter((l) => l.includes('fetch("/api/sliptrack-push"')).length;
+  ck("ยังมีทางคุยกับบัญชีครบทุกทาง", slipCalls, 4);
+  ck("ทุกทางอ่านคำเตือนจากตัวตอบ",
+    ["slipWarnings(done)", "slipWarnings(vd)", "slipWarnings(d)", "slipWarnings(r.reply)"].filter((x) => !APP.includes(x)), []);
+  // จอปิดกะเคยขึ้นเขียวล้วนแม้บัญชีจะทิ้งค่าไปบางส่วน = คนปิดกะเชื่อว่าเรียบร้อย
+  ok_("จอปิดกะแยกสถานะ \"ส่งแล้วแต่ไม่ครบ\" ออกจากเขียวล้วน",
+    APP.includes("const warnRows=rows.filter(r=>r.ok&&slipWarnings(r.reply).length);") &&
+    APP.includes("const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0;") &&
+    APP.includes("ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก"));
+  ok_("จอปิดกะบอกด้วยว่าบัญชีไม่รับอะไรไปบ้าง",
+    APP.includes("⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(\" · \")}"));
   ok_("ยังไม่ได้เพิ่มคอลัมน์ cash_source แล้วยังบันทึกการจ่ายเงินได้",
     APP.includes("const {cash_source,...rest}=patch;") &&
     APP.includes('await api.patchPOIfStatus(po.id,"awaiting_payment",rest);'));
