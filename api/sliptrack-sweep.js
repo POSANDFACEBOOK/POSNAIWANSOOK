@@ -61,6 +61,16 @@ function sliptrackBranchName(name) {
 // ── Payload builder (ported EXACTLY from client pushPOToSlipTrack lines 566-617) ─────────────
 // Returns {skip:'reason'} for a non-billable PO, else {payload, amount}. `paidCtx` (optional)
 // carries {paidAt, slipUrl, note} for the Stage-2 (paid) push.
+// เหตุที่ "ข้าม" มีสองแบบ ต้องแยกให้ขาด ไม่งั้นเงินหายเงียบ:
+//  • ไม่มีอะไรต้องลงบัญชีจริงๆ (ย้ายในหน่วยเดียวกัน / ยอดเป็นศูนย์) = จบแล้ว ไม่ต้องตามอีก
+//  • ลงไม่ได้เพราะข้อมูลยังไม่พร้อม (หาสาขาไม่เจอ) = ยังไม่จบ ต้องตามต่อ
+// เดิมเหมารวมเป็น 'skip' ทั้งหมด แล้ว 'skip' ถูกนับว่า "เรียบร้อยแล้ว" ⟹ ใบที่หาสาขาไม่เจอ
+// จะหลุดพร้อมกันทั้งจากป้ายค้างซิงค์ ทั้งจากตัวซ่อมอัตโนมัติ ทั้งจากตัวกวาดบนเซิร์ฟเวอร์
+// ถ้าจังหวะนั้นรายชื่อสาขายังโหลดไม่เสร็จ ใบค้างทั้งกองจะถูกตีตราว่าเสร็จในครั้งเดียว
+// แล้วไม่มีอะไรในระบบพูดถึงมันอีกเลย — บิลจริง เงินจริง ที่บัญชีไม่เคยเห็น
+const SLIP_SKIP_DONE = ["same-branch", "zero-amount"];
+const flagForSkip = (reason) => (SLIP_SKIP_DONE.includes(reason) ? "skip" : "failed");
+
 function buildPushPayload(po, branchById, paidCtx) {
   const fromB = branchById[+po.from_branch_id];
   const toB = branchById[+po.branch_id];
@@ -250,7 +260,13 @@ export default async function handler(req, res) {
 
         // Stage 1 (create/refresh the ค้างจ่าย row).
         const built = buildPushPayload(po, branchById, null);
-        if (built.skip) { await recordFlag(po.id, "skip"); skipped++; results.push({ po: po.po_number, flag: "skip", reason: built.skip }); continue; }
+        if (built.skip) {
+          const f = flagForSkip(built.skip);
+          await recordFlag(po.id, f);
+          f === "skip" ? skipped++ : failed++;      // 'failed' = รอบหน้ากวาดเจออีก ไม่ตกหาย
+          results.push({ po: po.po_number, flag: f, reason: built.skip });
+          continue;
+        }
         const s1 = await pushToSlipTrack(built.payload, apiKey);
 
         if (po.status !== "paid") {
@@ -264,7 +280,13 @@ export default async function handler(req, res) {
         // isn't masked. Same external_id + datetime, so it updates the same rows.
         const slipUrl = await signSlipUrl(po.payment_slip_url, base);
         const paidBuilt = buildPushPayload(po, branchById, { paidAt: po.payment_at || new Date().toISOString(), slipUrl, note: po.payment_note, cashSource: po.cash_source });
-        if (paidBuilt.skip) { await recordFlag(po.id, "skip"); skipped++; results.push({ po: po.po_number, flag: "skip", reason: paidBuilt.skip }); continue; }
+        if (paidBuilt.skip) {
+          const f = flagForSkip(paidBuilt.skip);
+          await recordFlag(po.id, f);
+          f === "skip" ? skipped++ : failed++;
+          results.push({ po: po.po_number, flag: f, reason: paidBuilt.skip });
+          continue;
+        }
         const s2 = await pushToSlipTrack(paidBuilt.payload, apiKey);
         const flag = (s1.ok && s2.ok) ? "ok" : "failed";
         await recordFlag(po.id, flag);

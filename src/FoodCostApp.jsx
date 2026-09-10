@@ -1022,7 +1022,20 @@ async function pushPOToSlipTrack(po, branches, opts={}){
 // Best-effort: patches ONLY sliptrack_sync (never updated_at, so it can't disturb an
 // optimistic lock) and if the column doesn't exist yet the PATCH throws and we ignore
 // it — the whole feature degrades to a no-op until the column is added.
-function slipSyncFlag(res){ return !res?"failed":res.ok?"ok":res.skipped?"skip":"failed"; }
+// เหตุที่ "ข้าม" มีสองแบบ ต้องแยกให้ขาด ไม่งั้นเงินหายเงียบ:
+//  • ไม่มีอะไรต้องลงบัญชีจริงๆ (ย้ายในหน่วยเดียวกัน / ยอดเป็นศูนย์) = จบแล้ว ไม่ต้องตามอีก
+//  • ลงไม่ได้เพราะข้อมูลยังไม่พร้อม (หาสาขาไม่เจอ) = ยังไม่จบ ต้องตามต่อ
+// เดิมเหมารวมเป็น 'skip' ทั้งหมด แล้ว 'skip' ถูกนับว่า "เรียบร้อยแล้ว" ⟹ ใบที่หาสาขาไม่เจอ
+// จะหลุดพร้อมกันทั้งจากป้ายค้างซิงค์ ทั้งจากตัวซ่อมอัตโนมัติ ทั้งจากตัวกวาดบนเซิร์ฟเวอร์
+// ถ้าจังหวะนั้นรายชื่อสาขายังโหลดไม่เสร็จ ใบค้างทั้งกองจะถูกตีตราว่าเสร็จในครั้งเดียว
+// แล้วไม่มีอะไรในระบบพูดถึงมันอีกเลย — บิลจริง เงินจริง ที่บัญชีไม่เคยเห็น
+const SLIP_SKIP_DONE=["same-branch","zero-amount"];
+function slipSyncFlag(res){
+  if(!res)return "failed";
+  if(res.ok)return "ok";
+  if(res.skipped)return SLIP_SKIP_DONE.includes(res.skipped)?"skip":"failed";
+  return "failed";
+}
 async function recordSlipSync(poId,res){ try{ await api.updatePO(poId,{sliptrack_sync:slipSyncFlag(res)}); }catch{} }
 // A PO whose accounting row hasn't confirmed-synced and needs a (re)push. Shared by the client
 // self-heal, the "ค้างซิงค์" badge, and the server cron sweep so all three agree EXACTLY:

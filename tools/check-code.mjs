@@ -2034,6 +2034,68 @@ section("วันที่โอนจริง + แหล่งเงิน�
     APP.includes("const warnRows=rows.filter(r=>r.ok&&slipWarnings(r.reply).length);") &&
     APP.includes("const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0;") &&
     APP.includes("ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก"));
+  // ── "ข้าม" มีสองแบบ ห้ามเหมารวม ────────────────────────────────────────
+  // ไม่มีอะไรต้องลงบัญชี (ย้ายในหน่วยเดียวกัน/ยอดศูนย์) = จบ
+  // ลงไม่ได้เพราะข้อมูลไม่พร้อม (หาสาขาไม่เจอ) = ยังไม่จบ ต้องตามต่อ
+  // เดิมเหมาเป็น 'skip' หมด แล้ว 'skip' ถูกนับว่าเรียบร้อย ⟹ ใบหลุดจากทุกตะแกรงพร้อมกัน
+  const grabFn = (src, head, name) => {
+    const st = src.indexOf(head);
+    if (st < 0) return null;
+    let d = 0, started = false, en = -1;
+    for (let i = st; i < src.length; i++) {
+      if (src[i] === "{") { d++; started = true; }
+      else if (src[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+    }
+    const done = src.split("\n").find((l) => l.trim().startsWith("const SLIP_SKIP_DONE"));
+    return new Function((done || "") + "\n" + src.slice(st, en) + "\n return " + name + ";")();
+  };
+  const slipFlag = grabFn(APP, "function slipSyncFlag(res){", "slipSyncFlag");
+  ok_("ยังมีตัวตัดสินสถานะการลงบัญชีอยู่", !!slipFlag);
+  if (slipFlag) {
+    ck("ยิงสำเร็จ = เรียบร้อย", slipFlag({ ok: true }), "ok");
+    ck("ไม่มีอะไรต้องลงบัญชีจริงๆ = จบได้",
+      [slipFlag({ skipped: "same-branch" }), slipFlag({ skipped: "zero-amount" })], ["skip", "skip"]);
+    // ตัวชี้ขาดของบั๊กนี้: หาสาขาไม่เจอไม่ใช่ "ไม่มีอะไรต้องทำ" มันคือ "ยังทำไม่ได้"
+    ck("ลงบัญชีไม่ได้เพราะข้อมูลไม่พร้อม = ต้องตามต่อ ห้ามนับว่าเสร็จ",
+      [slipFlag({ skipped: "unknown-branch" }), slipFlag({ skipped: "no-po" })], ["failed", "failed"]);
+    ck("ไม่มีผลลัพธ์/ยิงพลาด = ตามต่อ", [slipFlag(null), slipFlag({ ok: false })], ["failed", "failed"]);
+  }
+
+  // ตะแกรงเดียวที่ป้ายค้างซิงค์ + ตัวซ่อมอัตโนมัติ + ตัวกวาดเซิร์ฟเวอร์ ใช้ร่วมกัน
+  // ใบที่ยังลงบัญชีไม่ได้ต้องกลับเข้าตะแกรงนี้ทุกใบ ไม่งั้นคือเงินหายเงียบ
+  const needsSync = (() => {
+    const st = APP.indexOf("const poNeedsSlipSync=(p)=>!!p");
+    if (st < 0) return null;
+    const en = APP.indexOf(";", APP.indexOf('p.status==="cancelled"', st)) + 1;
+    return new Function(APP.slice(st, en) + " return poNeedsSlipSync;")();
+  })();
+  ok_("ยังมีตะแกรงตามใบที่ยังไม่เข้าบัญชีอยู่", !!needsSync);
+  if (slipFlag && needsSync) {
+    const missed = [];
+    for (const reason of ["same-branch", "zero-amount", "unknown-branch", "no-po"]) {
+      const row = { sliptrack_sync: slipFlag({ skipped: reason }), received_at: "2026-09-01T00:00:00.000Z", status: "paid" };
+      const chased = !!needsSync(row);
+      const should = !["same-branch", "zero-amount"].includes(reason);
+      if (chased !== should) missed.push(reason + ": ตาม=" + chased + " ควรตาม=" + should);
+    }
+    ck("ใบที่ลงบัญชีไม่ได้ ต้องกลับเข้าตะแกรงตามงานค้างทุกใบ", missed, []);
+  }
+
+  // ตัวกวาดบนเซิร์ฟเวอร์ตัดสินคนละที่กับหน้าเว็บ — ถ้าสองฝั่งคิดไม่ตรงกัน
+  // ฝั่งหนึ่งจะตามใบที่อีกฝั่งตีตราว่าจบไปแล้ว (หรือแย่กว่า: ไม่มีใครตามเลย)
+  const srvFlag = (() => {
+    const ln = SWEEP.split("\n").find((l) => l.startsWith("const flagForSkip ="));
+    const done = SWEEP.split("\n").find((l) => l.startsWith("const SLIP_SKIP_DONE ="));
+    return ln && done ? new Function(done + "\n" + ln + "\n return flagForSkip;")() : null;
+  })();
+  ok_("ตัวกวาดบนเซิร์ฟเวอร์มีตัวตัดสินของตัวเอง", !!srvFlag);
+  if (slipFlag && srvFlag) {
+    ck("เซิร์ฟเวอร์กับหน้าเว็บตัดสินเหมือนกันทุกเหตุผล",
+      ["same-branch", "zero-amount", "unknown-branch", "no-po"].filter((r) => srvFlag(r) !== slipFlag({ skipped: r })), []);
+  }
+  ok_("ตัวกวาดใช้ตัวตัดสิน ไม่ใช่ตีตรา skip ตายตัว",
+    SWEEP.includes("const f = flagForSkip(built.skip);") && SWEEP.includes("const f = flagForSkip(paidBuilt.skip);"));
+
   ok_("จอปิดกะบอกด้วยว่าบัญชีไม่รับอะไรไปบ้าง",
     APP.includes("⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(\" · \")}"));
   ok_("ยังไม่ได้เพิ่มคอลัมน์ cash_source แล้วยังบันทึกการจ่ายเงินได้",
