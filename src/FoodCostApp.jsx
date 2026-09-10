@@ -20300,6 +20300,9 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
   // และรอบหน้าจะไปโผล่ในกะถัดไปทั้งที่ลูกค้ากินในกะนี้ — ยอดสองกะเพี้ยนพร้อมกัน
   const[openBills,setOpenBills]=useState([]);
   const[cancelled,setCancelled]=useState([]);   // บิลที่ถูกยกเลิกในช่วงกะนี้
+  // ผลการส่งยอดขายเข้าระบบบัญชี — ต้องเห็นด้วยตา ไม่ใช่ปล่อยเงียบ
+  // เงินที่ไม่เข้าสมุดบัญชีคือเงินที่ไม่มีใครรู้ว่าหาย จนกว่าจะปิดงบแล้วไม่ตรง
+  const[acct,setAcct]=useState(null);
   const[blockList,setBlockList]=useState(null);   // ไม่ null = กำลังเตือนว่ามีโต๊ะค้าง
   async function load(){
     setLoading(true);
@@ -20375,7 +20378,21 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
       await api.closeShift(shift.id,{status:"closed",closed_at:new Date().toISOString(),closing_cash:round2(totals.actual),expected_cash:round2(totals.expected),cash_diff:round2(totals.diff),total_sales:round2(totals.totalSales),total_cash:round2(totals.totalCash),total_transfer:round2(totals.totalTransfer),total_card:round2(totals.totalCard),total_other:round2(totals.totalOther),total_pay_in:round2(totals.payIn),total_pay_out:round2(totals.payOut),total_drop:round2(totals.drops),order_count:totals.orderCount,notes:noteFull||null});
       // Clear auto-print dedup so next shift starts fresh
       try{sessionStorage.removeItem("fc_printed_orders");}catch{}
-      onClosed();
+      // ── ส่งยอดขายเข้าระบบบัญชี (SlipTrack) ──────────────────────────────
+      // เซิร์ฟเวอร์อ่านบิลจริงจาก DB คำนวณเอง แล้วยิงเป็นใบปิดยอดรายวัน
+      // ห้ามทำให้การปิดกะล้ม — กะปิดไปแล้วเรียบร้อย ตรงนี้ล้มก็แค่ยิงใหม่ทีหลังได้
+      let acctRes=null;
+      try{
+        const rr=await fetch("/api/sliptrack-push",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({kind:"pos_closing",shift_id:shift.id})});
+        acctRes=await rr.json().catch(()=>({error:"อ่านคำตอบจากระบบบัญชีไม่ได้"}));
+        if(!rr.ok&&!acctRes)acctRes={error:"ระบบบัญชีตอบ "+rr.status};
+      }catch(e){acctRes={error:String((e&&e.message)||e)};}
+      setAcct(acctRes);
+      setSaving(false);
+      // ถ้าสาขานี้ยังไม่เปิดใช้ท่อบัญชี ก็ปิดจอไปเลยเหมือนเดิม ไม่ต้องมีจออะไรมาคั่น
+      if(acctRes&&acctRes.skipped){onClosed();return;}
+      return;   // มีผลลงบัญชีให้ดู — ปิดจอเมื่อผู้ใช้กดรับทราบ
     }catch(e){showErr("ปิดกะไม่สำเร็จ",e);}
     setSaving(false);
   }
@@ -20383,6 +20400,47 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     {/* ── โต๊ะยังค้าง ── ปิดกะทั้งที่บิลยังเปิดอยู่ = เงินก้อนนั้นไม่เข้ากะนี้
         Z-Report ขาดยอด และรอบหน้าไปโผล่ในกะถัดไปทั้งที่ลูกค้ากินในกะนี้ ยอดเพี้ยนสองกะ
         เตือนแบบต้องกดยืนยันอีกชั้น ไม่ใช่ปล่อยผ่านเงียบๆ */}
+    {/* ── ผลการส่งยอดเข้าระบบบัญชี ──────────────────────────────────────
+        ต้องขึ้นเป็นจอให้กดรับทราบ ไม่ใช่ toast ที่หายไปเอง
+        ถ้ายอดไม่เข้าบัญชีแล้วไม่มีใครรู้ จะไปรู้อีกทีตอนปิดงบแล้วตัวเลขไม่ตรง */}
+    {acct&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5300,padding:14}}>
+      {(()=>{
+        const rows=Array.isArray(acct.results)?acct.results:[];
+        const good=rows.filter(r=>r.ok),bad=rows.filter(r=>!r.ok);
+        const fatal=!!acct.error||(rows.length===0&&!acct.skipped);
+        const okAll=!fatal&&bad.length===0&&rows.length>0;
+        return <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(94vw,460px)",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{padding:"18px 20px 12px",background:okAll?C.greenLight:C.redLight,borderBottom:`1px solid ${okAll?C.green:C.red}33`}}>
+            <div style={{fontSize:32,marginBottom:4}}>{okAll?"📗":"⚠️"}</div>
+            <div style={{fontSize:17,fontWeight:900,color:okAll?"#0F6E4C":C.red}}>
+              {okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":"ยอดขายยังไม่เข้าระบบบัญชี"}
+            </div>
+            <div style={{fontSize:12,color:okAll?"#0F6E4C":C.red,marginTop:4,lineHeight:1.6,opacity:.95}}>
+              {okAll?"กะปิดเรียบร้อยและยอดลงสมุดบัญชีแล้ว":"กะปิดเรียบร้อยแล้ว แต่ยอดยังไม่ลงบัญชี — แจ้งผู้ดูแลระบบให้ส่งซ้ำ"}
+            </div>
+          </div>
+          <div style={{flex:1,overflowY:"auto",padding:"12px 20px",minHeight:0,fontSize:12.5,color:C.ink2,lineHeight:1.7}}>
+            {acct.error&&<div style={{color:C.red,fontWeight:700}}>{String(acct.error)}</div>}
+            {rows.map((r,i)=><div key={i} style={{padding:"9px 11px",marginBottom:6,borderRadius:10,background:r.ok?C.bg:C.redLight,border:`1px solid ${r.ok?C.line:C.red+"44"}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:8,fontWeight:800,color:r.ok?C.ink:C.red}}>
+                <span>{r.business_date} · {r.bills} บิล</span><span>฿{(+r.total_sales||0).toLocaleString()}</span>
+              </div>
+              {r.ok&&r.reply&&r.reply.income&&<div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>
+                ลงบัญชี: {String(r.reply.income.status)}{r.reply.income.rows?` · ${r.reply.income.rows} แถว`:""}{r.reply.income.vat!=null?` · VAT ฿${(+r.reply.income.vat).toLocaleString()}`:""}
+              </div>}
+              {!r.ok&&<div style={{fontSize:11.5,color:C.red,marginTop:3}}>
+                {r.blocked
+                  ?<>❌ ด่านตรวจไม่ผ่าน จึงไม่ส่ง — {(r.problems||[]).join(" · ")}</>
+                  :<>❌ {r.error||((r.reply&&(r.reply.error||r.reply.message))||("ระบบบัญชีตอบ "+r.status))}</>}
+              </div>}
+            </div>)}
+          </div>
+          <div style={{padding:"12px 20px 18px",borderTop:`1px solid ${C.line}`}}>
+            <Btn onClick={()=>{setAcct(null);onClosed();}} full icon={I.check} s={{padding:"12px",fontSize:14.5,fontWeight:900}}>รับทราบ</Btn>
+          </div>
+        </div>;
+      })()}
+    </div>}
     {blockList&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5200,padding:14}}>
       <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(94vw,430px)",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{padding:"18px 20px 12px",background:C.redLight,borderBottom:`1px solid ${C.red}33`}}>

@@ -17,6 +17,7 @@ const HTML = fs.readFileSync(process.env.HTML_SRC || new URL("../index.html", im
 const PUSH = fs.readFileSync(new URL("../api/push.js", import.meta.url), "utf8");
 const VERCEL = JSON.parse(fs.readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
 const SLIP = fs.readFileSync(new URL("../api/kitchen-slip.js", import.meta.url), "utf8");
+const SLIPPUSH = fs.readFileSync(new URL("../api/sliptrack-push.js", import.meta.url), "utf8");
 const BACKUP = fs.readFileSync(new URL("../api/backup.js", import.meta.url), "utf8");
 const WATCHDOG = fs.readFileSync(new URL("../.github/workflows/health-watchdog.yml", import.meta.url), "utf8");
 
@@ -1187,6 +1188,116 @@ section("จอสั่งอาหาร: พิมพ์ซ้ำ/ยกเ�
   // ใบพิมพ์ซ้ำต้องมีข้อมูลเท่าใบแรก ไม่งั้นครัวได้กระดาษที่อ้างอิงอะไรไม่ได้
   ok_("คำสั่งพิมพ์ซ้ำพกเลขบิลและผู้สั่งไปด้วย",
     APP.includes("bill:existingOrder?.id??null,by:currentUser?.username||null"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ปิดกะ → ยอดขายเข้าระบบบัญชี (SlipTrack pos_closing)
+// สเปกที่ตกลงกับฝั่งบัญชี 10 ก.ย. 69 — เป็นเงินที่จะลงสมุดบัญชีจริง ผิดไม่ได้
+// ดึง handler ตัวจริงมา "เรียก" ด้วยข้อมูลจำลอง แล้วดักตอนจะยิงออก เพื่อดู payload จริง
+// ══════════════════════════════════════════════════════════════════════════
+section("ปิดกะ → ลงบัญชี (pos_closing)");
+let _acctOk = false;
+try {
+  const realFetch = globalThis.fetch;
+  const mkFetch = (shift, orders, branchName) => {
+    const sent = [];
+    globalThis.fetch = async (url, opt) => {
+      const u = String(url);
+      if (u.includes("sliptrack-pro.vercel.app")) { sent.push(JSON.parse(opt.body)); return { ok: true, status: 200, json: async () => ({ success: true, income: { status: "posted" } }) }; }
+      if (u.includes("pos_shifts")) return { ok: true, json: async () => (shift ? [shift] : []) };
+      if (u.includes("/branches?")) return { ok: true, json: async () => [{ name: branchName }] };
+      if (u.includes("/orders?")) return { ok: true, json: async () => orders };
+      return { ok: false, status: 404, text: async () => "unexpected " + u };
+    };
+    return sent;
+  };
+  const run = async (shift, orders, branchName) => {
+    const sent = mkFetch(shift, orders, branchName);
+    process.env.SLIPTRACK_API_KEY = "TEST";
+    const mod = await import(new URL("../api/sliptrack-push.js", import.meta.url).href + "?t=" + Math.random());
+    let out = null, code = null;
+    const res = { setHeader() {}, status(c) { code = c; return this; }, json(j) { out = j; return this; } };
+    await mod.default({ method: "POST", body: { kind: "pos_closing", shift_id: shift ? shift.id : 1 } }, res);
+    globalThis.fetch = realFetch;
+    return { code, out, sent };
+  };
+  const SHIFT = { id: 8, branch_id: 8, opened_at: "2026-09-08T06:00:00Z", closed_at: "2026-09-09T17:00:00Z" };
+  const bill = (id, total, pm, day, extra) => ({
+    id, total, subtotal: total, discount: 0, promo_amount: 0, service_charge: 0, vat: 0, round_adj: 0,
+    payment_method: pm, created_at: `2026-09-0${day}T12:00:00Z`, updated_at: `2026-09-0${day}T12:00:00Z`, ...(extra || {}),
+  });
+
+  // ① วันเดียว เงินสด+พร้อมเพย์ — พร้อมเพย์เป็นชั้นย่อย ห้ามบวกซ้ำ
+  {
+    const { sent } = await run(SHIFT, [
+      bill(1, 1000, "cash", 9), bill(2, 500, "cash", 9), bill(3, 300, "promptpay", 9),
+    ], "กาญจนบุรี The River");
+    ck("วันเดียว = ใบเดียว", sent.length, 1);
+    const p = sent[0];
+    ck("ยอดขายรวมถูก", p.total_sales, 1800);
+    ck("Σ ชั้นหลัก (ไม่นับพร้อมเพย์ซ้ำ) = ยอดขาย",
+      Math.round(p.payment.filter(x => x.name_th !== "พร้อมเพย์").reduce((t, x) => t + x.amount, 0) * 100) / 100, 1800);
+    ck("พร้อมเพย์อยู่เป็นชั้นย่อยด้วย", p.payment.some(x => x.name_th === "พร้อมเพย์" && x.amount === 300), true);
+    ck("external_id เป็นรายวันต่อสาขา (ไม่ใช่รายกะ)", p.external_id, "pos-2026-09-09-กาญจนบุรี The River");
+    ck("จำนวนบิลส่งไปเป็น number_of_guests", p.number_of_guests, 3);
+  }
+  // ② กะคร่อมวัน — ต้องแตกเป็นคนละใบ ไม่งั้นชนคีย์ UNIQUE(business_date,branch) แล้วยอดหายทั้งวัน
+  {
+    const { sent } = await run(SHIFT, [
+      bill(1, 1000, "cash", 8), bill(2, 700, "cash", 9), bill(3, 300, "promptpay", 9),
+    ], "กาญจนบุรี The River");
+    ck("กะคร่อมวันแตกเป็นสองใบ", sent.length, 2);
+    ck("แยกยอดตามวันถูกต้อง", sent.map(x => [x.business_date, x.total_sales]),
+      [["2026-09-08", 1000], ["2026-09-09", 1000]]);
+  }
+  // ③ ส่วนลด/โปรโมชั่น — สมการของฝั่งบัญชีต้องเป็นจริงเสมอ
+  {
+    const { sent } = await run(SHIFT, [
+      bill(1, 900, "cash", 9, { subtotal: 1000, discount: 100 }),
+      bill(2, 450, "cash", 9, { subtotal: 500, promo_amount: 50 }),
+    ], "กาญจนบุรี The River");
+    const p = sent[0];
+    ck("ส่วนลดรวมโปรโมชั่นด้วย", p.discount, 150);
+    ck("sub_total - discount = total_sales เสมอ", Math.round((p.sub_total - p.discount) * 100) / 100, p.total_sales);
+    ck("ยอดขายสุทธิถูก", p.total_sales, 1350);
+  }
+  // ④ VAT ส่งเท่าที่เก็บได้จริง ไม่สมมติ 7% ของยอดทั้งวัน (บิลที่ไม่มี VAT ปนอยู่ได้)
+  {
+    const { sent } = await run(SHIFT, [
+      bill(1, 1000, "cash", 9, { vat: 65.42 }), bill(2, 500, "cash", 9),
+    ], "กาญจนบุรี The River");
+    ck("exclude_vat = ผลรวม VAT ที่เก็บได้จริง", sent[0].exclude_vat, 65.42);
+    ck("ไม่ได้เอา 7% ของยอดทั้งวันมาคิด", sent[0].exclude_vat !== Math.round(1500 * 7 / 107 * 100) / 100, true);
+  }
+  // ⑤ สาขาที่ยังไม่เปิดใช้ ต้องไม่ยิง — เจ้าของสั่งให้เฉพาะ The River ก่อน
+  {
+    const { out, sent } = await run({ ...SHIFT, branch_id: 3 }, [bill(1, 100, "cash", 9)], "อยุธยา");
+    ck("สาขาที่ยังไม่เปิดใช้ = ไม่ยิงเลย", sent.length, 0);
+    ck("และบอกว่าข้ามเพราะอะไร", !!(out && out.skipped), true);
+  }
+  // ⑥ ไม่มีบิลที่ปิดแล้ว = ไม่มียอดให้ลง ห้ามยิงใบเปล่า
+  {
+    const { out, sent } = await run(SHIFT, [], "กาญจนบุรี The River");
+    ck("กะที่ไม่มีบิลปิด = ไม่ยิงใบเปล่า", sent.length, 0);
+    ck("และบอกเหตุผล", !!(out && out.skipped), true);
+  }
+  _acctOk = true;
+} catch (e) {
+  ok_("ดึง handler ลงบัญชีมารันได้ (" + String(e && e.message).slice(0, 70) + ")", false);
+}
+ok_("ด่านชุดลงบัญชีรันจนจบ", _acctOk);
+{
+  // เซิร์ฟเวอร์ต้องคำนวณเอง ห้ามเชื่อตัวเลขจากเบราว์เซอร์ — นี่คือยอดที่จะลงสมุดบัญชี
+  ok_("หน้าเว็บส่งแค่เลขกะ ไม่ได้ส่งตัวเลขเงินมาเอง",
+    APP.includes('body:JSON.stringify({kind:"pos_closing",shift_id:shift.id})'));
+  ok_("เซิร์ฟเวอร์อ่านบิลจริงจากฐานข้อมูลมาคำนวณ", SLIPPUSH.includes("status=eq.paid") && SLIPPUSH.includes("const sum = (list, k) =>"));
+  // ด่านกันยอดเพี้ยน — ยอดที่ลงบัญชีผิดแก้ยากกว่าไม่ลงเลย
+  ok_("ตัวเลขไม่ลงตัวถึงสตางค์ = ไม่ยิง",
+    SLIPPUSH.includes("if (problems.length) {") && SLIPPUSH.includes("blocked: true"));
+  ok_("ปิดกะล้มไม่ได้เพราะท่อบัญชี (กะปิดไปแล้ว ยิงใหม่ทีหลังได้)",
+    APP.includes("}catch(e){acctRes={error:String((e&&e.message)||e)};}"));
+  ok_("ผลลงบัญชีต้องขึ้นให้กดรับทราบ ไม่ใช่ toast ที่หายเอง",
+    APP.includes("ยอดขายยังไม่เข้าระบบบัญชี") && APP.includes("onClick={()=>{setAcct(null);onClosed();}}"));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
