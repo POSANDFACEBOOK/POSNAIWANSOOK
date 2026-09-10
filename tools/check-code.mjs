@@ -2220,6 +2220,31 @@ section("วันที่โอนจริง + แหล่งเงิน�
     APP.includes('await api.patchPOIfStatus(po.id,"awaiting_payment",rest);'));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// หน้าเว็บหลักห้ามถูกแจกแบบ "เก่าค้าง"
+// เหตุจริง 10 ก.ย. 69: index.html ตั้ง s-maxage=300 + stale-while-revalidate=3600
+// ⟹ CDN แจกหน้าเก่าได้อีกถึง 1 ชม. หลัง deploy · ร้านรันโค้ดเก่าโดยไม่มีใครรู้
+// อาการที่เจอ: แก้บั๊กส่งซ้ำแล้ว deploy แล้ว แต่ iPad ที่ร้านยังเป็นเหมือนเดิม
+// (ตรวจหัวข้อจริงตอนนั้น Age: 1203 = หน้าที่ได้รับเก่า 20 นาที)
+// ไฟล์ใน /assets มีแฮชในชื่อ จึงแคชยาวได้ตามเดิม — ตัวที่ห้ามค้างคือหน้าที่ชี้ไปหามัน
+// ══════════════════════════════════════════════════════════════════════════
+section("หน้าเว็บหลักต้องไม่ถูกแจกแบบเก่าค้าง");
+{
+  const rules = (VERCEL.headers || []);
+  const htmlRule = rules.find((r) => /\(\?!api\//.test(String(r.source || "")));
+  ok_("ยังมีกติกาแคชของหน้าเว็บหลักอยู่", !!htmlRule);
+  if (htmlRule) {
+    const cc = String(((htmlRule.headers || []).find((h) => /cache-control/i.test(h.key)) || {}).value || "");
+    ck("หน้าเว็บหลักต้องไม่ให้ CDN เก็บไว้แจกเอง (s-maxage)", /s-maxage/i.test(cc), false);
+    ck("หน้าเว็บหลักต้องไม่แจกของเก่าระหว่างรอของใหม่ (stale-while-revalidate)", /stale-while-revalidate/i.test(cc), false);
+    ok_("หน้าเว็บหลักต้องถามใหม่ทุกครั้ง", /max-age=0/.test(cc) && /must-revalidate|no-cache|no-store/i.test(cc));
+  }
+  // ไฟล์ที่มีแฮชในชื่อ เปลี่ยนเนื้อ = เปลี่ยนชื่อ จึงแคชยาวได้ ไม่มีทางค้างผิดตัว
+  const assetRule = rules.find((r) => String(r.source || "").startsWith("/assets/"));
+  ok_("ไฟล์ที่มีแฮชในชื่อยังแคชยาวได้เหมือนเดิม",
+    !!assetRule && /immutable/i.test(String(((assetRule.headers || []).find((h) => /cache-control/i.test(h.key)) || {}).value || "")));
+}
+
 console.log(`\n${"═".repeat(52)}`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
