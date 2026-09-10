@@ -1195,6 +1195,33 @@ section("จอสั่งอาหาร: พิมพ์ซ้ำ/ยกเ�
 // สเปกที่ตกลงกับฝั่งบัญชี 10 ก.ย. 69 — เป็นเงินที่จะลงสมุดบัญชีจริง ผิดไม่ได้
 // ดึง handler ตัวจริงมา "เรียก" ด้วยข้อมูลจำลอง แล้วดักตอนจะยิงออก เพื่อดู payload จริง
 // ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+// กันแก้ VAT ระหว่างที่กะยังเปิดอยู่
+// เหตุจริง 9 ก.ย. 69 สาขา 8: สวิตช์ VAT ถูกกดไป-กลับ 9 ครั้งในเย็นเดียว
+// บิล 41 ใบเก็บภาษีแค่ 8 ใบ · ใบเสร็จอยู่กับลูกค้าแล้ว แก้ย้อนหลังไม่ได้
+// ฝ่ายบัญชีประเมินว่ายอดที่ออกไปโดยไม่เก็บ VAT อาจต้องนำส่งเอง ~฿1,757 (วันเดียว)
+// ══════════════════════════════════════════════════════════════════════════
+section("กันแก้ VAT ระหว่างกะเปิด");
+{
+  const VAT_LINE = "const VAT_KEYS=[\"vat_enabled\",\"vat_rate\",\"vat_included\"];";
+  ok_("รายชื่อช่อง VAT ที่เฝ้าอยู่ ตรงกับที่ตั้งใจ", APP.includes(VAT_LINE));
+  const f = new Function(VAT_LINE + " " + grabConst(APP, "vatFieldsChanged") + " return {VAT_KEYS,vatFieldsChanged};")();
+  ck("จับได้ว่าเปิด/ปิด VAT", f.vatFieldsChanged({ vat_enabled: false }, { vat_enabled: true }), ["vat_enabled"]);
+  ck("จับได้ว่าเปลี่ยนอัตรา", f.vatFieldsChanged({ vat_rate: 7 }, { vat_rate: 10 }), ["vat_rate"]);
+  ck("จับได้ว่าเปลี่ยนวิธีคิด", f.vatFieldsChanged({ vat_included: true }, { vat_included: false }), ["vat_included"]);
+  ck("แก้ของอื่นไม่ถือว่าแตะ VAT", f.vatFieldsChanged({ vat_rate: 7, rounding: "none" }, { vat_rate: 7, rounding: "up" }), []);
+  ck("ค่าเท่าเดิมคนละชนิดไม่ถือว่าเปลี่ยน", f.vatFieldsChanged({ vat_rate: 7 }, { vat_rate: "7" }), []);
+  ck("ดูครบทั้งสามช่อง", f.VAT_KEYS.length, 3);
+
+  ok_("ไม่มีกะเปิดอยู่ = แก้ได้ตามปกติ ไม่กวน", APP.includes("if(!open)return true;"));
+  ok_("เช็คกะไม่ได้ต้องไม่ขวางงาน", APP.includes("catch{return true;}"));
+  // สองจอที่แก้ VAT ได้ ต้องกันทั้งคู่ ไม่งั้นเดินอ้อมอีกจอได้
+  ok_("จอจัดการใบเสร็จกันแล้ว", APP.includes("if(!await okToChangeVatNow(currentBranch.id,orig,s))return;"));
+  ok_("จอตั้งค่า POS หลังบ้านกันแล้ว", APP.includes("if(!await okToChangeVatNow(currentBranch.id,orig,settings))return;"));
+  ok_("บอกผลกระทบให้เห็นก่อนกด ไม่ใช่ห้ามเฉยๆ",
+    APP.includes("อาจต้องนำส่งเองภายหลัง") && APP.includes("แนะนำให้ปิดกะก่อน แล้วค่อยเปลี่ยน"));
+}
+
 section("ปิดกะ → ลงบัญชี (pos_closing)");
 let _acctOk = false;
 try {

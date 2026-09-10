@@ -18469,11 +18469,14 @@ function MenuOptionPicker({menu,groups,onConfirm,onClose}){
 function ReceiptSettingsModal({currentBranch,onClose,onSaved}){
   const lbl={display:"block",fontSize:12.5,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
   const[loading,setLoading]=useState(true);const[s,setS]=useState(null);const[saving,setSaving]=useState(false);
-  async function load(){setLoading(true);try{const r=await api.getPOSSettings(currentBranch.id);setS((r&&r[0])||{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,receipt_header:"",receipt_footer:""});}catch(e){alert("โหลดไม่สำเร็จ: "+(e&&e.message||e));}setLoading(false);}
+  const[orig,setOrig]=useState(null);   // ค่าที่โหลดมาตอนแรก — ใช้เทียบว่าแตะ VAT ไปไหม
+  async function load(){setLoading(true);try{const r=await api.getPOSSettings(currentBranch.id);setOrig((r&&r[0])||null);setS((r&&r[0])||{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,receipt_header:"",receipt_footer:""});}catch(e){alert("โหลดไม่สำเร็จ: "+(e&&e.message||e));}setLoading(false);}
   useEffect(()=>{load();/* eslint-disable-next-line */},[]);
   const set=(k,v)=>setS(p=>({...p,[k]:v}));
   const TPL="(ชื่อร้าน / ผู้ประกอบการ)\n(ที่อยู่ร้าน)\nเลขประจำตัวผู้เสียภาษี 0-0000-00000-00-0\nโทร. 0xx-xxx-xxxx";
   async function save(){
+    // แก้ VAT ระหว่างกะเปิดอยู่ = บิลในกะเดียวกันไม่เหมือนกัน ต้องให้เห็นผลกระทบก่อน
+    if(!await okToChangeVatNow(currentBranch.id,orig,s))return;
     setSaving(true);
     try{const d={...s,branch_id:currentBranch.id,updated_at:new Date().toISOString()};delete d.id;const res=await api.upsertPOSSettings(d);if(Array.isArray(res)&&res[0])setS(res[0]);if(onSaved)await onSaved();posToast("บันทึกรูปแบบใบเสร็จแล้ว","ok");onClose();}
     catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
@@ -20615,6 +20618,28 @@ function genPromptPayPayload(id,amount){
 // หลังบ้านมี 11 ฟิลด์ หน้าร้านมีแค่ 5 (ขาดค่าบริการกับ PromptPay ทั้งชุด)
 // ทำเป็นสองชุดแล้วแก้คู่กันไม่มีทางรอด เดี๋ยวก็เหลื่อมกันอีก — ให้มีที่เดียว
 // s = ค่าปัจจุบัน · set(key,value) = ตัวแก้ค่า · ทั้งสองจอมีปุ่มบันทึกของตัวเอง
+// ── กันแก้ VAT ระหว่างที่กะยังเปิดอยู่ ────────────────────────────────────
+// เหตุจริง 9 ก.ย. 69 สาขา 8: สวิตช์ VAT ถูกกดไป-กลับ 9 ครั้งในเย็นเดียว
+// (18:03 ไม่มี → 21:38 มี → 22:26 ไม่มี → 22:31 มี → ... → 23:12 ไม่มี)
+// ผลคือบิล 41 ใบเก็บภาษีแค่ 8 ใบ ที่เหลือออกไปโดยไม่เก็บ และแก้ย้อนหลังไม่ได้
+// เพราะใบเสร็จอยู่กับลูกค้าไปแล้ว · ฝ่ายบัญชีประเมินว่ายอดที่ออกไปโดยไม่เก็บ VAT
+// อาจต้องนำส่งเอง 7/107 ของยอดนั้น (วันนั้นวันเดียว ~฿1,757)
+// ตรงนี้ไม่ได้ห้าม แต่ต้องรู้ตัวว่ากำลังทำอะไรอยู่ และเห็นผลกระทบก่อนกด
+const VAT_KEYS=["vat_enabled","vat_rate","vat_included"];
+const vatFieldsChanged=(before,after)=>VAT_KEYS.filter(k=>String((before||{})[k]??"")!==String((after||{})[k]??""));
+async function okToChangeVatNow(branchId,before,after){
+  if(!vatFieldsChanged(before,after).length)return true;         // ไม่ได้แตะ VAT ก็ผ่าน
+  let open=null;
+  try{const r=await api.getActiveShift(branchId);open=(Array.isArray(r)&&r[0])||null;}catch{return true;}   // เช็คไม่ได้ = ไม่ขวางงาน
+  if(!open)return true;                                          // ไม่มีกะเปิดอยู่ = แก้ได้ตามปกติ
+  return await confirmDlg({
+    title:"⚠️ กะยังเปิดอยู่ — แก้ VAT ตอนนี้จะทำให้บิลในกะเดียวกันไม่เหมือนกัน",
+    message:"บิลที่ออกไปแล้วในกะนี้จะยังเป็นแบบเดิม ส่วนบิลถัดไปจะเป็นแบบใหม่\n"
+      +"ใบเสร็จอยู่กับลูกค้าไปแล้ว แก้ย้อนหลังไม่ได้\n\n"
+      +"ถ้าร้านจดทะเบียน VAT ยอดที่ออกบิลไปโดยไม่เก็บภาษี อาจต้องนำส่งเองภายหลัง\n\n"
+      +"แนะนำให้ปิดกะก่อน แล้วค่อยเปลี่ยน",
+    confirmLabel:"เข้าใจแล้ว เปลี่ยนเลย",cancelLabel:"ไม่เปลี่ยน รอปิดกะก่อน",danger:true});
+}
 function POSSettingsFields({s:settings,set}){
   // ตัวอย่าง QR ที่สร้างจากเบอร์ — โชว์เฉพาะตอนไม่ได้แนบรูปเอง
   const qrPreview=settings.show_qr_promptpay&&settings.promptpay_id?genPromptPayPayload(settings.promptpay_id,100):"";
@@ -20751,10 +20776,12 @@ function POSSettingsFields({s:settings,set}){
 }
 
 function POSSettingsPanel({currentBranch}){
+  const[orig,setOrig]=useState(null);   // ค่าที่โหลดมาตอนแรก — ใช้เทียบว่าแตะ VAT ไปไหม
   const[settings,setSettings]=useState(null);const[loading,setLoading]=useState(true);const[saving,setSaving]=useState(false);
-  async function load(){setLoading(true);try{const s=await api.getPOSSettings(currentBranch.id);setSettings((s&&s[0])||{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10,promptpay_id:"",promptpay_name:"",show_qr_promptpay:false,receipt_header:"",receipt_footer:""});}catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}setLoading(false);}
+  async function load(){setLoading(true);try{const s=await api.getPOSSettings(currentBranch.id);setOrig((s&&s[0])||null);setSettings((s&&s[0])||{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10,promptpay_id:"",promptpay_name:"",show_qr_promptpay:false,receipt_header:"",receipt_footer:""});}catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
   async function save(){
+    if(!await okToChangeVatNow(currentBranch.id,orig,settings))return;   // แก้ VAT ระหว่างกะเปิด = บิลในกะไม่เหมือนกัน
     setSaving(true);
     try{
       const d={...settings,branch_id:currentBranch.id,updated_at:new Date().toISOString()};
