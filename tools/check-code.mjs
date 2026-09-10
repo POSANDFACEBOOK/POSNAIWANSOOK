@@ -1608,9 +1608,42 @@ ok_("ด่านชุดรอชำระเงินรันจนจบ", 
     APP.includes("const back=(o&&Array.isArray(o.lines))?o.lines:[];"));
 
   // ── โต๊ะเปลี่ยนสี ──
-  ok_("ผังโต๊ะมีสถานะรอชำระเงินเป็นสีของตัวเอง",
-    APP.includes('waitpay:  {bg:C.purpleLight,border:C.purple,text:C.purple,label:"รอชำระเงิน"}')
-    && APP.includes('if(o.status==="awaiting_payment")return "waitpay";'));
+  // ── กฎสีโต๊ะ: 4 สถานะ ต้องแยกออกจากกันด้วยตาเปล่า ทุกโซนเหมือนกันหมด ──
+  // ด่านเดิมล็อกค่าสีม่วงไว้เป็นตัวหนังสือ ซึ่งตรวจ "ค่าที่เขียนไว้" ไม่ได้ตรวจ "สิ่งที่ต้องการ"
+  // พอเปลี่ยนจานสีตามที่เจ้าของสั่ง ด่านก็ตกทั้งที่พฤติกรรมถูกขึ้น — ตรวจเจตนาแทน
+  const TSmap = (() => {
+    const st = APP.indexOf("const TS={");
+    if (st < 0) return null;
+    const en = APP.indexOf("};", st) + 2;
+    return new Function("C", APP.slice(st, en) + " return TS;")(
+      new Proxy({}, { get: (_, k) => "C." + String(k) })   // สีจากจานกลางคืนเป็นชื่อ ไม่ต้องโหลดจริง
+    );
+  })();
+  ok_("อ่านจานสีสถานะโต๊ะได้", !!TSmap);
+  if (TSmap) {
+    const need = ["available", "qrsent", "occupied", "waitpay"];
+    ck("มีครบ 4 สถานะตามกฎสีที่ตกลงไว้", need.filter((k) => !TSmap[k]), []);
+    // ตัวชี้ขาด: ถ้าสองสถานะสีเดียวกัน พนักงานแยกไม่ออก = กฎสีไม่มีความหมาย
+    const borders = need.map((k) => TSmap[k] && TSmap[k].border);
+    ck("สีกรอบของ 4 สถานะต้องไม่ซ้ำกันเลย", borders.length - new Set(borders).size, 0);
+    const bgs = need.map((k) => TSmap[k] && TSmap[k].bg);
+    ck("สีพื้นของ 4 สถานะต้องไม่ซ้ำกันเลย", bgs.length - new Set(bgs).size, 0);
+    ok_("โต๊ะว่างเป็นพื้นขาว", String(TSmap.available.bg).toUpperCase() === "C.WHITE" || /^#FFF(FFF)?$/i.test(String(TSmap.available.bg)));
+  }
+  ok_("พิมพ์ QR จ่ายเงินแล้ว = สถานะรอชำระของตัวเอง",
+    APP.includes('if(o.status==="awaiting_payment")return "waitpay";'));
+  ok_("พิมพ์ QR สั่งอาหารแล้ว แต่ยังไม่มีบิล = สถานะของตัวเอง ไม่ปนกับโต๊ะว่าง",
+    APP.includes('if(!o)return t.qr_printed_at?"qrsent":"available";'));
+  // สีโซนเคยทับสีสถานะ ⟹ ทั้งโซนกรอบสีเดียวกันหมด มองไม่ออกว่าโต๊ะไหนมีลูกค้า
+  ok_("กรอบโต๊ะเป็นของสถานะ ไม่ใช่ของโซน",
+    APP.includes("const borderColor=sv.border;") && !APP.includes("const borderColor=zoneColor||sv.border;"));
+  // ธงต้องถูกล้างตอนบิลจบ ไม่งั้นปิดบิลแล้วโต๊ะเด้งกลับเป็นเขียวแทนที่จะเป็นขาว
+  ok_("ปิดบิล/ยกเลิกบิลแล้วล้างธงพิมพ์ QR",
+    (APP.split("      clearQRFlag();").length - 1) === 2 &&
+    APP.includes("const clearQRFlag=()=>{ try{ if(table&&table.id)api.clearTableQRPrinted(table.id); }catch{} };"));
+  // คอลัมน์ใหม่ยังไม่ถูกเพิ่ม = ห้ามทำให้พิมพ์ QR/ปิดบิล/ปิดกะ ล้ม
+  ok_("ยังไม่ได้เพิ่มคอลัมน์ qr_printed_at แล้วต้องไม่พัง",
+    APP.includes("if(/PGRST204|column .* does not exist|schema cache/i.test(String((e&&e.message)||e)))return false; throw e;"));
 
   // ── ล็อกส่วนลด ──
   ok_("พิมพ์ QR แล้วล็อกสถานะ+ยอดไว้ที่ตัวบิล", APP.includes("const row=await api.setPayWaiting(existingOrder.id,verRef.current,lock);"));

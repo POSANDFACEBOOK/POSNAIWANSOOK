@@ -535,6 +535,18 @@ const api = {
   scanTable: (branchId,tableId,token) => sb(`tables?id=eq.${+tableId}&branch_id=eq.${+branchId}&qr_token=eq.${encodeURIComponent(token||"")}&active=eq.true`),
   addPOSTable: (d) => sb("tables", { method:"POST", body:JSON.stringify(d) }),
   updatePOSTable: (id, d) => sb(`tables?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
+  // ── ธง "พิมพ์ QR สั่งอาหารให้โต๊ะนี้แล้ว" ────────────────────────────
+  // ต้องรัน: alter table tables add column if not exists qr_printed_at timestamptz;
+  // ยังไม่รันก็ต้องไม่พัง — พิมพ์ QR / ปิดบิล / ปิดกะ ห้ามล้มเพราะคอลัมน์เสริมตัวเดียว
+  // (PostgREST ปฏิเสธทั้งคำขอเมื่อเจอคอลัมน์ที่ไม่รู้จัก) แค่โต๊ะจะไม่เปลี่ยนเป็นสีเขียว
+  _qrFlag: async (q, val) => {
+    try{ await sb(q, {method:"PATCH", headers:{Prefer:"return=minimal"}, body:JSON.stringify({qr_printed_at:val})}); return true; }
+    catch(e){ if(/PGRST204|column .* does not exist|schema cache/i.test(String((e&&e.message)||e)))return false; throw e; }
+  },
+  markTableQRPrinted: (id) => api._qrFlag(`tables?id=eq.${+id}`, new Date().toISOString()),
+  clearTableQRPrinted: (id) => api._qrFlag(`tables?id=eq.${+id}`, null),
+  // กวาดทั้งสาขาตอนปิดกะ — โต๊ะที่พิมพ์ QR แล้วลูกค้าไม่ได้สั่งเลย จะไม่ค้างเขียวข้ามวัน
+  clearBranchQRPrinted: (bid) => api._qrFlag(`tables?branch_id=eq.${+bid}&qr_printed_at=not.is.null`, null),
   deletePOSTable: (id) => sb(`tables?id=eq.${id}`, { method:"DELETE", headers:{"Prefer":"return=minimal"} }),
   getPOSOrders: (bid) => sb(`orders?order=created_at.desc&branch_id=eq.${bid}&limit=200`),
   // บิลทั้งหมดตั้งแต่เวลาที่ระบุ (ใช้ตอนปิดกะ/Z-Report) — แบ่งหน้าจนครบ ไม่ตัดที่ 200
@@ -18054,13 +18066,20 @@ async function printKitchen(items,tableNum,printers=[]){
 // ══════════════════════════════════════════════════════
 // ── TABLE STATUS COLORS ───────────────────────────────
 // ══════════════════════════════════════════════════════
+// กฎสีเดียวกันทุกโซน อ่านออกจากระยะไกลบนแท็บเล็ตกลางร้าน:
+//   ขาว/ดำ   = ว่าง                    ยังไม่ได้ทำอะไรกับโต๊ะนี้
+//   เขียว     = พิมพ์ QR สั่งอาหารแล้ว   ลูกค้านั่งแล้ว รอสั่ง
+//   น้ำเงิน   = สั่งอาหารแล้ว            มีรายการในบิล
+//   ส้ม       = พิมพ์ QR รอจ่ายเงินแล้ว   พนักงานต้องมากดยืนยันชำระ
+// สีพื้นกับสีกรอบเป็นสีเดียวกันเสมอ (พื้นอ่อน กรอบเข้ม) เพื่อให้เห็นชัดทั้งตอนมองผ่านๆ
+// และตอนโต๊ะเล็กจนอ่านตัวหนังสือไม่ทัน · "เรียกบิล" ใช้สีเดียวกับสั่งอาหารแล้ว
+// เพราะยังเป็นสถานะ "มีของในบิล ยังไม่จ่าย" เหมือนกัน ต่างกันแค่ป้ายกำกับ
 const TS={
-  available:{bg:C.greenLight,border:C.green,text:C.green,label:"ว่าง"},
-  occupied: {bg:"#FFF7ED",border:C.brand,text:C.brand,label:"มีลูกค้า"},
-  ordering: {bg:C.yellowLight,border:C.yellow,text:"#92400E",label:"กำลังสั่ง"},
-  bill:     {bg:C.redLight,border:C.red,text:C.red,label:"เรียกบิล"},
-  waitpay:  {bg:C.purpleLight,border:C.purple,text:C.purple,label:"รอชำระเงิน"},
-  cleaning: {bg:C.lineLight,border:C.line,text:C.ink3,label:"ทำความสะอาด"},
+  available:{bg:C.white,   border:"#111827",text:"#111827",label:"ว่าง"},
+  qrsent:   {bg:"#D1FAE5", border:"#059669",text:"#065F46",label:"พิมพ์ QR สั่งอาหารแล้ว"},
+  occupied: {bg:"#DBEAFE", border:"#2563EB",text:"#1E3A8A",label:"สั่งอาหารแล้ว"},
+  bill:     {bg:"#DBEAFE", border:"#2563EB",text:"#1E3A8A",label:"เรียกบิล"},
+  waitpay:  {bg:"#FFEDD5", border:"#EA580C",text:"#9A3412",label:"รอชำระเงิน"},
 };
 
 // ══════════════════════════════════════════════════════
@@ -18170,7 +18189,14 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],onSelectTable,onA
   const zoneColorMap=useMemo(()=>{const m={};zones.forEach(z=>{m[z.name]=z.color||C.brand;});return m;},[zones]);
   function getTableOrder(tid){return activeOrders.find(o=>o.table_id===tid);}
   // พิมพ์ QR จ่ายเงินไปแล้ว = โต๊ะนี้รอเงินเข้า พนักงานต้องเห็นจากผังว่าต้องมากดยืนยัน
-  function getStatus(t){const o=getTableOrder(t.id);if(!o)return "available";if(o.status==="awaiting_payment")return "waitpay";if(o.status==="bill_requested")return "bill";return "occupied";}
+  function getStatus(t){
+    const o=getTableOrder(t.id);
+    // ยังไม่มีบิล แต่พิมพ์ QR สั่งอาหารไปแล้ว = ลูกค้านั่งอยู่ รอสั่ง ต้องไม่ปนกับโต๊ะว่าง
+    if(!o)return t.qr_printed_at?"qrsent":"available";
+    if(o.status==="awaiting_payment")return "waitpay";
+    if(o.status==="bill_requested")return "bill";
+    return "occupied";
+  }
   const cols=Math.max(1,Math.floor((canvasW-PAD)/(TW+GAP)));
   function slotFor(idx){return{x:PAD+(idx%cols)*(TW+GAP),y:PAD+Math.floor(idx/cols)*(TH+GAP)};}
   function displayPos(t,idx){
@@ -18288,14 +18314,14 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],onSelectTable,onA
           const o=getTableOrder(t.id);
           const itemCount=(o?.items||[]).reduce((s,i)=>s+i.qty,0);
           const zoneColor=t.zone?zoneColorMap[t.zone]:null;
-          const borderColor=zoneColor||sv.border;
+          const borderColor=sv.border;   // สถานะเท่านั้น — โซนบอกด้วยจุดมุมขวาบน
           const active=editId===t.id;
           return <div key={t.id} onPointerDown={e=>{e.stopPropagation();beginPress(e,t,p.x,p.y);}}
             style={{position:"absolute",left:p.x,top:p.y,width:TW,height:TH,boxSizing:"border-box",background:sv.bg,border:`2.5px solid ${active?C.brand:borderColor}`,borderRadius:t.shape==="round"?"50%":14,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:editable?"grab":"pointer",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",touchAction:active?"none":"pan-y",boxShadow:active?`0 12px 26px ${C.brand}66`:(st!=="available"?`0 4px 16px ${sv.border}44`:"0 2px 8px rgba(0,0,0,.08)"),transform:active?"scale(1.06)":"none",transition:(dragPos&&dragPos.id===t.id)?"none":"transform .12s,box-shadow .2s,left .14s,top .14s",zIndex:active?30:1}}>
             {zoneColor&&<div style={{position:"absolute",top:-3,right:-3,width:10,height:10,borderRadius:"50%",background:zoneColor,border:`2px solid ${C.white}`,boxShadow:`0 1px 3px ${zoneColor}88`}}/>}
             <div style={{fontWeight:900,fontSize:17,color:sv.text,fontFamily:"'Sarabun',sans-serif",lineHeight:1}}>{t.table_number}</div>
             {t.label&&<div style={{fontSize:9,color:sv.text,fontFamily:"'Sarabun',sans-serif",opacity:.8,marginTop:1,maxWidth:"90%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.label}</div>}
-            {st==="available"?<div style={{fontSize:10,color:C.green,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{t.seats||4} ที่นั่ง</div>
+            {!o?<div style={{fontSize:10,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2,opacity:.85}}>{st==="qrsent"?"พิมพ์ QR แล้ว":`${t.seats||4} ที่นั่ง`}</div>
             :<>{o&&failMap.has(String(o.id))&&<div title={"ใบครัวไม่ออก: "+(failMap.get(String(o.id)).names||[]).join(", ")}
                 style={{fontSize:10,fontWeight:900,color:"#fff",background:C.red,borderRadius:6,padding:"1px 6px",marginTop:3,fontFamily:"'Sarabun',sans-serif"}}>⚠️ ใบครัวไม่ออก</div>}
               <div style={{fontSize:11,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
@@ -18857,6 +18883,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     else posToast(o.noneMsg||"⚠️ เมนูนี้ยังไม่ได้กำหนดเครื่องพิมพ์ — ตั้งที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์","warn");
   }
 
+  // บิลจบแล้ว = โต๊ะกลับมาว่างจริง ธง "พิมพ์ QR แล้ว" ของรอบที่แล้วต้องหายไปด้วย
+  // ไม่ล้าง = ปิดบิลเสร็จโต๊ะเด้งกลับเป็นสีเขียวแทนที่จะเป็นขาว พนักงานอ่านว่ายังมีคนนั่ง
+  // ยิงแบบไม่รอผลและกลืน error โดยตั้งใจ — ธงนี้เป็นแค่ "สี" ห้ามทำให้ปิดบิลล้ม
+  const clearQRFlag=()=>{ try{ if(table&&table.id)api.clearTableQRPrinted(table.id); }catch{} };
   async function cancelOrder(){
     if(!existingOrder?.id)return;
     if(existingOrder.status==="paid"){alert("ไม่สามารถยกเลิกบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'จ่ายออก' ในเงินในลิ้นชัก");return;}
@@ -18887,6 +18917,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         posToast("⚠️ ยกเลิกบิลแล้ว แต่ยังบันทึกผู้ยกเลิก/เหตุผลไม่ได้ — ต้องเพิ่มคอลัมน์ในฐานข้อมูลก่อน","warn");
       }
       if(!row){alert("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ แล้วลองยกเลิกอีกครั้ง");onDone();onClose();return;}
+      clearQRFlag();
       onDone();onClose();
     }catch(e){alert("เกิดข้อผิดพลาด: "+friendlyError(e));}
   }
@@ -19061,6 +19092,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
       // passing the combined figure would deduct the promotion twice on the printed receipt.
       await smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:payMethod,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
+      clearQRFlag();
       onDone();onClose();
     }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSavingGuard(false);
   }
@@ -20036,7 +20068,13 @@ function QRImg({url,size=120}){
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}&margin=8`;
   return <img src={qrUrl} alt="QR Code" style={{width:size,height:size,borderRadius:8,border:`1px solid ${C.line}`}}/>;
 }
-async function printTableQR(table,branch,printers=[]){
+async function printTableQR(table,branch,printers=[],onPrinted){
+  // ติดธงเฉพาะตอน "ส่งไปพิมพ์สำเร็จ" เท่านั้น — ถ้าไม่มีกระดาษออก โต๊ะต้องไม่เปลี่ยนสี
+  // ไม่งั้นพนักงานจะเห็นเขียวแล้วเข้าใจว่าวาง QR ให้ลูกค้าแล้ว ทั้งที่ยังไม่ได้วาง
+  const stamp=async()=>{
+    try{ await api.markTableQRPrinted(table.id); }catch(e){ console.warn("ติดธงพิมพ์ QR ไม่สำเร็จ",e); }
+    if(typeof onPrinted==="function")onPrinted();
+  };
   const baseUrl=publicBaseUrl();
   const tokenPart=table.qr_token?`&t=${encodeURIComponent(table.qr_token)}`:"";
   const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${table.id}${tokenPart}`;
@@ -20048,6 +20086,7 @@ async function printTableQR(table,branch,printers=[]){
   if(btP){
     try{
       await btPrint(b64Bytes(await buildTableQRB64(table,branch,url)),getPConn(btP).btName);
+      await stamp();
       return;
     }catch(e){
       console.error("BT QR print failed — falling back to print window",e);
@@ -20064,6 +20103,7 @@ async function printTableQR(table,branch,printers=[]){
       const b64=await buildTableQRB64(table,branch,url);
       await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64})})));
       posToast("🔳 ส่งคำสั่งพิมพ์ QR โต๊ะ "+table.table_number+" ไปเครื่องพิมพ์ใบเสร็จแล้ว — กระดาษจะออกใน ~5 วินาที","ok");
+      await stamp();
       return;
     }catch(e){alert("ส่งคำสั่งพิมพ์ QR ไม่สำเร็จ: "+(e&&e.message||e));return;}
   }
@@ -20078,6 +20118,7 @@ async function printTableQR(table,branch,printers=[]){
   if(!w)return;
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR โต๊ะ ${table.table_number}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;text-align:center;padding:20px;margin:0}h2{font-size:22px;margin:8px 0}p{color:#64748b;font-size:13px;margin:4px 0}.box{border:2px dashed #e2e8f0;border-radius:16px;padding:20px;display:inline-block}@media print{@page{margin:0;size:auto}}</style></head><body><div class="box"><p style="font-size:11px;font-weight:700;letter-spacing:2px;color:#94a3b8;text-transform:uppercase">${branch.name}</p><h2>โต๊ะ ${table.table_number}</h2>${table.label?`<p>${table.label}</p>`:""}<img src="${qrUrl}" style="width:200px;height:200px;margin:12px 0;border-radius:8px"/><p style="font-size:12px">สแกนเพื่อดูเมนูและสั่งอาหาร</p><p style="font-size:11px;color:#94a3b8">Scan to order</p></div><br/><script>window.onload=()=>setTimeout(()=>window.print(),500)<\/script></body></html>`);
   w.document.close();addPrintClose(w);
+  await stamp();
 }
 function POSQRPage({branch,tables,onTablesChanged}){
   const baseUrl=publicBaseUrl();
@@ -22368,7 +22409,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll({silent:true});}} wide noScroll>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:10,flexShrink:0,flexWrap:"wrap"}}>
         {selOrder?.id&&<button onClick={()=>setMoveFrom({table:selTable,order:selOrder})} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.blue}55`,background:C.blueLight,cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>🔀 ย้ายโต๊ะ</button>}
-        <button onClick={()=>printTableQR(selTable,currentBranch,printers)} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
+        <button onClick={()=>printTableQR(selTable,currentBranch,printers,()=>loadAll({silent:true}))} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})}/>
     </Modal>}
