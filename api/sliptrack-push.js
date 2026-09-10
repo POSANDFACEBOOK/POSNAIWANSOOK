@@ -157,23 +157,24 @@ export default async function handler(req, res) {
       // นับเงินจริงเกิดครั้งเดียวตอนปิดกะ ไม่ได้แยกรายวัน ⟹ แนบไปกับ "วันสุดท้ายของกะ" เท่านั้น
       // ถ้าแนบทุกวันในกะที่คร่อมวัน ตู้เซฟจะได้เงินซ้ำสองรอบ
       const mv = (t) => r2((moves || []).filter((m) => m.type === t).reduce((a, m) => a + (Number(m.amount) || 0), 0));
-      const drawer = (() => {
+      const mkDrawer = (bills) => {
         const opening = mv("opening"), salesCash = mv("sale"), payIn = mv("pay_in");
         const payOut = mv("pay_out"), drop = mv("drop"), refund = mv("refund");
-        const expected = r2(opening + salesCash + payIn - payOut - drop - refund);
+        // เงินเข้า/ออกลิ้นชักรวมเป็นตัวเดียวตามสเปกเขา (บวก = เข้า) — ฝากเซฟไม่นับตัวนี้
+        const paidInOut = r2(payIn - payOut - drop);
+        const expected = r2(opening + salesCash + paidInOut - refund);
         const counted = mv("closing");
         return {
-          opening_cash: opening,
-          sales_cash: salesCash,
-          pay_in: payIn,
-          pay_out: payOut,
-          drop: drop,
+          start_drawer: opening,               // 0 = "ยังไม่ได้กรอก" ในระบบเขา ไม่ใช่ "ไม่มีเงินทอน"
+          cash_sales: salesCash,
           refund: refund,
-          expected_cash: expected,     // ยอดที่ควรมีตามระบบ
-          counted_cash: counted,       // ยอดที่พนักงานนับได้จริง
-          cash_diff: r2(counted - expected),
+          paid_in_out: paidInOut,
+          expected_in_drawer: expected,        // ตัวที่ใช้คำนวณเงินเข้าตู้เซฟ
+          actual_in_drawer: counted,           // ยอดนับ ไว้เทียบหาเงินขาด/เกิน ไม่เข้าสูตรเซฟ
+          difference: r2(counted - expected),
+          total_bills: bills,
         };
-      })();
+      };
       const results = [];
       const days = [...byDay.entries()].sort();
       const lastDay = days.length ? days[days.length - 1][0] : null;
@@ -251,7 +252,7 @@ export default async function handler(req, res) {
           // ส่งจำนวนบิลไปจะทำให้ยอดแขกทั้งบริษัทบนแดชบอร์ดบัญชีต่ำกว่าความจริง
           average_trans: r2(total_sales / list.length),   // ยอดขายเฉลี่ยต่อบิล
           // แนบเงินลิ้นชักเฉพาะวันสุดท้ายของกะ — นับเงินจริงเกิดครั้งเดียวตอนปิดกะ
-          ...(business_date === lastDay ? { drawer } : {}),
+          ...(business_date === lastDay ? { drawer: mkDrawer(list.length) } : {}),
           payment,
         };
         try {
