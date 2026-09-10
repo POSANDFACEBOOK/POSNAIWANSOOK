@@ -990,7 +990,13 @@ async function pushPOToSlipTrack(po, branches, opts={}){
       console.error("SlipTrack sync failed",r.status,data);
       return{ok:false,status:r.status,error:data&&data.error};
     }
-    return{ok:true,status:r.status};
+    // ตอบ 2xx ไม่ได้แปลว่ารับครบทุกฟิลด์ — ฝั่งบัญชีทิ้งค่าที่เขาไม่รู้จักแล้วบอกไว้ใน warnings
+    // เคยโดนมาแล้ว: เขารับ 7 ฟิลด์มาแล้วทิ้งเงียบๆ เพราะฝั่งเราไม่เคยอ่านตัวตอบเลย
+    // อาการคือค่าในฐานเขาเป็น 0/ว่าง ทั้งที่เราส่งครบ และไม่มีใครรู้จนไปไล่ดูเอง
+    const done=await r.json().catch(()=>({}));
+    const warnings=Array.isArray(done&&done.warnings)?done.warnings.filter(Boolean):[];
+    if(warnings.length)console.warn("SlipTrack รับข้อมูลไม่ครบ",externalId,warnings);
+    return{ok:true,status:r.status,...(warnings.length?{warnings}:{})};
   }catch(err){
     // Network failure — never throws to the caller (idempotent retry on next event).
     console.error("SlipTrack sync error",err);
@@ -9477,7 +9483,12 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       let signedSlipUrl=null;
       try{signedSlipUrl=await api.getSlipSignedUrl(slipUrl,31536000);if(signedSlipUrl&&signedSlipUrl.startsWith("/"))signedSlipUrl=location.origin+signedSlipUrl;}catch{}
       // Stage 2 → SlipTrack: flip the same external_id from pending → confirmed (จ่ายแล้ว)
-      pushPOToSlipTrack(po,branches,{paid:true,paidAt,slipUrl:signedSlipUrl,paymentNote:note,cashSource}).then(r=>recordSlipSync(po.id,r));
+      pushPOToSlipTrack(po,branches,{paid:true,paidAt,slipUrl:signedSlipUrl,paymentNote:note,cashSource}).then(r=>{
+        recordSlipSync(po.id,r);
+        // ตอนกดจ่ายคือนาทีเดียวที่คนยังแก้ได้ทัน ถ้าปล่อยผ่านจะไม่มีใครรู้ว่าค่าถูกทิ้ง
+        // (ทางส่งซ้ำอัตโนมัติไม่เตือน เพราะไม่มีคนนั่งดูอยู่ — ลงไว้ที่ console พอ)
+        if(r&&r.warnings&&r.warnings.length)setTimeout(()=>alert("⚠️ ระบบบัญชีรับข้อมูลบางส่วนไม่ได้\n\n"+r.warnings.join("\n")+"\n\nยอดเงินบันทึกเรียบร้อยแล้ว แต่ข้อมูลที่แจ้งข้างบนไม่ถูกเก็บฝั่งบัญชี"),0);
+      });
       await load();setViewPO(null);
     }catch(e){showErr("บันทึกการชำระไม่สำเร็จ",e);throw e;}
   }

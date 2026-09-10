@@ -2007,6 +2007,20 @@ section("วันที่โอนจริง + แหล่งเงิน�
     SWEEP.includes('const cols = COLS_BASE + ",cash_source";') &&
     SWEEP.includes("candidates = await sbFetch(") &&
     SWEEP.includes("select=$" + "{COLS_BASE}&$" + "{filter}"));
+  // ── ตอบ 2xx ไม่ได้แปลว่ารับครบ ────────────────────────────────────────
+  // ฝั่งบัญชีทิ้งค่าที่เขาไม่รู้จักแล้วบอกไว้ใน warnings — เคยหายไป 7 ฟิลด์
+  // เพราะฝั่งเราไม่เคยอ่านตัวตอบเลย ดึงบรรทัดที่แกะค่ามารันจริง
+  // ถอดโค้ดออกแล้วต้อง "สอบตก" ให้อ่านออก ไม่ใช่โยน exception แล้วตัวตรวจตายทั้งตัว
+  // (ตัวพิสูจน์ด่านมองหาบรรทัด ❌ ถ้าโปรแกรมพังก่อนพิมพ์ มันจะนับว่าด่านนี้จับไม่ได้)
+  const warnLine = APP.split("\n").find((l) => l.includes("const warnings=Array.isArray(done&&done.warnings)"));
+  ok_("ยังอ่านคำเตือนจากตัวตอบของฝั่งบัญชีอยู่", !!warnLine);
+  const parseWarn = warnLine ? new Function("done", warnLine.trim() + " return warnings;") : () => null;
+  ck("แกะคำเตือนจากตัวตอบได้ และคัดค่าว่างทิ้ง", parseWarn({ warnings: ["ก", "", null, "ข"] }), ["ก", "ข"]);
+  ck("ไม่มีคำเตือน = รายการว่าง ไม่ใช่พัง", [parseWarn({}), parseWarn(null), parseWarn({ warnings: "พัง" })], [[], [], []]);
+  ok_("คนกดจ่ายต้องรู้ทันทีถ้าบัญชีรับไม่ครบ",
+    APP.includes("if(r&&r.warnings&&r.warnings.length)setTimeout(()=>alert(\"⚠️ ระบบบัญชีรับข้อมูลบางส่วนไม่ได้"));
+  ok_("ตัวเก็บงานค้างบนเซิร์ฟเวอร์ก็ต้องเห็นคำเตือนเหมือนกัน",
+    SWEEP.includes("const warnings = Array.isArray(done && done.warnings) ? done.warnings.filter(Boolean) : [];"));
   ok_("ยังไม่ได้เพิ่มคอลัมน์ cash_source แล้วยังบันทึกการจ่ายเงินได้",
     APP.includes("const {cash_source,...rest}=patch;") &&
     APP.includes('await api.patchPOIfStatus(po.id,"awaiting_payment",rest);'));

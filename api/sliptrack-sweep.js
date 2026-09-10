@@ -117,7 +117,11 @@ async function pushToSlipTrack(payload, apiKey) {
       body: JSON.stringify(payload),
     });
     if (!r.ok) { const d = await r.json().catch(() => ({})); return { ok: false, status: r.status, error: (d && d.error) || `HTTP ${r.status}` }; }
-    return { ok: true, status: r.status };
+    // 2xx แต่รับไม่ครบก็มี — ไม่นับเป็นล้มเหลว (ยิงซ้ำก็ได้ผลเดิม) แต่ต้องมีร่องรอยไว้ตาม
+    const done = await r.json().catch(() => ({}));
+    const warnings = Array.isArray(done && done.warnings) ? done.warnings.filter(Boolean) : [];
+    if (warnings.length) console.warn("SlipTrack รับข้อมูลไม่ครบ", payload && payload.external_id, warnings);
+    return { ok: true, status: r.status, ...(warnings.length ? { warnings } : {}) };
   } catch (err) {
     return { ok: false, error: (err && err.message) || String(err) };
   }
