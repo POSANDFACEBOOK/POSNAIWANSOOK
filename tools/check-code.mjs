@@ -1207,6 +1207,7 @@ try {
       if (u.includes("pos_shifts")) return { ok: true, json: async () => (shift ? [shift] : []) };
       if (u.includes("/branches?")) return { ok: true, json: async () => [{ name: branchName }] };
       if (u.includes("/orders?")) return { ok: true, json: async () => orders };
+      if (u.includes("cash_movements")) return { ok: true, json: async () => (globalThis.__MOVES || []) };
       return { ok: false, status: 404, text: async () => "unexpected " + u };
     };
     return sent;
@@ -1242,6 +1243,30 @@ try {
     // POS ไม่ได้เก็บจำนวนแขก ห้ามส่งจำนวนบิลไปแทน (แดชบอร์ดบัญชีนับเป็นคน)
     ck("ไม่ส่งจำนวนแขก เพราะ POS ไม่ได้เก็บ", p.number_of_guests === undefined, true);
     ck("ส่งยอดขายเฉลี่ยต่อบิลแทน", p.average_trans, 600);
+  }
+  // ①.5 เงินในลิ้นชัก — ตู้เซฟฝั่งบัญชีดึงจากบล็อกนี้ ไม่ใช่จาก payment
+  {
+    globalThis.__MOVES = [
+      { type: "opening", amount: 500 }, { type: "sale", amount: 1500 },
+      { type: "pay_out", amount: 200 }, { type: "closing", amount: 1700 },
+    ];
+    const { sent } = await run(SHIFT, [bill(1, 1000, "cash", 9), bill(2, 500, "cash", 9)], "กาญจนบุรี The River");
+    const d = sent[0].drawer;
+    ck("ส่งเงินลิ้นชักไปให้ตู้เซฟ", !!d, true);
+    ck("ยอดที่ควรมี = เปิด + ขายสด + รับเข้า - จ่ายออก - เซฟ - คืนเงิน", d.expected_cash, 1800);
+    ck("ส่งยอดนับจริงไปด้วย ไม่ใช่ส่งแต่ยอดที่ควรมี", d.counted_cash, 1700);
+    ck("บอกส่วนต่างให้เห็น", d.cash_diff, -100);
+    globalThis.__MOVES = [];
+  }
+  // ①.6 กะคร่อมวัน — เงินลิ้นชักต้องแนบวันเดียว ไม่งั้นตู้เซฟได้เงินซ้ำ
+  {
+    globalThis.__MOVES = [{ type: "sale", amount: 1700 }, { type: "closing", amount: 1700 }];
+    const { sent } = await run(SHIFT, [bill(1, 1000, "cash", 8), bill(2, 700, "cash", 9)], "กาญจนบุรี The River");
+    ck("กะคร่อมวัน: เงินลิ้นชักแนบใบเดียว (ไม่งั้นตู้เซฟได้เงินซ้ำ)",
+      sent.filter(x => x.drawer).length, 1);
+    ck("และแนบกับวันสุดท้ายของกะ (วันที่นับเงินจริง)",
+      sent.find(x => x.drawer).business_date, "2026-09-09");
+    globalThis.__MOVES = [];
   }
   // ② กะคร่อมวัน — ต้องแตกเป็นคนละใบ ไม่งั้นชนคีย์ UNIQUE(business_date,branch) แล้วยอดหายทั้งวัน
   {

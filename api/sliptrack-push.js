@@ -135,6 +135,8 @@ export default async function handler(req, res) {
         `&order=id.asc&limit=2000`
       );
 
+      // เงินในลิ้นชักของกะนี้ — ฝั่งบัญชีดึงเงินเข้าตู้เซฟจากบล็อกนี้ ไม่ใช่จาก payment
+      const moves = await sbGet(`cash_movements?shift_id=eq.${shiftId}&select=type,amount&limit=2000`);
       const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
       // วันที่ทำการ = วันที่ "ปิดบิล" ตามเวลาไทย (โต๊ะเปิด 4 ทุ่มจ่ายตีหนึ่ง = รายได้ของวันที่จ่าย)
       const bizDate = (o) => new Date(o.updated_at || o.created_at)
@@ -151,8 +153,31 @@ export default async function handler(req, res) {
       }
 
       const sum = (list, k) => r2(list.reduce((t, x) => t + (Number(x[k]) || 0), 0));
+      // ── เงินในลิ้นชัก ──
+      // นับเงินจริงเกิดครั้งเดียวตอนปิดกะ ไม่ได้แยกรายวัน ⟹ แนบไปกับ "วันสุดท้ายของกะ" เท่านั้น
+      // ถ้าแนบทุกวันในกะที่คร่อมวัน ตู้เซฟจะได้เงินซ้ำสองรอบ
+      const mv = (t) => r2((moves || []).filter((m) => m.type === t).reduce((a, m) => a + (Number(m.amount) || 0), 0));
+      const drawer = (() => {
+        const opening = mv("opening"), salesCash = mv("sale"), payIn = mv("pay_in");
+        const payOut = mv("pay_out"), drop = mv("drop"), refund = mv("refund");
+        const expected = r2(opening + salesCash + payIn - payOut - drop - refund);
+        const counted = mv("closing");
+        return {
+          opening_cash: opening,
+          sales_cash: salesCash,
+          pay_in: payIn,
+          pay_out: payOut,
+          drop: drop,
+          refund: refund,
+          expected_cash: expected,     // ยอดที่ควรมีตามระบบ
+          counted_cash: counted,       // ยอดที่พนักงานนับได้จริง
+          cash_diff: r2(counted - expected),
+        };
+      })();
       const results = [];
-      for (const [business_date, list] of [...byDay.entries()].sort()) {
+      const days = [...byDay.entries()].sort();
+      const lastDay = days.length ? days[days.length - 1][0] : null;
+      for (const [business_date, list] of days) {
         const total_sales = sum(list, "total");
         // ส่วนลดที่ให้ไปจริง (รวมโปรโมชั่น) — ตัวเลขนี้ต้องตรงกับความจริงเสมอ
         const discount = r2(sum(list, "discount") + sum(list, "promo_amount"));
@@ -225,6 +250,8 @@ export default async function handler(req, res) {
           // ไม่ส่ง number_of_guests — ช่องนั้นคือ "จำนวนแขก" ที่ POS เราไม่ได้เก็บ
           // ส่งจำนวนบิลไปจะทำให้ยอดแขกทั้งบริษัทบนแดชบอร์ดบัญชีต่ำกว่าความจริง
           average_trans: r2(total_sales / list.length),   // ยอดขายเฉลี่ยต่อบิล
+          // แนบเงินลิ้นชักเฉพาะวันสุดท้ายของกะ — นับเงินจริงเกิดครั้งเดียวตอนปิดกะ
+          ...(business_date === lastDay ? { drawer } : {}),
           payment,
         };
         try {
