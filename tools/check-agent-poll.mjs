@@ -302,7 +302,7 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   ok_("พิมพ์ไม่สำเร็จต้องบันทึกไว้ให้แอปแจ้งเตือนที่โต๊ะ",
     SRC.includes("async function recordPrintFail(") && SRC.includes("await recordPrintFail(printers, o,"));
   ok_("บันทึกแล้วมาร์คว่าจัดการแล้ว จะได้ไม่วนพิมพ์", SRC.includes("await recordPrintFail(printers, o, (lastResult && lastResult.failedItems) || []);"));
-  ok_("เก็บรายการล้มเหลวไม่ให้บวม (เก็บล่าสุดพอ)", SRC.includes("d.failed = kept.slice(-30);"));
+  ok_("เก็บรายการล้มเหลวไม่ให้บวม (เก็บล่าสุดพอ)", SRC.includes("d.failed = kept.slice(-FAIL_CAP);"));
   ok_("สถานะ done/tries ถูกเก็บกวาดตามบิลที่ปิดไป",
     SRC.includes("Object.keys(state.done)") && SRC.includes("delete state.done[k];"));
   ok_("orphan ไม่นับเป็นความล้มเหลว (ลองใหม่ก็ไม่หาย)", !SRC.includes("orphan.length === 0"));

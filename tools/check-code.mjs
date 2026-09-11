@@ -584,8 +584,9 @@ const guards = [
   ["มีตัวอ่านรายการที่พิมพ์ไม่ออก", APP.includes("const printFailsOf=(printers)=>")],
   ["ผังโต๊ะขึ้นป้ายเตือนที่โต๊ะนั้น", APP.includes("⚠️ ใบครัวไม่ออก")],
   ["ผังโต๊ะได้รับข้อมูลเครื่องพิมพ์", APP.includes("<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} printers={printers}")],
-  ["จอสั่งอาหารมีปุ่มให้พนักงานกดพิมพ์เอง", APP.includes("พิมพ์ใบครัวรายการนี้อีกครั้ง")],
-  ["กดพิมพ์แล้วล้างรายการเตือนออก", APP.includes("async function clearPrintFail()") && APP.includes("await clearPrintFail();")],
+  ["จอสั่งอาหารมีปุ่มให้พนักงานกดพิมพ์เอง", APP.includes("พิมพ์ใบครัวที่ไม่ออกอีกครั้ง")],
+  // เดิมกดแล้วล้างเตือนทันที ทั้งที่เครื่องอาจยังดับอยู่ = ใบหายเงียบ · ตอนนี้ตัวพิมพ์เป็นคนลบเมื่อออกจริง
+  ["ไม่ล้างเตือนตอนกด (ตัวพิมพ์ลบเองเมื่อออกจริง)", !APP.includes("clearPrintFail") && AGENT.includes("async function settleFail(")],
   // ── หมวดคุมจากครัวกลางที่เดียว สาขาแก้เองไม่ได้ ──
   ["จอขายไม่มีเมนูจัดการหมวดแล้ว", !APP.includes("เพิ่ม/แก้/ลบหมวด")],
   ["ไม่เหลือโค้ดเปิดจอจัดการหมวดที่ตายแล้ว", !APP.includes("active===\"cats\"")],
@@ -2912,6 +2913,127 @@ section("ใบยกเลิก/ย้ายโต๊ะ ทางสำรอ
     && APP.includes("items:slipBody(mine)") && APP.includes("items:slipBody(body)"));
   ok_("ใบยกเลิกคงหมายเหตุเดิมของจาน (เมนูเดียวกันหลายจาน)", APP.includes("note:[target.note,\x60ยกเลิกโดย "));
   ok_("ขยับเวอร์ชันตัวพิมพ์แล้ว (ร้านอัปเดตเอง)", +((AGENT.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 39);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ปุ่ม "พิมพ์ไม่สำเร็จ" + รีปริ้นรายเมนู (11 ก.ย. 69)
+// ปุ่มต้องหายเมื่อ "ออกจริง" เท่านั้น — กดแล้วหายทั้งที่เครื่องยังดับ = ใบหายเงียบ ครัวไม่ได้ทำ
+// ใบสั่งอาหารที่ไม่ออก พิมพ์ใหม่ต้องเป็นใบสั่งอาหารปกติ — ติดป้าย "พิมพ์ซ้ำ" แล้วครัวข้าม = ลูกค้าไม่ได้กิน
+// ══════════════════════════════════════════════════════════════════════════
+section("ปุ่มพิมพ์ไม่สำเร็จ");
+{
+  const LA = APP.split("\n"), LG = AGENT.split("\n");
+  // ดึงฟังก์ชันระดับบนสุดจากบรรทัดหัว ถึงบรรทัดปิด (บรรทัดที่เป็น "}" หรือ "};" ล้วน)
+  const grabTop = (L, head) => { const a = L.findIndex(l => l.startsWith(head)); if (a < 0) return null; const b = L.findIndex((l, i) => i > a && (l === "}" || l === "};")); return b > a ? L.slice(a, b + 1).join("\n") : null; };
+  const safe = (f) => { try { return f(); } catch { return null; } };
+
+  // ── ฝั่งแอป: อ่าน/รวมรายการ, ติ๊กรีปริ้น, จับคู่รายการ ──
+  const appFns = safe(() => new Function(
+    [grabTop(LA, "const printFailList=(printers)=>{"), grabTop(LA, "const printFailsOf=(printers)=>{"), grabTop(LA, "function markPrintRetry(list,failId,ks,now){"),
+     LA.find(l => l.startsWith("const PRINT_RETRY_TTL=")), LA.find(l => l.startsWith("const printRetryWaiting=")), LA.find(l => l.startsWith("const samePrintFail="))].join("\n")
+    + "\nreturn {printFailList,printFailsOf,markPrintRetry,printRetryWaiting,samePrintFail,PRINT_RETRY_TTL};")());
+  ok_("อ่านตัวจัดการรายการพิมพ์ไม่ออกของแอปได้", !!appFns);
+  if (appFns) {
+    const { printFailList, printFailsOf, markPrintRetry, printRetryWaiting, samePrintFail } = appFns;
+    const e1 = { id: "7-100", at: 100, orderId: 7, table: "B5", names: ["หมู"], n: 1, items: [{ k: 0, name: "หมู", qty: 1 }] };
+    const e2 = { at: 50, orderId: 7, table: "B5", names: ["ผัก"], n: 2 };   // รายการจากตัวพิมพ์รุ่นเก่า (ไม่มี id/items)
+    const PR = [{ id: 10, description: JSON.stringify({ on: true, failed: [e1, e2] }) }, { id: 11, description: "{เสีย" }, { id: 12, description: null }];
+    const L = printFailList(PR);
+    ok_("อ่านทุกรายการ พร้อมบอกว่าเก็บอยู่เครื่องไหน · เรียงเก่าไปใหม่ · ช่องเสียไม่ทำจอพัง",
+      L.length === 2 && L.every(f => f.holder === 10) && L[0].at === 50 && L[1].id === "7-100");
+    const M = printFailsOf(PR).get("7");
+    ok_("บิลเดียวไม่ออกหลายรอบ = รวมชื่อทุกรอบ (เดิมรอบหลังทับรอบแรก)", !!M && M.names.join() === "ผัก,หมู" && M.n === 3);   // เรียงรอบเก่าก่อน
+    const list = [JSON.parse(JSON.stringify(e1)), { id: "8-1", items: [{ k: 0 }, { k: 1 }, { k: 2 }] }];
+    const out = markPrintRetry(list, "8-1", [1, 2], 555);
+    ok_("กดรีปริ้นเมนูไหน ติ๊กเฉพาะเมนูนั้น", !!out && out[1].items.map(i => i.r || 0).join() === "0,555,555" && !out[0].items[0].r);
+    ok_("รายการเพิ่งพิมพ์ออกไปแล้ว (ตัวพิมพ์ลบไป) = ไม่เขียนอะไร", markPrintRetry(list, "ไม่มี", [0], 1) === null && markPrintRetry(list, "8-1", [9], 1) === null);
+    ok_("กำลังพิมพ์ = ติ๊กยังไม่เก่าเกินเวลาที่ตัวพิมพ์ยอมทำ", printRetryWaiting({ r: 1000 }, 1000 + 60e3) && !printRetryWaiting({ r: 1000 }, 1000 + appFns.PRINT_RETRY_TTL + 1) && !printRetryWaiting({}, 5));
+    ok_("เอาออกถูกรายการ (ทั้งแบบใหม่และแบบเก่า) ไม่โดนรายการอื่น",
+      samePrintFail(e1, { id: "7-100" }) && !samePrintFail(e1, { id: "7-101" }) && samePrintFail(e2, { at: 50, orderId: 7 }) && !samePrintFail(e1, { at: 100, orderId: 7 }));
+  }
+  const ttlApp = safe(() => Function("return " + LA.find(l => l.startsWith("const PRINT_RETRY_TTL=")).split("=")[1].split(";")[0])());
+  const ttlAgent = safe(() => Function("return " + LG.find(l => l.startsWith("const RETRY_TTL =")).split("=")[1].split(";")[0])());
+  ok_("เวลาหมดอายุของติ๊กรีปริ้น แอปกับตัวพิมพ์ตรงกัน", ttlApp != null && ttlApp === ttlAgent);
+
+  // ── ฝั่งตัวพิมพ์: เขียนผลกลับ (settleFail) ──
+  const settleSrc = grabTop(LG, "async function settleFail(holderId, failId, want, okKs) {");
+  const runSettle = async (desc, want, okKs) => {
+    let wrote = null;
+    const fn = new Function("sb", "patchPrinter", settleSrc + "\nreturn settleFail;")(async () => [{ description: JSON.stringify(desc) }], async (id, body) => { wrote = JSON.parse(body.description); });
+    await fn(10, "F1", want, new Set(okKs));
+    return wrote;
+  };
+  if (settleSrc) {
+    const base = () => ({ on: true, failed: [{ id: "F1", names: ["ก", "ข", "ค"], n: 3, items: [{ k: 0, name: "ก", qty: 1, r: 5 }, { k: 1, name: "ข", qty: 1 }, { k: 2, name: "ค", qty: 1, r: 5 }] }, { id: "F2", items: [{ k: 0 }] }] });
+    const w1 = await runSettle(base(), [{ k: 0, r: 5 }, { k: 2, r: 5 }], [0]);
+    const f1 = w1 && w1.failed.find(f => f.id === "F1");
+    ok_("ออกแล้ว = ลบเมนูนั้น · ไม่ออก = คงไว้ ปลดติ๊กให้กดใหม่ · เมนูที่ไม่ได้กดไม่โดนแตะ",
+      !!f1 && f1.items.map(i => i.k).join() === "1,2" && f1.items[1].r === null && !!f1.items[1].lastTry && !("lastTry" in f1.items[0]) && f1.names.join() === "ข,ค" && w1.on === true && w1.failed.length === 2);
+    const d2 = base(); d2.failed[0].items[2].r = 9;   // พนักงานกดซ้ำระหว่างที่ตัวพิมพ์กำลังพิมพ์
+    const w2 = await runSettle(d2, [{ k: 0, r: 5 }, { k: 2, r: 5 }], [0]);
+    ok_("กดใหม่ระหว่างพิมพ์ = คงติ๊กใหม่ไว้ รอบหน้าพิมพ์ต่อ", !!w2 && w2.failed[0].items.find(i => i.k === 2).r === 9);
+    const d3 = base(); d3.failed[0].items = [d3.failed[0].items[0]];
+    const w3 = await runSettle(d3, [{ k: 0, r: 5 }], [0]);
+    ok_("ออกครบทุกเมนู = ลบรายการทิ้ง (ปุ่มหาย) โดยไม่แตะรายการอื่น", !!w3 && w3.failed.length === 1 && w3.failed[0].id === "F2");
+  } else ok_("มีตัวเขียนผลรีปริ้นกลับ (settleFail)", false);
+
+  // ── ฝั่งตัวพิมพ์: พิมพ์เฉพาะที่กด ครั้งเดียว ชนิดใบเดิม ──
+  const retrySrc = grabTop(LG, "async function handleFailRetries(printers) {");
+  const handlesSrc = grabTop(LG, "function printerHandles(p, it) {");
+  if (retrySrc && handlesSrc) {
+    const mkRun = (opts) => {
+      const calls = { print: [], send: [], buf: [], settle: [] };
+      const state = { retried: {} };
+      const printerHandles = new Function(handlesSrc + "\nreturn printerHandles;")();
+      const fn = new Function("state", "saveState", "isBluetooth", "itemsToBuffer", "sendToPrinter", "printItems", "printerHandles", "settleFail", "RETRY_TTL", "console",
+        retrySrc + "\nreturn handleFailRetries;")(
+        state, () => {}, () => false,
+        async (items, t, meta) => { calls.buf.push({ items, t, meta }); return { buf: Buffer.from("x") }; },
+        async (ip) => { calls.send.push(ip); if (opts.sendFails) throw new Error("offline"); },
+        async (items, t, prs, done, meta) => { calls.print.push({ items: items.map(i => i.k), t, meta }); return { okIds: opts.okIds || [] }; },
+        printerHandles,
+        async (hid, fid, want, okKs) => { calls.settle.push({ hid, fid, want: want.map(i => i.k), ok: [...okKs].sort() }); },
+        600000, { log() {} });
+      return { fn, calls, state };
+    };
+    const now = Date.now();
+    const prs = (failed) => [{ id: 1, ip: "10.0.0.5", categories: ["ครัว"], description: JSON.stringify({ failed }) }, { id: 2, ip: "10.0.0.6", categories: ["บาร์"], description: "{}" }];
+    // บิลที่ไม่ออก: ติ๊ก 2 เมนู (หนึ่งในนั้นไม่มีเครื่องไหนรับหมวดแล้ว) ไม่ติ๊ก 1 เมนู
+    const A = { id: "A", orderId: 7, table: "B5", kind: "", items: [{ k: 0, name: "หมู", category: "ครัว", r: now }, { k: 1, name: "ผัก", category: "ครัว" }, { k: 2, name: "ยำ", category: "ของหวาน", r: now }] };
+    const R1 = mkRun({ okIds: [1] });
+    await R1.fn(prs([A]));
+    ok_("พิมพ์เฉพาะเมนูที่พนักงานกด", R1.calls.print.length === 1 && R1.calls.print[0].items.join() === "0,2");
+    ok_("ใบสั่งอาหารที่ไม่ออก พิมพ์ใหม่เป็นใบสั่งอาหารปกติ (ไม่ใช่พิมพ์ซ้ำ)", R1.calls.print[0] && R1.calls.print[0].meta.kind === "" && R1.calls.print[0].meta.bill === 7 && R1.calls.print[0].t === "B5");
+    ok_("ออก = มีเครื่องที่รับเมนูนั้นพิมพ์ผ่าน · ไม่มีเครื่องรับเลย ≠ ออก (ห้ามลบเงียบ)", R1.calls.settle.length === 1 && R1.calls.settle[0].ok.join() === "0" && R1.calls.settle[0].want.join() === "0,2");
+    await R1.fn(prs([A]));
+    ok_("กดครั้งเดียว พิมพ์ครั้งเดียว (รอบถัดไปไม่พิมพ์ซ้ำเอง)", R1.calls.print.length === 1 && R1.calls.settle.length === 1);
+    const R2 = mkRun({ okIds: [1] });
+    await R2.fn(prs([{ ...A, items: [{ k: 0, name: "หมู", category: "ครัว", r: now - 11 * 60000 }] }]));
+    ok_("ติ๊กค้างนานเกิน 10 นาที (ตัวพิมพ์ดับอยู่) = ไม่พิมพ์ย้อนหลัง แค่ปลดติ๊ก", R2.calls.print.length === 0 && R2.calls.settle.length === 1 && R2.calls.settle[0].ok.length === 0);
+    const V = { id: "V", orderId: 7, table: "B5", kind: "void", pid: 2, items: [{ k: 0, name: "ยกเลิก: หมู", r: now }] };
+    const R3 = mkRun({});
+    await R3.fn(prs([V]));
+    ok_("ใบยกเลิกที่ไม่ออก พิมพ์ใหม่ที่เครื่องเดิม เป็นใบยกเลิก", R3.calls.send.join() === "10.0.0.6" && R3.calls.buf[0] && R3.calls.buf[0].meta.kind === "void" && R3.calls.settle[0].ok.join() === "0");
+    const R4 = mkRun({ sendFails: true });
+    await R4.fn(prs([V]));
+    ok_("ส่งไม่ผ่านอีก = ยังอยู่ในรายการ ให้กดใหม่ได้", R4.calls.settle.length === 1 && R4.calls.settle[0].ok.length === 0);
+    const R5 = mkRun({ okIds: [1] });
+    await R5.fn(prs([{ ...A, items: A.items.map(i => ({ ...i, r: null })) }]));
+    ok_("ไม่มีใครกด = ไม่พิมพ์เองเด็ดขาด (กติกาเจ้าของ)", R5.calls.print.length === 0 && R5.calls.send.length === 0 && R5.calls.settle.length === 0);
+  } else ok_("มีตัวพิมพ์ใหม่ตามที่พนักงานกด (handleFailRetries)", false);
+
+  // ── ต่อสายครบ ──
+  ok_("ตัวพิมพ์เรียกพิมพ์ใหม่ทุกรอบ", AGENT.includes("  await handleFailRetries(printers);"));
+  ok_("ตัวพิมพ์จำว่ากดไหนทำไปแล้ว (ข้ามการรีสตาร์ท)", AGENT.includes("if (!state.retried) state.retried = {};"));
+  ok_("บันทึกรายการละเอียดพอพิมพ์ใหม่ได้ (จำนวน/ตัวเลือก/หมายเหตุ/เครื่องที่รับ)", AGENT.includes("items: items.slice(0, 30).map(failItem),") && AGENT.includes("function failItem(it, k) {"));
+  ok_("บิลเดียวไม่ออกหลายรอบ = เพิ่มรายการใหม่ ไม่ทับรอบแรก", !AGENT.includes("const kept = list.filter(f => String(f.orderId) !== String(order.id));"));
+  ok_("ใบยกเลิก/ย้ายโต๊ะ/พิมพ์ซ้ำที่ไม่ออก ก็เข้ารายการด้วย",
+    AGENT.includes("await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id });"));
+  ok_("ปุ่มขึ้นข้างปุ่มรายงาน เฉพาะตอนมีรายการค้าง",
+    APP.includes("{failCount>0&&<Btn v=\"danger\" onClick={()=>setShowPrintFails(true)} icon={I.print} s={{padding:\"5px 10px\",fontSize:12}}>พิมพ์ไม่สำเร็จ ({failCount})</Btn>}\n        <Btn v=\"ghost\" onClick={()=>setShowOrders(true)}"));
+  ok_("ถามเฉพาะเครื่องที่มีรายการค้าง (ปกติได้แถวว่าง ไม่เปลืองเน็ต)", APP.includes("description=like.*%22failed%22:%5B%7B*"));
+  ok_("รีปริ้นอ่านของล่าสุดก่อนเขียน", APP.includes("async function editPrintFail(holderId,fn){\n  const all=await api.getAllPrinters();"));
+  ok_("ในจอมีรีปริ้นท้ายชื่อเมนู + ปุ่มเอาออกเมื่อไม่ต้องพิมพ์แล้ว", APP.includes("onClick={()=>retry(f,[it.k])}") && APP.includes("onClick={()=>dismiss(f)}"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

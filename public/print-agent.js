@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 39;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 40;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -207,7 +207,7 @@ let state = { sig: {}, init: {}, greeted: {} };
 // อ่านสำเร็จจริงไหม ไม่ใช่แค่ "ไฟล์มีอยู่" — ไฟดับกลางเขียนทำให้ไฟล์พังได้
 let stateLoaded = false;
 try { if (fs.existsSync(STATE_FILE)) { state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); stateLoaded = true; } } catch { console.log("⚠️  ไฟล์ความจำเสียหาย (ไฟดับกลางเขียน?) — เริ่มจำใหม่ ไม่พิมพ์ย้อนหลัง"); }
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.done) state.done = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.done) state.done = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (!state.retried) state.retried = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
 // ⚠️ ต้องดู "อ่านความจำได้ไหม" ไม่ใช่ "ไฟล์มีอยู่ไหม"
 // ไฟล์พังแต่ยังอยู่ = ความจำว่างเปล่าแต่คิดว่าจำได้ → ทุกบิลที่เปิดอยู่กลายเป็น
 // บิลใหม่หมด แล้วพิมพ์ซ้ำทั้งร้าน (เกิดได้จริงตอนแบตหมดกลางจังหวะเขียนไฟล์)
@@ -405,7 +405,11 @@ async function handleReprintRequests(printers) {
         const { buf, mode } = await itemsToBuffer(its, rp.table || "-", { bill: rp.bill, by: rp.by, kind: rp.kind, from: rp.from });
         await sendToPrinter(p.ip, p.port, buf);
         console.log(`  🔁 พิมพ์ซ้ำ ${its.length} รายการ [${mode}] → ${p.name} (${p.ip})`);
-      } catch (e) { console.log(`  ❌ พิมพ์ซ้ำ → ${p.name} (${p.ip}): ${e.message}`); }
+      } catch (e) {
+        console.log(`  ❌ พิมพ์ซ้ำ → ${p.name} (${p.ip}): ${e.message}`);
+        // ใบยกเลิก/ย้ายโต๊ะ/พิมพ์ซ้ำที่ไม่ออกก็ต้องขึ้นปุ่ม "พิมพ์ไม่สำเร็จ" — ใบยกเลิกหายเงียบ = ครัวทำต่อ
+        await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id });
+      }
     }
   }
 }
@@ -481,30 +485,100 @@ async function handleScanRequests(printers) {
   }
 }
 
-// บันทึก "ใบครัวที่ไม่ออก" กลับเข้าระบบ ให้แอปเอาไปแจ้งเตือนที่โต๊ะนั้น
+// บันทึก "ใบครัวที่ไม่ออก" กลับเข้าระบบ ให้แอปขึ้นปุ่ม "พิมพ์ไม่สำเร็จ" + เตือนที่โต๊ะนั้น
 // เจ้าของสั่งไว้ (8 ก.ย. 69): ห้ามลองพิมพ์ใหม่เอง แม้เน็ตกลับมาแล้วก็ห้าม
 // ให้พนักงานเป็นคนกดเองเมื่อมั่นใจว่าพร้อม — กระดาษที่ออกมาเองตอนไม่มีคนดู
 // คือใบที่ครัวอาจไม่เห็น หรือเห็นแล้วทำซ้ำกับที่ทำไปแล้ว
-async function recordPrintFail(printers, order, items) {
+// เก็บรายละเอียดครบ (จำนวน/ตัวเลือก/หมายเหตุ/เครื่องที่รับ) เพื่อพิมพ์ใหม่ได้ "เฉพาะที่ไม่ออก" เป๊ะๆ
+// เพิ่มเป็นรายการใหม่ทุกครั้ง ห้ามทับของเดิมของบิลเดียวกัน — เดิมทับ รอบแรกที่ไม่ออกจึงหายไปจากจอ
+// extra = {kind, from, pid} · pid = เครื่องเดียวที่ต้องพิมพ์ (คำสั่งพิมพ์ซ้ำ/ยกเลิก/ย้ายโต๊ะ ส่งถึงเครื่องเดียว)
+const FAIL_CAP = 60;
+function failItem(it, k) {
+  return { k, name: String(it.name || ""), qty: it.qty, options: Array.isArray(it.options) ? it.options : [], note: it.note || "",
+    menu_id: it.menu_id != null ? it.menu_id : null, printer_id: it.printer_id != null ? it.printer_id : null, category: it.category != null ? it.category : null };
+}
+async function recordPrintFail(printers, order, items, extra) {
   const target = (printers || []).find(p => p.ip) || (printers || [])[0];
   if (!target || !items || !items.length) return;
+  const x = extra || {};
   try {
     let d = {};
     try { const r = await sb(`printers?id=eq.${target.id}&select=description`); if (r && r[0]) d = JSON.parse(r[0].description || "{}"); } catch {}
-    const list = Array.isArray(d.failed) ? d.failed : [];
-    // ทับรายการเดิมของบิลนี้ ไม่สะสมซ้ำทุกรอบ
-    const kept = list.filter(f => String(f.orderId) !== String(order.id));
+    const kept = Array.isArray(d.failed) ? d.failed : [];
+    const at = Date.now();
     kept.push({
-      at: Date.now(),
-      orderId: order.id,
+      id: `${order.id != null ? order.id : "x"}-${at}-${Math.floor(Math.random() * 1e6)}`,
+      at,
+      orderId: order.id != null ? order.id : null,
       table: tableLabel(order),
+      kind: x.kind || "", from: x.from || "", by: order.ordered_by || "", pid: x.pid != null ? x.pid : null,
       names: [...new Set(items.map(i => i.name))].slice(0, 20),
       n: items.reduce((a, i) => a + (+i.qty || 0), 0),
+      items: items.slice(0, 30).map(failItem),
     });
-    d.failed = kept.slice(-30);   // เก็บล่าสุดพอ ไม่ให้ description บวม
+    if (kept.length > FAIL_CAP) console.log(`  ⚠️ รายการพิมพ์ไม่ออกเกิน ${FAIL_CAP} — ตัดของเก่าสุดออก ${kept.length - FAIL_CAP} รายการ`);
+    d.failed = kept.slice(-FAIL_CAP);   // เก็บล่าสุดพอ ไม่ให้ description บวม
     await patchPrinter(target.id, { description: JSON.stringify(d) });
-    console.log(`  📌 บันทึกไว้ให้พนักงานกดพิมพ์เอง — โต๊ะ ${order.table_number}: ${d.failed[d.failed.length-1].names.join(", ")}`);
+    console.log(`  📌 บันทึกไว้ให้พนักงานกดพิมพ์เอง — โต๊ะ ${tableLabel(order)}: ${d.failed[d.failed.length-1].names.join(", ")}`);
   } catch (e) { console.log("  ⚠️ บันทึกรายการที่พิมพ์ไม่ผ่านไม่สำเร็จ:", e.message); }
+}
+
+// พิมพ์ใหม่ตามที่พนักงานกด "รีปริ้น" ในแอป — แอปติ๊ก r (เวลาที่กด) ไว้ที่รายการใน failed
+// ยังคงกติกาเจ้าของ: ตัวพิมพ์ไม่ลองเอง พิมพ์เฉพาะรายการที่มีคนกด ครั้งเดียวต่อการกดหนึ่งครั้ง
+// ออกจริง = ลบออกจากรายการ (ปุ่มในแอปหายเอง) · ไม่ออก = คงไว้ ปลดติ๊ก ให้กดใหม่ได้
+// ติ๊กค้างนานเกิน 10 นาทีโดยตัวพิมพ์ไม่ได้ทำ (ตัวพิมพ์ดับอยู่) = ไม่พิมพ์ย้อนหลัง ปลดติ๊กเฉยๆ
+// ใบสั่งอาหารที่ไม่ออกพิมพ์ใหม่เป็นใบสั่งอาหารปกติ (ชนิดเดิม) — ห้ามติดป้าย "พิมพ์ซ้ำ" ครัวยังไม่เคยได้ใบนี้
+const RETRY_TTL = 10 * 60 * 1000;
+async function handleFailRetries(printers) {
+  const seenFlags = new Set();
+  const all = (printers || []).filter(p => !isBluetooth(p) && p.ip);
+  for (const holder of printers || []) {
+    let d = {}; try { d = JSON.parse(holder.description || "{}"); } catch { continue; }
+    for (const f of (Array.isArray(d.failed) ? d.failed : [])) {
+      if (!f || !f.id || !Array.isArray(f.items)) continue;
+      const flagged = f.items.filter(it => it && it.r);
+      flagged.forEach(it => seenFlags.add(f.id + ":" + it.k));
+      const want = flagged.filter(it => String(state.retried[f.id + ":" + it.k]) !== String(it.r));
+      if (!want.length) continue;
+      want.forEach(it => { state.retried[f.id + ":" + it.k] = it.r; }); saveState();   // มาร์คก่อนส่ง กันยิงซ้ำจาก tick ซ้อน
+      const fresh = want.filter(it => Date.now() - (+it.r || 0) <= RETRY_TTL);
+      const okKs = new Set();
+      if (fresh.length) {
+        const meta = { bill: f.orderId, by: f.by, kind: f.kind, from: f.from };
+        try {
+          if (f.pid != null) {
+            const p = all.find(x => +x.id === +f.pid);
+            if (p) { const { buf } = await itemsToBuffer(fresh, f.table || "-", meta); await sendToPrinter(p.ip, p.port, buf); fresh.forEach(it => okKs.add(it.k)); }
+          } else {
+            const r = await printItems(fresh, f.table || "-", printers, {}, meta);
+            const ok = new Set((r && r.okIds || []).map(Number));
+            // ออก = มีเครื่องที่รับรายการนี้พิมพ์ผ่านอย่างน้อยหนึ่งเครื่อง · ไม่มีเครื่องรับเลย ≠ ออก (ห้ามลบทิ้งเงียบๆ)
+            fresh.forEach(it => { if (all.some(p => printerHandles(p, it) && ok.has(+p.id))) okKs.add(it.k); });
+          }
+        } catch (e) { console.log(`  ❌ พิมพ์ใหม่ (พนักงานกด) → โต๊ะ ${f.table}: ${e.message}`); }
+      }
+      console.log(`  🖨️ พิมพ์ใหม่ที่พนักงานกด โต๊ะ ${f.table}: ออก ${okKs.size}/${want.length}`);
+      await settleFail(holder.id, f.id, want, okKs);
+    }
+  }
+  for (const k of Object.keys(state.retried)) if (!seenFlags.has(k)) delete state.retried[k];
+}
+// เขียนผลกลับ: อ่านของล่าสุดก่อนเสมอ (แอปอาจเพิ่งติ๊กรายการอื่นในบิลเดียวกัน)
+// ลบรายการที่ออกแล้ว · ที่ไม่ออก ปลดติ๊กเฉพาะถ้ายังเป็นติ๊กเดิม (กดใหม่ระหว่างพิมพ์ = รอบหน้าทำต่อ)
+async function settleFail(holderId, failId, want, okKs) {
+  try {
+    let d = {};
+    const r = await sb(`printers?id=eq.${holderId}&select=description`); if (r && r[0]) d = JSON.parse(r[0].description || "{}");
+    const list = Array.isArray(d.failed) ? d.failed : [];
+    const f = list.find(x => x && x.id === failId);
+    if (!f) return;
+    const rOf = new Map(want.map(it => [String(it.k), String(it.r)]));
+    f.items = (f.items || []).filter(it => !okKs.has(it.k))
+      .map(it => (rOf.get(String(it.k)) === String(it.r)) ? { ...it, r: null, lastTry: Date.now() } : it);
+    if (!f.items.length) d.failed = list.filter(x => x !== f);
+    else { f.names = [...new Set(f.items.map(i => i.name))]; f.n = f.items.reduce((a, i) => a + (+i.qty || 0), 0); }
+    await patchPrinter(holderId, { description: JSON.stringify(d) });
+  } catch (e) { console.log("  ⚠️ อัปเดตรายการพิมพ์ไม่ออกไม่สำเร็จ:", e.message); }
 }
 
 let fullTick = 0;   // นับรอบไปหาตาข่ายนิรภัย
@@ -538,6 +612,7 @@ async function tick() {
   }
   await handleTestRequests(printers);   // ทดสอบพิมพ์ตามคำสั่งที่กดจากแอป
   await handleReprintRequests(printers);   // พิมพ์ใบครัวซ้ำตามคำสั่งที่กดจากแอป
+  await handleFailRetries(printers);   // พิมพ์ใหม่รายการที่ไม่ออก ตามที่พนักงานกด "รีปริ้น"
   await handleQRRequests(printers);   // พิมพ์ QR โต๊ะตามคำสั่งที่กดจากแอป
   await handlePJRequests(printers);   // พิมพ์รูปภาพ (ไทยคมชัด) ตามคำสั่งที่กดจากแอป
   await handlePingRequests(printers);   // เช็คสถานะเครื่องทันทีเมื่อกด "เช็คสถานะใหม่" ในแอป
