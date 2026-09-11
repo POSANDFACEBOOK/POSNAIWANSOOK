@@ -1480,7 +1480,9 @@ section("ผลตรวจเส้นทางเงิน: 11 ข้อที
   ok_("ช่องกรอกส่วนลดรายเมนูก็เขียนด้วย line_uid", APP.includes("setItemDisc(p=>({...p,[discKey(it,idx)]:"));
   // ล็อกยอดแล้วแต่ช่องส่วนลดรายเมนูยังพิมพ์ได้ = ล็อกไม่จริง
   ok_("ล็อกยอดแล้วช่องส่วนลดรายเมนูต้องกดไม่ได้",
-    APP.includes("<select disabled={payWait} value={d?.t||\"percent\"}") && APP.includes("<NumInput disabled={payWait} value={d?.v||\"\"}"));
+    // ปุ่ม % ฿ (เดิมเป็น select) ปิดปุ่ม และกันซ้ำในตัวจัดการ แบบเดียวกับช่องจำนวน
+    APP.includes("type=\"button\" disabled={payWait} aria-label={t.v===\"percent\"?\"ลดเป็นเปอร์เซ็นต์\":\"ลดเป็นบาท\"} onClick={()=>{if(payWait)return;setItemDisc(")
+    && APP.includes("<NumInput disabled={payWait} value={d?.v||\"\"}"));
 
   // ── กันจอที่ถือภาพเก่าไปทับของที่เครื่องอื่นเพิ่งเพิ่ม ──
   // ยกเลิกรอชำระเดิมไม่มีตัวกันชน แต่เอา updated_at ใหม่ไปใส่ verRef = ผ่านด่านของการเขียนครั้งถัดไป

@@ -19592,17 +19592,22 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
       <div style={{flex:1,overflowY:"auto",padding:"14px 20px"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>📋 รายการ ({items.length})</div>
         <div style={{background:C.bg,borderRadius:12,padding:"8px 12px",marginBottom:14}}>
-          {items.map((it,idx)=>{const d=itemDisc[discKey(it,idx)];const lineTotal=it.price*it.qty;const lineDisc=discMode==="item"&&d&&d.v?(d.t==="percent"?lineTotal*(+d.v||0)/100:Math.min(+d.v||0,lineTotal)):0;return <div key={idx} style={{padding:"6px 0",borderBottom:idx<items.length-1?`1px dashed ${C.line}`:"none"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:600,color:C.ink}}>{it.qty}x {it.name}</div>
-              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink}}>฿{lineTotal.toFixed(0)}</div>
+          {/* ส่วนลดรายเมนู: ชื่อ/ตัวเลือกตัวใหญ่ + ปุ่ม % ฿ และช่องจำนวนขนาดนิ้วกด — กันใส่ส่วนลดผิดแถว
+              แถวที่มีส่วนลดแล้วพื้นเป็นสีแดงอ่อน เห็นทันทีว่าลดไปที่เมนูไหน */}
+          {items.map((it,idx)=>{const d=itemDisc[discKey(it,idx)];const dt=d?.t||"percent";const lineTotal=it.price*it.qty;const lineDisc=discMode==="item"&&d&&d.v?(d.t==="percent"?lineTotal*(+d.v||0)/100:Math.min(+d.v||0,lineTotal)):0;const opt=optionsText(it.options);return <div key={idx} style={{padding:discMode==="item"?"10px 8px":"6px 0",margin:discMode==="item"?"0 -8px":0,borderRadius:discMode==="item"?10:0,background:lineDisc>0?C.redLight:"transparent",borderBottom:idx<items.length-1?`1px dashed ${C.line}`:"none"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+              <div style={{flex:1,minWidth:0,fontFamily:"'Sarabun',sans-serif",fontSize:discMode==="item"?16:13,fontWeight:discMode==="item"?800:600,color:C.ink,lineHeight:1.35,overflowWrap:"anywhere"}}>{it.qty}x {it.name}
+                {opt&&<div style={{fontSize:discMode==="item"?13:11,fontWeight:700,color:C.teal,marginTop:1}}>+ {opt}</div>}
+                {it.note&&<div style={{fontSize:discMode==="item"?13:11,fontWeight:600,color:C.ink3,marginTop:1}}>★ {it.note}</div>}
+              </div>
+              <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:discMode==="item"?16:13,fontWeight:800,color:C.ink,flexShrink:0}}>฿{lineTotal.toFixed(0)}</div>
             </div>
-            {discMode==="item"&&<div style={{display:"flex",gap:5,marginTop:4,alignItems:"center"}}>
-              <select disabled={payWait} value={d?.t||"percent"} onChange={e=>setItemDisc(p=>({...p,[discKey(it,idx)]:{...(p[discKey(it,idx)]||{}),t:e.target.value,v:p[discKey(it,idx)]?.v||0}}))} style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}>
-                <option value="percent">%</option><option value="amount">฿</option>
-              </select>
-              <NumInput disabled={payWait} value={d?.v||""} onValue={v=>{if(payWait)return;setItemDisc(p=>({...p,[discKey(it,idx)]:{...(p[discKey(it,idx)]||{t:"percent"}),v}}));}} placeholder="0" style={{...iS,padding:"3px 6px",fontSize:11,width:60,height:26}}/>
-              {lineDisc>0&&<span style={{fontSize:11,color:C.red,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>-฿{lineDisc.toFixed(0)}</span>}
+            {discMode==="item"&&<div style={{display:"flex",gap:8,marginTop:8,alignItems:"center"}}>
+              <div style={{display:"flex",borderRadius:10,overflow:"hidden",border:`2px solid ${C.brand}`,flexShrink:0}}>
+                {[{v:"percent",l:"%"},{v:"amount",l:"฿"}].map(t=><button key={t.v} type="button" disabled={payWait} aria-label={t.v==="percent"?"ลดเป็นเปอร์เซ็นต์":"ลดเป็นบาท"} onClick={()=>{if(payWait)return;setItemDisc(p=>({...p,[discKey(it,idx)]:{...(p[discKey(it,idx)]||{}),t:t.v,v:p[discKey(it,idx)]?.v||0}}));}} style={{width:52,height:44,border:"none",background:dt===t.v?C.brand:C.white,color:dt===t.v?C.white:C.brand,fontFamily:"'Sarabun',sans-serif",fontSize:19,fontWeight:900,cursor:payWait?"not-allowed":"pointer",padding:0}}>{t.l}</button>)}
+              </div>
+              <NumInput disabled={payWait} value={d?.v||""} onValue={v=>{if(payWait)return;setItemDisc(p=>({...p,[discKey(it,idx)]:{...(p[discKey(it,idx)]||{t:"percent"}),v}}));}} placeholder="0" style={{...iS,padding:"0 12px",fontSize:19,fontWeight:800,width:120,height:44,textAlign:"right"}}/>
+              {lineDisc>0&&<span style={{fontSize:15,color:C.red,fontWeight:900,fontFamily:"'Sarabun',sans-serif",marginLeft:"auto"}}>-฿{lineDisc.toFixed(0)}</span>}
             </div>}
           </div>;})}
         </div>
