@@ -20290,6 +20290,14 @@ function QRImg({url,size=120}){
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}&margin=8`;
   return <img src={qrUrl} alt="QR Code" style={{width:size,height:size,borderRadius:8,border:`1px solid ${C.line}`}}/>;
 }
+// ── ลิงก์ที่ลูกค้าได้จากการสแกน QR โต๊ะ — ประกอบที่นี่ที่เดียว ─────────────
+// ใช้ทั้งตอนพิมพ์ QR ลงกระดาษ · ป็อปอัพให้พนักงานสแกนเช็ค · หน้าจัดการ QR
+// ถ้าต่างคนต่างประกอบ วันหนึ่งจะไม่ตรงกัน แล้วพนักงานเช็คหน้าที่ไม่ใช่หน้าที่ลูกค้าได้จริง
+// (t = รหัสลับของโต๊ะ ใช้กันคนสุ่มเลขโต๊ะสั่งแทน — ต้องติดไปกับทุก QR เหมือนกัน)
+function tableScanUrl(table,branch){
+  const tokenPart=table&&table.qr_token?`&t=${encodeURIComponent(table.qr_token)}`:"";
+  return `${publicBaseUrl()}?scan=1&branch=${branch&&branch.id}&table=${table&&table.id}${tokenPart}`;
+}
 async function printTableQR(table,branch,printers=[],onPrinted){
   // ติดธงเฉพาะตอน "ส่งไปพิมพ์สำเร็จ" เท่านั้น — ถ้าไม่มีกระดาษออก โต๊ะต้องไม่เปลี่ยนสี
   // ไม่งั้นพนักงานจะเห็นเขียวแล้วเข้าใจว่าวาง QR ให้ลูกค้าแล้ว ทั้งที่ยังไม่ได้วาง
@@ -20297,9 +20305,7 @@ async function printTableQR(table,branch,printers=[],onPrinted){
     try{ await api.markTableQRPrinted(table.id); }catch(e){ console.warn("ติดธงพิมพ์ QR ไม่สำเร็จ",e); }
     if(typeof onPrinted==="function")onPrinted();
   };
-  const baseUrl=publicBaseUrl();
-  const tokenPart=table.qr_token?`&t=${encodeURIComponent(table.qr_token)}`:"";
-  const url=`${baseUrl}?scan=1&branch=${branch.id}&table=${table.id}${tokenPart}`;
+  const url=tableScanUrl(table,branch);
   let prs=printers;   // ดึงเครื่องพิมพ์ล่าสุดจาก DB — กันค่าค้าง (เพิ่งติ๊ก "เครื่องพิมพ์ใบเสร็จ" ในหน้าต่างตั้งค่า)
   try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
   // 1) If a Bluetooth printer is configured for this branch, print the QR slip
@@ -20346,7 +20352,7 @@ function POSQRPage({branch,tables,onTablesChanged}){
   const baseUrl=publicBaseUrl();
   const zones=[...new Set(tables.map(t=>t.zone).filter(Boolean))];
   const grouped=[...zones.map(z=>({zone:z,tables:tables.filter(t=>t.zone===z)})),{zone:null,tables:tables.filter(t=>!t.zone)}].filter(g=>g.tables.length>0);
-  const buildUrl=(t)=>`${baseUrl}?scan=1&branch=${branch.id}&table=${t.id}${t.qr_token?`&t=${encodeURIComponent(t.qr_token)}`:""}`;
+  const buildUrl=(t)=>tableScanUrl(t,branch);
   const[rotating,setRotating]=useState(false);
   async function rotateOne(t){
     if(!await confirmDlg({title:"หมุน QR ใหม่",message:`สร้าง QR ใหม่สำหรับโต๊ะ ${t.table_number}?\n\nQR เก่าจะใช้งานไม่ได้ทันที — ต้องพิมพ์ใหม่และวางที่โต๊ะ`,confirmLabel:"🔄 หมุน QR ใหม่"}))return;
@@ -22625,6 +22631,9 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
   // เพราะจอโต๊ะปิดตัวเองทันทีที่ปิดบิลเสร็จ (โต๊ะต้องว่างพร้อมรับลูกค้าใหม่ทันที)
   // ถ้าเอาป็อปอัพไว้ในจอโต๊ะ มันจะถูกถอดออกไปพร้อมกันแล้วพนักงานไม่เห็นยอดทอนเลย
   const[changeDlg,setChangeDlg]=useState(null);
+  // ป็อปอัพ QR หลังกดพิมพ์ QR โต๊ะ — ให้พนักงานเอามือถือสแกนดูหน้าที่ลูกค้าจะเห็นจริง
+  const[qrPeek,setQrPeek]=useState(null);   // {table,url}
+  const[qrPeekErr,setQrPeekErr]=useState(false);
   const[loading,setLoading]=useState(true);
   const[selTable,setSelTable]=useState(null);const[selOrder,setSelOrder]=useState(null);
   const[showPrinters,setShowPrinters]=useState(false);
@@ -22807,12 +22816,40 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll({silent:true});}} wide noScroll>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:10,flexShrink:0,flexWrap:"wrap"}}>
         {selOrder?.id&&<button onClick={()=>setMoveFrom({table:selTable,order:selOrder})} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.blue}55`,background:C.blueLight,cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>🔀 ย้ายโต๊ะ</button>}
-        <button onClick={()=>printTableQR(selTable,currentBranch,printers,()=>loadAll({silent:true}))} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
+        <button onClick={()=>{setQrPeekErr(false);setQrPeek({table:selTable,url:tableScanUrl(selTable,currentBranch)});printTableQR(selTable,currentBranch,printers,()=>loadAll({silent:true}));}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onCashChange={setChangeDlg} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})}/>
     </Modal>}
     {/* ── เงินทอน ── ปิดบิลเงินสดเสร็จแล้ว โต๊ะว่างแล้ว เหลืออย่างเดียวคือทอนเงิน
         ตัวเลขใหญ่ที่สุดบนจอคือยอดที่ต้องทอน เพราะนั่นคือสิ่งเดียวที่ต้องทำต่อ */}
+    {/* ── ป็อปอัพ QR โต๊ะ ── ลิงก์เดียวกับที่พิมพ์ลงกระดาษ (tableScanUrl ตัวเดียว)
+        ขึ้นทันทีที่กด ไม่ผูกกับผลการพิมพ์ — พิมพ์ไม่ออกก็ยังเช็คหน้าลูกค้าได้ */}
+    {qrPeek&&<div onClick={e=>{if(e.target===e.currentTarget)setQrPeek(null);}} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.78)",zIndex:7300,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,380px)",overflow:"hidden",fontFamily:"'Sarabun',sans-serif",boxShadow:"0 30px 80px rgba(0,0,0,.5)",textAlign:"center"}}>
+        <div style={{padding:"18px 20px 6px"}}>
+          <div style={{fontSize:13,fontWeight:800,color:C.ink3}}>มุมมองลูกค้า</div>
+          <div style={{fontSize:30,fontWeight:900,color:C.ink,lineHeight:1.15}}>โต๊ะ {qrPeek.table&&qrPeek.table.table_number}</div>
+        </div>
+        <div style={{padding:"10px 20px 4px",display:"flex",justifyContent:"center"}}>
+          {!qrPeekErr
+            ?<img src={`https://api.qrserver.com/v1/create-qr-code/?size=520x520&data=${encodeURIComponent(qrPeek.url)}&margin=12`}
+                alt={"QR โต๊ะ "+(qrPeek.table&&qrPeek.table.table_number)} onError={()=>setQrPeekErr(true)}
+                style={{width:"min(66vw,260px)",height:"min(66vw,260px)",borderRadius:12,border:`1px solid ${C.line}`,background:C.white}}/>
+            :<div style={{width:"min(66vw,260px)",height:"min(66vw,260px)",borderRadius:12,border:`1.5px dashed ${C.line}`,display:"flex",alignItems:"center",justifyContent:"center",padding:18,fontSize:13,color:C.ink3,lineHeight:1.7}}>
+              โหลดรูป QR ไม่ได้ (เน็ตสะดุด)<br/>ใช้ลิงก์ด้านล่างเปิดดูแทนได้
+            </div>}
+        </div>
+        <div style={{padding:"8px 22px 4px",fontSize:13,color:C.ink2,lineHeight:1.7}}>
+          เอามือถือสแกน เพื่อดูหน้าที่ลูกค้าเห็นจริง<br/>
+          <span style={{fontSize:11.5,color:C.ink4}}>QR ตัวเดียวกับที่พิมพ์ออกไป</span>
+        </div>
+        <a href={qrPeek.url} target="_blank" rel="noopener noreferrer"
+          style={{display:"inline-block",margin:"6px 0 2px",fontSize:12.5,fontWeight:800,color:C.blue,textDecoration:"underline"}}>เปิดหน้าลูกค้าบนเครื่องนี้ ↗</a>
+        <div style={{padding:"12px 20px 20px"}}>
+          <button onClick={()=>setQrPeek(null)} style={{width:"100%",padding:"14px",borderRadius:14,border:"none",background:C.ink,color:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:15.5,fontWeight:900}}>ปิด</button>
+        </div>
+      </div>
+    </div>}
     {changeDlg&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.8)",zIndex:7200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
       <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,400px)",overflow:"hidden",fontFamily:"'Sarabun',sans-serif",boxShadow:"0 30px 80px rgba(0,0,0,.5)",textAlign:"center"}}>
         <div style={{padding:"22px 20px 8px"}}>

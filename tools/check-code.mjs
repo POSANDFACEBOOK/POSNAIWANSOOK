@@ -2685,6 +2685,40 @@ section("แจ้งเตือนต้องจริงและแก้�
     BACKUP.includes(': status === "degraded" ? "ไฟล์สำรองครบแล้ว แต่ข้ามขั้นอ่านกลับมาตรวจ'));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ป็อปอัพ QR โต๊ะ — พนักงานสแกนเช็คมุมมองลูกค้า
+// ต้องเป็นลิงก์เดียวกับที่พิมพ์ลงกระดาษเป๊ะ ไม่งั้นพนักงานเช็คหน้าที่ลูกค้าไม่ได้เห็นจริง
+// ══════════════════════════════════════════════════════════════════════════
+section("ป็อปอัพ QR โต๊ะ");
+{
+  // ตัวชี้ขาด: ลิงก์ QR โต๊ะประกอบที่เดียวทั้งแอป — มีที่สองเมื่อไหร่ วันหนึ่งจะไม่ตรงกัน
+  ck("ลิงก์ QR โต๊ะประกอบที่เดียวทั้งแอป", APP.split("?scan=1&branch=").length - 1, 1);
+  const st = APP.indexOf("function tableScanUrl(table,branch){");
+  let fn = null;
+  if (st >= 0) {
+    let d = 0, started = false, en = -1;
+    for (let i = st + "function tableScanUrl(table,branch){".length - 1; i < APP.length; i++) {
+      if (APP[i] === "{") { d++; started = true; }
+      else if (APP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+    }
+    fn = new Function("publicBaseUrl", APP.slice(st, en) + "\nreturn tableScanUrl;")(() => "https://x.app/");
+  }
+  ok_("ยังมีตัวประกอบลิงก์ QR โต๊ะ", !!fn);
+  if (fn) {
+    ck("มีรหัสลับโต๊ะ = ติดไปกับลิงก์ (กันคนสุ่มเลขโต๊ะสั่งแทน)",
+      fn({ id: 12, qr_token: "a b/c" }, { id: 8 }), "https://x.app/?scan=1&branch=8&table=12&t=a%20b%2Fc");
+    ck("ไม่มีรหัสลับ = ไม่มี t ห้อยท้าย", fn({ id: 12 }, { id: 8 }), "https://x.app/?scan=1&branch=8&table=12");
+  }
+  ok_("ตัวพิมพ์ QR ใช้ลิงก์ตัวเดียวกัน", APP.includes("  const url=tableScanUrl(table,branch);"));
+  ok_("หน้าจัดการ QR ใช้ลิงก์ตัวเดียวกัน", APP.includes("  const buildUrl=(t)=>tableScanUrl(t,branch);"));
+  // ปุ่มพิมพ์ QR โต๊ะนี้: เด้งป็อปอัพด้วยลิงก์ตัวเดียวกัน ก่อนสั่งพิมพ์ (พิมพ์ไม่ออกก็ยังเช็คได้)
+  ok_("ปุ่มพิมพ์ QR โต๊ะนี้ เด้งป็อปอัพด้วยลิงก์ตัวเดียวกับที่พิมพ์",
+    APP.includes("setQrPeek({table:selTable,url:tableScanUrl(selTable,currentBranch)});printTableQR(selTable,currentBranch,printers,"));
+  ok_("ป็อปอัพแสดง QR จากลิงก์ในป็อปอัพเอง ไม่ประกอบใหม่",
+    APP.includes("data=$" + "{encodeURIComponent(qrPeek.url)}") &&APP.includes("<a href={qrPeek.url} target=\"_blank\" rel=\"noopener noreferrer\""));
+  ok_("รูป QR โหลดไม่ได้ ต้องบอกและมีทางเปิดดูแทน", APP.includes("onError={()=>setQrPeekErr(true)}") && APP.includes("โหลดรูป QR ไม่ได้ (เน็ตสะดุด)"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
