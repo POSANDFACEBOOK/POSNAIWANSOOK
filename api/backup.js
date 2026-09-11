@@ -167,12 +167,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // that would delete an implausible number of files.
 const KEEP_DAILY = 14, KEEP_MONTHLY = 12, KEEP_YEARLY = 3, MAX_DELETE = 40;
 const NAME_RE = /^foodcost-backup-(\d{4})-(\d{2})-(\d{2})(T\d{6}Z)?\.json\.gz$/;
+// ลิสต์ไฟล์ด้วย corpora=allDrives + กรองด้วย "'FOLDER_ID' in parents" ใน q
+// เดิมใช้ corpora=drive&driveId=FOLDER_ID แต่ช่อง driveId รับได้เฉพาะ "รหัส Shared Drive"
+// ไม่ใช่รหัสโฟลเดอร์ ⟹ Google ตอบ 404 "ไม่พบไดรฟ์" ทุกคืน ทั้งที่อัปโหลดสำเร็จ (อัปโหลดใช้
+// parents=[FOLDER_ID] ซึ่งถูก) ผลคือไฟล์เก่าไม่เคยถูกเก็บกวาดเลย และสถานะขึ้น degraded ทุกคืน
 async function rotate(todayId) {
   const tok = await bearer();
   const q = `'${FOLDER_ID}' in parents and name contains 'foodcost-backup-' and trashed=false`;
   let files = [], pageToken = "";
   do {
-    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=drive&driveId=${FOLDER_ID}&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ""}`;
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ""}`;
     const r = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
     if (!r.ok) return { deleted: [], kept: 0, error: `list failed ${r.status} — rotation skipped` };
     const j = await r.json();
@@ -200,7 +204,10 @@ async function rotate(todayId) {
   if (toDelete.length > MAX_DELETE) return { deleted: [], kept: cand.length, error: `refused: plan would delete ${toDelete.length} (>${MAX_DELETE})` };
   const deleted = [];
   for (const f of toDelete) {
-    try { const d = await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}?supportsAllDrives=true`, { method: "DELETE", headers: { Authorization: `Bearer ${tok}` } }); if (d.ok || d.status === 204) deleted.push(f.name); } catch {}
+    // ย้ายลงถังขยะ ไม่ใช่ลบถาวร — การเก็บกวาดนี้ไม่เคยรันสำเร็จมาก่อนเลย (ติด 404 ทุกคืน)
+    // คืนแรกที่มันทำงานจะลบไฟล์เก่าทีเดียวหลายไฟล์ ถ้ากติกาเก็บไฟล์มีจุดพลาดที่ไม่มีใครเคยเห็น
+    // ไฟล์สำรองที่หายไปจะกู้คืนไม่ได้เลย · ถังขยะเก็บไว้ 30 วันแล้ว Google ล้างให้เอง พื้นที่คืนตามมา
+    try { const d = await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}?supportsAllDrives=true`, { method: "PATCH", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify({ trashed: true }) }); if (d.ok || d.status === 204) deleted.push(f.name); } catch {}
   }
   return { deleted, kept: cand.length - deleted.length, error: null };
 }
@@ -328,7 +335,12 @@ export default async function handler(req, res) {
       tables: manifestOut, missing_tables: missing, extra_tables: extra,
       rotation, duration_ms: Date.now() - new Date(started).getTime(),
     });
-    if (status !== "success") await alertBackupProblem(status, name, missing, extra, settled);
+    // แจ้งเข้ามือถือเฉพาะเมื่อ "ข้อมูลสำรองมีความเสี่ยง" — ไม่ครบ / อ่านกลับไม่ได้ / ข้ามขั้นตรวจ / ยอดไม่ตรง
+    // สำรองครบและตรวจแล้วผ่าน แต่เก็บกวาดไฟล์เก่าไม่สำเร็จ = ข้อมูลปลอดภัยดี เป็นแค่งานบ้าน
+    // เดิมแจ้ง "🟠 สำรองข้อมูลไม่ผ่าน · ไม่ผ่านการตรวจสอบ" ทุกคืน ซึ่งผิดความจริงทั้งสองคำ
+    // (ยังเห็นได้ในหน้าสำรองข้อมูลว่า "สำเร็จ (มีเตือน)" พร้อมสาเหตุ)
+    const dataSafe = dataComplete && verified && !verifySkipped && driftClean;
+    if (status !== "success" && !dataSafe) await alertBackupProblem(status, name, missing, extra, settled);
     return res.status(200).json({
       ok: status === "success" || status === "degraded", status, file: storedName, driveId: storedDrive,
       gzKB: Math.round(gz.length / 1024), totalRows, verified, missing_tables: missing, extra_tables: extra,
@@ -352,6 +364,7 @@ async function alertBackupProblem(status, fileName, missing, extra, settled, err
       : badTables.length ? `ดึงข้อมูลไม่สำเร็จ: ${badTables.slice(0, 4).join(", ")}`
       : (missing || []).length ? `มีตารางใหม่ที่ยังไม่ได้สำรอง: ${missing.slice(0, 4).join(", ")}`
       : (extra || []).length ? `ตารางในลิสต์หายไปจากฐานข้อมูล: ${extra.slice(0, 4).join(", ")}`
+      : status === "degraded" ? "ไฟล์สำรองครบแล้ว แต่ข้ามขั้นอ่านกลับมาตรวจ หรือจำนวนแถวไม่ตรง — เปิดหน้าสำรองข้อมูลดูสาเหตุ"
       : "ไม่ผ่านการตรวจสอบ";
     await fetch("https://foodcost-eta.vercel.app/api/push", {
       method: "POST", headers: { "Content-Type": "application/json" },

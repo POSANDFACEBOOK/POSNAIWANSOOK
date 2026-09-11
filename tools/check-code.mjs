@@ -847,10 +847,13 @@ const guards = [
   ["ตารางจริงยังต้องถูกตรวจ drift เหมือนเดิม",
     !driftRe.test("orders") && !driftRe.test("ingredients") && !driftRe.test("stock_logs") && !driftRe.test("backups")],
   ["สำรองไม่ผ่านต้องมีคนรู้ ไม่ใช่เงียบ",
-    BACKUP.includes("async function alertBackupProblem(") && BACKUP.includes('if (status !== "success") await alertBackupProblem(')],
+    // สำรองที่ข้อมูลมีความเสี่ยงต้องแจ้งเสมอ — ส่วนที่ไม่แจ้งมีแค่ "ครบ + อ่านกลับผ่าน + ไม่ข้ามตรวจ + ตารางตรง"
+    BACKUP.includes("async function alertBackupProblem(") &&
+    BACKUP.includes('if (status !== "success" && !dataSafe) await alertBackupProblem(') &&
+    BACKUP.includes("const dataSafe = dataComplete && verified && !verifySkipped && driftClean;")],
   ["แจ้งเตือนสำรองต้องบอกสาเหตุที่ลงมือแก้ได้", BACKUP.includes("มีตารางใหม่ที่ยังไม่ได้สำรอง")],
   ["แจ้งเตือนพังต้องไม่ทำให้การสำรองพังตาม",
-    /alertBackupProblem[\s\S]{0,900}catch \{ \/\* แจ้งไม่ได้/.test(BACKUP)],
+    /async function alertBackupProblem\([\s\S]{0,1600}catch \{ \/\* แจ้งไม่ได้/.test(BACKUP)],
   // ── ฟังก์ชันต้องรันใกล้ร้านและใกล้ฐานข้อมูล ──
   // ไม่ตั้ง regions = Vercel รันที่ค่าเริ่มต้น iad1 (วอชิงตัน) · ยืนยันจาก header จริง
   // x-vercel-id: sin1::iad1::... = เข้าที่สิงคโปร์ แต่ไปทำงานที่อเมริกา
@@ -2552,6 +2555,60 @@ section("ติ๊กเสิร์ฟแล้วรายเมนู");
   ok_("ติ๊กเสิร์ฟอ่านจากแถวบิลตัวเดียวกัน ไม่ต้องดึงเพิ่ม", APP.includes("existingOrder.served_items&&typeof existingOrder.served_items===\"object\""));
   // กดค้างที่ปุ่มบนไอแพด ต้องไม่ขึ้นแถบ คัดลอก/ค้นดู/แปลภาษา มาบังปุ่ม
   ok_("ปุ่มไม่ขึ้นแถบคัดลอกเมื่อกดค้างบนไอแพด", HTML.includes('button, [role="button"] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }'));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// แจ้งเตือนเข้ามือถือเจ้าของต้อง "จริงและแก้ได้" — ไม่ใช่เตือนทุกอย่างที่ขยับ
+// เหตุจริง 11 ก.ย. 69: ตีสี่เตือน "ระบบตอบช้า" (ข้อความเองบอกว่าฐานข้อมูลไม่ได้ช้า)
+// ตีสองเตือน "สำรองข้อมูลไม่ผ่าน" ทั้งที่สำรองครบและตรวจแล้วผ่าน แค่ลบไฟล์เก่าไม่สำเร็จ
+// ══════════════════════════════════════════════════════════════════════════
+section("แจ้งเตือนต้องจริงและแก้ได้");
+{
+  // ── ตัวเฝ้าความเร็วในแอป ──
+  ok_("ไม่นับตัวอย่างตอนแอปอยู่เบื้องหลัง/เพิ่งกลับมาหน้าจอ",
+    APP.includes('if(kind!=="ok"&&dbhQuiet())return;') &&
+    APP.includes('if(typeof document!=="undefined"&&document.visibilityState==="hidden")return true;') &&
+    APP.includes("return dbhResumedAt>0&&Date.now()-dbhResumedAt<20000;"));
+  // ดึงตัวตัดสิน "ส่งเข้ามือถือไหม" มารันจริง — ข้อความจากตัววัดคือสิ่งที่ตัดสิน
+  const gateStart = APP.indexOf('  if(kind==="down"){\n    if(!/น่าจะล่มจริง|ช้าจริง/.test(msg.body))return;');
+  ok_("ยังมีตัวตัดสินว่าจะส่งเข้ามือถือเจ้าของไหม", gateStart > 0);
+  if (gateStart > 0) {
+    const gateEnd = APP.indexOf("  try{ fetch(\"/api/push\"", gateStart);
+    const gate = APP.slice(gateStart, gateEnd);
+    const mem = {};
+    const LS = { getItem: (k) => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = String(v); }, removeItem: (k) => { delete mem[k]; } };
+    const run = new Function("kind", "msg", "localStorage", 'const DOWN_KEY="fc_dbh_down_pushed";\n' + gate + "\nreturn true;");
+    const sends = (kind, body) => run(kind, { body }, LS) === true;
+    // ข้อความจริงสามแบบที่ตัววัดสร้าง (ดู dbhAlert)
+    const DEVICE = "คำสั่งใช้เวลา 0.7 วินาที แต่คำขอจิ๋วเร็วปกติ (489 ms) — ฐานข้อมูลไม่ได้ช้า ปัญหาอยู่ที่เครื่องนี้";
+    const SLOW = "คำสั่งใช้เวลา 9 วินาที คำขอจิ๋วก็ช้า (4200 ms) — เน็ตของสาขาหรือฐานข้อมูลช้าจริง";
+    const DOWN = "คำสั่งใช้เวลา 9 วินาที ต่อฐานข้อมูลไม่ได้เลย — น่าจะล่มจริง ตรวจ Supabase ทันที";
+    ck("ปัญหาที่เครื่องเดียว (ฐานข้อมูลปกติ) ห้ามปลุกเจ้าของ", sends("down", DEVICE), false);
+    ck("ไม่เคยแจ้งว่ามีปัญหา ก็ไม่ต้องแจ้งว่ากลับมาปกติ", sends("up", ""), false);
+    ck("ฐานข้อมูลช้าจริง/ต่อไม่ได้ ต้องแจ้ง", [sends("down", SLOW), sends("down", DOWN)], [true, true]);
+    ck("เคยแจ้งว่ามีปัญหาแล้ว ต้องแจ้งตอนกลับมาปกติ (ครั้งเดียว)", [sends("up", ""), sends("up", "")], [true, false]);
+  }
+  // ข้อความต้นทางต้องยังมีคำที่ตัวตัดสินใช้ — ถ้าใครแก้ถ้อยคำ ตัวตัดสินจะเงียบตลอดกาล
+  ok_("ข้อความจากตัววัดยังมีคำที่ตัวตัดสินใช้แยก",
+    APP.includes("— น่าจะล่มจริง ตรวจ Supabase ทันที") && APP.includes("— เน็ตของสาขาหรือฐานข้อมูลช้าจริง"));
+
+  // ── สำรองข้อมูล ──
+  ok_("ลิสต์ไฟล์สำรองไม่ส่งรหัสโฟลเดอร์ไปในช่องรหัส Shared Drive (404 ทุกคืน)",
+    BACKUP.includes("corpora=allDrives") && !BACKUP.includes("driveId=$" + "{FOLDER_ID}"));
+  ok_("ยังกรองเฉพาะไฟล์ในโฟลเดอร์สำรอง ไม่กวาดทั้งไดรฟ์",
+    BACKUP.includes("' in parents and name contains 'foodcost-backup-' and trashed=false"));
+  // เก็บกวาดไม่เคยรันสำเร็จมาก่อน — คืนแรกที่ทำงานห้ามลบถาวร
+  {
+    const rs = BACKUP.indexOf("async function rotate(todayId) {");
+    const re = BACKUP.indexOf("export default async function handler", rs);
+    const rot = rs > 0 && re > rs ? BACKUP.slice(rs, re) : "";
+    ok_("เก็บกวาดไฟล์สำรองเก่าย้ายลงถังขยะ ไม่ลบถาวร",
+      rot.includes('method: "PATCH"') && rot.includes("JSON.stringify({ trashed: true })") && !/method:\s*"DELETE"/.test(rot));
+    ok_("ยังเก็บ 14 วันล่าสุดเสมอ และปฏิเสธแผนที่จะลบเยอะผิดปกติ",
+      BACKUP.includes("const KEEP_DAILY = 14, KEEP_MONTHLY = 12, KEEP_YEARLY = 3, MAX_DELETE = 40;") && rot.includes("toDelete.length > MAX_DELETE"));
+  }
+  ok_("สาเหตุในแจ้งเตือนต้องตรงความจริง ไม่ใช่ \"ไม่ผ่านการตรวจสอบ\" ทุกกรณี",
+    BACKUP.includes(': status === "degraded" ? "ไฟล์สำรองครบแล้ว แต่ข้ามขั้นอ่านกลับมาตรวจ'));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

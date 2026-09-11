@@ -84,12 +84,41 @@ async function dbhAlert(kind){
     msg = { title:"⚠️ ระบบตอบช้า", body:`คำสั่งใช้เวลา ${slowSec} วินาที ${where}` };
   }
   // ยิงผ่าน Vercel (คนละเครื่องกับฐานข้อมูล) จึงยังส่งได้ตอนฐานข้อมูลเริ่มป่วย
+  // ── ส่งเข้ามือถือเจ้าของเมื่อไหร่ ──────────────────────────────────────
+  // คำขอจิ๋วเร็วปกติ = ฐานข้อมูลดี ปัญหาอยู่ที่เครื่อง/เน็ตของเครื่องนี้ ⟹ ไม่ส่งเข้ามือถือ
+  // แถบเตือนบนจอเครื่องนั้นยังขึ้นตามเดิม (คนที่แก้ได้คือคนที่ถือเครื่องนั้น ไม่ใช่เจ้าของที่บ้าน)
+  // ระบบล่มจริงมีตัวเฝ้าระวังภายนอก (GitHub ทุก 10 นาที) ยิงเข้ามือถือ + LINE อยู่แล้ว
+  // เดิมส่งทุกครั้ง ข้อความเองยังบอกว่า "ฐานข้อมูลไม่ได้ช้า" แต่ปลุกเจ้าของตอนตีสี่อยู่ดี
+  // "กลับมาปกติ" ส่งเฉพาะเมื่อเคยส่ง "มีปัญหา" ออกไปจริง — ไม่งั้นคือแจ้งว่าหายจากสิ่งที่ไม่เคยบอก
+  const DOWN_KEY="fc_dbh_down_pushed";
+  if(kind==="down"){
+    if(!/น่าจะล่มจริง|ช้าจริง/.test(msg.body))return;   // ตัววัดบอกว่าฐานข้อมูลปกติ → จบที่แถบบนจอ
+    try{localStorage.setItem(DOWN_KEY,"1");}catch{}
+  }else{
+    let was=null;try{was=localStorage.getItem(DOWN_KEY);localStorage.removeItem(DOWN_KEY);}catch{}
+    if(was!=="1")return;
+  }
   try{ fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({...msg, scope:"admin", url:"/"}),keepalive:true}); }catch{}
 }
 // kind: "ok" | "slow" | "err"
+// ไอแพดที่เปิดแอปค้างไว้ข้ามคืน: Safari พักหน้าที่อยู่เบื้องหลัง คำขอที่ค้างอยู่หมดเวลา/พังหมด
+// พอกลับมาหน้าจอก็ยิงคำขอที่ค้างไว้พร้อมกันเป็นชุด ⟹ นับเป็น "พัง 3 ครั้ง" แล้วเตือนว่าระบบมีปัญหา
+// ทั้งที่ฐานข้อมูลปกติดี (เคสจริง 11 ก.ย. 69 03:59 — ร้านปิดแล้ว ไอแพดวางทิ้งไว้)
+// ⟹ ไม่นับตัวอย่างที่เกิดตอนหน้าอยู่เบื้องหลัง และช่วง 20 วินาทีแรกหลังกลับมาหน้าจอ
+let dbhResumedAt=0;
+if(typeof document!=="undefined"){
+  try{document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")dbhResumedAt=Date.now();});}catch{}
+}
+const dbhQuiet=()=>{
+  try{
+    if(typeof document!=="undefined"&&document.visibilityState==="hidden")return true;
+    return dbhResumedAt>0&&Date.now()-dbhResumedAt<20000;
+  }catch{return false;}
+};
 function dbhRecord(kind, ms){
   try{
+    if(kind!=="ok"&&dbhQuiet())return;   // ตัวอย่างช่วงหลับ/เพิ่งตื่นเชื่อไม่ได้ — ห้ามเอามาตัดสินว่าระบบป่วย
     // เน็ตของผู้ใช้หลุด ≠ ฐานข้อมูลป่วย — ถ้าเหมารวมจะเตือนผิดทุกครั้งที่ไวไฟสาขาสะดุด
     if(kind!=="ok" && typeof navigator!=="undefined" && navigator.onLine===false) return;
     if(ms) DBH.lastMs = ms;
