@@ -58,9 +58,23 @@
         document.addEventListener("touchstart", function (e) {
           if (e.touches && e.touches.length > 1) document.addEventListener("touchmove", blockPinch, { passive: false });
         }, { passive: true });
-        document.addEventListener("touchend", function (e) {
+        // ถอดตัวบล็อกออกทั้ง touchend และ touchcancel
+        // iOS ยิง touchcancel (ไม่ใช่ touchend) ทุกครั้งที่ระบบยึดนิ้วไป — แถบแจ้งเตือน
+        // ปัดเปิดศูนย์ควบคุม สายเข้า สลับแอป ฯลฯ ถ้าดักแต่ touchend ตัวบล็อกจะค้างผูกกับ
+        // document ถาวร แล้วทุกการขยับนิ้วหลังจากนั้นต้องวิ่งผ่าน JS ทั้งหมด
+        // ที่แย่กว่านั้นคือมันกิน touchmove ของทุกลำดับที่มีนิ้วแตะเกินหนึ่ง ⟹ วางนิ้วโป้ง
+        // ประคองไอแพดไว้แล้วแตะสั่งอาหารด้วยอีกนิ้ว การแตะนั้นจะไม่กลายเป็นคลิกเลย
+        // (อาการ "บางจังหวะกดอะไรไม่ได้" ขึ้นกับว่าถือเครื่องยังไง จึงเป็นๆ หายๆ)
+        var unblock = function (e) {
           if (!e.touches || e.touches.length < 2) document.removeEventListener("touchmove", blockPinch);
-        }, { passive: true });
+        };
+        document.addEventListener("touchend", unblock, { passive: true });
+        document.addEventListener("touchcancel", unblock, { passive: true });
+        // กันเหนียวอีกชั้น: หน้าจอถูกพักแล้วกลับมา ให้ถอดตัวบล็อกทิ้งเสมอ
+        // เพราะลำดับนิ้วที่ค้างอยู่ตอนสลับแอปอาจไม่มีอีเวนต์ปิดท้ายมาให้เลย
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "visible") document.removeEventListener("touchmove", blockPinch);
+        });
         window.addEventListener("wheel", function (e) {
           if (e.ctrlKey) e.preventDefault(); // trackpad pinch / ctrl-wheel zoom
         }, { passive: false });

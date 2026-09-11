@@ -1481,7 +1481,7 @@ section("ผลตรวจเส้นทางเงิน: 11 ข้อที
     && APP.includes("const r = await sb(`orders?id=eq.${id}&updated_at=${guard}&status=eq.awaiting_payment`,"));
   ok_("ยกเลิกไม่ผ่านกันชนต้องบอกให้เปิดโต๊ะใหม่ ไม่ใช่เดินต่อ",
     APP.includes("const row=await api.clearPayWaiting(existingOrder.id,verRef.current);")
-    && APP.includes("if(!row){alert(\"⚠️ ยกเลิกไม่สำเร็จ"));
+    && APP.includes("if(!row){notifyDlg(\"⚠️ ยกเลิกไม่สำเร็จ"));
 
   // ── มือถือลูกค้าต้องเห็นเลขเดียวกับที่ต้องจ่าย ──
   ok_("ล็อกยอดแล้วมือถือลูกค้าโชว์ยอดบน QR ใบนั้น",
@@ -2291,6 +2291,46 @@ section("ป็อปอัพเก็บเงิน + เงินทอน")
       .filter((x) => !APP.includes(x)), []);
   ok_("ตัวพิมพ์ราสเตอร์ยังพิมพ์บรรทัดส่วนลดรายเมนู",
     APP.includes('if(disc>0)L.push({t:"   ลด "+(i.item_discount_type==="percent"?i.item_discount_value+"%":bahtR(i.item_discount_value)),size:18});'));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// จอต้องไม่ค้างจนต้องฆ่าแอป
+// เหตุจริง 10 ก.ย. 69: จอโต๊ะหยุดรับการแตะเป็นบางจังหวะ ปิดจอไม่ได้ ต้องปิดแอปเปิดใหม่
+// ทางที่ทำให้เกิดได้จริงมีสามทาง แต่ละทางปิดแยกกัน
+// ══════════════════════════════════════════════════════════════════════════
+section("จอต้องไม่ค้างจนต้องฆ่าแอป");
+{
+  // ① ตัวกันซูมสองนิ้ว: iOS ยิง touchcancel ไม่ใช่ touchend เมื่อระบบยึดนิ้วไป
+  // ดักแต่ touchend = ตัวบล็อกค้างผูกกับ document ถาวร แล้วกิน touchmove ของทุกลำดับ
+  // ที่มีนิ้วเกินหนึ่ง ⟹ วางนิ้วโป้งประคองเครื่องแล้วแตะสั่งอาหาร การแตะไม่กลายเป็นคลิก
+  ok_("ตัวกันซูมถอดตัวบล็อกตอนระบบยึดนิ้วไปด้วย", HTML.includes('document.addEventListener("touchcancel", unblock, { passive: true });'));
+  ok_("ถอดด้วยตัวเดียวกันทั้ง touchend และ touchcancel",
+    HTML.includes('document.addEventListener("touchend", unblock, { passive: true });') &&
+    HTML.includes("var unblock = function (e) {"));
+  ok_("กลับมาจากสลับแอปแล้วถอดตัวบล็อกทิ้งเสมอ",
+    HTML.includes('if (document.visibilityState === "visible") document.removeEventListener("touchmove", blockPinch);'));
+
+  // ② กล่องเตือนของเบราว์เซอร์บล็อกเธรดหลัก — บนไอแพดที่เปิดจากไอคอนหน้าจอโฮม
+  // มีจังหวะที่มันไม่ขึ้นให้เห็นแต่ยังล็อกไว้ ⟹ ทั้งจอตายจนกว่าจะฆ่าแอป
+  ok_("มีกล่องเตือนแบบไม่บล็อกเธรด", APP.includes("function notifyDlg(msg){"));
+  ok_("ตัวแจ้ง error กลางก็เลิกบล็อกแล้ว",
+    APP.includes("function showErr(prefix,err){console.error(prefix,err);notifyDlg(prefix+\": \"+friendlyError(err));}"));
+  // ตัวชี้ขาด: ในจอที่พนักงานกดรัวตอนขาย ต้องไม่เหลือกล่องที่บล็อกเธรดเลยสักจุด
+  {
+    const lines = APP.split("\n");
+    const st = lines.findIndex((l) => l.startsWith("function POSOrderPanel({table,existingOrder,"));
+    const en = lines.findIndex((l, i) => i > st && l.startsWith("const PAY_METHODS="));
+    const left = (st >= 0 && en > st)
+      ? lines.slice(st, en).filter((l) => /(^|[^A-Za-z0-9_.$])alert\(/.test(l)).length
+      : -1;
+    ck("จอโต๊ะ/จ่ายเงินต้องไม่เหลือกล่องเตือนที่บล็อกเธรด", left, 0);
+  }
+
+  // ③ รอสิ่งที่ไม่มีวันมา: ปิดบิลค้างกลางทาง ลูกค้ายืนรอหน้าเคาน์เตอร์
+  ok_("รอฟอนต์มีเพดานเวลา", APP.includes("new Promise(r=>setTimeout(r,2500))"));
+  ok_("โหลดรูปใบเสร็จมีเพดานเวลา",
+    APP.includes('const t=setTimeout(()=>rej(new Error("โหลดรูปนานเกินไป")),6000);') &&
+    APP.includes("x.onload=()=>{clearTimeout(t);res(x);};"));
 }
 
 console.log(`\n${"═".repeat(52)}`);

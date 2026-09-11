@@ -279,7 +279,13 @@ function friendlyError(err){
   return raw||"เกิดข้อผิดพลาด";
 }
 // Show friendly error + log raw to console in dev only
-function showErr(prefix,err){console.error(prefix,err);alert(prefix+": "+friendlyError(err));}
+// กล่องเตือนแบบไม่บล็อกเธรดหลัก
+// alert() ของเบราว์เซอร์หยุดทุกอย่างจนกว่าจะมีคนกดปิด และบนไอแพดที่เปิดจากไอคอนหน้าจอโฮม
+// มีจังหวะที่มันไม่ขึ้นให้เห็นแต่ยังล็อกเธรดไว้ ⟹ จอค้างทั้งใบ แตะอะไรไม่ติดสักอย่าง
+// ต้องฆ่าแอปทิ้งอย่างเดียว ซึ่งตรงกับอาการที่หน้าร้านเจอเป๊ะ
+// ตัวนี้ใช้หน้าต่างของแอปเองแทน — ไม่บล็อกอะไร และปิดเองได้เสมอ
+function notifyDlg(msg){ try{ confirmDlg({title:"แจ้งเตือน",message:String(msg),confirmLabel:"รับทราบ",cancelLabel:null}); }catch{ console.warn(msg); } }
+function showErr(prefix,err){console.error(prefix,err);notifyDlg(prefix+": "+friendlyError(err));}
 // Detect image MIME from magic bytes (browser File). Returns 'image/jpeg' | 'image/png' | 'image/webp' | null
 async function detectImageMime(file){
   const buf=await file.slice(0,12).arrayBuffer();
@@ -17746,14 +17752,19 @@ async function btPrint(escData,btName){
 // แล้วแปลงเป็นคำสั่ง ESC/POS raster (GS v 0) → พิมพ์ไทยคมชัดทุกเครื่อง ไม่ต้องพึ่ง code page เครื่องพิมพ์
 // lines: [{t, size, bold, align:'left'|'center', mb, rule}] · คืนค่าเป็น base64 ของไบต์ ESC/POS พร้อมพิมพ์
 async function escposSlipRaster(lines,width=576,opts={}){
-  try{if(document.fonts&&document.fonts.ready)await document.fonts.ready;}catch{}
+  // รอฟอนต์พร้อม แต่ต้องมีเพดานเวลา — WebKit เคยค้างสถานะ "กำลังโหลดฟอนต์" ไว้ทั้งหน้า
+  // ถ้ารอเปล่าๆ ตรงนี้ การพิมพ์ใบเสร็จ "ทุกใบที่เหลือของวันนั้น" จะค้างตามไปด้วย
+  // ฟอนต์ไม่พร้อมแค่ทำให้ตัวหนังสือเพี้ยน แต่การค้างทำให้ปิดบิลไม่ได้เลย
+  try{await Promise.race([document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve(),new Promise(r=>setTimeout(r,2500))]);}catch{}
   // บรรทัดชนิดรูป ({img,h}) ต้องโหลดเสร็จก่อนวัดความสูง ไม่งั้นใบเบี้ยว/รูปหาย
   // รูปมาจาก /api/drive-view ซึ่งเป็น same-origin ผ้าใบจึงไม่ถูก taint
   // (ถ้า taint getImageData จะโยน แล้วใบทั้งใบพิมพ์ไม่ออก ไม่ใช่แค่รูปหาย)
   const imgCache=new Map();
   for(const l of lines){
     if(!l||!l.img||imgCache.has(l.img))continue;
-    try{imgCache.set(l.img,await new Promise((res,rej)=>{const x=new Image();x.onload=()=>res(x);x.onerror=()=>rej(new Error("โหลดรูปไม่ได้"));x.src=l.img;}));}
+    // รูปที่โหลดค้าง (เน็ตร้านสะดุด) ไม่ยิงทั้ง onload และ onerror ⟹ รอตลอดกาล
+    // ใบเสร็จไม่มีโลโก้ยังใช้ได้ แต่ปิดบิลไม่ได้คือลูกค้ายืนรอหน้าเคาน์เตอร์
+    try{imgCache.set(l.img,await new Promise((res,rej)=>{const x=new Image();const t=setTimeout(()=>rej(new Error("โหลดรูปนานเกินไป")),6000);x.onload=()=>{clearTimeout(t);res(x);};x.onerror=()=>{clearTimeout(t);rej(new Error("โหลดรูปไม่ได้"));};x.src=l.img;}));}
     catch{imgCache.set(l.img,null);}   // โหลดไม่ได้ = เว้นที่ไว้ ใบยังออก ดีกว่าไม่ได้ใบเลย
   }
   const pad=14;
@@ -18849,7 +18860,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   },[newQty]);
 
   async function voidItem(idx){
-    if(existingOrder?.status==="paid"){alert("ไม่สามารถยกเลิกรายการของบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'รับเงินเข้า/จ่ายออก' ในเงินในลิ้นชัก");return;}
+    if(existingOrder?.status==="paid"){notifyDlg("ไม่สามารถยกเลิกรายการของบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'รับเงินเข้า/จ่ายออก' ในเงินในลิ้นชัก");return;}
     const target=items[idx];if(!target)return;
     if(!await confirmDlg({message:`ยกเลิก "${target.name}"?`,title:"ยกเลิกรายการ",confirmLabel:"ยกเลิกรายการ",cancelLabel:"ไม่ยกเลิก",danger:true}))return;
     const newLocal=items.filter((_,i)=>i!==idx);
@@ -18864,7 +18875,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         try{
           const newSub=round2(newSent.reduce((s,i)=>s+i.price*i.qty,0));
           const row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,{items:newSent,subtotal:newSub,total:newSub,discount:0,updated_at:new Date().toISOString()});
-          if(!row){alert("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อดูรายการล่าสุดก่อนยกเลิก");onDone();onClose();return;}
+          if(!row){notifyDlg("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อดูรายการล่าสุดก่อนยกเลิก");onDone();onClose();return;}
           verRef.current=row.updated_at;
           // แจ้งครัวว่ารายการนี้ถูกยกเลิก — ตัวพิมพ์เห็นแค่ "รายการที่เพิ่มขึ้น"
           // ของที่หายไปจึงเงียบสนิท ครัวจะทำอาหารที่ลูกค้ายกเลิกไปแล้ว
@@ -18876,7 +18887,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
             console.warn("แจ้งครัวเรื่องยกเลิกไม่สำเร็จ",err);
             posToast("⚠️ ยกเลิกในระบบแล้ว แต่แจ้งครัวไม่สำเร็จ — กรุณาบอกครัวด้วยตัวเอง","warn");
           }
-        }catch(e){alert("ยกเลิกรายการไม่สำเร็จ: "+friendlyError(e));return;}
+        }catch(e){notifyDlg("ยกเลิกรายการไม่สำเร็จ: "+friendlyError(e));return;}
       }
     }
     setItems(newLocal);
@@ -18890,7 +18901,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const r=await agentPrintItems(list,table.table_number,branch?.id,
         {bill:existingOrder?.id??null,by:currentUser?.username||null,kind:o.kind||"reprint"});
       sent=r.sent;noPrinter=r.noPrinter;
-    }catch(e){alert("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
+    }catch(e){notifyDlg("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
     if(sent&&noPrinter)posToast(`${o.okMsg||"🔁 ส่งพิมพ์ซ้ำแล้ว"} · อีก ${noPrinter} รายการยังไม่ได้กำหนดเครื่องพิมพ์`,"warn");
     else if(sent)posToast(o.okMsg||"🔁 ส่งคำสั่งพิมพ์ใบครัวไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
     else posToast(o.noneMsg||"⚠️ เมนูนี้ยังไม่ได้กำหนดเครื่องพิมพ์ — ตั้งที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์","warn");
@@ -18902,7 +18913,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const clearQRFlag=()=>{ try{ if(table&&table.id)api.clearTableQRPrinted(table.id); }catch{} };
   async function cancelOrder(){
     if(!existingOrder?.id)return;
-    if(existingOrder.status==="paid"){alert("ไม่สามารถยกเลิกบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'จ่ายออก' ในเงินในลิ้นชัก");return;}
+    if(existingOrder.status==="paid"){notifyDlg("ไม่สามารถยกเลิกบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'จ่ายออก' ในเงินในลิ้นชัก");return;}
     // ยกเลิกบิลคือทางที่เงินสดหายได้เงียบที่สุด: เก็บเงินลูกค้า → กดยกเลิก → ลิ้นชักตรงเป๊ะ
     // เลยต้องมีเหตุผลทุกครั้ง และต้องรู้ว่าใครกด ไม่งั้นไม่มีอะไรให้ตรวจย้อนหลังเลย
     const reason=await reasonDlg({
@@ -18929,10 +18940,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,base);
         posToast("⚠️ ยกเลิกบิลแล้ว แต่ยังบันทึกผู้ยกเลิก/เหตุผลไม่ได้ — ต้องเพิ่มคอลัมน์ในฐานข้อมูลก่อน","warn");
       }
-      if(!row){alert("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ แล้วลองยกเลิกอีกครั้ง");onDone();onClose();return;}
+      if(!row){notifyDlg("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ แล้วลองยกเลิกอีกครั้ง");onDone();onClose();return;}
       clearQRFlag();
       onDone();onClose();
-    }catch(e){alert("เกิดข้อผิดพลาด: "+friendlyError(e));}
+    }catch(e){notifyDlg("เกิดข้อผิดพลาด: "+friendlyError(e));}
   }
 
   // พิมพ์ใบเสร็จ — iPad/https พิมพ์ผ่านตัวพิมพ์ (agent) เป็นรูปภาพไทยคมชัด · เดสก์ท็อป/LAN ใช้หน้าต่างพิมพ์ปกติ
@@ -18957,7 +18968,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // ใช้ยอด "สด" ชุดเดียวกับที่ป็อปอัพแสดงอยู่ ไม่ใช่ค่าจากแถวบิลที่ยังไม่ปิด
   // (แถวที่ยังไม่ปิดเก็บแค่ยอดรวมดิบ ไม่มีค่าบริการ/VAT — เคยพิมพ์ QR ยอดน้อยกว่าที่ต้องจ่ายมาแล้ว)
   async function printPayQR(){
-    if(!items.length){alert("ยังไม่มีรายการในบิล");return;}
+    if(!items.length){notifyDlg("ยังไม่มีรายการในบิล");return;}
     // พิมพ์ก่อน ล็อกทีหลัง — ถ้า await ก่อนเปิดหน้าต่างพิมพ์ เบราว์เซอร์จะบล็อกป็อปอัพ
     // (บางสาขายังไม่มีเครื่องพิมพ์ใบเสร็จ ต้องตกไปทางหน้าต่างพิมพ์)
     smartPrintReceipt({...(existingOrder||{}),items:itemsWithDisc,payment_method:payMethod,
@@ -18974,14 +18985,14 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         promo_id:selectedPromoId??null,promo_name:selectedPromo?.name||null,promo_amount:round2(promoDiscount),
         pay_method:payMethod,by:currentUser?.username||null};
       const row=await api.setPayWaiting(existingOrder.id,verRef.current,lock);
-      if(!row){alert("⚠️ พิมพ์ QR แล้ว แต่ล็อกยอดไม่สำเร็จ — บิลโต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ ตรวจยอดอีกครั้ง แล้วพิมพ์ QR ใหม่");return;}
+      if(!row){notifyDlg("⚠️ พิมพ์ QR แล้ว แต่ล็อกยอดไม่สำเร็จ — บิลโต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ ตรวจยอดอีกครั้ง แล้วพิมพ์ QR ใหม่");return;}
       verRef.current=row.updated_at;
       setPayWait(true);setLockedTotal(round2(total));
       posToast(row._noLockCol
         ?"🔒 โต๊ะนี้ขึ้นสถานะรอชำระเงินแล้ว (ยังล็อกส่วนลดไม่ได้ — ต้องเพิ่มคอลัมน์ในฐานข้อมูลก่อน)"
         :"🔒 ล็อกยอดแล้ว — โต๊ะขึ้นสถานะรอชำระเงิน ลูกค้าสั่งเพิ่มไม่ได้จนกว่าจะยืนยันชำระ","ok");
       onDone&&onDone();
-    }catch(e){alert("พิมพ์ QR แล้ว แต่ล็อกยอดไม่สำเร็จ: "+friendlyError(e));}
+    }catch(e){notifyDlg("พิมพ์ QR แล้ว แต่ล็อกยอดไม่สำเร็จ: "+friendlyError(e));}
   }
   // ปลดล็อกกลับไปแก้ส่วนลด/พิมพ์ QR ใหม่ — กดพิมพ์ผิดโต๊ะแล้วต้องมีทางออก ไม่ใช่ค้างอยู่อย่างนั้น
   async function unlockPayWait(){
@@ -18989,12 +19000,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(!await confirmDlg({title:"ยกเลิกการรอชำระเงิน?",message:"โต๊ะกลับไปสถานะปกติ · ลูกค้าสั่งเพิ่มได้อีกครั้ง · แก้ส่วนลดได้\n\n✅ QR ใบเดิมที่ลูกค้าถืออยู่ยังใช้จ่ายได้ ไม่ต้องพิมพ์ใหม่\n(QR พร้อมเพย์ผูกกับยอดเงิน ไม่ได้ผูกกับโต๊ะ) — ยกเว้นถ้ายอดเปลี่ยน ระบบจะเตือนให้เอง",confirmLabel:"ยกเลิกการรอชำระ",cancelLabel:"ไม่ยกเลิก"}))return;
     try{
       const row=await api.clearPayWaiting(existingOrder.id,verRef.current);
-      if(!row){alert("⚠️ ยกเลิกไม่สำเร็จ — บิลโต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น (อาจมีคนสั่งเพิ่ม)\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่");return;}
+      if(!row){notifyDlg("⚠️ ยกเลิกไม่สำเร็จ — บิลโต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น (อาจมีคนสั่งเพิ่ม)\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่");return;}
       verRef.current=row.updated_at;
       setPayWait(false);   // คง lockedTotal ไว้ ระบบจะได้เฝ้าว่า QR ใบเดิมยังใช้ยอดนี้อยู่ไหม
       posToast("ยกเลิกการรอชำระแล้ว — QR ใบเดิมยังใช้ได้ถ้ายอดไม่เปลี่ยน","ok");
       onDone&&onDone();
-    }catch(e){alert("ปลดล็อกไม่สำเร็จ: "+friendlyError(e));}
+    }catch(e){notifyDlg("ปลดล็อกไม่สำเร็จ: "+friendlyError(e));}
   }
   // ลบรายการ "พิมพ์ไม่ออก" ของบิลนี้ออกจากที่ตัวพิมพ์บันทึกไว้
   // อ่านของล่าสุดก่อนเขียนเสมอ — ตัวพิมพ์อาจเพิ่งเขียนคำสั่งอื่นลงไปในช่องเดียวกัน
@@ -19016,7 +19027,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 
   async function saveOrder(){
     if(savingRef.current)return;   // กดซ้ำ/ghost-click — ครัวจะได้ออเดอร์สองใบ
-    if(!items.length){alert("กรุณาเลือกเมนูก่อนครับ");return;}
+    if(!items.length){notifyDlg("กรุณาเลือกเมนูก่อนครับ");return;}
     setSavingGuard(true);
     try{
       // ส่งเฉพาะ "รายการใหม่ที่ยังไม่ได้ส่ง" (delta เหนือจำนวนที่ส่งครัวไปแล้ว) แบบ append atomic
@@ -19043,7 +19054,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // NOTE: ไม่พิมพ์ที่นี่ — "ตัวพิมพ์ (agent)" ที่ร้าน poll ออเดอร์แล้วพิมพ์รายการใหม่เอง (จุดเดียว กันพิมพ์ซ้ำ + ใช้ได้กับ iPad)
       posToast("✅ ส่งรายการแล้ว — ตัวพิมพ์กำลังพิมพ์ใบครัว","ok");
       onDone();onClose();
-    }catch(e){alert("บันทึกไม่สำเร็จ: "+friendlyError(e));}setSavingGuard(false);
+    }catch(e){notifyDlg("บันทึกไม่สำเร็จ: "+friendlyError(e));}setSavingGuard(false);
   }
   async function checkOut(methodArg){
     if(savingRef.current)return;   // กดซ้ำ = ตัดเงินสองรอบ
@@ -19090,7 +19101,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         try{const r=await api.getPOSOrderById(existingOrder.id);fresh=Array.isArray(r)?r[0]:r;}catch{}
         const committed=fresh&&fresh.status==="paid"&&Math.abs((+fresh.total||0)-round2(total))<0.01;
         if(committed){row=fresh;}
-        else{alert("⚠️ มีการเพิ่ม/แก้รายการของโต๊ะนี้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — ยังไม่ได้ตัดเงิน\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อตรวจสอบยอดล่าสุดก่อนชำระเงิน");setSavingGuard(false);onDone();onClose();return;}
+        else{notifyDlg("⚠️ มีการเพิ่ม/แก้รายการของโต๊ะนี้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — ยังไม่ได้ตัดเงิน\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อตรวจสอบยอดล่าสุดก่อนชำระเงิน");setSavingGuard(false);onDone();onClose();return;}
       }
       verRef.current=row.updated_at;
       // record cash movement if cash payment — skip if one already exists for this order (the
@@ -19111,7 +19122,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         onCashChange({change:round2(Math.max(0,(+cashReceived||0)-total)),received:+cashReceived||0,total,table:table.table_number});
       }
       onDone();onClose();
-    }catch(e){alert("ชำระเงินไม่สำเร็จ: "+e.message);}setSavingGuard(false);
+    }catch(e){notifyDlg("ชำระเงินไม่สำเร็จ: "+e.message);}setSavingGuard(false);
   }
 
   // Split bill: compute selected subtotal
@@ -19254,7 +19265,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const parts=splitEvenly(total,splitN);
       const amtNum=Math.max(0,Math.min(total,+String(splitAmt).replace(/[^0-9.]/g,"")||0));
       const printShare=(key,label,amt)=>{
-        if(!(amt>0)){alert("ยอดต้องมากกว่า 0");return;}
+        if(!(amt>0)){notifyDlg("ยอดต้องมากกว่า 0");return;}
         smartPrintReceipt({items:[{name:label,qty:1,price:amt}],subtotal:amt,discount:0,total:amt,
           payment_method:"split",service_charge:0,vat:0,vat_rate:0,vat_included:vatIncluded},table.table_number,false);
         setSplitDone(p=>({...p,[key]:true}));
@@ -19331,7 +19342,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           <div style={{display:"flex",gap:8,padding:"12px 20px 18px",borderTop:`1px solid ${C.line}`,flexShrink:0}}>
             <Btn v="ghost" onClick={closeSplit} full s={{padding:"9px"}}>ปิด</Btn>
             {splitMode==="item"&&<Btn icon={I.print} onClick={()=>{
-              if(splitItems.length===0){alert("กรุณาเลือกรายการ");return;}
+              if(splitItems.length===0){notifyDlg("กรุณาเลือกรายการ");return;}
               // เฉลี่ยส่วนลด/ค่าบริการ/VAT ตามสัดส่วนของยอดที่เลือก เทียบยอดก่อนลดทั้งบิล
               // ถ้าไม่เฉลี่ย คนที่แยกจ่ายจะรวมกันแล้วจ่ายเกินยอดจริงของบิล
               const ratio=subtotal>0?splitSubtotal/subtotal:0;
