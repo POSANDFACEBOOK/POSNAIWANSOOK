@@ -2333,6 +2333,65 @@ section("จอต้องไม่ค้างจนต้องฆ่าแ�
     APP.includes("x.onload=()=>{clearTimeout(t);res(x);};"));
 }
 
-console.log(`\n${"═".repeat(52)}`);
+// ══════════════════════════════════════════════════════════════════════════
+// ใบปิดกะต้องออกเครื่องพิมพ์ใบเสร็จ ไม่ใช่หน้าต่างพิมพ์ A4
+// เหตุจริง 10 ก.ย. 69: ปิดกะบนไอแพดแล้วขึ้นหน้าต่างพิมพ์ของ iOS "ไม่มีเครื่องพิมพ์ที่เลือก"
+// ใบปิดกะไม่เคยออกเลย เพราะเปิดแต่หน้าต่างเบราว์เซอร์ ไม่เคยต่อเข้าตัวพิมพ์ (agent)
+// ══════════════════════════════════════════════════════════════════════════
+section("ใบปิดกะออกเครื่องพิมพ์ใบเสร็จ");
+{
+  const grabFn2 = (head) => {
+    const st = APP.indexOf(head);
+    if (st < 0) return null;
+    let d = 0, started = false, en = -1;
+    for (let i = st + head.length - 1; i < APP.length; i++) {  // นับจากปีกกาของตัวฟังก์ชัน ไม่ใช่ของลายเซ็น ({...})
+      if (APP[i] === "{") { d++; started = true; }
+      else if (APP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+    }
+    return APP.slice(st, en);
+  };
+  const bahtLn = APP.split("\n").find((l) => l.startsWith("function bahtR(n){"));
+  const emojiLn = APP.split("\n").find((l) => l.startsWith("function stripEmoji(s){"));
+  const body = grabFn2("function buildZReportLines({shift,totals,branch,user,note}){");
+  ok_("ยังมีตัวสร้างใบปิดกะแบบบรรทัด", !!(body && bahtLn && emojiLn));
+  if (body && bahtLn && emojiLn) {
+    const build = new Function(
+      bahtLn + "\n" + emojiLn + "\nconst fmtDT=()=>\"10/09/2569 23:02\";\n" + body + "\nreturn buildZReportLines;"
+    )();
+    // ตัวเลขชุดจริงจากจอปิดกะในรูปที่เจ้าของส่งมา (กะ #9 สาขา 8)
+    const T = {
+      orderCount: 14, itemQty: 78, avgBill: 553.21, gross: 10113, disc: 2365.5, discPct: 23.39,
+      promo: 0, svc: 0, vat: 506.84, vatIncluded: true, roundAdj: -2.5, totalSales: 7745,
+      totalCash: 6834, totalTransfer: 535, totalCard: 0, totalOther: 376,
+      openingCash: 2000, salesCash: 6834, payIn: 0, payOut: 0, drops: 0, refunds: 0, expected: 8834,
+      cancelCount: 1, cancelAmt: 119, cancelList: [{ id: 71, table: "B7", total: 119, by: "มะลิ" }],
+      openCount: 1, openAmt: 299, openList: [{ id: 72, table: "A3", total: 299 }],
+      actual: 8800, diff: -34,
+    };
+    const L = build({ shift: { id: 9, opened_at: "2026-09-09T16:28:00Z" }, totals: T, branch: { name: "กาญจนบุรี The River" }, user: { name: "มะลิ" }, note: "⚠️ ปิดกะทั้งที่ยังมีโต๊ะค้าง 1 โต๊ะ" });
+    const txt = L.map((x) => [x.t, x.l, x.r].filter(Boolean).join(" ")).join("\n");
+    // ตัวเลขเงินทุกตัวที่คนตรวจต้องใช้ ต้องอยู่บนกระดาษ — หายตัวเดียว = กระทบยอดไม่ได้
+    ck("ตัวเลขเงินหลักอยู่บนใบครบ",
+      ["฿7745.00", "฿8834.00", "฿8800.00", "฿6834.00", "฿535.00", "฿376.00", "-฿2365.50", "฿506.84"].filter((v) => !txt.includes(v)), []);
+    ck("หัวข้อครบทุกส่วน",
+      ["ยอดขาย", "โครงสร้างยอด", "แยกตามวิธีชำระ", "ลิ้นชัก", "นับจริง", "รายการที่ต้องตรวจ"].filter((h) => !txt.includes(h)), []);
+    ok_("เงินขาดต้องบอกว่า \"ขาด\" พร้อมยอด", L.some((x) => x.l === "ขาด" && x.r === "-฿34.00"));
+    ok_("บิลที่ยกเลิกต้องบอกว่าใครยกเลิก", txt.includes("B7 ฿119.00 (มะลิ)"));
+    ok_("โต๊ะที่ยังไม่ปิดบิลต้องขึ้นบนใบ", txt.includes("A3 ฿299.00"));
+    // ฟอนต์ที่ใช้ทำภาพใบไม่มีรูปอีโมจิ — พิมพ์ออกมาเป็นกล่องสี่เหลี่ยม อ่านไม่ออก
+    ck("ห้ามมีอีโมจิบนใบ (พิมพ์ออกมาเป็นกล่องสี่เหลี่ยม)",
+      L.map((x) => [x.t, x.l, x.r].join("")).filter((s) => /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(s)).length, 0);
+  }
+  // ทางส่งพิมพ์: ไอแพดต้องไปทางตัวพิมพ์ ไม่ใช่หน้าต่างพิมพ์
+  const pz = grabFn2("function printZReport(args){") || "";
+  ok_("ไอแพดส่งใบปิดกะเข้าตัวพิมพ์ ไม่ใช่หน้าต่างพิมพ์",
+    pz.includes("getReceiptPrinters(prs)") && pz.includes('cmdDesc(p,"pj",{at,b64})') && pz.includes("escposSlipRaster(buildZReportLines(args),576)"));
+  ok_("เดสก์ท็อปยังเปิดหน้าต่างพิมพ์ทันทีตอนกด (ไม่โดนบล็อกป็อปอัพ)",
+    pz.includes("if(!isHttps){printZReportWindow(args);return;}"));
+  ok_("ยังไม่ติ๊กเครื่องพิมพ์ใบเสร็จ ต้องบอกให้รู้ ไม่ใช่เงียบ", pz.includes("ใบปิดกะไม่ได้พิมพ์"));
+  ok_("การพิมพ์ต้องไม่ขวางการปิดกะ", pz.includes("(async()=>{"));
+}
+
+console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

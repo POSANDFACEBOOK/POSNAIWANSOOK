@@ -20439,7 +20439,98 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
 // ══════════════════════════════════════════════════════
 // ── CLOSE SHIFT (Z-REPORT) ───────────────────────────
 // ══════════════════════════════════════════════════════
-function printZReport({shift,totals,branch,user,note}){
+// ── ใบปิดกะ (Z-Report) แบบบรรทัด สำหรับเครื่องพิมพ์ใบเสร็จ ────────────
+// เนื้อหาเดียวกับหน้าต่างพิมพ์ทุกบรรทัด แต่ไม่มีอีโมจิ — ฟอนต์ที่ใช้ทำภาพใบ
+// ไม่มีรูปอีโมจิ พิมพ์ออกมาจะเป็นกล่องสี่เหลี่ยมแทน
+function buildZReportLines({shift,totals,branch,user,note}){
+  const t=totals||{};const L=[];const b=(n)=>bahtR(n);
+  const who=(user&&(user.name||user.username))||"";
+  L.push({t:(branch&&branch.name)||"",size:36,bold:true,align:"center",mb:2});
+  L.push({t:"Z-REPORT · ใบปิดกะ",size:26,bold:true,align:"center"});
+  L.push({t:"กะ #"+shift.id+(who?" · "+who:""),size:20,align:"center",mb:2});
+  L.push({rule:true});
+  L.push({l:"เปิดกะ",r:fmtDT(shift.opened_at),size:20});
+  L.push({l:"ปิดกะ",r:fmtDT(),size:20});
+  L.push({rule:true});
+  L.push({t:"ยอดขาย",size:24,bold:true});
+  L.push({l:"จำนวนบิล",r:(t.orderCount||0)+" บิล",size:22});
+  L.push({l:"จำนวนรายการอาหาร",r:(+t.itemQty||0).toLocaleString()+" ชิ้น",size:22});
+  L.push({l:"เฉลี่ยต่อบิล",r:b(t.avgBill),size:22});
+  L.push({rule:true});
+  L.push({t:"โครงสร้างยอด",size:24,bold:true});
+  L.push({l:"ยอดก่อนส่วนลด",r:b(t.gross),size:22});
+  if(t.disc)L.push({l:"- ส่วนลด"+(t.discPct?` (${t.discPct}%)`:""),r:"-"+b(t.disc),size:22});
+  if(t.promo)L.push({l:"- โปรโมชั่น",r:"-"+b(t.promo),size:22});
+  if(t.svc)L.push({l:"+ ค่าบริการ",r:"+"+b(t.svc),size:22});
+  if(t.vat)L.push({l:"VAT"+(t.vatIncluded?" (รวมในราคาแล้ว)":""),r:(t.vatIncluded?"":"+")+b(t.vat),size:22});
+  if(t.roundAdj)L.push({l:"ปัดเศษ",r:(t.roundAdj>0?"+":"-")+b(Math.abs(t.roundAdj)),size:22});
+  L.push({l:"= ยอดขายสุทธิ",r:b(t.totalSales),size:26,bold:true});
+  L.push({rule:true});
+  L.push({t:"แยกตามวิธีชำระ",size:24,bold:true});
+  L.push({l:"  เงินสด",r:b(t.totalCash),size:22});
+  L.push({l:"  โอน/พร้อมเพย์",r:b(t.totalTransfer),size:22});
+  L.push({l:"  บัตร",r:b(t.totalCard),size:22});
+  L.push({l:"  อื่นๆ",r:b(t.totalOther),size:22});
+  L.push({rule:true});
+  L.push({t:"ลิ้นชัก",size:24,bold:true});
+  L.push({l:"เงินทอนเริ่มต้น",r:b(t.openingCash),size:22});
+  L.push({l:"+ ขายเงินสด",r:b(t.salesCash),size:22});
+  L.push({l:"+ รับเข้าเพิ่ม",r:b(t.payIn),size:22});
+  L.push({l:"- จ่ายออก",r:b(t.payOut),size:22});
+  L.push({l:"- ฝาก/ถอนเซฟ",r:b(t.drops),size:22});
+  L.push({l:"- คืนเงิน",r:b(t.refunds),size:22});
+  L.push({l:"= ยอดที่ควรมี",r:b(t.expected),size:24,bold:true});
+  // รายการที่ต้องตรวจ — ใบปิดกะคือเอกสารตรวจสอบ ห้ามตัดให้สั้นลงแม้กระดาษจะยาว
+  if(t.cancelCount||t.openCount){L.push({rule:true});L.push({t:"รายการที่ต้องตรวจ",size:24,bold:true});}
+  if(t.cancelCount){
+    L.push({l:`บิลที่ยกเลิก ${t.cancelCount} ใบ`,r:b(t.cancelAmt),size:22,bold:true});
+    for(const c of (t.cancelList||[]))L.push({t:`   ${c.table||"#"+c.id} ${b(c.total)}${c.by?" ("+c.by+")":" (ไม่มีบันทึกผู้ยกเลิก)"}`,size:18});
+  }
+  if(t.openCount){
+    L.push({l:`โต๊ะที่ยังไม่ปิดบิล ${t.openCount} โต๊ะ`,r:b(t.openAmt),size:22,bold:true});
+    for(const c of (t.openList||[]))L.push({t:`   ${c.table||"#"+c.id} ${b(c.total)}`,size:18});
+  }
+  L.push({rule:true});
+  L.push({l:"นับจริง",r:b(t.actual),size:30,bold:true});
+  const d=+t.diff||0;
+  L.push({l:d===0?"ตรงเป๊ะ":d>0?"เกิน":"ขาด",r:(d>0?"+":d<0?"-":"")+b(Math.abs(d)),size:30,bold:true});
+  if(note){L.push({rule:true});for(const ln of String(note).split("\n"))if(ln.trim())L.push({t:stripEmoji(ln),size:20});}
+  L.push({rule:true});
+  L.push({t:"ผู้ปิดกะ .............................",size:20,mb:14});
+  L.push({t:"ผู้ตรวจ ..............................",size:20,mb:6});
+  L.push({t:"พิมพ์เมื่อ "+fmtDT()+(who?" · "+who:""),size:16,align:"center"});
+  return L;
+}
+// ── ส่งใบปิดกะเข้าเครื่องพิมพ์ ─────────────────────────────────────────
+// เดิมเปิดหน้าต่างพิมพ์ของเบราว์เซอร์อย่างเดียว บนไอแพด (https) ส่งเข้าเครื่องพิมพ์
+// ในร้านไม่ได้ (เบราว์เซอร์ห้ามหน้า https คุยกับเครื่อง 192.168.x.x) ⟹ ขึ้นหน้าต่างพิมพ์
+// A4 ของ iOS ว่า "ไม่มีเครื่องพิมพ์ที่เลือก" แล้วใบปิดกะไม่ออกเลยทุกครั้ง
+// ตอนนี้ไปทางเดียวกับใบเสร็จ: เขียนคำสั่งให้ "ตัวพิมพ์ (agent)" ที่ร้านหยิบไปพิมพ์
+// ห้ามให้การพิมพ์ขวางการปิดกะ — ปิดกะต้องสำเร็จเสมอ พิมพ์พลาดแค่แจ้งเตือน
+function printZReport(args){
+  const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
+  // เดสก์ท็อป/LAN: หน้าต่างพิมพ์ต้องเปิด "ทันที" ในจังหวะที่ผู้ใช้กด
+  // ถ้า await อะไรก่อน เบราว์เซอร์จะมองว่าไม่ใช่การกดของคนแล้วบล็อกป็อปอัพ
+  if(!isHttps){printZReportWindow(args);return;}
+  (async()=>{
+    let prs=[];
+    try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+(args.branch&&args.branch.id));}catch{}
+    const rcps=getReceiptPrinters(prs);
+    if(!rcps.length){
+      posToast("⚠️ ใบปิดกะไม่ได้พิมพ์ — ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ\nไปที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์ → ติ๊ก \"🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ\"","warn",9000);
+      return;
+    }
+    try{
+      const b64=await escposSlipRaster(buildZReportLines(args),576);
+      const at=Date.now();
+      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64})})));
+      posToast(`🧾 ส่งใบปิดกะไป ${rcps.length} เครื่องแล้ว — กระดาษจะออกใน ~5 วินาที`,"ok",6000);
+    }catch(e){
+      posToast("⚠️ ส่งใบปิดกะเข้าเครื่องพิมพ์ไม่สำเร็จ: "+((e&&e.message)||e),"warn",9000);
+    }
+  })();
+}
+function printZReportWindow({shift,totals,branch,user,note}){
   const w=openPrintWindow(420,720);
   if(!w)return;
   const fmt=(v)=>(+v||0).toLocaleString();
