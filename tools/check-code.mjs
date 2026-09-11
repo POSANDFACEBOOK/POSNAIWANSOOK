@@ -2843,6 +2843,31 @@ section("รายการในโต๊ะอ่านได้เต็ม")
   ck("ชื่อ/ตัวเลือก/หมายเหตุไม่ถูกตัดเป็น ...", (blk.match(/textOverflow:"ellipsis"|whiteSpace:"nowrap"/g) || []).length, 0);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ช่องทางจ่ายย่อยใต้ "อื่นๆ" (ไทยพลัส ฯลฯ) — ยอดต้องไม่หลุดจากสรุปกะ/ท่อบัญชี และทุกช่องทางต้องมีชื่อ
+// ══════════════════════════════════════════════════════════════════════════
+section("ช่องทางจ่ายอื่นๆ");
+{
+  const grab = (head) => { const L = APP.split("\n"); const a = L.findIndex(l => l.startsWith(head)); if (a < 0) return null; const b = L.findIndex((l, i) => i >= a && /^\];|\};$/.test(l.trim()) ); return L.slice(a, b + 1).join("\n"); };
+  let OTHER = null, LABEL = null;
+  try { OTHER = new Function(grab("const OTHER_PAY_METHODS=") + "\nreturn OTHER_PAY_METHODS;")(); } catch {}
+  try { LABEL = new Function(APP.split("\n").find(l => l.startsWith("const PAY_LABEL=")) + "\nreturn PAY_LABEL;")(); } catch {}
+  ok_("อ่านรายการช่องทางอื่นๆ ได้", Array.isArray(OTHER) && OTHER.length > 0 && LABEL && typeof LABEL === "object");
+  if (Array.isArray(OTHER) && LABEL) {
+    const noName = OTHER.filter(m => !LABEL[m.v]).map(m => m.v);
+    ck("ทุกช่องทางมีชื่อบนใบเสร็จ/ประวัติ (ขาด: " + (noName.join(",") || "-") + ")", noName.length, 0);
+    ok_("มีไทยพลัส", OTHER.some(m => m.v === "thaiplus" && m.l === "ไทยพลัส"));
+    ok_("ยังเลือก อื่นๆ แบบไม่ระบุได้ (บิลเดิมใช้อยู่)", OTHER.some(m => m.v === "other"));
+    ck("ไม่มีช่องทางซ้ำ", new Set(OTHER.map(m => m.v)).size, OTHER.length);
+    ok_("ไม่มีช่องทางย่อยไปชนเงินสด/พร้อมเพย์ (จะลงผิดกลุ่ม)", !OTHER.some(m => ["cash", "promptpay", "transfer", "credit", "debit"].includes(m.v)));
+  }
+  // ยอดของช่องทางใหม่ต้องลงกลุ่ม "อื่นๆ" เอง — ทั้งสองที่ต้องคัดด้วยการยกเว้น ห้ามเป็นรายชื่อ
+  ok_("สรุปกะ: ช่องทางที่ไม่รู้จักลงกลุ่มอื่นๆ", APP.includes("else if(pm==='credit'||pm==='debit')totalCard+=t;else totalOther+=t;"));
+  ok_("ท่อบัญชี: ช่องทางที่ไม่รู้จักลงกลุ่ม Custom Payment", SLIPPUSH.includes('const other = list.filter((x) => !["cash", "promptpay", "transfer", "credit", "debit"].includes(x.payment_method));'));
+  ok_("กด อื่นๆ = เปิดรายการช่องทาง ไม่ปิดบิลทันที", APP.includes('onClick={()=>{if(m.v==="other"){setAskPay("other");return;}setPayMethod(m.v);'));
+  ok_("เลือกช่องทางย่อย = ปิดบิลด้วยช่องทางนั้น", APP.includes("{OTHER_PAY_METHODS.map(m=><button key={m.v} disabled={saving}") && APP.includes("onClick={()=>{setPayMethod(m.v);setAskPay(null);onPay(m.v);}}"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

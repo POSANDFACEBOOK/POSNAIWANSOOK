@@ -17730,7 +17730,7 @@ export default function App(){
 // ══════════════════════════════════════════════════════
 // ── PRINT HELPERS ─────────────────────────────────────
 // ══════════════════════════════════════════════════════
-const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
+const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",thaiplus:"🏛️ ไทยพลัส",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
 function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const w=openPrintWindow(400,700);
   if(!w)return;
@@ -19575,6 +19575,13 @@ const PAY_METHODS=[
   {v:"promptpay",l:"พร้อมเพย์",icon:"📲",c:"#1E40AF"},
   {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
 ];
+// ช่องทางย่อยในป็อปอัพ "อื่นๆ" — เพิ่มช่องทางใหม่ที่นี่ + ชื่อใน PAY_LABEL (ใบเสร็จ/ประวัติใช้ชื่อจากที่นั่น)
+// ยอดของช่องทางพวกนี้ลงกลุ่ม "อื่นๆ" เองทั้งในสรุปกะและท่อบัญชี (คัดด้วยการยกเว้น ไม่ใช่รายชื่อ) — ไม่มีวันหลุดจากยอด
+// logo: ไฟล์รูปใน public/ (ถ้ามี) · ไม่มีก็ใช้ป้ายตัวอักษรแทน
+const OTHER_PAY_METHODS=[
+  {v:"thaiplus",l:"ไทยพลัส",c:"#1D4ED8"},
+  {v:"other",l:"ช่องทางอื่น (ไม่ระบุ)",icon:"➕",c:"#475569"},
+];
 function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null,onPrintQR,onSplit,onCancelOrder,payWait=false,lockedTotal=null,onUnlockPay}){
   // ป็อปอัพถามวิธีจ่ายหลังกดยืนยันชำระ: null → "choose" → (เงินสด) "cash"
   // ย้ายออกมาจากตัวจอเพราะพนักงานเลือกวิธีจ่าย "ตอนเก็บเงินจริง" ไม่ใช่ตอนกดดูบิล
@@ -19696,14 +19703,30 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:12}}>ลูกค้าจ่ายแบบไหน?</div>
               <div style={{display:"grid",gap:10}}>
                 {PAY_METHODS.map(m=><button key={m.v} disabled={saving}
-                  onClick={()=>{setPayMethod(m.v);if(m.v==="cash"){setCashRcv("");setAskPay("cash");}else{setAskPay(null);onPay(m.v);}}}
+                  onClick={()=>{if(m.v==="other"){setAskPay("other");return;}setPayMethod(m.v);if(m.v==="cash"){setCashRcv("");setAskPay("cash");}else{setAskPay(null);onPay(m.v);}}}
                   style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${m.c}`,background:`${m.c}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left"}}>
                   <span style={{fontSize:30,lineHeight:1}}>{m.icon}</span>
                   <span style={{fontSize:18,fontWeight:900,color:m.c}}>{m.l}</span>
-                  {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:11,color:m.c,fontWeight:700,opacity:.85}}>พิมพ์ใบเสร็จ + ปิดโต๊ะ →</span>}
+                  {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:11,color:m.c,fontWeight:700,opacity:.85}}>{m.v==="other"?"เลือกช่องทาง →":"พิมพ์ใบเสร็จ + ปิดโต๊ะ →"}</span>}
                 </button>)}
               </div>
               <button onClick={()=>setAskPay(null)} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
+            </div>
+            :askPay==="other"?<div style={{padding:18}}>
+              <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:12}}>ช่องทางอื่นๆ — เลือกแล้วปิดบิลทันที</div>
+              <div style={{display:"grid",gap:10}}>
+                {OTHER_PAY_METHODS.map(m=><button key={m.v} disabled={saving}
+                  onClick={()=>{setPayMethod(m.v);setAskPay(null);onPay(m.v);}}
+                  style={{display:"flex",alignItems:"center",gap:14,padding:"14px 18px",borderRadius:14,border:`2.5px solid ${m.c}`,background:`${m.c}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left"}}>
+                  {m.logo
+                    ?<img src={m.logo} alt="" style={{width:52,height:52,objectFit:"contain",flexShrink:0,borderRadius:10,background:C.white}}/>
+                    :m.icon?<span style={{width:52,flexShrink:0,fontSize:30,lineHeight:1,textAlign:"center"}}>{m.icon}</span>
+                    :<span style={{width:52,height:52,flexShrink:0,borderRadius:12,background:m.c,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:900,lineHeight:1.1,textAlign:"center",padding:3}}>{m.l}</span>}
+                  <span style={{fontSize:18,fontWeight:900,color:m.c}}>{m.l}</span>
+                  <span style={{marginLeft:"auto",fontSize:11,color:m.c,fontWeight:700,opacity:.85}}>พิมพ์ใบเสร็จ + ปิดโต๊ะ →</span>
+                </button>)}
+              </div>
+              <button onClick={()=>setAskPay("choose")} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
             </div>
             :<div style={{padding:18}}>
               <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:8}}>💵 รับเงินมาเท่าไหร่?</div>
