@@ -2828,6 +2828,19 @@ section("ป้ายห้ามห่อปุ่ม");
   ok_("แถวตัวเลือกเมนูกดได้ทั้งแถว", APP.includes("return <div key={c.id} role=\"button\" onClick={()=>pick(g,c)}"));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// รายการในแผงโต๊ะ: ชื่อ ตัวเลือก หมายเหตุ ต้องอ่านได้เต็ม — พนักงานใช้ทวนรายการกับลูกค้า
+// เคยถูกตัดเป็น "ชุด..." "+ ชา..." บนแท็บเล็ตแนวตั้ง (11 ก.ย. 69)
+// ══════════════════════════════════════════════════════════════════════════
+section("รายการในโต๊ะอ่านได้เต็ม");
+{
+  const a = APP.indexOf('<div ref={listRef} style={{flex:1,overflowY:"auto",padding:8}}>');
+  const b = a < 0 ? -1 : APP.indexOf("</SwipeRow>)", a);
+  const blk = a >= 0 && b > a ? APP.slice(a, b) : "";
+  ok_("เจอรายการอาหารในแผงโต๊ะ (ชื่อ ตัวเลือก หมายเหตุ)", blk.includes("{item.name}") && blk.includes("optionsText(item.options)") && blk.includes("{item.note}"));
+  ck("ชื่อ/ตัวเลือก/หมายเหตุไม่ถูกตัดเป็น ...", (blk.match(/textOverflow:"ellipsis"|whiteSpace:"nowrap"/g) || []).length, 0);
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

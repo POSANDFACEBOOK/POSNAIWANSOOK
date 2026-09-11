@@ -19392,7 +19392,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
               {existingOrder?.id&&<button onClick={()=>agentReprint([item])} title="พิมพ์ซ้ำเฉพาะรายการนี้ไปครัว" aria-label="พิมพ์ซ้ำรายการนี้" style={{flex:1,border:"none",borderRadius:7,background:C.blue,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.print} s={16} c={C.white}/></button>}
               <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" aria-label="ลบรายการ" style={{flex:1,border:"none",borderRadius:7,background:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={16} c={C.white}/></button>
             </>}>
-            <div style={{display:"flex",alignItems:"center",gap:9,padding:"9px 11px"}}>
+            {/* ชื่อ ตัวเลือก หมายเหตุ ต้องอ่านได้ครบทุกตัวอักษร (พนักงานใช้ทวนรายการกับลูกค้า) — ห้ามตัดเป็น "..."
+                ข้อความจึงได้ความกว้างเต็มแถว แล้วปุ่มจำนวน/ราคาย้ายลงไปบรรทัดล่าง */}
+            <div style={{display:"flex",alignItems:"flex-start",gap:9,padding:"9px 11px"}}>
               {/* ติ๊กเสิร์ฟแล้ว — มีเฉพาะแถวที่ส่งครัวแล้ว (แถวที่ยังไม่ส่ง ยังไม่มีอะไรให้เสิร์ฟ)
                   ใช้เป็นตัวรีเช็คกับฝั่งครัวว่าเมนูไหนออกจากครัวมาถึงโต๊ะแล้ว */}
               {!unsent&&existingOrder?.id&&item.line_uid&&(()=>{const sv=served[String(item.line_uid)];return <button
@@ -19402,24 +19404,24 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
                 {sv&&<Ic d={I.check} s={16} c={C.white}/>}
               </button>;})()}
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13.5,fontWeight:unsent?900:700,color:(!unsent&&served[String(item.line_uid)])?C.ink3:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                <div style={{fontSize:13.5,fontWeight:unsent?900:700,color:(!unsent&&served[String(item.line_uid)])?C.ink3:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.35,overflowWrap:"anywhere"}}>
                   {unsent&&<span style={{display:"inline-block",background:"#EA580C",color:C.white,fontSize:9.5,fontWeight:900,borderRadius:5,padding:"1px 6px",marginRight:6,verticalAlign:"middle"}}>ใหม่</span>}
                   {item.name}
                 </div>
-                {item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>+ {optionsText(item.options)}</div>}
+                {item.options&&item.options.length>0&&<div style={{fontSize:12,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:700,lineHeight:1.35,overflowWrap:"anywhere",marginTop:1}}>+ {optionsText(item.options)}</div>}
                 {!unsent&&served[String(item.line_uid)]&&(()=>{const sv=served[String(item.line_uid)];let tm="";try{tm=new Date(sv.at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"});}catch{}
                   return <div style={{fontSize:10.5,color:C.green,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>✓ เสิร์ฟแล้ว{tm?` ${tm}`:""}{sv.by?` · ${sv.by}`:""}</div>;})()}
-                {item.note
-                  ?<div onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",cursor:"pointer",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>
-                  :<div onClick={()=>{setNoteIdx(idx);setNoteText("");}} style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",cursor:"pointer"}}>+ หมายเหตุ</div>}
+                {item.note&&<div onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",fontWeight:600,cursor:"pointer",lineHeight:1.35,overflowWrap:"anywhere",whiteSpace:"pre-wrap",marginTop:1}}>★ {item.note}</div>}
+                <div style={{display:"flex",alignItems:"center",gap:4,marginTop:6}}>
+                  {!item.note&&<div onClick={()=>{setNoteIdx(idx);setNoteText("");}} style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",cursor:"pointer",padding:"4px 0"}}>+ หมายเหตุ</div>}
+                  <div style={{flex:1}}/>
+                  <button onClick={()=>chQty(idx,-1)} aria-label="ลดจำนวน" style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.minus} s={12}/></button>
+                  <span style={{fontSize:14,fontWeight:800,minWidth:20,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
+                  <button onClick={()=>chQty(idx,1)} aria-label="เพิ่มจำนวน" style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.plus} s={12}/></button>
+                  <div style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif",minWidth:52,textAlign:"right",flexShrink:0}}>฿{(item.price*item.qty).toFixed(0)}</div>
+                  <span style={{fontSize:14,color:C.ink4,opacity:.35,flexShrink:0}}>‹</span>
+                </div>
               </div>
-              <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
-                <button onClick={()=>chQty(idx,-1)} aria-label="ลดจำนวน" style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={12}/></button>
-                <span style={{fontSize:14,fontWeight:800,minWidth:20,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
-                <button onClick={()=>chQty(idx,1)} aria-label="เพิ่มจำนวน" style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={12}/></button>
-              </div>
-              <div style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif",minWidth:52,textAlign:"right",flexShrink:0}}>฿{(item.price*item.qty).toFixed(0)}</div>
-              <span style={{fontSize:14,color:C.ink4,opacity:.35,flexShrink:0}}>‹</span>
             </div>
           </SwipeRow>)
         }
