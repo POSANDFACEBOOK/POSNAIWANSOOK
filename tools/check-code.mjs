@@ -1761,9 +1761,10 @@ ok_("ด่านชุดรอชำระเงินรันจนจบ", 
   ok_("กรอบโต๊ะเป็นของสถานะ ไม่ใช่ของโซน",
     APP.includes("const borderColor=sv.border;") && !APP.includes("const borderColor=zoneColor||sv.border;"));
   // ธงต้องถูกล้างตอนบิลจบ ไม่งั้นปิดบิลแล้วโต๊ะเด้งกลับเป็นเขียวแทนที่จะเป็นขาว
-  ok_("ปิดบิล/ยกเลิกบิลแล้วล้างธงพิมพ์ QR",
-    (APP.split("      clearQRFlag();").length - 1) === 2 &&
-    APP.includes("const clearQRFlag=()=>{ try{ if(table&&table.id)api.clearTableQRPrinted(table.id); }catch{} };"));
+  // ปิดบิล/ยกเลิกบิล = ปล่อยโต๊ะ (เปลี่ยนรหัส QR + ล้างธงพิมพ์ QR) และต้องรอให้เสร็จก่อนปิดจอ
+  ok_("ปิดบิล/ยกเลิกบิลแล้วปล่อยโต๊ะ (ล้างธงพิมพ์ QR + เปลี่ยน QR)",
+    (APP.split("      await releaseThisTable();").length - 1) === 2 &&
+    APP.includes("ok=await Promise.race([api.releaseTable(table.id),new Promise(r=>setTimeout(()=>r(false),4000))]);"));
   // คอลัมน์ใหม่ยังไม่ถูกเพิ่ม = ห้ามทำให้พิมพ์ QR/ปิดบิล/ปิดกะ ล้ม
   ok_("ยังไม่ได้เพิ่มคอลัมน์ qr_printed_at แล้วต้องไม่พัง",
     APP.includes("if(/PGRST204|column .* does not exist|schema cache/i.test(String((e&&e.message)||e)))return false; throw e;"));
@@ -2712,11 +2713,66 @@ section("ป็อปอัพ QR โต๊ะ");
   ok_("ตัวพิมพ์ QR ใช้ลิงก์ตัวเดียวกัน", APP.includes("  const url=tableScanUrl(table,branch);"));
   ok_("หน้าจัดการ QR ใช้ลิงก์ตัวเดียวกัน", APP.includes("  const buildUrl=(t)=>tableScanUrl(t,branch);"));
   // ปุ่มพิมพ์ QR โต๊ะนี้: เด้งป็อปอัพด้วยลิงก์ตัวเดียวกัน ก่อนสั่งพิมพ์ (พิมพ์ไม่ออกก็ยังเช็คได้)
+  // ป็อปอัพรับลิงก์ "จากตัวพิมพ์" หลังอ่านรหัสล่าสุดแล้ว — กระดาษกับจอเป็นลิงก์เดียวกันแน่นอน
   ok_("ปุ่มพิมพ์ QR โต๊ะนี้ เด้งป็อปอัพด้วยลิงก์ตัวเดียวกับที่พิมพ์",
-    APP.includes("setQrPeek({table:selTable,url:tableScanUrl(selTable,currentBranch)});printTableQR(selTable,currentBranch,printers,"));
+    APP.includes("setQrPeek({table:selTable,url:null});printTableQR(selTable,currentBranch,printers,()=>loadAll({silent:true}),(u)=>setQrPeek(p=>p?{...p,url:u}:p));") &&
+    APP.includes('if(typeof onUrl==="function"){try{onUrl(url);}catch{}}'));
   ok_("ป็อปอัพแสดง QR จากลิงก์ในป็อปอัพเอง ไม่ประกอบใหม่",
     APP.includes("data=$" + "{encodeURIComponent(qrPeek.url)}") &&APP.includes("<a href={qrPeek.url} target=\"_blank\" rel=\"noopener noreferrer\""));
   ok_("รูป QR โหลดไม่ได้ ต้องบอกและมีทางเปิดดูแทน", APP.includes("onError={()=>setQrPeekErr(true)}") && APP.includes("โหลดรูป QR ไม่ได้ (เน็ตสะดุด)"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ปิดโต๊ะแล้ว QR ต้องเปลี่ยนใหม่ (เจ้าของสั่ง 11 ก.ย. 69)
+// ลูกค้าคนใหม่ที่ลงโต๊ะเดิมได้ QR ใหม่ · QR ของคนก่อนสั่งเข้าโต๊ะนี้ไม่ได้อีก
+// ══════════════════════════════════════════════════════════════════════════
+section("ปิดโต๊ะ = QR ใหม่");
+{
+  const head = "  releaseTable: async (id) => {";
+  const st = APP.indexOf(head);
+  let rel = null;
+  if (st >= 0) {
+    let d = 0, started = false, en = -1;
+    for (let i = st + head.length - 1; i < APP.length; i++) {
+      if (APP[i] === "{") { d++; started = true; }
+      else if (APP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+    }
+    const expr = APP.slice(st + "  releaseTable: ".length, en);
+    rel = (sb) => new Function("sb", "uuidv4", "return (" + expr + ");")(sb, () => "NEW-TOKEN");
+  }
+  ok_("ยังมีตัวปล่อยโต๊ะ", !!rel);
+  if (rel) {
+    // ปกติ: เขียนรหัสใหม่ + ล้างธง ในคำสั่งเดียว
+    { const w = []; const ok = await rel(async (path, opt) => { w.push({ path, body: JSON.parse(opt.body) }); return []; })(12);
+      ck("ปล่อยโต๊ะ = เปลี่ยนรหัส QR + ล้างธงพิมพ์ QR ในคำสั่งเดียว", [ok, w.length, w[0] && w[0].body], [true, 1, { qr_token: "NEW-TOKEN", qr_printed_at: null }]);
+      ok_("เขียนเฉพาะโต๊ะนั้น", w[0] && w[0].path === "tables?id=eq.12"); }
+    // เน็ตสะดุดครั้งแรก — ต้องลองซ้ำ ไม่ใช่ยอมแพ้ (QR เก่าจะยังใช้ได้)
+    { let n = 0; const ok = await rel(async () => { if (++n === 1) throw new Error("network"); return []; })(12);
+      ck("เน็ตสะดุดครั้งแรก ลองซ้ำจนสำเร็จ", [ok, n], [true, 2]); }
+    // คอลัมน์ธงยังไม่มี — ต้องยังเปลี่ยนรหัสได้ (สิ่งที่สำคัญที่สุด)
+    { const w = []; const ok = await rel(async (path, opt) => { const b = JSON.parse(opt.body); w.push(b); if ("qr_printed_at" in b) throw new Error("column tables.qr_printed_at does not exist"); return []; })(12);
+      ck("ยังไม่มีคอลัมน์ธง ก็ยังเปลี่ยนรหัส QR ได้", [ok, w[w.length - 1]], [true, { qr_token: "NEW-TOKEN" }]); }
+    // ล้มทุกครั้ง — ต้องบอกคนเรียกว่าไม่สำเร็จ ห้ามทำเหมือนสำเร็จ
+    { const ok = await rel(async () => { throw new Error("network"); })(12);
+      ck("เปลี่ยนไม่สำเร็จ ต้องคืนว่าไม่สำเร็จ (ให้จอเตือนพนักงาน)", ok, false); }
+  }
+  ok_("เปลี่ยนไม่สำเร็จ จอต้องเตือนพนักงานว่า QR เดิมยังใช้ได้", APP.includes("ไม่สำเร็จ — QR เดิมยังใช้ได้อยู่"));
+  // ย้ายโต๊ะ: โต๊ะต้นทางต้องถูกปล่อย — ไม่งั้น QR เดิมในมือลูกค้าเปิดบิลใหม่ที่โต๊ะเดิม
+  ok_("ย้ายโต๊ะแล้วปล่อยโต๊ะต้นทาง", APP.includes("const released=await Promise.race([api.releaseTable(from.id),"));
+  ok_("ย้ายโต๊ะแล้วเตือนให้พิมพ์ QR โต๊ะใหม่", APP.includes("อย่าลืมพิมพ์ QR โต๊ะใหม่ให้ลูกค้า"));
+  // พิมพ์ QR ต้องอ่านรหัสล่าสุดจากฐานก่อนประกอบลิงก์ — ห้ามพิมพ์จากค่าค้างในจอ
+  {
+    const ps = APP.indexOf("async function printTableQR(table,branch,printers=[],onPrinted,onUrl){");
+    const fresh = APP.indexOf("const r=await api.getTableFresh(table.id);", ps);
+    const build = APP.indexOf("  const url=tableScanUrl(table,branch);", ps);
+    ok_("พิมพ์ QR อ่านรหัสล่าสุดจากฐานก่อนประกอบลิงก์", ps > 0 && fresh > ps && build > fresh);
+  }
+  // หน้าลูกค้า: QR หมดอายุแล้วต้องหยุดทุกทาง
+  ok_("หน้าลูกค้าที่ QR หมดอายุ ห้ามเห็นบิลของลูกค้าคนใหม่",
+    APP.includes('if(token){const ok=await api.scanTable(branchId,tableId,token);if(Array.isArray(ok)&&ok.length===0){setMyOrder(null);setGateError("bad_token");return;}}'));
+  ok_("คิวออฟไลน์เช็ค QR ก่อนส่ง และทิ้งของค้างถ้าหมดอายุ",
+    APP.includes('if(Array.isArray(ok)&&ok.length===0){writeOutbox(null);setOutbox(null);setGateError("bad_token");flushingRef.current=false;setOutboxBusy(false);return;}}'));
+  ok_("QR หมดอายุบนมือถือลูกค้าไม่ใช้กล่องเตือนที่บล็อกเธรด", !APP.includes('alert("QR ของโต๊ะนี้ถูกอัพเดทใหม่'));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

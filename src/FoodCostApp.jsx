@@ -586,6 +586,25 @@ const api = {
   getPOSTables: (bid) => sb(`tables?order=table_number.asc&branch_id=eq.${bid}&active=eq.true`),
   // Rotate QR token for a single table (cuts off any leaked / stale QRs)
   rotateTableToken: (id) => sb(`tables?id=eq.${id}`, {method:"PATCH", body:JSON.stringify({qr_token:uuidv4()})}),
+  // ── ปล่อยโต๊ะให้ลูกค้าคนต่อไป ─────────────────────────────────────────
+  // เจ้าของสั่ง 11 ก.ย. 69: ปิดโต๊ะแล้ว QR ต้องเปลี่ยนใหม่ ลูกค้าคนใหม่ที่ลงโต๊ะเดิมได้ QR ใหม่
+  // QR ของลูกค้าคนก่อน (ถ่ายรูปไว้/เก็บกลับบ้าน/เปิดค้างในมือถือ) ต้องสั่งเข้าโต๊ะนี้ไม่ได้อีก
+  // เปลี่ยนรหัสกับล้างธง "พิมพ์ QR แล้ว" ในคำสั่งเดียว — โต๊ะว่างจริงทั้งสองอย่างพร้อมกัน
+  // ลองซ้ำ 3 ครั้ง: ถ้าเปลี่ยนไม่สำเร็จ QR เก่ายังใช้ได้ = สิ่งที่ฟีเจอร์นี้ตั้งใจกัน · คืน true/false ให้คนเรียกบอกต่อ
+  releaseTable: async (id) => {
+    const body = { qr_token: uuidv4(), qr_printed_at: null };
+    for (let a = 0; a < 3; a++) {
+      try { await sb(`tables?id=eq.${+id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(body) }); return true; }
+      catch (e) {
+        // คอลัมน์ธงพิมพ์ QR ยังไม่มี → เปลี่ยนรหัสอย่างเดียวก็ยังได้สิ่งที่สำคัญที่สุด
+        if (/qr_printed_at|PGRST204|42703|schema cache/i.test(String((e && e.message) || e)) && "qr_printed_at" in body) { delete body.qr_printed_at; a--; continue; }
+        await new Promise((r) => setTimeout(r, 400 * (a + 1)));
+      }
+    }
+    return false;
+  },
+  // รหัส QR ล่าสุดของโต๊ะ — ใช้ก่อนพิมพ์ QR เสมอ ห้ามพิมพ์จากข้อมูลโต๊ะที่ค้างอยู่ในจอ
+  getTableFresh: (id) => sb(`tables?id=eq.${+id}&select=id,table_number,label,qr_token&limit=1`),
   // Rotate all active tables in a branch in one batch
   rotateAllTableTokens: async (bid) => {
     const tbls=await sb(`tables?branch_id=eq.${bid}&active=eq.true&select=id`);
@@ -18251,8 +18270,12 @@ function MoveTableModal({from,order,tables,activeOrders,branch,currentUser,onClo
           {bill:order.id,by:currentUser?.username||null,kind:"move",from:String(from.table_number)},true);
         sent=r.sent;
       }catch(err){console.warn("แจ้งครัวเรื่องย้ายโต๊ะไม่สำเร็จ",err);}
+      // โต๊ะต้นทางว่างแล้ว → เปลี่ยนรหัส QR ของมัน · ไม่งั้นลูกค้าที่ย้ายไปแล้วยังถือ QR โต๊ะเดิม
+      // สแกนสั่งเมื่อไหร่ จะเปิดบิลใหม่ที่โต๊ะเดิม ซึ่งอาจมีลูกค้าคนใหม่นั่งอยู่แล้ว (อาหารไปผิดโต๊ะ)
+      const released=await Promise.race([api.releaseTable(from.id),new Promise(r=>setTimeout(()=>r(false),4000))]).catch(()=>false);
+      if(!released)posToast("⚠️ เปลี่ยน QR โต๊ะ "+from.table_number+" ไม่สำเร็จ — QR เดิมยังใช้ได้อยู่ ไปที่ QR โต๊ะ → หมุน QR ใหม่","warn",10000);
       posToast(sent
-        ?`ย้ายไปโต๊ะ ${t.table_number} แล้ว — ใบแจ้งครัวจะออกใน ~5 วินาที`
+        ?`ย้ายไปโต๊ะ ${t.table_number} แล้ว — ใบแจ้งครัวจะออกใน ~5 วินาที · อย่าลืมพิมพ์ QR โต๊ะใหม่ให้ลูกค้า`
         :`ย้ายไปโต๊ะ ${t.table_number} แล้ว — แต่แจ้งครัวไม่สำเร็จ กรุณาบอกครัวด้วยตัวเอง`, sent?"ok":"warn");
       onDone&&onDone();
       onClose&&onClose();
@@ -19019,7 +19042,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // บิลจบแล้ว = โต๊ะกลับมาว่างจริง ธง "พิมพ์ QR แล้ว" ของรอบที่แล้วต้องหายไปด้วย
   // ไม่ล้าง = ปิดบิลเสร็จโต๊ะเด้งกลับเป็นสีเขียวแทนที่จะเป็นขาว พนักงานอ่านว่ายังมีคนนั่ง
   // ยิงแบบไม่รอผลและกลืน error โดยตั้งใจ — ธงนี้เป็นแค่ "สี" ห้ามทำให้ปิดบิลล้ม
-  const clearQRFlag=()=>{ try{ if(table&&table.id)api.clearTableQRPrinted(table.id); }catch{} };
+  // รอให้เปลี่ยนรหัสเสร็จก่อนปิดจอ (เพดาน 4 วิ) — ถ้าปล่อยวิ่งเบื้องหลัง พนักงานอาจพิมพ์ QR
+  // ให้ลูกค้าคนต่อไปก่อนรหัสเปลี่ยนเสร็จ แล้ว QR ที่พิมพ์ออกไปจะใช้ไม่ได้ทันทีที่รหัสเปลี่ยนตามมา
+  // เงินถูกบันทึกไปก่อนหน้านี้แล้ว ตรงนี้พลาดได้แค่เรื่อง QR — บอกให้รู้ ไม่ขวางการปิดบิล
+  const releaseThisTable=async()=>{
+    if(!table||!table.id)return;
+    let ok=false;
+    try{ok=await Promise.race([api.releaseTable(table.id),new Promise(r=>setTimeout(()=>r(false),4000))]);}catch{ok=false;}
+    if(!ok)posToast("⚠️ เปลี่ยน QR โต๊ะ "+table.table_number+" ไม่สำเร็จ — QR เดิมยังใช้ได้อยู่\nไปที่ QR โต๊ะ → หมุน QR ใหม่ ก่อนรับลูกค้าคนต่อไป","warn",10000);
+  };
   // ติ๊ก/เอาติ๊กเสิร์ฟออก — ขึ้นทันทีบนจอ แล้วค่อยบันทึก ถ้าบันทึกไม่ได้ต้องถอยกลับและบอก
   // (ปล่อยให้จอติ๊กค้างทั้งที่ฐานไม่มี = เครื่องอื่นเห็นว่ายังไม่เสิร์ฟ แล้วครัวทำซ้ำ)
   async function toggleServed(item){
@@ -19068,7 +19099,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         posToast("⚠️ ยกเลิกบิลแล้ว แต่ยังบันทึกผู้ยกเลิก/เหตุผลไม่ได้ — ต้องเพิ่มคอลัมน์ในฐานข้อมูลก่อน","warn");
       }
       if(!row){notifyDlg("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ แล้วลองยกเลิกอีกครั้ง");onDone();onClose();return;}
-      clearQRFlag();
+      await releaseThisTable();
       onDone();onClose();
     }catch(e){notifyDlg("เกิดข้อผิดพลาด: "+friendlyError(e));}
   }
@@ -19249,7 +19280,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
       // passing the combined figure would deduct the promotion twice on the printed receipt.
       await smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:pm,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
-      clearQRFlag();
+      await releaseThisTable();
       if(pm==="cash"&&typeof onCashChange==="function"){
         onCashChange({change:round2(Math.max(0,(+cashReceived||0)-total)),received:+cashReceived||0,total,table:table.table_number});
       }
@@ -19863,7 +19894,11 @@ function CustomerPage({branchId,tableId,token}){
       due:(myOrder&&myOrder.status==="paid")?(+myOrder.total||0):due};
   },[myOrder,posCfg]);
   const[gateLoading,setGateLoading]=useState(true);
-  async function loadMyOrder(){try{const ex=await api.getOrderByTable(+tableId);
+  async function loadMyOrder(){try{
+    // QR นี้ยังใช้ได้อยู่ไหม — ปิดโต๊ะแล้วรหัสเปลี่ยน หน้าที่เปิดค้างของลูกค้าคนก่อน
+    // จะยังดึงบิลของโต๊ะนี้ต่อไปเรื่อยๆ = เห็นรายการของลูกค้าคนใหม่ที่มานั่งแทน
+    if(token){const ok=await api.scanTable(branchId,tableId,token);if(Array.isArray(ok)&&ok.length===0){setMyOrder(null);setGateError("bad_token");return;}}
+    const ex=await api.getOrderByTable(+tableId);
     if(ex&&ex.length>0){setMyOrder(ex[0]);hadOrderRef.current=true;}
     // บิลหายจากผลค้นหา = ถูกปิด (ตัวค้นกรอง paid/cancelled ออก) — ถ้าเคยมีบิลอยู่
     // ต้องบอกว่า "ชำระแล้ว" ไม่ใช่ทำเหมือนไม่เคยสั่งอะไร ลูกค้าเพิ่งจ่ายเงินไป
@@ -19980,7 +20015,7 @@ function CustomerPage({branchId,tableId,token}){
       if(!Array.isArray(matches)||matches.length===0){
         setSending(false);
         setGateError("bad_token");
-        alert("QR ของโต๊ะนี้ถูกอัพเดทใหม่ — กรุณาขอ QR ปัจจุบันจากพนักงาน");
+        /* จอ "QR หมดอายุแล้ว" (gate bad_token) บอกลูกค้าเอง — ไม่ใช้กล่องเตือนที่บล็อกเธรด */
         return;
       }
       // Persist BEFORE the request: if this device dies mid-flight the order is still recoverable.
@@ -20049,6 +20084,10 @@ function CustomerPage({branchId,tableId,token}){
     flushingRef.current=true;               // can otherwise all pass a stale `outboxBusy` at once
     setOutboxBusy(true);
     try{
+      // เช็ค QR ก่อนส่งของค้างในคิว — ทางส่งปกติเช็คอยู่แล้ว แต่ทางคิวออฟไลน์ไม่เคยเช็ค
+      // ลูกค้าคนก่อนกดสั่งตอนเน็ตหลุด แล้วเน็ตกลับมาหลังปิดโต๊ะไปแล้ว = ของเข้าบิลลูกค้าคนใหม่
+      if(token){const ok=await api.scanTable(branchId,tableId,token);
+        if(Array.isArray(ok)&&ok.length===0){writeOutbox(null);setOutbox(null);setGateError("bad_token");flushingRef.current=false;setOutboxBusy(false);return;}}
       await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:o.lines,ordered_by:"customer",blockIfAwaiting:true});
       markSent(o.lines);
       writeOutbox(null);setDone(true);loadMyOrder();
@@ -20298,7 +20337,11 @@ function tableScanUrl(table,branch){
   const tokenPart=table&&table.qr_token?`&t=${encodeURIComponent(table.qr_token)}`:"";
   return `${publicBaseUrl()}?scan=1&branch=${branch&&branch.id}&table=${table&&table.id}${tokenPart}`;
 }
-async function printTableQR(table,branch,printers=[],onPrinted){
+async function printTableQR(table,branch,printers=[],onPrinted,onUrl){
+  // อ่านรหัส QR ล่าสุดของโต๊ะจากฐานก่อนพิมพ์เสมอ — ข้อมูลโต๊ะในจออาจค้างรหัสเก่า
+  // (เพิ่งปิดโต๊ะไป ระบบเพิ่งเปลี่ยนรหัสให้ แต่จอยังโหลดไม่ทัน) ถ้าพิมพ์จากค่าค้าง
+  // ลูกค้าคนใหม่จะได้ QR ที่ใช้ไม่ได้ตั้งแต่แผ่นแรก · อ่านไม่ได้ (เน็ตสะดุด) ค่อยใช้ค่าในจอ
+  try{const r=await api.getTableFresh(table.id);if(Array.isArray(r)&&r[0])table={...table,...r[0]};}catch{}
   // ติดธงเฉพาะตอน "ส่งไปพิมพ์สำเร็จ" เท่านั้น — ถ้าไม่มีกระดาษออก โต๊ะต้องไม่เปลี่ยนสี
   // ไม่งั้นพนักงานจะเห็นเขียวแล้วเข้าใจว่าวาง QR ให้ลูกค้าแล้ว ทั้งที่ยังไม่ได้วาง
   const stamp=async()=>{
@@ -20306,6 +20349,8 @@ async function printTableQR(table,branch,printers=[],onPrinted){
     if(typeof onPrinted==="function")onPrinted();
   };
   const url=tableScanUrl(table,branch);
+  // ส่งลิงก์ที่ใช้พิมพ์จริงออกไปให้ป็อปอัพ — ป็อปอัพกับกระดาษเป็นลิงก์เดียวกันแน่นอน
+  if(typeof onUrl==="function"){try{onUrl(url);}catch{}}
   let prs=printers;   // ดึงเครื่องพิมพ์ล่าสุดจาก DB — กันค่าค้าง (เพิ่งติ๊ก "เครื่องพิมพ์ใบเสร็จ" ในหน้าต่างตั้งค่า)
   try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
   // 1) If a Bluetooth printer is configured for this branch, print the QR slip
@@ -22816,7 +22861,7 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll({silent:true});}} wide noScroll>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:10,flexShrink:0,flexWrap:"wrap"}}>
         {selOrder?.id&&<button onClick={()=>setMoveFrom({table:selTable,order:selOrder})} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.blue}55`,background:C.blueLight,cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>🔀 ย้ายโต๊ะ</button>}
-        <button onClick={()=>{setQrPeekErr(false);setQrPeek({table:selTable,url:tableScanUrl(selTable,currentBranch)});printTableQR(selTable,currentBranch,printers,()=>loadAll({silent:true}));}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
+        <button onClick={()=>{setQrPeekErr(false);setQrPeek({table:selTable,url:null});printTableQR(selTable,currentBranch,printers,()=>loadAll({silent:true}),(u)=>setQrPeek(p=>p?{...p,url:u}:p));}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onCashChange={setChangeDlg} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})}/>
     </Modal>}
@@ -22831,7 +22876,9 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
           <div style={{fontSize:30,fontWeight:900,color:C.ink,lineHeight:1.15}}>โต๊ะ {qrPeek.table&&qrPeek.table.table_number}</div>
         </div>
         <div style={{padding:"10px 20px 4px",display:"flex",justifyContent:"center"}}>
-          {!qrPeekErr
+          {!qrPeek.url
+            ?<div style={{width:"min(66vw,260px)",height:"min(66vw,260px)",borderRadius:12,border:`1.5px dashed ${C.line}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:C.ink3}}>กำลังเตรียม QR…</div>
+          :!qrPeekErr
             ?<img src={`https://api.qrserver.com/v1/create-qr-code/?size=520x520&data=${encodeURIComponent(qrPeek.url)}&margin=12`}
                 alt={"QR โต๊ะ "+(qrPeek.table&&qrPeek.table.table_number)} onError={()=>setQrPeekErr(true)}
                 style={{width:"min(66vw,260px)",height:"min(66vw,260px)",borderRadius:12,border:`1px solid ${C.line}`,background:C.white}}/>
@@ -22843,8 +22890,8 @@ function POSSaleMode({menus,reloadMenus,currentBranch,currentUser,printers=[],sh
           เอามือถือสแกน เพื่อดูหน้าที่ลูกค้าเห็นจริง<br/>
           <span style={{fontSize:11.5,color:C.ink4}}>QR ตัวเดียวกับที่พิมพ์ออกไป</span>
         </div>
-        <a href={qrPeek.url} target="_blank" rel="noopener noreferrer"
-          style={{display:"inline-block",margin:"6px 0 2px",fontSize:12.5,fontWeight:800,color:C.blue,textDecoration:"underline"}}>เปิดหน้าลูกค้าบนเครื่องนี้ ↗</a>
+        {qrPeek.url&&<a href={qrPeek.url} target="_blank" rel="noopener noreferrer"
+          style={{display:"inline-block",margin:"6px 0 2px",fontSize:12.5,fontWeight:800,color:C.blue,textDecoration:"underline"}}>เปิดหน้าลูกค้าบนเครื่องนี้ ↗</a>}
         <div style={{padding:"12px 20px 20px"}}>
           <button onClick={()=>setQrPeek(null)} style={{width:"100%",padding:"14px",borderRadius:14,border:"none",background:C.ink,color:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:15.5,fontWeight:900}}>ปิด</button>
         </div>
