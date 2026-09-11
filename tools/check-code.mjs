@@ -2352,7 +2352,7 @@ section("ใบปิดกะออกเครื่องพิมพ์ใ�
   };
   const bahtLn = APP.split("\n").find((l) => l.startsWith("function bahtR(n){"));
   const emojiLn = APP.split("\n").find((l) => l.startsWith("function stripEmoji(s){"));
-  const body = grabFn2("function buildZReportLines({shift,totals,branch,user,note}){");
+  const body = grabFn2("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[]}){");
   ok_("ยังมีตัวสร้างใบปิดกะแบบบรรทัด", !!(body && bahtLn && emojiLn));
   if (body && bahtLn && emojiLn) {
     const build = new Function(
@@ -2390,6 +2390,82 @@ section("ใบปิดกะออกเครื่องพิมพ์ใ�
     pz.includes("if(!isHttps){printZReportWindow(args);return;}"));
   ok_("ยังไม่ติ๊กเครื่องพิมพ์ใบเสร็จ ต้องบอกให้รู้ ไม่ใช่เงียบ", pz.includes("ใบปิดกะไม่ได้พิมพ์"));
   ok_("การพิมพ์ต้องไม่ขวางการปิดกะ", pz.includes("(async()=>{"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// พิมพ์ใบปิดกะซ้ำ: ต้องเป็นตัวเลขชุดเดียวกับที่เซ็นรับไปตอนปิดกะ
+// ══════════════════════════════════════════════════════════════════════════
+section("พิมพ์ใบปิดกะซ้ำ");
+{
+  const grabF = (head) => {
+    const st = APP.indexOf(head); if (st < 0) return null;
+    let d = 0, started = false, en = -1;
+    for (let i = st + head.length - 1; i < APP.length; i++) {
+      if (APP[i] === "{") { d++; started = true; }
+      else if (APP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+    }
+    return APP.slice(st, en);
+  };
+  // สูตรเดียวทั้งระบบ — ถ้ามีสองชุด ใบพิมพ์ซ้ำจะออกตัวเลขคนละชุดกับใบจริงสักวัน
+  ok_("ตอนปิดกะใช้สูตรยอดกะตัวเดียวกับตอนพิมพ์ซ้ำ",
+    APP.includes("const totals=useMemo(()=>computeShiftTotals({movements,orders,actualCash,cancelled,openBills}),[movements,orders,actualCash,cancelled,openBills]);"));
+  const r2Ln = APP.split("\n").find((l) => /^const round2\s*=/.test(l) || /^function round2\(/.test(l));
+  const cst = grabF("function computeShiftTotals({movements,orders,actualCash,cancelled,openBills}){");
+  const lsr = grabF("async function loadShiftTotalsForReprint(shift,branchId){");
+  ok_("ยังมีตัวประกอบยอดของกะที่ปิดแล้ว", !!(r2Ln && cst && lsr));
+  if (r2Ln && cst && lsr) {
+    const mk = (orders, moves) => new Function("api", r2Ln + "\n" + cst + "\n" + lsr + "\nreturn loadShiftTotalsForReprint;")({
+      getCashMovements: async () => moves,
+      getPOSOrdersSince: async () => orders,
+    });
+    const H = (h) => "2026-09-10T" + String(h).padStart(2, "0") + ":00:00.000Z";
+    const SHIFT = { id: 9, opened_at: H(3), closed_at: H(13), opening_cash: 400, closing_cash: 500,
+      expected_cash: 700, cash_diff: -200, total_sales: 300, total_cash: 300, total_transfer: 0, total_card: 0,
+      total_other: 0, total_pay_in: 0, total_pay_out: 0, total_drop: 0, order_count: 2, username: "มะลิ" };
+    const ORDERS = [
+      { id: 1, status: "paid", payment_method: "cash", total: 100, subtotal: 100, created_at: H(4), updated_at: H(5), items: [{ qty: 2 }] },
+      { id: 2, status: "paid", payment_method: "cash", total: 200, subtotal: 200, created_at: H(6), updated_at: H(7), items: [{ qty: 3 }] },
+      // ยังเปิดอยู่ตอนปิดกะ แล้วไปจ่ายในกะถัดไป — ห้ามไหลเข้ามาเป็นยอดขายของกะนี้
+      { id: 3, status: "paid", payment_method: "cash", total: 999, subtotal: 999, created_at: H(12), updated_at: H(15), table_number: "A3", items: [] },
+      // เปิดหลังปิดกะแล้ว — ไม่ใช่ของกะนี้เลย
+      { id: 4, status: "paid", payment_method: "cash", total: 555, subtotal: 555, created_at: H(14), updated_at: H(14), items: [] },
+    ];
+    const MOVES = [{ type: "opening", amount: 400 }, { type: "sale", amount: 100, order_id: 1 }, { type: "sale", amount: 200, order_id: 2 }, { type: "closing", amount: 500 }];
+
+    const ok1 = await mk(ORDERS, MOVES)(SHIFT, 8);
+    ck("ข้อมูลตรงกับตอนปิดกะ = ไม่มีส่วนที่ไม่ตรง", ok1.mismatches, []);
+    ck("บิลที่ไปจ่ายในกะถัดไป/เปิดหลังปิดกะ ห้ามนับเป็นยอดของกะนี้", [ok1.totals.totalSales, ok1.totals.orderCount], [300, 2]);
+    ok_("บิลที่ยังเปิดอยู่ตอนปิดกะ ต้องขึ้นเป็นโต๊ะค้าง", (ok1.totals.openList || []).some((x) => x.id === 3));
+    ck("ยอดนับเงินปิดกะไม่ถูกนับเป็นเงินเข้าลิ้นชัก", ok1.totals.expected, 700);
+
+    // มีคนแก้บิลเก่าหลังปิดกะ — ใบพิมพ์ซ้ำต้องใช้ตัวเลขที่เซ็นรับไปแล้ว และต้องบอกว่าไม่ตรง
+    const EDITED = ORDERS.map((o) => o.id === 2 ? { ...o, total: 250 } : o);
+    const ok2 = await mk(EDITED, MOVES)(SHIFT, 8);
+    ck("มีคนแก้บิลหลังปิดกะ ใบพิมพ์ซ้ำยังใช้ตัวเลขตอนปิดกะ", ok2.totals.totalSales, 300);
+    ok_("และต้องบอกว่ายอดคำนวณวันนี้ไม่ตรง ห้ามเงียบ", ok2.mismatches.some((m) => m.startsWith("ยอดขายสุทธิ: ตอนปิดกะ 300")));
+    ck("ส่วนต่างบนใบพิมพ์ซ้ำ = ค่าที่บันทึกตอนปิดกะ", [ok2.totals.actual, ok2.totals.expected, ok2.totals.diff], [500, 700, -200]);
+  }
+  // ตัวใบ: ต้องตีตราว่าเป็นใบพิมพ์ซ้ำ และบอกเวลาปิดกะจริง ไม่ใช่เวลาที่กดพิมพ์
+  const bz = grabF("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[]}){");
+  const bLn = APP.split("\n").find((l) => l.startsWith("function bahtR(n){"));
+  const eLn = APP.split("\n").find((l) => l.startsWith("function stripEmoji(s){"));
+  if (bz && bLn && eLn) {
+    const build = new Function(bLn + "\n" + eLn + "\nconst fmtDT=(d)=>d?\"ปิดจริง:\"+d:\"ตอนนี้\";\n" + bz + "\nreturn buildZReportLines;")();
+    const L = build({ shift: { id: 9, opened_at: "o", closed_at: "2026-09-10T16:02", username: "มะลิ" }, totals: {}, branch: { name: "x" }, user: { name: "ผู้จัดการ" }, reprint: true, mismatches: ["ยอดขายสุทธิ: ตอนปิดกะ 300 · คำนวณวันนี้ 350"] });
+    const txt = L.map((x) => [x.t, x.l, x.r].filter(Boolean).join(" ")).join("\n");
+    ok_("ใบพิมพ์ซ้ำตีตรา \"ใบพิมพ์ซ้ำ\" ให้เห็นชัด", txt.includes("*** ใบพิมพ์ซ้ำ ***"));
+    ok_("ใบพิมพ์ซ้ำบอกเวลาปิดกะจริง ไม่ใช่เวลาที่กดพิมพ์", L.some((x) => x.l === "ปิดกะ" && x.r === "ปิดจริง:2026-09-10T16:02"));
+    ok_("หัวใบบอกคนเปิดกะ ไม่ใช่คนกดพิมพ์ซ้ำ", txt.includes("กะ #9 · เปิดกะโดย มะลิ"));
+    ok_("ส่วนที่ไม่ตรงถูกพิมพ์ไว้บนใบ", txt.includes("ยอดคำนวณวันนี้ไม่ตรงกับตอนปิดกะ") && txt.includes("ตอนปิดกะ 300 · คำนวณวันนี้ 350"));
+    const L0 = build({ shift: { id: 9, opened_at: "o" }, totals: {}, branch: { name: "x" }, user: { name: "มะลิ" } });
+    ok_("ใบปิดกะปกติไม่มีตราใบพิมพ์ซ้ำ", !L0.some((x) => String(x.t || "").includes("ใบพิมพ์ซ้ำ")));
+  }
+  // ปุ่มในหน้าประวัติกะ
+  ok_("หน้าประวัติกะมีปุ่มพิมพ์ใบปิดกะ", APP.includes("🖨 พิมพ์ใบปิดกะ (ใบพิมพ์ซ้ำ)") && APP.includes("reprintZ(s)"));
+  ok_("หน้าประวัติกะประกาศ hook ก่อน return ก่อนกำหนด",
+    APP.indexOf("const[busyId,setBusyId]=useState(null);") > 0 &&
+    APP.indexOf("const[busyId,setBusyId]=useState(null);") < APP.indexOf('if(loading)return <Loading text="โหลดประวัติกะ..."/>;'));
+  ok_("ส่วนต่างติดลบในหน้าประวัติกะมีเครื่องหมายลบ", APP.includes("{+s.cash_diff>0?'+':+s.cash_diff<0?'-':''}฿"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

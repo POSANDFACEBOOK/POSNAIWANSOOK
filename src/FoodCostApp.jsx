@@ -20442,15 +20442,20 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
 // ── ใบปิดกะ (Z-Report) แบบบรรทัด สำหรับเครื่องพิมพ์ใบเสร็จ ────────────
 // เนื้อหาเดียวกับหน้าต่างพิมพ์ทุกบรรทัด แต่ไม่มีอีโมจิ — ฟอนต์ที่ใช้ทำภาพใบ
 // ไม่มีรูปอีโมจิ พิมพ์ออกมาจะเป็นกล่องสี่เหลี่ยมแทน
-function buildZReportLines({shift,totals,branch,user,note}){
+function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[]}){
   const t=totals||{};const L=[];const b=(n)=>bahtR(n);
   const who=(user&&(user.name||user.username))||"";
+  // ใบพิมพ์ซ้ำ: หัวใบบอกคนที่เปิดกะ ไม่ใช่คนที่กดพิมพ์ซ้ำวันนี้ (คนกดพิมพ์ไปอยู่ท้ายใบ)
+  const head=reprint?(shift.username?"เปิดกะโดย "+shift.username:""):who;
   L.push({t:(branch&&branch.name)||"",size:36,bold:true,align:"center",mb:2});
   L.push({t:"Z-REPORT · ใบปิดกะ",size:26,bold:true,align:"center"});
-  L.push({t:"กะ #"+shift.id+(who?" · "+who:""),size:20,align:"center",mb:2});
+  L.push({t:"กะ #"+shift.id+(head?" · "+head:""),size:20,align:"center",mb:2});
+  // ตีตราใบพิมพ์ซ้ำให้เห็นชัด — ห้ามให้ใบพิมพ์ซ้ำถูกใช้แทนใบจริงที่เซ็นรับไปแล้วได้
+  if(reprint)L.push({t:"*** ใบพิมพ์ซ้ำ ***",size:26,bold:true,align:"center",mb:2});
   L.push({rule:true});
   L.push({l:"เปิดกะ",r:fmtDT(shift.opened_at),size:20});
-  L.push({l:"ปิดกะ",r:fmtDT(),size:20});
+  // ใบพิมพ์ซ้ำต้องบอกเวลาปิดกะจริง ไม่ใช่เวลาที่กดพิมพ์วันนี้
+  L.push({l:"ปิดกะ",r:shift.closed_at?fmtDT(shift.closed_at):fmtDT(),size:20});
   L.push({rule:true});
   L.push({t:"ยอดขาย",size:24,bold:true});
   L.push({l:"จำนวนบิล",r:(t.orderCount||0)+" บิล",size:22});
@@ -20495,10 +20500,17 @@ function buildZReportLines({shift,totals,branch,user,note}){
   const d=+t.diff||0;
   L.push({l:d===0?"ตรงเป๊ะ":d>0?"เกิน":"ขาด",r:(d>0?"+":d<0?"-":"")+b(Math.abs(d)),size:30,bold:true});
   if(note){L.push({rule:true});for(const ln of String(note).split("\n"))if(ln.trim())L.push({t:stripEmoji(ln),size:20});}
+  // ตัวเลขที่คำนวณใหม่ไม่ตรงกับตอนปิดกะ — ใบใช้ตัวเลขตอนปิดกะ แต่ต้องบอกไว้ ห้ามเงียบ
+  if(mismatches&&mismatches.length){
+    L.push({rule:true});
+    L.push({t:"ยอดคำนวณวันนี้ไม่ตรงกับตอนปิดกะ",size:22,bold:true});
+    L.push({t:"(ใบนี้ใช้ตัวเลขตอนปิดกะ) มีบิลถูกแก้หลังปิดกะ",size:18});
+    for(const x of mismatches)L.push({t:"  "+x,size:18});
+  }
   L.push({rule:true});
   L.push({t:"ผู้ปิดกะ .............................",size:20,mb:14});
   L.push({t:"ผู้ตรวจ ..............................",size:20,mb:6});
-  L.push({t:"พิมพ์เมื่อ "+fmtDT()+(who?" · "+who:""),size:16,align:"center"});
+  L.push({t:(reprint?"พิมพ์ซ้ำเมื่อ ":"พิมพ์เมื่อ ")+fmtDT()+(who?" · "+who:""),size:16,align:"center"});
   return L;
 }
 // ── ส่งใบปิดกะเข้าเครื่องพิมพ์ ─────────────────────────────────────────
@@ -20512,6 +20524,7 @@ function printZReport(args){
   // เดสก์ท็อป/LAN: หน้าต่างพิมพ์ต้องเปิด "ทันที" ในจังหวะที่ผู้ใช้กด
   // ถ้า await อะไรก่อน เบราว์เซอร์จะมองว่าไม่ใช่การกดของคนแล้วบล็อกป็อปอัพ
   if(!isHttps){printZReportWindow(args);return;}
+  if(args.win){try{args.win.close();}catch{}}   // ไอแพดไม่ใช้หน้าต่าง — ปิดหน้าต่างเปล่าที่เปิดรอไว้
   (async()=>{
     let prs=[];
     try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+(args.branch&&args.branch.id));}catch{}
@@ -20530,8 +20543,8 @@ function printZReport(args){
     }
   })();
 }
-function printZReportWindow({shift,totals,branch,user,note}){
-  const w=openPrintWindow(420,720);
+function printZReportWindow({shift,totals,branch,user,note,reprint=false,mismatches=[],win=null}){
+  const w=win||openPrintWindow(420,720);
   if(!w)return;
   const fmt=(v)=>(+v||0).toLocaleString();
   const html=`<html><head><title>Z-Report กะ #${shift.id}</title>
@@ -20540,12 +20553,13 @@ function printZReportWindow({shift,totals,branch,user,note}){
 <div class="center">
   <h2>${branch.name}</h2>
   <div class="bold">═══ Z-REPORT ═══</div>
+  ${reprint?'<div class="bold" style="font-size:15px;margin:4px 0">*** ใบพิมพ์ซ้ำ ***</div>':''}
   <div>กะ #${shift.id}</div>
   <div>${user.name||user.username}</div>
 </div>
 <div class="div"></div>
 <div class="row"><span>เปิดกะ</span><span>${fmtDT(shift.opened_at)}</span></div>
-<div class="row"><span>ปิดกะ</span><span>${fmtDT()}</span></div>
+<div class="row"><span>ปิดกะ</span><span>${shift.closed_at?fmtDT(shift.closed_at):fmtDT()}</span></div>
 <div class="div"></div>
 <h3>📊 ยอดขาย</h3>
 <div class="row"><span>จำนวนบิล</span><span class="bold">${totals.orderCount} บิล</span></div>
@@ -20584,6 +20598,7 @@ ${totals.openCount?`<div class="row"><span>โต๊ะที่ยังไม�
 <div class="row big bold"><span>นับจริง</span><span>฿${fmt(totals.actual)}</span></div>
 <div class="row big bold" style="color:${totals.diff===0?'#10B981':totals.diff>0?'#3B82F6':'#EF4444'}"><span>${totals.diff===0?'✅ ตรงเป๊ะ':totals.diff>0?'📈 เกิน':'📉 ขาด'}</span><span>${totals.diff>0?'+':''}฿${fmt(Math.abs(totals.diff))}</span></div>
 ${note?`<div class="div"></div><div><b>หมายเหตุ:</b> ${note}</div>`:''}
+${(mismatches&&mismatches.length)?`<div class="div"></div><div class="bold">ยอดคำนวณวันนี้ไม่ตรงกับตอนปิดกะ</div><div style="font-size:10px">(ใบนี้ใช้ตัวเลขตอนปิดกะ) มีบิลถูกแก้หลังปิดกะ</div>${mismatches.map(x=>`<div style="font-size:10px">• ${x}</div>`).join("")}`:''}
 <div class="div"></div>
 <div class="div"></div>
 <div style="margin-top:16px;display:flex;gap:16px">
@@ -20594,6 +20609,77 @@ ${note?`<div class="div"></div><div><b>หมายเหตุ:</b> ${note}</di
 <script>setTimeout(()=>{window.print();},300);</script>
 </body></html>`;
   w.document.write(html);w.document.close();addPrintClose(w);
+}
+// ── สูตรยอดกะ (ตัวเดียวทั้งระบบ) ──────────────────────────────────────
+// ใช้ทั้งตอนปิดกะและตอนพิมพ์ใบปิดกะซ้ำ — ถ้ามีสองชุด วันหนึ่งจะคิดไม่ตรงกัน
+// แล้วใบพิมพ์ซ้ำจะออกตัวเลขคนละชุดกับใบที่เซ็นรับไปแล้ว
+function computeShiftTotals({movements,orders,actualCash,cancelled,openBills}){
+    let openingCash=0,payIn=0,payOut=0,drops=0,refunds=0,salesCash=0;
+    movements.forEach(m=>{const a=+m.amount||0;if(m.type==='opening')openingCash+=a;else if(m.type==='pay_in')payIn+=a;else if(m.type==='pay_out')payOut+=a;else if(m.type==='drop')drops+=a;else if(m.type==='refund')refunds+=a;else if(m.type==='sale')salesCash+=a;});
+    let totalSales=0,totalCash=0,totalTransfer=0,totalCard=0,totalOther=0;
+    orders.forEach(o=>{const t=+o.total||0;totalSales+=t;const pm=o.payment_method;if(pm==='cash')totalCash+=t;else if(pm==='transfer'||pm==='promptpay')totalTransfer+=t;else if(pm==='credit'||pm==='debit')totalCard+=t;else totalOther+=t;});
+    const expected=openingCash+payIn+salesCash-payOut-drops-refunds;
+    const actual=+actualCash||0;
+    // โครงสร้างยอด — ใบปิดยอดต้องแยกให้เห็นว่ายอดขายมาจากอะไรบ้าง ไม่ใช่มีแต่ยอดสุทธิก้อนเดียว
+    // ส่วนลดคือตัวเลขที่ต้องเห็นที่สุด: ของจริงกะนี้ให้ส่วนลดไป ฿9,583 จากยอดก่อนลด ฿44,447 (21.6%)
+    // แล้วไม่เคยขึ้นบนจอปิดกะหรือใบ Z-Report เลยสักตัว
+    const sum=(k)=>round2(orders.reduce((a,o)=>a+(+o[k]||0),0));
+    const gross=sum("subtotal"),disc=sum("discount"),promo=sum("promo_amount");
+    const svc=sum("service_charge"),vatSum=sum("vat"),roundSum=sum("round_adj");
+    const vatIncluded=orders.length?orders[0].vat_included!==false:true;
+    const itemQty=orders.reduce((a,o)=>a+(o.items||[]).reduce((b,i)=>b+(+i.qty||0),0),0);
+    const cancelAmt=round2(cancelled.reduce((a,o)=>a+(+o.total||0),0));
+    const openAmt=round2(openBills.reduce((a,o)=>a+(+o.total||0),0));
+    return{openingCash,payIn,payOut,drops,refunds,salesCash,totalSales:round2(totalSales),
+      totalCash:round2(totalCash),totalTransfer:round2(totalTransfer),totalCard:round2(totalCard),totalOther:round2(totalOther),
+      expected:round2(expected),actual,diff:round2(actual-expected),orderCount:orders.length,
+      gross,disc,promo,svc,vat:vatSum,roundAdj:roundSum,vatIncluded,itemQty,
+      discPct:gross>0?round2(disc/gross*100):0,
+      avgBill:orders.length?round2(totalSales/orders.length):0,
+      cancelCount:cancelled.length,cancelAmt,
+      cancelList:cancelled.map(o=>({id:o.id,table:o.table_number,total:round2(+o.total||0),by:o.cancelled_by||null,reason:o.cancel_reason||null})),
+      openCount:openBills.length,openAmt,
+      openList:openBills.map(o=>({id:o.id,table:o.table_number,total:round2(+o.total||0)}))};
+  }
+// ── ประกอบยอดของกะที่ปิดไปแล้ว สำหรับพิมพ์ใบปิดกะซ้ำ ──────────────────
+// ตัวเลขที่ "เซ็นรับไปแล้ว" ตอนปิดกะ (ยอดขาย แยกวิธีชำระ เงินลิ้นชัก ยอดที่ควรมี นับจริง ส่วนต่าง)
+// ใช้ค่าที่บันทึกไว้ในแถวกะเป็นหลักเสมอ — ใบพิมพ์ซ้ำต้องเป็นตัวเลขชุดเดียวกับตอนปิดกะ
+// ไม่ใช่ตัวเลขที่คำนวณใหม่วันนี้ ซึ่งเพี้ยนได้ถ้ามีคนแตะบิลเก่าหลังปิดกะ
+// รายละเอียดที่ไม่ได้บันทึกไว้ (ส่วนลด VAT ปัดเศษ จำนวนชิ้น บิลยกเลิก) ประกอบกลับจากบิลในช่วงกะ
+// แล้วเทียบกับค่าที่บันทึกไว้ทุกตัว — ไม่ตรงต้องพิมพ์บอกบนใบ ห้ามแสดงตัวเลขต่างกันเงียบๆ
+// บิลไม่ได้ผูกเลขกะไว้ จึงต้องตัดด้วยช่วงเวลา "เปิดกะ → ปิดกะ" ให้เหมือนตอนปิดกะเป๊ะ:
+// ตอนปิดกะ บิลที่ยังไม่จ่ายจะไม่ถูกนับ แต่วันนี้มันอาจจ่ายไปแล้วในกะถัดไป ถ้าไม่ตัดท้าย
+// ช่วงเวลา ยอดของกะถัดไปจะไหลเข้ามาปนในใบของกะนี้
+async function loadShiftTotalsForReprint(shift,branchId){
+  const opened=new Date(shift.opened_at).getTime();
+  const closed=shift.closed_at?new Date(shift.closed_at).getTime():Date.now();
+  const tOf=(iso)=>new Date(iso).getTime();
+  const inWin=(iso)=>{const t=tOf(iso);return t>=opened&&t<=closed;};
+  const[m,o]=await Promise.all([api.getCashMovements(shift.id),api.getPOSOrdersSince(branchId,shift.opened_at)]);
+  const movements=Array.isArray(m)?m:[];
+  const all=(Array.isArray(o)?o:[]).filter(x=>tOf(x.created_at)<=closed);   // บิลที่เปิดหลังปิดกะไม่ใช่ของกะนี้
+  const linkedIds=new Set(movements.filter(x=>x.type==="sale"&&x.order_id).map(x=>x.order_id));
+  const orders=all.filter(x=>x.status==="paid"&&(linkedIds.has(x.id)||inWin(x.updated_at||x.created_at)));
+  const cancelled=all.filter(x=>x.status==="cancelled"&&inWin(x.cancelled_at||x.updated_at||x.created_at));
+  // โต๊ะที่ยังเปิดอยู่ตอนปิดกะ = เปิดก่อนปิดกะ และตอนนั้นยังไม่จ่าย/ยังไม่ยกเลิก
+  const openBills=all.filter(x=>(x.status!=="paid"&&x.status!=="cancelled")||tOf(x.updated_at||x.created_at)>closed);
+  const computed=computeShiftTotals({movements,orders,actualCash:shift.closing_cash,cancelled,openBills});
+  const S=(k)=>shift[k]==null?null:round2(+shift[k]);
+  const stored={totalSales:S("total_sales"),totalCash:S("total_cash"),totalTransfer:S("total_transfer"),totalCard:S("total_card"),totalOther:S("total_other"),
+    openingCash:S("opening_cash"),payIn:S("total_pay_in"),payOut:S("total_pay_out"),drops:S("total_drop"),
+    expected:S("expected_cash"),actual:S("closing_cash"),diff:S("cash_diff"),orderCount:shift.order_count==null?null:+shift.order_count};
+  const LABEL={totalSales:"ยอดขายสุทธิ",totalCash:"เงินสด",totalTransfer:"โอน/พร้อมเพย์",totalCard:"บัตร",totalOther:"อื่นๆ",
+    openingCash:"เงินทอนเริ่มต้น",payIn:"รับเข้าเพิ่ม",payOut:"จ่ายออก",drops:"ฝาก/ถอนเซฟ",
+    expected:"ยอดที่ควรมี",actual:"นับจริง",diff:"ส่วนต่าง",orderCount:"จำนวนบิล"};
+  const totals={...computed};const mismatches=[];
+  for(const k of Object.keys(stored)){
+    if(stored[k]==null)continue;
+    const c=k==="orderCount"?(+computed[k]||0):round2(+computed[k]||0);
+    if(Math.abs(c-stored[k])>0.009)mismatches.push(`${LABEL[k]}: ตอนปิดกะ ${stored[k].toLocaleString()} · คำนวณวันนี้ ${c.toLocaleString()}`);
+    totals[k]=stored[k];   // ตัวเลขที่เซ็นรับไปแล้วชนะเสมอ
+  }
+  totals.avgBill=totals.orderCount?round2((+totals.totalSales||0)/totals.orderCount):0;
+  return{totals,mismatches};
 }
 function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
   const[movements,setMovements]=useState([]);const[orders,setOrders]=useState([]);
@@ -20631,34 +20717,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     setLoading(false);
   }
   useEffect(()=>{load();},[shift.id]);
-  const totals=useMemo(()=>{
-    let openingCash=0,payIn=0,payOut=0,drops=0,refunds=0,salesCash=0;
-    movements.forEach(m=>{const a=+m.amount||0;if(m.type==='opening')openingCash+=a;else if(m.type==='pay_in')payIn+=a;else if(m.type==='pay_out')payOut+=a;else if(m.type==='drop')drops+=a;else if(m.type==='refund')refunds+=a;else if(m.type==='sale')salesCash+=a;});
-    let totalSales=0,totalCash=0,totalTransfer=0,totalCard=0,totalOther=0;
-    orders.forEach(o=>{const t=+o.total||0;totalSales+=t;const pm=o.payment_method;if(pm==='cash')totalCash+=t;else if(pm==='transfer'||pm==='promptpay')totalTransfer+=t;else if(pm==='credit'||pm==='debit')totalCard+=t;else totalOther+=t;});
-    const expected=openingCash+payIn+salesCash-payOut-drops-refunds;
-    const actual=+actualCash||0;
-    // โครงสร้างยอด — ใบปิดยอดต้องแยกให้เห็นว่ายอดขายมาจากอะไรบ้าง ไม่ใช่มีแต่ยอดสุทธิก้อนเดียว
-    // ส่วนลดคือตัวเลขที่ต้องเห็นที่สุด: ของจริงกะนี้ให้ส่วนลดไป ฿9,583 จากยอดก่อนลด ฿44,447 (21.6%)
-    // แล้วไม่เคยขึ้นบนจอปิดกะหรือใบ Z-Report เลยสักตัว
-    const sum=(k)=>round2(orders.reduce((a,o)=>a+(+o[k]||0),0));
-    const gross=sum("subtotal"),disc=sum("discount"),promo=sum("promo_amount");
-    const svc=sum("service_charge"),vatSum=sum("vat"),roundSum=sum("round_adj");
-    const vatIncluded=orders.length?orders[0].vat_included!==false:true;
-    const itemQty=orders.reduce((a,o)=>a+(o.items||[]).reduce((b,i)=>b+(+i.qty||0),0),0);
-    const cancelAmt=round2(cancelled.reduce((a,o)=>a+(+o.total||0),0));
-    const openAmt=round2(openBills.reduce((a,o)=>a+(+o.total||0),0));
-    return{openingCash,payIn,payOut,drops,refunds,salesCash,totalSales:round2(totalSales),
-      totalCash:round2(totalCash),totalTransfer:round2(totalTransfer),totalCard:round2(totalCard),totalOther:round2(totalOther),
-      expected:round2(expected),actual,diff:round2(actual-expected),orderCount:orders.length,
-      gross,disc,promo,svc,vat:vatSum,roundAdj:roundSum,vatIncluded,itemQty,
-      discPct:gross>0?round2(disc/gross*100):0,
-      avgBill:orders.length?round2(totalSales/orders.length):0,
-      cancelCount:cancelled.length,cancelAmt,
-      cancelList:cancelled.map(o=>({id:o.id,table:o.table_number,total:round2(+o.total||0),by:o.cancelled_by||null,reason:o.cancel_reason||null})),
-      openCount:openBills.length,openAmt,
-      openList:openBills.map(o=>({id:o.id,table:o.table_number,total:round2(+o.total||0)}))};
-  },[movements,orders,actualCash,cancelled,openBills]);
+  const totals=useMemo(()=>computeShiftTotals({movements,orders,actualCash,cancelled,openBills}),[movements,orders,actualCash,cancelled,openBills]);
   // กดปิดกะ = เช็คโต๊ะค้าง "สดๆ ตรงนั้น" ก่อนเสมอ ไม่ใช้ค่าที่โหลดไว้ตอนเปิดจอ
   // ระหว่างที่นับเงินอยู่ อาจมีโต๊ะเปิดใหม่หรือเพิ่งปิดไป
   async function closeShift(){
@@ -21316,7 +21375,7 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
       {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser} menus={menus} currentBranch={currentBranch}/>}
       {section==="settings"&&<POSSettingsPanel currentBranch={currentBranch}/>}
       {section==="promotions"&&<POSPromotionManager currentBranch={currentBranch} menus={menus}/>}
-      {section==="shifts"&&<POSShiftHistory shifts={shifts} loading={loadingS} reload={loadShifts}/>}
+      {section==="shifts"&&<POSShiftHistory shifts={shifts} loading={loadingS} reload={loadShifts} branch={currentBranch} user={currentUser}/>}
     </div>
   </div>;
 }
@@ -21993,7 +22052,25 @@ function POSOptionLibrary({currentBranch,onClose}){
   </Modal>;
 }
 
-function POSShiftHistory({shifts,loading,reload}){
+function POSShiftHistory({shifts,loading,reload,branch,user}){
+  // ต้องประกาศก่อน return ก่อนกำหนดทุกตัว (กติกา hooks ของ React)
+  const[busyId,setBusyId]=useState(null);
+  async function reprintZ(s){
+    if(busyId||!branch)return;
+    // เดสก์ท็อป: เปิดหน้าต่างเปล่ารอไว้ตั้งแต่จังหวะกด ไม่งั้นโดนบล็อกป็อปอัพหลัง await
+    const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
+    const win=isHttps?null:openPrintWindow(420,720);
+    setBusyId(s.id);
+    try{
+      const{totals,mismatches}=await loadShiftTotalsForReprint(s,branch.id);
+      printZReport({shift:s,totals,branch,user:user||{},note:s.notes||"",reprint:true,mismatches,win});
+      if(mismatches.length)notifyDlg("⚠️ ยอดที่คำนวณวันนี้ไม่ตรงกับตอนปิดกะ "+mismatches.length+" รายการ\n\nใบที่พิมพ์ใช้ตัวเลขตอนปิดกะ และพิมพ์ส่วนที่ไม่ตรงไว้ท้ายใบแล้ว\n\n"+mismatches.join("\n"));
+    }catch(e){
+      if(win){try{win.close();}catch{}}
+      notifyDlg("โหลดข้อมูลกะไม่สำเร็จ: "+friendlyError(e));
+    }
+    setBusyId(null);
+  }
   if(loading)return <Loading text="โหลดประวัติกะ..."/>;
   if(shifts.length===0)return <div style={{textAlign:"center",padding:60,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><Ic d={I.clock} s={48} c={C.line}/><p style={{marginTop:12}}>ยังไม่มีประวัติกะ</p></div>;
   return <div>
@@ -22020,10 +22097,14 @@ function POSShiftHistory({shifts,loading,reload}){
               <div>เงินสด: <b style={{color:C.green}}>฿{(+s.total_cash||0).toLocaleString()}</b></div>
               {!isOpen&&<>
                 <div>ปิดที่: <b>฿{(+s.closing_cash||0).toLocaleString()}</b></div>
-                <div>ส่วนต่าง: <b style={{color:s.cash_diff===0?C.green:s.cash_diff>0?C.blue:C.red}}>{s.cash_diff>0?'+':''}฿{Math.abs(+s.cash_diff||0).toLocaleString()}</b></div>
+                <div>ส่วนต่าง: <b style={{color:s.cash_diff===0?C.green:s.cash_diff>0?C.blue:C.red}}>{+s.cash_diff>0?'+':+s.cash_diff<0?'-':''}฿{Math.abs(+s.cash_diff||0).toLocaleString()}</b></div>
               </>}
             </div>
             {s.notes&&<div style={{marginTop:8,padding:"6px 10px",background:C.yellowLight,borderRadius:7,fontSize:11,color:C.ink3}}>📝 {s.notes}</div>}
+            {!isOpen&&<button onClick={()=>reprintZ(s)} disabled={!!busyId}
+              style={{marginTop:10,width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${C.blue}`,background:busyId===s.id?C.blueLight:C.white,color:C.blue,cursor:busyId?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,opacity:busyId&&busyId!==s.id?.5:1}}>
+              {busyId===s.id?"กำลังเตรียมใบปิดกะ...":"🖨 พิมพ์ใบปิดกะ (ใบพิมพ์ซ้ำ)"}
+            </button>}
           </div>
         </Card>;
       })}
