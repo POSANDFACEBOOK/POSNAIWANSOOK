@@ -1552,11 +1552,12 @@ try {
   }
   const expr = APP.slice(st + "  posAppendItems: ".length, en);
 
-  const mk = (order) => {
+  const mk = (order, menuRows) => {
     const calls = [];
     const sb = async (path, opt) => {
       calls.push({ path, method: (opt && opt.method) || "GET", body: opt && opt.body });
       if (/^tables\?/.test(path)) return [{ table_number: "C7" }];
+      if (/^menus\?/.test(path)) { if (menuRows === "fail") throw new Error("network"); return menuRows || []; }
       if (!opt) return order ? [order] : [];                       // SELECT บิลที่เปิดอยู่
       if (opt.method === "PATCH") return [{ ...order, ...JSON.parse(opt.body) }];
       if (opt.method === "POST") return [{ id: 99, ...JSON.parse(opt.body) }];
@@ -1566,7 +1567,10 @@ try {
     // ถ้าเอาแค่ค่าปลอมมาใส่ ด่านจะไม่ได้ทดสอบว่าธงถูกถอดจริงหรือเปล่า
     const stripLine = APP.split("\n").find((l) => l.startsWith("const stripNewFlags="));
     if (!stripLine) throw new Error("ไม่เจอ stripNewFlags");
-    const fn = new Function("sb", stripLine + "\nconst posAppendItems = " + expr + "; return posAppendItems;")(sb);
+    // กติกาสามปุ่มตัวจริง (ขาย/วันนี้หมด/ซ่อน) — posAppendItems ใช้มันตัดสินว่าจะรับรายการไหม
+    const availLines = APP.split("\n").filter((l) => /^const menu(AvailAt|SoldOutAt|HiddenAt)=/.test(l));
+    if (availLines.length !== 3) throw new Error("ไม่เจอกติกาสามปุ่มครบ");
+    const fn = new Function("sb", stripLine + "\n" + availLines.join("\n") + "\nconst posAppendItems = " + expr + "; return posAppendItems;")(sb);
     return { fn, calls };
   };
   const LINE = [{ line_uid: "new1", menu_id: 5, name: "หมูสไลด์", price: 100, qty: 1, category: "หมูกระทะ" }];
@@ -1611,6 +1615,48 @@ try {
     APP.includes("const[items,setItems]=useState(()=>stripNewFlags(existingOrder&&existingOrder.items));"));
   ok_("ปากทางแก้บิลก็กันธงหลุดด้วย",
     APP.includes("const body = (d && Array.isArray(d.items)) ? {...d, items:stripNewFlags(d.items)} : d;"));
+
+  // ── flow สามปุ่มของเจ้าของ (11 ก.ย. 69): ขาย / วันนี้หมด / ซ่อน ───────────
+  // วันนี้หมด = ห้ามทั้งพนักงานและลูกค้า · ซ่อน = ห้ามเฉพาะลูกค้า พนักงานยังสั่งให้ได้
+  // ตรวจที่ปากทางเขียนบิล เพราะหน้าจอที่เปิดค้าง/ของค้างในตะกร้า เห็นสถานะช้ากว่าความจริง
+  {
+    const LINE1 = [{ line_uid: "a1", menu_id: 5, name: "หมูหมัก", price: 79, qty: 1 }];
+    const tryOrder = async (who, avail, menuRowsOverride) => {
+      const rows = menuRowsOverride !== undefined ? menuRowsOverride : [{ id: 5, name: "หมูหมัก", availability: avail }];
+      const { fn, calls } = mk({ id: 7, items: [], status: "pending", updated_at: "t0" }, rows);
+      try {
+        await fn({ branch_id: 8, table_id: 3, table_number: "C7", newItems: LINE1, ordered_by: who, ...(who === "customer" ? { blockIfAwaiting: true } : {}) });
+        return calls.some((x) => x.method === "PATCH" || x.method === "POST") ? "รับ" : "ไม่ได้เขียน";
+      } catch (e) {
+        const wrote = calls.some((x) => x.method === "PATCH" || x.method === "POST");
+        return wrote ? "เขียนไปแล้วทั้งที่ปฏิเสธ" : (e && e.unavailable ? "ปฏิเสธ" : "error อื่น:" + (e && e.message));
+      }
+    };
+    ck("ขาย: ลูกค้าและพนักงานสั่งได้", [await tryOrder("customer", {}), await tryOrder("ผึ้ง", {})], ["รับ", "รับ"]);
+    ck("วันนี้หมด: ลูกค้าและพนักงานสั่งไม่ได้", [await tryOrder("customer", { 8: "sold_out" }), await tryOrder("ผึ้ง", { 8: "sold_out" })], ["ปฏิเสธ", "ปฏิเสธ"]);
+    ck("ซ่อน: ลูกค้าสั่งไม่ได้ แต่พนักงานสั่งให้ได้", [await tryOrder("customer", { 8: "hidden" }), await tryOrder("ผึ้ง", { 8: "hidden" })], ["ปฏิเสธ", "รับ"]);
+    ck("หมดที่สาขาอื่น ไม่กระทบสาขานี้", await tryOrder("customer", { 3: "sold_out" }), "รับ");
+    // อ่านสถานะเมนูไม่ได้ (เน็ตสะดุด) ต้องไม่หยุดการขาย
+    ck("อ่านสถานะเมนูไม่ได้ ต้องไม่หยุดการขาย", await tryOrder("customer", {}, "fail"), "รับ");
+    // ข้อความต้องบอกชื่อเมนูที่หมด — ลูกค้า/พนักงานต้องรู้ว่าต้องเอาอะไรออก
+    {
+      const { fn } = mk({ id: 7, items: [], status: "pending", updated_at: "t0" }, [{ id: 5, name: "หมูหมัก", availability: { 8: "sold_out" } }]);
+      let err = null;
+      try { await fn({ branch_id: 8, table_id: 3, table_number: "C7", newItems: LINE1, ordered_by: "customer", blockIfAwaiting: true }); } catch (e) { err = e; }
+      ok_("ปฏิเสธแล้วบอกชื่อเมนูและรหัสเมนูที่หมด", !!err && err.unavailable && (err.unavailableNames || []).includes("หมูหมัก") && (err.unavailableIds || []).includes(5));
+    }
+  }
+  // หน้าจอ: จอพนักงานต้องไม่กรองเมนูที่ซ่อนทิ้ง · ของหมดขึ้นกลางรูปทั้งสองฝั่ง
+  ok_("จอพนักงานไม่กรองเมนูที่ซ่อนทิ้งแล้ว", !APP.includes('if((m.availability||{})[bidSale]==="hidden")return false;'));
+  ok_("การ์ดพนักงานบอกว่าเมนูนี้ซ่อนจากลูกค้า", APP.includes("{hiddenFromCustomer&&<span style={MC_HID}>ซ่อนจากลูกค้า</span>}") && APP.includes("hiddenFromCustomer={menuHiddenAt(m,bidSale)}"));
+  ok_("การ์ดพนักงาน: ของหมดขึ้นกลางรูป", APP.includes("{soldOut&&<span style={MC_SOLDOUT}>ของหมด</span>}") && APP.includes('transform:"translate(-50%,-50%)"'));
+  ok_("หน้าลูกค้า: ของหมดขึ้นกลางรูป", APP.includes('fontSize:17,fontWeight:900,borderRadius:999,padding:"6px 18px",fontFamily:"\'Sarabun\',sans-serif",letterSpacing:.3}}>ของหมด</span>'));
+  ok_("หน้าลูกค้ายังซ่อนเมนูที่ตั้งซ่อน", APP.includes('setMenus(ms.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));'));
+  // ถูกปฏิเสธเพราะของหมด = ปฏิเสธถาวร ห้ามเข้าคิวออฟไลน์วนส่งซ้ำไม่จบ
+  ok_("หน้าลูกค้า: ของหมดไม่วนส่งซ้ำ ทั้งทางส่งปกติและทางคิวออฟไลน์",
+    APP.includes("if(e&&e.unavailable){handleUnavailable(e,sending);setSending(false);loadMyOrder();return;}") &&
+    APP.includes("else if(e&&e.unavailable){handleUnavailable(e,o&&o.lines);loadMyOrder();}") &&
+    APP.includes("writeOutbox(null);setOutbox(null);\n    const back=(Array.isArray(lines)?lines:[]).filter(l=>!gone.has(+(l&&l.menu_id)));"));
 
   const OPEN = { id: 7, items: [], status: "pending", updated_at: "t0" };
   const WAIT = { id: 7, items: [], status: "awaiting_payment", updated_at: "t0" };

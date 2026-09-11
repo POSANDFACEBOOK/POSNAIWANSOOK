@@ -242,6 +242,14 @@ const todayBkk = () => new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Ban
 // ล้างทั้ง "ขาเข้า" (อ่านจากฐานมาแสดง) และ "ขาออก" (ก่อนเขียนลงฐาน)
 // ขาเข้าสำคัญกว่า เพราะมันซ่อมของที่รั่วไปแล้วให้ทันทีโดยไม่ต้องแก้ข้อมูลเก่า
 const stripNewFlags=(arr)=>Array.isArray(arr)?arr.map(({_new,...r})=>r):[];
+// ── สถานะเมนูรายสาขา (ปุ่มในหน้า "เมนูทั้งหมด") ────────────────────────
+//   ขาย       = ทุกจอเห็น สั่งได้
+//   วันนี้หมด  = ทุกจอเห็น ขึ้น "ของหมด" กลางรูป สั่งไม่ได้ ทั้งพนักงานและลูกค้า
+//   ซ่อน      = หน้าลูกค้าที่สแกน QR ไม่เห็นเลย · จอพนักงานยังเห็นและสั่งให้ลูกค้าได้
+// (เจ้าของกำหนด flow นี้เอง 11 ก.ย. 69 — เดิม "ซ่อน" ซ่อนจากพนักงานด้วย พนักงานสั่งให้ลูกค้าไม่ได้)
+const menuAvailAt=(m,bid)=>((m&&m.availability)||{})[bid]||"";
+const menuSoldOutAt=(m,bid)=>menuAvailAt(m,bid)==="sold_out";
+const menuHiddenAt=(m,bid)=>menuAvailAt(m,bid)==="hidden";
 // "2026-09-10" → ISO ของ "เที่ยงวันเวลาไทย" ของวันนั้น
 // ทำไมเที่ยงวัน ไม่ใช่เที่ยงคืน: เที่ยงคืน+07 คือ 17:00 ของ "เมื่อวาน" ในเวลา UTC
 // ระบบไหนที่ตัดวันด้วย UTC จะอ่านได้วันก่อนหน้าทันที (ข้ามเดือนได้ถ้าเป็นวันที่ 1)
@@ -696,6 +704,28 @@ const api = {
     // ต้นตอของบั๊กส่งซ้ำ: ตอน "สร้างบิลใบแรก" ฝั่งจอส่ง items ดิบมาทั้งก้อนโดยไม่ได้ถอดธง
     // ทำให้ทุกแถวของบิลใบแรกถูกบันทึกพร้อมธง _new แล้วขึ้นส้มค้างตลอด
     newItems = stripNewFlags(newItems);
+    // ── เมนูที่หมด/ซ่อน ห้ามหลุดเข้าบิล ────────────────────────────────────
+    // หน้าจอกันกดไว้แล้วก็จริง แต่มือถือลูกค้าเห็นสถานะช้าได้ถึงนาที และของที่ใส่ตะกร้าไว้
+    // ก่อนครัวกด "วันนี้หมด" ยังค้างอยู่ในตะกร้า กดส่งได้ ทั้งที่ครัวไม่มีของให้ทำแล้ว
+    // ตรวจกับสถานะล่าสุดในฐานตรงนี้จุดเดียว เพราะทุกทางที่สั่งอาหารผ่านฟังก์ชันนี้หมด
+    // วันนี้หมด = ห้ามทุกคน · ซ่อน = ห้ามเฉพาะลูกค้า (พนักงานยังสั่งให้ได้ตาม flow ของเจ้าของ)
+    // อ่านสถานะไม่ได้ (เน็ตสะดุด) = ปล่อยผ่าน — การขายต้องไม่หยุดเพราะตัวตรวจเสริมตัวเดียว
+    {
+      const fromCustomer = ordered_by === "customer";
+      const ids = [...new Set(newItems.map((i) => +i.menu_id).filter((n) => n > 0))];
+      if (ids.length) {
+        let rows = null;
+        try { rows = await sb(`menus?select=id,name,availability&id=in.(${ids.join(",")})`); } catch {}
+        if (Array.isArray(rows)) {
+          const bad = rows.filter((m) => menuSoldOutAt(m, branch_id) || (fromCustomer && menuHiddenAt(m, branch_id)));
+          if (bad.length) {
+            const err = new Error("เมนูนี้หมดแล้ว: " + bad.map((m) => m.name).join(", ") + " — เอาออกจากรายการแล้วสั่งใหม่ได้เลย");
+            err.unavailable = true; err.unavailableIds = bad.map((m) => +m.id); err.unavailableNames = bad.map((m) => m.name);
+            throw err;
+          }
+        }
+      }
+    }
     // ชื่อโต๊ะคือสิ่งเดียวที่บอกครัวว่าอาหารไปโต๊ะไหน — ใบที่ไม่มีชื่อโต๊ะคือใบที่ส่งของไม่ได้
     // 9 ก.ย. 69 บิล #17 ออกใบครัวมาโดยไม่มีชื่อโต๊ะ: หน้าลูกค้าอ่านชื่อโต๊ะจากสถานะบนจอ
     // ซึ่งตอนส่งของค้างจากคิวออฟไลน์ สถานะนั้นยังโหลดไม่เสร็จ → ส่งค่าว่างไปเงียบๆ
@@ -18749,16 +18779,24 @@ function SwipeRow({children,actions,actionWidth=86,bg,accent}){
 // สไตล์ที่ไม่ผูกกับสถานะยกขึ้นมาเป็นค่าคงที่ระดับโมดูล ไม่ต้องสร้างใหม่ทุกใบทุกรอบ
 const MC_BADGE={position:"absolute",top:4,right:4,fontSize:8.5,fontWeight:800,borderRadius:8,padding:"1px 6px",fontFamily:"'Sarabun',sans-serif"};
 const MC_OUT={...MC_BADGE,color:"#92400E",background:"#FEF3C7",border:"1px solid #F59E0B"};
+// "ของหมด" กลางรูป — เห็นชัดจากระยะไกล ไม่ใช่ป้ายเล็กที่มุมที่มองข้ามได้
+const MC_SOLDOUT={position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",background:"rgba(17,24,39,.86)",color:"#fff",fontSize:12,fontWeight:900,borderRadius:999,padding:"3px 11px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",pointerEvents:"none"};
+// เมนูที่ซ่อนจากลูกค้า — พนักงานต้องรู้ว่าลูกค้าสั่งเองไม่ได้ ต้องสั่งผ่านพนักงาน
+const MC_HID={...MC_BADGE,left:4,right:"auto",color:"#475569",background:"#F1F5F9",border:"1px solid #CBD5E1"};
 const MC_OPT={...MC_BADGE,color:C.teal,background:C.tealLight};
 const MC_ICON={height:40,display:"flex",alignItems:"center",justifyContent:"center"};
 const MC_NAME={fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3};
-const MenuCard=memo(function MenuCard({m,soldOut,hasOpts,onPick}){
-  return <div className={soldOut?undefined:"mcard"} onClick={()=>{if(!soldOut)onPick(m);}} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:soldOut?"not-allowed":"pointer",textAlign:"center",position:"relative",opacity:soldOut?.55:1}}>
-    {soldOut?<span style={MC_OUT}>วันนี้หมด</span>:hasOpts&&<span style={MC_OPT}>+ ตัวเลือก</span>}
+const MenuCard=memo(function MenuCard({m,soldOut,hiddenFromCustomer,hasOpts,onPick}){
+  return <div className={soldOut?undefined:"mcard"} onClick={()=>{if(!soldOut)onPick(m);}} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:soldOut?"not-allowed":"pointer",textAlign:"center",position:"relative"}}>
+    {!soldOut&&hasOpts&&<span style={MC_OPT}>+ ตัวเลือก</span>}
+    {hiddenFromCustomer&&<span style={MC_HID}>ซ่อนจากลูกค้า</span>}
+    <div style={{position:"relative"}}>
     {m.image
       ?<img src={driveImgSrc(m.image,96)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>
       :<div style={MC_ICON}><Ic d={I.food} s={26} c={soldOut?C.ink4:C.brand}/></div>}
-    <div style={MC_NAME}>{m.name}</div>
+      {soldOut&&<span style={MC_SOLDOUT}>ของหมด</span>}
+    </div>
+    <div style={{...MC_NAME,color:soldOut?C.ink4:C.ink}}>{m.name}</div>
     <div style={{fontSize:13,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</div>
   </div>;
 });
@@ -18812,7 +18850,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     const ms=menuSorter(catOrderOf(posSettings),menuOrderOf(posSettings));
     return menus.filter(m=>{
       if(!menuVisibleAt(m,bidSale))return false;            // สาขานี้ไม่ได้เปิดขายเมนูนี้
-      if((m.availability||{})[bidSale]==="hidden")return false;  // ตั้ง "ซ่อน" → ไม่ขึ้นหน้าขาย (ตรงกับหน้าลูกค้า)
+      // "ซ่อน" = ซ่อนจากลูกค้าที่สแกน QR เท่านั้น — จอพนักงานต้องยังเห็นและสั่งให้ลูกค้าได้
+      // (เดิมกรองทิ้งตรงนี้ด้วย พนักงานเลยสั่งเมนูที่ตั้งใจเก็บไว้สั่งผ่านพนักงานไม่ได้เลย)
       const c=menuCatOf(m);
       if(!c)return false;                                  // ครัวกลางยังไม่ได้จัดหมวด → ไม่ขึ้นในหน้าขาย
       if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
@@ -19131,7 +19170,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // NOTE: ไม่พิมพ์ที่นี่ — "ตัวพิมพ์ (agent)" ที่ร้าน poll ออเดอร์แล้วพิมพ์รายการใหม่เอง (จุดเดียว กันพิมพ์ซ้ำ + ใช้ได้กับ iPad)
       posToast("✅ ส่งรายการแล้ว — ตัวพิมพ์กำลังพิมพ์ใบครัว","ok");
       onDone();onClose();
-    }catch(e){notifyDlg("บันทึกไม่สำเร็จ: "+friendlyError(e));}setSavingGuard(false);
+    }catch(e){
+      // ของหมดระหว่างที่ยังไม่ได้กดส่ง — ดึงเมนูใหม่ให้การ์ดขึ้น "ของหมด" แล้วบอกชื่อเมนู
+      // (ไม่ลบออกจากรายการเอง ให้พนักงานเห็นแล้วตัดสินใจ ปัดซ้ายเอาออกได้ทันที)
+      if(e&&e.unavailable){try{reloadMenus&&reloadMenus();}catch{}notifyDlg("ส่งไม่ได้ — "+e.message);}
+      else notifyDlg("บันทึกไม่สำเร็จ: "+friendlyError(e));
+    }setSavingGuard(false);
   }
   async function checkOut(methodArg){
     if(savingRef.current)return;   // กดซ้ำ = ตัดเงินสองรอบ
@@ -19230,7 +19274,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"7px 12px",fontSize:13}}/>
       </div>
       <div style={{flex:1,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
-        {filtered.map(m=><MenuCard key={m.id} m={m} soldOut={(m.availability||{})[bidSale]==="sold_out"} hasOpts={optsSet.has(m.id)} onPick={pickOrAdd}/>)}
+        {filtered.map(m=><MenuCard key={m.id} m={m} soldOut={menuSoldOutAt(m,bidSale)} hiddenFromCustomer={menuHiddenAt(m,bidSale)} hasOpts={optsSet.has(m.id)} onPick={pickOrAdd}/>)}
         {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"40px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
           <Ic d={I.food} s={42} c={C.line}/>
           <p style={{marginTop:10,fontSize:13.5,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูที่จัดหมวดหมู่ไว้"}</p>
@@ -19954,6 +19998,7 @@ function CustomerPage({branchId,tableId,token}){
         loadMyOrder();
         return;
       }
+      if(e&&e.unavailable){handleUnavailable(e,sending);setSending(false);loadMyOrder();return;}
       // Do NOT clear the cart and do NOT drop the outbox — it retries on reconnect. Re-sending is
       // safe: the append ignores any line_uid the order already carries.
       setOutbox(readOutbox());
@@ -19973,6 +20018,19 @@ function CustomerPage({branchId,tableId,token}){
   // รอชำระเงินอยู่ไหม — โพลล์บิลทุก 45 วินาที และเช็คซ้ำตอนกดส่ง
   const payWaiting=!!myOrder&&myOrder.status==="awaiting_payment";
   const[payWaitMsg,setPayWaitMsg]=useState(false);
+  const[soldOutMsg,setSoldOutMsg]=useState(null);   // ชื่อเมนูที่หมดระหว่างที่ลูกค้ากำลังสั่ง
+  // ถูกปฏิเสธเพราะเมนูหมด = ปฏิเสธถาวร ไม่ใช่เน็ตสะดุด
+  // ถ้าปล่อยเข้าคิวออฟไลน์เหมือน error ทั่วไป คิวจะวนส่งซ้ำไม่จบ และลูกค้าติดอยู่ตรงนั้น
+  // ⟹ ทิ้งคิว · เอาเฉพาะเมนูที่หมดออก ที่เหลือคืนตะกร้าให้กดส่งใหม่ได้ทันที · ขึ้นบอกชื่อเมนู
+  function handleUnavailable(e,lines){
+    const gone=new Set((e&&e.unavailableIds)||[]);
+    writeOutbox(null);setOutbox(null);
+    const back=(Array.isArray(lines)?lines:[]).filter(l=>!gone.has(+(l&&l.menu_id)));
+    if(back.length)setCart(p=>[...back,...p]);
+    // ให้หน้าจอขึ้น "ของหมด" ทันที ไม่ต้องรอรอบดึงสถานะถัดไป
+    setMenus(ms=>ms.map(m=>gone.has(+m.id)?{...m,availability:{...(m.availability||{}),[branchId]:"sold_out"}}:m));
+    setSoldOutMsg((e&&e.unavailableNames)||[]);
+  }
   useEffect(()=>{if(payWaiting)setPayWaitMsg(true);},[payWaiting]);
   async function flushOutbox(){
     const o=readOutbox();
@@ -19992,6 +20050,7 @@ function CustomerPage({branchId,tableId,token}){
         if(back.length)setCart(p=>[...back,...p]);
         setPayWaitMsg(true);loadMyOrder();
       }
+      else if(e&&e.unavailable){handleUnavailable(e,o&&o.lines);loadMyOrder();}
     }
     flushingRef.current=false;
     setOutboxBusy(false);
@@ -20073,7 +20132,9 @@ function CustomerPage({branchId,tableId,token}){
         {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
           <div style={{position:"relative",width:"100%",height:130,flexShrink:0}}>
             {m.image?<img src={driveImgSrc(m.image,160)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
-            {soldOut&&<span style={{position:"absolute",top:6,left:6,fontSize:10,fontWeight:700,color:"#92400E",background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:10,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>วันนี้หมด</span>}
+            {soldOut&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(255,255,255,.35)",pointerEvents:"none"}}>
+              <span style={{background:"rgba(17,24,39,.86)",color:"#fff",fontSize:17,fontWeight:900,borderRadius:999,padding:"6px 18px",fontFamily:"'Sarabun',sans-serif",letterSpacing:.3}}>ของหมด</span>
+            </div>}
             {hasOpts&&!soldOut&&<span style={{position:"absolute",top:6,right:6,fontSize:9.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:10,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
           </div>
           <div style={{padding:"9px 11px",display:"flex",flexDirection:"column",flex:1}}>
@@ -20176,6 +20237,15 @@ function CustomerPage({branchId,tableId,token}){
       </div>
     </>}
     {/* รอชำระเงิน — ต้องเป็นป็อปอัพ ไม่ใช่แถบเล็กๆ ลูกค้าจะได้ไม่กดสั่งซ้ำแล้วงงว่าทำไมไม่เข้า */}
+    {soldOutMsg&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
+      <div style={{background:C.white,borderRadius:18,padding:"26px 22px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:46,marginBottom:8}}>🙏</div>
+        <div style={{fontSize:18,fontWeight:900,color:C.ink,marginBottom:7}}>ขออภัย เมนูนี้หมดแล้ว</div>
+        <div style={{fontSize:14.5,color:C.ink,fontWeight:800,lineHeight:1.7,marginBottom:6}}>{(soldOutMsg||[]).join(", ")}</div>
+        <div style={{fontSize:13,color:C.ink3,lineHeight:1.7,marginBottom:18}}>เอาออกจากรายการให้แล้ว<br/>รายการอื่นยังอยู่ในตะกร้า กดสั่งต่อได้เลย</div>
+        <Btn onClick={()=>setSoldOutMsg(null)} full s={{padding:"12px",fontSize:15,fontWeight:900}}>รับทราบ</Btn>
+      </div>
+    </div>}
     {payWaitMsg&&payWaiting&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
       <div style={{background:C.white,borderRadius:18,padding:"26px 22px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:46,marginBottom:8}}>🧾</div>
