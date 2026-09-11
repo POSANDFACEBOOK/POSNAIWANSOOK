@@ -22,20 +22,32 @@ function buildLines(body) {
   // พิมพ์ซ้ำแล้วครัวทำอีกจาน = ของทิ้งเปล่า · ย้ายโต๊ะแล้วเสิร์ฟที่เดิม = ลูกค้าไม่ได้กิน
   // ห้ามใช้อีโมจิในข้อความที่พิมพ์ — ฟอนต์ Sarabun ไม่มีตัวนั้น จะออกมาเป็นกล่องสี่เหลี่ยม
   const kind = String(body.kind || "");
-  const head = kind === "void" ? "แจ้งยกเลิกรายการ" : kind === "move" ? "แจ้งย้ายโต๊ะ" : "ใบสั่งอาหาร";
-  const mark = kind === "reprint" ? "พิมพ์ซ้ำ - ไม่ใช่ออเดอร์ใหม่"
-    : kind === "void" ? "ยกเลิกแล้ว - ไม่ต้องทำ"
-    : kind === "move" ? (body.from ? `ย้ายมาจากโต๊ะ ${body.from} - ไม่ต้องทำใหม่` : "ย้ายโต๊ะ - ไม่ต้องทำใหม่")
-    : "";
-  const lines = [
-    { t: head, size: 28, bold: true, align: "center" },
-    { t: String(body.table || ""), size: 76, bold: true, align: "center" },   // เบอร์โต๊ะตัวใหญ่มาก ครัวเห็นชัด
-  ];
-  if (mark) lines.push({ t: mark, size: 26, bold: true, align: "center" });
-  if (body.time) lines.push({ t: String(body.time), size: 20, align: "center" });
+  const time = body.time ? { t: String(body.time), size: 20, align: "center" } : null;
   // เลขบิลคือตัวอ้างอิงเดียวที่ตามกลับไปหาบิลในระบบได้ — ครัวถือกระดาษมาถามได้ตรงใบ
   // ผู้สั่งไว้ตรวจย้อนหลังตอนมีปัญหาว่าใครเป็นคนรับออเดอร์ หรือลูกค้าสแกนสั่งเอง
   const foot = [body.bill ? `บิล #${body.bill}` : "", body.by ? (String(body.by) === "customer" ? "ลูกค้าสแกนสั่งเอง" : String(body.by)) : ""].filter(Boolean).join("  ·  ");
+  // ใบย้ายโต๊ะ: บอกแค่ "จากโต๊ะไหน ไปโต๊ะไหน" ใบเดียว ไม่มีรายการอาหาร (ครัวไม่ต้องทำอะไรใหม่)
+  if (kind === "move") {
+    const lines = [
+      { box: "ย้ายโต๊ะ", size: 52 },
+      { t: "จากโต๊ะ", size: 26, align: "center" },
+      { t: String(body.from || "-"), size: 76, bold: true, align: "center" },
+      { t: "ย้ายไปโต๊ะ", size: 26, align: "center" },
+      { t: String(body.table || "-"), size: 76, bold: true, align: "center" },
+      { t: "ไม่ต้องทำอาหารใหม่ - เสิร์ฟที่โต๊ะใหม่", size: 24, bold: true, align: "center" },
+    ];
+    if (time) lines.push(time);
+    if (foot) lines.push({ t: foot, size: 20, align: "center" });
+    return lines;
+  }
+  const mark = kind === "reprint" ? "พิมพ์ซ้ำ - ไม่ใช่ออเดอร์ใหม่" : kind === "void" ? "ยกเลิกแล้ว - ไม่ต้องทำ" : "";
+  const lines = [
+    // ใบยกเลิก: หัวเป็นกล่องดำทึบตัวขาว "ยกเลิก" — ครัวต้องไม่มีทางอ่านเป็นออเดอร์ใหม่
+    kind === "void" ? { box: "ยกเลิก", size: 60 } : { t: "ใบสั่งอาหาร", size: 28, bold: true, align: "center" },
+    { t: String(body.table || ""), size: 76, bold: true, align: "center" },   // เบอร์โต๊ะตัวใหญ่มาก ครัวเห็นชัด
+  ];
+  if (mark) lines.push({ t: mark, size: 26, bold: true, align: "center" });
+  if (time) lines.push(time);
   if (foot) lines.push({ t: foot, size: 20, align: "center" });
   lines.push({ rule: true });
   (body.items || []).forEach(it => {
@@ -49,7 +61,7 @@ function buildLines(body) {
 }
 
 // เรนเดอร์เป็นรูปภาพ 1-bit แล้วแปลงเป็น ESC/POS raster (GS v 0)
-// รองรับ: {rule} เส้นคั่น · {t,size,bold,align,indent} ข้อความ · {c1,c2,size,bold} สองคอลัมน์ (จำนวน|ชื่อเมนู)
+// รองรับ: {box} กล่องดำทึบตัวขาวเต็มความกว้าง · {rule} เส้นคั่น · {t,size,bold,align,indent} ข้อความ · {c1,c2,size,bold} สองคอลัมน์ (จำนวน|ชื่อเมนู)
 // ชิดขอบบน/ล่างให้มากสุด (pad น้อย) ประหยัดกระดาษ · ตัดบรรทัดชื่อยาวโดยไม่แยกสระ/วรรณยุกต์ไทย
 function render(createCanvas, lines, W) {
   const pad = 8, QCOL = 96, RPAD = 8;
@@ -67,7 +79,7 @@ function render(createCanvas, lines, W) {
   const nameMaxW = W - pad - QCOL - RPAD, fullMaxW = W - pad * 2;
   const rows = [];   // ขยายบรรทัดที่ยาวเกินเป็นหลายบรรทัด
   for (const l of lines) {
-    if (l.rule) { rows.push(l); continue; }
+    if (l.rule || l.box) { rows.push(l); continue; }
     if (l.c1 != null || l.c2 != null) {
       const nl = l.c2 != null ? wrap(l.c2, l.size, l.bold, nameMaxW) : [""];
       nl.forEach((t, i) => rows.push({ c1: i === 0 ? l.c1 : "", c2: t, size: l.size, bold: l.bold, mb: i === nl.length - 1 ? (l.mb || 0) : 0 }));
@@ -77,7 +89,7 @@ function render(createCanvas, lines, W) {
     const tl = wrap(l.t || "", l.size, l.bold, l.indent ? nameMaxW : fullMaxW);
     tl.forEach((t, i) => rows.push({ t, size: l.size, bold: l.bold, indent: l.indent, mb: i === tl.length - 1 ? (l.mb || 0) : 0 }));
   }
-  const lineH = l => l.rule ? 12 : Math.round((l.size || 28) * 1.3) + (l.mb != null ? l.mb : 3);
+  const lineH = l => l.rule ? 12 : l.box ? Math.round(l.size * 1.3) + 18 : Math.round((l.size || 28) * 1.3) + (l.mb != null ? l.mb : 3);
   let h = pad * 2; rows.forEach(l => { h += lineH(l); });
   const cv = createCanvas(W, h);
   const ctx = cv.getContext("2d");
@@ -86,6 +98,16 @@ function render(createCanvas, lines, W) {
   let y = pad;
   for (const l of rows) {
     if (l.rule) { ctx.fillRect(pad, y + 5, W - pad * 2, 2); y += lineH(l); continue; }
+    if (l.box) {   // กล่องดำทึบ ตัวอักษรขาวกลางกล่อง (สีขาว = ไม่พิมพ์ = เนื้อกระดาษ)
+      const bh = lineH(l) - 8;
+      ctx.fillRect(pad, y, W - pad * 2, bh);
+      ctx.font = `bold ${l.size}px Sarabun, sans-serif`;
+      ctx.fillStyle = "#fff";
+      const bw = ctx.measureText(l.box).width;
+      ctx.fillText(l.box, Math.max(pad, Math.round((W - bw) / 2)), y + Math.round((bh - l.size * 1.3) / 2) + 2);
+      ctx.fillStyle = "#000";
+      y += lineH(l); continue;
+    }
     ctx.font = `${l.bold ? "bold " : ""}${l.size || 28}px Sarabun, sans-serif`;
     if (l.c1 != null || l.c2 != null) {
       if (l.c1) ctx.fillText(String(l.c1), pad, y);

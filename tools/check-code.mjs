@@ -1907,7 +1907,7 @@ section("ใบครัว: ป้ายบอกชนิด + ย้ายโ
     else if (SLIP[j] === "}") { d--; if (!d) { en = j + 1; break; } }
   }
   const buildLines = new Function(SLIP.slice(st, en) + "\nreturn buildLines;")();
-  const txt = (ls) => ls.map(l => l.t || l.c2 || "").join("\n");
+  const txt = (ls) => ls.map(l => l.t || l.box || l.c2 || "").join("\n");
   const IT = [{ qty: 2, name: "หมูสไลด์", options: [], note: "" }];
 
   const plain = buildLines({ table: "C7", items: IT });
@@ -1921,13 +1921,20 @@ section("ใบครัว: ป้ายบอกชนิด + ย้ายโ
   ok_("ยังพิมพ์รายการอาหารครบเหมือนเดิม", txt(rep).includes("หมูสไลด์"));
 
   const vd = buildLines({ table: "C7", kind: "void", items: IT });
-  ck("ใบยกเลิกเปลี่ยนหัวใบให้อ่านออกทันที", vd[0].t, "แจ้งยกเลิกรายการ");
+  // เจ้าของสั่ง 11 ก.ย. 69: หัวใบยกเลิกเป็นกล่องสี่เหลี่ยมดำทึบ เขียนว่ายกเลิกชัดๆ
+  ck("ใบยกเลิกหัวเป็นกล่องดำเขียนว่ายกเลิก", vd[0].box, "ยกเลิก");
+  ok_("ใบยกเลิกยังมีเบอร์โต๊ะและรายการที่ยกเลิก", vd[1].t === "C7" && txt(vd).includes("หมูสไลด์"));
   ok_("ใบยกเลิกบอกว่าไม่ต้องทำ", txt(vd).includes("ยกเลิกแล้ว - ไม่ต้องทำ"));
 
   const mv = buildLines({ table: "C7", kind: "move", from: "A5", items: IT });
-  ck("ใบย้ายโต๊ะเปลี่ยนหัวใบ", mv[0].t, "แจ้งย้ายโต๊ะ");
-  ck("ใบย้ายโต๊ะโชว์เบอร์โต๊ะใหม่ตัวใหญ่", mv[1].t, "C7");
-  ok_("ใบย้ายโต๊ะบอกว่ามาจากโต๊ะไหน และห้ามทำใหม่", txt(mv).includes("ย้ายมาจากโต๊ะ A5 - ไม่ต้องทำใหม่"));
+  // เจ้าของสั่ง 11 ก.ย. 69: ใบย้ายโต๊ะบอกแค่จากโต๊ะไหน ไปโต๊ะไหน ตามชื่อโต๊ะ
+  ck("ใบย้ายโต๊ะหัวเป็นกล่องดำเขียนว่าย้ายโต๊ะ", mv[0].box, "ย้ายโต๊ะ");
+  const mvT = mv.map(l => l.t || l.box || "");
+  const iFrom = mvT.indexOf("จากโต๊ะ"), iTo = mvT.indexOf("ย้ายไปโต๊ะ");
+  ok_("ใบย้ายโต๊ะ: จากโต๊ะ A5 แล้วค่อย ย้ายไปโต๊ะ C7 (ห้ามสลับ)", iFrom >= 0 && mvT[iFrom + 1] === "A5" && iTo > iFrom && mvT[iTo + 1] === "C7");
+  ck("ชื่อโต๊ะทั้งสองเป็นตัวใหญ่สุดบนใบ", mv.filter(l => l.size === 76).map(l => l.t).join(), "A5,C7");
+  ok_("ใบย้ายโต๊ะไม่มีรายการอาหาร และบอกว่าไม่ต้องทำใหม่", !txt(mv).includes("หมูสไลด์") && txt(mv).includes("ไม่ต้องทำอาหารใหม่"));
+  ok_("ตัววาดรองรับกล่องดำตัวขาว", SLIP.includes("if (l.box) {") && SLIP.includes('ctx.fillStyle = "#fff";'));
   ok_("ไม่มีอีโมจิบนกระดาษ (ฟอนต์ใบครัวไม่มีตัวอีโมจิ)",
     ![plain, rep, vd, mv].some(ls => /[\u{1F300}-\u{1FAFF}\u{2700}-\u{27BF}\u{2B00}-\u{2BFF}]/u.test(txt(ls))));
 
@@ -2866,6 +2873,45 @@ section("ช่องทางจ่ายอื่นๆ");
   ok_("ท่อบัญชี: ช่องทางที่ไม่รู้จักลงกลุ่ม Custom Payment", SLIPPUSH.includes('const other = list.filter((x) => !["cash", "promptpay", "transfer", "credit", "debit"].includes(x.payment_method));'));
   ok_("กด อื่นๆ = เปิดรายการช่องทาง ไม่ปิดบิลทันที", APP.includes('onClick={()=>{if(m.v==="other"){setAskPay("other");return;}setPayMethod(m.v);'));
   ok_("เลือกช่องทางย่อย = ปิดบิลด้วยช่องทางนั้น", APP.includes("{OTHER_PAY_METHODS.map(m=><button key={m.v} disabled={saving}") && APP.includes("onClick={()=>{setPayMethod(m.v);setAskPay(null);onPay(m.v);}}"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ใบยกเลิก/ย้ายโต๊ะ ทางสำรองของตัวพิมพ์ (ตอนเรนเดอร์รูปไม่ได้) — ต้องบอกชนิดใบเหมือนกัน
+// เดิมใบสำรองขึ้น "ใบสั่งอาหาร" ทุกชนิด = ใบยกเลิก/ย้ายโต๊ะ ครัวอ่านเป็นออเดอร์ใหม่แล้วทำซ้ำ
+// ══════════════════════════════════════════════════════════════════════════
+section("ใบยกเลิก/ย้ายโต๊ะ ทางสำรอง");
+{
+  const L = AGENT.split("\n");
+  const a = L.findIndex(l => l.startsWith("function buildKitchenESC(item, tableNum, meta) {"));
+  const b = L.findIndex((l, i) => i > a && l === "}");
+  let esc = null;
+  if (a >= 0 && b > a) {
+    try {
+      esc = new Function("thaiBytes", "SET_THAI", "optionsText", L.slice(a, b + 1).join("\n") + "\nreturn buildKitchenESC;")(
+        (s) => Buffer.from(String(s), "utf8"), [], (o) => (o || []).map(x => x.name).join(", "));
+    } catch {}
+  }
+  ok_("ใบสำรองรับชนิดใบได้", !!esc);
+  if (esc) {
+    const s = (buf) => buf.toString("utf8");
+    const REV = Buffer.from([0x1d, 0x42, 0x01]);
+    const it = { qty: 1, name: "ยกเลิก: หมูสไลด์", options: [], note: "ไม่เผ็ด · ยกเลิกโดย a" };
+    const v = esc(it, "C7", { kind: "void" });
+    ok_("ใบสำรองยกเลิก: กล่องกลับสีเขียนว่ายกเลิก ไม่ใช่ใบสั่งอาหาร", v.includes(REV) && s(v).includes("ยกเลิก") && !s(v).includes("ใบสั่งอาหาร"));
+    ok_("ใบสำรองยกเลิก: มีเบอร์โต๊ะ รายการ และหมายเหตุ", s(v).includes("C7") && s(v).includes("หมูสไลด์") && s(v).includes("ไม่เผ็ด"));
+    const m = esc({ qty: 1, name: "ย้ายโต๊ะ" }, "C7", { kind: "move", from: "A5" });
+    const ms = s(m);
+    ok_("ใบสำรองย้ายโต๊ะ: จาก A5 ไป C7 ตามลำดับ ไม่ใช่ใบสั่งอาหาร",
+      m.includes(REV) && ms.indexOf("จากโต๊ะ") < ms.indexOf("A5") && ms.indexOf("A5") < ms.indexOf("ย้ายไปโต๊ะ") && ms.indexOf("ย้ายไปโต๊ะ") < ms.indexOf("C7") && !ms.includes("ใบสั่งอาหาร"));
+    const n = s(esc({ qty: 2, name: "หมูสไลด์" }, "C7", {}));
+    ok_("ใบสั่งอาหารปกติ ใบสำรองเหมือนเดิม", n.includes("ใบสั่งอาหาร") && n.includes("2x หมูสไลด์") && !n.includes("ยกเลิก"));
+  }
+  ok_("ใบสำรองได้รับชนิดใบจากทางเรนเดอร์", AGENT.includes("{ buf: buildKitchenESC(it, tableNum, meta), raster: false }"));
+  ok_("ตัวพิมพ์พิมพ์ใบย้ายโต๊ะใบเดียวต่อเครื่อง", AGENT.includes('const list = (meta && meta.kind === "move") ? (items || []).slice(0, 1) : items;'));
+  ok_("แอปส่งใบย้ายโต๊ะใบเดียว ไม่แนบรายการอาหาร", APP.includes('const slipBody=(its)=>(meta&&meta.kind==="move")?[{qty:1,name:"ย้ายโต๊ะ",options:[],note:""}]:its;')
+    && APP.includes("items:slipBody(mine)") && APP.includes("items:slipBody(body)"));
+  ok_("ใบยกเลิกคงหมายเหตุเดิมของจาน (เมนูเดียวกันหลายจาน)", APP.includes("note:[target.note,\x60ยกเลิกโดย "));
+  ok_("ขยับเวอร์ชันตัวพิมพ์แล้ว (ร้านอัปเดตเอง)", +((AGENT.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 39);
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

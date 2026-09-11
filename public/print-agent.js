@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 38;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 39;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -127,12 +127,29 @@ function resolvePrinter(item, printers) {
   if (item.category) { const c = String(item.category).trim(); const byCat = printers.find(p => Array.isArray(p.categories) && p.categories.some(x => String(x).trim() === c)); if (byCat) return byCat; }
   return printers.find(p => p.categories === null || p.categories === undefined) || null;
 }
-function buildKitchenESC(item, tableNum) {
+// ใบสำรอง (ตัวอักษร) ต้องบอกชนิดใบเหมือนใบรูปภาพ — เดิมพิมพ์ "ใบสั่งอาหาร" ทุกชนิด
+// ใบยกเลิก/ย้ายโต๊ะที่ออกมาเป็นใบสั่งอาหาร = ครัวทำจานใหม่ที่ไม่มีใครสั่ง
+function buildKitchenESC(item, tableNum, meta) {
+  const kind = String((meta && meta.kind) || "");
   const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(thaiBytes(s));
+  const big = s => { b(0x1d, 0x21, 0x11); b(0x1b, 0x45, 0x01); t(`${s}\n`); b(0x1b, 0x45, 0x00); b(0x1d, 0x21, 0x00); };
+  // กล่องดำตัวขาว (GS B 1 = พิมพ์กลับสี) · ขนาดปกติ — ตัวใหญ่พิเศษทำสระ/วรรณยุกต์ไทยเพี้ยน
+  const box = s => { b(0x1d, 0x21, 0x00); b(0x1b, 0x45, 0x01); b(0x1d, 0x42, 0x01); t(`    ${s}    \n`); b(0x1d, 0x42, 0x00); b(0x1b, 0x45, 0x00); };
   b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01);
-  b(0x1d, 0x21, 0x00); b(0x1b, 0x45, 0x01); t("ใบสั่งอาหาร\n"); b(0x1b, 0x45, 0x00);
-  b(0x1d, 0x21, 0x11); b(0x1b, 0x45, 0x01); t(`${tableNum}\n`); b(0x1b, 0x45, 0x00);   // เลขโต๊ะตัวใหญ่ (ไม่มีคำว่า "โต๊ะ")
-  b(0x1d, 0x21, 0x00); t(new Date().toLocaleString("th-TH") + "\n");
+  if (kind === "move") {   // ใบเดียว บอกแค่จากโต๊ะไหนไปโต๊ะไหน
+    box("ย้ายโต๊ะ");
+    t("จากโต๊ะ\n"); big((meta && meta.from) || "-");
+    t("ย้ายไปโต๊ะ\n"); big(tableNum);
+    b(0x1b, 0x45, 0x01); t("ไม่ต้องทำอาหารใหม่ - เสิร์ฟที่โต๊ะใหม่\n"); b(0x1b, 0x45, 0x00);
+    t(new Date().toLocaleString("th-TH") + "\n");
+    b(0x1b, 0x64, 0x05); b(0x1d, 0x56, 0x41, 0x00);
+    return Buffer.concat(bufs);
+  }
+  if (kind === "void") box("ยกเลิก");
+  else { b(0x1d, 0x21, 0x00); b(0x1b, 0x45, 0x01); t("ใบสั่งอาหาร\n"); b(0x1b, 0x45, 0x00); }
+  big(tableNum);   // เลขโต๊ะตัวใหญ่ (ไม่มีคำว่า "โต๊ะ")
+  if (kind === "void" || kind === "reprint") { b(0x1b, 0x45, 0x01); t((kind === "void" ? "ยกเลิกแล้ว - ไม่ต้องทำ" : "พิมพ์ซ้ำ - ไม่ใช่ออเดอร์ใหม่") + "\n"); b(0x1b, 0x45, 0x00); }
+  t(new Date().toLocaleString("th-TH") + "\n");
   t("--------------------------------\n");
   b(0x1b, 0x61, 0x00);   // ชิดซ้าย
   // ชื่อเมนู: ขนาดปกติ + ตัวหนา → สระ/วรรณยุกต์ไทยเรียงถูกตำแหน่ง (ตัวใหญ่พิเศษทำให้เพี้ยน)
@@ -266,7 +283,7 @@ async function mapLimit(arr, limit, fn) {
 async function renderItemBufs(items, tableNum, meta) {
   return mapLimit(items || [], 6, async it => {
     const b = await fetchSlipRaster([it], tableNum, meta);
-    return b ? { buf: b, raster: true } : { buf: buildKitchenESC(it, tableNum), raster: false };
+    return b ? { buf: b, raster: true } : { buf: buildKitchenESC(it, tableNum, meta), raster: false };
   });
 }
 function bufsMode(parts) {
@@ -275,7 +292,9 @@ function bufsMode(parts) {
 }
 // รวมรายการเป็นบัฟเฟอร์พิมพ์ (เรนเดอร์ทุกใบพร้อมกัน) — ใช้โดยเส้นทางพิมพ์ซ้ำ (rp)
 async function itemsToBuffer(items, tableNum, meta) {
-  const parts = await renderItemBufs(items, tableNum, meta);
+  // ใบย้ายโต๊ะมีใบเดียวต่อเครื่องเสมอ — เรนเดอร์ทีละรายการจะได้ใบย้ายโต๊ะซ้ำกันหลายใบ
+  const list = (meta && meta.kind === "move") ? (items || []).slice(0, 1) : items;
+  const parts = await renderItemBufs(list, tableNum, meta);
   return { buf: Buffer.concat(parts.map(p => p.buf)), mode: bufsMode(parts) };
 }
 // เครื่องนี้ต้องพิมพ์รายการนี้ไหม — ตาม "กำหนดการพิมพ์" เป๊ะๆ: ปักหมุดเมนู(printer_id)→เฉพาะเครื่องนั้น · ไม่งั้น categories=null(พิมพ์ทุกหมวด) หรือมีหมวดนั้นในลิสต์

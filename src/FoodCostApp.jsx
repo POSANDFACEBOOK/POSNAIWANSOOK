@@ -18085,16 +18085,19 @@ async function agentPrintItems(items,tableLabel,branchId,meta,fallbackAll){
   try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
   const usable=prs.filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
   const list=items||[];
+  // ใบย้ายโต๊ะ: เลือกเครื่องตามรายการในบิล (ครัวที่ทำของโต๊ะนี้) แต่ส่งไปแค่ "ใบเดียว" ต่อเครื่อง
+  // ไม่แนบรายการอาหาร — ใบบอกแค่จากโต๊ะไหนไปโต๊ะไหน (ตัวพิมพ์ทุกรุ่นพิมพ์หนึ่งใบต่อหนึ่งรายการ)
+  const slipBody=(its)=>(meta&&meta.kind==="move")?[{qty:1,name:"ย้ายโต๊ะ",options:[],note:""}]:its;
   const ups=[];const sentItems=new Set();
   for(const p of usable){
     const mine=list.filter(it=>printerHandles(p,it));
     if(!mine.length)continue;
-    ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:mine,table:tableLabel,...(meta||{})})}));
+    ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:slipBody(mine),table:tableLabel,...(meta||{})})}));
     mine.forEach(it=>sentItems.add(it));
   }
   if(!ups.length&&fallbackAll&&usable.length){
     const body=list.length?list:[{qty:1,name:"(ไม่มีรายการในบิล)"}];
-    for(const p of usable)ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:body,table:tableLabel,...(meta||{})})}));
+    for(const p of usable)ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:slipBody(body),table:tableLabel,...(meta||{})})}));
     sentItems.add("__all");
   }
   if(ups.length)await Promise.all(ups);
@@ -19039,7 +19042,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           // แจ้งครัวว่ารายการนี้ถูกยกเลิก — ตัวพิมพ์เห็นแค่ "รายการที่เพิ่มขึ้น"
           // ของที่หายไปจึงเงียบสนิท ครัวจะทำอาหารที่ลูกค้ายกเลิกไปแล้ว
           try{
-            await agentReprint([{...target,qty:target.qty,name:`ยกเลิก: ${target.name}`,note:`(ยกเลิกโดย ${currentUser?.username||"พนักงาน"})`}],
+            await agentReprint([{...target,qty:target.qty,name:`ยกเลิก: ${target.name}`,note:[target.note,`ยกเลิกโดย ${currentUser?.username||"พนักงาน"}`].filter(Boolean).join(" · ")}],
               {kind:"void",okMsg:"❌ แจ้งครัวแล้วว่ายกเลิกรายการนี้ — ใบจะออกใน ~5 วินาที",
                noneMsg:"⚠️ ยกเลิกในระบบแล้ว แต่เมนูนี้ไม่มีเครื่องพิมพ์รับ — กรุณาบอกครัวด้วยตัวเอง"});
           }catch(err){
