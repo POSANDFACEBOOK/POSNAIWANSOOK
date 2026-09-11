@@ -2468,6 +2468,92 @@ section("พิมพ์ใบปิดกะซ้ำ");
   ok_("ส่วนต่างติดลบในหน้าประวัติกะมีเครื่องหมายลบ", APP.includes("{+s.cash_diff>0?'+':+s.cash_diff<0?'-':''}฿"));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ติ๊ก "เสิร์ฟแล้ว" รายเมนู — ต้องไม่มีทางไปแตะรายการอาหารหรือยอดเงินในบิล
+// ══════════════════════════════════════════════════════════════════════════
+section("ติ๊กเสิร์ฟแล้วรายเมนู");
+{
+  const head = "  setItemServed: async (orderId, lineUid, served, by) => {";
+  const st = APP.indexOf(head);
+  let fn = null;
+  if (st >= 0) {
+    let d = 0, started = false, en = -1;
+    for (let i = st + head.length - 1; i < APP.length; i++) {
+      if (APP[i] === "{") { d++; started = true; }
+      else if (APP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+    }
+    const expr = APP.slice(st + "  setItemServed: ".length, en);
+    fn = (sb) => new Function("sb", "return (" + expr + ");")(sb);
+  }
+  ok_("ยังมีตัวบันทึกติ๊กเสิร์ฟ", !!fn);
+  if (fn) {
+    // ฐานจำลองต้อง "ทำตัวเหมือน PostgREST จริง" — มีเงื่อนไขในคำสั่งก็เช็ค ไม่มีก็เขียนทับเลย
+    // เคยพลาดมาแล้ว: ฐานจำลองรุ่นแรกปฏิเสธการเขียนที่ไม่มีตัวกันชน ซึ่งของจริงไม่ทำ
+    // พอมีคนถอดตัวกันชนออก ฟังก์ชันเลย throw แทนที่จะเขียนทับให้เห็น → ด่านระเบิดแทนสอบตก
+    // (ตัวพิสูจน์ด่านจับได้ตรงนี้เอง — ด่านที่ผ่านเพราะฐานจำลองเข้มกว่าของจริงคือด่านหลอก)
+    const sortK = (v) => (v && typeof v === "object" && !Array.isArray(v)) ? Object.keys(v).sort().reduce((a, k) => (a[k] = sortK(v[k]), a), {}) : v;
+    const mkDb = (row, raceOnce) => {
+      const db = { row: JSON.parse(JSON.stringify(row)), writes: [], raced: false };
+      db.sb = async (path, opt) => {
+        if (!opt) return [JSON.parse(JSON.stringify(db.row))];
+        const body = JSON.parse(opt.body); db.writes.push({ path, body });
+        // อีกเครื่องติ๊กแถว u2 ลงไปก่อน "ระหว่าง" ที่เราอ่านค่าไปแล้วแต่ยังไม่ทันเขียน
+        if (raceOnce && !db.raced) { db.raced = true; db.row.served_items = { ...(db.row.served_items || {}), u2: { at: "x", by: "ผึ้ง" } }; }
+        const m = /served_items=(is\.null|eq\.(.+))$/.exec(path);
+        if (m) {   // มีเงื่อนไขค่าเดิม → เช็คแบบ jsonb (ไม่สนลำดับคีย์) เหมือนของจริง
+          const cur = db.row.served_items == null ? null : db.row.served_items;
+          const ok = m[1] === "is.null" ? cur == null : JSON.stringify(sortK(JSON.parse(decodeURIComponent(m[2])))) === JSON.stringify(sortK(cur));
+          if (!ok) return [];
+        }
+        Object.assign(db.row, body); return [JSON.parse(JSON.stringify(db.row))];   // ไม่มีเงื่อนไข = เขียนทับทันที
+      };
+      return db;
+    };
+    // โยน error ต้องกลายเป็น "สอบตก" ที่อ่านออก ไม่ใช่ทำตัวตรวจทั้งตัวตาย
+    const run = async (p) => { try { return await p; } catch (e) { return { __err: String((e && e.message) || e) }; } };
+    const ROW = { id: 71, status: "pending", served_items: null, updated_at: "t0", items: [{ line_uid: "u1", name: "หมู", qty: 1, price: 99 }, { line_uid: "u2", name: "น้ำแข็ง", qty: 1, price: 20 }] };
+
+    const d1 = mkDb(ROW);
+    const r1 = await run(fn(d1.sb)(71, "u1", true, "มะลิ"));
+    ok_("ติ๊กแล้วบันทึกลงเฉพาะแถวนั้น", r1 && r1.u1 && r1.u1.by === "มะลิ" && !r1.u2);
+    // ตัวชี้ขาดที่สำคัญที่สุด: ติ๊กเสิร์ฟต้องไม่แตะรายการอาหาร/ยอดเงิน/ตัวกันชนตอนปิดบิล
+    ck("ติ๊กเสิร์ฟเขียนแค่ served_items อย่างเดียว ไม่แตะ items/ยอด/updated_at",
+      [...new Set(d1.writes.flatMap((w) => Object.keys(w.body)))], ["served_items"]);
+    ck("รายการอาหารในบิลเหมือนเดิมทุกตัวอักษร", JSON.stringify(d1.row.items), JSON.stringify(ROW.items));
+    ck("updated_at ไม่ขยับ (จ่ายเงินหลังติ๊กต้องไม่โดนปฏิเสธ)", d1.row.updated_at, "t0");
+
+    // สองเครื่องติ๊กพร้อมกัน — ติ๊กของอีกเครื่องต้องไม่หาย
+    const d2 = mkDb(ROW, true);
+    const r2 = await run(fn(d2.sb)(71, "u1", true, "มะลิ"));
+    // ตัวชี้ขาดของการชนกัน: ดูที่ "ในฐาน" ไม่ใช่แค่ค่าที่ฟังก์ชันคืนมา — ของที่หายคือของในฐาน
+    ck("สองเครื่องติ๊กพร้อมกัน ติ๊กของทั้งสองเครื่องอยู่ครบในฐาน", Object.keys(d2.row.served_items || {}).sort(), ["u1", "u2"]);
+    ok_("ตอนชนกัน ต้องอ่านใหม่แล้วลองอีกรอบ ไม่ใช่เขียนทับ", d2.writes.length === 2);
+
+    // เอาติ๊กออก
+    const d3 = mkDb({ ...ROW, served_items: { u1: { at: "a", by: "x" }, u2: { at: "b", by: "y" } } });
+    const r3 = await run(fn(d3.sb)(71, "u1", false, "มะลิ"));
+    ck("เอาติ๊กออกได้ และไม่กระทบแถวอื่น", Object.keys(r3 || {}), ["u2"]);
+
+    // บิลที่ปิดไปแล้ว / แถวที่ถูกยกเลิกไปแล้ว ต้องไม่ถูกเขียน
+    const refused = async (row, uid) => { const d = mkDb(row); try { await fn(d.sb)(71, uid, true, "x"); return d.writes.length === 0 ? "ไม่ปฏิเสธ" : "เขียนไปแล้ว"; } catch { return d.writes.length === 0 ? "ปฏิเสธ" : "เขียนไปแล้ว"; } };
+    ck("บิลที่จ่ายแล้ว/ยกเลิกแล้ว/แถวที่ไม่มีแล้ว ห้ามเขียน",
+      [await refused({ ...ROW, status: "paid" }, "u1"), await refused({ ...ROW, status: "cancelled" }, "u1"), await refused(ROW, "ไม่มีแถวนี้")],
+      ["ปฏิเสธ", "ปฏิเสธ", "ปฏิเสธ"]);
+
+    // ยังไม่ได้เพิ่มคอลัมน์ — ต้องบอกเป็นภาษาคน ไม่ใช่โยน error ดิบ
+    const noCol = async () => { try { await fn(async () => { throw new Error('column orders.served_items does not exist'); })(71, "u1", true, "x"); return "ไม่ error"; } catch (e) { return /ต้องเพิ่มคอลัมน์ served_items/.test(e.message) ? "บอกชัด" : e.message; } };
+    ck("ยังไม่มีคอลัมน์ ต้องบอกให้รู้ว่าต้องเพิ่มอะไร", await noCol(), "บอกชัด");
+  }
+  // จอ: ติ๊กมีเฉพาะแถวที่ส่งครัวแล้ว และถ้าบันทึกไม่ได้ต้องถอยกลับ ไม่ค้างติ๊กหลอกไว้
+  ok_("ช่องติ๊กมีเฉพาะแถวที่ส่งครัวแล้ว", APP.includes("{!unsent&&existingOrder?.id&&item.line_uid&&(()=>{const sv=served[String(item.line_uid)];"));
+  ok_("บันทึกไม่ได้ต้องถอยติ๊กกลับและบอก",
+    APP.includes("setServed(p=>{const n={...p};if(prev)n[k]=prev;else delete n[k];return n;});") &&
+    APP.includes('notifyDlg("บันทึกการเสิร์ฟไม่สำเร็จ: "+friendlyError(e));'));
+  ok_("ติ๊กเสิร์ฟอ่านจากแถวบิลตัวเดียวกัน ไม่ต้องดึงเพิ่ม", APP.includes("existingOrder.served_items&&typeof existingOrder.served_items===\"object\""));
+  // กดค้างที่ปุ่มบนไอแพด ต้องไม่ขึ้นแถบ คัดลอก/ค้นดู/แปลภาษา มาบังปุ่ม
+  ok_("ปุ่มไม่ขึ้นแถบคัดลอกเมื่อกดค้างบนไอแพด", HTML.includes('button, [role="button"] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }'));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

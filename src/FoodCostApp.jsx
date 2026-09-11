@@ -635,6 +635,34 @@ const api = {
   // create branch relies on the partial unique index (one open order per table) to
   // turn a simultaneous double-create into a duplicate-key it catches and retries as
   // an append. Falls back gracefully (just creates) if that index isn't there yet.
+  // ── ติ๊ก "เสิร์ฟแล้ว" รายเมนู ─────────────────────────────────────────
+  // ต้องรัน: alter table orders add column if not exists served_items jsonb;
+  // เก็บแยกคอลัมน์ของตัวเอง {line_uid: {at, by}} — ไม่แตะ items เด็ดขาด
+  // items คือรายการที่ผูกกับยอดเงิน/ใบครัว/บัญชี ติ๊กเสิร์ฟต้องไม่มีทางไปกระทบมันได้เลย
+  // และไม่แตะ updated_at ด้วย: จอโต๊ะใช้ updated_at เป็นตัวกันชนตอนปิดบิล ถ้าติ๊กเสิร์ฟ
+  // ขยับมัน การกดจ่ายเงินหลังติ๊กจะโดนปฏิเสธว่า "บิลถูกแก้จากอุปกรณ์อื่น" ทุกครั้ง
+  // กันชนสองเครื่องติ๊กพร้อมกันด้วยการเทียบค่าคอลัมน์นี้เอง (jsonb เทียบตามความหมาย)
+  // ⟹ อ่านค่าเดิม → แก้ → เขียนเฉพาะถ้าค่ายังเป็นค่าเดิม ไม่งั้นอ่านใหม่แล้วลองอีกรอบ
+  setItemServed: async (orderId, lineUid, served, by) => {
+    const colErr = (e) => /served_items|42703|PGRST204|column .* does not exist|schema cache/i.test(String((e&&e.message)||e));
+    const k = String(lineUid);
+    for (let attempt = 0; attempt < 6; attempt++) {
+      let cur;
+      try { const rows = await sb(`orders?id=eq.${+orderId}&select=id,status,served_items,items`); cur = Array.isArray(rows) && rows[0]; }
+      catch (e) { if (colErr(e)) throw new Error("ระบบยังไม่พร้อมบันทึกการเสิร์ฟ — ผู้ดูแลต้องเพิ่มคอลัมน์ served_items ก่อน"); throw e; }
+      if (!cur) throw new Error("ไม่พบบิลนี้แล้ว");
+      if (cur.status === "paid" || cur.status === "cancelled") throw new Error("บิลนี้ปิดไปแล้ว");
+      if (!(cur.items || []).some((i) => String(i.line_uid) === k)) throw new Error("ไม่พบรายการนี้ในบิลแล้ว (อาจถูกยกเลิกไป)");
+      const old = (cur.served_items && typeof cur.served_items === "object") ? cur.served_items : null;
+      const next = { ...(old || {}) };
+      if (served) next[k] = { at: new Date().toISOString(), by: by || null }; else delete next[k];
+      const guard = old == null ? "served_items=is.null" : `served_items=eq.${encodeURIComponent(JSON.stringify(old))}`;
+      const res = await sb(`orders?id=eq.${+orderId}&${guard}`, { method: "PATCH", body: JSON.stringify({ served_items: next }) });
+      if (Array.isArray(res) && res.length) return (res[0] && res[0].served_items) || next;
+      await new Promise((r) => setTimeout(r, 60 * (attempt + 1) + Math.floor(Math.random() * 60)));
+    }
+    throw new Error("มีคนติ๊กบิลนี้พร้อมกัน — ลองกดอีกครั้ง");
+  },
   posAppendItems: async ({branch_id, table_id, table_number, newItems, ordered_by, blockIfAwaiting}) => {
     // ต้นตอของบั๊กส่งซ้ำ: ตอน "สร้างบิลใบแรก" ฝั่งจอส่ง items ดิบมาทั้งก้อนโดยไม่ได้ถอดธง
     // ทำให้ทุกแถวของบิลใบแรกถูกบันทึกพร้อมธง _new แล้วขึ้นส้มค้างตลอด
@@ -18709,6 +18737,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const isMobile=useIsMobile();
   const[mobileView,setMobileView]=useState("menu"); // "menu" | "order"
   const[items,setItems]=useState(()=>stripNewFlags(existingOrder&&existingOrder.items));
+  // ติ๊กเสิร์ฟแล้ว {line_uid:{at,by}} — มาจากแถวบิลตัวเดียวกัน ไม่ต้องดึงเพิ่ม
+  const[served,setServed]=useState(()=>(existingOrder&&existingOrder.served_items&&typeof existingOrder.served_items==="object")?existingOrder.served_items:{});
   // last-known updated_at of this table's order — the token for optimistic-concurrency
   // (compare-and-set) writes. Updated after every successful guarded write so multiple
   // ops in one session (e.g. void → checkout) don't false-conflict with themselves.
@@ -18911,6 +18941,24 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // ไม่ล้าง = ปิดบิลเสร็จโต๊ะเด้งกลับเป็นสีเขียวแทนที่จะเป็นขาว พนักงานอ่านว่ายังมีคนนั่ง
   // ยิงแบบไม่รอผลและกลืน error โดยตั้งใจ — ธงนี้เป็นแค่ "สี" ห้ามทำให้ปิดบิลล้ม
   const clearQRFlag=()=>{ try{ if(table&&table.id)api.clearTableQRPrinted(table.id); }catch{} };
+  // ติ๊ก/เอาติ๊กเสิร์ฟออก — ขึ้นทันทีบนจอ แล้วค่อยบันทึก ถ้าบันทึกไม่ได้ต้องถอยกลับและบอก
+  // (ปล่อยให้จอติ๊กค้างทั้งที่ฐานไม่มี = เครื่องอื่นเห็นว่ายังไม่เสิร์ฟ แล้วครัวทำซ้ำ)
+  async function toggleServed(item){
+    if(!existingOrder?.id||item._new||!item.line_uid)return;
+    const k=String(item.line_uid);
+    const prev=served[k];const want=!prev;
+    setServed(p=>{const n={...p};if(want)n[k]={at:new Date().toISOString(),by:currentUser?.username||currentUser?.name||null};else delete n[k];return n;});
+    try{
+      const next=await api.setItemServed(existingOrder.id,k,want,currentUser?.username||currentUser?.name||null);
+      setServed(next&&typeof next==="object"?next:{});
+    }catch(e){
+      setServed(p=>{const n={...p};if(prev)n[k]=prev;else delete n[k];return n;});
+      notifyDlg("บันทึกการเสิร์ฟไม่สำเร็จ: "+friendlyError(e));
+    }
+  }
+  // นับเฉพาะรายการที่ส่งครัวแล้ว — รายการที่ยังไม่ส่งยังเสิร์ฟไม่ได้อยู่แล้ว
+  const sentRows=items.filter(i=>!i._new&&i.line_uid);
+  const servedCount=sentRows.filter(i=>served[String(i.line_uid)]).length;
   async function cancelOrder(){
     if(!existingOrder?.id)return;
     if(existingOrder.status==="paid"){notifyDlg("ไม่สามารถยกเลิกบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'จ่ายออก' ในเงินในลิ้นชัก");return;}
@@ -19169,7 +19217,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       {/* Header */}
       <div style={{padding:"10px 12px",borderBottom:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
         <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
-        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{table.seats} ที่นั่ง {items.length>0&&`• ${items.length} รายการ`}</div>
+        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{table.seats} ที่นั่ง {items.length>0&&`• ${items.length} รายการ`}{sentRows.length>0&&<span style={{color:servedCount===sentRows.length?C.green:C.ink3,fontWeight:800}}>{` • เสิร์ฟแล้ว ${servedCount}/${sentRows.length}`}</span>}</div>
       </div>
 
       {(()=>{
@@ -19203,12 +19251,22 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
               <button onClick={()=>voidItem(idx)} title="ยกเลิกรายการนี้" aria-label="ลบรายการ" style={{flex:1,border:"none",borderRadius:7,background:C.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={16} c={C.white}/></button>
             </>}>
             <div style={{display:"flex",alignItems:"center",gap:9,padding:"9px 11px"}}>
+              {/* ติ๊กเสิร์ฟแล้ว — มีเฉพาะแถวที่ส่งครัวแล้ว (แถวที่ยังไม่ส่ง ยังไม่มีอะไรให้เสิร์ฟ)
+                  ใช้เป็นตัวรีเช็คกับฝั่งครัวว่าเมนูไหนออกจากครัวมาถึงโต๊ะแล้ว */}
+              {!unsent&&existingOrder?.id&&item.line_uid&&(()=>{const sv=served[String(item.line_uid)];return <button
+                onClick={e=>{e.stopPropagation();toggleServed(item);}}
+                aria-label={sv?"เอาติ๊กเสิร์ฟออก":"ติ๊กว่าเสิร์ฟแล้ว"} title={sv?"เสิร์ฟแล้ว — แตะเพื่อเอาติ๊กออก":"แตะเมื่อเสิร์ฟเมนูนี้แล้ว"}
+                style={{width:28,height:28,flexShrink:0,borderRadius:8,border:`2px solid ${sv?C.green:"#94A3B8"}`,background:sv?C.green:C.white,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",padding:0,transition:"background .12s,border-color .12s"}}>
+                {sv&&<Ic d={I.check} s={16} c={C.white}/>}
+              </button>;})()}
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13.5,fontWeight:unsent?900:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                <div style={{fontSize:13.5,fontWeight:unsent?900:700,color:(!unsent&&served[String(item.line_uid)])?C.ink3:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                   {unsent&&<span style={{display:"inline-block",background:"#EA580C",color:C.white,fontSize:9.5,fontWeight:900,borderRadius:5,padding:"1px 6px",marginRight:6,verticalAlign:"middle"}}>ใหม่</span>}
                   {item.name}
                 </div>
                 {item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>+ {optionsText(item.options)}</div>}
+                {!unsent&&served[String(item.line_uid)]&&(()=>{const sv=served[String(item.line_uid)];let tm="";try{tm=new Date(sv.at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"});}catch{}
+                  return <div style={{fontSize:10.5,color:C.green,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>✓ เสิร์ฟแล้ว{tm?` ${tm}`:""}{sv.by?` · ${sv.by}`:""}</div>;})()}
                 {item.note
                   ?<div onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",cursor:"pointer",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>★ {item.note}</div>
                   :<div onClick={()=>{setNoteIdx(idx);setNoteText("");}} style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",cursor:"pointer"}}>+ หมายเหตุ</div>}
@@ -19233,7 +19291,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         </div>
         <div style={{display:"flex",gap:6}}>
           {existingOrder?.id&&<Btn v="yellow" onClick={()=>setShowPay(true)} icon={I.bill} full s={{padding:"8px 10px",fontSize:13}}>💳 เช็คบิล</Btn>}
-          <Btn onClick={saveOrder} icon={I.check} loading={saving} disabled={!hasNewItems} full s={{padding:"8px 10px",fontSize:13}}>{hasNewItems?"ส่งรายการ":(items.length?"✓ ส่งครัวแล้ว":"ส่งรายการ")}</Btn>
+          <Btn onClick={saveOrder} icon={I.check} loading={saving} disabled={!hasNewItems} full s={{padding:"8px 10px",fontSize:13}}>{hasNewItems?"ส่งรายการ":(items.length?"ส่งครัวแล้ว":"ส่งรายการ")}</Btn>
         </div>
       </div>
     </div>
