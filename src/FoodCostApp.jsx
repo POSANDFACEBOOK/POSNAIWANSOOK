@@ -18682,37 +18682,58 @@ function getMenuOptions(menu,branchId,optionLibrary){
 // True if the menu has at least one bound option GROUP that has choices.
 function menuHasOptions(menu,branchId,optionLibrary){return getMenuOptions(menu,branchId,optionLibrary).some(g=>g&&Array.isArray(g.choices)&&g.choices.length>0);}
 // Compact text of chosen options for prints/notes (e.g. "เพิ่มไข่, ไม่เผ็ด").
-function optionsText(opts){return (opts||[]).map(o=>o&&o.name).filter(Boolean).join(", ");}
+// ตัวเลือกที่เลือกซ้ำ (เช่น เตาหมูกระทะ 2 เตา) เก็บเป็นรายการซ้ำกันในอาร์เรย์ — หนึ่งตัว = หนึ่งครั้งที่เลือก
+// ราคาจึงบวกถูกเองโดยไม่ต้องแก้สูตรเงินที่ไหนเลย · ตอนแสดงผลรวมเป็น "ชื่อ ×N" ตามลำดับที่เจอก่อน
+// ต้องให้ผลเหมือนกับ optionsText ในตัวพิมพ์ (public/print-agent.js) และใบครัว (api/kitchen-slip.js)
+function optionsText(opts){const m=new Map();for(const o of (opts||[])){const n=o&&o.name;if(n)m.set(n,(m.get(n)||0)+1);}return [...m].map(([n,k])=>k>1?`${n} ×${k}`:n).join(", ");}
 
 // Shared option picker (GROUP-based) — staff (POSOrderPanel) + customer scan
 // (CustomerPage). `groups` = [{id,name,required,choices:[{id,name,price}]}].
-// Required group = pick exactly g.pick choices (default 1); optional = pick any (checkbox).
-// onConfirm gets the flat chosen choices [{name,price}].
+// Required group = pick exactly g.pick (default 1); optional = pick any (checkbox).
+// onConfirm gets the flat chosen choices [{name,price}] — a choice picked twice appears twice.
+// ── เลือกตัวเดิมซ้ำได้ (เจ้าของสั่ง 11 ก.ย. 69) ─────────────────────────────
+// กลุ่มบังคับที่ต้องเลือกมากกว่า 1 (เช่น "เลือกได้ 2 เตา") เลือกตัวเดิมซ้ำได้ — เตาหมูกระทะ ×2
+// แตะแถว = +1 · ตัวที่เลือกแล้วมีปุ่ม − จำนวน + · รวมทั้งกลุ่มไม่เกินจำนวนที่บังคับ
+// กลุ่มเลือก 1 และกลุ่มไม่บังคับ ทำงานเหมือนเดิมทุกอย่าง
 function MenuOptionPicker({menu,groups,onConfirm,onClose}){
-  const[sel,setSel]=useState({});  // choiceId -> true
+  const[sel,setSel]=useState({});  // choiceId -> จำนวนครั้งที่เลือก
+  const orderRef=useRef([]);        // ตัวที่ขยับล่าสุดอยู่ท้าย — ตอนเต็มแล้วต้องย้ายจากตัวที่ไม่ได้แตะนานสุด
   const[qty,setQty]=useState(1);
   const base=+menu.price||0;
   const grps=(groups||[]).filter(g=>g&&Array.isArray(g.choices)&&g.choices.length);
-  const chosen=grps.flatMap(g=>g.choices.filter(c=>sel[c.id]).map(c=>({name:c.name,price:+c.price||0})));
+  const cnt=(c)=>+sel[c.id]||0;
+  // หนึ่งครั้งที่เลือก = หนึ่งรายการ ⟹ ราคาตัวเลือกบวกตามจำนวนครั้งเอง ไม่ต้องมีสูตรคูณแยก
+  const chosen=grps.flatMap(g=>g.choices.flatMap(c=>Array.from({length:cnt(c)},()=>({name:c.name,price:+c.price||0}))));
   const total=base+chosen.reduce((s,o)=>s+(+o.price||0),0);
   // ต้องเลือกกี่อย่างในกลุ่มนี้ — ไม่เคยตั้งไว้ = 1 (กลุ่มเดิมทุกกลุ่มทำงานเหมือนเดิม)
-  // จำกัดไม่ให้เกินจำนวนตัวเลือกที่มีจริง กันตั้งเลข 5 ในกลุ่มที่มี 3 ตัวเลือกแล้วสั่งไม่ได้เลย
-  const needOf=(g)=>Math.max(1,Math.min(+g.pick||1,(g.choices||[]).length));
-  const countIn=(g)=>g.choices.filter(c=>sel[c.id]).length;
+  // เดิมจำกัดไม่ให้เกินจำนวนตัวเลือกที่มี (เลือกซ้ำไม่ได้ ตั้ง 5 ในกลุ่มที่มี 3 = สั่งไม่ได้เลย)
+  // ตอนนี้เลือกซ้ำได้แล้ว ข้อจำกัดนั้นหมดความจำเป็น — ตั้ง 2 ในกลุ่มที่มีตัวเดียวก็สั่ง ×2 ได้ม่ได้เลย
+  const needOf=(g)=>Math.max(1,+g.pick||1);
+  const countIn=(g)=>g.choices.reduce((t,c)=>t+cnt(c),0);
+  const multi=(g)=>!!g.required&&needOf(g)>1;   // บังคับเลือกหลายตัว = เลือกตัวเดิมซ้ำได้
   const missingRequired=grps.some(g=>g.required&&countIn(g)!==needOf(g));
-  function pick(g,c){setSel(s=>{
-    const n={...s};
-    if(!g.required){ if(n[c.id])delete n[c.id];else n[c.id]=true; return n; }
+  const bump=(id,now)=>{const o=orderRef.current.filter(x=>x!==id);if(now>0)o.push(id);orderRef.current=o;};
+  // +1 (แตะแถว หรือปุ่ม +)
+  function inc(g,c){setSel(s=>{
+    const n={...s};const cur=+n[c.id]||0;
+    if(!g.required){ if(cur){delete n[c.id];bump(c.id,0);}else{n[c.id]=1;bump(c.id,1);} return n; }   // ไม่บังคับ: ติ๊ก/เอาออก
     const need=needOf(g);
-    if(n[c.id]){ delete n[c.id]; return n; }                       // กดซ้ำ = เอาออก ทำได้เสมอ
-    if(need===1){ g.choices.forEach(x=>{delete n[x.id];}); n[c.id]=true; return n; }
-    // เลือกหลายอย่าง: ครบจำนวนแล้วให้ตัวใหม่แทนตัวที่เลือกไว้นานสุด
+    if(need===1){ g.choices.forEach(x=>{delete n[x.id];bump(x.id,0);}); n[c.id]=1; bump(c.id,1); return n; }   // เลือก 1: เปลี่ยนตัว
+    const total=g.choices.reduce((t,x)=>t+(+n[x.id]||0),0);
+    if(total<need){ n[c.id]=cur+1; bump(c.id,n[c.id]); return n; }
+    // เต็มแล้ว: ย้าย 1 จากตัวที่ไม่ได้แตะนานสุดในกลุ่มนี้มาให้ตัวที่กด — กดแล้วต้องมีอะไรเกิดขึ้นเสมอ
     // (ปล่อยให้กดไม่ติดเฉยๆ ลูกค้าจะนึกว่าจอค้าง แล้วกดรัวจนหงุดหงิด)
-    const on=g.choices.filter(x=>n[x.id]);
-    if(on.length>=need)delete n[on[0].id];
-    n[c.id]=true;
+    const ids=new Set(g.choices.map(x=>x.id));
+    const donor=orderRef.current.find(id=>ids.has(id)&&id!==c.id&&(+n[id]||0)>0);
+    if(donor==null)return n;   // ตัวนี้ถือครบทั้งกลุ่มอยู่แล้ว
+    n[donor]=(+n[donor]||0)-1; if(n[donor]<=0){delete n[donor];bump(donor,0);}
+    n[c.id]=cur+1; bump(c.id,n[c.id]);
     return n;
   });}
+  // −1 (ปุ่ม −) — ลดจนเหลือ 0 = เอาตัวนั้นออก
+  function dec(g,c){setSel(s=>{const n={...s};const cur=+n[c.id]||0;if(cur<=1){delete n[c.id];bump(c.id,0);}else{n[c.id]=cur-1;bump(c.id,n[c.id]);}return n;});}
+  // แตะแถว: กลุ่มเลือกซ้ำได้ = +1 · กลุ่มอื่นทำเหมือนเดิม (กดตัวที่เลือกอยู่ = เอาออก)
+  function pick(g,c){ if(multi(g))return inc(g,c); if(cnt(c)&&g.required&&needOf(g)===1)return; if(cnt(c))return dec(g,c); return inc(g,c); }
   return <Modal title={`เลือกตัวเลือก — ${menu.name}`} onClose={onClose}>
     <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12.5,color:C.ink3,marginBottom:12}}>ราคาเริ่มต้น ฿{base.toLocaleString()}</div>
     <div style={{display:"flex",flexDirection:"column",gap:14,maxHeight:"52vh",overflowY:"auto",marginBottom:14}}>
@@ -18724,11 +18745,17 @@ function MenuOptionPicker({menu,groups,onConfirm,onClose}){
           {need&&<span style={{fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>⚠️ {countIn(g)===0?"ยังไม่เลือก":`ยังขาดอีก ${needOf(g)-countIn(g)}`}</span>}
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          {g.choices.map(c=>{const on=!!sel[c.id];const p=+c.price||0;return <label key={c.id} onClick={()=>pick(g,c)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:11,cursor:"pointer",background:on?C.brandLight:C.white,border:`1.5px solid ${on?C.brandBorder:C.line}`,transition:"all .12s"}}>
+          {g.choices.map(c=>{const n=cnt(c);const on=n>0;const full=multi(g)&&countIn(g)>=needOf(g);const p=+c.price||0;return <div key={c.id} role="button" onClick={()=>pick(g,c)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:11,cursor:"pointer",background:on?C.brandLight:C.white,border:`1.5px solid ${on?C.brandBorder:C.line}`,transition:"all .12s"}}>
             <span style={{width:18,height:18,flexShrink:0,borderRadius:(g.required&&needOf(g)===1)?"50%":5,border:`2px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,display:"flex",alignItems:"center",justifyContent:"center"}}>{on&&<span style={{width:8,height:8,borderRadius:(g.required&&needOf(g)===1)?"50%":2,background:C.white}}/>}</span>
             <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?800:600,color:on?C.brand:C.ink}}>{c.name}</span>
             <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:p>0?C.brand:C.ink4}}>{p>0?`+฿${p.toLocaleString()}`:"ฟรี"}</span>
-          </label>;})}
+            {/* เลือกซ้ำได้: − จำนวน + หน้าตาเดียวกับปุ่มจำนวนด้านล่าง · กดปุ่มไม่ไปโดนการแตะแถว */}
+            {multi(g)&&on&&<span onClick={e=>e.stopPropagation()} style={{display:"flex",alignItems:"center",gap:6,flexShrink:0,marginLeft:4}}>
+              <button type="button" aria-label={"ลด "+c.name} onClick={e=>{e.stopPropagation();dec(g,c);}} style={{width:34,height:34,borderRadius:9,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><Ic d={I.minus} s={14} c={C.brand}/></button>
+              <span style={{fontWeight:900,fontSize:16,minWidth:18,textAlign:"center",color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{n}</span>
+              <button type="button" aria-label={"เพิ่ม "+c.name} onClick={e=>{e.stopPropagation();inc(g,c);}} style={{width:34,height:34,borderRadius:9,border:"none",background:full&&n>=needOf(g)?C.line:C.brand,cursor:full&&n>=needOf(g)?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}><Ic d={I.plus} s={14} c={C.white}/></button>
+            </span>}
+          </div>;})}
         </div>
       </div>;})}
       {grps.length===0&&<div style={{padding:20,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>เมนูนี้ยังไม่มีตัวเลือก</div>}
@@ -22244,7 +22271,7 @@ function POSOptionLibrary({currentBranch,onClose}){
               <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,color:C.ink}}>📦 {g.name}</span>
               {g.required?<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:8,padding:"2px 8px"}}>* บังคับเลือก {Math.max(1,+g.pick||1)} อย่าง</span>:<span style={{fontSize:10.5,fontWeight:700,color:C.ink4,background:C.white,borderRadius:8,padding:"2px 8px",border:`1px solid ${C.line}`}}>ไม่บังคับ</span>}
               <span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>· {(g.choices||[]).length} ตัวเลือกย่อย</span>
-              {g.required&&Math.max(1,+g.pick||1)>(g.choices||[]).length&&<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,borderRadius:8,padding:"2px 8px"}}>⚠️ ตั้งให้เลือก {Math.max(1,+g.pick||1)} แต่มีแค่ {(g.choices||[]).length} — ลูกค้าจะสั่งไม่ได้</span>}
+              {/* เคยเตือน "ตั้งให้เลือก N แต่มีแค่ M ตัวเลือก — ลูกค้าสั่งไม่ได้" · ตอนนี้เลือกตัวเดิมซ้ำได้ จึงสั่งได้เสมอ */}
               <div style={{marginLeft:"auto",display:"flex",gap:6}}>
                 <button onClick={()=>{setEditG(g.id);setEg({name:g.name,required:!!g.required,pick:Math.max(1,+g.pick||1)});}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>แก้กลุ่ม</button>
                 <button onClick={()=>delGroup(g)} style={{background:C.redLight,border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>ลบกลุ่ม</button>

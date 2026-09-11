@@ -40,7 +40,9 @@ function buildLines(body) {
   lines.push({ rule: true });
   (body.items || []).forEach(it => {
     lines.push({ c1: String(it.qty), c2: String(it.name || ""), size: 46, bold: true, mb: 3 });   // จำนวน+ชื่อเมนูตัวใหญ่
-    (it.options || []).forEach(o => { const n = o && o.name; if (n) lines.push({ t: "- " + n, size: 30, indent: true }); });  // ตัวเลือกแสดงทีละบรรทัด
+    // ตัวเลือกที่เลือกซ้ำ (เตาหมูกระทะ 2 เตา) รวมเป็นบรรทัดเดียว "×2" — ครัวนับผิดง่ายถ้าเห็นชื่อเดิมซ้ำสองบรรทัด
+    { const m = new Map(); (it.options || []).forEach(o => { const n = o && o.name; if (n) m.set(n, (m.get(n) || 0) + 1); });
+      for (const [n, k] of m) lines.push({ t: "- " + n + (k > 1 ? " ×" + k : ""), size: 30, indent: true }); }  // ตัวเลือกแสดงทีละบรรทัด
     if (it.note) lines.push({ t: "* " + it.note, size: 30, bold: true, indent: true });
   });
   return lines;

@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 37;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 38;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -118,7 +118,8 @@ function thaiBytes(s) {
 }
 const THAI_CP = 27;                              // เลขโค้ดเพจไทยของ Xprinter C300H (ยืนยันจากการทดสอบจริง — รุ่นนี้ใช้ 27 ไม่ใช่ 21)
 const SET_THAI = [0x1c, 0x2e, 0x1b, 0x74, THAI_CP];   // FS . (ยกเลิกโหมดตัวอักษรจีน 2 ไบต์) + ESC t = เลือกโค้ดเพจไทย (TIS-620/CP874)
-function optionsText(opts) { return (opts || []).map(o => o && o.name).filter(Boolean).join(", "); }
+// ตัวเลือกซ้ำ = "ชื่อ ×N" — ต้องเหมือน optionsText ในแอปทุกตัวอักษร (ใช้ทั้งพิมพ์และทำลายเซ็นตรวจรายการใหม่)
+function optionsText(opts) { const m = new Map(); for (const o of (opts || [])) { const n = o && o.name; if (n) m.set(n, (m.get(n) || 0) + 1); } return [...m].map(([n, k]) => k > 1 ? `${n} ×${k}` : n).join(", "); }
 function isBluetooth(p) { try { return JSON.parse(p.description || "{}").c === "bt"; } catch { return false; } }
 function resolvePrinter(item, printers) {
   if (!printers || !printers.length) return null;

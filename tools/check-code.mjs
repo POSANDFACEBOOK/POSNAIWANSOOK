@@ -227,31 +227,30 @@ const driftRe = (() => {
 // กลุ่ม "บังคับเลือก" เดิมล็อกไว้ที่ 1 อย่างเสมอ · เซตที่ให้เลือก 2 เตาจึงทำไม่ได้
 // ร้านต้องไปเขียนบอกในชื่อกลุ่มแทน แล้วระบบก็ยังบังคับแค่ 1 = ลูกค้าจ่ายค่าสองเตาได้เตาเดียว
 // ตรงนี้พลาดแล้วลูกค้าได้ของไม่ครบตามที่จ่าย จึงต้องรันจริง ไม่ใช่ค้นข้อความ
-const optPick = (() => {
-  const head = "function pick(g,c){setSel(s=>{";
-  const st = APP.indexOf(head);
-  if (st < 0) throw new Error("ไม่เจอตัวเลือกตัวเลือกเมนู (pick)");
-  let d = 0, started = false, en = -1;
-  for (let i = st + head.length - 1; i < APP.length; i++) {
-    if (APP[i] === "{") { d++; started = true; }
-    else if (APP[i] === "}") { d--; if (started && d === 0) { en = i; break; } }
-  }
-  const body = APP.slice(st + head.length, en);
-  const needLn = APP.split("\n").find(l => l.includes("const needOf=(g)=>"));
-  if (!needLn) throw new Error("ไม่เจอ needOf");
-  return new Function("s", "g", "c", needLn.trim() + " " + body)
-;
+// ตรรกะใหม่ (11 ก.ย. 69): นับจำนวนต่อตัวเลือก · กลุ่มบังคับหลายตัวเลือกตัวเดิมซ้ำได้
+// ตรรกะอยู่ในคอมโพเนนต์ React (ใช้ sel/setSel/useRef) — ดึงก้อนจริงจาก needOf ถึง pick()
+// มาวางในสภาพแวดล้อมจำลองที่มี state แบบซิงค์ ⟹ ทดสอบโค้ดตัวจริง ไม่ใช่เขียนเลียนแบบ
+const pickerSrc = (() => {
+  const LL = APP.split("\n");
+  const a = LL.findIndex(l => l.startsWith("  const needOf=(g)=>"));
+  const b = LL.findIndex((l, i) => i > a && l.startsWith("  function pick(g,c){"));
+  if (a < 0 || b < 0) throw new Error("ไม่เจอตรรกะตัวเลือกตัวเลือกเมนู");
+  return LL.slice(a, b + 1).join("\n");
 })();
-const needOfFn = (() => {
-  const ln = APP.split("\n").find(l => l.includes("const needOf=(g)=>"));
-  return new Function("g", ln.trim() + " return needOf(g);");
-})();
-// กดเลือกทีละใบตามลำดับ แล้วดูว่าเหลือติ๊กอะไรบ้าง
-const tap = (g, ids) => {
-  let sel = {};
-  for (const id of ids) sel = optPick(sel, g, g.choices.find(x => x.id === id));
-  return g.choices.filter(x => sel[x.id]).map(x => x.id);
+const newPicker = () => new Function("orderRef", [
+  "let sel = {};",
+  "const setSel = (f) => { sel = typeof f === 'function' ? f(sel) : f; };",
+  "const grps = [];",
+  "const cnt = (c) => +sel[c.id] || 0;",
+  pickerSrc,
+  "return { pick, inc, dec, needOf, countIn, get sel() { return sel; } };",
+].join("\n"))({ current: [] });
+// แตะตามลำดับ (แตะแถว) แล้วดูว่าได้อะไร — ตัวที่เลือกซ้ำจะออกมาซ้ำตามจำนวน
+const tap = (g, ids, P = newPicker()) => {
+  for (const id of ids) P.pick(g, g.choices.find(x => x.id === id));
+  return g.choices.flatMap(x => Array(+P.sel[x.id] || 0).fill(x.id));
 };
+const needOfFn = (g) => newPicker().needOf(g);
 const G = (n, req, pick) => ({ required: req, pick, choices: Array.from({ length: n }, (_, i) => ({ id: "c" + (i + 1) })) });
 
 // ── ดึงตัวเรียงลำดับหมวดตัวจริงมารัน ──────────────────────────────────────
@@ -874,11 +873,16 @@ const guards = [
   ["บังคับ 1 → เลือกใบที่สองแทนที่ใบแรก (แบบวิทยุ)", tap(G(3, true, 1), ["c1", "c2"]).join() === "c2"],
   ["บังคับ 2 → เลือกได้สองใบพร้อมกัน", tap(G(3, true, 2), ["c1", "c2"]).join() === "c1,c2"],
   // ครบแล้วกดใบใหม่ ต้องได้ใบใหม่ ไม่ใช่กดไม่ติดเฉยๆ (ลูกค้าจะนึกว่าจอค้างแล้วกดรัว)
-  ["บังคับ 2 → ครบแล้วกดใบที่สาม ใบเก่าสุดหลุดออก", tap(G(3, true, 2), ["c1", "c2", "c3"]).join() === "c2,c3"],
-  ["กดซ้ำที่ใบเดิม = เอาออกได้เสมอ", tap(G(3, true, 2), ["c1", "c2", "c1"]).join() === "c2"],
+  // ครบแล้วกดใบที่สาม: ย้าย 1 จากตัวที่ไม่ได้แตะนานสุดมาให้ — กดแล้วต้องมีอะไรเกิดขึ้นเสมอ
+  ["บังคับ 2 → ครบแล้วกดใบที่สาม ใบที่ไม่ได้แตะนานสุดหลุดออก", tap(G(3, true, 2), ["c1", "c2", "c3"]).join() === "c2,c3"],
+  // เจ้าของสั่ง 11 ก.ย. 69: บังคับเลือกหลายตัว = เลือกตัวเดิมซ้ำได้ (เตาหมูกระทะ ×2)
+  ["บังคับ 2 → กดตัวเดิมสองครั้ง = ได้ตัวนั้น ×2", tap(G(3, true, 2), ["c1", "c1"]).join() === "c1,c1"],
+  ["บังคับ 2 → เต็มแล้วกดตัวเดิมอีก = ย้ายจากอีกตัวมา (รวมยังไม่เกิน 2)", tap(G(3, true, 2), ["c1", "c2", "c1"]).join() === "c1,c1"],
+  ["บังคับ 2 → ตัวเดียวถือครบแล้วกดอีก = ไม่เกินจำนวนที่บังคับ", tap(G(3, true, 2), ["c1", "c1", "c1"]).join() === "c1,c1"],
   ["ไม่บังคับ = เลือกกี่อย่างก็ได้ ไม่มีเพดาน", tap(G(4, false, 1), ["c1", "c2", "c3", "c4"]).length === 4],
-  // ตั้งไว้ 5 แต่มีตัวเลือก 3 = ลูกค้าเลือกครบไม่ได้ กดสั่งไม่ได้ทั้งเมนู
-  ["ตั้งจำนวนเกินตัวเลือกที่มี ต้องหั่นลงมาให้สั่งได้", needOfFn(G(3, true, 5)) === 3],
+  // เดิมหั่นจำนวนลงให้ไม่เกินตัวเลือกที่มี (เลือกซ้ำไม่ได้ ตั้ง 5 ในกลุ่ม 3 ตัว = สั่งไม่ได้)
+  // ตอนนี้เลือกซ้ำได้ จำนวนที่ตั้งไว้ใช้ได้ตรงตัว — ตั้ง 2 ในกลุ่มที่มีตัวเดียว ก็สั่ง ×2 ได้
+  ["ตั้งจำนวนเกินตัวเลือกที่มี ใช้ได้ตรงตัว เพราะเลือกซ้ำได้แล้ว", needOfFn(G(3, true, 5)) === 5 && tap(G(1, true, 2), ["c1", "c1"]).join() === "c1,c1"],
   ["ตั้ง 0 หรือค่าติดลบ ต้องกลับเป็น 1", needOfFn(G(3, true, 0)) === 1 && needOfFn(G(3, true, -2)) === 1],
   // ปุ่มสั่งต้องปลดล็อกเมื่อครบพอดี ไม่ใช่แค่เลือกอะไรก็ได้สักอย่าง
   ["ต้องเลือกครบตามจำนวนถึงจะสั่งได้", APP.includes("const missingRequired=grps.some(g=>g.required&&countIn(g)!==needOf(g));")],
@@ -889,7 +893,8 @@ const guards = [
   ["ฟอร์มแก้กลุ่มมีช่องกรอกจำนวน", APP.includes("setEg(s=>({...s,pick:")],
   ["บันทึกจำนวนลงกลุ่มจริงทั้งสร้างและแก้",
     APP.includes("pick:gReq?Math.max(1,+gPick||1):1") && APP.includes("pick:eg.required?Math.max(1,+eg.pick||1):1")],
-  ["เตือนเมื่อตั้งจำนวนเกินตัวเลือกที่มี", APP.includes("ลูกค้าจะสั่งไม่ได้")],
+  // เลือกซ้ำได้แล้ว: ตั้ง 2 ในกลุ่มที่มีตัวเดียวสั่งได้จริง — คำเตือน "ลูกค้าจะสั่งไม่ได้" กลายเป็นคำเตือนผิด
+  ["ไม่เตือนผิดๆ เมื่อตั้งจำนวนเกินตัวเลือก (เลือกซ้ำได้แล้ว)", !APP.includes("ลูกค้าจะสั่งไม่ได้")],
   // ── ลำดับหมวดที่ร้านจัดเอง (ลากสลับได้) ──
   ["ยังไม่เคยจัดลำดับ = เรียงไทยเหมือนเดิมทุกประการ",
     catSortWith(null, ["ยำ", "กาแฟ", "ไก่ทอด"]).join("|") === "กาแฟ|ไก่ทอด|ยำ"],
@@ -972,7 +977,7 @@ const guards = [
   ["ใบครัวพิมพ์เลขบิลและผู้สั่ง", SLIP.includes("const foot = [body.bill ?")],
   ["ลูกค้าสแกนสั่งเองต้องอ่านออกบนใบครัว", SLIP.includes('"ลูกค้าสแกนสั่งเอง"')],
   ["ชื่อโต๊ะยังเป็นตัวใหญ่สุดบนใบ", SLIP.includes('{ t: String(body.table || ""), size: 76, bold: true, align: "center" }')],
-  ["ตัวเลือกและหมายเหตุยังพิมพ์ครบ", SLIP.includes('lines.push({ t: "- " + n,') && SLIP.includes('lines.push({ t: "* " + it.note,')],
+  ["ตัวเลือกและหมายเหตุยังพิมพ์ครบ", SLIP.includes('lines.push({ t: "- " + n + ') && SLIP.includes('lines.push({ t: "* " + it.note,')],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
 ];
@@ -2773,6 +2778,54 @@ section("ปิดโต๊ะ = QR ใหม่");
   ok_("คิวออฟไลน์เช็ค QR ก่อนส่ง และทิ้งของค้างถ้าหมดอายุ",
     APP.includes('if(Array.isArray(ok)&&ok.length===0){writeOutbox(null);setOutbox(null);setGateError("bad_token");flushingRef.current=false;setOutboxBusy(false);return;}}'));
   ok_("QR หมดอายุบนมือถือลูกค้าไม่ใช้กล่องเตือนที่บล็อกเธรด", !APP.includes('alert("QR ของโต๊ะนี้ถูกอัพเดทใหม่'));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ตัวเลือกเลือกซ้ำได้ — ปุ่ม − จำนวน + · ×N ต้องแสดงตรงกันทั้งจอ ใบเสร็จ ใบครัว และตัวพิมพ์
+// ══════════════════════════════════════════════════════════════════════════
+section("ตัวเลือกเลือกซ้ำได้");
+{
+  const g2 = G(3, true, 2);
+  { const P = newPicker(); P.pick(g2, g2.choices[0]); P.inc(g2, g2.choices[0]); P.dec(g2, g2.choices[0]);
+    ck("ปุ่ม + แล้ว − กลับมาเหลือ 1", +P.sel.c1 || 0, 1);
+    P.dec(g2, g2.choices[0]); ck("ลดจนเหลือ 0 = เอาตัวนั้นออก", "c1" in P.sel, false); }
+  { const P = newPicker(); P.pick(g2, g2.choices[0]); P.pick(g2, g2.choices[0]);
+    ck("ครบจำนวนแล้วปลดล็อกปุ่มสั่ง (ไม่ขาด ไม่เกิน)", P.countIn(g2) === P.needOf(g2), true); }
+  // กลุ่มเลือก 1 และกลุ่มไม่บังคับ ต้องทำงานเหมือนเดิมทุกอย่าง (ไม่มีการเลือกซ้ำ)
+  ck("บังคับ 1 → กดตัวเดิมซ้ำ ยังเป็นตัวเดียว (ไม่ซ้ำ)", tap(G(3, true, 1), ["c1", "c1"]).join(), "c1");
+  ck("ไม่บังคับ → กดตัวเดิมซ้ำ = เอาออก (เหมือนเดิม)", tap(G(3, false, 1), ["c1", "c1"]).join(), "");
+  // ข้อความตัวเลือกทั้งสามที่ต้องตรงกันทุกตัวอักษร
+  const appOT = new Function(APP.split("\n").find(l => l.startsWith("function optionsText(opts){")) + "\nreturn optionsText;")();
+  const agLine = AGENT.split("\n").find(l => l.startsWith("function optionsText(opts) {"));
+  const agOT = agLine ? new Function(agLine + "\nreturn optionsText;")() : null;
+  const X = [{ name: "เตาหมูกระทะ" }, { name: "เตาหมูกระทะ" }, { name: "น้ำจิ้มซีฟู้ด" }];
+  ck("จอ/ใบเสร็จ: ตัวเลือกซ้ำแสดงเป็น ×N", appOT(X), "เตาหมูกระทะ ×2, น้ำจิ้มซีฟู้ด");
+  ck("ไม่มีตัวซ้ำ แสดงเหมือนเดิมทุกตัวอักษร (บิลเก่าไม่เปลี่ยน)", appOT([{ name: "ก" }, { name: "ข" }]), "ก, ข");
+  ok_("ตัวพิมพ์ที่ร้านแสดงตรงกับแอปทุกตัวอักษร", !!agOT && agOT(X) === appOT(X) && agOT([{ name: "ก" }, { name: "ข" }]) === "ก, ข");
+  ok_("ใบครัวรวมตัวเลือกซ้ำเป็นบรรทัดเดียว ×N", SLIP.includes('lines.push({ t: "- " + n + (k > 1 ? " ×" + k : ""), size: 30, indent: true });'));
+  // ราคา: หนึ่งครั้งที่เลือก = หนึ่งรายการ ⟹ ตัวเลือกมีราคาบวกตามจำนวนครั้งเอง
+  ok_("ตัวเลือกที่มีราคา เลือกซ้ำแล้วราคาบวกตามจำนวนครั้ง", APP.includes("const chosen=grps.flatMap(g=>g.choices.flatMap(c=>Array.from({length:cnt(c)},()=>({name:c.name,price:+c.price||0}))));"));
+  ok_("ขยับเวอร์ชันตัวพิมพ์แล้ว (ร้านอัปเดตเอง)", /const AGENT_VERSION = (\d+);/.test(AGENT) && +AGENT.match(/const AGENT_VERSION = (\d+);/)[1] >= 38);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// <label> ห้ามห่อปุ่ม — ปุ่มคือ "ตัวควบคุมของป้าย" ตามมาตรฐาน HTML
+// แตะที่ป้าย (ชื่อตัวเลือก) เบราว์เซอร์จะคลิกปุ่มแรกข้างในให้เองอีกทีหนึ่ง
+// เคยเกือบหลุด 11 ก.ย. 69: แถวตัวเลือกมีปุ่ม − จำนวน + · แตะแถวเพื่อเพิ่ม = บวกแล้วโดนลบทันที จำนวนไม่ขยับ
+// ══════════════════════════════════════════════════════════════════════════
+section("ป้ายห้ามห่อปุ่ม");
+{
+  const bad = [];
+  const re = /<label\b|<\/label>/g;
+  let m, stack = [];
+  while ((m = re.exec(APP))) {
+    if (m[0] === "</label>") {
+      const st = stack.pop();
+      if (st != null && /<button\b/.test(APP.slice(st, m.index))) bad.push(APP.slice(0, st).split("\n").length);
+    } else stack.push(m.index);
+  }
+  ck("ไม่มี <label> ที่มีปุ่มอยู่ข้างใน (บรรทัด: " + (bad.join(", ") || "-") + ")", bad.length, 0);
+  ok_("แถวตัวเลือกเมนูกดได้ทั้งแถว", APP.includes("return <div key={c.id} role=\"button\" onClick={()=>pick(g,c)}"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
