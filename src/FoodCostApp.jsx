@@ -247,7 +247,18 @@ const stripNewFlags=(arr)=>Array.isArray(arr)?arr.map(({_new,...r})=>r):[];
 //   วันนี้หมด  = ทุกจอเห็น ขึ้น "ของหมด" กลางรูป สั่งไม่ได้ ทั้งพนักงานและลูกค้า
 //   ซ่อน      = หน้าลูกค้าที่สแกน QR ไม่เห็นเลย · จอพนักงานยังเห็นและสั่งให้ลูกค้าได้
 // (เจ้าของกำหนด flow นี้เอง 11 ก.ย. 69 — เดิม "ซ่อน" ซ่อนจากพนักงานด้วย พนักงานสั่งให้ลูกค้าไม่ได้)
-const menuAvailAt=(m,bid)=>((m&&m.availability)||{})[bid]||"";
+// ── วันทำการเวลาไทย ตัดวันตอนตีห้า (ไม่ใช่เที่ยงคืน) ─────────────────────
+// ร้านเปิดเลยเที่ยงคืน: ของที่หมดตอนห้าทุ่มต้องยังหมดอยู่ตอนตีหนึ่ง แต่เช้าวันใหม่ต้องกลับมาขายเอง
+// เวลาไทย = UTC+7 · ถอยไป 5 ชม. ให้ 00:00–04:59 ยังนับเป็นวันก่อน ⟹ รวมแล้ว UTC + 2 ชม.
+const BIZ_DAY_CUT_H=5;
+const bizDayBkk=(t=Date.now())=>new Date(t+(7-BIZ_DAY_CUT_H)*3600000).toISOString().slice(0,10);
+// "วันนี้หมด" = แค่วันนี้วันเดียว (เจ้าของกำหนด 11 ก.ย. 69) — เก็บเป็น "sold_out@วันทำการที่กด"
+// ทุกจอตัดสินเองตอนอ่านว่าหมดอายุหรือยัง ไม่พึ่งงานตั้งเวลาไปล้างค่า ซึ่งถ้าวันไหนไม่รัน
+// เมนูจะค้างหมดไปเรื่อยๆ แบบไม่มีใครรู้ · ค่าเก่า "sold_out" ที่ไม่มีวันที่ (มาจากแอปเวอร์ชันก่อน
+// ที่ยังไม่รีเฟรช) ถือว่ายังหมดอยู่ — ไม่รู้ว่ากดเมื่อไหร่ ก็ต้องไม่เดาว่าขายได้แล้ว
+// (ตอนเปลี่ยน ในฐานมี 0 รายการ · ถ้าเจอ กดปุ่มใหม่ครั้งเดียวก็กลายเป็นแบบมีวันที่)
+const soldOutMark=(t)=>"sold_out@"+bizDayBkk(t);
+const menuAvailAt=(m,bid)=>{const v=((m&&m.availability)||{})[bid]||"";if(typeof v==="string"&&v.startsWith("sold_out@"))return v.slice(9)===bizDayBkk()?"sold_out":"";return v;};
 const menuSoldOutAt=(m,bid)=>menuAvailAt(m,bid)==="sold_out";
 const menuHiddenAt=(m,bid)=>menuAvailAt(m,bid)==="hidden";
 // "2026-09-10" → ISO ของ "เที่ยงวันเวลาไทย" ของวันนั้น
@@ -20028,7 +20039,7 @@ function CustomerPage({branchId,tableId,token}){
     const back=(Array.isArray(lines)?lines:[]).filter(l=>!gone.has(+(l&&l.menu_id)));
     if(back.length)setCart(p=>[...back,...p]);
     // ให้หน้าจอขึ้น "ของหมด" ทันที ไม่ต้องรอรอบดึงสถานะถัดไป
-    setMenus(ms=>ms.map(m=>gone.has(+m.id)?{...m,availability:{...(m.availability||{}),[branchId]:"sold_out"}}:m));
+    setMenus(ms=>ms.map(m=>gone.has(+m.id)?{...m,availability:{...(m.availability||{}),[branchId]:soldOutMark()}}:m));
     setSoldOutMsg((e&&e.unavailableNames)||[]);
   }
   useEffect(()=>{if(payWaiting)setPayWaitMsg(true);},[payWaiting]);
@@ -20129,7 +20140,7 @@ function CustomerPage({branchId,tableId,token}){
       </div>
       <div style={{padding:"8px 12px",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"9px 14px"}}/></div>
       <div style={{flex:1,overflowY:"auto",minHeight:0,WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gridAutoRows:"max-content",gap:10,alignContent:"start"}}>
-        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=(m.availability||{})[branchId]==="sold_out";const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
+        {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=menuSoldOutAt(m,branchId);const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
           <div style={{position:"relative",width:"100%",height:130,flexShrink:0}}>
             {m.image?<img src={driveImgSrc(m.image,160)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
             {soldOut&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(255,255,255,.35)",pointerEvents:"none"}}>
@@ -21724,7 +21735,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
     .filter(m=>{const okB=isCentral||menuVisibleAt(m,currentBranch.id);if(!okB)return false;if(cat&&menuCatOf(m)!==cat)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;})
     .sort(menuSorter(catOrder,menuOrder)),[menus,cat,q,isCentral,currentBranch.id,catOrder,menuOrder]);
   stRef.current={visible,menus,catOrder,menuOrder,isCentral,bid:currentBranch.id};
-  const setAvail=useCallback(async function setAvail(m,status){setBusyId(m.id);const avail={...(m.availability||{})};if(!status)delete avail[currentBranch.id];else avail[currentBranch.id]=status;try{await api.updateMenu(m.id,{availability:avail});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);},[currentBranch.id]);
+  const setAvail=useCallback(async function setAvail(m,status){setBusyId(m.id);const avail={...(m.availability||{})};if(!status)delete avail[currentBranch.id];else avail[currentBranch.id]=status==="sold_out"?soldOutMark():status;try{await api.updateMenu(m.id,{availability:avail});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);},[currentBranch.id]);
   // หมวดที่มีอยู่จริงในเมนูของสาขานี้ — ไม่เอาหมวดของสาขาอื่นมาให้กดแล้วว่างเปล่า
   // นับจำนวนเมนูต่อหมวดไว้ด้วย จะได้รู้ว่ากดแล้วเจออะไรบ้างโดยไม่ต้องกดลองทีละอัน
   useEffect(()=>{let ok=true;(async()=>{
@@ -22013,7 +22024,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
           maxHeight:"58vh",overflowY:mDrag?"hidden":"auto",overflowX:"hidden",padding:"2px 2px 8px",
           touchAction:mDrag?"none":"pan-y"}}>
           {visible.map(m=><MenuMgrCard key={m.id} m={m}
-            cur={(m.availability||{})[currentBranch.id]||""}
+            cur={menuAvailAt(m,currentBranch.id)}
             nOpt={getMenuOptions(m,currentBranch.id,lib).length}
             busy={busyId===m.id}
             onAvail={setAvail} onBind={openBind} onHold={beginMHold}/>)}

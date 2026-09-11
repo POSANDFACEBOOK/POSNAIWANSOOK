@@ -1568,8 +1568,8 @@ try {
     const stripLine = APP.split("\n").find((l) => l.startsWith("const stripNewFlags="));
     if (!stripLine) throw new Error("ไม่เจอ stripNewFlags");
     // กติกาสามปุ่มตัวจริง (ขาย/วันนี้หมด/ซ่อน) — posAppendItems ใช้มันตัดสินว่าจะรับรายการไหม
-    const availLines = APP.split("\n").filter((l) => /^const menu(AvailAt|SoldOutAt|HiddenAt)=/.test(l));
-    if (availLines.length !== 3) throw new Error("ไม่เจอกติกาสามปุ่มครบ");
+    const availLines = APP.split("\n").filter((l) => /^const (BIZ_DAY_CUT_H|bizDayBkk|soldOutMark|menuAvailAt|menuSoldOutAt|menuHiddenAt)=/.test(l));
+    if (availLines.length !== 6) throw new Error("ไม่เจอกติกาสามปุ่มครบ");
     const fn = new Function("sb", stripLine + "\n" + availLines.join("\n") + "\nconst posAppendItems = " + expr + "; return posAppendItems;")(sb);
     return { fn, calls };
   };
@@ -1636,6 +1636,8 @@ try {
     ck("วันนี้หมด: ลูกค้าและพนักงานสั่งไม่ได้", [await tryOrder("customer", { 8: "sold_out" }), await tryOrder("ผึ้ง", { 8: "sold_out" })], ["ปฏิเสธ", "ปฏิเสธ"]);
     ck("ซ่อน: ลูกค้าสั่งไม่ได้ แต่พนักงานสั่งให้ได้", [await tryOrder("customer", { 8: "hidden" }), await tryOrder("ผึ้ง", { 8: "hidden" })], ["ปฏิเสธ", "รับ"]);
     ck("หมดที่สาขาอื่น ไม่กระทบสาขานี้", await tryOrder("customer", { 3: "sold_out" }), "รับ");
+    // วันนี้หมด = แค่วันเดียว: ของที่กดหมดไว้วันก่อน ต้องสั่งได้แล้วโดยไม่ต้องมีใครกดขายคืน
+    ck("หมดไว้เมื่อวันก่อน สั่งได้แล้วทั้งลูกค้าและพนักงาน", [await tryOrder("customer", { 8: "sold_out@2000-01-01" }), await tryOrder("ผึ้ง", { 8: "sold_out@2000-01-01" })], ["รับ", "รับ"]);
     // อ่านสถานะเมนูไม่ได้ (เน็ตสะดุด) ต้องไม่หยุดการขาย
     ck("อ่านสถานะเมนูไม่ได้ ต้องไม่หยุดการขาย", await tryOrder("customer", {}, "fail"), "รับ");
     // ข้อความต้องบอกชื่อเมนูที่หมด — ลูกค้า/พนักงานต้องรู้ว่าต้องเอาอะไรออก
@@ -1645,6 +1647,32 @@ try {
       try { await fn({ branch_id: 8, table_id: 3, table_number: "C7", newItems: LINE1, ordered_by: "customer", blockIfAwaiting: true }); } catch (e) { err = e; }
       ok_("ปฏิเสธแล้วบอกชื่อเมนูและรหัสเมนูที่หมด", !!err && err.unavailable && (err.unavailableNames || []).includes("หมูหมัก") && (err.unavailableIds || []).includes(5));
     }
+  }
+  // ── "วันนี้หมด" = แค่วันนี้ วันต่อไปขายเอง (ตัดวันตีห้าเวลาไทย) ──────────
+  {
+    const L = APP.split("\n");
+    const pick = (re) => L.find((l) => re.test(l));
+    const src = [pick(/^const BIZ_DAY_CUT_H=/), pick(/^const bizDayBkk=/), pick(/^const soldOutMark=/), pick(/^const menuAvailAt=/)];
+    ok_("ยังมีตัวคิดวันทำการและกติกาหมดวันเดียว", src.every(Boolean));
+    if (src.every(Boolean)) {
+      const k = new Function(src.join("\n") + "\nreturn {bizDayBkk,soldOutMark,menuAvailAt};")();
+      const BK = (s) => Date.parse(s + "+07:00");   // เวลาไทยที่อ่านง่าย → timestamp
+      ck("ห้าทุ่มกับตีสี่ห้าสิบเก้า ยังเป็นวันทำการเดียวกัน",
+        [k.bizDayBkk(BK("2026-09-10T23:00:00")), k.bizDayBkk(BK("2026-09-11T04:59:00"))], ["2026-09-10", "2026-09-10"]);
+      ck("ตีห้าตรง = ขึ้นวันทำการใหม่", k.bizDayBkk(BK("2026-09-11T05:00:00")), "2026-09-11");
+      ck("ข้ามเดือนก็ตัดตีห้าเหมือนกัน",
+        [k.bizDayBkk(BK("2026-10-01T04:00:00")), k.bizDayBkk(BK("2026-10-01T05:00:00"))], ["2026-09-30", "2026-10-01"]);
+      const today = k.bizDayBkk(), m = (v) => ({ availability: { 8: v } });
+      ck("กดวันนี้หมดวันนี้ = หมด", k.menuAvailAt(m("sold_out@" + today), 8), "sold_out");
+      ck("กดไว้เมื่อวาน/วันก่อน = กลับมาขายเองแล้ว", [k.menuAvailAt(m("sold_out@2000-01-01"), 8), k.menuAvailAt(m("sold_out@2026-09-10"), 8) === "" || today === "2026-09-10"], ["", true]);
+      ck("ค่าเก่าไม่มีวันที่ ถือว่ายังหมด (ไม่เดาว่าขายได้)", k.menuAvailAt(m("sold_out"), 8), "sold_out");
+      ck("ซ่อนไม่เกี่ยวกับวัน ยังซ่อนเหมือนเดิม", k.menuAvailAt(m("hidden"), 8), "hidden");
+      ok_("ตัวตีตราหมดเขียนวันทำการปัจจุบัน", k.soldOutMark() === "sold_out@" + today);
+    }
+    ok_("หลังบ้านกดวันนี้หมด = เขียนพร้อมวันที่", APP.includes('else avail[currentBranch.id]=status==="sold_out"?soldOutMark():status;'));
+    ok_("ปุ่มหลังบ้านติดไฟตามสถานะจริง (หมดอายุแล้วขึ้นขาย)", APP.includes("cur={menuAvailAt(m,currentBranch.id)}"));
+    ok_("ไม่มีจอไหนเทียบคำว่า sold_out ตรงๆ อีก (ต้องผ่านกติกาเดียว)",
+      !/\[(bidSale|branchId|currentBranch\.id)\]==="sold_out"/.test(APP) && !/\|\|\{\}\)\[[a-zA-Z.]+\]==="sold_out"/.test(APP));
   }
   // หน้าจอ: จอพนักงานต้องไม่กรองเมนูที่ซ่อนทิ้ง · ของหมดขึ้นกลางรูปทั้งสองฝั่ง
   ok_("จอพนักงานไม่กรองเมนูที่ซ่อนทิ้งแล้ว", !APP.includes('if((m.availability||{})[bidSale]==="hidden")return false;'));
