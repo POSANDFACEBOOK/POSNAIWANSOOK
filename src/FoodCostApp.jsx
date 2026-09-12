@@ -745,6 +745,9 @@ const api = {
     // ต้นตอของบั๊กส่งซ้ำ: ตอน "สร้างบิลใบแรก" ฝั่งจอส่ง items ดิบมาทั้งก้อนโดยไม่ได้ถอดธง
     // ทำให้ทุกแถวของบิลใบแรกถูกบันทึกพร้อมธง _new แล้วขึ้นส้มค้างตลอด
     newItems = stripNewFlags(newItems);
+    // เวลาที่ส่งเข้าครัวของแต่ละรายการ — ติดตรงนี้เพราะทุกทาง (พนักงานกดส่ง + ลูกค้าสแกนสั่ง) ผ่านที่นี่
+    // จอโต๊ะเอาไปโชว์เป็นเวลาเล็กๆ ท้ายรายการ ไล่เช็คได้ว่ารอบไหนส่งไปแล้ว จะได้ไม่ส่งซ้ำ (เจ้าของสั่ง 12 ก.ย. 69)
+    { const _at=new Date().toISOString(); newItems=(newItems||[]).map(i=>(i&&i.sent_at)?i:{...i,sent_at:_at}); }
     // ── เมนูที่หมด/ซ่อน ห้ามหลุดเข้าบิล ────────────────────────────────────
     // หน้าจอกันกดไว้แล้วก็จริง แต่มือถือลูกค้าเห็นสถานะช้าได้ถึงนาที และของที่ใส่ตะกร้าไว้
     // ก่อนครัวกด "วันนี้หมด" ยังค้างอยู่ในตะกร้า กดส่งได้ ทั้งที่ครัวไม่มีของให้ทำแล้ว
@@ -19499,6 +19502,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
                   {item.name}
                 </div>
                 {item.options&&item.options.length>0&&<div style={{fontSize:12,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:700,lineHeight:1.35,overflowWrap:"anywhere",marginTop:1}}>+ {optionsText(item.options)}</div>}
+                {!unsent&&item.sent_at&&(()=>{let tm="";try{tm=new Date(item.sent_at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"});}catch{}
+                  // เวลาที่ส่งเข้าครัว — ไว้ไล่เช็คว่ารายการนี้ส่งรอบไหน ไม่ใช่ของซ้ำ
+                  return tm?<div style={{fontSize:11,color:C.ink4,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>🕘 ส่งครัว {tm}</div>:null;})()}
                 {!unsent&&served[String(item.line_uid)]&&(()=>{const sv=served[String(item.line_uid)];let tm="";try{tm=new Date(sv.at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"});}catch{}
                   return <div style={{fontSize:10.5,color:C.green,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>✓ เสิร์ฟแล้ว{tm?` ${tm}`:""}{sv.by?` · ${sv.by}`:""}</div>;})()}
                 {item.note&&<div onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",fontWeight:600,cursor:"pointer",lineHeight:1.35,overflowWrap:"anywhere",whiteSpace:"pre-wrap",marginTop:1}}>★ {item.note}</div>}
