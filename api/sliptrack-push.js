@@ -15,6 +15,42 @@ const SLIPTRACK_URL = "https://sliptrack-pro.vercel.app/api/ingest";
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
 
+// ── บรรทัดวิธีจ่ายที่ส่งให้บัญชี ─────────────────────────────────────────────
+// ลำดับสำคัญ: บรรทัดหลักต้องมาก่อนบรรทัดลูกเสมอ — ตัวอ่านฝั่งบัญชี (buildReceiptSplit)
+// ยึดลำดับ ส่งลูกก่อนแม่ = ยอดทั้งใบขาด
+// ชั้นหลัก = เงินสด + บัตรเครดิต(รวมพร้อมเพย์) + Custom Payment · ผลรวมต้องเท่ากับ total_sales
+// บรรทัดลูกห้ามบวกเข้าผลรวมชั้นหลัก (จะกลายเป็นยอดซ้ำ) และ Σ ลูก ≤ ยอดแม่เสมอ
+// ช่องทางย่อยใต้ Custom Payment ต้องแยกบรรทัด เพราะปลายทางคนละบัญชี (ฝั่งบัญชียืนยัน 12 ก.ย. 69):
+//   · ไทยช่วยไทย พลัส → บัญชี "บุคคล" คนละผู้เสียภาษี · เคยไหลผิดทางมาแล้ว ฿268,095 ตอนกอดรวมกัน
+//   · Bartercard → บัญชีบริษัท ถือเป็นเงินรับทันที ไม่ตั้งลูกหนี้ (เหมือนสาขาอื่นที่ลงอยู่แล้ว)
+//   · "ช่องทางอื่น (ไม่ระบุ)" ปล่อยรวมในตัวแม่ได้ ไม่ต้องแยก
+// ชื่อต้องตรงกับตัวจับคู่ฝั่งบัญชี (src/lib/pos-receipt.ts) ทุกตัวอักษร — เพิ่มช่องทางใหม่ในแอป
+// แล้วลืมเพิ่มที่นี่ ยอดจะไปกองรวมในตัวแม่เงียบๆ (ด่าน check-code จับให้)
+const MAIN_PAY_METHODS = ["cash", "promptpay", "transfer", "credit", "debit"];
+const OTHER_CHILD_LINES = [
+  { pm: "thaiplus", name_th: "ไทยช่วยไทย พลัส", name_en: "ไทยช่วยไทย พลัส" },
+  { pm: "bartercard", name_th: "Bartercard", name_en: "Bartercard" },
+];
+function buildPaymentLines(list) {
+  const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const sum = (l) => r2(l.reduce((t, x) => t + (Number(x.total) || 0), 0));
+  const cash = list.filter((x) => x.payment_method === "cash");
+  const pp = list.filter((x) => x.payment_method === "promptpay" || x.payment_method === "transfer");
+  const card = list.filter((x) => x.payment_method === "credit" || x.payment_method === "debit");
+  const other = list.filter((x) => !MAIN_PAY_METHODS.includes(x.payment_method));
+  const cardMain = r2(sum(pp) + sum(card));   // พร้อมเพย์เป็นชั้นย่อยของบัตรเครดิต
+  const payment = [];
+  if (cash.length) payment.push({ name_th: "เงินสด", name_en: "Cash", count: cash.length, amount: sum(cash) });
+  if (cardMain > 0) payment.push({ name_th: "บัตรเครดิต (กรอกเอง)", name_en: "Credit Card (Manual input)", count: pp.length + card.length, amount: cardMain });
+  if (pp.length) payment.push({ name_th: "พร้อมเพย์", name_en: "PromptPay", count: pp.length, amount: sum(pp) });
+  if (other.length) payment.push({ name_th: "Custom Payment", name_en: "Custom Payment", count: other.length, amount: sum(other) });
+  for (const c of OTHER_CHILD_LINES) {
+    const rows = other.filter((x) => x.payment_method === c.pm);
+    if (rows.length) payment.push({ name_th: c.name_th, name_en: c.name_en, count: rows.length, amount: sum(rows) });
+  }
+  return { payment, mainSum: r2(sum(cash) + cardMain + sum(other)) };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -198,20 +234,10 @@ export default async function handler(req, res) {
           return rs.length ? rs[0] : 7;
         })();
 
-        const cash = list.filter((x) => x.payment_method === "cash");
-        const pp = list.filter((x) => x.payment_method === "promptpay" || x.payment_method === "transfer");
-        const card = list.filter((x) => x.payment_method === "credit" || x.payment_method === "debit");
-        const other = list.filter((x) => !["cash", "promptpay", "transfer", "credit", "debit"].includes(x.payment_method));
-        const cardMain = r2(sum(pp, "total") + sum(card, "total"));   // พร้อมเพย์เป็นชั้นย่อยของบัตรเครดิต
-        const payment = [];
-        if (cash.length) payment.push({ name_th: "เงินสด", name_en: "Cash", count: cash.length, amount: sum(cash, "total") });
-        if (cardMain > 0) payment.push({ name_th: "บัตรเครดิต (กรอกเอง)", name_en: "Credit Card (Manual input)", count: pp.length + card.length, amount: cardMain });
-        if (pp.length) payment.push({ name_th: "พร้อมเพย์", name_en: "PromptPay", count: pp.length, amount: sum(pp, "total") });
-        if (other.length) payment.push({ name_th: "Custom Payment", name_en: "Custom Payment", count: other.length, amount: sum(other, "total") });
+        const { payment, mainSum } = buildPaymentLines(list);
 
         // ── ด่านกันยอดเพี้ยน — ไม่ลงตัวถึงสตางค์ = ไม่ยิง ──
         // ยอดที่ลงสมุดบัญชีผิด แก้ยากกว่าไม่ลงเลยมาก ถ้าเลขไม่ตรงต้องให้คนมาดูก่อน
-        const mainSum = r2(sum(cash, "total") + cardMain + sum(other, "total"));
         const problems = [];
         if (Math.abs(r2(sub_total - discount) - total_sales) > 0.005)
           problems.push(`sub_total - discount (${r2(sub_total - discount)}) ไม่เท่า total_sales (${total_sales})`);

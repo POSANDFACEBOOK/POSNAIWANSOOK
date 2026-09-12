@@ -2871,7 +2871,9 @@ section("ช่องทางจ่ายอื่นๆ");
   }
   // ยอดของช่องทางใหม่ต้องลงกลุ่ม "อื่นๆ" เอง — ทั้งสองที่ต้องคัดด้วยการยกเว้น ห้ามเป็นรายชื่อ
   ok_("สรุปกะ: ช่องทางที่ไม่รู้จักลงกลุ่มอื่นๆ", APP.includes("else if(pm==='credit'||pm==='debit')totalCard+=t;else totalOther+=t;"));
-  ok_("ท่อบัญชี: ช่องทางที่ไม่รู้จักลงกลุ่ม Custom Payment", SLIPPUSH.includes('const other = list.filter((x) => !["cash", "promptpay", "transfer", "credit", "debit"].includes(x.payment_method));'));
+  ok_("ท่อบัญชี: ช่องทางที่ไม่รู้จักลงกลุ่ม Custom Payment (คัดด้วยการยกเว้น ไม่ใช่รายชื่อ)",
+    SLIPPUSH.includes('const MAIN_PAY_METHODS = ["cash", "promptpay", "transfer", "credit", "debit"];')
+    && SLIPPUSH.includes("const other = list.filter((x) => !MAIN_PAY_METHODS.includes(x.payment_method));"));
   ok_("กด อื่นๆ = เปิดรายการช่องทาง ไม่ปิดบิลทันที", APP.includes('onClick={()=>{if(m.v==="other"){setAskPay("other");return;}setPayMethod(m.v);'));
   ok_("เลือกช่องทางย่อย = ปิดบิลด้วยช่องทางนั้น", APP.includes("{OTHER_PAY_METHODS.map(m=><button key={m.v} disabled={saving}") && APP.includes("onClick={()=>{setPayMethod(m.v);setAskPay(null);onPay(m.v);}}"));
 }
@@ -3034,6 +3036,62 @@ section("ปุ่มพิมพ์ไม่สำเร็จ");
   ok_("ถามเฉพาะเครื่องที่มีรายการค้าง (ปกติได้แถวว่าง ไม่เปลืองเน็ต)", APP.includes("description=like.*%22failed%22:%5B%7B*"));
   ok_("รีปริ้นอ่านของล่าสุดก่อนเขียน", APP.includes("async function editPrintFail(holderId,fn){\n  const all=await api.getAllPrinters();"));
   ok_("ในจอมีรีปริ้นท้ายชื่อเมนู + ปุ่มเอาออกเมื่อไม่ต้องพิมพ์แล้ว", APP.includes("onClick={()=>retry(f,[it.k])}") && APP.includes("onClick={()=>dismiss(f)}"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// บรรทัดวิธีจ่ายที่ส่งเข้าบัญชี — ลำดับแม่ก่อนลูก · ลูกห้ามบวกซ้ำ · ชื่อต้องเป๊ะ
+// ไทยช่วยไทย พลัส เข้าบัญชีบุคคล ส่วนตัวแม่ Custom Payment เข้าบัญชีบริษัท
+// กอดรวมกัน = ยอดของคนละผู้เสียภาษีไปกองรวมกัน (ฝั่งบัญชีเคยเจอมาแล้ว ฿268,095)
+// ══════════════════════════════════════════════════════════════════════════
+section("วิธีจ่าย: บรรทัดแม่-ลูกที่ส่งเข้าบัญชี");
+{
+  const LS = SLIPPUSH.split("\n");
+  const a = LS.findIndex(l => l.startsWith("const MAIN_PAY_METHODS ="));
+  const b = LS.findIndex((l, i) => i > a && l === "}");
+  let build = null;
+  try { build = new Function(LS.slice(a, b + 1).join("\n") + "\nreturn buildPaymentLines;")(); } catch {}
+  ok_("อ่านตัวสร้างบรรทัดวิธีจ่ายได้", !!build);
+  if (build) {
+    const bill = (pm, total) => ({ payment_method: pm, total });
+    const { payment, mainSum } = build([
+      bill("cash", 100), bill("promptpay", 50), bill("credit", 30),
+      bill("thaiplus", 200), bill("bartercard", 70), bill("other", 10), bill(null, 5),
+    ]);
+    const at = (n) => payment.findIndex(p => p.name_th === n);
+    const amt = (n) => { const p = payment.find(x => x.name_th === n); return p ? p.amount : null; };
+    ck("ผลรวมชั้นหลักเท่ากับยอดขายจริง (ลูกไม่ถูกบวกซ้ำ)", mainSum, 465);
+    ck("Custom Payment = ทุกช่องทางนอกชั้นหลักรวมกัน", amt("Custom Payment"), 285);
+    ck("แยกบรรทัดไทยช่วยไทย พลัส ตามชื่อที่บัญชีใช้", amt("ไทยช่วยไทย พลัส"), 200);
+    ck("แยกบรรทัด Bartercard ตามชื่อที่บัญชีใช้", amt("Bartercard"), 70);
+    ok_("ชื่ออังกฤษของบรรทัดลูกตรงกับฝั่งบัญชี",
+      payment.find(p => p.name_th === "ไทยช่วยไทย พลัส").name_en === "ไทยช่วยไทย พลัส"
+      && payment.find(p => p.name_th === "Bartercard").name_en === "Bartercard");
+    ok_("บรรทัดแม่มาก่อนบรรทัดลูกเสมอ (ส่งลูกก่อนแม่ = ยอดทั้งใบขาด)",
+      at("Custom Payment") >= 0 && at("Custom Payment") < at("ไทยช่วยไทย พลัส") && at("Custom Payment") < at("Bartercard")
+      && at("บัตรเครดิต (กรอกเอง)") < at("พร้อมเพย์"));
+    ck("Σ บรรทัดลูก ≤ ยอดบรรทัดแม่", amt("ไทยช่วยไทย พลัส") + amt("Bartercard") <= amt("Custom Payment"), true);
+    const only = build([bill("cash", 100), bill("other", 20)]);
+    ok_("ไม่มีช่องทางย่อย = ไม่มีบรรทัดลูกติดไปด้วย", only.payment.length === 2 && only.payment[1].name_th === "Custom Payment" && only.mainSum === 120);
+    const none = build([bill("cash", 100)]);
+    ok_("ไม่มียอดนอกชั้นหลัก = ไม่มี Custom Payment", none.payment.length === 1 && none.mainSum === 100);
+  }
+  // ── ช่องทางในแอปกับบรรทัดที่ส่งบัญชี ต้องไปด้วยกัน ──
+  // เพิ่มช่องทางใหม่ในจอขายแล้วลืมบอกบัญชี = ยอดไปกองรวมในตัวแม่เงียบๆ ทั้งที่ปลายทางคนละบัญชี
+  const appPms = (() => {
+    try {
+      const L = APP.split("\n"); const i = L.findIndex(l => l.startsWith("const OTHER_PAY_METHODS="));
+      const j = L.findIndex((l, k) => k > i && l.trim() === "];");
+      return new Function(L.slice(i, j + 1).join("\n") + "\nreturn OTHER_PAY_METHODS;")().map(m => m.v);
+    } catch { return null; }
+  })();
+  const childPms = [...SLIPPUSH.matchAll(/\{ pm: "([a-z0-9_]+)"/g)].map(m => m[1]);
+  ok_("อ่านช่องทางย่อยได้ทั้งสองฝั่ง", Array.isArray(appPms) && appPms.length > 0 && childPms.length > 0);
+  if (appPms) {
+    const missing = appPms.filter(v => v !== "other" && !childPms.includes(v));
+    ck("ทุกช่องทางย่อยในจอขาย มีบรรทัดของตัวเองฝั่งบัญชี (ขาด: " + (missing.join(",") || "-") + ")", missing.length, 0);
+    const extra = childPms.filter(v => !appPms.includes(v));
+    ck("ไม่มีบรรทัดบัญชีที่ไม่มีช่องทางในจอขายแล้ว (เกิน: " + (extra.join(",") || "-") + ")", extra.length, 0);
+  }
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
