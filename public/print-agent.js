@@ -20,6 +20,11 @@ const AGENT_VERSION = 41;   // ⬆️ เลขเวอร์ชัน — เ�
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
+// ลิ้นชักต้องเปิด "ทันทีที่กดตกลง" ไม่ใช่รอรอบปกติ 5 วินาที (เจ้าของสั่ง 12 ก.ย. 69)
+// จึงมีรอบเร็วแยกเฉพาะคำสั่งเปิดลิ้นชัก — คิวรีนี้กรองว่ามีคำสั่ง dk อยู่จริงเท่านั้น
+// ปกติจึงได้ "แถวว่าง" (ไม่กี่ไบต์) ไม่ใช่การดึงตารางเครื่องพิมพ์ทั้งใบทุกวินาที
+// (บทเรียน 30 ก.ค. 69: Disk IO หมดเพราะ polling ที่ดึงของหนักถี่ๆ — ตัวนี้ตั้งใจให้เบาที่สุด)
+const DRAWER_POLL_MS = 800;
 // ทุกกี่รอบจึงจะดึงบิล "เต็ม" หนึ่งครั้ง (60 รอบ x 5 วิ = 5 นาที)
 // เป็นตาข่ายนิรภัย เผื่อวันหลังมีทางเขียนไหนแก้รายการในบิลโดยไม่ขยับ updated_at
 // ถ้าไม่มีตาข่ายนี้ ใบครัวที่พลาดจะพลาดถาวร — ครัวไม่มีทางรู้เลย
@@ -810,6 +815,17 @@ async function heartbeat() {
   };
   await tickSafe();
   setInterval(tickSafe, POLL_MS);
+  // รอบเร็วของลิ้นชัก — กันซ้อนรอบเดียวกับ tick หลัก ถ้ารอบก่อนยังไม่จบก็ข้าม
+  let kickBusy = false;
+  setInterval(async () => {
+    if (kickBusy) return;
+    kickBusy = true;
+    try {
+      const rows = await sb(`printers?select=id,name,ip,port,description&description=like.*%22dk%22:%7B*&or=(branch_id.is.null,branch_id.eq.${BRANCH})`);
+      if (Array.isArray(rows) && rows.length) await handleDrawerRequests(rows);
+    } catch { /* เน็ตสะดุดรอบเดียว — รอบหน้าอีก 0.8 วิ */ }
+    finally { kickBusy = false; }
+  }, DRAWER_POLL_MS);
   // พิมพ์หน้าทดสอบให้เครื่องที่ "เพิ่งกดเพิ่มใช้งาน" อัตโนมัติ ทุก 30 วินาที
   setInterval(greetNewPrinters, 30 * 1000);
   await pingPrinters();                       // เช็คออนไลน์/ออฟไลน์ครั้งแรก

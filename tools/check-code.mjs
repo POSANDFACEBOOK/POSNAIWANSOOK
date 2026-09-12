@@ -3256,6 +3256,13 @@ section("เปิดลิ้นชักเก็บเงิน");
   // ── ฝั่งตัวพิมพ์ ──
   ok_("ตัวพิมพ์ยิงคำสั่งเปิดลิ้นชักทั้งขา 2 และขา 5", AGENT.includes("const DRAWER_KICK = Buffer.from([0x1b, 0x70, 0x00, 0x19, 0xfa, 0x1b, 0x70, 0x01, 0x19, 0xfa]);"));
   ok_("ตัวพิมพ์รับคำสั่งเปิดลิ้นชักทุกรอบ", AGENT.includes("  await handleDrawerRequests(printers);"));
+  // ลิ้นชักต้องเปิดทันทีที่กดตกลง — รอรอบปกติ 5 วิ ช้าเกินไปเวลาถือเงินลูกค้าอยู่
+  // แต่ห้ามดึงของหนักถี่ๆ: คิวรีรอบเร็วต้องกรองว่ามีคำสั่งอยู่จริง ปกติได้แถวว่าง
+  ok_("มีรอบเร็วเฉพาะคำสั่งเปิดลิ้นชัก และไม่เกิน 1 วินาที",
+    /const DRAWER_POLL_MS = (\d+);/.test(AGENT) && +AGENT.match(/const DRAWER_POLL_MS = (\d+);/)[1] <= 1000);
+  ok_("รอบเร็วกรองเฉพาะเครื่องที่มีคำสั่งค้างอยู่ (ไม่ดึงตารางทั้งใบ)",
+    AGENT.includes("description=like.*%22dk%22:%7B*") && AGENT.includes("if (Array.isArray(rows) && rows.length) await handleDrawerRequests(rows);"));
+  ok_("รอบเร็วกันซ้อนรอบตัวเอง", AGENT.includes("if (kickBusy) return;"));
   ok_("มาร์คก่อนส่ง (tick ซ้อนไม่เปิดลิ้นชักซ้ำ) และล้างคำสั่งทิ้งหลังทำ",
     AGENT.includes("state.kicked[p.id] = k.at; saveState();") && AGENT.includes('await clearCmdKey(p.id, "dk", k.at);'));
   ok_("จำคำสั่งที่ทำแล้วข้ามการรีสตาร์ท", AGENT.includes("if (!state.kicked) state.kicked = {};"));
