@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 40;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 41;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 5000;
@@ -207,7 +207,7 @@ let state = { sig: {}, init: {}, greeted: {} };
 // อ่านสำเร็จจริงไหม ไม่ใช่แค่ "ไฟล์มีอยู่" — ไฟดับกลางเขียนทำให้ไฟล์พังได้
 let stateLoaded = false;
 try { if (fs.existsSync(STATE_FILE)) { state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); stateLoaded = true; } } catch { console.log("⚠️  ไฟล์ความจำเสียหาย (ไฟดับกลางเขียน?) — เริ่มจำใหม่ ไม่พิมพ์ย้อนหลัง"); }
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.done) state.done = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (!state.retried) state.retried = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.done) state.done = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (!state.retried) state.retried = {}; if (!state.kicked) state.kicked = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
 // ⚠️ ต้องดู "อ่านความจำได้ไหม" ไม่ใช่ "ไฟล์มีอยู่ไหม"
 // ไฟล์พังแต่ยังอยู่ = ความจำว่างเปล่าแต่คิดว่าจำได้ → ทุกบิลที่เปิดอยู่กลายเป็น
 // บิลใหม่หมด แล้วพิมพ์ซ้ำทั้งร้าน (เกิดได้จริงตอนแบตหมดกลางจังหวะเขียนไฟล์)
@@ -428,6 +428,36 @@ async function handleQRRequests(printers) {
   }
 }
 
+// เปิดลิ้นชักเก็บเงินที่เสียบสาย RJ11 ไว้กับเครื่องพิมพ์ ตามคำสั่งจากแอป: description.dk = {at}
+// ESC p m t1 t2 = จ่ายไฟเปิดลิ้นชัก · ยิงทั้งขา 2 และขา 5 เพราะลิ้นชักแต่ละยี่ห้อใช้คนละขา
+// (ขาที่ไม่ได้ต่อไว้ไม่มีอะไรเกิดขึ้น — ปลอดภัยกว่าเดาผิดแล้วลิ้นชักไม่เปิด)
+const DRAWER_KICK = Buffer.from([0x1b, 0x70, 0x00, 0x19, 0xfa, 0x1b, 0x70, 0x01, 0x19, 0xfa]);
+function dkOf(p) { try { const k = JSON.parse(p.description || "{}").dk; return (k && k.at) ? k : null; } catch { return null; } }
+async function handleDrawerRequests(printers) {
+  for (const p of printers) {
+    if (isBluetooth(p) || !p.ip) continue;
+    const k = dkOf(p);
+    if (!k) continue;
+    if (String(state.kicked[p.id]) !== String(k.at)) {
+      state.kicked[p.id] = k.at; saveState();   // มาร์คก่อนส่ง กันเปิดซ้ำจาก tick ซ้อน
+      try { await sendToPrinter(p.ip, p.port, DRAWER_KICK); console.log(`  💵 เปิดลิ้นชัก → ${p.name} (${p.ip})`); }
+      catch (e) { console.log(`  ❌ เปิดลิ้นชัก → ${p.name} (${p.ip}): ${e.message}`); }
+    }
+    // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที ไม่งั้นค้างอยู่ในแถวแล้วถูกอ่านซ้ำทุก 5 วินาที
+    await clearCmdKey(p.id, "dk", k.at);
+  }
+}
+// ล้างคำสั่งที่ทำเสร็จแล้วออกจากแถว (เทียบ at ก่อน — ถ้ามีคำสั่งใหม่กว่ามาแล้วห้ามลบ)
+async function clearCmdKey(id, key, at) {
+  try {
+    const r = await sb(`printers?id=eq.${id}&select=description`);
+    let d = {};
+    try { d = JSON.parse((r && r[0] && r[0].description) || "{}"); } catch { return; }
+    if (!d[key] || String(d[key].at) !== String(at)) return;
+    delete d[key];
+    await patchPrinter(id, { description: JSON.stringify(d) });
+  } catch { /* ล้างไม่สำเร็จก็ไม่เป็นไร รอบหน้าลองใหม่ */ }
+}
 // พิมพ์รูปภาพ (raster ESC/POS ที่แอปเรนเดอร์ไทยคมชัดมาให้แล้ว) ตามคำสั่ง: description.pj = {at, b64}
 function pjOf(p) { try { const j = JSON.parse(p.description || "{}").pj; return (j && j.at && j.b64) ? j : null; } catch { return null; } }
 // ลบงานพิมพ์ที่จัดการเสร็จแล้วออกจากแถว — อ่านของสดก่อนเขียนเสมอ เพื่อไม่ทับคำสั่งอื่น
@@ -615,6 +645,7 @@ async function tick() {
   await handleFailRetries(printers);   // พิมพ์ใหม่รายการที่ไม่ออก ตามที่พนักงานกด "รีปริ้น"
   await handleQRRequests(printers);   // พิมพ์ QR โต๊ะตามคำสั่งที่กดจากแอป
   await handlePJRequests(printers);   // พิมพ์รูปภาพ (ไทยคมชัด) ตามคำสั่งที่กดจากแอป
+  await handleDrawerRequests(printers);   // เปิดลิ้นชักเก็บเงินตามคำสั่งที่กดจากแอป
   await handlePingRequests(printers);   // เช็คสถานะเครื่องทันทีเมื่อกด "เช็คสถานะใหม่" ในแอป
   await handleScanRequests(printers);   // สแกนหาเครื่องพิมพ์ใหม่ทันทีเมื่อกด "ค้นหาเครื่องพิมพ์" ในแอป
   for (const o of orders) {

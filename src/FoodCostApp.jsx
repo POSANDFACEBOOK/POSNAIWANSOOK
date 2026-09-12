@@ -17996,13 +17996,31 @@ function isReceiptPrinter(p){try{return JSON.parse(p.description||"{}").rcpt===1
 // กันคำสั่งค้างสะสมแล้ว agent ยิงซ้ำ/พิมพ์ผิดใบ (เช่น rp ใบครัวค้างแล้วโผล่มาตอนพิมพ์ใบเสร็จ) — คำสั่งเป็น one-shot
 function cmdDesc(printer,key,val){
   let d={};try{d=JSON.parse((printer&&printer.description)||"{}");}catch{}
-  const{tp,rp,qr,pj,...keep}=d;   // ทิ้งคำสั่งเก่าทั้งหมด
+  const{tp,rp,qr,pj,dk,...keep}=d;   // ทิ้งคำสั่งเก่าทั้งหมด
   keep[key]=val;
   return JSON.stringify(keep);
 }
 function getReceiptPrinters(printers){
   // เฉพาะเครื่องที่ติ๊ก "🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ" (rcpt=1) เท่านั้น — ใบเสร็จ/เช็คบิล/QR โต๊ะ ออกเฉพาะเครื่องเหล่านี้ (ไม่มี fallback ไปเครื่องครัว)
   return (printers||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth"&&isReceiptPrinter(p));
+}
+// ── เปิดลิ้นชักเก็บเงิน ────────────────────────────────────────────────────
+// ลิ้นชักเสียบสาย RJ11 อยู่กับเครื่องพิมพ์ — แอปสั่งผ่านตัวพิมพ์ที่ร้าน (ESC p) เหมือนงานพิมพ์อื่น
+// เครื่องไหนมีลิ้นชักต่ออยู่ ให้ติ๊ก "ลิ้นชักเก็บเงินต่อกับเครื่องนี้" (dw=1) ในกำหนดการพิมพ์
+// ไม่ได้ติ๊กไว้เลย = ใช้เครื่องพิมพ์ใบเสร็จ (ร้านส่วนใหญ่ต่อลิ้นชักไว้กับเครื่องแคชเชียร์อยู่แล้ว)
+const drawerPrinters=(printers)=>{
+  const usable=(printers||[]).filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
+  const flagged=usable.filter(p=>{try{return JSON.parse(p.description||"{}").dw===1;}catch{return false;}});
+  return flagged.length?flagged:getReceiptPrinters(usable);
+};
+async function kickCashDrawer(printers,branchId){
+  let prs=printers;
+  try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
+  const targets=drawerPrinters(prs);
+  if(!targets.length)return 0;
+  const at=Date.now();
+  await Promise.all(targets.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"dk",{at})})));
+  return targets.length;
 }
 // paid=true → ใบเสร็จ/ใบกำกับภาษี (โชว์รับเงิน/เงินทอน/ชำระโดย) · paid=false → ใบแจ้งยอดก่อนจ่าย (ไม่โชว์ว่าจ่ายแล้ว)
 function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
@@ -20599,8 +20617,19 @@ const CASH_TYPE_INFO={
   drop:{l:"ฝาก/ถอนเซฟ",icon:"🏦",c:"#3B82F6"},
   closing:{l:"ปิดกะ",icon:"🔚",c:"#64748B"},
 };
-function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
+function CashDrawerModal({shift,currentBranch,currentUser,printers=[],onClose}){
   const[movements,setMovements]=useState([]);const[expCats,setExpCats]=useState([]);
+  // เปิดลิ้นชักให้เลยตอนกดเข้ามา (เจ้าของสั่ง 12 ก.ย. 69) — พนักงานจะได้ไม่ต้องกดสองที
+  // ยิงครั้งเดียวต่อการเปิดจอหนึ่งครั้ง · ไม่มีเครื่องที่ต่อลิ้นชักไว้ = เงียบ ไม่ต้องรบกวน
+  const[kick,setKick]=useState("");
+  const openDrawer=useCallback(async(manual)=>{
+    try{
+      const n=await kickCashDrawer(printers,currentBranch?.id);
+      setKick(n?"opened":"none");
+      if(manual)posToast(n?"💵 สั่งเปิดลิ้นชักแล้ว":"ยังไม่ได้ตั้งว่าลิ้นชักต่อกับเครื่องไหน — ไปที่ 🖨 เครื่องพิมพ์ → กำหนดการพิมพ์",n?"ok":"warn");
+    }catch(e){setKick("err");if(manual)posToast("สั่งเปิดลิ้นชักไม่สำเร็จ: "+(e&&e.message||e),"warn");}
+  },[printers,currentBranch]);
+  useEffect(()=>{openDrawer(false);},[]);// eslint-disable-line react-hooks/exhaustive-deps  (เปิดจอ = เปิดลิ้นชักหนึ่งครั้ง)
   const[loading,setLoading]=useState(true);const[action,setAction]=useState(null);
   const[amount,setAmount]=useState("");const[category,setCategory]=useState("");
   const[reason,setReason]=useState("");const[note,setNote]=useState("");const[saving,setSaving]=useState(false);
@@ -20638,7 +20667,10 @@ function CashDrawerModal({shift,currentBranch,currentUser,onClose}){
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,opacity:.85}}>กะ #{shift.id} · เปิดเมื่อ {fmtDT(shift.opened_at)}</div>
           </div>
         </div>
-        <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:32,height:32,cursor:"pointer",color:C.white,fontSize:18}}>✕</button>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <button onClick={()=>openDrawer(true)} title="สั่งเปิดลิ้นชักเก็บเงิน" style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,padding:"7px 13px",cursor:"pointer",color:C.white,fontSize:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>💵 เปิดลิ้นชัก</button>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:32,height:32,cursor:"pointer",color:C.white,fontSize:18}}>✕</button>
+        </div>
       </div>
       <div style={{padding:"14px 22px",borderBottom:`1px solid ${C.line}`,background:C.bg,flexShrink:0}}>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(140px,45%),1fr))",gap:8}}>
@@ -23100,6 +23132,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const[sOpenCats,setSOpenCats]=useState(()=>new Set());  // หมวดที่กางดูรายเมนู
   const[sSaving,setSSaving]=useState(false);
   const[sRcpt,setSRcpt]=useState(false);            // เครื่องนี้เป็นเครื่องพิมพ์ใบเสร็จด้วยหรือไม่ (description.rcpt)
+  const[sDraw,setSDraw]=useState(false);           // ลิ้นชักเก็บเงินเสียบสาย RJ11 อยู่กับเครื่องนี้ (description.dw)
   const aliveRef=useRef(true);   // กันอัปเดต state หลังปิด modal (ระหว่างวนค้นหา 15 วินาที)
   useEffect(()=>()=>{aliveRef.current=false;},[]);
   const[station,setStation]=useState(printStation||isPrintStation());
@@ -23278,7 +23311,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     // เครื่องเก่าที่เก็บ categories=null คือ "รับทุกหมวด" อยู่เดิม — เปิดมาให้ติ๊กครบทุกหมวด
     // เพื่อให้เห็นตรงกับที่มันทำอยู่จริง ไม่ใช่โชว์ว่าไม่ได้ติ๊กอะไรแต่แอบพิมพ์ทุกอย่าง
     setSCats(Array.isArray(p.categories)?[...p.categories]:[...branchCategories]);
-    let dd={};try{dd=JSON.parse(p.description||"{}");}catch{}setSRcpt(dd.rcpt===1);
+    let dd={};try{dd=JSON.parse(p.description||"{}");}catch{}setSRcpt(dd.rcpt===1);setSDraw(dd.dw===1);
     const ov={};(menus||[]).forEach(m=>{if(m.printer_id)ov[m.id]=+m.printer_id;});setSOverride(ov);setSOpenCats(new Set());
   }
   function toggleSOpenCat(c){setSOpenCats(prev=>{const n=new Set(prev);if(n.has(c))n.delete(c);else n.add(c);return n;});}
@@ -23291,6 +23324,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       let fresh=p;try{const all=await api.getAllPrinters();const f=(all||[]).find(x=>+x.id===+p.id);if(f)fresh=f;}catch{}
       let dd={};try{dd=JSON.parse(fresh.description||"{}");}catch{}
       if(sRcpt)dd.rcpt=1;else delete dd.rcpt;
+      if(sDraw)dd.dw=1;else delete dd.dw;
       // เก็บเป็นรายการเสมอ ไม่เขียน null อีกแล้ว — null คือ catch-all ซึ่งเลิกใช้
       await api.updatePrinter(p.id,{name,categories:sCats,description:JSON.stringify(dd)});
       const ups=[];(menus||[]).forEach(m=>{const nw=sOverride[m.id]||null;const ol=m.printer_id||null;if(String(nw)!==String(ol))ups.push(api.updateMenu(m.id,{printer_id:nw}));});
@@ -23358,6 +23392,13 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:13.5,fontWeight:800,color:sRcpt?C.green:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ</div>
             <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.5}}>เช็คบิล/พิมพ์ใบเสร็จซ้ำ/แบ่งจ่าย จะพิมพ์ออกเครื่องนี้ · ติ๊กได้หลายเครื่อง — ใบเสร็จจะออกทุกเครื่องที่เลือก</div>
+          </div>
+        </label>
+        <label style={{display:"flex",alignItems:"center",gap:11,margin:"6px 0 4px",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${sDraw?C.brand:C.line}`,background:sDraw?C.brandLight:C.white,cursor:"pointer"}}>
+          <input type="checkbox" checked={sDraw} onChange={e=>setSDraw(e.target.checked)} style={{accentColor:C.brand,width:19,height:19,cursor:"pointer",flexShrink:0}}/>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:13.5,fontWeight:800,color:sDraw?C.brand:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>💵 ลิ้นชักเก็บเงินต่อกับเครื่องนี้</div>
+            <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.5}}>เสียบสายลิ้นชัก (RJ11) ไว้ที่เครื่องนี้ — กดปุ่ม 💰 เงินในลิ้นชัก แล้วลิ้นชักจะเด้งออกเอง · ไม่ติ๊กเลยสักเครื่อง = สั่งไปที่เครื่องพิมพ์ใบเสร็จ</div>
           </div>
         </label>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"15px 0 8px",flexWrap:"wrap",gap:8}}>
@@ -23984,7 +24025,7 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   if(!shift)return <OpenShiftModal currentBranch={currentBranch} currentUser={currentUser} onDone={s=>setShift(s)} onCancel={exitSale}/>;
   return <>
     <POSSaleMode menus={menus} reloadMenus={reloadMenus} reloadPrinters={reloadPrinters} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={exitSale} saleOnly={saleOnly} reloadPosSettings={loadPosSettings} refreshTick={refreshTick} reloadZones={loadZones}/>
-    {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCashDrawer(false)}/>}
+    {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} printers={printers} onClose={()=>setShowCashDrawer(false)}/>}
     {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShowCashDrawer(false);setShift(null);if(!saleOnly)setMode(null);}}/>}
   </>;
 }

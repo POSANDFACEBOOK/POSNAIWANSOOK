@@ -3222,6 +3222,46 @@ section("แก้ไขบิลที่ปิดแล้ว");
   ok_("ท่อบัญชีดึงช่องทางที่จ่ายจริงมาด้วย", SLIPPUSH.includes("payment_method,payments,created_at,updated_at"));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// เปิดลิ้นชักเก็บเงินอัตโนมัติ (เจ้าของสั่ง 12 ก.ย. 69) — กด "เงินในลิ้นชัก" แล้วลิ้นชักเด้งออก
+// ลิ้นชักต่อ RJ11 อยู่กับเครื่องพิมพ์ ⟹ ต้องสั่งผ่านตัวพิมพ์ที่ร้าน ไม่ใช่จากเบราว์เซอร์ตรงๆ
+// ══════════════════════════════════════════════════════════════════════════
+section("เปิดลิ้นชักเก็บเงิน");
+{
+  const L = APP.split("\n");
+  const a = L.findIndex(l => l.startsWith("const drawerPrinters=(printers)=>{"));
+  const b = L.findIndex((l, i) => i > a && l === "};");
+  let pick = null;
+  try {
+    pick = new Function("getPConn", "getReceiptPrinters", L.slice(a, b + 1).join("\n") + "\nreturn drawerPrinters;")(
+      () => ({ type: "net" }),
+      (list) => (list || []).filter(p => { try { return JSON.parse(p.description || "{}").rcpt === 1; } catch { return false; } }));
+  } catch {}
+  ok_("อ่านตัวเลือกเครื่องที่ต่อลิ้นชักได้", !!pick);
+  if (pick) {
+    const P = (id, d, extra) => ({ id, ip: "10.0.0." + id, description: JSON.stringify(d), ...(extra || {}) });
+    const kitchen = P(1, {}), cashier = P(2, { rcpt: 1 }), withDrawer = P(3, { dw: 1 });
+    ck("ติ๊กไว้ว่าลิ้นชักต่อเครื่องไหน = สั่งเครื่องนั้นเครื่องเดียว", pick([kitchen, cashier, withDrawer]).map(p => p.id).join(), "3");
+    ck("ไม่ได้ติ๊กเลย = ใช้เครื่องพิมพ์ใบเสร็จ", pick([kitchen, cashier]).map(p => p.id).join(), "2");
+    ck("ไม่มีทั้งสองอย่าง = ไม่สั่งอะไรเลย (ไม่ไปเปิดลิ้นชักผิดเครื่อง)", pick([kitchen]).length, 0);
+    ck("เครื่องที่ปิดใช้งาน/ไม่มี IP ไม่ถูกสั่ง", pick([P(3, { dw: 1 }, { active: false }), { id: 4, description: JSON.stringify({ dw: 1 }) }]).length, 0);
+    ck("ช่องข้อมูลเสีย ไม่ทำให้จอพัง", pick([{ id: 5, ip: "10.0.0.5", description: "{พัง" }]).length, 0);
+  }
+  ok_("คำสั่งเปิดลิ้นชักเป็นคำสั่งครั้งเดียวจบ (ถูกล้างเหมือน tp/rp/qr/pj)", APP.includes("const{tp,rp,qr,pj,dk,...keep}=d;"));
+  ok_("กดเข้าจอเงินในลิ้นชัก = สั่งเปิดหนึ่งครั้ง", APP.includes("useEffect(()=>{openDrawer(false);},[]);"));
+  ok_("มีปุ่มสั่งเปิดลิ้นชักซ้ำในจอ", APP.includes('onClick={()=>openDrawer(true)} title="สั่งเปิดลิ้นชักเก็บเงิน"'));
+  ok_("ไม่มีเครื่องที่ต่อลิ้นชัก ต้องบอกว่าไปตั้งที่ไหน", APP.includes("ยังไม่ได้ตั้งว่าลิ้นชักต่อกับเครื่องไหน"));
+  ok_("มีช่องติ๊ก \"ลิ้นชักเก็บเงินต่อกับเครื่องนี้\" ในกำหนดการพิมพ์ และบันทึกค่าได้",
+    APP.includes("💵 ลิ้นชักเก็บเงินต่อกับเครื่องนี้") && APP.includes("if(sDraw)dd.dw=1;else delete dd.dw;") && APP.includes("setSDraw(dd.dw===1);"));
+  // ── ฝั่งตัวพิมพ์ ──
+  ok_("ตัวพิมพ์ยิงคำสั่งเปิดลิ้นชักทั้งขา 2 และขา 5", AGENT.includes("const DRAWER_KICK = Buffer.from([0x1b, 0x70, 0x00, 0x19, 0xfa, 0x1b, 0x70, 0x01, 0x19, 0xfa]);"));
+  ok_("ตัวพิมพ์รับคำสั่งเปิดลิ้นชักทุกรอบ", AGENT.includes("  await handleDrawerRequests(printers);"));
+  ok_("มาร์คก่อนส่ง (tick ซ้อนไม่เปิดลิ้นชักซ้ำ) และล้างคำสั่งทิ้งหลังทำ",
+    AGENT.includes("state.kicked[p.id] = k.at; saveState();") && AGENT.includes('await clearCmdKey(p.id, "dk", k.at);'));
+  ok_("จำคำสั่งที่ทำแล้วข้ามการรีสตาร์ท", AGENT.includes("if (!state.kicked) state.kicked = {};"));
+  ok_("ขยับเวอร์ชันตัวพิมพ์แล้ว (ร้านอัปเดตเอง)", +((AGENT.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 41);
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
