@@ -19316,6 +19316,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // record cash movement if cash payment — skip if one already exists for this order (the
       // reconcile path above can re-enter after a lost response; a duplicate would inflate the
       // shift's expected cash).
+      // เงินสด = ต้องเปิดลิ้นชักให้ทอนเงิน · ยิงแบบไม่รอผลและกลืน error เด็ดขาด (ปิดบิลสำคัญกว่าลิ้นชัก)
+      if(pm==="cash")kickCashDrawer(printers,branch?.id).catch(()=>{});
       if(pm==="cash"&&shift){
         try{
           const existingMoves=await api.getCashMovements(shift.id).catch(()=>[]);
@@ -23668,6 +23670,7 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
     if(!row){setSaving(false);notifyDlg("บิลนี้เพิ่งถูกแก้จากอุปกรณ์อื่น — กรุณาปิดแล้วเปิดบิลนี้ใหม่ก่อนแก้");return;}
     // ── เงินในลิ้นชัก — เงินสดเท่านั้นที่ขยับลิ้นชัก ช่องทางอื่นบันทึกไว้ในบิล/ร่องรอย ──
     let mv=null;
+    if(delta!==0&&method==="cash")kickCashDrawer(printers,branch?.id).catch(()=>{});   // ต้องหยิบ/ใส่เงินจริง
     if(delta!==0&&method==="cash"&&shift?.id){
       try{
         mv=await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:delta>0?"sale":"refund",amount:Math.abs(delta),
