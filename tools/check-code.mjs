@@ -2356,8 +2356,9 @@ section("ป็อปอัพเก็บเงิน + เงินทอน")
   ck("ทุกที่ในตัวปิดบิลใช้ค่าที่กด ไม่ใช่ state",
     ["const pm=methodArg||payMethod;", "payment_method:pmCol,updated_at", "const pmCol=payParts?", "if(cashPart>0&&shift)", "payment_method:pmCol,payments:paymentsCol,cash_received"]
       .filter((x) => !APP.includes(x)), []);
-  ok_("ป็อปอัพส่งวิธีจ่ายที่กดเข้าไปจริง",
-    APP.includes("onPay={async(m)=>{await checkOut(m);setShowPay(false);}}") &&
+  // ป็อปอัพส่งต่อ "ทั้งชื่อช่องทางและรายละเอียดการแบ่งจ่าย" — รับแค่ตัวแรกคือบั๊คที่ทำบิล #127/#144 พัง
+  ok_("ป็อปอัพส่งวิธีจ่ายและรายละเอียดการแบ่งจ่ายเข้าไปครบ",
+    APP.includes("onPay={async(m,opts)=>{await checkOut(m,opts);setShowPay(false);}}") &&
     APP.includes("setAskPay(null);onPay(m.v);") && APP.includes('onPay("cash");'));
 
   // เงินสดต้องกรอกยอดที่รับมา และต้องไม่น้อยกว่ายอดบิล — ดึงเงื่อนไขจริงมารัน
@@ -3379,8 +3380,54 @@ section("แบ่งจ่ายหลายช่องทาง");
   ok_("บิลเก็บช่องทางที่จ่ายจริงไว้ทุกขั้น", APP.includes("payments:paymentsCol,paid_by:"));
   ok_("จ่ายช่องทางเดียวยังเก็บเป็นช่องทางนั้น · หลายช่องทางจึงเป็น mixed",
     APP.includes('const pmCol=payParts?(payParts.length===1?payParts[0].method:"mixed"):pm;'));
+  // ── รายละเอียดแบ่งจ่ายต้องเดินทางถึงตัวปิดบิลจริง ──
+  // บั๊คจริง 12 ก.ย. 69: บิล #127 (C13) และ #144 (C10-) แบ่งจ่ายจริง แต่ฐานข้อมูลได้แค่คำว่า "mixed"
+  // เพราะจอเช็คบิลส่งต่อให้ตัวปิดบิลแค่ชื่อช่องทาง — อาร์กิวเมนต์ตัวที่สอง (ขั้นการแบ่งจ่าย) ตกหายที่ปากทาง
+  // ใบเสร็จจึงขึ้นแค่ "แบ่งจ่ายหลายช่องทาง" ลอยๆ และบัญชีแยกยอดตามช่องทางไม่ได้เลย
+  // ⟹ ต้องดึงตัวส่งต่อจริงมารัน การค้นข้อความมองไม่เห็นอาร์กิวเมนต์ที่หายไป
+  {
+    const m = APP.match(/onPay=\{(async\([^)]*\)=>\{[^{}]*\})\}/);
+    ok_("อ่านตัวส่งต่อจากจอเช็คบิลไปยังตัวปิดบิลได้", !!m);
+    if (m) {
+      let got = null;
+      const fn = new Function("checkOut", "setShowPay", "return " + m[1] + ";")((mm, oo) => { got = { m: mm, o: oo }; }, () => {});
+      fn("mixed", { payments: [{ method: "promptpay", amount: 1000 }, { method: "cash", amount: 285 }], cashReceived: 300 });
+      ok_("กดแบ่งจ่ายแล้วรายละเอียดทุกขั้นถึงตัวปิดบิล (ไม่ตกหายที่ปากทาง)",
+        !!got && got.m === "mixed" && !!got.o && Array.isArray(got.o.payments) && got.o.payments.length === 2 && got.o.cashReceived === 300);
+    }
+  }
+  ok_("ได้คำว่าแบ่งจ่ายมาแต่ไม่มีรายละเอียด = ไม่ยอมปิดบิล (ดีกว่าบันทึกลอยๆ แล้วแยกยอดไม่ได้)",
+    APP.includes('if(pm==="mixed"&&!payParts){'));
+  // ── เงินทอนของบิลแบ่งจ่าย: ต้องคิดจากขั้นเงินสด ไม่ใช่ยอดทั้งบิล ──
+  {
+    const st = APP.indexOf("const cashPartOf=(order)=>{");
+    let fn = null;
+    if (st >= 0) {
+      let d = 0, started = false, en = -1;
+      for (let i = st; i < APP.length; i++) {
+        if (APP[i] === "{") { d++; started = true; }
+        else if (APP[i] === "}") { d--; if (started && d === 0) { en = APP.indexOf(";", i) + 1; break; } }
+      }
+      try { fn = new Function(APP.slice(st, en) + " return cashPartOf;")(); } catch {}
+    }
+    ok_("อ่านตัวคิดยอดเงินสดของบิลได้", !!fn);
+    if (fn) {
+      ok_("บิลเงินสดล้วน = เงินสดเท่ายอดบิล", fn({ payment_method: "cash", total: 500 }) === 500);
+      ok_("บิลแบ่งจ่าย = นับเฉพาะขั้นที่เป็นเงินสด (ทอนจากยอดนั้น)",
+        fn({ payment_method: "mixed", total: 1285, payments: [{ method: "promptpay", amount: 1000 }, { method: "cash", amount: 285 }] }) === 285);
+      ok_("บิลแบ่งจ่ายที่ไม่มีขั้นเงินสด = ไม่มีเงินทอน",
+        fn({ payment_method: "mixed", total: 1000, payments: [{ method: "promptpay", amount: 700 }, { method: "thaiplus", amount: 300 }] }) === 0);
+      ok_("บิลโอนล้วน = ไม่มีเงินสด", fn({ payment_method: "promptpay", total: 745 }) === 0);
+    }
+  }
   ok_("ใบเสร็จแจกแจงว่าขั้นไหนจ่ายเท่าไรด้วยอะไร",
-    APP.includes("if(Array.isArray(order.payments)&&order.payments.length>1)") && APP.includes("const splitLines="));
+    APP.includes("if(splitPay)splitPay.forEach((p,i)=>L.push(") && APP.includes("const splitLines="));
+  ok_("หัวใบเสร็จบอกจำนวนช่องทางที่แบ่งจ่าย ไม่ใช่คำว่าแบ่งจ่ายลอยๆ",
+    APP.includes("ชำระโดย: แบ่งจ่าย ") && APP.includes(" ช่องทาง"));
+  ok_("เงินทอนบนใบเสร็จคิดจากขั้นเงินสด ไม่ใช่ยอดทั้งบิล",
+    APP.includes("const cashPaid=cashPartOf(order);") && APP.includes("const cashPaidH=cashPartOf(order);"));
+  ok_("เปิดบิลย้อนดูทีหลังก็ยังเห็นว่าแบ่งจ่ายช่องทางไหนบ้าง",
+    APP.includes("{paid&&Array.isArray(o.payments)&&o.payments.length>1&&"));
 }
 
 // ══════════════════════════════════════════════════════════════════════════

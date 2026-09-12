@@ -17810,7 +17810,8 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const splitLines=(Array.isArray(order.payments)&&order.payments.length>1)
     ?order.payments.map((p,i)=>`<div style="display:flex;justify-content:space-between;font-size:12px"><span>${i+1}. ${esc(payMethodLabel(p.method))}</span><span>฿${(+p.amount||0).toFixed(2)}</span></div>`).join("")
     :"";
-  const cashLine=(paid&&order.payment_method==="cash"&&order.cash_received)?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(2)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-(order.total||0)).toFixed(2)}</span></div>`:"";
+  const cashPaidH=cashPartOf(order);
+  const cashLine=(paid&&cashPaidH>0&&order.cash_received)?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(2)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-cashPaidH).toFixed(2)}</span></div>`:"";
   const promoLine=order.promo_amount>0?`<div style="display:flex;justify-content:space-between;color:#7C3AED;font-size:12px"><span>🎁 ${esc(order.promo_name||"โปรโมชั่น")}</span><span>-฿${(+order.promo_amount).toFixed(2)}</span></div>`:"";
   const scLine=order.service_charge>0?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>Service Charge</span><span>+฿${(+order.service_charge).toFixed(2)}</span></div>`:"";
   // ปัดเศษต้องขึ้นบนใบทางนี้ด้วย ไม่งั้นใบกำกับภาษีอย่างย่อบวกไม่ลง (ทางนี้ใช้ตอนพิมพ์ย้อนหลังด้วย)
@@ -17998,6 +17999,13 @@ async function escposSlipRaster(lines,width=576,opts={}){
 // ── ใบเสร็จเป็นรูปภาพ (raster) สำหรับ iPad/https พิมพ์ผ่านตัวพิมพ์ (agent) — ไทยคมชัด + QR พร้อมเพย์เนทีฟ ──
 function bahtR(n){return "฿"+(+n||0).toFixed(2);}
 const payMethodLabel=(v)=>stripEmoji(PAY_LABEL[v]||v||"-").trim();   // ชื่อช่องทางแบบไม่มีอีโมจิ (ใบเสร็จ/รายการขั้นแบ่งจ่าย)
+// ยอดที่รับเป็น "เงินสด" ของบิลใบนี้ — บิลแบ่งจ่ายนับเฉพาะขั้นที่เป็นเงินสด (ขั้นสุดท้ายเสมอ จึงเป็นขั้นที่ต้องทอน)
+// ถ้าเอายอดทั้งบิลไปลบเงินที่รับมา เงินทอนบนใบเสร็จของบิลแบ่งจ่ายจะติดลบ/ผิดทันที
+const cashPartOf=(order)=>{
+  const ps=order&&Array.isArray(order.payments)?order.payments:null;
+  if(ps&&ps.length)return ps.filter(p=>p&&p.method==="cash").reduce((s,p)=>s+(+p.amount||0),0);
+  return (order&&order.payment_method==="cash")?(+order.total||0):0;
+};
 function stripEmoji(s){return String(s||"").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}️⃣]/gu,"").replace(/\s+/g," ").trim();}
 // สร้างไบต์ QR เนทีฟ (GS ( k) จัดกึ่งกลาง — เอาไว้ต่อท้าย raster ใบเสร็จ (เครื่องพิมพ์เรนเดอร์ QR เอง คมชัด)
 // base64 -> ไบต์ · ทางบลูทูธรับ Uint8Array ไม่ใช่ base64 (btPrint หั่นทีละ 512 ไบต์)
@@ -18083,15 +18091,16 @@ function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
   L.push({l:(paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"),r:bahtR(order.total||0),size:38,bold:true,mb:6});   // เน้นยอดตัวใหญ่
   if(posSettings&&posSettings.vat_enabled&&order.vat_included!==false)L.push({t:"* ราคานี้รวมภาษีมูลค่าเพิ่ม (VAT) แล้ว",size:16,align:"center"});
   if(paid){
-    if(order.payment_method==="cash"&&order.cash_received){
+    const cashPaid=cashPartOf(order);
+    if(cashPaid>0&&order.cash_received){
       L.push({l:"รับเงิน",r:bahtR(order.cash_received),size:22});
-      L.push({l:"เงินทอน",r:bahtR(Math.max(0,(+order.cash_received)-(order.total||0))),size:22});
+      L.push({l:"เงินทอน",r:bahtR(Math.max(0,(+order.cash_received)-cashPaid)),size:22});
     }
     L.push({rule:true});
-    L.push({t:"ชำระโดย: "+stripEmoji(PAY_LABEL[order.payment_method]||order.payment_method||"-"),size:24,bold:true,align:"center"});
-    // แบ่งจ่ายหลายช่องทาง — ลูกค้าต้องเห็นว่าจ่ายอะไรไปเท่าไรบ้าง ไม่ใช่เห็นแค่คำว่า "แบ่งจ่าย"
-    if(Array.isArray(order.payments)&&order.payments.length>1)
-      order.payments.forEach((p,i)=>L.push({l:`  ${i+1}. ${payMethodLabel(p.method)}`,r:bahtR(+p.amount||0),size:22}));
+    const splitPay=(Array.isArray(order.payments)&&order.payments.length>1)?order.payments:null;
+    // แบ่งจ่ายหลายช่องทาง — ลูกค้าและพนักงานต้องเห็นว่าจ่ายช่องทางไหนไปเท่าไรบ้าง ไม่ใช่เห็นแค่คำว่า "แบ่งจ่าย"
+    L.push({t:splitPay?`ชำระโดย: แบ่งจ่าย ${splitPay.length} ช่องทาง`:"ชำระโดย: "+stripEmoji(PAY_LABEL[order.payment_method]||order.payment_method||"-"),size:24,bold:true,align:"center"});
+    if(splitPay)splitPay.forEach((p,i)=>L.push({l:`  ${i+1}. ${payMethodLabel(p.method)}`,r:bahtR(+p.amount||0),size:22,bold:true}));
     L.push({t:"ขอบคุณที่ใช้บริการครับ",size:22,align:"center",mb:2});
   }else{
     L.push({rule:true});
@@ -19334,6 +19343,13 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     try{
       // แบ่งจ่าย: ยอดเงินสดคือเฉพาะขั้นที่เป็นเงินสด ไม่ใช่ทั้งบิล — ลิ้นชักกับเงินทอนต้องอิงตัวนี้
       const payParts=(opts&&Array.isArray(opts.payments)&&opts.payments.length)?opts.payments.map(p=>({method:String(p.method||"other"),amount:round2(+p.amount||0)})):null;
+      // ได้คำว่า "แบ่งจ่าย" มาแต่ไม่มีรายละเอียดขั้นตอน = เครื่องนี้ยังรันโค้ดชุดเก่า
+      // ถ้าปล่อยให้ปิดบิล ใบเสร็จจะขึ้นแค่ "แบ่งจ่ายหลายช่องทาง" ลอยๆ และบัญชีแยกยอดตามช่องทางไม่ได้ตลอดกาล
+      // (เกิดจริงกับบิล #127 และ #144 วันที่ 12 ก.ย. 69) — หยุดไว้ก่อนดีกว่าเก็บเงินแล้วไม่รู้ว่าเข้าช่องไหน
+      if(pm==="mixed"&&!payParts){
+        notifyDlg("⚠️ ยังไม่ได้รับรายละเอียดการแบ่งจ่าย — ยังไม่ได้ตัดเงิน\n\nแตะแถบสีส้ม \"มีระบบเวอร์ชันใหม่\" ด้านบน (หรือรีเฟรชหน้าจอ) แล้วทำรายการใหม่\nหรือเลือกจ่ายช่องทางเดียวไปก่อน");
+        setSavingGuard(false);return;
+      }
       const cashPart=payParts?round2(payParts.filter(p=>p.method==="cash").reduce((s,p)=>s+p.amount,0)):(pm==="cash"?total:0);
       const cashReceived=payParts?(cashPart>0?round2(opts.cashReceived!=null?+opts.cashReceived:cashPart):null):(pm==="cash"?(+cashRcv||total):null);
       const payAt=new Date().toISOString();
@@ -19660,7 +19676,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       </div>;
     })()}
 
-    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async(m)=>{await checkOut(m);setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings} onPrintQR={printPayQR} payWait={payWait} lockedTotal={lockedTotal} onUnlockPay={unlockPayWait}
+    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async(m,opts)=>{await checkOut(m,opts);setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings} onPrintQR={printPayQR} payWait={payWait} lockedTotal={lockedTotal} onUnlockPay={unlockPayWait}
       onSplit={()=>setShowSplitBill(true)} onCancelOrder={cancelOrder}/>}
   </div>;
 }
@@ -23742,8 +23758,12 @@ function BillDetailCard({order,branch=null,cfg=null,onBack,onEdit=null}){
         {+o.service_charge>0&&<Row l="ค่าบริการ (Service)" v={m(o.service_charge)} plus="+"/>}
         {+o.vat>0&&<Row l={`VAT ${o.vat_rate||7}%${o.vat_included?" (รวมในราคา)":""}`} v={m(o.vat)} plus={o.vat_included?"":"+"}/>}
         <div style={{borderTop:`1px solid ${C.line}`,margin:"8px 0 0",paddingTop:10}}><Row l="รวมทั้งสิ้น" v={m(o.total)} big/></div>
-        {paid&&o.payment_method==="cash"&&o.cash_received&&<div style={{marginTop:8}}><Row l="รับเงิน" v={m(o.cash_received)}/><Row l="เงินทอน" v={m(Math.max(0,(+o.cash_received)-(+o.total||0)))}/></div>}
+        {paid&&cashPartOf(o)>0&&o.cash_received&&<div style={{marginTop:8}}><Row l="รับเงิน" v={m(o.cash_received)}/><Row l="เงินทอน" v={m(Math.max(0,(+o.cash_received)-cashPartOf(o)))}/></div>}
         {paid&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed ${C.lineLight}`,fontSize:12.5,fontFamily:"'Sarabun',sans-serif",color:C.ink3,display:"flex",justifyContent:"space-between"}}><span>ชำระโดย</span><span style={{fontWeight:700,color:C.ink}}>{PAY_LABEL[o.payment_method]||o.payment_method||"-"}</span></div>}
+        {/* แบ่งจ่าย: ไล่ให้เห็นทีละขั้นว่าช่องทางไหนเท่าไร — เปิดย้อนดูทีหลังก็ยังตรวจได้ */}
+        {paid&&Array.isArray(o.payments)&&o.payments.length>1&&<div style={{marginTop:4,fontSize:12.5,fontFamily:"'Sarabun',sans-serif",color:C.ink3}}>
+          {o.payments.map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"1px 0"}}><span>{i+1}. {payMethodLabel(p.method)}</span><span style={{fontWeight:700,color:C.ink}}>{m(p.amount)}</span></div>)}
+        </div>}
       </div>
     </div>
   </div>;
