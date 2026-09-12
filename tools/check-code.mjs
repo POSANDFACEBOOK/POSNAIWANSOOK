@@ -3416,6 +3416,43 @@ section("พิมพ์แล้วห้ามออกซ้ำเอง");
   ok_("บิลที่เคยพิมพ์แล้วมีของเพิ่ม = พิมพ์เฉพาะที่เพิ่ม", AGENT.includes("const items = newItemsVs(last, o.items);"));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ยกเลิกรายการอาหารต้องหายจากบิลจริง ไม่ใช่หายแค่บนจอ (เจอจริง 12 ก.ย. 69)
+// ใบยกเลิกออกที่ครัวแล้ว แต่พอเข้าหน้าชำระเงิน/เปิดโต๊ะใหม่ รายการนั้นยังอยู่
+// เพราะเทียบแถวด้วย เมนู+หมายเหตุ+ตัวเลือก ถ้าเทียบไม่ตรงก็เอาออกแค่บนจอแล้วเงียบ
+// ══════════════════════════════════════════════════════════════════════════
+section("ยกเลิกรายการต้องหายจากบิลจริง");
+{
+  const L = APP.split("\n");
+  const a = L.findIndex((l) => l.startsWith("const findSentIndex=(rows,target,keyOf)=>{"));
+  const b = L.findIndex((l, i) => i > a && l === "};");
+  let find = null;
+  try { find = new Function(L.slice(a, b + 1).join("\n") + "\nreturn findSentIndex;")(); } catch {}
+  ok_("อ่านตัวหาแถวที่จะยกเลิกได้", !!find);
+  if (find) {
+    const key = (i) => `${i.menu_id}|${i.note || ""}|${(i.options || []).map((o) => o.name).join(",")}`;
+    const rows = [
+      { line_uid: "A", menu_id: 5, note: "", options: [] },
+      { line_uid: "B", menu_id: 5, note: "", options: [] },
+      { line_uid: "C", menu_id: 9, note: "เผ็ดน้อย", options: [{ name: "ไข่" }] },
+    ];
+    ck("ผูกกับแถวตรงตัวด้วย line_uid (เมนูซ้ำกันก็ไม่โดนผิดแถว)", find(rows, { line_uid: "B", menu_id: 5 }, key), 1);
+    ck("แถวเก่าที่ไม่มี line_uid ยังเทียบด้วยเมนู+หมายเหตุ+ตัวเลือกได้", find(rows, { menu_id: 9, note: "เผ็ดน้อย", options: [{ name: "ไข่" }] }, key), 2);
+    ck("line_uid ไม่ตรงใครเลย = ถอยไปเทียบด้วยคีย์ประกอบ", find(rows, { line_uid: "ไม่มีจริง", menu_id: 5, note: "", options: [] }, key), 0);
+    ck("ไม่มีในบิลแล้ว = บอกว่าไม่เจอ (ห้ามเดาว่าเป็นแถวแรก)", find(rows, { line_uid: "Z", menu_id: 77 }, key), -1);
+    ck("บิลว่าง/ข้อมูลเพี้ยน ไม่ทำให้จอพัง", [find(null, { menu_id: 1 }, key), find([], { menu_id: 1 }, key)], [-1, -1]);
+  }
+  // ต้องอ่านบิลล่าสุดจากฐานก่อนตัดสินใจ — สำเนาในจออาจเก่ากว่าความจริง
+  ok_("อ่านบิลล่าสุดจากฐานก่อนยกเลิก", APP.includes("try{const r=await api.getPOSOrderById(existingOrder.id);fresh=Array.isArray(r)?r[0]:r;}catch{}"));
+  ok_("อ่านไม่ได้ = ไม่ยกเลิก (ห้ามเอาออกแค่บนจอ)", APP.includes('notifyDlg("อ่านบิลล่าสุดไม่ได้ (เน็ตสะดุด) — ยังไม่ได้ยกเลิกรายการนี้ กรุณาลองใหม่");return;'));
+  ok_("เขียนกลับจากรายการจริงในฐาน และกันชนกันด้วยเวลาแก้ล่าสุดของฐาน",
+    APP.includes("const newSent=dbItems.filter((_,i)=>i!==at);") && APP.includes("await api.updatePOSOrderIfUnchanged(existingOrder.id,fresh.updated_at,{items:newSent,"));
+  ok_("ไม่มีในฐานแล้ว = บอกพนักงาน แล้วปรับจอให้ตรงกับบิลจริง",
+    APP.includes('posToast("รายการนี้ถูกเอาออกไปก่อนหน้านี้แล้ว — จอถูกอัปเดตให้ตรงกับบิลจริง","warn",6000);'));
+  ok_("ยกเลิกเสร็จแล้วให้จอแม่ดึงบิลใหม่ (เปิดโต๊ะซ้ำต้องไม่เห็นของที่ยกเลิก)",
+    APP.includes("    onDone&&onDone();   // ให้จอแม่ดึงบิลใหม่"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

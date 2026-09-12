@@ -1763,6 +1763,19 @@ function billTotalsOf({items,manualDiscount=0,promoDiscount=0,posSettings=null})
   const total=roundBill(rawTotal,roundModeOf(posSettings));
   return{subtotal,totalDiscount,subAfterDisc,scRate,sc,vatRate,vatIncluded,vat,rawTotal,total,roundAdj:round2(total-rawTotal)};
 }
+// หาแถวในฐานที่ตรงกับรายการที่พนักงานกดยกเลิก — ผูกด้วย line_uid ก่อนเสมอ (ชี้แถวตรงตัว)
+// เทียบด้วย เมนู+หมายเหตุ+ตัวเลือก เป็นทางสำรองของแถวเก่าที่ยังไม่มี line_uid
+// เดิมเทียบด้วยคีย์ประกอบอย่างเดียว พอเทียบไม่ตรง (ตัวเลือกเรียงคนละลำดับ ฯลฯ)
+// ระบบจะเอาออกแค่บนจอแล้วเงียบ — ฐานยังมีรายการนั้นอยู่ เปิดโต๊ะใหม่ก็กลับมา (เจอจริง 12 ก.ย. 69)
+const findSentIndex=(rows,target,keyOf)=>{
+  const list=Array.isArray(rows)?rows:[];
+  if(target&&target.line_uid){
+    const i=list.findIndex(r=>r&&String(r.line_uid)===String(target.line_uid));
+    if(i>=0)return i;
+  }
+  const k=keyOf(target);
+  return list.findIndex(r=>keyOf(r)===k);
+};
 // กุญแจของส่วนลดรายเมนู — ผูกกับ line_uid ของแถว ไม่ใช่เลขลำดับ
 // เลขลำดับเลื่อนทุกครั้งที่ลบแถว ส่วนลดจะไปเกาะเมนูผิดตัวโดยไม่มีใครรู้ (ของแถมกลายเป็นของขาย/กลับกัน)
 const discKey=(it,idx)=>String((it&&it.line_uid)||("#"+idx));
@@ -19103,12 +19116,25 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     // ถ้าออเดอร์มีใน DB แล้ว และรายการที่ยกเลิกเป็น "รายการที่ส่งไปแล้ว" → อัปเดต DB (ครัว/QR ลูกค้าตรงกัน)
     // โดยลบเฉพาะรายการที่ส่งแล้วตัวนั้นออก — ไม่ดึงรายการใหม่ที่ "ยังไม่ได้กดส่ง" ลง DB ก่อนเวลา
     if(existingOrder?.id){
-      const k=sentKey(target);let removed=false;const newSent=[];
-      for(const s of stripNewFlags(existingOrder.items)){if(!removed&&sentKey(s)===k){removed=true;continue;}newSent.push(s);}
-      if(removed){
-        try{
+      try{
+        // อ่านบิลล่าสุดจากฐานก่อนเสมอ — สำเนาในจออาจเก่า (ลูกค้าสแกนสั่งเพิ่ม/อีกเครื่องแก้)
+        // แล้วค่อยหาแถวที่จะเอาออกจาก "ของจริง" ไม่ใช่จากสำเนาในจอ
+        let fresh=null;
+        try{const r=await api.getPOSOrderById(existingOrder.id);fresh=Array.isArray(r)?r[0]:r;}catch{}
+        if(!fresh){notifyDlg("อ่านบิลล่าสุดไม่ได้ (เน็ตสะดุด) — ยังไม่ได้ยกเลิกรายการนี้ กรุณาลองใหม่");return;}
+        const dbItems=stripNewFlags(fresh.items);
+        const at=findSentIndex(dbItems,target,sentKey);
+        if(at<0){
+          // ไม่มีในฐานแล้ว = มีคนเอาออกไปก่อนหน้านี้แล้ว → เอาออกจากจอให้ตรงกัน แต่ต้องบอกว่าไม่ได้แจ้งครัวซ้ำ
+          setItems(newLocal);verRef.current=fresh.updated_at;
+          posToast("รายการนี้ถูกเอาออกไปก่อนหน้านี้แล้ว — จอถูกอัปเดตให้ตรงกับบิลจริง","warn",6000);
+          onDone&&onDone();
+          return;
+        }
+        const newSent=dbItems.filter((_,i)=>i!==at);
+        {
           const newSub=round2(newSent.reduce((s,i)=>s+i.price*i.qty,0));
-          const row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,{items:newSent,subtotal:newSub,total:newSub,discount:0,updated_at:new Date().toISOString()});
+          const row=await api.updatePOSOrderIfUnchanged(existingOrder.id,fresh.updated_at,{items:newSent,subtotal:newSub,total:newSub,discount:0,updated_at:new Date().toISOString()});
           if(!row){notifyDlg("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อดูรายการล่าสุดก่อนยกเลิก");onDone();onClose();return;}
           verRef.current=row.updated_at;
           // แจ้งครัวว่ารายการนี้ถูกยกเลิก — ตัวพิมพ์เห็นแค่ "รายการที่เพิ่มขึ้น"
@@ -19121,10 +19147,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
             console.warn("แจ้งครัวเรื่องยกเลิกไม่สำเร็จ",err);
             posToast("⚠️ ยกเลิกในระบบแล้ว แต่แจ้งครัวไม่สำเร็จ — กรุณาบอกครัวด้วยตัวเอง","warn");
           }
-        }catch(e){notifyDlg("ยกเลิกรายการไม่สำเร็จ: "+friendlyError(e));return;}
-      }
+        }
+      }catch(e){notifyDlg("ยกเลิกรายการไม่สำเร็จ: "+friendlyError(e));return;}
     }
     setItems(newLocal);
+    onDone&&onDone();   // ให้จอแม่ดึงบิลใหม่ เปิดโต๊ะนี้อีกครั้งจะได้ไม่เห็นรายการที่ยกเลิกไปแล้ว
   }
 
   // พิมพ์ใบครัวซ้ำผ่าน "ตัวพิมพ์ (agent)" — ส่งไป "ทุกเครื่องที่ตั้งค่าให้รับหมวดนั้น" (ตรงตาม กำหนดการพิมพ์) ไม่ใช่เครื่องเดียว
