@@ -3503,6 +3503,16 @@ section("เวลาส่งครัวรายรายการ");
   ok_("แถวที่ยังไม่ได้ส่ง ไม่โชว์เวลา", APP.includes("{!unsent&&item.sent_at"));
 }
 
+// ── งานล่าสุดของเครื่องพิมพ์ — ตอบให้ได้ว่า "คำสั่งถึงเครื่องหรือยัง" ──
+// 12 ก.ย. 69: กดรีปริ้นแล้วกระดาษยังไม่ออก แต่ไม่มีใครบอกได้ว่าคำสั่งไปถึงตัวพิมพ์แล้วหรือยัง
+section("งานล่าสุดของเครื่องพิมพ์");
+{
+  ok_("ตัวพิมพ์จดงานล่าสุดพ่วงไปกับการล้างคำสั่ง (ไม่เพิ่มการเขียน)",
+    AGENT.includes("d.lastJob = { at: Date.now(), kind: key, ok: ok !== false };") && AGENT.includes("async function clearCmdKey(id, key, at, ok) {"));
+  ok_("หน้าเครื่องพิมพ์โชว์งานล่าสุดของแต่ละเครื่อง", APP.includes("const lastJobText=(p)=>{") && APP.includes("{lastJobText(p)&&<div"));
+  ok_("ช่องข้อมูลเสีย/ยังไม่เคยมีงาน = ไม่โชว์อะไร ไม่ทำให้จอพัง", APP.includes("const j=d.lastJob;if(!j||!j.at)return \"\";"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

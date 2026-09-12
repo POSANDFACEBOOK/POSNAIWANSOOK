@@ -23461,6 +23461,15 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const stView=(st)=>st==="online"
     ?{c:C.green,bg:C.greenLight,t:"🟢 ออนไลน์"}
     :{c:C.red,bg:C.redLight,t:"🔴 ออฟไลน์"};
+  // งานล่าสุดที่เครื่องนี้ทำจริง — ตอบคำถาม "กดสั่งพิมพ์แล้วถึงเครื่องหรือยัง" ได้ทันที
+  // ตัวพิมพ์จดไว้ตอนล้างคำสั่งที่ทำเสร็จ (เขียนอยู่แล้ว ไม่มีการเขียนเพิ่ม)
+  const JOB_LABEL={rp:"ใบครัว/พิมพ์ซ้ำ",qr:"QR โต๊ะ",pj:"ใบเสร็จ",dk:"เปิดลิ้นชัก",tp:"ทดสอบพิมพ์"};
+  const lastJobText=(p)=>{
+    let d={};try{d=JSON.parse(p.description||"{}");}catch{}
+    const j=d.lastJob;if(!j||!j.at)return "";
+    let tm="";try{tm=new Date(+j.at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"});}catch{}
+    return "🖨 งานล่าสุด: "+(JOB_LABEL[j.kind]||j.kind||"")+" "+tm;
+  };
   const activePrinters=printers.filter(p=>p.active!==false);
   const isIgnored=(p)=>{try{return JSON.parse(p.description||"{}").ig===1;}catch{return false;}};
   const notAdded=printers.filter(p=>p.active===false);
@@ -23535,6 +23544,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           <div style={{minWidth:0,flex:1}}>
             <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}><span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:800,color:C.ink}}>{p.name}</span>{isReceiptPrinter(p)&&<span style={{fontSize:10,fontWeight:800,color:C.green,background:C.greenLight,border:`1px solid ${C.green}55`,borderRadius:20,padding:"1px 8px",fontFamily:"'Sarabun',sans-serif"}}>🧾 ใบเสร็จ</span>}</div>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink4}}>{conn.type==="bluetooth"?`บลูทูธ${conn.btName?" · "+conn.btName:""}`:`${p.ip||"-"}:${p.port||9100}`} · พิมพ์: {catLabel}{ovCount>0?` · +${ovCount} เมนู`:""}</div>
+            {lastJobText(p)&&<div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.ink3,fontWeight:700}}>{lastJobText(p)}</div>}
           </div>
           <span style={{fontSize:11.5,fontWeight:800,color:sv.c,background:sv.bg,border:`1px solid ${sv.c}44`,borderRadius:20,padding:"3px 12px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{sv.t}</span>
           <button onClick={()=>openSettings(p)} title="กำหนดหมวดหมู่/เมนู ที่พิมพ์ออกเครื่องนี้ + แก้ชื่อ" style={{background:C.blueLight,border:`1px solid ${C.blue}55`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.blue,whiteSpace:"nowrap"}}>🖨️ กำหนดการพิมพ์</button>

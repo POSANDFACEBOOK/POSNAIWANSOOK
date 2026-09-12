@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 44;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 45;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 2000;
@@ -488,13 +488,15 @@ async function handleDrawerRequests(printers) {
   }
 }
 // ล้างคำสั่งที่ทำเสร็จแล้วออกจากแถว (เทียบ at ก่อน — ถ้ามีคำสั่งใหม่กว่ามาแล้วห้ามลบ)
-async function clearCmdKey(id, key, at) {
+async function clearCmdKey(id, key, at, ok) {
   try {
     const r = await sb(`printers?id=eq.${id}&select=description`);
     let d = {};
     try { d = JSON.parse((r && r[0] && r[0].description) || "{}"); } catch { return; }
     if (!d[key] || String(d[key].at) !== String(at)) return;
     delete d[key];
+    // งานล่าสุดของเครื่องนี้ — แอปเอาไปโชว์ว่า "พิมพ์ล่าสุดเมื่อไหร่ สำเร็จไหม"
+    d.lastJob = { at: Date.now(), kind: key, ok: ok !== false };
     await patchPrinter(id, { description: JSON.stringify(d) });
   } catch { /* ล้างไม่สำเร็จก็ไม่เป็นไร รอบหน้าลองใหม่ */ }
 }
