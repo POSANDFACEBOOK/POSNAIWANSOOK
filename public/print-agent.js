@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 43;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 44;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 2000;
@@ -58,9 +58,19 @@ async function checkUpdate() {
 const getActiveOrderHeads = () => sb(`orders?status=neq.paid&status=neq.cancelled&select=id,updated_at&branch_id=eq.${BRANCH}`);
 // ดึงรายการเฉพาะบิลที่เปลี่ยนจริง — คงตัวกรองสถานะไว้ด้วย เผื่อบิลถูกปิดคั่นระหว่างสองคำขอ
 // (ถ้าถูกปิดไปแล้วจะไม่ถูกส่งกลับมา = ไม่พิมพ์ใบของบิลที่จ่ายเงินไปแล้ว)
-const getOrdersByIds = (ids) => sb(`orders?id=in.(${ids.join(",")})&status=neq.paid&status=neq.cancelled&select=id,table_number,items,ordered_by&branch_id=eq.${BRANCH}`);
+const getOrdersByIds = (ids) => sbCols(`orders?id=in.(${ids.join(",")})&status=neq.paid&status=neq.cancelled`, "id,table_number,items,ordered_by", `&branch_id=eq.${BRANCH}`);
 // ดึงเต็ม — ใช้ตอน prime และตอนตาข่ายนิรภัยเท่านั้น
-const getActiveOrders = () => sb(`orders?status=neq.paid&status=neq.cancelled&select=id,table_number,items&order=created_at.desc&branch_id=eq.${BRANCH}`);
+const getActiveOrders = () => sbCols("orders?status=neq.paid&status=neq.cancelled", "id,table_number,items", `&order=created_at.desc&branch_id=eq.${BRANCH}`);
+// ขอคอลัมน์ printed_sig เพิ่มเสมอ — ถ้าร้านยังไม่ได้รันคำสั่งเพิ่มคอลัมน์ ค่อยถอยไปชุดเดิม
+// (ถ้าไม่ถอย คำขอจะพังทั้งก้อน = ตัวพิมพ์ตาบอดทั้งร้าน เพราะคอลัมน์เสริมตัวเดียว)
+let _noPrintedSig = false;
+async function sbCols(path, cols, tail) {
+  if (!_noPrintedSig) {
+    try { return await sb(`${path}&select=${cols},printed_sig${tail}`); }
+    catch (e) { if (!/printed_sig|42703|PGRST|schema cache/i.test(String((e && e.message) || e))) throw e; _noPrintedSig = true; console.log("⚠️  ยังไม่มีคอลัมน์ printed_sig ในตาราง orders — ใช้ความจำในเครื่องอย่างเดียวไปก่อน"); }
+  }
+  return sb(`${path}&select=${cols}${tail}`);
+}
 // ดึงเฉพาะเครื่องพิมพ์ของสาขานี้ (+ที่ใช้ร่วมทุกสาขา branch_id=null) — ไม่ดึงข้ามสาขา (ทุก caller กรองแบบนี้อยู่แล้ว)
 const getPrinters = () => sb(`printers?or=(branch_id.is.null,branch_id.eq.${BRANCH})&order=id.asc`);
 // รายชื่อเครื่องพิมพ์เปลี่ยนไม่บ่อย แต่เป็นก้อนใหญ่ (description พกคำสั่ง/สถานะ) — ใช้ซ้ำได้ 6 วิ
@@ -241,6 +251,19 @@ function saveState() {
   } catch {}
 }
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
+// ลายเซ็นล่าสุดที่ "พิมพ์ไปแล้ว" ของบิลนี้ — ในเครื่องก่อน ไม่มีค่อยดูที่ตัวบิล
+const lastSigOf = (o) => state.sig[o.id] || o.printed_sig || null;
+// เห็นบิลนี้ครั้งแรกจริงๆ ไหม — บิลที่เคยพิมพ์แล้ว (มี printed_sig) ไม่ใช่บิลใหม่ แม้ความจำในเครื่องจะหาย
+const isFirstSight = (o) => !state.init[o.id] && !o.printed_sig;
+// จำลงบนตัวบิล — ยิงแบบไม่รอผลและกลืน error: พิมพ์ออกไปแล้ว ห้ามให้การจดบันทึกมาทำให้รอบพัง
+// (ไม่แตะ updated_at ⟹ ไม่ไปกวนการตรวจ "บิลเปลี่ยนไหม" ของตัวเอง และไม่ชนกับการเขียนของแอป)
+function rememberPrinted(id, sig) {
+  fetch(`${SUPA_URL}/rest/v1/orders?id=eq.${id}`, {
+    method: "PATCH",
+    headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ printed_sig: sig }),
+  }).catch(() => {});
+}
 // รวมจำนวนตามคีย์ก่อนเทียบเสมอ — ห้ามใช้ new Map(entries) ตรงๆ เพราะคีย์ซ้ำจะ "ทับกัน"
 // ไม่ใช่บวกกัน (posAppendItems ต่อเมนูเดิมเป็นแถวใหม่ ไม่รวมแถว) ถ้าทับกันแล้ว
 // การสั่งเมนูเดิมซ้ำจะไม่มีวันถูกนับเป็นรายการใหม่ → ครัวไม่ได้ใบสั่งเลย
@@ -670,7 +693,7 @@ async function tick() {
   await handleScanRequests(printers);   // สแกนหาเครื่องพิมพ์ใหม่ทันทีเมื่อกด "ค้นหาเครื่องพิมพ์" ในแอป
   for (const o of orders) {
     if (!o || !o.items || !o.items.length) continue;
-    const sig = sigOf(o), last = state.sig[o.id], first = !state.init[o.id];
+    const sig = sigOf(o), last = lastSigOf(o), first = isFirstSight(o);
     // มาร์คว่า "จัดการแล้ว" เฉพาะเมื่อพิมพ์ผ่านจริง — ถ้ากระดาษหมด/หลุดแลน
     // ต้องปล่อยให้ sig เดิมค้างไว้ รอบถัดไป (5 วิ) จะลองพิมพ์ให้ใหม่เอง
     let ok = true;
@@ -707,7 +730,7 @@ async function tick() {
     }
     // มาร์ค uat พร้อม sig เท่านั้น — ถ้าพิมพ์ไม่ผ่านแล้วเผลอมาร์ค uat ไว้
     // รอบหน้าจะเห็นว่า "ไม่เปลี่ยน" แล้วไม่เปิดดูรายการอีกเลย = ใบครัวหายถาวร
-    if (ok) { state.sig[o.id] = sig; state.uat[o.id] = uatOf.get(String(o.id)) || null; }
+    if (ok) { state.sig[o.id] = sig; state.uat[o.id] = uatOf.get(String(o.id)) || null; if (!_noPrintedSig && o.printed_sig !== sig) rememberPrinted(o.id, sig); }
     else console.log(`  🔁 จะลองพิมพ์ใหม่รอบหน้า — โต๊ะ ${o.table_number}`);
   }
   // prune state ให้เหลือเฉพาะออเดอร์ที่ยัง active

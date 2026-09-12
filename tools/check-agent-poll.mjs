@@ -47,10 +47,13 @@ ok_("prune รวม orders เข้าไปด้วย (กันบิล�
 ok_("ล้างสถานะเฉพาะรอบที่รู้จริงว่ามีบิลเปิดอยู่ (ไม่เชื่อคำตอบว่าง)",
   pruneSrc.includes("if (heads.length > 0) {"));
 ok_("ไม่มีตัวนับ emptyHeads ที่ค้างค่าได้แล้ว", !SRC.includes("emptyHeads"));
-ok_("มาร์ค uat พร้อม sig เฉพาะตอนพิมพ์ผ่าน",
-  SRC.includes("if (ok) { state.sig[o.id] = sig; state.uat[o.id] = uatOf.get(String(o.id)) || null; }"));
+// จำว่าพิมพ์อะไรไปแล้วสองชั้น: ในเครื่อง (state) และบนตัวบิล (printed_sig)
+// บนตัวบิลคือชั้นที่กันเคส "ปิดบิลผิดแล้วเปิดคืน" ไม่ให้พิมพ์อาหารทั้งโต๊ะซ้ำ (12 ก.ย. 69)
+ok_("มาร์ค uat พร้อม sig เฉพาะตอนพิมพ์ผ่าน (และจดลงบิลด้วย)",
+  SRC.includes("if (ok) { state.sig[o.id] = sig; state.uat[o.id] = uatOf.get(String(o.id)) || null; if (!_noPrintedSig && o.printed_sig !== sig) rememberPrinted(o.id, sig); }"));
 ok_("คำขอรายการคงตัวกรองสถานะไว้ (บิลที่จ่ายแล้วต้องไม่ถูกพิมพ์)",
-  SRC.includes("&status=neq.paid&status=neq.cancelled&select=id,table_number,items"));
+  SRC.includes('status=neq.paid&status=neq.cancelled`, "id,table_number,items,ordered_by"')
+  && SRC.includes('sbCols("orders?status=neq.paid&status=neq.cancelled", "id,table_number,items"'));
 ok_("หัวบิลไม่ลาก items มาด้วย",
   SRC.includes("getActiveOrderHeads") && SRC.includes("select=id,updated_at"));
 
@@ -393,7 +396,7 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   ok_("ชื่อโต๊ะเป็นช่องว่างล้วนก็ถือว่าไม่มี", tableLabel({ id: 5, table_number: "   " }).includes("5"));
   ok_("เลข 0 เป็นชื่อโต๊ะที่ใช้ได้ ห้ามตีเป็นค่าว่าง", tableLabel({ id: 5, table_number: 0 }) === "0");
   ok_("สั่งพิมพ์ใช้ตัวนี้ ไม่ได้ส่งชื่อโต๊ะดิบ", SRC.includes("printItems(items, tableLabel(o), printers, done,"));
-  ok_("ส่งเลขบิลและผู้สั่งไปกับใบด้วย", SRC.includes("{ bill: o.id, by: o.ordered_by }") && SRC.includes("select=id,table_number,items,ordered_by"));
+  ok_("ส่งเลขบิลและผู้สั่งไปกับใบด้วย", SRC.includes("{ bill: o.id, by: o.ordered_by }") && SRC.includes('"id,table_number,items,ordered_by"'));
   ok_("รายการที่พิมพ์ไม่ผ่านก็บันทึกชื่อโต๊ะแบบเดียวกัน", SRC.includes("table: tableLabel(order),"));
 }
 

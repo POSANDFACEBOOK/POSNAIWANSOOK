@@ -409,7 +409,8 @@ const guards = [
   ["ยอดลูกค้าคิดสูตรเดียวกับ POS", APP.includes("const custBill=useMemo(()=>{")],
   ["ของค้างในมือถือหมดอายุ", APP.includes("const OUTBOX_MAX_AGE=")],
   ["ตัวพิมพ์: กัน tick ซ้อน", AGENT.includes("let tickBusy = false;")],
-  ["ตัวพิมพ์: พิมพ์ไม่ผ่าน = ไม่มาร์คว่าพิมพ์แล้ว", AGENT.includes("if (ok) { state.sig[o.id] = sig; state.uat[o.id] = uatOf.get(String(o.id)) || null; }")],
+  ["ตัวพิมพ์: พิมพ์ไม่ผ่าน = ไม่มาร์คว่าพิมพ์แล้ว (ทั้งในเครื่องและบนบิล)",
+    AGENT.includes("if (ok) { state.sig[o.id] = sig; state.uat[o.id] = uatOf.get(String(o.id)) || null; if (!_noPrintedSig && o.printed_sig !== sig) rememberPrinted(o.id, sig); }")],
   // ห้ามตัดสินจากอายุ onAt — ตัวพิมพ์เขียนเฉพาะตอนสถานะเปลี่ยน ค่าเก่าไม่ได้แปลว่าตาย
   ["ป้ายสถานะดูสัญญาณชีพตัวพิมพ์ ไม่ใช่อายุค่าเดิม", APP.includes("const agentOk=h.state===") && !APP.includes("const fresh=age<3*60*1000;")],
   // เจ้าของสั่ง: ให้มีแค่เขียว/แดง ไม่มีสีที่สาม
@@ -3380,6 +3381,39 @@ section("แบ่งจ่ายหลายช่องทาง");
     APP.includes('const pmCol=payParts?(payParts.length===1?payParts[0].method:"mixed"):pm;'));
   ok_("ใบเสร็จแจกแจงว่าขั้นไหนจ่ายเท่าไรด้วยอะไร",
     APP.includes("if(Array.isArray(order.payments)&&order.payments.length>1)") && APP.includes("const splitLines="));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ของที่พิมพ์ไปแล้วห้ามออกซ้ำเอง (เจ้าของสั่ง 12 ก.ย. 69 หลังเจอของจริง)
+// บิลโต๊ะ C13 ถูกปิดผิดแล้วเปิดคืน → ความจำในเครื่องถูกล้างตอนบิลปิด ตัวพิมพ์เห็นเป็นบิลใหม่
+// แล้วพิมพ์อาหารทั้งโต๊ะซ้ำ ครัวทำซ้ำทั้งโต๊ะ ⟹ ความจำต้องอยู่บนตัวบิลด้วย ไม่ใช่แค่ในเครื่อง
+// ══════════════════════════════════════════════════════════════════════════
+section("พิมพ์แล้วห้ามออกซ้ำเอง");
+{
+  const LG = AGENT.split("\n");
+  const lineOf = (head) => LG.find((l) => l.startsWith(head)) || "";
+  let fn = null;
+  try {
+    fn = new Function("state", [lineOf("const lastSigOf ="), lineOf("const isFirstSight =")].join("\n") + "\nreturn { lastSigOf, isFirstSight };");
+  } catch {}
+  ok_("อ่านตัวตัดสินใจว่าเคยพิมพ์ไปแล้วหรือยังได้", !!fn);
+  if (fn) {
+    const memEmpty = fn({ sig: {}, init: {} });
+    const memHas = fn({ sig: { 7: "SIG-เครื่องจำไว้" }, init: { 7: 1 } });
+    const reopened = { id: 7, printed_sig: "SIG-บนบิล" };
+    // เคสจริง: บิลถูกปิดแล้วเปิดคืน ความจำในเครื่องหายไปแล้ว แต่ตัวบิลยังจำได้
+    ok_("บิลที่เคยพิมพ์แล้ว ถึงความจำในเครื่องหาย ก็ไม่ใช่บิลใหม่", memEmpty.isFirstSight(reopened) === false);
+    ck("ใช้ลายเซ็นบนบิลแทนเมื่อในเครื่องไม่มี", memEmpty.lastSigOf(reopened), "SIG-บนบิล");
+    ck("ความจำในเครื่องมาก่อนเสมอ (สดกว่า)", memHas.lastSigOf(reopened), "SIG-เครื่องจำไว้");
+    ok_("บิลใหม่จริงๆ (ไม่เคยพิมพ์เลย) ยังถือว่าใหม่", memEmpty.isFirstSight({ id: 9 }) === true && memEmpty.lastSigOf({ id: 9 }) === null);
+  }
+  ok_("จดลายเซ็นลงบิลหลังพิมพ์ผ่าน แบบไม่แตะเวลาแก้ไขบิล",
+    AGENT.includes("function rememberPrinted(id, sig) {") && AGENT.includes('body: JSON.stringify({ printed_sig: sig }),') && !AGENT.includes("printed_sig: sig, updated_at"));
+  ok_("ดึงลายเซ็นบนบิลมาด้วยทุกคำขอ และมีทางถอยถ้ายังไม่มีคอลัมน์",
+    AGENT.includes("async function sbCols(path, cols, tail) {") && AGENT.includes("_noPrintedSig = true;"));
+  ok_("ตัดสินใจพิมพ์จากความจำสองชั้น", AGENT.includes("const sig = sigOf(o), last = lastSigOf(o), first = isFirstSight(o);"));
+  // ยังต้องพิมพ์ "เฉพาะส่วนที่เพิ่มขึ้น" เหมือนเดิม ไม่ใช่ทั้งบิล
+  ok_("บิลที่เคยพิมพ์แล้วมีของเพิ่ม = พิมพ์เฉพาะที่เพิ่ม", AGENT.includes("const items = newItemsVs(last, o.items);"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
