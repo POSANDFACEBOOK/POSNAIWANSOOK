@@ -23824,24 +23824,24 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
     {/* ── เลือกวัน ── */}
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
       <button onClick={()=>shiftDay(-1)} style={navBtn} title="วันก่อนหน้า">◀</button>
-      <input type="date" value={date} max={todayStr} onChange={e=>e.target.value&&setDate(e.target.value)} style={{padding:"8px 11px",borderRadius:9,border:`1px solid ${C.line}`,fontSize:13,fontFamily:"'Sarabun',sans-serif",color:C.ink,background:C.white}}/>
+      <input type="date" value={date} max={todayStr} onChange={e=>e.target.value&&setDate(e.target.value)} style={{padding:"10px 13px",borderRadius:9,border:`1px solid ${C.line}`,fontSize:15.5,fontFamily:"'Sarabun',sans-serif",color:C.ink,background:C.white}}/>
       <button onClick={()=>shiftDay(1)} disabled={isToday} style={{...navBtn,opacity:isToday?.4:1,cursor:isToday?"default":"pointer"}} title="วันถัดไป">▶</button>
       {!isToday&&<button onClick={()=>setDate(todayStr)} style={{padding:"8px 13px",borderRadius:9,border:`1px solid ${C.brand}`,background:`${C.brand}12`,color:C.brand,cursor:"pointer",fontSize:12.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>วันนี้</button>}
-      <span style={{marginLeft:"auto",fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{span>1?`ย้อนหลัง ${span} วัน ถึง ${fmtD(date)}`:`${fmtD(date)}${isToday?" · วันนี้":""}`}</span>
+      <span style={{marginLeft:"auto",fontSize:15,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{span>1?`ย้อนหลัง ${span} วัน ถึง ${fmtD(date)}`:`${fmtD(date)}${isToday?" · วันนี้":""}`}</span>
     </div>
 
     {/* ── ช่วงเวลา + ค้นหา ── */}
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
       <div style={{display:"flex",gap:5}}>
         {[{v:1,l:"วันเดียว"},{v:7,l:"7 วัน"},{v:30,l:"30 วัน"}].map(o=>{const on=span===o.v;
-          return <button key={o.v} onClick={()=>setSpan(o.v)} style={{padding:"7px 13px",borderRadius:20,border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,cursor:"pointer",fontSize:12.5,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{o.l}</button>;})}
+          return <button key={o.v} onClick={()=>setSpan(o.v)} style={{padding:"9px 16px",borderRadius:20,border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,cursor:"pointer",fontSize:14.5,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{o.l}</button>;})}
       </div>
       <div style={{position:"relative",flex:"1 1 240px",minWidth:200}}>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหา: เลขบิล · โต๊ะ · ชื่อเมนู · ยอดเงิน"
-          style={{width:"100%",padding:"8px 30px 8px 12px",borderRadius:9,border:`1px solid ${C.line}`,fontSize:13,fontFamily:"'Sarabun',sans-serif",color:C.ink}}/>
+          style={{width:"100%",padding:"10px 32px 10px 13px",borderRadius:9,border:`1px solid ${C.line}`,fontSize:15.5,fontFamily:"'Sarabun',sans-serif",color:C.ink}}/>
         {q&&<button onClick={()=>setQ("")} title="ล้างคำค้น" style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",border:"none",background:"transparent",cursor:"pointer",color:C.ink4,fontSize:15,lineHeight:1}}>×</button>}
       </div>
-      {q&&<span style={{fontSize:12,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>เจอ {all.length} บิล จาก {orders.length}</span>}
+      {q&&<span style={{fontSize:14,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>เจอ {all.length} บิล จาก {orders.length}</span>}
     </div>
 
     {loading?<div style={{padding:"40px 0"}}><Loading text="กำลังโหลดรายงาน..."/></div>
@@ -23861,26 +23861,26 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
           ...(vatTotal>0?[{l:"📊 VAT",v:`฿${m(vatTotal)}`,c:C.blue}]:[]),
           ...(roundTotal!==0?[{l:"🪙 ปัดเศษรวม",v:`${roundTotal>0?"+":"-"}฿${m(Math.abs(roundTotal))}`,c:C.ink3}]:[]),
           {l:"📈 เฉลี่ย/บิล",v:`฿${m(avg)}`,c:C.brand},
-          ...(itemQty>0?[{l:"🍽️ จำนวนรายการที่ขาย",v:`${m(itemQty)} ชิ้น`,c:C.ink2,sub:`เฉลี่ย ฿${m(avgItem)}/ชิ้น`}]:[])].map(s=><div key={s.l} style={{flex:"1 1 140px",background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${s.warn?C.red+"55":C.line}`}}><div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:20,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div>{s.sub&&<div style={{fontSize:10,color:s.warn?C.red:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2,lineHeight:1.4}}>{s.sub}</div>}</div>)}
+          ...(itemQty>0?[{l:"🍽️ จำนวนรายการที่ขาย",v:`${m(itemQty)} ชิ้น`,c:C.ink2,sub:`เฉลี่ย ฿${m(avgItem)}/ชิ้น`}]:[])].map(s=><div key={s.l} style={{flex:"1 1 190px",background:C.white,borderRadius:12,padding:"14px 18px",border:`1px solid ${s.warn?C.red+"55":C.line}`}}><div style={{fontSize:14,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:28,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div>{s.sub&&<div style={{fontSize:12.5,color:s.warn?C.red:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2,lineHeight:1.4}}>{s.sub}</div>}</div>)}
       </div>
       {payBreak.length>0&&<div style={{background:C.bg,borderRadius:12,padding:"12px 16px",marginBottom:14,border:`1px solid ${C.line}`}}>
-        <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>💳 แยกตามวิธีชำระเงิน</div>
+        <div style={{fontSize:15,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:9}}>💳 แยกตามวิธีชำระเงิน</div>
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          {payBreak.map(([k,v])=><div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12.5,fontFamily:"'Sarabun',sans-serif"}}><span style={{color:C.ink2}}>{PAY_LABEL[k]||k} <span style={{color:C.ink4}}>· {v.n} บิล</span></span><span style={{fontWeight:800,color:C.ink}}>฿{m(v.sum)}</span></div>)}
+          {payBreak.map(([k,v])=><div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:14.5,fontFamily:"'Sarabun',sans-serif"}}><span style={{color:C.ink2}}>{PAY_LABEL[k]||k} <span style={{color:C.ink4}}>· {v.n} บิล</span></span><span style={{fontWeight:800,color:C.ink}}>฿{m(v.sum)}</span></div>)}
         </div>
       </div>}
       {/* เมนูขายดี + ช่วงเวลาที่ขายดี — สองอย่างที่ใช้ตัดสินใจสั่งของและจัดกำลังคน */}
       {(topMenus.length>0||byHour.length>0)&&<div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
         {topMenus.length>0&&<div style={{flex:"1 1 280px",background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`}}>
-          <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>🔥 เมนูขายดี (จากบิลที่ปิดแล้ว)</div>
-          {topMenus.map((t,i)=><div key={t.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:12.5,fontFamily:"'Sarabun',sans-serif",padding:"3px 0"}}>
+          <div style={{fontSize:15,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:9}}>🔥 เมนูขายดี (จากบิลที่ปิดแล้ว)</div>
+          {topMenus.map((t,i)=><div key={t.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:14.5,fontFamily:"'Sarabun',sans-serif",padding:"4px 0"}}>
             <span style={{color:C.ink2,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{i+1}. {t.name}</span>
             <span style={{color:C.ink3,whiteSpace:"nowrap"}}><b style={{color:C.ink}}>{m(t.qty)}</b> ชิ้น · ฿{m(t.amt)}</span>
           </div>)}
         </div>}
         {byHour.length>0&&<div style={{flex:"1 1 220px",background:C.white,borderRadius:12,padding:"12px 16px",border:`1px solid ${C.line}`}}>
-          <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>⏰ ช่วงเวลาที่ขายดี</div>
-          {byHour.map(([h,v])=><div key={h} style={{display:"flex",justifyContent:"space-between",fontSize:12.5,fontFamily:"'Sarabun',sans-serif",padding:"3px 0"}}>
+          <div style={{fontSize:15,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:9}}>⏰ ช่วงเวลาที่ขายดี</div>
+          {byHour.map(([h,v])=><div key={h} style={{display:"flex",justifyContent:"space-between",fontSize:14.5,fontFamily:"'Sarabun',sans-serif",padding:"4px 0"}}>
             <span style={{color:C.ink2}}>{String(h).padStart(2,"0")}:00 - {String(h).padStart(2,"0")}:59</span>
             <span style={{fontWeight:800,color:C.ink}}>฿{m(v)}</span>
           </div>)}
@@ -23888,29 +23888,29 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
       </div>}
       {/* ── ตัวกรอง: ทั้งหมด / ปิดบิลแล้ว / ยังไม่ปิดบิล ── */}
       <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
-        {[{id:"all",l:"ทั้งหมด",n:paid.length+unpaid.length+cancelled.length},{id:"paid",l:"ปิดบิลแล้ว",n:paid.length},{id:"unpaid",l:"ยังไม่ปิดบิล",n:unpaid.length},{id:"cancelled",l:"🗑️ ยกเลิก",n:cancelled.length,warn:true}].map(t=>{const on=filter===t.id;const ac=t.warn?C.red:C.brand;return <button key={t.id} onClick={()=>setFilter(t.id)} style={{padding:"7px 14px",borderRadius:20,border:`1px solid ${on?ac:(t.warn&&t.n>0?`${C.red}66`:C.line)}`,background:on?ac:C.white,color:on?C.white:(t.warn&&t.n>0?C.red:C.ink2),cursor:"pointer",fontSize:12.5,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{t.l} ({t.n})</button>;})}
+        {[{id:"all",l:"ทั้งหมด",n:paid.length+unpaid.length+cancelled.length},{id:"paid",l:"ปิดบิลแล้ว",n:paid.length},{id:"unpaid",l:"ยังไม่ปิดบิล",n:unpaid.length},{id:"cancelled",l:"🗑️ ยกเลิก",n:cancelled.length,warn:true}].map(t=>{const on=filter===t.id;const ac=t.warn?C.red:C.brand;return <button key={t.id} onClick={()=>setFilter(t.id)} style={{padding:"9px 17px",borderRadius:20,border:`1px solid ${on?ac:(t.warn&&t.n>0?`${C.red}66`:C.line)}`,background:on?ac:C.white,color:on?C.white:(t.warn&&t.n>0?C.red:C.ink2),cursor:"pointer",fontSize:14.5,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{t.l} ({t.n})</button>;})}
       </div>
       {/* ── รายการบิล (กดเข้าดูรายละเอียด) ── */}
       {list.length===0?<div style={{textAlign:"center",padding:"40px 0",color:C.ink4}}><Ic d={I.order} s={46} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีบิลในวันนี้</p></div>
       :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(260px,100%),1fr))",gap:10}}>
         {list.map(o=><button key={o.id} onClick={()=>setBill(o)} style={{textAlign:"left",background:C.white,borderRadius:12,border:`1px solid ${C.line}`,overflow:"hidden",cursor:"pointer",padding:0,fontFamily:"'Sarabun',sans-serif",transition:"box-shadow .15s,border-color .15s"}} onMouseEnter={e=>{e.currentTarget.style.boxShadow="0 4px 14px rgba(0,0,0,0.08)";e.currentTarget.style.borderColor=C.brand;}} onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";e.currentTarget.style.borderColor=C.line;}}>
           <div style={{padding:"9px 12px",background:C.bg,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <span style={{fontWeight:800,fontSize:14,color:C.ink}}>โต๊ะ {o.table_number}</span>
-            <span style={{fontSize:11,fontWeight:700,color:stC[o.status]||C.ink3,background:`${stC[o.status]||C.ink3}22`,padding:"2px 8px",borderRadius:20}}>{stL[o.status]||o.status}</span>
+            <span style={{fontWeight:800,fontSize:17,color:C.ink}}>โต๊ะ {o.table_number}</span>
+            <span style={{fontSize:13,fontWeight:700,color:stC[o.status]||C.ink3,background:`${stC[o.status]||C.ink3}22`,padding:"2px 8px",borderRadius:20}}>{stL[o.status]||o.status}</span>
           </div>
           <div style={{padding:"9px 12px"}}>
-            {o.status==="cancelled"&&<div style={{background:C.redLight,border:`1px solid ${C.red}33`,borderRadius:8,padding:"6px 9px",marginBottom:7,fontSize:11,color:C.red,lineHeight:1.5}}>
+            {o.status==="cancelled"&&<div style={{background:C.redLight,border:`1px solid ${C.red}33`,borderRadius:8,padding:"7px 10px",marginBottom:7,fontSize:13,color:C.red,lineHeight:1.55}}>
               <div style={{fontWeight:800}}>ยกเลิกโดย {o.cancelled_by||"— ไม่มีบันทึก —"}</div>
               {o.cancel_reason&&<div style={{color:"#991B1B"}}>เหตุผล: {o.cancel_reason}</div>}
             </div>}
-            {(o.items||[]).slice(0,3).map((i,idx)=><div key={idx} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:2,gap:8}}><span style={{color:C.ink2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{i.qty}x {i.name}</span><span style={{color:C.brand,fontWeight:700,whiteSpace:"nowrap"}}>฿{m((+i.price||0)*(+i.qty||0))}</span></div>)}
-            {(o.items||[]).length>3&&<div style={{fontSize:11,color:C.ink4}}>+อีก {o.items.length-3} รายการ</div>}
-            {(o.items||[]).length===0&&<div style={{fontSize:11.5,color:C.ink4}}>ไม่มีรายการ</div>}
+            {(o.items||[]).slice(0,3).map((i,idx)=><div key={idx} style={{display:"flex",justifyContent:"space-between",fontSize:14,marginBottom:3,gap:8}}><span style={{color:C.ink2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{i.qty}x {i.name}</span><span style={{color:C.brand,fontWeight:700,whiteSpace:"nowrap"}}>฿{m((+i.price||0)*(+i.qty||0))}</span></div>)}
+            {(o.items||[]).length>3&&<div style={{fontSize:13,color:C.ink4}}>+อีก {o.items.length-3} รายการ</div>}
+            {(o.items||[]).length===0&&<div style={{fontSize:13,color:C.ink4}}>ไม่มีรายการ</div>}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6,paddingTop:6,borderTop:`1px solid ${C.lineLight}`}}>
-              <span style={{fontSize:11,color:C.ink4}}>{new Date(o.created_at).toLocaleTimeString("th-TH",{hour:'2-digit',minute:'2-digit'})}</span>
-              <span style={{fontSize:14,fontWeight:900,color:C.ink}}>฿{m(o.total)}</span>
+              <span style={{fontSize:13,color:C.ink4}}>{new Date(o.created_at).toLocaleTimeString("th-TH",{hour:'2-digit',minute:'2-digit'})}</span>
+              <span style={{fontSize:18,fontWeight:900,color:C.ink}}>฿{m(o.total)}</span>
             </div>
-            <div style={{fontSize:11,color:C.brand,fontWeight:700,marginTop:6,textAlign:"right"}}>ดูรายละเอียด →</div>
+            <div style={{fontSize:13,color:C.brand,fontWeight:700,marginTop:7,textAlign:"right"}}>ดูรายละเอียด →</div>
           </div>
         </button>)}
       </div>}
