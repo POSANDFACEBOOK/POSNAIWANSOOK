@@ -17771,7 +17771,7 @@ export default function App(){
 // ══════════════════════════════════════════════════════
 // ── PRINT HELPERS ─────────────────────────────────────
 // ══════════════════════════════════════════════════════
-const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",thaiplus:"🏛️ ไทยช่วยไทย พลัส",bartercard:"💳 Bartercard",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
+const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",thaiplus:"🏛️ ไทยช่วยไทย พลัส",bartercard:"💳 Bartercard",mixed:"✂️ แบ่งจ่ายหลายช่องทาง",mixed:"✂️ แบ่งจ่ายหลายช่องทาง",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
 function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const w=openPrintWindow(400,700);
   if(!w)return;
@@ -17786,6 +17786,9 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
     :`<script>window.onload=()=>window.print();<\/script>`;
   const rows=(order.items||[]).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${esc(i.name)}${i.options&&i.options.length?`<br/><span style="font-size:11px;color:#0D9488">+ ${esc(optionsText(i.options))}</span>`:""}${i.note?`<br/><span style="font-size:11px;color:#666">★${esc(i.note)}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?esc(i.item_discount_value)+"%":"฿"+esc(i.item_discount_value)}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
   const payLabel=PAY_LABEL[order.payment_method]||esc(order.payment_method||"-");
+  const splitLines=(Array.isArray(order.payments)&&order.payments.length>1)
+    ?order.payments.map((p,i)=>`<div style="display:flex;justify-content:space-between;font-size:12px"><span>${i+1}. ${esc(payMethodLabel(p.method))}</span><span>฿${(+p.amount||0).toFixed(2)}</span></div>`).join("")
+    :"";
   const cashLine=(paid&&order.payment_method==="cash"&&order.cash_received)?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(2)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-(order.total||0)).toFixed(2)}</span></div>`:"";
   const promoLine=order.promo_amount>0?`<div style="display:flex;justify-content:space-between;color:#7C3AED;font-size:12px"><span>🎁 ${esc(order.promo_name||"โปรโมชั่น")}</span><span>-฿${(+order.promo_amount).toFixed(2)}</span></div>`:"";
   const scLine=order.service_charge>0?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>Service Charge</span><span>+฿${(+order.service_charge).toFixed(2)}</span></div>`:"";
@@ -17809,7 +17812,7 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const headerExtra=posSettings?.receipt_header?`<div style="text-align:center;font-size:11px;color:#444;white-space:pre-line;margin:4px 0">${esc(posSettings.receipt_header)}</div>`:"";
   const footerExtra=posSettings?.receipt_footer?`<div style="text-align:center;font-size:11px;color:#444;white-space:pre-line;margin-top:6px">${esc(posSettings.receipt_footer)}</div>`:"";
   const payBlock=paid
-    ?`<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div>${qrBlock}<div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div>`
+    ?`<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div>${splitLines}${qrBlock}<div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div>`
     :`<div class="line"></div><div style="text-align:center;font-size:14px;font-weight:800">** ยังไม่ชำระเงิน **</div><div style="text-align:center;font-size:11px;color:#555;margin-top:2px">กรุณาชำระที่เคาน์เตอร์</div>${qrBlock}`;
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;margin:0;padding:0;font-size:13px;background:#e2e8f0}#rcpt{width:72mm;margin:0 auto;padding:10px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.18)}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{body{background:#fff}#rcpt{zoom:1!important;box-shadow:none;margin:0}@page{margin:0;size:72mm auto}}</style></head><body><div id="rcpt"><h2>${esc(branchName)}</h2>${headerExtra}${taxLabel}<div class="tbl-num">โต๊ะ ${esc(tableNum)}</div><div style="text-align:center;font-size:11px;color:#555">${fmtDT()}${rcptNo}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>ส่วนลดรวม</span><span>-฿${(+order.discount).toFixed(2)}</span></div>`:""}${promoLine}${scLine}${vatLine}${roundLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>${paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"}</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${vatIncNote}${cashLine}${payBlock}${footerExtra}</div><br/>${autoPrint}</body></html>`);
   w.document.close();addPrintClose(w);
@@ -17973,6 +17976,7 @@ async function escposSlipRaster(lines,width=576,opts={}){
 }
 // ── ใบเสร็จเป็นรูปภาพ (raster) สำหรับ iPad/https พิมพ์ผ่านตัวพิมพ์ (agent) — ไทยคมชัด + QR พร้อมเพย์เนทีฟ ──
 function bahtR(n){return "฿"+(+n||0).toFixed(2);}
+const payMethodLabel=(v)=>stripEmoji(PAY_LABEL[v]||v||"-").trim();   // ชื่อช่องทางแบบไม่มีอีโมจิ (ใบเสร็จ/รายการขั้นแบ่งจ่าย)
 function stripEmoji(s){return String(s||"").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}️⃣]/gu,"").replace(/\s+/g," ").trim();}
 // สร้างไบต์ QR เนทีฟ (GS ( k) จัดกึ่งกลาง — เอาไว้ต่อท้าย raster ใบเสร็จ (เครื่องพิมพ์เรนเดอร์ QR เอง คมชัด)
 // base64 -> ไบต์ · ทางบลูทูธรับ Uint8Array ไม่ใช่ base64 (btPrint หั่นทีละ 512 ไบต์)
@@ -17994,11 +17998,19 @@ function escposQRBytes(payload){
 function isReceiptPrinter(p){try{return JSON.parse(p.description||"{}").rcpt===1;}catch{return false;}}
 // เขียนคำสั่งใหม่ลง description โดย "ล้างคำสั่งเก่าทุกชนิด (tp/rp/qr/pj) ทิ้ง" เก็บเฉพาะ config (rcpt/c/d/ig…)
 // กันคำสั่งค้างสะสมแล้ว agent ยิงซ้ำ/พิมพ์ผิดใบ (เช่น rp ใบครัวค้างแล้วโผล่มาตอนพิมพ์ใบเสร็จ) — คำสั่งเป็น one-shot
+const CMD_KEYS=["tp","rp","qr","pj","dk"];
+const CMD_FRESH_MS=3*60*1000;   // คำสั่งที่สั่งไว้เกิน 3 นาทีถือว่าค้าง (ตัวพิมพ์ดับ) — ทิ้งได้
 function cmdDesc(printer,key,val){
   let d={};try{d=JSON.parse((printer&&printer.description)||"{}");}catch{}
-  const{tp,rp,qr,pj,dk,...keep}=d;   // ทิ้งคำสั่งเก่าทั้งหมด
-  keep[key]=val;
-  return JSON.stringify(keep);
+  const now=Date.now();
+  for(const k of CMD_KEYS){
+    if(k===key)continue;
+    const v=d[k];
+    const at=(v&&typeof v==="object")?+v.at:+v;   // tp เก็บเป็นเวลาเปล่าๆ · ที่เหลือเก็บเป็น {at,...}
+    if(!(at>0)||now-at>CMD_FRESH_MS)delete d[k];   // ค้างเก่า = ทิ้ง · เพิ่งสั่ง = เก็บไว้ ห้ามฆ่างานของคนอื่น
+  }
+  d[key]=val;
+  return JSON.stringify(d);
 }
 function getReceiptPrinters(printers){
   // เฉพาะเครื่องที่ติ๊ก "🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ" (rcpt=1) เท่านั้น — ใบเสร็จ/เช็คบิล/QR โต๊ะ ออกเฉพาะเครื่องเหล่านี้ (ไม่มี fallback ไปเครื่องครัว)
@@ -18056,6 +18068,9 @@ function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
     }
     L.push({rule:true});
     L.push({t:"ชำระโดย: "+stripEmoji(PAY_LABEL[order.payment_method]||order.payment_method||"-"),size:24,bold:true,align:"center"});
+    // แบ่งจ่ายหลายช่องทาง — ลูกค้าต้องเห็นว่าจ่ายอะไรไปเท่าไรบ้าง ไม่ใช่เห็นแค่คำว่า "แบ่งจ่าย"
+    if(Array.isArray(order.payments)&&order.payments.length>1)
+      order.payments.forEach((p,i)=>L.push({l:`  ${i+1}. ${payMethodLabel(p.method)}`,r:bahtR(+p.amount||0),size:22}));
     L.push({t:"ขอบคุณที่ใช้บริการครับ",size:22,align:"center",mb:2});
   }else{
     L.push({rule:true});
@@ -19265,7 +19280,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       else notifyDlg("บันทึกไม่สำเร็จ: "+friendlyError(e));
     }setSavingGuard(false);
   }
-  async function checkOut(methodArg){
+  // methodArg = ช่องทางเดียว · opts.payments = แบ่งจ่ายหลายช่องทาง [{method,amount}] (เงินสดเป็นขั้นสุดท้ายเท่านั้น)
+  async function checkOut(methodArg,opts){
     if(savingRef.current)return;   // กดซ้ำ = ตัดเงินสองรอบ
     // ค่าที่พนักงานเพิ่งกดในป็อปอัพชนะเสมอ — ไม่รอ state รอบถัดไป
     const pm=methodArg||payMethod;
@@ -19279,13 +19295,21 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     }))return;
     setSavingGuard(true);
     try{
-      const cashReceived=pm==="cash"?(+cashRcv||total):null;
+      // แบ่งจ่าย: ยอดเงินสดคือเฉพาะขั้นที่เป็นเงินสด ไม่ใช่ทั้งบิล — ลิ้นชักกับเงินทอนต้องอิงตัวนี้
+      const payParts=(opts&&Array.isArray(opts.payments)&&opts.payments.length)?opts.payments.map(p=>({method:String(p.method||"other"),amount:round2(+p.amount||0)})):null;
+      const cashPart=payParts?round2(payParts.filter(p=>p.method==="cash").reduce((s,p)=>s+p.amount,0)):(pm==="cash"?total:0);
+      const cashReceived=payParts?(cashPart>0?round2(opts.cashReceived!=null?+opts.cashReceived:cashPart):null):(pm==="cash"?(+cashRcv||total):null);
+      const payAt=new Date().toISOString();
+      const paymentsCol=payParts?payParts.map(p=>({...p,at:payAt,by:currentUser?.username||null})):null;
       const promoMeta=selectedPromo?{promo_id:selectedPromo.id,promo_name:selectedPromo.name,promo_amount:promoDiscount}:{};
       // Base fields (always exist) + full breakdown (needs the migration). If the
       // breakdown columns aren't there yet, fall back to base so the sale never fails.
-      const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,round_adj:roundAdj,payment_method:pm,updated_at:new Date().toISOString()};
+      // จ่ายช่องทางเดียว = ชนิดบิลเป็นช่องทางนั้น · หลายช่องทาง = "mixed" แล้วรายละเอียดอยู่ใน payments
+      // (สรุปกะและท่อบัญชีอ่านจาก payments เมื่อมี จึงแยกยอดตามช่องทางจริงได้ ไม่กองรวมช่องเดียว)
+      const pmCol=payParts?(payParts.length===1?payParts[0].method:"mixed"):pm;
+      const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,round_adj:roundAdj,payment_method:pmCol,updated_at:new Date().toISOString()};
       // paid_by = ใครกดปิดบิลใบนี้ · เดิมไม่มีเลย บิลทุกใบไร้เจ้าของ ตรวจย้อนหลังไม่ได้
-      const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,paid_by:currentUser?.username||currentUser?.name||null};
+      const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,payments:paymentsCol,paid_by:currentUser?.username||currentUser?.name||null};
       let row;
       try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,fullPayload);}
       catch(err){
@@ -19317,21 +19341,21 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // reconcile path above can re-enter after a lost response; a duplicate would inflate the
       // shift's expected cash).
       // เงินสด = ต้องเปิดลิ้นชักให้ทอนเงิน · ยิงแบบไม่รอผลและกลืน error เด็ดขาด (ปิดบิลสำคัญกว่าลิ้นชัก)
-      if(pm==="cash")kickCashDrawer(printers,branch?.id).catch(()=>{});
-      if(pm==="cash"&&shift){
+      if(cashPart>0)kickCashDrawer(printers,branch?.id).catch(()=>{});
+      if(cashPart>0&&shift){
         try{
           const existingMoves=await api.getCashMovements(shift.id).catch(()=>[]);
           const already=Array.isArray(existingMoves)&&existingMoves.some(m=>m&&m.type==="sale"&&+m.order_id===+existingOrder.id);
-          if(!already)await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"sale",amount:total,reason:`ขายโต๊ะ ${table.table_number}`,order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
+          if(!already)await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"sale",amount:cashPart,reason:`ขายโต๊ะ ${table.table_number}`+(payParts?" (แบ่งจ่าย)":""),order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
         }catch(err){console.error("บันทึก cash movement ไม่สำเร็จ:",err);}
       }
       // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
       // passing the combined figure would deduct the promotion twice on the printed receipt.
-      const _rcpt=smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:pm,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
+      const _rcpt=smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:pmCol,payments:paymentsCol,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
       // บอกเงินทอนก่อนงานอื่นทั้งหมด — ลิ้นชักเพิ่งเปิด เงินอยู่ในมือ ต้องรู้ตอนนี้ว่าทอนเท่าไร
       // (ใบเสร็จส่งไปตัวพิมพ์แล้ว รอผลทีหลัง — พลาดก็ยังขึ้นเตือนเหมือนเดิม ไม่กลืนเงียบ)
-      if(pm==="cash"&&typeof onCashChange==="function"){
-        onCashChange({change:round2(Math.max(0,(+cashReceived||0)-total)),received:+cashReceived||0,total,table:table.table_number});
+      if(cashPart>0&&typeof onCashChange==="function"){
+        onCashChange({change:round2(Math.max(0,(+cashReceived||0)-cashPart)),received:+cashReceived||0,total:cashPart,table:table.table_number});
       }
       await _rcpt;   // รอผลใบเสร็จ (พลาดก็ยังขึ้นเตือนเหมือนเดิม ไม่กลืนเงียบ)
       await releaseThisTable();
@@ -19619,7 +19643,21 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
   // ป็อปอัพถามวิธีจ่ายหลังกดยืนยันชำระ: null → "choose" → (เงินสด) "cash"
   // ย้ายออกมาจากตัวจอเพราะพนักงานเลือกวิธีจ่าย "ตอนเก็บเงินจริง" ไม่ใช่ตอนกดดูบิล
   const[askPay,setAskPay]=useState(null);
-  const enoughCash=(+cashRcv||0)>=total;
+  // แบ่งจ่ายทีละขั้น: parts = ขั้นที่จ่ายไปแล้ว · partAmt = จำนวนของขั้นที่กำลังจะกด
+  // เงินสดต้องเป็นขั้นสุดท้ายเสมอ (ขั้นเดียวที่มีเงินทอน) จึงเช็คว่าจำนวนที่ใส่ = ยอดที่เหลือพอดี
+  const[parts,setParts]=useState([]);
+  const[partAmt,setPartAmt]=useState("");
+  const paidSoFar=round2(parts.reduce((s,p)=>s+(+p.amount||0),0));
+  const remain=round2(total-paidSoFar);
+  const partNow=round2(+partAmt||0);
+  const addPart=(method)=>{
+    if(partNow<=0||partNow>remain)return;
+    setParts(a=>[...a,{method,amount:partNow}]);
+    setPartAmt("");
+  };
+  // จอรับเงินสดใช้ร่วมกันสองทาง: จ่ายสดทั้งบิล กับ ขั้นสุดท้ายของการแบ่งจ่าย
+  const dueNow=askPay==="split-cash"?remain:total;
+  const enoughCash=(+cashRcv||0)>=dueNow;
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
       <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
@@ -19704,10 +19742,6 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
         </div>
         {/* งานรองของบิลนี้ — ย้ายมาจากแถบเดิมบนจอสั่งอาหาร */}
         <div style={{display:"flex",gap:8,marginBottom:10}}>
-          <button onClick={onSplit} title="แบ่งจ่ายหลายคน" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"9px 6px",
-            border:`1px solid ${C.purple}55`,borderRadius:9,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,color:C.purple}}>
-            <Ic d={I.users} s={13} c={C.purple}/>แบ่งจ่าย
-          </button>
           <button onClick={onCancelOrder} title="ยกเลิกบิลทั้งโต๊ะ" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"9px 6px",
             border:`1px solid ${C.red}55`,borderRadius:9,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,color:C.red}}>
             <Ic d={I.trash} s={13} c={C.red}/>ยกเลิกบิล
@@ -19743,6 +19777,12 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                   {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:11,color:m.c,fontWeight:700,opacity:.85}}>{m.v==="other"?"เลือกช่องทาง →":"พิมพ์ใบเสร็จ + ปิดโต๊ะ →"}</span>}
                 </button>)}
               </div>
+              <button onClick={()=>{setParts([]);setPartAmt("");setAskPay("split");}} disabled={saving}
+                style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${C.purple}`,background:`${C.purple}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",width:"100%",marginTop:10}}>
+                <span style={{fontSize:30,lineHeight:1}}>✂️</span>
+                <span style={{fontSize:18,fontWeight:900,color:C.purple}}>แบ่งจ่าย</span>
+                <span style={{marginLeft:"auto",fontSize:11,color:C.purple,fontWeight:700,opacity:.85}}>จ่ายหลายช่องทาง ทีละขั้น →</span>
+              </button>
               <button onClick={()=>setAskPay(null)} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
             </div>
             :askPay==="other"?<div style={{padding:18}}>
@@ -19761,20 +19801,77 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               </div>
               <button onClick={()=>setAskPay("choose")} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
             </div>
+            :askPay==="split"?<div style={{padding:18}}>
+              {/* แบ่งจ่ายทีละขั้น: ใส่จำนวน → เลือกช่องทาง → ทำซ้ำจนครบยอด
+                  เงินสดต้องเป็นขั้นสุดท้ายเสมอ เพราะเป็นขั้นเดียวที่มีเงินทอน */}
+              <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+                <div style={{flex:"1 1 240px",minWidth:0}}>
+                  <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:8}}>แบ่งจ่ายขั้นที่ {parts.length+1}</div>
+                  <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>ใส่จำนวนเงินของขั้นนี้ แล้วเลือกว่าจ่ายด้วยอะไร</div>
+                  <NumInput value={partAmt} onValue={setPartAmt} placeholder={remain.toFixed(0)} style={{...iS,padding:"14px",fontSize:26,fontWeight:900,textAlign:"center"}}/>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>
+                    <button onClick={()=>setPartAmt(String(remain))} style={{flex:"1 1 90px",padding:"10px 6px",background:C.brand,border:"none",borderRadius:10,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.white}}>ที่เหลือทั้งหมด ฿{remain.toLocaleString()}</button>
+                    {[100,500,1000].map(v=><button key={v} onClick={()=>setPartAmt(String(Math.min(remain,(+partAmt||0)+v)))} style={{flex:"1 1 60px",padding:"10px 6px",background:C.white,border:`1.5px solid ${C.brand}`,borderRadius:10,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.brand}}>+{v}</button>)}
+                  </div>
+                  <div style={{fontSize:13,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif",margin:"12px 0 6px"}}>ขั้นนี้จ่ายด้วยอะไร</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8}}>
+                    {SETTLE_METHODS().map(mt=>{
+                      // เงินสดต้องเป็นขั้นสุดท้าย — ถ้าใส่จำนวนน้อยกว่ายอดที่เหลือ ยังกดเงินสดไม่ได้
+                      const lastStep=partNow>0&&round2(remain-partNow)===0;
+                      const off=saving||partNow<=0||partNow>remain||(mt.v==="cash"&&!lastStep);
+                      return <button key={mt.v} disabled={off} onClick={()=>{if(mt.v==="cash"){setCashRcv(String(partNow));setAskPay("split-cash");return;}addPart(mt.v);}}
+                        style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderRadius:12,border:`2.5px solid ${off?C.line:mt.c}`,background:off?C.bg:`${mt.c}12`,cursor:off?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",opacity:off?.55:1,textAlign:"left"}}>
+                        <span style={{fontSize:22}}>{mt.icon||"💠"}</span>
+                        <span style={{fontSize:14,fontWeight:800,color:off?C.ink4:mt.c}}>{mt.l}</span>
+                      </button>;})}
+                  </div>
+                  {partNow>remain&&<div style={{fontSize:12.5,color:C.red,fontWeight:800,fontFamily:"'Sarabun',sans-serif",marginTop:8}}>ใส่เกินยอดที่เหลือ (฿{remain.toLocaleString()})</div>}
+                  {partNow>0&&partNow<remain&&<div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:8}}>เงินสดกดได้เฉพาะขั้นสุดท้าย (เผื่อต้องทอนเงิน) — ขั้นนี้ยังเหลืออีก ฿{round2(remain-partNow).toLocaleString()}</div>}
+                </div>
+                <div style={{flex:"1 1 210px",minWidth:0,background:C.bg,borderRadius:12,padding:"12px 14px",border:`1px solid ${C.line}`}}>
+                  <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>จ่ายไปแล้ว</div>
+                  {parts.length===0
+                    ?<div style={{fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีขั้นไหนจ่าย</div>
+                    :<div style={{display:"grid",gap:6}}>
+                      {parts.map((p,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8,background:C.white,borderRadius:9,padding:"8px 10px",border:`1px solid ${C.line}`}}>
+                        <span style={{fontSize:11.5,fontWeight:900,color:C.white,background:C.ink3,borderRadius:20,minWidth:22,height:22,display:"flex",alignItems:"center",justifyContent:"center"}}>{i+1}</span>
+                        <span style={{flex:1,minWidth:0,fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif",overflowWrap:"anywhere"}}>{payMethodLabel(p.method)}</span>
+                        <span style={{fontSize:14,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>฿{round2(p.amount).toLocaleString()}</span>
+                        {i===parts.length-1&&<button onClick={()=>setParts(a=>a.slice(0,-1))} disabled={saving} title="เอาขั้นนี้ออก" style={{border:"none",background:"none",color:C.red,cursor:"pointer",fontSize:15,fontWeight:900,padding:0}}>✕</button>}
+                      </div>)}
+                    </div>}
+                  <div style={{borderTop:`1px dashed ${C.line}`,marginTop:10,paddingTop:8,fontFamily:"'Sarabun',sans-serif"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3}}><span>ยอดบิล</span><span>฿{total.toLocaleString()}</span></div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3}}><span>จ่ายแล้ว</span><span>฿{paidSoFar.toLocaleString()}</span></div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:18,fontWeight:900,color:remain>0?C.red:C.green,marginTop:4}}><span>{remain>0?"ยังเหลือ":"ครบแล้ว"}</span><span>฿{remain.toLocaleString()}</span></div>
+                  </div>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:14,flexWrap:"wrap"}}>
+                <button onClick={()=>{setPartAmt("");setAskPay("choose");}} disabled={saving} style={{flex:"0 0 34%",padding:"14px 8px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
+                <Btn v="success" onClick={()=>{setAskPay(null);onPay("mixed",{payments:parts});}} loading={saving} disabled={saving||remain!==0||parts.length===0} icon={I.check}
+                  s={{flex:1,padding:"14px 10px",fontSize:15,fontWeight:900}}>ยืนยัน & พิมพ์ใบเสร็จ</Btn>
+              </div>
+              {onSplit&&<button onClick={onSplit} disabled={saving} style={{marginTop:10,width:"100%",border:"none",background:"none",color:C.purple,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,textDecoration:"underline"}}>แบ่งบิลตามคน (พิมพ์ใบตัวอย่างให้ลูกค้าดู) →</button>}
+            </div>
+
             :<div style={{padding:18}}>
-              <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:8}}>💵 รับเงินมาเท่าไหร่?</div>
-              <NumInput value={cashRcv} onValue={setCashRcv} placeholder={total.toFixed(0)} style={{...iS,padding:"14px",fontSize:26,fontWeight:900,textAlign:"center"}}/>
+              <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:8}}>💵 รับเงินมาเท่าไหร่?{askPay==="split-cash"?` (ขั้นสุดท้าย ฿${remain.toLocaleString()})`:""}</div>
+              <NumInput value={cashRcv} onValue={setCashRcv} placeholder={dueNow.toFixed(0)} style={{...iS,padding:"14px",fontSize:26,fontWeight:900,textAlign:"center"}}/>
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>
-                <button onClick={()=>setCashRcv(String(total))} style={{flex:"1 1 70px",padding:"11px 6px",background:C.green,border:"none",borderRadius:10,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.white}}>พอดี</button>
+                <button onClick={()=>setCashRcv(String(dueNow))} style={{flex:"1 1 70px",padding:"11px 6px",background:C.green,border:"none",borderRadius:10,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.white}}>พอดี</button>
                 {[100,500,1000].map(v=><button key={v} onClick={()=>setCashRcv(String((+cashRcv||0)+v))} style={{flex:"1 1 70px",padding:"11px 6px",background:C.white,border:`1.5px solid ${C.green}`,borderRadius:10,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.green}}>+{v}</button>)}
               </div>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginTop:14,padding:"11px 13px",borderRadius:12,background:enoughCash?C.greenLight:C.redLight}}>
                 <span style={{fontSize:14,fontWeight:800,color:enoughCash?C.green:C.red}}>{enoughCash?"เงินทอน":"เงินยังไม่พอ"}</span>
-                <span style={{fontSize:26,fontWeight:900,color:enoughCash?C.green:C.red}}>฿{(enoughCash?cashChange:round2(total-(+cashRcv||0))).toLocaleString("en-US",{maximumFractionDigits:2})}</span>
+                <span style={{fontSize:26,fontWeight:900,color:enoughCash?C.green:C.red}}>฿{round2(Math.abs((+cashRcv||0)-dueNow)).toLocaleString("en-US",{maximumFractionDigits:2})}</span>
               </div>
               <div style={{display:"flex",gap:8,marginTop:14}}>
-                <button onClick={()=>setAskPay("choose")} disabled={saving} style={{flex:"0 0 34%",padding:"14px 8px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
-                <Btn v="success" onClick={()=>{setAskPay(null);onPay("cash");}} loading={saving} disabled={!enoughCash||saving} icon={I.check}
+                <button onClick={()=>setAskPay(askPay==="split-cash"?"split":"choose")} disabled={saving} style={{flex:"0 0 34%",padding:"14px 8px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
+                <Btn v="success" onClick={()=>{
+                    if(askPay==="split-cash"){const all=[...parts,{method:"cash",amount:remain}];setAskPay(null);onPay("mixed",{payments:all,cashReceived:round2(+cashRcv||0)});return;}
+                    setAskPay(null);onPay("cash");
+                  }} loading={saving} disabled={!enoughCash||saving} icon={I.check}
                   s={{flex:1,padding:"14px 10px",fontSize:15,fontWeight:900}}>ยืนยัน & พิมพ์ใบเสร็จ</Btn>
               </div>
             </div>}
@@ -20940,7 +21037,14 @@ function computeShiftTotals({movements,orders,actualCash,cancelled,openBills}){
     let openingCash=0,payIn=0,payOut=0,drops=0,refunds=0,salesCash=0;
     movements.forEach(m=>{const a=+m.amount||0;if(m.type==='opening')openingCash+=a;else if(m.type==='pay_in')payIn+=a;else if(m.type==='pay_out')payOut+=a;else if(m.type==='drop')drops+=a;else if(m.type==='refund')refunds+=a;else if(m.type==='sale')salesCash+=a;});
     let totalSales=0,totalCash=0,totalTransfer=0,totalCard=0,totalOther=0;
-    orders.forEach(o=>{const t=+o.total||0;totalSales+=t;const pm=o.payment_method;if(pm==='cash')totalCash+=t;else if(pm==='transfer'||pm==='promptpay')totalTransfer+=t;else if(pm==='credit'||pm==='debit')totalCard+=t;else totalOther+=t;});
+    // บิลหนึ่งใบอาจจ่ายหลายช่องทาง (แบ่งจ่าย) หรือถูกแก้ทีหลังแล้วคืนเงินบางส่วน
+    // ⟹ แยกยอดตาม payments เมื่อมี · ไม่มีค่อยใช้ช่องทางเดียวทั้งใบเหมือนเดิม
+    orders.forEach(o=>{
+      const t=+o.total||0;totalSales+=t;
+      const ps=(Array.isArray(o.payments)&&o.payments.length)?o.payments:[{method:o.payment_method,amount:t}];
+      ps.forEach(p=>{const a=+p.amount||0;const pm=p&&p.method;
+        if(pm==='cash')totalCash+=a;else if(pm==='transfer'||pm==='promptpay')totalTransfer+=a;else if(pm==='credit'||pm==='debit')totalCard+=a;else totalOther+=a;});
+    });
     const expected=openingCash+payIn+salesCash-payOut-drops-refunds;
     const actual=+actualCash||0;
     // โครงสร้างยอด — ใบปิดยอดต้องแยกให้เห็นว่ายอดขายมาจากอะไรบ้าง ไม่ใช่มีแต่ยอดสุทธิก้อนเดียว

@@ -669,7 +669,7 @@ const guards = [
   ["ไม่มีเหตุผล = ปุ่มยืนยันกดไม่ได้", APP.includes("disabled={!val}") && APP.includes("onClick={()=>{if(val)close(val);}}")],
   ["บันทึกครบทั้งคนยกเลิก เวลา และเหตุผล",
     APP.includes("const full={...base,cancelled_by:who,cancelled_at:at,cancel_reason:reason};")],
-  ["บันทึกว่าใครปิดบิล", APP.includes("cash_received:cashReceived,paid_by:currentUser?.username||currentUser?.name||null}")],
+  ["บันทึกว่าใครปิดบิล", APP.includes("cash_received:cashReceived,payments:paymentsCol,paid_by:currentUser?.username||currentUser?.name||null}")],
   // กล่องเหตุผลต้องขึ้นทุกจุดที่ mount <ConfirmDlg/> (มี 4 จุด) ถ้าลืมจุดใดจุดหนึ่ง
   // reasonDlg จะคืน null เงียบๆ = กดยกเลิกบิลแล้วไม่เกิดอะไรขึ้น ไม่มี error ให้เห็น
   ["กล่องเหตุผลผูกติดกล่องยืนยัน ไม่ต้องไล่ mount เอง",
@@ -1463,7 +1463,7 @@ section("ผลตรวจเส้นทางเงิน: 11 ข้อที
 {
   // ── ใบเสร็จต้องบวกลงตัวทุกทาง ──
   // ทางพิมพ์มีสองเส้น: ตัวพิมพ์ (raster) กับหน้าต่างพิมพ์ (HTML) — เดิมใส่บรรทัดปัดเศษแค่เส้นเดียว
-  ok_("ใบเสร็จตอนปิดบิลพกส่วนต่างการปัดไปด้วย", APP.includes("total,round_adj:roundAdj,payment_method:pm,cash_received:cashReceived"));
+  ok_("ใบเสร็จตอนปิดบิลพกส่วนต่างการปัดไปด้วย", APP.includes("total,round_adj:roundAdj,payment_method:pmCol,payments:paymentsCol,cash_received:cashReceived"));
   ok_("ใบทางหน้าต่างพิมพ์มีบรรทัดปัดเศษด้วย",
     APP.includes("const roundLine=order.round_adj?") && APP.includes("${promoLine}${scLine}${vatLine}${roundLine}<div style="));
   // ปุ่มพิมพ์ใบเสร็จย้อนหลังในรายงานก็เดินทางนี้ และส่งแถวจาก DB ที่มี round_adj อยู่แล้ว
@@ -2348,10 +2348,12 @@ section("ป็อปอัพเก็บเงิน + เงินทอน")
   // วิธีจ่ายต้องมาเป็น "ค่าที่กด" ไม่ใช่ค่าจาก state — กดปุ๊บตัดเงินปั๊บในจังหวะเดียว
   // ถ้าอ่านจาก state จะได้ค่าเก่า (React อัปเดตทีหลัง) ⟹ บันทึกวิธีจ่ายผิด
   // ผลคือจ่ายพร้อมเพย์แต่ระบบนับเป็นเงินสด → เงินในลิ้นชักเกินจริง หาไม่เจอตอนปิดกะ
-  ok_("ตัวปิดบิลรับวิธีจ่ายเป็นค่าที่กดมา", APP.includes("async function checkOut(methodArg){"));
+  ok_("ตัวปิดบิลรับวิธีจ่ายเป็นค่าที่กดมา (พร้อมรายการแบ่งจ่ายถ้ามี)", APP.includes("async function checkOut(methodArg,opts){"));
   ok_("ค่าที่กดชนะค่าใน state เสมอ", APP.includes("const pm=methodArg||payMethod;"));
+  // บิลใบเดียวจ่ายได้หลายช่องทางแล้ว (แบ่งจ่าย) จุดที่เกี่ยวกับเงินสดจึงผูกกับ "ยอดส่วนที่เป็นเงินสด"
+  // ไม่ใช่ "วิธีจ่ายของทั้งบิล" อีกต่อไป — แต่ต้องยังใช้ค่าที่กดมา ไม่ใช่ state ค้างในจอ
   ck("ทุกที่ในตัวปิดบิลใช้ค่าที่กด ไม่ใช่ state",
-    ["payment_method:pm,updated_at", "cashReceived=pm===\"cash\"", "if(pm===\"cash\"&&shift)", "payment_method:pm,cash_received"]
+    ["const pm=methodArg||payMethod;", "payment_method:pmCol,updated_at", "const pmCol=payParts?", "if(cashPart>0&&shift)", "payment_method:pmCol,payments:paymentsCol,cash_received"]
       .filter((x) => !APP.includes(x)), []);
   ok_("ป็อปอัพส่งวิธีจ่ายที่กดเข้าไปจริง",
     APP.includes("onPay={async(m)=>{await checkOut(m);setShowPay(false);}}") &&
@@ -2360,7 +2362,7 @@ section("ป็อปอัพเก็บเงิน + เงินทอน")
   // เงินสดต้องกรอกยอดที่รับมา และต้องไม่น้อยกว่ายอดบิล — ดึงเงื่อนไขจริงมารัน
   const enough = (() => {
     const ln = APP.split("\n").find((l) => l.trim().startsWith("const enoughCash="));
-    return ln ? new Function("cashRcv", "total", ln.trim() + " return enoughCash;") : null;
+    return ln ? new Function("cashRcv", "dueNow", ln.trim() + " return enoughCash;") : null;
   })();
   ok_("ยังมีเงื่อนไขกันเงินสดไม่พอ", !!enough);
   if (enough) {
@@ -2373,7 +2375,7 @@ section("ป็อปอัพเก็บเงิน + เงินทอน")
   // ป็อปอัพเงินทอนต้องอยู่ที่จอแม่ — จอโต๊ะปิดตัวเองทันทีที่ปิดบิลเสร็จ
   // ถ้าอยู่ในจอโต๊ะ มันจะถูกถอดออกไปพร้อมกัน แล้วพนักงานไม่เห็นยอดทอนเลย
   ok_("ยอดทอนถูกส่งออกไปก่อนปิดจอโต๊ะ",
-    APP.includes('if(pm==="cash"&&typeof onCashChange==="function"){'));
+    APP.includes('if(cashPart>0&&typeof onCashChange==="function"){'));
   ok_("จอแม่เป็นคนถือป็อปอัพเงินทอน",
     APP.includes("const[changeDlg,setChangeDlg]=useState(null);") && APP.includes("onCashChange={setChangeDlg}"));
 
@@ -2873,7 +2875,8 @@ section("ช่องทางจ่ายอื่นๆ");
     ok_("ไม่มีช่องทางย่อยไปชนเงินสด/พร้อมเพย์ (จะลงผิดกลุ่ม)", !OTHER.some(m => ["cash", "promptpay", "transfer", "credit", "debit"].includes(m.v)));
   }
   // ยอดของช่องทางใหม่ต้องลงกลุ่ม "อื่นๆ" เอง — ทั้งสองที่ต้องคัดด้วยการยกเว้น ห้ามเป็นรายชื่อ
-  ok_("สรุปกะ: ช่องทางที่ไม่รู้จักลงกลุ่มอื่นๆ", APP.includes("else if(pm==='credit'||pm==='debit')totalCard+=t;else totalOther+=t;"));
+  ok_("สรุปกะ: ช่องทางที่ไม่รู้จักลงกลุ่มอื่นๆ (คัดด้วยการยกเว้น)",
+    APP.includes("if(pm==='cash')totalCash+=a;else if(pm==='transfer'||pm==='promptpay')totalTransfer+=a;else if(pm==='credit'||pm==='debit')totalCard+=a;else totalOther+=a;"));
   ok_("ท่อบัญชี: ช่องทางที่ไม่รู้จักลงกลุ่ม Custom Payment (คัดด้วยการยกเว้น ไม่ใช่รายชื่อ)",
     SLIPPUSH.includes('const MAIN_PAY_METHODS = ["cash", "promptpay", "transfer", "credit", "debit"];')
     && SLIPPUSH.includes("const other = list.filter((x) => !MAIN_PAY_METHODS.includes(x.payment_method));"));
@@ -3247,7 +3250,7 @@ section("เปิดลิ้นชักเก็บเงิน");
     ck("เครื่องที่ปิดใช้งาน/ไม่มี IP ไม่ถูกสั่ง", pick([P(3, { dw: 1 }, { active: false }), { id: 4, description: JSON.stringify({ dw: 1 }) }]).length, 0);
     ck("ช่องข้อมูลเสีย ไม่ทำให้จอพัง", pick([{ id: 5, ip: "10.0.0.5", description: "{พัง" }]).length, 0);
   }
-  ok_("คำสั่งเปิดลิ้นชักเป็นคำสั่งครั้งเดียวจบ (ถูกล้างเหมือน tp/rp/qr/pj)", APP.includes("const{tp,rp,qr,pj,dk,...keep}=d;"));
+  ok_("คำสั่งเปิดลิ้นชักเป็นคำสั่งครั้งเดียวจบ เหมือน tp/rp/qr/pj", APP.includes('const CMD_KEYS=["tp","rp","qr","pj","dk"];'));
   ok_("กดเข้าจอเงินในลิ้นชัก = สั่งเปิดหนึ่งครั้ง", APP.includes("useEffect(()=>{openDrawer(false);},[]);"));
   ok_("มีปุ่มสั่งเปิดลิ้นชักซ้ำในจอ", APP.includes('onClick={()=>openDrawer(true)} title="สั่งเปิดลิ้นชักเก็บเงิน"'));
   ok_("ไม่มีเครื่องที่ต่อลิ้นชัก ต้องบอกว่าไปตั้งที่ไหน", APP.includes("ยังไม่ได้ตั้งว่าลิ้นชักต่อกับเครื่องไหน"));
@@ -3280,8 +3283,9 @@ section("เปิดลิ้นชักเก็บเงิน");
     AGENT.includes("state.kicked[p.id] = k.at; saveState();") && AGENT.includes('await clearCmdKey(p.id, "dk", k.at);'));
   ok_("จำคำสั่งที่ทำแล้วข้ามการรีสตาร์ท", AGENT.includes("if (!state.kicked) state.kicked = {};"));
   // เงินสดเข้า/ออกจริงเมื่อไหร่ ลิ้นชักต้องเปิดเมื่อนั้น — และห้ามทำให้การปิดบิลล้มเด็ดขาด
-  ok_("ปิดบิลด้วยเงินสด = ลิ้นชักเปิดให้ทอน (ยิงแบบไม่รอผล กลืน error)",
-    APP.includes('if(pm==="cash")kickCashDrawer(printers,branch?.id).catch(()=>{});'));
+  // บิลใบเดียวจ่ายได้หลายช่องทาง ⟹ เงื่อนไขคือ "มีส่วนที่เป็นเงินสดจริง" ไม่ใช่ "ทั้งบิลเป็นเงินสด"
+  ok_("มีเงินสดในบิล = ลิ้นชักเปิดให้ทอน (ยิงแบบไม่รอผล กลืน error)",
+    APP.includes('if(cashPart>0)kickCashDrawer(printers,branch?.id).catch(()=>{});'));
   ok_("แก้บิลแล้วเก็บเพิ่ม/คืนเป็นเงินสด = ลิ้นชักเปิดด้วย",
     APP.includes('if(delta!==0&&method==="cash")kickCashDrawer(printers,branch?.id).catch(()=>{});'));
   // จ่ายพร้อมเพย์/ช่องทางอื่น ลิ้นชักต้องไม่เปิด — ทุกจุดที่สั่งเปิดต้องผูกกับเงื่อนไขเงินสดหรือปุ่มที่คนกดเอง
@@ -3294,6 +3298,82 @@ section("เปิดลิ้นชักเก็บเงิน");
   ck("จุดที่สั่งเปิดลิ้นชักมีเท่าที่ตั้งใจไว้ (ประกาศ + จอลิ้นชัก + ปิดบิลเงินสด + แก้บิลเงินสด)",
     (APP.match(/kickCashDrawer\(/g) || []).length, 4);
   ok_("ขยับเวอร์ชันตัวพิมพ์แล้ว (ร้านอัปเดตเอง)", +((AGENT.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 41);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// แบ่งจ่ายหลายช่องทาง (เจ้าของสั่ง 12 ก.ย. 69) — ใส่จำนวน → เลือกช่องทาง → ทำซ้ำจนครบยอด
+// เงินสดต้องเป็นขั้นสุดท้ายเสมอ เพราะเป็นขั้นเดียวที่มีเงินทอน
+// เงินที่เข้าลิ้นชักต้องเป็น "เฉพาะส่วนที่เป็นเงินสด" ไม่ใช่ยอดทั้งบิล ไม่งั้นปิดกะเงินเกินทุกครั้ง
+// ══════════════════════════════════════════════════════════════════════════
+section("แบ่งจ่ายหลายช่องทาง");
+{
+  const L = APP.split("\n");
+  const lineOf = (name) => L.find(l => l.startsWith(name + "=") || l.startsWith(name + " =")) || "";
+  const grabTop = (head, end) => { const a = L.findIndex(l => l.startsWith(head)); if (a < 0) return null; const b = L.findIndex((l, i) => i > a && l === end); return b > a ? L.slice(a, b + 1).join("\n") : null; };
+
+  // ── ยอดตามช่องทางในสรุปกะ: บิลแบ่งจ่ายต้องถูกแยกตามช่องทางจริง ──
+  let totalsFn = null;
+  try {
+    totalsFn = new Function("round2", grabTop("function computeShiftTotals({movements,orders,actualCash,cancelled,openBills}){", "}") + "\nreturn computeShiftTotals;")(
+      (n) => Math.round((+n || 0) * 100) / 100);
+  } catch {}
+  ok_("อ่านสูตรยอดกะได้", !!totalsFn);
+  if (totalsFn) {
+    const mv = [{ type: "opening", amount: 1000 }, { type: "sale", amount: 285 }];
+    const t = totalsFn({
+      movements: mv, actualCash: 1285, cancelled: [], openBills: [],
+      orders: [
+        { total: 500, payment_method: "promptpay" },                                   // บิลปกติช่องทางเดียว
+        { total: 1285, payment_method: "mixed", payments: [{ method: "promptpay", amount: 1000 }, { method: "cash", amount: 285 }] },   // แบ่งจ่าย
+        { total: 207, payment_method: "cash", payments: [{ method: "cash", amount: 276 }, { method: "cash", amount: -69 }] },           // แก้บิลแล้วคืนเงินสด
+      ],
+    });
+    ck("ยอดขายรวมยังนับจากยอดบิล ไม่ใช่ผลรวมช่องทาง", t.totalSales, 1992);
+    ck("เงินสดนับเฉพาะส่วนที่เป็นเงินสดจริง (รวมส่วนที่คืนไป)", t.totalCash, 492);
+    ck("พร้อมเพย์ได้ส่วนของมันครบ", t.totalTransfer, 1500);
+    ck("ผลรวมทุกช่องทางต้องเท่ายอดขาย", Math.round((t.totalCash + t.totalTransfer + t.totalCard + t.totalOther) * 100) / 100, 1992);
+  }
+
+  // ── คำสั่งพิมพ์ที่เครื่องแคชเชียร์ทับกัน ──
+  // เปิดลิ้นชัก + ใบเสร็จ ถูกสั่งห่างกันไม่ถึงวินาที ถ้าคำสั่งใหม่ลบของเก่า ลิ้นชักจะไม่เปิด
+  let cmd = null;
+  try {
+    cmd = new Function([lineOf("const CMD_KEYS"), lineOf("const CMD_FRESH_MS"), grabTop("function cmdDesc(printer,key,val){", "}")].join("\n") + "\nreturn cmdDesc;")();
+  } catch {}
+  ok_("อ่านตัวเขียนคำสั่งลงเครื่องพิมพ์ได้", !!cmd);
+  if (cmd) {
+    const now = Date.now();
+    const withPj = { description: JSON.stringify({ rcpt: 1, dw: 1, on: true, pj: { at: now - 200, b64: "x" } }) };
+    const afterDk = JSON.parse(cmd(withPj, "dk", { at: now }));
+    ok_("สั่งเปิดลิ้นชักแล้ว งานพิมพ์ใบเสร็จที่เพิ่งสั่งต้องไม่หาย", !!afterDk.pj && !!afterDk.dk);
+    ok_("ค่าตั้งค่าของเครื่อง (เครื่องใบเสร็จ/ลิ้นชัก/สถานะ) ไม่ถูกลบ", afterDk.rcpt === 1 && afterDk.dw === 1 && afterDk.on === true);
+    const stale = { description: JSON.stringify({ pj: { at: now - 10 * 60 * 1000 }, rp: { at: now - 10 * 60 * 1000 } }) };
+    const afterStale = JSON.parse(cmd(stale, "dk", { at: now }));
+    ok_("คำสั่งค้างเก่า (ตัวพิมพ์ดับไปนาน) ถูกทิ้ง ไม่พิมพ์ย้อนหลัง", !afterStale.pj && !afterStale.rp && !!afterStale.dk);
+    const broken = { description: "{พัง" };
+    ok_("ช่องข้อมูลเสีย ยังเขียนคำสั่งได้", JSON.parse(cmd(broken, "dk", { at: now })).dk.at === now);
+  }
+
+  // ── จอแบ่งจ่าย ──
+  ok_("ปุ่มแบ่งจ่ายอยู่ในป็อปอัพถามวิธีจ่าย (ไม่ใช่แถบล่างแล้ว)",
+    APP.includes('onClick={()=>{setParts([]);setPartAmt("");setAskPay("split");}}') && !APP.includes('<button onClick={onSplit} title="แบ่งจ่ายหลายคน"'));
+  ok_("เงินสดกดได้เฉพาะขั้นสุดท้าย (ขั้นที่เหลือพอดี) เพราะต้องทอนเงิน",
+    APP.includes("const lastStep=partNow>0&&round2(remain-partNow)===0;") && APP.includes('(mt.v==="cash"&&!lastStep)'));
+  ok_("ใส่เกินยอดที่เหลือไม่ได้", APP.includes("if(partNow<=0||partNow>remain)return;"));
+  ok_("มีคอลัมน์บอกว่าจ่ายไปกี่ขั้น ขั้นละเท่าไร ด้วยช่องทางอะไร",
+    APP.includes(">จ่ายไปแล้ว</div>") && APP.includes("{payMethodLabel(p.method)}") && APP.includes("{i===parts.length-1&&<button onClick={()=>setParts(a=>a.slice(0,-1))}"));
+  ok_("ปิดบิลได้ต่อเมื่อจ่ายครบยอดพอดี", APP.includes("disabled={saving||remain!==0||parts.length===0}"));
+  ok_("แบ่งบิลตามคน (ของเดิม) ยังเข้าถึงได้จากจอแบ่งจ่าย", APP.includes("แบ่งบิลตามคน (พิมพ์ใบตัวอย่างให้ลูกค้าดู)"));
+  // ── เงินสดของบิลแบ่งจ่าย ──
+  ok_("ลิ้นชักเปิดเฉพาะเมื่อมีขั้นที่เป็นเงินสด", APP.includes("if(cashPart>0)kickCashDrawer(printers,branch?.id).catch(()=>{});"));
+  ok_("ลิ้นชักได้เฉพาะยอดส่วนที่เป็นเงินสด ไม่ใช่ทั้งบิล",
+    APP.includes('type:"sale",amount:cashPart,') && APP.includes("if(cashPart>0&&shift){"));
+  ok_("เงินทอนคิดจากขั้นเงินสด ไม่ใช่ยอดบิล", APP.includes("onCashChange({change:round2(Math.max(0,(+cashReceived||0)-cashPart)),received:+cashReceived||0,total:cashPart,"));
+  ok_("บิลเก็บช่องทางที่จ่ายจริงไว้ทุกขั้น", APP.includes("payments:paymentsCol,paid_by:"));
+  ok_("จ่ายช่องทางเดียวยังเก็บเป็นช่องทางนั้น · หลายช่องทางจึงเป็น mixed",
+    APP.includes('const pmCol=payParts?(payParts.length===1?payParts[0].method:"mixed"):pm;'));
+  ok_("ใบเสร็จแจกแจงว่าขั้นไหนจ่ายเท่าไรด้วยอะไร",
+    APP.includes("if(Array.isArray(order.payments)&&order.payments.length>1)") && APP.includes("const splitLines="));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
