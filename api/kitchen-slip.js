@@ -133,7 +133,16 @@ function render(createCanvas, lines, W) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") { res.setHeader("Allow", "POST"); return res.status(405).json({ error: "POST only" }); }
+  // อุ่นเครื่อง: ตัวพิมพ์เรียก GET ทุก 4 นาที ให้ฟอนต์ถูกโหลดค้างไว้ในเครื่องที่รันฟังก์ชันนี้
+  // ใบแรกหลังร้านเงียบจะได้ไม่ต้องรอโหลดฟอนต์ (เย็นแล้วช้าขึ้นหลายวินาที) — ไม่ได้เรนเดอร์อะไรจริง
+  if (req.method === "GET") {
+    try {
+      const { GlobalFonts } = await import("@napi-rs/canvas");
+      await ensureFont(GlobalFonts);
+      return res.status(200).json({ ok: true, warm: true });
+    } catch (e) { return res.status(200).json({ ok: false, warm: false, error: String((e && e.message) || e) }); }
+  }
+  if (req.method !== "POST") { res.setHeader("Allow", "GET, POST"); return res.status(405).json({ error: "POST only" }); }
   try {
     const { createCanvas, GlobalFonts } = await import("@napi-rs/canvas");
     await ensureFont(GlobalFonts);

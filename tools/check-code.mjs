@@ -3261,7 +3261,20 @@ section("เปิดลิ้นชักเก็บเงิน");
   ok_("มีรอบเร็วเฉพาะคำสั่งเปิดลิ้นชัก และไม่เกิน 1 วินาที",
     /const DRAWER_POLL_MS = (\d+);/.test(AGENT) && +AGENT.match(/const DRAWER_POLL_MS = (\d+);/)[1] <= 1000);
   ok_("รอบเร็วกรองเฉพาะเครื่องที่มีคำสั่งค้างอยู่ (ไม่ดึงตารางทั้งใบ)",
-    AGENT.includes("description=like.*%22dk%22:%7B*") && AGENT.includes("if (Array.isArray(rows) && rows.length) await handleDrawerRequests(rows);"));
+    AGENT.includes("or=(description.like.*%22dk%22:%7B*,description.like.*%22pj%22:%7B*,description.like.*%22rp%22:%7B*,description.like.*%22qr%22:%7B*)"));
+  // ── งานพิมพ์ทุกอย่างที่คนยืนรอ ต้องวิ่งในรอบเร็ว ไม่ใช่รอรอบหลัก ──
+  ok_("รอบเร็วทำครบทั้งลิ้นชัก ใบเสร็จ พิมพ์ซ้ำ/ใบยกเลิก และ QR โต๊ะ",
+    AGENT.includes("        await handleDrawerRequests(rows);\n        await handlePJRequests(rows);\n        await handleQRRequests(rows);\n        await handleReprintRequests(rows);"));
+  // คำสั่งที่ไม่ถูกล้าง = ค้างในแถวตลอดวัน (rp พกรายการอาหารไปด้วย) และรอบเร็วจะเจอแถวเดิมซ้ำทุก 0.8 วิ
+  ok_("คำสั่งพิมพ์ซ้ำ/QR ถูกล้างทิ้งหลังทำ เหมือน pj และ dk",
+    AGENT.includes('await clearCmdKey(p.id, "rp", rp.at);') && AGENT.includes('await clearCmdKey(p.id, "qr", q.at);'));
+  // ── รอบหลัก: ถามบิลถี่ขึ้น แต่ของหนักต้องไม่ถูกดึงถี่ตาม ──
+  ok_("รอบหลักไม่เกิน 2 วินาที", /const POLL_MS = (\d+);/.test(AGENT) && +AGENT.match(/const POLL_MS = (\d+);/)[1] <= 2000);
+  ok_("รายชื่อเครื่องพิมพ์ (ก้อนใหญ่) ถูกใช้ซ้ำ ไม่ดึงใหม่ทุกรอบ",
+    AGENT.includes("async function getPrintersCached() {") && AGENT.includes("getActiveOrderHeads(), getPrintersCached()"));
+  ok_("ตัวเรนเดอร์ใบครัวถูกอุ่นไว้ และเซิร์ฟเวอร์รับคำขออุ่นแบบเบา",
+    AGENT.includes("setInterval(warmSlip, 4 * 60 * 1000);") && SLIP.includes('if (req.method === "GET") {') && SLIP.includes("warm: true"));
+  ok_("ออเดอร์ใบใหญ่เรนเดอร์พร้อมกันได้มากขึ้น", AGENT.includes("return mapLimit(items || [], 10, async it => {"));
   ok_("รอบเร็วกันซ้อนรอบตัวเอง", AGENT.includes("if (kickBusy) return;"));
   ok_("มาร์คก่อนส่ง (tick ซ้อนไม่เปิดลิ้นชักซ้ำ) และล้างคำสั่งทิ้งหลังทำ",
     AGENT.includes("state.kicked[p.id] = k.at; saveState();") && AGENT.includes('await clearCmdKey(p.id, "dk", k.at);'));

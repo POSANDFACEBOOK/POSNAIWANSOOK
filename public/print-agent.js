@@ -16,10 +16,10 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 41;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 42;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
-const POLL_MS = 5000;
+const POLL_MS = 2000;
 // ลิ้นชักต้องเปิด "ทันทีที่กดตกลง" ไม่ใช่รอรอบปกติ 5 วินาที (เจ้าของสั่ง 12 ก.ย. 69)
 // จึงมีรอบเร็วแยกเฉพาะคำสั่งเปิดลิ้นชัก — คิวรีนี้กรองว่ามีคำสั่ง dk อยู่จริงเท่านั้น
 // ปกติจึงได้ "แถวว่าง" (ไม่กี่ไบต์) ไม่ใช่การดึงตารางเครื่องพิมพ์ทั้งใบทุกวินาที
@@ -63,6 +63,16 @@ const getOrdersByIds = (ids) => sb(`orders?id=in.(${ids.join(",")})&status=neq.p
 const getActiveOrders = () => sb(`orders?status=neq.paid&status=neq.cancelled&select=id,table_number,items&order=created_at.desc&branch_id=eq.${BRANCH}`);
 // ดึงเฉพาะเครื่องพิมพ์ของสาขานี้ (+ที่ใช้ร่วมทุกสาขา branch_id=null) — ไม่ดึงข้ามสาขา (ทุก caller กรองแบบนี้อยู่แล้ว)
 const getPrinters = () => sb(`printers?or=(branch_id.is.null,branch_id.eq.${BRANCH})&order=id.asc`);
+// รายชื่อเครื่องพิมพ์เปลี่ยนไม่บ่อย แต่เป็นก้อนใหญ่ (description พกคำสั่ง/สถานะ) — ใช้ซ้ำได้ 6 วิ
+// ทำให้ถามบิลถี่ขึ้นได้โดยไม่เพิ่มภาระฐานข้อมูล (บทเรียน Disk IO 30 ก.ค. 69: ตัวการคือ polling ของหนัก)
+let _prCache = null, _prAt = 0;
+const PRINTERS_TTL = 6000;
+async function getPrintersCached() {
+  if (_prCache && Date.now() - _prAt < PRINTERS_TTL) return _prCache;
+  const r = await getPrinters();
+  _prCache = r; _prAt = Date.now();
+  return r;
+}
 const addPrinter = (d) => fetch(`${SUPA_URL}/rest/v1/printers`, { method: "POST", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
 const patchPrinter = (id, d) => fetch(`${SUPA_URL}/rest/v1/printers?id=eq.${id}`, { method: "PATCH", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
 
@@ -286,7 +296,7 @@ async function mapLimit(arr, limit, fn) {
 }
 // เรนเดอร์ "หนึ่งใบต่อหนึ่งรายการ" พร้อมกัน (cap 6) — ลองรูปภาพไทยคมชัดก่อน ถอยไปตัวอักษร ESC/POS ถ้าล้มเหลว (พิมพ์ไม่มีวันพัง)
 async function renderItemBufs(items, tableNum, meta) {
-  return mapLimit(items || [], 6, async it => {
+  return mapLimit(items || [], 10, async it => {
     const b = await fetchSlipRaster([it], tableNum, meta);
     return b ? { buf: b, raster: true } : { buf: buildKitchenESC(it, tableNum, meta), raster: false };
   });
@@ -415,6 +425,7 @@ async function handleReprintRequests(printers) {
         // ใบยกเลิก/ย้ายโต๊ะ/พิมพ์ซ้ำที่ไม่ออกก็ต้องขึ้นปุ่ม "พิมพ์ไม่สำเร็จ" — ใบยกเลิกหายเงียบ = ครัวทำต่อ
         await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id });
       }
+      await clearCmdKey(p.id, "rp", rp.at);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที (ล้มเหลวไปอยู่ในรายการ "พิมพ์ไม่สำเร็จ" แล้ว)
     }
   }
 }
@@ -429,6 +440,7 @@ async function handleQRRequests(printers) {
       state.qrPrinted[p.id] = q.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
       try { await sendToPrinter(p.ip, p.port, buildQRESC(q)); console.log(`  🔳 พิมพ์ QR โต๊ะ ${q.table} → ${p.name} (${p.ip})`); }
       catch (e) { console.log(`  ❌ พิมพ์ QR → ${p.name} (${p.ip}): ${e.message}`); }
+      await clearCmdKey(p.id, "qr", q.at);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที
     }
   }
 }
@@ -619,7 +631,7 @@ async function settleFail(holderId, failId, want, okKs) {
 let fullTick = 0;   // นับรอบไปหาตาข่ายนิรภัย
 async function tick() {
   let heads, printers;
-  try { [heads, printers] = await Promise.all([getActiveOrderHeads(), getPrinters()]); }
+  try { [heads, printers] = await Promise.all([getActiveOrderHeads(), getPrintersCached()]); }
   catch (e) { console.log("⚠️  ดึงข้อมูลไม่ได้ (เช็คเน็ต):", e.message); return; }
   printers = (printers || []).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false);
   heads = heads || [];
@@ -821,13 +833,27 @@ async function heartbeat() {
     if (kickBusy) return;
     kickBusy = true;
     try {
-      const rows = await sb(`printers?select=id,name,ip,port,description&description=like.*%22dk%22:%7B*&or=(branch_id.is.null,branch_id.eq.${BRANCH})`);
-      if (Array.isArray(rows) && rows.length) await handleDrawerRequests(rows);
+      // งานที่ "คนยืนรออยู่หน้าเครื่อง": เปิดลิ้นชัก · ใบเสร็จ/รูป (pj) · พิมพ์ซ้ำ/ใบยกเลิก/ย้ายโต๊ะ (rp) · QR โต๊ะ
+      // กรองว่ามีคำสั่งค้างจริงเท่านั้น ⟹ ปกติได้แถวว่าง (ไม่กี่ไบต์) ไม่ใช่ดึงตารางทั้งใบทุก 0.8 วิ
+      // ทุกคำสั่งถูกล้างทิ้งหลังทำ รายการจึงว่างจริงเมื่อไม่มีงาน
+      const rows = (await sb("printers?select=id,name,ip,port,branch_id,description&or=(description.like.*%22dk%22:%7B*,description.like.*%22pj%22:%7B*,description.like.*%22rp%22:%7B*,description.like.*%22qr%22:%7B*)"))
+        .filter((p) => p.branch_id == null || +p.branch_id === +BRANCH);
+      if (rows.length) {
+        await handleDrawerRequests(rows);
+        await handlePJRequests(rows);
+        await handleQRRequests(rows);
+        await handleReprintRequests(rows);
+      }
     } catch { /* เน็ตสะดุดรอบเดียว — รอบหน้าอีก 0.8 วิ */ }
     finally { kickBusy = false; }
   }, DRAWER_POLL_MS);
   // พิมพ์หน้าทดสอบให้เครื่องที่ "เพิ่งกดเพิ่มใช้งาน" อัตโนมัติ ทุก 30 วินาที
   setInterval(greetNewPrinters, 30 * 1000);
+  // อุ่นตัวเรนเดอร์ใบครัวไว้ทุก 4 นาที — ถ้าปล่อยเย็น ใบแรกหลังร้านเงียบจะช้าขึ้นหลายวินาที
+  // (เรียกแบบ GET เบาๆ แค่ให้ฟอนต์ถูกโหลดค้างไว้ ไม่ได้สั่งเรนเดอร์จริง)
+  const warmSlip = () => { fetch(SLIP_RENDER_URL, { method: "GET" }).catch(() => {}); };
+  warmSlip();
+  setInterval(warmSlip, 4 * 60 * 1000);
   await pingPrinters();                       // เช็คออนไลน์/ออฟไลน์ครั้งแรก
   setInterval(pingPrinters, 30 * 1000);       // แล้วเช็คทุก 30 วิ → แอปโชว์จุดเขียว/แดง
   await heartbeat();                           // บอกแอปว่า agent ยังมีชีวิต (ครั้งแรกทันที)
