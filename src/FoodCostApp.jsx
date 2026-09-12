@@ -19660,12 +19660,16 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
   const enoughCash=(+cashRcv||0)>=dueNow;
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
-      <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
-        <div>
-          <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:900,fontSize:18}}>💳 ชำระเงิน</div>
-          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,opacity:.85}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
+      <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
+        <button onClick={onCancelOrder} title="ยกเลิกบิลทั้งโต๊ะ"
+          style={{display:"flex",alignItems:"center",gap:6,padding:"10px 14px",borderRadius:11,border:"2px solid rgba(255,255,255,.5)",background:C.red,color:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:900,flexShrink:0,boxShadow:"0 2px 8px rgba(0,0,0,.2)"}}>
+          <Ic d={I.trash} s={15} c={C.white}/>ยกเลิกบิล
+        </button>
+        <div style={{flex:1,minWidth:0,textAlign:"center"}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:900,fontSize:20,lineHeight:1.2}}>💳 ชำระเงิน</div>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:22,fontWeight:900,lineHeight:1.25,overflowWrap:"anywhere"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
         </div>
-        <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:32,height:32,cursor:"pointer",color:C.white,fontSize:18,fontFamily:"'Sarabun',sans-serif"}}>✕</button>
+        <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:36,height:36,cursor:"pointer",color:C.white,fontSize:19,fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>✕</button>
       </div>
       <div style={{flex:1,overflowY:"auto",padding:"14px 20px"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>📋 รายการ ({items.length})</div>
@@ -19739,13 +19743,6 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:`linear-gradient(135deg,${C.green},#059669)`,borderRadius:10,marginBottom:10,color:C.white}}>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:700}}>ยอดสุทธิ</span>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900}}>฿{total.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-        </div>
-        {/* งานรองของบิลนี้ — ย้ายมาจากแถบเดิมบนจอสั่งอาหาร */}
-        <div style={{display:"flex",gap:8,marginBottom:10}}>
-          <button onClick={onCancelOrder} title="ยกเลิกบิลทั้งโต๊ะ" style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,padding:"9px 6px",
-            border:`1px solid ${C.red}55`,borderRadius:9,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,color:C.red}}>
-            <Ic d={I.trash} s={13} c={C.red}/>ยกเลิกบิล
-          </button>
         </div>
         {/* กดพิมพ์ผิดโต๊ะต้องยกเลิกได้ตรงนี้เลย ไม่ต้องไปหาที่อื่น — ปุ่มอยู่ข้างกันกับปุ่มพิมพ์ */}
         <div style={{display:"flex",gap:10,alignItems:"stretch",flexWrap:"wrap"}}>
