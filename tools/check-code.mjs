@@ -3453,6 +3453,21 @@ section("ยกเลิกรายการต้องหายจากบ�
     APP.includes("    onDone&&onDone();   // ให้จอแม่ดึงบิลใหม่"));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// มีเวอร์ชันใหม่ขึ้นระบบแล้วต้องบอกที่หน้าจอ — ร้านเจอซ้ำๆ ว่าแก้แล้วแต่เครื่องยังใช้ของเก่า
+// (12 ก.ย. 69: บิล #129 จ่ายแบบแบ่งจ่าย แต่ไม่มีข้อมูลบันทึกเพราะเครื่องยังรันโค้ดชุดเก่า)
+// ⚠️ ห้ามรีโหลดเอง — พนักงานอาจกำลังคิดเงินอยู่กลางบิล
+// ══════════════════════════════════════════════════════════════════════════
+section("แจ้งเมื่อมีเวอร์ชันใหม่");
+{
+  ok_("มีตัวเช็คเวอร์ชันใหม่ในจอขาย", APP.includes("function useNewBuild(){") && APP.includes("const hasNewBuild=useNewBuild();"));
+  ok_("เทียบจากชื่อไฟล์โปรแกรมที่มีแฮช (เปลี่ยนทุกครั้งที่ขึ้นระบบ)", APP.includes("assets") && APP.includes("fresh.includes(cur)"));
+  ok_("อ่าน index.html แบบไม่เอาของในแคช", APP.includes("fetch(\"/index.html?_=\"+Date.now(),{cache:\"no-store\"})"));
+  ok_("ขึ้นแถบให้แตะเอง ไม่รีโหลดกลางบิล",
+    APP.includes("{hasNewBuild&&<button onClick={()=>{try{location.reload();}catch{}}}") && !APP.includes("setTimeout(()=>location.reload()"));
+  ok_("หยุดเช็คเมื่อออกจากจอ และไม่เช็คตอนจอถูกซ่อน", APP.includes("return()=>{stop=true;clearInterval(t);document.removeEventListener(\"visibilitychange\",onVis);};"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

@@ -22982,12 +22982,42 @@ function PrintFailModal({branchId,onClose,onChanged}){
   </Modal>;
 }
 
+// ── มีเวอร์ชันใหม่ขึ้นระบบแล้วหรือยัง ────────────────────────────────────
+// ร้านเจอซ้ำๆ ว่าแก้ไปแล้วแต่เครื่องที่ร้านยังใช้ของเก่า เพราะไม่มีใครรีเฟรช
+// (บิล #129 จ่ายแบบแบ่งจ่ายแต่ไม่มีข้อมูลบันทึก เพราะเครื่องยังรันโค้ดชุดเก่า — 12 ก.ย. 69)
+// วิธีเช็ค: ชื่อไฟล์โปรแกรมมีแฮชอยู่ในชื่อ เปลี่ยนทุกครั้งที่ขึ้นระบบใหม่
+// อ่านชื่อไฟล์จาก index.html ตัวจริงแล้วเทียบกับไฟล์ที่เครื่องนี้กำลังรันอยู่
+// ⚠️ ห้ามรีโหลดเอง — พนักงานอาจกำลังคิดเงินอยู่ ขึ้นแถบให้แตะเองเท่านั้น
+function useNewBuild(){
+  const[has,setHas]=useState(false);
+  useEffect(()=>{
+    let stop=false;
+    const mine=()=>{try{const s=[...document.querySelectorAll("script[src]")].map(x=>x.src).filter(x=>/\/assets\/[^/]+\.js/.test(x));return s.length?s[0].split("/").pop():null;}catch{return null;}};
+    const check=async()=>{
+      const cur=mine();if(!cur)return;
+      try{
+        const r=await fetch("/index.html?_="+Date.now(),{cache:"no-store"});
+        if(!r.ok)return;
+        const t=await r.text();
+        const fresh=(t.match(/\/assets\/[A-Za-z0-9_.-]+\.js/g)||[]).map(x=>x.split("/").pop());
+        if(!stop&&fresh.length&&!fresh.includes(cur))setHas(true);
+      }catch{}   // เน็ตสะดุด = ไม่ต้องบอกอะไร รอบหน้าเช็คใหม่
+    };
+    check();
+    const t=setInterval(()=>{if(!document.hidden)check();},2*60*1000);
+    const onVis=()=>{if(!document.hidden)check();};
+    document.addEventListener("visibilitychange",onVis);
+    return()=>{stop=true;clearInterval(t);document.removeEventListener("visibilitychange",onVis);};
+  },[]);
+  return has;
+}
 function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode,saleOnly=false,reloadPosSettings,refreshTick=0,reloadZones}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);
   const[moveFrom,setMoveFrom]=useState(null);   // {table,order} ระหว่างเลือกโต๊ะปลายทาง
   // ปุ่ม "พิมพ์ไม่สำเร็จ" — ขึ้นเฉพาะตอนมีใบที่ยังไม่ออก · พิมพ์ออกครบ ตัวพิมพ์ลบรายการเอง ปุ่มก็หายเอง
   // ถามเฉพาะเครื่องที่มีรายการค้าง ทุก 15 วิ (ปกติได้แถวว่าง) — ไม่ต้องรอรอบดึงเครื่องพิมพ์ 60 วิ
+  const hasNewBuild=useNewBuild();   // มีเวอร์ชันใหม่รออยู่ไหม (ไม่รีโหลดเอง)
   const[failPrinters,setFailPrinters]=useState([]);
   const[showPrintFails,setShowPrintFails]=useState(false);
   const loadFails=useCallback(async()=>{try{const r=await api.getPrintersWithFails();if(Array.isArray(r))setFailPrinters(printersAt(r,currentBranch.id));}catch{}},[currentBranch.id]);
@@ -23157,6 +23187,11 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   if(loading)return <Loading text="กำลังโหลดข้อมูล POS..."/>;
 
   return <div style={{margin:"-20px -24px",display:"flex",flexDirection:"column",height:"calc(100vh - 150px)"}}>
+    {/* มีเวอร์ชันใหม่ขึ้นระบบแล้ว — แตะเพื่อโหลด (ไม่โหลดเองกลางบิล) */}
+    {hasNewBuild&&<button onClick={()=>{try{location.reload();}catch{}}}
+      style={{padding:"10px 16px",background:C.brand,color:C.white,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,flexShrink:0,width:"100%"}}>
+      🔄 มีระบบเวอร์ชันใหม่แล้ว — แตะตรงนี้เพื่ออัปเดต (ของที่ค้างอยู่ไม่หาย)
+    </button>}
     {/* Shift indicator strip */}
     <div style={{padding:"6px 16px",background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,display:"flex",alignItems:"center",gap:14,fontSize:12,fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
       <span style={{fontSize:14}}>💵</span>
