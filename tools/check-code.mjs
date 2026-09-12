@@ -3095,6 +3095,43 @@ section("วิธีจ่าย: บรรทัดแม่-ลูกที�
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// เปิดนับสต็อกนอกเวลาเฉพาะวัน (branches.stock_count_open_on) — เจ้าของสั่งเปิดให้ The River 12 ก.ย. 69
+// ต้องเปิดเฉพาะสาขาที่ตั้งไว้ และเฉพาะวันนั้น · ค่าเพี้ยน/ว่าง = กลับไปใช้ช่วงเวลาปกติเสมอ
+// ══════════════════════════════════════════════════════════════════════════
+section("เปิดนับสต็อกนอกเวลาเฉพาะวัน");
+{
+  const L = APP.split("\n");
+  const openFn = (() => {
+    const a = L.findIndex(l => l.startsWith("const stockCountOpenToday=(branch)=>{"));
+    const b = L.findIndex((l, i) => i > a && l === "};");
+    try { return new Function(L.slice(a, b + 1).join("\n") + "\nreturn stockCountOpenToday;")(); } catch { return null; }
+  })();
+  const winFn = (() => {
+    const a = L.findIndex(l => l.startsWith("function stockCountWindow(isCentral){"));
+    const b = L.findIndex((l, i) => i > a && l === "}");
+    try { return new Function("bkkWeekday", L.slice(a, b + 1).join("\n") + "\nreturn stockCountWindow;")(() => 1); } catch { return null; }
+  })();
+  ok_("อ่านตัวคุมเวลานับสต็อกได้", !!openFn && !!winFn);
+  if (openFn && winFn) {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+    const other = new Date(Date.now() - 86400000).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+    ok_("ตั้งวันที่วันนี้ = เปิดให้นับนอกเวลา", openFn({ stock_count_open_on: today }) === true);
+    ok_("รับรูปแบบที่มีเวลาต่อท้ายด้วย (timestamp จากฐาน)", openFn({ stock_count_open_on: today + "T00:00:00+07:00" }) === true);
+    ok_("วันอื่น/วันเก่า = ปิดเอง ไม่ค้างเปิดข้ามวัน", openFn({ stock_count_open_on: other }) === false);
+    ok_("ไม่ได้ตั้ง = ใช้ช่วงเวลาปกติ", openFn({}) === false && openFn(null) === false && openFn({ stock_count_open_on: null }) === false);
+    ok_("ค่าเพี้ยน = ใช้ช่วงเวลาปกติ (ไม่เปิดมั่ว)", openFn({ stock_count_open_on: "เปิดเลย" }) === false && openFn({ stock_count_open_on: "2026-13-45" }) === false && openFn({ stock_count_open_on: true }) === false);
+    // ช่วงเวลาปกติต้องไม่ถูกแตะ — สาขา 16:00–23:30 · ครัวกลาง 12:00–16:00
+    const bw = winFn(false), cw = winFn(true);
+    ck("ช่วงเวลาปกติของสาขายังเหมือนเดิม", [bw.s, bw.e], [960, 1410]);
+    ck("ช่วงเวลาปกติของครัวกลางยังเหมือนเดิม", [cw.s, cw.e], [720, 960]);
+  }
+  ok_("ด่านเวลาเช็ควันเปิดพิเศษของ \"สาขาที่กำลังเปิดอยู่\" เท่านั้น",
+    APP.includes("if(!stockCountOpenToday(currentBranch)&&(now<win.s||now>=win.e)){"));
+  // ต้องยังกันนับทับรอบที่ Area ยังไม่อนุมัติ — การเปิดนอกเวลาไม่ใช่ใบผ่านให้ข้ามการอนุมัติ
+  ok_("เปิดนอกเวลาแล้วยังกันนับทับรอบที่รออนุมัติเหมือนเดิม", APP.includes('title:"⏳ ต้องรออนุมัติก่อน"'));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

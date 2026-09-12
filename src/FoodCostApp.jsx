@@ -313,6 +313,15 @@ function stockCountWindow(isCentral){
   if(bkkWeekday()===6)return{s:13*60,e:18*60,lbl:"13:00–18:00"};
   return{s:12*60,e:16*60,lbl:"12:00–16:00"};
 }
+// เปิดให้นับสต็อกนอกช่วงเวลาแบบเฉพาะกิจ — ตั้ง "วันที่" (เขตไทย) ไว้ที่ branches.stock_count_open_on
+// ใช้ตอนเจ้าของสั่งเปิดให้สาขาหนึ่งนับนอกเวลา (เช่น นับใหญ่ตอนเช้า) · เป็นวันที่ ไม่ใช่สวิตช์เปิดค้าง
+// ⟹ พ้นวันนั้นก็ปิดเอง ไม่มีทางลืมเปิดค้างไว้ · ค่าว่าง/รูปแบบผิด = ใช้ช่วงเวลาปกติ (ปลอดภัยไว้ก่อน)
+const stockCountOpenToday=(branch)=>{
+  const raw=branch&&branch.stock_count_open_on;if(!raw)return false;
+  const day=String(raw).slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day))return false;
+  try{return day===new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});}catch{return false;}
+};
 const hhmmOfMin=m=>`${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
 // Friendly error mapping (avoid leaking Postgres internals to cashiers)
 function friendlyError(err){
@@ -4838,7 +4847,8 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     {
       const win=stockCountWindow(isCentral);
       const now=bkkNowMinutes();
-      if(now<win.s||now>=win.e){
+      // เจ้าของเปิดให้สาขานี้นับนอกเวลาเฉพาะวันนี้ (branches.stock_count_open_on) → ข้ามด่านเวลา
+      if(!stockCountOpenToday(currentBranch)&&(now<win.s||now>=win.e)){
         await confirmDlg({title:"⏰ ยังไม่ถึงเวลานับสต็อก",message:`${isCentral?"ครัวกลาง":"สาขา"}เปิดให้นับสต็อกได้เฉพาะช่วง ${win.lbl} น. (เวลาไทย)\n\nขณะนี้ ${hhmmOfMin(now)} น. — กรุณากลับมาในช่วงเวลาที่กำหนด`,confirmLabel:"เข้าใจแล้ว",cancelLabel:null,danger:false});
         return;
       }
