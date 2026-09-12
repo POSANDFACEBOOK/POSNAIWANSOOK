@@ -1527,10 +1527,12 @@ section("ปัดเศษท้ายบิล");
     [319.2,1597.55,0.01,99999.99].every(v => Number.isInteger(R(v,"up")) && Number.isInteger(R(v,"down"))), true);
 
   // ── ต่อเข้ากับของจริงครบทุกทาง ──
+  // สูตรยอดบิลย้ายไปอยู่ที่ billTotalsOf ตัวเดียว (จอโต๊ะ + จอแก้บิลที่ปิดแล้วใช้ร่วมกัน)
+  // ด่านที่รันสูตรจริงอยู่ในหมวด "แก้ไขบิลที่ปิดแล้ว" — ตรงนี้เหลือแค่ดูว่ายังต่อสายถูก
   ok_("จอสั่งอาหารปัดยอดสุดท้ายตามที่ตั้ง",
-    APP.includes("const roundMode=roundModeOf(posSettings);") && APP.includes("const total=roundBill(rawTotal,roundMode);"));
+    APP.includes("const total=roundBill(rawTotal,roundModeOf(posSettings));") && APP.includes("const rawTotal=_T.rawTotal,total=_T.total;"));
   // ปัดแล้วไม่บอก = ตัวเลขบนใบบวกไม่ลง และยอดขายในระบบไม่ตรงกับเงินที่รับมา
-  ok_("ส่วนต่างจากการปัดถูกคำนวณไว้", APP.includes("const roundAdj=round2(total-rawTotal);"));
+  ok_("ส่วนต่างจากการปัดถูกคำนวณไว้", APP.includes("roundAdj:round2(total-rawTotal)") && APP.includes("const roundAdj=_T.roundAdj;"));
   ok_("ใบเสร็จพิมพ์บรรทัดปัดเศษ", APP.includes('if(order.round_adj)L.push({l:"ปัดเศษ"'));
   ok_("บิลที่ปิดเก็บส่วนต่างการปัดลงฐานข้อมูล", APP.includes("total,round_adj:roundAdj,payment_method:pm"));
   ok_("ใบแจ้งยอด/QR ก็พกส่วนต่างไปด้วย", APP.includes("promo_name:selectedPromo?.name||null,round_adj:roundAdj,"));
@@ -3130,6 +3132,94 @@ section("เปิดนับสต็อกนอกเวลาเฉพา�
     APP.includes("if(!stockCountOpenToday(currentBranch)&&(now<win.s||now>=win.e)){"));
   // ต้องยังกันนับทับรอบที่ Area ยังไม่อนุมัติ — การเปิดนอกเวลาไม่ใช่ใบผ่านให้ข้ามการอนุมัติ
   ok_("เปิดนอกเวลาแล้วยังกันนับทับรอบที่รออนุมัติเหมือนเดิม", APP.includes('title:"⏳ ต้องรออนุมัติก่อน"'));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// แก้ไขบิลที่ปิดแล้ว (12 ก.ย. 69) — เพิ่ม/ลดรายการ แล้วเก็บเพิ่มหรือคืนเงิน
+// เงินของบิลที่ปิดไปแล้วคือเงินที่นับไปแล้ว: ยอดบิล · ลิ้นชัก · ยอดที่ส่งบัญชี ต้องขยับพร้อมกันเสมอ
+// และห้ามแก้เงียบ — ต้องมีเหตุผลทุกครั้ง
+// ══════════════════════════════════════════════════════════════════════════
+section("แก้ไขบิลที่ปิดแล้ว");
+{
+  const L = APP.split("\n");
+  const grabTop = (head, end) => { const a = L.findIndex(l => l.startsWith(head)); if (a < 0) return null; const b = L.findIndex((l, i) => i > a && l === end); return b > a ? L.slice(a, b + 1).join("\n") : null; };
+  const line = (head) => L.find(l => l.startsWith(head)) || "";
+  // ประกาศตัวช่วยเขียนได้หลายแบบ (มี/ไม่มีช่องว่างรอบ =) — จับด้วยชื่อล้วนๆ ปลอดภัยกว่า
+  const lineRe = (name) => L.find(l => l.startsWith(name + "=") || l.startsWith(name + " =")) || "";
+  const totalsFn = (() => {
+    try {
+      return new Function(
+        [lineRe("const round2"), lineRe("const roundModeOf"), grabTop("const roundBill=(amount,mode)=>{", "};"),
+         grabTop("function billTotalsOf({items,manualDiscount=0,promoDiscount=0,posSettings=null}){", "}")].join("\n")
+        + "\nreturn billTotalsOf;")();
+    } catch { return null; }
+  })();
+  const editableFn = (() => {
+    try { return new Function([line("const EDIT_BILL_DAYS="), grabTop("const canEditPaidBill=(o)=>{", "};")].join("\n") + "\nreturn canEditPaidBill;")(); } catch { return null; }
+  })();
+  ok_("อ่านสูตรยอดบิลและกติกาวันที่แก้ได้", !!totalsFn && !!editableFn);
+  if (totalsFn) {
+    const S = { vat_enabled: true, vat_rate: 7, vat_included: true, service_charge_enabled: false };
+    const items = (n) => Array.from({ length: n }, () => ({ price: 69, qty: 1 }));
+    // บิลจริงที่เพิ่งแก้มือ (โต๊ะ A10): 4 แก้ว 276 → 3 แก้ว 207 ภาษี 13.54
+    const four = totalsFn({ items: items(4), posSettings: S }), three = totalsFn({ items: items(3), posSettings: S });
+    ck("ยอดและภาษีตรงกับบิลจริงที่เคยคิดไว้ (VAT ในราคา)", [four.total, four.vat, three.total, three.vat], [276, 18.06, 207, 13.54]);
+    ck("ส่วนต่างที่ต้องคืนลูกค้าคือหนึ่งแก้วพอดี", Math.round((four.total - three.total) * 100) / 100, 69);
+    const ex = totalsFn({ items: items(1), posSettings: { vat_enabled: true, vat_rate: 7, vat_included: false } });
+    ck("VAT แบบบวกเพิ่ม = บวกเข้ายอด ไม่ใช่ถอดออก", [ex.vat, ex.total], [4.83, 73.83]);
+    const sc = totalsFn({ items: items(1), posSettings: { service_charge_enabled: true, service_charge_rate: 10, vat_enabled: false } });
+    ck("ค่าบริการคิดจากยอดหลังหักส่วนลด", [sc.sc, sc.total], [6.9, 75.9]);
+    const dc = totalsFn({ items: items(1), manualDiscount: 200, posSettings: { vat_enabled: false } });
+    ck("ส่วนลดมากกว่าค่าอาหาร = ยอดเป็นศูนย์ ไม่ติดลบ", dc.total, 0);
+    const rd = totalsFn({ items: [{ price: 68.4, qty: 1 }], posSettings: { vat_enabled: false, rounding: "up" } });
+    ck("ปัดเศษท้ายบิลตามที่ร้านตั้งไว้ และเก็บส่วนต่างการปัด", [rd.total, rd.roundAdj], [69, 0.6]);
+  }
+  if (editableFn) {
+    const d = (days) => new Date(Date.now() - days * 86400000).toISOString();
+    ok_("บิลที่ปิดวันนี้แก้ได้", editableFn({ status: "paid", updated_at: d(0) }) === true);
+    ok_("ย้อนหลังได้ 7 วันตามที่เจ้าของสั่ง", editableFn({ status: "paid", updated_at: d(6.9) }) === true && editableFn({ status: "paid", updated_at: d(7.1) }) === false);
+    ok_("บิลที่ยกเลิก/ยังไม่ปิด แก้ไม่ได้", editableFn({ status: "cancelled", updated_at: d(0) }) === false && editableFn({ status: "open", updated_at: d(0) }) === false);
+  }
+  // ── ต้องมีเหตุผลเสมอ · เงินต้องขยับให้ตรงทิศ · ห้ามเขียนทับคนอื่น ──
+  ok_("ไม่ใส่เหตุผล กดยืนยันไม่ได้ (ปิดปุ่ม + กันซ้ำในตัวจัดการ)",
+    APP.includes("disabled={saving||!reason.trim()}") && APP.includes('if(!reason.trim()){notifyDlg("กรุณาใส่เหตุผลที่แก้บิล");return;}'));
+  ok_("เก็บเงินเพิ่ม = เงินเข้าลิ้นชัก · คืนเงิน = เงินออกลิ้นชัก (เงินสดเท่านั้น)",
+    APP.includes('type:delta>0?"sale":"refund",amount:Math.abs(delta)') && APP.includes('if(delta!==0&&method==="cash"&&shift?.id){'));
+  ok_("เงินสดแต่ยังไม่เปิดกะ = ไม่ให้ทำ (ลิ้นชักไม่มีที่ลง)", APP.includes('if(delta!==0&&method==="cash"&&!shift?.id)'));
+  ok_("เขียนบิลแบบกันชนกัน (เขียนต่อเมื่อยังไม่มีใครแก้)", APP.includes("await api.updatePOSOrderIfUnchanged(order.id,order.updated_at,full)"));
+  ok_("บันทึกร่องรอยทุกครั้ง พร้อมเหตุผลและส่วนต่าง", APP.includes("await api.addOrderEdit({order_id:order.id,") && APP.includes("delta,settle_method:delta!==0?method:null,"));
+  ok_("เขียนร่องรอยไม่ได้ ต้องบอกดังๆ ไม่ใช่เงียบ", APP.includes('if(noTrail)posToast("⚠️ แก้บิลแล้ว แต่บันทึกร่องรอยไม่ได้'));
+  ok_("บิลของวันที่ปิดกะไปแล้ว ต้องเตือนว่าต้องแจ้งบัญชี และติดธงไว้ในร่องรอย",
+    APP.includes("const pastDay=!!(oldDay&&today&&oldDay!==today);") && APP.includes("needs_accounting:pastDay"));
+  ok_("ของที่เพิ่ม = ใบสั่งอาหารปกติ · ของที่ลด = ใบยกเลิกไปครัว",
+    APP.includes('if(added.length)await agentPrintItems(added,String(order.table_number||"-"),branch?.id,{bill:order.id,by:who,kind:""});')
+    && APP.includes('kind:"void"}'));
+  ok_("แก้เสร็จพิมพ์ใบเสร็จใบใหม่ให้ลูกค้า", APP.includes("await printBillReceipt({...order,...full,id:order.id},order.table_number,"));
+  ok_("ใบเสร็จจอโต๊ะกับจอแก้บิลใช้ตัวพิมพ์ตัวเดียวกัน",
+    APP.includes("const smartPrintReceipt=(order,tableNum,paid)=>printBillReceipt(order,tableNum,{branch,posSettings,printers,paid});"));
+  ok_("ส่วนลดรายเมนูคิดใหม่เมื่อจำนวนเปลี่ยน (ไม่ลดเกินราคาอาหาร)", APP.includes("function recalcItemDiscounts(items){") && APP.includes("const amt=t===\"percent\"?round2(line*v/100):Math.min(v,line);"));
+  ok_("ช่องทางเก็บเพิ่ม/คืนเงิน ใช้รายชื่อเดียวกับตอนปิดบิล ไม่มีรายชื่อซ้อนที่สอง",
+    APP.includes("const SETTLE_METHODS=()=>[...PAY_METHODS.filter(m=>m.v!==\"other\"),...OTHER_PAY_METHODS];"));
+  ok_("เปิดจอแก้บิลได้จากหน้าบิลในรายงาน", APP.includes("onEdit={()=>setEditBill(bill)}") && APP.includes("{onEdit&&canEditPaidBill(o)&&<div"));
+
+  // ── ท่อบัญชี: บิลที่จ่ายหลายช่องทางต้องแยกยอดตามช่องทางจริง ──
+  const LS = SLIPPUSH.split("\n");
+  const a2 = LS.findIndex(l => l.startsWith("const MAIN_PAY_METHODS ="));
+  const b2 = LS.findIndex((l, i) => i > a2 && l === "}");
+  let build = null;
+  try { build = new Function(LS.slice(a2, b2 + 1).join("\n") + "\nreturn buildPaymentLines;")(); } catch {}
+  if (build) {
+    const out = build([
+      { payment_method: "cash", total: 276 },                                  // บิลปกติ
+      { payment_method: "cash", total: 376, payments: [{ method: "cash", amount: 276 }, { method: "promptpay", amount: 100 }] },   // แก้บิลแล้วเก็บเพิ่มทางพร้อมเพย์
+      { payment_method: "cash", total: 207, payments: [{ method: "cash", amount: 276 }, { method: "cash", amount: -69 }] },        // แก้บิลแล้วคืนเงินสด
+    ]);
+    const amt = (n) => { const p = out.payment.find(x => x.name_th === n); return p ? p.amount : 0; };
+    ck("ยอดเงินสดหักเงินที่คืนไปแล้ว", amt("เงินสด"), 759);
+    ck("ยอดที่เก็บเพิ่มทางพร้อมเพย์ไปอยู่ช่องพร้อมเพย์", amt("พร้อมเพย์"), 100);
+    ck("ผลรวมชั้นหลักยังเท่ายอดขายจริงทั้งสามใบ", out.mainSum, 859);
+  } else ok_("อ่านตัวสร้างบรรทัดวิธีจ่ายได้ (หลังรองรับหลายช่องทาง)", false);
+  ok_("ท่อบัญชีดึงช่องทางที่จ่ายจริงมาด้วย", SLIPPUSH.includes("payment_method,payments,created_at,updated_at"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

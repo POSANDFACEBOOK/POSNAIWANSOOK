@@ -31,9 +31,18 @@ const OTHER_CHILD_LINES = [
   { pm: "thaiplus", name_th: "ไทยช่วยไทย พลัส", name_en: "ไทยช่วยไทย พลัส" },
   { pm: "bartercard", name_th: "Bartercard", name_en: "Bartercard" },
 ];
-function buildPaymentLines(list) {
+function buildPaymentLines(bills) {
   const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
   const sum = (l) => r2(l.reduce((t, x) => t + (Number(x.total) || 0), 0));
+  // บิลที่ถูกแก้หลังปิดบิลอาจจ่ายหลายช่องทาง (จ่ายสดมาก่อน แล้วเก็บเพิ่มทางพร้อมเพย์)
+  // แตกเป็นรายการละช่องทางก่อนจัดกลุ่ม ไม่งั้นยอดทั้งใบจะไปกองที่ช่องทางแรกช่องเดียว
+  // ถ้าไม่มี payments (บิลปกติ) = หนึ่งใบหนึ่งช่องทางเหมือนเดิมทุกประการ
+  const list = [];
+  for (const o of bills || []) {
+    const ps = Array.isArray(o.payments) ? o.payments.filter((p) => p && Number(p.amount)) : null;
+    if (ps && ps.length) for (const p of ps) list.push({ payment_method: String(p.method || o.payment_method || "other"), total: Number(p.amount) || 0 });
+    else list.push({ payment_method: o.payment_method, total: Number(o.total) || 0 });
+  }
   const cash = list.filter((x) => x.payment_method === "cash");
   const pp = list.filter((x) => x.payment_method === "promptpay" || x.payment_method === "transfer");
   const card = list.filter((x) => x.payment_method === "credit" || x.payment_method === "debit");
@@ -167,7 +176,7 @@ export default async function handler(req, res) {
       const orders = await sbGet(
         `orders?branch_id=eq.${Number(shift.branch_id)}&status=eq.paid` +
         `&created_at=gte.${from}&created_at=lt.${to}` +
-        `&select=id,total,subtotal,discount,promo_amount,service_charge,vat,vat_rate,round_adj,payment_method,created_at,updated_at` +
+        `&select=id,total,subtotal,discount,promo_amount,service_charge,vat,vat_rate,round_adj,payment_method,payments,created_at,updated_at` +
         `&order=id.asc&limit=2000`
       );
 
