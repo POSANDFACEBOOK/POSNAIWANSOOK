@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 42;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 43;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 2000;
@@ -423,7 +423,7 @@ async function handleReprintRequests(printers) {
       } catch (e) {
         console.log(`  ❌ พิมพ์ซ้ำ → ${p.name} (${p.ip}): ${e.message}`);
         // ใบยกเลิก/ย้ายโต๊ะ/พิมพ์ซ้ำที่ไม่ออกก็ต้องขึ้นปุ่ม "พิมพ์ไม่สำเร็จ" — ใบยกเลิกหายเงียบ = ครัวทำต่อ
-        await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id });
+        await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id, pname: p.name });
       }
       await clearCmdKey(p.id, "rp", rp.at);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที (ล้มเหลวไปอยู่ในรายการ "พิมพ์ไม่สำเร็จ" แล้ว)
     }
@@ -560,6 +560,9 @@ async function recordPrintFail(printers, order, items, extra) {
       table: tableLabel(order),
       kind: x.kind || "", from: x.from || "", by: order.ordered_by || "", pid: x.pid != null ? x.pid : null,
       names: [...new Set(items.map(i => i.name))].slice(0, 20),
+      // ชื่อเครื่องที่ควรพิมพ์ใบนี้ — แอปเอาไปขึ้นที่โต๊ะว่า "เครื่องไหนไม่ออก" พนักงานจะได้เดินไปดูถูกเครื่อง
+      pnames: x.pname ? [String(x.pname)]
+        : [...new Set(items.flatMap((it) => (printers || []).filter((p) => printerHandles(p, it)).map((p) => p.name)).filter(Boolean))].slice(0, 4),
       n: items.reduce((a, i) => a + (+i.qty || 0), 0),
       items: items.slice(0, 30).map(failItem),
     });

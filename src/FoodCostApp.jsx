@@ -1781,6 +1781,11 @@ const printersAt=(list,bid)=>(list||[]).filter(p=>p.branch_id==null||+p.branch_i
 // ถ้าไม่เอามาแสดง ใบที่ไม่ออกจะเงียบหายไปเลย ครัวไม่รู้ ลูกค้ารอ
 // printFailList: ทุกรายการ (ทุกเครื่อง) + holder = เครื่องที่เก็บรายการไว้ — ใช้กับปุ่ม "พิมพ์ไม่สำเร็จ"
 // รายการจากตัวพิมพ์ v40 ขึ้นไปมี id + items (จำนวน/ตัวเลือก/หมายเหตุ/เครื่องที่รับ) พิมพ์ใหม่ได้เฉพาะที่ไม่ออก
+// ชื่อเครื่องที่ไม่ออกของรายการนั้น — ตัวพิมพ์รุ่นเก่ายังไม่ส่งชื่อมา ก็ถอยไปใช้คำกลางๆ
+const failPrinterNames=(f)=>{
+  const a=(f&&Array.isArray(f.pnames))?f.pnames.filter(Boolean):[];
+  return a.length?a.join(" · "):"";
+};
 const printFailList=(printers)=>{
   const out=[];
   for(const p of printers||[]){
@@ -1795,7 +1800,7 @@ const printFailsOf=(printers)=>{
   for(const f of printFailList(printers)){
     if(f.orderId==null)continue;
     const k=String(f.orderId),prev=m.get(k);
-    m.set(k,prev?{...prev,at:Math.max(+prev.at||0,+f.at||0),n:(+prev.n||0)+(+f.n||0),names:[...new Set([...(prev.names||[]),...(f.names||[])])]}:f);
+    m.set(k,prev?{...prev,at:Math.max(+prev.at||0,+f.at||0),n:(+prev.n||0)+(+f.n||0),names:[...new Set([...(prev.names||[]),...(f.names||[])])],pnames:[...new Set([...(prev.pnames||[]),...(f.pnames||[])])]}:f);
   }
   return m;
 };
@@ -18381,8 +18386,8 @@ function MoveTableModal({from,order,tables,activeOrders,branch,currentUser,onClo
       </div>}
   </Modal>;
 }
-function POSTableMap({tables,activeOrders,zones=[],printers=[],onSelectTable,onAddZone,onAddTable,onUpdateTable,onDeleteTable,onMoveTable,onRenameZone,onDeleteZone}){
-  const failMap=printFailsOf(printers);
+function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null,onSelectTable,onAddZone,onAddTable,onUpdateTable,onDeleteTable,onMoveTable,onRenameZone,onDeleteZone}){
+  const failMap=printFailsOf(failPrinters||printers);   // รายการสดจากรอบถามเร็ว (ถ้ามี) — ป้ายจะหายทันทีที่พิมพ์ออก
   // Free-position floor plan: TAP a table = open its order · LONG-PRESS a table to
   // lift it (shows ✏️/🗑 + drag to reposition). Drag is clamped to the canvas width
   // so the view still scrolls vertically only (no horizontal scroll).
@@ -18543,8 +18548,10 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],onSelectTable,onA
             <div style={{fontWeight:900,fontSize:17,color:sv.text,fontFamily:"'Sarabun',sans-serif",lineHeight:1}}>{t.table_number}</div>
             {t.label&&<div style={{fontSize:9,color:sv.text,fontFamily:"'Sarabun',sans-serif",opacity:.8,marginTop:1,maxWidth:"90%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.label}</div>}
             {!o?<div style={{fontSize:10,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2,opacity:.85}}>{st==="qrsent"?"พิมพ์ QR แล้ว":`${t.seats||4} ที่นั่ง`}</div>
-            :<>{o&&failMap.has(String(o.id))&&<div title={"ใบครัวไม่ออก: "+(failMap.get(String(o.id)).names||[]).join(", ")}
-                style={{fontSize:10,fontWeight:900,color:"#fff",background:C.red,borderRadius:6,padding:"1px 6px",marginTop:3,fontFamily:"'Sarabun',sans-serif"}}>⚠️ ใบครัวไม่ออก</div>}
+            :<>{o&&failMap.has(String(o.id))&&(()=>{const f=failMap.get(String(o.id));const pn=failPrinterNames(f);
+              // บอกชื่อเครื่องที่ไม่ออกเลย (เจ้าของสั่ง 12 ก.ย. 69) — เดิมบอกแค่ว่าใบครัวไม่ออก ต้องไปไล่หาเองว่าเครื่องไหน
+              return <div title={(pn?pn+" ไม่ออก: ":"ใบครัวไม่ออก: ")+(f.names||[]).join(", ")}
+                style={{fontSize:10,fontWeight:900,color:"#fff",background:C.red,borderRadius:6,padding:"1px 6px",marginTop:3,fontFamily:"'Sarabun',sans-serif",maxWidth:"96%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>⚠️ {pn?pn+" ไม่ออก":"ใบครัวไม่ออก"}</div>;})()}
               <div style={{fontSize:11,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
             {active&&<>
               <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();setTableForm({id:t.id,table_number:t.table_number,label:t.label||"",seats:t.seats||4,shape:t.shape||"square",zone:t.zone||""});}} title="แก้ไขโต๊ะ" style={{position:"absolute",top:-13,left:-13,width:30,height:30,borderRadius:"50%",border:"2px solid #fff",background:C.blue,color:"#fff",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,.35)",zIndex:31}}>✏️</button>
@@ -22957,8 +22964,11 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   const[failPrinters,setFailPrinters]=useState([]);
   const[showPrintFails,setShowPrintFails]=useState(false);
   const loadFails=useCallback(async()=>{try{const r=await api.getPrintersWithFails();if(Array.isArray(r))setFailPrinters(printersAt(r,currentBranch.id));}catch{}},[currentBranch.id]);
-  useEffect(()=>{loadFails();const t=setInterval(()=>{if(!document.hidden)loadFails();},15000);return()=>clearInterval(t);},[loadFails]);
+  useEffect(()=>{loadFails();const t=setInterval(()=>{if(!document.hidden)loadFails();},6000);return()=>clearInterval(t);},[loadFails]);
   const failCount=useMemo(()=>printFailList(failPrinters).reduce((s,f)=>s+(Array.isArray(f.items)&&f.items.length?f.items.length:Math.max(1,(f.names||[]).length)),0),[failPrinters]);
+  // ผังโต๊ะและจอโต๊ะใช้รายการจากรอบถามเร็ว ⟹ กดรีปริ้นแล้วป้ายหายภายในไม่กี่วินาที
+  // (เดิมอ่านจากรายชื่อเครื่องพิมพ์ที่ดึงทุก 60 วิ ป้ายจึงค้างอยู่นานทั้งที่พิมพ์ออกแล้ว)
+  const failPrintersLive=failPrinters;
   // เงินทอนหลังปิดบิลเงินสด — เก็บไว้ที่จอแม่ ไม่ใช่ในจอโต๊ะ
   // เพราะจอโต๊ะปิดตัวเองทันทีที่ปิดบิลเสร็จ (โต๊ะต้องว่างพร้อมรับลูกค้าใหม่ทันที)
   // ถ้าเอาป็อปอัพไว้ในจอโต๊ะ มันจะถูกถอดออกไปพร้อมกันแล้วพนักงานไม่เห็นยอดทอนเลย
@@ -23143,7 +23153,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
       </div>
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} printers={printers} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined} onRenameZone={canEdit?handleRenameZone:undefined} onDeleteZone={canEdit?handleDeleteZone:undefined}/>}
+      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} printers={printers} failPrinters={failPrintersLive} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined} onRenameZone={canEdit?handleRenameZone:undefined} onDeleteZone={canEdit?handleDeleteZone:undefined}/>}
       {showOrders&&<SalesReportModal currentBranch={currentBranch} menus={menus} printers={printers} posSettings={posSettings} shift={shift} currentUser={currentUser} onEdited={loadAll} onClose={()=>setShowOrders(false)}/>}
       {showPrintFails&&<PrintFailModal branchId={currentBranch.id} onChanged={loadFails} onClose={()=>{setShowPrintFails(false);loadFails();try{reloadPrinters&&reloadPrinters();}catch{}}}/>}
     </div>
