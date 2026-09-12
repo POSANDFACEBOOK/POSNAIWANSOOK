@@ -19760,13 +19760,13 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
             พร้อมเพย์/อื่นๆ = กดแล้วจบเลย (พิมพ์ใบเสร็จ + ปิดโต๊ะ)
             เงินสด = ต้องกรอกว่ารับเงินมาเท่าไหร่ก่อน แล้วค่อยยืนยัน จะได้รู้เงินทอน
             ส่งวิธีจ่ายเข้าไปเป็นค่าโดยตรง ไม่อ่านจาก state — กันบันทึกวิธีจ่ายผิดจังหวะ */}
-        {askPay&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.78)",zIndex:7000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div style={{background:C.white,borderRadius:20,width:"100%",maxWidth:"min(94vw,420px)",overflow:"hidden",fontFamily:"'Sarabun',sans-serif",boxShadow:"0 30px 80px rgba(0,0,0,.45)"}}>
-            <div style={{padding:"16px 20px",background:C.greenLight,borderBottom:`1px solid ${C.green}33`}}>
-              <div style={{fontSize:12,fontWeight:800,color:C.green}}>โต๊ะ {(table&&table.table_number)||""} · ยอดที่ต้องเก็บ</div>
-              <div style={{fontSize:34,fontWeight:900,color:C.green,lineHeight:1.15}}>฿{total.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+        {askPay&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.78)",zIndex:7000,display:"flex",alignItems:"center",justifyContent:"center",padding:"3vh 16px"}}>
+          <div style={{background:C.white,borderRadius:20,width:"100%",maxWidth:`min(94vw,${askPay==="split"?860:520}px)`,maxHeight:"94vh",display:"flex",flexDirection:"column",overflow:"hidden",fontFamily:"'Sarabun',sans-serif",boxShadow:"0 30px 80px rgba(0,0,0,.45)"}}>
+            <div style={{padding:"18px 24px",background:C.greenLight,borderBottom:`1px solid ${C.green}33`,flexShrink:0}}>
+              <div style={{fontSize:13.5,fontWeight:800,color:C.green}}>โต๊ะ {(table&&table.table_number)||""} · ยอดที่ต้องเก็บ</div>
+              <div style={{fontSize:38,fontWeight:900,color:C.green,lineHeight:1.15}}>฿{total.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
             </div>
-            {askPay==="choose"?<div style={{padding:18}}>
+            {askPay==="choose"?<div style={{padding:"22px 24px",overflowY:"auto"}}>
               <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:12}}>ลูกค้าจ่ายแบบไหน?</div>
               <div style={{display:"grid",gap:10}}>
                 {PAY_METHODS.map(m=><button key={m.v} disabled={saving}
@@ -19785,7 +19785,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               </button>
               <button onClick={()=>setAskPay(null)} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
             </div>
-            :askPay==="other"?<div style={{padding:18}}>
+            :askPay==="other"?<div style={{padding:"22px 24px",overflowY:"auto"}}>
               <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:12}}>ช่องทางอื่นๆ — เลือกแล้วปิดบิลทันที</div>
               <div style={{display:"grid",gap:10}}>
                 {OTHER_PAY_METHODS.map(m=><button key={m.v} disabled={saving}
@@ -19801,7 +19801,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               </div>
               <button onClick={()=>setAskPay("choose")} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
             </div>
-            :askPay==="split"?<div style={{padding:18}}>
+            :askPay==="split"?<div style={{padding:"22px 24px",overflowY:"auto"}}>
               {/* แบ่งจ่ายทีละขั้น: ใส่จำนวน → เลือกช่องทาง → ทำซ้ำจนครบยอด
                   เงินสดต้องเป็นขั้นสุดท้ายเสมอ เพราะเป็นขั้นเดียวที่มีเงินทอน */}
               <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
@@ -19855,8 +19855,8 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               {onSplit&&<button onClick={onSplit} disabled={saving} style={{marginTop:10,width:"100%",border:"none",background:"none",color:C.purple,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,textDecoration:"underline"}}>แบ่งบิลตามคน (พิมพ์ใบตัวอย่างให้ลูกค้าดู) →</button>}
             </div>
 
-            :<div style={{padding:18}}>
-              <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:8}}>💵 รับเงินมาเท่าไหร่?{askPay==="split-cash"?` (ขั้นสุดท้าย ฿${remain.toLocaleString()})`:""}</div>
+            :<div style={{padding:"22px 24px",overflowY:"auto"}}>
+              <div style={{fontSize:16,fontWeight:800,color:C.ink2,marginBottom:10}}>💵 รับเงินมาเท่าไหร่?{askPay==="split-cash"?` (ขั้นสุดท้าย ฿${remain.toLocaleString()})`:""}</div>
               <NumInput value={cashRcv} onValue={setCashRcv} placeholder={dueNow.toFixed(0)} style={{...iS,padding:"14px",fontSize:26,fontWeight:900,textAlign:"center"}}/>
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>
                 <button onClick={()=>setCashRcv(String(dueNow))} style={{flex:"1 1 70px",padding:"11px 6px",background:C.green,border:"none",borderRadius:10,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.white}}>พอดี</button>
