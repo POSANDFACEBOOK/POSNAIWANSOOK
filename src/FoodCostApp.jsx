@@ -19327,11 +19327,14 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       }
       // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
       // passing the combined figure would deduct the promotion twice on the printed receipt.
-      await smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:pm,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
-      await releaseThisTable();
+      const _rcpt=smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:pm,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
+      // บอกเงินทอนก่อนงานอื่นทั้งหมด — ลิ้นชักเพิ่งเปิด เงินอยู่ในมือ ต้องรู้ตอนนี้ว่าทอนเท่าไร
+      // (ใบเสร็จส่งไปตัวพิมพ์แล้ว รอผลทีหลัง — พลาดก็ยังขึ้นเตือนเหมือนเดิม ไม่กลืนเงียบ)
       if(pm==="cash"&&typeof onCashChange==="function"){
         onCashChange({change:round2(Math.max(0,(+cashReceived||0)-total)),received:+cashReceived||0,total,table:table.table_number});
       }
+      await _rcpt;   // รอผลใบเสร็จ (พลาดก็ยังขึ้นเตือนเหมือนเดิม ไม่กลืนเงียบ)
+      await releaseThisTable();
       onDone();onClose();
     }catch(e){notifyDlg("ชำระเงินไม่สำเร็จ: "+e.message);}setSavingGuard(false);
   }
