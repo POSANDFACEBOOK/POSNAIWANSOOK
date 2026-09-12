@@ -19740,7 +19740,8 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
         {promoDiscount>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.purple,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>🎁 {selectedPromo?.name||"โปรโมชั่น"}</span><span>-฿{promoDiscount.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>}
         {sc>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>Service Charge {posSettings?.service_charge_rate||0}%</span><span>+฿{sc.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>}
         {vat>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}><span>VAT {vatRate}% {vatIncluded?"(รวมในราคา)":""}</span><span>{vatIncluded?"":"+"}฿{vat.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:`linear-gradient(135deg,${C.green},#059669)`,borderRadius:10,marginBottom:10,color:C.white}}>
+        {/* ยอดสุทธิเป็นกรอบเขียว ไม่ใช่แถบเขียวทึบ — แถบทึบไปซ้ำหน้าตากับปุ่มยืนยันชำระ พนักงานลายตา (เจ้าของแจ้ง 12 ก.ย. 69) */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:C.white,border:`2px solid ${C.green}`,borderRadius:10,marginBottom:10,color:C.green}}>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:700}}>ยอดสุทธิ</span>
           <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:24,fontWeight:900}}>฿{total.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
         </div>
