@@ -23946,6 +23946,12 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
   </Modal>;
 }
 
+// เวลาที่ "มีอะไรเกิดขึ้นล่าสุด" กับบิลใบนี้ — ปิดบิล/แก้บิล/สั่งเพิ่ม ใช้ updated_at
+// บิลที่ยังไม่เคยถูกแตะเลยก็ใช้เวลาที่เปิดโต๊ะ
+const billActedAt=(o)=>{
+  const t=Date.parse((o&&(o.updated_at||o.created_at))||"");
+  return Number.isFinite(t)?t:0;
+};
 function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSettings=null,shift=null,currentUser=null,onEdited}){
   const[editBill,setEditBill]=useState(null);const[reloadTick,setReloadTick]=useState(0);
   const isoKey=(d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;  // machine key (ISO) — do NOT shadow the global BE fmtD
@@ -24032,7 +24038,7 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
   // เดิมบิลที่ยกเลิกถูกกรองทิ้งทุกตัวกรอง เหลือแค่ตัวเลขนับมุมขวา — กดดูไม่ได้เลย
   // ซึ่งแปลว่ากินเงินสดแล้วกดยกเลิกจะไม่มีใครเห็นอะไรเลย ต้องเปิดให้ดูได้
   const baseList=filter==="paid"?paid:filter==="unpaid"?unpaid:filter==="cancelled"?cancelled:[...paid,...unpaid,...cancelled];
-  const list=baseList.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+  const list=baseList.slice().sort((a,b)=>billActedAt(b)-billActedAt(a));   // อะไรเพิ่งเกิดล่าสุด อยู่บนสุด
   const m=(n)=>(+n||0).toLocaleString(undefined,{maximumFractionDigits:0});
 
   const isToday=date===todayStr;
@@ -24128,7 +24134,12 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
             {(o.items||[]).length>3&&<div style={{fontSize:13,color:C.ink4}}>+อีก {o.items.length-3} รายการ</div>}
             {(o.items||[]).length===0&&<div style={{fontSize:13,color:C.ink4}}>ไม่มีรายการ</div>}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6,paddingTop:6,borderTop:`1px solid ${C.lineLight}`}}>
-              <span style={{fontSize:13,color:C.ink4}}>{new Date(o.created_at).toLocaleTimeString("th-TH",{hour:'2-digit',minute:'2-digit'})}</span>
+              <span style={{fontSize:13,color:C.ink4}}>{(()=>{
+                const hhmm=(t)=>new Date(t).toLocaleTimeString("th-TH",{hour:'2-digit',minute:'2-digit'});
+                const open=hhmm(o.created_at),act=o.updated_at?hhmm(o.updated_at):open;
+                // เวลาเปิดโต๊ะ · เวลาที่เพิ่งมีอะไรเกิดขึ้น (ปิดบิล/แก้บิล/สั่งเพิ่ม) ถ้าไม่ใช่เวลาเดียวกัน
+                return act&&act!==open?`${open} · ล่าสุด ${act}`:open;
+              })()}</span>
               <span style={{fontSize:18,fontWeight:900,color:C.ink}}>฿{m(o.total)}</span>
             </div>
             <div style={{fontSize:13,color:C.brand,fontWeight:700,marginTop:7,textAlign:"right"}}>ดูรายละเอียด →</div>

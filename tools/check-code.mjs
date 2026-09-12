@@ -3468,6 +3468,29 @@ section("แจ้งเมื่อมีเวอร์ชันใหม่")
   ok_("หยุดเช็คเมื่อออกจากจอ และไม่เช็คตอนจอถูกซ่อน", APP.includes("return()=>{stop=true;clearInterval(t);document.removeEventListener(\"visibilitychange\",onVis);};"));
 }
 
+// ── รายงานยอดขาย: สิ่งที่เพิ่งเกิดล่าสุดต้องอยู่บนสุด (เจ้าของสั่ง 12 ก.ย. 69) ──
+// เดิมเรียงตามเวลาเปิดโต๊ะ บิลที่เพิ่งปิด/เพิ่งแก้จึงจมอยู่กลางรายการ กลับมาดูแลต่อไม่เจอ
+section("รายงาน: ล่าสุดอยู่บนสุด");
+{
+  const L = APP.split("\n");
+  const a = L.findIndex((l) => l.startsWith("const billActedAt=(o)=>{"));
+  const b = L.findIndex((l, i) => i > a && l === "};");
+  let at = null;
+  try { at = new Function(L.slice(a, b + 1).join("\n") + "\nreturn billActedAt;")(); } catch {}
+  ok_("อ่านตัวจับเวลาล่าสุดของบิลได้", !!at);
+  if (at) {
+    const open = "2026-09-12T10:44:00Z", closed = "2026-09-12T12:23:00Z";
+    ck("ใช้เวลาที่เพิ่งเกิดเรื่องล่าสุด ไม่ใช่เวลาเปิดโต๊ะ", at({ created_at: open, updated_at: closed }), Date.parse(closed));
+    ck("บิลที่ยังไม่เคยถูกแตะ ใช้เวลาเปิดโต๊ะ", at({ created_at: open }), Date.parse(open));
+    ck("ข้อมูลเวลาเพี้ยน = 0 (ไม่ทำให้การเรียงพัง)", [at({}), at(null), at({ updated_at: "เมื่อวาน" })], [0, 0, 0]);
+    // บิลที่เปิดทีหลัง (11:00) แต่ไม่มีใครแตะ ต้องอยู่ใต้บิลเก่าที่เพิ่งถูกแก้ตอน 12:23
+    const rows = [{ created_at: "2026-09-12T11:00:00Z" }, { created_at: open, updated_at: closed }];
+    ck("บิลเก่าที่เพิ่งถูกแก้ ต้องขึ้นมาอยู่บนสุด", rows.slice().sort((x, y) => at(y) - at(x))[0].updated_at, closed);
+  }
+  ok_("รายงานเรียงด้วยเวลาล่าสุดจริง", APP.includes("const list=baseList.slice().sort((a,b)=>billActedAt(b)-billActedAt(a));"));
+  ok_("การ์ดบอกทั้งเวลาเปิดโต๊ะและเวลาล่าสุด", APP.includes("ล่าสุด ") && APP.includes("const open=hhmm(o.created_at),act=o.updated_at?hhmm(o.updated_at):open;"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
