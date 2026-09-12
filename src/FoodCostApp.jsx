@@ -17743,7 +17743,7 @@ export default function App(){
 // ══════════════════════════════════════════════════════
 // ── PRINT HELPERS ─────────────────────────────────────
 // ══════════════════════════════════════════════════════
-const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",thaiplus:"🏛️ ไทยพลัส",bartercard:"💳 Bartercard",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
+const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",thaiplus:"🏛️ ไทยช่วยไทย พลัส",bartercard:"💳 Bartercard",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
 function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const w=openPrintWindow(400,700);
   if(!w)return;
@@ -19585,7 +19585,7 @@ const PAY_METHODS=[
 // ยอดของช่องทางพวกนี้ลงกลุ่ม "อื่นๆ" เองทั้งในสรุปกะและท่อบัญชี (คัดด้วยการยกเว้น ไม่ใช่รายชื่อ) — ไม่มีวันหลุดจากยอด
 // logo: ไฟล์รูปใน public/ (ถ้ามี) · ไม่มีก็ใช้ป้ายตัวอักษรแทน
 const OTHER_PAY_METHODS=[
-  {v:"thaiplus",l:"ไทยพลัส",c:"#1D4ED8"},
+  {v:"thaiplus",l:"ไทยช่วยไทย พลัส",icon:"🏛️",c:"#1D4ED8"},
   {v:"bartercard",l:"Bartercard",icon:"💳",c:"#0F766E"},
   {v:"other",l:"ช่องทางอื่น (ไม่ระบุ)",icon:"➕",c:"#475569"},
 ];

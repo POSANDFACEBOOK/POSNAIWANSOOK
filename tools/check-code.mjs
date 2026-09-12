@@ -2864,7 +2864,8 @@ section("ช่องทางจ่ายอื่นๆ");
   if (Array.isArray(OTHER) && LABEL) {
     const noName = OTHER.filter(m => !LABEL[m.v]).map(m => m.v);
     ck("ทุกช่องทางมีชื่อบนใบเสร็จ/ประวัติ (ขาด: " + (noName.join(",") || "-") + ")", noName.length, 0);
-    ok_("มีไทยพลัส", OTHER.some(m => m.v === "thaiplus" && m.l === "ไทยพลัส"));
+        // ชื่อบนจอต้องตรงกับชื่อที่ฝั่งบัญชีใช้ ไม่งั้นพนักงานกับบัญชีเรียกคนละอย่างแล้วกระทบยอดกันไม่รู้เรื่อง
+  ok_("ชื่อไทยช่วยไทย พลัส ตรงกับที่ส่งเข้าบัญชี", OTHER.some(m => m.v === "thaiplus" && m.l === "ไทยช่วยไทย พลัส") && SLIPPUSH.includes('name_th: "ไทยช่วยไทย พลัส"'));
     ok_("ยังเลือก อื่นๆ แบบไม่ระบุได้ (บิลเดิมใช้อยู่)", OTHER.some(m => m.v === "other"));
     ck("ไม่มีช่องทางซ้ำ", new Set(OTHER.map(m => m.v)).size, OTHER.length);
     ok_("ไม่มีช่องทางย่อยไปชนเงินสด/พร้อมเพย์ (จะลงผิดกลุ่ม)", !OTHER.some(m => ["cash", "promptpay", "transfer", "credit", "debit"].includes(m.v)));
