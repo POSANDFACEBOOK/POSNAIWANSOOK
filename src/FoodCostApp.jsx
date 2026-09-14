@@ -17806,7 +17806,7 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
     ?`<script>(function(){var r=document.getElementById('rcpt');if(!r)return;function fit(){r.style.zoom=Math.max(1.5,Math.min(3.4,(window.innerWidth*0.94)/272));}fit();window.addEventListener('resize',fit);window.onbeforeprint=function(){r.style.zoom=1;};window.onafterprint=fit;})();<\/script>`
     :`<script>window.onload=()=>window.print();<\/script>`;
   const rows=(order.items||[]).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${esc(i.name)}${i.options&&i.options.length?`<br/><span style="font-size:11px;color:#0D9488">+ ${esc(optionsText(i.options))}</span>`:""}${i.note?`<br/><span style="font-size:11px;color:#666">★${esc(i.note)}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?esc(i.item_discount_value)+"%":"฿"+esc(i.item_discount_value)}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
-  const payLabel=PAY_LABEL[order.payment_method]||esc(order.payment_method||"-");
+  const payLabel=(Array.isArray(order.payments)&&order.payments.length>1)?esc(payHeadOf(order)):(PAY_LABEL[order.payment_method]||esc(order.payment_method||"-"));
   const splitLines=(Array.isArray(order.payments)&&order.payments.length>1)
     ?order.payments.map((p,i)=>`<div style="display:flex;justify-content:space-between;font-size:12px"><span>${i+1}. ${esc(payMethodLabel(p.method))}</span><span>฿${(+p.amount||0).toFixed(2)}</span></div>`).join("")
     :"";
@@ -18001,6 +18001,17 @@ function bahtR(n){return "฿"+(+n||0).toFixed(2);}
 const payMethodLabel=(v)=>stripEmoji(PAY_LABEL[v]||v||"-").trim();   // ชื่อช่องทางแบบไม่มีอีโมจิ (ใบเสร็จ/รายการขั้นแบ่งจ่าย)
 // ยอดที่รับเป็น "เงินสด" ของบิลใบนี้ — บิลแบ่งจ่ายนับเฉพาะขั้นที่เป็นเงินสด (ขั้นสุดท้ายเสมอ จึงเป็นขั้นที่ต้องทอน)
 // ถ้าเอายอดทั้งบิลไปลบเงินที่รับมา เงินทอนบนใบเสร็จของบิลแบ่งจ่ายจะติดลบ/ผิดทันที
+// หัวบรรทัด "ชำระโดย" — ใช้ร่วมกันทั้งใบเสร็จความร้อน ใบเสร็จหน้าเว็บ และจอพรีวิว ให้เขียนเหมือนกันเป๊ะ
+// นับช่องทางที่ต่างกันจริง: ไทยช่วยไทย พลัส 3 ครั้ง = "ไทยช่วยไทย พลัส (3 รายการ)" ไม่ใช่ "แบ่งจ่าย 3 ช่องทาง"
+const payHeadOf=(order)=>{
+  const ps=(order&&Array.isArray(order.payments))?order.payments.filter(Boolean):[];
+  if(ps.length>1){
+    const kinds=[...new Set(ps.map(p=>p.method))];
+    if(kinds.length===1)return `${payMethodLabel(kinds[0])} (${ps.length} รายการ)`;
+    return `แบ่งจ่าย ${kinds.length} ช่องทาง`+(ps.length>kinds.length?` (${ps.length} รายการ)`:"");
+  }
+  return payMethodLabel(order&&order.payment_method);
+};
 const cashPartOf=(order)=>{
   const ps=order&&Array.isArray(order.payments)?order.payments:null;
   if(ps&&ps.length)return ps.filter(p=>p&&p.method==="cash").reduce((s,p)=>s+(+p.amount||0),0);
@@ -18099,7 +18110,7 @@ function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
     L.push({rule:true});
     const splitPay=(Array.isArray(order.payments)&&order.payments.length>1)?order.payments:null;
     // แบ่งจ่ายหลายช่องทาง — ลูกค้าและพนักงานต้องเห็นว่าจ่ายช่องทางไหนไปเท่าไรบ้าง ไม่ใช่เห็นแค่คำว่า "แบ่งจ่าย"
-    L.push({t:splitPay?`ชำระโดย: แบ่งจ่าย ${splitPay.length} ช่องทาง`:"ชำระโดย: "+stripEmoji(PAY_LABEL[order.payment_method]||order.payment_method||"-"),size:24,bold:true,align:"center"});
+    L.push({t:"ชำระโดย: "+payHeadOf(order),size:24,bold:true,align:"center"});
     if(splitPay)splitPay.forEach((p,i)=>L.push({l:`  ${i+1}. ${payMethodLabel(p.method)}`,r:bahtR(+p.amount||0),size:22,bold:true}));
     L.push({t:"ขอบคุณที่ใช้บริการครับ",size:22,align:"center",mb:2});
   }else{
@@ -19359,7 +19370,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // breakdown columns aren't there yet, fall back to base so the sale never fails.
       // จ่ายช่องทางเดียว = ชนิดบิลเป็นช่องทางนั้น · หลายช่องทาง = "mixed" แล้วรายละเอียดอยู่ใน payments
       // (สรุปกะและท่อบัญชีอ่านจาก payments เมื่อมี จึงแยกยอดตามช่องทางจริงได้ ไม่กองรวมช่องเดียว)
-      const pmCol=payParts?(payParts.length===1?payParts[0].method:"mixed"):pm;
+      // นับ "ช่องทางที่ต่างกัน" ไม่ใช่จำนวนครั้ง — หลายคนจ่ายไทยช่วยไทย พลัสคนละครั้ง ยังเป็นบิลไทยช่วยไทย พลัส (บิล #182 13 ก.ย. 69)
+      const pmCol=payParts?(new Set(payParts.map(p=>p.method)).size===1?payParts[0].method:"mixed"):pm;
       const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,round_adj:roundAdj,payment_method:pmCol,updated_at:new Date().toISOString()};
       // paid_by = ใครกดปิดบิลใบนี้ · เดิมไม่มีเลย บิลทุกใบไร้เจ้าของ ตรวจย้อนหลังไม่ได้
       const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,payments:paymentsCol,paid_by:currentUser?.username||currentUser?.name||null};
@@ -23759,7 +23771,7 @@ function BillDetailCard({order,branch=null,cfg=null,onBack,onEdit=null}){
         {+o.vat>0&&<Row l={`VAT ${o.vat_rate||7}%${o.vat_included?" (รวมในราคา)":""}`} v={m(o.vat)} plus={o.vat_included?"":"+"}/>}
         <div style={{borderTop:`1px solid ${C.line}`,margin:"8px 0 0",paddingTop:10}}><Row l="รวมทั้งสิ้น" v={m(o.total)} big/></div>
         {paid&&cashPartOf(o)>0&&o.cash_received&&<div style={{marginTop:8}}><Row l="รับเงิน" v={m(o.cash_received)}/><Row l="เงินทอน" v={m(Math.max(0,(+o.cash_received)-cashPartOf(o)))}/></div>}
-        {paid&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed ${C.lineLight}`,fontSize:12.5,fontFamily:"'Sarabun',sans-serif",color:C.ink3,display:"flex",justifyContent:"space-between"}}><span>ชำระโดย</span><span style={{fontWeight:700,color:C.ink}}>{PAY_LABEL[o.payment_method]||o.payment_method||"-"}</span></div>}
+        {paid&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed ${C.lineLight}`,fontSize:12.5,fontFamily:"'Sarabun',sans-serif",color:C.ink3,display:"flex",justifyContent:"space-between"}}><span>ชำระโดย</span><span style={{fontWeight:700,color:C.ink}}>{(Array.isArray(o.payments)&&o.payments.length>1)?payHeadOf(o):(PAY_LABEL[o.payment_method]||o.payment_method||"-")}</span></div>}
         {/* แบ่งจ่าย: ไล่ให้เห็นทีละขั้นว่าช่องทางไหนเท่าไร — เปิดย้อนดูทีหลังก็ยังตรวจได้ */}
         {paid&&Array.isArray(o.payments)&&o.payments.length>1&&<div style={{marginTop:4,fontSize:12.5,fontFamily:"'Sarabun',sans-serif",color:C.ink3}}>
           {o.payments.map((p,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"1px 0"}}><span>{i+1}. {payMethodLabel(p.method)}</span><span style={{fontWeight:700,color:C.ink}}>{m(p.amount)}</span></div>)}

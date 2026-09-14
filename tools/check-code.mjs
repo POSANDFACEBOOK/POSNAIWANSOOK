@@ -3378,8 +3378,21 @@ section("แบ่งจ่ายหลายช่องทาง");
     APP.includes('type:"sale",amount:cashPart,') && APP.includes("if(cashPart>0&&shift){"));
   ok_("เงินทอนคิดจากขั้นเงินสด ไม่ใช่ยอดบิล", APP.includes("onCashChange({change:round2(Math.max(0,(+cashReceived||0)-cashPart)),received:+cashReceived||0,total:cashPart,"));
   ok_("บิลเก็บช่องทางที่จ่ายจริงไว้ทุกขั้น", APP.includes("payments:paymentsCol,paid_by:"));
-  ok_("จ่ายช่องทางเดียวยังเก็บเป็นช่องทางนั้น · หลายช่องทางจึงเป็น mixed",
-    APP.includes('const pmCol=payParts?(payParts.length===1?payParts[0].method:"mixed"):pm;'));
+  // ชนิดบิลนับ "ช่องทางที่ต่างกัน" — ดึงบรรทัดจริงมารัน
+  // ของจริง 13 ก.ย. 69: #182 = ไทยช่วยไทย พลัส 317 + 363 + 363 เคยถูกเก็บเป็น mixed
+  {
+    const ln = APP.split("\n").find((l) => l.includes("const pmCol=payParts?"));
+    let pmOf = null;
+    try { pmOf = new Function("payParts", "pm", ln.trim() + " return pmCol;"); } catch {}
+    ok_("อ่านตัวตัดสินชนิดบิลได้", !!pmOf);
+    if (pmOf) {
+      ok_("จ่ายช่องทางเดียว = ช่องทางนั้น", pmOf(null, "promptpay") === "promptpay");
+      ok_("ขั้นเดียว = ช่องทางนั้น", pmOf([{ method: "cash", amount: 500 }], "mixed") === "cash");
+      ok_("ช่องทางเดียวกันหลายครั้ง = ยังเป็นช่องทางนั้น ไม่ใช่ mixed",
+        pmOf([{ method: "thaiplus", amount: 317 }, { method: "thaiplus", amount: 363 }, { method: "thaiplus", amount: 363 }], "mixed") === "thaiplus");
+      ok_("ต่างช่องทาง = mixed", pmOf([{ method: "thaiplus", amount: 333 }, { method: "promptpay", amount: 404 }], "mixed") === "mixed");
+    }
+  }
   // ── รายละเอียดแบ่งจ่ายต้องเดินทางถึงตัวปิดบิลจริง ──
   // บั๊คจริง 12 ก.ย. 69: บิล #127 (C13) และ #144 (C10-) แบ่งจ่ายจริง แต่ฐานข้อมูลได้แค่คำว่า "mixed"
   // เพราะจอเช็คบิลส่งต่อให้ตัวปิดบิลแค่ชื่อช่องทาง — อาร์กิวเมนต์ตัวที่สอง (ขั้นการแบ่งจ่าย) ตกหายที่ปากทาง
@@ -3422,8 +3435,37 @@ section("แบ่งจ่ายหลายช่องทาง");
   }
   ok_("ใบเสร็จแจกแจงว่าขั้นไหนจ่ายเท่าไรด้วยอะไร",
     APP.includes("if(splitPay)splitPay.forEach((p,i)=>L.push(") && APP.includes("const splitLines="));
-  ok_("หัวใบเสร็จบอกจำนวนช่องทางที่แบ่งจ่าย ไม่ใช่คำว่าแบ่งจ่ายลอยๆ",
-    APP.includes("ชำระโดย: แบ่งจ่าย ") && APP.includes(" ช่องทาง"));
+  // หัว "ชำระโดย" — ดึงตัวจริงมารัน ทุกใบเสร็จต้องใช้ตัวเดียวกัน
+  {
+    const lines = APP.split("\n");
+    const one = (h) => lines.find((l) => l.startsWith(h)) || "";
+    const grab = (head) => {
+      const st = APP.indexOf(head); if (st < 0) return "";
+      let d = 0, started = false;
+      for (let i = st; i < APP.length; i++) {
+        if (APP[i] === "{") { d++; started = true; }
+        else if (APP[i] === "}") { d--; if (started && d === 0) return APP.slice(st, i + 1) + ";"; }
+      }
+      return "";
+    };
+    let head = null;
+    try {
+      head = new Function([one("const PAY_LABEL={"), one("function stripEmoji(s){"), one("const payMethodLabel=(v)=>"), grab("const payHeadOf=(order)=>{"), "return payHeadOf;"].join("\n"))();
+    } catch {}
+    ok_("อ่านตัวเขียนหัวชำระโดยได้", !!head);
+    if (head) {
+      ok_("ช่องทางเดียว = ชื่อช่องทาง", head({ payment_method: "promptpay" }) === "พร้อมเพย์");
+      ok_("ไทยช่วยไทย พลัส 3 ครั้ง = \"ไทยช่วยไทย พลัส (3 รายการ)\"",
+        head({ payment_method: "thaiplus", payments: [{ method: "thaiplus", amount: 317 }, { method: "thaiplus", amount: 363 }, { method: "thaiplus", amount: 363 }] }) === "ไทยช่วยไทย พลัส (3 รายการ)");
+      ok_("ต่างช่องทาง = \"แบ่งจ่าย 2 ช่องทาง\"",
+        head({ payment_method: "mixed", payments: [{ method: "thaiplus", amount: 333 }, { method: "promptpay", amount: 404 }] }) === "แบ่งจ่าย 2 ช่องทาง");
+      ok_("2 ช่องทาง 3 ครั้ง = บอกทั้งช่องทางและจำนวนรายการ",
+        head({ payment_method: "mixed", payments: [{ method: "thaiplus", amount: 333 }, { method: "thaiplus", amount: 84 }, { method: "promptpay", amount: 404 }] }) === "แบ่งจ่าย 2 ช่องทาง (3 รายการ)");
+      ok_("บิลเก่า mixed ไม่มีรายละเอียด ยังอ่านออก", head({ payment_method: "mixed", payments: null }) === "แบ่งจ่ายหลายช่องทาง");
+    }
+    ok_("ใบเสร็จทั้งสามแบบใช้หัวชำระโดยตัวเดียวกัน",
+      APP.includes('L.push({t:"ชำระโดย: "+payHeadOf(order),') && APP.includes("?esc(payHeadOf(order)):") && APP.includes("?payHeadOf(o):"));
+  }
   ok_("เงินทอนบนใบเสร็จคิดจากขั้นเงินสด ไม่ใช่ยอดทั้งบิล",
     APP.includes("const cashPaid=cashPartOf(order);") && APP.includes("const cashPaidH=cashPartOf(order);"));
   ok_("เปิดบิลย้อนดูทีหลังก็ยังเห็นว่าแบ่งจ่ายช่องทางไหนบ้าง",
