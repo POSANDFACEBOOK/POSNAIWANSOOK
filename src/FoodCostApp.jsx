@@ -11240,6 +11240,7 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
 
 // Full-screen PO view with status-aware actions
 function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canDelete,onClose,onAcceptRequest,onShip,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel,onDelete,onSavePhotos}){
+  const isMobile=useIsMobile();   // มือถือ: ตารางรายการพอดีจอ ไม่มีเลื่อนแนวนอน (นิ้วบนตารางต้องเลื่อนขึ้นลงได้)
   const isCreator=+po.from_branch_id===currentBranch.id;
   const isReceiver=+po.branch_id===currentBranch.id;
   // Central kitchen has manager-level access: it can act on any PO,
@@ -11295,7 +11296,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
     </div>
 
     {/* Body — scrollable */}
-    <div style={{flex:1,overflowY:"auto",background:"#F1F5F9",padding:"24px 32px"}}>
+    <div style={{flex:1,minHeight:0,overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",background:"#F1F5F9",padding:isMobile?"12px 10px":"24px 32px"}}>
       <div style={{maxWidth:1100,margin:"0 auto"}}>
 
         {/* Status / activity timeline */}
@@ -11334,39 +11335,39 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         </div>
 
         {/* Items table */}
-        <div style={{background:C.white,borderRadius:14,overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",boxShadow:"0 2px 8px rgba(15,23,42,.05)",marginBottom:14}}>
+        <div style={{background:C.white,borderRadius:14,overflowX:isMobile?"visible":"auto",WebkitOverflowScrolling:"touch",boxShadow:"0 2px 8px rgba(15,23,42,.05)",marginBottom:14}}>
           <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.line}`,background:C.bg,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:15,color:C.ink}}>📋 รายการ ({(po.items||[]).length})</div>
             {mode==="dispute"&&<span style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#9A3412",background:"#FFEDD5",padding:"4px 10px",borderRadius:18,fontWeight:700}}>กำลังแก้ไขจำนวนที่ได้รับจริง</span>}
           </div>
-          <table style={{width:"100%",minWidth:560,borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
+          <table style={{width:"100%",minWidth:isMobile?0:560,borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
             <thead><tr style={{background:C.bg}}>
-              <th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:40}}>#</th>
-              <th style={{padding:"10px 12px",textAlign:"left",fontSize:11,color:C.ink3,fontWeight:700}}>รายการ</th>
-              <th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:70}}>หน่วย</th>
-              <th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:90}}>สั่ง</th>
-              {mode==="dispute"&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:"#9A3412",fontWeight:800,width:120}}>ได้รับจริง *</th>}
-              {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.green,fontWeight:800,width:110}}>รับจริง</th>}
-              {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<th style={{padding:"10px 12px",textAlign:"center",fontSize:11,color:C.red,fontWeight:800,width:110}}>ผลต่าง</th>}
-              <th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:100}}>ราคา/หน่วย</th>
-              <th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:110}}>รวม</th>
+              {!isMobile&&<th style={{padding:isMobile?"8px 6px":"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:40}}>#</th>}
+              <th style={{padding:isMobile?"8px 6px":"10px 12px",textAlign:"left",fontSize:11,color:C.ink3,fontWeight:700}}>รายการ</th>
+              {!isMobile&&<th style={{padding:isMobile?"8px 6px":"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:70}}>หน่วย</th>}
+              <th style={{padding:isMobile?"8px 6px":"10px 12px",textAlign:"center",fontSize:11,color:C.ink3,fontWeight:700,width:90}}>สั่ง</th>
+              {mode==="dispute"&&<th style={{padding:isMobile?"8px 6px":"10px 12px",textAlign:"center",fontSize:11,color:"#9A3412",fontWeight:800,width:120}}>ได้รับจริง *</th>}
+              {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<th style={{padding:isMobile?"8px 6px":"10px 12px",textAlign:"center",fontSize:11,color:C.green,fontWeight:800,width:110}}>รับจริง</th>}
+              {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<th style={{padding:isMobile?"8px 6px":"10px 12px",textAlign:"center",fontSize:11,color:C.red,fontWeight:800,width:110}}>ผลต่าง</th>}
+              {!isMobile&&<th style={{padding:isMobile?"8px 6px":"10px 12px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:100}}>ราคา/หน่วย</th>}
+              {!(isMobile&&mode==="dispute")&&<th style={{padding:isMobile?"8px 6px":"10px 12px",textAlign:"right",fontSize:11,color:C.ink3,fontWeight:700,width:110}}>รวม</th>}
             </tr></thead>
             <tbody>
               {(po.items||[]).map((it,i)=>{
                 const recv=mode==="dispute"?(+receivedQty[i]||0):it.received_qty;
                 const short=recv!=null&&+recv<+it.qty;
                 return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
-                  <td style={{padding:"9px 12px",textAlign:"center",fontSize:12,color:C.ink4,fontWeight:700}}>{i+1}</td>
-                  <td style={{padding:"9px 12px",fontSize:13,fontWeight:600,color:C.ink}}>{it.name}{it.note?<div style={{fontSize:11,color:C.ink4,marginTop:2}}>★ {it.note}</div>:null}</td>
-                  <td style={{padding:"9px 12px",textAlign:"center",fontSize:12,color:C.ink2}}>{it.unit||"-"}</td>
-                  <td style={{padding:"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:C.ink}}>{it.qty}</td>
+                  {!isMobile&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"center",fontSize:12,color:C.ink4,fontWeight:700}}>{i+1}</td>}
+                  <td style={{padding:isMobile?"8px 6px":"9px 12px",fontSize:13,fontWeight:600,color:C.ink,overflowWrap:"anywhere"}}>{isMobile?`${i+1}. `:""}{it.name}{isMobile&&<div style={{fontSize:11.5,color:C.ink3,fontWeight:600,marginTop:2}}>{it.unit||"-"} · ฿{(+it.price_per_unit||0).toFixed(2)}/หน่วย</div>}{it.note?<div style={{fontSize:11,color:C.ink4,marginTop:2}}>★ {it.note}</div>:null}</td>
+                  {!isMobile&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"center",fontSize:12,color:C.ink2}}>{it.unit||"-"}</td>}
+                  <td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:C.ink}}>{it.qty}</td>
                   {mode==="dispute"&&<td style={{padding:"6px 8px",textAlign:"center"}}>
-                    <NumStepper value={receivedQty[i]} onChange={v=>setReceivedQty(prev=>({...prev,[i]:v}))} max={+it.qty} step={1} width={64} btnColor={short?C.red:C.brand} btnBg={short?"#FEF2F2":C.bg} inputStyle={{fontSize:14,fontWeight:800,color:short?C.red:C.ink,background:short?"#FEF2F2":C.white,border:`2px solid ${short?C.red:C.brandBorder}`}}/>
+                    <NumStepper value={receivedQty[i]} onChange={v=>setReceivedQty(prev=>({...prev,[i]:v}))} max={+it.qty} step={1} width={isMobile?52:64} btnColor={short?C.red:C.brand} btnBg={short?"#FEF2F2":C.bg} inputStyle={{fontSize:14,fontWeight:800,color:short?C.red:C.ink,background:short?"#FEF2F2":C.white,border:`2px solid ${short?C.red:C.brandBorder}`}}/>
                   </td>}
-                  {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<td style={{padding:"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:short?C.red:C.green}}>{recv!=null?recv:it.qty}</td>}
-                  {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&(()=>{const price=+it.price_per_unit||0;const rv=recv!=null?+recv:+it.qty;const dQty=round2(rv-(+it.qty||0));const dVal=round2(dQty*price);return <td style={{padding:"9px 12px",textAlign:"center"}}>{dQty===0?<span style={{color:C.green,fontWeight:800,fontSize:13}}>✓ ครบ</span>:<><div style={{color:dQty<0?C.red:C.green,fontWeight:800,fontSize:13}}>{dQty<0?`ขาด ${Math.abs(dQty)}`:`เกิน ${dQty}`}</div>{dVal!==0&&<div style={{fontSize:11,color:dQty<0?C.red:C.green,fontWeight:700,marginTop:1}}>{dVal>0?"+":"-"}฿{Math.abs(dVal).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>}</>}</td>;})()}
-                  <td style={{padding:"9px 12px",textAlign:"right",fontSize:13,color:C.ink2}}>฿{(+it.price_per_unit||0).toFixed(2)}</td>
-                  <td style={{padding:"9px 12px",textAlign:"right",fontSize:14,fontWeight:800,color:C.brand}}>฿{(+it.line_total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+                  {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:short?C.red:C.green}}>{recv!=null?recv:it.qty}</td>}
+                  {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&(()=>{const price=+it.price_per_unit||0;const rv=recv!=null?+recv:+it.qty;const dQty=round2(rv-(+it.qty||0));const dVal=round2(dQty*price);return <td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"center"}}>{dQty===0?<span style={{color:C.green,fontWeight:800,fontSize:13}}>✓ ครบ</span>:<><div style={{color:dQty<0?C.red:C.green,fontWeight:800,fontSize:13}}>{dQty<0?`ขาด ${Math.abs(dQty)}`:`เกิน ${dQty}`}</div>{dVal!==0&&<div style={{fontSize:11,color:dQty<0?C.red:C.green,fontWeight:700,marginTop:1}}>{dVal>0?"+":"-"}฿{Math.abs(dVal).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>}</>}</td>;})()}
+                  {!isMobile&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"right",fontSize:13,color:C.ink2}}>฿{(+it.price_per_unit||0).toFixed(2)}</td>}
+                  {!(isMobile&&mode==="dispute")&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"right",fontSize:14,fontWeight:800,color:C.brand}}>฿{(+it.line_total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>}
                 </tr>;
               })}
             </tbody>
@@ -19455,7 +19456,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       <div style={{padding:"6px 10px",borderBottom:`1px solid ${C.line}`,flexShrink:0}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"7px 12px",fontSize:13}}/>
       </div>
-      <div style={{flex:1,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
+      <div style={{flex:1,minHeight:0,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
         {filtered.map(m=><MenuCard key={m.id} m={m} soldOut={menuSoldOutAt(m,bidSale)} hiddenFromCustomer={menuHiddenAt(m,bidSale)} hasOpts={optsSet.has(m.id)} onPick={pickOrAdd}/>)}
         {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"40px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
           <Ic d={I.food} s={42} c={C.line}/>
@@ -19503,7 +19504,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
             :<div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>ใบจากตัวพิมพ์รุ่นเก่า — ปัดซ้ายที่รายการเพื่อพิมพ์ซ้ำ แล้วเอาออกที่ปุ่ม "พิมพ์ไม่สำเร็จ" ด้านบน</div>}
         </div>;
       })()}
-      <div ref={listRef} style={{flex:1,overflowY:"auto",padding:8}}>
+      <div ref={listRef} style={{flex:1,minHeight:0,overflowY:"auto",padding:8}}>
         {items.length===0
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
           :items.map((item,idx)=>({item,idx,unsent:!!item._new}))
@@ -19610,7 +19611,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
             <div style={{display:"flex",gap:6}}>{tabBtn("even","เท่ากัน")}{tabBtn("item","ตามรายการ")}{tabBtn("amount","ระบุยอด")}</div>
           </div>
 
-          <div style={{flex:1,overflowY:"auto",padding:"0 20px"}}>
+          <div style={{flex:1,minHeight:0,overflowY:"auto",padding:"0 20px"}}>
             {splitMode==="even"&&<>
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,padding:"10px 0 14px"}}>
                 <button onClick={()=>setSplitN(n=>Math.max(2,n-1))} style={{width:40,height:40,borderRadius:11,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:20,fontWeight:800,color:C.ink2}}>−</button>
@@ -19739,7 +19740,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
         </div>
         <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:36,height:36,cursor:"pointer",color:C.white,fontSize:19,fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>✕</button>
       </div>
-      <div style={{flex:1,overflowY:"auto",padding:"14px 20px"}}>
+      <div style={{flex:1,minHeight:0,overflowY:"auto",padding:"14px 20px"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>📋 รายการ ({items.length})</div>
         <div style={{background:C.bg,borderRadius:12,padding:"8px 12px",marginBottom:14}}>
           {/* ส่วนลดรายเมนู: ชื่อ/ตัวเลือกตัวใหญ่ + ปุ่ม % ฿ และช่องจำนวนขนาดนิ้วกด — กันใส่ส่วนลดผิดแถว
@@ -20896,7 +20897,7 @@ function CashDrawerModal({shift,currentBranch,currentUser,printers=[],onClose}){
           {action==='in'?"บันทึกเงินเข้า":action==='out'?"บันทึกจ่ายออก":"บันทึกฝาก/ถอน"}
         </Btn>
       </div>}
-      <div style={{flex:1,overflowY:"auto",padding:"14px 22px"}}>
+      <div style={{flex:1,minHeight:0,overflowY:"auto",padding:"14px 22px"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>📋 ประวัติเคลื่อนไหว ({movements.length})</div>
         {loading?<div style={{padding:20,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>:movements.length===0?<div style={{textAlign:"center",padding:20,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>ยังไม่มีรายการ</div>:
         <div style={{display:"flex",flexDirection:"column",gap:5}}>
@@ -21343,7 +21344,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         </div>
         <button onClick={onClose} style={{background:"rgba(255,255,255,.22)",border:"none",borderRadius:10,width:32,height:32,cursor:"pointer",color:C.white,fontSize:18}}>✕</button>
       </div>
-      <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+      <div style={{flex:1,minHeight:0,overflowY:"auto",padding:"18px 22px"}}>
         {loading?<div style={{padding:30,textAlign:"center",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>:<>
         <div style={{background:C.bg,borderRadius:14,padding:14,marginBottom:14}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:10}}>📊 สรุปยอดขาย</div>

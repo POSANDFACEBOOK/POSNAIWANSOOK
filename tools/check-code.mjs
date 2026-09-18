@@ -2850,7 +2850,7 @@ section("ป้ายห้ามห่อปุ่ม");
 // ══════════════════════════════════════════════════════════════════════════
 section("รายการในโต๊ะอ่านได้เต็ม");
 {
-  const a = APP.indexOf('<div ref={listRef} style={{flex:1,overflowY:"auto",padding:8}}>');
+  const a = APP.indexOf('<div ref={listRef} style={{flex:1,minHeight:0,overflowY:"auto",padding:8}}>');
   const b = a < 0 ? -1 : APP.indexOf("</SwipeRow>)", a);
   const blk = a >= 0 && b > a ? APP.slice(a, b) : "";
   ok_("เจอรายการอาหารในแผงโต๊ะ (ชื่อ ตัวเลือก หมายเหตุ)", blk.includes("{item.name}") && blk.includes("optionsText(item.options)") && blk.includes("{item.note}"));
@@ -3601,6 +3601,27 @@ section("งานล่าสุดของเครื่องพิมพ�
   ok_("หน้าเครื่องพิมพ์โชว์งานล่าสุดของแต่ละเครื่อง", APP.includes("const lastJobText=(p)=>{") && APP.includes("{lastJobText(p)&&<div"));
   ok_("ช่องข้อมูลเสีย/ยังไม่เคยมีงาน = ไม่โชว์อะไร ไม่ทำให้จอพัง", APP.includes("const j=d.lastJob;if(!j||!j.at)return \"\";"));
 }
+// ══════════════════════════════════════════════════════════════════════════
+// หน้าต่างรับสินค้าบนมือถือต้องเลื่อนขึ้นลงได้ (เจ้าของแจ้ง 18 ก.ย. 69 พร้อมรูปจากมือถือ Android)
+// ตารางรายการเคยอยู่ในกรอบ overflowX:auto + overflowY:hidden กว้าง 560 — นิ้วแตะบนตาราง (ซึ่งเต็มจอ)
+// ถูกกรอบนั้นยึดไว้ทั้งจังหวะ เลื่อนได้แค่ซ้าย-ขวา ลงไปกดยืนยันรับของ/ดูรายการล่างๆ ไม่ได้
+// ══════════════════════════════════════════════════════════════════════════
+section("หน้าต่างรับสินค้าบนมือถือ");
+{
+  const at = APP.indexOf("function POViewModal(");
+  const end = APP.indexOf("\nfunction ", at + 10);
+  const PO = at < 0 ? "" : APP.slice(at, end);
+  ok_("เจอหน้าต่างใบสั่งซื้อ", PO.length > 0);
+  ok_("รู้ว่าเป็นมือถือ", PO.includes("const isMobile=useIsMobile();"));
+  ok_("ไม่มีกรอบที่ล็อกแนวตั้งแต่เลื่อนแนวนอน (ตัวที่ยึดนิ้ว)", !/overflowX:"auto",overflowY:"hidden"/.test(PO));
+  ok_("มือถือไม่มีเลื่อนแนวนอน ตารางพอดีจอ", PO.includes('overflowX:isMobile?"visible":"auto"') && PO.includes("minWidth:isMobile?0:560"));
+  ok_("มือถือยังเห็นหน่วยและราคาต่อหน่วย (ย้ายไปใต้ชื่อ)", PO.includes("/หน่วย</div>}") && PO.includes("{it.unit||\"-\"} · ฿"));
+  ok_("ตัวเลื่อนหลักเลื่อนได้จริงทุกเครื่อง", PO.includes('flex:1,minHeight:0,overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"'));
+  // ทั้งแอป: กรอบเลื่อนแนวนอนที่ล็อกแนวตั้งไว้ด้วย = นิ้วติดเลื่อนได้แค่ซ้าย-ขวา ห้ามกลับมา
+  ck("ทั้งแอปไม่มีกรอบ overflowX:auto + overflowY:hidden", (APP.match(/overflowX:"auto",overflowY:"hidden"/g) || []).length, 0);
+  ck("ตัวเลื่อน flex:1 ทุกตัวมี minHeight:0", (APP.match(/flex:1,overflowY:"auto"(?![^}]*minHeight)/g) || []).length, 0);
+}
+
 
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
