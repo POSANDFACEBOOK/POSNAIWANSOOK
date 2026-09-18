@@ -6749,7 +6749,7 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
 
     {/* Ingredient amount popup (same look as MenuSOPView) */}
     {ingPopup&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1500,padding:16}}>
-      <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
+      <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"}}>
         <div style={{padding:"20px 24px 0",borderBottom:`1px solid ${C.lineLight}`,paddingBottom:16,background:C.bg,display:"flex",alignItems:"center",gap:10}}>
           <div style={{width:40,height:40,borderRadius:"50%",background:C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,border:`1px solid ${C.green}33`}}>
             <Ic d={I.leaf} s={20} c={C.green}/>
@@ -7017,7 +7017,7 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
     </Card>
   </div>
   {ingPopup&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1500,padding:16}}>
-    <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
+    <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"}}>
       <div style={{padding:"20px 24px 0",borderBottom:`1px solid ${C.lineLight}`,paddingBottom:16,background:C.bg,display:"flex",alignItems:"center",gap:10}}>
         <div style={{width:40,height:40,borderRadius:"50%",background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,border:`1px solid ${C.brandBorder}`}}>
           <Ic d={I.leaf} s={20} c={C.brand}/>
@@ -11474,7 +11474,7 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
     }catch(e){showErr("อัพโหลดสลิปไม่สำเร็จ",e);setSaving(false);}
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",zIndex:6000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,520px)",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,520px)",boxShadow:"0 30px 80px rgba(0,0,0,.4)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"}}>
       <div style={{padding:"16px 22px",background:`linear-gradient(135deg,${C.blue},#2563EB)`,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <div style={{fontSize:28}}>💳</div>
@@ -20745,7 +20745,7 @@ function OpenShiftModal({currentBranch,currentUser,onDone,onCancel}){
     setSaving(false);
   }
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:16}}>
-    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,460px)",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,460px)",boxShadow:"0 30px 80px rgba(0,0,0,.4)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"}}>
       <div style={{padding:"18px 22px",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <div style={{fontSize:30}}>💵</div>

@@ -3619,6 +3619,9 @@ section("หน้าต่างรับสินค้าบนมือถ�
   ok_("ตัวเลื่อนหลักเลื่อนได้จริงทุกเครื่อง", PO.includes('flex:1,minHeight:0,overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"'));
   // ทั้งแอป: กรอบเลื่อนแนวนอนที่ล็อกแนวตั้งไว้ด้วย = นิ้วติดเลื่อนได้แค่ซ้าย-ขวา ห้ามกลับมา
   ck("ทั้งแอปไม่มีกรอบ overflowX:auto + overflowY:hidden", (APP.match(/overflowX:"auto",overflowY:"hidden"/g) || []).length, 0);
+  // ป็อปอัพกลางจอที่ไม่มีตัวเลื่อน: เนื้อหาสูงกว่าจอมือถือ = หัว/ปุ่มล่างถูกตัดทิ้ง เลื่อนไม่ได้ (ตรวจทั้งแอป 18 ก.ย. 69)
+  ck("ป็อปอัพวัตถุดิบ SOP / จ่ายเงินใบสั่งซื้อ / เปิดกะ เลื่อนได้เมื่อสูงเกินจอ",
+    (APP.match(/maxHeight:"calc\(100vh - 32px\)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"/g) || []).length, 4);
   ck("ตัวเลื่อน flex:1 ทุกตัวมี minHeight:0", (APP.match(/flex:1,overflowY:"auto"(?![^}]*minHeight)/g) || []).length, 0);
 }
 
