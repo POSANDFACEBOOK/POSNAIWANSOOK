@@ -1309,12 +1309,17 @@ try {
     const d = sent[0].drawer;
     ck("ส่งเงินลิ้นชักไปให้ตู้เซฟ", !!d, true);
     // ชื่อคีย์ต้องตรงกับ STD_DRAWER ของฝั่งบัญชีเป๊ะ ผิดชื่อ = ตู้เซฟไม่ได้เงิน
-    ck("ใช้ชื่อคีย์ตามสเปกฝั่งบัญชีครบ 8 ตัว", Object.keys(d).sort().join(","),
-      "actual_in_drawer,cash_sales,difference,expected_in_drawer,paid_in_out,refund,start_drawer,total_bills");
+    ck("ใช้ชื่อคีย์ตามสเปกฝั่งบัญชีครบ (8 ตัวเดิม + เงินเข้า/ออกแยกช่อง)", Object.keys(d).sort().join(","),
+      "actual_in_drawer,cash_sales,difference,expected_in_drawer,paid_in,paid_in_out,paid_out,pay_in,pay_out,refund,start_drawer,total_bills");
     ck("ยอดที่ควรมี = เริ่มต้น + ขายสด + เข้า/ออก - คืนเงิน", d.expected_in_drawer, 1800);
     ck("ส่งยอดนับจริงไปด้วย (ไว้เทียบหาเงินขาด ไม่เข้าสูตรเซฟ)", d.actual_in_drawer, 1700);
     ck("บอกส่วนต่างให้เห็น", d.difference, -100);
     ck("เงินเข้า/ออกลิ้นชักรวมเป็นตัวเดียว (บวก = เข้า)", d.paid_in_out, -200);
+    // แยกช่องเงินเข้า/เงินออกด้วย — ยอดสุทธิตัวเดียวทำให้ฝั่งบัญชีหักเงินทอนที่ใส่ทีหลังออกจากยอดฝากตู้เซฟไม่ได้
+    // (ฝั่งเขาไล่ทั้งฐานพบว่าฝากเกินจริงรวม ฿18,653 — 20 ก.ย. 69)
+    ck("เงินใส่เข้าลิ้นชักแยกช่องมาให้", { paid_in: d.paid_in, pay_in: d.pay_in }, { paid_in: 0, pay_in: 0 });
+    ck("เงินหยิบออกจากลิ้นชัก (จ่ายของ + นำออกฝากเซฟ) แยกช่องมาให้", { paid_out: d.paid_out, pay_out: d.pay_out }, { paid_out: 200, pay_out: 200 });
+    ck("เข้า − ออก ต้องเท่ายอดสุทธิเดิมเสมอ", (d.paid_in - d.paid_out), d.paid_in_out);
     // ใส่เงินทอนตั้งต้นปลอม = ฝากเข้าตู้เซฟขาดไปเท่าตัวเลขที่ปลอมทุกวัน
     // (สูตรเซฟของเขา = expected_in_drawer − start_drawer)
     ck("เงินทอนตั้งต้นเป็นค่าจริงจากลิ้นชัก ไม่ใช่ค่าที่ตั้งเอง", d.start_drawer, 500);
