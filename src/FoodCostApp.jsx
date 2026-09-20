@@ -20395,7 +20395,15 @@ function CustomerPage({branchId,tableId,token}){
     </div>
   </div>;
   const myOrderItemCount=myOrder?(myOrder.items||[]).reduce((s,i)=>s+i.qty,0):0;
-  // .cust-shell ให้ความสูงแบบ 100dvh (ดู index.html) — ต้องเป็นความสูง "ที่แน่นอน" ไม่ใช่ min-height
+  // หัวจอสูงเท่าไร (ชื่อสาขายาวขึ้นบรรทัดที่สองได้) — แถบหมวดต้องติดใต้หัวพอดี ไม่ทับกัน
+  const headRef=useRef(null);const[headH,setHeadH]=useState(0);
+  useEffect(()=>{const el=headRef.current;if(!el)return;
+    const upd=()=>setHeadH(el.offsetHeight||0);upd();
+    const ro=typeof ResizeObserver!=="undefined"?new ResizeObserver(upd):null;if(ro)ro.observe(el);
+    window.addEventListener("resize",upd);window.addEventListener("orientationchange",upd);
+    return()=>{if(ro)ro.disconnect();window.removeEventListener("resize",upd);window.removeEventListener("orientationchange",upd);};
+  },[]);
+  // .cust-shell สูงอย่างน้อยเท่าจอ แล้วปล่อยให้ "ทั้งหน้า" เลื่อน (ดู index.html)
   // ไม่งั้นกล่องรายการเมนูข้างในจะยืดตามเนื้อหาแทนที่จะเลื่อน แล้วลูกค้าเลื่อนดูเมนูไม่ได้
   return <div className="cust-shell" style={{background:C.bg,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column"}}>
     {/* Order stuck in the outbox — the diner must know it is NOT lost and that we keep retrying. */}
@@ -20410,7 +20418,7 @@ function CustomerPage({branchId,tableId,token}){
           : <>อย่าปิดหน้านี้ · รายการจะไม่หาย และจะไม่ถูกสั่งซ้ำ</>}
       </div>
     </div>}
-    <div style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,padding:"14px 16px",flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+    <div ref={headRef} style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,padding:"14px 16px",flexShrink:0,position:"sticky",top:0,zIndex:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
       <div>
         <div style={{fontWeight:900,fontSize:17,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>{branch.name}</div>
         <div style={{fontSize:12,color:"rgba(255,255,255,.8)",fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
@@ -20428,11 +20436,13 @@ function CustomerPage({branchId,tableId,token}){
       <div style={{fontSize:11.5,color:C.purple,marginTop:2,lineHeight:1.5,opacity:.9}}>ยอดถูกล็อกไว้แล้ว สั่งเพิ่มไม่ได้ · ถ้าต้องการสั่งเพิ่ม กรุณาแจ้งพนักงาน</div>
     </div>}
     {step==="menu"&&<>
+      <div style={{position:"sticky",top:headH,zIndex:12,background:C.white,flexShrink:0}}>
       <div style={{padding:"8px 10px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
         {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"5px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
       </div>
       <div style={{padding:"8px 12px",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"9px 14px"}}/></div>
-      <div style={{flex:1,overflowY:"auto",minHeight:0,WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gridAutoRows:"max-content",gap:10,alignContent:"start"}}>
+      </div>
+      <div style={{padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gridAutoRows:"max-content",gap:10,alignContent:"start"}}>
         {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=menuSoldOutAt(m,branchId);const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
           <div style={{position:"relative",width:"100%",height:130,flexShrink:0}}>
             {m.image?<img src={driveImgSrc(m.image,160)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
@@ -20464,7 +20474,7 @@ function CustomerPage({branchId,tableId,token}){
       </div>
     </>}
     {step==="myorder"&&<>
-      <div style={{flex:1,overflowY:"auto",minHeight:0,WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",padding:12}}>
+      <div style={{padding:12}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
           <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:900,color:C.ink,margin:0}}>📋 สรุปยอดของฉัน</h3>
           <button onClick={loadMyOrder} style={{background:C.lineLight,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:600}}>🔄 รีเฟรช</button>
@@ -20508,7 +20518,7 @@ function CustomerPage({branchId,tableId,token}){
           </div>
         </>}
       </div>
-      <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",flexDirection:"column",gap:10,flexShrink:0}}>
+      <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",flexDirection:"column",gap:10,flexShrink:0,position:"sticky",bottom:0,zIndex:12}}>
         {myOrder&&myOrder.status==="paid"
           ?<div style={{padding:"13px",background:C.greenLight,border:`1.5px solid ${C.green}`,borderRadius:12,textAlign:"center",fontFamily:"'Sarabun',sans-serif",fontSize:14.5,fontWeight:900,color:C.green}}>✅ ชำระเงินแล้ว ขอบคุณครับ 🙏</div>
           :<div style={{padding:"13px 14px",background:C.brandLight,border:`1.5px solid ${C.brandBorder}`,borderRadius:12,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
@@ -20518,7 +20528,7 @@ function CustomerPage({branchId,tableId,token}){
       </div>
     </>}
     {step==="cart"&&<>
-      <div style={{flex:1,overflowY:"auto",minHeight:0,WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",padding:10}}>
+      <div style={{padding:10}}>
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:10}}>รายการที่สั่ง</h3>
         {cart.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:10,padding:"10px",marginBottom:6,border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:8}}>
           <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.brand,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>📝 {item.note}</div>}{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}<div style={{fontSize:12,color:C.brand,fontWeight:700}}>฿{item.price} × {item.qty} = ฿{(item.price*item.qty).toFixed(0)}</div></div>
@@ -20535,7 +20545,7 @@ function CustomerPage({branchId,tableId,token}){
         </div>)}
         <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",textAlign:"center",padding:"10px 0 2px"}}>รวม {itemCount} รายการ</div>
       </div>
-      <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",gap:8,flexShrink:0}}>
+      <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",gap:8,flexShrink:0,position:"sticky",bottom:0,zIndex:12}}>
         <Btn v="ghost" onClick={()=>setStep("menu")} full s={{padding:"10px"}}>← เพิ่มเมนู</Btn>
         <Btn v="success" onClick={()=>{if(payWaiting){setPayWaitMsg(true);return;}placeOrder();}} loading={sending} disabled={payWaiting} full s={{padding:"10px"}} icon={I.check}>{payWaiting?"รอชำระเงินอยู่":"ยืนยันสั่งอาหาร"}</Btn>
       </div>
@@ -23716,15 +23726,28 @@ function BillDetailCard({order,branch=null,cfg=null,onBack,onEdit=null}){
     try{ printReceipt(o,o.table_number,branch?.name||"",cfg,{paid:o.status==="paid"}); }
     catch(e){ alert("เปิดหน้าต่างพิมพ์ไม่สำเร็จ: "+friendlyError(e)); }
   }
+  // ส่งเข้าเครื่องพิมพ์ใบเสร็จของร้านจริงๆ (ใบเดียวกับตอนปิดบิล) — ไม่ใช่หน้าต่างพิมพ์ของเบราว์เซอร์
+  const[sendingPrint,setSendingPrint]=useState(false);
+  async function printToShop(){
+    if(sendingPrint)return;
+    if(!branch){printBill();return;}   // ไม่รู้ว่าสาขาไหน = เลือกเครื่องเองจากเบราว์เซอร์
+    setSendingPrint(true);
+    try{ await printBillReceipt(o,o.table_number,{branch,posSettings:cfg,paid:o.status==="paid"}); }
+    catch(e){ alert("ส่งเข้าเครื่องพิมพ์ไม่สำเร็จ: "+friendlyError(e)); }
+    setSendingPrint(false);
+  }
   return <div>
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
       <button onClick={onBack} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12.5,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>← กลับไปรายการบิล</button>
       <button onClick={printBill} style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:7,padding:"9px 18px",borderRadius:10,border:"none",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,cursor:"pointer",fontSize:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif",boxShadow:`0 6px 16px ${C.brand}44`}}>
-        <Ic d={I.print} s={15} c={C.white}/>พิมพ์ใบเสร็จ / บันทึก PDF
+        <Ic d={I.print} s={15} c={C.white}/>💾 บันทึก PDF
+      </button>
+      <button onClick={printToShop} disabled={sendingPrint} style={{display:"flex",alignItems:"center",gap:7,padding:"9px 18px",borderRadius:10,border:"none",background:sendingPrint?C.ink4:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,cursor:sendingPrint?"wait":"pointer",fontSize:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>
+        <Ic d={I.print} s={15} c={C.white}/>{sendingPrint?"กำลังส่ง...":"🖨️ พิมพ์ที่เครื่องพิมพ์ร้าน"}
       </button>
     </div>
     <div style={{maxWidth:460,margin:"0 auto 10px",fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center",lineHeight:1.6}}>
-      กดแล้วเลือกปลายทางเป็น <b style={{color:C.ink3}}>“บันทึกเป็น PDF”</b> เพื่อเก็บไฟล์ หรือเลือกเครื่องพิมพ์เพื่อพิมพ์กระดาษ
+      <b style={{color:C.green}}>“พิมพ์ที่เครื่องพิมพ์ร้าน”</b> = กระดาษออกที่เครื่องใบเสร็จของสาขาใน ~5 วินาที · <b style={{color:C.ink3}}>“บันทึก PDF”</b> = เปิดหน้าต่างของเบราว์เซอร์ไว้เก็บไฟล์หรือเลือกเครื่องพิมพ์เอง
     </div>
     <div style={{maxWidth:460,margin:"0 auto",background:C.white,borderRadius:14,border:`1px solid ${C.line}`,overflow:"hidden",boxShadow:"0 2px 10px rgba(0,0,0,0.04)"}}>
       <div style={{padding:"14px 18px",background:C.bg,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
