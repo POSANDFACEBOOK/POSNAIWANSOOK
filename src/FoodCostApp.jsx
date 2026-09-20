@@ -20092,6 +20092,15 @@ function CRMJoinPage({initialBranchId,initialGo}){
 }
 
 function CustomerPage({branchId,tableId,token}){
+  // ⚠️ ต้องอยู่บนสุดก่อน return ทุกทาง — hook ที่อยู่หลัง early return ทำให้จอลูกค้าพังทั้งจอ (เจอจริง 20 ก.ย. 69)
+  // หัวจอสูงเท่าไร (ชื่อสาขายาวขึ้นบรรทัดที่สองได้) — แถบหมวดต้องติดใต้หัวพอดี ไม่ทับกัน
+  const headRef=useRef(null);const[headH,setHeadH]=useState(0);
+  useEffect(()=>{const el=headRef.current;if(!el)return;
+    const upd=()=>setHeadH(el.offsetHeight||0);upd();
+    const ro=typeof ResizeObserver!=="undefined"?new ResizeObserver(upd):null;if(ro)ro.observe(el);
+    window.addEventListener("resize",upd);window.addEventListener("orientationchange",upd);
+    return()=>{if(ro)ro.disconnect();window.removeEventListener("resize",upd);window.removeEventListener("orientationchange",upd);};
+  },[]);
   const[branch,setBranch]=useState(null);const[table,setTable]=useState(null);const[menus,setMenus]=useState([]);
   const[cart,setCart]=useState([]);const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
   const[step,setStep]=useState("menu");const[sending,setSending]=useState(false);const[done,setDone]=useState(false);
@@ -20395,14 +20404,6 @@ function CustomerPage({branchId,tableId,token}){
     </div>
   </div>;
   const myOrderItemCount=myOrder?(myOrder.items||[]).reduce((s,i)=>s+i.qty,0):0;
-  // หัวจอสูงเท่าไร (ชื่อสาขายาวขึ้นบรรทัดที่สองได้) — แถบหมวดต้องติดใต้หัวพอดี ไม่ทับกัน
-  const headRef=useRef(null);const[headH,setHeadH]=useState(0);
-  useEffect(()=>{const el=headRef.current;if(!el)return;
-    const upd=()=>setHeadH(el.offsetHeight||0);upd();
-    const ro=typeof ResizeObserver!=="undefined"?new ResizeObserver(upd):null;if(ro)ro.observe(el);
-    window.addEventListener("resize",upd);window.addEventListener("orientationchange",upd);
-    return()=>{if(ro)ro.disconnect();window.removeEventListener("resize",upd);window.removeEventListener("orientationchange",upd);};
-  },[]);
   // .cust-shell สูงอย่างน้อยเท่าจอ แล้วปล่อยให้ "ทั้งหน้า" เลื่อน (ดู index.html)
   // ไม่งั้นกล่องรายการเมนูข้างในจะยืดตามเนื้อหาแทนที่จะเลื่อน แล้วลูกค้าเลื่อนดูเมนูไม่ได้
   return <div className="cust-shell" style={{background:C.bg,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column"}}>
