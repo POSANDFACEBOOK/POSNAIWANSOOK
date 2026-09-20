@@ -1310,7 +1310,7 @@ try {
     ck("ส่งเงินลิ้นชักไปให้ตู้เซฟ", !!d, true);
     // ชื่อคีย์ต้องตรงกับ STD_DRAWER ของฝั่งบัญชีเป๊ะ ผิดชื่อ = ตู้เซฟไม่ได้เงิน
     ck("ใช้ชื่อคีย์ตามสเปกฝั่งบัญชีครบ (8 ตัวเดิม + เงินเข้า/ออกแยกช่อง)", Object.keys(d).sort().join(","),
-      "actual_in_drawer,cash_sales,difference,expected_in_drawer,paid_in,paid_in_out,paid_out,pay_in,pay_out,refund,start_drawer,total_bills");
+      "actual_in_drawer,cash_sales,difference,drop,expected_in_drawer,paid_in,paid_in_out,paid_out,pay_in,pay_out,refund,safe_drop,start_drawer,total_bills");
     ck("ยอดที่ควรมี = เริ่มต้น + ขายสด + เข้า/ออก - คืนเงิน", d.expected_in_drawer, 1800);
     ck("ส่งยอดนับจริงไปด้วย (ไว้เทียบหาเงินขาด ไม่เข้าสูตรเซฟ)", d.actual_in_drawer, 1700);
     ck("บอกส่วนต่างให้เห็น", d.difference, -100);
@@ -1320,6 +1320,23 @@ try {
     ck("เงินใส่เข้าลิ้นชักแยกช่องมาให้", { paid_in: d.paid_in, pay_in: d.pay_in }, { paid_in: 0, pay_in: 0 });
     ck("เงินหยิบออกจากลิ้นชัก (จ่ายของ + นำออกฝากเซฟ) แยกช่องมาให้", { paid_out: d.paid_out, pay_out: d.pay_out }, { paid_out: 200, pay_out: 200 });
     ck("เข้า − ออก ต้องเท่ายอดสุทธิเดิมเสมอ", (d.paid_in - d.paid_out), d.paid_in_out);
+    // เงินที่นำออกไปฝากตู้เซฟระหว่างกะ ต้องบอกแยกด้วย ไม่งั้นฝั่งบัญชีฝากขาดเท่ายอดนั้น
+    // (คิดยอดฝากจากเงินที่เหลือในลิ้นชัก เงินที่ออกไปแล้วจึงหายจากการคำนวณ)
+    ck("เงินนำออกฝากเซฟแยกช่องมาให้ และยังรวมอยู่ใน paid_out", { drop: d.drop, safe_drop: d.safe_drop, inPaidOut: d.paid_out >= d.drop }, { drop: 0, safe_drop: 0, inPaidOut: true });
+    {
+      globalThis.__MOVES = [
+        { type: "opening", amount: 500 }, { type: "sale", amount: 4000 },
+        { type: "pay_in", amount: 2000 }, { type: "pay_out", amount: 500 },
+        { type: "drop", amount: 3000 }, { type: "closing", amount: 3000 },
+      ];
+      const r2b = await run(SHIFT, [bill(1, 4000, "cash", 9)], "กาญจนบุรี The River");
+      const dd = r2b.sent[0].drawer;
+      ck("วันที่มีทั้งเติมเงินทอน ควักจ่ายของ และนำออกฝากเซฟ — แยกครบทุกช่อง",
+        { paid_in: dd.paid_in, paid_out: dd.paid_out, drop: dd.drop, net: dd.paid_in_out, expected: dd.expected_in_drawer },
+        { paid_in: 2000, paid_out: 3500, drop: 3000, net: -1500, expected: 3000 });
+      ck("เงินที่ออกจากลิ้นชักแล้วไม่ได้เข้าเซฟ = paid_out − drop", dd.paid_out - dd.drop, 500);
+      globalThis.__MOVES = [];
+    }
     // ใส่เงินทอนตั้งต้นปลอม = ฝากเข้าตู้เซฟขาดไปเท่าตัวเลขที่ปลอมทุกวัน
     // (สูตรเซฟของเขา = expected_in_drawer − start_drawer)
     ck("เงินทอนตั้งต้นเป็นค่าจริงจากลิ้นชัก ไม่ใช่ค่าที่ตั้งเอง", d.start_drawer, 500);

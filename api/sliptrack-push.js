@@ -223,6 +223,11 @@ export default async function handler(req, res) {
           paid_out: r2(payOut + drop),         // เงินหยิบออกจากลิ้นชัก (จ่ายของ + นำออกฝากเซฟ)
           pay_in: payIn,                       // ชื่อสำรอง — ฝั่งเขาอ่านได้ทั้งสองชื่อ
           pay_out: r2(payOut + drop),
+          // เงินที่พนักงานนำออกจากลิ้นชักไป "ฝากตู้เซฟแล้ว" ระหว่างกะ — ยังรวมอยู่ใน paid_out ข้างบนด้วย
+          // ฝั่งบัญชีคิดยอดฝากเซฟจากเงินที่เหลือในลิ้นชัก เงินก้อนนี้จึงหายไปจากการคำนวณ ต้องบวกกลับ
+          // ⟹ เงินที่ออกจากลิ้นชักแล้วไม่ได้เข้าเซฟ = paid_out − drop
+          drop: drop,
+          safe_drop: drop,                     // ชื่อสำรอง
           expected_in_drawer: expected,        // ตัวที่ใช้คำนวณเงินเข้าตู้เซฟ
           actual_in_drawer: counted,           // ยอดนับ ไว้เทียบหาเงินขาด/เกิน ไม่เข้าสูตรเซฟ
           difference: r2(counted - expected),
