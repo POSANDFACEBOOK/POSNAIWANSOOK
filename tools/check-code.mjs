@@ -927,7 +927,7 @@ const guards = [
   // ── ประวัติการขาย: ต้องตามหาบิลเก่าเจอ และพิมพ์ซ้ำเป็น PDF ได้ ──
   // เดิมเดินทีละวันอย่างเดียว ไม่มีค้นหา และหน้ารายละเอียดไม่มีปุ่มอะไรเลยนอกจากปุ่มย้อนกลับ
   ["ดูย้อนหลังเป็นช่วงได้ ไม่ใช่ทีละวัน", APP.includes("const[span,setSpan]=useState(1);")],
-  ["ค้นหาบิลจากเลขบิล/โต๊ะ/เมนู/ยอดได้", APP.includes("const hit=(o)=>{") && APP.includes("const all=orders.filter(hit);")],
+  ["ค้นหาบิลจากเลขบิล/โต๊ะ/เมนู/ยอดได้", APP.includes("const hit=(o)=>{") && APP.includes("const all=(shiftView?orders.filter(inShift):orders).filter(hit);")],
   ["มีทั้งปุ่มพิมพ์ที่เครื่องพิมพ์ร้านและปุ่มบันทึก PDF", APP.includes("async function printToShop(){") && APP.includes("🖨️ พิมพ์ที่เครื่องพิมพ์ร้าน") && APP.includes("function printBill(){") && APP.includes("💾 บันทึก PDF")],
   // ต้องเปิดหน้าต่างพิมพ์ตรงจากการกด ถ้ามี await คั่น เบราว์เซอร์จะบล็อกเพราะไม่นับเป็นการกดของผู้ใช้
   ["โหลดตั้งค่าใบเสร็จไว้ก่อน ไม่ใช่ตอนกดพิมพ์", APP.includes("const[cfg,setCfg]=useState(null);")],
@@ -3648,6 +3648,44 @@ section("หน้าต่างรับสินค้าบนมือถ�
   ck("ป็อปอัพวัตถุดิบ SOP / จ่ายเงินใบสั่งซื้อ / เปิดกะ เลื่อนได้เมื่อสูงเกินจอ",
     (APP.match(/maxHeight:"calc\(100vh - 32px\)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"/g) || []).length, 4);
   ck("ตัวเลื่อน flex:1 ทุกตัวมี minHeight:0", (APP.match(/flex:1,overflowY:"auto"(?![^}]*minHeight)/g) || []).length, 0);
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// จอรายงานต้องแยก "กะนี้" ออกจาก "ทั้งวัน" (เจ้าของแจ้ง 20 ก.ย. 69 พร้อมรูปหน้าจอ)
+// ของจริง: กะเช้าขายสด ฿1,611 ปิดกะไปแล้ว · เปิดกะบ่ายใส่เงินทอน ฿2,000 ขายอีก ฿10
+// จอขึ้นเงินสด ฿1,621 (ยอดทั้งวัน) พนักงานเอาไปนับเงินในลิ้นชักของกะบ่ายไม่ได้
+// ขอบเขตกะต้องใช้กติกาเดียวกับใบปิดยอดที่ส่งบัญชี (เวลาเปิดโต๊ะอยู่ในช่วงกะ) ห้ามคิดเอง
+// ══════════════════════════════════════════════════════════════════════════
+section("รายงาน: แยกกะนี้กับทั้งวัน");
+{
+  const st = APP.indexOf("const inShift=(o)=>{");
+  let fn = null;
+  if (st >= 0) {
+    let d = 0, started = false, en = -1;
+    for (let i = st; i < APP.length; i++) {
+      if (APP[i] === "{") { d++; started = true; }
+      else if (APP[i] === "}") { d--; if (started && d === 0) { en = APP.indexOf(";", i) + 1; break; } }
+    }
+    try { fn = new Function("shift", APP.slice(st, en) + " return inShift;"); } catch {}
+  }
+  ok_("อ่านตัวตัดสินว่าบิลอยู่ในกะไหนได้", !!fn);
+  if (fn) {
+    const openShift = { opened_at: "2026-09-20T08:54:00.000Z", closed_at: null };
+    const closedShift = { opened_at: "2026-09-20T01:54:00.000Z", closed_at: "2026-09-20T08:54:00.000Z" };
+    const bill = (iso) => ({ created_at: iso });
+    ok_("บิลที่เปิดโต๊ะหลังเปิดกะ = อยู่ในกะนี้", fn(openShift)(bill("2026-09-20T09:10:00.000Z")) === true);
+    ok_("บิลของกะก่อนหน้า ไม่ถูกนับเข้ากะนี้ (ต้นเหตุยอด ฿1,621)", fn(openShift)(bill("2026-09-20T07:00:00.000Z")) === false);
+    ok_("กะที่ปิดแล้ว ไม่กินบิลของกะถัดไป", fn(closedShift)(bill("2026-09-20T09:10:00.000Z")) === false);
+    ok_("บิลตรงเวลาเปิดกะพอดี = อยู่ในกะนี้", fn(openShift)(bill("2026-09-20T08:54:00.000Z")) === true);
+    ok_("ไม่มีกะ = ไม่กรองอะไรเลย", fn(null)(bill("2026-09-20T09:10:00.000Z")) === true);
+    ok_("ข้อมูลเวลาเสีย = ไม่นับเข้ากะ (ดีกว่านับมั่ว)", fn(openShift)(bill("พัง")) === false);
+  }
+  ok_("เปิดจอมาเห็นกะที่ทำอยู่ก่อน", APP.includes('const[scope,setScope]=useState("shift");'));
+  ok_("สลับดูทั้งวันได้", APP.includes('{[{v:"shift",l:"กะนี้"},{v:"day",l:"ทั้งวัน"}].map('));
+  ok_("ดูรายกะได้เฉพาะวันนี้วันเดียวและต้องมีกะเปิดอยู่",
+    APP.includes("const canShiftView=!!(shift&&shift.opened_at&&span===1&&date===todayStr);"));
+  ok_("ป้ายบนจอบอกชัดว่ากำลังดูกะหรือทั้งวัน", APP.includes("กะที่เปิดอยู่ · ตั้งแต่ ") && APP.includes('" · ทั้งวัน"'));
 }
 
 

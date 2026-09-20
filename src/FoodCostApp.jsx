@@ -24044,6 +24044,8 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
   const[span,setSpan]=useState(1);               // ดูย้อนหลังกี่วันนับจากวันที่เลือก (1 = วันเดียว)
   const[q,setQ]=useState("");                     // ค้นหา: เลขบิล · โต๊ะ · ชื่อเมนู · ยอด
   const[filter,setFilter]=useState("all");
+  // เปิดจอมาให้เห็น "กะที่ทำอยู่" ก่อน เพราะคนกดส่วนใหญ่กำลังนับเงินในลิ้นชักของกะนั้น
+  const[scope,setScope]=useState("shift");
   const[orders,setOrders]=useState([]);
   const[loading,setLoading]=useState(true);
   const[bill,setBill]=useState(null);
@@ -24079,7 +24081,19 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
     if(String(Math.round(+o.total||0)).includes(t.replace(/[,฿\s]/g,"")))return true;
     return (o.items||[]).some(i=>String(i&&i.name||"").toLowerCase().includes(t));
   };
-  const all=orders.filter(hit);
+  // ขอบเขตกะ: บิลที่ "เปิดโต๊ะ" ระหว่างกะนี้ — กติกาเดียวกับ api/sliptrack-push.js ที่ส่งบัญชี
+  const inShift=(o)=>{
+    if(!shift||!shift.opened_at)return true;
+    const t=Date.parse(o&&o.created_at||"");
+    if(!Number.isFinite(t))return false;
+    if(t<Date.parse(shift.opened_at))return false;
+    if(shift.closed_at&&t>=Date.parse(shift.closed_at))return false;
+    return true;
+  };
+  // ดูเป็นรายกะได้เฉพาะตอนดูวันนี้วันเดียวและมีกะเปิดอยู่ — ย้อนหลังหลายวันไม่มีความหมาย
+  const canShiftView=!!(shift&&shift.opened_at&&span===1&&date===todayStr);
+  const shiftView=canShiftView&&scope==="shift";
+  const all=(shiftView?orders.filter(inShift):orders).filter(hit);
   const paid=all.filter(o=>o.status==="paid");
   const unpaid=all.filter(o=>o.status!=="paid"&&o.status!=="cancelled");
   const cancelled=all.filter(o=>o.status==="cancelled");
@@ -24138,11 +24152,16 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
       <input type="date" value={date} max={todayStr} onChange={e=>e.target.value&&setDate(e.target.value)} style={{padding:"10px 13px",borderRadius:9,border:`1px solid ${C.line}`,fontSize:15.5,fontFamily:"'Sarabun',sans-serif",color:C.ink,background:C.white}}/>
       <button onClick={()=>shiftDay(1)} disabled={isToday} style={{...navBtn,opacity:isToday?.4:1,cursor:isToday?"default":"pointer"}} title="วันถัดไป">▶</button>
       {!isToday&&<button onClick={()=>setDate(todayStr)} style={{padding:"8px 13px",borderRadius:9,border:`1px solid ${C.brand}`,background:`${C.brand}12`,color:C.brand,cursor:"pointer",fontSize:12.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>วันนี้</button>}
-      <span style={{marginLeft:"auto",fontSize:15,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{span>1?`ย้อนหลัง ${span} วัน ถึง ${fmtD(date)}`:`${fmtD(date)}${isToday?" · วันนี้":""}`}</span>
+      <span style={{marginLeft:"auto",fontSize:15,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>{span>1?`ย้อนหลัง ${span} วัน ถึง ${fmtD(date)}`:(shiftView?`กะที่เปิดอยู่ · ตั้งแต่ ${new Date(shift.opened_at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"})} น.`:`${fmtD(date)}${isToday?" · ทั้งวัน":""}`)}</span>
     </div>
 
     {/* ── ช่วงเวลา + ค้นหา ── */}
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+      {canShiftView&&<div style={{display:"flex",gap:5}}>
+        {[{v:"shift",l:"กะนี้"},{v:"day",l:"ทั้งวัน"}].map(o=>{const on=(scope===o.v);
+          return <button key={o.v} onClick={()=>setScope(o.v)} style={{padding:"9px 16px",borderRadius:20,border:`1px solid ${on?C.green:C.line}`,background:on?C.green:C.white,color:on?C.white:C.ink2,cursor:"pointer",fontSize:14.5,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{o.l}</button>;
+        })}
+      </div>}
       <div style={{display:"flex",gap:5}}>
         {[{v:1,l:"วันเดียว"},{v:7,l:"7 วัน"},{v:30,l:"30 วัน"}].map(o=>{const on=span===o.v;
           return <button key={o.v} onClick={()=>setSpan(o.v)} style={{padding:"9px 16px",borderRadius:20,border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,cursor:"pointer",fontSize:14.5,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{o.l}</button>;})}
