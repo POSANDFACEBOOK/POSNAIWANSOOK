@@ -1106,9 +1106,9 @@ section("หน้าลูกค้าสแกน: เลื่อนดูเ
     CUST.split('overflowY:"auto"').length - 1, 0);
   ok_("หัวจอ (ชื่อโต๊ะ + ปุ่มตะกร้า) ติดอยู่บนสุดตลอด", CUST.includes('position:"sticky",top:0,zIndex:14'));
   ok_("แถบหมวดกับช่องค้นหาติดใต้หัวจอพอดี ไม่ทับกัน",
-    CUST.includes('position:"sticky",top:headH,zIndex:12') && CUST.includes("const headRef=useRef(null);const[headH,setHeadH]=useState(0);"));
+    CUST.includes('position:"sticky",top:headH,zIndex:12') && CUST.includes("const headRef=useCallback((el)=>{"));
   ok_("ชื่อสาขายาวขึ้นสองบรรทัด แถบหมวดก็ยังไม่ทับ (วัดความสูงจริง ไม่ใช่ค่าตายตัว)",
-    CUST.includes("setHeadH(el.offsetHeight||0)") && CUST.includes("new ResizeObserver(upd)"));
+    CUST.includes("setHeadH(el.offsetHeight||0)") && CUST.includes("new ResizeObserver(upd)") && CUST.includes("headElRef.current=el||null;"));
   ck("แถบปุ่มล่างติดล่างสุดทั้งจอตะกร้าและจอออเดอร์ของฉัน",
     CUST.split('position:"sticky",bottom:0,zIndex:12').length - 1, 2);
   // ความสูงแน่นอน + ตาราง = กับดัก: แถวจะถูกบีบให้พอดีกรอบแทนที่จะสูงตามการ์ด

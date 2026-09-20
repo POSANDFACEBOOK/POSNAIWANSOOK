@@ -20094,12 +20094,23 @@ function CRMJoinPage({initialBranchId,initialGo}){
 function CustomerPage({branchId,tableId,token}){
   // ⚠️ ต้องอยู่บนสุดก่อน return ทุกทาง — hook ที่อยู่หลัง early return ทำให้จอลูกค้าพังทั้งจอ (เจอจริง 20 ก.ย. 69)
   // หัวจอสูงเท่าไร (ชื่อสาขายาวขึ้นบรรทัดที่สองได้) — แถบหมวดต้องติดใต้หัวพอดี ไม่ทับกัน
-  const headRef=useRef(null);const[headH,setHeadH]=useState(0);
-  useEffect(()=>{const el=headRef.current;if(!el)return;
-    const upd=()=>setHeadH(el.offsetHeight||0);upd();
-    const ro=typeof ResizeObserver!=="undefined"?new ResizeObserver(upd):null;if(ro)ro.observe(el);
+  // วัดตอน "หัวจอโผล่จริง" ด้วย callback ref — ไม่ใช่ useEffect ตอน mount
+  // เพราะตอน mount หน้านี้ยังเป็นจอ "กำลังโหลด" หัวจอยังไม่มีตัวตน วัดได้ 0 แล้วไม่มีใครวัดซ้ำอีกเลย
+  // (ผลคือแถบหมวดติดที่ 0 ทับหัวจอ — เจอจริงตอนตรวจบนจอมือถือ 20 ก.ย. 69)
+  const[headH,setHeadH]=useState(0);
+  const headElRef=useRef(null);const headRoRef=useRef(null);
+  const headRef=useCallback((el)=>{
+    if(headRoRef.current){headRoRef.current.disconnect();headRoRef.current=null;}
+    headElRef.current=el||null;
+    if(!el)return;
+    const upd=()=>setHeadH(el.offsetHeight||0);
+    upd();
+    if(typeof ResizeObserver!=="undefined"){const ro=new ResizeObserver(upd);ro.observe(el);headRoRef.current=ro;}
+  },[]);
+  useEffect(()=>{
+    const upd=()=>{const el=headElRef.current;if(el)setHeadH(el.offsetHeight||0);};
     window.addEventListener("resize",upd);window.addEventListener("orientationchange",upd);
-    return()=>{if(ro)ro.disconnect();window.removeEventListener("resize",upd);window.removeEventListener("orientationchange",upd);};
+    return()=>{window.removeEventListener("resize",upd);window.removeEventListener("orientationchange",upd);};
   },[]);
   const[branch,setBranch]=useState(null);const[table,setTable]=useState(null);const[menus,setMenus]=useState([]);
   const[cart,setCart]=useState([]);const[selCat,setSelCat]=useState("ทั้งหมด");const[search,setSearch]=useState("");
