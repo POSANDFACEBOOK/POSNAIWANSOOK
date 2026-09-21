@@ -2498,7 +2498,7 @@ section("ใบปิดกะออกเครื่องพิมพ์ใ�
     ck("ตัวเลขเงินหลักอยู่บนใบครบ",
       ["฿7745.00", "฿8834.00", "฿8800.00", "฿6834.00", "฿535.00", "฿376.00", "-฿2365.50", "฿506.84"].filter((v) => !txt.includes(v)), []);
     ck("หัวข้อครบทุกส่วน",
-      ["ยอดขาย", "โครงสร้างยอด", "แยกตามวิธีชำระ", "ลิ้นชัก", "นับจริง", "รายการที่ต้องตรวจ"].filter((h) => !txt.includes(h)), []);
+      ["สรุปจำนวน", "โครงสร้างยอด", "ช่องทางชำระเงิน", "ลิ้นชักเงินสด", "นับจริง", "บิลที่ต้องตรวจ"].filter((h) => !txt.includes(h)), []);
     ok_("เงินขาดต้องบอกว่า \"ขาด\" พร้อมยอด", L.some((x) => x.l === "ขาด" && x.r === "-฿34.00"));
     ok_("บิลที่ยกเลิกต้องบอกว่าใครยกเลิก", txt.includes("B7 ฿119.00 (มะลิ)"));
     ok_("โต๊ะที่ยังไม่ปิดบิลต้องขึ้นบนใบ", txt.includes("A3 ฿299.00"));
@@ -2535,10 +2535,16 @@ section("พิมพ์ใบปิดกะซ้ำ");
     APP.includes("const totals=useMemo(()=>computeShiftTotals({movements,orders,actualCash,cancelled,openBills}),[movements,orders,actualCash,cancelled,openBills]);"));
   const r2Ln = APP.split("\n").find((l) => /^const round2\s*=/.test(l) || /^function round2\(/.test(l));
   const cst = grabF("function computeShiftTotals({movements,orders,actualCash,cancelled,openBills}){");
+  // สูตรยอดกะเรียกใช้บล็อกรายละเอียดของใบปิดกะ ต้องดึงมาด้วย ไม่งั้นรันไม่ได้
+  const blk = grabF("function shiftReportBlocks({orders=[],cancelled=[]}={}){");
+  const payLn = APP.split("\n").find((l) => l.startsWith("const payMethodLabel="));
+  const mainLn = APP.split("\n").find((l) => l.startsWith("const PAY_MAIN_METHODS="));
+  const takeLn = APP.split("\n").find((l) => l.startsWith("const isTakeawayTable="));
+  const emo = APP.split("\n").find((l) => l.startsWith("function stripEmoji(s){"));
   const lsr = grabF("async function loadShiftTotalsForReprint(shift,branchId){");
-  ok_("ยังมีตัวประกอบยอดของกะที่ปิดแล้ว", !!(r2Ln && cst && lsr));
-  if (r2Ln && cst && lsr) {
-    const mk = (orders, moves) => new Function("api", r2Ln + "\n" + cst + "\n" + lsr + "\nreturn loadShiftTotalsForReprint;")({
+  ok_("ยังมีตัวประกอบยอดของกะที่ปิดแล้ว", !!(r2Ln && cst && lsr && blk));
+  if (r2Ln && cst && lsr && blk) {
+    const mk = (orders, moves) => new Function("api", [mainLn, takeLn, emo, payLn, blk, r2Ln, cst, lsr, "return loadShiftTotalsForReprint;"].filter(Boolean).join("\n"))({
       getCashMovements: async () => moves,
       getPOSOrdersSince: async () => orders,
     });
@@ -3347,7 +3353,13 @@ section("แบ่งจ่ายหลายช่องทาง");
   // ── ยอดตามช่องทางในสรุปกะ: บิลแบ่งจ่ายต้องถูกแยกตามช่องทางจริง ──
   let totalsFn = null;
   try {
-    totalsFn = new Function("round2", grabTop("function computeShiftTotals({movements,orders,actualCash,cancelled,openBills}){", "}") + "\nreturn computeShiftTotals;")(
+    // ต้องแนบตัวช่วยที่สูตรเรียกใช้ไปด้วย (บล็อกรายละเอียดใบปิดกะ + ชื่อช่องทาง) ไม่งั้นรันไม่ได้
+    // ต้องแนบตัวช่วยที่สูตรเรียกใช้ไปด้วย (บล็อกรายละเอียดใบปิดกะ + ชื่อช่องทาง) ไม่งั้นรันไม่ได้
+    totalsFn = new Function("round2",
+      grabTop("const PAY_MAIN_METHODS=", "}") + "\n" +
+      (L.find((l) => l.startsWith("const payMethodLabel=")) || "") + "\n" +
+      (L.find((l) => l.startsWith("function stripEmoji(s){")) || "") + "\n" +
+      grabTop("function computeShiftTotals({movements,orders,actualCash,cancelled,openBills}){", "}") + "\nreturn computeShiftTotals;")(
       (n) => Math.round((+n || 0) * 100) / 100);
   } catch {}
   ok_("อ่านสูตรยอดกะได้", !!totalsFn);
@@ -3560,7 +3572,16 @@ section("ยกเลิกรายการต้องหายจากบ�
   ok_("อ่านบิลล่าสุดจากฐานก่อนยกเลิก", APP.includes("try{const r=await api.getPOSOrderById(existingOrder.id);fresh=Array.isArray(r)?r[0]:r;}catch{}"));
   ok_("อ่านไม่ได้ = ไม่ยกเลิก (ห้ามเอาออกแค่บนจอ)", APP.includes('notifyDlg("อ่านบิลล่าสุดไม่ได้ (เน็ตสะดุด) — ยังไม่ได้ยกเลิกรายการนี้ กรุณาลองใหม่");return;'));
   ok_("เขียนกลับจากรายการจริงในฐาน และกันชนกันด้วยเวลาแก้ล่าสุดของฐาน",
-    APP.includes("const newSent=dbItems.filter((_,i)=>i!==at);") && APP.includes("await api.updatePOSOrderIfUnchanged(existingOrder.id,fresh.updated_at,{items:newSent,"));
+    APP.includes("const newSent=dbItems.filter((_,i)=>i!==at);")
+    && APP.includes("const basePatch={items:newSent,subtotal:newSub,total:newSub,discount:0,updated_at:new Date().toISOString()};")
+    && APP.includes("api.updatePOSOrderIfUnchanged(existingOrder.id,fresh.updated_at,{...basePatch,void_log:voidLog})"));
+  // ของที่ยกเลิกต้องเหลือร่องรอยไว้ให้ใบปิดกะรายงาน — เดิมลบทิ้งเงียบๆ ไม่มีใครรู้ว่าวันนั้นยกเลิกอะไรไปบ้าง
+  ok_("จดรายการที่ยกเลิกไว้บนบิล (ชื่อ จำนวน ราคา เวลา ใครกด)",
+    APP.includes("const voidRec={name:target.name,qty:+target.qty||0,price:+target.price||0,")
+    && APP.includes("by:currentUser?.username||null,table:table?.table_number||null};")
+    && APP.includes("const voidLog=[...(Array.isArray(fresh.void_log)?fresh.void_log:[]),voidRec];"));
+  ok_("ฐานยังไม่มีคอลัมน์ void_log = ยกเลิกรายการต้องทำได้เหมือนเดิม (แค่ไม่มีประวัติ)",
+    APP.includes("row=await api.updatePOSOrderIfUnchanged(existingOrder.id,fresh.updated_at,basePatch);"));
   ok_("ไม่มีในฐานแล้ว = บอกพนักงาน แล้วปรับจอให้ตรงกับบิลจริง",
     APP.includes('posToast("รายการนี้ถูกเอาออกไปก่อนหน้านี้แล้ว — จอถูกอัปเดตให้ตรงกับบิลจริง","warn",6000);'));
   ok_("ยกเลิกเสร็จแล้วให้จอแม่ดึงบิลใหม่ (เปิดโต๊ะซ้ำต้องไม่เห็นของที่ยกเลิก)",
@@ -3686,6 +3707,76 @@ section("รายงาน: แยกกะนี้กับทั้งวั
   ok_("ดูรายกะได้เฉพาะวันนี้วันเดียวและต้องมีกะเปิดอยู่",
     APP.includes("const canShiftView=!!(shift&&shift.opened_at&&span===1&&date===todayStr);"));
   ok_("ป้ายบนจอบอกชัดว่ากำลังดูกะหรือทั้งวัน", APP.includes("กะที่เปิดอยู่ · ตั้งแต่ ") && APP.includes('" · ทั้งวัน"'));
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// ใบปิดกะต้องรายงานครบทุกบล็อกเหมือนใบที่ร้านใช้อยู่ (เจ้าของสั่ง 21 ก.ย. 69 พร้อมรูปใบจริง)
+// กติกาเหล็กของเอกสารนี้: ทุกบล็อกต้องบวกกลับได้ตรงกัน ไม่งั้นคนตรวจร้านจับผิดไม่ได้
+//   Σ ขายตามหมวด = ยอดก่อนส่วนลด · Σ ช่องทางขาย = ยอดขายสุทธิ · Σ ช่องทางชำระ = ยอดขายสุทธิ
+// บิลแบ่งจ่ายต้องนับเป็นหลายครั้งตามขั้นจริง และช่องทางย่อยต้องอยู่ใต้ช่องทางแม่เหมือนที่ส่งบัญชี
+// ══════════════════════════════════════════════════════════════════════════
+section("ใบปิดกะ: บล็อกรายละเอียด");
+{
+  const one = (p) => APP.split("\n").find((l) => l.startsWith(p)) || "";
+  const grabB = (head) => {
+    const st = APP.indexOf(head); if (st < 0) return "";
+    let d = 0, started = false;
+    for (let i = st + head.length - 1; i < APP.length; i++) {
+      if (APP[i] === "{") { d++; started = true; }
+      else if (APP[i] === "}") { d--; if (started && d === 0) return APP.slice(st, i + 1); }
+    }
+    return "";
+  };
+  let blocks = null;
+  try {
+    blocks = new Function([
+      one("const PAY_LABEL={cash:"), one("function stripEmoji(s){"), one("const payMethodLabel=(v)=>"),
+      one("const PAY_MAIN_METHODS="), one("const isTakeawayTable="),
+      grabB("function shiftReportBlocks({orders=[],cancelled=[]}={}){"),
+      "return shiftReportBlocks;",
+    ].join("\n"))();
+  } catch {}
+  ok_("อ่านตัวคิดบล็อกใบปิดกะได้", !!blocks);
+  if (blocks) {
+    const ORDERS = [
+      { id: 1, table_number: "C5", total: 900, payment_method: "cash", discount: 100, promo_amount: 0,
+        items: [{ name: "หมูสไลด์", category: "หมูกระทะ", qty: 2, price: 400, item_discount: 100, item_discount_type: "percent", item_discount_value: 12.5 },
+                { name: "น้ำเปล่า", category: "น้ำ", qty: 2, price: 100 }] },
+      { id: 2, table_number: "กลับบ้าน1", total: 500, payment_method: "mixed", discount: 0, promo_amount: 50, promo_name: "ลดวันเกิด",
+        payments: [{ method: "promptpay", amount: 300 }, { method: "thaiplus", amount: 150 }, { method: "cash", amount: 50 }],
+        items: [{ name: "หมูหมัก", category: "หมูกระทะ", qty: 1, price: 550 }],
+        void_log: [{ name: "เบียร์", qty: 1, price: 120, by: "มะลิ" }] },
+    ];
+    const CANCELLED = [{ id: 3, table_number: "A2", total: 250, paid_by: "มะลิ", void_log: [] }];
+    const r = blocks({ orders: ORDERS, cancelled: CANCELLED });
+    const sum = (a, k) => Math.round(a.reduce((t, x) => t + (+x[k] || 0), 0) * 100) / 100;
+    ck("Σ ขายตามหมวด = ยอดก่อนส่วนลดของทุกบิล", sum(r.byCategory, "amt"), 1550);   // 800 + 200 + 550
+    ck("จำนวนชิ้นรวมถูก", r.itemCount, 5);
+    ck("หมวดเดียวกันจากคนละบิล ถูกรวมเป็นแถวเดียว",
+      r.byCategory.find((c) => c.name === "หมูกระทะ"), { name: "หมูกระทะ", qty: 3, amt: 1350 });   // 800 + 550
+    ck("Σ ช่องทางขาย = ยอดขายสุทธิ", r.channel.table.amt + r.channel.takeaway.amt, 1400);
+    ck("โต๊ะชื่อ 'กลับบ้าน' นับเป็นสั่งกลับบ้าน", { n: r.channel.takeaway.n, amt: r.channel.takeaway.amt }, { n: 1, amt: 500 });
+    ck("ส่วนลดแยกตามอัตราที่กดจริง + ลดท้ายบิล + โปรโมชั่น",
+      r.discountLines.map((x) => x.name + "|" + x.count + "|" + x.amt).sort().join(" , "),
+      ["ลดรายเมนู 12.50%|1|100", "โปรโมชั่น: ลดวันเกิด|1|50"].sort().join(" , "));
+    ck("Σ ช่องทางชำระ = ยอดขายสุทธิ", r.paymentTotal, 1400);
+    ck("บิลแบ่งจ่ายนับเป็นหลายครั้งตามขั้นจริง (เงินสด 2 ครั้ง)",
+      r.payment.find((p) => p.name === "เงินสด"), { name: "เงินสด", count: 2, amt: 950, lvl: 0 });
+    ck("พร้อมเพย์อยู่ใต้บัตรเครดิต (กรอกเอง) เหมือนที่ส่งบัญชี",
+      r.payment.filter((p) => p.name === "บัตรเครดิต (กรอกเอง)" || p.name === "พร้อมเพย์").map((p) => p.name + "|" + p.lvl + "|" + p.amt).join(" , "),
+      "บัตรเครดิต (กรอกเอง)|0|300 , พร้อมเพย์|1|300");
+    ck("ช่องทางอื่นอยู่ใต้ Custom Payment",
+      r.payment.filter((p) => p.name === "Custom Payment" || p.name === "ไทยช่วยไทย พลัส").map((p) => p.name + "|" + p.lvl + "|" + p.amt).join(" , "),
+      "Custom Payment|0|150 , ไทยช่วยไทย พลัส|1|150");
+    ck("รายการที่ยกเลิกหลังส่งครัว ขึ้นบนใบพร้อมยอด", { n: r.voidCount, qty: r.voidQty, amt: r.voidAmt }, { n: 1, qty: 1, amt: 120 });
+    ck("บิลที่ยกเลิกหลังรับเงินแล้ว แยกให้เห็น", { n: r.voidAfterPaidCount, amt: r.voidAfterPaidAmt }, { n: 1, amt: 250 });
+    ck("ไม่มีบิลเลย = ทุกบล็อกว่าง ไม่พัง", blocks({}).paymentTotal, 0);
+  }
+  // บล็อกที่ต้องมีบนกระดาษ — หายไปหนึ่งบล็อก = เอกสารตรวจร้านใช้ไม่ได้
+  ck("หัวข้อบนใบครบทุกบล็อก",
+    ["สรุปจำนวน", "ขายตามหมวด", "โครงสร้างยอด", "ช่องทางขาย", "ส่วนลดและโปรโมชั่น", "ช่องทางชำระเงิน", "ลิ้นชักเงินสด", "รายการที่ยกเลิก", "บิลที่ต้องตรวจ"]
+      .filter((h) => !APP.includes('sec("' + h + '")')), []);
 }
 
 
