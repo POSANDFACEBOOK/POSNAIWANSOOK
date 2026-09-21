@@ -23888,7 +23888,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
 // ══════════════════════════════════════════════════════
 // ── SALES REPORT (รายงานยอดขาย: เลือกวัน · ปิด/ยังไม่ปิดบิล · ดูแต่ละบิล) ─
 // ══════════════════════════════════════════════════════
-function BillDetailCard({order,branch=null,cfg=null,onBack,onEdit=null,onVoid=null}){
+function BillDetailCard({order,branch=null,cfg=null,onBack,onEdit=null,onVoid=null,onFixPay=null}){
   const o=order;
   const items=o.items||[];
   const stL={pending:"รอยืนยัน",confirmed:"กำลังทำ",bill_requested:"เรียกบิล",paid:"ชำระแล้ว",cancelled:"ยกเลิก"};
@@ -23943,6 +23943,7 @@ function BillDetailCard({order,branch=null,cfg=null,onBack,onEdit=null,onVoid=nu
       </div>}
       {onEdit&&canEditPaidBill(o)&&<div style={{padding:"10px 18px",borderBottom:`1px solid ${C.line}`,background:C.white}}>
         <Btn v="primary" full onClick={()=>onEdit(o)} s={{padding:"9px",fontSize:13}}>✏️ แก้ไขบิลนี้ — เพิ่ม/ลดรายการ แล้วเก็บเพิ่มหรือคืนเงิน</Btn>
+        {onFixPay&&<Btn v="ghost" full onClick={()=>onFixPay(o)} s={{padding:"9px",fontSize:13,marginTop:8}}>💳 แก้ช่องทางชำระ — กดผิดช่องทาง (ยอดไม่เปลี่ยน)</Btn>}
         {onVoid&&<Btn v="danger" full onClick={()=>onVoid(o)} s={{padding:"9px",fontSize:13,marginTop:8}}>🚫 ยกเลิกบิลนี้ (Void) — ต้องใส่เหตุผล</Btn>}
         {+o.edit_count>0&&<div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:6}}>บิลนี้ถูกแก้มาแล้ว {o.edit_count} ครั้ง · ล่าสุด {o.edited_at?fmtDT(o.edited_at):"-"}{o.edited_by?" โดย "+o.edited_by:""}</div>}
       </div>}
@@ -24000,6 +24001,113 @@ async function printBillReceipt(order,tableNum,{branch,posSettings,printers=[],p
   }
   if(isHttps&&!rcps.length){posToast("⚠️ ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ไปที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์ → ติ๊ก \"🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ\"","warn");return;}
   printReceipt(order,tableNum,branch.name,posSettings,{paid});   // เดสก์ท็อป/LAN (ไม่ใช่ https) → หน้าต่างพิมพ์เบราว์เซอร์
+}
+// ── แก้ช่องทางชำระของบิลที่ปิดแล้ว (เจ้าของสั่ง 21 ก.ย. 69) ──────────────
+// เหตุจริง: บิล #357 ลูกค้าจ่ายสด ฿89 แต่พนักงานกดเป็นพร้อมเพย์ 79 + สด 10
+// กว่าจะรู้ตัวก็ปิดกะแล้ว ต้องไล่แก้สามระบบ (บิล · ลิ้นชัก · บัญชี) ⟹ ให้แก้เองได้ตั้งแต่ยังไม่ปิดกะ
+// กติกา: เฉพาะกะที่เปิดอยู่ · ยอดรวมต้องเท่าบิลเป๊ะ · บังคับเหตุผล · เงินสดที่เปลี่ยนต้องตามไปแก้ลิ้นชักเสมอ
+function PayChannelFixModal({order,branch,currentUser,shift,onDone,onClose}){
+  const o=order;
+  const total=round2(+o.total||0);
+  const before=(Array.isArray(o.payments)&&o.payments.length)?o.payments.map(p=>({method:p.method,amount:round2(+p.amount||0)})):[{method:o.payment_method||"other",amount:total}];
+  const[parts,setParts]=useState([]);
+  const[amt,setAmt]=useState("");
+  const[reason,setReason]=useState("");
+  const[saving,setSaving]=useState(false);
+  const paid=round2(parts.reduce((s,p)=>s+p.amount,0));
+  const remain=round2(total-paid);
+  const canSave=remain===0&&parts.length>0&&reason.trim().length>=3&&!saving;
+  const addPart=(m)=>{
+    const want=round2(+amt||remain);
+    if(!(want>0)||want>remain)return;
+    setParts(a=>[...a,{method:m,amount:want}]);setAmt("");
+  };
+  async function saveNow(){
+    if(!canSave)return;
+    const beforeText=before.map(p=>payMethodLabel(p.method)+" "+bahtR(p.amount)).join(" + ");
+    const afterText=parts.map(p=>payMethodLabel(p.method)+" "+bahtR(p.amount)).join(" + ");
+    if(!await confirmDlg({title:"แก้ช่องทางชำระ",confirmLabel:"บันทึก",cancelLabel:"ยกเลิก",
+      message:"บิล #"+o.id+" โต๊ะ "+o.table_number+"\nเดิม: "+beforeText+"\nใหม่: "+afterText+"\n\nยอดรวม "+bahtR(total)+" ไม่เปลี่ยน · เงินในลิ้นชักจะถูกปรับให้ตรงอัตโนมัติ"}))return;
+    setSaving(true);
+    try{
+      const at=new Date().toISOString();
+      const who=currentUser?.username||currentUser?.name||"-";
+      const cashBefore=round2(before.filter(p=>p.method==="cash").reduce((s,p)=>s+p.amount,0));
+      const cashAfter=round2(parts.filter(p=>p.method==="cash").reduce((s,p)=>s+p.amount,0));
+      const kinds=[...new Set(parts.map(p=>p.method))];
+      const payments=parts.map(p=>({...p,at,by:who,reason:"แก้ช่องทางชำระ: "+reason.trim()}));
+      const patch={payment_method:kinds.length===1?kinds[0]:"mixed",payments,
+        cash_received:cashAfter>0?cashAfter:null,updated_at:at};
+      const row=await api.updatePOSOrderIfUnchanged(o.id,o.updated_at,patch);
+      if(!row){notifyDlg("บิลนี้เพิ่งถูกแก้จากอุปกรณ์อื่น — ปิดหน้านี้แล้วเปิดบิลใหม่อีกครั้ง");setSaving(false);return;}
+      // เงินสดเปลี่ยน = ลิ้นชักต้องเปลี่ยนตาม ไม่งั้นตอนปิดกะเงินจะขาด/เกินโดยไม่มีใครรู้สาเหตุ
+      const delta=round2(cashAfter-cashBefore);
+      if(delta!==0&&shift){
+        try{
+          await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"sale",amount:delta,order_id:o.id,
+            reason:"แก้ช่องทางชำระบิล #"+o.id+" โต๊ะ "+o.table_number+" ("+beforeText+" → "+afterText+")",
+            user_id:currentUser?.id,username:who});
+        }catch(err){
+          console.error("ปรับเงินลิ้นชักไม่สำเร็จ:",err);
+          notifyDlg("แก้ช่องทางในบิลแล้ว แต่ปรับเงินในลิ้นชักไม่สำเร็จ\nกรุณาไปที่ \"เงินในลิ้นชัก\" แล้วบันทึกเงิน"+(delta>0?"เข้า ":"ออก ")+bahtR(Math.abs(delta))+" ด้วยตัวเอง");
+        }
+      }
+      // ลงประวัติการแก้บิล — ใบปิดกะจะรายงานว่าแก้กี่ครั้ง ใครแก้ เพราะอะไร
+      try{
+        await api.addOrderEdit({order_id:o.id,branch_id:branch.id,shift_id:shift?.id||null,edited_by:who,
+          reason:"แก้ช่องทางชำระ: "+reason.trim()+" ("+beforeText+" → "+afterText+")",
+          delta:0,settle_method:kinds.length===1?kinds[0]:"mixed",old_total:total,new_total:total,items_before:o.items||[]});
+      }catch(err){console.warn("บันทึกประวัติการแก้บิลไม่สำเร็จ",err);}
+      posToast("แก้ช่องทางชำระบิล #"+o.id+" แล้ว","ok");
+      onDone&&onDone();
+    }catch(e){notifyDlg("แก้ช่องทางชำระไม่สำเร็จ: "+friendlyError(e));}
+    setSaving(false);
+  }
+  const chip={padding:"10px 14px",borderRadius:10,border:"1px solid "+C.line,background:C.white,cursor:"pointer",
+    fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:700,color:C.ink2,minHeight:44};
+  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.78)",zIndex:6200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+    <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,540px)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",boxShadow:"0 30px 80px rgba(0,0,0,.45)"}}>
+      <div style={{padding:"16px 20px",background:C.brand,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:900,fontSize:18}}>💳 แก้ช่องทางชำระ · บิล #{o.id}</div>
+        <button onClick={onClose} style={{background:"rgba(255,255,255,.2)",border:"none",borderRadius:10,width:44,height:44,cursor:"pointer",color:C.white,fontSize:20}}>✕</button>
+      </div>
+      <div style={{padding:20,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{background:C.bg,borderRadius:12,padding:"12px 14px",marginBottom:14,fontSize:13.5,color:C.ink2,lineHeight:1.8}}>
+          <div>โต๊ะ <b style={{color:C.ink}}>{o.table_number}</b> · ยอดบิล <b style={{color:C.ink,fontSize:18}}>{bahtR(total)}</b></div>
+          <div>ตอนนี้บันทึกไว้ว่า <b style={{color:C.ink}}>{before.map(p=>payMethodLabel(p.method)+" "+bahtR(p.amount)).join(" + ")}</b></div>
+        </div>
+        <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,marginBottom:8}}>ที่จ่ายจริงคือช่องทางไหน *</div>
+        {parts.length>0&&<div style={{border:"1px solid "+C.line,borderRadius:12,padding:"8px 12px",marginBottom:10}}>
+          {parts.map((p,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:i<parts.length-1?"1px dashed "+C.lineLight:"none"}}>
+            <span style={{flex:1,fontSize:14,fontWeight:700,color:C.ink2}}>{i+1}. {payMethodLabel(p.method)}</span>
+            <span style={{fontSize:15,fontWeight:900,color:C.ink}}>{bahtR(p.amount)}</span>
+            {i===parts.length-1&&<button onClick={()=>setParts(a=>a.slice(0,-1))} style={{...chip,padding:"6px 10px",minHeight:36,color:C.red,fontSize:12}}>ลบ</button>}
+          </div>)}
+        </div>}
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+          <NumInput value={amt} onValue={setAmt} placeholder={"เหลือ "+bahtR(remain)} style={{...iS,flex:1,fontSize:16,fontWeight:800,padding:"12px 14px",textAlign:"center"}}/>
+          <button onClick={()=>setAmt(String(remain))} style={chip}>ทั้งหมด</button>
+        </div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
+          {SETTLE_METHODS().map(mt=><button key={mt.v} onClick={()=>addPart(mt.v)} disabled={remain<=0}
+            style={{...chip,opacity:remain<=0?.4:1,borderColor:mt.c,color:mt.c,fontWeight:800}}>{mt.icon} {mt.l}</button>)}
+        </div>
+        <div style={{fontSize:14,fontWeight:900,color:remain===0?C.green:C.red,marginBottom:14}}>
+          {remain===0?"ครบยอดพอดี "+bahtR(total):"ยังเหลืออีก "+bahtR(remain)}
+        </div>
+        <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,marginBottom:8}}>เหตุผล *</div>
+        <input value={reason} onChange={e=>setReason(e.target.value)} placeholder="เช่น กดช่องทางผิด ลูกค้าจ่ายเงินสดทั้งหมด"
+          style={{...iS,fontSize:14.5,padding:"12px 14px",marginBottom:14}}/>
+        <div style={{fontSize:12.5,color:C.ink4,lineHeight:1.7,marginBottom:16}}>
+          ยอดบิลไม่เปลี่ยน เปลี่ยนแค่ช่องทาง · ถ้าเงินสดเปลี่ยน ระบบจะปรับเงินในลิ้นชักให้เองและขึ้นบนใบปิดกะ
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn v="ghost" onClick={onClose} full s={{padding:"12px"}}>ยกเลิก</Btn>
+          <Btn v="primary" onClick={saveNow} loading={saving} disabled={!canSave} full icon={I.check} s={{padding:"12px",fontWeight:900}}>บันทึกช่องทางใหม่</Btn>
+        </div>
+      </div>
+    </div>
+  </div>;
 }
 // ── ใบยกเลิกบิล — ออกที่เครื่องใบเสร็จทุกครั้งที่กด Void ────────────────
 // เอกสารกระดาษคือสิ่งเดียวที่ผู้จัดการตรวจย้อนหลังได้โดยไม่ต้องเปิดคอม
@@ -24312,7 +24420,7 @@ const billActedAt=(o)=>{
   return Number.isFinite(t)?t:0;
 };
 function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSettings=null,shift=null,currentUser=null,onEdited}){
-  const[editBill,setEditBill]=useState(null);const[voidBill,setVoidBill]=useState(null);const[reloadTick,setReloadTick]=useState(0);
+  const[editBill,setEditBill]=useState(null);const[voidBill,setVoidBill]=useState(null);const[fixPayBill,setFixPayBill]=useState(null);const[reloadTick,setReloadTick]=useState(0);
   // ยกเลิกบิลได้เฉพาะบิลของ "กะที่เปิดอยู่" — บิลของกะที่ปิดไปแล้วส่งยอดเข้าบัญชีแล้ว ต้องแก้ผ่านบัญชี
   const canVoidBill=(o)=>!!(shift&&shift.status!=="closed"&&o&&o.status==="paid"&&shift.opened_at&&Date.parse(o.created_at||"")>=Date.parse(shift.opened_at));
   const isoKey=(d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;  // machine key (ISO) — do NOT shadow the global BE fmtD
@@ -24453,7 +24561,10 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
 
     {loading?<div style={{padding:"40px 0"}}><Loading text="กำลังโหลดรายงาน..."/></div>
     :bill?<><BillDetailCard order={bill} branch={currentBranch} cfg={cfg} onBack={()=>setBill(null)} onEdit={()=>setEditBill(bill)}
-        onVoid={canVoidBill(bill)?()=>setVoidBill(bill):null}/>
+        onVoid={canVoidBill(bill)?()=>setVoidBill(bill):null}
+        onFixPay={canVoidBill(bill)?()=>setFixPayBill(bill):null}/>
+      {fixPayBill&&<PayChannelFixModal order={fixPayBill} branch={currentBranch} currentUser={currentUser} shift={shift}
+        onDone={()=>{setFixPayBill(null);setBill(null);setReloadTick(t=>t+1);onEdited&&onEdited();}} onClose={()=>setFixPayBill(null)}/>}
       {voidBill&&<VoidBillModal order={voidBill} branch={currentBranch} currentUser={currentUser} shift={shift} printers={printers}
         onDone={()=>{setVoidBill(null);setBill(null);setReloadTick(t=>t+1);onEdited&&onEdited();}} onClose={()=>setVoidBill(null)}/>}
       {editBill&&<EditPaidBillModal order={editBill} branch={currentBranch} posSettings={posSettings} menus={menus} printers={printers} currentUser={currentUser} shift={shift}

@@ -3669,7 +3669,7 @@ section("หน้าต่างรับสินค้าบนมือถ�
   ck("ทั้งแอปไม่มีกรอบ overflowX:auto + overflowY:hidden", (APP.match(/overflowX:"auto",overflowY:"hidden"/g) || []).length, 0);
   // ป็อปอัพกลางจอที่ไม่มีตัวเลื่อน: เนื้อหาสูงกว่าจอมือถือ = หัว/ปุ่มล่างถูกตัดทิ้ง เลื่อนไม่ได้ (ตรวจทั้งแอป 18 ก.ย. 69)
   ck("ป็อปอัพวัตถุดิบ SOP / จ่ายเงินใบสั่งซื้อ / เปิดกะ เลื่อนได้เมื่อสูงเกินจอ",
-    (APP.match(/maxHeight:"calc\(100vh - 32px\)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"/g) || []).length, 5);   // + จอยกเลิกบิล
+    (APP.match(/maxHeight:"calc\(100vh - 32px\)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"/g) || []).length, 6);   // + จอแก้ช่องทางชำระ   // + จอยกเลิกบิล
   ck("ตัวเลื่อน flex:1 ทุกตัวมี minHeight:0", (APP.match(/flex:1,overflowY:"auto"(?![^}]*minHeight)/g) || []).length, 0);
 }
 
@@ -3844,6 +3844,36 @@ section("ปุ่มยกเลิกบิล (Void)");
     APP.includes("⚠️ ยกเลิกบิลแล้ว แต่ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ"));
   ok_("ใบยกเลิกบอกครบ: เลขบิล โต๊ะ ยอด ช่องทางเดิม เหตุผล คนกด เวลา",
     ["เลขที่บิล", "โต๊ะ", "ยอดบิล", "เดิมชำระโดย", "เหตุผล: ", "ยกเลิกโดย "].every((x) => APP.includes(x)));
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// ปุ่มแก้ช่องทางชำระ (เจ้าของสั่ง 21 ก.ย. 69 หลังเคสบิล #357)
+// เคสจริง: ลูกค้าจ่ายสด ฿89 แต่กดเป็นพร้อมเพย์ 79 + สด 10 · กว่าจะรู้ก็ปิดกะแล้ว
+// ต้องไล่แก้สามระบบ (บิล · ลิ้นชัก · บัญชี) ⟹ ให้พนักงานแก้เองได้ทันทีตั้งแต่กะยังไม่ปิด
+// กติกาที่ห้ามหลุด: ยอดบิลห้ามเปลี่ยน · ช่องทางใหม่ต้องรวมได้เท่ายอดบิลเป๊ะ · เงินสดที่ขยับต้องตามไปแก้ลิ้นชักเสมอ
+// ══════════════════════════════════════════════════════════════════════════
+section("ปุ่มแก้ช่องทางชำระ");
+{
+  ok_("มีจอแก้ช่องทางชำระ", APP.includes("function PayChannelFixModal({order,branch,currentUser,shift,onDone,onClose}){"));
+  ok_("ใช้ได้เฉพาะบิลของกะที่เปิดอยู่ (กติกาเดียวกับปุ่มยกเลิกบิล)",
+    APP.includes("onFixPay={canVoidBill(bill)?()=>setFixPayBill(bill):null}"));
+  ok_("บันทึกไม่ได้จนกว่าช่องทางใหม่จะรวมได้เท่ายอดบิลพอดี และใส่เหตุผลแล้ว",
+    APP.includes("const canSave=remain===0&&parts.length>0&&reason.trim().length>=3&&!saving;"));
+  ok_("ใส่ยอดเกินที่เหลือไม่ได้", APP.includes("if(!(want>0)||want>remain)return;"));
+  ok_("ยอดบิลไม่ถูกแตะ เปลี่ยนแค่ช่องทางกับเงินรับ",
+    APP.includes('const patch={payment_method:kinds.length===1?kinds[0]:"mixed",payments,')
+    && !APP.includes("const patch={payment_method:kinds.length===1?kinds[0]:\"mixed\",payments,total:"));
+  ok_("ช่องทางเดียวกันทั้งใบ = เก็บเป็นช่องทางนั้น ไม่ใช่ mixed",
+    APP.includes("kinds.length===1?kinds[0]:\"mixed\""));
+  ok_("เขียนทับกันด้วยเวลาแก้ล่าสุด (กันสองเครื่องแก้ชนกัน)",
+    APP.includes("const row=await api.updatePOSOrderIfUnchanged(o.id,o.updated_at,patch);"));
+  ok_("เงินสดที่เปลี่ยนไปต้องตามไปปรับลิ้นชักเสมอ",
+    APP.includes("const delta=round2(cashAfter-cashBefore);") && APP.includes('type:"sale",amount:delta,order_id:o.id,'));
+  ok_("ปรับลิ้นชักไม่สำเร็จต้องบอกให้ไปทำเอง ไม่ใช่เงียบ",
+    APP.includes("แก้ช่องทางในบิลแล้ว แต่ปรับเงินในลิ้นชักไม่สำเร็จ"));
+  ok_("ลงประวัติการแก้บิลทุกครั้ง (ใบปิดกะจะรายงาน)",
+    APP.includes('reason:"แก้ช่องทางชำระ: "+reason.trim()+" ("+beforeText+" → "+afterText+")",') && APP.includes("delta:0,settle_method:"));
 }
 
 
