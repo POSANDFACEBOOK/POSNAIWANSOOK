@@ -18544,7 +18544,7 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
   return <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
     {/* Zone filter row */}
     {(allZoneNames.length>0||onAddZone)&&<div style={{padding:"8px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6,overflowX:"auto",flexShrink:0}}>
-      <span style={{fontSize:11,fontWeight:700,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>โซน:</span>
+      <span style={{fontSize:11.5,fontWeight:700,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>โซน:</span>
       {allZoneNames.map(zn=>{const c=zoneColorMap[zn]||C.ink3;const n=tables.filter(t=>t.zone===zn).length;const active=zoneFilter===zn;const zid=zones.find(z=>z.name===zn)?.id;return <button key={zn} onPointerDown={e=>zoneDown(e,zn,zid)} onPointerMove={zoneMove} onPointerUp={()=>zoneUp(zn)} onPointerCancel={()=>{if(zonePressRef.current){clearTimeout(zonePressRef.current.timer);zonePressRef.current=null;}}} title={(editable&&onRenameZone)?"แตะ = กรอง · กดค้าง = แก้ไข/ลบโซน":undefined} style={{padding:"4px 12px",borderRadius:18,border:active?`2px solid ${c}`:`1px solid ${C.line}`,background:active?`${c}22`:C.white,color:active?c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}><span style={{width:8,height:8,borderRadius:"50%",background:c}}/>{zn} ({n})</button>;})}
       {tables.some(isUnzoned)&&<button onClick={()=>setZoneFilter("none")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="none"?`2px solid ${C.ink3}`:`1px solid ${C.line}`,background:zoneFilter==="none"?C.lineLight:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ไม่มีโซน ({tables.filter(isUnzoned).length})</button>}
       {onAddZone&&(addingZone
@@ -18558,9 +18558,9 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
     </div>}
     {/* Status legend + add-table action */}
     <div style={{padding:"10px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",flexShrink:0}}>
-      {Object.entries(TS).map(([k,v])=>{const n=tables.filter(t=>getStatus(t)===k).length;return n>0?<div key={k} style={{display:"flex",alignItems:"center",gap:5,background:v.bg,border:`1px solid ${v.border}`,borderRadius:8,padding:"3px 10px"}}><div style={{width:8,height:8,borderRadius:"50%",background:v.border}}/><span style={{fontSize:11,fontWeight:700,color:v.text,fontFamily:"'Sarabun',sans-serif"}}>{v.label} ({n})</span></div>:null;})}
+      {Object.entries(TS).map(([k,v])=>{const n=tables.filter(t=>getStatus(t)===k).length;return n>0?<div key={k} style={{display:"flex",alignItems:"center",gap:5,background:v.bg,border:`1px solid ${v.border}`,borderRadius:8,padding:"3px 10px"}}><div style={{width:8,height:8,borderRadius:"50%",background:v.border}}/><span style={{fontSize:11.5,fontWeight:700,color:v.text,fontFamily:"'Sarabun',sans-serif"}}>{v.label} ({n})</span></div>:null;})}
       {editable&&<div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
-        <span style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>💡 กดค้างที่โต๊ะ/โซนเพื่อแก้ไข·ลบ · ลากโต๊ะเพื่อย้าย</span>
+        <span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>💡 กดค้างที่โต๊ะ/โซนเพื่อแก้ไข·ลบ · ลากโต๊ะเพื่อย้าย</span>
         {onAddTable&&<button onClick={()=>setTableForm({table_number:"",label:"",seats:4,shape:"square",zone:(zoneFilter!=="all"&&zoneFilter!=="none")?zoneFilter:""})} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"6px 14px",borderRadius:9,border:"none",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:"#fff",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>➕ เพิ่มโต๊ะ</button>}
       </div>}
     </div>
@@ -18583,13 +18583,13 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
             style={{position:"absolute",left:p.x,top:p.y,width:TW,height:TH,boxSizing:"border-box",background:sv.bg,border:`2.5px solid ${active?C.brand:borderColor}`,borderRadius:t.shape==="round"?"50%":14,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:editable?"grab":"pointer",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",touchAction:active?"none":"pan-y",boxShadow:active?`0 12px 26px ${C.brand}66`:(st!=="available"?`0 4px 16px ${sv.border}44`:"0 2px 8px rgba(0,0,0,.08)"),transform:active?"scale(1.06)":"none",transition:(dragPos&&dragPos.id===t.id)?"none":"transform .12s,box-shadow .2s,left .14s,top .14s",zIndex:active?30:1}}>
             {zoneColor&&<div style={{position:"absolute",top:-3,right:-3,width:10,height:10,borderRadius:"50%",background:zoneColor,border:`2px solid ${C.white}`,boxShadow:`0 1px 3px ${zoneColor}88`}}/>}
             <div style={{fontWeight:900,fontSize:17,color:sv.text,fontFamily:"'Sarabun',sans-serif",lineHeight:1}}>{t.table_number}</div>
-            {t.label&&<div style={{fontSize:9,color:sv.text,fontFamily:"'Sarabun',sans-serif",opacity:.8,marginTop:1,maxWidth:"90%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.label}</div>}
-            {!o?<div style={{fontSize:10,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2,opacity:.85}}>{st==="qrsent"?"พิมพ์ QR แล้ว":`${t.seats||4} ที่นั่ง`}</div>
+            {t.label&&<div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif",opacity:.8,marginTop:1,maxWidth:"90%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.label}</div>}
+            {!o?<div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2,opacity:.85}}>{st==="qrsent"?"พิมพ์ QR แล้ว":`${t.seats||4} ที่นั่ง`}</div>
             :<>{o&&failMap.has(String(o.id))&&(()=>{const f=failMap.get(String(o.id));const pn=failPrinterNames(f);
               // บอกชื่อเครื่องที่ไม่ออกเลย (เจ้าของสั่ง 12 ก.ย. 69) — เดิมบอกแค่ว่าใบครัวไม่ออก ต้องไปไล่หาเองว่าเครื่องไหน
               return <div title={(pn?pn+" ไม่ออก: ":"ใบครัวไม่ออก: ")+(f.names||[]).join(", ")}
-                style={{fontSize:10,fontWeight:900,color:"#fff",background:C.red,borderRadius:6,padding:"1px 6px",marginTop:3,fontFamily:"'Sarabun',sans-serif",maxWidth:"96%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>⚠️ {pn?pn+" ไม่ออก":"ใบครัวไม่ออก"}</div>;})()}
-              <div style={{fontSize:11,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
+                style={{fontSize:11,fontWeight:900,color:"#fff",background:C.red,borderRadius:6,padding:"1px 6px",marginTop:3,fontFamily:"'Sarabun',sans-serif",maxWidth:"96%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>⚠️ {pn?pn+" ไม่ออก":"ใบครัวไม่ออก"}</div>;})()}
+              <div style={{fontSize:11.5,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11.5,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
             {active&&<>
               <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();setTableForm({id:t.id,table_number:t.table_number,label:t.label||"",seats:t.seats||4,shape:t.shape||"square",zone:t.zone||""});}} title="แก้ไขโต๊ะ" style={{position:"absolute",top:-13,left:-13,width:30,height:30,borderRadius:"50%",border:"2px solid #fff",background:C.blue,color:"#fff",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,.35)",zIndex:31}}>✏️</button>
               <button onPointerDown={e=>e.stopPropagation()} onClick={async e=>{e.stopPropagation();
@@ -19458,7 +19458,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       <button onClick={()=>setMobileView("menu")} style={{flex:1,padding:"12px 10px",border:"none",background:mobileView==="menu"?C.brandLight:C.white,color:mobileView==="menu"?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:13,borderBottom:`3px solid ${mobileView==="menu"?C.brand:"transparent"}`,minHeight:48}}>🍽️ เมนู</button>
       <button onClick={()=>setMobileView("order")} style={{flex:1,padding:"12px 10px",border:"none",background:mobileView==="order"?C.brandLight:C.white,color:mobileView==="order"?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:13,borderBottom:`3px solid ${mobileView==="order"?C.brand:"transparent"}`,minHeight:48,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
         🧾 ออเดอร์
-        {items.length>0&&<span style={{background:C.brand,color:C.white,fontSize:11,fontWeight:900,minWidth:22,height:22,padding:"0 7px",borderRadius:11,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{itemTotalQty}</span>}
+        {items.length>0&&<span style={{background:C.brand,color:C.white,fontSize:12,fontWeight:900,minWidth:24,height:24,padding:"0 7px",borderRadius:12,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{itemTotalQty}</span>}
       </button>
     </div>}
     {/* Left: menu */}
@@ -19475,8 +19475,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           <Ic d={I.food} s={42} c={C.line}/>
           <p style={{marginTop:10,fontSize:13.5,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูที่จัดหมวดหมู่ไว้"}</p>
           {!search&&(branch?.type==="central"
-            ?<p style={{marginTop:6,fontSize:11.5,color:C.ink4,lineHeight:1.7}}>กด <b style={{color:C.brand}}>"🍔 จัดการเมนูและหมวดหมู่ → หมวดหมู่"</b> ด้านบน<br/>→ คลิกหมวด → ติ๊กเมนูเข้าหมวด · เมนูจะขึ้นที่นี่อัตโนมัติ</p>
-            :<p style={{marginTop:6,fontSize:11.5,color:C.ink4,lineHeight:1.7}}>หมวดหมู่จัดจากครัวกลางที่เดียว<br/>แจ้งครัวกลางให้จัดเมนูเข้าหมวด แล้วจะขึ้นที่นี่เอง</p>)}
+            ?<p style={{marginTop:6,fontSize:12,color:C.ink4,lineHeight:1.7}}>กด <b style={{color:C.brand}}>"🍔 จัดการเมนูและหมวดหมู่ → หมวดหมู่"</b> ด้านบน<br/>→ คลิกหมวด → ติ๊กเมนูเข้าหมวด · เมนูจะขึ้นที่นี่อัตโนมัติ</p>
+            :<p style={{marginTop:6,fontSize:12,color:C.ink4,lineHeight:1.7}}>หมวดหมู่จัดจากครัวกลางที่เดียว<br/>แจ้งครัวกลางให้จัดเมนูเข้าหมวด แล้วจะขึ้นที่นี่เอง</p>)}
         </div>}
       </div>
     </div>
@@ -19486,7 +19486,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       {/* Header */}
       <div style={{padding:"10px 12px",borderBottom:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
         <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
-        <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{table.seats} ที่นั่ง {items.length>0&&`• ${items.length} รายการ`}{sentRows.length>0&&<span style={{color:servedCount===sentRows.length?C.green:C.ink3,fontWeight:800}}>{` • เสิร์ฟแล้ว ${servedCount}/${sentRows.length}`}</span>}</div>
+        <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{table.seats} ที่นั่ง {items.length>0&&`• ${items.length} รายการ`}{sentRows.length>0&&<span style={{color:servedCount===sentRows.length?C.green:C.ink3,fontWeight:800}}>{` • เสิร์ฟแล้ว ${servedCount}/${sentRows.length}`}</span>}</div>
       </div>
 
       {(()=>{
@@ -19499,7 +19499,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         const retryable=fl.filter(f=>f.id&&Array.isArray(f.items)&&f.items.length);
         return <div style={{margin:"8px 8px 0",padding:"10px 12px",borderRadius:11,background:C.redLight,border:`1.5px solid ${C.red}`}}>
           <div style={{fontSize:12.5,fontWeight:900,color:C.red,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>⚠️ ใบครัวไม่ออก</div>
-          <div style={{fontSize:11.5,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:8}}>
+          <div style={{fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:8}}>
             {names.join(" · ")}
             <div style={{color:C.ink4,marginTop:3}}>ระบบไม่พิมพ์ซ้ำให้เอง — เช็คเครื่องพิมพ์กับสัญญาณให้พร้อมก่อน แล้วกดปุ่มด้านล่าง · ออกจริงแล้วป้ายนี้จะหายเอง</div>
           </div>
@@ -19514,7 +19514,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
               }
               posToast(sent?"🖨️ ส่งคำสั่งพิมพ์ใบครัวที่ไม่ออกแล้ว — ออกจริงแล้วป้ายนี้จะหายเอง":"กำลังพิมพ์อยู่ หรือเพิ่งพิมพ์ออกไปแล้ว — รอสักครู่",sent?"ok":"warn");
             }}>พิมพ์ใบครัวที่ไม่ออกอีกครั้ง</Btn>
-            :<div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>ใบจากตัวพิมพ์รุ่นเก่า — ปัดซ้ายที่รายการเพื่อพิมพ์ซ้ำ แล้วเอาออกที่ปุ่ม "พิมพ์ไม่สำเร็จ" ด้านบน</div>}
+            :<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>ใบจากตัวพิมพ์รุ่นเก่า — ปัดซ้ายที่รายการเพื่อพิมพ์ซ้ำ แล้วเอาออกที่ปุ่ม "พิมพ์ไม่สำเร็จ" ด้านบน</div>}
         </div>;
       })()}
       <div ref={listRef} style={{flex:1,minHeight:0,overflowY:"auto",padding:8}}>
@@ -19540,22 +19540,22 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
               </button>;})()}
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13.5,fontWeight:unsent?900:700,color:(!unsent&&served[String(item.line_uid)])?C.ink3:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.35,overflowWrap:"anywhere"}}>
-                  {unsent&&<span style={{display:"inline-block",background:"#EA580C",color:C.white,fontSize:9.5,fontWeight:900,borderRadius:5,padding:"1px 6px",marginRight:6,verticalAlign:"middle"}}>ใหม่</span>}
+                  {unsent&&<span style={{display:"inline-block",background:"#EA580C",color:C.white,fontSize:12,fontWeight:900,borderRadius:5,padding:"1px 6px",marginRight:6,verticalAlign:"middle"}}>ใหม่</span>}
                   {item.name}
                 </div>
                 {item.options&&item.options.length>0&&<div style={{fontSize:12,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:700,lineHeight:1.35,overflowWrap:"anywhere",marginTop:1}}>+ {optionsText(item.options)}</div>}
                 {!unsent&&item.sent_at&&(()=>{let tm="";try{tm=new Date(item.sent_at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"});}catch{}
                   // เวลาที่ส่งเข้าครัว — ไว้ไล่เช็คว่ารายการนี้ส่งรอบไหน ไม่ใช่ของซ้ำ
-                  return tm?<div style={{fontSize:11,color:C.ink4,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>🕘 ส่งครัว {tm}</div>:null;})()}
+                  return tm?<div style={{fontSize:12,color:C.ink4,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>🕘 ส่งครัว {tm}</div>:null;})()}
                 {!unsent&&served[String(item.line_uid)]&&(()=>{const sv=served[String(item.line_uid)];let tm="";try{tm=new Date(sv.at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"});}catch{}
-                  return <div style={{fontSize:10.5,color:C.green,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>✓ เสิร์ฟแล้ว{tm?` ${tm}`:""}{sv.by?` · ${sv.by}`:""}</div>;})()}
+                  return <div style={{fontSize:12,color:C.green,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>✓ เสิร์ฟแล้ว{tm?` ${tm}`:""}{sv.by?` · ${sv.by}`:""}</div>;})()}
                 {item.note&&<div onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",fontWeight:600,cursor:"pointer",lineHeight:1.35,overflowWrap:"anywhere",whiteSpace:"pre-wrap",marginTop:1}}>★ {item.note}</div>}
                 <div style={{display:"flex",alignItems:"center",gap:4,marginTop:6}}>
-                  {!item.note&&<div onClick={()=>{setNoteIdx(idx);setNoteText("");}} style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",cursor:"pointer",padding:"4px 0"}}>+ หมายเหตุ</div>}
+                  {!item.note&&<div onClick={()=>{setNoteIdx(idx);setNoteText("");}} style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",cursor:"pointer",padding:"4px 0"}}>+ หมายเหตุ</div>}
                   <div style={{flex:1}}/>
-                  <button onClick={()=>chQty(idx,-1)} aria-label="ลดจำนวน" style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.minus} s={12}/></button>
+                  <button onClick={()=>chQty(idx,-1)} aria-label="ลดจำนวน" style={{width:44,height:44,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.minus} s={12}/></button>
                   <span style={{fontSize:14,fontWeight:800,minWidth:20,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
-                  <button onClick={()=>chQty(idx,1)} aria-label="เพิ่มจำนวน" style={{width:28,height:28,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.plus} s={12}/></button>
+                  <button onClick={()=>chQty(idx,1)} aria-label="เพิ่มจำนวน" style={{width:44,height:44,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.plus} s={12}/></button>
                   <div style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif",minWidth:52,textAlign:"right",flexShrink:0}}>฿{(item.price*item.qty).toFixed(0)}</div>
                   <span style={{fontSize:14,color:C.ink4,opacity:.35,flexShrink:0}}>‹</span>
                 </div>
@@ -19627,14 +19627,14 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           <div style={{flex:1,minHeight:0,overflowY:"auto",padding:"0 20px"}}>
             {splitMode==="even"&&<>
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:14,padding:"10px 0 14px"}}>
-                <button onClick={()=>setSplitN(n=>Math.max(2,n-1))} style={{width:40,height:40,borderRadius:11,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:20,fontWeight:800,color:C.ink2}}>−</button>
+                <button onClick={()=>setSplitN(n=>Math.max(2,n-1))} style={{width:44,height:44,borderRadius:11,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:20,fontWeight:800,color:C.ink2}}>−</button>
                 <div style={{textAlign:"center",minWidth:78}}>
                   <div style={{fontSize:26,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.1}}>{splitN}</div>
-                  <div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>คน</div>
+                  <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>คน</div>
                 </div>
-                <button onClick={()=>setSplitN(n=>Math.min(20,n+1))} style={{width:40,height:40,borderRadius:11,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:20,fontWeight:800,color:C.ink2}}>+</button>
+                <button onClick={()=>setSplitN(n=>Math.min(20,n+1))} style={{width:44,height:44,borderRadius:11,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:20,fontWeight:800,color:C.ink2}}>+</button>
               </div>
-              {parts.length>1&&parts[0]!==parts[parts.length-1]&&<div style={{fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6}}>
+              {parts.length>1&&parts[0]!==parts[parts.length-1]&&<div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10,lineHeight:1.6}}>
                 หารไม่ลงตัว — เศษสตางค์ตกที่คนแรกๆ คนละ 1 สตางค์ รวมกันแล้วเท่ากับยอดบิลพอดี
               </div>}
               <div style={{display:"flex",flexDirection:"column",gap:6,paddingBottom:14}}>
@@ -19642,7 +19642,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
                   background:splitDone["e"+i]?C.greenLight:C.lineLight,border:`1px solid ${splitDone["e"+i]?C.green:"transparent"}`}}>
                   <div style={{flex:1,fontSize:13,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>คนที่ {i+1}{splitDone["e"+i]?" · พิมพ์แล้ว":""}</div>
                   <div style={{fontSize:15,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{amt.toFixed(2)}</div>
-                  <button onClick={()=>printShare("e"+i,`แบ่งจ่าย ${i+1}/${splitN}`,amt)} style={{border:"none",background:C.brand,color:C.white,borderRadius:8,padding:"6px 11px",cursor:"pointer",fontSize:11.5,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>พิมพ์</button>
+                  <button onClick={()=>printShare("e"+i,`แบ่งจ่าย ${i+1}/${splitN}`,amt)} style={{border:"none",background:C.brand,color:C.white,borderRadius:8,padding:"6px 11px",cursor:"pointer",fontSize:12,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>พิมพ์</button>
                 </div>)}
               </div>
             </>}
@@ -19654,7 +19654,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
                   <input type="checkbox" checked={!!splitSel[idx]} onChange={e=>setSplitSel(p=>({...p,[idx]:e.target.checked}))} style={{width:16,height:16,accentColor:C.brand}}/>
                   <div style={{flex:1,fontFamily:"'Sarabun',sans-serif"}}>
                     <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{item.qty}x {item.name}</div>
-                    {item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}
+                    {item.note&&<div style={{fontSize:12,color:C.ink4}}>★ {item.note}</div>}
                   </div>
                   <div style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(item.price*item.qty).toFixed(0)}</div>
                 </label>)}
@@ -19778,7 +19778,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
 
         {payWait&&<div style={{marginBottom:12,padding:"11px 13px",borderRadius:11,background:C.purpleLight,border:`1px solid ${C.purple}55`,fontFamily:"'Sarabun',sans-serif"}}>
           <div style={{fontSize:13,fontWeight:900,color:C.purple}}>🔒 รอลูกค้าโอน — ยอดถูกล็อกไว้แล้ว</div>
-          <div style={{fontSize:11.5,color:C.purple,marginTop:3,lineHeight:1.6,opacity:.95}}>
+          <div style={{fontSize:12,color:C.purple,marginTop:3,lineHeight:1.6,opacity:.95}}>
             ส่วนลดและโปรโมชั่นแก้ไม่ได้ เพื่อให้ตรงกับยอดบน QR ที่ลูกค้าถืออยู่ · กด <b>ยืนยันชำระ</b> ได้เลยเมื่อเงินเข้า
           </div>
         </div>}
@@ -19786,11 +19786,11 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
             เพราะลูกค้ายังถือใบเดิมอยู่ ยอดขยับเมื่อไหร่ใบนั้นก็จ่ายผิดทันที */}
         {lockedTotal!=null&&Math.abs((+total||0)-(+lockedTotal||0))>0.009&&<div style={{marginBottom:12,padding:"11px 13px",borderRadius:11,background:C.redLight,border:`1px solid ${C.red}55`,fontFamily:"'Sarabun',sans-serif"}}>
           <div style={{fontSize:13,fontWeight:900,color:C.red}}>⚠️ ยอดไม่ตรงกับ QR ที่พิมพ์ไปแล้ว</div>
-          <div style={{fontSize:11.5,color:C.red,marginTop:3,lineHeight:1.6}}>
+          <div style={{fontSize:12,color:C.red,marginTop:3,lineHeight:1.6}}>
             บน QR ฿{(+lockedTotal||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} · ตอนนี้ ฿{(+total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — รายการถูกแก้หลังพิมพ์ QR <b>ต้องพิมพ์ QR ใหม่</b>
           </div>
         </div>}
-        {lockedTotal!=null&&!payWait&&Math.abs((+total||0)-(+lockedTotal||0))<=0.009&&<div style={{marginBottom:12,padding:"9px 13px",borderRadius:11,background:C.greenLight,border:`1px solid ${C.green}44`,fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:"#0F6E4C",lineHeight:1.6}}>
+        {lockedTotal!=null&&!payWait&&Math.abs((+total||0)-(+lockedTotal||0))<=0.009&&<div style={{marginBottom:12,padding:"9px 13px",borderRadius:11,background:C.greenLight,border:`1px solid ${C.green}44`,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:"#0F6E4C",lineHeight:1.6}}>
           ✅ QR ใบที่พิมพ์ไปแล้ว (฿{(+lockedTotal||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}) ยังใช้จ่ายได้ ยอดยังตรงกันอยู่
         </div>}
         <div style={{opacity:payWait?.45:1,pointerEvents:payWait?"none":"auto"}}>
@@ -19799,7 +19799,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
           <button onClick={()=>onSelectPromo&&onSelectPromo(null)} style={{padding:"7px 12px",borderRadius:9,border:`2px solid ${!selectedPromo?C.brand:C.line}`,background:!selectedPromo?C.brandLight:C.white,color:!selectedPromo?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12}}>ไม่ใช้</button>
           {applicablePromos.map(p=>{const sel=selectedPromo?.id===p.id;return <button key={p.id} onClick={()=>onSelectPromo&&onSelectPromo(p.id)} style={{padding:"7px 12px",borderRadius:9,border:`2px solid ${sel?C.brand:C.line}`,background:sel?C.brandLight:C.white,color:sel?C.brand:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
             <span>🎁 {p.name}</span>
-            <span style={{fontSize:10,color:sel?C.brand:C.ink4,fontWeight:600}}>{p.type==="percent"?`-${p.discount_value}%`:p.type==="amount"?`-฿${p.discount_value}`:`ราคาพิเศษ ฿${p.discount_value}`}</span>
+            <span style={{fontSize:12,color:sel?C.brand:C.ink4,fontWeight:600}}>{p.type==="percent"?`-${p.discount_value}%`:p.type==="amount"?`-฿${p.discount_value}`:`ราคาพิเศษ ฿${p.discount_value}`}</span>
           </button>;})}
         </div></>}
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🎁 ส่วนลด (ปรับเอง)</div>
@@ -19811,7 +19811,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
             {[{v:"percent",l:"%"},{v:"amount",l:"฿"}].map(t=><button key={t.v} onClick={()=>setDiscType(t.v)} style={{padding:"6px 12px",borderRadius:8,border:`2px solid ${discType===t.v?C.brand:C.line}`,background:discType===t.v?C.brand:C.white,color:discType===t.v?C.white:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13}}>{t.l}</button>)}
           </div>
           <NumInput value={discValue||""} onValue={setDiscValue} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:700,flex:1}}/>
-          {discType==="percent"&&<div style={{display:"flex",gap:3}}>{[5,10,15,20].map(p=><button key={p} onClick={()=>setDiscValue(p)} style={{padding:"5px 8px",border:`1px solid ${C.line}`,background:C.white,borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:600,color:C.ink3}}>{p}%</button>)}</div>}
+          {discType==="percent"&&<div style={{display:"flex",gap:3}}>{[5,10,15,20].map(p=><button key={p} onClick={()=>setDiscValue(p)} style={{padding:"5px 8px",border:`1px solid ${C.line}`,background:C.white,borderRadius:6,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:600,color:C.ink3}}>{p}%</button>)}</div>}
         </div>}
 
         </div>
@@ -19854,14 +19854,14 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                   style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${m.c}`,background:`${m.c}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left"}}>
                   <span style={{fontSize:30,lineHeight:1}}>{m.icon}</span>
                   <span style={{fontSize:18,fontWeight:900,color:m.c}}>{m.l}</span>
-                  {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:11,color:m.c,fontWeight:700,opacity:.85}}>{m.v==="other"?"เลือกช่องทาง →":"พิมพ์ใบเสร็จ + ปิดโต๊ะ →"}</span>}
+                  {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:12,color:m.c,fontWeight:700,opacity:.85}}>{m.v==="other"?"เลือกช่องทาง →":"พิมพ์ใบเสร็จ + ปิดโต๊ะ →"}</span>}
                 </button>)}
               </div>
               <button onClick={()=>{setParts([]);setPartAmt("");setAskPay("split");}} disabled={saving}
                 style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${C.purple}`,background:`${C.purple}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",width:"100%",marginTop:10}}>
                 <span style={{fontSize:30,lineHeight:1}}>✂️</span>
                 <span style={{fontSize:18,fontWeight:900,color:C.purple}}>แบ่งจ่าย</span>
-                <span style={{marginLeft:"auto",fontSize:11,color:C.purple,fontWeight:700,opacity:.85}}>จ่ายหลายช่องทาง ทีละขั้น →</span>
+                <span style={{marginLeft:"auto",fontSize:12,color:C.purple,fontWeight:700,opacity:.85}}>จ่ายหลายช่องทาง ทีละขั้น →</span>
               </button>
               <button onClick={()=>setAskPay(null)} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
             </div>
@@ -19876,7 +19876,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                     :m.icon?<span style={{width:52,flexShrink:0,fontSize:30,lineHeight:1,textAlign:"center"}}>{m.icon}</span>
                     :<span style={{width:52,height:52,flexShrink:0,borderRadius:12,background:m.c,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:900,lineHeight:1.1,textAlign:"center",padding:3}}>{m.l}</span>}
                   <span style={{fontSize:18,fontWeight:900,color:m.c}}>{m.l}</span>
-                  <span style={{marginLeft:"auto",fontSize:11,color:m.c,fontWeight:700,opacity:.85}}>พิมพ์ใบเสร็จ + ปิดโต๊ะ →</span>
+                  <span style={{marginLeft:"auto",fontSize:12,color:m.c,fontWeight:700,opacity:.85}}>พิมพ์ใบเสร็จ + ปิดโต๊ะ →</span>
                 </button>)}
               </div>
               <button onClick={()=>setAskPay("choose")} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
@@ -19914,7 +19914,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                     ?<div style={{fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีขั้นไหนจ่าย</div>
                     :<div style={{display:"grid",gap:6}}>
                       {parts.map((p,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8,background:C.white,borderRadius:9,padding:"8px 10px",border:`1px solid ${C.line}`}}>
-                        <span style={{fontSize:11.5,fontWeight:900,color:C.white,background:C.ink3,borderRadius:20,minWidth:22,height:22,display:"flex",alignItems:"center",justifyContent:"center"}}>{i+1}</span>
+                        <span style={{fontSize:12,fontWeight:900,color:C.white,background:C.ink3,borderRadius:20,minWidth:24,height:22,display:"flex",alignItems:"center",justifyContent:"center"}}>{i+1}</span>
                         <span style={{flex:1,minWidth:0,fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif",overflowWrap:"anywhere"}}>{payMethodLabel(p.method)}</span>
                         <span style={{fontSize:14,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>฿{round2(p.amount).toLocaleString()}</span>
                         {i===parts.length-1&&<button onClick={()=>setParts(a=>a.slice(0,-1))} disabled={saving} title="เอาขั้นนี้ออก" style={{border:"none",background:"none",color:C.red,cursor:"pointer",fontSize:15,fontWeight:900,padding:0}}>✕</button>}
@@ -19932,7 +19932,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                 <Btn v="success" onClick={()=>{setAskPay(null);onPay("mixed",{payments:parts});}} loading={saving} disabled={saving||remain!==0||parts.length===0} icon={I.check}
                   s={{flex:1,padding:"14px 10px",fontSize:15,fontWeight:900}}>ยืนยัน & พิมพ์ใบเสร็จ</Btn>
               </div>
-              {onSplit&&<button onClick={onSplit} disabled={saving} style={{marginTop:10,width:"100%",border:"none",background:"none",color:C.purple,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,textDecoration:"underline"}}>แบ่งบิลตามคน (พิมพ์ใบตัวอย่างให้ลูกค้าดู) →</button>}
+              {onSplit&&<button onClick={onSplit} disabled={saving} style={{marginTop:10,width:"100%",border:"none",background:"none",color:C.purple,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700,textDecoration:"underline"}}>พิมพ์ใบตัวอย่างหารกันเอง (ไม่ใช่การชำระเงิน) →</button>}
             </div>
 
             :<div style={{padding:"22px 24px",overflowY:"auto"}}>
@@ -23453,7 +23453,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
         </div>
         <div style={{padding:"8px 22px 4px",fontSize:13,color:C.ink2,lineHeight:1.7}}>
           เอามือถือสแกน เพื่อดูหน้าที่ลูกค้าเห็นจริง<br/>
-          <span style={{fontSize:11.5,color:C.ink4}}>QR ตัวเดียวกับที่พิมพ์ออกไป</span>
+          <span style={{fontSize:12,color:C.ink4}}>QR ตัวเดียวกับที่พิมพ์ออกไป</span>
         </div>
         {qrPeek.url&&<a href={qrPeek.url} target="_blank" rel="noopener noreferrer"
           style={{display:"inline-block",margin:"6px 0 2px",fontSize:12.5,fontWeight:800,color:C.blue,textDecoration:"underline"}}>เปิดหน้าลูกค้าบนเครื่องนี้ ↗</a>}
