@@ -2532,9 +2532,9 @@ section("พิมพ์ใบปิดกะซ้ำ");
   };
   // สูตรเดียวทั้งระบบ — ถ้ามีสองชุด ใบพิมพ์ซ้ำจะออกตัวเลขคนละชุดกับใบจริงสักวัน
   ok_("ตอนปิดกะใช้สูตรยอดกะตัวเดียวกับตอนพิมพ์ซ้ำ",
-    APP.includes("const totals=useMemo(()=>computeShiftTotals({movements,orders,actualCash,cancelled,openBills}),[movements,orders,actualCash,cancelled,openBills]);"));
+    APP.includes("const totals=useMemo(()=>computeShiftTotals({movements,orders,actualCash,cancelled,openBills,edits}),[movements,orders,actualCash,cancelled,openBills,edits]);"));
   const r2Ln = APP.split("\n").find((l) => /^const round2\s*=/.test(l) || /^function round2\(/.test(l));
-  const cst = grabF("function computeShiftTotals({movements,orders,actualCash,cancelled,openBills}){");
+  const cst = grabF("function computeShiftTotals({movements,orders,actualCash,cancelled,openBills,edits=[]}){");
   // สูตรยอดกะเรียกใช้บล็อกรายละเอียดของใบปิดกะ ต้องดึงมาด้วย ไม่งั้นรันไม่ได้
   const blk = grabF("function shiftReportBlocks({orders=[],cancelled=[]}={}){");
   const payLn = APP.split("\n").find((l) => l.startsWith("const payMethodLabel="));
@@ -3335,7 +3335,7 @@ section("เปิดลิ้นชักเก็บเงิน");
   ok_("บอกเงินทอนก่อนรอใบเสร็จและก่อนเปลี่ยนรหัส QR โต๊ะ",
     APP.indexOf("onCashChange({change:round2") < APP.indexOf("await _rcpt;"));
   ck("จุดที่สั่งเปิดลิ้นชักมีเท่าที่ตั้งใจไว้ (ประกาศ + จอลิ้นชัก + ปิดบิลเงินสด + แก้บิลเงินสด)",
-    (APP.match(/kickCashDrawer\(/g) || []).length, 4);
+    (APP.match(/kickCashDrawer\(/g) || []).length, 5);   // + คืนเงินสดตอนยกเลิกบิล (21 ก.ย. 69)
   ok_("ขยับเวอร์ชันตัวพิมพ์แล้ว (ร้านอัปเดตเอง)", +((AGENT.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 41);
 }
 
@@ -3359,7 +3359,7 @@ section("แบ่งจ่ายหลายช่องทาง");
       grabTop("const PAY_MAIN_METHODS=", "}") + "\n" +
       (L.find((l) => l.startsWith("const payMethodLabel=")) || "") + "\n" +
       (L.find((l) => l.startsWith("function stripEmoji(s){")) || "") + "\n" +
-      grabTop("function computeShiftTotals({movements,orders,actualCash,cancelled,openBills}){", "}") + "\nreturn computeShiftTotals;")(
+      grabTop("function computeShiftTotals({movements,orders,actualCash,cancelled,openBills,edits=[]}){", "}") + "\nreturn computeShiftTotals;")(
       (n) => Math.round((+n || 0) * 100) / 100);
   } catch {}
   ok_("อ่านสูตรยอดกะได้", !!totalsFn);
@@ -3669,7 +3669,7 @@ section("หน้าต่างรับสินค้าบนมือถ�
   ck("ทั้งแอปไม่มีกรอบ overflowX:auto + overflowY:hidden", (APP.match(/overflowX:"auto",overflowY:"hidden"/g) || []).length, 0);
   // ป็อปอัพกลางจอที่ไม่มีตัวเลื่อน: เนื้อหาสูงกว่าจอมือถือ = หัว/ปุ่มล่างถูกตัดทิ้ง เลื่อนไม่ได้ (ตรวจทั้งแอป 18 ก.ย. 69)
   ck("ป็อปอัพวัตถุดิบ SOP / จ่ายเงินใบสั่งซื้อ / เปิดกะ เลื่อนได้เมื่อสูงเกินจอ",
-    (APP.match(/maxHeight:"calc\(100vh - 32px\)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"/g) || []).length, 4);
+    (APP.match(/maxHeight:"calc\(100vh - 32px\)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"/g) || []).length, 5);   // + จอยกเลิกบิล
   ck("ตัวเลื่อน flex:1 ทุกตัวมี minHeight:0", (APP.match(/flex:1,overflowY:"auto"(?![^}]*minHeight)/g) || []).length, 0);
 }
 
@@ -3811,6 +3811,39 @@ section("จอขาย: อ่านออก กดถูก");
   ok_("ปุ่มเพิ่ม-ลดจำนวนคน (ใบตัวอย่าง) ใหญ่พอสำหรับนิ้ว",
     APP.includes("<button onClick={()=>setSplitN(n=>Math.max(2,n-1))} style={{width:44,height:44,")
     && APP.includes("<button onClick={()=>setSplitN(n=>Math.min(20,n+1))} style={{width:44,height:44,"));
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// ปุ่มยกเลิกบิล (Void) — ผู้จัดการขอไว้ 21 ก.ย. 69 · กติกาที่เจ้าของเคาะ:
+//   ทุกคนที่เข้าระบบขายกดได้ · เฉพาะบิลของกะที่เปิดอยู่ · บังคับใส่เหตุผล · บังคับเลือกเรื่องเงินคืนทุกครั้ง
+// สิ่งที่ห้ามหลุดเด็ดขาด: บิลต้องไม่ถูกลบ · คืนเงินสดต้องลงบันทึกเงินออกจากลิ้นชัก · ต้องมีใบกระดาษ
+// ══════════════════════════════════════════════════════════════════════════
+section("ปุ่มยกเลิกบิล (Void)");
+{
+  ok_("มีจอยกเลิกบิล", APP.includes("function VoidBillModal({order,branch,currentUser,shift,printers=[],onDone,onClose}){"));
+  ok_("ยกเลิกได้เฉพาะบิลที่ปิดแล้วของกะที่ยังเปิดอยู่",
+    APP.includes('const canVoidBill=(o)=>!!(shift&&shift.status!=="closed"&&o&&o.status==="paid"&&shift.opened_at&&Date.parse(o.created_at||"")>=Date.parse(shift.opened_at));'));
+  ok_("ปุ่มขึ้นเฉพาะตอนยกเลิกได้จริง", APP.includes("onVoid={canVoidBill(bill)?()=>setVoidBill(bill):null}"));
+  ok_("กดยืนยันไม่ได้ถ้าไม่ใส่เหตุผลและไม่เลือกเรื่องเงินคืน",
+    APP.includes("const canSave=reason.trim().length>=3&&!!refund&&!saving;"));
+  ok_("ต้องยืนยันอีกชั้นก่อนยกเลิกจริง (กันกดพลาด)",
+    APP.includes('if(!await confirmDlg({title:"ยกเลิกบิลนี้",danger:true,confirmLabel:"ยกเลิกบิล"'));
+  ok_("บิลถูกทำเครื่องหมายว่ายกเลิก ไม่ถูกลบ และมีร่องรอยครบ",
+    APP.includes('const patch={status:"cancelled",cancelled_by:who,cancelled_at:at,cancel_reason:reason.trim()+" · "+refundText,updated_at:at};'));
+  ok_("เขียนทับกันด้วยเวลาแก้ล่าสุด (กันสองเครื่องยกเลิกพร้อมกัน)",
+    APP.includes("row=await api.updatePOSOrderIfUnchanged(o.id,o.updated_at,{...patch,void_log:"));
+  ok_("คืนเงินสด = บันทึกเงินออกจากลิ้นชัก + เปิดลิ้นชักให้หยิบเงิน",
+    APP.includes('if(refund==="cash"&&shift){') && APP.includes('type:"refund",amount:total,'));
+  ok_("บันทึกคืนเงินไม่สำเร็จต้องเตือน ไม่ใช่เงียบ",
+    APP.includes("⚠️ ยกเลิกบิลแล้ว แต่บันทึกคืนเงินสดไม่สำเร็จ"));
+  ok_("ออกใบยกเลิกบิลที่เครื่องใบเสร็จทุกครั้ง",
+    APP.includes("async function printVoidBillSlip({order,branch,reason,refundText,by,at,printers=[]}){")
+    && APP.includes('L.push({t:"*** ยกเลิกบิล ***"'));
+  ok_("ไม่มีเครื่องใบเสร็จ = บอกบนจอ ไม่ใช่เงียบ",
+    APP.includes("⚠️ ยกเลิกบิลแล้ว แต่ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ"));
+  ok_("ใบยกเลิกบอกครบ: เลขบิล โต๊ะ ยอด ช่องทางเดิม เหตุผล คนกด เวลา",
+    ["เลขที่บิล", "โต๊ะ", "ยอดบิล", "เดิมชำระโดย", "เหตุผล: ", "ยกเลิกโดย "].every((x) => APP.includes(x)));
 }
 
 
