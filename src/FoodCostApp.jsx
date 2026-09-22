@@ -1,6 +1,22 @@
 import { useState, useEffect, useCallback, useMemo, useRef, memo, createContext, useContext } from "react";
 import ErrorBoundary from "./ErrorBoundary.jsx";
 
+// ── กะที่เปิดอยู่จริง ณ วินาทีนี้ (ถามฐาน ไม่เชื่อหน้าจอ) ────────────────
+// จอ POS เปิดค้างข้ามวันได้ พอกะถูกปิดจากอีกเครื่อง state ในจอยังเป็นกะเก่า
+// เงินสดที่บันทึกเข้ากะที่ปิดแล้ว = กะที่เปิดจริงเห็นเงินสด 0 และลิ้นชักเกินโดยไม่มีที่มา
+// (เกิดจริง 22 ก.ย. 69 กะ #24 ขายเงินสด ฿272 แต่ใบปิดกะขึ้น ฿0)
+// คืนค่า {id, note} — note ไม่ว่าง = มีอะไรผิดปกติที่ต้องบอกพนักงาน ห้ามเงียบ
+async function liveShift(branchId,stateShift){
+  let live=null;
+  try{const r=await api.getActiveShift(branchId);live=Array.isArray(r)?r[0]:r;}catch{}
+  if(live&&live.id){
+    if(stateShift&&+stateShift.id===+live.id)return{id:live.id,note:""};
+    return{id:live.id,note:`บันทึกเข้ากะ #${live.id} ที่เปิดอยู่จริง (จอนี้ค้างกะ #${stateShift?stateShift.id:"-"} ไว้ — รีเฟรชหน้าจอด้วย)`};
+  }
+  // ไม่มีกะเปิดอยู่เลย: ยังต้องบันทึกเงินไว้กับกะที่จอถืออยู่ ดีกว่าเงินหาย แต่ต้องเตือนดังๆ
+  return{id:stateShift&&stateShift.id?stateShift.id:null,
+    note:"⚠️ ตอนนี้ไม่มีกะเปิดอยู่ — เงินสดถูกบันทึกไว้กับกะล่าสุดของจอนี้ กรุณาเปิดกะแล้วแจ้งผู้จัดการให้ตรวจ"};
+}
 // ── ระบบอนุมัติของ Area: ปิดอยู่ (เจ้าของสั่ง 22 ก.ย. 69) ────────────────
 // ปิด = ใบขอซื้อ · ใบสั่งของ · การนับสต็อก เดินต่อทันทีโดยไม่มีขั้น "รออนุมัติ" คั่น
 // โค้ดของระบบอนุมัติยังอยู่ครบ (จอ ApprovalTab · ปุ่มอนุมัติ/ตีกลับ · สถานะ pending_approval)
@@ -19453,7 +19469,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         try{
           const existingMoves=await api.getCashMovements(shift.id).catch(()=>[]);
           const already=Array.isArray(existingMoves)&&existingMoves.some(m=>m&&m.type==="sale"&&+m.order_id===+existingOrder.id);
-          if(!already)await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"sale",amount:cashPart,reason:`ขายโต๊ะ ${table.table_number}`+(payParts?" (แบ่งจ่าย)":""),order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
+          const _ls=await liveShift(branch.id,shift);
+          if(_ls.note)posToast(_ls.note,"warn",9000);
+          if(!already)await api.addCashMovement({shift_id:_ls.id,branch_id:branch.id,type:"sale",amount:cashPart,reason:`ขายโต๊ะ ${table.table_number}`+(payParts?" (แบ่งจ่าย)":""),order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
         }catch(err){console.error("บันทึก cash movement ไม่สำเร็จ:",err);}
       }
       // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
@@ -20800,6 +20818,17 @@ function OpenShiftModal({currentBranch,currentUser,onDone,onCancel}){
     const amt=+cash;
     if(isNaN(amt)||amt<0){alert("กรุณาใส่จำนวนเงินที่ถูกต้อง");return;}
     // ใส่ 0 แล้วเปิดกะไม่ได้ — เงินทอนที่ไม่ได้บันทึกตอนเปิด ทำให้ยอดฝากเข้าตู้เซฟของบัญชีเกินจริง
+    // มีกะเปิดค้างอยู่แล้วหรือยัง — สาขาหนึ่งเปิดได้ทีละกะเดียว
+    // ไม่งั้นเงินสดจะกระจายไปคนละกะกับที่คนนับเงินตอนปิด แล้วยอดไม่มีวันตรง
+    try{
+      const r=await api.getActiveShift(currentBranch.id);
+      const live=Array.isArray(r)?r[0]:r;
+      if(live&&live.id){
+        await confirmDlg({title:"มีกะเปิดอยู่แล้ว",confirmLabel:"เข้าใจแล้ว",cancelLabel:null,
+          message:`สาขานี้มีกะ #${live.id} เปิดอยู่ (เปิดโดย ${live.username||"-"} เมื่อ ${fmtDT(live.opened_at)})\n\nต้องปิดกะนั้นก่อนถึงจะเปิดกะใหม่ได้\nถ้าหน้าจอนี้ไม่เห็นกะดังกล่าว ให้รีเฟรชหน้าจอหนึ่งครั้ง`});
+        return;
+      }
+    }catch(e){console.warn("เช็คกะที่เปิดอยู่ไม่ได้",e);}
     if(!(amt>0)){alert("ต้องใส่เงินทอนเริ่มต้นก่อนเปิดกะ\n\nนับเงินในลิ้นชักตอนนี้แล้วใส่ยอดจริง — ใส่ 0 ไม่ได้\nถ้ายังไม่มีเงินทอนในลิ้นชัก ให้ใส่เงินก่อนแล้วค่อยเปิดกะ");return;}
     setSaving(true);
     try{
@@ -20888,7 +20917,9 @@ function CashDrawerModal({shift,currentBranch,currentUser,printers=[],onClose}){
     setSaving(true);
     try{
       const type=action==='in'?'pay_in':action==='out'?'pay_out':'drop';
-      await api.addCashMovement({shift_id:shift.id,branch_id:currentBranch.id,type,amount:amt,category:action==='out'?category:null,reason,note:note||null,user_id:currentUser.id,username:currentUser.username});
+      const _ls=await liveShift(currentBranch.id,shift);
+      if(_ls.note)posToast(_ls.note,"warn",9000);
+      await api.addCashMovement({shift_id:_ls.id,branch_id:currentBranch.id,type,amount:amt,category:action==='out'?category:null,reason,note:note||null,user_id:currentUser.id,username:currentUser.username});
       setAmount("");setCategory("");setReason("");setNote("");setAction(null);await load();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
     setSaving(false);
@@ -24070,7 +24101,9 @@ function PayChannelFixModal({order,branch,currentUser,shift,onDone,onClose}){
       const delta=round2(cashAfter-cashBefore);
       if(delta!==0&&shift){
         try{
-          await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"sale",amount:delta,order_id:o.id,
+          const _ls=await liveShift(branch.id,shift);
+          if(_ls.note)posToast(_ls.note,"warn",9000);
+          await api.addCashMovement({shift_id:_ls.id,branch_id:branch.id,type:"sale",amount:delta,order_id:o.id,
             reason:"แก้ช่องทางชำระบิล #"+o.id+" โต๊ะ "+o.table_number+" ("+beforeText+" → "+afterText+")",
             user_id:currentUser?.id,username:who});
         }catch(err){
@@ -24197,7 +24230,10 @@ function VoidBillModal({order,branch,currentUser,shift,printers=[],onDone,onClos
       if(!row){notifyDlg("บิลนี้เพิ่งถูกแก้จากอุปกรณ์อื่น — ปิดหน้านี้แล้วเปิดบิลใหม่อีกครั้งก่อนยกเลิก");setSaving(false);return;}
       // คืนเงินสด = เงินออกจากลิ้นชักจริง ต้องบันทึกและเปิดลิ้นชักให้หยิบเงิน
       if(refund==="cash"&&shift){
-        try{await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:"refund",amount:total,
+        try{
+          const _ls=await liveShift(branch.id,shift);
+          if(_ls.note)posToast(_ls.note,"warn",9000);
+          await api.addCashMovement({shift_id:_ls.id,branch_id:branch.id,type:"refund",amount:total,
           reason:"ยกเลิกบิล #"+o.id+" โต๊ะ "+o.table_number+" — "+reason.trim(),order_id:o.id,user_id:currentUser?.id,username:who});}
         catch(err){console.error("บันทึกคืนเงินไม่สำเร็จ:",err);posToast("⚠️ ยกเลิกบิลแล้ว แต่บันทึกคืนเงินสดไม่สำเร็จ — ลงบันทึกที่ลิ้นชักเงินสดด้วยตัวเอง","warn",8000);}
         kickCashDrawer(printers,branch?.id).catch(()=>{});
@@ -24343,7 +24379,9 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
     if(delta!==0&&method==="cash")kickCashDrawer(printers,branch?.id).catch(()=>{});   // ต้องหยิบ/ใส่เงินจริง
     if(delta!==0&&method==="cash"&&shift?.id){
       try{
-        mv=await api.addCashMovement({shift_id:shift.id,branch_id:branch.id,type:delta>0?"sale":"refund",amount:Math.abs(delta),
+        const _ls=await liveShift(branch.id,shift);
+        if(_ls.note)posToast(_ls.note,"warn",9000);
+        mv=await api.addCashMovement({shift_id:_ls.id,branch_id:branch.id,type:delta>0?"sale":"refund",amount:Math.abs(delta),
           reason:delta>0?"เก็บเงินเพิ่ม (แก้บิล)":"คืนเงินลูกค้า (แก้บิล)",
           note:`บิล #${order.id} โต๊ะ ${order.table_number||"-"} · ${reason.trim()}`,order_id:order.id,user_id:currentUser?.id||null,username:who});
       }catch(e){posToast("⚠️ แก้บิลแล้ว แต่บันทึกเงินเข้า/ออกลิ้นชักไม่สำเร็จ — กรุณาบันทึกเองที่ 💰 เงินในลิ้นชัก","warn",9000);}
