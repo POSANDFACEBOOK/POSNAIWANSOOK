@@ -17838,7 +17838,7 @@ export default function App(){
 // ══════════════════════════════════════════════════════
 // ── PRINT HELPERS ─────────────────────────────────────
 // ══════════════════════════════════════════════════════
-const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 Voucher",thaiplus:"🏛️ ไทยช่วยไทย พลัส",bartercard:"💳 Bartercard",mixed:"✂️ แบ่งจ่ายหลายช่องทาง",mixed:"✂️ แบ่งจ่ายหลายช่องทาง",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
+const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 Voucher",thaiplus:"🏛️ ไทยช่วยไทย พลัส",bartercard:"💳 Bartercard",mixed:"✂️ แบ่งจ่ายหลายช่องทาง",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
 function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const w=openPrintWindow(400,700);
   if(!w)return;
@@ -19769,16 +19769,20 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 }
 
 // ── PAYMENT MODAL ─────────────────────────────────────
+// ปุ่มบนจอเก็บเงิน — ทุกปุ่มกดแล้วปิดบิลได้เลย ไม่มีชั้น "อื่นๆ" ให้กดซ้อนอีกที (เจ้าของสั่ง 22 ก.ย. 69)
+// ไทยช่วยไทย พลัส ขึ้นมาอยู่แถวนี้เพราะใช้จริง 41 ใบจาก 350 ใบล่าสุด — ถ้าไม่มีปุ่มให้กด
+// พนักงานจะกดเงินสดแทน แล้วเงินในลิ้นชักไม่ตรงกับของจริง (พนักงานโดนหักเงิน)
+// สีต้องต่างกันให้ชัด: เขียว=สด · น้ำเงินเข้ม=พร้อมเพย์ · ส้มเข้ม=ไทยช่วยไทย — ห้ามใช้น้ำเงินซ้ำกัน
 const PAY_METHODS=[
   {v:"cash",l:"เงินสด",icon:"💵",c:"#10B981"},
   {v:"promptpay",l:"พร้อมเพย์",icon:"📲",c:"#1E40AF"},
-  {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
+  {v:"thaiplus",l:"ไทยช่วยไทย พลัส",icon:"🏛️",c:"#B45309"},
 ];
-// ช่องทางย่อยในป็อปอัพ "อื่นๆ" — เพิ่มช่องทางใหม่ที่นี่ + ชื่อใน PAY_LABEL (ใบเสร็จ/ประวัติใช้ชื่อจากที่นั่น)
+// ช่องทางที่ไม่ได้ขึ้นเป็นปุ่มบนจอเก็บเงิน แต่ยังต้องเลือกได้ตอนแบ่งจ่าย / แก้ช่องทางชำระ / คืนเงินตอน void
+// (บิลเก่าใช้อยู่ — ตัดทิ้งเมื่อไหร่ ชื่อบนใบเสร็จกับประวัติจะกลายเป็นรหัสดิบทันที)
 // ยอดของช่องทางพวกนี้ลงกลุ่ม "อื่นๆ" เองทั้งในสรุปกะและท่อบัญชี (คัดด้วยการยกเว้น ไม่ใช่รายชื่อ) — ไม่มีวันหลุดจากยอด
-// logo: ไฟล์รูปใน public/ (ถ้ามี) · ไม่มีก็ใช้ป้ายตัวอักษรแทน
+// เพิ่มช่องทางใหม่ที่นี่ + ชื่อใน PAY_LABEL · logo: ไฟล์รูปใน public/ (ถ้ามี) ไม่มีก็ใช้ป้ายตัวอักษรแทน
 const OTHER_PAY_METHODS=[
-  {v:"thaiplus",l:"ไทยช่วยไทย พลัส",icon:"🏛️",c:"#1D4ED8"},
   {v:"bartercard",l:"Bartercard",icon:"💳",c:"#0F766E"},
   {v:"other",l:"ช่องทางอื่น (ไม่ระบุ)",icon:"➕",c:"#475569"},
 ];
@@ -19790,9 +19794,9 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
   // เงินสดต้องเป็นขั้นสุดท้ายเสมอ (ขั้นเดียวที่มีเงินทอน) จึงเช็คว่าจำนวนที่ใส่ = ยอดที่เหลือพอดี
   const[parts,setParts]=useState([]);
   const[partAmt,setPartAmt]=useState("");
-  // ── Voucher: ช่องทางชำระที่ใส่รหัสอ้างอิงและมูลค่าเป็นบาทหรือ % ของยอดบิล ──
+  // ── Voucher: ส่วนลดท้ายบิล ใส่รหัสอ้างอิงและมูลค่าเป็นบาทหรือ % ของยอด ──
   // ของจริงที่ร้านใช้: คูปองเช็คอิน/รีวิว มีรหัสกำกับ ต้องเก็บไว้ตรวจย้อนหลังได้
-  // คูปองไม่ลดยอดบิล แต่นับเป็นเงินที่ร้านได้รับผ่านช่องทาง "Voucher"
+  // คูปองลดยอดสุทธิจริง (ภาษีคิดจากยอดหลังหัก) ไม่ใช่เงินที่ร้านรับเข้ามา — ช่องทางชำระคือยอดที่เหลือหลังหักคูปอง
   const[vRef,setVRef]=useState("");
   const[vMode,setVMode]=useState("baht");
   const[vVal,setVVal]=useState("");
@@ -19910,7 +19914,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
             s={{flex:payWait?"1 1 36%":"1 1 56%",minWidth:150,padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>✅ ยืนยันชำระ</Btn>
         </div>
         {/* ── ป็อปอัพเก็บเงิน ────────────────────────────────────────────
-            พร้อมเพย์/อื่นๆ = กดแล้วจบเลย (พิมพ์ใบเสร็จ + ปิดโต๊ะ)
+            พร้อมเพย์/ไทยช่วยไทย = กดแล้วจบเลย (พิมพ์ใบเสร็จ + ปิดโต๊ะ)
             เงินสด = ต้องกรอกว่ารับเงินมาเท่าไหร่ก่อน แล้วค่อยยืนยัน จะได้รู้เงินทอน
             ส่งวิธีจ่ายเข้าไปเป็นค่าโดยตรง ไม่อ่านจาก state — กันบันทึกวิธีจ่ายผิดจังหวะ */}
         {askPay&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.78)",zIndex:7000,display:"flex",alignItems:"center",justifyContent:"center",padding:"3vh 16px"}}>
@@ -19923,13 +19927,11 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:12}}>ลูกค้าจ่ายแบบไหน?</div>
               <div style={{display:"grid",gap:10}}>
                 {PAY_METHODS.map(m=><button key={m.v} disabled={saving}
-                  onClick={()=>{if(m.v==="other"){setAskPay("other");return;}
-                    if(m.v==="voucher"){setParts([]);setVRef("");setVVal("");setVMode("baht");setAskPay("voucher");return;}
-                    setPayMethod(m.v);if(m.v==="cash"){setCashRcv("");setAskPay("cash");}else{setAskPay(null);onPay(m.v);}}}
+                  onClick={()=>{setPayMethod(m.v);if(m.v==="cash"){setCashRcv("");setAskPay("cash");}else{setAskPay(null);onPay(m.v);}}}
                   style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${m.c}`,background:`${m.c}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left"}}>
                   <span style={{fontSize:30,lineHeight:1}}>{m.icon}</span>
                   <span style={{fontSize:18,fontWeight:900,color:m.c}}>{m.l}</span>
-                  {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:12,color:m.c,fontWeight:700,opacity:.85}}>{m.v==="other"?"เลือกช่องทาง →":m.v==="voucher"?"ใส่รหัส + มูลค่า →":"พิมพ์ใบเสร็จ + ปิดโต๊ะ →"}</span>}
+                  {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:12,color:m.c,fontWeight:700,opacity:.85}}>พิมพ์ใบเสร็จ + ปิดโต๊ะ →</span>}
                 </button>)}
               </div>
               <button onClick={()=>{setVRef(voucher&&voucher.ref||"");setVMode(voucher&&voucher.mode||"baht");setVVal(voucher?String(voucher.value):"");setAskPay("voucher");}} disabled={saving}
@@ -19979,22 +19981,6 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                   disabled={saving||!(vPreview>0)} icon={I.check} s={{flex:"2 1 200px",padding:"13px",fontSize:15.5,fontWeight:900}}>ใช้ส่วนลดคูปอง</Btn>
               </div>
             </div>
-            :askPay==="other"?<div style={{padding:"22px 24px",overflowY:"auto"}}>
-              <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:12}}>ช่องทางอื่นๆ — เลือกแล้วปิดบิลทันที</div>
-              <div style={{display:"grid",gap:10}}>
-                {OTHER_PAY_METHODS.map(m=><button key={m.v} disabled={saving}
-                  onClick={()=>{setPayMethod(m.v);setAskPay(null);onPay(m.v);}}
-                  style={{display:"flex",alignItems:"center",gap:14,padding:"14px 18px",borderRadius:14,border:`2.5px solid ${m.c}`,background:`${m.c}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left"}}>
-                  {m.logo
-                    ?<img src={m.logo} alt="" style={{width:52,height:52,objectFit:"contain",flexShrink:0,borderRadius:10,background:C.white}}/>
-                    :m.icon?<span style={{width:52,flexShrink:0,fontSize:30,lineHeight:1,textAlign:"center"}}>{m.icon}</span>
-                    :<span style={{width:52,height:52,flexShrink:0,borderRadius:12,background:m.c,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:900,lineHeight:1.1,textAlign:"center",padding:3}}>{m.l}</span>}
-                  <span style={{fontSize:18,fontWeight:900,color:m.c}}>{m.l}</span>
-                  <span style={{marginLeft:"auto",fontSize:12,color:m.c,fontWeight:700,opacity:.85}}>พิมพ์ใบเสร็จ + ปิดโต๊ะ →</span>
-                </button>)}
-              </div>
-              <button onClick={()=>setAskPay("choose")} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
-            </div>
             :askPay==="split"?<div style={{padding:"22px 24px",overflowY:"auto"}}>
               {/* แบ่งจ่ายทีละขั้น: ใส่จำนวน → เลือกช่องทาง → ทำซ้ำจนครบยอด
                   เงินสดต้องเป็นขั้นสุดท้ายเสมอ เพราะเป็นขั้นเดียวที่มีเงินทอน */}
@@ -20013,10 +19999,9 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                       // เงินสดต้องเป็นขั้นสุดท้าย — ถ้าใส่จำนวนน้อยกว่ายอดที่เหลือ ยังกดเงินสดไม่ได้
                       const lastStep=partNow>0&&round2(remain-partNow)===0;
                       const off=saving||partNow<=0||partNow>remain||(mt.v==="cash"&&!lastStep);
-                      return <button key={mt.v} disabled={mt.v==="voucher"?saving:off} onClick={()=>{
-                          if(mt.v==="voucher"){setVRef("");setVVal("");setVMode("baht");setAskPay("voucher");return;}
+                      return <button key={mt.v} disabled={off} onClick={()=>{
                           if(mt.v==="cash"){setCashRcv(String(partNow));setAskPay("split-cash");return;}addPart(mt.v);}}
-                        style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderRadius:12,border:`2.5px solid ${(mt.v!=="voucher"&&off)?C.line:mt.c}`,background:(mt.v!=="voucher"&&off)?C.bg:`${mt.c}12`,cursor:off?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",opacity:off?.55:1,textAlign:"left"}}>
+                        style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderRadius:12,border:`2.5px solid ${off?C.line:mt.c}`,background:off?C.bg:`${mt.c}12`,cursor:off?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",opacity:off?.55:1,textAlign:"left"}}>
                         <span style={{fontSize:22}}>{mt.icon||"💠"}</span>
                         <span style={{fontSize:14,fontWeight:800,color:off?C.ink4:mt.c}}>{mt.l}</span>
                       </button>;})}
@@ -24366,7 +24351,9 @@ const canEditPaidBill=(o)=>{
   return (Date.now()-t)<=EDIT_BILL_DAYS*86400000;
 };
 // ช่องทางที่เลือกได้ตอนเก็บเพิ่ม/คืนเงิน = ช่องทางเดียวกับที่ระบบใช้ปิดบิล (ไม่มีรายชื่อซ้อนที่สอง)
-const SETTLE_METHODS=()=>[...PAY_METHODS.filter(m=>m.v!=="other"),...OTHER_PAY_METHODS];
+// ช่องทางที่ใช้ตอนแบ่งจ่าย / เก็บเพิ่ม / คืนเงิน / แก้ช่องทางชำระ = ปุ่มบนจอเก็บเงิน + ช่องทางนอกจอ
+// รายชื่อเดียวของทั้งระบบ ห้ามมีรายชื่อซ้อนที่สอง ไม่งั้นแก้ที่เดียวแล้วอีกจอไม่ตาม
+const SETTLE_METHODS=()=>[...PAY_METHODS,...OTHER_PAY_METHODS];
 // ส่วนลดรายเมนูเก็บเป็น "ชนิด+ค่า" ไว้ด้วย — ลดจำนวนแล้วต้องคิดใหม่ตามสูตรเดิม
 // (ถ้าคงยอดลดเดิมไว้ ลดจาก 2 เหลือ 1 จะกลายเป็นลดเกินราคาอาหาร)
 function recalcItemDiscounts(items){

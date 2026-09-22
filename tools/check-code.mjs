@@ -2889,23 +2889,36 @@ section("รายการในโต๊ะอ่านได้เต็ม")
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// ช่องทางจ่ายย่อยใต้ "อื่นๆ" (ไทยพลัส ฯลฯ) — ยอดต้องไม่หลุดจากสรุปกะ/ท่อบัญชี และทุกช่องทางต้องมีชื่อ
+// ช่องทางจ่ายนอกกลุ่มหลัก (ไทยช่วยไทย พลัส ฯลฯ) — ยอดต้องไม่หลุดจากสรุปกะ/ท่อบัญชี และทุกช่องทางต้องมีชื่ออ่านออก
+// 22 ก.ย. 69 เจ้าของสั่งเอาปุ่มรวม "อื่นๆ" ออกจากจอเก็บเงิน ⟹ ไทยช่วยไทย พลัส (ใช้จริง 41 ใบจาก 350 ใบล่าสุด)
+// ขึ้นมาเป็นปุ่มของตัวเอง · ที่เหลือ (Bartercard / ไม่ระบุ) ยังเลือกได้ตอนแบ่งจ่าย-แก้ช่องทาง เพราะบิลเก่าใช้อยู่
+// ห้ามปล่อยให้ช่องทางที่ยังใช้จริงไม่มีปุ่มกด — พนักงานจะกดเงินสดแทน แล้วเงินในลิ้นชักไม่ตรงของจริง
 // ══════════════════════════════════════════════════════════════════════════
 section("ช่องทางจ่ายอื่นๆ");
 {
   const grab = (head) => { const L = APP.split("\n"); const a = L.findIndex(l => l.startsWith(head)); if (a < 0) return null; const b = L.findIndex((l, i) => i >= a && /^\];|\};$/.test(l.trim()) ); return L.slice(a, b + 1).join("\n"); };
-  let OTHER = null, LABEL = null;
+  let MAIN = null, OTHER = null, LABEL = null;
+  try { MAIN = new Function(grab("const PAY_METHODS=") + "\nreturn PAY_METHODS;")(); } catch {}
   try { OTHER = new Function(grab("const OTHER_PAY_METHODS=") + "\nreturn OTHER_PAY_METHODS;")(); } catch {}
   try { LABEL = new Function(APP.split("\n").find(l => l.startsWith("const PAY_LABEL=")) + "\nreturn PAY_LABEL;")(); } catch {}
-  ok_("อ่านรายการช่องทางอื่นๆ ได้", Array.isArray(OTHER) && OTHER.length > 0 && LABEL && typeof LABEL === "object");
-  if (Array.isArray(OTHER) && LABEL) {
-    const noName = OTHER.filter(m => !LABEL[m.v]).map(m => m.v);
+  ok_("อ่านรายชื่อช่องทางได้ทั้งปุ่มบนจอและช่องทางนอกจอ",
+    Array.isArray(MAIN) && MAIN.length > 0 && Array.isArray(OTHER) && OTHER.length > 0 && LABEL && typeof LABEL === "object");
+  if (Array.isArray(MAIN) && Array.isArray(OTHER) && LABEL) {
+    const ALL = [...MAIN, ...OTHER];   // SETTLE_METHODS ก็รวมสองรายชื่อนี้แบบเดียวกัน
+    const noName = ALL.filter(m => !LABEL[m.v]).map(m => m.v);
     ck("ทุกช่องทางมีชื่อบนใบเสร็จ/ประวัติ (ขาด: " + (noName.join(",") || "-") + ")", noName.length, 0);
-        // ชื่อบนจอต้องตรงกับชื่อที่ฝั่งบัญชีใช้ ไม่งั้นพนักงานกับบัญชีเรียกคนละอย่างแล้วกระทบยอดกันไม่รู้เรื่อง
-  ok_("ชื่อไทยช่วยไทย พลัส ตรงกับที่ส่งเข้าบัญชี", OTHER.some(m => m.v === "thaiplus" && m.l === "ไทยช่วยไทย พลัส") && SLIPPUSH.includes('name_th: "ไทยช่วยไทย พลัส"'));
-    ok_("ยังเลือก อื่นๆ แบบไม่ระบุได้ (บิลเดิมใช้อยู่)", OTHER.some(m => m.v === "other"));
-    ck("ไม่มีช่องทางซ้ำ", new Set(OTHER.map(m => m.v)).size, OTHER.length);
-    ok_("ไม่มีช่องทางย่อยไปชนเงินสด/พร้อมเพย์ (จะลงผิดกลุ่ม)", !OTHER.some(m => ["cash", "promptpay", "transfer", "credit", "debit"].includes(m.v)));
+    // ชื่อบนจอต้องตรงกับชื่อที่ฝั่งบัญชีใช้ ไม่งั้นพนักงานกับบัญชีเรียกคนละอย่างแล้วกระทบยอดกันไม่รู้เรื่อง
+    ok_("ชื่อไทยช่วยไทย พลัส ตรงกับที่ส่งเข้าบัญชี",
+      ALL.some(m => m.v === "thaiplus" && m.l === "ไทยช่วยไทย พลัส") && SLIPPUSH.includes('name_th: "ไทยช่วยไทย พลัส"'));
+    // ── ช่องทางที่ยังใช้จริงต้องมีปุ่มกดบนจอเก็บเงิน ไม่ใช่ซ่อนอยู่ใต้ปุ่มรวมอีกชั้น ──
+    ok_("ไทยช่วยไทย พลัส เป็นปุ่มบนจอเก็บเงิน (ไม่ต้องกดซ้อนชั้น)", MAIN.some(m => m.v === "thaiplus"));
+    ok_("ไม่มีปุ่มรวม อื่นๆ บนจอเก็บเงินแล้ว",
+      !MAIN.some(m => m.v === "other") && !APP.includes('setAskPay("other")') && !APP.includes('askPay==="other"'));
+    ok_("ยังเลือก อื่นๆ แบบไม่ระบุได้ตอนแบ่งจ่าย/แก้ช่องทาง (บิลเดิมใช้อยู่)", OTHER.some(m => m.v === "other"));
+    ck("ไม่มีช่องทางซ้ำในรายชื่อรวม", new Set(ALL.map(m => m.v)).size, ALL.length);
+    // สองปุ่มสีเดียวกัน = กดผิดปุ่มตอนร้านแน่น แล้วยอดไปลงผิดช่องทาง
+    ck("ปุ่มบนจอเก็บเงินสีไม่ซ้ำกัน", new Set(MAIN.map(m => m.c)).size, MAIN.length);
+    ok_("ช่องทางนอกจอไม่ไปชนเงินสด/พร้อมเพย์ (จะลงผิดกลุ่ม)", !OTHER.some(m => ["cash", "promptpay", "transfer", "credit", "debit"].includes(m.v)));
   }
   // ยอดของช่องทางใหม่ต้องลงกลุ่ม "อื่นๆ" เอง — ทั้งสองที่ต้องคัดด้วยการยกเว้น ห้ามเป็นรายชื่อ
   ok_("สรุปกะ: ช่องทางที่ไม่รู้จักลงกลุ่มอื่นๆ (คัดด้วยการยกเว้น)",
@@ -2913,10 +2926,11 @@ section("ช่องทางจ่ายอื่นๆ");
   ok_("ท่อบัญชี: ช่องทางที่ไม่รู้จักลงกลุ่ม Custom Payment (คัดด้วยการยกเว้น ไม่ใช่รายชื่อ)",
     SLIPPUSH.includes('const MAIN_PAY_METHODS = ["cash", "promptpay", "transfer", "credit", "debit"];')
     && SLIPPUSH.includes("const other = list.filter((x) => !MAIN_PAY_METHODS.includes(x.payment_method));"));
-  ok_("กด อื่นๆ = เปิดรายการช่องทาง ไม่ปิดบิลทันที", APP.includes('onClick={()=>{if(m.v==="other"){setAskPay("other");return;}'));
-  ok_("กด Voucher = เปิดจอใส่รหัส/มูลค่า ไม่ปิดบิลทันที",
-    APP.includes('if(m.v==="voucher"){setParts([]);setVRef("");setVVal("");setVMode("baht");setAskPay("voucher");return;}'));
-  ok_("เลือกช่องทางย่อย = ปิดบิลด้วยช่องทางนั้น", APP.includes("{OTHER_PAY_METHODS.map(m=><button key={m.v} disabled={saving}") && APP.includes("onClick={()=>{setPayMethod(m.v);setAskPay(null);onPay(m.v);}}"));
+  // กดปุ่มไหนก็ปิดบิลด้วยช่องทางนั้นตรงๆ — เงินสดเป็นปุ่มเดียวที่ถามต่อ (ต้องรู้เงินที่รับมา ถึงคิดเงินทอนได้)
+  ok_("จอเก็บเงินเรนเดอร์ปุ่มจากรายชื่อเดียว ไม่มีปุ่มเขียนมือแทรก", APP.includes("{PAY_METHODS.map(m=><button key={m.v} disabled={saving}"));
+  ok_("กดปุ่ม = ปิดบิลด้วยช่องทางนั้นทันที (เงินสดถามเงินที่รับมาก่อน)",
+    APP.includes('onClick={()=>{setPayMethod(m.v);if(m.v==="cash"){setCashRcv("");setAskPay("cash");}else{setAskPay(null);onPay(m.v);}}}'));
+  ok_("ป้ายท้ายปุ่มบอกตรงๆ ว่ากดแล้วจบ", APP.includes("พิมพ์ใบเสร็จ + ปิดโต๊ะ →"));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -3126,7 +3140,7 @@ section("วิธีจ่าย: บรรทัดแม่-ลูกที�
   // เพิ่มช่องทางใหม่ในจอขายแล้วลืมบอกบัญชี = ยอดไปกองรวมในตัวแม่เงียบๆ ทั้งที่ปลายทางคนละบัญชี
   // ช่องทางที่ต้องมีบรรทัดของตัวเองฝั่งบัญชี = ทุกช่องทางที่ไม่ใช่ช่องทางหลัก
   // (ช่องทางหลัก = เงินสด/พร้อมเพย์/โอน/บัตร ซึ่งมีบรรทัดของตัวเองอยู่แล้วในสเปกของเขา)
-  // ดึงจากทั้งสองรายการ เพราะบางช่องทางอยู่ในปุ่มหลัก (เช่น Voucher) ไม่ได้อยู่ใต้ "อื่นๆ"
+  // ดึงจากทั้งสองรายการ เพราะช่องทางกระจายอยู่สองที่: ปุ่มบนจอเก็บเงิน + ช่องทางนอกจอ (แบ่งจ่าย/แก้ช่องทาง)
   const appPms = (() => {
     try {
       const L = APP.split("\n");
@@ -3253,7 +3267,7 @@ section("แก้ไขบิลที่ปิดแล้ว");
     APP.includes("const smartPrintReceipt=(order,tableNum,paid)=>printBillReceipt(order,tableNum,{branch,posSettings,printers,paid});"));
   ok_("ส่วนลดรายเมนูคิดใหม่เมื่อจำนวนเปลี่ยน (ไม่ลดเกินราคาอาหาร)", APP.includes("function recalcItemDiscounts(items){") && APP.includes("const amt=t===\"percent\"?round2(line*v/100):Math.min(v,line);"));
   ok_("ช่องทางเก็บเพิ่ม/คืนเงิน ใช้รายชื่อเดียวกับตอนปิดบิล ไม่มีรายชื่อซ้อนที่สอง",
-    APP.includes("const SETTLE_METHODS=()=>[...PAY_METHODS.filter(m=>m.v!==\"other\"),...OTHER_PAY_METHODS];"));
+    APP.includes("const SETTLE_METHODS=()=>[...PAY_METHODS,...OTHER_PAY_METHODS];"));
   ok_("เปิดจอแก้บิลได้จากหน้าบิลในรายงาน", APP.includes("onEdit={()=>setEditBill(bill)}") && APP.includes("{onEdit&&canEditPaidBill(o)&&<div"));
 
   // ── ท่อบัญชี: บิลที่จ่ายหลายช่องทางต้องแยกยอดตามช่องทางจริง ──
