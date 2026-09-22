@@ -30,8 +30,6 @@ const MAIN_PAY_METHODS = ["cash", "promptpay", "transfer", "credit", "debit"];
 const OTHER_CHILD_LINES = [
   { pm: "thaiplus", name_th: "ไทยช่วยไทย พลัส", name_en: "ไทยช่วยไทย พลัส" },
   { pm: "bartercard", name_th: "Bartercard", name_en: "Bartercard" },
-  // คูปอง/Voucher — ช่องทางชำระ ไม่ใช่ส่วนลด (เพิ่ม 22 ก.ย. 69) ยอดขายและภาษีไม่เปลี่ยน
-  { pm: "voucher", name_th: "Voucher", name_en: "Voucher" },
 ];
 function buildPaymentLines(bills) {
   const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -193,7 +191,7 @@ export default async function handler(req, res) {
       const orders = await sbGet(
         `orders?branch_id=eq.${Number(shift.branch_id)}&status=eq.paid` +
         `&created_at=gte.${from}&created_at=lt.${to}` +
-        `&select=id,total,subtotal,discount,promo_amount,service_charge,vat,vat_rate,round_adj,payment_method,payments,created_at,updated_at` +
+        `&select=id,total,subtotal,discount,promo_amount,service_charge,vat,vat_rate,round_adj,payment_method,payments,voucher,created_at,updated_at` +
         `&order=id.asc&limit=2000`
       );
 
@@ -258,6 +256,12 @@ export default async function handler(req, res) {
         const total_sales = sum(list, "total");
         // ส่วนลดที่ให้ไปจริง (รวมโปรโมชั่น) — ตัวเลขนี้ต้องตรงกับความจริงเสมอ
         const discount = r2(sum(list, "discount") + sum(list, "promo_amount"));
+        // คูปองส่งเป็นช่องของตัวเอง (ติดลบ) เหมือนที่ FoodStory ส่งมาจากสาขาอื่น
+        // ฝั่งบัญชีขอไว้ 22 ก.ย. 69: ถ้ากลบไว้ใน discount จะมองไม่เห็นว่าวันไหนแจกคูปองไปเท่าไร
+        // ⚠️ ต่างจาก FoodStory ตรงฐานภาษี: ของเราหักคูปองก่อนคิด VAT (คูปองคือส่วนลด ณ จุดขาย)
+        const voucherRows = (list || []).map((o) => o && o.voucher).filter((v) => v && Number(v.amount) > 0);
+        const voucher_discount = r2(-voucherRows.reduce((t, v) => t + (Number(v.amount) || 0), 0));
+        const vouchers = voucherRows.map((v) => ({ ref: v.ref || null, amount: r2(v.amount), mode: v.mode || "baht", value: r2(v.value) }));
         // sub_total หามาจาก total_sales + discount เพื่อให้สมการของฝั่งบัญชีเป็นจริงเสมอ
         // (ค่าบริการ/ปัดเศษ/VAT แบบบวกเพิ่ม จะถูกซึมอยู่ในตัวนี้ — ตั้งใจ ไม่ใช่ความบังเอิญ)
         const sub_total = r2(total_sales + discount);
@@ -309,6 +313,7 @@ export default async function handler(req, res) {
           total_sales,
           sub_total,
           discount,
+          ...(vouchers.length ? { voucher_discount, vouchers } : {}),
           exclude_vat,
           sales_before_vat,          // ขาดตัวนี้ = ฝั่งบัญชีออกใบขายเงินสด CA- ไม่ได้
           non_vat_sales,             // บิลที่ไม่มี VAT — ฐานภาษีต้องหักตัวนี้ออก

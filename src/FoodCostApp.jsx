@@ -1782,9 +1782,10 @@ const roundBill=(amount,mode)=>{
 };
 // สูตรยอดบิล — ที่เดียวทั้งระบบ (จอโต๊ะตอนปิดบิล + จอแก้บิลที่ปิดแล้ว)
 // สองที่คิดคนละสูตรเมื่อไหร่ ใบแก้กับใบเดิมจะได้ยอดคนละตัวทันทีโดยไม่มีใครรู้
-function billTotalsOf({items,manualDiscount=0,promoDiscount=0,posSettings=null}){
+function billTotalsOf({items,manualDiscount=0,promoDiscount=0,voucherDiscount=0,posSettings=null}){
   const subtotal=round2((items||[]).reduce((s,i)=>s+(+i.price||0)*(+i.qty||0),0));
-  const totalDiscount=round2((+manualDiscount||0)+(+promoDiscount||0));
+  // คูปองเป็นส่วนลดท้ายบิลเหมือน FoodStory — ลดยอดสุทธิ แล้วภาษีคิดจากยอดหลังหัก
+  const totalDiscount=round2((+manualDiscount||0)+(+promoDiscount||0)+(+voucherDiscount||0));
   const subAfterDisc=round2(Math.max(0,subtotal-totalDiscount));
   const scRate=posSettings?.service_charge_enabled?(+posSettings.service_charge_rate||0):0;
   const sc=round2(subAfterDisc*scRate/100);
@@ -18140,6 +18141,10 @@ function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
   L.push({l:"ยอดรวม",r:bahtR(order.subtotal||0),size:24});
   if(order.discount>0)L.push({l:"ส่วนลดรวม",r:"-"+bahtR(order.discount),size:22});
   if(order.promo_amount>0)L.push({l:stripEmoji(order.promo_name||"โปรโมชั่น"),r:"-"+bahtR(order.promo_amount),size:22});
+  // คูปอง — ต้องเห็นบนใบว่าใบไหนถูกใช้ ไม่งั้นตรวจย้อนหลังไม่ได้ว่าส่วนลดมาจากคูปองอะไร
+  if(order.voucher&&(+order.voucher.amount||0)>0)
+    L.push({l:"Voucher"+(order.voucher.ref?" ("+stripEmoji(String(order.voucher.ref))+")":"")+(order.voucher.mode==="percent"?` ${order.voucher.value}%`:""),
+      r:"-"+bahtR(order.voucher.amount),size:22});
   if(order.service_charge>0)L.push({l:"ค่าบริการ (Service)",r:"+"+bahtR(order.service_charge),size:22});
   if(order.vat>0)L.push({l:`VAT ${order.vat_rate||7}%${order.vat_included?" (รวมในราคา)":""}`,r:(order.vat_included?"":"+")+bahtR(order.vat),size:22});
   // ปัดเศษต้องเห็นบนใบ ไม่งั้นลูกค้าบวกเลขตามแล้วไม่ตรง และร้านตรวจย้อนหลังไม่ได้ว่าหายไปไหน
@@ -19095,6 +19100,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const hasNewItems=newRows.length>0;
   const itemsWithDisc=useMemo(()=>items.map(clean).map((i,idx)=>{const d=itemDisc[discKey(i,idx)];if(!d||!d.v||discMode!=="item")return i;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:Math.min(+d.v||0,i.price*i.qty);return{...i,item_discount:amt,item_discount_type:d.t,item_discount_value:+d.v};}),[items,itemDisc,discMode]);
   const itemDiscTotal=useMemo(()=>{let t=0;items.forEach((i,idx)=>{const d=itemDisc[discKey(i,idx)];if(!d||!d.v)return;const amt=d.t==="percent"?(i.price*i.qty)*(+d.v||0)/100:+d.v||0;t+=Math.min(amt,i.price*i.qty);});return t;},[items,itemDisc]);
+  // ── คูปอง/Voucher ของบิลนี้ — ส่วนลดท้ายบิลที่มีรหัสอ้างอิงกำกับ ──
+  // เก็บ "วิธีคิด" (บาท/%) ไว้ด้วย เพราะถ้าลูกค้าสั่งเพิ่มทีหลัง คูปอง % ต้องคิดใหม่ตามยอดใหม่
+  const[voucher,setVoucher]=useState(null);
   const billDisc=useMemo(()=>{if(discMode!=="bill")return 0;const v=+discValue||0;const after=Math.max(0,subtotal-itemDiscTotal);return discType==="percent"?after*v/100:Math.min(v,after);},[discMode,discType,discValue,subtotal,itemDiscTotal]);
   const manualDiscount=(discMode==="item"?itemDiscTotal:0)+(discMode==="bill"?billDisc:0);
 
@@ -19124,8 +19132,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   },[applicablePromos,subtotal]);
   const selectedPromo=applicablePromos.find(p=>p.id===selectedPromoId);
   const promoDiscount=selectedPromo?calcPromoDiscount(selectedPromo,{subtotal,items,menusById}):0;
+  // มูลค่าคูปองคิดจากยอดหลังหักส่วนลดอื่นแล้ว และห้ามเกินยอดที่เหลือ (คูปองไม่กลายเป็นเงินทอน)
+  const voucherDiscount=useMemo(()=>{
+    if(!voucher)return 0;
+    const base=Math.max(0,round2(subtotal-(+manualDiscount||0)-(+promoDiscount||0)));
+    const raw=voucher.mode==="percent"?round2(base*(+voucher.value||0)/100):round2(+voucher.value||0);
+    return Math.min(Math.max(0,raw),base);
+  },[voucher,subtotal,manualDiscount,promoDiscount]);
 
-  const _T=billTotalsOf({items,manualDiscount,promoDiscount,posSettings});
+  const _T=billTotalsOf({items,manualDiscount,promoDiscount,voucherDiscount,posSettings});
   const totalDiscount=_T.totalDiscount,subAfterDisc=_T.subAfterDisc;
   const scRate=_T.scRate,sc=_T.sc,vatRate=_T.vatRate,vatIncluded=_T.vatIncluded,vat=_T.vat;
   const rawTotal=_T.rawTotal,total=_T.total;
@@ -19432,7 +19447,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const pmCol=payParts?(new Set(payParts.map(p=>p.method)).size===1?payParts[0].method:"mixed"):pm;
       const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,round_adj:roundAdj,payment_method:pmCol,updated_at:new Date().toISOString()};
       // paid_by = ใครกดปิดบิลใบนี้ · เดิมไม่มีเลย บิลทุกใบไร้เจ้าของ ตรวจย้อนหลังไม่ได้
-      const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,payments:paymentsCol,paid_by:currentUser?.username||currentUser?.name||null};
+      const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,payments:paymentsCol,voucher:(voucher&&voucherDiscount>0)?{...voucher,amount:round2(voucherDiscount)}:null,paid_by:currentUser?.username||currentUser?.name||null};
       let row;
       try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,fullPayload);}
       catch(err){
@@ -19748,7 +19763,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       </div>;
     })()}
 
-    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async(m,opts)=>{await checkOut(m,opts);setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings} onPrintQR={printPayQR} payWait={payWait} lockedTotal={lockedTotal} onUnlockPay={unlockPayWait}
+    {showPay&&<PayModal items={items} subtotal={subtotal} discMode={discMode} setDiscMode={setDiscMode} discType={discType} setDiscType={setDiscType} discValue={discValue} setDiscValue={setDiscValue} itemDisc={itemDisc} setItemDisc={setItemDisc} itemDiscTotal={itemDiscTotal} billDisc={billDisc} totalDiscount={totalDiscount} total={total} voucher={voucher} setVoucher={setVoucher} voucherDiscount={voucherDiscount} voucherBase={round2(Math.max(0,subtotal-manualDiscount-promoDiscount))} payMethod={payMethod} setPayMethod={setPayMethod} cashRcv={cashRcv} setCashRcv={setCashRcv} cashChange={cashChange} onClose={()=>setShowPay(false)} onPay={async(m,opts)=>{await checkOut(m,opts);setShowPay(false);}} saving={saving} table={table} sc={sc} vat={vat} vatRate={vatRate} vatIncluded={vatIncluded} subAfterDisc={subAfterDisc} promoDiscount={promoDiscount} selectedPromo={selectedPromo} applicablePromos={applicablePromos} onSelectPromo={setSelectedPromoId} posSettings={posSettings} onPrintQR={printPayQR} payWait={payWait} lockedTotal={lockedTotal} onUnlockPay={unlockPayWait}
       onSplit={()=>setShowSplitBill(true)} onCancelOrder={cancelOrder}/>}
   </div>;
 }
@@ -19757,7 +19772,6 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 const PAY_METHODS=[
   {v:"cash",l:"เงินสด",icon:"💵",c:"#10B981"},
   {v:"promptpay",l:"พร้อมเพย์",icon:"📲",c:"#1E40AF"},
-  {v:"voucher",l:"Voucher / คูปอง",icon:"🎫",c:"#7C3AED"},
   {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
 ];
 // ช่องทางย่อยในป็อปอัพ "อื่นๆ" — เพิ่มช่องทางใหม่ที่นี่ + ชื่อใน PAY_LABEL (ใบเสร็จ/ประวัติใช้ชื่อจากที่นั่น)
@@ -19768,7 +19782,7 @@ const OTHER_PAY_METHODS=[
   {v:"bartercard",l:"Bartercard",icon:"💳",c:"#0F766E"},
   {v:"other",l:"ช่องทางอื่น (ไม่ระบุ)",icon:"➕",c:"#475569"},
 ];
-function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null,onPrintQR,onSplit,onCancelOrder,payWait=false,lockedTotal=null,onUnlockPay}){
+function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,discValue,setDiscValue,itemDisc,setItemDisc,itemDiscTotal,billDisc,totalDiscount,total,voucher=null,setVoucher=()=>{},voucherDiscount=0,voucherBase=0,payMethod,setPayMethod,cashRcv,setCashRcv,cashChange,onClose,onPay,saving,table,sc=0,vat=0,vatRate=0,vatIncluded=true,subAfterDisc=0,promoDiscount=0,selectedPromo=null,applicablePromos=[],onSelectPromo,posSettings=null,onPrintQR,onSplit,onCancelOrder,payWait=false,lockedTotal=null,onUnlockPay}){
   // ป็อปอัพถามวิธีจ่ายหลังกดยืนยันชำระ: null → "choose" → (เงินสด) "cash"
   // ย้ายออกมาจากตัวจอเพราะพนักงานเลือกวิธีจ่าย "ตอนเก็บเงินจริง" ไม่ใช่ตอนกดดูบิล
   const[askPay,setAskPay]=useState(null);
@@ -19785,24 +19799,12 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
   const paidSoFar=round2(parts.reduce((s,p)=>s+(+p.amount||0),0));
   const remain=round2(total-paidSoFar);
   const partNow=round2(+partAmt||0);
-  // คูปองจ่ายได้ไม่เกินยอดที่เหลือ — คูปองมูลค่าเกินบิลไม่ทอนเงินสดคืน
-  const voucherTarget=parts.length?remain:total;
-  const voucherAmt=(()=>{
+  // พรีวิวส่วนลดคูปองบนจอ — ตัวเลขจริงคิดที่แผงออเดอร์ (สูตรเดียวกันเป๊ะ)
+  const vPreview=(()=>{
     const v=+vVal||0;if(!(v>0))return 0;
-    const raw=vMode==="percent"?round2(voucherTarget*v/100):round2(v);
-    return Math.min(raw,round2(voucherTarget));
+    const raw=vMode==="percent"?round2(voucherBase*v/100):round2(v);
+    return Math.min(Math.max(0,raw),round2(voucherBase));
   })();
-  const voucherLeft=round2(voucherTarget-voucherAmt);
-  function useVoucherNow(){
-    if(!(voucherAmt>0))return;
-    const part={method:"voucher",amount:voucherAmt,ref:(vRef||"").trim()||null,
-      vmode:vMode,vvalue:round2(+vVal||0)};
-    const all=[...parts,part];
-    setVRef("");setVVal("");setVMode("baht");
-    // คูปองคลุมทั้งยอด = ปิดบิลได้เลย · ไม่พอ = ไปหน้าแบ่งจ่ายเก็บส่วนที่เหลือต่อ
-    if(voucherLeft<=0){setAskPay(null);onPay("voucher",{payments:all});return;}
-    setParts(all);setPartAmt("");setAskPay("split");
-  }
   const addPart=(method)=>{
     if(partNow<=0||partNow>remain)return;
     setParts(a=>[...a,{method,amount:partNow}]);
@@ -19930,6 +19932,12 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                   {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:12,color:m.c,fontWeight:700,opacity:.85}}>{m.v==="other"?"เลือกช่องทาง →":m.v==="voucher"?"ใส่รหัส + มูลค่า →":"พิมพ์ใบเสร็จ + ปิดโต๊ะ →"}</span>}
                 </button>)}
               </div>
+              <button onClick={()=>{setVRef(voucher&&voucher.ref||"");setVMode(voucher&&voucher.mode||"baht");setVVal(voucher?String(voucher.value):"");setAskPay("voucher");}} disabled={saving}
+                style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${C.purple}`,background:`${C.purple}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",width:"100%",marginTop:10,minHeight:48}}>
+                <span style={{fontSize:30,lineHeight:1}}>🎫</span>
+                <span style={{fontSize:18,fontWeight:900,color:C.purple}}>{voucher?"แก้ไข Voucher":"ใช้งาน Voucher"}</span>
+                <span style={{marginLeft:"auto",fontSize:12,color:C.purple,fontWeight:700,opacity:.85}}>{voucher?`ลดอยู่ ${bahtR(voucherDiscount)}`:"ส่วนลดจากคูปอง →"}</span>
+              </button>
               <button onClick={()=>{setParts([]);setPartAmt("");setAskPay("split");}} disabled={saving}
                 style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${C.purple}`,background:`${C.purple}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",width:"100%",marginTop:10}}>
                 <span style={{fontSize:30,lineHeight:1}}>✂️</span>
@@ -19939,19 +19947,17 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               <button onClick={()=>setAskPay(null)} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
             </div>
             :askPay==="voucher"?<div style={{padding:"22px 24px",overflowY:"auto"}}>
-              {/* Voucher = ช่องทางชำระอย่างหนึ่ง ไม่ใช่ส่วนลด — ยอดบิลไม่เปลี่ยน
-                  คูปองจ่ายไปเท่าไร ส่วนที่เหลือต้องเก็บด้วยช่องทางอื่นต่อ
-                  ใส่เป็นบาทหรือ % ของยอดบิลก็ได้ (เจ้าของสั่ง 22 ก.ย. 69 ตามใบของ FoodStory) */}
-              <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:4}}>ใช้ Voucher</div>
-              <div style={{fontSize:12.5,color:C.ink4,marginBottom:14,lineHeight:1.6}}>
-                คูปองนับเป็นช่องทางชำระ — ยอดบิลไม่ลด ถ้าคูปองไม่พอ ส่วนที่เหลือเก็บต่อได้ทันที
-              </div>
+              {/* Voucher = ส่วนลดท้ายบิล (ทำตามของเดิมที่ร้านใช้: "ส่วนลดจะลดที่ยอดรวมสุทธิ")
+                  ยอดบิลลดลงจริง ภาษีคิดจากยอดหลังหักคูปอง — ไม่ใช่ช่องทางรับเงิน
+                  เก็บรหัสอ้างอิงไว้กับบิลเสมอ เพื่อให้ตรวจย้อนหลังได้ว่าคูปองใบไหน */}
+              <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:4}}>ใช้งาน Voucher</div>
+              <div style={{fontSize:12.5,color:C.ink4,marginBottom:14,lineHeight:1.6}}>ส่วนลดจะลดที่ยอดรวมสุทธิ</div>
               <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,marginBottom:6}}>รหัสอ้างอิง (ถ้ามี)</div>
               <input value={vRef} onChange={e=>setVRef(e.target.value)} placeholder="เช่น BT001"
                 style={{...iS,fontSize:16,fontWeight:800,padding:"13px 15px",marginBottom:16,letterSpacing:.5}}/>
-              <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,marginBottom:6}}>มูลค่าคูปอง</div>
+              <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,marginBottom:6}}>ระบุส่วนลด</div>
               <div style={{display:"flex",gap:8,marginBottom:10}}>
-                {[{v:"baht",l:"จำนวนเงิน (บาท)"},{v:"percent",l:"% ของยอดบิล"}].map(o=>{const on=vMode===o.v;
+                {[{v:"baht",l:"จำนวนเงิน (บาท)"},{v:"percent",l:"% ของยอด"}].map(o=>{const on=vMode===o.v;
                   return <button key={o.v} onClick={()=>setVMode(o.v)}
                     style={{flex:1,padding:"12px 10px",borderRadius:12,border:`2px solid ${on?C.purple:C.line}`,background:on?`${C.purple}14`:C.white,
                       color:on?C.purple:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?900:700,minHeight:48}}>{o.l}</button>;})}
@@ -19959,16 +19965,18 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               <NumInput value={vVal} onValue={setVVal} autoFocus placeholder={vMode==="percent"?"เช่น 10":"เช่น 100"}
                 style={{...iS,fontSize:26,fontWeight:900,padding:"14px 18px",textAlign:"center",letterSpacing:1}}/>
               <div style={{marginTop:12,padding:"12px 14px",borderRadius:12,background:C.bg,fontSize:14,color:C.ink2,lineHeight:1.9}}>
-                <div style={{display:"flex",justifyContent:"space-between"}}><span>ยอดที่ต้องเก็บ</span><b style={{color:C.ink}}>{bahtR(voucherTarget)}</b></div>
-                <div style={{display:"flex",justifyContent:"space-between"}}><span>คูปองจ่าย</span><b style={{color:C.purple,fontSize:17}}>{bahtR(voucherAmt)}</b></div>
-                <div style={{display:"flex",justifyContent:"space-between"}}><span>เหลือเก็บอีก</span><b style={{color:voucherLeft>0?C.red:C.green,fontSize:17}}>{bahtR(voucherLeft)}</b></div>
+                <div style={{display:"flex",justifyContent:"space-between"}}><span>ยอดก่อนหักคูปอง</span><b style={{color:C.ink}}>{bahtR(voucherBase)}</b></div>
+                <div style={{display:"flex",justifyContent:"space-between"}}><span>ส่วนลดคูปอง</span><b style={{color:C.purple,fontSize:17}}>-{bahtR(vPreview)}</b></div>
+                <div style={{display:"flex",justifyContent:"space-between"}}><span>เหลือให้ลูกค้าจ่าย</span><b style={{color:C.green,fontSize:17}}>{bahtR(Math.max(0,round2(voucherBase-vPreview)))}</b></div>
               </div>
-              {voucherAmt>0&&voucherLeft>0&&<div style={{fontSize:12.5,color:C.ink4,marginTop:8,lineHeight:1.6}}>กดยืนยันแล้วจะไปหน้าแบ่งจ่ายต่อ เพื่อเก็บส่วนที่เหลือ {bahtR(voucherLeft)}</div>}
-              <div style={{display:"flex",gap:10,marginTop:18}}>
-                <button onClick={()=>{setAskPay(parts.length?"split":"choose");}} disabled={saving}
-                  style={{flex:1,padding:"13px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink3,minHeight:48}}>← ย้อนกลับ</button>
-                <Btn v="primary" onClick={useVoucherNow} loading={saving} disabled={saving||!(voucherAmt>0)} icon={I.check}
-                  s={{flex:2,padding:"13px",fontSize:15.5,fontWeight:900}}>{voucherLeft>0?"ใช้คูปองแล้วเก็บส่วนที่เหลือ":"ใช้คูปอง + ปิดโต๊ะ"}</Btn>
+              <div style={{fontSize:12,color:C.ink4,marginTop:8,lineHeight:1.6}}>* ยอดจริงจะคิด VAT/ค่าบริการตามการตั้งค่าของร้านอีกชั้น ตัวเลขนี้คือยอดก่อนภาษี</div>
+              <div style={{display:"flex",gap:10,marginTop:18,flexWrap:"wrap"}}>
+                <button onClick={()=>setAskPay(null)} disabled={saving}
+                  style={{flex:"1 1 120px",padding:"13px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink3,minHeight:48}}>← ย้อนกลับ</button>
+                {voucher&&<button onClick={()=>{setVoucher(null);setVRef("");setVVal("");setVMode("baht");setAskPay(null);}} disabled={saving}
+                  style={{flex:"1 1 120px",padding:"13px",borderRadius:12,border:`1.5px solid ${C.red}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.red,minHeight:48}}>ลบคูปองนี้</button>}
+                <Btn v="primary" onClick={()=>{if(!(vPreview>0))return;setVoucher({ref:(vRef||"").trim()||null,mode:vMode,value:round2(+vVal||0)});setAskPay(null);}}
+                  disabled={saving||!(vPreview>0)} icon={I.check} s={{flex:"2 1 200px",padding:"13px",fontSize:15.5,fontWeight:900}}>ใช้ส่วนลดคูปอง</Btn>
               </div>
             </div>
             :askPay==="other"?<div style={{padding:"22px 24px",overflowY:"auto"}}>
@@ -21353,6 +21361,8 @@ function shiftReportBlocks({orders=[],cancelled=[]}={}){
     const billDisc=r2((+o.discount||0)-itemDisc);
     if(billDisc>0.005)addDc("ลดท้ายบิล",billDisc);
     if((+o.promo_amount||0)>0)addDc("โปรโมชั่น: "+(o.promo_name||"ไม่ระบุชื่อ"),+o.promo_amount||0);
+    // คูปองแยกบรรทัดของตัวเอง — เจ้าของต้องเห็นว่าแต่ละกะแจกคูปองไปเท่าไร
+    if(o.voucher&&(+o.voucher.amount||0)>0)addDc("Voucher"+(o.voucher.ref?" "+o.voucher.ref:""),+o.voucher.amount||0);
   }
   const discountLines=[...dc].map(([name,v])=>({name,count:v.n,amt:v.amt})).sort((a,b)=>b.amt-a.amt);
   // ── ช่องทางชำระ แบบแม่-ลูก พร้อมจำนวนครั้ง — จัดกลุ่มแบบเดียวกับที่ส่งบัญชี (api/sliptrack-push.js)

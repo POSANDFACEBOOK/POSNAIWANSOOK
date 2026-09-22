@@ -670,7 +670,7 @@ const guards = [
   ["ไม่มีเหตุผล = ปุ่มยืนยันกดไม่ได้", APP.includes("disabled={!val}") && APP.includes("onClick={()=>{if(val)close(val);}}")],
   ["บันทึกครบทั้งคนยกเลิก เวลา และเหตุผล",
     APP.includes("const full={...base,cancelled_by:who,cancelled_at:at,cancel_reason:reason};")],
-  ["บันทึกว่าใครปิดบิล", APP.includes("cash_received:cashReceived,payments:paymentsCol,paid_by:currentUser?.username||currentUser?.name||null}")],
+  ["บันทึกว่าใครปิดบิล", APP.includes("paid_by:currentUser?.username||currentUser?.name||null}")],
   // กล่องเหตุผลต้องขึ้นทุกจุดที่ mount <ConfirmDlg/> (มี 4 จุด) ถ้าลืมจุดใดจุดหนึ่ง
   // reasonDlg จะคืน null เงียบๆ = กดยกเลิกบิลแล้วไม่เกิดอะไรขึ้น ไม่มี error ให้เห็น
   ["กล่องเหตุผลผูกติดกล่องยืนยัน ไม่ต้องไล่ mount เอง",
@@ -3204,7 +3204,7 @@ section("แก้ไขบิลที่ปิดแล้ว");
     try {
       return new Function(
         [lineRe("const round2"), lineRe("const roundModeOf"), grabTop("const roundBill=(amount,mode)=>{", "};"),
-         grabTop("function billTotalsOf({items,manualDiscount=0,promoDiscount=0,posSettings=null}){", "}")].join("\n")
+         grabTop("function billTotalsOf({items,manualDiscount=0,promoDiscount=0,voucherDiscount=0,posSettings=null}){", "}")].join("\n")
         + "\nreturn billTotalsOf;")();
     } catch { return null; }
   })();
@@ -3273,7 +3273,7 @@ section("แก้ไขบิลที่ปิดแล้ว");
     ck("ยอดที่เก็บเพิ่มทางพร้อมเพย์ไปอยู่ช่องพร้อมเพย์", amt("พร้อมเพย์"), 100);
     ck("ผลรวมชั้นหลักยังเท่ายอดขายจริงทั้งสามใบ", out.mainSum, 859);
   } else ok_("อ่านตัวสร้างบรรทัดวิธีจ่ายได้ (หลังรองรับหลายช่องทาง)", false);
-  ok_("ท่อบัญชีดึงช่องทางที่จ่ายจริงมาด้วย", SLIPPUSH.includes("payment_method,payments,created_at,updated_at"));
+  ok_("ท่อบัญชีดึงช่องทางที่จ่ายจริงมาด้วย", SLIPPUSH.includes("payment_method,payments,voucher,created_at,updated_at"));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -3428,7 +3428,7 @@ section("แบ่งจ่ายหลายช่องทาง");
   ok_("ลิ้นชักได้เฉพาะยอดส่วนที่เป็นเงินสด ไม่ใช่ทั้งบิล",
     APP.includes('type:"sale",amount:cashPart,') && APP.includes("if(cashPart>0&&shift){"));
   ok_("เงินทอนคิดจากขั้นเงินสด ไม่ใช่ยอดบิล", APP.includes("onCashChange({change:round2(Math.max(0,(+cashReceived||0)-cashPart)),received:+cashReceived||0,total:cashPart,"));
-  ok_("บิลเก็บช่องทางที่จ่ายจริงไว้ทุกขั้น", APP.includes("payments:paymentsCol,paid_by:"));
+  ok_("บิลเก็บช่องทางที่จ่ายจริงไว้ทุกขั้น", APP.includes("payments:paymentsCol,voucher:"));
   // ชนิดบิลนับ "ช่องทางที่ต่างกัน" — ดึงบรรทัดจริงมารัน
   // ของจริง 13 ก.ย. 69: #182 = ไทยช่วยไทย พลัส 317 + 363 + 363 เคยถูกเก็บเป็น mixed
   {
@@ -4010,46 +4010,52 @@ section("เงินสดต้องเข้ากะที่เปิด�
 
 
 // ══════════════════════════════════════════════════════════════════════════
-// ช่องทาง Voucher (เจ้าของสั่ง 22 ก.ย. 69 ตามหน้าจอ FoodStory ที่ร้านเคยใช้)
-// คูปองเป็น "ช่องทางชำระ" ไม่ใช่ส่วนลด — ยอดบิลและภาษีห้ามเปลี่ยน
-// ใส่มูลค่าเป็นบาทหรือ % ของยอดบิลก็ได้ · เก็บรหัสอ้างอิงไว้ตรวจย้อนหลัง
-// คูปองมูลค่าเกินยอดบิล ต้องไม่กลายเป็นเงินทอน
+// Voucher = ส่วนลดท้ายบิล ไม่ใช่ช่องทางชำระ (เจ้าของยืนยัน 22 ก.ย. 69 ให้ทำเหมือน FoodStory
+// ซึ่งเขียนไว้บนจอเองว่า "ส่วนลดจะลดที่ยอดรวมสุทธิ")
+// ฝั่งบัญชียืนยันจากข้อมูลจริง 874 ใบ: FoodStory ส่งคูปองมาเป็นคอลัมน์ voucher_discount ของตัวเอง
+// และบรรทัดช่องทางชำระรวมกันเท่ายอดที่หักคูปองแล้วพอดี ⟹ คูปองไม่ใช่เงินที่รับเข้ามา
 // ══════════════════════════════════════════════════════════════════════════
-section("ช่องทาง Voucher");
+section("Voucher: ส่วนลดท้ายบิล");
 {
-  ok_("มีปุ่ม Voucher ในรายการช่องทาง", APP.includes('{v:"voucher",l:"Voucher / คูปอง",icon:"🎫",c:"#7C3AED"},'));
-  ok_("ชื่อบนใบเสร็จ/รายงานเป็น Voucher", APP.includes('voucher:"🎫 Voucher"'));
-  // ดึงตัวคำนวณจริงมารัน — เงินล้วนๆ ห้ามเดา
+  ok_("ไม่มี Voucher ในรายการช่องทางชำระแล้ว", !APP.includes('{v:"voucher",l:"Voucher / คูปอง"'));
+  ok_("ปุ่มใช้งาน Voucher อยู่ในจอเลือกช่องทาง (เปิดจอใส่รหัส/มูลค่า)",
+    APP.includes('setAskPay("voucher");}} disabled={saving}') && APP.includes("ใช้งาน Voucher"));
+  ok_("จอคูปองบอกกติกาตรงกับของเดิมที่ร้านใช้", APP.includes("ส่วนลดจะลดที่ยอดรวมสุทธิ"));
+  ok_("เก็บรหัสอ้างอิง + วิธีคิด (บาท/%) ไว้กับบิล",
+    APP.includes('setVoucher({ref:(vRef||"").trim()||null,mode:vMode,value:round2(+vVal||0)});'));
+  ok_("ลบคูปองออกจากบิลได้", APP.includes("ลบคูปองนี้"));
+  // ── สูตรยอดบิลต้องหักคูปองจริง และภาษีต้องคิดจากยอดหลังหัก ──
   {
     const lines = APP.split("\n");
-    const i = lines.findIndex((l) => l.includes("const voucherAmt=(()=>{"));
-    const src = i < 0 ? "" : lines.slice(i, i + 5).join("\n");
-    let calc = null;
+    const i = lines.findIndex((l) => l.startsWith("function billTotalsOf({"));
+    let dd = 0, st = false, en = -1;
+    for (let k = i; k < lines.length; k++) {
+      for (const ch of lines[k]) { if (ch === "{") { dd++; st = true; } else if (ch === "}") dd--; }
+      if (st && dd === 0) { en = k; break; }
+    }
+    let fn = null;
     try {
-      calc = new Function("voucherTarget", "vVal", "vMode", "round2", src + "\nreturn voucherAmt;");
+      fn = new Function("round2", "roundBill", "roundModeOf",
+        lines.slice(i, en + 1).join("\n") + "\nreturn billTotalsOf;")(
+        (n) => Math.round((+n || 0) * 100) / 100, (n) => n, () => "none");
     } catch {}
-    ok_("อ่านตัวคำนวณมูลค่าคูปองได้", !!calc);
-    if (calc) {
-      const r2 = (n) => Math.round((+n || 0) * 100) / 100;
-      const run = (target, val, mode) => calc(target, val, mode, r2);
-      ck("ใส่เป็นบาท = ได้ตามนั้น", run(117, 100, "baht"), 100);
-      ck("ใส่เป็น % = คิดจากยอดที่ต้องเก็บ", run(117, 10, "percent"), 11.7);
-      ck("คูปองใหญ่กว่าบิล = จ่ายได้แค่เท่าบิล (ไม่ทอนเงิน)", run(117, 500, "baht"), 117);
-      ck("100% = เต็มยอดพอดี", run(117, 100, "percent"), 117);
-      ck("ยังไม่ใส่ตัวเลข = 0 (ปุ่มยืนยันยังกดไม่ได้)", run(117, "", "baht"), 0);
-      ck("ใส่ติดลบ = 0 ไม่ใช่ติดลบ", run(117, -50, "baht"), 0);
+    ok_("อ่านสูตรยอดบิลได้", !!fn);
+    if (fn) {
+      const items = [{ price: 100, qty: 10 }];   // 1,000 บาท
+      const st7 = { vat_enabled: true, vat_rate: 7, vat_included: true };
+      const noV = fn({ items, posSettings: st7 });
+      const withV = fn({ items, voucherDiscount: 200, posSettings: st7 });
+      ck("คูปองลดยอดสุทธิจริง", { before: noV.total, after: withV.total }, { before: 1000, after: 800 });
+      ck("คูปองถูกนับรวมในส่วนลดของบิล", withV.totalDiscount, 200);
+      // VAT ในราคา 7% ของ 800 = 52.34 — ภาษีต้องคิดจากยอดหลังหักคูปอง
+      ck("ภาษีคิดจากยอดหลังหักคูปอง", withV.vat, Math.round((800 * 7 / 107) * 100) / 100);
+      ck("คูปองบวกกับส่วนลดอื่นได้", fn({ items, manualDiscount: 100, voucherDiscount: 200, posSettings: st7 }).total, 700);
     }
   }
-  ok_("คูปองคลุมทั้งยอด = ปิดบิลเป็นช่องทาง voucher ทันที",
-    APP.includes('if(voucherLeft<=0){setAskPay(null);onPay("voucher",{payments:all});return;}'));
-  ok_("คูปองไม่พอ = ไปหน้าแบ่งจ่ายเก็บส่วนที่เหลือต่อ", APP.includes('setParts(all);setPartAmt("");setAskPay("split");'));
-  ok_("เก็บรหัสอ้างอิงและวิธีคิด (บาท/%) ไว้กับบิล",
-    APP.includes('const part={method:"voucher",amount:voucherAmt,ref:(vRef||"").trim()||null,') && APP.includes("vmode:vMode,vvalue:round2(+vVal||0)};"));
-  ok_("ใบเสร็จโชว์รหัสคูปองต่อท้ายชื่อช่องทาง", APP.includes('${p&&p.ref?" ("+stripEmoji(String(p.ref))+")":""}'));
-  ok_("ในจอแบ่งจ่าย กดคูปองก็ต้องเข้าจอใส่รหัสเหมือนกัน",
-    APP.includes('if(mt.v==="voucher"){setVRef("");setVVal("");setVMode("baht");setAskPay("voucher");return;}'));
-  ok_("ท่อบัญชีรู้จักช่องทางคูปอง (ลงเป็นบรรทัดลูกของ Custom Payment)",
-    SLIPPUSH.includes('{ pm: "voucher", name_th: "Voucher", name_en: "Voucher" }'));
+  ok_("คูปองห้ามเกินยอดที่เหลือ (ไม่กลายเป็นเงินทอน)",
+    APP.includes("return Math.min(Math.max(0,raw),base);"));
+  ok_("คูปอง % คิดใหม่เมื่อยอดบิลเปลี่ยน (ลูกค้าสั่งเพิ่มทีหลัง)",
+    APP.includes("},[voucher,subtotal,manualDiscount,promoDiscount]);"));
 }
 
 
