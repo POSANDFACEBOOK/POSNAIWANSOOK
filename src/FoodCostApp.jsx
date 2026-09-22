@@ -17837,7 +17837,7 @@ export default function App(){
 // ══════════════════════════════════════════════════════
 // ── PRINT HELPERS ─────────────────────────────────────
 // ══════════════════════════════════════════════════════
-const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 คูปอง",thaiplus:"🏛️ ไทยช่วยไทย พลัส",bartercard:"💳 Bartercard",mixed:"✂️ แบ่งจ่ายหลายช่องทาง",mixed:"✂️ แบ่งจ่ายหลายช่องทาง",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
+const PAY_LABEL={cash:"💵 เงินสด",promptpay:"📲 พร้อมเพย์",transfer:"🏦 โอนธนาคาร",credit:"💳 บัตรเครดิต",debit:"💳 บัตรเดบิต",truemoney:"🟠 TrueMoney",shopeepay:"🛒 ShopeePay",linepay:"💚 LINE Pay",rabbit:"🐰 Rabbit LINE Pay",paotang:"💰 เป๋าตัง",alipay:"🅰️ Alipay",wechatpay:"💬 WeChat Pay",grabpay:"🟢 GrabPay",airpay:"✈️ AirPay",qr:"📱 QR Code",voucher:"🎫 Voucher",thaiplus:"🏛️ ไทยช่วยไทย พลัส",bartercard:"💳 Bartercard",mixed:"✂️ แบ่งจ่ายหลายช่องทาง",mixed:"✂️ แบ่งจ่ายหลายช่องทาง",other:"➕ อื่นๆ",split:"✂️ บิลแยก (ตัวอย่าง)"};
 function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const w=openPrintWindow(400,700);
   if(!w)return;
@@ -18156,7 +18156,7 @@ function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
     const splitPay=(Array.isArray(order.payments)&&order.payments.length>1)?order.payments:null;
     // แบ่งจ่ายหลายช่องทาง — ลูกค้าและพนักงานต้องเห็นว่าจ่ายช่องทางไหนไปเท่าไรบ้าง ไม่ใช่เห็นแค่คำว่า "แบ่งจ่าย"
     L.push({t:"ชำระโดย: "+payHeadOf(order),size:24,bold:true,align:"center"});
-    if(splitPay)splitPay.forEach((p,i)=>L.push({l:`  ${i+1}. ${payMethodLabel(p.method)}`,r:bahtR(+p.amount||0),size:22,bold:true}));
+    if(splitPay)splitPay.forEach((p,i)=>L.push({l:`  ${i+1}. ${payMethodLabel(p.method)}${p&&p.ref?" ("+stripEmoji(String(p.ref))+")":""}`,r:bahtR(+p.amount||0),size:22,bold:true}));
     L.push({t:"ขอบคุณที่ใช้บริการครับ",size:22,align:"center",mb:2});
   }else{
     L.push({rule:true});
@@ -19757,6 +19757,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 const PAY_METHODS=[
   {v:"cash",l:"เงินสด",icon:"💵",c:"#10B981"},
   {v:"promptpay",l:"พร้อมเพย์",icon:"📲",c:"#1E40AF"},
+  {v:"voucher",l:"Voucher / คูปอง",icon:"🎫",c:"#7C3AED"},
   {v:"other",l:"อื่นๆ",icon:"➕",c:"#475569"},
 ];
 // ช่องทางย่อยในป็อปอัพ "อื่นๆ" — เพิ่มช่องทางใหม่ที่นี่ + ชื่อใน PAY_LABEL (ใบเสร็จ/ประวัติใช้ชื่อจากที่นั่น)
@@ -19775,9 +19776,33 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
   // เงินสดต้องเป็นขั้นสุดท้ายเสมอ (ขั้นเดียวที่มีเงินทอน) จึงเช็คว่าจำนวนที่ใส่ = ยอดที่เหลือพอดี
   const[parts,setParts]=useState([]);
   const[partAmt,setPartAmt]=useState("");
+  // ── Voucher: ช่องทางชำระที่ใส่รหัสอ้างอิงและมูลค่าเป็นบาทหรือ % ของยอดบิล ──
+  // ของจริงที่ร้านใช้: คูปองเช็คอิน/รีวิว มีรหัสกำกับ ต้องเก็บไว้ตรวจย้อนหลังได้
+  // คูปองไม่ลดยอดบิล แต่นับเป็นเงินที่ร้านได้รับผ่านช่องทาง "Voucher"
+  const[vRef,setVRef]=useState("");
+  const[vMode,setVMode]=useState("baht");
+  const[vVal,setVVal]=useState("");
   const paidSoFar=round2(parts.reduce((s,p)=>s+(+p.amount||0),0));
   const remain=round2(total-paidSoFar);
   const partNow=round2(+partAmt||0);
+  // คูปองจ่ายได้ไม่เกินยอดที่เหลือ — คูปองมูลค่าเกินบิลไม่ทอนเงินสดคืน
+  const voucherTarget=parts.length?remain:total;
+  const voucherAmt=(()=>{
+    const v=+vVal||0;if(!(v>0))return 0;
+    const raw=vMode==="percent"?round2(voucherTarget*v/100):round2(v);
+    return Math.min(raw,round2(voucherTarget));
+  })();
+  const voucherLeft=round2(voucherTarget-voucherAmt);
+  function useVoucherNow(){
+    if(!(voucherAmt>0))return;
+    const part={method:"voucher",amount:voucherAmt,ref:(vRef||"").trim()||null,
+      vmode:vMode,vvalue:round2(+vVal||0)};
+    const all=[...parts,part];
+    setVRef("");setVVal("");setVMode("baht");
+    // คูปองคลุมทั้งยอด = ปิดบิลได้เลย · ไม่พอ = ไปหน้าแบ่งจ่ายเก็บส่วนที่เหลือต่อ
+    if(voucherLeft<=0){setAskPay(null);onPay("voucher",{payments:all});return;}
+    setParts(all);setPartAmt("");setAskPay("split");
+  }
   const addPart=(method)=>{
     if(partNow<=0||partNow>remain)return;
     setParts(a=>[...a,{method,amount:partNow}]);
@@ -19896,11 +19921,13 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
               <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:12}}>ลูกค้าจ่ายแบบไหน?</div>
               <div style={{display:"grid",gap:10}}>
                 {PAY_METHODS.map(m=><button key={m.v} disabled={saving}
-                  onClick={()=>{if(m.v==="other"){setAskPay("other");return;}setPayMethod(m.v);if(m.v==="cash"){setCashRcv("");setAskPay("cash");}else{setAskPay(null);onPay(m.v);}}}
+                  onClick={()=>{if(m.v==="other"){setAskPay("other");return;}
+                    if(m.v==="voucher"){setParts([]);setVRef("");setVVal("");setVMode("baht");setAskPay("voucher");return;}
+                    setPayMethod(m.v);if(m.v==="cash"){setCashRcv("");setAskPay("cash");}else{setAskPay(null);onPay(m.v);}}}
                   style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${m.c}`,background:`${m.c}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left"}}>
                   <span style={{fontSize:30,lineHeight:1}}>{m.icon}</span>
                   <span style={{fontSize:18,fontWeight:900,color:m.c}}>{m.l}</span>
-                  {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:12,color:m.c,fontWeight:700,opacity:.85}}>{m.v==="other"?"เลือกช่องทาง →":"พิมพ์ใบเสร็จ + ปิดโต๊ะ →"}</span>}
+                  {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:12,color:m.c,fontWeight:700,opacity:.85}}>{m.v==="other"?"เลือกช่องทาง →":m.v==="voucher"?"ใส่รหัส + มูลค่า →":"พิมพ์ใบเสร็จ + ปิดโต๊ะ →"}</span>}
                 </button>)}
               </div>
               <button onClick={()=>{setParts([]);setPartAmt("");setAskPay("split");}} disabled={saving}
@@ -19910,6 +19937,39 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                 <span style={{marginLeft:"auto",fontSize:12,color:C.purple,fontWeight:700,opacity:.85}}>จ่ายหลายช่องทาง ทีละขั้น →</span>
               </button>
               <button onClick={()=>setAskPay(null)} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
+            </div>
+            :askPay==="voucher"?<div style={{padding:"22px 24px",overflowY:"auto"}}>
+              {/* Voucher = ช่องทางชำระอย่างหนึ่ง ไม่ใช่ส่วนลด — ยอดบิลไม่เปลี่ยน
+                  คูปองจ่ายไปเท่าไร ส่วนที่เหลือต้องเก็บด้วยช่องทางอื่นต่อ
+                  ใส่เป็นบาทหรือ % ของยอดบิลก็ได้ (เจ้าของสั่ง 22 ก.ย. 69 ตามใบของ FoodStory) */}
+              <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:4}}>ใช้ Voucher</div>
+              <div style={{fontSize:12.5,color:C.ink4,marginBottom:14,lineHeight:1.6}}>
+                คูปองนับเป็นช่องทางชำระ — ยอดบิลไม่ลด ถ้าคูปองไม่พอ ส่วนที่เหลือเก็บต่อได้ทันที
+              </div>
+              <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,marginBottom:6}}>รหัสอ้างอิง (ถ้ามี)</div>
+              <input value={vRef} onChange={e=>setVRef(e.target.value)} placeholder="เช่น BT001"
+                style={{...iS,fontSize:16,fontWeight:800,padding:"13px 15px",marginBottom:16,letterSpacing:.5}}/>
+              <div style={{fontSize:13.5,fontWeight:800,color:C.ink2,marginBottom:6}}>มูลค่าคูปอง</div>
+              <div style={{display:"flex",gap:8,marginBottom:10}}>
+                {[{v:"baht",l:"จำนวนเงิน (บาท)"},{v:"percent",l:"% ของยอดบิล"}].map(o=>{const on=vMode===o.v;
+                  return <button key={o.v} onClick={()=>setVMode(o.v)}
+                    style={{flex:1,padding:"12px 10px",borderRadius:12,border:`2px solid ${on?C.purple:C.line}`,background:on?`${C.purple}14`:C.white,
+                      color:on?C.purple:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:on?900:700,minHeight:48}}>{o.l}</button>;})}
+              </div>
+              <NumInput value={vVal} onValue={setVVal} autoFocus placeholder={vMode==="percent"?"เช่น 10":"เช่น 100"}
+                style={{...iS,fontSize:26,fontWeight:900,padding:"14px 18px",textAlign:"center",letterSpacing:1}}/>
+              <div style={{marginTop:12,padding:"12px 14px",borderRadius:12,background:C.bg,fontSize:14,color:C.ink2,lineHeight:1.9}}>
+                <div style={{display:"flex",justifyContent:"space-between"}}><span>ยอดที่ต้องเก็บ</span><b style={{color:C.ink}}>{bahtR(voucherTarget)}</b></div>
+                <div style={{display:"flex",justifyContent:"space-between"}}><span>คูปองจ่าย</span><b style={{color:C.purple,fontSize:17}}>{bahtR(voucherAmt)}</b></div>
+                <div style={{display:"flex",justifyContent:"space-between"}}><span>เหลือเก็บอีก</span><b style={{color:voucherLeft>0?C.red:C.green,fontSize:17}}>{bahtR(voucherLeft)}</b></div>
+              </div>
+              {voucherAmt>0&&voucherLeft>0&&<div style={{fontSize:12.5,color:C.ink4,marginTop:8,lineHeight:1.6}}>กดยืนยันแล้วจะไปหน้าแบ่งจ่ายต่อ เพื่อเก็บส่วนที่เหลือ {bahtR(voucherLeft)}</div>}
+              <div style={{display:"flex",gap:10,marginTop:18}}>
+                <button onClick={()=>{setAskPay(parts.length?"split":"choose");}} disabled={saving}
+                  style={{flex:1,padding:"13px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink3,minHeight:48}}>← ย้อนกลับ</button>
+                <Btn v="primary" onClick={useVoucherNow} loading={saving} disabled={saving||!(voucherAmt>0)} icon={I.check}
+                  s={{flex:2,padding:"13px",fontSize:15.5,fontWeight:900}}>{voucherLeft>0?"ใช้คูปองแล้วเก็บส่วนที่เหลือ":"ใช้คูปอง + ปิดโต๊ะ"}</Btn>
+              </div>
             </div>
             :askPay==="other"?<div style={{padding:"22px 24px",overflowY:"auto"}}>
               <div style={{fontSize:15,fontWeight:800,color:C.ink2,marginBottom:12}}>ช่องทางอื่นๆ — เลือกแล้วปิดบิลทันที</div>
@@ -19945,8 +20005,10 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                       // เงินสดต้องเป็นขั้นสุดท้าย — ถ้าใส่จำนวนน้อยกว่ายอดที่เหลือ ยังกดเงินสดไม่ได้
                       const lastStep=partNow>0&&round2(remain-partNow)===0;
                       const off=saving||partNow<=0||partNow>remain||(mt.v==="cash"&&!lastStep);
-                      return <button key={mt.v} disabled={off} onClick={()=>{if(mt.v==="cash"){setCashRcv(String(partNow));setAskPay("split-cash");return;}addPart(mt.v);}}
-                        style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderRadius:12,border:`2.5px solid ${off?C.line:mt.c}`,background:off?C.bg:`${mt.c}12`,cursor:off?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",opacity:off?.55:1,textAlign:"left"}}>
+                      return <button key={mt.v} disabled={mt.v==="voucher"?saving:off} onClick={()=>{
+                          if(mt.v==="voucher"){setVRef("");setVVal("");setVMode("baht");setAskPay("voucher");return;}
+                          if(mt.v==="cash"){setCashRcv(String(partNow));setAskPay("split-cash");return;}addPart(mt.v);}}
+                        style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderRadius:12,border:`2.5px solid ${(mt.v!=="voucher"&&off)?C.line:mt.c}`,background:(mt.v!=="voucher"&&off)?C.bg:`${mt.c}12`,cursor:off?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",opacity:off?.55:1,textAlign:"left"}}>
                         <span style={{fontSize:22}}>{mt.icon||"💠"}</span>
                         <span style={{fontSize:14,fontWeight:800,color:off?C.ink4:mt.c}}>{mt.l}</span>
                       </button>;})}

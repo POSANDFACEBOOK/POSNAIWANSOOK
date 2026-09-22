@@ -30,6 +30,8 @@ const MAIN_PAY_METHODS = ["cash", "promptpay", "transfer", "credit", "debit"];
 const OTHER_CHILD_LINES = [
   { pm: "thaiplus", name_th: "ไทยช่วยไทย พลัส", name_en: "ไทยช่วยไทย พลัส" },
   { pm: "bartercard", name_th: "Bartercard", name_en: "Bartercard" },
+  // คูปอง/Voucher — ช่องทางชำระ ไม่ใช่ส่วนลด (เพิ่ม 22 ก.ย. 69) ยอดขายและภาษีไม่เปลี่ยน
+  { pm: "voucher", name_th: "Voucher", name_en: "Voucher" },
 ];
 function buildPaymentLines(bills) {
   const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;

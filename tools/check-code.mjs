@@ -2913,7 +2913,9 @@ section("ช่องทางจ่ายอื่นๆ");
   ok_("ท่อบัญชี: ช่องทางที่ไม่รู้จักลงกลุ่ม Custom Payment (คัดด้วยการยกเว้น ไม่ใช่รายชื่อ)",
     SLIPPUSH.includes('const MAIN_PAY_METHODS = ["cash", "promptpay", "transfer", "credit", "debit"];')
     && SLIPPUSH.includes("const other = list.filter((x) => !MAIN_PAY_METHODS.includes(x.payment_method));"));
-  ok_("กด อื่นๆ = เปิดรายการช่องทาง ไม่ปิดบิลทันที", APP.includes('onClick={()=>{if(m.v==="other"){setAskPay("other");return;}setPayMethod(m.v);'));
+  ok_("กด อื่นๆ = เปิดรายการช่องทาง ไม่ปิดบิลทันที", APP.includes('onClick={()=>{if(m.v==="other"){setAskPay("other");return;}'));
+  ok_("กด Voucher = เปิดจอใส่รหัส/มูลค่า ไม่ปิดบิลทันที",
+    APP.includes('if(m.v==="voucher"){setParts([]);setVRef("");setVVal("");setVMode("baht");setAskPay("voucher");return;}'));
   ok_("เลือกช่องทางย่อย = ปิดบิลด้วยช่องทางนั้น", APP.includes("{OTHER_PAY_METHODS.map(m=><button key={m.v} disabled={saving}") && APP.includes("onClick={()=>{setPayMethod(m.v);setAskPay(null);onPay(m.v);}}"));
 }
 
@@ -3122,11 +3124,21 @@ section("วิธีจ่าย: บรรทัดแม่-ลูกที�
   }
   // ── ช่องทางในแอปกับบรรทัดที่ส่งบัญชี ต้องไปด้วยกัน ──
   // เพิ่มช่องทางใหม่ในจอขายแล้วลืมบอกบัญชี = ยอดไปกองรวมในตัวแม่เงียบๆ ทั้งที่ปลายทางคนละบัญชี
+  // ช่องทางที่ต้องมีบรรทัดของตัวเองฝั่งบัญชี = ทุกช่องทางที่ไม่ใช่ช่องทางหลัก
+  // (ช่องทางหลัก = เงินสด/พร้อมเพย์/โอน/บัตร ซึ่งมีบรรทัดของตัวเองอยู่แล้วในสเปกของเขา)
+  // ดึงจากทั้งสองรายการ เพราะบางช่องทางอยู่ในปุ่มหลัก (เช่น Voucher) ไม่ได้อยู่ใต้ "อื่นๆ"
   const appPms = (() => {
     try {
-      const L = APP.split("\n"); const i = L.findIndex(l => l.startsWith("const OTHER_PAY_METHODS="));
-      const j = L.findIndex((l, k) => k > i && l.trim() === "];");
-      return new Function(L.slice(i, j + 1).join("\n") + "\nreturn OTHER_PAY_METHODS;")().map(m => m.v);
+      const L = APP.split("\n");
+      const grab = (head) => {
+        const i = L.findIndex((l) => l.startsWith(head));
+        if (i < 0) return [];
+        const j = L.findIndex((l, k) => k > i && l.trim() === "];");
+        const name = head.replace("const ", "").replace("=", "");
+        return new Function(L.slice(i, j + 1).join("\n") + "\nreturn " + name + ";")().map((m) => m.v);
+      };
+      const MAIN = ["cash", "promptpay", "transfer", "credit", "debit"];
+      return [...new Set([...grab("const OTHER_PAY_METHODS="), ...grab("const PAY_METHODS=")])].filter((v) => !MAIN.includes(v));
     } catch { return null; }
   })();
   const childPms = [...SLIPPUSH.matchAll(/\{ pm: "([a-z0-9_]+)"/g)].map(m => m[1]);
@@ -3994,6 +4006,50 @@ section("เงินสดต้องเข้ากะที่เปิด�
   }
   ok_("เปิดกะซ้อนกันไม่ได้ (สาขาละกะเดียว)",
     APP.includes("const r=await api.getActiveShift(currentBranch.id);") && APP.includes('title:"มีกะเปิดอยู่แล้ว"'));
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// ช่องทาง Voucher (เจ้าของสั่ง 22 ก.ย. 69 ตามหน้าจอ FoodStory ที่ร้านเคยใช้)
+// คูปองเป็น "ช่องทางชำระ" ไม่ใช่ส่วนลด — ยอดบิลและภาษีห้ามเปลี่ยน
+// ใส่มูลค่าเป็นบาทหรือ % ของยอดบิลก็ได้ · เก็บรหัสอ้างอิงไว้ตรวจย้อนหลัง
+// คูปองมูลค่าเกินยอดบิล ต้องไม่กลายเป็นเงินทอน
+// ══════════════════════════════════════════════════════════════════════════
+section("ช่องทาง Voucher");
+{
+  ok_("มีปุ่ม Voucher ในรายการช่องทาง", APP.includes('{v:"voucher",l:"Voucher / คูปอง",icon:"🎫",c:"#7C3AED"},'));
+  ok_("ชื่อบนใบเสร็จ/รายงานเป็น Voucher", APP.includes('voucher:"🎫 Voucher"'));
+  // ดึงตัวคำนวณจริงมารัน — เงินล้วนๆ ห้ามเดา
+  {
+    const lines = APP.split("\n");
+    const i = lines.findIndex((l) => l.includes("const voucherAmt=(()=>{"));
+    const src = i < 0 ? "" : lines.slice(i, i + 5).join("\n");
+    let calc = null;
+    try {
+      calc = new Function("voucherTarget", "vVal", "vMode", "round2", src + "\nreturn voucherAmt;");
+    } catch {}
+    ok_("อ่านตัวคำนวณมูลค่าคูปองได้", !!calc);
+    if (calc) {
+      const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+      const run = (target, val, mode) => calc(target, val, mode, r2);
+      ck("ใส่เป็นบาท = ได้ตามนั้น", run(117, 100, "baht"), 100);
+      ck("ใส่เป็น % = คิดจากยอดที่ต้องเก็บ", run(117, 10, "percent"), 11.7);
+      ck("คูปองใหญ่กว่าบิล = จ่ายได้แค่เท่าบิล (ไม่ทอนเงิน)", run(117, 500, "baht"), 117);
+      ck("100% = เต็มยอดพอดี", run(117, 100, "percent"), 117);
+      ck("ยังไม่ใส่ตัวเลข = 0 (ปุ่มยืนยันยังกดไม่ได้)", run(117, "", "baht"), 0);
+      ck("ใส่ติดลบ = 0 ไม่ใช่ติดลบ", run(117, -50, "baht"), 0);
+    }
+  }
+  ok_("คูปองคลุมทั้งยอด = ปิดบิลเป็นช่องทาง voucher ทันที",
+    APP.includes('if(voucherLeft<=0){setAskPay(null);onPay("voucher",{payments:all});return;}'));
+  ok_("คูปองไม่พอ = ไปหน้าแบ่งจ่ายเก็บส่วนที่เหลือต่อ", APP.includes('setParts(all);setPartAmt("");setAskPay("split");'));
+  ok_("เก็บรหัสอ้างอิงและวิธีคิด (บาท/%) ไว้กับบิล",
+    APP.includes('const part={method:"voucher",amount:voucherAmt,ref:(vRef||"").trim()||null,') && APP.includes("vmode:vMode,vvalue:round2(+vVal||0)};"));
+  ok_("ใบเสร็จโชว์รหัสคูปองต่อท้ายชื่อช่องทาง", APP.includes('${p&&p.ref?" ("+stripEmoji(String(p.ref))+")":""}'));
+  ok_("ในจอแบ่งจ่าย กดคูปองก็ต้องเข้าจอใส่รหัสเหมือนกัน",
+    APP.includes('if(mt.v==="voucher"){setVRef("");setVVal("");setVMode("baht");setAskPay("voucher");return;}'));
+  ok_("ท่อบัญชีรู้จักช่องทางคูปอง (ลงเป็นบรรทัดลูกของ Custom Payment)",
+    SLIPPUSH.includes('{ pm: "voucher", name_th: "Voucher", name_en: "Voucher" }'));
 }
 
 
