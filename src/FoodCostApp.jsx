@@ -17547,6 +17547,7 @@ export default function App(){
 
   const addH=useCallback(async a=>{try{await api.addActionHist({action:a,time:nowStr()});await reload.action();}catch{}},[currentBranch]);
 
+  const hasNewBuildBO=useNewBuild();   // หลังบ้านเปิดค้างข้ามวันได้ ต้องบอกให้อัปเดตเหมือนจอขาย
   const TABS=[
     // แท็บอนุมัติถูกซ่อนตามคำสั่งเจ้าของ — เปิด APPROVAL_ON เป็น true แล้วกลับมาเอง
     ...(APPROVAL_ON?[{id:"approve",l:"อนุมัติการสั่งของ",icon:I.check,perm:"approve"}]:[]),
@@ -17737,6 +17738,12 @@ export default function App(){
       {/* ── MAIN CONTENT ── */}
       <main style={{marginLeft:isMobile?0:sidebarW,flex:1,minWidth:0,display:"flex",flexDirection:"column",width:isMobile?"100%":undefined}}>
 
+        {/* มีเวอร์ชันใหม่ขึ้นระบบแล้ว — แตะเพื่อโหลด (เดิมมีแถบนี้เฉพาะจอขาย
+            หลังบ้านจึงค้างโค้ดเก่าได้ทั้งวันจนยิงแจ้งเตือนของฟีเจอร์ที่ปิดไปแล้ว) */}
+        {hasNewBuildBO&&<button onClick={()=>{try{location.reload();}catch{}}}
+          style={{padding:"10px 16px",background:C.brand,color:C.white,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,flexShrink:0,width:"100%"}}>
+          🔄 มีระบบเวอร์ชันใหม่แล้ว — แตะตรงนี้เพื่ออัปเดต (ของที่ค้างอยู่ไม่หาย)
+        </button>}
         {/* Top bar */}
         <div style={{background:"#fff",borderBottom:"1px solid #E2E8F0",padding:isMobile?"0 12px":"0 28px",height:isMobile?52:58,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,position:"sticky",top:0,zIndex:100,boxShadow:"0 1px 3px rgba(15,23,42,0.05)"}}>
           <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0,flex:1}}>

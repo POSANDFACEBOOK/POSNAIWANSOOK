@@ -76,6 +76,14 @@ export default async function handler(req, res) {
     // Default text is the order-approval alert the two original callers rely on; a caller
     // may override all three fields (health alerts do). Kept as an override rather than a
     // separate endpoint because the Vercel plan caps this project at 12 functions.
+    // ระบบอนุมัติถูกปิดที่แอป (APPROVAL_ON=false ใน src/FoodCostApp.jsx) — ต้องปิดที่ปลายทางด้วย
+    // เพราะเครื่องที่เปิดแอปค้างไว้ยังรันโค้ดชุดเก่าและยิงแจ้งเตือนชนิดนี้ต่อได้อีกเป็นวัน
+    // ค่าที่ไม่ได้ส่ง title มาเอง = ตัวแจ้งเตือน "คำสั่งซื้อรออนุมัติ" ของเดิมเท่านั้น (ตัวอื่นส่ง title มาครบ)
+    // เปิดระบบอนุมัติกลับมาเมื่อไหร่ ให้เปลี่ยนบรรทัดล่างเป็น true พร้อมกับธงในแอป
+    const APPROVAL_PUSH_ON = false;
+    if (!APPROVAL_PUSH_ON && !body.title) {
+      return res.status(200).json({ skipped: true, reason: "ปิดระบบอนุมัติแล้ว — ไม่ส่งแจ้งเตือนรออนุมัติ" });
+    }
     const payload = JSON.stringify({
       title: body.title || "🔔 คำสั่งซื้อรออนุมัติ",
       body:  body.body  || `${branchName} ส่งคำสั่งซื้อมารออนุมัติ`,
