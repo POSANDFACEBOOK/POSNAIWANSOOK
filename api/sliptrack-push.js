@@ -59,6 +59,21 @@ function buildPaymentLines(bills) {
   }
   return { payment, mainSum: r2(sum(cash) + cardMain + sum(other)) };
 }
+// เงินสดสองทางต้องตรงกันเสมอ: ที่บันทึกเข้าลิ้นชัก (cash_movements) กับที่เก็บจากบิล (payments)
+// ไม่ตรง = มีเงินสดหลุดไปกะอื่น (เครื่องแคชเชียร์ค้างกะเก่า) หรือบันทึกลิ้นชักพลาด
+// เหตุจริง 22 ก.ย. 69 The River: ใบส่ง cash_sales = 0 ทั้งที่บรรทัดช่องทางเงินสดมี ฿272
+// เงินเข้าตู้เซฟจึงขาดทั้งก้อน และไม่มีใครรู้จนมีคนทัก ⟹ ต้องส่งธงเตือนไปกับใบ ห้ามเงียบ
+function cashWarnings(drawer, payment) {
+  const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  if (!drawer) return [];
+  const cashLine = (payment || []).find((p) => p && p.name_en === "Cash");
+  const fromBills = r2(cashLine ? cashLine.amount : 0);
+  const inDrawer = r2(drawer.cash_sales);
+  if (Math.abs(fromBills - inDrawer) < 0.005) return [];
+  return ["⚠️ เงินสดไม่ตรงกัน: บิลเก็บเงินสด " + fromBills.toFixed(2) +
+    " แต่ลิ้นชักบันทึกไว้ " + inDrawer.toFixed(2) +
+    " (ต่างกัน " + r2(fromBills - inDrawer).toFixed(2) + ") — ตรวจว่ามีเงินสดถูกบันทึกเข้ากะอื่นหรือไม่"];
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -301,7 +316,11 @@ export default async function handler(req, res) {
           // ส่งจำนวนบิลไปจะทำให้ยอดแขกทั้งบริษัทบนแดชบอร์ดบัญชีต่ำกว่าความจริง
           average_trans: r2(total_sales / list.length),   // ยอดขายเฉลี่ยต่อบิล
           // แนบเงินลิ้นชักเฉพาะวันสุดท้ายของกะ — นับเงินจริงเกิดครั้งเดียวตอนปิดกะ
-          ...(business_date === lastDay ? { drawer: mkDrawer(list.length) } : {}),
+          ...(business_date === lastDay ? (() => {
+            const drawer = mkDrawer(list.length);
+            const warnings = cashWarnings(drawer, payment);
+            return warnings.length ? { drawer, warnings } : { drawer };
+          })() : {}),
           payment,
         };
         try {

@@ -3968,6 +3968,30 @@ section("เงินสดต้องเข้ากะที่เปิด�
   ck("เหลือการเขียนด้วยกะจากหน้าจอแค่ตอนปิดกะเท่านั้น",
     (APP.match(/addCashMovement\(\{shift_id:shift\.id[^\n]*/g) || []).filter((l) => !l.includes('type:"closing"')).length, 0);
   ck("ทุกจุดที่ขยับเงินใช้กะที่เปิดจริง", (APP.match(/addCashMovement\(\{shift_id:_ls\.id/g) || []).length, 5);
+  // ใบปิดยอดต้องฟ้องเองเมื่อเงินสดสองทางไม่ตรง — ฝั่งบัญชีขอไว้ 22 ก.ย. 69
+  {
+    const st = SLIPPUSH.indexOf("function cashWarnings(drawer, payment) {");
+    let fn = null;
+    if (st >= 0) {
+      let d = 0, started = false, en = -1;
+      for (let i = st; i < SLIPPUSH.length; i++) {
+        if (SLIPPUSH[i] === "{") { d++; started = true; }
+        else if (SLIPPUSH[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+      }
+      try { fn = new Function(SLIPPUSH.slice(st, en) + " return cashWarnings;")(); } catch {}
+    }
+    ok_("อ่านตัวเทียบเงินสดสองทางได้", !!fn);
+    if (fn) {
+      const cash = (n) => [{ name_th: "เงินสด", name_en: "Cash", count: 1, amount: n }];
+      ck("เงินสดตรงกัน = ไม่มีธงเตือน", fn({ cash_sales: 272 }, cash(272)).length, 0);
+      ok_("ลิ้นชักได้ 0 แต่บิลเก็บเงินสด = ต้องเตือน (เคสจริง 22 ก.ย. 69)",
+        fn({ cash_sales: 0 }, cash(272))[0].includes("272.00"));
+      ok_("ลิ้นชักมากกว่าบิลก็ต้องเตือน", fn({ cash_sales: 300 }, cash(272)).length === 1);
+      ck("วันที่ไม่มีบล็อกลิ้นชัก = ไม่เตือนมั่ว", fn(null, cash(272)).length, 0);
+      ck("ไม่มีเงินสดเลยทั้งสองทาง = เงียบ", fn({ cash_sales: 0 }, []).length, 0);
+    }
+    ok_("ธงถูกแนบไปกับใบปิดยอดจริง", SLIPPUSH.includes("const warnings = cashWarnings(drawer, payment);") && SLIPPUSH.includes("return warnings.length ? { drawer, warnings } : { drawer };"));
+  }
   ok_("เปิดกะซ้อนกันไม่ได้ (สาขาละกะเดียว)",
     APP.includes("const r=await api.getActiveShift(currentBranch.id);") && APP.includes('title:"มีกะเปิดอยู่แล้ว"'));
 }
