@@ -1444,7 +1444,7 @@ const ALL_PERMS=[
   {id:"history",label:"ประวัติต้นทุน"},
   {id:"suppliers",label:"ซัพพลาย"},
   {id:"assets",label:"สินทรัพย์"},
-  {id:"approve",label:"อนุมัติการสั่งของ"},
+  ...(APPROVAL_ON?[{id:"approve",label:"อนุมัติการสั่งของ"}]:[]),
   {id:"kitchen_3d",label:"ครัว 3D"},
   {id:"settings",label:"ตั้งค่า"},
 ];
@@ -4905,7 +4905,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
         // Same-day open session just keeps counting (you're mid-count today).
         const bkkDay=d=>{try{return new Date(d).toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});}catch{return "";}};
         const sDay=bkkDay(sess.started_at),today=bkkDay(new Date());
-        if(sDay&&today&&sDay!==today){
+        if(APPROVAL_ON&&sDay&&today&&sDay!==today){
           setStockBtnLoading(false);
           let dShow=sDay;try{dShow=fmtD(sess.started_at);}catch{}
           await confirmDlg({title:"⏳ ต้องรออนุมัติก่อน",message:`การนับสต็อกครั้งก่อน (เริ่ม ${dShow}${sess.counter_name?` โดย ${sess.counter_name}`:""}) ยังรอ Area อนุมัติอยู่\n\nต้องให้ Area อนุมัติรอบนั้นก่อน จึงจะเริ่มนับสต็อกรอบใหม่ได้`,confirmLabel:"เข้าใจแล้ว",cancelLabel:null,danger:false});
@@ -5774,6 +5774,10 @@ function StockCheckPopup({ings,currentBranch,currentUser,reload,onClose,counter}
   // ยิงแบบไม่รอ — หน้าปิดทันที ตารางเบื้องหลังตามมาเอง ถ้าพลาดหน้าอื่นก็มี poll ของตัวเอง
   function finishClose(){
     if(Object.keys(savedRef.current).length&&reload){try{reload();}catch{}}
+    // ปิดรอบนับให้เรียบร้อยเมื่อไม่มีขั้นอนุมัติแล้ว — ยิงแบบไม่รอผล ปิดหน้าต้องไม่สะดุด
+    if(!APPROVAL_ON&&counter&&counter.sessionId){
+      try{api.approveStockSession(counter.sessionId,APPROVED_BY_AUTO).catch(()=>{});}catch{}
+    }
     onClose&&onClose();
   }
   async function guardedClose(){
@@ -8130,6 +8134,17 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
   </div>;
 }
 
+// ── ระบบอนุมัติของ Area: ปิดอยู่ (เจ้าของสั่ง 22 ก.ย. 69) ────────────────
+// ปิด = ใบขอซื้อ · ใบสั่งของ · การนับสต็อก เดินต่อทันทีโดยไม่มีขั้น "รออนุมัติ" คั่น
+// โค้ดของระบบอนุมัติยังอยู่ครบ (จอ ApprovalTab · ปุ่มอนุมัติ/ตีกลับ · สถานะ pending_approval)
+// อยากกลับมาใช้เมื่อไหร่: เปลี่ยนบรรทัดล่างเป็น true ที่เดียวพอ
+const APPROVAL_ON=false;
+// สถานะแรกของเอกสารเมื่อปิดขั้นอนุมัติ — ต้องตรงกับที่ปุ่ม "อนุมัติ" เคยตั้งให้เป๊ะ
+// (ใบสั่งของ → pending · ใบสั่งซื้อครัวกลาง → requested · ใบขอซื้อ → approved)
+const firstDocStatus=(kind)=>APPROVAL_ON?"pending_approval":(kind==="pr"?"approved":kind==="po"?"requested":"pending");
+// ใบขอซื้อที่ข้ามขั้นอนุมัติ ต้องมีร่องรอยว่าใครอนุมัติ — เขียนตรงๆ ว่าระบบอนุมัติให้เพราะปิดขั้นนี้ไว้
+const APPROVED_BY_AUTO="อนุมัติอัตโนมัติ (ปิดขั้นอนุมัติ)";
+const autoApproved=()=>APPROVAL_ON?{}:{approved_by:APPROVED_BY_AUTO,approved_at:new Date().toISOString()};
 const PO_STATUS={
   // Branch submitted, waiting for an Area Manager to approve before it is released to central.
   pending_approval:{label:"⏳ รออนุมัติ",       short:"รออนุมัติ",   color:"#A855F7",bg:"#F5F3FF"},
@@ -8216,8 +8231,8 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
     if(!await confirmDlg({title:"ยืนยันสั่งซื้อสินทรัพย์/อุปกรณ์",message:`${lines}\n\nรวม ${cart.length} รายการ (สินทรัพย์ ${nAsset} · อุปกรณ์อื่น ${nOther})\n\n⚠️ กรุณาแจ้งบอสในไลน์ก่อน — เป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะอนุมัติได้`,confirmLabel:"สั่งซื้อ"}))return;
     savingRef.current=true;setSaving(true);
     try{
-      await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"asset",items:cart,reason:null,status:"pending_approval",created_by:currentUser?.username||currentUser?.name||"",updated_at:new Date().toISOString()});
-      posToast("✅ ส่งใบขอซื้อสินทรัพย์แล้ว — รอ Area อนุมัติ","ok");
+      await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"asset",items:cart,reason:null,status:firstDocStatus("pr"),...autoApproved(),created_by:currentUser?.username||currentUser?.name||"",updated_at:new Date().toISOString()});
+      posToast(APPROVAL_ON?"✅ ส่งใบขอซื้อสินทรัพย์แล้ว — รอ Area อนุมัติ":"✅ ส่งใบขอซื้อสินทรัพย์แล้ว — ส่งต่อครัวกลางทันที","ok");
       if(onSubmitted)await onSubmitted();
       onClose();
       setTimeout(()=>alert("⚠️ รายการสินทรัพย์/อุปกรณ์นี้ กรุณา \"แจ้งบอสในไลน์ก่อน\"\nเป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะกดอนุมัติได้"),300);
@@ -8329,12 +8344,12 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         // duplicate an already-issued delivery).
         // Stamp revised_at so Area sees "ถูกแก้ไข+ส่งใหม่". Column-missing fallback keeps
         // resubmit working even before the ALTER TABLE runs.
-        try{await api.updatePRIfStatus(editingPR.id,"rejected",{...body,status:"pending_approval",reject_reason:null,rejected_by:null,revised_at:new Date().toISOString()});}
-        catch(e){if(/PGRST204|column/i.test(String((e&&e.message)||e)))await api.updatePRIfStatus(editingPR.id,"rejected",{...body,status:"pending_approval",reject_reason:null,rejected_by:null});else throw e;}
-        posToast("✅ แก้ไข + ส่งใหม่แล้ว — รอ Area อนุมัติ","ok");
+        try{await api.updatePRIfStatus(editingPR.id,"rejected",{...body,status:firstDocStatus("pr"),...autoApproved(),reject_reason:null,rejected_by:null,revised_at:new Date().toISOString()});}
+        catch(e){if(/PGRST204|column/i.test(String((e&&e.message)||e)))await api.updatePRIfStatus(editingPR.id,"rejected",{...body,status:firstDocStatus("pr"),...autoApproved(),reject_reason:null,rejected_by:null});else throw e;}
+        posToast(APPROVAL_ON?"✅ แก้ไข + ส่งใหม่แล้ว — รอ Area อนุมัติ":"✅ แก้ไข + ส่งใหม่แล้ว","ok");
       }else{
-        await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"ingredient",...body,status:"pending_approval",created_by:currentUser?.username||currentUser?.name||""});
-        posToast("✅ ส่งใบขอซื้อแล้ว — รอ Area อนุมัติ","ok");
+        await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"ingredient",...body,status:firstDocStatus("pr"),...autoApproved(),created_by:currentUser?.username||currentUser?.name||""});
+        posToast(APPROVAL_ON?"✅ ส่งใบขอซื้อแล้ว — รอ Area อนุมัติ":"✅ ส่งใบขอซื้อแล้ว — ส่งต่อครัวกลางทันที","ok");
       }
       setShowForm(false);setEditingPR(null);await load();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
@@ -10153,14 +10168,15 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         supplier_id:supplierId,
         supplier_name:g.name,
         items,
-        status:"pending_approval",   // hold for Area approval — same as the normal สร้างคำสั่งซื้อ flow
+        status:firstDocStatus("po"),   // ปิดขั้นอนุมัติ = ไป "requested" ทันที (สถานะเดียวกับที่ปุ่มอนุมัติเคยตั้ง)
         requested_by:currentUser.username,
         requested_at:nowStr(),
         note,
       });
     }
     // Notify the Area manager(s) that central's purchases are waiting for approval (fire-and-forget).
-    try{fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({branch_id:currentBranch.id,branchName:currentBranch.name})});}catch{}
+    // ปิดขั้นอนุมัติ = ไม่มีใครต้องมากดอนุมัติ จึงไม่ส่งแจ้งเตือนกวนอีกต่อไป
+    if(APPROVAL_ON)try{fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({branch_id:currentBranch.id,branchName:currentBranch.name})});}catch{}
     if(reloadOrders)await reloadOrders();
   }
 
@@ -10986,8 +11002,7 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
       if(!await confirmDlg({
         title:"สร้างรายการสั่งซื้อ + พิมพ์",
         message:`สร้างรายการสั่งซื้อ ${pickedIngs} วัตถุดิบ จาก ${pickedGroups.length} ซัพพลาย สำหรับ "${currentBranch?.name||"ครัวกลาง"}" และพิมพ์ใบรายการซื้อ?${groups.length>pickedGroups.length?`\n\n⏭ ข้าม ${groups.length-pickedGroups.length} เจ้าที่ไม่ได้ติ๊ก — ยังค้างอยู่ในหน้านี้ สั่งทีหลังได้`:""}
-\n• รายการจะส่งให้ Area อนุมัติก่อน (แท็บ "อนุมัติการสั่งของ")
-• อนุมัติแล้ว → ส่งซัพพลาย → กด "ยืนยันรับ" + กรอกราคาจริง`,
+\n${APPROVAL_ON?'• รายการจะส่งให้ Area อนุมัติก่อน (แท็บ "อนุมัติการสั่งของ")\n• อนุมัติแล้ว → ส่งซัพพลาย → กด "ยืนยันรับ" + กรอกราคาจริง':'• ส่งซัพพลาย → กด "ยืนยันรับ" + กรอกราคาจริง'}`,
         confirmLabel:"🛒 สร้าง + พิมพ์",
       }))return;
       setCreating(true);
@@ -12340,7 +12355,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     try{
       if(wasRejected){
         // Edited a rejected order → send it back to Area for re-approval.
-        const patch={items:cleaned,status:"pending_approval",reject_reason:null,rejected_by:null,revised_at:new Date().toISOString()};
+        const patch={items:cleaned,status:firstDocStatus("order"),reject_reason:null,rejected_by:null,revised_at:new Date().toISOString()};
         try{await api.updateOrderIfStatus(editingQty.orderId,"rejected",patch);}
         catch(e){if(/PGRST204|column|revised_at/i.test(String((e&&e.message)||e))){const{revised_at,...p2}=patch;await api.updateOrderIfStatus(editingQty.orderId,"rejected",p2);}else throw e;}
       }else{
@@ -12348,7 +12363,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       }
       setEditingQty(null);
       await reload();
-      if(wasRejected)alert("✅ แก้ไขแล้ว — ส่งให้ Area อนุมัติใหม่");
+      if(wasRejected)alert(APPROVAL_ON?"✅ แก้ไขแล้ว — ส่งให้ Area อนุมัติใหม่":"✅ แก้ไขแล้ว — ส่งต่อได้เลย");
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
   }
 
@@ -13004,7 +13019,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             await api.addOrder({
               branch_id:currentBranch.id,branch_name:currentBranch.name,
               supplier_id:sup.supplierId,supplier_name:sup.supplierName,
-              items:sup.items,status:"pending_approval",   // hold: Area Manager approves → released to "pending"
+              items:sup.items,status:firstDocStatus("order"),   // ปิดขั้นอนุมัติ = ไป "pending" ทันที (เดิมค้างที่ pending_approval รอ Area)
               requested_by:currentUser.username,requested_at:nowStr(),
               note:`นับสต็อก ${fmtD(todayStr())}`,
             });
@@ -13027,7 +13042,8 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             items:centralItems.map(it=>({ingredient_id:it.ingId,name:it.name,unit:it.unit,qty:+it.qtyNeeded||0,note:null})),
             reason:`สั่งจากนับสต็อก ${fmtD(todayStr())}`,
             needed_by:null,
-            status:"pending_approval",
+            status:firstDocStatus("pr"),
+            ...autoApproved(),
             created_by:currentUser.username,
             updated_at:new Date().toISOString(),
           });
@@ -13046,7 +13062,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       setOpenOrdersTick(t=>t+1);   // ใบที่เพิ่งส่งต้องถูกนับเป็น "สั่งแล้วรอเข้า" ทันที ไม่งั้นสั่งซ้ำ
       if(reload)await reload();
       // Notify the Area Manager(s) of this branch that an order is waiting for approval (Web Push, fire-and-forget)
-      if(poList.length||extList.length){try{fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({branch_id:currentBranch.id,branchName:currentBranch.name})});}catch{}}
+      if(APPROVAL_ON&&(poList.length||extList.length)){try{fetch("/api/push",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({branch_id:currentBranch.id,branchName:currentBranch.name})});}catch{}}
       // Show beautiful result popup instead of plain alert — staff can see exactly
       // where each item went (PO to central vs. external orders), preventing
       // confusion when the printed PO has fewer items than what was submitted.
@@ -13381,8 +13397,8 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
       message:`ส่ง ${sendable.length} วัตถุดิบ จาก ${sups.length} ซัพพลาย ในชื่อสาขา "${currentBranch?.name||""}"`
         +(noSup.length?`\n\n⏭ ข้าม ${noSup.length} รายการที่ยังไม่ได้ตั้งซัพของสาขานี้:\n${noSup.slice(0,6).map(i=>"• "+i.name).join("\n")}${noSup.length>6?`\n• … อีก ${noSup.length-6} รายการ`:""}`:"")
         +(warned.length?`\n\n⚠️ ซัพที่ตั้งไว้ให้สาขาอื่น — เช็คก่อนว่าถูกเจ้า:\n${warned.map(s=>`• ${s.supplierName} (ตั้งไว้ให้ ${s.supWarn})`).join("\n")}`:"")
-        +`\n\n• รายการจะส่งให้ Area อนุมัติก่อน (แท็บ "อนุมัติการสั่งของ")`,
-      confirmLabel:"ส่งให้ Area อนุมัติ",
+        +(APPROVAL_ON?`\n\n• รายการจะส่งให้ Area อนุมัติก่อน (แท็บ "อนุมัติการสั่งของ")`:""),
+      confirmLabel:APPROVAL_ON?"ส่งให้ Area อนุมัติ":"ส่งรายการสั่งวัตถุดิบ",
     }))return;
     setSendingOrder(snap.id);
     try{
@@ -13391,12 +13407,12 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
           // ⚠️ ต้องเป็น pending_approval — เดิมเขียน "pending" ซึ่งคือสถานะ "อนุมัติแล้ว"
           // ปุ่มนี้จึงสร้างใบสั่งของที่ข้ามการอนุมัติของ Area ไปทั้งขั้น ต่างจากทุกเส้นทางอื่น
           // (ตรวจ 13/08/2569: ยังไม่เคยมีใบไหนมาจากปุ่มนี้เลย 0 จาก 2,062 ใบ — แก้ก่อนถูกใช้)
-          status:"pending_approval",
+          status:firstDocStatus("order"),
           requested_by:currentUser.username,requested_at:nowStr(),
           note:`ประวัติต้นทุน ${snap.date_from} - ${snap.date_to}`});
       }
       await reloadOrders();
-      alert(`✅ ส่งแล้ว ${sups.length} ใบ — รอ Area อนุมัติที่แท็บ "อนุมัติการสั่งของ"`);
+      alert(APPROVAL_ON?`✅ ส่งแล้ว ${sups.length} ใบ — รอ Area อนุมัติที่แท็บ "อนุมัติการสั่งของ"`:`✅ ส่งแล้ว ${sups.length} ใบ — ส่งซัพพลายได้เลย`);
     }
     catch(e){alert("ส่งไม่สำเร็จ: "+e.message);}setSendingOrder(null);
   }
@@ -17385,7 +17401,8 @@ export default function App(){
   const[orders,setOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
   const[printers,setPrinters]=useState([]);const[assets,setAssets]=useState([]);
   const[loading,setLoading]=useState(false);const[initErr,setInitErr]=useState("");
-  const[tab,setTab]=useState(()=>{try{return new URLSearchParams(window.location.search).get("approve")==="1"?"approve":"pos";}catch{return "pos";}});
+  // ลิงก์ ?approve=1 (จากแจ้งเตือนเก่า) พาไปแท็บอนุมัติได้เฉพาะตอนเปิดระบบอนุมัติ
+  const[tab,setTab]=useState(()=>{try{return (APPROVAL_ON&&new URLSearchParams(window.location.search).get("approve")==="1")?"approve":"pos";}catch{return "pos";}});
   const[poSubTab,setPoSubTab]=useState("pr");   // within the menu: "pr" = ใบขอซื้อ · "po" = PO docs · "ext" = สั่งซัพพลายนอก (OrderTab)
   // Always land on the ใบขอซื้อ (PR) sub-tab each time this menu is entered (fires only when
   // `tab` becomes "po"; switching sub-tabs keeps tab="po" so it won't reset mid-use).
@@ -17530,7 +17547,8 @@ export default function App(){
   const addH=useCallback(async a=>{try{await api.addActionHist({action:a,time:nowStr()});await reload.action();}catch{}},[currentBranch]);
 
   const TABS=[
-    {id:"approve",l:"อนุมัติการสั่งของ",icon:I.check,perm:"approve"},
+    // แท็บอนุมัติถูกซ่อนตามคำสั่งเจ้าของ — เปิด APPROVAL_ON เป็น true แล้วกลับมาเอง
+    ...(APPROVAL_ON?[{id:"approve",l:"อนุมัติการสั่งของ",icon:I.check,perm:"approve"}]:[]),
     {id:"pos",l:t("tab.pos"),icon:I.table,perm:"pos"},
     {id:"crm",l:t("tab.crm"),icon:I.users,perm:"crm"},
     {id:"ingredients",l:t("tab.ingredients"),icon:I.leaf,perm:"ingredients"},

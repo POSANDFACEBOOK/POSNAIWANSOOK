@@ -3877,6 +3877,53 @@ section("ปุ่มแก้ช่องทางชำระ");
 }
 
 
+// ══════════════════════════════════════════════════════════════════════════
+// ระบบอนุมัติของ Area ถูกปิด (เจ้าของสั่ง 22 ก.ย. 69) — "ซ่อนไว้ก่อน ไม่ต้องลบโค้ด"
+// สิ่งที่ต้องจริงเสมอ: เอกสารใหม่ห้ามค้างที่ "รออนุมัติ" อีก · สถานะที่ได้ต้องตรงกับที่ปุ่มอนุมัติเคยตั้ง
+// และโค้ดของระบบอนุมัติต้องยังอยู่ครบ เพื่อเปิดกลับมาใช้ได้ด้วยการแก้ค่าเดียว
+// ══════════════════════════════════════════════════════════════════════════
+section("ระบบอนุมัติ: ปิดไว้แต่ยังกู้กลับได้");
+{
+  const one = (p) => APP.split("\n").find((l) => l.startsWith(p)) || "";
+  let fns = null;
+  try {
+    fns = new Function([one("const APPROVAL_ON="), one("const firstDocStatus="), one("const APPROVED_BY_AUTO="), one("const autoApproved="),
+      "return {APPROVAL_ON,firstDocStatus,autoApproved};"].join("\n"))();
+  } catch {}
+  ok_("อ่านธงระบบอนุมัติได้", !!fns);
+  if (fns) {
+    ck("ตอนนี้ปิดอยู่", fns.APPROVAL_ON, false);
+    // สถานะปลายทางต้องตรงกับที่ปุ่ม "อนุมัติ" ในจอ ApprovalTab เคยตั้งให้เป๊ะ
+    ck("ใบสั่งของไป pending ทันที (เท่ากับที่ approveReq เคยตั้ง)", fns.firstDocStatus("order"), "pending");
+    ck("ใบสั่งซื้อครัวกลางไป requested ทันที (เท่ากับ approvePO)", fns.firstDocStatus("po"), "requested");
+    ck("ใบขอซื้อไป approved ทันที (เท่ากับ approvePR)", fns.firstDocStatus("pr"), "approved");
+    const a = fns.autoApproved();
+    ok_("ใบขอซื้อที่ข้ามขั้นอนุมัติ ต้องมีร่องรอยว่าใครอนุมัติ", !!(a && a.approved_by && a.approved_at));
+  }
+  // ปุ่ม "อนุมัติ" ในจอ ApprovalTab ยังอยู่ครบ — เปิดธงกลับมาแล้วต้องใช้ได้ทันที
+  ok_("จอและปุ่มอนุมัติยังอยู่ในโค้ด (ไม่ได้ลบทิ้ง)",
+    APP.includes("function ApprovalTab({currentUser,currentBranch,branches=[],reloadOrders,ings=[]}){")
+    && APP.includes('api.updateOrderIfStatus(o.id,"pending_approval",{status:"pending"})')
+    && APP.includes('api.patchPOIfStatus(o.id,"pending_approval",{status:"requested"')
+    && APP.includes('api.updatePRIfStatus(o.id,"pending_approval",{status:"approved"'));
+  // เอกสารใหม่ต้องไม่มีที่ไหนฝัง "รออนุมัติ" ไว้ตรงๆ อีก — ไม่งั้นจะมีใบค้างที่ไม่มีใครกดอนุมัติได้
+  ck("ไม่มีจุดสร้างเอกสารที่ฝังสถานะรออนุมัติไว้ตรงๆ", (APP.match(/status:"pending_approval"/g) || []).length, 0);
+  ok_("แท็บอนุมัติถูกซ่อน (ไม่ใช่ลบ)",
+    APP.includes('...(APPROVAL_ON?[{id:"approve",l:"อนุมัติการสั่งของ",icon:I.check,perm:"approve"}]:[]),')
+    && APP.includes('...(APPROVAL_ON?[{id:"approve",label:"อนุมัติการสั่งของ"}]:[]),'));
+  ok_("ลิงก์ ?approve=1 พาไปแท็บอนุมัติได้เฉพาะตอนเปิดระบบ",
+    APP.includes('(APPROVAL_ON&&new URLSearchParams(window.location.search).get("approve")==="1")?"approve":"pos"'));
+  ok_("เลิกแจ้งเตือน \"รออนุมัติ\" ไปกวน Area",
+    APP.includes('if(APPROVAL_ON)try{fetch("/api/push",') && APP.includes("if(APPROVAL_ON&&(poList.length||extList.length)){"));
+  // ── นับสต็อก ──
+  ok_("นับสต็อกไม่ถูกบล็อกด้วยรอบก่อนที่ยังไม่อนุมัติ", APP.includes("if(APPROVAL_ON&&sDay&&today&&sDay!==today){"));
+  ok_("รอบนับยังสร้างเป็น open เพื่อให้กลับมานับต่อได้",
+    APP.includes('api.addStockSession({branch_id:currentBranch?.id,branch_name:currentBranch?.name,counter_name:name.trim(),counter_photo:photo,created_by:currentUser?.username||currentUser?.name||""})'));
+  ok_("ปิดหน้านับสต็อก = ปิดรอบนั้นให้เรียบร้อย ไม่ค้างเป็นรออนุมัติ",
+    APP.includes("if(!APPROVAL_ON&&counter&&counter.sessionId){") && APP.includes("api.approveStockSession(counter.sessionId,APPROVED_BY_AUTO)"));
+}
+
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
