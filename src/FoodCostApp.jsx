@@ -1,5 +1,17 @@
 import { useState, useEffect, useCallback, useMemo, useRef, memo, createContext, useContext } from "react";
 import ErrorBoundary from "./ErrorBoundary.jsx";
+
+// ── ระบบอนุมัติของ Area: ปิดอยู่ (เจ้าของสั่ง 22 ก.ย. 69) ────────────────
+// ปิด = ใบขอซื้อ · ใบสั่งของ · การนับสต็อก เดินต่อทันทีโดยไม่มีขั้น "รออนุมัติ" คั่น
+// โค้ดของระบบอนุมัติยังอยู่ครบ (จอ ApprovalTab · ปุ่มอนุมัติ/ตีกลับ · สถานะ pending_approval)
+// อยากกลับมาใช้เมื่อไหร่: เปลี่ยนบรรทัดล่างเป็น true ที่เดียวพอ
+const APPROVAL_ON=false;
+// สถานะแรกของเอกสารเมื่อปิดขั้นอนุมัติ — ต้องตรงกับที่ปุ่ม "อนุมัติ" เคยตั้งให้เป๊ะ
+// (ใบสั่งของ → pending · ใบสั่งซื้อครัวกลาง → requested · ใบขอซื้อ → approved)
+const firstDocStatus=(kind)=>APPROVAL_ON?"pending_approval":(kind==="pr"?"approved":kind==="po"?"requested":"pending");
+// ใบขอซื้อที่ข้ามขั้นอนุมัติ ต้องมีร่องรอยว่าใครอนุมัติ — เขียนตรงๆ ว่าระบบอนุมัติให้เพราะปิดขั้นนี้ไว้
+const APPROVED_BY_AUTO="อนุมัติอัตโนมัติ (ปิดขั้นอนุมัติ)";
+const autoApproved=()=>APPROVAL_ON?{}:{approved_by:APPROVED_BY_AUTO,approved_at:new Date().toISOString()};
 // xlsx is ~130KB gzip and only used in import/export handlers — never on first
 // paint. Load it on demand (one cached dynamic import) so it stays OUT of the
 // boot chunk that every visitor downloads, including the customer QR-scan
@@ -8134,17 +8146,6 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
   </div>;
 }
 
-// ── ระบบอนุมัติของ Area: ปิดอยู่ (เจ้าของสั่ง 22 ก.ย. 69) ────────────────
-// ปิด = ใบขอซื้อ · ใบสั่งของ · การนับสต็อก เดินต่อทันทีโดยไม่มีขั้น "รออนุมัติ" คั่น
-// โค้ดของระบบอนุมัติยังอยู่ครบ (จอ ApprovalTab · ปุ่มอนุมัติ/ตีกลับ · สถานะ pending_approval)
-// อยากกลับมาใช้เมื่อไหร่: เปลี่ยนบรรทัดล่างเป็น true ที่เดียวพอ
-const APPROVAL_ON=false;
-// สถานะแรกของเอกสารเมื่อปิดขั้นอนุมัติ — ต้องตรงกับที่ปุ่ม "อนุมัติ" เคยตั้งให้เป๊ะ
-// (ใบสั่งของ → pending · ใบสั่งซื้อครัวกลาง → requested · ใบขอซื้อ → approved)
-const firstDocStatus=(kind)=>APPROVAL_ON?"pending_approval":(kind==="pr"?"approved":kind==="po"?"requested":"pending");
-// ใบขอซื้อที่ข้ามขั้นอนุมัติ ต้องมีร่องรอยว่าใครอนุมัติ — เขียนตรงๆ ว่าระบบอนุมัติให้เพราะปิดขั้นนี้ไว้
-const APPROVED_BY_AUTO="อนุมัติอัตโนมัติ (ปิดขั้นอนุมัติ)";
-const autoApproved=()=>APPROVAL_ON?{}:{approved_by:APPROVED_BY_AUTO,approved_at:new Date().toISOString()};
 const PO_STATUS={
   // Branch submitted, waiting for an Area Manager to approve before it is released to central.
   pending_approval:{label:"⏳ รออนุมัติ",       short:"รออนุมัติ",   color:"#A855F7",bg:"#F5F3FF"},
