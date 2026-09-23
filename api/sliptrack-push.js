@@ -57,7 +57,22 @@ function buildPaymentLines(bills) {
     const rows = other.filter((x) => x.payment_method === c.pm);
     if (rows.length) payment.push({ name_th: c.name_th, name_en: c.name_en, count: rows.length, amount: sum(rows) });
   }
-  return { payment, mainSum: r2(sum(cash) + cardMain + sum(other)) };
+  // ── ผลรวมแบบ "ใบล่างสุดของสาย" (leaf) ──────────────────────────────────
+  // ฝั่งบัญชีแตกหมวดรายได้รายช่องทางจากบรรทัดที่ไม่มีลูก ไม่ใช่จากบรรทัดชั้นพ่อ
+  // (เขายืนยัน 23 ก.ย. 69: พ่อที่มีลูก effectiveAmount = 0 ⟹ ชื่อ leaf คือหมวดที่เงินลงจริง)
+  // ⟹ ถ้าพ่อตัวไหนมีลูกไม่ครบยอด เงินส่วนที่ไม่มีลูกจะหายจากหมวดรายได้ของเขาเงียบๆ
+  //    ทั้งที่ยอดรวมทั้งใบยังถูก — มองด้วยตาไม่เห็น ต้องให้ตัวเลขฟ้องเอง
+  // เคสที่จะทำให้หาย (ยังไม่เกิดวันนี้ แต่ประตูเปิดรออยู่):
+  //   · มีบิลบัตรเครดิต/เดบิตปนกับพร้อมเพย์ ⟹ พ่อ "บัตรเครดิต (กรอกเอง)" มีลูกแค่พร้อมเพย์ ยอดบัตรหาย
+  //   · มีช่องทาง "อื่นๆ (ไม่ระบุ)" ปนกับไทยช่วยไทย ⟹ พ่อ Custom Payment มีลูกแค่ไทยช่วยไทย ยอดที่เหลือหาย
+  const ppLine = pp.length > 0;
+  const otherChildSum = r2(OTHER_CHILD_LINES.reduce((t, c) => t + sum(other.filter((x) => x.payment_method === c.pm)), 0));
+  const hasOtherChild = OTHER_CHILD_LINES.some((c) => other.some((x) => x.payment_method === c.pm));
+  const leafSum = r2(
+    sum(cash)
+    + (ppLine ? sum(pp) : cardMain)                       // มีบรรทัดลูกพร้อมเพย์ = พ่อไม่ถูกนับ
+    + (hasOtherChild ? otherChildSum : sum(other)));      // Custom Payment มีลูก = พ่อไม่ถูกนับ
+  return { payment, mainSum: r2(sum(cash) + cardMain + sum(other)), leafSum };
 }
 // เงินสดสองทางต้องตรงกันเสมอ: ที่บันทึกเข้าลิ้นชัก (cash_movements) กับที่เก็บจากบิล (payments)
 // ไม่ตรง = มีเงินสดหลุดไปกะอื่น (เครื่องแคชเชียร์ค้างกะเก่า) หรือบันทึกลิ้นชักพลาด
@@ -163,6 +178,14 @@ export default async function handler(req, res) {
   //   · ฝั่งเขากันลงซ้ำให้แล้วสองชั้น (409 day_already_closed / income.status exists)
   if (String(body.kind || "") === "pos_closing") {
     const POS_CLOSING_BRANCHES = [8];   // เฉพาะ The River ตามที่เจ้าของสั่ง สาขาอื่นยังใช้สแกนรูป
+    // ── สาขาที่ฝั่งบัญชี "เปิดคีย์รายกะ" ให้แล้ว = ลงได้หลายใบต่อวัน ──────────
+    // ว่าง = ยังใช้รูปแบบเดิม (วันละใบ) · เติมเลขสาขาได้เฉพาะ "วัน cutover ที่นัดกับฝั่งบัญชี"
+    // ⚠️ ห้ามเติมสาขาที่มีใบกำกับภาษีเต็มรูป (INV-) จนกว่าฝั่งบัญชีจะแก้ตัวหักใบ INV-
+    //    ที่ยังคีย์ด้วย (สาขา, วัน) — วันละ 2 ใบจะถูกหักซ้ำสองรอบ = ยื่นภาษีขายขาด
+    //    ซึ่งมองด้วยตาไม่เห็น และแก้ยากกว่า "ยอดไม่ลง" มาก
+    // ฝั่งบัญชีนับใบ INV- ตั้งแต่ 1 ก.ย. 69 ให้แล้ว: The River 0 ใบ · อยุธยา 9 · บางใหญ่ 14
+    //    · สำนักงานใหญ่ 7 · คลองสาม 3 ⟹ The River จึงเป็นสาขาเดียวที่ปลอดภัยจะเปิดก่อน
+    const SHIFT_KEYED_BRANCHES = [];
     const shiftId = Number(body.shift_id);
     if (!Number.isFinite(shiftId) || shiftId <= 0) {
       return res.status(400).json({ error: "Missing or invalid shift_id" });
@@ -181,6 +204,8 @@ export default async function handler(req, res) {
       if (!POS_CLOSING_BRANCHES.includes(Number(shift.branch_id))) {
         return res.status(200).json({ skipped: true, reason: "สาขานี้ยังไม่เปิดใช้ท่อลงบัญชีอัตโนมัติ", branch_id: shift.branch_id });
       }
+      // กะเดียวอาจออกใบได้หลายวัน (กะคร่อมเที่ยงคืน) ⟹ คีย์ฝั่งบัญชีคือ (วันทำการ, สาขา, กะ)
+      const shiftKeyed = SHIFT_KEYED_BRANCHES.includes(Number(shift.branch_id));
       const brRows = await sbGet(`branches?id=eq.${Number(shift.branch_id)}&select=name`);
       const branchName = (Array.isArray(brRows) && brRows[0] && brRows[0].name) || "";
       if (!branchName) return res.status(500).json({ error: "ไม่พบชื่อสาขา" });
@@ -278,7 +303,15 @@ export default async function handler(req, res) {
           return rs.length ? rs[0] : 7;
         })();
 
-        const { payment, mainSum } = buildPaymentLines(list);
+        const { payment, mainSum, leafSum } = buildPaymentLines(list);
+
+        // วันที่ยอดรวมเป็น 0 (เช่นกะที่เปิดคร่อมเที่ยงคืนแล้วยังไม่มีใครจ่าย) — ไม่มีอะไรต้องลงบัญชี
+        // แยกออกจากกลุ่ม "ด่านตรวจไม่ผ่าน" เพราะไม่ใช่ความผิดพลาด ถ้าขึ้นแดงบ่อยๆ
+        // พนักงานจะชินแล้วมองข้ามวันที่ยอดไม่เข้าบัญชีจริง
+        if (!(total_sales > 0)) {
+          results.push({ business_date, ok: false, noSale: true, total_sales, bills: list.length });
+          continue;
+        }
 
         // ── ด่านกันยอดเพี้ยน — ไม่ลงตัวถึงสตางค์ = ไม่ยิง ──
         // ยอดที่ลงสมุดบัญชีผิด แก้ยากกว่าไม่ลงเลยมาก ถ้าเลขไม่ตรงต้องให้คนมาดูก่อน
@@ -287,7 +320,10 @@ export default async function handler(req, res) {
           problems.push(`sub_total - discount (${r2(sub_total - discount)}) ไม่เท่า total_sales (${total_sales})`);
         if (Math.abs(mainSum - total_sales) > 0.005)
           problems.push(`ผลรวมวิธีจ่ายชั้นหลัก (${mainSum}) ไม่เท่า total_sales (${total_sales})`);
-        if (!(total_sales > 0)) problems.push(`total_sales ต้องมากกว่า 0 (ได้ ${total_sales})`);
+        // ผลรวมแบบ leaf ต้องเท่ากันด้วย ไม่งั้นหมวดรายได้ฝั่งบัญชีขาดไปเงียบๆ (ดูหมายเหตุที่ buildPaymentLines)
+        // ลงผิดแก้ยากกว่าไม่ลง ⟹ ไม่ตรงเมื่อไหร่ บล็อกไว้ให้คนมาดูก่อน
+        if (Math.abs(leafSum - total_sales) > 0.005)
+          problems.push(`ผลรวมช่องทางชั้นล่างสุด (${leafSum}) ไม่เท่า total_sales (${total_sales}) — มีช่องทางที่ไม่มีบรรทัดของตัวเอง เงินจะหายจากหมวดรายได้ฝั่งบัญชี`);
         if (exclude_vat > total_sales) problems.push(`VAT (${exclude_vat}) มากกว่ายอดขาย (${total_sales})`);
         // ── ด่านเดียวกับที่ฝั่งบัญชีใช้บล็อก — ส่งของที่เขาจะบล็อกไป ก็เท่ากับไม่มีเอกสารภาษี ──
         // ฐานภาษี = sales_before_vat − non_vat_sales · ภาษีต้องเท่าฐาน × อัตรา (เขายอมคลาดได้ ฿1)
@@ -307,9 +343,18 @@ export default async function handler(req, res) {
         const payload = {
           source: "pos",
           kind: "pos_closing",
-          external_id: `pos-${business_date}-${branchName}`,
+          external_id: shiftKeyed
+            ? `pos-${business_date}-${branchName}-s${shiftId}`
+            : `pos-${business_date}-${branchName}`,
           branch: branchName,
           business_date,
+          // ส่งเฉพาะสาขาที่เปิดคีย์รายกะแล้ว — ฝั่งบัญชีนับ "กะที่เท่าไหร่ของวัน" เองจาก shift_closed_at
+          // แล้วตรึงเลขไว้ตอนออกใบกำกับ (เอกสารภาษีห้ามเปลี่ยนเนื้อหาหลังออกไปแล้ว)
+          ...(shiftKeyed ? {
+            shift_id: shiftId,
+            shift_opened_at: shift.opened_at,
+            shift_closed_at: shift.closed_at,
+          } : {}),
           total_sales,
           sub_total,
           discount,

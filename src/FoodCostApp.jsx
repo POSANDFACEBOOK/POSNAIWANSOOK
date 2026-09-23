@@ -21563,7 +21563,10 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     {acct&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5300,padding:14}}>
       {(()=>{
         const rows=Array.isArray(acct.results)?acct.results:[];
-        const good=rows.filter(r=>r.ok),bad=rows.filter(r=>!r.ok);
+        // วันที่ไม่มียอดขายเลย (ยอด 0) ไม่ใช่ความผิดพลาด — ไม่นับเป็นแดง
+        // ถ้าขึ้นแดงบ่อยๆ พนักงานจะชินแล้วมองข้ามวันที่ยอดไม่เข้าบัญชีจริง
+        const good=rows.filter(r=>r.ok),bad=rows.filter(r=>!r.ok&&!r.noSale);
+        const noneToSend=rows.length>0&&rows.every(r=>r.noSale);
         const fatal=!!acct.error||(rows.length===0&&!acct.skipped);
         // ส่งผ่าน แต่บัญชีทิ้งบางค่า = ยอดเงินลงแล้วก็จริง แต่เอกสารไม่ครบ
         // เดิมเคสนี้ขึ้นเขียวล้วน "ส่งเข้าระบบบัญชีแล้ว" แล้วไม่มีใครรู้ว่าขาดอะไร
@@ -21576,10 +21579,11 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
           <div style={{padding:"18px 20px 12px",background:okAll?C.greenLight:partial?C.yellowLight:C.redLight,borderBottom:`1px solid ${okAll?C.green:partial?C.yellow:C.red}33`}}>
             <div style={{fontSize:32,marginBottom:4}}>{okAll?"📗":partial?"📙":"⚠️"}</div>
             <div style={{fontSize:17,fontWeight:900,color:okAll?"#0F6E4C":partial?"#92400E":C.red}}>
-              {okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":partial?"ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก":"ยอดขายยังไม่เข้าระบบบัญชี"}
+              {noneToSend?"ปิดกะเรียบร้อย — ไม่มียอดขายให้ลงบัญชี":okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":partial?"ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก":"ยอดขายยังไม่เข้าระบบบัญชี"}
             </div>
             <div style={{fontSize:12,color:okAll?"#0F6E4C":partial?"#92400E":C.red,marginTop:4,lineHeight:1.6,opacity:.95}}>
-              {okAll?"กะปิดเรียบร้อยและยอดลงสมุดบัญชีแล้ว"
+              {noneToSend?"กะนี้ไม่มีบิลที่เก็บเงินได้ จึงไม่มียอดต้องส่งเข้าบัญชี — ไม่ใช่ความผิดพลาด"
+                :okAll?"กะปิดเรียบร้อยและยอดลงสมุดบัญชีแล้ว"
                 :partial?"ยอดเงินลงสมุดบัญชีแล้ว แต่ระบบบัญชีไม่รับข้อมูลบางอย่าง — ดูรายละเอียดข้างล่าง แล้วแจ้งผู้ดูแลระบบ"
                 :dropRows.length?"กะปิดเรียบร้อยแล้ว แต่วันนี้มีใบปิดยอดของสาขานี้ลงไปแล้ว ระบบบัญชีจึงไม่รับยอดกะนี้ — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ"
                 :"กะปิดเรียบร้อยแล้ว แต่ยอดยังไม่ลงบัญชี — แจ้งผู้ดูแลระบบให้ส่งซ้ำ"}
@@ -21587,8 +21591,8 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
           </div>
           <div style={{flex:1,overflowY:"auto",padding:"12px 20px",minHeight:0,fontSize:12.5,color:C.ink2,lineHeight:1.7}}>
             {acct.error&&<div style={{color:C.red,fontWeight:700}}>{String(acct.error)}</div>}
-            {rows.map((r,i)=><div key={i} style={{padding:"9px 11px",marginBottom:6,borderRadius:10,background:r.ok?C.bg:C.redLight,border:`1px solid ${r.ok?C.line:C.red+"44"}`}}>
-              <div style={{display:"flex",justifyContent:"space-between",gap:8,fontWeight:800,color:r.ok?C.ink:C.red}}>
+            {rows.map((r,i)=><div key={i} style={{padding:"9px 11px",marginBottom:6,borderRadius:10,background:(r.ok||r.noSale)?C.bg:C.redLight,border:`1px solid ${(r.ok||r.noSale)?C.line:C.red+"44"}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:8,fontWeight:800,color:(r.ok||r.noSale)?C.ink:C.red}}>
                 <span>{r.business_date} · {r.bills} บิล</span><span>฿{(+r.total_sales||0).toLocaleString()}</span>
               </div>
               {r.ok&&r.reply&&r.reply.income&&<div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>
@@ -21598,7 +21602,9 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
                 ⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(" · ")}
               </div>}
               {!r.ok&&<div style={{fontSize:11.5,color:C.red,marginTop:3}}>
-                {r.dropped
+                {r.noSale
+                  ?<span style={{color:C.ink4}}>ℹ️ วันนี้ไม่มียอดขาย จึงไม่มีอะไรต้องส่งเข้าบัญชี</span>
+                  :r.dropped
                   ?<>❌ วันที่ {r.business_date} มีใบปิดยอดของสาขานี้อยู่แล้ว ยอดกะนี้จึงไม่ถูกบันทึก — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ</>
                   :r.blocked
                   ?<>❌ ด่านตรวจไม่ผ่าน จึงไม่ส่ง — {(r.problems||[]).join(" · ")}</>

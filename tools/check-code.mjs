@@ -4102,6 +4102,79 @@ section("ปิดกะ: ตอบ 200 แต่ยอดไม่ลง");
   ok_("บอกตรงๆ ว่าส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชี", APP.includes("ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ"));
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// ชุดคีย์รายกะ (เตรียมไว้ ยังไม่เปิด) + กติกา leaf ของฝั่งบัญชี
+// ฝั่งบัญชีแตกหมวดรายได้รายช่องทางจาก "บรรทัดที่ไม่มีลูก" (leaf) ไม่ใช่บรรทัดชั้นพ่อ
+// ⟹ พ่อที่มีลูกไม่ครบยอด เงินส่วนที่ไม่มีลูกจะหายจากหมวดรายได้เขาเงียบๆ ทั้งที่ยอดรวมทั้งใบยังถูก
+// ══════════════════════════════════════════════════════════════════════════
+section("ท่อบัญชี: กติกา leaf + คีย์รายกะ");
+{
+  const LS3 = SLIPPUSH.split("\n");
+  const a3 = LS3.findIndex(l => l.startsWith("const MAIN_PAY_METHODS ="));
+  const b3 = LS3.findIndex((l, i) => i > a3 && l === "}");
+  let bpl = null;
+  try { bpl = new Function(LS3.slice(a3, b3 + 1).join("\n") + "\nreturn buildPaymentLines;")(); } catch {}
+  ok_("อ่านตัวแตกบรรทัดช่องทางมารันได้", !!bpl);
+  if (bpl) {
+    const names = (r) => r.payment.map(p => p.name_en);
+    // ── รูปจริงของวันที่ 19 ก.ย. 69 ที่ตกหล่น ──
+    const real = bpl([
+      { payment_method: "cash", total: 1064 },
+      { payment_method: "promptpay", total: 17126 },
+      { payment_method: "thaiplus", total: 1411 },
+    ]);
+    ck("ผลรวมชั้นพ่อ = ยอดขายทั้งวัน", real.mainSum, 19601);
+    ck("ผลรวมชั้นล่างสุด (leaf) = ยอดขายทั้งวัน", real.leafSum, 19601);
+    // บรรทัดลูกต้องมีอยู่จริง ห้ามยุบทิ้งเพื่อให้สั้นลง — หมวดรายได้ฝั่งบัญชีอ่านจากชื่อ leaf
+    ok_("ส่งบรรทัดครบทั้งพ่อและลูก (พร้อมเพย์อยู่ใต้บัตรเครดิต)",
+      names(real).includes("Credit Card (Manual input)") && names(real).includes("PromptPay"));
+    ok_("ช่องทางอื่นก็ส่งครบทั้งพ่อและลูก",
+      names(real).includes("Custom Payment") && real.payment.some(p => p.name_th === "ไทยช่วยไทย พลัส"));
+    // ── กับดักที่ตัวเลขต้องฟ้องเอง: พ่อมีลูกไม่ครบยอด ⟹ leaf ขาด ⟹ ด่านต้องบล็อก ──
+    const trapCard = bpl([
+      { payment_method: "cash", total: 100 },
+      { payment_method: "promptpay", total: 200 },
+      { payment_method: "credit", total: 300 },
+    ]);
+    ck("บัตรเครดิตปนพร้อมเพย์: ชั้นพ่อยังครบ", trapCard.mainSum, 600);
+    ok_("บัตรเครดิตปนพร้อมเพย์: leaf ขาด ⟹ จับได้", trapCard.leafSum !== trapCard.mainSum);
+    const trapOther = bpl([
+      { payment_method: "thaiplus", total: 50 },
+      { payment_method: "other", total: 70 },
+    ]);
+    ck("ช่องทางไม่ระบุปนไทยช่วยไทย: ชั้นพ่อยังครบ", trapOther.mainSum, 120);
+    ok_("ช่องทางไม่ระบุปนไทยช่วยไทย: leaf ขาด ⟹ จับได้", trapOther.leafSum !== trapOther.mainSum);
+    // ── เคสที่พ่อไม่มีลูก พ่อเองคือ leaf ต้องไม่ถูกนับพลาด ──
+    ck("บัตรเครดิตล้วน (ไม่มีลูก) leaf = ชั้นพ่อ", bpl([{ payment_method: "credit", total: 300 }]).leafSum, 300);
+    ck("ช่องทางไม่ระบุล้วน (ไม่มีลูก) leaf = ชั้นพ่อ", bpl([{ payment_method: "other", total: 70 }]).leafSum, 70);
+  }
+  ok_("leaf ไม่ตรงยอดขาย = บล็อกไม่ยิง (ลงผิดแก้ยากกว่าไม่ลง)",
+    SLIPPUSH.includes("if (Math.abs(leafSum - total_sales) > 0.005)"));
+
+  // ── วันที่ไม่มียอดขาย = ไม่ใช่ความผิดพลาด ห้ามทำให้จอแดงจนพนักงานชิน ──
+  ok_("ยอด 0 แยกเป็น noSale ไม่ใช่ด่านตรวจไม่ผ่าน",
+    SLIPPUSH.includes("results.push({ business_date, ok: false, noSale: true, total_sales, bills: list.length });")
+    && !SLIPPUSH.includes("problems.push(`total_sales ต้องมากกว่า 0"));
+  ok_("จอปิดกะไม่นับวันไม่มียอดขายเป็นสีแดง",
+    APP.includes("bad=rows.filter(r=>!r.ok&&!r.noSale);") && APP.includes("const noneToSend=rows.length>0&&rows.every(r=>r.noSale);"));
+  ok_("จอปิดกะบอกตรงๆ ว่าวันนี้ไม่มียอดขาย", APP.includes("ℹ️ วันนี้ไม่มียอดขาย จึงไม่มีอะไรต้องส่งเข้าบัญชี"));
+
+  // ── คีย์รายกะ: โค้ดพร้อมแล้ว แต่ต้องปิดสวิตช์ไว้จนถึงวัน cutover ที่นัดกับฝั่งบัญชี ──
+  // เปิดก่อนที่ตัวรับเขาพร้อม = ใบของทั้งวันกลายเป็นใบที่เขาไม่รู้จัก แย่กว่าสถานะปัจจุบัน
+  ok_("ยังปิดสวิตช์คีย์รายกะอยู่ (ว่าง = รูปแบบเดิมวันละใบ)",
+    SLIPPUSH.includes("const SHIFT_KEYED_BRANCHES = [];"));
+  ok_("มีเหตุผลติดไว้ว่าทำไมห้ามเปิดสาขาที่มีใบกำกับเต็มรูป", SLIPPUSH.includes("INV-") && SLIPPUSH.includes("ยื่นภาษีขายขาด"));
+  ok_("เลขอ้างอิงใบมีสองรูปแบบ ตามว่าสาขานั้นเปิดคีย์รายกะหรือยัง",
+    SLIPPUSH.includes("external_id: shiftKeyed") && SLIPPUSH.includes("-s${shiftId}`"));
+  ok_("ฟิลด์กะส่งเฉพาะสาขาที่เปิดคีย์รายกะ (ไม่ยัดไปให้สาขาที่ตัวรับยังไม่รู้จัก)",
+    SLIPPUSH.includes("...(shiftKeyed ? {") && SLIPPUSH.includes("shift_opened_at: shift.opened_at,"));
+  // เงินนับจริงเกิดครั้งเดียวตอนปิดกะ — กะคร่อมเที่ยงคืนออกใบสองวันแต่มีเงินนับชุดเดียว
+  // แนบทุกวันเมื่อไหร่ ตู้เซฟได้เงินซ้ำสองรอบ (เคยพลาดมาแล้วเรื่องฝากเกิน ฿18,653)
+  ok_("เงินลิ้นชักยังแนบวันสุดท้ายของกะวันเดียว แม้เปลี่ยนเป็นคีย์รายกะ",
+    SLIPPUSH.includes("...(business_date === lastDay ? (() => {"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
