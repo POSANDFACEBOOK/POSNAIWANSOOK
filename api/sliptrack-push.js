@@ -189,7 +189,7 @@ export default async function handler(req, res) {
     //    ซึ่งมองด้วยตาไม่เห็น และแก้ยากกว่า "ยอดไม่ลง" มาก
     // ฝั่งบัญชีนับใบ INV- ตั้งแต่ 1 ก.ย. 69 ให้แล้ว: The River 0 ใบ · อยุธยา 9 · บางใหญ่ 14
     //    · สำนักงานใหญ่ 7 · คลองสาม 3 ⟹ The River จึงเป็นสาขาเดียวที่ปลอดภัยจะเปิดก่อน
-    const SHIFT_KEYED_BRANCHES = [];
+    const SHIFT_KEYED_BRANCHES = [8];   // The River — เปิด 23 ก.ย. 69 หลังฝั่งบัญชีเปลี่ยนคีย์ตัวรับเสร็จ
     const shiftId = Number(body.shift_id);
     if (!Number.isFinite(shiftId) || shiftId <= 0) {
       return res.status(400).json({ error: "Missing or invalid shift_id" });
