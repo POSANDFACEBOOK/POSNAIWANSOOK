@@ -4073,6 +4073,35 @@ section("Voucher: ส่วนลดท้ายบิล");
 }
 
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// ปิดกะ: ระบบบัญชีตอบ 200 แต่ "ทิ้ง" ยอดกะนั้น ⟹ ต้องขึ้นแดง ไม่ใช่เขียว
+// ฝั่งเขามี UNIQUE (business_date, branch) = วันละ 1 ใบต่อสาขา ถ้าวันนั้นมีใบอยู่แล้ว
+// เขาตอบ HTTP 200 success:true + status:"duplicate" แล้วยอดกะนั้นหายไปเฉยๆ
+// เหตุจริง 19-22 ก.ย. 69: The River เปลี่ยนมาเปิดวันละ 2 กะ กะสองถูกทิ้งทุกวัน
+// รวม ฿32,705 ไม่ถึงบัญชี (19/9 ฿19,601 · 20/9 ฿6,914 · 21/9 ฿3,173 · 22/9 ฿3,017)
+// แต่จอปิดกะขึ้น "ส่งยอดขายเข้าระบบบัญชีแล้ว" สีเขียว ⟹ ไม่มีใครรู้ 4 วัน
+// จนเจ้าของสังเกตเองว่าไลน์แจ้งยอดเมื่อวานแค่ ฿322
+// ══════════════════════════════════════════════════════════════════════════
+section("ปิดกะ: ตอบ 200 แต่ยอดไม่ลง");
+{
+  const m = SLIPPUSH.match(/const dropped = ([\s\S]*?);\n/);
+  let isDropped = null;
+  try { isDropped = new Function("data", "return (" + (m && m[1]) + ");"); } catch {}
+  ok_("อ่านตัวตัดสิน 'ใบถูกทิ้ง' ออกมารันได้", !!isDropped);
+  if (isDropped) {
+    ok_("ตอบ duplicate = ถือว่ายอดยังไม่ลงบัญชี", isDropped({ success: true, status: "duplicate" }) === true);
+    ok_("ตอบ income.exists = ถือว่ายอดยังไม่ลงบัญชี", isDropped({ success: true, income: { status: "exists" } }) === true);
+    ok_("ตอบ day_already_closed = ถือว่ายอดยังไม่ลงบัญชี", isDropped({ day_already_closed: true }) === true);
+    ok_("ใบที่ลงจริงยังนับเป็นผ่านเหมือนเดิม",
+      isDropped({ success: true, status: "created", income: { status: "created", rows: 2 } }) === false);
+  }
+  ok_("ผลที่ส่งกลับหน้าเว็บติดธง dropped และ ok=false", SLIPPUSH.includes("ok: r.ok && !dropped, dropped,"));
+  ok_("จอปิดกะแยกเคสใบชนวันออกจาก error อื่น", APP.includes("const dropRows=rows.filter(r=>r.dropped);"));
+  // ส่งซ้ำไม่ช่วยเพราะใบของวันนั้นมีอยู่แล้ว — ถ้าบอกผิดทาง พนักงานจะกดส่งซ้ำแล้วคิดว่าจบ
+  ok_("บอกตรงๆ ว่าส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชี", APP.includes("ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

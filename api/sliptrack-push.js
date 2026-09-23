@@ -337,7 +337,22 @@ export default async function handler(req, res) {
             body: JSON.stringify(payload),
           });
           const data = await r.json().catch(() => ({}));
-          results.push({ business_date, ok: r.ok, status: r.status, bills: list.length, total_sales, sent: payload, reply: data });
+          // ── ตอบ 200 แต่ยอดไม่ได้ลง ──────────────────────────────────────
+          // ฝั่งบัญชีมี UNIQUE (business_date, branch) = วันละ 1 ใบต่อสาขา ถ้าวันนั้นมีใบแล้ว
+          // เขาตอบ HTTP 200 success:true พร้อม status:"duplicate" แล้ว "ทิ้ง" ยอดกะนี้เงียบๆ
+          // เกิดจริง 19-22 ก.ย. 69: The River เปลี่ยนมาเปิดวันละ 2 กะ กะสองถูกตีกลับทุกวัน
+          // รวม ฿32,705 ไม่ถึงบัญชี แต่จอปิดกะขึ้นเขียว "ส่งเข้าระบบบัญชีแล้ว" ⟹ ไม่มีใครรู้ 4 วัน
+          // ⟹ เคสนี้ต้องนับเป็น "ไม่สำเร็จ" ให้จอขึ้นแดงและพนักงานต้องกดรับทราบ
+          const dropped = !!data && (
+            String(data.status || "") === "duplicate" ||
+            data.day_already_closed === true ||
+            String(data.error || "") === "day_already_closed" ||
+            String((data.income && data.income.status) || "") === "exists");
+          results.push({
+            business_date, ok: r.ok && !dropped, dropped, status: r.status,
+            bills: list.length, total_sales, sent: payload, reply: data,
+            ...(dropped ? { error: `วันที่ ${business_date} มีใบปิดยอดของสาขานี้อยู่แล้ว ระบบบัญชีจึงไม่รับยอดกะนี้ (฿${total_sales.toLocaleString()}) — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ` } : {}),
+          });
         } catch (err) {
           results.push({ business_date, ok: false, error: String((err && err.message) || err), total_sales, bills: list.length });
         }

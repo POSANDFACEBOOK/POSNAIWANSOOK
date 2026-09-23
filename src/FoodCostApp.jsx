@@ -21568,6 +21568,8 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         // ส่งผ่าน แต่บัญชีทิ้งบางค่า = ยอดเงินลงแล้วก็จริง แต่เอกสารไม่ครบ
         // เดิมเคสนี้ขึ้นเขียวล้วน "ส่งเข้าระบบบัญชีแล้ว" แล้วไม่มีใครรู้ว่าขาดอะไร
         const warnRows=rows.filter(r=>r.ok&&slipWarnings(r.reply).length);
+        // วันนั้นมีใบปิดยอดอยู่แล้ว (เปิดวันละ 2 กะ) — ยอดกะนี้ถูกทิ้ง และส่งซ้ำก็ไม่ช่วย
+        const dropRows=rows.filter(r=>r.dropped);
         const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0;
         const partial=!fatal&&bad.length===0&&rows.length>0&&warnRows.length>0;
         return <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(94vw,460px)",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
@@ -21579,6 +21581,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
             <div style={{fontSize:12,color:okAll?"#0F6E4C":partial?"#92400E":C.red,marginTop:4,lineHeight:1.6,opacity:.95}}>
               {okAll?"กะปิดเรียบร้อยและยอดลงสมุดบัญชีแล้ว"
                 :partial?"ยอดเงินลงสมุดบัญชีแล้ว แต่ระบบบัญชีไม่รับข้อมูลบางอย่าง — ดูรายละเอียดข้างล่าง แล้วแจ้งผู้ดูแลระบบ"
+                :dropRows.length?"กะปิดเรียบร้อยแล้ว แต่วันนี้มีใบปิดยอดของสาขานี้ลงไปแล้ว ระบบบัญชีจึงไม่รับยอดกะนี้ — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ"
                 :"กะปิดเรียบร้อยแล้ว แต่ยอดยังไม่ลงบัญชี — แจ้งผู้ดูแลระบบให้ส่งซ้ำ"}
             </div>
           </div>
@@ -21595,7 +21598,9 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
                 ⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(" · ")}
               </div>}
               {!r.ok&&<div style={{fontSize:11.5,color:C.red,marginTop:3}}>
-                {r.blocked
+                {r.dropped
+                  ?<>❌ วันที่ {r.business_date} มีใบปิดยอดของสาขานี้อยู่แล้ว ยอดกะนี้จึงไม่ถูกบันทึก — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ</>
+                  :r.blocked
                   ?<>❌ ด่านตรวจไม่ผ่าน จึงไม่ส่ง — {(r.problems||[]).join(" · ")}</>
                   :<>❌ {r.error||((r.reply&&(r.reply.error||r.reply.message))||("ระบบบัญชีตอบ "+r.status))}</>}
               </div>}
