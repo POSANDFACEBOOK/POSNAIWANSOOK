@@ -679,6 +679,9 @@ const api = {
     return out;
   },
   getPOSOrdersByDay: (bid, startISO, endISO) => sbAll(`orders?branch_id=eq.${bid}&created_at=gte.${encodeURIComponent(startISO)}&created_at=lt.${encodeURIComponent(endISO)}&order=created_at.desc`),
+  // รายงานยอดขาย: จัดวันด้วย "เวลาปิดบิล" (updated_at) เหมือนใบปิดยอดที่ส่งบัญชี ไม่ใช่เวลาเปิดโต๊ะ
+  // ⟹ บิลที่เปิดโต๊ะ 5 ทุ่มแล้วจ่ายตีหนึ่ง เป็นยอดของวันที่จ่าย — ตัวเลขสองระบบจึงตรงกันเสมอ
+  getPOSOrdersByBiz: (bid, startISO, endISO) => sbAll(`orders?branch_id=eq.${bid}&updated_at=gte.${encodeURIComponent(startISO)}&updated_at=lt.${encodeURIComponent(endISO)}&order=updated_at.desc`),
   // Printers
   getPrinters: (bid) => sb(`printers?order=id.asc${bid?`&branch_id=eq.${bid}`:"&branch_id=is.null"}`),
   getAllPrinters: () => sb(`printers?order=id.asc`),
@@ -4503,10 +4506,11 @@ function RptDonut({segments,size=132,thickness=20}){
   </svg>;
 }
 // Horizontal bar list — rows:[{name|label,value,count?,color?,sub?}]
-function RptBars({rows,color,fmt}){
+function RptBars({rows,color,fmt,total}){
   if(!rows||rows.length===0)return <div style={{fontSize:12.5,color:C.ink4,textAlign:"center",padding:"16px 0",fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีข้อมูล</div>;
   const max=rows.reduce((m,r)=>Math.max(m,+r.value||0),0)||1;
-  const sum=rows.reduce((s,r)=>s+(+r.value||0),0)||1;
+  // total = ยอดทั้งก้อนก่อนตัดเหลือ N อันดับแรก — ไม่ส่งมาก็คิดจากแถวที่มี (พฤติกรรมเดิม)
+  const sum=(total!=null?(+total||0):rows.reduce((s,r)=>s+(+r.value||0),0))||1;
   return <div style={{display:"flex",flexDirection:"column",gap:9}}>
     {rows.map((r,i)=>{const v=+r.value||0;const col=r.color||color||C.brand;return <div key={r.key||r.name||i}>
       <div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12.5,marginBottom:3,fontFamily:"'Sarabun',sans-serif"}}>
@@ -20835,12 +20839,303 @@ function POSQRPage({branch,tables,onTablesChanged}){
 // ── POS TAB (Main entry) ──────────────────────────────
 // ══════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════
+// ── POS SALES REPORT (dashboard) ──────────────────────
+// ══════════════════════════════════════════════════════
+// วันทำการของรายงานนี้นับจาก "เวลาปิดบิล" (updated_at) ตามเวลาไทย — กติกาเดียวกับที่ส่งเข้าบัญชี
+// (api/sliptrack-push.js) ⟹ ตัวเลขบนจอนี้กับใบปิดยอดที่บัญชีได้รับต้องตรงกันเสมอ
+// ถ้าใช้ created_at (เวลาเปิดโต๊ะ) บิลที่เปิด 5 ทุ่มจ่ายตีหนึ่งจะไปอยู่คนละวันกับบัญชี
+const TH_OFF=7*3600e3;
+const thDayOf=(iso)=>new Date(new Date(iso).getTime()+TH_OFF).toISOString().slice(0,10);
+const thHourOf=(iso)=>new Date(new Date(iso).getTime()+TH_OFF).getUTCHours();
+const dayShift=(d,n)=>{const t=new Date(d+"T00:00:00Z");t.setUTCDate(t.getUTCDate()+n);return t.toISOString().slice(0,10);};
+const dayLabel=(d)=>d.slice(8,10)+"/"+d.slice(5,7);
+const todayTH=()=>new Date(Date.now()+TH_OFF).toISOString().slice(0,10);
+// ── ตัวรวมยอดของรายงาน (แยกออกมาเป็นฟังก์ชันล้วนๆ เพื่อให้ด่านตรวจรันจริงได้) ──
+// รับเฉพาะบิลที่จ่ายแล้ว · คืนชุดข้อมูลสำหรับกราฟทุกตัวบนจอ
+function posSalesSeries(paid,fromD,toD){
+  const r2=(n)=>Math.round((+n||0)*100)/100;
+  const dayOf=(o)=>thDayOf(o.updated_at||o.created_at);
+  // ── ยอดรายวัน — เติมวันที่ไม่มีบิลด้วย 0 ให้กราฟไม่ขาดช่วง (วันปิดร้านต้องเห็นว่าเป็น 0 ไม่ใช่หายไป)
+  const map=new Map();
+  for(const o of paid){const d=dayOf(o);const e=map.get(d)||{amt:0,n:0};e.amt=r2(e.amt+(+o.total||0));e.n++;map.set(d,e);}
+  const days=[];
+  if(fromD&&toD){for(let d=fromD,guard=0;d<=toD&&guard<400;d=dayShift(d,1),guard++){const e=map.get(d)||{amt:0,n:0};days.push({k:d,label:dayLabel(d),value:e.amt,count:e.n});}}
+  else for(const [d,e] of [...map].sort())days.push({k:d,label:dayLabel(d),value:e.amt,count:e.n});
+  // ── ช่วงเวลาที่ขายดี — ชั่วโมงตามเวลาไทยของ "เวลาปิดบิล"
+  const hrs=Array.from({length:24},()=>({amt:0,n:0}));
+  for(const o of paid){const h=thHourOf(o.updated_at||o.created_at);hrs[h].amt=r2(hrs[h].amt+(+o.total||0));hrs[h].n++;}
+  const hit=hrs.map((h,i)=>({i,...h})).filter(h=>h.n>0);
+  const h0=hit.length?hit[0].i:0,h1=hit.length?hit[hit.length-1].i:0;
+  const hours=hit.length?hrs.slice(h0,h1+1).map((h,i)=>({k:h0+i,label:String(h0+i).padStart(2,"0"),value:h.amt,count:h.n})):[];
+  // ── เมนูขายดี — ราคาก่อนหักส่วนลด เพื่อให้รวมรายเมนู = ยอดก่อนส่วนลด (กติกาเดียวกับใบปิดกะ)
+  const mm=new Map();
+  for(const o of paid)for(const i of (o.items||[])){
+    const k=(i&&i.name)||"ไม่ระบุชื่อ";
+    const e=mm.get(k)||{qty:0,amt:0};
+    e.qty+=(+i.qty||0);e.amt=r2(e.amt+r2((+i.price||0)*(+i.qty||0)));mm.set(k,e);
+  }
+  const menus=[...mm].map(([name,v])=>({name,qty:v.qty,amt:v.amt})).sort((a,b)=>b.amt-a.amt||b.qty-a.qty);
+  // ── คูปองที่ใช้ไปในช่วงนี้ (ต้องตรวจย้อนได้ว่าใบไหนใช้กับบิลไหน)
+  const vouchers=paid.filter(o=>o&&o.voucher&&(+o.voucher.amount||0)>0)
+    .map(o=>({bill:o.id,ref:(o.voucher.ref||"").trim()||"ไม่ระบุรหัส",amt:r2(o.voucher.amount),
+      mode:o.voucher.mode||"baht",value:r2(o.voucher.value),day:dayOf(o)}))
+    .sort((a,b)=>b.amt-a.amt);
+  const voucherAmt=r2(vouchers.reduce((t,v)=>t+v.amt,0));
+  const best=days.reduce((m,d)=>(!m||d.value>m.value)?d:m,null);
+  return{days,hours,menus,vouchers,voucherAmt,bestDay:best&&best.value>0?best:null,
+    daysWithSales:days.filter(d=>d.value>0).length};
+}
+// กราฟแท่งแนวตั้ง — rows:[{k,label,value,count}]
+function RptCols({rows,color=C.brand,height=160,money=true}){
+  if(!rows||!rows.length)return <div style={{fontSize:12.5,color:C.ink4,textAlign:"center",padding:"28px 0",fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีข้อมูลในช่วงนี้</div>;
+  const max=rows.reduce((m,r)=>Math.max(m,+r.value||0),0)||1;
+  const wide=rows.length<=16;
+  return <div style={{display:"flex",alignItems:"stretch",gap:rows.length>24?3:6,height,overflowX:"auto",paddingBottom:2}}>
+    {rows.map(r=>{const v=+r.value||0;return <div key={r.k} style={{flex:"1 0 auto",minWidth:rows.length>24?18:28,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+      <div style={{flex:1,width:"100%",display:"flex",alignItems:"flex-end",justifyContent:"center"}}
+        title={`${r.label} · ฿${rB(v)}${r.count!=null?` · ${r.count} บิล`:""}`}>
+        <div style={{width:"100%",height:`${Math.max(v>0?3:1,v/max*100)}%`,background:v>0?color:C.lineLight,borderRadius:"7px 7px 0 0",transition:"height .3s"}}/>
+      </div>
+      {wide&&<div style={{fontSize:9.5,fontWeight:800,color:v>0?C.ink2:C.ink4,whiteSpace:"nowrap",fontFamily:"'Sarabun',sans-serif"}}>{v>0?(money?abbrMoney(v):v):"–"}</div>}
+      <div style={{fontSize:9.5,color:C.ink4,whiteSpace:"nowrap",fontFamily:"'Sarabun',sans-serif"}}>{r.label}</div>
+    </div>;})}
+  </div>;
+}
+function POSSalesReport({currentBranch,currentUser,onExit}){
+  const isMobile=useIsMobile();
+  const today=todayTH();
+  const[preset,setPreset]=useState("7d");
+  const[fromD,setFromD]=useState(dayShift(today,-6));
+  const[toD,setToD]=useState(today);
+  const[orders,setOrders]=useState([]);
+  const[shifts,setShifts]=useState([]);
+  const[loading,setLoading]=useState(true);
+  const[err,setErr]=useState("");
+  const[tick,setTick]=useState(0);
+  function applyPreset(p){
+    setPreset(p);const t=todayTH();
+    if(p==="today"){setFromD(t);setToD(t);}
+    else if(p==="7d"){setFromD(dayShift(t,-6));setToD(t);}
+    else if(p==="30d"){setFromD(dayShift(t,-29));setToD(t);}
+    else if(p==="month"){setFromD(t.slice(0,8)+"01");setToD(t);}
+  }
+  useEffect(()=>{
+    let cancel=false;setLoading(true);setErr("");
+    (async()=>{
+      try{
+        // ขอบช่วง = เที่ยงคืนตามเวลาไทย (+07:00) ไม่ใช่ UTC — ไม่งั้นยอดเลื่อน 7 ชั่วโมง
+        const startISO=`${fromD}T00:00:00+07:00`,endISO=`${dayShift(toD,1)}T00:00:00+07:00`;
+        const[o,s]=await Promise.all([
+          api.getPOSOrdersByBiz(currentBranch.id,startISO,endISO),
+          api.getShifts(currentBranch.id,120).catch(()=>[]),
+        ]);
+        if(cancel)return;
+        setOrders(Array.isArray(o)?o:[]);setShifts(Array.isArray(s)?s:[]);
+      }catch(e){if(!cancel){setOrders([]);setErr(friendlyError(e));}}
+      if(!cancel)setLoading(false);
+    })();
+    return()=>{cancel=true;};
+  },[currentBranch.id,fromD,toD,tick]);
+
+  const paid=orders.filter(o=>o&&o.status==="paid");
+  const cancelled=orders.filter(o=>o&&o.status==="cancelled");
+  // ใช้ตัวรวมยอดตัวเดียวกับใบปิดกะ ⟹ ตัวเลขบนจอนี้กับใบ Z-Report ตรงกันเสมอ ไม่มีสูตรที่สอง
+  const T=useMemo(()=>computeShiftTotals({movements:[],orders:paid,actualCash:0,cancelled,openBills:[],edits:[]}),[orders]);
+  const S=useMemo(()=>posSalesSeries(paid,fromD,toD),[orders,fromD,toD]);
+  // กะที่ "ปิดแล้ว" และคาบเกี่ยวช่วงที่เลือก
+  const shiftRows=useMemo(()=>{
+    const s0=new Date(`${fromD}T00:00:00+07:00`).getTime(),s1=new Date(`${dayShift(toD,1)}T00:00:00+07:00`).getTime();
+    return (shifts||[]).filter(s=>{const a=new Date(s.opened_at).getTime();const b=s.closed_at?new Date(s.closed_at).getTime():Date.now();return b>=s0&&a<s1;})
+      .sort((a,b)=>new Date(b.opened_at)-new Date(a.opened_at));
+  },[shifts,fromD,toD]);
+
+  const box={background:C.white,border:`1px solid ${C.line}`,borderRadius:16,padding:isMobile?14:18};
+  const sect={fontSize:13.5,fontWeight:900,color:C.ink2,margin:"20px 0 10px",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"};
+  const note={fontSize:11,color:C.ink4,fontWeight:600};
+  const chip=(on)=>({padding:"7px 15px",borderRadius:20,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,fontWeight:on?900:600,fontSize:12.5,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",minHeight:38});
+  const PRESETS=[["today","วันนี้"],["7d","7 วัน"],["30d","30 วัน"],["month","เดือนนี้"],["custom","กำหนดเอง"]];
+  // % บนแถบต้องเทียบกับยอดทั้งก้อน ไม่ใช่เฉพาะ 10 อันดับที่โชว์ · และต้องบอกด้วยว่าที่ไม่ได้โชว์มีเท่าไร
+  const sumAmt=(rows)=>round2((rows||[]).reduce((t,r)=>t+(+(r.amt!=null?r.amt:r.value)||0),0));
+  const catTop=(T.byCategory||[]).slice(0,10),catTot=sumAmt(T.byCategory);
+  const menuTop=S.menus.slice(0,10),menuTot=sumAmt(S.menus);
+  const dcTop=(T.discountLines||[]).slice(0,8),dcTot=sumAmt(T.discountLines);
+  const moreNote=(all,shown,unit)=>all.length>shown.length
+    ?<div style={{fontSize:11,color:C.ink4,fontWeight:600,marginTop:9,paddingTop:7,borderTop:`1px dashed ${C.line}`}}>
+      และอีก {all.length-shown.length} {unit} รวม ฿{rB(sumAmt(all)-sumAmt(shown))}
+    </div>:null;
+  const payTop=(T.payment||[]).filter(p=>p.lvl===0);
+  const paySeg=payTop.map((p,i)=>({name:p.name,value:p.amt,color:RPT_COLORS[i%RPT_COLORS.length]}));
+  const nDays=S.days.length||1;
+
+  return <div style={{margin:isMobile?"-14px -12px":"-20px -24px",display:"flex",flexDirection:"column",minHeight:"calc(100vh - 150px)"}}>
+    <div style={{padding:isMobile?"0 12px":"0 16px",background:"linear-gradient(135deg,#0F172A,#1E293B)",display:"flex",alignItems:"center",minHeight:54,gap:10,flexShrink:0,flexWrap:"wrap"}}>
+      <button onClick={onExit} style={{background:"rgba(255,255,255,0.1)",border:"none",color:C.white,padding:"7px 14px",borderRadius:9,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,minHeight:34}}>← กลับ</button>
+      <div style={{color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900}}>📊 รายงานยอดขาย</div>
+      <div style={{color:"rgba(255,255,255,.55)",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700}}>{currentBranch&&currentBranch.name}</div>
+      <button onClick={()=>setTick(t=>t+1)} disabled={loading} style={{marginLeft:"auto",background:"rgba(255,255,255,0.1)",border:"none",color:C.white,padding:"7px 14px",borderRadius:9,cursor:loading?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,minHeight:34,opacity:loading?.6:1}}>↻ โหลดใหม่</button>
+    </div>
+    <div style={{flex:1,padding:isMobile?"14px 12px 40px":"18px 24px 48px",background:C.bg,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{display:"flex",gap:7,flexWrap:"wrap",alignItems:"center",marginBottom:6}}>
+        {PRESETS.map(([v,l])=><button key={v} onClick={()=>v==="custom"?setPreset("custom"):applyPreset(v)} style={chip(preset===v)}>{l}</button>)}
+        {preset==="custom"&&<div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+          <input type="date" value={fromD} max={toD} onChange={e=>setFromD(e.target.value||fromD)} style={{...iS,padding:"7px 10px",fontSize:13,minHeight:38}}/>
+          <span style={{color:C.ink4,fontSize:13}}>ถึง</span>
+          <input type="date" value={toD} min={fromD} max={todayTH()} onChange={e=>setToD(e.target.value||toD)} style={{...iS,padding:"7px 10px",fontSize:13,minHeight:38}}/>
+        </div>}
+      </div>
+      <div style={{...note,marginBottom:14}}>นับวันทำการจาก <b>เวลาปิดบิล</b> ตามเวลาไทย — กติกาเดียวกับใบปิดยอดที่ส่งเข้าระบบบัญชี · ช่วงที่ดู {fmtD(fromD)} – {fmtD(toD)} ({nDays} วัน)</div>
+
+      {loading?<Loading text="รวบรวมยอดขาย..."/>:err?<div style={{...box,color:C.red,fontWeight:700}}>โหลดข้อมูลไม่สำเร็จ: {err}</div>:<>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(152px,1fr))",gap:10}}>
+          <RptCard emoji="💰" label="ยอดขายสุทธิ" value={`฿${rB(T.totalSales)}`} sub={`${T.orderCount} บิล · เฉลี่ยวันละ ฿${rB(T.totalSales/nDays)}`} accent={C.green} tint={C.greenLight}/>
+          <RptCard emoji="🧾" label="เฉลี่ยต่อบิล" value={`฿${rB(T.avgBill)}`} sub={`${T.itemQty} รายการอาหาร`} accent={C.brand}/>
+          <RptCard emoji="🏷️" label="ส่วนลดที่ให้ไป" value={`฿${rB(T.disc)}`} sub={`${T.discPct.toFixed(1)}% ของยอดก่อนลด ฿${rB(T.gross)}`} accent={C.purple}/>
+          <RptCard emoji="💵" label="เงินสด" value={`฿${rB(T.totalCash)}`} sub={`โอน/พร้อมเพย์ ฿${rB(T.totalTransfer)}`} accent={C.teal}/>
+          <RptCard emoji="🧮" label="ภาษีมูลค่าเพิ่ม" value={`฿${rB(T.vat)}`} sub={T.svc>0?`ค่าบริการ ฿${rB(T.svc)}`:"รวมอยู่ในราคาขายแล้ว"} accent={C.blue}/>
+          <RptCard emoji="🚫" label="บิลที่ยกเลิก" value={`${T.cancelCount} บิล`} sub={T.cancelCount?`มูลค่า ฿${rB(T.cancelAmt)}`:"ไม่มีบิลถูกยกเลิก"} accent={T.cancelCount?C.red:C.ink4} tint={T.cancelCount?C.redLight:undefined}/>
+        </div>
+
+        {T.orderCount===0?<div style={{...box,textAlign:"center",padding:"60px 20px",color:C.ink4,marginTop:18}}>— ช่วงที่เลือกยังไม่มีบิลที่เก็บเงินแล้ว —</div>:<>
+
+        <div style={sect}>📅 ยอดขายรายวัน {S.bestDay&&<span style={note}>· วันที่ขายดีที่สุด {fmtD(S.bestDay.k)} ฿{rB(S.bestDay.value)}</span>}</div>
+        <div style={box}><RptCols rows={S.days} color={C.brand} height={isMobile?140:180}/></div>
+
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14,marginTop:6}}>
+          <div style={{minWidth:0}}>
+            <div style={sect}>💳 ช่องทางชำระเงิน</div>
+            <div style={{...box,display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
+              <RptDonut segments={paySeg.length?paySeg:[{name:"-",value:1,color:C.lineLight}]} size={138}/>
+              <div style={{flex:"1 1 200px",minWidth:0,display:"flex",flexDirection:"column",gap:7}}>
+                {(T.payment||[]).map((p,i)=><div key={p.name+i} style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5,paddingLeft:p.lvl?16:0}}>
+                  {p.lvl===0?<span style={{width:11,height:11,borderRadius:3,background:(paySeg.find(s=>s.name===p.name)||{}).color||C.ink4,flexShrink:0}}/>:<span style={{color:C.ink4,fontSize:11}}>└</span>}
+                  <span style={{color:p.lvl?C.ink3:C.ink2,fontWeight:p.lvl?600:800,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}<span style={{color:C.ink4,fontWeight:400}}> · {p.count} ครั้ง</span></span>
+                  <span style={{color:p.lvl?C.ink3:C.ink,fontWeight:p.lvl?700:900,whiteSpace:"nowrap"}}>฿{rB(p.amt)}</span>
+                </div>)}
+                <div style={{borderTop:`1px dashed ${C.line}`,marginTop:4,paddingTop:6,display:"flex",justifyContent:"space-between",fontSize:12.5}}>
+                  <span style={{color:C.ink3,fontWeight:700}}>รวมชั้นหลัก</span>
+                  <span style={{color:Math.abs(T.paymentTotal-T.totalSales)<0.01?C.green:C.red,fontWeight:900}}>฿{rB(T.paymentTotal)}</span>
+                </div>
+                {Math.abs(T.paymentTotal-T.totalSales)>=0.01&&<div style={{fontSize:11,color:C.red,fontWeight:700}}>⚠️ ไม่เท่ายอดขายสุทธิ (ต่าง ฿{rB(T.paymentTotal-T.totalSales)}) — แจ้งผู้ดูแลระบบ</div>}
+              </div>
+            </div>
+          </div>
+          <div style={{minWidth:0}}>
+            <div style={sect}>⏰ ช่วงเวลาที่ขายดี <span style={note}>· ตามเวลาปิดบิล</span></div>
+            <div style={box}><RptCols rows={S.hours} color={C.blue} height={isMobile?140:180}/></div>
+          </div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14,marginTop:6}}>
+          <div style={{minWidth:0}}>
+            <div style={sect}>📂 ขายตามหมวดอาหาร <span style={note}>· ราคาก่อนหักส่วนลด</span></div>
+            <div style={box}>
+              <RptBars total={catTot} rows={catTop.map((c,i)=>({name:c.name,value:c.amt,count:c.qty,color:RPT_COLORS[i%RPT_COLORS.length]}))}/>
+              {moreNote(T.byCategory||[],catTop,"หมวด")}
+            </div>
+          </div>
+          <div style={{minWidth:0}}>
+            <div style={sect}>🏆 เมนูขายดี 10 อันดับ</div>
+            <div style={box}>
+              <RptBars total={menuTot} rows={menuTop.map((m,i)=>({name:m.name,value:m.amt,count:m.qty,color:RPT_COLORS[i%RPT_COLORS.length]}))}/>
+              {moreNote(S.menus,menuTop,"เมนู")}
+            </div>
+          </div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:14,marginTop:6}}>
+          <div style={{minWidth:0}}>
+            <div style={sect}>🍽 นั่งที่ร้าน vs สั่งกลับบ้าน</div>
+            <div style={box}><RptBars rows={[
+              {name:"นั่งที่ร้าน",value:T.channel.table.amt,count:T.channel.table.n,color:C.brand},
+              {name:"สั่งกลับบ้าน",value:T.channel.takeaway.amt,count:T.channel.takeaway.n,color:C.teal},
+            ].filter(r=>r.count>0)}/></div>
+          </div>
+          <div style={{minWidth:0}}>
+            <div style={sect}>🏷️ ส่วนลดและโปรโมชั่น</div>
+            <div style={box}>
+              <RptBars total={dcTot} rows={dcTop.map((d,i)=>({name:d.name,value:d.amt,count:d.count,color:RPT_COLORS[i%RPT_COLORS.length]}))}/>
+              {moreNote(T.discountLines||[],dcTop,"รายการ")}
+              {S.vouchers.length>0&&<div style={{marginTop:12,paddingTop:10,borderTop:`1px dashed ${C.line}`}}>
+                <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,marginBottom:6}}>🎫 คูปองที่ใช้ {S.vouchers.length} ใบ · ฿{rB(S.voucherAmt)}</div>
+                {S.vouchers.slice(0,8).map((v,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:11.5,color:C.ink3,padding:"3px 0"}}>
+                  <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{v.ref} <span style={{color:C.ink4}}>· บิล #{v.bill} · {fmtD(v.day)}</span></span>
+                  <span style={{fontWeight:800,color:C.purple,whiteSpace:"nowrap"}}>-฿{rB(v.amt)}</span>
+                </div>)}
+              </div>}
+            </div>
+          </div>
+        </div>
+
+        <div style={sect}>🕐 สรุปรายกะ <span style={note}>· ยอดจากแถวกะตอนปิด (ตัวเลขที่พนักงานเซ็นรับไปแล้ว)</span></div>
+        <div style={{...box,padding:0,overflow:"hidden"}}>
+          {shiftRows.length===0?<div style={{padding:"26px 0",textAlign:"center",color:C.ink4,fontSize:12.5}}>ไม่มีกะในช่วงนี้</div>
+          :<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12.5,minWidth:560}}>
+            <thead><tr style={{background:C.bg}}>
+              {["กะ","เปิด","ปิด","บิล","ยอดขาย","เงินสด","โอน/พร้อมเพย์","เงินขาด/เกิน"].map((h,i)=>
+                <th key={h} style={{padding:"9px 12px",textAlign:i>2?"right":"left",color:C.ink3,fontWeight:800,whiteSpace:"nowrap",borderBottom:`1px solid ${C.line}`}}>{h}</th>)}
+            </tr></thead>
+            <tbody>{shiftRows.map(s=>{const d=+s.cash_diff||0;return <tr key={s.id}>
+              <td style={{padding:"9px 12px",fontWeight:800,color:C.ink,borderBottom:`1px solid ${C.lineLight}`,whiteSpace:"nowrap"}}>#{s.id}{s.username?<span style={{color:C.ink4,fontWeight:500}}> · {s.username}</span>:null}</td>
+              <td style={{padding:"9px 12px",color:C.ink3,borderBottom:`1px solid ${C.lineLight}`,whiteSpace:"nowrap"}}>{fmtDT(s.opened_at)}</td>
+              <td style={{padding:"9px 12px",color:C.ink3,borderBottom:`1px solid ${C.lineLight}`,whiteSpace:"nowrap"}}>{s.closed_at?fmtDT(s.closed_at):<span style={{color:C.green,fontWeight:800}}>ยังเปิดอยู่</span>}</td>
+              <td style={{padding:"9px 12px",textAlign:"right",color:C.ink3,borderBottom:`1px solid ${C.lineLight}`}}>{s.order_count||0}</td>
+              <td style={{padding:"9px 12px",textAlign:"right",fontWeight:900,color:C.ink,borderBottom:`1px solid ${C.lineLight}`,whiteSpace:"nowrap"}}>฿{rB(s.total_sales)}</td>
+              <td style={{padding:"9px 12px",textAlign:"right",color:C.ink2,borderBottom:`1px solid ${C.lineLight}`,whiteSpace:"nowrap"}}>฿{rB(s.total_cash)}</td>
+              <td style={{padding:"9px 12px",textAlign:"right",color:C.ink2,borderBottom:`1px solid ${C.lineLight}`,whiteSpace:"nowrap"}}>฿{rB(s.total_transfer)}</td>
+              <td style={{padding:"9px 12px",textAlign:"right",fontWeight:800,color:!s.closed_at?C.ink4:(Math.abs(d)<0.005?C.green:C.red),borderBottom:`1px solid ${C.lineLight}`,whiteSpace:"nowrap"}}>{!s.closed_at?"—":(Math.abs(d)<0.005?"ตรงพอดี":`${d>0?"+":"-"}฿${rB(Math.abs(d))}`)}</td>
+            </tr>;})}</tbody>
+          </table></div>}
+        </div>
+
+        {(T.cancelCount>0||T.voidCount>0)&&<>
+          <div style={sect}>🚫 บิลที่ยกเลิก และรายการที่ยกเลิกหลังส่งครัว</div>
+          <div style={{...box,display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:16}}>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,marginBottom:8}}>บิลที่ยกเลิก {T.cancelCount} ใบ · ฿{rB(T.cancelAmt)}{T.voidAfterPaidCount>0?` · ในนี้เป็นการยกเลิกหลังรับเงินแล้ว ${T.voidAfterPaidCount} ใบ (฿${rB(T.voidAfterPaidAmt)})`:""}</div>
+              {(T.cancelList||[]).slice(0,12).map(c=><div key={c.id} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:11.5,color:C.ink3,padding:"4px 0",borderBottom:`1px solid ${C.lineLight}`}}>
+                <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>#{c.id} · โต๊ะ {c.table||"-"}{c.reason?<span style={{color:C.ink4}}> · {c.reason}</span>:null}{c.by?<span style={{color:C.ink4}}> · {c.by}</span>:null}</span>
+                <span style={{fontWeight:800,color:C.red,whiteSpace:"nowrap"}}>฿{rB(c.total)}</span>
+              </div>)}
+              {T.cancelCount===0&&<div style={{fontSize:12,color:C.ink4}}>ไม่มี</div>}
+            </div>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:12.5,fontWeight:800,color:C.ink2,marginBottom:8}}>รายการที่ยกเลิกหลังส่งครัว {T.voidCount} ครั้ง · {T.voidQty} ชิ้น · ฿{rB(T.voidAmt)}</div>
+              {(T.voids||[]).slice(0,12).map((v,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:11.5,color:C.ink3,padding:"4px 0",borderBottom:`1px solid ${C.lineLight}`}}>
+                <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{v.name||"-"} ×{v.qty||0} <span style={{color:C.ink4}}>· บิล #{v.bill} · โต๊ะ {v.table||"-"}{v.reason?` · ${v.reason}`:""}</span></span>
+                <span style={{fontWeight:800,color:C.red,whiteSpace:"nowrap"}}>฿{rB((+v.price||0)*(+v.qty||0))}</span>
+              </div>)}
+              {T.voidCount===0&&<div style={{fontSize:12,color:C.ink4}}>ไม่มี</div>}
+            </div>
+          </div>
+        </>}
+
+        <div style={sect}>🧾 โครงสร้างยอดขาย</div>
+        <div style={{...box,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:10}}>
+          {[["ยอดก่อนส่วนลด",T.gross,C.ink],["ส่วนลดทั้งหมด",-T.disc,C.purple],["ค่าบริการ",T.svc,C.teal],
+            ["ปัดเศษ",T.roundAdj,C.ink3],["ภาษีมูลค่าเพิ่ม (ในราคา)",T.vat,C.blue],["ยอดขายสุทธิ",T.totalSales,C.green],
+            ["ยอดขายที่ไม่มีภาษี",T.nonVatSales,C.ink3]].filter(r=>r[1]!==0||r[0]==="ยอดขายสุทธิ").map(([l,v,c])=>
+            <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,padding:"8px 12px",background:C.bg,borderRadius:10,minWidth:0}}>
+              <span style={{fontSize:12,color:C.ink3,fontWeight:700}}>{l}</span>
+              <span style={{fontSize:15,fontWeight:900,color:c,whiteSpace:"nowrap"}}>{v<0?"-":""}฿{rB(Math.abs(v))}</span>
+            </div>)}
+        </div>
+        <div style={{...note,marginTop:10,lineHeight:1.7}}>
+          ยอดก่อนส่วนลด − ส่วนลด = ยอดขายสุทธิ · ภาษีรวมอยู่ในยอดสุทธิแล้ว (ราคาขายรวมภาษี) · ตัวเลขทุกตัวคิดจากบิลที่ <b>เก็บเงินแล้ว</b> เท่านั้น บิลที่ยังไม่ปิดและบิลที่ยกเลิกไม่ถูกนับเป็นยอดขาย
+        </div>
+        </>}
+      </>}
+    </div>
+  </div>;
+}
+
+// ══════════════════════════════════════════════════════
 // ── POS MODE SELECTOR ─────────────────────────────────
 // ══════════════════════════════════════════════════════
 function POSModeSelect({onSelect,canManage=true}){
+  // ปุ่มรายงานเปิดให้คนที่เข้าหลังบ้านได้เท่านั้น — ยอดขายทั้งร้านไม่ใช่ของที่แคชเชียร์ทุกคนควรเห็น
   const isMobile=useIsMobile();
   return <div style={{minHeight:"calc(100vh - 140px)",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight} 0%,#FFFBEB 100%)`,margin:isMobile?"-14px -12px":"-20px -24px",padding:isMobile?16:24}}>
-    <div style={{background:C.white,borderRadius:isMobile?18:24,padding:isMobile?"24px 18px":"40px 36px",maxWidth:"min(95vw,620px)",width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
+    <div style={{background:C.white,borderRadius:isMobile?18:24,padding:isMobile?"24px 18px":"40px 36px",maxWidth:`min(95vw,${canManage?940:620}px)`,width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
       <div style={{textAlign:"center",marginBottom:isMobile?20:30}}>
         <div style={{width:isMobile?56:68,height:isMobile?56:68,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:isMobile?16:20,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:isMobile?10:14,boxShadow:`0 12px 28px ${C.brand}55`}}>
           <Ic d={I.shop} s={isMobile?28:34} c={C.white}/>
@@ -20848,12 +21143,17 @@ function POSModeSelect({onSelect,canManage=true}){
         <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?20:24,fontWeight:900,color:C.ink,margin:"0 0 6px"}}>ระบบขายหน้าร้าน</h2>
         <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?13:14,color:C.ink3,margin:0}}>เลือกโหมดการใช้งาน</p>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":(canManage?"1fr 1fr":"1fr"),gap:isMobile?10:14,maxWidth:canManage&&!isMobile?"none":300,margin:canManage&&!isMobile?0:"0 auto"}}>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":(canManage?"1fr 1fr 1fr":"1fr"),gap:isMobile?10:14,maxWidth:canManage&&!isMobile?"none":300,margin:canManage&&!isMobile?0:"0 auto"}}>
         <button onClick={()=>onSelect('sale')} style={{padding:"26px 18px",border:`2px solid ${C.brandBorder}`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.brandLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.brand}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.brandBorder;e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
           <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>🛒</div>
           <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>เข้าสู่การขายหน้าร้าน</div>
           <div style={{fontSize:12,color:C.ink3,lineHeight:1.6}}>เปิดกะ • รับออเดอร์ • ชำระเงิน<br/>จัดการเงินในลิ้นชัก</div>
         </button>
+        {canManage&&<button onClick={()=>onSelect('report')} style={{padding:"26px 18px",border:`2px solid #BFDBFE`,borderRadius:18,background:`linear-gradient(135deg,${C.white},#EFF6FF)`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.blue;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.blue}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#BFDBFE";e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+          <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.blue},#1D4ED8)`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>📊</div>
+          <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>รายงานยอดขาย</div>
+          <div style={{fontSize:12,color:C.ink3,lineHeight:1.6}}>ยอดรายวัน • ช่องทางชำระ<br/>เมนูขายดี • สรุปรายกะ</div>
+        </button>}
         {canManage&&<button onClick={()=>onSelect('manage')} style={{padding:"26px 18px",border:`2px solid #DDD6FE`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.purpleLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.purple;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.purple}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#DDD6FE";e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
           <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.purple},#7C3AED)`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>⚙️</div>
           <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>จัดการหลังบ้าน</div>
@@ -24829,6 +25129,11 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   // Where "exit" goes: kiosk cashier → logout to PIN gate; normal user → mode chooser.
   const exitSale=()=>{if(saleOnly){onExit&&onExit();}else{setMode(null);}};
   if(mode===null)return <POSModeSelect onSelect={setMode} canManage={canManage}/>;
+  // รายงานยอดขาย — อ่านอย่างเดียว ไม่แตะบิลหรือกะ เปิดจากตัวเลือกโหมดเท่านั้น
+  if(mode==='report'){
+    if(!canManage){setMode(null);return null;}
+    return <POSSalesReport currentBranch={currentBranch} currentUser={currentUser} onExit={()=>setMode(null)}/>;
+  }
   if(mode==='manage'){
     if(!canManage){setMode(null);return null;}
     return <POSBackOffice currentBranch={currentBranch} currentUser={currentUser} printers={printers} reloadPrinters={reloadPrinters} branches={branches} zones={zones} reloadZones={loadZones} menus={menus} reloadMenus={reloadMenus} onExit={()=>{setMode(null);loadZones();loadPosSettings();loadPromotions();}}/>;
