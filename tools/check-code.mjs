@@ -4187,6 +4187,84 @@ section("ท่อบัญชี: กติกา leaf + คีย์ราย�
     SLIPPUSH.includes("...(business_date === lastDay ? (() => {"));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// จอรายงานยอดขายจาก POS — ตัวเลขต้องตรงกับใบปิดกะและกับยอดที่ส่งเข้าบัญชี
+// กติกาที่ห้ามหลุด: วันทำการนับจาก "เวลาปิดบิล" (updated_at) ตามเวลาไทย เหมือน api/sliptrack-push.js
+// ถ้าจอนี้ใช้สูตรของตัวเอง เจ้าของจะเห็นเลขสามชุดไม่ตรงกัน (จอ · ใบปิดกะ · สมุดบัญชี) แล้วไม่รู้ว่าเชื่ออันไหน
+// ══════════════════════════════════════════════════════════════════════════
+section("รายงานยอดขาย POS");
+{
+  const LS = APP.split("\n");
+  const ia = LS.findIndex((l) => l.startsWith("const TH_OFF="));
+  const ifn = LS.findIndex((l, i) => i > ia && l.startsWith("function posSalesSeries("));
+  const ib = LS.findIndex((l, i) => i > ifn && l === "}");
+  let series = null;
+  try { series = new Function(LS.slice(ia, ib + 1).join("\n") + "\nreturn posSalesSeries;")(); } catch {}
+  ok_("อ่านตัวรวมยอดของรายงานมารันได้", !!series);
+  if (series) {
+    // บิลใบแรกปิด 23:59 ของวันที่ 20 (เวลาไทย) · ใบที่สองปิด 00:30 ของวันที่ 21 · ใบที่สามเที่ยงวันที่ 22
+    const O = [
+      { status: "paid", id: 1, total: 100, updated_at: "2026-09-20T16:59:00Z", items: [{ name: "หมู", qty: 2, price: 50 }] },
+      { status: "paid", id: 2, total: 200, updated_at: "2026-09-20T17:30:00Z", items: [{ name: "หมู", qty: 1, price: 50 }, { name: "เนื้อ", qty: 1, price: 150 }] },
+      { status: "paid", id: 3, total: 300, updated_at: "2026-09-22T05:00:00Z", items: [], voucher: { ref: "BT1", amount: 50, mode: "baht", value: 50 } },
+    ];
+    const S = series(O, "2026-09-20", "2026-09-23");
+    // ── เขตเวลา: ผิด 7 ชั่วโมง = ยอดข้ามวันทั้งกะ แล้วไม่ตรงกับบัญชี ──
+    ck("บิลที่ปิดก่อนเที่ยงคืนอยู่วันเดิม", { d: S.days[0].k, v: S.days[0].value }, { d: "2026-09-20", v: 100 });
+    ck("บิลที่ปิดหลังเที่ยงคืนไปอยู่วันใหม่", { d: S.days[1].k, v: S.days[1].value }, { d: "2026-09-21", v: 200 });
+    // วันปิดร้านต้องเห็นเป็น 0 ไม่ใช่หายไปจากกราฟ (ไม่งั้นอ่านกราฟแล้วเข้าใจผิดว่าขายทุกวัน)
+    ck("วันที่ไม่มีบิลยังอยู่ในกราฟด้วยยอด 0", { n: S.days.length, last: S.days[3].value, c: S.days[3].count }, { n: 4, last: 0, c: 0 });
+    ck("ผลรวมรายวันเท่ายอดบิลทั้งหมด", S.days.reduce((t, d) => t + d.value, 0), 600);
+    ck("นับเฉพาะวันที่ขายได้จริง", S.daysWithSales, 3);
+    ck("วันที่ขายดีที่สุดถูกต้อง", S.bestDay.k, "2026-09-22");
+    // ── เมนูขายดี: รวมชื่อเดียวกันข้ามบิล และคิดราคาก่อนหักส่วนลด (กติกาเดียวกับใบปิดกะ) ──
+    ck("รวมเมนูชื่อเดียวกันข้ามบิล", { name: S.menus[0].name, qty: S.menus[0].qty, amt: S.menus[0].amt }, { name: "หมู", qty: 3, amt: 150 });
+    ck("จำนวนเมนูที่ขายได้", S.menus.length, 2);
+    // ── ชั่วโมง: ตัดช่วงตั้งแต่ชั่วโมงแรกถึงชั่วโมงสุดท้ายที่มีขาย ──
+    ck("ชั่วโมงแรก/สุดท้ายตามเวลาไทย", { first: S.hours[0].k, last: S.hours[S.hours.length - 1].k }, { first: 0, last: 23 });
+    ck("บิลเที่ยงคืนนับเป็นชั่วโมง 0 ของวันใหม่", S.hours[0].count, 1);
+    // ── คูปอง: ต้องตามรอยได้ว่าใบไหนใช้กับบิลไหน ──
+    ck("เก็บคูปองพร้อมรหัสและบิล", { n: S.vouchers.length, ref: S.vouchers[0].ref, bill: S.vouchers[0].bill, amt: S.voucherAmt }, { n: 1, ref: "BT1", bill: 3, amt: 50 });
+  }
+  // ── ห้ามมีสูตรรวมยอดชุดที่สอง: จอนี้ต้องเรียกตัวเดียวกับใบปิดกะ ──
+  ok_("รายงานใช้ตัวรวมยอดตัวเดียวกับใบปิดกะ",
+    APP.includes("const T=useMemo(()=>computeShiftTotals({movements:[],orders:paid,actualCash:0,cancelled,openBills:[],edits:[]}),[orders]);"));
+  ok_("นับเฉพาะบิลที่เก็บเงินแล้ว (บิลค้าง/ยกเลิกไม่เป็นยอดขาย)",
+    APP.includes('const paid=orders.filter(o=>o&&o.status==="paid");') && APP.includes('const cancelled=orders.filter(o=>o&&o.status==="cancelled");'));
+  ok_("ดึงบิลด้วยวันทำการแบบเดียวกับบัญชี (เวลาปิดบิล)",
+    APP.includes("getPOSOrdersByBiz:") && APP.includes("updated_at=gte.${encodeURIComponent(startISO)}&updated_at=lt.${encodeURIComponent(endISO)}"));
+  ok_("ขอบช่วงวันใช้เที่ยงคืนเวลาไทย ไม่ใช่ UTC",
+    APP.includes("const startISO=`${fromD}T00:00:00+07:00`,endISO=`${dayShift(toD,1)}T00:00:00+07:00`;"));
+  ok_("บอกบนจอว่านับวันจากเวลาปิดบิล", APP.includes("นับวันทำการจาก"));
+  // ── ทางเข้า: ปุ่มที่สามในตัวเลือกโหมด เปิดเฉพาะคนที่เข้าหลังบ้านได้ ──
+  ok_("มีปุ่มรายงานยอดขายในตัวเลือกโหมด", APP.includes("{canManage&&<button onClick={()=>onSelect('report')}"));
+  ok_("ตัวเลือกโหมดวางเป็นสามช่องเมื่อเปิดสิทธิ์จัดการ", APP.includes('gridTemplateColumns:isMobile?"1fr":(canManage?"1fr 1fr 1fr":"1fr")'));
+  ok_("ไม่มีสิทธิ์จัดการ = เข้าจอรายงานไม่ได้",
+    APP.includes("if(mode==='report'){\n    if(!canManage){setMode(null);return null;}"));
+  ok_("ผลรวมช่องทางชำระไม่เท่ายอดขาย ต้องเตือนบนจอ ไม่ใช่เงียบ",
+    APP.includes("⚠️ ไม่เท่ายอดขายสุทธิ (ต่าง ฿"));
+  // ── % บนแถบต้องเทียบยอดทั้งก้อน ไม่ใช่เฉพาะ 10 อันดับที่โชว์ ──
+  // ก่อนแก้: เมนูอันดับหนึ่งขึ้น 29% ทั้งที่เป็น 12% ของยอดขายจริง (เพราะหารด้วยผลรวมแค่ 10 แถว)
+  ok_("แถบเปอร์เซ็นต์รับยอดฐานจากภายนอกได้", APP.includes("function RptBars({rows,color,fmt,total}){")
+    && APP.includes("const sum=(total!=null?(+total||0):rows.reduce((s,r)=>s+(+r.value||0),0))||1;"));
+  ok_("หมวด/เมนู/ส่วนลด ส่งยอดฐานของทั้งก้อนไปคิด %",
+    APP.includes("<RptBars total={catTot}") && APP.includes("<RptBars total={menuTot}") && APP.includes("<RptBars total={dcTot}"));
+  ok_("บอกด้วยว่ารายการที่ไม่ได้โชว์เหลืออีกเท่าไร (ห้ามตัดทิ้งเงียบ)", APP.includes("และอีก {all.length-shown.length} {unit} รวม ฿"));
+  // ── มือถือ: ช่องกริด/แถวเฟล็กต้องตั้ง minWidth:0 ──────────────────────────
+  // ค่าเริ่มต้น min-width:auto ทำให้ข้อความที่สั่ง nowrap ดันกล่องกว้างเกินจอ แม้จะสั่ง ellipsis ไว้แล้ว
+  // วัดจริงบนจอ 375px ก่อนแก้: หน้ากว้าง 1015px (ล้น 640px) เลื่อนซ้ายขวาได้แต่อ่านไม่ครบ
+  // — อาการเดียวกับหน้ารับสินค้าบนมือถือที่เคยแก้ไป ห้ามให้กลับมาอีก
+  {
+    const LR = APP.split("\n");
+    const ra = LR.findIndex((l) => l.startsWith("function POSSalesReport({"));
+    const rb = LR.findIndex((l, i) => i > ra && l === "}");
+    const blk = ra >= 0 && rb > ra ? LR.slice(ra, rb + 1).join("\n") : "";
+    ok_("อ่านบล็อกจอรายงานได้", blk.length > 2000);
+    ck("จอรายงานตั้ง minWidth:0 ให้ช่องที่มีข้อความยาว", (blk.match(/minWidth:0/g) || []).length >= 10, true);
+    ok_("ตารางกะกว้างเกินจอได้ แต่ต้องเลื่อนในกล่องของมันเอง", blk.includes('<div style={{overflowX:"auto"}}><table'));
+  }
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
