@@ -225,6 +225,27 @@ const main = async () => {
     bad.length ? warn(`${bad.length} ตาราง`, bad) : ok("ทุกตารางที่ดึงทั้งก้อนยังต่ำกว่า 900 แถว");
   }
 
+  // ── 11) หมวดเมนูที่เมนูใช้อยู่ แต่ไม่มีแถวในตาราง categories ──
+  // หมวดเมนูมีสองแหล่ง: แถวในตาราง (ใช้ทำชิป/แก้ชื่อ/ลบ) กับข้อความบน menus.category (ตัวจริงที่ลูกค้าเห็น)
+  // หมวดที่ไม่มีแถว = จอเมนูแก้ชื่อไม่ได้ ลบไม่ได้ เพราะไม่มีแถวให้แก้
+  // เคสจริง 24/09/2569: 7 หมวด (เมนูใช้อยู่ 43 ตัว) ไม่มีแถวเลย — สร้างแถวให้แล้ว
+  // และเจอหมวดความหมายเดียวกันแยกกันอยู่สองชื่อ ("รีฟิล" 4 เมนู กับ "Refill" 7 เมนู) — รวมเป็นชื่อเดียวแล้ว
+  section("11) หมวดเมนู: แถวในตารางกับหมวดที่เมนูใช้จริง ต้องตรงกัน");
+  {
+    const cats = await gAll("categories?select=id,name,type,branch_id&type=eq.menu");
+    const menus = await gAll("menus?select=id,category");
+    const rows = new Map();
+    for (const c of cats) { if (c.branch_id) continue; const n = String(c.name || "").trim(); if (n) rows.set(n, (rows.get(n) || 0) + 1); }
+    const used = new Map();
+    for (const m of menus) { const n = String(m.category || "").trim(); if (n) used.set(n, (used.get(n) || 0) + 1); }
+    const ghosts = [...used].filter(([n]) => !rows.has(n)).map(([n, c]) => `${n} (เมนูใช้อยู่ ${c} ตัว) — แก้ชื่อ/ลบไม่ได้`);
+    const dups = [...rows].filter(([, c]) => c > 1).map(([n, c]) => `${n} มี ${c} แถว — ชิปจะขึ้นซ้ำ`);
+    const none = menus.filter((m) => !String(m.category || "").trim()).length;
+    const bad = [...ghosts, ...dups];
+    if (none) bad.push(`เมนูที่ไม่ได้ระบุหมวดเลย ${none} ตัว`);
+    bad.length ? warn(`${bad.length} เรื่อง`, bad) : ok(`หมวดที่ใช้งานอยู่ ${used.size} หมวด มีแถวครบทุกหมวด ไม่มีแถวซ้ำ`);
+  }
+
   console.log(`\n${"═".repeat(50)}`);
   console.log(warns === 0 ? "✅ สะอาดทุกข้อ" : `⚠️ พบ ${warns} เรื่องที่ควรจัดการ (รายละเอียดด้านบน)`);
 };
