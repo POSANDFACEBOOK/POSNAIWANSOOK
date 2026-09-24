@@ -4300,20 +4300,36 @@ section("รายงานยอดขาย POS");
     }
     ok_("อ่านแผนที่ ฟังก์ชัน → ตาราง ได้ครบทั้ง 3 ตารางที่มีด่าน",
       Object.keys(DB_ALLOWED).every((t) => Object.values(fnTable).includes(t)));
+    // อ่าน "ทั้งคำสั่ง" ตั้งแต่วงเล็บเปิดหลัง api.xxx จนวงเล็บปิดคู่ของมัน — ไม่ใช่แค่ N บรรทัดแรก
+    // รุ่นแรกดูแค่ 8 บรรทัด ⟹ ใบสรุปต้องซื้อที่เขียนยาว 12 บรรทัด บรรทัด status หลุดสายตา
+    // ทดสอบด้วยการใส่บั๊กเดิมกลับเข้าไป (24 ก.ย. 69) แล้วด่านไม่ร้องเลยทั้ง 3 แบบ
+    // ตัดคอมเมนต์ // ทิ้งก่อนนับวงเล็บ (คอมเมนต์ภาษาไทยมีวงเล็บเปิดค้างได้) แต่ไม่ตัด https:// ในสตริง
+    const callBody = (li, col) => {
+      let depth = 0, out = "";
+      for (let i = li; i < LA.length && i < li + 120; i++) {
+        const seg = (i === li ? LA[i].slice(col) : LA[i]).replace(/(^|\s)\/\/.*$/, "$1");
+        for (const ch of seg) {
+          out += ch;
+          if (ch === "(") depth++;
+          else if (ch === ")") { depth--; if (depth === 0) return out; }
+        }
+        out += "\n";
+      }
+      return out;
+    };
     const bad = [];
     for (let i = 0; i < LA.length; i++) {
-      const calls = [...LA[i].matchAll(/api\.(\w+)\(/g)].map((x) => x[1]).filter((f) => DB_ALLOWED[fnTable[f]]);
-      if (!calls.length) continue;
-      const t = fnTable[calls[0]];
-      const stmt = LA.slice(i, i + 8).join(" ");
-      const end = stmt.indexOf(");");
-      const body = end >= 0 ? stmt.slice(0, end) : stmt;
+      for (const cm of LA[i].matchAll(/api\.(\w+)\(/g)) {
+      const t = fnTable[cm[1]];
+      if (!DB_ALLOWED[t]) continue;
+      const body = callBody(i, cm.index + cm[0].length - 1);
       // เอาทั้งค่าตรงๆ และค่าในนิพจน์เงื่อนไข (a?"x":"y") มาตรวจทุกตัว
       for (const m of body.matchAll(/status\s*:\s*([^,}]+)/g)) {
         const expr = m[1];
         const f = expr.match(/firstDocStatus\("(\w+)"\)/);
         const vals = f ? [FDS[f[1]]] : [...expr.matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
         for (const v of vals) if (!DB_ALLOWED[t].includes(v)) bad.push(`บรรทัด ${i + 1}: ${t} ← "${v}"`);
+      }
       }
     }
     ck("ทุกสถานะที่เขียนลงฐาน อยู่ในรายการที่ด่าน CHECK อนุญาตจริง", bad, []);
