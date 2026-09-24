@@ -4272,10 +4272,15 @@ section("รายงานยอดขาย POS");
     APP.includes('else if(p==="yesterday"){const y=dayShift(t,-1);setFromD(y);setToD(y);}')
     && APP.includes('["yesterday","เมื่อวาน"]'));
   // ── ทางเข้า: ปุ่มที่สามในตัวเลือกโหมด เปิดเฉพาะคนที่เข้าหลังบ้านได้ ──
-  ok_("มีปุ่มรายงานยอดขายในตัวเลือกโหมด", APP.includes("{canManage&&<button onClick={()=>onSelect('report')}"));
-  ok_("ตัวเลือกโหมดวางเป็นสามช่องเมื่อเปิดสิทธิ์จัดการ", APP.includes('gridTemplateColumns:isMobile?"1fr":(canManage?"1fr 1fr 1fr":"1fr")'));
-  ok_("ไม่มีสิทธิ์จัดการ = เข้าจอรายงานไม่ได้",
-    APP.includes("if(mode==='report'){\n    if(!canManage){setMode(null);return null;}"));
+  // สิทธิ์สองชั้นคนละเรื่อง: รายงาน = อ่านอย่างเดียว เปิดให้ทุกคน · หลังบ้าน = แก้ตั้งค่าได้ จึงยังจำกัด
+  ok_("ปุ่มรายงานใช้สิทธิ์ของตัวเอง ไม่ผูกกับสิทธิ์จัดการ", APP.includes("{canReport&&<button onClick={()=>onSelect('report')}"));
+  ok_("ปุ่มจัดการหลังบ้านยังผูกกับสิทธิ์ตั้งค่าเหมือนเดิม",
+    APP.includes('const canManage=!saleOnly&&hasPerm(currentUser,"settings");') && APP.includes("{canManage&&<button onClick={()=>onSelect('manage')}"));
+  ok_("รายงานเปิดให้ทุกคนที่เข้าหน้าขายได้", APP.includes("const canReport=!saleOnly;"));
+  ok_("ตัวเลือกโหมดจัดคอลัมน์ตามจำนวนปุ่มที่เห็นจริง",
+    APP.includes("const cards=1+(canReport?1:0)+(canManage?1:0);") && APP.includes('gridTemplateColumns:isMobile?"1fr":`repeat(${cards},1fr)`'));
+  ok_("ไม่มีสิทธิ์ดูรายงาน = เข้าจอรายงานไม่ได้",
+    APP.includes("if(mode==='report'){\n    if(!canReport){setMode(null);return null;}"));
   ok_("ผลรวมช่องทางชำระไม่เท่ายอดขาย ต้องเตือนบนจอ ไม่ใช่เงียบ",
     APP.includes("⚠️ ไม่เท่ายอดขายสุทธิ (ต่าง ฿"));
   // จอรายงานของร้านโชว์เฉพาะช่องทางที่พนักงานกดจริง — ชั้นพ่อ "บัตรเครดิต (กรอกเอง)" / "Custom Payment"

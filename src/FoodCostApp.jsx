@@ -21153,11 +21153,14 @@ function POSSalesReport({currentBranch,currentUser,onExit}){
 // ══════════════════════════════════════════════════════
 // ── POS MODE SELECTOR ─────────────────────────────────
 // ══════════════════════════════════════════════════════
-function POSModeSelect({onSelect,canManage=true}){
-  // ปุ่มรายงานเปิดให้คนที่เข้าหลังบ้านได้เท่านั้น — ยอดขายทั้งร้านไม่ใช่ของที่แคชเชียร์ทุกคนควรเห็น
+function POSModeSelect({onSelect,canManage=true,canReport=true}){
+  // สิทธิ์สองชั้นคนละเรื่องกัน (เจ้าของสั่ง 24 ก.ย. 69):
+  //   · รายงานยอดขาย = อ่านอย่างเดียว เปิดให้ทุกคนที่เข้าหน้าขายได้
+  //   · จัดการหลังบ้าน = แก้ตั้งค่า VAT/ผังโต๊ะ/เครื่องพิมพ์/PIN ⟹ เฉพาะคนที่มีสิทธิ์ตั้งค่า
   const isMobile=useIsMobile();
+  const cards=1+(canReport?1:0)+(canManage?1:0);   // กว้างของกล่องกับจำนวนคอลัมน์ต้องตามจำนวนปุ่มจริง
   return <div style={{minHeight:"calc(100vh - 140px)",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight} 0%,#FFFBEB 100%)`,margin:isMobile?"-14px -12px":"-20px -24px",padding:isMobile?16:24}}>
-    <div style={{background:C.white,borderRadius:isMobile?18:24,padding:isMobile?"24px 18px":"40px 36px",maxWidth:`min(95vw,${canManage?940:620}px)`,width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
+    <div style={{background:C.white,borderRadius:isMobile?18:24,padding:isMobile?"24px 18px":"40px 36px",maxWidth:`min(95vw,${cards>=3?940:cards===2?680:520}px)`,width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
       <div style={{textAlign:"center",marginBottom:isMobile?20:30}}>
         <div style={{width:isMobile?56:68,height:isMobile?56:68,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:isMobile?16:20,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:isMobile?10:14,boxShadow:`0 12px 28px ${C.brand}55`}}>
           <Ic d={I.shop} s={isMobile?28:34} c={C.white}/>
@@ -21165,13 +21168,13 @@ function POSModeSelect({onSelect,canManage=true}){
         <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?20:24,fontWeight:900,color:C.ink,margin:"0 0 6px"}}>ระบบขายหน้าร้าน</h2>
         <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?13:14,color:C.ink3,margin:0}}>เลือกโหมดการใช้งาน</p>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":(canManage?"1fr 1fr 1fr":"1fr"),gap:isMobile?10:14,maxWidth:canManage&&!isMobile?"none":300,margin:canManage&&!isMobile?0:"0 auto"}}>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":`repeat(${cards},1fr)`,gap:isMobile?10:14,maxWidth:cards>1&&!isMobile?"none":300,margin:cards>1&&!isMobile?0:"0 auto"}}>
         <button onClick={()=>onSelect('sale')} style={{padding:"26px 18px",border:`2px solid ${C.brandBorder}`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.brandLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.brand}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.brandBorder;e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
           <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>🛒</div>
           <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>เข้าสู่การขายหน้าร้าน</div>
           <div style={{fontSize:12,color:C.ink3,lineHeight:1.6}}>เปิดกะ • รับออเดอร์ • ชำระเงิน<br/>จัดการเงินในลิ้นชัก</div>
         </button>
-        {canManage&&<button onClick={()=>onSelect('report')} style={{padding:"26px 18px",border:`2px solid #BFDBFE`,borderRadius:18,background:`linear-gradient(135deg,${C.white},#EFF6FF)`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.blue;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.blue}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#BFDBFE";e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+        {canReport&&<button onClick={()=>onSelect('report')} style={{padding:"26px 18px",border:`2px solid #BFDBFE`,borderRadius:18,background:`linear-gradient(135deg,${C.white},#EFF6FF)`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.blue;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.blue}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#BFDBFE";e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
           <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.blue},#1D4ED8)`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>📊</div>
           <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>รายงานยอดขาย</div>
           <div style={{fontSize:12,color:C.ink3,lineHeight:1.6}}>ยอดรายวัน • ช่องทางชำระ<br/>เมนูขายดี • สรุปรายกะ</div>
@@ -25158,16 +25161,17 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   useEffect(()=>{if(onShiftState)onShiftState(mode==='sale'&&!!shift);},[mode,shift]);// eslint-disable-line
   useEffect(()=>{if(closeShiftSignal>0&&mode==='sale'&&shift)setShowCloseShift(true);},[closeShiftSignal]);// eslint-disable-line
 
-  // เจ้าของสั่ง 24 ก.ย. 69: ทุกคนที่เข้าหน้าขายได้ ต้องเห็นทั้งปุ่มรายงานยอดขายและปุ่มจัดการหลังบ้าน
-  // เดิมผูกกับสิทธิ์ "ตั้งค่า" ⟹ พนักงานสาขาเห็นปุ่มขายปุ่มเดียว เข้ารายงานของสาขาตัวเองไม่ได้เลย
-  // โหมดแคชเชียร์ที่เข้าด้วย PIN (ลิงก์ขายของสาขา) ยังเป็นจอขายล้วนเหมือนเดิม — ไม่มีตัวเลือกโหมดให้กดอยู่แล้ว
-  const canManage=!saleOnly;
+  // เจ้าของสั่ง 24 ก.ย. 69: รายงานยอดขายเปิดให้ทุกคนที่เข้าหน้าขายได้ (พนักงานสาขาต้องดูยอดของตัวเองได้)
+  // แต่จัดการหลังบ้านยังจำกัดเฉพาะคนที่มีสิทธิ์ตั้งค่า เพราะจอนั้นแก้ VAT/ผังโต๊ะ/เครื่องพิมพ์/PIN ได้
+  // โหมดแคชเชียร์ที่เข้าด้วย PIN (ลิงก์ขายของสาขา) ยังเป็นจอขายล้วน — ไม่มีตัวเลือกโหมดให้กดอยู่แล้ว
+  const canReport=!saleOnly;
+  const canManage=!saleOnly&&hasPerm(currentUser,"settings");
   // Where "exit" goes: kiosk cashier → logout to PIN gate; normal user → mode chooser.
   const exitSale=()=>{if(saleOnly){onExit&&onExit();}else{setMode(null);}};
-  if(mode===null)return <POSModeSelect onSelect={setMode} canManage={canManage}/>;
+  if(mode===null)return <POSModeSelect onSelect={setMode} canManage={canManage} canReport={canReport}/>;
   // รายงานยอดขาย — อ่านอย่างเดียว ไม่แตะบิลหรือกะ เปิดจากตัวเลือกโหมดเท่านั้น
   if(mode==='report'){
-    if(!canManage){setMode(null);return null;}
+    if(!canReport){setMode(null);return null;}
     return <POSSalesReport currentBranch={currentBranch} currentUser={currentUser} onExit={()=>setMode(null)}/>;
   }
   if(mode==='manage'){
