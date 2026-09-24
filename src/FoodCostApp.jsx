@@ -25158,7 +25158,10 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   useEffect(()=>{if(onShiftState)onShiftState(mode==='sale'&&!!shift);},[mode,shift]);// eslint-disable-line
   useEffect(()=>{if(closeShiftSignal>0&&mode==='sale'&&shift)setShowCloseShift(true);},[closeShiftSignal]);// eslint-disable-line
 
-  const canManage=!saleOnly&&hasPerm(currentUser,"settings");
+  // เจ้าของสั่ง 24 ก.ย. 69: ทุกคนที่เข้าหน้าขายได้ ต้องเห็นทั้งปุ่มรายงานยอดขายและปุ่มจัดการหลังบ้าน
+  // เดิมผูกกับสิทธิ์ "ตั้งค่า" ⟹ พนักงานสาขาเห็นปุ่มขายปุ่มเดียว เข้ารายงานของสาขาตัวเองไม่ได้เลย
+  // โหมดแคชเชียร์ที่เข้าด้วย PIN (ลิงก์ขายของสาขา) ยังเป็นจอขายล้วนเหมือนเดิม — ไม่มีตัวเลือกโหมดให้กดอยู่แล้ว
+  const canManage=!saleOnly;
   // Where "exit" goes: kiosk cashier → logout to PIN gate; normal user → mode chooser.
   const exitSale=()=>{if(saleOnly){onExit&&onExit();}else{setMode(null);}};
   if(mode===null)return <POSModeSelect onSelect={setMode} canManage={canManage}/>;
