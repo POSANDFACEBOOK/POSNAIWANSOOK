@@ -4277,6 +4277,23 @@ section("รายงานยอดขาย POS");
   ok_("ปุ่มจัดการหลังบ้านยังผูกกับสิทธิ์ตั้งค่าเหมือนเดิม",
     APP.includes('const canManage=!saleOnly&&hasPerm(currentUser,"settings");') && APP.includes("{canManage&&<button onClick={()=>onSelect('manage')}"));
   ok_("รายงานเปิดให้ทุกคนที่เข้าหน้าขายได้", APP.includes("const canReport=!saleOnly;"));
+  // ── สถานะต้องตรงกับตารางที่ลงจริง ────────────────────────────────────────
+  // ตาราง order_requests มีด่าน CHECK รับเฉพาะสถานะของใบสั่งของ (pending_approval/pending/approved/...)
+  // 24 ก.ย. 69 ปุ่มสรุปต้องซื้อวันนี้ใส่สถานะของ PO ("requested") ⟹ ครัวกลางสร้างใบไม่ได้เลย
+  // ทุกจุดที่เรียก api.addOrder( ต้องไม่ใช้ firstDocStatus("po") หรือ "requested" ตรงๆ
+  {
+    const L3 = APP.split("\n");
+    const bad = [];
+    L3.forEach((l, i) => {
+      if (!l.includes("api.addOrder(")) return;
+      // ดูบรรทัดถัดไปไม่เกิน 30 บรรทัดจนเจอปิดวงเล็บของคำสั่งนั้น
+      const chunk = L3.slice(i, i + 30).join("\n");
+      const end = chunk.indexOf("});");
+      const body = end >= 0 ? chunk.slice(0, end) : chunk;
+      if (body.includes('firstDocStatus("po")') || /status:\s*"requested"/.test(body)) bad.push(i + 1);
+    });
+    ck("ทุกจุดที่สร้างใบสั่งของ ใช้สถานะของใบสั่งของ (ไม่ใช่ของ PO)", bad, []);
+  }
   ok_("ตัวเลือกโหมดจัดคอลัมน์ตามจำนวนปุ่มที่เห็นจริง",
     APP.includes("const cards=1+(canReport?1:0)+(canManage?1:0);") && APP.includes('gridTemplateColumns:isMobile?"1fr":`repeat(${cards},1fr)`'));
   ok_("ไม่มีสิทธิ์ดูรายงาน = เข้าจอรายงานไม่ได้",

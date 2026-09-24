@@ -10201,7 +10201,10 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         supplier_id:supplierId,
         supplier_name:g.name,
         items,
-        status:firstDocStatus("po"),   // ปิดขั้นอนุมัติ = ไป "requested" ทันที (สถานะเดียวกับที่ปุ่มอนุมัติเคยตั้ง)
+        // ใบนี้ลงตาราง order_requests (api.addOrder) ⟹ ต้องใช้สถานะของใบสั่งของ ไม่ใช่ของ PO
+        // เคยใส่สถานะของ PO (requested) ซึ่งตารางนี้ไม่รับ ⟹ ชนด่าน order_requests_status_check
+        // สร้างใบไม่ได้เลย (24 ก.ย. 69 17:07 น.) · ปุ่มอนุมัติเดิมของใบชนิดนี้ตั้ง pending_approval → "pending"
+        status:firstDocStatus("order"),
         requested_by:currentUser.username,
         requested_at:nowStr(),
         note,
