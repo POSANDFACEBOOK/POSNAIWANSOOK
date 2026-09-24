@@ -4245,6 +4245,10 @@ section("รายงานยอดขาย POS");
   ok_("ขอบช่วงวันใช้เที่ยงคืนเวลาไทย ไม่ใช่ UTC",
     APP.includes("const startISO=`${fromD}T00:00:00+07:00`,endISO=`${dayShift(toD,1)}T00:00:00+07:00`;"));
   ok_("บอกบนจอว่านับวันจากเวลาปิดบิล", APP.includes("นับวันทำการจาก"));
+  // "เมื่อวาน" ต้องเป็นวันเดียวจบ — ถ้าเผลอทำเป็นช่วง 2 วัน ยอดของวันนี้จะถูกรวมเข้าไปด้วยโดยไม่มีใครเห็น
+  ok_("ปุ่มเมื่อวานเลือกวันเดียว ไม่ลากมาถึงวันนี้",
+    APP.includes('else if(p==="yesterday"){const y=dayShift(t,-1);setFromD(y);setToD(y);}')
+    && APP.includes('["yesterday","เมื่อวาน"]'));
   // ── ทางเข้า: ปุ่มที่สามในตัวเลือกโหมด เปิดเฉพาะคนที่เข้าหลังบ้านได้ ──
   ok_("มีปุ่มรายงานยอดขายในตัวเลือกโหมด", APP.includes("{canManage&&<button onClick={()=>onSelect('report')}"));
   ok_("ตัวเลือกโหมดวางเป็นสามช่องเมื่อเปิดสิทธิ์จัดการ", APP.includes('gridTemplateColumns:isMobile?"1fr":(canManage?"1fr 1fr 1fr":"1fr")'));
@@ -4252,6 +4256,43 @@ section("รายงานยอดขาย POS");
     APP.includes("if(mode==='report'){\n    if(!canManage){setMode(null);return null;}"));
   ok_("ผลรวมช่องทางชำระไม่เท่ายอดขาย ต้องเตือนบนจอ ไม่ใช่เงียบ",
     APP.includes("⚠️ ไม่เท่ายอดขายสุทธิ (ต่าง ฿"));
+  // จอรายงานของร้านโชว์เฉพาะช่องทางที่พนักงานกดจริง — ชั้นพ่อ "บัตรเครดิต (กรอกเอง)" / "Custom Payment"
+  // เป็นของผังบัญชี ไม่ใช่ปุ่มบนจอขาย (ร้านไม่มีเครื่องรูดบัตรสักเครื่อง) เจ้าของสั่งเอาออก 24 ก.ย. 69
+  ok_("จอรายงานเอาเฉพาะช่องทางที่กดจริง (ตัดชั้นพ่อของผังบัญชีออก)",
+    APP.includes("const payLeaf=(()=>{const rows=T.payment||[];const out=[];") && APP.includes("{payLeaf.map((p,i)=><div"));
+  // ── รันตัวคัดช่องทางจริง ไม่ใช่แค่ดูว่ามีข้อความอยู่ ──
+  // รูปแถวจริงจากหน้าจอวันที่ 24 ก.ย. 69: เงินสด · [บัตรเครดิต(พ่อ) → พร้อมเพย์] · [Custom Payment(พ่อ) → ไทยช่วยไทย]
+  // ต้องเหลือ 3 ช่องทาง และผลรวมต้องเท่ากับผลรวมชั้นพ่อเป๊ะ ไม่งั้นเงินหายจากจอ
+  {
+    const L2 = APP.split("\n");
+    const i2 = L2.findIndex((l) => l.includes("const payLeaf=(()=>{const rows=T.payment||[];const out=[];"));
+    const j2 = L2.findIndex((l, i) => i >= i2 && l.includes("return out;})();"));
+    let pick = null;
+    if (i2 >= 0 && j2 >= i2) {
+      const expr = L2.slice(i2, j2 + 1).join("\n").replace("const payLeaf=", "").replace(/;\s*$/, "");
+      try { pick = new Function("T", "return " + expr + ";"); } catch {}
+    }
+    ok_("อ่านตัวคัดช่องทางมารันได้", !!pick);
+    if (pick) {
+      const rows = [
+        { name: "เงินสด", count: 55, amt: 14722, lvl: 0 },
+        { name: "บัตรเครดิต (กรอกเอง)", count: 86, amt: 52964, lvl: 0 },
+        { name: "พร้อมเพย์", count: 86, amt: 52964, lvl: 1 },
+        { name: "Custom Payment", count: 17, amt: 4839, lvl: 0 },
+        { name: "ไทยช่วยไทย พลัส", count: 17, amt: 4839, lvl: 1 },
+      ];
+      const out = pick({ payment: rows });
+      ck("เหลือเฉพาะช่องทางที่กดจริง", out.map((r) => r.name), ["เงินสด", "พร้อมเพย์", "ไทยช่วยไทย พลัส"]);
+      ck("ยอดรวมไม่หายไปสักบาท", out.reduce((t, r) => t + r.amt, 0), 72525);
+      // พ่อที่ไม่มีลูก (เช่นวันที่มีแต่บัตรจริง ไม่มีพร้อมเพย์) ตัวมันเองคือช่องทางจริง ห้ามตกหาย
+      const solo = pick({ payment: [{ name: "บัตรเครดิต (กรอกเอง)", count: 2, amt: 500, lvl: 0 }] });
+      ck("พ่อที่ไม่มีลูกยังอยู่บนจอ", { n: solo.length, amt: solo[0] && solo[0].amt }, { n: 1, amt: 500 });
+      ck("ไม่มีช่องทางเลย = ไม่พัง", pick({}).length, 0);
+    }
+  }
+  // ⚠️ แต่ห้ามลามไปถึงท่อบัญชี — เขาแตกหมวดรายได้จากชื่อ leaf และยังต้องการบรรทัดพ่อไว้กระทบยอด
+  ok_("ท่อบัญชียังส่งบรรทัดพ่อครบเหมือนเดิม",
+    SLIPPUSH.includes('payment.push({ name_th: "บัตรเครดิต (กรอกเอง)"') && SLIPPUSH.includes('payment.push({ name_th: "Custom Payment"'));
   // ── % บนแถบต้องเทียบยอดทั้งก้อน ไม่ใช่เฉพาะ 10 อันดับที่โชว์ ──
   // ก่อนแก้: เมนูอันดับหนึ่งขึ้น 29% ทั้งที่เป็น 12% ของยอดขายจริง (เพราะหารด้วยผลรวมแค่ 10 แถว)
   ok_("แถบเปอร์เซ็นต์รับยอดฐานจากภายนอกได้", APP.includes("function RptBars({rows,color,fmt,total}){")

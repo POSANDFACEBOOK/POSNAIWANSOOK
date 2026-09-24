@@ -20915,6 +20915,7 @@ function POSSalesReport({currentBranch,currentUser,onExit}){
   function applyPreset(p){
     setPreset(p);const t=todayTH();
     if(p==="today"){setFromD(t);setToD(t);}
+    else if(p==="yesterday"){const y=dayShift(t,-1);setFromD(y);setToD(y);}
     else if(p==="7d"){setFromD(dayShift(t,-6));setToD(t);}
     else if(p==="30d"){setFromD(dayShift(t,-29));setToD(t);}
     else if(p==="month"){setFromD(t.slice(0,8)+"01");setToD(t);}
@@ -20953,7 +20954,7 @@ function POSSalesReport({currentBranch,currentUser,onExit}){
   const sect={fontSize:13.5,fontWeight:900,color:C.ink2,margin:"20px 0 10px",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"};
   const note={fontSize:11,color:C.ink4,fontWeight:600};
   const chip=(on)=>({padding:"7px 15px",borderRadius:20,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,fontWeight:on?900:600,fontSize:12.5,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",minHeight:38});
-  const PRESETS=[["today","วันนี้"],["7d","7 วัน"],["30d","30 วัน"],["month","เดือนนี้"],["custom","กำหนดเอง"]];
+  const PRESETS=[["today","วันนี้"],["yesterday","เมื่อวาน"],["7d","7 วัน"],["30d","30 วัน"],["month","เดือนนี้"],["custom","กำหนดเอง"]];
   // % บนแถบต้องเทียบกับยอดทั้งก้อน ไม่ใช่เฉพาะ 10 อันดับที่โชว์ · และต้องบอกด้วยว่าที่ไม่ได้โชว์มีเท่าไร
   const sumAmt=(rows)=>round2((rows||[]).reduce((t,r)=>t+(+(r.amt!=null?r.amt:r.value)||0),0));
   const catTop=(T.byCategory||[]).slice(0,10),catTot=sumAmt(T.byCategory);
@@ -20963,8 +20964,12 @@ function POSSalesReport({currentBranch,currentUser,onExit}){
     ?<div style={{fontSize:11,color:C.ink4,fontWeight:600,marginTop:9,paddingTop:7,borderTop:`1px dashed ${C.line}`}}>
       และอีก {all.length-shown.length} {unit} รวม ฿{rB(sumAmt(all)-sumAmt(shown))}
     </div>:null;
-  const payTop=(T.payment||[]).filter(p=>p.lvl===0);
-  const paySeg=payTop.map((p,i)=>({name:p.name,value:p.amt,color:RPT_COLORS[i%RPT_COLORS.length]}));
+  const payLeaf=(()=>{const rows=T.payment||[];const out=[];
+    for(let i=0;i<rows.length;i++){const r=rows[i];
+      if(r.lvl===1){out.push(r);continue;}                       // บรรทัดลูก = ช่องทางจริงเสมอ
+      if(!(rows[i+1]&&rows[i+1].lvl===1))out.push(r);}           // พ่อที่ไม่มีลูก = ตัวมันเองคือช่องทางจริง
+    return out;})();
+  const paySeg=payLeaf.map((p,i)=>({name:p.name,value:p.amt,color:RPT_COLORS[i%RPT_COLORS.length]}));
   const nDays=S.days.length||1;
 
   return <div style={{margin:isMobile?"-14px -12px":"-20px -24px",display:"flex",flexDirection:"column",minHeight:"calc(100vh - 150px)"}}>
@@ -21006,13 +21011,13 @@ function POSSalesReport({currentBranch,currentUser,onExit}){
             <div style={{...box,display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
               <RptDonut segments={paySeg.length?paySeg:[{name:"-",value:1,color:C.lineLight}]} size={138}/>
               <div style={{flex:"1 1 200px",minWidth:0,display:"flex",flexDirection:"column",gap:7}}>
-                {(T.payment||[]).map((p,i)=><div key={p.name+i} style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5,paddingLeft:p.lvl?16:0}}>
-                  {p.lvl===0?<span style={{width:11,height:11,borderRadius:3,background:(paySeg.find(s=>s.name===p.name)||{}).color||C.ink4,flexShrink:0}}/>:<span style={{color:C.ink4,fontSize:11}}>└</span>}
-                  <span style={{color:p.lvl?C.ink3:C.ink2,fontWeight:p.lvl?600:800,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}<span style={{color:C.ink4,fontWeight:400}}> · {p.count} ครั้ง</span></span>
-                  <span style={{color:p.lvl?C.ink3:C.ink,fontWeight:p.lvl?700:900,whiteSpace:"nowrap"}}>฿{rB(p.amt)}</span>
+                {payLeaf.map((p,i)=><div key={p.name+i} style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5}}>
+                  <span style={{width:11,height:11,borderRadius:3,background:(paySeg.find(s=>s.name===p.name)||{}).color||C.ink4,flexShrink:0}}/>
+                  <span style={{color:C.ink2,fontWeight:800,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}<span style={{color:C.ink4,fontWeight:400}}> · {p.count} ครั้ง</span></span>
+                  <span style={{color:C.ink,fontWeight:900,whiteSpace:"nowrap"}}>฿{rB(p.amt)}</span>
                 </div>)}
                 <div style={{borderTop:`1px dashed ${C.line}`,marginTop:4,paddingTop:6,display:"flex",justifyContent:"space-between",fontSize:12.5}}>
-                  <span style={{color:C.ink3,fontWeight:700}}>รวมชั้นหลัก</span>
+                  <span style={{color:C.ink3,fontWeight:700}}>รวมทุกช่องทาง</span>
                   <span style={{color:Math.abs(T.paymentTotal-T.totalSales)<0.01?C.green:C.red,fontWeight:900}}>฿{rB(T.paymentTotal)}</span>
                 </div>
                 {Math.abs(T.paymentTotal-T.totalSales)>=0.01&&<div style={{fontSize:11,color:C.red,fontWeight:700}}>⚠️ ไม่เท่ายอดขายสุทธิ (ต่าง ฿{rB(T.paymentTotal-T.totalSales)}) — แจ้งผู้ดูแลระบบ</div>}
