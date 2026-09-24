@@ -678,6 +678,17 @@ const api = {
     }
     return out;
   },
+  // บิลของกะหนึ่ง = ใบที่ติดเลขกะไว้ตอนกดรับเงิน + ใบเก่าที่ยังไม่มีเลขกะ (ดึงด้วยเวลาเหมือนเดิม)
+  // ต้องดึงสองทางแล้วรวมกัน เพราะใบที่ติดเลขกะไว้อาจเปิดโต๊ะก่อนเวลาเปิดกะ (นั่งข้ามกะแล้วมาจ่าย)
+  getShiftOrders: async (bid, shiftId, sinceISO) => {
+    const [tagged, timed] = await Promise.all([
+      sbAll("orders?branch_id=eq." + bid + "&shift_id=eq." + Number(shiftId) + "&order=created_at.desc").catch(() => []),
+      api.getPOSOrdersSince(bid, sinceISO),
+    ]);
+    const seen = new Set(), out = [];
+    for (const o of [...(tagged || []), ...(timed || [])]) if (o && !seen.has(o.id)) { seen.add(o.id); out.push(o); }
+    return out;
+  },
   getPOSOrdersByDay: (bid, startISO, endISO) => sbAll(`orders?branch_id=eq.${bid}&created_at=gte.${encodeURIComponent(startISO)}&created_at=lt.${encodeURIComponent(endISO)}&order=created_at.desc`),
   // รายงานยอดขาย: จัดวันด้วย "เวลาปิดบิล" (updated_at) เหมือนใบปิดยอดที่ส่งบัญชี ไม่ใช่เวลาเปิดโต๊ะ
   // ⟹ บิลที่เปิดโต๊ะ 5 ทุ่มแล้วจ่ายตีหนึ่ง เป็นยอดของวันที่จ่าย — ตัวเลขสองระบบจึงตรงกันเสมอ
@@ -19449,7 +19460,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // (สรุปกะและท่อบัญชีอ่านจาก payments เมื่อมี จึงแยกยอดตามช่องทางจริงได้ ไม่กองรวมช่องเดียว)
       // นับ "ช่องทางที่ต่างกัน" ไม่ใช่จำนวนครั้ง — หลายคนจ่ายไทยช่วยไทย พลัสคนละครั้ง ยังเป็นบิลไทยช่วยไทย พลัส (บิล #182 13 ก.ย. 69)
       const pmCol=payParts?(new Set(payParts.map(p=>p.method)).size===1?payParts[0].method:"mixed"):pm;
-      const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,round_adj:roundAdj,payment_method:pmCol,updated_at:new Date().toISOString()};
+      // ── ติดเลขกะลงบนบิลตอนกดรับเงิน ────────────────────────────────────
+      // เดิมใบปิดกะกับท่อบัญชีเดาว่าบิลอยู่กะไหนจาก "เวลาเปิดโต๊ะ" ⟹ มีรูสองแบบ:
+      //   · เปิดโต๊ะในรอยต่อระหว่างกะ (กะเก่าปิดแล้ว กะใหม่ยังไม่เปิด) = ไม่มีกะไหนเป็นเจ้าของ
+      //   · เปิดโต๊ะกะหนึ่งแล้วไปจ่ายอีกกะ = ตอนกะแรกปิดยังไม่ paid · กะหลังก็ไม่เก็บ
+      // เกิดจริง 23 ก.ย. 69: บิล #397 ฿1,567 เปิดโต๊ะในช่องว่าง 30 วินาที แล้วไม่เคยถึงบัญชีเลย
+      // ถามฐานว่ากะไหนเปิดอยู่จริง ไม่เชื่อ state ของจอ (จอค้างกะเก่าได้) — ตัวเดียวกับที่เงินสดใช้
+      const _pls=await liveShift(branch.id,shift);
+      if(_pls.note)posToast(_pls.note,"warn",9000);
+      const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,round_adj:roundAdj,payment_method:pmCol,shift_id:_pls.id||null,updated_at:new Date().toISOString()};
       // paid_by = ใครกดปิดบิลใบนี้ · เดิมไม่มีเลย บิลทุกใบไร้เจ้าของ ตรวจย้อนหลังไม่ได้
       const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,payments:paymentsCol,voucher:(voucher&&voucherDiscount>0)?{...voucher,amount:round2(voucherDiscount)}:null,paid_by:currentUser?.username||currentUser?.name||null};
       let row;
@@ -19488,9 +19507,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         try{
           const existingMoves=await api.getCashMovements(shift.id).catch(()=>[]);
           const already=Array.isArray(existingMoves)&&existingMoves.some(m=>m&&m.type==="sale"&&+m.order_id===+existingOrder.id);
-          const _ls=await liveShift(branch.id,shift);
-          if(_ls.note)posToast(_ls.note,"warn",9000);
-          if(!already)await api.addCashMovement({shift_id:_ls.id,branch_id:branch.id,type:"sale",amount:cashPart,reason:`ขายโต๊ะ ${table.table_number}`+(payParts?" (แบ่งจ่าย)":""),order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
+          if(!already)await api.addCashMovement({shift_id:_pls.id,branch_id:branch.id,type:"sale",amount:cashPart,reason:`ขายโต๊ะ ${table.table_number}`+(payParts?" (แบ่งจ่าย)":""),order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
         }catch(err){console.error("บันทึก cash movement ไม่สำเร็จ:",err);}
       }
       // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
@@ -21752,12 +21769,14 @@ async function loadShiftTotalsForReprint(shift,branchId){
   const closed=shift.closed_at?new Date(shift.closed_at).getTime():Date.now();
   const tOf=(iso)=>new Date(iso).getTime();
   const inWin=(iso)=>{const t=tOf(iso);return t>=opened&&t<=closed;};
-  const[m,o]=await Promise.all([api.getCashMovements(shift.id),api.getPOSOrdersSince(branchId,shift.opened_at)]);
+  const[m,o]=await Promise.all([api.getCashMovements(shift.id),api.getShiftOrders(branchId,shift.id,shift.opened_at)]);
   const movements=Array.isArray(m)?m:[];
-  const all=(Array.isArray(o)?o:[]).filter(x=>tOf(x.created_at)<=closed);   // บิลที่เปิดหลังปิดกะไม่ใช่ของกะนี้
+  // ติดเลขกะแล้ว = ตัดสินจากเลขกะอย่างเดียว (true/false) · ยังไม่ติด (บิลเก่า) = null แล้วใช้กติกาเวลาเหมือนเดิม
+  const mine=(x)=>x&&x.shift_id!=null?+x.shift_id===+shift.id:null;
+  const all=(Array.isArray(o)?o:[]).filter(x=>mine(x)!==false&&(mine(x)===true||tOf(x.created_at)<=closed));
   const linkedIds=new Set(movements.filter(x=>x.type==="sale"&&x.order_id).map(x=>x.order_id));
-  const orders=all.filter(x=>x.status==="paid"&&(linkedIds.has(x.id)||inWin(x.updated_at||x.created_at)));
-  const cancelled=all.filter(x=>x.status==="cancelled"&&inWin(x.cancelled_at||x.updated_at||x.created_at));
+  const orders=all.filter(x=>x.status==="paid"&&(mine(x)===true||linkedIds.has(x.id)||inWin(x.updated_at||x.created_at)));
+  const cancelled=all.filter(x=>x.status==="cancelled"&&(mine(x)===true||inWin(x.cancelled_at||x.updated_at||x.created_at)));
   // โต๊ะที่ยังเปิดอยู่ตอนปิดกะ = เปิดก่อนปิดกะ และตอนนั้นยังไม่จ่าย/ยังไม่ยกเลิก
   const openBills=all.filter(x=>(x.status!=="paid"&&x.status!=="cancelled")||tOf(x.updated_at||x.created_at)>closed);
   const computed=computeShiftTotals({movements,orders,actualCash:shift.closing_cash,cancelled,openBills});
@@ -21797,16 +21816,19 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
       // ดึงบิลตั้งแต่เวลาเปิดกะ ครบทุกใบ (เดิมตัดที่ 200 ใบล่าสุด ทำให้ยอดกะขาด)
       // ดึงบิลที่ยังเปิดอยู่แยกต่างหาก — บิลที่เปิดมาก่อนเวลาเปิดกะก็ต้องนับ ไม่งั้นมองไม่เห็น
       // ประวัติการแก้บิลอ่านแยก — ล้มก็ไม่ควรขวางการปิดกะ (ใบจะแค่ไม่มีบล็อกแก้บิล)
-      const[m,o,openNow,ed]=await Promise.all([api.getCashMovements(shift.id),api.getPOSOrdersSince(currentBranch.id,shift.opened_at),api.getActiveOrders(currentBranch.id),api.getOrderEdits(shift.id).catch(()=>[])]);
+      const[m,o,openNow,ed]=await Promise.all([api.getCashMovements(shift.id),api.getShiftOrders(currentBranch.id,shift.id,shift.opened_at),api.getActiveOrders(currentBranch.id),api.getOrderEdits(shift.id).catch(()=>[])]);
       setEdits(Array.isArray(ed)?ed:[]);
       setMovements(m);
       setOpenBills(Array.isArray(openNow)?openNow:[]);
-      setCancelled((o||[]).filter(x=>x.status==="cancelled"));
+      // บิลที่ติดเลขกะไว้แล้วตัดสินจากเลขกะอย่างเดียว · บิลเก่าที่ยังไม่มีเลขกะใช้กติกาเวลาเหมือนเดิม
+      const mine=(x)=>x&&x.shift_id!=null?+x.shift_id===+shift.id:null;
+      setCancelled((o||[]).filter(x=>x.status==="cancelled"&&mine(x)!==false));
       const since=new Date(shift.opened_at).getTime();
       // Source of truth: orders linked via cash_movements (sale rows) PLUS any paid orders updated in shift window
       const linkedIds=new Set(m.filter(x=>x.type==='sale'&&x.order_id).map(x=>x.order_id));
       const inShift=(o||[]).filter(x=>{
         if(x.status!=='paid')return false;
+        if(mine(x)!==null)return mine(x);
         if(linkedIds.has(x.id))return true;
         const u=new Date(x.updated_at||x.created_at).getTime();
         return u>=since;

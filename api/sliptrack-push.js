@@ -217,12 +217,21 @@ export default async function handler(req, res) {
       // บิลที่ปิดแล้วในช่วงกะ — ขอบบนใช้เวลาปิดกะ ถ้ายังไม่ปิดใช้เวลาปัจจุบัน
       const from = encodeURIComponent(shift.opened_at);
       const to = encodeURIComponent(shift.closed_at || new Date().toISOString());
-      const orders = await sbGet(
-        `orders?branch_id=eq.${Number(shift.branch_id)}&status=eq.paid` +
-        `&created_at=gte.${from}&created_at=lt.${to}` +
-        `&select=id,total,subtotal,discount,promo_amount,service_charge,vat,vat_rate,round_adj,payment_method,payments,voucher,created_at,updated_at` +
-        `&order=id.asc&limit=2000`
-      );
+      // ── บิลของกะนี้ ────────────────────────────────────────────────────
+      // ใบที่ติดเลขกะไว้ตอนกดรับเงิน = ของกะนั้นแน่นอน ไม่ต้องเดาจากเวลา
+      // ใบเก่าที่ยังไม่มีเลขกะ ใช้กติกาเดิม (เวลาเปิดโต๊ะอยู่ในช่วงกะ) และต้องกรอง shift_id=is.null
+      // ไม่งั้นบิลที่ติดเลขกะอื่นไว้จะไหลเข้ามาซ้ำ
+      // เดิมใช้เวลาอย่างเดียว ⟹ บิลที่เปิดโต๊ะในรอยต่อระหว่างกะไม่มีใบไหนพาไปเลย
+      // (23 ก.ย. 69 บิล #397 ฿1,567 ตกร่อง 30 วินาทีระหว่างกะ#26 ปิดกับกะ#27 เปิด)
+      const SEL = "&select=id,total,subtotal,discount,promo_amount,service_charge,vat,vat_rate,round_adj,payment_method,payments,voucher,created_at,updated_at&order=id.asc&limit=2000";
+      const bid = Number(shift.branch_id);
+      const [tagged, timed] = await Promise.all([
+        sbGet(`orders?branch_id=eq.${bid}&status=eq.paid&shift_id=eq.${shiftId}${SEL}`),
+        sbGet(`orders?branch_id=eq.${bid}&status=eq.paid&shift_id=is.null&created_at=gte.${from}&created_at=lt.${to}${SEL}`),
+      ]);
+      const seenIds = new Set();
+      const orders = [];
+      for (const o of [...(tagged || []), ...(timed || [])]) if (o && !seenIds.has(o.id)) { seenIds.add(o.id); orders.push(o); }
 
       // เงินในลิ้นชักของกะนี้ — ฝั่งบัญชีดึงเงินเข้าตู้เซฟจากบล็อกนี้ ไม่ใช่จาก payment
       const moves = await sbGet(`cash_movements?shift_id=eq.${shiftId}&select=type,amount&limit=2000`);

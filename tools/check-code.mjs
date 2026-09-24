@@ -403,7 +403,7 @@ const guards = [
   ["ยกเลิกรายการ แจ้งครัว", APP.includes("name:`ยกเลิก: ${target.name}`")],
   // เดิมเคยบังคับว่า "รับทุกหมวด" ต้องเก็บเป็น null — เลิกใช้แล้ว (8 ก.ย. 69)
   // เจ้าของสั่งให้ตัดตัวเลือกนั้นทิ้ง ให้ติ๊กหมวดเป็นตัวตัดสินอย่างเดียว
-  ["ปิดกะดึงบิลครบทั้งกะ (ไม่ตัดที่ 200)", APP.includes("api.getPOSOrdersSince(currentBranch.id,shift.opened_at)")],
+  ["ปิดกะดึงบิลครบทั้งกะ ด้วยเลขกะ (ไม่ตัดที่ 200)", APP.includes("api.getShiftOrders(currentBranch.id,shift.id,shift.opened_at)")],
   ["บิลแยกเฉลี่ยส่วนลด", APP.includes("const splitDisc=round2(totalDiscount*ratio);")],
   ["เมนูในมือถือลูกค้ารีเฟรชระหว่างมื้อ", APP.includes("menuPollId=setInterval")],
   ["ยอดลูกค้าคิดสูตรเดียวกับ POS", APP.includes("const custBill=useMemo(()=>{")],
@@ -2385,7 +2385,7 @@ section("ป็อปอัพเก็บเงิน + เงินทอน")
   // บิลใบเดียวจ่ายได้หลายช่องทางแล้ว (แบ่งจ่าย) จุดที่เกี่ยวกับเงินสดจึงผูกกับ "ยอดส่วนที่เป็นเงินสด"
   // ไม่ใช่ "วิธีจ่ายของทั้งบิล" อีกต่อไป — แต่ต้องยังใช้ค่าที่กดมา ไม่ใช่ state ค้างในจอ
   ck("ทุกที่ในตัวปิดบิลใช้ค่าที่กด ไม่ใช่ state",
-    ["const pm=methodArg||payMethod;", "payment_method:pmCol,updated_at", "const pmCol=payParts?", "if(cashPart>0&&shift)", "payment_method:pmCol,payments:paymentsCol,cash_received"]
+    ["const pm=methodArg||payMethod;", "payment_method:pmCol,shift_id:_pls.id||null,updated_at", "const pmCol=payParts?", "if(cashPart>0&&shift)", "payment_method:pmCol,payments:paymentsCol,cash_received"]
       .filter((x) => !APP.includes(x)), []);
   // ป็อปอัพส่งต่อ "ทั้งชื่อช่องทางและรายละเอียดการแบ่งจ่าย" — รับแค่ตัวแรกคือบั๊คที่ทำบิล #127/#144 พัง
   ok_("ป็อปอัพส่งวิธีจ่ายและรายละเอียดการแบ่งจ่ายเข้าไปครบ",
@@ -2553,6 +2553,9 @@ section("พิมพ์ใบปิดกะซ้ำ");
     const mk = (orders, moves) => new Function("api", [mainLn, takeLn, emo, payLn, blk, r2Ln, cst, lsr, "return loadShiftTotalsForReprint;"].filter(Boolean).join("\n"))({
       getCashMovements: async () => moves,
       getPOSOrdersSince: async () => orders,
+      // ตัวจริงรวมสองทาง (ใบที่ติดเลขกะ + ใบที่ดึงด้วยเวลา) แล้วค่อยกรองในตัวประกอบยอด
+      // สตับคืนทุกใบ = กรองหนักกว่าของจริง ⟹ ถ้าผ่านด่านนี้ ของจริงก็ผ่าน
+      getShiftOrders: async () => orders,
     });
     const H = (h) => "2026-09-10T" + String(h).padStart(2, "0") + ":00:00.000Z";
     const SHIFT = { id: 9, opened_at: H(3), closed_at: H(13), opening_cash: 400, closing_cash: 500,
@@ -2573,6 +2576,21 @@ section("พิมพ์ใบปิดกะซ้ำ");
     ck("บิลที่ไปจ่ายในกะถัดไป/เปิดหลังปิดกะ ห้ามนับเป็นยอดของกะนี้", [ok1.totals.totalSales, ok1.totals.orderCount], [300, 2]);
     ok_("บิลที่ยังเปิดอยู่ตอนปิดกะ ต้องขึ้นเป็นโต๊ะค้าง", (ok1.totals.openList || []).some((x) => x.id === 3));
     ck("ยอดนับเงินปิดกะไม่ถูกนับเป็นเงินเข้าลิ้นชัก", ok1.totals.expected, 700);
+
+    // ── เลขกะบนบิลเป็นตัวตัดสิน ไม่ใช่เวลา ────────────────────────────────
+    // 23 ก.ย. 69 บิล #397 ฿1,567 เปิดโต๊ะในช่องว่าง 30 วินาทีระหว่างกะ ⟹ ไม่มีกะไหนเป็นเจ้าของ
+    // และไม่เคยถึงบัญชีเลย · ตั้งแต่ติดเลขกะตอนกดรับเงิน เคสแบบนี้ต้องเข้ากะที่เก็บเงินได้
+    const SHIFT2 = { ...SHIFT, total_sales: 350, total_cash: 350, order_count: 3 };
+    const ORDERS2 = [
+      ORDERS[0], ORDERS[1],
+      // เปิดโต๊ะก่อนกะนี้เปิดด้วยซ้ำ แต่มาจ่ายในกะนี้ และติดเลขกะนี้ไว้ ⟹ ต้องนับเข้ากะนี้
+      { id: 5, status: "paid", payment_method: "cash", total: 50, subtotal: 50, created_at: H(1), updated_at: H(8), shift_id: 9, items: [] },
+      // อยู่ในช่วงเวลาของกะนี้ แต่ติดเลขกะอื่นไว้ ⟹ ห้ามไหลเข้ามา (ไม่งั้นนับซ้ำสองกะ)
+      { id: 6, status: "paid", payment_method: "cash", total: 777, subtotal: 777, created_at: H(7), updated_at: H(8), shift_id: 10, items: [] },
+    ];
+    const ok3 = await mk(ORDERS2, MOVES)(SHIFT2, 8);
+    ck("บิลที่ติดเลขกะไว้ นับเข้ากะนั้น แม้เปิดโต๊ะก่อนกะเปิด", [ok3.totals.totalSales, ok3.totals.orderCount], [350, 3]);
+    ok_("บิลที่ติดเลขกะอื่นไว้ ห้ามไหลเข้ามาในกะนี้", !(ok3.totals.orderCount > 3) && ok3.totals.totalSales !== 1127);
 
     // มีคนแก้บิลเก่าหลังปิดกะ — ใบพิมพ์ซ้ำต้องใช้ตัวเลขที่เซ็นรับไปแล้ว และต้องบอกว่าไม่ตรง
     const EDITED = ORDERS.map((o) => o.id === 2 ? { ...o, total: 250 } : o);
@@ -4004,7 +4022,11 @@ section("เงินสดต้องเข้ากะที่เปิด�
   // เหลือได้จุดเดียวคือ "ปิดกะ" ซึ่งต้องผูกกับกะที่กำลังปิดอยู่จริงๆ ไม่ใช่กะที่เปิดอยู่
   ck("เหลือการเขียนด้วยกะจากหน้าจอแค่ตอนปิดกะเท่านั้น",
     (APP.match(/addCashMovement\(\{shift_id:shift\.id[^\n]*/g) || []).filter((l) => !l.includes('type:"closing"')).length, 0);
-  ck("ทุกจุดที่ขยับเงินใช้กะที่เปิดจริง", (APP.match(/addCashMovement\(\{shift_id:_ls\.id/g) || []).length, 5);
+  // _pls = กะที่เปิดจริงที่ตัวปิดบิลถามไว้ครั้งเดียว แล้วใช้ทั้งกับเลขกะบนบิลและกับเงินสดของใบเดียวกัน
+  // (ถามสองครั้งอาจได้คนละกะถ้ามีคนปิดกะคั่นกลางพอดี — บิลกับเงินสดจะไปคนละกะ)
+  ck("ทุกจุดที่ขยับเงินใช้กะที่เปิดจริง", (APP.match(/addCashMovement\(\{shift_id:_p?ls\.id/g) || []).length, 5);
+  ok_("บิลกับเงินสดของใบเดียวกันใช้เลขกะตัวเดียวกัน",
+    APP.includes("const _pls=await liveShift(branch.id,shift);") && APP.includes("addCashMovement({shift_id:_pls.id,"));
   // ใบปิดยอดต้องฟ้องเองเมื่อเงินสดสองทางไม่ตรง — ฝั่งบัญชีขอไว้ 22 ก.ย. 69
   {
     const st = SLIPPUSH.indexOf("function cashWarnings(drawer, payment) {");
