@@ -4277,10 +4277,58 @@ section("รายงานยอดขาย POS");
   ok_("ปุ่มจัดการหลังบ้านยังผูกกับสิทธิ์ตั้งค่าเหมือนเดิม",
     APP.includes('const canManage=!saleOnly&&hasPerm(currentUser,"settings");') && APP.includes("{canManage&&<button onClick={()=>onSelect('manage')}"));
   ok_("รายงานเปิดให้ทุกคนที่เข้าหน้าขายได้", APP.includes("const canReport=!saleOnly;"));
-  // ── สถานะต้องตรงกับตารางที่ลงจริง ────────────────────────────────────────
-  // ตาราง order_requests มีด่าน CHECK รับเฉพาะสถานะของใบสั่งของ (pending_approval/pending/approved/...)
-  // 24 ก.ย. 69 ปุ่มสรุปต้องซื้อวันนี้ใส่สถานะของ PO ("requested") ⟹ ครัวกลางสร้างใบไม่ได้เลย
-  // ทุกจุดที่เรียก api.addOrder( ต้องไม่ใช้ firstDocStatus("po") หรือ "requested" ตรงๆ
+  // ── สถานะที่เขียนลงฐาน ต้องอยู่ในรายการที่ด่าน CHECK ของตารางนั้นอนุญาตจริง ─────────
+  // 24 ก.ย. 69 ปุ่มสรุปต้องซื้อวันนี้เขียน "requested" (สถานะของ PO) ลง order_requests ⟹ ครัวกลางสร้างใบไม่ได้เลย
+  // รายการข้างล่างคัดลอกจากฐานจริง (pg_constraint · เจ้าของรันให้ 24 ก.ย. 69) มีแค่ 3 ตารางที่มีด่านนี้
+  // ถ้าแก้ด่านในฐาน ต้องแก้รายการตรงนี้ให้ตรงด้วย ไม่งั้นด่านนี้จะเตือนผิด/ปล่อยผิด
+  {
+    const DB_ALLOWED = {
+      order_requests: ["pending_approval", "pending", "approved", "rejected", "delivered", "cancelled"],
+      purchase_orders: ["pending_approval", "requested", "open", "shipped", "disputed", "awaiting_payment", "paid", "received", "cancelled", "transfer_pending", "transfer_shipped", "transfer_done"],
+      pos_shifts: ["open", "closed"],
+    };
+    // สถานะเริ่มต้นตอนปิดขั้นอนุมัติ — ต้องตรงกับ firstDocStatus ในแอป
+    const FDS = { order: "pending", pr: "approved", po: "requested" };
+    const LA = APP.split("\n");
+    const a0 = LA.findIndex((l) => /^const api\s*=\s*\{/.test(l));
+    const a1 = LA.findIndex((l, i) => i > a0 && /^\};?\s*$/.test(l));
+    const fnTable = {}; let cur = null;
+    for (let i = a0; i <= a1; i++) {
+      const m = LA[i].match(/^\s{2}(\w+)\s*:/); if (m) cur = m[1];
+      const t = LA[i].match(/sb(?:All)?\(\s*[`"]([a-z_]+)[?`"]/);
+      if (cur && t && !fnTable[cur]) fnTable[cur] = t[1];
+    }
+    ok_("อ่านแผนที่ ฟังก์ชัน → ตาราง ได้ครบทั้ง 3 ตารางที่มีด่าน",
+      Object.keys(DB_ALLOWED).every((t) => Object.values(fnTable).includes(t)));
+    const bad = [];
+    for (let i = 0; i < LA.length; i++) {
+      const calls = [...LA[i].matchAll(/api\.(\w+)\(/g)].map((x) => x[1]).filter((f) => DB_ALLOWED[fnTable[f]]);
+      if (!calls.length) continue;
+      const t = fnTable[calls[0]];
+      const stmt = LA.slice(i, i + 8).join(" ");
+      const end = stmt.indexOf(");");
+      const body = end >= 0 ? stmt.slice(0, end) : stmt;
+      // เอาทั้งค่าตรงๆ และค่าในนิพจน์เงื่อนไข (a?"x":"y") มาตรวจทุกตัว
+      for (const m of body.matchAll(/status\s*:\s*([^,}]+)/g)) {
+        const expr = m[1];
+        const f = expr.match(/firstDocStatus\("(\w+)"\)/);
+        const vals = f ? [FDS[f[1]]] : [...expr.matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+        for (const v of vals) if (!DB_ALLOWED[t].includes(v)) bad.push(`บรรทัด ${i + 1}: ${t} ← "${v}"`);
+      }
+    }
+    ck("ทุกสถานะที่เขียนลงฐาน อยู่ในรายการที่ด่าน CHECK อนุญาตจริง", bad, []);
+    // เขียนตรงด้วย sb(...) โดยไม่ผ่านชั้น api = ด่านนี้มองไม่เห็น ⟹ ห้ามมี
+    const rawW = [];
+    for (let i = 0; i < LA.length; i++) {
+      if (i >= a0 && i <= a1) continue;
+      if (!/sb(?:All)?\(\s*[`"](order_requests|purchase_orders|pos_shifts)[?`"]/.test(LA[i])) continue;
+      if (/method\s*:\s*"(POST|PATCH|PUT)"/.test(LA.slice(i, i + 4).join(" "))) rawW.push(i + 1);
+    }
+    ck("ไม่มีการเขียนลงตารางที่มีด่าน CHECK โดยข้ามชั้น api", rawW, []);
+    ok_("ตัวซ่อม PO ค้างไม่กลืน error แล้วอ้างว่าสำเร็จ",
+      APP.includes('.then(()=>p.id).catch(e=>{console.error("ซ่อม PO ค้างไม่สำเร็จ #"+p.id,e);return null;})')
+      && APP.includes("const fixedIds=new Set(done.filter(Boolean));"));
+  }
   {
     const L3 = APP.split("\n");
     const bad = [];

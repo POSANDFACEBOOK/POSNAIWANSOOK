@@ -9178,10 +9178,14 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       const isCentralId=(id)=>(branchById[id]||{}).type==="central";
       const stranded=data.filter(p=>p.status==="open"&&isCentralId(p.branch_id)&&!isCentralId(p.from_branch_id));
       if(stranded.length){
-        await Promise.all(stranded.map(p=>
-          api.patchPOIfStatus(p.id,"open",{status:"requested",updated_at:new Date().toISOString()}).catch(()=>{})
+        // เดิมกลืน error ทิ้งแล้วเปลี่ยนสถานะบนจอให้ทุกใบ ⟹ ถ้าฐานไม่รับ จอจะบอก "requested" ทั้งที่ฐานยัง "open"
+        // (บั๊กชนิดเดียวกับที่ใบสั่งของชนด่านสถานะ 24 ก.ย. 69 จะซ่อนตัวอยู่ตรงนี้ได้ตลอดไป)
+        // ยังเป็นงานเบื้องหลังที่ไม่ขวางจอ แต่จอเปลี่ยนเฉพาะใบที่ฐานรับจริง และจด error ไว้ให้เห็น
+        const done=await Promise.all(stranded.map(p=>
+          api.patchPOIfStatus(p.id,"open",{status:"requested",updated_at:new Date().toISOString()})
+            .then(()=>p.id).catch(e=>{console.error("ซ่อม PO ค้างไม่สำเร็จ #"+p.id,e);return null;})
         ));
-        const fixedIds=new Set(stranded.map(p=>p.id));
+        const fixedIds=new Set(done.filter(Boolean));
         data=data.map(p=>fixedIds.has(p.id)?{...p,status:"requested"}:p);
       }
       // ── Self-heal unsynced accounting rows ───────────────────────────────
