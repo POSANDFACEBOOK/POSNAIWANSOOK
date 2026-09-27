@@ -4289,6 +4289,47 @@ section("รายงานยอดขาย POS");
     APP.includes("isCentral={isCentral} currentBranch={currentBranch} branches={branches} onClose={()=>setPriceHistoryItem(null)}"));
   ok_("บอกทุกแถวว่าซื้อมาจากไหน (ซัพพลาย / ครัวกลาง / โอนจากสาขา) พร้อมเลขเอกสาร",
     APP.includes('{kindLabel(r.kind)}{r.ref?" · "+r.ref:""}'));
+  // ── จอรายงานยอดขาย POS: บิลแบ่งจ่ายต้องแตกออกมาว่าแต่ละช่องทางจ่ายเท่าไร (28 ก.ย. 69) ──
+  {
+    const LS = APP.split("\n");
+    const ia = LS.findIndex((l) => l.startsWith("function payBreakdown("));
+    const ib = LS.findIndex((l, i) => i > ia && l === "}");
+    let PBf = null;
+    try { PBf = new Function(LS.slice(ia, ib + 1).join("\n") + "\nreturn payBreakdown;")(); } catch {}
+    ok_("อ่านตัวแยกวิธีชำระเงินมารันได้", ia > 0 && PBf);
+    if (PBf) {
+      const B = [
+        { id: 1, total: 100, payment_method: "cash" },                                                          // บิลเงินสดไม่มี payments
+        { id: 2, total: 200, payment_method: "promptpay", payments: [{ method: "promptpay", amount: 200 }] },
+        { id: 3, total: 25, payment_method: "mixed", payments: [{ method: "promptpay", amount: 17 }, { method: "cash", amount: 8 }] }, // บิลจริง #478
+        { id: 4, total: 2372, payment_method: "mixed", payments: [{ method: "thaiplus", amount: 333 }, { method: "thaiplus", amount: 333 }, { method: "cash", amount: 1706 }] }, // #281
+        { id: 5, total: 50, payment_method: "mixed" },                                                          // บิลเก่าไม่มีรายละเอียด
+        { id: 6, total: 1151, payment_method: "mixed", payments: [{ method: "thaiplus", amount: 575.5 }, { method: "thaiplus", amount: 575.5 }] }, // #208 ป้าย mixed ช่องทางเดียว
+      ];
+      const P = PBf(B);
+      const mx = P.rows.find((r) => r.key === "mixed") || { parts: [] };
+      const part = (k) => (mx.parts.find((p) => p.key === k) || {}).sum;
+      const real = (k) => (P.real.find((p) => p.key === k) || {}).sum;
+      ck("แถวแบ่งจ่าย: จำนวนบิลและยอดรวมเท่าเดิม", mx.n + "|" + mx.sum, "4|3598");
+      ck("แตกย่อยแต่ละช่องทางถูก (บิล #478 พร้อมเพย์ 17 · เงินสด 8)", [part("cash"), part("promptpay"), part("thaiplus")].join(), "1714,17,1817");
+      ck("บิลเก่าไม่มีรายละเอียด ต้องบอกว่าไม่ทราบ ห้ามเดาช่องทาง", part("unknown"), 50);
+      ck("ยอดแตกย่อยรวมกันเท่ายอดแถวแบ่งจ่ายพอดี", Math.round(mx.parts.reduce((t, p) => t + p.sum, 0) * 100) / 100, mx.sum);
+      ck("ยอดรับจริงต่อช่องทาง รวมส่วนแบ่งจ่ายแล้ว", [real("cash"), real("promptpay"), real("thaiplus"), real("unknown")].join(), "1814,217,1817,50");
+      ck("ยอดรับจริงรวมทุกช่องทาง = ยอดขายทั้งหมด", Math.round(P.real.reduce((t, p) => t + p.sum, 0) * 100) / 100, 3898);
+      ck("บิลช่องทางเดียวไม่มีแถวแตกย่อย", P.rows.filter((r) => r.key !== "mixed").every((r) => r.parts.length === 0), true);
+      ck("ไม่มีบิลแบ่งจ่าย = ไม่ต้องโชว์ยอดรับจริงซ้ำ", PBf(B.slice(0, 2)).hasSplit, false);
+      // ขั้นที่บันทึกช่องทางเป็น "mixed" (แก้บิลแล้วไม่ได้เลือกช่องทาง) ต้องเป็นแถวเตือน ไม่ใช่ช่องทางจริง
+      const Q = PBf([{ id: 9, total: 35, payment_method: "mixed", payments: [{ method: "promptpay", amount: 17 }, { method: "cash", amount: 8 }, { method: "mixed", amount: 10 }] }]);
+      ck("ขั้นช่องทาง mixed ไปอยู่แถวไม่ทราบช่องทาง ไม่โผล่เป็นช่องทางจริง",
+        Q.real.map((p) => p.key + ":" + p.sum).sort().join(), "cash:8,promptpay:17,unknown:10");
+    }
+    ok_("ทุกตัวเลขในกล่องแยกตามวิธีชำระใช้รูปแบบเดียวกัน (แถวหลัก+แถวย่อยบวกกันลงบนจอ)",
+      APP.includes('฿{m2(r.sum)}</span>') && !APP.includes('฿{m(r.sum)}</span>'));
+    ok_("แก้บิลแบ่งจ่าย: ไม่ตั้งต้นช่องทางเป็น mixed และต้องเลือกช่องทางก่อนบันทึกส่วนต่าง",
+      APP.includes("useState(SETTLE_METHODS().some(mt=>mt.v===order.payment_method)?order.payment_method:null)") &&
+      APP.includes('if(delta!==0&&!method){notifyDlg('));
+    ok_("จอรายงานยอดขายใช้ตัวแยกนี้", APP.includes("const PB=payBreakdown(paid);") && APP.includes("{r.parts.length>0&&"));
+  }
   // ── ตัวกรองช่วงวันที่ + ตัวสรุป (28 ก.ย. 69) — รันจริง ไม่ใช่ค้นข้อความ ──
   {
     const LS = APP.split("\n");

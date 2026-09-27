@@ -24841,7 +24841,9 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
   const[step,setStep]=useState("items");
   const[q,setQ]=useState("");
   const[optPick,setOptPick]=useState(null);
-  const[method,setMethod]=useState(order.payment_method||"cash");
+  // ตั้งต้นเป็นช่องทางของบิลเฉพาะเมื่อเป็นปุ่มที่เลือกได้จริง · บิลแบ่งจ่าย ("mixed") / ช่องทางเก่า = ต้องให้พนักงานเลือกเอง
+  // เดิมตั้งต้น "mixed" ⟹ ไม่มีปุ่มไหนติด แต่กดบันทึกได้ ⟹ ส่วนต่างถูกบันทึกเป็นช่องทาง "แบ่งจ่าย" ที่ไม่มีอยู่จริง (ตรวจเจอ 28 ก.ย. 69)
+  const[method,setMethod]=useState(SETTLE_METHODS().some(mt=>mt.v===order.payment_method)?order.payment_method:null);
   const[reason,setReason]=useState("");
   const[saving,setSaving]=useState(false);
   const optionLib=useMemo(()=>posSettings?.option_library||[],[posSettings]);
@@ -24881,6 +24883,7 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
     if(!changed){notifyDlg("ยังไม่ได้แก้อะไรในบิลนี้");return;}
     if(!items.length){notifyDlg("บิลต้องมีอย่างน้อย 1 รายการ — ถ้าจะยกเลิกทั้งบิล ให้ใช้ปุ่มยกเลิกบิลที่จอโต๊ะแทน");return;}
     if(!reason.trim()){notifyDlg("กรุณาใส่เหตุผลที่แก้บิล");return;}
+    if(delta!==0&&!method){notifyDlg(delta>0?"กรุณาเลือกว่ารับเงินเพิ่มทางไหน":"กรุณาเลือกว่าคืนเงินทางไหน");return;}
     if(delta!==0&&method==="cash"&&!shift?.id){notifyDlg("ยังไม่ได้เปิดกะ — เงินสดเข้า/ออกต้องบันทึกในกะ กรุณาเปิดกะก่อน");return;}
     setSaving(true);
     const who=currentUser?.username||currentUser?.name||"ไม่ทราบชื่อ";
@@ -25013,6 +25016,33 @@ const billActedAt=(o)=>{
   const t=Date.parse((o&&(o.updated_at||o.created_at))||"");
   return Number.isFinite(t)?t:0;
 };
+// ── แยกตามวิธีชำระเงิน (จอรายงานยอดขายใน POS) ────────────────────────────────
+// แถวหลักยังจัดตาม "ชนิดบิล" เหมือนเดิม แต่บิลแบ่งจ่ายต้องแตกออกมาว่าจ่ายช่องทางไหนไปเท่าไร
+// เจ้าของขอ 28 ก.ย. 69: เห็นแค่ "แบ่งจ่ายหลายช่องทาง · 1 บิล ฿25" (บิล #478 = พร้อมเพย์ ฿17 + เงินสด ฿8)
+// พนักงานหน้าร้านไม่รู้ว่าเงินสด/ยอดโอนจริงต้องเป็นเท่าไร ⟹ บอกทั้งยอดแตกย่อย และยอดรับจริงต่อช่องทางที่รวมส่วนแบ่งจ่ายแล้ว
+// กติกาเดียวกับใบปิดกะและท่อบัญชี: มี payments ใช้ payments · ไม่มีใช้ช่องทางของบิลทั้งใบ
+// บิลป้าย mixed ที่ไม่มี payments (บิลเก่าก่อน 12 ก.ย. 69) = ไม่รู้ว่าเข้าช่องไหน ต้องบอกตรงๆ ห้ามเดา
+function payBreakdown(paid){
+  const r2=(n)=>Math.round((+n||0)*100)/100;
+  // ขั้นที่ช่องทางเป็น "mixed" หรือว่าง ไม่ใช่ช่องทางจริง (เกิดได้จากแก้บิลแบ่งจ่ายแล้วไม่ได้เลือกช่องทาง ก่อน 28 ก.ย. 69)
+  const mOf=(p)=>{const m=String((p&&p.method)||"");return(!m||m==="mixed"||m==="split")?"unknown":m;};
+  const rows=new Map();
+  const bump=(list,key,a)=>{let e=list.find(x=>x.key===key);if(!e){e={key,n:0,sum:0};list.push(e);}e.n++;e.sum=r2(e.sum+a);};
+  const realList=[];
+  for(const o of (paid||[])){
+    const t=+o.total||0;
+    const ps=Array.isArray(o.payments)?o.payments.filter(Boolean):[];
+    const split=new Set(ps.map(mOf)).size>1||o.payment_method==="mixed";
+    const k=split?"mixed":(o.payment_method||"other");
+    const e=rows.get(k)||{key:k,n:0,sum:0,parts:[]};e.n++;e.sum=r2(e.sum+t);rows.set(k,e);
+    const steps=ps.length?ps.map(p=>({m:mOf(p),a:+p.amount||0})):[{m:split?"unknown":k,a:t}];
+    for(const s of steps){bump(realList,s.m,s.a);if(split)bump(e.parts,s.m,s.a);}
+  }
+  const byAmt=(a,b)=>b.sum-a.sum;
+  const list=[...rows.values()].sort(byAmt);
+  for(const e of list)e.parts.sort(byAmt);
+  return{rows:list,hasSplit:rows.has("mixed"),real:realList.sort(byAmt)};
+}
 function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSettings=null,shift=null,currentUser=null,onEdited}){
   const[editBill,setEditBill]=useState(null);const[voidBill,setVoidBill]=useState(null);const[fixPayBill,setFixPayBill]=useState(null);const[reloadTick,setReloadTick]=useState(0);
   // ยกเลิกบิลได้เฉพาะบิลของ "กะที่เปิดอยู่" — บิลของกะที่ปิดไปแล้วส่งยอดเข้าบัญชีแล้ว ต้องแก้ผ่านบัญชี
@@ -25111,7 +25141,10 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
       const k=d.getHours();h.set(k,(h.get(k)||0)+(+o.total||0));}
     return [...h.entries()].sort((a,b)=>b[1]-a[1]).slice(0,3);
   })();
-  const payBreak=Object.entries(paid.reduce((mm,o)=>{const k=o.payment_method||"other";if(!mm[k])mm[k]={sum:0,n:0};mm[k].sum+=(+o.total||0);mm[k].n+=1;return mm;},{})).sort((a,b)=>b[1].sum-a[1].sum);
+  const PB=payBreakdown(paid);
+  // ทุกตัวเลขในกล่องแยกตามวิธีชำระใช้ตัวนี้ตัวเดียว — แถวหลักปัดเป็นบาทแต่แถวย่อยมีสตางค์ = บวกกันบนจอไม่ลง (บิล 9 ก.ย. 69 มีสตางค์)
+  const m2=(n)=>(+n||0).toLocaleString(undefined,{maximumFractionDigits:2});
+  const payName=(k)=>k==="unknown"?"⚠️ ไม่มีรายละเอียดว่าจ่ายช่องทางไหน":(PAY_LABEL[k]||k);
   // เดิมบิลที่ยกเลิกถูกกรองทิ้งทุกตัวกรอง เหลือแค่ตัวเลขนับมุมขวา — กดดูไม่ได้เลย
   // ซึ่งแปลว่ากินเงินสดแล้วกดยกเลิกจะไม่มีใครเห็นอะไรเลย ต้องเปิดให้ดูได้
   const baseList=filter==="paid"?paid:filter==="unpaid"?unpaid:filter==="cancelled"?cancelled:[...paid,...unpaid,...cancelled];
@@ -25178,11 +25211,28 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
           {l:"📈 เฉลี่ย/บิล",v:`฿${m(avg)}`,c:C.brand},
           ...(itemQty>0?[{l:"🍽️ จำนวนรายการที่ขาย",v:`${m(itemQty)} ชิ้น`,c:C.ink2,sub:`เฉลี่ย ฿${m(avgItem)}/ชิ้น`}]:[])].map(s=><div key={s.l} style={{flex:"1 1 190px",background:C.white,borderRadius:12,padding:"14px 18px",border:`1px solid ${s.warn?C.red+"55":C.line}`}}><div style={{fontSize:14,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:28,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div>{s.sub&&<div style={{fontSize:12.5,color:s.warn?C.red:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2,lineHeight:1.4}}>{s.sub}</div>}</div>)}
       </div>
-      {payBreak.length>0&&<div style={{background:C.bg,borderRadius:12,padding:"12px 16px",marginBottom:14,border:`1px solid ${C.line}`}}>
+      {PB.rows.length>0&&<div style={{background:C.bg,borderRadius:12,padding:"12px 16px",marginBottom:14,border:`1px solid ${C.line}`}}>
         <div style={{fontSize:15,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:9}}>💳 แยกตามวิธีชำระเงิน</div>
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          {payBreak.map(([k,v])=><div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:14.5,fontFamily:"'Sarabun',sans-serif"}}><span style={{color:C.ink2}}>{PAY_LABEL[k]||k} <span style={{color:C.ink4}}>· {v.n} บิล</span></span><span style={{fontWeight:800,color:C.ink}}>฿{m(v.sum)}</span></div>)}
+          {PB.rows.map(r=><div key={r.key}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:14.5,fontFamily:"'Sarabun',sans-serif"}}><span style={{color:C.ink2,minWidth:0}}>{PAY_LABEL[r.key]||r.key} <span style={{color:C.ink4}}>· {r.n} บิล</span></span><span style={{fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>฿{m2(r.sum)}</span></div>
+            {r.parts.length>0&&<div style={{margin:"5px 0 3px 12px",paddingLeft:12,borderLeft:`2px solid ${C.brand}55`,display:"flex",flexDirection:"column",gap:4}}>
+              {r.parts.map(p=><div key={p.key} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:13.5,fontFamily:"'Sarabun',sans-serif"}}>
+                <span style={{color:p.key==="unknown"?C.red:C.ink3,minWidth:0}}>↳ {payName(p.key)} <span style={{color:C.ink4}}>· {p.n} ครั้ง</span></span>
+                <span style={{fontWeight:700,color:p.key==="unknown"?C.red:C.ink2,whiteSpace:"nowrap"}}>฿{m2(p.sum)}</span>
+              </div>)}
+            </div>}
+          </div>)}
         </div>
+        {PB.hasSplit&&<div style={{marginTop:11,paddingTop:10,borderTop:`1px dashed ${C.line}`}}>
+          <div style={{fontSize:14,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:7}}>🧾 ยอดรับจริงแต่ละช่องทาง <span style={{fontWeight:600,color:C.ink4,fontSize:12.5}}>(รวมส่วนที่แบ่งจ่ายแล้ว)</span></div>
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {PB.real.map(p=><div key={p.key} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:14.5,fontFamily:"'Sarabun',sans-serif"}}>
+              <span style={{color:p.key==="unknown"?C.red:C.ink2,minWidth:0}}>{payName(p.key)}</span>
+              <span style={{fontWeight:900,color:p.key==="unknown"?C.red:C.green,whiteSpace:"nowrap"}}>฿{m2(p.sum)}</span>
+            </div>)}
+          </div>
+        </div>}
       </div>}
       {/* เมนูขายดี + ช่วงเวลาที่ขายดี — สองอย่างที่ใช้ตัดสินใจสั่งของและจัดกำลังคน */}
       {(topMenus.length>0||byHour.length>0)&&<div style={{display:"flex",gap:12,marginBottom:14,flexWrap:"wrap"}}>
