@@ -4277,6 +4277,18 @@ section("รายงานยอดขาย POS");
   ok_("ปุ่มจัดการหลังบ้านยังผูกกับสิทธิ์ตั้งค่าเหมือนเดิม",
     APP.includes('const canManage=!saleOnly&&hasPerm(currentUser,"settings");') && APP.includes("{canManage&&<button onClick={()=>onSelect('manage')}"));
   ok_("รายงานเปิดให้ทุกคนที่เข้าหน้าขายได้", APP.includes("const canReport=!saleOnly;"));
+  // ── ประวัติราคาซื้อต้องครบทุกแหล่งที่ของเข้าสต็อก (เจ้าของสั่ง 27 ก.ย. 69) ──
+  // เดิมอ่านเฉพาะใบสั่งของจากซัพพลาย ⟹ ของที่รับจากครัวกลาง (PO) ไม่ขึ้นเลย ทั้งที่เป็นการเพิ่มสต็อกที่มีราคาครบ
+  ok_("ประวัติราคาซื้อดึง PO ที่สาขานี้รับเข้าแล้วมารวม",
+    APP.includes("const list=await api.getReceivedPOsForIng(currentBranch.id,ing.id);") && APP.includes("for(const r of poRows)out.push(r);"));
+  ok_("นับเฉพาะ PO ที่รับของแล้วจริง และไม่นับใบที่ยกเลิก",
+    APP.includes("&received_at=not.is.null&status=neq.cancelled&items=cs."));
+  ok_("ใช้จำนวนที่รับจริงก่อนจำนวนที่สั่ง (ใบที่รับไม่ครบ)",
+    APP.includes("const qty=it.received_qty!=null?+it.received_qty:(it.receivedQty!=null?+it.receivedQty:+it.qty||0);"));
+  ok_("ส่งสาขาปัจจุบันเข้า modal ประวัติราคา (ไม่งั้นดึง PO ไม่ได้)",
+    APP.includes("isCentral={isCentral} currentBranch={currentBranch} branches={branches} onClose={()=>setPriceHistoryItem(null)}"));
+  ok_("บอกทุกแถวว่าซื้อมาจากไหน (ซัพพลาย / ครัวกลาง / โอนจากสาขา) พร้อมเลขเอกสาร",
+    APP.includes('{kindLabel(r.kind)}{r.ref?" · "+r.ref:""}'));
   // ── สถานะที่เขียนลงฐาน ต้องอยู่ในรายการที่ด่าน CHECK ของตารางนั้นอนุญาตจริง ─────────
   // 24 ก.ย. 69 ปุ่มสรุปต้องซื้อวันนี้เขียน "requested" (สถานะของ PO) ลง order_requests ⟹ ครัวกลางสร้างใบไม่ได้เลย
   // รายการข้างล่างคัดลอกจากฐานจริง (pg_constraint · เจ้าของรันให้ 24 ก.ย. 69) มีแค่ 3 ตารางที่มีด่านนี้

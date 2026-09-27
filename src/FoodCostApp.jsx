@@ -1001,6 +1001,10 @@ const api = {
     return sb(`purchase_orders?${q.join("&")}`);
   },
   getPO: (id) => sb(`purchase_orders?id=eq.${id}&limit=1`),
+  // PO ที่สาขานี้ "รับของเข้าแล้ว" และมีวัตถุดิบตัวนี้ — ใช้ในประวัติราคาซื้อ (รับจากครัวกลาง / โอนจากสาขาอื่น)
+  // กรองวัตถุดิบในฐานด้วย items=cs.[{"ingredient_id":N}] · ingredient_id ใน items เป็นตัวเลขทุกแถว (ตรวจ 27 ก.ย. 69: 21,662 แถว ไม่มีแบบข้อความ)
+  // รับแล้ว = มี received_at · ใบที่ยกเลิกทีหลังไม่นับ
+  getReceivedPOsForIng: (bid, ingId) => sbAll(`purchase_orders?order=received_at.desc,id.desc&select=id,po_number,branch_id,from_branch_id,status,items,received_at,po_date&branch_id=eq.${Number(bid)}&received_at=not.is.null&status=neq.cancelled&items=cs.${encodeURIComponent(JSON.stringify([{ingredient_id:Number(ingId)}]))}`),
   addPO: (d) => sb("purchase_orders", {method:"POST", body:JSON.stringify(d)}),
   updatePO: (id,d) => sb(`purchase_orders?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   // Atomically claim + clear a doc's stock_pending (row-locked RPC) so only ONE 🔁 retry can
@@ -3897,8 +3901,42 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
 // ══════════════════════════════════════════════════════
 // ── INGREDIENT TAB ────────────────────────────────────
 // ══════════════════════════════════════════════════════
-function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
-  // Build chronological history rows from delivered external-supplier orders.
+function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,branches=[],onClose}){
+  // ── ประวัติราคาซื้อ = ทุกครั้งที่ของ "เข้าสต็อก" พร้อมราคา ไม่ว่าจะมาจากไหน ──────────
+  // เดิมอ่านเฉพาะใบสั่งของจากซัพพลายภายนอก (order_requests ที่ส่งแล้ว)
+  // ⟹ ของที่สาขารับจากครัวกลาง (PO) ไม่ขึ้นเลย ทั้งที่มันคือการเพิ่มสต็อกและมีราคาต่อหน่วยครบ
+  // เจ้าของสั่ง 27 ก.ย. 69: "ประวัติการซื้อต้องขึ้นทุกซัพพลายและครัวกลางด้วย · ต้องเก็บประวัติว่าซื้อมาจากที่ไหนบ้างให้ครบถ้วน"
+  // PO ที่ครัวกลางส่งออกไปให้สาขา ไม่นับในมุมของครัวกลาง (เป็นของออก ไม่ใช่ของซื้อเข้า) — นับเฉพาะใบที่สาขานี้เป็นคนรับ
+  const[poRows,setPoRows]=useState([]);
+  const[poState,setPoState]=useState("loading");   // loading | ok | error
+  useEffect(()=>{
+    let alive=true;
+    if(!currentBranch||!currentBranch.id||!ing||!ing.id){setPoState("ok");return;}
+    (async()=>{
+      try{
+        const list=await api.getReceivedPOsForIng(currentBranch.id,ing.id);
+        const out=[];
+        for(const po of (list||[])){
+          const from=(branches||[]).find(b=>+b.id===+po.from_branch_id)||null;
+          const kind=from&&from.type==="central"?"central":"branch";
+          const source=from?from.name:("สาขา #"+po.from_branch_id);
+          for(const it of (po.items||[])){
+            if(+it.ingredient_id!==+ing.id)continue;
+            // จำนวนที่รับจริง — ใบที่รับไม่ครบ/แจ้งของไม่ตรงเก็บไว้ที่ received_qty (บางใบเก่าเป็น receivedQty)
+            const qty=it.received_qty!=null?+it.received_qty:(it.receivedQty!=null?+it.receivedQty:+it.qty||0);
+            const price=+it.price_per_unit||0;
+            if(!(qty>0)||!(price>0))continue;
+            out.push({orderId:"po"+po.id,kind,ref:po.po_number||("PO #"+po.id),date:po.received_at||po.po_date||"",
+              supplier:source,branch:currentBranch.name||"",qty,unit:it.unit||ing.buy_unit||"หน่วย",price,
+              total:Math.round(qty*price*100)/100});
+          }
+        }
+        if(alive){setPoRows(out);setPoState("ok");}
+      }catch(e){if(alive){setPoRows([]);setPoState("error");}}
+    })();
+    return()=>{alive=false;};
+  },[currentBranch&&currentBranch.id,ing&&ing.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Build chronological history rows from delivered external-supplier orders + received POs.
   const rows=(()=>{
     const src=isCentral&&allOrders&&allOrders.length?allOrders:(orders||[]);
     const out=[];
@@ -3912,6 +3950,8 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
         if(price<=0)continue;
         out.push({
           orderId:o.id,
+          kind:"supplier",
+          ref:"ใบสั่ง #"+o.id,
           date:o.requested_at||"",
           supplier:o.supplier_name||it.supplierName||it.supplier_name||"ไม่ระบุ",
           branch:o.branch_name||"",
@@ -3922,8 +3962,10 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
         });
       }
     }
+    for(const r of poRows)out.push(r);   // ของที่รับจากครัวกลาง / โอนจากสาขาอื่น
     // Newest first — sort by parsed epoch (robust to ISO or legacy DD/MM), orderId on ties.
-    out.sort((a,b)=>((parseAnyDate(b.date)?.getTime()||0)-(parseAnyDate(a.date)?.getTime()||0))||(b.orderId-a.orderId));
+    // orderId ของแถว PO เป็นข้อความ ("po123") ⟹ ลบกันตรงๆ ได้ NaN แล้วลำดับเพี้ยน ใช้เทียบข้อความแทน
+    out.sort((a,b)=>((parseAnyDate(b.date)?.getTime()||0)-(parseAnyDate(a.date)?.getTime()||0))||String(b.orderId).localeCompare(String(a.orderId),undefined,{numeric:true}));
     return out;
   })();
 
@@ -3933,6 +3975,13 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
   const avgP=prices.length?prices.reduce((s,n)=>s+n,0)/prices.length:0;
   const totalQty=rows.reduce((s,r)=>s+r.qty,0);
   const totalSpent=rows.reduce((s,r)=>s+r.total,0);
+  // แยกตามแหล่งที่ซื้อ — ราคาเฉลี่ยถ่วงตามจำนวน (รวมเงิน ÷ รวมจำนวน) ไม่ใช่เฉลี่ยราคาต่อครั้งเฉยๆ
+  const bySource=(()=>{const m=new Map();
+    for(const r of rows){const e=m.get(r.supplier)||{name:r.supplier,kind:r.kind,n:0,qty:0,total:0,unit:r.unit};e.n++;e.qty+=r.qty;e.total+=r.total;m.set(r.supplier,e);}
+    return [...m.values()].map(e=>({...e,avg:e.qty>0?e.total/e.qty:0})).sort((a,b)=>b.total-a.total);})();
+  const kindColor=(k)=>k==="central"?C.purple:k==="branch"?C.teal:C.brand;
+  const kindIcon=(k)=>k==="central"?"🏭":k==="branch"?"🔁":"🚚";
+  const kindLabel=(k)=>k==="central"?"รับจากครัวกลาง":k==="branch"?"โอนจากสาขา":"ซัพพลายภายนอก";
   const fmtMoney=n=>(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const fmtQty=n=>{const v=+n;return v%1===0?String(v):v.toFixed(3).replace(/0+$/,"").replace(/\.$/,"");};
 
@@ -3958,18 +4007,29 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
       </div>
     </div>
 
+    {bySource.length>0&&<div style={{marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{fontSize:11,fontWeight:800,color:C.ink3,marginBottom:6}}>แยกตามแหล่งที่ซื้อ</div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        {bySource.map(s=><div key={s.name} style={{flex:"1 1 200px",minWidth:0,padding:"8px 11px",borderRadius:10,border:`1px solid ${kindColor(s.kind)}33`,background:`${kindColor(s.kind)}0D`}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:kindColor(s.kind),overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{kindIcon(s.kind)} {s.name}</div>
+          <div style={{fontSize:11,color:C.ink3,marginTop:2}}>{s.n} ครั้ง · {fmtQty(s.qty)} {s.unit} · เฉลี่ย <b style={{color:C.ink}}>฿{fmtMoney(s.avg)}</b>/{s.unit}</div>
+        </div>)}
+      </div>
+    </div>}
+    {poState==="error"&&<div style={{marginBottom:10,padding:"8px 11px",borderRadius:9,background:C.yellowLight,color:"#92400E",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>⚠️ โหลดรายการรับจากครัวกลางไม่สำเร็จ — ตอนนี้แสดงเฉพาะซัพพลายภายนอก ลองปิดแล้วเปิดใหม่</div>}
+
     {rows.length===0
       ?<div style={{padding:"40px 20px",textAlign:"center",background:C.bg,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:36,marginBottom:6}}>📭</div>
-        <div style={{fontSize:14,fontWeight:800,color:C.ink3}}>ยังไม่มีประวัติการซื้อ</div>
-        <div style={{fontSize:11,color:C.ink4,marginTop:4}}>ราคาจะเริ่มเก็บเมื่อมีการกด "✅ ยืนยันรับสินค้า" ที่หน้ารับสินค้าจากซัพพลาย</div>
+        <div style={{fontSize:14,fontWeight:800,color:C.ink3}}>{poState==="loading"?"กำลังโหลดประวัติ...":"ยังไม่มีประวัติการซื้อ"}</div>
+        <div style={{fontSize:11,color:C.ink4,marginTop:4}}>ราคาจะเริ่มเก็บเมื่อสาขารับของเข้าสต็อก — ทั้งจากซัพพลายภายนอกและจากครัวกลาง</div>
       </div>
       :<div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",border:`1px solid ${C.lineLight}`,borderRadius:10}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,minWidth:560}}>
           <thead>
             <tr style={{background:C.bg,borderBottom:`2px solid ${C.lineLight}`}}>
               <th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,width:140}}>วันที่</th>
-              <th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3}}>ซัพพลาย</th>
+              <th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3}}>ซื้อจาก</th>
               {isCentral&&<th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,width:130}}>สาขา</th>}
               <th style={{padding:"8px 10px",textAlign:"right",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,width:90}}>รับเข้า</th>
               <th style={{padding:"8px 10px",textAlign:"right",fontSize:11,fontWeight:900,color:"#92400E",letterSpacing:.3,width:110,background:"#FFFBEB"}}>ราคา/หน่วย</th>
@@ -3982,7 +4042,10 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,onClose}){
               const isMax=Math.abs(r.price-maxP)<0.005&&minP!==maxP;
               return <tr key={r.orderId+":"+i} style={{borderTop:i>0?`1px solid ${C.lineLight}`:"none",background:i%2===0?C.white:"#FAFBFC"}}>
                 <td style={{padding:"10px",color:C.ink2,whiteSpace:"nowrap"}}>{fmtDT(r.date)||"—"}</td>
-                <td style={{padding:"10px",fontWeight:700,color:C.brand,wordBreak:"break-word"}}>{r.supplier}</td>
+                <td style={{padding:"10px",wordBreak:"break-word"}}>
+                  <div style={{fontWeight:700,color:kindColor(r.kind)}}>{kindIcon(r.kind)} {r.supplier}</div>
+                  <div style={{fontSize:10.5,color:C.ink4,marginTop:1}}>{kindLabel(r.kind)}{r.ref?" · "+r.ref:""}</div>
+                </td>
                 {isCentral&&<td style={{padding:"10px",color:C.ink3,fontSize:12,wordBreak:"break-word"}}>{r.branch||"—"}</td>}
                 <td style={{padding:"10px",textAlign:"right",color:C.ink2,whiteSpace:"nowrap"}}>{fmtQty(r.qty)} <span style={{fontSize:10,color:C.ink4}}>{r.unit}</span></td>
                 <td style={{padding:"10px",textAlign:"right",whiteSpace:"nowrap"}}>
@@ -5450,7 +5513,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       {paged.length<filtered.length&&<div style={{textAlign:"center",marginTop:20}}><Btn v="ghost" onClick={()=>setPg(p=>p+1)}>โหลดเพิ่ม ({filtered.length-paged.length})</Btn></div>}
     </>}
     {showImport&&<ImportIngModal onClose={()=>setShowImport(false)} ingCats={ingCats} suppliers={suppliers} currentUser={currentUser} currentBranch={currentBranch} ings={ings} onDone={async()=>{await reload();setShowImport(false);}}/>}
-    {priceHistoryItem&&<PriceHistoryModal ing={priceHistoryItem} orders={orders} allOrders={allOrders} isCentral={isCentral} onClose={()=>setPriceHistoryItem(null)}/>}
+    {priceHistoryItem&&<PriceHistoryModal ing={priceHistoryItem} orders={orders} allOrders={allOrders} isCentral={isCentral} currentBranch={currentBranch} branches={branches} onClose={()=>setPriceHistoryItem(null)}/>}
     {stockHistItem&&<StockHistoryModal ing={stockHistItem} currentBranch={currentBranch} branches={branches} onClose={()=>setStockHistItem(null)}/>}
     {reportModal&&<IngReportModal kind={reportModal} scope={(reportScope==="org"&&report.org)?"org":"branch"} data={R} currentBranch={currentBranch} onClose={()=>setReportModal(null)}/>}
     {/* ── ป็อปอัพ "ลบไม่ได้ เพราะอะไร" ───────────────────────────────────────
