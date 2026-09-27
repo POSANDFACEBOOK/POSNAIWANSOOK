@@ -4289,6 +4289,44 @@ section("รายงานยอดขาย POS");
     APP.includes("isCentral={isCentral} currentBranch={currentBranch} branches={branches} onClose={()=>setPriceHistoryItem(null)}"));
   ok_("บอกทุกแถวว่าซื้อมาจากไหน (ซัพพลาย / ครัวกลาง / โอนจากสาขา) พร้อมเลขเอกสาร",
     APP.includes('{kindLabel(r.kind)}{r.ref?" · "+r.ref:""}'));
+  // ── ตัวกรองช่วงวันที่ + ตัวสรุป (28 ก.ย. 69) — รันจริง ไม่ใช่ค้นข้อความ ──
+  {
+    const LS = APP.split("\n");
+    const ia = LS.findIndex((l) => l.startsWith("function priceHistWindow("));
+    const ib = LS.findIndex((l, i) => i > ia && l.startsWith("function PriceHistoryModal("));
+    let PH = null;
+    try { PH = new Function(LS.slice(ia, ib).join("\n") + "\nreturn {priceHistWindow,priceHistSummary};")(); } catch {}
+    ok_("อ่านตัวกรอง/ตัวสรุปประวัติราคามารันได้", ia > 0 && ib > ia && PH);
+    if (PH) {
+      const W = PH.priceHistWindow;
+      ck("7 วัน = วันนี้ + ย้อน 6 วัน", W("7d", "2026-09-28").join(), "2026-09-22,2026-09-28");
+      ck("เดือนนี้เริ่มวันที่ 1", W("month", "2026-09-28").join(), "2026-09-01,2026-09-28");
+      ck("เดือนก่อน = ทั้งเดือนที่แล้ว", W("lastmonth", "2026-09-28").join(), "2026-08-01,2026-08-31");
+      ck("เดือนก่อน ข้ามปี/ก.พ. ถูก", W("lastmonth", "2026-03-01").join() + "|" + W("lastmonth", "2026-01-15").join(), "2026-02-01,2026-02-28|2025-12-01,2025-12-31");
+      ck("ทั้งหมด = ไม่กรอง", W("all", "2026-09-28").join(), ",");
+      const row = (day, supplier, unit, qty, price) => ({ day, supplier, kind: "central", unit, qty, price, total: Math.round(qty * price * 100) / 100 });
+      const ALL = [
+        row("2026-09-01", "ครัวกลาง", "กิโลกรัม", 10, 100),
+        row("2026-09-10", "ครัวกลาง", "กก.", 10, 120),        // สะกดหน่วยต่าง แต่หน่วยเดียวกัน
+        row("2026-09-12", "ซัพ", "ลัง", 1, 1000),              // หน่วยอื่น — ห้ามปนในช่วงราคา
+        row("2026-09-15", "ครัวกลาง", "กิโลกรัม", 0.001, 75000), // บรรทัดปรับยอด ฿75 (เจอจริง PO-202609-B1-ZDMUA)
+        row("2026-09-20", "ซัพ", "กิโลกรัม", 5, 0),            // ของเข้าแต่ไม่มีราคา
+        row("", "ซัพ", "กิโลกรัม", 1, 90),                     // ไม่มีวันที่
+        row("2026-08-20", "ครัวกลาง", "กิโลกรัม", 10, 80),
+      ];
+      const A = PH.priceHistSummary(ALL, "กิโลกรัม", ["", ""]);
+      ck("ไม่กรอง = ครบทุกแถว รวมแถวไม่มีราคา", A.rows.length, 7);
+      ck("ค่าเฉลี่ยถ่วงตามจำนวน (บรรทัดปรับยอดไม่ทำให้พุ่ง)", Math.round(A.avg * 100) / 100, Math.round(3165 / 31.001 * 100) / 100);
+      ck("หน่วยอื่น (ลัง) ไม่ปนในช่วงราคา แต่นับแยกไว้", A.otherUnitN + "|" + A.min, "1|80");
+      ck("กก. กับ กิโลกรัม ถือเป็นหน่วยเดียวกัน", A.bySource.filter((s) => s.name === "ครัวกลาง").length, 1);
+      ck("แถวไม่มีราคานับแยก ไม่เข้ายอดเงิน", A.noPriceN + "|" + A.spent, "1|4165");
+      const B = PH.priceHistSummary(ALL, "กิโลกรัม", PH.priceHistWindow("custom", "2026-09-28", "2026-09-01", "2026-09-30"));
+      ck("กรองช่วงวัน: เอาเฉพาะในช่วง · แถวไม่มีวันที่ไม่หลุดเข้ามา", B.rows.length + "|" + B.undatedN, "5|1");
+      ck("กรองแล้วตัวสรุปคิดจากแถวในช่วงเท่านั้น", B.min + "|" + B.spent, "100|3275");
+    }
+    ok_("modal ใช้ตัวสรุปเดียวกับที่ด่านรัน", APP.includes("const S=priceHistSummary(allRows,ing.buy_unit,win);"));
+    ok_("ของเข้าสต็อกแต่ไม่มีราคา ต้องโชว์ ไม่ซ่อน", APP.includes("if(!(qty>0))continue;   // รับจริง 0 = ของไม่มา") && APP.includes("if(!(price>0)&&!(qty>0))continue;"));
+  }
   // ── สถานะที่เขียนลงฐาน ต้องอยู่ในรายการที่ด่าน CHECK ของตารางนั้นอนุญาตจริง ─────────
   // 24 ก.ย. 69 ปุ่มสรุปต้องซื้อวันนี้เขียน "requested" (สถานะของ PO) ลง order_requests ⟹ ครัวกลางสร้างใบไม่ได้เลย
   // รายการข้างล่างคัดลอกจากฐานจริง (pg_constraint · เจ้าของรันให้ 24 ก.ย. 69) มีแค่ 3 ตารางที่มีด่านนี้

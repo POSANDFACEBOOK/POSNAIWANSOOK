@@ -3901,6 +3901,48 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
 // ══════════════════════════════════════════════════════
 // ── INGREDIENT TAB ────────────────────────────────────
 // ══════════════════════════════════════════════════════
+// ── ประวัติราคาซื้อ: ตัวกรองช่วงวันที่ + ตัวสรุป (แยกเป็นฟังก์ชันล้วน ให้ด่านตรวจรันจริงได้) ──
+// ตรวจทั้ง 954 วัตถุดิบ (28 ก.ย. 69) เจอ 3 อย่างที่ทำให้ตัวเลขบนหัวจอเพี้ยน:
+//   · 68 ตัวรับของมาหลายหน่วย (กก. / ลัง / แพ็ค) ⟹ ช่วงราคา/ค่าเฉลี่ยเอาราคาต่อกก.ไปปนกับราคาต่อลัง
+//   · มีบรรทัดปรับยอด เช่น 0.001 กก. × ฿75,000 = ฿75 ⟹ ค่าเฉลี่ยแบบ "บวกราคาหารจำนวนครั้ง" พุ่งเป็นหมื่น ต้องถ่วงตามจำนวน
+//   · ของเข้าสต็อกแล้วแต่เอกสารไม่มีราคา (~740 บรรทัด) เคยถูกซ่อน ⟹ ประวัติว่าซื้อจากไหนไม่ครบ ตอนนี้โชว์แต่ไม่นำไปคิดราคา
+// วันที่ของแถว (r.day) = วันที่ไทย YYYY-MM-DD ของวันรับของ
+function priceHistWindow(range,today,fromD,toD){
+  const back=(n)=>new Date(new Date(today+"T00:00:00Z").getTime()-n*864e5).toISOString().slice(0,10);
+  if(range==="7d")return[back(6),today];
+  if(range==="30d")return[back(29),today];
+  if(range==="90d")return[back(89),today];
+  if(range==="month")return[today.slice(0,8)+"01",today];
+  if(range==="lastmonth"){const e=back(+today.slice(8,10));return[e.slice(0,8)+"01",e];}
+  if(range==="year")return[today.slice(0,5)+"01-01",today];
+  if(range==="custom")return[fromD||"",toD||""];
+  return["",""];
+}
+function priceHistSummary(all,buyUnit,win){
+  const normU=(u)=>{const s=String(u||"").trim();return s==="กก."||s==="กก"?"กิโลกรัม":s;};
+  const f=(win&&win[0])||"",t=(win&&win[1])||"";
+  const rows=(f||t)?all.filter(r=>r.day&&(!f||r.day>=f)&&(!t||r.day<=t)):all;
+  const priced=rows.filter(r=>r.price>0);
+  const cnt=new Map();for(const r of priced){const u=normU(r.unit);cnt.set(u,(cnt.get(u)||0)+1);}
+  const bu=normU(buyUnit);
+  // หน่วยหลัก = หน่วยซื้อที่ตั้งไว้ ถ้ามีรับเป็นหน่วยนั้นจริง · ไม่งั้นใช้หน่วยที่รับบ่อยสุด
+  const unit=cnt.has(bu)?bu:([...cnt].sort((a,b)=>b[1]-a[1])[0]||[bu])[0];
+  const isMain=(r)=>r.price>0&&normU(r.unit)===unit;
+  const main=rows.filter(isMain);
+  const ps=main.map(r=>r.price);
+  const qty=main.reduce((s,r)=>s+r.qty,0),spentMain=main.reduce((s,r)=>s+r.total,0);
+  const src=new Map();
+  for(const r of rows){const u=normU(r.unit),k=r.supplier+"|"+u;
+    const e=src.get(k)||{key:k,name:r.supplier,kind:r.kind,unit:u,n:0,qty:0,total:0};
+    e.n++;if(r.price>0){e.qty+=r.qty;e.total+=r.total;}src.set(k,e);}
+  return{rows,unit,isMain,
+    min:ps.length?Math.min(...ps):0,max:ps.length?Math.max(...ps):0,
+    avg:qty>0?spentMain/qty:(ps.length?ps.reduce((s,n)=>s+n,0)/ps.length:0),
+    qty,spent:priced.reduce((s,r)=>s+r.total,0),
+    otherUnitN:priced.length-main.length,noPriceN:rows.length-priced.length,
+    undatedN:(f||t)?all.filter(r=>!r.day).length:0,
+    bySource:[...src.values()].map(e=>({...e,avg:e.qty>0?e.total/e.qty:0})).sort((a,b)=>b.total-a.total||b.n-a.n)};
+}
 function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,branches=[],onClose}){
   // ── ประวัติราคาซื้อ = ทุกครั้งที่ของ "เข้าสต็อก" พร้อมราคา ไม่ว่าจะมาจากไหน ──────────
   // เดิมอ่านเฉพาะใบสั่งของจากซัพพลายภายนอก (order_requests ที่ส่งแล้ว)
@@ -3909,6 +3951,9 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
   // PO ที่ครัวกลางส่งออกไปให้สาขา ไม่นับในมุมของครัวกลาง (เป็นของออก ไม่ใช่ของซื้อเข้า) — นับเฉพาะใบที่สาขานี้เป็นคนรับ
   const[poRows,setPoRows]=useState([]);
   const[poState,setPoState]=useState("loading");   // loading | ok | error
+  const[range,setRange]=useState("all");            // ตัวกรองช่วงวันที่ (เจ้าของขอ 28 ก.ย. 69)
+  const[fromD,setFromD]=useState("");
+  const[toD,setToD]=useState("");
   useEffect(()=>{
     let alive=true;
     if(!currentBranch||!currentBranch.id||!ing||!ing.id){setPoState("ok");return;}
@@ -3925,7 +3970,7 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
             // จำนวนที่รับจริง — ใบที่รับไม่ครบ/แจ้งของไม่ตรงเก็บไว้ที่ received_qty (บางใบเก่าเป็น receivedQty)
             const qty=it.received_qty!=null?+it.received_qty:(it.receivedQty!=null?+it.receivedQty:+it.qty||0);
             const price=+it.price_per_unit||0;
-            if(!(qty>0)||!(price>0))continue;
+            if(!(qty>0))continue;   // รับจริง 0 = ของไม่มา ไม่ใช่การเข้าสต็อก · ไม่มีราคาแต่ของเข้าจริง ยังต้องโชว์
             out.push({orderId:"po"+po.id,kind,ref:po.po_number||("PO #"+po.id),date:po.received_at||po.po_date||"",
               supplier:source,branch:currentBranch.name||"",qty,unit:it.unit||ing.buy_unit||"หน่วย",price,
               total:Math.round(qty*price*100)/100});
@@ -3937,7 +3982,7 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
     return()=>{alive=false;};
   },[currentBranch&&currentBranch.id,ing&&ing.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   // Build chronological history rows from delivered external-supplier orders + received POs.
-  const rows=(()=>{
+  const allRows=(()=>{
     const src=isCentral&&allOrders&&allOrders.length?allOrders:(orders||[]);
     const out=[];
     for(const o of src){
@@ -3947,7 +3992,7 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
         if(ingId!==+ing.id)continue;
         const price=+it.pricePerUnit||+it.buyPrice||0;
         const qty=+it.receivedQty||+it.qtyNeeded||0;
-        if(price<=0)continue;
+        if(!(price>0)&&!(qty>0))continue;
         out.push({
           orderId:o.id,
           kind:"supplier",
@@ -3966,19 +4011,15 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
     // Newest first — sort by parsed epoch (robust to ISO or legacy DD/MM), orderId on ties.
     // orderId ของแถว PO เป็นข้อความ ("po123") ⟹ ลบกันตรงๆ ได้ NaN แล้วลำดับเพี้ยน ใช้เทียบข้อความแทน
     out.sort((a,b)=>((parseAnyDate(b.date)?.getTime()||0)-(parseAnyDate(a.date)?.getTime()||0))||String(b.orderId).localeCompare(String(a.orderId),undefined,{numeric:true}));
+    for(const r of out){const d=parseAnyDate(r.date);r.day=d?new Date(d.getTime()+TH_OFF).toISOString().slice(0,10):"";}
     return out;
   })();
 
-  const prices=rows.map(r=>r.price);
-  const minP=prices.length?Math.min(...prices):0;
-  const maxP=prices.length?Math.max(...prices):0;
-  const avgP=prices.length?prices.reduce((s,n)=>s+n,0)/prices.length:0;
-  const totalQty=rows.reduce((s,r)=>s+r.qty,0);
-  const totalSpent=rows.reduce((s,r)=>s+r.total,0);
-  // แยกตามแหล่งที่ซื้อ — ราคาเฉลี่ยถ่วงตามจำนวน (รวมเงิน ÷ รวมจำนวน) ไม่ใช่เฉลี่ยราคาต่อครั้งเฉยๆ
-  const bySource=(()=>{const m=new Map();
-    for(const r of rows){const e=m.get(r.supplier)||{name:r.supplier,kind:r.kind,n:0,qty:0,total:0,unit:r.unit};e.n++;e.qty+=r.qty;e.total+=r.total;m.set(r.supplier,e);}
-    return [...m.values()].map(e=>({...e,avg:e.qty>0?e.total/e.qty:0})).sort((a,b)=>b.total-a.total);})();
+  const win=priceHistWindow(range,todayTH(),fromD,toD);
+  const S=priceHistSummary(allRows,ing.buy_unit,win);
+  const rows=S.rows,minP=S.min,maxP=S.max,avgP=S.avg,totalQty=S.qty,totalSpent=S.spent,bySource=S.bySource;
+  const RANGES=[["all","ทั้งหมด"],["7d","7 วัน"],["30d","30 วัน"],["90d","3 เดือน"],["month","เดือนนี้"],["lastmonth","เดือนก่อน"],["year","ปีนี้"],["custom","กำหนดเอง"]];
+  const pickRange=(v)=>{if(v==="custom"&&!fromD&&!toD){const w=priceHistWindow("30d",todayTH());setFromD(w[0]);setToD(w[1]);}setRange(v);};
   const kindColor=(k)=>k==="central"?C.purple:k==="branch"?C.teal:C.brand;
   const kindIcon=(k)=>k==="central"?"🏭":k==="branch"?"🔁":"🚚";
   const kindLabel=(k)=>k==="central"?"รับจากครัวกลาง":k==="branch"?"โอนจากสาขา":"ซัพพลายภายนอก";
@@ -3986,50 +4027,69 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
   const fmtQty=n=>{const v=+n;return v%1===0?String(v):v.toFixed(3).replace(/0+$/,"").replace(/\.$/,"");};
 
   return <Modal title={`📈 ประวัติราคาซื้อ — ${ing.name}`} onClose={onClose} extraWide>
+    <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>
+      <span style={{fontSize:11.5,fontWeight:800,color:C.ink3,marginRight:2}}>📅 ช่วงวันที่</span>
+      {RANGES.map(([v,l])=>{const on=range===v;return <button key={v} onClick={()=>pickRange(v)} style={{padding:"6px 13px",borderRadius:20,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,fontWeight:on?900:600,fontSize:12,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",minHeight:34}}>{l}</button>;})}
+      {range==="custom"&&<div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+        <input type="date" value={fromD} max={toD||undefined} onChange={e=>setFromD(e.target.value)} style={{...iS,width:"auto",padding:"6px 10px",fontSize:13,minHeight:34}}/>
+        <span style={{color:C.ink4,fontSize:12}}>ถึง</span>
+        <input type="date" value={toD} min={fromD||undefined} onChange={e=>setToD(e.target.value)} style={{...iS,width:"auto",padding:"6px 10px",fontSize:13,minHeight:34}}/>
+      </div>}
+    </div>
+    {range!=="all"&&<div style={{fontSize:11.5,color:C.ink4,marginTop:-6,marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>
+      ช่วงที่ดู {win[0]?fmtD(win[0]):"แรกสุด"} – {win[1]?fmtD(win[1]):"ล่าสุด"} · {rows.length} จาก {allRows.length} ครั้ง{S.undatedN?` · ไม่มีวันที่ ${S.undatedN} ครั้ง (ดูได้ใน "ทั้งหมด")`:""}
+    </div>}
     {/* Summary cards */}
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(140px,100%),1fr))",gap:8,marginBottom:14}}>
       <div style={{padding:"10px 12px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:10,color:"#92400E",fontWeight:700}}>ช่วงราคา</div>
-        <div style={{fontSize:14,fontWeight:900,color:"#92400E"}}>{rows.length?(`฿${fmtMoney(minP)} – ฿${fmtMoney(maxP)}`):"—"}</div>
+        <div style={{fontSize:14,fontWeight:900,color:"#92400E"}}>{maxP>0?(`฿${fmtMoney(minP)} – ฿${fmtMoney(maxP)}`):"—"}</div>
+        {maxP>0&&<div style={{fontSize:9,color:C.ink4,marginTop:1}}>ต่อ{S.unit}</div>}
       </div>
       <div style={{padding:"10px 12px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:10,color:C.brand,fontWeight:700}}>ราคาเฉลี่ย</div>
-        <div style={{fontSize:14,fontWeight:900,color:C.brand}}>{rows.length?`฿${fmtMoney(avgP)}`:"—"}</div>
+        <div style={{fontSize:14,fontWeight:900,color:C.brand}}>{avgP>0?`฿${fmtMoney(avgP)}`:"—"}</div>
+        {avgP>0&&<div style={{fontSize:9,color:C.ink4,marginTop:1}}>ต่อ{S.unit} · ถ่วงตามจำนวนที่รับ</div>}
       </div>
       <div style={{padding:"10px 12px",background:C.tealLight,border:`1px solid ${C.teal}33`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:10,color:C.teal,fontWeight:700}}>จำนวนครั้ง</div>
         <div style={{fontSize:14,fontWeight:900,color:C.teal}}>{rows.length} ครั้ง</div>
+        {S.noPriceN>0&&<div style={{fontSize:9,color:C.ink4,marginTop:1}}>ไม่มีราคา {S.noPriceN} ครั้ง</div>}
       </div>
       <div style={{padding:"10px 12px",background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:10,color:C.green,fontWeight:700}}>รวมที่จ่ายไป</div>
         <div style={{fontSize:14,fontWeight:900,color:C.green}}>฿{fmtMoney(totalSpent)}</div>
-        <div style={{fontSize:9,color:C.ink4,marginTop:1}}>{fmtQty(totalQty)} {ing.buy_unit||""}</div>
+        <div style={{fontSize:9,color:C.ink4,marginTop:1}}>{fmtQty(totalQty)} {S.unit}{S.otherUnitN?" + หน่วยอื่น":""}</div>
       </div>
     </div>
 
     {bySource.length>0&&<div style={{marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>
       <div style={{fontSize:11,fontWeight:800,color:C.ink3,marginBottom:6}}>แยกตามแหล่งที่ซื้อ</div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-        {bySource.map(s=><div key={s.name} style={{flex:"1 1 200px",minWidth:0,padding:"8px 11px",borderRadius:10,border:`1px solid ${kindColor(s.kind)}33`,background:`${kindColor(s.kind)}0D`}}>
+        {bySource.map(s=><div key={s.key} style={{flex:"1 1 200px",minWidth:0,padding:"8px 11px",borderRadius:10,border:`1px solid ${kindColor(s.kind)}33`,background:`${kindColor(s.kind)}0D`}}>
           <div style={{fontSize:12.5,fontWeight:800,color:kindColor(s.kind),overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{kindIcon(s.kind)} {s.name}</div>
-          <div style={{fontSize:11,color:C.ink3,marginTop:2}}>{s.n} ครั้ง · {fmtQty(s.qty)} {s.unit} · เฉลี่ย <b style={{color:C.ink}}>฿{fmtMoney(s.avg)}</b>/{s.unit}</div>
+          <div style={{fontSize:11,color:C.ink3,marginTop:2}}>{s.n} ครั้ง · {s.qty>0?<>{fmtQty(s.qty)} {s.unit} · เฉลี่ย <b style={{color:C.ink}}>฿{fmtMoney(s.avg)}</b>/{s.unit}</>:"ไม่มีราคาในเอกสาร"}</div>
         </div>)}
       </div>
+    </div>}
+    {(S.otherUnitN>0||S.noPriceN>0)&&<div style={{marginBottom:10,padding:"7px 11px",borderRadius:9,background:C.bg,color:C.ink3,fontSize:11.5,lineHeight:1.55,fontFamily:"'Sarabun',sans-serif"}}>
+      {S.otherUnitN>0&&<div>ℹ️ ช่วงราคาและค่าเฉลี่ยคิดเฉพาะที่รับเป็น <b>{S.unit}</b> · มีรับเป็นหน่วยอื่นอีก {S.otherUnitN} ครั้ง (ราคาต่อหน่วยเทียบกันตรงๆ ไม่ได้ ดูในตาราง)</div>}
+      {S.noPriceN>0&&<div>ℹ️ รับของเข้าสต็อกแต่เอกสารไม่มีราคา {S.noPriceN} ครั้ง — แสดงในตารางให้เห็นว่ามาจากไหน แต่ไม่นำไปคิดราคา</div>}
     </div>}
     {poState==="error"&&<div style={{marginBottom:10,padding:"8px 11px",borderRadius:9,background:C.yellowLight,color:"#92400E",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>⚠️ โหลดรายการรับจากครัวกลางไม่สำเร็จ — ตอนนี้แสดงเฉพาะซัพพลายภายนอก ลองปิดแล้วเปิดใหม่</div>}
 
     {rows.length===0
       ?<div style={{padding:"40px 20px",textAlign:"center",background:C.bg,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:36,marginBottom:6}}>📭</div>
-        <div style={{fontSize:14,fontWeight:800,color:C.ink3}}>{poState==="loading"?"กำลังโหลดประวัติ...":"ยังไม่มีประวัติการซื้อ"}</div>
-        <div style={{fontSize:11,color:C.ink4,marginTop:4}}>ราคาจะเริ่มเก็บเมื่อสาขารับของเข้าสต็อก — ทั้งจากซัพพลายภายนอกและจากครัวกลาง</div>
+        <div style={{fontSize:14,fontWeight:800,color:C.ink3}}>{allRows.length>0?"ไม่มีการรับของในช่วงวันที่เลือก":poState==="loading"?"กำลังโหลดประวัติ...":"ยังไม่มีประวัติการซื้อ"}</div>
+        <div style={{fontSize:11,color:C.ink4,marginTop:4}}>{allRows.length>0?`มีประวัติทั้งหมด ${allRows.length} ครั้ง — กด "ทั้งหมด" เพื่อดูทุกช่วง`:"ราคาจะเริ่มเก็บเมื่อสาขารับของเข้าสต็อก — ทั้งจากซัพพลายภายนอกและจากครัวกลาง"}</div>
       </div>
       :<div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",border:`1px solid ${C.lineLight}`,borderRadius:10}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,minWidth:560}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,minWidth:680}}>
           <thead>
             <tr style={{background:C.bg,borderBottom:`2px solid ${C.lineLight}`}}>
               <th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,width:140}}>วันที่</th>
-              <th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3}}>ซื้อจาก</th>
+              <th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,minWidth:190}}>ซื้อจาก</th>
               {isCentral&&<th style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,width:130}}>สาขา</th>}
               <th style={{padding:"8px 10px",textAlign:"right",fontSize:11,fontWeight:800,color:C.ink3,letterSpacing:.3,width:90}}>รับเข้า</th>
               <th style={{padding:"8px 10px",textAlign:"right",fontSize:11,fontWeight:900,color:"#92400E",letterSpacing:.3,width:110,background:"#FFFBEB"}}>ราคา/หน่วย</th>
@@ -4038,8 +4098,8 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
           </thead>
           <tbody>
             {rows.map((r,i)=>{
-              const isMin=Math.abs(r.price-minP)<0.005&&minP!==maxP;
-              const isMax=Math.abs(r.price-maxP)<0.005&&minP!==maxP;
+              const isMin=S.isMain(r)&&Math.abs(r.price-minP)<0.005&&minP!==maxP;
+              const isMax=S.isMain(r)&&Math.abs(r.price-maxP)<0.005&&minP!==maxP;
               return <tr key={r.orderId+":"+i} style={{borderTop:i>0?`1px solid ${C.lineLight}`:"none",background:i%2===0?C.white:"#FAFBFC"}}>
                 <td style={{padding:"10px",color:C.ink2,whiteSpace:"nowrap"}}>{fmtDT(r.date)||"—"}</td>
                 <td style={{padding:"10px",wordBreak:"break-word"}}>
@@ -4049,11 +4109,11 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
                 {isCentral&&<td style={{padding:"10px",color:C.ink3,fontSize:12,wordBreak:"break-word"}}>{r.branch||"—"}</td>}
                 <td style={{padding:"10px",textAlign:"right",color:C.ink2,whiteSpace:"nowrap"}}>{fmtQty(r.qty)} <span style={{fontSize:10,color:C.ink4}}>{r.unit}</span></td>
                 <td style={{padding:"10px",textAlign:"right",whiteSpace:"nowrap"}}>
-                  <span style={{fontWeight:900,color:isMin?C.green:isMax?C.red:"#92400E",fontSize:14}}>฿{fmtMoney(r.price)}</span>
+                  {r.price>0?<span style={{fontWeight:900,color:isMin?C.green:isMax?C.red:"#92400E",fontSize:14}}>฿{fmtMoney(r.price)}</span>:<span style={{fontWeight:700,color:C.ink4,fontSize:12}}>ไม่มีราคา</span>}
                   {isMin&&<div style={{fontSize:9,color:C.green,fontWeight:800}}>ต่ำสุด</div>}
                   {isMax&&<div style={{fontSize:9,color:C.red,fontWeight:800}}>สูงสุด</div>}
                 </td>
-                <td style={{padding:"10px",textAlign:"right",fontWeight:800,color:C.green,whiteSpace:"nowrap"}}>฿{fmtMoney(r.total)}</td>
+                <td style={{padding:"10px",textAlign:"right",fontWeight:800,color:r.price>0?C.green:C.ink4,whiteSpace:"nowrap"}}>{r.price>0?`฿${fmtMoney(r.total)}`:"—"}</td>
               </tr>;
             })}
           </tbody>
