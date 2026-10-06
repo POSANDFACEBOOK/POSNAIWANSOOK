@@ -4514,6 +4514,37 @@ section("รายงานยอดขาย POS");
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// สำรองข้อมูลต้องครอบคลุมทุกตารางที่ระบบใช้
+// ตัวสำรองรายคืนตรวจ drift ได้ถูกต้องและแจ้งเตือนทุกคืน แต่ตารางใหม่หลุดมาแล้ว 2 ครั้ง:
+//   asset_transfers (29 ก.ค. 69 · failed 6 คืน) และ order_edits (12 ก.ย. 69 · failed 24 คืน — ตัวกู้ได้ค้างที่ 12 ก.ย.)
+// ⟹ จับตั้งแต่ตอน build: ตารางที่โค้ดอ่าน/เขียน (sb/sbAll/sbFetch/rest/v1) ต้องอยู่ใน TABLES ของ api/backup.js
+// ══════════════════════════════════════════════════════════════════════════
+section("สำรองข้อมูลครอบคลุมทุกตาราง");
+{
+  const srcFiles = ["src/FoodCostApp.jsx", "public/print-agent.js",
+    ...fs.readdirSync(new URL("../api/", import.meta.url)).filter((f) => f.endsWith(".js")).map((f) => "api/" + f),
+    ...(fs.existsSync(new URL("../lib/", import.meta.url)) ? fs.readdirSync(new URL("../lib/", import.meta.url)).filter((f) => f.endsWith(".js")).map((f) => "lib/" + f) : [])];
+  const used = new Map();
+  const RE = [
+    /\bsb\(\s*["'`]([a-z_][a-z0-9_]*)(?=[?"'`])/g,
+    /\bsbAll\(\s*["'`]([a-z_][a-z0-9_]*)(?=[?"'`])/g,
+    /\bsbFetch\(\s*["'`]([a-z_][a-z0-9_]*)(?=[?"'`])/g,
+    /\/rest\/v1\/([a-z_][a-z0-9_]*)(?=[?"'`\s])/g,
+  ];
+  for (const f of srcFiles) {
+    const s = rd(new URL("../" + f, import.meta.url));
+    for (const re of RE) for (const m of s.matchAll(re)) { if (m[1] === "rpc") continue; (used.get(m[1]) || used.set(m[1], new Set()).get(m[1])).add(f); }
+  }
+  const tb = BACKUP.slice(BACKUP.indexOf("const TABLES = ["), BACKUP.indexOf("].map((t) =>", BACKUP.indexOf("const TABLES = [")));
+  // ตัดคอมเมนต์ทิ้งก่อน — ชื่อที่ถูก // ปิดไว้ไม่ได้ถูกสำรองจริง (ด่านเวอร์ชันแรกนับมันด้วยแล้วผ่านทั้งที่ขาด)
+  const inBackup = new Set([...tb.replace(/\/\/[^\n]*/g, "").matchAll(/["']([a-z_][a-z0-9_]*)["']/g)].map((m) => m[1]));
+  const missing = [...used.keys()].filter((t) => !inBackup.has(t)).sort();
+  ok_("อ่านรายชื่อตารางที่โค้ดใช้ได้จริง (กันด่านว่างเปล่า)", used.size >= 30 && used.has("orders") && used.has("purchase_orders"));
+  ok_("ทุกตารางที่โค้ดอ่าน/เขียน อยู่ในชุดสำรองของ api/backup.js" + (missing.length ? " — ขาด: " + missing.map((t) => t + " (" + [...used.get(t)].join(", ") + ")").join(" · ") : ""),
+    missing.length === 0);
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
