@@ -87,7 +87,9 @@ declare
     'stock_count_sessions','stock_logs','waste_logs','approval_log','action_history',
     'cost_history','cost_snapshots','crm_customers','crm_transactions','crm_vouchers',
     'crm_reservations','crm_booking_requests','crm_feedback','crm_point_claims','crm_promotions',
-    'crm_broadcasts','crm_events','crm_line_users','order_items','promotions','push_subscriptions'];
+    'crm_broadcasts','crm_events','crm_line_users','order_items','promotions','push_subscriptions',
+    -- เพิ่ม 6 ต.ค. 69: สำรองอยู่แล้วแต่เคยกู้คืนไม่ได้ (restore_table ตอบ "not allowed")
+    'stock_movements','sliptrack_opening','asset_transfers','order_edits'];
   n_before bigint; n_after bigint; has_gen_always boolean; ov text; conflict text := '';
   colname text; seqname text;
 begin

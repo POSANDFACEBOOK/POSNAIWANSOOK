@@ -4541,6 +4541,34 @@ section("สำรองข้อมูลครอบคลุมทุกต�
   const inBackup = new Set([...tb.replace(/\/\/[^\n]*/g, "").matchAll(/["']([a-z_][a-z0-9_]*)["']/g)].map((m) => m[1]));
   const missing = [...used.keys()].filter((t) => !inBackup.has(t)).sort();
   ok_("อ่านรายชื่อตารางที่โค้ดใช้ได้จริง (กันด่านว่างเปล่า)", used.size >= 30 && used.has("orders") && used.has("purchase_orders"));
+  // ── ที่สำรองไว้ต้องกู้คืนได้ด้วย (6 ต.ค. 69) ──
+  // เดิม 4 ตารางอยู่ในไฟล์สำรองครบ แต่ปุ่มกู้คืน/สคริปต์/ฟังก์ชันในฐานไม่รู้จัก ⟹ วันที่ต้องกู้จริง ตารางพวกนี้จะถูกข้ามเงียบๆ
+  {
+    const strip = (s) => s.replace(/\/\/[^\n]*/g, "").replace(/--[^\n]*/g, "");
+    const names = (s) => [...strip(s).matchAll(/["']([a-z_][a-z0-9_]*)["']/g)].map((m) => m[1]);
+    const between = (s, a, b) => { const i = s.indexOf(a); return i < 0 ? "" : s.slice(i, s.indexOf(b, i + a.length)); };
+    const backed = [...inBackup].filter((t) => t !== "backups" && t !== "branch_id").sort();
+    const RESTORE_API = rd(new URL("../api/backup-restore.js", import.meta.url));
+    const RESTORE_CLI = rd(new URL("../scripts/restore.mjs", import.meta.url));
+    const SQL_SETUP = rd(new URL("../sql/backup-setup.sql", import.meta.url));
+    const SQL_ALLOW = rd(new URL("../sql/restore-table-allow-all.sql", import.meta.url));
+    const lists = {
+      "ปุ่มกู้คืน (api/backup-restore.js)": names(between(RESTORE_API, "const RESTORE_ORDER = [", "];")),
+      "สคริปต์กู้คืน (scripts/restore.mjs)": names(between(RESTORE_CLI, "const RESTORE_ORDER = [", "];")),
+      "ฐานข้อมูล (sql/backup-setup.sql)": names(between(SQL_SETUP, "allowed text[] := array[", "];")),
+      "ฐานข้อมูล (sql/restore-table-allow-all.sql)": names(between(SQL_ALLOW, "allowed text[] := array[", "];")),
+    };
+    ok_("อ่านรายชื่อกู้คืนได้ครบทั้ง 4 ที่ (กันด่านว่างเปล่า)", Object.values(lists).every((l) => l.length >= 40));
+    for (const [where, l] of Object.entries(lists)) {
+      const set = new Set(l);
+      const lack = backed.filter((t) => !set.has(t)), extra = l.filter((t) => !backed.includes(t));
+      ok_(`กู้คืนได้ครบทุกตารางที่สำรอง — ${where}` + (lack.length ? " · ขาด: " + lack.join(", ") : "") + (extra.length ? " · เกิน: " + extra.join(", ") : ""),
+        lack.length === 0 && extra.length === 0 && set.size === l.length);
+    }
+    // ไฟล์ SQL สั้นต้องเป็นฟังก์ชันตัวเดียวกับไฟล์ตั้งต้นเป๊ะ ไม่งั้นรันแล้วได้คนละตัว
+    const fnOf = (s) => between(s, "create or replace function public.restore_table(", "grant execute on function public.restore_table(");
+    ok_("ไฟล์ SQL ที่ให้เจ้าของรัน = ฟังก์ชันตัวเดียวกับใน backup-setup.sql", fnOf(SQL_SETUP).length > 500 && fnOf(SQL_SETUP) === fnOf(SQL_ALLOW));
+  }
   ok_("ทุกตารางที่โค้ดอ่าน/เขียน อยู่ในชุดสำรองของ api/backup.js" + (missing.length ? " — ขาด: " + missing.map((t) => t + " (" + [...used.get(t)].join(", ") + ")").join(" · ") : ""),
     missing.length === 0);
 }

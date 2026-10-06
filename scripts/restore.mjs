@@ -34,6 +34,9 @@ const RESTORE_ORDER = [
   "crm_promotions", "crm_vouchers", "crm_transactions", "crm_point_claims", "crm_reservations",
   "crm_booking_requests", "crm_feedback", "crm_broadcasts", "crm_events", "crm_line_users",
   "promotions", "push_subscriptions",
+  // ตารางที่สำรองอยู่แล้วแต่เคยกู้คืนไม่ได้ (เพิ่ม 6 ต.ค. 69) — ไม่มี FK ประกาศไว้ แต่อ้าง branches/ingredients/assets/orders
+  // จึงวางท้ายสุด: พ่อแม่ทุกตัวอยู่ข้างบนแล้ว และตอน --force ลบย้อนลำดับ ตัวลูกพวกนี้ถูกลบก่อน
+  "stock_movements", "sliptrack_opening", "asset_transfers", "order_edits",
 ];
 
 function arg(name) { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : undefined; }
