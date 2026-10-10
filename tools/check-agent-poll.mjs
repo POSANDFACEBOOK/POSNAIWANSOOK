@@ -299,12 +299,12 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   }
   ok_("orphan ดูจากเครื่องทั้งหมด ไม่ใช่เฉพาะที่ยังไม่ส่ง",
     SRC.includes("const orphan = items.filter(it => !all.some(p => printerHandles(p, it)));"));
-  ok_("printItems คืนรายชื่อเครื่องที่ผ่าน + รายการที่ไม่ได้พิมพ์", SRC.includes("return { ok: !anyFail, okIds, failedItems };"));
+  ok_("printItems คืนรายชื่อเครื่องที่ผ่าน + รายการที่ไม่ได้พิมพ์", SRC.includes("return { ok: !anyFail, okIds, failedItems, errs };"));
   ok_("tick จำเครื่องที่ผ่านไว้ใน state.done", SRC.includes("const done = state.done[dk] || {};"));
   ok_("ไม่ลองพิมพ์ใหม่เองเลย (เจ้าของสั่ง: ให้แจ้งเตือนแล้วรอพนักงานกด)", !SRC.includes("state.tries"));
   ok_("พิมพ์ไม่สำเร็จต้องบันทึกไว้ให้แอปแจ้งเตือนที่โต๊ะ",
     SRC.includes("async function recordPrintFail(") && SRC.includes("await recordPrintFail(printers, o,"));
-  ok_("บันทึกแล้วมาร์คว่าจัดการแล้ว จะได้ไม่วนพิมพ์", SRC.includes("await recordPrintFail(printers, o, (lastResult && lastResult.failedItems) || []);"));
+  ok_("บันทึกแล้วมาร์คว่าจัดการแล้ว จะได้ไม่วนพิมพ์", SRC.includes("await recordPrintFail(printers, o, (lastResult && lastResult.failedItems) || [], { errs: (lastResult && lastResult.errs) || [] });"));
   ok_("เก็บรายการล้มเหลวไม่ให้บวม (เก็บล่าสุดพอ)", SRC.includes("d.failed = kept.slice(-FAIL_CAP);"));
   ok_("สถานะ done/tries ถูกเก็บกวาดตามบิลที่ปิดไป",
     SRC.includes("Object.keys(state.done)") && SRC.includes("delete state.done[k];"));
@@ -339,7 +339,7 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
 // แต่ไม่เคยมีใครลบทิ้ง → ถูกอ่านซ้ำทุก 5 วิ และเขียนกลับทั้งก้อนทุก 45 วิ ตลอด 24 ชม.
 // ดึง clearPJ ตัวจริงมารันกับ sb/patchPrinter ปลอม แล้วดูว่ามันแตะอะไรบ้าง
 {
-  const src = grabBetween("async function clearPJ(", "async function handlePJRequests(");
+  const src = grabBetween("function jobStamp(", "// ล้างคำสั่งที่ทำเสร็จแล้วออกจากแถว") + grabBetween("async function clearPJ(", "async function handlePJRequests(");
   let stored = null, patched = null;
   const mk = (desc) => {
     stored = desc;
@@ -378,10 +378,51 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   ok_("description อ่านไม่ออก → ไม่ล้มทั้งตัวพิมพ์", !threw && patched === null);
 
   // ต้องถูกเรียกจริงจากขั้นตอนพิมพ์ ไม่ใช่เขียนฟังก์ชันทิ้งไว้เฉยๆ
-  ok_("ขั้นตอนพิมพ์เรียกตัวล้างจริง", /await clearPJ\(p\.id, j\.at\);/.test(SRC));
+  ok_("ขั้นตอนพิมพ์เรียกตัวล้างจริง", /await clearPJ\(p\.id, j\.at, ok, err, j\.what\);/.test(SRC));
   // ต้องล้างแม้รอบนี้ไม่ได้พิมพ์ (ของค้างจากเมื่อวานต้องหายด้วย)
   ok_("ของค้างเก่าที่พิมพ์ไปแล้วก็ต้องถูกล้าง",
     SRC.includes("if (!j) continue;") && !/if \(j && String\(state\.printed/.test(SRC));
+}
+
+// ── บันทึก "ไม่ออก" ห้ามเขียนทับค่าตั้งเครื่อง (รีวิว 10 ต.ค. 69) ──
+// แถวเครื่องพิมพ์เก็บ rcpt (เครื่องใบเสร็จ) / dw (ลิ้นชัก) / สถานะ ไว้ใน description เดียวกับรายการไม่ออก
+// เดิมอ่านแถวพลาดแล้วถือว่าว่าง {} เขียนทับทั้งแถว = ใบเสร็จไม่มีเครื่องรับ ลิ้นชักไม่เปิด รายการไม่ออกเดิมหาย
+{
+  const src = grabBetween("const PJ_FAIL_KEEP_MS", "async function recordPrintFail(");
+  const run = async (sbImpl) => {
+    let wrote = null;
+    const fn = new Function("sb", "patchPrinter", "FAIL_CAP", "console", src + " return pushFail;")(sbImpl, async (id, d) => { wrote = d; }, 60, { log() {} });
+    const r = await fn([{ id: 12, ip: "1.1.1.1" }], { id: "x", at: Date.now(), kind: "pj", items: [] });
+    return { r, wrote };
+  };
+  const keep = JSON.stringify({ rcpt: 1, dw: 1, on: 1, failed: [{ id: "old" }] });
+  const a = await run(async () => { throw new Error("504"); });
+  ok_("อ่านแถวไม่ได้ (504/เน็ตสะดุด) → ไม่เขียนเลย", a.r === false && a.wrote === null);
+  const b = await run(async () => []);
+  ok_("ไม่เจอแถว → ไม่เขียน", b.r === false && b.wrote === null);
+  const c = await run(async () => [{ description: "{พัง" }]);
+  ok_("description อ่านไม่ออก → ไม่เขียนทับ", c.r === false && c.wrote === null);
+  const d = await run(async () => [{ description: keep }]);
+  const dd = d.wrote && JSON.parse(d.wrote.description);
+  ok_("อ่านได้ → ต่อท้ายโดยค่าตั้งเครื่องอยู่ครบ", d.r === true && dd && dd.rcpt === 1 && dd.dw === 1 && dd.failed.length === 2);
+}
+
+// ── รอบหลัก + รอบเร็วเรียกงานรูป (pj) เดียวกันพร้อมกัน ต้องไม่ล้างงานทิ้งระหว่างอีกรอบรอเครื่อง (รีวิว 10 ต.ค. 69) ──
+// เดิมรอบที่สองเห็นว่ามาร์คแล้ว → ล้างงานเป็น "ไม่รู้ผล" ทันที → ผล "ไม่ออก" ที่ตามมา 8 วิให้หลังเขียนไม่ได้
+{
+  const src = grabBetween("async function handlePJRequests(", "// ปุ่ม \"เช็คสถานะใหม่\"");
+  const clears = [], fails = [];
+  const state = { printed: {} };
+  const fn = new Function("isBluetooth", "pjOf", "state", "saveState", "sendToPrinter", "errOf", "recordJobFail", "clearPJ", "pjInflight", "Buffer", "console",
+    src + " return handlePJRequests;")(
+    () => false, (p) => p.pj, state, () => {},
+    () => new Promise((_, rej) => setTimeout(() => { const e = new Error("t"); e.code = "DRAIN_TIMEOUT"; rej(e); }, 60)),
+    (p, e) => ({ pid: p.id, code: e.code }), async (...a) => { fails.push(a); },
+    async (id, at, ok, err, what) => { clears.push({ id, at, ok, err, what }); }, new Set(), Buffer, { log() {} });
+  const rows = [{ id: 12, ip: "1.1.1.1", pj: { at: 5, b64: "QQ==", what: "ใบเสร็จ" } }];
+  await Promise.all([fn(rows), new Promise((r) => setTimeout(r, 10)).then(() => fn(rows))]);
+  ok_("สองรอบชนกัน → ส่งครั้งเดียว ล้างครั้งเดียว", clears.length === 1 && fails.length === 1);
+  ok_("ผล 'ไม่ออก' ถูกจดพร้อมเหตุ (ไม่ถูกล้างทิ้งเป็นไม่รู้ผล)", clears[0] && clears[0].ok === false && clears[0].err && clears[0].err.code === "DRAIN_TIMEOUT" && clears[0].what === "ใบเสร็จ");
 }
 
 // ── ใบครัวต้องบอกได้เสมอว่าไปโต๊ะไหน (เหตุจริง 9 ก.ย. 69) ──

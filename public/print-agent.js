@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 45;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 46;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 2000;
@@ -215,16 +215,34 @@ function buildQRESC(qr) {
   b(0x1b, 0x64, 0x04); b(0x1d, 0x56, 0x41, 0x00);
   return Buffer.concat(bufs);
 }
+// ล้มเหลวแล้วต้องบอกได้ว่า "ล้มตรงไหน" — เหตุจริง 10 ต.ค. 69 ที่ The River: ใบไม่ออก 5 ใบ
+// ทุกใบหมดเวลา 8 วิ แต่ระบบเก็บแค่ว่า "ไม่ออก" ไม่มีใครรู้ว่าต่อเครื่องไม่ติด หรือต่อติดแต่เครื่องค้าง
+// ซึ่งแก้คนละที่ (เครือข่าย/Wi-Fi ของเครื่องที่รันตัวพิมพ์ vs ตัวเครื่องพิมพ์: กระดาษ ฝา ค้าง)
+// จังหวะเวลาเหมือนเดิมเป๊ะ (รอได้ 8 วิไม่มีความเคลื่อนไหว ทั้งช่วงต่อและช่วงส่ง) เพิ่มแค่ป้ายบอกเหตุ
+// e.code: CONNECT_TIMEOUT · DRAIN_TIMEOUT · ECONNREFUSED · EHOSTUNREACH ฯลฯ · e.phase: connect | drain · e.ms: ใช้เวลาไปเท่าไร
 function sendToPrinter(ip, port, buf) {
   return new Promise((resolve, reject) => {
+    const t0 = Date.now();
     const s = net.createConnection({ host: ip, port: +port || 9100 });
-    let done = false;
+    let done = false, connected = false;
+    const fail = (code, msg) => {
+      if (done) return; done = true;
+      try { s.destroy(); } catch {}
+      const e = new Error(msg); e.code = code; e.phase = connected ? "drain" : "connect"; e.ms = Date.now() - t0;
+      reject(e);
+    };
     s.setTimeout(8000);
-    s.on("connect", () => s.write(buf, () => s.end()));
+    s.on("connect", () => { connected = true; s.write(buf, () => s.end()); });
     s.on("close", () => { if (!done) { done = true; resolve(); } });
-    s.on("timeout", () => { if (!done) { done = true; s.destroy(); reject(new Error("หมดเวลา (เครื่องไม่ตอบ)")); } });
-    s.on("error", e => { if (!done) { done = true; reject(e); } });
+    s.on("timeout", () => connected
+      ? fail("DRAIN_TIMEOUT", "หมดเวลา — ต่อเครื่องติดแต่เครื่องไม่รับงานจนจบ (กระดาษหมด/ฝาเปิด/เครื่องค้าง)")
+      : fail("CONNECT_TIMEOUT", "หมดเวลา — ต่อเครื่องไม่ติด (เครื่องดับ/หลุด Wi-Fi/คนละวง)"));
+    s.on("error", e => fail(e.code || "ERR", e.message));
   });
+}
+// ย่อความผิดพลาดให้เก็บลงฐานข้อมูลได้ (ไม่เก็บข้อความยาว — แอปแปลรหัสเป็นภาษาคนเอง)
+function errOf(p, e) {
+  return { pid: p && p.id != null ? p.id : null, name: (p && p.name) || "", code: (e && e.code) || "ERR", phase: (e && e.phase) || "", ms: (e && e.ms) || null };
 }
 
 // ── สถานะ: ออเดอร์/รายการที่พิมพ์ไปแล้ว (กันพิมพ์ซ้ำ) ──────────────────────
@@ -370,11 +388,11 @@ async function printItems(items, tableNum, printers, alreadyDone, meta) {
     return { p, buf: Buffer.concat(parts.map(x => x.buf)), mode: bufsMode(parts), n: idxs.length };
   }).filter(Boolean);
   let anyFail = false;
-  const okIds = [];
+  const okIds = [], errs = [];
   await Promise.all(jobs.map(({ p, buf, mode, n }) =>
     sendToPrinter(p.ip, p.port, buf)
       .then(() => { okIds.push(p.id); console.log(`  ✅ พิมพ์ ${n} รายการ [${mode}] → ${p.name} (${p.ip})`); })
-      .catch(e => { anyFail = true; console.log(`  ❌ ไม่สำเร็จ → ${p.name} (${p.ip}): ${e.message}`); })
+      .catch(e => { anyFail = true; errs.push(errOf(p, e)); console.log(`  ❌ ไม่สำเร็จ → ${p.name} (${p.ip}): ${e.message}`); })
   ));
   // orphan ดูจากเครื่องทั้งหมด ไม่ใช่เฉพาะที่ยังไม่ได้พิมพ์ — ไม่งั้นพอเครื่องที่รับ
   // หมวดนั้นพิมพ์ผ่านแล้ว รอบถัดไปจะหลงคิดว่าไม่มีเครื่องรับ แล้วรายงานผิด
@@ -409,7 +427,7 @@ async function printItems(items, tableNum, printers, alreadyDone, meta) {
     const hs = all.filter(p => printerHandles(p, it));
     return hs.length > 0 && !hs.some(p => delivered.has(+p.id));
   });
-  return { ok: !anyFail, okIds, failedItems };
+  return { ok: !anyFail, okIds, failedItems, errs };
 }
 
 // ทดสอบพิมพ์ตามคำสั่งจากแอป: แอปเขียน description.tp = เวลาที่กด → agent พิมพ์หน้าทดสอบให้เครื่องนั้นภายใน ~5 วินาที
@@ -439,16 +457,18 @@ async function handleReprintRequests(printers) {
       // การเรนเดอร์ต้องอยู่ในกันชนเดียวกับการส่ง — เดิมอยู่นอกกันชน พอมันโยน
       // คำสั่งก็ถูกกินไปแล้วจากบรรทัดบน (มาร์คก่อนส่ง) และ tick ทั้งรอบตายกลางทาง
       // = กดปุ่มพิมพ์ซ้ำแล้วเงียบสนิท ไม่มีอะไรเกิดขึ้น และออเดอร์ปกติในรอบนั้นก็ไม่ได้พิมพ์ด้วย
+      let ok = true, err = null;
       try {
         const { buf, mode } = await itemsToBuffer(its, rp.table || "-", { bill: rp.bill, by: rp.by, kind: rp.kind, from: rp.from });
         await sendToPrinter(p.ip, p.port, buf);
         console.log(`  🔁 พิมพ์ซ้ำ ${its.length} รายการ [${mode}] → ${p.name} (${p.ip})`);
       } catch (e) {
+        ok = false; err = errOf(p, e);
         console.log(`  ❌ พิมพ์ซ้ำ → ${p.name} (${p.ip}): ${e.message}`);
         // ใบยกเลิก/ย้ายโต๊ะ/พิมพ์ซ้ำที่ไม่ออกก็ต้องขึ้นปุ่ม "พิมพ์ไม่สำเร็จ" — ใบยกเลิกหายเงียบ = ครัวทำต่อ
-        await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id, pname: p.name });
+        await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id, pname: p.name, errs: [err] });
       }
-      await clearCmdKey(p.id, "rp", rp.at);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที (ล้มเหลวไปอยู่ในรายการ "พิมพ์ไม่สำเร็จ" แล้ว)
+      await clearCmdKey(p.id, "rp", rp.at, ok, err);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที (ล้มเหลวไปอยู่ในรายการ "พิมพ์ไม่สำเร็จ" แล้ว)
     }
   }
 }
@@ -461,9 +481,10 @@ async function handleQRRequests(printers) {
     const q = qrOf(p);
     if (q && String(state.qrPrinted[p.id]) !== String(q.at)) {
       state.qrPrinted[p.id] = q.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
+      let ok = true, err = null;
       try { await sendToPrinter(p.ip, p.port, buildQRESC(q)); console.log(`  🔳 พิมพ์ QR โต๊ะ ${q.table} → ${p.name} (${p.ip})`); }
-      catch (e) { console.log(`  ❌ พิมพ์ QR → ${p.name} (${p.ip}): ${e.message}`); }
-      await clearCmdKey(p.id, "qr", q.at);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที
+      catch (e) { ok = false; err = errOf(p, e); console.log(`  ❌ พิมพ์ QR → ${p.name} (${p.ip}): ${e.message}`); }
+      await clearCmdKey(p.id, "qr", q.at, ok, err);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที
     }
   }
 }
@@ -478,39 +499,58 @@ async function handleDrawerRequests(printers) {
     if (isBluetooth(p) || !p.ip) continue;
     const k = dkOf(p);
     if (!k) continue;
-    if (String(state.kicked[p.id]) !== String(k.at)) {
-      state.kicked[p.id] = k.at; saveState();   // มาร์คก่อนส่ง กันเปิดซ้ำจาก tick ซ้อน
-      try { await sendToPrinter(p.ip, p.port, DRAWER_KICK); console.log(`  💵 เปิดลิ้นชัก → ${p.name} (${p.ip})`); }
-      catch (e) { console.log(`  ❌ เปิดลิ้นชัก → ${p.name} (${p.ip}): ${e.message}`); }
-    }
-    // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที ไม่งั้นค้างอยู่ในแถวแล้วถูกอ่านซ้ำทุก 5 วินาที
-    await clearCmdKey(p.id, "dk", k.at);
+    const fk = p.id + "|" + k.at;
+    if (dkInflight.has(fk)) continue;   // อีกรอบกำลังเปิดลิ้นชักนี้อยู่ — ปล่อยให้รอบนั้นจดผลเอง (เหตุผลเดียวกับใบเสร็จ)
+    let ok, err = null;   // ok ว่าง = รอบก่อนส่งไปแล้ว แต่ล้างคำสั่งไม่ทัน (ไม่รู้ผล ห้ามเดาว่าสำเร็จ)
+    dkInflight.add(fk);
+    try {
+      if (String(state.kicked[p.id]) !== String(k.at)) {
+        state.kicked[p.id] = k.at; saveState();   // มาร์คก่อนส่ง กันเปิดซ้ำจาก tick ซ้อน
+        try { await sendToPrinter(p.ip, p.port, DRAWER_KICK); ok = true; console.log(`  💵 เปิดลิ้นชัก → ${p.name} (${p.ip})`); }
+        catch (e) { ok = false; err = errOf(p, e); console.log(`  ❌ เปิดลิ้นชัก → ${p.name} (${p.ip}): ${e.message}`); }
+      }
+      // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที ไม่งั้นค้างอยู่ในแถวแล้วถูกอ่านซ้ำทุก 5 วินาที
+      await clearCmdKey(p.id, "dk", k.at, ok, err);
+    } finally { dkInflight.delete(fk); }
   }
 }
+// งานที่กำลังส่งอยู่ (ไม่ต้องเก็บข้ามรีสตาร์ท — แค่กันสองรอบในโปรเซสเดียวกันชนกัน)
+const pjInflight = new Set(), dkInflight = new Set();
+// งานล่าสุดของเครื่องนี้ — แอปเอาไปโชว์ว่า "พิมพ์ล่าสุดเมื่อไหร่ ออกไหม เพราะอะไร"
+// เดิม ok เป็นจริงเสมอ (ไม่มีใครส่งผลมา) จอจึงบอกว่าเครื่องเพิ่งทำงานทั้งที่ส่งไม่ผ่าน
+// ok ว่าง = ไม่รู้ผล → ไม่ใส่ ok เลย (ห้ามเดาว่าสำเร็จ)
+function jobStamp(key, ok, err, what) {
+  const j = { at: Date.now(), kind: key };
+  if (what) j.what = String(what).slice(0, 30);   // งานรูป (pj) มีหลายชนิด — ใบเสร็จ/QR/ใบปิดกะ/ทดสอบ
+  if (ok === true || ok === false) j.ok = ok;
+  if (ok === false && err) j.err = { code: err.code, phase: err.phase };
+  return j;
+}
 // ล้างคำสั่งที่ทำเสร็จแล้วออกจากแถว (เทียบ at ก่อน — ถ้ามีคำสั่งใหม่กว่ามาแล้วห้ามลบ)
-async function clearCmdKey(id, key, at, ok) {
+async function clearCmdKey(id, key, at, ok, err) {
   try {
     const r = await sb(`printers?id=eq.${id}&select=description`);
     let d = {};
     try { d = JSON.parse((r && r[0] && r[0].description) || "{}"); } catch { return; }
     if (!d[key] || String(d[key].at) !== String(at)) return;
     delete d[key];
-    // งานล่าสุดของเครื่องนี้ — แอปเอาไปโชว์ว่า "พิมพ์ล่าสุดเมื่อไหร่ สำเร็จไหม"
-    d.lastJob = { at: Date.now(), kind: key, ok: ok !== false };
+    d.lastJob = jobStamp(key, ok, err);
     await patchPrinter(id, { description: JSON.stringify(d) });
   } catch { /* ล้างไม่สำเร็จก็ไม่เป็นไร รอบหน้าลองใหม่ */ }
 }
-// พิมพ์รูปภาพ (raster ESC/POS ที่แอปเรนเดอร์ไทยคมชัดมาให้แล้ว) ตามคำสั่ง: description.pj = {at, b64}
+// พิมพ์รูปภาพ (raster ESC/POS ที่แอปเรนเดอร์ไทยคมชัดมาให้แล้ว) ตามคำสั่ง: description.pj = {at, b64, what?, bill?, table?}
 function pjOf(p) { try { const j = JSON.parse(p.description || "{}").pj; return (j && j.at && j.b64) ? j : null; } catch { return null; } }
 // ลบงานพิมพ์ที่จัดการเสร็จแล้วออกจากแถว — อ่านของสดก่อนเขียนเสมอ เพื่อไม่ทับคำสั่งอื่น
 // ลบเฉพาะงานที่มี at ตรงกับที่เราเพิ่งจัดการ ถ้าแอปเพิ่งส่งงานใหม่เข้ามาคาบเกี่ยว จะไม่ไปลบของใหม่ทิ้ง
-async function clearPJ(id, at) {
+// เขียนผลลง lastJob ในการเขียนครั้งเดียวกับที่ล้างงาน — ไม่เพิ่มจำนวนการเขียน
+async function clearPJ(id, at, ok, err, what) {
   try {
     const r = await sb(`printers?id=eq.${id}&select=description`);
     let d = {};
     try { d = JSON.parse((r && r[0] && r[0].description) || "{}"); } catch { return; }
     if (!d.pj || String(d.pj.at) !== String(at)) return;   // ไม่ใช่งานเดิม = มีคนส่งงานใหม่มาแล้ว ปล่อยไว้
     delete d.pj;
+    d.lastJob = jobStamp("pj", ok, err, what);
     await patchPrinter(id, { description: JSON.stringify(d) });
     console.log(`  🧹 ล้างงานพิมพ์ที่เสร็จแล้วออกจากแถว #${id}`);
   } catch { /* ล้างไม่สำเร็จก็ไม่เป็นไร รอบหน้าลองใหม่ */ }
@@ -521,17 +561,32 @@ async function handlePJRequests(printers) {
     if (isBluetooth(p) || !p.ip) continue;
     const j = pjOf(p);
     if (!j) continue;
-    if (String(state.printed[p.id]) !== String(j.at)) {
-      state.printed[p.id] = j.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
-      try { await sendToPrinter(p.ip, p.port, Buffer.from(j.b64, "base64")); console.log(`  🖼️ พิมพ์รูปภาพ (ไทยคมชัด) → ${p.name} (${p.ip})`); }
-      catch (e) { console.log(`  ❌ พิมพ์รูปภาพ → ${p.name} (${p.ip}): ${e.message}`); }
-    }
+    // รอบหลัก (2 วิ) กับรอบเร็ว (0.8 วิ) เรียกตัวนี้ทั้งคู่ — ถ้าอีกรอบกำลังส่งงานนี้อยู่ ห้ามแตะ
+    // ไม่งั้นรอบนี้ล้างงานทิ้งเป็น "ไม่รู้ผล" ระหว่างที่อีกรอบรอเครื่อง 8 วิ แล้วผล "ไม่ออก" ที่ตามมาเขียนไม่ได้
+    const fk = p.id + "|" + j.at;
+    if (pjInflight.has(fk)) continue;
+    let ok, err = null;   // ok ว่าง = รอบก่อนส่งไปแล้ว แต่ล้างงานไม่ทัน (ไม่รู้ผล)
+    pjInflight.add(fk);
+    try {
+      if (String(state.printed[p.id]) !== String(j.at)) {
+        state.printed[p.id] = j.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
+        try { await sendToPrinter(p.ip, p.port, Buffer.from(j.b64, "base64")); ok = true; console.log(`  🖼️ พิมพ์รูปภาพ (ไทยคมชัด) → ${p.name} (${p.ip})`); }
+        catch (e) {
+          ok = false; err = errOf(p, e);
+          console.log(`  ❌ พิมพ์รูปภาพ → ${p.name} (${p.ip}): ${e.message}`);
+          // ใบเสร็จ/ใบแจ้งยอด/QR/ใบปิดกะที่ไม่ออก เดิมหายเงียบ (บิล 499/500 วันที่ 10 ต.ค. 69)
+          // ⟹ ขึ้นในปุ่ม "พิมพ์ไม่สำเร็จ" ด้วย · ไม่เก็บรูป (ใหญ่ ~24KB) — พนักงานสั่งพิมพ์ใหม่จากบิลเอง
+          // หน้าทดสอบไม่ต้องขึ้น (คนกดยืนดูอยู่ และจอเครื่องพิมพ์บอกผลงานล่าสุดแล้ว)
+          if (j.what !== "ทดสอบพิมพ์") await recordJobFail(printers, p, j, err);
+        }
+      }
     // งานพิมพ์เป็นคำสั่งครั้งเดียวจบ — พิมพ์แล้ว (หรือพยายามแล้ว) ต้องลบทิ้งทันที
     // ปล่อยค้างไว้คือรูปใบเสร็จ base64 ~24KB นอนอยู่ในแถว แล้วถูกอ่านซ้ำทุก 5 วินาที
     // ตลอด 24 ชม. (getPrinters ดึงทุกคอลัมน์) และถูกเขียนกลับทั้งก้อนทุก 45 วินาที
     // (heartbeat merge ทั้ง description) — นี่คือสิ่งที่ทำให้ Disk IO หมดจนฐานข้อมูลล่ม 9 ก.ย. 69
     // ไม่ลองพิมพ์ใหม่อยู่แล้วตามกติกา (ล้มเหลว = แจ้งเตือนที่โต๊ะ) การลบจึงไม่ทำให้ใบหาย
-    await clearPJ(p.id, j.at);
+      await clearPJ(p.id, j.at, ok, err, j.what);
+    } finally { pjInflight.delete(fk); }
   }
 }
 
@@ -569,16 +624,35 @@ function failItem(it, k) {
   return { k, name: String(it.name || ""), qty: it.qty, options: Array.isArray(it.options) ? it.options : [], note: it.note || "",
     menu_id: it.menu_id != null ? it.menu_id : null, printer_id: it.printer_id != null ? it.printer_id : null, category: it.category != null ? it.category : null };
 }
-async function recordPrintFail(printers, order, items, extra) {
+// เพิ่มรายการเข้า failed ของเครื่องแรกที่มี IP (อ่านของล่าสุดก่อนเขียนเสมอ — แอปเขียนช่องเดียวกันอยู่)
+// ⚠️ อ่านไม่ได้ = ไม่เขียน (fail closed) — แถวนี้เก็บค่าตั้งเครื่องด้วย (rcpt ใบเสร็จ · dw ลิ้นชัก · สถานะ)
+// เดิมอ่านพลาดแล้วถือว่าแถวว่าง {} แล้วเขียนทับทั้งแถว = เครื่องใบเสร็จหาย ลิ้นชักไม่เปิด รายการไม่ออกเดิมหายหมด
+// เสียบันทึกไม่ออกหนึ่งรายการ ถูกกว่าล้างค่าตั้งเครื่องทั้งแถวมาก
+const PJ_FAIL_KEEP_MS = 24 * 60 * 60 * 1000;   // ใบเสร็จ/QR ที่ไม่ออกเกินวัน ไม่มีใครพิมพ์ย้อนแล้ว — ไม่ให้เบียดใบครัวที่ยังรีปริ้นได้ออกจากโควตา
+async function pushFail(printers, entry) {
   const target = (printers || []).find(p => p.ip) || (printers || [])[0];
-  if (!target || !items || !items.length) return;
+  if (!target) return false;
+  let d;
+  try {
+    const r = await sb(`printers?id=eq.${target.id}&select=description`);
+    if (!r || !r[0]) return false;
+    d = JSON.parse(r[0].description || "{}");
+    if (!d || typeof d !== "object" || Array.isArray(d)) return false;
+  } catch { console.log("  ⚠️ อ่านแถวเครื่องพิมพ์ไม่ได้ — ไม่บันทึกรายการไม่ออกรอบนี้ (กันเขียนทับค่าตั้งเครื่อง)"); return false; }
+  const now = Date.now();
+  const kept = (Array.isArray(d.failed) ? d.failed : []).filter(f => !(f && f.kind === "pj" && now - (+f.at || 0) > PJ_FAIL_KEEP_MS));
+  kept.push(entry);
+  if (kept.length > FAIL_CAP) console.log(`  ⚠️ รายการพิมพ์ไม่ออกเกิน ${FAIL_CAP} — ตัดของเก่าสุดออก ${kept.length - FAIL_CAP} รายการ`);
+  d.failed = kept.slice(-FAIL_CAP);   // เก็บล่าสุดพอ ไม่ให้ description บวม
+  await patchPrinter(target.id, { description: JSON.stringify(d) });
+  return true;
+}
+async function recordPrintFail(printers, order, items, extra) {
+  if (!items || !items.length) return;
   const x = extra || {};
   try {
-    let d = {};
-    try { const r = await sb(`printers?id=eq.${target.id}&select=description`); if (r && r[0]) d = JSON.parse(r[0].description || "{}"); } catch {}
-    const kept = Array.isArray(d.failed) ? d.failed : [];
     const at = Date.now();
-    kept.push({
+    const entry = {
       id: `${order.id != null ? order.id : "x"}-${at}-${Math.floor(Math.random() * 1e6)}`,
       at,
       orderId: order.id != null ? order.id : null,
@@ -590,12 +664,29 @@ async function recordPrintFail(printers, order, items, extra) {
         : [...new Set(items.flatMap((it) => (printers || []).filter((p) => printerHandles(p, it)).map((p) => p.name)).filter(Boolean))].slice(0, 4),
       n: items.reduce((a, i) => a + (+i.qty || 0), 0),
       items: items.slice(0, 30).map(failItem),
-    });
-    if (kept.length > FAIL_CAP) console.log(`  ⚠️ รายการพิมพ์ไม่ออกเกิน ${FAIL_CAP} — ตัดของเก่าสุดออก ${kept.length - FAIL_CAP} รายการ`);
-    d.failed = kept.slice(-FAIL_CAP);   // เก็บล่าสุดพอ ไม่ให้ description บวม
-    await patchPrinter(target.id, { description: JSON.stringify(d) });
-    console.log(`  📌 บันทึกไว้ให้พนักงานกดพิมพ์เอง — โต๊ะ ${tableLabel(order)}: ${d.failed[d.failed.length-1].names.join(", ")}`);
+      // เหตุที่ไม่ออก รายเครื่อง — แอปแปลเป็นภาษาคน ("ต่อเครื่องไม่ติด" vs "ต่อติดแต่เครื่องค้าง")
+      errs: (Array.isArray(x.errs) ? x.errs : []).slice(0, 4),
+    };
+    if (await pushFail(printers, entry)) console.log(`  📌 บันทึกไว้ให้พนักงานกดพิมพ์เอง — โต๊ะ ${entry.table}: ${entry.names.join(", ")}`);
   } catch (e) { console.log("  ⚠️ บันทึกรายการที่พิมพ์ไม่ผ่านไม่สำเร็จ:", e.message); }
+}
+// งานพิมพ์รูป (pj) ที่ไม่ออก — ใบเสร็จ/ใบแจ้งยอด/QR โต๊ะ/ใบปิดกะ/ใบยกเลิกบิล
+// แอปแนบ what/bill/table มากับคำสั่ง (แท็บเก่าที่ยังไม่รีเฟรชไม่มี → ขึ้นเป็น "ใบจากเคาน์เตอร์")
+// items ว่างโดยตั้งใจ: ตัวพิมพ์พิมพ์ซ้ำเองไม่ได้ (ไม่เก็บรูป) handleFailRetries จึงข้ามรายการนี้
+async function recordJobFail(printers, p, j, err) {
+  try {
+    const at = Date.now();
+    const what = String((j && j.what) || "ใบจากเคาน์เตอร์");
+    await pushFail(printers, {
+      id: `pj-${(j && j.at) || at}-${p.id}`,
+      at,
+      orderId: j && j.bill != null ? j.bill : null,
+      table: j && j.table ? String(j.table) : "",
+      kind: "pj", what, from: "", by: "", pid: p.id,
+      names: [what], pnames: [p.name], n: 1, items: [],
+      errs: err ? [err] : [],
+    }) && console.log(`  📌 ${what} ไม่ออก → ${p.name} — ขึ้นในปุ่ม "พิมพ์ไม่สำเร็จ" แล้ว`);
+  } catch (e) { console.log("  ⚠️ บันทึกงานพิมพ์ที่ไม่ออกไม่สำเร็จ:", e.message); }
 }
 
 // พิมพ์ใหม่ตามที่พนักงานกด "รีปริ้น" ในแอป — แอปติ๊ก r (เวลาที่กด) ไว้ที่รายการใน failed
@@ -618,29 +709,35 @@ async function handleFailRetries(printers) {
       want.forEach(it => { state.retried[f.id + ":" + it.k] = it.r; }); saveState();   // มาร์คก่อนส่ง กันยิงซ้ำจาก tick ซ้อน
       const fresh = want.filter(it => Date.now() - (+it.r || 0) <= RETRY_TTL);
       const okKs = new Set();
+      let errs = [];
       if (fresh.length) {
         const meta = { bill: f.orderId, by: f.by, kind: f.kind, from: f.from };
         try {
           if (f.pid != null) {
             const p = all.find(x => +x.id === +f.pid);
-            if (p) { const { buf } = await itemsToBuffer(fresh, f.table || "-", meta); await sendToPrinter(p.ip, p.port, buf); fresh.forEach(it => okKs.add(it.k)); }
+            if (p) {
+              const { buf } = await itemsToBuffer(fresh, f.table || "-", meta);
+              try { await sendToPrinter(p.ip, p.port, buf); fresh.forEach(it => okKs.add(it.k)); }
+              catch (e) { errs = [errOf(p, e)]; throw e; }
+            }
           } else {
             const r = await printItems(fresh, f.table || "-", printers, {}, meta);
             const ok = new Set((r && r.okIds || []).map(Number));
+            errs = (r && r.errs) || [];
             // ออก = มีเครื่องที่รับรายการนี้พิมพ์ผ่านอย่างน้อยหนึ่งเครื่อง · ไม่มีเครื่องรับเลย ≠ ออก (ห้ามลบทิ้งเงียบๆ)
             fresh.forEach(it => { if (all.some(p => printerHandles(p, it) && ok.has(+p.id))) okKs.add(it.k); });
           }
         } catch (e) { console.log(`  ❌ พิมพ์ใหม่ (พนักงานกด) → โต๊ะ ${f.table}: ${e.message}`); }
       }
       console.log(`  🖨️ พิมพ์ใหม่ที่พนักงานกด โต๊ะ ${f.table}: ออก ${okKs.size}/${want.length}`);
-      await settleFail(holder.id, f.id, want, okKs);
+      await settleFail(holder.id, f.id, want, okKs, errs);
     }
   }
   for (const k of Object.keys(state.retried)) if (!seenFlags.has(k)) delete state.retried[k];
 }
 // เขียนผลกลับ: อ่านของล่าสุดก่อนเสมอ (แอปอาจเพิ่งติ๊กรายการอื่นในบิลเดียวกัน)
 // ลบรายการที่ออกแล้ว · ที่ไม่ออก ปลดติ๊กเฉพาะถ้ายังเป็นติ๊กเดิม (กดใหม่ระหว่างพิมพ์ = รอบหน้าทำต่อ)
-async function settleFail(holderId, failId, want, okKs) {
+async function settleFail(holderId, failId, want, okKs, errs) {
   try {
     let d = {};
     const r = await sb(`printers?id=eq.${holderId}&select=description`); if (r && r[0]) d = JSON.parse(r[0].description || "{}");
@@ -651,7 +748,11 @@ async function settleFail(holderId, failId, want, okKs) {
     f.items = (f.items || []).filter(it => !okKs.has(it.k))
       .map(it => (rOf.get(String(it.k)) === String(it.r)) ? { ...it, r: null, lastTry: Date.now() } : it);
     if (!f.items.length) d.failed = list.filter(x => x !== f);
-    else { f.names = [...new Set(f.items.map(i => i.name))]; f.n = f.items.reduce((a, i) => a + (+i.qty || 0), 0); }
+    else {
+      f.names = [...new Set(f.items.map(i => i.name))]; f.n = f.items.reduce((a, i) => a + (+i.qty || 0), 0);
+      // พนักงานกดแล้วยังไม่ออก — เก็บเหตุล่าสุดแทนของเดิม จอจะได้บอกว่าตอนนี้ติดอะไร
+      if (Array.isArray(errs) && errs.length) f.errs = errs.slice(0, 4);
+    }
     await patchPrinter(holderId, { description: JSON.stringify(d) });
   } catch (e) { console.log("  ⚠️ อัปเดตรายการพิมพ์ไม่ออกไม่สำเร็จ:", e.message); }
 }
@@ -727,7 +828,7 @@ async function tick() {
     // แม้เน็ตกลับมาปกติแล้วก็ห้ามส่งเอง — คนต้องเป็นคนตัดสินใจว่าพร้อมแล้ว
     // มาร์คว่าจัดการแล้วทุกกรณี จะได้ไม่วนพิมพ์ (เคยทำกระดาษหมดม้วนมาแล้ว)
     if (!ok) {
-      await recordPrintFail(printers, o, (lastResult && lastResult.failedItems) || []);
+      await recordPrintFail(printers, o, (lastResult && lastResult.failedItems) || [], { errs: (lastResult && lastResult.errs) || [] });
       ok = true;
     }
     // มาร์ค uat พร้อม sig เท่านั้น — ถ้าพิมพ์ไม่ผ่านแล้วเผลอมาร์ค uat ไว้

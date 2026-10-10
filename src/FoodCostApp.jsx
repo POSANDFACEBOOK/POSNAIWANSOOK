@@ -1867,11 +1867,30 @@ const printFailsOf=(printers)=>{
   const m=new Map();
   for(const f of printFailList(printers)){
     if(f.orderId==null)continue;
+    if(f.kind==="pj")continue;   // ใบเสร็จ/ใบแจ้งยอด/QR ที่ไม่ออก ≠ "ใบครัวไม่ออก" — ขึ้นในแผงพิมพ์ไม่สำเร็จเท่านั้น
     const k=String(f.orderId),prev=m.get(k);
     m.set(k,prev?{...prev,at:Math.max(+prev.at||0,+f.at||0),n:(+prev.n||0)+(+f.n||0),names:[...new Set([...(prev.names||[]),...(f.names||[])])],pnames:[...new Set([...(prev.pnames||[]),...(f.pnames||[])])]}:f);
   }
   return m;
 };
+// เหตุที่ใบไม่ออก (ตัวพิมพ์ v46+ ส่ง errs/err มา) → ภาษาคน ให้พนักงานรู้ว่าต้องไปแก้ที่ไหน
+// เหตุจริง 10 ต.ค. 69 The River: ใบไม่ออก 5 ใบ ทุกใบ "หมดเวลา" แต่ไม่มีใครรู้ว่าต่อไม่ติดหรือเครื่องค้าง
+const PRINT_ERR_TH={
+  CONNECT_TIMEOUT:"ต่อเครื่องไม่ติด — เครื่องพิมพ์ดับ/หลุด Wi-Fi หรือเครื่องที่รันตัวพิมพ์หลุดวงแลนร้าน",
+  ETIMEDOUT:"ต่อเครื่องไม่ติด (หมดเวลา) — เช็คไฟและสายแลน/Wi-Fi",
+  ECONNREFUSED:"เครื่องพิมพ์ไม่รับการเชื่อมต่อ — ลองปิดเปิดเครื่องพิมพ์",
+  EHOSTUNREACH:"หาเครื่องพิมพ์ในวงแลนไม่เจอ — เช็คสายแลน/Wi-Fi และเลข IP",
+  ENETUNREACH:"เครื่องที่รันตัวพิมพ์ไม่ได้ต่อวงแลนร้าน — เช็ค Wi-Fi ของเครื่องนั้น",
+  ECONNRESET:"เครื่องพิมพ์ตัดการเชื่อมต่อกลางทาง — ลองปิดเปิดเครื่องพิมพ์",
+  DRAIN_TIMEOUT:"ต่อติดแต่เครื่องไม่รับงานจนจบ — กระดาษหมด/ฝาเปิด/เครื่องค้าง",
+};
+// ต่อติดแล้วส่งไม่จบ = ข้อมูลอาจถึงเครื่องไปแล้วบางส่วน/ทั้งหมด → ใบครัวอาจออกแล้ว กดรีปริ้นทันทีเสี่ยงครัวทำซ้ำ
+const printErrText=(e)=>!e?"":(PRINT_ERR_TH[e.code]||("ส่งไม่ผ่าน ("+(e.code||"ไม่ทราบสาเหตุ")+")"));
+// เกิน 12 ชม. = ของกะก่อน ๆ — แยกออกจากของวันนี้ ไม่งั้นป้ายแดงติดค้างจนพนักงานชินแล้วไม่เปิดดู
+// (รายการของ 28 ก.ย. ค้างอยู่ 12 วันจนวันที่ใบไม่ออกจริง ไม่มีใครสังเกต) · ของเก่าห้ามรีปริ้น ครัวจะทำของที่เสิร์ฟไปแล้ว
+const PRINT_FAIL_OLD_MS=12*60*60*1000;
+const isOldPrintFail=(f,now)=>((now||Date.now())-(+(f&&f.at)||0))>PRINT_FAIL_OLD_MS;
+const printFailWeight=(f)=>Array.isArray(f.items)&&f.items.length?f.items.length:Math.max(1,(f.names||[]).length);
 // เมนูนี้เปิดให้สาขานี้ขายไหม — ว่าง/ไม่ได้ตั้ง = ทุกสาขา (ค่าเดิมของระบบ)
 // ⚠️ ตัวนี้คือตัวกรองสาขาที่แท้จริง และต้องเรียกใช้ตรง ๆ เสมอ
 // ก่อนหน้านี้หน้าขายกับหน้าลูกค้าไม่ได้เรียกมัน แต่รอด "โดยบังเอิญ" เพราะกรองด้วย
@@ -18598,7 +18617,7 @@ function MoveTableModal({from,order,tables,activeOrders,branch,currentUser,onClo
       const released=await Promise.race([api.releaseTable(from.id),new Promise(r=>setTimeout(()=>r(false),4000))]).catch(()=>false);
       if(!released)posToast("⚠️ เปลี่ยน QR โต๊ะ "+from.table_number+" ไม่สำเร็จ — QR เดิมยังใช้ได้อยู่ ไปที่ QR โต๊ะ → หมุน QR ใหม่","warn",10000);
       posToast(sent
-        ?`ย้ายไปโต๊ะ ${t.table_number} แล้ว — ใบแจ้งครัวจะออกใน ~5 วินาที · อย่าลืมพิมพ์ QR โต๊ะใหม่ให้ลูกค้า`
+        ?`ย้ายไปโต๊ะ ${t.table_number} แล้ว — ส่งใบแจ้งครัวให้ตัวพิมพ์แล้ว (ไม่ออกจะขึ้นเตือนที่โต๊ะ) · อย่าลืมพิมพ์ QR โต๊ะใหม่ให้ลูกค้า`
         :`ย้ายไปโต๊ะ ${t.table_number} แล้ว — แต่แจ้งครัวไม่สำเร็จ กรุณาบอกครัวด้วยตัวเอง`, sent?"ok":"warn");
       onDone&&onDone();
       onClose&&onClose();
@@ -19392,7 +19411,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           // ของที่หายไปจึงเงียบสนิท ครัวจะทำอาหารที่ลูกค้ายกเลิกไปแล้ว
           try{
             await agentReprint([{...target,qty:target.qty,name:`ยกเลิก: ${target.name}`,note:[target.note,`ยกเลิกโดย ${currentUser?.username||"พนักงาน"}`].filter(Boolean).join(" · ")}],
-              {kind:"void",okMsg:"❌ แจ้งครัวแล้วว่ายกเลิกรายการนี้ — ใบจะออกใน ~5 วินาที",
+              {kind:"void",okMsg:"❌ ส่งใบยกเลิกรายการนี้ให้ตัวพิมพ์แล้ว — ไม่ออกจะขึ้นในปุ่ม พิมพ์ไม่สำเร็จ",
                noneMsg:"⚠️ ยกเลิกในระบบแล้ว แต่เมนูนี้ไม่มีเครื่องพิมพ์รับ — กรุณาบอกครัวด้วยตัวเอง"});
           }catch(err){
             console.warn("แจ้งครัวเรื่องยกเลิกไม่สำเร็จ",err);
@@ -19415,7 +19434,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       sent=r.sent;noPrinter=r.noPrinter;
     }catch(e){notifyDlg("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
     if(sent&&noPrinter)posToast(`${o.okMsg||"🔁 ส่งพิมพ์ซ้ำแล้ว"} · อีก ${noPrinter} รายการยังไม่ได้กำหนดเครื่องพิมพ์`,"warn");
-    else if(sent)posToast(o.okMsg||"🔁 ส่งคำสั่งพิมพ์ใบครัวไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
+    else if(sent)posToast(o.okMsg||"🔁 ส่งคำสั่งพิมพ์ใบครัวไปตัวพิมพ์แล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ","ok");
     else posToast(o.noneMsg||"⚠️ เมนูนี้ยังไม่ได้กำหนดเครื่องพิมพ์ — ตั้งที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์","warn");
   }
 
@@ -19556,7 +19575,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         onDone();onClose();setSavingGuard(false);return;
       }
       // NOTE: ไม่พิมพ์ที่นี่ — "ตัวพิมพ์ (agent)" ที่ร้าน poll ออเดอร์แล้วพิมพ์รายการใหม่เอง (จุดเดียว กันพิมพ์ซ้ำ + ใช้ได้กับ iPad)
-      posToast("✅ ส่งรายการแล้ว — ตัวพิมพ์กำลังพิมพ์ใบครัว","ok");
+      posToast("✅ บันทึกรายการแล้ว — ส่งให้ตัวพิมพ์แล้ว (ใบไม่ออกจะขึ้นเตือนที่โต๊ะ)","ok");
       onDone();onClose();
     }catch(e){
       // ของหมดระหว่างที่ยังไม่ได้กดส่ง — ดึงเมนูใหม่ให้การ์ดขึ้น "ของหมด" แล้วบอกชื่อเมนู
@@ -19715,10 +19734,13 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         // ใบครัวที่พิมพ์ไม่ออก — ระบบไม่ลองใหม่เอง พนักงานต้องกดเอง
         // วางไว้เหนือรายการอาหาร เพราะถ้าซ่อนอยู่ล่างๆ จะไม่มีใครเห็น
         // กดแล้วตัวพิมพ์พิมพ์ "เฉพาะที่ไม่ออก" เป็นใบชนิดเดิม · ป้ายหายเองเมื่อออกจริง ไม่ใช่ตอนกด
-        const fl=existingOrder?.id?printFailList(printers).filter(f=>String(f.orderId)===String(existingOrder.id)):[];
+        // ใบแจ้งยอด/ใบยกเลิกบิล (pj) ที่ไม่ออก ≠ ใบครัว — ห้ามขึ้นที่นี่ ไม่งั้นพนักงานปัดพิมพ์อาหารเข้าครัวซ้ำ (ไปดูในแผงพิมพ์ไม่สำเร็จ)
+        const _now=Date.now();
+        const fl=existingOrder?.id?printFailList(printers).filter(f=>String(f.orderId)===String(existingOrder.id)&&f.kind!=="pj"):[];
         if(!fl.length)return null;
         const names=[...new Set(fl.flatMap(f=>f.names||[]))];
-        const retryable=fl.filter(f=>f.id&&Array.isArray(f.items)&&f.items.length);
+        // ค้างเกิน 12 ชม. = รีปริ้นไม่ได้ (กติกาเดียวกับแผงพิมพ์ไม่สำเร็จ — กันครัวทำของที่เสิร์ฟไปแล้ว)
+        const retryable=fl.filter(f=>f.id&&Array.isArray(f.items)&&f.items.length&&!isOldPrintFail(f,_now));
         return <div style={{margin:"8px 8px 0",padding:"10px 12px",borderRadius:11,background:C.redLight,border:`1.5px solid ${C.red}`}}>
           <div style={{fontSize:12.5,fontWeight:900,color:C.red,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>⚠️ ใบครัวไม่ออก</div>
           <div style={{fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:8}}>
@@ -20925,8 +20947,8 @@ async function printTableQR(table,branch,printers=[],onPrinted,onUrl){
       // ส่งเป็นคำสั่ง "รูปภาพ" (pj) ที่ตัวพิมพ์รองรับอยู่แล้ว — ไม่ต้องแก้ฝั่งตัวพิมพ์
       // (คำสั่ง "qr" แบบข้อความยังอยู่ในตัวพิมพ์ เผื่อแท็บเก่าที่ยังไม่รีเฟรช)
       const b64=await buildTableQRB64(table,branch,url);
-      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64})})));
-      posToast("🔳 ส่งคำสั่งพิมพ์ QR โต๊ะ "+table.table_number+" ไปเครื่องพิมพ์ใบเสร็จแล้ว — กระดาษจะออกใน ~5 วินาที","ok");
+      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64,what:"QR โต๊ะ",table:String(table.table_number||"")})})));
+      posToast("🔳 ส่งคำสั่งพิมพ์ QR โต๊ะ "+table.table_number+" ไปเครื่องพิมพ์ใบเสร็จแล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ","ok");
       await stamp();
       return;
     }catch(e){alert("ส่งคำสั่งพิมพ์ QR ไม่สำเร็จ: "+(e&&e.message||e));return;}
@@ -21698,8 +21720,8 @@ function printZReport(args){
     try{
       const b64=await escposSlipRaster(buildZReportLines(args),576);
       const at=Date.now();
-      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64})})));
-      posToast(`🧾 ส่งใบปิดกะไป ${rcps.length} เครื่องแล้ว — กระดาษจะออกใน ~5 วินาที`,"ok",6000);
+      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64,what:"ใบปิดกะ"})})));
+      posToast(`🧾 ส่งใบปิดกะไป ${rcps.length} เครื่องแล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ`,"ok",6000);
     }catch(e){
       posToast("⚠️ ส่งใบปิดกะเข้าเครื่องพิมพ์ไม่สำเร็จ: "+((e&&e.message)||e),"warn",9000);
     }
@@ -23748,7 +23770,41 @@ function markPrintRetry(list,failId,ks,now){
 }
 const printRetryWaiting=(it,now)=>!!(it&&it.r&&now-(+it.r||0)<PRINT_RETRY_TTL);
 const samePrintFail=(a,b)=>!!(a&&b&&(b.id?a.id===b.id:(!a.id&&a.at===b.at&&String(a.orderId)===String(b.orderId))));
-function PrintFailModal({branchId,onClose,onChanged}){
+// ── แถบสถานะการพิมพ์บนจอขาย ─────────────────────────────────────────────
+// เหตุจริง 10 ต.ค. 69 (The River): ใบครัว/ใบเสร็จไม่ออกครึ่งวัน แต่จอขายไม่บอกอะไร ทุกปุ่มขึ้น ✅
+// ขึ้นเฉพาะตอนมีปัญหา (ปกติไม่กินที่จอ): ตัวพิมพ์ไม่ตอบ · เครื่องพิมพ์ออฟไลน์ · ใบไม่ออกใน 20 นาทีล่าสุด
+// ค่า on ของเครื่องเชื่อได้เฉพาะตอนตัวพิมพ์ยังหายใจ (agentSeen) — ตัวพิมพ์ดับ = ค่า on ค้างจากรอบสุดท้าย
+const PRINT_RECENT_MS=20*60*1000;
+function PrintHealthStrip({printers,failPrinters,branchId,onOpenFails}){
+  const[,setTick]=useState(0);
+  useEffect(()=>{const t=setInterval(()=>setTick(x=>x+1),30000);return()=>clearInterval(t);},[]);   // หน้าต่าง 20 นาที/นาทีที่ไม่ตอบ เดินเองแม้ข้อมูลไม่เปลี่ยน
+  // รายชื่อเครื่องพิมพ์มาจากรอบดึง 60 วิ (หยุดตอนสลับแท็บ) — ตัดสินว่า "ตัวพิมพ์ไม่ตอบ" จากอายุสัญญาณ ณ ตอนที่ได้ข้อมูลมา
+  // ไม่ใช่ ณ ตอนนี้ ไม่งั้นกลับมาจากแท็บอื่นแล้วขึ้นแดงหลอกจนกว่ารอบดึงจะมาถึง · ข้อมูลเก่าเกิน 2.5 นาที = ไม่พูดอะไรเรื่องเครื่อง
+  const gotAt=useMemo(()=>Date.now(),[printers]);
+  const now=Date.now();
+  const all=printersAt(printers,branchId);
+  const mine=all.filter(p=>p&&p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
+  if(!mine.length)return null;
+  const fresh=now-gotAt<150000;
+  const hh=agentHealth(all,branchId);
+  const h=!fresh||!hh.seen?{state:"unknown"}:{...hh,state:(gotAt-hh.seen)>120000?"down":"ok",ageSec:Math.round((now-hh.seen)/1000)};
+  const off=h.state==="ok"?mine.filter(p=>{try{return JSON.parse(p.description||"{}").on===0;}catch{return false;}}):[];
+  const recent=printFailList(failPrinters).filter(f=>now-(+f.at||0)<PRINT_RECENT_MS);
+  const last=recent[recent.length-1];
+  const lastErr=last&&Array.isArray(last.errs)?last.errs[0]:null;
+  const rows=[];
+  if(h.state==="down")rows.push({c:C.red,bg:C.redLight,t:`⛔ โปรแกรมตัวพิมพ์ที่ร้านไม่ตอบมา ${Math.max(1,Math.round((h.ageSec||0)/60))} นาที — ใบครัว/ใบเสร็จจะไม่ออกเลย`,s:"เช็คเครื่องที่รันตัวพิมพ์: เปิดอยู่ไหม · ต่อ Wi-Fi ร้าน · เสียบชาร์จ"});
+  if(off.length)rows.push({c:C.red,bg:C.redLight,t:`🔴 เครื่องพิมพ์ ${off.map(p=>p.name).join(" · ")} ไม่ตอบ — ใบที่ส่งเข้าเครื่องนี้จะไม่ออก`,s:"เช็คไฟ · กระดาษ · สายแลน/Wi-Fi ของเครื่อง แล้วรอจุดเขียว"});
+  if(recent.length)rows.push({c:"#92400E",bg:"#FEF3C7",t:`⚠️ ใบไม่ออก ${recent.reduce((s,f)=>s+printFailWeight(f),0)} ใบใน 20 นาทีล่าสุด${last&&Array.isArray(last.pnames)&&last.pnames.length?` (${last.pnames.join(" · ")})`:""}`,s:(lastErr?printErrText(lastErr)+" · ":"")+"แตะเพื่อดูและรีปริ้น",click:true});
+  if(!rows.length)return null;
+  return <div style={{flexShrink:0}}>
+    {rows.map((r,i)=><div key={i} onClick={r.click?onOpenFails:undefined} style={{padding:"6px 16px",background:r.bg,borderBottom:`1px solid ${r.c}33`,color:r.c,fontFamily:"'Sarabun',sans-serif",cursor:r.click?"pointer":"default",display:"flex",flexWrap:"wrap",alignItems:"baseline",gap:"2px 10px"}}>
+      <span style={{fontSize:13,fontWeight:900}}>{r.t}</span>
+      <span style={{fontSize:12,fontWeight:600,opacity:.9}}>{r.s}</span>
+    </div>)}
+  </div>;
+}
+function PrintFailModal({branchId,branch,posSettings,onClose,onChanged}){
   const[list,setList]=useState(null);
   const[now,setNow]=useState(()=>Date.now());
   // ถามทุก 4 วิระหว่างเปิดจอนี้ — เห็นทันทีว่าออกแล้ว (รายการหาย) หรือยังไม่ออก (ขึ้นให้กดใหม่)
@@ -23766,34 +23822,77 @@ function PrintFailModal({branchId,onClose,onChanged}){
     try{await editPrintFail(f.holder,l=>l.filter(x=>!samePrintFail(x,f)));}catch(e){notifyDlg("เอาออกไม่สำเร็จ: "+friendlyError(e));}
     await load();onChanged&&onChanged();
   }
+  // ใบเสร็จที่ไม่ออก: ตัวพิมพ์ไม่ได้เก็บรูปไว้ → ดึงบิลล่าสุดมาสั่งพิมพ์ใหม่ (ใบเดียวกับตอนปิดบิล) แล้วเอารายการเดิมออก
+  // ถ้ารอบใหม่ไม่ออกอีก ตัวพิมพ์จะเพิ่มรายการใหม่ให้เอง ไม่มีใบหายเงียบ
+  async function printReceiptAgain(f){
+    if(!branch){notifyDlg("ไม่รู้ว่าสาขาไหน — พิมพ์ใหม่จาก 📊 รายงาน → แตะบิล");return;}
+    try{
+      const r=await sb("orders?id=eq."+(+f.orderId)+"&limit=1");
+      const o=Array.isArray(r)?r[0]:null;
+      if(!o){notifyDlg("ไม่เจอบิล #"+f.orderId);return;}
+      // เอารายการเดิมออกเฉพาะเมื่อส่งเข้าตัวพิมพ์ได้จริง — ส่งไม่ได้ (ไม่มีเครื่องใบเสร็จ/เน็ตสะดุด) ต้องค้างไว้ให้เห็น
+      const sent=await printBillReceipt(o,o.table_number,{branch,posSettings,paid:o.status==="paid"});
+      if(sent)await editPrintFail(f.holder,l=>{const k=l.filter(x=>!samePrintFail(x,f));return k.length===l.length?null:k;});
+    }catch(e){notifyDlg("สั่งพิมพ์ใบเสร็จใหม่ไม่สำเร็จ: "+friendlyError(e));}
+    await load();onChanged&&onChanged();
+  }
+  // ล้างของเก่าทีเดียว (อ่านของล่าสุดของแต่ละเครื่องก่อนเขียน — ตัวพิมพ์เขียนช่องเดียวกันอยู่)
+  async function clearOld(oldList){
+    const n=oldList.reduce((s,f)=>s+printFailWeight(f),0);
+    if(!await confirmDlg({title:"ล้างรายการเก่า?",message:`เอารายการที่ค้างเกิน 12 ชม. ออก ${n} รายการ โดยไม่พิมพ์\n\nใช้เมื่อเป็นของกะก่อนที่จัดการไปแล้ว`,confirmLabel:"ล้างรายการเก่า",cancelLabel:"ไม่ล้าง",danger:true}))return;
+    const holders=[...new Set(oldList.map(f=>f.holder))];
+    try{for(const h of holders)await editPrintFail(h,l=>{const t=Date.now();const k=l.filter(x=>!isOldPrintFail(x,t));return k.length===l.length?null:k;});}
+    catch(e){notifyDlg("ล้างไม่สำเร็จ: "+friendlyError(e));}
+    await load();onChanged&&onChanged();
+  }
   const KIND={void:"ใบยกเลิก",move:"ใบย้ายโต๊ะ",reprint:"ใบพิมพ์ซ้ำ"};
   const F="'Sarabun',sans-serif";
+  const fmtFailAt=(at)=>{if(!at)return "";const d=new Date(+at);const today=new Date(now).toDateString()===d.toDateString();
+    return today?d.toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"}):fmtDT(d.toISOString());};
+  const recentList=(list||[]).filter(f=>!isOldPrintFail(f,now)),oldList=(list||[]).filter(f=>isOldPrintFail(f,now));
+  const card=(f,old)=>{const its=Array.isArray(f.items)?f.items:[];const idle=its.filter(it=>!printRetryWaiting(it,now));const pj=f.kind==="pj";
+    const errs=Array.isArray(f.errs)?f.errs:[];
+    return <div key={f.id||`${f.orderId}-${f.at}`} style={{border:`1.5px solid ${old?C.line:C.red+"55"}`,borderRadius:12,overflow:"hidden",opacity:old?.85:1}}>
+      <div style={{padding:"9px 12px",background:old?C.lineLight:C.redLight,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",fontFamily:F}}>
+        <span style={{fontSize:16,fontWeight:900,color:C.ink}}>{f.table?`โต๊ะ ${f.table}`:pj?"เคาน์เตอร์":"โต๊ะ -"}</span>
+        <span style={{fontSize:11.5,fontWeight:800,color:C.red,background:C.white,borderRadius:6,padding:"1px 7px"}}>{pj?(f.what||"ใบจากเคาน์เตอร์"):(KIND[f.kind]||"ใบสั่งอาหาร")}</span>
+        <span style={{fontSize:11.5,color:C.ink3}}>{fmtFailAt(f.at)}{f.orderId!=null?` · บิล #${f.orderId}`:""}{Array.isArray(f.pnames)&&f.pnames.length?` · ${f.pnames.join(" · ")}`:""}</span>
+        <button onClick={()=>dismiss(f)} style={{marginLeft:"auto",border:"none",background:"none",color:C.ink4,fontFamily:F,fontSize:11.5,fontWeight:700,cursor:"pointer",textDecoration:"underline",padding:"4px 0"}}>ไม่ต้องพิมพ์แล้ว</button>
+      </div>
+      {errs.length>0&&<div style={{padding:"6px 12px",borderTop:`1px solid ${C.line}`,fontFamily:F,fontSize:12,fontWeight:700,color:"#92400E",background:"#FFFBEB",lineHeight:1.5}}>
+        {errs.map((e,i)=><div key={i}>⚠️ {e.name?e.name+": ":""}{printErrText(e)}{!pj&&e.code==="DRAIN_TIMEOUT"?" · ใบอาจออกไปแล้ว ถามครัวก่อนกดรีปริ้น":""}</div>)}
+      </div>}
+      {pj?<div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderTop:`1px solid ${C.line}`,fontFamily:F}}>
+          <div style={{flex:1,minWidth:0,fontSize:12.5,color:C.ink3,lineHeight:1.5}}>{f.what==="ใบเสร็จ"&&f.orderId!=null?"กดพิมพ์ใบเสร็จของบิลนี้ใหม่ได้เลย":"ตัวพิมพ์ไม่ได้เก็บใบนี้ไว้ — สั่งพิมพ์ใหม่จากจุดเดิม (เช่น เปิดโต๊ะ/บิลแล้วกดพิมพ์อีกครั้ง) แล้วกด \"ไม่ต้องพิมพ์แล้ว\""}</div>
+          {f.what==="ใบเสร็จ"&&f.orderId!=null&&!old&&<Btn v="danger" onClick={()=>printReceiptAgain(f)} icon={I.print} s={{padding:"8px 12px",fontSize:13,flexShrink:0}}>พิมพ์ใบเสร็จใหม่</Btn>}
+        </div>
+      :its.length?its.map(it=>{const wait=printRetryWaiting(it,now);const opt=optionsText(it.options);
+        return <div key={it.k} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderTop:`1px solid ${C.line}`}}>
+          <div style={{flex:1,minWidth:0,fontFamily:F,lineHeight:1.35,overflowWrap:"anywhere"}}>
+            <div style={{fontSize:15,fontWeight:800,color:C.ink}}>{it.qty}× {it.name}</div>
+            {opt&&<div style={{fontSize:12.5,fontWeight:700,color:C.teal}}>+ {opt}</div>}
+            {it.note&&<div style={{fontSize:12.5,fontWeight:600,color:C.ink3}}>★ {it.note}</div>}
+            {it.lastTry&&!wait&&<div style={{fontSize:11,fontWeight:800,color:C.red}}>ลองแล้วยังไม่ออก — เช็คเครื่องพิมพ์แล้วกดใหม่</div>}
+          </div>
+          {!old&&<Btn v={wait?"ghost":"danger"} disabled={wait} onClick={()=>retry(f,[it.k])} icon={I.print} s={{padding:"8px 12px",fontSize:13,flexShrink:0}}>{wait?"กำลังพิมพ์…":"รีปริ้น"}</Btn>}
+        </div>;})
+      :<div style={{padding:"9px 12px",fontFamily:F,fontSize:13,color:C.ink2,borderTop:`1px solid ${C.line}`}}>{(f.names||[]).join(" · ")}<div style={{fontSize:11.5,color:C.ink4,marginTop:3}}>รายการจากตัวพิมพ์รุ่นเก่า พิมพ์ใหม่จากที่นี่ไม่ได้ — เปิดโต๊ะแล้วปัดซ้ายที่รายการเพื่อพิมพ์ แล้วกด "ไม่ต้องพิมพ์แล้ว"</div></div>}
+      {!old&&!pj&&idle.length>1&&<div style={{padding:"8px 12px",borderTop:`1px solid ${C.line}`}}><Btn v="danger" full onClick={()=>retry(f,idle.map(it=>it.k))} icon={I.print} s={{padding:"8px",fontSize:13}}>รีปริ้นทั้งหมดของโต๊ะนี้ ({idle.length})</Btn></div>}
+      {old&&!pj&&its.length>0&&<div style={{padding:"6px 12px",borderTop:`1px solid ${C.line}`,fontFamily:F,fontSize:11.5,color:C.ink4}}>ค้างเกิน 12 ชม. — รีปริ้นจากที่นี่ไม่ได้ (กันครัวทำของที่เสิร์ฟไปแล้ว)</div>}
+    </div>;};
   return <Modal title="🖨️ พิมพ์ไม่สำเร็จ" onClose={onClose}>
     {list===null?<Loading text="กำลังโหลด..."/>
     :list.length===0?<div style={{textAlign:"center",padding:"28px 0",fontFamily:F,fontSize:15,fontWeight:800,color:C.green}}>✅ พิมพ์ออกครบแล้ว ไม่มีรายการค้าง</div>
     :<div style={{display:"grid",gap:12}}>
-      <div style={{fontSize:12.5,color:C.ink3,fontFamily:F,lineHeight:1.6}}>เช็คเครื่องพิมพ์ให้พร้อมก่อน (เปิดเครื่อง · มีกระดาษ · ปิดฝาสนิท) แล้วกด <b>รีปริ้น</b> ท้ายชื่อเมนู — ออกจริงแล้วรายการจะหายเอง</div>
-      {list.map(f=>{const its=Array.isArray(f.items)?f.items:[];const idle=its.filter(it=>!printRetryWaiting(it,now));
-        return <div key={f.id||`${f.orderId}-${f.at}`} style={{border:`1.5px solid ${C.red}55`,borderRadius:12,overflow:"hidden"}}>
-          <div style={{padding:"9px 12px",background:C.redLight,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",fontFamily:F}}>
-            <span style={{fontSize:16,fontWeight:900,color:C.ink}}>โต๊ะ {f.table||"-"}</span>
-            <span style={{fontSize:11.5,fontWeight:800,color:C.red,background:C.white,borderRadius:6,padding:"1px 7px"}}>{KIND[f.kind]||"ใบสั่งอาหาร"}</span>
-            <span style={{fontSize:11.5,color:C.ink3}}>{f.at?new Date(+f.at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"}):""}{f.orderId!=null?` · บิล #${f.orderId}`:""}</span>
-            <button onClick={()=>dismiss(f)} style={{marginLeft:"auto",border:"none",background:"none",color:C.ink4,fontFamily:F,fontSize:11.5,fontWeight:700,cursor:"pointer",textDecoration:"underline",padding:"4px 0"}}>ไม่ต้องพิมพ์แล้ว</button>
-          </div>
-          {its.length?its.map(it=>{const wait=printRetryWaiting(it,now);const opt=optionsText(it.options);
-            return <div key={it.k} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderTop:`1px solid ${C.line}`}}>
-              <div style={{flex:1,minWidth:0,fontFamily:F,lineHeight:1.35,overflowWrap:"anywhere"}}>
-                <div style={{fontSize:15,fontWeight:800,color:C.ink}}>{it.qty}× {it.name}</div>
-                {opt&&<div style={{fontSize:12.5,fontWeight:700,color:C.teal}}>+ {opt}</div>}
-                {it.note&&<div style={{fontSize:12.5,fontWeight:600,color:C.ink3}}>★ {it.note}</div>}
-                {it.lastTry&&!wait&&<div style={{fontSize:11,fontWeight:800,color:C.red}}>ลองแล้วยังไม่ออก — เช็คเครื่องพิมพ์แล้วกดใหม่</div>}
-              </div>
-              <Btn v={wait?"ghost":"danger"} disabled={wait} onClick={()=>retry(f,[it.k])} icon={I.print} s={{padding:"8px 12px",fontSize:13,flexShrink:0}}>{wait?"กำลังพิมพ์…":"รีปริ้น"}</Btn>
-            </div>;})
-          :<div style={{padding:"9px 12px",fontFamily:F,fontSize:13,color:C.ink2,borderTop:`1px solid ${C.line}`}}>{(f.names||[]).join(" · ")}<div style={{fontSize:11.5,color:C.ink4,marginTop:3}}>รายการจากตัวพิมพ์รุ่นเก่า พิมพ์ใหม่จากที่นี่ไม่ได้ — เปิดโต๊ะแล้วปัดซ้ายที่รายการเพื่อพิมพ์ แล้วกด "ไม่ต้องพิมพ์แล้ว"</div></div>}
-          {idle.length>1&&<div style={{padding:"8px 12px",borderTop:`1px solid ${C.line}`}}><Btn v="danger" full onClick={()=>retry(f,idle.map(it=>it.k))} icon={I.print} s={{padding:"8px",fontSize:13}}>รีปริ้นทั้งหมดของโต๊ะนี้ ({idle.length})</Btn></div>}
-        </div>;})}
+      {recentList.length>0&&<div style={{fontSize:12.5,color:C.ink3,fontFamily:F,lineHeight:1.6}}>เช็คเครื่องพิมพ์ให้พร้อมก่อน (เปิดเครื่อง · มีกระดาษ · ปิดฝาสนิท) แล้วกด <b>รีปริ้น</b> ท้ายชื่อเมนู — ออกจริงแล้วรายการจะหายเอง · ถ้าขึ้นว่า "ใบอาจออกไปแล้ว" ให้ถามครัวก่อนกด</div>}
+      {recentList.slice().reverse().map(f=>card(f,false))}
+      {oldList.length>0&&<div style={{display:"grid",gap:10,marginTop:recentList.length?6:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",fontFamily:F}}>
+          <span style={{fontSize:13.5,fontWeight:900,color:C.ink3}}>รายการเก่า (ค้างเกิน 12 ชม.) · {oldList.length}</span>
+          <Btn v="ghost" onClick={()=>clearOld(oldList)} s={{marginLeft:"auto",padding:"6px 12px",fontSize:12.5}}>ล้างรายการเก่าทั้งหมด</Btn>
+        </div>
+        {oldList.slice().reverse().map(f=>card(f,true))}
+      </div>}
     </div>}
   </Modal>;
 }
@@ -23838,7 +23937,10 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   const[showPrintFails,setShowPrintFails]=useState(false);
   const loadFails=useCallback(async()=>{try{const r=await api.getPrintersWithFails();if(Array.isArray(r))setFailPrinters(printersAt(r,currentBranch.id));}catch{}},[currentBranch.id]);
   useEffect(()=>{loadFails();const t=setInterval(()=>{if(!document.hidden)loadFails();},6000);return()=>clearInterval(t);},[loadFails]);
-  const failCount=useMemo(()=>printFailList(failPrinters).reduce((s,f)=>s+(Array.isArray(f.items)&&f.items.length?f.items.length:Math.max(1,(f.names||[]).length)),0),[failPrinters]);
+  // ปุ่มแดงนับเฉพาะของ 12 ชม.ล่าสุด · ของเก่ากว่านั้นแยกเป็นปุ่มเทา (ล้างทีเดียวได้ในแผง)
+  // เดิมนับรวม รายการ 28 ก.ย. จึงทำปุ่มแดงติดตลอด 12 วัน — วันที่ใบไม่ออกจริงก็ไม่มีใครสังเกต
+  const failSplit=useMemo(()=>{const now=Date.now();let recent=0,old=0;for(const f of printFailList(failPrinters)){if(isOldPrintFail(f,now))old+=printFailWeight(f);else recent+=printFailWeight(f);}return{recent,old};},[failPrinters]);
+  const failCount=failSplit.recent;
   // ผังโต๊ะและจอโต๊ะใช้รายการจากรอบถามเร็ว ⟹ กดรีปริ้นแล้วป้ายหายภายในไม่กี่วินาที
   // (เดิมอ่านจากรายชื่อเครื่องพิมพ์ที่ดึงทุก 60 วิ ป้ายจึงค้างอยู่นานทั้งที่พิมพ์ออกแล้ว)
   const failPrintersLive=failPrinters;
@@ -24016,11 +24118,13 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
       <span style={{opacity:.85}}>· ทอนเริ่มต้น ฿{(+shift.opening_cash||0).toLocaleString()}</span>
       <span style={{opacity:.85,marginLeft:"auto"}}>{shift.username}</span>
     </div>
+    <PrintHealthStrip printers={printers} failPrinters={failPrinters} branchId={currentBranch.id} onOpenFails={()=>setShowPrintFails(true)}/>
     <div style={{padding:"0 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",height:46,gap:2,flexShrink:0}}>
       {PTABS.map(t=>{const active=posTab===t.id;return <button key={t.id} onClick={()=>setPosTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:"none",cursor:"pointer",fontSize:12,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s"}}><Ic d={t.icon} s={13} c={active?C.brand:C.ink4}/>{t.l}</button>;})}
       {canEdit&&<POSMenuTools currentBranch={currentBranch} variant="dropdown" onChanged={()=>{reloadMenus&&reloadMenus();reloadPosSettings&&reloadPosSettings();}}/>}
       <div style={{marginLeft:"auto",display:"flex",gap:6}}>
         {failCount>0&&<Btn v="danger" onClick={()=>setShowPrintFails(true)} icon={I.print} s={{padding:"5px 10px",fontSize:12}}>พิมพ์ไม่สำเร็จ ({failCount})</Btn>}
+        {failCount===0&&failSplit.old>0&&<Btn v="ghost" onClick={()=>setShowPrintFails(true)} icon={I.print} s={{padding:"5px 10px",fontSize:12}}>ใบค้างเก่า ({failSplit.old})</Btn>}
         <Btn v="ghost" onClick={()=>setShowOrders(true)} icon={I.order} s={{padding:"5px 10px",fontSize:12}}>📊 รายงาน</Btn>
         <Btn v="success" onClick={onCashDrawer} icon={I.cash} s={{padding:"5px 12px",fontSize:12}}>💰 เงินในลิ้นชัก</Btn>
         {canEdit&&!saleOnly&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
@@ -24033,7 +24137,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
       {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} printers={printers} failPrinters={failPrintersLive} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined} onRenameZone={canEdit?handleRenameZone:undefined} onDeleteZone={canEdit?handleDeleteZone:undefined}/>}
       {showOrders&&<SalesReportModal currentBranch={currentBranch} menus={menus} printers={printers} posSettings={posSettings} shift={shift} currentUser={currentUser} onEdited={loadAll} onClose={()=>setShowOrders(false)}/>}
-      {showPrintFails&&<PrintFailModal branchId={currentBranch.id} onChanged={loadFails} onClose={()=>{setShowPrintFails(false);loadFails();try{reloadPrinters&&reloadPrinters();}catch{}}}/>}
+      {showPrintFails&&<PrintFailModal branchId={currentBranch.id} branch={currentBranch} posSettings={posSettings} onChanged={loadFails} onClose={()=>{setShowPrintFails(false);loadFails();try{reloadPrinters&&reloadPrinters();}catch{}}}/>}
     </div>
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll({silent:true});}} wide noScroll>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:10,flexShrink:0,flexWrap:"wrap"}}>
@@ -24237,8 +24341,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           {rule:true},
           {t:fmtDT(),size:20,align:"center"},
         ],576);
-        await api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at:Date.now(),b64})});
-        posToast("🧾 ส่งทดสอบพิมพ์ (แบบรูปภาพ ไทยคมชัด) ไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที","ok");
+        await api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at:Date.now(),b64,what:"ทดสอบพิมพ์"})});
+        posToast("🧾 ส่งทดสอบพิมพ์ (แบบรูปภาพ ไทยคมชัด) ไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที (ผลดูที่ งานล่าสุด ของเครื่อง)","ok");
       }catch(e){alert("ส่งคำสั่งทดสอบไม่สำเร็จ: "+(e&&e.message||e));}
       return;
     }
@@ -24278,7 +24382,10 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     let d={};try{d=JSON.parse(p.description||"{}");}catch{}
     const j=d.lastJob;if(!j||!j.at)return "";
     let tm="";try{tm=new Date(+j.at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"});}catch{}
-    return "🖨 งานล่าสุด: "+(JOB_LABEL[j.kind]||j.kind||"")+" "+tm;
+    // ตัวพิมพ์ v46+ บอกผลจริง (ok:false + เหตุ) · ok:true ของตัวพิมพ์รุ่นเก่าเป็นจริงเสมอแม้ส่งไม่ผ่าน
+    // จึงขึ้นเฉพาะตอนไม่ออก — ไม่ขึ้น ✅ ที่อาจหลอกตา
+    const res=j.ok===false?" — ❌ ไม่ออก: "+printErrText(j.err||{}):"";
+    return "🖨 งานล่าสุด: "+((j.kind==="pj"&&j.what)?j.what:(JOB_LABEL[j.kind]||j.kind||""))+" "+tm+res;
   };
   const activePrinters=printers.filter(p=>p.active!==false);
   const isIgnored=(p)=>{try{return JSON.parse(p.description||"{}").ig===1;}catch{return false;}};
@@ -24589,13 +24696,15 @@ async function printBillReceipt(order,tableNum,{branch,posSettings,printers=[],p
     try{
       const b64=await buildReceiptB64(order,tableNum,branch.name,posSettings,paid);
       const at=Date.now();
-      await Promise.all(rcps.map(rcp=>api.updatePrinter(rcp.id,{description:cmdDesc(rcp,"pj",{at,b64})})));
-      posToast(`🧾 ส่ง${paid?"ใบเสร็จ":"ใบแจ้งยอด"}ไป ${rcps.length} เครื่องแล้ว — กระดาษจะออกใน ~5 วินาที`,"ok");
+      await Promise.all(rcps.map(rcp=>api.updatePrinter(rcp.id,{description:cmdDesc(rcp,"pj",{at,b64,what:paid?"ใบเสร็จ":"ใบแจ้งยอด",bill:order&&order.id!=null?order.id:null,table:String(tableNum??"")})})));
+      posToast(`🧾 ส่ง${paid?"ใบเสร็จ":"ใบแจ้งยอด"}ไป ${rcps.length} เครื่องแล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ`,"ok");
+      return true;   // ส่งเข้าตัวพิมพ์แล้วจริง (ผู้เรียกบางที่ใช้ตัดสินว่าเอารายการ "ไม่ออก" เดิมออกได้)
     }catch(e){posToast("พิมพ์ไม่สำเร็จ: "+(e&&e.message||e),"warn");try{printReceipt(order,tableNum,branch.name,posSettings,{paid});}catch{}}
-    return;
+    return false;
   }
-  if(isHttps&&!rcps.length){posToast("⚠️ ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ไปที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์ → ติ๊ก \"🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ\"","warn");return;}
+  if(isHttps&&!rcps.length){posToast("⚠️ ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ไปที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์ → ติ๊ก \"🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ\"","warn");return false;}
   printReceipt(order,tableNum,branch.name,posSettings,{paid});   // เดสก์ท็อป/LAN (ไม่ใช่ https) → หน้าต่างพิมพ์เบราว์เซอร์
+  return false;
 }
 // ── แก้ช่องทางชำระของบิลที่ปิดแล้ว (เจ้าของสั่ง 21 ก.ย. 69) ──────────────
 // เหตุจริง: บิล #357 ลูกค้าจ่ายสด ฿89 แต่พนักงานกดเป็นพร้อมเพย์ 79 + สด 10
@@ -24731,7 +24840,7 @@ async function printVoidBillSlip({order,branch,reason,refundText,by,at,printers=
   if(!rcps.length){posToast("⚠️ ยกเลิกบิลแล้ว แต่ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ใบยกเลิกไม่ได้พิมพ์","warn",7000);return;}
   const b64=await escposSlipRaster(L,576);
   const stamp=Date.now();
-  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at:stamp,b64})})));
+  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at:stamp,b64,what:"ใบยกเลิกบิล",bill:order.id,table:String(order.table_number||"")})})));
   posToast("🧾 ส่งใบยกเลิกบิลไปเครื่องพิมพ์แล้ว","ok");
 }
 // ── ยกเลิกบิลที่ปิดไปแล้ว (Void) — ผู้จัดการขอไว้ 21 ก.ย. 69 ──────────────

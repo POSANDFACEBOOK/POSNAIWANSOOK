@@ -503,7 +503,7 @@ const guards = [
   })()],
   ["ใบ QR สร้างเป็นรูปแล้ว (ไทยไม่เพี้ยน)", APP.includes("async function buildTableQRB64(table,branch,url)")],
   ["ทาง LAN ส่งใบ QR เป็นคำสั่งรูป (pj) ไม่ใช่ข้อความ",
-    APP.includes('cmdDesc(p,"pj",{at,b64})') && !APP.includes('cmdDesc(p,"qr",{at,url')],
+    /cmdDesc\(p,"pj",\{at,b64[,}]/.test(APP) && !APP.includes('cmdDesc(p,"qr",{at,url')],
   ["ทางบลูทูธส่งเป็นไบต์ ไม่ใช่ base64", APP.includes("btPrint(b64Bytes(await buildTableQRB64(table,branch,url))")],
   // ── แบ่งจ่าย: ยอดต้องบวกกลับได้เท่าเดิมเป๊ะทุกกรณี ──
   ["฿1000 หาร 3 คน บวกกลับได้ 1000 พอดี", sumOf(splitEvenlyOf(1000, 3)) === 1000],
@@ -2515,7 +2515,7 @@ section("ใบปิดกะออกเครื่องพิมพ์ใ�
   // ทางส่งพิมพ์: ไอแพดต้องไปทางตัวพิมพ์ ไม่ใช่หน้าต่างพิมพ์
   const pz = grabFn2("function printZReport(args){") || "";
   ok_("ไอแพดส่งใบปิดกะเข้าตัวพิมพ์ ไม่ใช่หน้าต่างพิมพ์",
-    pz.includes("getReceiptPrinters(prs)") && pz.includes('cmdDesc(p,"pj",{at,b64})') && pz.includes("escposSlipRaster(buildZReportLines(args),576)"));
+    pz.includes("getReceiptPrinters(prs)") && pz.includes('cmdDesc(p,"pj",{at,b64,what:"ใบปิดกะ"})') && pz.includes("escposSlipRaster(buildZReportLines(args),576)"));
   ok_("เดสก์ท็อปยังเปิดหน้าต่างพิมพ์ทันทีตอนกด (ไม่โดนบล็อกป็อปอัพ)",
     pz.includes("if(!isHttps){printZReportWindow(args);return;}"));
   ok_("ยังไม่ติ๊กเครื่องพิมพ์ใบเสร็จ ต้องบอกให้รู้ ไม่ใช่เงียบ", pz.includes("ใบปิดกะไม่ได้พิมพ์"));
@@ -3037,7 +3037,7 @@ section("ปุ่มพิมพ์ไม่สำเร็จ");
   ok_("เวลาหมดอายุของติ๊กรีปริ้น แอปกับตัวพิมพ์ตรงกัน", ttlApp != null && ttlApp === ttlAgent);
 
   // ── ฝั่งตัวพิมพ์: เขียนผลกลับ (settleFail) ──
-  const settleSrc = grabTop(LG, "async function settleFail(holderId, failId, want, okKs) {");
+  const settleSrc = grabTop(LG, "async function settleFail(holderId, failId, want, okKs, errs) {");
   const runSettle = async (desc, want, okKs) => {
     let wrote = null;
     const fn = new Function("sb", "patchPrinter", settleSrc + "\nreturn settleFail;")(async () => [{ description: JSON.stringify(desc) }], async (id, body) => { wrote = JSON.parse(body.description); });
@@ -3066,15 +3066,15 @@ section("ปุ่มพิมพ์ไม่สำเร็จ");
       const calls = { print: [], send: [], buf: [], settle: [] };
       const state = { retried: {} };
       const printerHandles = new Function(handlesSrc + "\nreturn printerHandles;")();
-      const fn = new Function("state", "saveState", "isBluetooth", "itemsToBuffer", "sendToPrinter", "printItems", "printerHandles", "settleFail", "RETRY_TTL", "console",
+      const fn = new Function("state", "saveState", "isBluetooth", "itemsToBuffer", "sendToPrinter", "printItems", "printerHandles", "settleFail", "RETRY_TTL", "console", "errOf",
         retrySrc + "\nreturn handleFailRetries;")(
         state, () => {}, () => false,
         async (items, t, meta) => { calls.buf.push({ items, t, meta }); return { buf: Buffer.from("x") }; },
         async (ip) => { calls.send.push(ip); if (opts.sendFails) throw new Error("offline"); },
         async (items, t, prs, done, meta) => { calls.print.push({ items: items.map(i => i.k), t, meta }); return { okIds: opts.okIds || [] }; },
         printerHandles,
-        async (hid, fid, want, okKs) => { calls.settle.push({ hid, fid, want: want.map(i => i.k), ok: [...okKs].sort() }); },
-        600000, { log() {} });
+        async (hid, fid, want, okKs, errs) => { calls.settle.push({ hid, fid, want: want.map(i => i.k), ok: [...okKs].sort(), errs: errs || [] }); },
+        600000, { log() {} }, (p, e) => ({ pid: p && p.id, code: (e && e.code) || "ERR" }));
       return { fn, calls, state };
     };
     const now = Date.now();
@@ -3098,6 +3098,7 @@ section("ปุ่มพิมพ์ไม่สำเร็จ");
     const R4 = mkRun({ sendFails: true });
     await R4.fn(prs([V]));
     ok_("ส่งไม่ผ่านอีก = ยังอยู่ในรายการ ให้กดใหม่ได้", R4.calls.settle.length === 1 && R4.calls.settle[0].ok.length === 0);
+    ok_("ส่งไม่ผ่านอีก = จดเหตุล่าสุดของเครื่องนั้นกลับไปด้วย", R4.calls.settle[0] && R4.calls.settle[0].errs.length === 1 && R4.calls.settle[0].errs[0].pid === 2);
     const R5 = mkRun({ okIds: [1] });
     await R5.fn(prs([{ ...A, items: A.items.map(i => ({ ...i, r: null })) }]));
     ok_("ไม่มีใครกด = ไม่พิมพ์เองเด็ดขาด (กติกาเจ้าของ)", R5.calls.print.length === 0 && R5.calls.send.length === 0 && R5.calls.settle.length === 0);
@@ -3109,7 +3110,7 @@ section("ปุ่มพิมพ์ไม่สำเร็จ");
   ok_("บันทึกรายการละเอียดพอพิมพ์ใหม่ได้ (จำนวน/ตัวเลือก/หมายเหตุ/เครื่องที่รับ)", AGENT.includes("items: items.slice(0, 30).map(failItem),") && AGENT.includes("function failItem(it, k) {"));
   ok_("บิลเดียวไม่ออกหลายรอบ = เพิ่มรายการใหม่ ไม่ทับรอบแรก", !AGENT.includes("const kept = list.filter(f => String(f.orderId) !== String(order.id));"));
   ok_("ใบยกเลิก/ย้ายโต๊ะ/พิมพ์ซ้ำที่ไม่ออก ก็เข้ารายการด้วย",
-    AGENT.includes("await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id, pname: p.name });"));
+    AGENT.includes("await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id, pname: p.name, errs: [err] });"));
   // ป้ายที่โต๊ะต้องบอกชื่อเครื่องที่ไม่ออก ไม่ใช่แค่ว่ามีใบไม่ออก (เจ้าของสั่ง 12 ก.ย. 69)
   ok_("บันทึกชื่อเครื่องที่ควรพิมพ์ใบนั้นไว้ด้วย", AGENT.includes("pnames: x.pname ? [String(x.pname)]"));
   ok_("ป้ายที่โต๊ะขึ้นชื่อเครื่องที่ไม่ออก", APP.includes("const failPrinterNames=(f)=>{") && APP.includes("{pn?pn+\" ไม่ออก\":\"ใบครัวไม่ออก\"}"));
@@ -3117,7 +3118,7 @@ section("ปุ่มพิมพ์ไม่สำเร็จ");
   ok_("ผังโต๊ะอ่านรายการที่ไม่ออกจากรอบถามเร็ว", APP.includes("const failMap=printFailsOf(failPrinters||printers);") && APP.includes("failPrinters={failPrintersLive}"));
   ok_("รอบถามรายการที่ไม่ออกไม่เกิน 6 วินาที", APP.includes("if(!document.hidden)loadFails();},6000);"));
   ok_("ปุ่มขึ้นข้างปุ่มรายงาน เฉพาะตอนมีรายการค้าง",
-    APP.includes("{failCount>0&&<Btn v=\"danger\" onClick={()=>setShowPrintFails(true)} icon={I.print} s={{padding:\"5px 10px\",fontSize:12}}>พิมพ์ไม่สำเร็จ ({failCount})</Btn>}\n        <Btn v=\"ghost\" onClick={()=>setShowOrders(true)}"));
+    APP.includes("{failCount>0&&<Btn v=\"danger\" onClick={()=>setShowPrintFails(true)} icon={I.print} s={{padding:\"5px 10px\",fontSize:12}}>พิมพ์ไม่สำเร็จ ({failCount})</Btn>}\n        {failCount===0&&failSplit.old>0&&<Btn v=\"ghost\" onClick={()=>setShowPrintFails(true)} icon={I.print} s={{padding:\"5px 10px\",fontSize:12}}>ใบค้างเก่า ({failSplit.old})</Btn>}\n        <Btn v=\"ghost\" onClick={()=>setShowOrders(true)}"));
   ok_("ถามเฉพาะเครื่องที่มีรายการค้าง (ปกติได้แถวว่าง ไม่เปลืองเน็ต)", APP.includes("description=like.*%22failed%22:%5B%7B*"));
   ok_("รีปริ้นอ่านของล่าสุดก่อนเขียน", APP.includes("async function editPrintFail(holderId,fn){\n  const all=await api.getAllPrinters();"));
   ok_("ในจอมีรีปริ้นท้ายชื่อเมนู + ปุ่มเอาออกเมื่อไม่ต้องพิมพ์แล้ว", APP.includes("onClick={()=>retry(f,[it.k])}") && APP.includes("onClick={()=>dismiss(f)}"));
@@ -3364,7 +3365,7 @@ section("เปิดลิ้นชักเก็บเงิน");
     AGENT.includes("        await handleDrawerRequests(rows);\n        await handlePJRequests(rows);\n        await handleQRRequests(rows);\n        await handleReprintRequests(rows);"));
   // คำสั่งที่ไม่ถูกล้าง = ค้างในแถวตลอดวัน (rp พกรายการอาหารไปด้วย) และรอบเร็วจะเจอแถวเดิมซ้ำทุก 0.8 วิ
   ok_("คำสั่งพิมพ์ซ้ำ/QR ถูกล้างทิ้งหลังทำ เหมือน pj และ dk",
-    AGENT.includes('await clearCmdKey(p.id, "rp", rp.at);') && AGENT.includes('await clearCmdKey(p.id, "qr", q.at);'));
+    AGENT.includes('await clearCmdKey(p.id, "rp", rp.at, ok, err);') && AGENT.includes('await clearCmdKey(p.id, "qr", q.at, ok, err);'));
   // ── รอบหลัก: ถามบิลถี่ขึ้น แต่ของหนักต้องไม่ถูกดึงถี่ตาม ──
   ok_("รอบหลักไม่เกิน 2 วินาที", /const POLL_MS = (\d+);/.test(AGENT) && +AGENT.match(/const POLL_MS = (\d+);/)[1] <= 2000);
   ok_("รายชื่อเครื่องพิมพ์ (ก้อนใหญ่) ถูกใช้ซ้ำ ไม่ดึงใหม่ทุกรอบ",
@@ -3374,7 +3375,7 @@ section("เปิดลิ้นชักเก็บเงิน");
   ok_("ออเดอร์ใบใหญ่เรนเดอร์พร้อมกันได้มากขึ้น", AGENT.includes("return mapLimit(items || [], 10, async it => {"));
   ok_("รอบเร็วกันซ้อนรอบตัวเอง", AGENT.includes("if (kickBusy) return;"));
   ok_("มาร์คก่อนส่ง (tick ซ้อนไม่เปิดลิ้นชักซ้ำ) และล้างคำสั่งทิ้งหลังทำ",
-    AGENT.includes("state.kicked[p.id] = k.at; saveState();") && AGENT.includes('await clearCmdKey(p.id, "dk", k.at);'));
+    AGENT.includes("state.kicked[p.id] = k.at; saveState();") && AGENT.includes('await clearCmdKey(p.id, "dk", k.at, ok, err);'));
   ok_("จำคำสั่งที่ทำแล้วข้ามการรีสตาร์ท", AGENT.includes("if (!state.kicked) state.kicked = {};"));
   // เงินสดเข้า/ออกจริงเมื่อไหร่ ลิ้นชักต้องเปิดเมื่อนั้น — และห้ามทำให้การปิดบิลล้มเด็ดขาด
   // บิลใบเดียวจ่ายได้หลายช่องทาง ⟹ เงื่อนไขคือ "มีส่วนที่เป็นเงินสดจริง" ไม่ใช่ "ทั้งบิลเป็นเงินสด"
@@ -3700,7 +3701,7 @@ section("เวลาส่งครัวรายรายการ");
 section("งานล่าสุดของเครื่องพิมพ์");
 {
   ok_("ตัวพิมพ์จดงานล่าสุดพ่วงไปกับการล้างคำสั่ง (ไม่เพิ่มการเขียน)",
-    AGENT.includes("d.lastJob = { at: Date.now(), kind: key, ok: ok !== false };") && AGENT.includes("async function clearCmdKey(id, key, at, ok) {"));
+    AGENT.includes("d.lastJob = jobStamp(key, ok, err);") && AGENT.includes("async function clearCmdKey(id, key, at, ok, err) {") && AGENT.includes('d.lastJob = jobStamp("pj", ok, err, what);'));
   ok_("หน้าเครื่องพิมพ์โชว์งานล่าสุดของแต่ละเครื่อง", APP.includes("const lastJobText=(p)=>{") && APP.includes("{lastJobText(p)&&<div"));
   ok_("ช่องข้อมูลเสีย/ยังไม่เคยมีงาน = ไม่โชว์อะไร ไม่ทำให้จอพัง", APP.includes("const j=d.lastJob;if(!j||!j.at)return \"\";"));
 }
@@ -4611,6 +4612,42 @@ section("ช่องกรอก Inp/TA/Sel เก็บข้อความ �
   const sl = [...APP.matchAll(/_at\??\.slice\(0,\s*16\)/g)].map((m) => APP.slice(0, m.index).split("\n").length);
   ok_("ไม่ตัด ISO timestamp ใส่ช่อง datetime-local ตรง ๆ" + (sl.length ? " · บรรทัด " + sl.join(", ") : ""), sl.length === 0);
   ok_("แก้ไขการจองแปลงเวลาด้วย toLocalDTInput", APP.includes("reserved_at:editRes.reserved_at?toLocalDTInput(editRes.reserved_at)"));
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// ใบไม่ออกต้องบอกเหตุ และห้ามหายเงียบ (10 ต.ค. 69)
+// The River: ใบครัวไม่ออก 5 ใบ ทุกใบหมดเวลา 8 วิ แต่ระบบเก็บแค่ "ไม่ออก" ไม่มีใครรู้ว่าต่อไม่ติดหรือเครื่องค้าง
+// ใบเสร็จพร้อมเพย์ไม่ออกเงียบ ๆ · lastJob.ok เป็นจริงเสมอ · ป้ายแดงของ 28 ก.ย. ค้าง 12 วันจนไม่มีใครดู
+// · จอขายขึ้น ✅ "ตัวพิมพ์กำลังพิมพ์ใบครัว" ทั้งที่ยังไม่รู้ผล
+// ═══════════════════════════════════════════════════════════
+section("ใบไม่ออกต้องบอกเหตุ และห้ามหายเงียบ");
+{
+  const fnBody = (src, sig) => { const a = src.indexOf(sig); if (a < 0) return ""; const b = src.indexOf("\n}\n", a); return b > a ? src.slice(a, b) : ""; };
+  const send = fnBody(AGENT, "function sendToPrinter(");
+  ok_("ตัวพิมพ์: ส่งไม่ผ่านต้องติดป้ายว่าล้มช่วงไหน (connect/drain) และรหัสเหตุ", /e\.phase = connected \? "drain" : "connect"/.test(send) && send.includes('"CONNECT_TIMEOUT"') && send.includes('"DRAIN_TIMEOUT"') && /e\.code = code/.test(send));
+  ok_("ตัวพิมพ์: จังหวะรอเท่าเดิม 8 วิ (แก้แค่ป้ายบอกเหตุ ไม่เปลี่ยนพฤติกรรมการพิมพ์)", /s\.setTimeout\(8000\)/.test(send) && !/setTimeout\((?!8000)\d+\)/.test(send));
+  ok_("ตัวพิมพ์: printItems คืนเหตุรายเครื่อง", /return \{ ok: !anyFail, okIds, failedItems, errs \}/.test(AGENT) && /errs\.push\(errOf\(p, e\)\)/.test(AGENT));
+  ok_("ตัวพิมพ์: บันทึกใบครัวไม่ออกพร้อมเหตุ", /recordPrintFail\(printers, o, \(lastResult && lastResult\.failedItems\) \|\| \[\], \{ errs:/.test(AGENT) && /errs: \(Array\.isArray\(x\.errs\) \? x\.errs : \[\]\)/.test(AGENT));
+  const pj = fnBody(AGENT, "async function handlePJRequests(");
+  ok_("ตัวพิมพ์: ใบเสร็จ/QR/ใบปิดกะที่ไม่ออก ต้องขึ้นในรายการพิมพ์ไม่สำเร็จ (ไม่หายเงียบ)", pj.includes("await recordJobFail(printers, p, j, err)") && /kind: "pj"/.test(AGENT) && /items: \[\]/.test(fnBody(AGENT, "async function recordJobFail(")));
+  ok_("ตัวพิมพ์: งานล่าสุดบอกผลจริง ไม่ใช่สำเร็จเสมอ", !/ok: ok !== false/.test(AGENT) && (AGENT.match(/clearCmdKey\(p\.id, "(rp|qr|dk)", [^)]*, ok, err\)/g) || []).length === 3 && pj.includes("clearPJ(p.id, j.at, ok, err, j.what)") && pj.includes("pjInflight.has(fk)"));
+  ok_("ตัวพิมพ์: ขยับเวอร์ชันแล้ว (ร้านอัปเดตเอง)", +((AGENT.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 46);
+  const pjCmds = [...APP.matchAll(/cmdDesc\(\w+,"pj",\{[^}]*\}/g)].map((m) => m[0]);
+  ok_("แอป: ทุกคำสั่งพิมพ์รูป (pj) บอกว่าเป็นใบอะไร (" + pjCmds.length + ")", pjCmds.length >= 5 && pjCmds.every((c) => /what:/.test(c)));
+  ok_("แอป: ใบเสร็จที่ไม่ออกไม่ขึ้นเป็น \"ใบครัวไม่ออก\" ที่โต๊ะ", /const printFailsOf=[\s\S]{0,200}if\(f\.kind==="pj"\)continue;/.test(APP));
+  ok_("แอป: ปุ่มแดงนับเฉพาะ 12 ชม.ล่าสุด ของเก่าแยก", /if\(isOldPrintFail\(f,now\)\)old\+=printFailWeight\(f\);else recent\+=/.test(APP) && APP.includes("const failCount=failSplit.recent;"));
+  const modal = fnBody(APP, "function PrintFailModal(");
+  ok_("แอป: แผงพิมพ์ไม่สำเร็จบอกเหตุ · แยกของเก่า · ของเก่ารีปริ้นไม่ได้", modal.includes("printErrText(e)") && modal.includes("isOldPrintFail(f,now)") && modal.includes("{!old&&<Btn v={wait?") && modal.includes("clearOld(oldList)"));
+  ok_("แอป: จอขายมีแถบสถานะการพิมพ์", APP.includes("<PrintHealthStrip printers={printers} failPrinters={failPrinters}") && /function PrintHealthStrip\(/.test(APP));
+  ok_("แอป: ข้อความหลังกดส่งไม่อ้างว่ากระดาษออกแล้ว", !APP.includes("ตัวพิมพ์กำลังพิมพ์ใบครัว") && !/— กระดาษจะออกใน ~5 วินาที(?! \(ผลดูที่)/.test(APP) && (APP.match(/จะออกใน ~5 วินาที/g) || []).length === 1);
+  // รีวิว 10 ต.ค. 69: หน้าโต๊ะเคยเอาใบแจ้งยอด/ใบยกเลิกบิล (pj) ที่ไม่ออก ขึ้นเป็น "ใบครัวไม่ออก" + ให้ปัดพิมพ์อาหารเข้าครัว
+  ok_("แอป: หน้าโต๊ะไม่เอาใบเสร็จ/ใบแจ้งยอดที่ไม่ออกมาเป็นใบครัว และของเก่า 12 ชม.รีปริ้นไม่ได้", /printFailList\(printers\)\.filter\(f=>String\(f\.orderId\)===String\(existingOrder\.id\)&&f\.kind!=="pj"\)/.test(APP) && /const retryable=fl\.filter\([^;]*!isOldPrintFail\(f,_now\)\)/.test(APP));
+  // แถบเตือนต้องตัดสิน "ตัวพิมพ์ไม่ตอบ" จากอายุสัญญาณ ณ ตอนได้ข้อมูล ไม่ใช่ ณ ตอนนี้ (กันแดงหลอกหลังสลับแท็บ)
+  const strip = fnBody(APP, "function PrintHealthStrip(");
+  ok_("แอป: แถบเตือนไม่ขึ้นแดงหลอกจากข้อมูลเครื่องพิมพ์ที่ค้าง", strip.includes("const gotAt=useMemo(()=>Date.now(),[printers]);") && /\(gotAt-hh\.seen\)>120000/.test(strip) && /const fresh=now-gotAt</.test(strip));
+  ok_("แอป: พิมพ์ใบเสร็จใหม่ เอารายการเดิมออกเฉพาะเมื่อส่งได้จริง", /const sent=await printBillReceipt\(/.test(modal) && modal.includes("if(sent)await editPrintFail("));
+  ok_("แอป: งานล่าสุดของเครื่องบอกว่าไม่ออก พร้อมเหตุ", /j\.ok===false\?" — ❌ ไม่ออก: "\+printErrText/.test(APP));
 }
 
 
