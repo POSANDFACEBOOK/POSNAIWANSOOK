@@ -4603,8 +4603,10 @@ section("ช่องกรอก Inp/TA/Sel เก็บข้อความ �
   ok_("ใช้คูปองต้องถามยืนยันก่อนตัด", before('title:"ใช้คูปอง"', "updateCRMVoucherIfStatus("));
   ok_("ใช้โปรต้องถามยืนยันก่อนนับ", before('title:"ใช้โปรโมชั่น"', "updateCRMPromotion(p.id,{used_count:"));
   // วันเกิดเป็นคอลัมน์ date — ส่ง "" ไปตอนไม่กรอก = 22007 เพิ่มลูกค้าไม่ได้
-  const sc = APP.slice(APP.indexOf("async function saveCust(){"), APP.indexOf("async function saveCust(){") + 600);
+  const sc = APP.slice(APP.indexOf("async function saveCust(){"), APP.indexOf("async function saveCust(){") + 1400);
   ok_("เพิ่มลูกค้า CRM: วันเกิดว่างส่งเป็น null ไม่ใช่ \"\"", /const d=\{\.\.\.form,birthdate:form\.birthdate\|\|null/.test(sc));
+  // เบอร์ซ้ำ = แต้มด่วน/อนุมัติบิลเข้าโปรไฟล์แรกเสมอ อีกคนไม่ได้แต้ม
+  ok_("เพิ่ม/แก้ลูกค้า CRM: กันเบอร์ซ้ำก่อนบันทึก", /const dup=dg&&\(allCustomers\|\|customers/.test(sc) && sc.indexOf("if(dup)return alert(") >= 0 && sc.indexOf("if(dup)return alert(") < sc.indexOf("setSaving(true)"));
   // datetime-local ต้องได้เวลาเครื่อง — ตัด ISO (UTC) 16 ตัวแรกใส่ช่อง = แก้ไขการจองแล้วเวลาเลื่อนไป 7 ชม.
   const sl = [...APP.matchAll(/_at\??\.slice\(0,\s*16\)/g)].map((m) => APP.slice(0, m.index).split("\n").length);
   ok_("ไม่ตัด ISO timestamp ใส่ช่อง datetime-local ตรง ๆ" + (sl.length ? " · บรรทัด " + sl.join(", ") : ""), sl.length === 0);

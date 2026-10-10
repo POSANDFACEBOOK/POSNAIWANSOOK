@@ -15966,6 +15966,10 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
 
   async function saveCust(){
     if(!form.name.trim())return alert("กรุณาใส่ชื่อลูกค้า");
+    // One phone = one member: points (แต้มด่วน / อนุมัติบิล) always go to the first profile with that number.
+    const dg=(form.phone||"").replace(/\D/g,"");
+    const dup=dg&&(allCustomers||customers||[]).find(c=>c.id!==(editCust&&editCust.id)&&(c.phone||"").replace(/\D/g,"")===dg);
+    if(dup)return alert(`เบอร์ ${form.phone} เป็นของ ${dup.name} อยู่แล้ว — แตะชื่อนั้นเพื่อแก้ไขแทนการเพิ่มใหม่`);
     setSaving(true);
     try{
       const d={...form,birthdate:form.birthdate||null,branch_id:currentBranch.id,points:editCust?editCust.points:0};
