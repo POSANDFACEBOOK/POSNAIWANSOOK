@@ -3272,6 +3272,59 @@ function ReceiveImagesEditor({initial,title,onSave,onClose}){
     </div>
   </Modal>;
 }
+// ── ส่วนลดทั้งบิลตอนรับของจากซัพพลาย (เจ้าของสั่ง 10 ต.ค. 69) ─────────────────
+// บิลซัพมักลดท้ายบิลเป็นบาทหรือเปอร์เซ็นต์ ถ้าเก็บแค่ยอดรวม ราคาต่อหน่วยจะสูงกว่าที่จ่ายจริง
+// และทุกจุดที่คิดต้นทุนอ่าน pricePerUnit ของบิลที่รับแล้ว (ต้นทุนเฉลี่ยถ่วงน้ำหนัก → ต้นทุนเมนู
+// · ประวัติราคา · สถิติซัพ) ⟹ ต้องกระจายส่วนลดลงทุกแถวตามสัดส่วนยอด แล้วเก็บราคาหลังลดเป็นราคาจริง
+// ราคาตามบิล (ก่อนลด) เก็บไว้ที่ billPrice และส่วนลดที่แถวนั้นได้ที่ billDisc (บาท) — ตรวจย้อนกับบิลซัพได้
+// กระจายเป็นสตางค์ด้วยเศษเหลือมากสุด ⟹ ผลรวมยอดทุกแถว = ยอดก่อนลด − ส่วนลด เป๊ะ ไม่มีสตางค์หาย
+const billGrossOf=(items)=>(items||[]).reduce((s,it)=>s+Math.round((+it.receivedQty||0)*(+it.pricePerUnit||0)*100),0)/100;   // ปัดรายแถวแบบเดียวกับตอนกระจาย — จอ กล่องยืนยัน ที่บันทึก และใบพิมพ์ ตรงกันถึงสตางค์
+function billDiscountAmount(itemsTotal,mode,value){
+  const v=Math.max(0,+value||0),t=Math.max(0,+itemsTotal||0);
+  const amt=mode==="percent"?t*Math.min(v,100)/100:Math.min(v,t);
+  return Math.round(amt*100)/100;
+}
+const billDiscountInvalid=(itemsTotal,mode,value)=>{
+  const raw=String(value==null?"":value).trim();if(raw==="")return false;
+  const v=+raw;if(!Number.isFinite(v)||v<0)return true;   // พิมพ์ผิด เช่น "1.2.3" ต้องเตือน ไม่ใช่กลายเป็นไม่มีส่วนลดเงียบ ๆ
+  // ลดเต็มบิล (100%) = ราคา 0 แล้วทุกจุดที่คิดต้นทุนถอยไปใช้ราคาตั้งต้นแทน ⟹ ของแถมให้ใส่ราคา 0 ที่แถวนั้นแทน
+  return mode==="percent"?v>=100:v>=(+itemsTotal||0)-0.005;
+};
+function applyBillDiscount(items,amount){
+  const gross=(items||[]).map(it=>Math.round((+it.receivedQty||0)*(+it.pricePerUnit||0)*100));   // สตางค์
+  const total=gross.reduce((a,b)=>a+b,0);
+  const cents=Math.min(Math.round((+amount||0)*100),total);
+  if(!(cents>0)||!(total>0))return (items||[]).map(it=>({...it}));
+  const exact=gross.map(g=>cents*g/total);
+  const share=exact.map(Math.floor);
+  let left=cents-share.reduce((a,b)=>a+b,0);
+  exact.map((x,i)=>[x-Math.floor(x),i]).sort((a,b)=>b[0]-a[0]).forEach(([,i])=>{if(left>0&&gross[i]>0){share[i]++;left--;}});
+  return items.map((it,i)=>{
+    if(!(gross[i]>0))return {...it};
+    const qty=+it.receivedQty||0,net=(gross[i]-share[i])/100;
+    return {...it,billPrice:+it.pricePerUnit||0,billDisc:share[i]/100,pricePerUnit:Math.round(net/qty*10000)/10000,estimatedCost:net};
+  });
+}
+// ช่องส่วนลดทั้งบิล — ใช้ทั้งจอรับของของสาขาและครัวกลาง
+function BillDiscountInput({mode,value,onMode,onValue,itemsTotal}){
+  const amt=billDiscountAmount(itemsTotal,mode,value);
+  const bad=billDiscountInvalid(itemsTotal,mode,value);
+  const on=amt>0||bad;
+  return <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+    <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>🏷️ ส่วนลดทั้งบิล <span style={{fontSize:11,fontWeight:400,color:C.ink4}}>(ตามบิลซัพ · ไม่มีใส่ 0)</span></span>
+    <div style={{display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap",justifyContent:"flex-end"}}>
+      <div style={{display:"inline-flex",border:`1.5px solid ${C.line}`,borderRadius:9,overflow:"hidden"}}>
+        {[["baht","฿ บาท"],["percent","% เปอร์เซ็นต์"]].map(([m,l])=><button key={m} type="button" onClick={()=>onMode(m)} style={{padding:"7px 10px",border:"none",background:mode===m?C.brand:C.white,color:mode===m?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,cursor:"pointer"}}>{l}</button>)}
+      </div>
+      <input type="text" inputMode="decimal" value={value} onChange={e=>onValue(e.target.value.replace(/[^\d.]/g,"").replace(/(\..*)\./g,"$1"))} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:90,minHeight:38,border:`2px solid ${bad?C.red:on?C.brand:C.brandBorder}`,background:bad?"#FEF2F2":on?C.brandLight:C.white,color:bad?C.red:on?C.brand:C.ink}}/>
+      <span style={{fontSize:13,fontWeight:900,color:amt>0&&!bad?C.green:C.ink4,minWidth:92,textAlign:"right"}}>{amt>0&&!bad?`−฿${amt.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`:"—"}</span>
+    </div>
+    {bad&&<div style={{width:"100%",fontSize:11.5,color:C.red,fontWeight:700,textAlign:"right"}}>{!Number.isFinite(+value)?"ตัวเลขไม่ถูกต้อง":mode==="percent"?"ส่วนลดต้องน้อยกว่า 100% (ของแถมให้ใส่ราคา 0 ที่แถวนั้น)":"ส่วนลดต้องน้อยกว่ายอดค่าสินค้า (ของแถมให้ใส่ราคา 0 ที่แถวนั้น)"}</div>}
+    {amt>0&&!bad&&<div style={{width:"100%",fontSize:11,color:C.ink4,textAlign:"right"}}>ระบบกระจายส่วนลดลงราคาต่อหน่วยทุกแถวตามสัดส่วนยอด — ต้นทุนวัตถุดิบจะเป็นราคาหลังลด</div>}
+  </div>;
+}
+// ราคาต่อหน่วยหลังส่วนลด (โชว์ในแถวระหว่างกรอก — ตัวคำนวณจริงตอนบันทึกคือ applyBillDiscount)
+const netAfterBillDisc=(price,itemsTotal,amt)=>(itemsTotal>0&&amt>0)?price*(1-amt/itemsTotal):price;
 // Flip an external-supplier order_requests row to "delivered", carrying the receive
 // photos. Tolerates a DB without the optional receive_images column yet: on that
 // specific error it retries without photos so the receive (and stock credit) still
@@ -9127,6 +9180,9 @@ function buildPriceHistoryMap(orders){
       const key=`${id}|${String(it.unit||"").trim()}`;
       const cur=m.get(key)||{last:0,lastAt:null,min:Infinity,max:0,n:0};
       cur.last=price;cur.lastAt=o.requested_at||o.created_at||null;   // เรียงเก่า→ใหม่ ตัวท้ายคือครั้งล่าสุด
+      // last/min/max = ราคาจริงหลังส่วนลดทั้งบิล (ใช้เทียบ) · lastBill = ราคาตามบิลก่อนลด (ใช้เติมช่องราคา)
+      // ถ้าเติมช่องด้วยราคาหลังลด แล้วกดรับพร้อมส่วนลดเดิม = หักส่วนลดซ้ำ ต้นทุนลดลงเรื่อย ๆ ทุกบิล
+      cur.lastBill=(it.billPrice!=null&&+it.billPrice>0)?+it.billPrice:price;
       cur.min=Math.min(cur.min,price);cur.max=Math.max(cur.max,price);cur.n++;
       m.set(key,cur);
     }
@@ -9173,7 +9229,7 @@ function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],las
     const n=Math.round((+qty||0)*1000)/1000;
     if(!(n>0)){alert("ใส่จำนวนที่รับจริง มากกว่า 0");return;}
     const p=Math.round((+price||0)*100)/100;
-    if(!(p>0)){alert("ใส่ราคา/หน่วยที่จ่ายจริง มากกว่า 0");return;}
+    if(!(p>0)){alert("ใส่ราคา/หน่วยตามบิล มากกว่า 0");return;}
     const dup=(items||[]).findIndex(x=>+(x.ingId||x.ingredient_id)===+pick.id);
     if(dup>=0&&!await confirmDlg({
       title:"รายการนี้มีอยู่แล้วในใบ",
@@ -9204,7 +9260,7 @@ function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],las
       {q.trim()&&<div style={{marginTop:7,maxHeight:170,overflowY:"auto",background:C.white,border:`1px solid ${C.line}`,borderRadius:10}}>
         {matches.length===0
           ?<div style={{padding:"10px 12px",fontSize:12,color:C.ink4}}>ไม่พบ{showAll?"":` — อาจไม่ได้ตั้งซัพพลายนี้ให้วัตถุดิบดังกล่าว ลองติ๊ก "แสดงทั้งหมด" ด้านล่าง`}</div>
-          :matches.map(m=><button key={m.id} onClick={()=>{setPick(m);const h=lastPriceOf?lastPriceOf(m.id,m.buy_unit):null;setPrice(h&&h.last>0?String(h.last):"");}}
+          :matches.map(m=><button key={m.id} onClick={()=>{setPick(m);const h=lastPriceOf?lastPriceOf(m.id,m.buy_unit):null;setPrice(h&&(h.lastBill||h.last)>0?String(h.lastBill||h.last):"");}}
               style={{display:"block",width:"100%",textAlign:"left",padding:"8px 12px",border:"none",borderBottom:`1px solid ${C.lineLight}`,background:"transparent",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
               <b style={{color:C.ink}}>{m.name}</b> <span style={{color:C.ink4,fontSize:11}}>· {m.buy_unit||"ไม่ระบุหน่วย"}</span>
             </button>)}
@@ -9226,7 +9282,7 @@ function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],las
             style={{width:"100%",padding:"9px 12px",borderRadius:10,border:`1.5px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box"}}/>
         </div>
         <div style={{flex:"1 1 140px"}}>
-          <div style={{fontSize:11,color:C.brand,fontWeight:800,marginBottom:3}}>💰 ราคา/หน่วยที่จ่ายจริง</div>
+          <div style={{fontSize:11,color:C.brand,fontWeight:800,marginBottom:3}}>💰 ราคา/หน่วยตามบิล <span style={{fontWeight:600,color:C.ink4}}>(ก่อนส่วนลดท้ายบิล)</span></div>
           <input type="text" inputMode="decimal" value={price} onChange={e=>setPrice(e.target.value)} placeholder="0.00"
             style={{width:"100%",padding:"9px 12px",borderRadius:10,border:`1.5px solid ${C.brand}77`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box"}}/>
         </div>
@@ -9284,6 +9340,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   const[receivingExtOrder,setReceivingExtOrder]=useState(null);  // null | { orderId, supplierName, items[receivedQty,pricePerUnit] }
   const[extRecvImages,setExtRecvImages]=useState([]);const[extRecvUploading,setExtRecvUploading]=useState(0);  // receive photos (Drive)
   const[extDeliveryFee,setExtDeliveryFee]=useState("0");  // ค่าจัดส่งของออเดอร์นี้ (0 = ไม่มี)
+  const[extDiscMode,setExtDiscMode]=useState("baht");const[extDiscValue,setExtDiscValue]=useState("");   // ส่วนลดทั้งบิล (บาท/เปอร์เซ็นต์)
   const[copyPO,setCopyPO]=useState(null);          // null | po — copy-target branch picker
   const[copyBusy,setCopyBusy]=useState(false);     // true while addPO for a copy is in-flight
   const slipHealRef=useRef(false);                 // guards load()'s SlipTrack self-heal from overlapping
@@ -9393,6 +9450,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   function startReceiveExt(order){
     setExtRecvImages(Array.isArray(order.receive_images)?order.receive_images:[]);setExtRecvUploading(0);
     setExtDeliveryFee(order.delivery_fee!=null?String(order.delivery_fee):"0");
+    setExtDiscMode("baht");setExtDiscValue("");
     setReceivingExtOrder({
       orderId:order.id,
       orderStatus:order.status,
@@ -9417,6 +9475,9 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       const price=Math.max(0,+it.pricePerUnit||0);
       return{...it,receivedQty:qty,pricePerUnit:price,estimatedCost:Math.round(qty*price*100)/100};
     });
+    const extGross=billGrossOf(itemsWithReceived);
+    if(billDiscountInvalid(extGross,extDiscMode,extDiscValue)){alert("ส่วนลดทั้งบิลไม่ถูกต้อง — ต้องเป็นตัวเลข และน้อยกว่ายอดค่าสินค้า (หรือน้อยกว่า 100%) · แก้ก่อนยืนยัน");return;}
+    const extDisc=billDiscountAmount(extGross,extDiscMode,extDiscValue);
     // อนุญาตให้ทุกรายการเป็น 0 ได้ (ไม่ได้รับของเลย) — หน้าต่างเตือนด้านล่างจะให้ยืนยันก่อน
     if(!extRecvImages||extRecvImages.length===0){alert("📷 กรุณาแนบรูปตอนรับสินค้าอย่างน้อย 1 รูป ก่อนยืนยันรับ (สต๊อกจะยังไม่วิ่งเข้า)");return;}
     if(extRecvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
@@ -9424,7 +9485,9 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     const warn2=notRecv2.length?`⚠️ มีสินค้า ${notRecv2.length} รายการที่ระบุว่า "ไม่ได้รับ" (จำนวน 0):\n${notRecv2.map(it=>`   • ${it.name}`).join("\n")}\n\nรายการเหล่านี้จะไม่ถูกเพิ่มเข้าสต๊อก — ยืนยันว่าไม่ได้รับจริงใช่ไหม?\n\n`:"";
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
-      message:`${warn2}ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?`,
+      message:`${warn2}ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?${extDisc>0?`
+
+🏷️ ส่วนลดทั้งบิล ฿${extDisc.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — กระจายลงราคาต่อหน่วยทุกแถว (ยอดค่าสินค้าหลังลด ฿${(extGross-extDisc).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})})`:""}`,
       confirmLabel:"✅ ยืนยัน + เพิ่มสต๊อก",
       danger:notRecv2.length>0,
     }))return;
@@ -9433,7 +9496,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       // ทั้งที่มือตัวเองกดสำเร็จไปแล้ว — ล็อกทันทีและโชว์ว่ากำลังทำงาน
     recvExtBusyRef.current=true;setRecvExtBusy(true);
     try{
-      const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
+      const payloadItems=applyBillDiscount(itemsWithReceived,extDisc).map(({_key,...rest})=>rest);
       await deliverOrderWithPhotos(receivingExtOrder.orderId,receivingExtOrder.orderStatus,payloadItems,extRecvImages,+extDeliveryFee||0);
       const acc=await transferStockBetweenBranches({
         fromBranchId:null,          // ของเข้าจากนอกบริษัท — ไม่มีสาขาไหนถูกหัก (ถูกต้อง ไม่ใช่การโอน)
@@ -10577,11 +10640,11 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     {/* Receive modal for external-supplier orders — actual qty + actual price */}
     {receivingExtOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingExtOrder.supplierName}`} onClose={()=>setReceivingExtOrder(null)} wide>
       <div style={{background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
-        💡 <b>กรอก 2 ค่าให้ครบทุกแถว</b> ก่อนกดยืนยัน:<br/>① <b>จำนวนรับจริง</b> · ② <b>ราคา/หน่วยที่จ่ายจริง</b> — ระบบจะเพิ่มสต๊อก "{currentBranch.name}" และเก็บราคาเข้าประวัติ
+        💡 <b>กรอก 2 ค่าให้ครบทุกแถว</b> ก่อนกดยืนยัน:<br/>① <b>จำนวนรับจริง</b> · ② <b>ราคา/หน่วยตามบิล</b> (บิลมีส่วนลดท้ายบิล ใส่ที่ช่อง 🏷️ ด้านล่าง) — ระบบจะเพิ่มสต๊อก "{currentBranch.name}" และเก็บราคาเข้าประวัติ
       </div>
       <div style={{maxHeight:"45vh",overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch",marginBottom:14,border:`1px solid ${C.line}`,borderRadius:10}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,minWidth:560}}>
-          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","💰 ราคา/หน่วยที่จ่าย","รวม"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:i===3?C.brand:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","💰 ราคา/หน่วยตามบิล","รวม"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:i===3?C.brand:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
           <tbody>{receivingExtOrder.items.map((it,idx)=>{
             const ordered=+it.qtyNeeded||0;
             const got=+it.receivedQty||0;
@@ -10589,6 +10652,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
             const lineTotal=got*price;
             const short=got<ordered;
             const needPrice=got>0&&!(price>0);
+            const g0=billGrossOf(receivingExtOrder.items),d0=billDiscountInvalid(g0,extDiscMode,extDiscValue)?0:billDiscountAmount(g0,extDiscMode,extDiscValue);
+            const eff=netAfterBillDisc(price,g0,d0);   // ราคาจริงหลังส่วนลดทั้งบิล — ใช้เทียบกับราคาครั้งก่อน
             return <tr key={it._key} style={{borderTop:`1px solid ${C.lineLight}`,background:short?"#FFFBEB":"transparent"}}>
               <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>
                 <div>{it.name}</div>
@@ -10605,11 +10670,12 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
                   <span style={{fontSize:11,color:C.ink4}}>/{it.unit||"หน่วย"}</span>
                 </div>
                 {needPrice&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>⚠ กรุณากรอกราคา</div>}
+                {d0>0&&price>0&&got>0&&<div style={{fontSize:10.5,color:C.green,fontWeight:800,marginTop:2}}>🏷️ หลังส่วนลด ฿{eff.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}/{it.unit||"หน่วย"}</div>}
                 {/* ราคาครั้งก่อน + ส่วนต่าง — จับกรณีซื้อแพงขึ้นผิดปกติได้ตั้งแต่ตอนรับของ */}
                 {(()=>{
                   const h=lastPriceOf(it.ingId||it.ingredient_id,it.unit);
                   if(!h||!(h.last>0))return <div style={{fontSize:10,color:C.ink4,marginTop:2}}>— ยังไม่มีประวัติราคา —</div>;
-                  const d=price>0?price-h.last:0;
+                  const d=price>0?eff-h.last:0;
                   const pct=h.last>0?(d/h.last*100):0;
                   const up=d>0.004,down=d<-0.004;
                   return <div style={{fontSize:10,marginTop:3,lineHeight:1.5}}>
@@ -10630,13 +10696,14 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       <ReceiveAddLine key={receivingExtOrder.orderId} isCentral={isCentralBranch} ings={ings} suppliers={suppliers} supplierName={receivingExtOrder.supplierName}
         branchId={currentBranch?.id} items={receivingExtOrder.items} lastPriceOf={lastPriceOf}
         onAdd={ln=>setReceivingExtOrder(s=>({...s,items:[...s.items,ln]}))}/>
-      {(()=>{const itemsTotal=receivingExtOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0);const fee=+extDeliveryFee||0;return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
+      {(()=>{const itemsTotal=billGrossOf(receivingExtOrder.items);const fee=+extDeliveryFee||0;const disc=billDiscountInvalid(itemsTotal,extDiscMode,extDiscValue)?0:billDiscountAmount(itemsTotal,extDiscMode,extDiscValue);return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,color:C.ink3,marginBottom:8}}><span>ยอดค่าสินค้า</span><span style={{fontWeight:700,color:C.ink2}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+        <BillDiscountInput mode={extDiscMode} value={extDiscValue} onMode={setExtDiscMode} onValue={setExtDiscValue} itemsTotal={itemsTotal}/>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
           <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>🚚 ค่าจัดส่ง <span style={{fontSize:11,fontWeight:400,color:C.ink4}}>(ไม่มีใส่ 0)</span></span>
           <div style={{display:"inline-flex",alignItems:"center",gap:5}}><span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span><input type="text" inputMode="decimal" value={extDeliveryFee} onChange={e=>setExtDeliveryFee(e.target.value)} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${fee>0?C.brand:C.brandBorder}`,background:fee>0?C.brandLight:C.white,color:fee>0?C.brand:C.ink}}/></div>
         </div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,borderTop:`1px dashed ${C.line}`}}><span style={{fontSize:14,fontWeight:800,color:C.ink}}>ยอดรวมทั้งสิ้น</span><span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{(itemsTotal+fee).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,borderTop:`1px dashed ${C.line}`}}><span style={{fontSize:14,fontWeight:800,color:C.ink}}>ยอดรวมทั้งสิ้น</span><span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{(itemsTotal-disc+fee).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
       </div>;})()}
       <ReceivePhotoAttach images={extRecvImages} setImages={setExtRecvImages} uploading={extRecvUploading} setUploading={setExtRecvUploading} minRequired={1}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
@@ -12367,7 +12434,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   async function closeReceiveGuarded(){
     if(recvClosingRef.current)return;
     const now=JSON.stringify((receivingOrder&&receivingOrder.items)||[]);
-    if(now===recvSnapRef.current){setReceivingOrder(null);return;}
+    if(now===recvSnapRef.current&&!(+recvDiscValue>0)){setReceivingOrder(null);return;}
     recvClosingRef.current=true;
     try{
       if(await confirmDlg({
@@ -12379,6 +12446,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   }
   const[recvImages,setRecvImages]=useState([]);const[recvUploading,setRecvUploading]=useState(0);  // receive photos (Drive)
   const[recvDeliveryFee,setRecvDeliveryFee]=useState("0");  // ค่าจัดส่งของออเดอร์นี้ (0 = ไม่มี)
+  const[recvDiscMode,setRecvDiscMode]=useState("baht");const[recvDiscValue,setRecvDiscValue]=useState("");   // ส่วนลดทั้งบิล (บาท/เปอร์เซ็นต์)
   const[photoEditOrder,setPhotoEditOrder]=useState(null);  // delivered order whose receive photos are being viewed/added retroactively
   const[copiedId,setCopiedId]=useState(null);          // shows ✓ briefly after copy succeeds
   const[retryingId,setRetryingId]=useState(null);      // order whose pending stock is being re-added
@@ -12497,12 +12565,16 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     // On the received-goods document also show ราคา/หน่วย + รวม + ยอดรวมทั้งสิ้น so it
     // reconciles against the supplier's receipt. The order-to-supplier version stays price-free.
     const money=n=>`฿${(+n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;
-    const lineTotal=it=>Math.round(qtyCol(it)*(+it.pricePerUnit||0)*100)/100;
-    const rows=printItems.map((it,n)=>`<tr><td style="text-align:center;color:#64748B">${n+1}</td><td>${esc(it.name)}</td><td style="text-align:center">${esc(qtyCol(it))}</td><td>${esc(it.unit||"")}</td>${delivered?`<td style="text-align:right">${money(+it.pricePerUnit||0)}</td><td style="text-align:right">${money(lineTotal(it))}</td>`:""}</tr>`).join("");
+    // ส่วนลดทั้งบิล: ราคาที่เก็บ (pricePerUnit) เป็นราคาหลังลดแล้ว — ใบนี้ต้องเทียบกับบิลซัพได้ จึงโชว์ราคาตามบิล (billPrice)
+    // แล้วหักส่วนลดท้ายบิลเป็นบรรทัดแยก ยอดสุทธิ = ผลรวมยอดหลังลดที่เก็บไว้ (estimatedCost) ไม่มีสตางค์เพี้ยน
+    const unitShown=it=>it.billPrice!=null?+it.billPrice:(+it.pricePerUnit||0);
+    const lineTotal=it=>Math.round(qtyCol(it)*unitShown(it)*100)/100;
+    const billDiscTotal=delivered?Math.round(printItems.reduce((s,it)=>s+(+it.billDisc||0),0)*100)/100:0;
+    const rows=printItems.map((it,n)=>`<tr><td style="text-align:center;color:#64748B">${n+1}</td><td>${esc(it.name)}</td><td style="text-align:center">${esc(qtyCol(it))}</td><td>${esc(it.unit||"")}</td>${delivered?`<td style="text-align:right">${money(unitShown(it))}</td><td style="text-align:right">${money(lineTotal(it))}</td>`:""}</tr>`).join("");
     const priceHead=delivered?`<th style="width:100px">ราคา/หน่วย</th><th style="width:110px">รวม</th>`:"";
     const subtotal=delivered?printItems.reduce((s,it)=>s+lineTotal(it),0):0;
     const fee=+order.delivery_fee||0;
-    const totalBlock=delivered?`<div style="margin-top:16px;text-align:right;font-size:14px"><div style="margin:2px 0">ยอดรวมค่าสินค้า: <b>${money(subtotal)}</b></div>${fee>0?`<div style="margin:2px 0">ค่าจัดส่ง: <b>${money(fee)}</b></div>`:""}<div style="font-size:18px;color:#FF6B35;font-weight:900;margin-top:6px;border-top:2px solid #FF6B35;display:inline-block;padding-top:6px">รวมทั้งสิ้น: ${money(subtotal+fee)}</div></div>`:"";
+    const totalBlock=delivered?`<div style="margin-top:16px;text-align:right;font-size:14px"><div style="margin:2px 0">ยอดรวมค่าสินค้า: <b>${money(subtotal)}</b></div>${billDiscTotal>0?`<div style="margin:2px 0;color:#16A34A">ส่วนลดท้ายบิล: <b>−${money(billDiscTotal)}</b></div>`:""}${fee>0?`<div style="margin:2px 0">ค่าจัดส่ง: <b>${money(fee)}</b></div>`:""}<div style="font-size:18px;color:#FF6B35;font-weight:900;margin-top:6px;border-top:2px solid #FF6B35;display:inline-block;padding-top:6px">รวมทั้งสิ้น: ${money(subtotal-billDiscTotal+fee)}</div></div>`:"";
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${docTitle}</title><style>body{font-family:'Sarabun',sans-serif;padding:24px;color:#0F172A}h2{color:#FF6B35;margin:0 0 6px}.meta{font-size:13px;margin:2px 0}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f5f5f5;font-weight:700}@media print{.noprint{display:none}}</style></head><body><h2>NAIWANSOOK FOODCOST — ${docTitle}</h2><p class="meta">ซัพพลายเออร์: <b>${esc(order.supplier_name)}</b></p><p class="meta">สาขาผู้สั่ง: <b>${esc(order.branch_name)}</b></p><p class="meta">สั่งโดย: <b>${esc(order.requested_by)}</b> · วันที่: ${esc(fmtDT(order.requested_at))}</p>${order.note?`<p class="meta">หมายเหตุ: ${esc(order.note)}</p>`:""}<table><thead><tr><th style="width:48px">ลำดับ</th><th>วัตถุดิบ</th><th style="width:120px">${qtyHeader}</th><th style="width:90px">หน่วย</th>${priceHead}</tr></thead><tbody>${rows}</tbody></table>${totalBlock}<br/><button class="noprint" onclick="window.print()">🖨️ พิมพ์</button></body></html>`);
     w.document.close();addPrintClose(w);
     setTimeout(()=>{try{w.print();}catch{}setPrintingId(null);},600);
@@ -12566,6 +12638,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   function startReceive(order){
     setRecvImages(Array.isArray(order.receive_images)?order.receive_images:[]);setRecvUploading(0);
     setRecvDeliveryFee(order.delivery_fee!=null?String(order.delivery_fee):"0");
+    setRecvDiscMode("baht");setRecvDiscValue("");
     setReceivingOrder({
       orderId:order.id,
       orderStatus:order.status,
@@ -12598,6 +12671,9 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         estimatedCost:Math.round(qty*price*100)/100,
       };
     });
+    const recvGross=billGrossOf(itemsWithReceived);
+    if(billDiscountInvalid(recvGross,recvDiscMode,recvDiscValue)){alert("ส่วนลดทั้งบิลไม่ถูกต้อง — ต้องเป็นตัวเลข และน้อยกว่ายอดค่าสินค้า (หรือน้อยกว่า 100%) · แก้ก่อนยืนยัน");return;}
+    const recvDisc=billDiscountAmount(recvGross,recvDiscMode,recvDiscValue);
     // อนุญาตให้ทุกรายการเป็น 0 ได้ (ไม่ได้รับของเลย) — หน้าต่างเตือนด้านล่างจะให้ยืนยันก่อน
     if(!recvImages||recvImages.length===0){alert("📷 กรุณาแนบรูปตอนรับสินค้าอย่างน้อย 1 รูป ก่อนยืนยันรับ (สต๊อกจะยังไม่วิ่งเข้า)");return;}
     if(recvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
@@ -12605,14 +12681,16 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     const warn1=notRecv1.length?`⚠️ มีสินค้า ${notRecv1.length} รายการที่ระบุว่า "ไม่ได้รับ" (จำนวน 0):\n${notRecv1.map(it=>`   • ${it.name}`).join("\n")}\n\nรายการเหล่านี้จะไม่ถูกเพิ่มเข้าสต็อก — ยืนยันว่าไม่ได้รับจริงใช่ไหม?\n\n`:"";
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
-      message:`${warn1}ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต็อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?`,
+      message:`${warn1}ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต็อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?${recvDisc>0?`
+
+🏷️ ส่วนลดทั้งบิล ฿${recvDisc.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — กระจายลงราคาต่อหน่วยทุกแถว (ยอดค่าสินค้าหลังลด ฿${(recvGross-recvDisc).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})})`:""}`,
       confirmLabel:"✅ ยืนยัน + เพิ่มสต็อก",
       danger:notRecv1.length>0,
     }))return;
     recvBusyRef.current=true;setRecvBusy(true);
     try{
       // Lock first; only proceed if status matches what we read
-      const payloadItems=itemsWithReceived.map(({_key,...rest})=>rest);
+      const payloadItems=applyBillDiscount(itemsWithReceived,recvDisc).map(({_key,...rest})=>rest);
       await deliverOrderWithPhotos(receivingOrder.orderId,receivingOrder.orderStatus,payloadItems,recvImages,+recvDeliveryFee||0);
       // External supplier → credit-only (no source deduction)
       const acc=await transferStockBetweenBranches({
@@ -12850,15 +12928,17 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     {/* Receive confirmation modal */}
     {receivingOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingOrder.supplierName}`} onClose={closeReceiveGuarded} wide>
       <div style={{background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
-        💡 <b>กรอก 2 ค่าให้ครบทุกแถว</b> ก่อนกดยืนยัน:<br/>① <b>จำนวนรับจริง</b> · ② <b>ราคา/หน่วยที่จ่ายจริง</b> — ระบบจะเพิ่มสต๊อกของสาขา "{receivingOrder.branchName}" และอัพเดทต้นทุนตามนี้
+        💡 <b>กรอก 2 ค่าให้ครบทุกแถว</b> ก่อนกดยืนยัน:<br/>① <b>จำนวนรับจริง</b> · ② <b>ราคา/หน่วยตามบิล</b> (บิลมีส่วนลดท้ายบิล ใส่ที่ช่อง 🏷️ ด้านล่าง) — ระบบจะเพิ่มสต๊อกของสาขา "{receivingOrder.branchName}" และอัพเดทต้นทุนตามนี้
       </div>
       <div style={{maxHeight:"45vh",overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch",marginBottom:14,border:`1px solid ${C.line}`,borderRadius:10}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,minWidth:560}}>
-          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","💰 ราคา/หน่วยที่จ่าย","รวม"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:i===3?C.brand:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สั่งไว้","รับจริง","💰 ราคา/หน่วยตามบิล","รวม"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:i===3?C.brand:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
           <tbody>{receivingOrder.items.map((it,idx)=>{
             const ordered=+it.qtyNeeded||0;
             const got=+it.receivedQty||0;
             const price=+it.pricePerUnit||0;
+            const g0=billGrossOf(receivingOrder.items),d0=billDiscountInvalid(g0,recvDiscMode,recvDiscValue)?0:billDiscountAmount(g0,recvDiscMode,recvDiscValue);
+            const eff=netAfterBillDisc(price,g0,d0);   // ราคาจริงหลังส่วนลดทั้งบิล — ใช้เทียบกับราคาครั้งก่อน (ซึ่งเก็บเป็นราคาหลังลดเหมือนกัน)
             const lineTotal=got*price;
             const short=got<ordered;
             const needPrice=got>0&&!(price>0);
@@ -12878,11 +12958,12 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
                   <span style={{fontSize:11,color:C.ink4}}>/{it.unit||"หน่วย"}</span>
                 </div>
                 {needPrice&&<div style={{fontSize:10,color:C.red,fontWeight:700,marginTop:2}}>⚠ กรุณากรอกราคา</div>}
+                {d0>0&&price>0&&got>0&&<div style={{fontSize:10.5,color:C.green,fontWeight:800,marginTop:2}}>🏷️ หลังส่วนลด ฿{eff.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}/{it.unit||"หน่วย"}</div>}
                 {/* ราคาครั้งก่อน + ส่วนต่าง — จับกรณีซื้อแพงขึ้นผิดปกติได้ตั้งแต่ตอนรับของ */}
                 {(()=>{
                   const h=lastPriceOf(it.ingId||it.ingredient_id,it.unit);
                   if(!h||!(h.last>0))return <div style={{fontSize:10,color:C.ink4,marginTop:2}}>— ยังไม่มีประวัติราคา —</div>;
-                  const d=price>0?price-h.last:0;
+                  const d=price>0?eff-h.last:0;
                   const pct=h.last>0?(d/h.last*100):0;
                   const up=d>0.004,down=d<-0.004;
                   return <div style={{fontSize:10,marginTop:3,lineHeight:1.5}}>
@@ -12907,12 +12988,13 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       <ReceiveAddLine key={receivingOrder.orderId} isCentral={isCentral} ings={ings} suppliers={suppliers} supplierName={receivingOrder.supplierName}
         branchId={receivingOrder.branchId} items={receivingOrder.items} lastPriceOf={lastPriceOf}
         onAdd={ln=>setReceivingOrder(s=>({...s,items:[...s.items,ln]}))}/>
-      {(()=>{const itemsTotal=receivingOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0);const fee=+recvDeliveryFee||0;return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
+      {(()=>{const itemsTotal=billGrossOf(receivingOrder.items);const fee=+recvDeliveryFee||0;const disc=billDiscountInvalid(itemsTotal,recvDiscMode,recvDiscValue)?0:billDiscountAmount(itemsTotal,recvDiscMode,recvDiscValue);return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
+        <BillDiscountInput mode={recvDiscMode} value={recvDiscValue} onMode={setRecvDiscMode} onValue={setRecvDiscValue} itemsTotal={itemsTotal}/>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
           <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>🚚 ค่าจัดส่ง <span style={{fontSize:11,fontWeight:400,color:C.ink4}}>(ไม่มีใส่ 0)</span></span>
           <div style={{display:"inline-flex",alignItems:"center",gap:5}}><span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span><input type="text" inputMode="decimal" value={recvDeliveryFee} onChange={e=>setRecvDeliveryFee(e.target.value)} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${fee>0?C.brand:C.brandBorder}`,background:fee>0?C.brandLight:C.white,color:fee>0?C.brand:C.ink}}/></div>
         </div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,borderTop:`1px dashed ${C.line}`}}><span style={{fontSize:14,fontWeight:800,color:C.ink}}>ยอดรวมทั้งสิ้น</span><span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{(itemsTotal+fee).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,borderTop:`1px dashed ${C.line}`}}><span style={{fontSize:14,fontWeight:800,color:C.ink}}>ยอดรวมทั้งสิ้น</span><span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{(itemsTotal-disc+fee).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
       </div>;})()}
       <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading} minRequired={1}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>

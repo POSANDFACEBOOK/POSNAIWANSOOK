@@ -4651,6 +4651,62 @@ section("ใบไม่ออกต้องบอกเหตุ และห�
 }
 
 
+// ═══════════════════════════════════════════════════════════
+// ส่วนลดทั้งบิลตอนรับของ ต้องลงต้นทุนจริง (เจ้าของสั่ง 10 ต.ค. 69)
+// ต้นทุนเฉลี่ย/ต้นทุนเมนู/ประวัติราคาอ่าน pricePerUnit ของบิลที่รับแล้ว — ส่วนลดท้ายบิลต้องกระจายลงทุกแถว
+// ไม่งั้นต้นทุนสูงกว่าที่จ่ายจริง · ผลรวมยอดหลังลดต้องเท่ายอดก่อนลด − ส่วนลด เป๊ะถึงสตางค์
+// ═══════════════════════════════════════════════════════════
+section("ส่วนลดทั้งบิลตอนรับของ ต้องลงต้นทุนจริง");
+{
+  const a = APP.indexOf("const billGrossOf=("), b = APP.indexOf("// ช่องส่วนลดทั้งบิล — ใช้ทั้งจอรับของ");
+  let D = null;
+  try { D = a > 0 && b > a ? new Function(APP.slice(a, b) + "\nreturn{billGrossOf,billDiscountAmount,billDiscountInvalid,applyBillDiscount};")() : null; } catch { D = null; }
+  ok_("อ่านตัวคำนวณส่วนลดทั้งบิลได้", !!D);
+  if (D) {
+    const sat = (n) => Math.round(n * 100);
+    const items = [{ name: "340", receivedQty: 3, pricePerUnit: 235 }, { name: "แม็ก", receivedQty: 3, pricePerUnit: 219 }, { name: "999", receivedQty: 20, pricePerUnit: 235 }, { name: "ไม่ได้รับ", receivedQty: 0, pricePerUnit: 100 }];
+    const g = D.billGrossOf(items);
+    ok_("ยอดก่อนลด = ผลรวม จำนวน×ราคา (6,062)", g === 6062);
+    const amt5 = D.billDiscountAmount(g, "percent", "5");
+    ok_("5% ของ 6,062 = 303.10", amt5 === 303.1);
+    const r = D.applyBillDiscount(items, amt5);
+    const net = r.reduce((s2, it) => s2 + sat(+it.estimatedCost || 0), 0);
+    ok_("ยอดหลังลดทุกแถวรวมกัน = ยอดก่อนลด − ส่วนลด เป๊ะถึงสตางค์", net === sat(g) - sat(amt5) - sat(0));
+    ok_("ส่วนลดที่กระจาย (billDisc) รวม = ส่วนลดทั้งบิล", r.reduce((s2, it) => s2 + sat(+it.billDisc || 0), 0) === sat(amt5));
+    ok_("เก็บราคาตามบิล (billPrice) ไว้ตรวจย้อน และราคาที่ใช้คิดต้นทุนเป็นราคาหลังลด", r[0].billPrice === 235 && r[0].pricePerUnit < 235 && Math.abs(r[0].pricePerUnit * 3 - r[0].estimatedCost) < 0.01);
+    ok_("แถวที่ไม่ได้รับ (จำนวน 0) ไม่โดนส่วนลดและไม่ถูกแตะ", r[3].billDisc === undefined && r[3].pricePerUnit === 100);
+    ok_("กระจายตามสัดส่วนยอด (แถวใหญ่ได้ส่วนลดมากกว่า)", r[2].billDisc > r[0].billDisc && Math.abs(r[2].billDisc - 4700 * 0.05) < 0.02);
+    const r1 = D.applyBillDiscount([{ receivedQty: 1, pricePerUnit: 10 }, { receivedQty: 1, pricePerUnit: 10 }, { receivedQty: 1, pricePerUnit: 10 }], 0.01);
+    ok_("เศษสตางค์ไปแถวเดียว ไม่หาย ไม่เกิน", r1.reduce((s2, it) => s2 + sat(it.billDisc || 0), 0) === 1);
+    ok_("ส่วนลดบาทเกินยอด = ไม่ผ่าน · % เกิน 100 = ไม่ผ่าน · ปกติผ่าน", D.billDiscountInvalid(g, "baht", "7000") && D.billDiscountInvalid(g, "percent", "101") && !D.billDiscountInvalid(g, "baht", "62") && !D.billDiscountInvalid(g, "percent", "5"));
+    const r0 = D.applyBillDiscount(items, 0);
+    ok_("ไม่มีส่วนลด = ไม่แตะราคาเลย (ไม่เติมช่อง billPrice)", r0.every((it, i) => it.pricePerUnit === items[i].pricePerUnit && it.billPrice === undefined));
+  }
+  // ต่อสายครบทั้งจอสาขาและจอครัวกลาง
+  ok_("จอรับของทั้งสองจอมีช่องส่วนลดทั้งบิล", (APP.match(/<BillDiscountInput mode=\{(recv|ext)DiscMode\}/g) || []).length === 2);
+  ok_("ยืนยันรับทั้งสองจอกระจายส่วนลดก่อนบันทึก", APP.includes("const payloadItems=applyBillDiscount(itemsWithReceived,recvDisc)") && APP.includes("const payloadItems=applyBillDiscount(itemsWithReceived,extDisc)"));
+  ok_("ส่วนลดผิด (เกินยอด/เกิน 100%) บันทึกไม่ได้ทั้งสองจอ", APP.includes("if(billDiscountInvalid(recvGross,recvDiscMode,recvDiscValue))") && APP.includes("if(billDiscountInvalid(extGross,extDiscMode,extDiscValue))"));
+  ok_("ยอดรวมทั้งสิ้นหักส่วนลดแล้ว (ทั้งสองจอ)", (APP.match(/฿\{\(itemsTotal-disc\+fee\)\.toLocaleString/g) || []).length === 2);
+  ok_("ราคาครั้งก่อนเทียบกับราคาหลังลด (ทั้งสองจอ)", (APP.match(/const d=price>0\?eff-h\.last:0;/g) || []).length === 2);
+  ok_("ใบรับสินค้าพิมพ์ราคาตามบิล + บรรทัดส่วนลดท้ายบิล", APP.includes("const unitShown=it=>it.billPrice!=null?+it.billPrice:(+it.pricePerUnit||0);") && APP.includes("money(subtotal-billDiscTotal+fee)"));
+  ok_("เปิดใบใหม่ล้างส่วนลดเดิม (ไม่ติดไปบิลถัดไป)", APP.includes('setRecvDiscMode("baht");setRecvDiscValue("");') && APP.includes('setExtDiscMode("baht");setExtDiscValue("");'));
+  // ── รีวิว 10 ต.ค. 69 ──
+  if (D) {
+    ok_("พิมพ์ตัวเลขผิด (1.2.3) = ไม่ผ่าน ไม่ใช่กลายเป็นไม่มีส่วนลดเงียบ ๆ", D.billDiscountInvalid(100, "baht", "1.2.3") && !D.billDiscountInvalid(100, "baht", ""));
+    ok_("ลดเต็มบิล (100% / เท่ายอด) = ไม่ผ่าน (ราคา 0 ทำให้ต้นทุนถอยไปใช้ราคาตั้งต้น)", D.billDiscountInvalid(6062, "percent", "100") && D.billDiscountInvalid(6062, "baht", "6062") && !D.billDiscountInvalid(6062, "percent", "99.9"));
+    const fr = [{ receivedQty: 0.5, pricePerUnit: 12.25 }, { receivedQty: 0.5, pricePerUnit: 12.25 }, { receivedQty: 0.333, pricePerUnit: 99.99 }];
+    const fg = D.billGrossOf(fr), fa = D.applyBillDiscount(fr, 1);
+    ok_("ยอดก่อนลดปัดรายแถวแบบเดียวกับตอนกระจาย — จอ/กล่องยืนยัน/ที่บันทึก ตรงกันถึงสตางค์", fg === 45.56 && Math.round(fa.reduce((s2, it) => s2 + it.estimatedCost, 0) * 100) === 4456);
+  }
+  // แถว "สั่งเพิ่มทีหลัง" เติมราคาจากครั้งก่อน — ต้องเป็นราคาตามบิล ไม่ใช่ราคาหลังลด (ไม่งั้นส่วนลดถูกหักซ้ำทุกบิล)
+  const ph0 = APP.indexOf("function buildPriceHistoryMap(orders){"), ph1 = APP.indexOf("const priceHistLookup=", ph0);
+  let PH = null; try { PH = ph0 > 0 && ph1 > ph0 ? new Function(APP.slice(ph0, ph1) + "\nreturn buildPriceHistoryMap;")() : null; } catch { PH = null; }
+  const hm = PH && PH([{ status: "delivered", requested_at: "2026-10-01", items: [{ ingId: 5, unit: "แพ็ค", pricePerUnit: 223.25, billPrice: 235, billDisc: 33.75, receivedQty: 3 }] }]).get("5|แพ็ค");
+  ok_("ประวัติราคาเก็บราคาตามบิลล่าสุดแยกจากราคาหลังลด", !!hm && hm.last === 223.25 && hm.lastBill === 235);
+  ok_("ช่องราคาแถวสั่งเพิ่มเติมด้วยราคาตามบิล (กันส่วนลดซ้ำ)", APP.includes('setPrice(h&&(h.lastBill||h.last)>0?String(h.lastBill||h.last):"");'));
+}
+
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
