@@ -4573,6 +4573,45 @@ section("สำรองข้อมูลครอบคลุมทุกต�
     missing.length === 0);
 }
 
+// ═══════════════════════════════════════════════════════════
+// ช่องกรอกต้องเก็บ "ข้อความ" ไม่ใช่ event (10 ต.ค. 69)
+// Inp/TA/Sel ส่ง event ดิบให้ onChange — ฟอร์ม CRM 16 ช่องเขียน v=>setForm(f=>({...f,name:v}))
+// จึงเก็บ event ลง state: ช่องโชว์ [object Object] · บันทึกลูกค้าไม่ได้ · ปรับแต้มขึ้น "กรุณาใส่จำนวน"
+// ตลอด · จองโต๊ะขึ้น Invalid time value ⟹ CRM ใช้งานไม่ได้ทั้งระบบ (ลูกค้า 0 ราย)
+// ═══════════════════════════════════════════════════════════
+section("ช่องกรอก Inp/TA/Sel เก็บข้อความ ไม่ใช่ event");
+{
+  const RE = /<(Inp|TA|Sel)\b[^>]*?onChange=\{\s*\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>([^}]*)/g;
+  let n = 0;
+  const bad = [];
+  for (const m of APP.matchAll(RE)) {
+    n++;
+    if (!new RegExp("\\b" + m[2] + "\\.(current)?[tT]arget\\b").test(m[3])) bad.push(APP.slice(0, m.index).split("\n").length + ": " + m[0].slice(0, 70));
+  }
+  ok_("อ่านช่องกรอกได้จริง (กันด่านว่างเปล่า)", n >= 100);
+  ok_("ทุก onChange ของ Inp/TA/Sel อ่านค่าจาก .target.value" + (bad.length ? " · ผิด: " + bad.join(" | ") : ""), bad.length === 0);
+  // confirmDlg รับ options ก้อนเดียว — อาร์กิวเมนต์ที่ 2-3 ถูกทิ้งเงียบ ๆ แล้วกล่องใช้ค่าเริ่มต้นแบบ "ลบ" สีแดง
+  // (เคยเกิดกับ "ทำเครื่องหมายว่าใช้คูปอง" ที่ขึ้นหัวข้อ ยืนยันการลบ)
+  const extra = [...APP.matchAll(/confirmDlg\(\s*(\x60[^\x60]*\x60|"[^"]*")\s*,/g)].map((m) => APP.slice(0, m.index).split("\n").length);
+  ok_("ไม่มี confirmDlg ที่ส่งป้ายปุ่มเป็นอาร์กิวเมนต์ที่ 2-3 (ถูกทิ้ง)" + (extra.length ? " · บรรทัด " + extra.join(", ") : ""), extra.length === 0);
+  // "ตรวจ / ใช้โค้ด" ต้องโชว์รายละเอียดแล้วถามก่อนตัดคูปอง/นับโปร — กดยกเลิก = ตรวจอย่างเดียว
+  const ua = APP.indexOf("async function useCode(){");
+  const ub = ua < 0 ? -1 : APP.indexOf("\n  return <div>", ua);
+  const uc = ua >= 0 && ub > ua ? APP.slice(ua, ub) : "";
+  ok_("อ่านฟังก์ชันใช้โค้ด CRM ได้", uc.length > 500);
+  const before = (needle, act) => { const i = uc.indexOf(needle), j = uc.indexOf(act); return i >= 0 && j > i; };
+  ok_("ใช้คูปองต้องถามยืนยันก่อนตัด", before('title:"ใช้คูปอง"', "updateCRMVoucherIfStatus("));
+  ok_("ใช้โปรต้องถามยืนยันก่อนนับ", before('title:"ใช้โปรโมชั่น"', "updateCRMPromotion(p.id,{used_count:"));
+  // วันเกิดเป็นคอลัมน์ date — ส่ง "" ไปตอนไม่กรอก = 22007 เพิ่มลูกค้าไม่ได้
+  const sc = APP.slice(APP.indexOf("async function saveCust(){"), APP.indexOf("async function saveCust(){") + 600);
+  ok_("เพิ่มลูกค้า CRM: วันเกิดว่างส่งเป็น null ไม่ใช่ \"\"", /const d=\{\.\.\.form,birthdate:form\.birthdate\|\|null/.test(sc));
+  // datetime-local ต้องได้เวลาเครื่อง — ตัด ISO (UTC) 16 ตัวแรกใส่ช่อง = แก้ไขการจองแล้วเวลาเลื่อนไป 7 ชม.
+  const sl = [...APP.matchAll(/_at\??\.slice\(0,\s*16\)/g)].map((m) => APP.slice(0, m.index).split("\n").length);
+  ok_("ไม่ตัด ISO timestamp ใส่ช่อง datetime-local ตรง ๆ" + (sl.length ? " · บรรทัด " + sl.join(", ") : ""), sl.length === 0);
+  ok_("แก้ไขการจองแปลงเวลาด้วย toLocalDTInput", APP.includes("reserved_at:editRes.reserved_at?toLocalDTInput(editRes.reserved_at)"));
+}
+
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

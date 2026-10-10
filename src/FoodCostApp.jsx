@@ -263,6 +263,9 @@ function isAssetPO(po){
 const fmtTHB = (n) => `฿${(+n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 // Today in Asia/Bangkok (YYYY-MM-DD) — avoids UTC off-by-one near midnight
 const todayBkk = () => new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});
+// ISO timestamp → value for <input type="datetime-local"> in the browser's own clock (the input reads it back the
+// same way via new Date(v)). Slicing the ISO string instead hands the box UTC time → every "แก้ไขการจอง" moved the booking 7 h earlier.
+const toLocalDTInput = (iso) => { const d=new Date(iso); if(isNaN(d))return ""; const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
 // ── ธง _new = "แถวนี้ยังไม่ได้ส่งครัว" เป็นของหน้าจอล้วนๆ ──────────────
 // ถ้ามันหลุดลงฐานข้อมูล แถวนั้นจะขึ้นสีส้มค้างตลอดทุกครั้งที่เปิดโต๊ะ
 // พนักงานเห็นส้มก็กด "ส่งรายการ" ซ้ำ → ครัวได้ใบซ้ำ ลูกค้าได้อาหารซ้ำ
@@ -15657,7 +15660,9 @@ function CRMPromotions({promotions,currentBranch,canEdit,reload}){
       const v=(vs||[]).find(x=>(x.code||"").toUpperCase()===code);
       if(v){
         if(v.status==="used")alert("⚠️ คูปองนี้ถูกใช้ไปแล้ว");
-        else{await api.updateCRMVoucherIfStatus(v.id,"active",{status:"used",used_at:new Date().toISOString()});alert(`✅ ใช้คูปอง ${code} แล้ว — มูลค่า ${v.value}${v.type==="percent"?"%":" บาท"}\nแคชเชียร์กดส่วนลดนี้ใน FoodStory ได้เลย`);}
+        else{
+          if(!await confirmDlg({title:"ใช้คูปอง",message:`คูปอง ${code} — มูลค่า ${v.value}${v.type==="percent"?"%":" บาท"}\n\nกดใช้แล้วคูปองถูกตัดทันที ใช้ซ้ำไม่ได้`,confirmLabel:"✅ ใช้คูปอง",danger:false})){setRBusy(false);return;}
+          await api.updateCRMVoucherIfStatus(v.id,"active",{status:"used",used_at:new Date().toISOString()});alert(`✅ ใช้คูปอง ${code} แล้ว — มูลค่า ${v.value}${v.type==="percent"?"%":" บาท"}\nแคชเชียร์กดส่วนลดนี้ใน FoodStory ได้เลย`);}
         setRedeem("");setRBusy(false);await reload();return;
       }
       const p=(promotions||[]).find(x=>(x.code||"").toUpperCase()===code);
@@ -15667,6 +15672,7 @@ function CRMPromotions({promotions,currentBranch,canEdit,reload}){
       if(p.start_date&&today<p.start_date){alert("โปรโมชั่นยังไม่เริ่ม");setRBusy(false);return;}
       if(p.end_date&&today>p.end_date){alert("โปรโมชั่นหมดอายุแล้ว");setRBusy(false);return;}
       if(p.quota!=null&&(+p.used_count||0)>=+p.quota){alert("โปรโมชั่นเต็มโควตาแล้ว");setRBusy(false);return;}
+      if(!await confirmDlg({title:"ใช้โปรโมชั่น",message:`${p.name} — ${promoDesc(p)}\n\nกดใช้แล้วนับการใช้โปรนี้ 1 ครั้ง`,confirmLabel:"✅ ใช้โปร",danger:false})){setRBusy(false);return;}
       await api.updateCRMPromotion(p.id,{used_count:(+p.used_count||0)+1});
       alert(`✅ ใช้โปรฯ "${p.name}" — ${promoDesc(p)}\nแคชเชียร์กดส่วนลดนี้ใน FoodStory ได้เลย`);
       setRedeem("");await reload();
@@ -15962,7 +15968,7 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
     if(!form.name.trim())return alert("กรุณาใส่ชื่อลูกค้า");
     setSaving(true);
     try{
-      const d={...form,branch_id:currentBranch.id,points:editCust?editCust.points:0};
+      const d={...form,birthdate:form.birthdate||null,branch_id:currentBranch.id,points:editCust?editCust.points:0};
       if(editCust)await api.updateCRMCustomer(editCust.id,{name:form.name,phone:form.phone,birthdate:form.birthdate||null,allergies:form.allergies,seat_pref:form.seat_pref,notes:form.notes});
       else await api.addCRMCustomer(d);
       await reload();setShowCustForm(false);setEditCust(null);
@@ -15971,7 +15977,7 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
   }
 
   async function delCust(c){
-    if(!await confirmDlg(`ลบลูกค้า "${c.name}"?`,"ลบ","ยกเลิก"))return;
+    if(!await confirmDlg({title:"ลบลูกค้า",message:`ลบลูกค้า "${c.name}"?`,confirmLabel:"ลบ",danger:true}))return;
     try{await api.deleteCRMCustomer(c.id);await reload();if(selCust?.id===c.id)setSelCust(null);}
     catch(e){alert("ลบไม่ได้: "+e.message);}
   }
@@ -16099,12 +16105,12 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
     {/* Add/Edit Customer Modal */}
     {showCustForm&&<Modal title={editCust?"แก้ไขลูกค้า":"เพิ่มลูกค้าใหม่"} onClose={()=>{setShowCustForm(false);setEditCust(null);}}>
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
-        <Field label="ชื่อ-นามสกุล *"><Inp value={form.name} onChange={v=>setForm(f=>({...f,name:v}))} placeholder="ชื่อลูกค้า"/></Field>
-        <Field label="เบอร์โทรศัพท์"><Inp value={form.phone} onChange={v=>setForm(f=>({...f,phone:v}))} placeholder="0812345678"/></Field>
-        <Field label="วันเกิด"><Inp type="date" value={form.birthdate} onChange={v=>setForm(f=>({...f,birthdate:v}))}/></Field>
-        <Field label="แพ้อาหาร / ข้อจำกัด"><Inp value={form.allergies} onChange={v=>setForm(f=>({...f,allergies:v}))} placeholder="เช่น แพ้ถั่ว, ไม่กินหมู"/></Field>
-        <Field label="ที่นั่งที่ชอบ"><Inp value={form.seat_pref} onChange={v=>setForm(f=>({...f,seat_pref:v}))} placeholder="เช่น โต๊ะริมหน้าต่าง"/></Field>
-        <Field label="หมายเหตุ"><TA value={form.notes} onChange={v=>setForm(f=>({...f,notes:v}))} rows={2} placeholder="ข้อมูลเพิ่มเติม"/></Field>
+        <Field label="ชื่อ-นามสกุล *"><Inp value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="ชื่อลูกค้า"/></Field>
+        <Field label="เบอร์โทรศัพท์"><Inp value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="0812345678"/></Field>
+        <Field label="วันเกิด"><Inp type="date" value={form.birthdate} onChange={e=>setForm(f=>({...f,birthdate:e.target.value}))}/></Field>
+        <Field label="แพ้อาหาร / ข้อจำกัด"><Inp value={form.allergies} onChange={e=>setForm(f=>({...f,allergies:e.target.value}))} placeholder="เช่น แพ้ถั่ว, ไม่กินหมู"/></Field>
+        <Field label="ที่นั่งที่ชอบ"><Inp value={form.seat_pref} onChange={e=>setForm(f=>({...f,seat_pref:e.target.value}))} placeholder="เช่น โต๊ะริมหน้าต่าง"/></Field>
+        <Field label="หมายเหตุ"><TA value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} placeholder="ข้อมูลเพิ่มเติม"/></Field>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
           <Btn onClick={()=>{setShowCustForm(false);setEditCust(null);}} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
           <Btn icon={I.save} onClick={saveCust} disabled={saving}>{saving?"กำลังบันทึก...":"บันทึก"}</Btn>
@@ -16118,8 +16124,8 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
         <div style={{display:"flex",gap:8}}>
           {[{id:"earn",l:"บวกคะแนน"},{id:"redeem",l:"หักคะแนน"}].map(opt=><button key={opt.id} onClick={()=>setPtForm(f=>({...f,type:opt.id}))} style={{flex:1,padding:"10px 0",borderRadius:8,border:"2px solid "+(ptForm.type===opt.id?C.brand:C.line),background:ptForm.type===opt.id?C.brand:"#fff",color:ptForm.type===opt.id?"#fff":C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,cursor:"pointer"}}>{opt.l}</button>)}
         </div>
-        <Field label="จำนวนคะแนน"><Inp type="number" value={ptForm.amount} onChange={v=>setPtForm(f=>({...f,amount:v}))} placeholder="เช่น 100"/></Field>
-        <Field label="หมายเหตุ"><Inp value={ptForm.note} onChange={v=>setPtForm(f=>({...f,note:v}))} placeholder="ซื้อสินค้า, แลกรางวัล ฯลฯ"/></Field>
+        <Field label="จำนวนคะแนน"><Inp type="number" value={ptForm.amount} onChange={e=>setPtForm(f=>({...f,amount:e.target.value}))} placeholder="เช่น 100"/></Field>
+        <Field label="หมายเหตุ"><Inp value={ptForm.note} onChange={e=>setPtForm(f=>({...f,note:e.target.value}))} placeholder="ซื้อสินค้า, แลกรางวัล ฯลฯ"/></Field>
         <div style={{background:C.lineLight,borderRadius:8,padding:10,fontSize:13}}>
           คะแนนปัจจุบัน: <b>{(selCust.points||0).toLocaleString()}</b> pts &nbsp;→&nbsp;
           หลังปรับ: <b style={{color:ptForm.type==="earn"?C.green:C.red}}>{Math.max(0,(selCust.points||0)+(ptForm.type==="earn"?+ptForm.amount:-+ptForm.amount)).toLocaleString()}</b> pts
@@ -16152,12 +16158,12 @@ function CRMloyalty({customers,transactions,vouchers,setVouchers,showVoucherForm
 
   async function useVoucher(v){
     if(v.status!=="active")return;
-    if(!await confirmDlg(`ทำเครื่องหมายว่าใช้คูปอง ${v.code}?`,"ยืนยัน","ยกเลิก"))return;
+    if(!await confirmDlg({title:"ใช้คูปองแล้ว",message:`ทำเครื่องหมายว่าคูปอง ${v.code} ถูกใช้แล้ว?`,confirmLabel:"✓ ใช้แล้ว",danger:false}))return;
     try{await api.updateCRMVoucher(v.id,{status:"used"});await reload();}
     catch(e){alert(e.message);}
   }
   async function deleteVoucher(v){
-    if(!await confirmDlg(`ลบคูปอง ${v.code}?`,"ลบ","ยกเลิก"))return;
+    if(!await confirmDlg({title:"ลบคูปอง",message:`ลบคูปอง ${v.code}?`,confirmLabel:"ลบ",danger:true}))return;
     try{await api.deleteCRMVoucher(v.id);await reload();}
     catch(e){alert(e.message);}
   }
@@ -16235,9 +16241,9 @@ function CRMloyalty({customers,transactions,vouchers,setVouchers,showVoucherForm
         <div style={{display:"flex",gap:8}}>
           {[{id:"fixed",l:"ส่วนลด (฿)"},{id:"percent",l:"ส่วนลด (%)"}].map(opt=><button key={opt.id} onClick={()=>setVForm(f=>({...f,type:opt.id}))} style={{flex:1,padding:"9px 0",borderRadius:8,border:"2px solid "+(vForm.type===opt.id?C.brand:C.line),background:vForm.type===opt.id?C.brand:"#fff",color:vForm.type===opt.id?"#fff":C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer"}}>{opt.l}</button>)}
         </div>
-        <Field label={vForm.type==="percent"?"ส่วนลด (%)":"มูลค่า (฿)"}><Inp type="number" value={vForm.value} onChange={v=>setVForm(f=>({...f,value:v}))} placeholder={vForm.type==="percent"?"เช่น 10":"เช่น 50"}/></Field>
-        <Field label="หมดอายุภายใน (วัน)"><Inp type="number" value={vForm.expires_days} onChange={v=>setVForm(f=>({...f,expires_days:v}))} placeholder="30"/></Field>
-        <Field label="หมายเหตุ"><Inp value={vForm.note} onChange={v=>setVForm(f=>({...f,note:v}))} placeholder="เช่น วันเกิด, ครบรอบ"/></Field>
+        <Field label={vForm.type==="percent"?"ส่วนลด (%)":"มูลค่า (฿)"}><Inp type="number" value={vForm.value} onChange={e=>setVForm(f=>({...f,value:e.target.value}))} placeholder={vForm.type==="percent"?"เช่น 10":"เช่น 50"}/></Field>
+        <Field label="หมดอายุภายใน (วัน)"><Inp type="number" value={vForm.expires_days} onChange={e=>setVForm(f=>({...f,expires_days:e.target.value}))} placeholder="30"/></Field>
+        <Field label="หมายเหตุ"><Inp value={vForm.note} onChange={e=>setVForm(f=>({...f,note:e.target.value}))} placeholder="เช่น วันเกิด, ครบรอบ"/></Field>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
           <Btn onClick={()=>setShowVoucherForm(false)} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
           <Btn icon={I.tag} onClick={saveVoucher} disabled={saving}>{saving?"กำลังออก...":"ออกคูปอง"}</Btn>
@@ -16253,7 +16259,7 @@ function CRMReservations({reservations,bookingRequests=[],customers,showResForm,
   const[saving,setSaving]=useState(false);
 
   useEffect(()=>{
-    if(editRes)setForm({customer_id:String(editRes.customer_id||""),reserved_at:editRes.reserved_at?editRes.reserved_at.slice(0,16):"",party_size:String(editRes.party_size||2),table_pref:editRes.table_pref||"",special_req:editRes.special_req||"",status:editRes.status||"pending",line_user_id:editRes.line_user_id||"",customer_name:editRes.customer_name||"",_reqId:null,_fromReq:false});
+    if(editRes)setForm({customer_id:String(editRes.customer_id||""),reserved_at:editRes.reserved_at?toLocalDTInput(editRes.reserved_at):"",party_size:String(editRes.party_size||2),table_pref:editRes.table_pref||"",special_req:editRes.special_req||"",status:editRes.status||"pending",line_user_id:editRes.line_user_id||"",customer_name:editRes.customer_name||"",_reqId:null,_fromReq:false});
     // Preserve a request's prefill (bookForRequest sets _fromReq) when the open-effect fires.
     else setForm(f=>(f&&f._fromReq)?{...f,_fromReq:false}:{customer_id:"",reserved_at:"",party_size:"2",table_pref:"",special_req:"",status:"pending",line_user_id:"",customer_name:"",_reqId:null,_fromReq:false});
   },[editRes,showResForm]);
@@ -16304,7 +16310,7 @@ function CRMReservations({reservations,bookingRequests=[],customers,showResForm,
     catch(e){alert(e.message);}
   }
   async function delRes(res){
-    if(!await confirmDlg("ลบการจองนี้?","ลบ","ยกเลิก"))return;
+    if(!await confirmDlg({title:"ลบการจอง",message:"ลบการจองนี้?",confirmLabel:"ลบ",danger:true}))return;
     try{await api.deleteCRMReservation(res.id);await reload();}
     catch(e){alert(e.message);}
   }
@@ -16376,10 +16382,10 @@ function CRMReservations({reservations,bookingRequests=[],customers,showResForm,
             {customers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.phone||"ไม่มีเบอร์"})</option>)}
           </select>
         </Field>
-        <Field label="วันและเวลาจอง *"><Inp type="datetime-local" value={form.reserved_at} onChange={v=>setForm(f=>({...f,reserved_at:v}))}/></Field>
-        <Field label="จำนวนคน"><Inp type="number" value={form.party_size} onChange={v=>setForm(f=>({...f,party_size:v}))} placeholder="2"/></Field>
-        <Field label="ที่นั่งที่ต้องการ"><Inp value={form.table_pref} onChange={v=>setForm(f=>({...f,table_pref:v}))} placeholder="เช่น ริมหน้าต่าง, ห้องส่วนตัว"/></Field>
-        <Field label="คำขอพิเศษ"><TA value={form.special_req} onChange={v=>setForm(f=>({...f,special_req:v}))} rows={2} placeholder="เค้กวันเกิด, ตกแต่งพิเศษ ฯลฯ"/></Field>
+        <Field label="วันและเวลาจอง *"><Inp type="datetime-local" value={form.reserved_at} onChange={e=>setForm(f=>({...f,reserved_at:e.target.value}))}/></Field>
+        <Field label="จำนวนคน"><Inp type="number" value={form.party_size} onChange={e=>setForm(f=>({...f,party_size:e.target.value}))} placeholder="2"/></Field>
+        <Field label="ที่นั่งที่ต้องการ"><Inp value={form.table_pref} onChange={e=>setForm(f=>({...f,table_pref:e.target.value}))} placeholder="เช่น ริมหน้าต่าง, ห้องส่วนตัว"/></Field>
+        <Field label="คำขอพิเศษ"><TA value={form.special_req} onChange={e=>setForm(f=>({...f,special_req:e.target.value}))} rows={2} placeholder="เค้กวันเกิด, ตกแต่งพิเศษ ฯลฯ"/></Field>
         <Field label="สถานะ">
           <select value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))} style={{width:"100%",padding:"8px 10px",border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none"}}>
             <option value="pending">รอยืนยัน</option><option value="confirmed">ยืนยันแล้ว</option><option value="done">เสร็จสิ้น</option><option value="cancelled">ยกเลิก</option>
@@ -16493,7 +16499,7 @@ function CRMFeedback({feedback,customers,showFeedForm,setShowFeedForm,canEdit,cu
           </div>
           <div style={{textAlign:"center",fontSize:12,color:C.ink3,marginTop:4}}>{["","แย่มาก","แย่","ปานกลาง","ดี","ดีมาก"][+form.score]}</div>
         </Field>
-        <Field label="ความคิดเห็น"><TA value={form.comment} onChange={v=>setForm(f=>({...f,comment:v}))} rows={3} placeholder="ความคิดเห็นของลูกค้า..."/></Field>
+        <Field label="ความคิดเห็น"><TA value={form.comment} onChange={e=>setForm(f=>({...f,comment:e.target.value}))} rows={3} placeholder="ความคิดเห็นของลูกค้า..."/></Field>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
           <Btn onClick={()=>setShowFeedForm(false)} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
           <Btn icon={I.save} onClick={saveFeedback} disabled={saving}>{saving?"กำลังบันทึก...":"บันทึก"}</Btn>
@@ -18935,7 +18941,7 @@ function POSTableManage({tables,branch,zones=[],reloadZones,onDone}){
     setSaving(true);
     try{let col=0,row=0;for(let i=bulk.from;i<=bulk.to;i++){const num=bulk.prefix?`${bulk.prefix}${i}`:String(i);if(!tables.find(t=>t.table_number===num)){await api.addPOSTable({table_number:num,label:"",zone:bulk.zone,seats:+bulk.seats,shape:"square",w:90,h:80,branch_id:branch.id,status:"available",active:true,x:col*110+20,y:row*100+20});col++;if(col>9){col=0;row++;}}}onDone();alert(`✅ เพิ่มโต๊ะสำเร็จ!`);}catch(e){alert("เพิ่มไม่สำเร็จ");}setSaving(false);
   }
-  async function delTable(id,num){if(!await confirmDlg(`ต้องการลบโต๊ะ ${num} ใช่หรือไม่?`,"ลบโต๊ะ","ยกเลิก"))return;try{await api.deletePOSTable(id);onDone();}catch{alert("ลบไม่สำเร็จ");}}
+  async function delTable(id,num){if(!await confirmDlg({title:"ลบโต๊ะ",message:`ต้องการลบโต๊ะ ${num} ใช่หรือไม่?`,confirmLabel:"ลบโต๊ะ",danger:true}))return;try{await api.deletePOSTable(id);onDone();}catch{alert("ลบไม่สำเร็จ");}}
 
   // Zones: from DB (zones table_zones) + legacy text values still on tables
   const dbZoneNames=zones.map(z=>z.name);
