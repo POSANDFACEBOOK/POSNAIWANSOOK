@@ -1638,6 +1638,21 @@ function subUnitGrams(ing){
   if(!(per>0)||!(subPer>0)||!String(ing&&ing.sub_unit||"").trim())return null;
   return round2(per/subPer);
 }
+// จำนวนในสูตรสำหรับ "แสดงผล" (ชิป SOP + ใบ SOP ที่พิมพ์) — ไม่แตะการคิดต้นทุน/ตัดสต๊อก (ยังใช้ amountGram เหมือนเดิม)
+// ใช้เลขที่คนพิมพ์ไว้ (displayAmount/displayUnit เช่น "2 ฟอง") เฉพาะเมื่อแปลงกลับแล้วได้กรัมตรงกับที่ระบบคิดจริง
+// ไม่ตรง (หน่วยที่ระบบไม่รู้น้ำหนักแล้วกดยืนยัน · หน้าเมนูบวกกรัมเพิ่มเข้าไป · แก้น้ำหนักต่อหน่วยทีหลัง) → โชว์กรัมจริงปัด 2 ตำแหน่ง
+// ห้ามโชว์ "1 ถุง" ทั้งที่ระบบคิดเป็น 1 กรัม — จะซ่อนต้นทุนผิดไว้หลังป้ายที่ดูถูก
+function recipeQty(mi,ing){
+  const g=+mi.amountGram||0;
+  if(mi.displayAmount!=null&&mi.displayUnit){
+    const c=recipeGrams(mi.displayAmount,mi.displayUnit,ing);
+    if(c.exact&&Math.abs(c.grams-g)<0.01)return{amt:round2(+mi.displayAmount),unit:mi.displayUnit};
+  }
+  return{amt:round2(g),unit:mi.unit||"กรัม"};
+}
+// บรรทัดสูตรรุ่นเก่า (ก่อน 43e8ce2) เก็บเลขที่พิมพ์คู่หน่วยที่ไม่ใช่กรัม (เช่น "2 ฟอง") แต่ทุกจุดคิดต้นทุน/ตัดสต๊อกเป็นกรัม
+// → ต้นทุนต่ำกว่าจริงมาก ใช้ติดป้ายเตือนให้คนที่แก้ SOP ได้เห็น (ไม่แก้ข้อมูลเอง — ต้องให้เจ้าของตัดสินใจ)
+const recipeLegacyUnit=mi=>{const u=String(mi.unit||"").trim();return !!u&&mi.displayAmount==null&&UNIT_G[u]!==1;};
 const toGrams=(amt,unit)=>round2((+amt||0)*(UNIT_G[String(unit||"").trim()]||1));
 // ตัวเลือกหน่วย — ใช้ <select> ธรรมดาไม่ได้ เพราะค่าเดิมที่ไม่อยู่ใน 9 หน่วย (เช่น "กก.")
 // จะทำให้ select แสดงว่าง แล้วพนักงานเผลอเซฟทับจนหน่วยหาย จึงต้องแยก
@@ -2865,7 +2880,7 @@ function buildSopSheetHTML(subj,ings,opt){
   const hasImg=steps.some(s=>s.image);
   const rows=(Array.isArray(subj.ingredients)?subj.ingredients:[]).map(mi=>{
     const g=(ings||[]).find(i=>+i.id===+mi.ingredientId);
-    return g?{name:g.name,amt:mi.amountGram,unit:mi.unit||"กรัม"}:null;
+    return g?{name:g.name,...recipeQty(mi,g)}:null;
   }).filter(Boolean);
 
   const chip=(label,val)=>val?`<span class="chip">${esc(label)}: <b>${esc(val)}</b></span>`:"";
@@ -4365,9 +4380,9 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[],reloa
         </div>}
         {sel&&<div style={{marginTop:6,fontSize:12,color:C.green,fontFamily:"'Sarabun',sans-serif"}}>✅ เลือก: <b>{sel.name}</b> · ฿{unitPrice.toLocaleString()}/{unit}</div>}
       </div>
-      {sel&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+      {sel&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12,alignItems:"end"}}>
         <Field label={`🔢 จำนวน (${unit})`}><NumInput value={qty} onValue={setQty} placeholder="0" style={iS}/></Field>
-        <Field label="💰 มูลค่า (บาท) — คำนวณอัตโนมัติ แก้ได้"><NumInput value={price} onValue={setPrice} placeholder="0" style={iS}/></Field>
+        <Field label="💰 มูลค่า (บาท)" hint="คำนวณให้ · แก้ได้"><NumInput value={price} onValue={setPrice} placeholder="0" style={iS}/></Field>
       </div>}
       <Inp label="📝 เหตุผล" value={reason} onChange={e=>setReason(e.target.value)} placeholder="เช่น หมดอายุ, ตกพื้น, เสียระหว่างเก็บ"/>
       <div style={{marginTop:12}}>
@@ -4380,7 +4395,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[],reloa
       </div>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,paddingTop:14,marginTop:14,borderTop:`1px solid ${C.line}`}}>
         <Btn v="ghost" onClick={closeRecord}>ปิด</Btn>
-        <Btn v="danger" onClick={save} loading={saving} disabled={saving||uploading>0||images.length===0} icon={I.check}>บันทึก</Btn>
+        <Btn v="success" onClick={save} loading={saving} disabled={saving||uploading>0||images.length===0} icon={I.check} s={{minWidth:150}}>{images.length===0?"แนบรูปก่อนบันทึก":"บันทึกของเสีย"}</Btn>
       </div>
     </Modal>}
     <div>
@@ -4388,12 +4403,12 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[],reloa
       {wasteTab==="report"?<WasteReport report={report} range={range} setRange={setRange}/>
       :loadingLogs?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
       :shownLogs.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีรายการของเสีย</div>
-      :<div style={{display:"grid",gridTemplateColumns:`repeat(${wasteCols},minmax(0,1fr))`,gap:12,maxHeight:"64vh",overflowY:"auto",paddingRight:4,paddingBottom:4}}>
+      :<div style={{display:"grid",gridTemplateColumns:`repeat(${wasteCols},minmax(0,1fr))`,gap:12,paddingBottom:4}}>
         {shownLogs.map(l=>{const imgs=Array.isArray(l.images)?l.images:[];const clamp2={display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"};
         return <div key={l.id} style={{border:`1px solid ${C.line}`,borderRadius:14,overflow:"hidden",background:C.white,boxShadow:"0 1px 4px rgba(15,23,42,.05)",fontFamily:"'Sarabun',sans-serif",display:"flex",flexDirection:"column"}}>
           <div style={{position:"relative",height:96,flexShrink:0}}>
             {imgs.length>0
-              ?<ImgOrFallback src={driveImgSrc(imgs[0])} onClick={()=>imgs.length>1?photoGallery(imgs,l.ingredient_name):imgView(driveImgSrc(imgs[0]))} note="HEIC" style={{width:"100%",height:"100%",objectFit:"cover",cursor:"pointer",display:"block"}}/>
+              ?<ImgOrFallback src={driveImgSrc(imgs[0])} onClick={()=>imgs.length>1?photoGallery(imgs,l.ingredient_name):imgView(driveImgSrc(imgs[0]))} style={{width:"100%",height:"100%",objectFit:"cover",cursor:"pointer",display:"block"}}/>
               :<div style={{width:"100%",height:"100%",background:C.redLight,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={26} c={C.red+"66"}/></div>}
             {imgs.length>1&&<span style={{position:"absolute",left:6,bottom:6,background:"rgba(15,23,42,.72)",color:C.white,fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:10,pointerEvents:"none"}}>📷 {imgs.length}</span>}
             {canDelWaste&&<button onClick={e=>{e.stopPropagation();delLog(l);}} title="ลบ" style={{position:"absolute",top:6,right:6,width:26,height:26,borderRadius:"50%",background:"rgba(255,255,255,.92)",border:`1px solid ${C.line}`,cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(15,23,42,.15)"}}>🗑️</button>}
@@ -4768,9 +4783,11 @@ function WasteReport({report,range,setRange}){
     </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
       <RptCard emoji="💸" label="มูลค่าของเสียรวม" value={`฿${rB(total)}`} sub={`${count} ครั้ง`} accent={C.red} tint={C.redLight}/>
-      <RptCard emoji="📅" label="เดือนนี้" value={`฿${rB(monthTotal)}`} accent={C.brand}/>
+      {/* ช่วง "เดือนนี้" = ยอดเดียวกับการ์ดแรกเป๊ะ — โชว์ซ้ำเปลืองช่อง จึงโชว์เฉพาะตอนเลือกช่วงอื่น */}
+      {range!=="month"&&<RptCard emoji="📅" label="เดือนนี้" value={`฿${rB(monthTotal)}`} accent={C.brand}/>}
       <RptCard emoji="🧾" label="เฉลี่ย/ครั้ง" value={`฿${rB(avg)}`} accent={C.purple}/>
-      <RptCard emoji="📂" label="หมวดเสียมากสุด" value={topCat?topCat.name:"—"} sub={topCat?`฿${rB(topCat.value)} · ${(topCat.value/(total||1)*100).toFixed(0)}%`:""} accent={C.teal}/>
+      {/* ชื่อหมวดขึ้นต้น "วัตถุดิบ - ..." เหมือนกันหมด ตัดบรรทัดเดียวบน iPad จะเหลือแต่คำนำหน้า → ให้ขึ้นได้ 2 บรรทัด ตัวเล็กกว่ายอดเงิน */}
+      <RptCard emoji="📂" label="หมวดเสียมากสุด" value={topCat?<span title={topCat.name} style={{display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",whiteSpace:"normal",wordBreak:"break-word",fontSize:15,fontWeight:800,lineHeight:1.3}}>{topCat.name}</span>:"—"} sub={topCat?`฿${rB(topCat.value)} · ${(topCat.value/(total||1)*100).toFixed(0)}%`:""} accent={C.teal}/>
     </div>
     {total<=0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4}}>— ยังไม่มีของเสียในช่วงนี้ —</div>:<>
     <div style={sect}>🍩 สัดส่วนมูลค่าของเสียตามหมวดหมู่</div>
@@ -6784,7 +6801,7 @@ function SOPChooser({onPick}){
           <Ic d={I.sop} s={isMobile?28:34} c={C.white}/>
         </div>
         <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?20:24,fontWeight:900,color:C.ink,margin:"0 0 6px"}}>📋 SOP — ขั้นตอนการทำ</h2>
-        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?13:14,color:C.ink3,margin:0}}>ต้องการแก้ไข SOP แบบไหน?</p>
+        <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?13:14,color:C.ink3,margin:0}}>เลือกประเภท SOP ที่ต้องการ</p>
       </div>
       <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?10:14}}>
         <button onClick={()=>onPick("ingredient")} style={{padding:isMobile?"22px 18px":"28px 22px",border:`2px solid ${C.line}`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.greenLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s",minHeight:80}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.green;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.green}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
@@ -6967,17 +6984,19 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
 
           {/* Selected ingredients chips */}
           <div style={{marginBottom:18}}>
-            <div style={{fontSize:12,fontWeight:700,color:C.ink3,textTransform:"uppercase",letterSpacing:1,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>ส่วนผสมที่ใช้</div>
+            <div style={{fontSize:16,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>ส่วนผสมที่ใช้</div>
             <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
               {(edit?editIngs:ing.ingredients||[]).map((mi,idx)=>{
                 const it=ings.find(i=>i.id===mi.ingredientId);
                 if(!it)return null;
                 const ppg=(+it.avg_price_per_gram>0?+it.avg_price_per_gram:+it.price_per_gram)||0;
                 const cost=ppg*(+mi.amountGram||0);
+                const q=recipeQty(mi,it);
                 return <div key={idx} style={{background:C.bg,borderRadius:8,padding:"5px 10px 5px 12px",fontSize:13,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6}}>
                   <span style={{fontWeight:700,color:C.ink}}>{it.name}</span>
-                  <span style={{color:C.green,fontWeight:700}}>{mi.amountGram} {mi.unit||"กรัม"}</span>
-                  <span style={{color:C.brand,fontWeight:800,background:C.brandLight,padding:"1px 7px",borderRadius:6,fontSize:11}}>฿{cost.toFixed(2)}</span>
+                  <span style={{color:C.brand,fontWeight:900,fontSize:14}}>{q.amt} {q.unit}</span>
+                  {canE&&recipeLegacyUnit(mi)&&<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,padding:"1px 6px",borderRadius:6}}>⚠️ คิดต้นทุนเป็น {round2(+mi.amountGram||0)} กรัม</span>}
+                  <span style={{color:C.ink3,fontWeight:600,padding:"1px 2px",fontSize:11}}>฿{cost.toFixed(2)}</span>
                   {edit&&<button onClick={()=>setEditIngs(f=>f.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",display:"flex",lineHeight:1}}><Ic d={I.x} s={12} c={C.red}/></button>}
                 </div>;
               })}
@@ -6986,7 +7005,7 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
             </div>
           </div>
 
-          <div style={{fontSize:12,fontWeight:700,color:C.ink3,textTransform:"uppercase",letterSpacing:1,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>ขั้นตอนการเตรียม / จัดการ</div>
+          <div style={{fontSize:16,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>ขั้นตอนการเตรียม / จัดการ</div>
           {edit?<div>
             {sop.map((step,idx)=><div key={idx} style={{background:C.bg,borderRadius:14,padding:"16px 18px",marginBottom:12,border:`1px solid ${C.line}`}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -7164,14 +7183,14 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
             {v:"all",l:`ทั้งหมด (${counts.all})`,c:C.ink2},
             {v:"has",l:`มี SOP (${counts.has})`,c:C.green},
             {v:"none",l:`ยังไม่มี (${counts.none})`,c:C.red},
-          ].map(o=>{const sel2=sopStatus===o.v;return <button key={o.v} onClick={()=>{setSopStatus(o.v);if(o.v!=="has")setCostBucket("all");}} style={{flex:1,padding:"5px 4px",borderRadius:7,border:`1.5px solid ${sel2?o.c:C.line}`,background:sel2?`${o.c}15`:C.white,color:sel2?o.c:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:11}}>{o.l}</button>;})}
+          ].map(o=>{const sel2=sopStatus===o.v;return <button key={o.v} onClick={()=>{setSopStatus(o.v);if(o.v!=="has")setCostBucket("all");}} style={{flex:1,padding:"8px 4px",minHeight:36,lineHeight:1.25,borderRadius:7,border:`1.5px solid ${sel2?o.c:C.line}`,background:sel2?`${o.c}15`:C.white,color:sel2?o.c:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:11}}>{o.l}</button>;})}
         </div>
         {/* Cost % bucket — only when "มี SOP" */}
         {sopStatus==="has"&&<div>
           <div style={{fontSize:9,fontWeight:700,color:C.ink4,letterSpacing:.8,textTransform:"uppercase",fontFamily:"'Sarabun',sans-serif",marginTop:6,marginBottom:4}}>กรอง % ต้นทุน</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
-            <button onClick={()=>setCostBucket("all")} style={{padding:"3px 8px",borderRadius:6,border:`1px solid ${costBucket==="all"?C.brand:C.line}`,background:costBucket==="all"?C.brandLight:C.white,color:costBucket==="all"?C.brand:C.ink3,cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกช่วง</button>
-            {COST_BUCKETS.map(b=>{const sel2=costBucket===b.id;const n=counts.buckets[b.id]||0;return <button key={b.id} onClick={()=>setCostBucket(b.id)} disabled={n===0} title={`${b.label} (${b.short})`} style={{padding:"3px 8px",borderRadius:6,border:`1px solid ${sel2?b.color:C.line}`,background:sel2?b.bg:C.white,color:sel2?b.color:(n===0?C.ink4:C.ink2),cursor:n===0?"not-allowed":"pointer",fontSize:10,fontWeight:700,fontFamily:"'Sarabun',sans-serif",opacity:n===0?.5:1}}>{b.short} ({n})</button>;})}
+            <button onClick={()=>setCostBucket("all")} style={{padding:"6px 10px",minHeight:30,borderRadius:6,border:`1px solid ${costBucket==="all"?C.brand:C.line}`,background:costBucket==="all"?C.brandLight:C.white,color:costBucket==="all"?C.brand:C.ink3,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ทุกช่วง</button>
+            {COST_BUCKETS.map(b=>{const sel2=costBucket===b.id;const n=counts.buckets[b.id]||0;return <button key={b.id} onClick={()=>setCostBucket(b.id)} disabled={n===0} title={`${b.label} (${b.short})`} style={{padding:"6px 10px",minHeight:30,borderRadius:6,border:`1px solid ${sel2?b.color:C.line}`,background:sel2?b.bg:C.white,color:sel2?b.color:(n===0?C.ink4:C.ink2),cursor:n===0?"not-allowed":"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",opacity:n===0?.5:1}}>{b.short} ({n})</button>;})}
           </div>
         </div>}
       </div>
@@ -7239,24 +7258,26 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
         </div>
 
         <div style={{marginBottom:18}}>
-          <div style={{fontSize:12,fontWeight:700,color:C.ink3,textTransform:"uppercase",letterSpacing:1,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>วัตถุดิบในเมนู</div>
+          <div style={{fontSize:16,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>วัตถุดิบในเมนู</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
             {(edit?editIngs:menu.ingredients||[]).map((mi,idx)=>{
               const ing=ings.find(i=>i.id===mi.ingredientId);
               if(!ing)return null;
               const ppg=(+ing.avg_price_per_gram>0?+ing.avg_price_per_gram:+ing.price_per_gram)||0;
               const cost=ppg*(+mi.amountGram||0);
+              const q=recipeQty(mi,ing);
               return <div key={idx} style={{background:C.bg,borderRadius:8,padding:"5px 10px 5px 12px",fontSize:13,fontFamily:"'Sarabun',sans-serif",border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6}}>
                 <span style={{fontWeight:700,color:C.ink}}>{ing.name}</span>
-                <span style={{color:C.brand,fontWeight:700}}>{mi.amountGram} {mi.unit||"กรัม"}</span>
-                <span style={{color:C.green,fontWeight:800,background:C.greenLight,padding:"1px 7px",borderRadius:6,fontSize:11}}>฿{cost.toFixed(2)}</span>
+                <span style={{color:C.brand,fontWeight:900,fontSize:14}}>{q.amt} {q.unit}</span>
+                {canE&&recipeLegacyUnit(mi)&&<span style={{fontSize:10.5,fontWeight:800,color:C.red,background:C.redLight,padding:"1px 6px",borderRadius:6}}>⚠️ คิดต้นทุนเป็น {round2(+mi.amountGram||0)} กรัม</span>}
+                <span style={{color:C.ink3,fontWeight:600,padding:"1px 2px",fontSize:11}}>฿{cost.toFixed(2)}</span>
                 {edit&&<button onClick={()=>setEditIngs(f=>f.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",display:"flex",lineHeight:1}}><Ic d={I.x} s={12} c={C.red}/></button>}
               </div>;
             })}
             {edit&&editIngs.length===0&&<div style={{fontSize:13,color:C.ink4,fontFamily:"'Sarabun',sans-serif",padding:"8px 12px",background:C.bg,borderRadius:8,border:`1px dashed ${C.line}`}}>กดเลือกวัตถุดิบจากรายการด้านบน</div>}
           </div>
         </div>
-        <div style={{fontSize:12,fontWeight:700,color:C.ink3,textTransform:"uppercase",letterSpacing:1,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>ขั้นตอนการทำ (SOP)</div>
+        <div style={{fontSize:16,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>ขั้นตอนการทำ (SOP)</div>
         {edit?<div>
           {sop.map((step,idx)=><div key={idx} style={{background:C.bg,borderRadius:14,padding:"16px 18px",marginBottom:12,border:`1px solid ${C.line}`}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -13963,7 +13984,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
       </div>
       <div style={{padding:"12px 14px",background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:11,color:C.green,fontWeight:700}}>ยอดที่จ่ายจริงรวม</div>
-        <div style={{fontSize:22,fontWeight:900,color:C.green}}>฿{fmtMoney(totals.amount)}</div>
+        <div style={{fontSize:"clamp(22px,2.6vw,28px)",lineHeight:1.15,fontWeight:900,color:C.green}}>฿{fmtMoney(totals.amount)}</div>
       </div>
       <div style={{padding:"12px 14px",background:C.tealLight,border:`1px solid ${C.teal}33`,borderRadius:10,fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:11,color:C.teal,fontWeight:700}}>จำนวนรายการ</div>
@@ -14008,13 +14029,14 @@ function SupplierStatsModal({supplier,orders,onClose}){
           <div style={{overflowX:"auto",maxHeight:"40vh"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
               <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>
-                {["เลขที่","วันที่","สาขา","รายการ","ยอดประมาณ","สถานะ","รูป"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}
+                {["เลขที่","วันที่","สาขา","รายการ","ยอดจ่ายจริง","สถานะ","รูป"].map((h,i)=><th key={h} style={{padding:"8px 10px",textAlign:i===4?"right":"left",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}
               </tr></thead>
               <tbody>{[...filtered].sort((a,b)=>{
                 const da=parseSupplierOrderDate(a.requested_at),db=parseSupplierOrderDate(b.requested_at);
                 return (db?db.getTime():0)-(da?da.getTime():0);
               }).map((o,i)=>{
-                const itemsTotal=(o.items||[]).reduce((s,it)=>s+(+it.estimatedCost||0),0);
+                // สูตรเดียวกับการ์ด "ยอดที่จ่ายจริงรวม" ด้านบน — แถวต้องรวมกันได้เท่ายอดบนการ์ด
+                const itemsTotal=(o.items||[]).reduce((s,it)=>s+(it.estimatedCost!=null?+it.estimatedCost:billedQty(it)*(+it.pricePerUnit||+it.buyPrice||0)),0);
                 return <tr key={o.id} style={{borderTop:`1px solid ${C.lineLight}`,background:i%2===0?C.white:"#FAFBFC"}}>
                   <td style={{padding:"7px 10px",fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>ORD-{o.id}</td>
                   <td style={{padding:"7px 10px",color:C.ink2,whiteSpace:"nowrap",fontSize:12}}>{fmtDT(o.requested_at)||"—"}</td>
@@ -14112,7 +14134,10 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
           <div style={{minWidth:0,flex:1}}>
             <div style={{fontWeight:700,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:4,display:"flex",alignItems:"center",gap:6}}>{s.name}<span style={{fontSize:10,color:C.ink4,fontWeight:600}}>📊 กดดูสถิติ</span></div>
             {s.contact&&<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}><span style={{color:C.ink4}}>ผู้ติดต่อ:</span> {s.contact}</div>}
-            {s.phone&&<div style={{fontSize:12,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>📞 {s.phone}</div>}
+            {/* เบอร์สีฟ้า = กดโทรได้จริง (เดิมกดแล้วเปิดสถิติแทน เพราะทั้งการ์ดกดได้) · ช่องที่ไม่มีเบอร์ให้โทร (เช่น LINE id) โชว์สีเทา */}
+            {s.phone&&(()=>{const dial=String(s.phone).split(/[,\/;]|\s{2,}|หรือ/)[0].replace(/[^\d+]/g,"");return dial.length>=6
+              ?<a href={`tel:${dial}`} onClick={e=>e.stopPropagation()} title="กดเพื่อโทร" style={{display:"inline-flex",alignItems:"center",gap:4,minHeight:36,fontSize:13,fontWeight:600,color:C.blue,textDecoration:"none",fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>📞 {s.phone}</a>
+              :<div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>📞 {s.phone}</div>;})()}
             {s.note&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontStyle:"italic",marginTop:4}}>📝 {s.note}</div>}
             {s.delivery_info&&<div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:3}}>🚚 {s.delivery_info}</div>}
             {(s.min_order>0||s.credit_term||s.invoice_type)&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
@@ -14336,7 +14361,7 @@ ${currentBranch?.name} → ${destName}
   const assetCats=useMemo(()=>allCats.filter(c=>c.type==="asset"&&+c.branch_id===+currentBranch?.id),[allCats,currentBranch]);
   async function addCat(){if(!newCatName.trim())return;try{await api.addCat({type:"asset",name:newCatName.trim(),branch_id:currentBranch?.id});if(reloadCats)await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;try{await api.updateCat(editingCatId,{name:editingCatName.trim()});if(reloadCats)await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
-  async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่? (สินทรัพย์ในหมวดนี้จะยังอยู่ แต่หมวดจะหายไป)`}))return;try{await api.deleteCat(c.id);if(reloadCats)await reloadCats();if(selCat===c.name)setSelCat("ทั้งหมด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
+  async function delCat(c){if(!await confirmDlg({title:"ลบหมวดหมู่",message:`ต้องการลบหมวด "${c.name}" ใช่หรือไม่? (สินทรัพย์ในหมวดนี้จะยังอยู่ แต่หมวดจะหายไป)`,danger:true}))return;try{await api.deleteCat(c.id);if(reloadCats)await reloadCats();if(selCat===c.name)setSelCat("ทั้งหมด");}catch(e){alert("ลบไม่สำเร็จ: "+e.message);}}
   const catTabBtn=(label,active,onClick)=><button onClick={onClick} style={{padding:"6px 14px",borderRadius:20,border:`1.5px solid ${active?C.brand:C.line}`,background:active?C.brandLight:"transparent",color:active?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{label}</button>;
   const filtered=useMemo(()=>myList.filter(a=>{
     if(selCat!=="ทั้งหมด"&&(a.category||"")!==selCat)return false;
@@ -14371,7 +14396,7 @@ ${currentBranch?.name} → ${destName}
     setSaving(false);
   }
   async function del(a){
-    if(!await confirmDlg({title:"ลบสินทรัพย์",message:`ต้องการลบ "${a.name}" ใช่หรือไม่?`,danger:true}))return;
+    if(!await confirmDlg({title:"ลบสินทรัพย์",message:`ต้องการลบ "${a.name}" ใช่หรือไม่?\n\n⚠️ ระบบจะแจ้งฝ่ายบัญชีให้ตัดรายการนี้ออกจากทะเบียนทรัพย์สินด้วย — ย้อนกลับเองไม่ได้\nถ้าของขาย/ทิ้งไปแล้ว ให้กด "แก้ไข" แล้วเปลี่ยนสถานะเป็น "จำหน่ายแล้ว" แทน เพื่อเก็บประวัติไว้ในระบบ`,danger:true}))return;
     try{
       // ทรัพย์สินที่เคยลงทะเบียนบัญชีไว้ ถ้าลบทิ้งโดยไม่แจ้ง จะค้างเป็นรายการผีคิดค่าเสื่อมต่อไปเรื่อยๆ
       // และเมื่อลบแล้วไม่มีแถวให้ cron ตามแจ้งได้อีก → ต้องแจ้งตัดออก "ให้สำเร็จก่อน" แล้วค่อยลบ
@@ -14416,9 +14441,10 @@ ${currentBranch?.name} → ${destName}
       </div>
       {/* ไม่ผูกสิทธิ์ใดๆ ตามที่ผู้ใช้สั่ง — ปุ่มนี้แค่ยื่นขอ ใบที่ได้เป็น pending_approval เสมอ
           และ Area ต้องอนุมัติก่อนจึงจะเกิดผล ไม่มีทางใช้เงินหรือแก้ทะเบียนได้จากปุ่มนี้ */}
-      <Btn onClick={()=>setShowAssetOrder(true)} icon={I.box} s={{padding:"8px 14px",fontSize:13,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>🛒 สั่งซื้อสินทรัพย์/อุปกรณ์</Btn>
-      {canE&&<Btn onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มสินทรัพย์</Btn>}
-      {canE&&xferDestBranches.length>0&&<Btn v="purple" onClick={()=>{setBulkOpen(true);setBulkDest("");setBulkPick({});setBulkNote("");setBulkQ("");}} s={{padding:"8px 14px",fontSize:13}}>🔄 โอนย้ายสินทรัพย์</Btn>}
+      {/* ปุ่มทึบมีปุ่มเดียว (สั่งซื้อ) + Export สีเขียวตามแบบทั้งแอป — ที่เหลือเป็นปุ่มขาว ไม่แย่งกันเด่น */}
+      <Btn onClick={()=>setShowAssetOrder(true)} s={{padding:"8px 14px",fontSize:13}}>🛒 สั่งซื้อสินทรัพย์/อุปกรณ์</Btn>
+      {canE&&<Btn v="ghost" onClick={openAdd} icon={I.plus} s={{padding:"8px 14px",fontSize:13}}>เพิ่มสินทรัพย์</Btn>}
+      {canE&&xferDestBranches.length>0&&<Btn v="ghost" onClick={()=>{setBulkOpen(true);setBulkDest("");setBulkPick({});setBulkNote("");setBulkQ("");}} s={{padding:"8px 14px",fontSize:13}}>🔄 โอนย้ายสินทรัพย์</Btn>}
       <Btn v="ghost" onClick={openXferHistory} loading={histBusy} s={{padding:"8px 14px",fontSize:13}}>🕘 ประวัติการโอนย้าย</Btn>
       <Btn v="success" onClick={exportXlsx} disabled={filtered.length===0} s={{padding:"8px 14px",fontSize:13}}>📊 Export</Btn>
     </div>
@@ -14428,8 +14454,8 @@ ${currentBranch?.name} → ${destName}
         ?<input key={c.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape")setEditingCatId(null);}} autoFocus style={{...iS,width:120,padding:"5px 10px",fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
         :<div key={c.id} style={{display:"flex",alignItems:"center"}}>
           {catTabBtn(c.name,selCat===c.name,()=>setSelCat(c.name))}
-          {canE&&<button onClick={()=>{setEditingCatId(c.id);setEditingCatName(c.name);}} title="เปลี่ยนชื่อหมวด" style={{marginLeft:2,background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.pencil} s={11} c={C.ink4}/></button>}
-          {canE&&<button onClick={()=>delCat(c)} title="ลบหมวด" style={{background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.trash} s={11} c={C.red}/></button>}
+          {canE&&<button onClick={()=>{setEditingCatId(c.id);setEditingCatName(c.name);}} title="เปลี่ยนชื่อหมวด" style={{marginLeft:2,background:"none",border:"none",cursor:"pointer",padding:8,display:"flex"}}><Ic d={I.pencil} s={13} c={C.ink4}/></button>}
+          {canE&&<button onClick={()=>delCat(c)} title="ลบหมวด" style={{background:"none",border:"none",cursor:"pointer",padding:8,display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
         </div>)}
       {canE&&(addingCat
         ?<div style={{display:"flex",gap:4,alignItems:"center"}}>
@@ -14451,7 +14477,7 @@ ${currentBranch?.name} → ${destName}
         {[{v:"all",l:"ทั้งหมด"},...ASSET_STATUS].map(s=>{const on=fStatus===s.v;return <button key={s.v} onClick={()=>setFStatus(s.v)} style={{padding:"6px 12px",borderRadius:20,border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,cursor:"pointer",fontSize:12,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</button>;})}
       </div>
     </div>
-    {filtered.length===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.box} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีสินทรัพย์{myList.length>0?"ที่ตรงกับตัวกรอง":""}</p>{canE&&myList.length===0&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.brand}}>"+ เพิ่มสินทรัพย์"</b> เพื่อเริ่ม</p>}</div>
+    {filtered.length===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.box} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีสินทรัพย์{myList.length>0?"ที่ตรงกับตัวกรอง":""}</p>{canE&&myList.length===0&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.ink}}>"+ เพิ่มสินทรัพย์"</b> เพื่อเริ่ม</p>}</div>
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(300px,100%),1fr))",gap:14}}>
       {filtered.map(a=>{const d=assetDeprec(a);const st=stOf(a.status||"active");return <Card key={a.id} style={{overflow:"hidden"}}>
         <div style={{display:"flex",gap:12,padding:"12px 14px"}}>
@@ -14459,10 +14485,14 @@ ${currentBranch?.name} → ${destName}
           <div style={{minWidth:0,flex:1}}>
             <div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"flex-start"}}>
               <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name}</div>
-              {canE&&<div style={{display:"flex",gap:4,flexShrink:0}}>
-                {xferDestBranches.length>0&&<button onClick={()=>openTransfer(a)} title="โอนย้ายไปสาขาอื่น" style={{background:`${C.teal}1A`,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.truck} s={12} c={C.teal}/></button>}
-                <button onClick={()=>openEdit(a)} title="แก้ไข" style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={12} c={C.blue}/></button>
-                <button onClick={()=>del(a)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+              {/* แก้ไข = ปุ่มใหญ่กดง่ายบน iPad · โอนย้าย/ลบ อยู่ในเมนู ⋮ — ลบ (แจ้งบัญชีตัดออก ย้อนไม่ได้) ไม่ติดกับปุ่มแก้ไขอีก
+                  ความกว้างรวมเท่าเดิม ชื่อสินทรัพย์จึงไม่ถูกตัดสั้นลง */}
+              {canE&&<div style={{display:"flex",gap:6,flexShrink:0,alignItems:"center"}}>
+                <button onClick={()=>openEdit(a)} title="แก้ไข" style={{width:34,height:34,padding:0,background:C.blueLight,border:"none",borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.pencil} s={15} c={C.blue}/></button>
+                <RowMenu items={[
+                  xferDestBranches.length>0&&{label:"โอนย้ายไปสาขาอื่น",icon:I.truck,color:C.purple,onClick:()=>openTransfer(a)},
+                  {label:"ลบสินทรัพย์",icon:I.trash,danger:true,onClick:()=>del(a)},
+                ]}/>
               </div>}
             </div>
             <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center",marginTop:4}}>
@@ -14497,7 +14527,7 @@ ${currentBranch?.name} → ${destName}
       </div>
       <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={()=>{if(!xferBusy)setXfer(null);}} disabled={xferBusy}>ยกเลิก</Btn>
-        <Btn onClick={doTransfer} loading={xferBusy} disabled={xferBusy||!xferBranch||!okQty} icon={I.check} s={{background:`linear-gradient(135deg,${C.teal},#0D9488)`}}>ยืนยันโอน</Btn>
+        <Btn v="purple" onClick={doTransfer} loading={xferBusy} disabled={xferBusy||!xferBranch||!okQty} icon={I.check}>ยืนยันโอน</Btn>
       </div>
     </Modal>;})()}
     {/* โอนหลายรายการพร้อมกัน — ปลายทางเดียว ออกใบโอนใบเดียว */}
@@ -14562,13 +14592,13 @@ ${currentBranch?.name} → ${destName}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
               <div style={{minWidth:0,fontFamily:"'Sarabun',sans-serif"}}>
                 <div style={{fontSize:14,fontWeight:900,color:C.ink}}>{t.transfer_no}</div>
-                <div style={{fontSize:12,color:C.ink3,marginTop:2}}>{t.from_branch_name||"—"} <b style={{color:C.purple}}>→</b> {t.to_branch_name||"—"}</div>
+                <div style={{fontSize:13.5,fontWeight:700,color:C.ink,marginTop:2}}>{t.from_branch_name||"—"} <b style={{color:C.purple}}>→</b> {t.to_branch_name||"—"}</div>
                 <div style={{fontSize:11,color:C.ink4,marginTop:2}}>{t.created_at?fmtDT(t.created_at):"—"}{t.transferred_by?` · โดย ${t.transferred_by}`:""}</div>
                 {t.note?<div style={{fontSize:11,color:C.ink4,marginTop:2}}>📝 {t.note}</div>:null}
               </div>
               <div style={{textAlign:"right",flexShrink:0}}>
                 <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{(Array.isArray(t.items)?t.items:[]).length} รายการ · {(Array.isArray(t.items)?t.items:[]).reduce((s,x)=>s+(+x.qty||0),0)} ชิ้น</div>
-                <div style={{fontSize:16,fontWeight:900,color:C.purple,fontFamily:"'Sarabun',sans-serif"}}>฿{assetMoney(+t.total_cost||0)}</div>
+                {+t.total_cost>0&&<div style={{fontSize:14,fontWeight:800,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>฿{assetMoney(+t.total_cost)}</div>}
                 <Btn v="ghost" onClick={()=>printAssetTransfer(t)} s={{padding:"5px 11px",fontSize:11.5,marginTop:5}}>🖨 พิมพ์ใบโอน</Btn>
               </div>
             </div>
@@ -14580,7 +14610,10 @@ ${currentBranch?.name} → ${destName}
         </div>}
     </Modal>}
 
-    {showForm&&<Modal title={editId?"✏️ แก้ไขสินทรัพย์":"➕ เพิ่มสินทรัพย์"} onClose={closeForm} wide>
+    {showForm&&<Modal title={editId?"✏️ แก้ไขสินทรัพย์":"➕ เพิ่มสินทรัพย์"} onClose={closeForm} wide noScroll>
+      {/* ฟอร์มยาว 17 ช่อง — ให้เลื่อนเฉพาะช่องกรอก ปุ่มบันทึกติดอยู่ด้านล่างเสมอ (งานหลักคือเปลี่ยนสถานะแล้วกดบันทึก)
+          padding บน 8px กันปุ่ม ✕ ลบรูป (top:-7) ไม่ให้โดนขอบกล่องเลื่อนตัด */}
+      <div style={{flex:1,minHeight:0,overflowY:"auto",WebkitOverflowScrolling:"touch",margin:"-8px -4px 0",padding:"8px 4px 4px"}}>
       <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><ImgUp label="" value={form.image} onChange={v=>setForm(f=>({...f,image:v}))}/></div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <Inp label="ชื่อสินทรัพย์ *" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น เตาแก๊ส, ตู้แช่แข็ง" autoFocus/>
@@ -14610,7 +14643,8 @@ ${currentBranch?.name} → ${destName}
           <span>มูลค่าคงเหลือ: <b style={{color:C.green}}>฿{assetMoney(prev.book)}</b></span>
         </div>
       </div>}
-      <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:12,borderTop:`1px solid ${C.line}`,marginTop:12}}>
+      </div>
+      <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:12,borderTop:`1px solid ${C.line}`,marginTop:12,flexShrink:0,background:C.white}}>
         <Btn v="ghost" onClick={closeForm}>ยกเลิก</Btn>
         <Btn v="success" onClick={save} loading={saving} icon={I.check} disabled={!form.name.trim()}>{editId?"บันทึก":"เพิ่มสินทรัพย์"}</Btn>
       </div>

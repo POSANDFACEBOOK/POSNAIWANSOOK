@@ -246,6 +246,26 @@ const main = async () => {
     bad.length ? warn(`${bad.length} เรื่อง`, bad) : ok(`หมวดที่ใช้งานอยู่ ${used.size} หมวด มีแถวครบทุกหมวด ไม่มีแถวซ้ำ`);
   }
 
+  // ── 12) บรรทัดสูตรรุ่นเก่าที่เก็บ "เลขที่พิมพ์ + หน่วยที่ไม่ใช่กรัม" (ก่อน 43e8ce2) ──
+  // ตัวเลือกวัตถุดิบเดิมบันทึก {amountGram:2, unit:"ฟอง"} แต่ทุกจุด (menuCost/ต้นทุน SOP/ตัดสต๊อกตอนผลิต)
+  // อ่าน amountGram เป็นกรัมเสมอ → "2 ฟอง" ถูกคิดเป็น 2 กรัม ต้นทุนต่ำกว่าจริงมาก (เคสจริง: ไข่ไก่ 10 บรรทัด)
+  // แก้ข้อมูลต้องให้เจ้าของตัดสินใจ (ต้นทุน/food cost % จะขึ้น) — ตัวนี้แค่นับให้เห็น
+  section("12) สูตรรุ่นเก่า: หน่วยไม่ใช่กรัม แต่ระบบคิดเป็นกรัม (ต้นทุนต่ำกว่าจริง)");
+  {
+    const GRAM_ALIAS = new Set(["กรัม", "ก.", "g", "มล.", "ml", "มิลลิลิตร"]);
+    const byId = new Map(ings.map((i) => [+i.id, i]));
+    const legacy = (l) => { const u = String(l.unit || "").trim(); return !!u && l.displayAmount == null && !GRAM_ALIAS.has(u); };
+    const line = (owner, l) => {
+      const g = byId.get(+l.ingredientId) || {};
+      const cost = (+g.price_per_gram || 0) * (+l.amountGram || 0);
+      return `${owner} → ${String(g.name || "#" + l.ingredientId).trim()} ${l.amountGram} ${l.unit} (คิดเป็น ${l.amountGram} กรัม ≈ ฿${cost.toFixed(2)} · ซื้อเป็น ${g.buy_unit || "-"})`;
+    };
+    const bad = [];
+    for (const m of menus) for (const l of m.ingredients || []) if (legacy(l)) bad.push(line(`เมนู "${String(m.name).trim()}"`, l));
+    for (const i of ings) if (i.has_sop) for (const l of i.ingredients || []) if (legacy(l)) bad.push(line(`SOP "${String(i.name).trim()}"`, l));
+    bad.length ? warn(`${bad.length} บรรทัด — ครัวกลางต้องเปิดแก้ไข SOP แล้วเลือกวัตถุดิบนั้นใหม่ (จอ SOP ขึ้นป้าย ⚠️ ให้คนแก้ได้เห็น)`, bad) : ok("ไม่มี");
+  }
+
   console.log(`\n${"═".repeat(50)}`);
   console.log(warns === 0 ? "✅ สะอาดทุกข้อ" : `⚠️ พบ ${warns} เรื่องที่ควรจัดการ (รายละเอียดด้านบน)`);
 };
