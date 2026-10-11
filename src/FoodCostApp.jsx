@@ -15713,9 +15713,12 @@ const CRM_TIERS=[
   {id:"platinum",label:"Platinum",min:15000,max:Infinity,color:"#7C3AED",bg:"#F5F3FF"},
 ];
 function getTier(pts){return CRM_TIERS.find(t=>pts>=t.min&&pts<=t.max)||CRM_TIERS[0];}
+// นับเป็น "มาร้าน 1 ครั้ง" เฉพาะแถวที่มียอดบิลจริง — แถวปรับคะแนนมือ (amount:0) ไม่ใช่การมาร้าน
+// ไม่งั้นปรับแต้มทีไรก็กลายเป็นลูกค้าประจำ และนาฬิกา "เสี่ยงหาย" ถูกรีเซ็ต (หน้าวิเคราะห์นับแบบนี้อยู่แล้ว)
+const isCRMVisit=t=>(+t.amount||0)>0;
 function getCustomerTags(cust,txns){
   const tags=[];
-  const myTxns=txns.filter(t=>t.customer_id===cust.id);
+  const myTxns=txns.filter(t=>t.customer_id===cust.id&&isCRMVisit(t));
   const now=Date.now();
   const createdMs=new Date(cust.created_at||0).getTime();
   if(now-createdMs<30*24*3600*1000)tags.push({l:"ใหม่",c:C.blue,bg:C.blueLight});
@@ -15789,30 +15792,17 @@ function CRMPoints({currentBranch,currentUser,customers,claims,events,canEdit,re
   }
   async function rejectClaim(cl){
     if(busyId)return;
-    const reason=window.prompt("เหตุผลที่ปฏิเสธ (เช่น รูปไม่ชัด / บิลซ้ำ):","");
-    if(reason===null)return;
+    // กล่องเหตุผลของแอป (มีปุ่มเหตุผลสำเร็จรูป + ห้ามว่าง) แทน window.prompt ที่กด OK ช่องว่างได้
+    const rejectReason=await reasonDlg({title:"ปฏิเสธบิลนี้?",message:`${cl.customer_name||cl.phone||"-"} · บิล ${cl.bill_number||"-"} · ฿${(+cl.amount||0).toLocaleString()}`,presets:["รูปไม่ชัด","บิลซ้ำ","ยอดไม่ตรงบิล","ไม่ใช่บิลสาขานี้"],confirmLabel:"ปฏิเสธบิล",cancelLabel:"กลับ"});
+    if(rejectReason==null)return;
     setBusyId(cl.id);
-    try{await api.updateCRMPointClaimIfStatus(cl.id,"pending",{status:"rejected",note:reason,approved_by:who,approved_at:new Date().toISOString()});await reload();}
+    try{await api.updateCRMPointClaimIfStatus(cl.id,"pending",{status:"rejected",note:rejectReason,approved_by:who,approved_at:new Date().toISOString()});await reload();}
     catch(e){alert("ไม่สำเร็จ: "+((e&&e.message)||e));await reload();}
     setBusyId(null);
   }
   const joinUrl=publicBaseUrl()+"?join=1";
   return <div>
-    <div style={{background:C.white,border:`1px dashed ${C.brandBorder}`,borderRadius:14,padding:16,marginBottom:16,display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
-      <QRImg url={joinUrl} size={116}/>
-      <div style={{flex:1,minWidth:200}}>
-        <div style={{fontSize:15,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📱 QR ลูกค้า — ใช้ตัวเดียวทุกสาขา</div>
-        <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",margin:"4px 0 8px",lineHeight:1.6}}>พิมพ์ไปตั้งหน้าร้าน / ส่งให้ลูกค้าจอง — สแกนแล้วเลือกสาขา → แอดไลน์ · จองโต๊ะ · สะสมแต้ม</div>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <code style={{fontSize:11,background:C.bg,padding:"6px 9px",borderRadius:6,color:C.ink3,wordBreak:"break-all",fontFamily:"monospace"}}>{joinUrl}</code>
-          <Btn v="ghost" onClick={()=>{try{navigator.clipboard.writeText(joinUrl);alert("คัดลอกลิงก์แล้ว");}catch{alert(joinUrl);}}} icon={I.copy} s={{padding:"6px 12px",fontSize:12}}>คัดลอกลิงก์</Btn>
-          <a href={joinUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:C.blue,fontWeight:700,fontFamily:"'Sarabun',sans-serif",textDecoration:"underline"}}>เปิดดูตัวอย่าง →</a>
-        </div>
-      </div>
-    </div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginBottom:16}}>
-      {[["สแกน 7 วัน",stat("visit",7),C.brand],["แอดไลน์ 7 วัน",stat("line_click",7),"#06C755"],["จอง 7 วัน",stat("booking",7),C.blue],["ส่งบิล 7 วัน",stat("point_claim",7),C.purple]].map(([l,n,c])=><div key={l} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:12,padding:"12px 14px"}}><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{l}</div><div style={{fontSize:24,fontWeight:900,color:c,fontFamily:"'Sarabun',sans-serif"}}>{n}</div></div>)}
-    </div>
+    {/* งานของแคชเชียร์อยู่บนสุด (เพิ่มแต้ม → บิลรออนุมัติ) · สถิติกับ QR ตั้งค่าครั้งเดียวไว้ล่าง */}
     {canEdit&&<div style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:16,marginBottom:18}}>
       <div style={{fontSize:15,fontWeight:900,color:C.ink,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>⚡ เพิ่มแต้มด่วน (แคชเชียร์)</div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8,alignItems:"end"}}>
@@ -15823,7 +15813,7 @@ function CRMPoints({currentBranch,currentUser,customers,claims,events,canEdit,re
       </div>
       <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:8}}>อัตรา 1 แต้ม / {POINTS_DIVISOR} บาท · เบอร์ที่ยังไม่เป็นสมาชิกจะถูกสร้างให้อัตโนมัติ</div>
     </div>}
-    <div style={{fontSize:15,fontWeight:900,color:C.ink,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>🧾 บิลรออนุมัติ ({pending.length})</div>
+    <div style={{fontSize:15,fontWeight:900,color:C.ink,marginBottom:10,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:8}}>🧾 บิลรออนุมัติ {pending.length>0?<span style={{background:"#FFFBEB",color:"#B45309",border:"1px solid #F59E0B",borderRadius:10,padding:"1px 9px",fontSize:13,fontWeight:900}}>{pending.length}</span>:<span style={{color:C.ink4,fontWeight:700}}>(0)</span>}</div>
     {pending.length===0?<div style={{textAlign:"center",color:C.ink4,padding:24,fontFamily:"'Sarabun',sans-serif"}}>ไม่มีบิลรออนุมัติ — ลูกค้าส่งบิลผ่าน QR แล้วจะมาโผล่ที่นี่</div>
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(270px,1fr))",gap:12}}>
       {pending.map(cl=><div key={cl.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
@@ -15843,6 +15833,21 @@ function CRMPoints({currentBranch,currentUser,customers,claims,events,canEdit,re
         </div>
       </div>)}
     </div>}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginTop:18,marginBottom:16}}>
+      {[["สแกน 7 วัน",stat("visit",7),C.brand],["แอดไลน์ 7 วัน",stat("line_click",7),"#06C755"],["จอง 7 วัน",stat("booking",7),C.blue],["ส่งบิล 7 วัน",stat("point_claim",7),C.purple]].map(([l,n,c])=><div key={l} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:12,padding:"12px 14px"}}><div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{l}</div><div style={{fontSize:24,fontWeight:900,color:c,fontFamily:"'Sarabun',sans-serif"}}>{n}</div></div>)}
+    </div>
+    <div style={{background:C.white,border:`1px dashed ${C.brandBorder}`,borderRadius:14,padding:16,marginBottom:0,display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
+      <QRImg url={joinUrl} size={116}/>
+      <div style={{flex:1,minWidth:200}}>
+        <div style={{fontSize:15,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>📱 QR ลูกค้า — ใช้ตัวเดียวทุกสาขา</div>
+        <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",margin:"4px 0 8px",lineHeight:1.6}}>พิมพ์ไปตั้งหน้าร้าน / ส่งให้ลูกค้าจอง — สแกนแล้วเลือกสาขา → แอดไลน์ · จองโต๊ะ · สะสมแต้ม</div>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <code style={{fontSize:11,background:C.bg,padding:"6px 9px",borderRadius:6,color:C.ink3,wordBreak:"break-all",fontFamily:"monospace"}}>{joinUrl}</code>
+          <Btn v="ghost" onClick={()=>{try{navigator.clipboard.writeText(joinUrl);alert("คัดลอกลิงก์แล้ว");}catch{alert(joinUrl);}}} icon={I.copy} s={{padding:"6px 12px",fontSize:12}}>คัดลอกลิงก์</Btn>
+          <a href={joinUrl} target="_blank" rel="noopener noreferrer" style={{fontSize:12,color:C.blue,fontWeight:700,fontFamily:"'Sarabun',sans-serif",textDecoration:"underline"}}>เปิดดูตัวอย่าง →</a>
+        </div>
+      </div>
+    </div>
   </div>;
 }
 
@@ -15877,7 +15882,11 @@ function CRMPromotions({promotions,currentBranch,canEdit,reload}){
       const vs=await api.getCRMVouchersAll().catch(()=>[]);
       const v=(vs||[]).find(x=>(x.code||"").toUpperCase()===code);
       if(v){
+        // ใช้เกณฑ์หมดอายุเดียวกับรายการคูปองในแท็บความภักดี (ที่ขึ้น "หมดอายุ" และซ่อนปุ่ม ✓)
+        const vExp=!!v.expires_at&&new Date(v.expires_at)<new Date();
         if(v.status==="used")alert("⚠️ คูปองนี้ถูกใช้ไปแล้ว");
+        else if(vExp)alert(`⚠️ คูปองนี้หมดอายุแล้ว (${fmtD(v.expires_at)}) — ใช้ไม่ได้`);
+        else if(v.status!=="active")alert("⚠️ คูปองนี้ใช้ไม่ได้");
         else{
           if(!await confirmDlg({title:"ใช้คูปอง",message:`คูปอง ${code} — มูลค่า ${v.value}${v.type==="percent"?"%":" บาท"}\n\nกดใช้แล้วคูปองถูกตัดทันที ใช้ซ้ำไม่ได้`,confirmLabel:"✅ ใช้คูปอง",danger:false})){setRBusy(false);return;}
           await api.updateCRMVoucherIfStatus(v.id,"active",{status:"used",used_at:new Date().toISOString()});alert(`✅ ใช้คูปอง ${code} แล้ว — มูลค่า ${v.value}${v.type==="percent"?"%":" บาท"}\nแคชเชียร์กดส่วนลดนี้ใน FoodStory ได้เลย`);}
@@ -15887,10 +15896,12 @@ function CRMPromotions({promotions,currentBranch,canEdit,reload}){
       if(!p){alert("❌ ไม่พบโค้ดนี้");setRBusy(false);return;}
       const today=todayBkk();
       if(p.active===false){alert("โปรโมชั่นนี้ปิดอยู่");setRBusy(false);return;}
+      // จำกัดสาขาไว้ (การ์ดโชว์ชื่อสาขา) — ว่าง/ไม่มี = ทุกสาขา ตรงกับการ์ดและบอท LINE
+      if(Array.isArray(p.branch_ids)&&p.branch_ids.length&&!p.branch_ids.map(Number).includes(+currentBranch.id)){alert(`โปรนี้ใช้ได้เฉพาะสาขา ${p.branch_ids.map(bName).join(", ")}`);setRBusy(false);return;}
       if(p.start_date&&today<p.start_date){alert("โปรโมชั่นยังไม่เริ่ม");setRBusy(false);return;}
       if(p.end_date&&today>p.end_date){alert("โปรโมชั่นหมดอายุแล้ว");setRBusy(false);return;}
       if(p.quota!=null&&(+p.used_count||0)>=+p.quota){alert("โปรโมชั่นเต็มโควตาแล้ว");setRBusy(false);return;}
-      if(!await confirmDlg({title:"ใช้โปรโมชั่น",message:`${p.name} — ${promoDesc(p)}\n\nกดใช้แล้วนับการใช้โปรนี้ 1 ครั้ง`,confirmLabel:"✅ ใช้โปร",danger:false})){setRBusy(false);return;}
+      if(!await confirmDlg({title:"ใช้โปรโมชั่น",message:`${p.name} — ${promoDesc(p)}${+p.min_spend>0?`\nขั้นต่ำ ฿${(+p.min_spend).toLocaleString()} — เช็กยอดบิลก่อนกด`:""}\n\nกดใช้แล้วนับการใช้โปรนี้ 1 ครั้ง`,confirmLabel:"✅ ใช้โปร",danger:false})){setRBusy(false);return;}
       await api.updateCRMPromotion(p.id,{used_count:(+p.used_count||0)+1});
       alert(`✅ ใช้โปรฯ "${p.name}" — ${promoDesc(p)}\nแคชเชียร์กดส่วนลดนี้ใน FoodStory ได้เลย`);
       setRedeem("");await reload();
@@ -16066,7 +16077,9 @@ function CRMTab({currentBranch,currentUser,menus}){
   const[reservations,setReservations]=useState([]);
   const[bookingRequests,setBookingRequests]=useState([]);   // จองโต๊ะ requests จากบอท LINE (รอแอดมินจอง)
   const[claims,setClaims]=useState([]);const[events,setEvents]=useState([]);const[promotions,setPromotions]=useState([]);
-  const[loading,setLoading]=useState(false);
+  // สปินเนอร์เต็มจอเฉพาะโหลดครั้งแรก — โหลดซ้ำหลังบันทึก/อนุมัติจะอัปเดตในที่
+  // (เดิมทุกจอลูกถูกถอดทิ้ง: ค่าแต้มที่แก้ไว้ในบิลอื่นหาย + เลื่อนกลับบนสุด)
+  const[loading,setLoading]=useState(true);const[loadedOnce,setLoadedOnce]=useState(false);const loadSeq=useRef(0);
   const[err,setErr]=useState("");
 
   // Customer sub-states
@@ -16091,6 +16104,7 @@ function CRMTab({currentBranch,currentUser,menus}){
   const canEdit=currentUser&&(currentUser.role==="admin"||currentUser.role==="manager"||currentUser.role==="staff");
 
   async function loadAll(){
+    const seq=++loadSeq.current;
     setLoading(true);setErr("");
     try{
       const[c,tx,v,fb,res,cl,ev,pr,br]=await Promise.all([
@@ -16104,9 +16118,11 @@ function CRMTab({currentBranch,currentUser,menus}){
         api.getCRMPromotions().catch(()=>[]),
         api.getCRMBookingRequests().catch(()=>[]),
       ]);
+      if(seq!==loadSeq.current)return;   // มีโหลดรอบใหม่กว่าแล้ว — ผลรอบนี้เก่า ทิ้ง (รอบใหม่จะปิด loading เอง)
       setCustomers(c);setTransactions(tx);setVouchers(v);setFeedback(fb);setReservations(res);setClaims(cl||[]);setEvents(ev||[]);setPromotions(pr||[]);setBookingRequests(br||[]);
-    }catch(e){setErr(e.message);}
-    setLoading(false);
+      setLoadedOnce(true);
+    }catch(e){if(seq===loadSeq.current)setErr(e.message);}
+    if(seq===loadSeq.current)setLoading(false);
   }
   useEffect(()=>{loadAll();},[]);
 
@@ -16114,8 +16130,8 @@ function CRMTab({currentBranch,currentUser,menus}){
     let list=customers;
     if(custSearch){const q=custSearch.toLowerCase();list=list.filter(c=>(c.name||"").toLowerCase().includes(q)||(c.phone||"").includes(q));}
     if(custFilter==="new")list=list.filter(c=>Date.now()-new Date(c.created_at||0).getTime()<30*24*3600*1000);
-    if(custFilter==="regular")list=list.filter(c=>transactions.filter(t=>t.customer_id===c.id).length>=5);
-    if(custFilter==="atrisk")list=list.filter(c=>{const myTxns=transactions.filter(t=>t.customer_id===c.id);if(!myTxns.length)return false;const lastMs=Math.max(...myTxns.map(t=>new Date(t.created_at||0).getTime()));return Date.now()-lastMs>60*24*3600*1000;});
+    if(custFilter==="regular")list=list.filter(c=>transactions.filter(t=>t.customer_id===c.id&&isCRMVisit(t)).length>=5);
+    if(custFilter==="atrisk")list=list.filter(c=>{const myTxns=transactions.filter(t=>t.customer_id===c.id&&isCRMVisit(t));if(!myTxns.length)return false;const lastMs=Math.max(...myTxns.map(t=>new Date(t.created_at||0).getTime()));return Date.now()-lastMs>60*24*3600*1000;});
     if(custFilter==="silver")list=list.filter(c=>getTier(c.points||0).id==="silver");
     if(custFilter==="gold")list=list.filter(c=>getTier(c.points||0).id==="gold");
     if(custFilter==="platinum")list=list.filter(c=>getTier(c.points||0).id==="platinum");
@@ -16134,13 +16150,15 @@ function CRMTab({currentBranch,currentUser,menus}){
     {id:"analytics",l:"วิเคราะห์"},
   ];
 
-  if(loading)return <Loading text="กำลังโหลด CRM..."/>;
+  if(loading&&!loadedOnce)return <Loading text="กำลังโหลด CRM..."/>;
   if(err)return <ErrBox msg={err} onRetry={loadAll}/>;
 
   return <div>
     {/* Sub-tab nav */}
     <div style={{display:"flex",gap:6,marginBottom:20,background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:6,flexWrap:"wrap"}}>
       {SUB_TABS.map(st=><button key={st.id} onClick={()=>setSubTab(st.id)} style={{padding:"7px 18px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:subTab===st.id?700:500,background:subTab===st.id?C.brand:"transparent",color:subTab===st.id?"#fff":C.ink3,transition:"all .15s"}}>{st.l}</button>)}
+      {/* จองที่ไว้ตลอด (แค่ซ่อน/โชว์) — ป้ายขึ้นแล้วแถบแท็บไม่กระโดด */}
+      <span style={{marginLeft:"auto",alignSelf:"center",fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",padding:"0 8px",visibility:loading?"visible":"hidden"}}>⟳ กำลังอัปเดต…</span>
     </div>
 
     {/* ── CUSTOMERS ── */}
@@ -16176,6 +16194,11 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
   const[showPoints,setShowPoints]=useState(false);
   const[ptForm,setPtForm]=useState({amount:"",type:"earn",note:""});
   const[ptSaving,setPtSaving]=useState(false);
+  // < 1100px (iPad แนวตั้ง/มือถือ): แผงรายละเอียดลูกค้าวางซ้อนบนรายการ แทนคอลัมน์ขวา 360px ที่บีบรายการจนชนกัน
+  const narrow=useIsMobile(1100);
+  const ptAmt=parseInt(ptForm.amount)||0;
+  // หักเกินแต้มที่มี: ยอดจริงถูกตัดถึง 0 แต่บันทึกประวัติหักเต็มจำนวน → ห้ามกดยืนยัน
+  const ptOver=ptForm.type==="redeem"&&ptAmt>(selCust?.points||0);
 
   useEffect(()=>{
     if(editCust)setForm({name:editCust.name||"",phone:editCust.phone||"",birthdate:editCust.birthdate||"",allergies:editCust.allergies||"",seat_pref:editCust.seat_pref||"",notes:editCust.notes||""});
@@ -16227,26 +16250,26 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
   return <div>
     <div style={{display:"flex",gap:10,marginBottom:16,alignItems:"center",flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:200}}>
-        <Ic d={I.search} s={15} c={C.ink4} style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)"}}/>
+        <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",display:"flex",pointerEvents:"none"}}><Ic d={I.search} s={15} c={C.ink4}/></span>
         <input value={custSearch} onChange={e=>setCustSearch(e.target.value)} placeholder="ค้นหาชื่อ / เบอร์โทร..." style={{width:"100%",paddingLeft:34,paddingRight:12,height:38,border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none",boxSizing:"border-box"}}/>
       </div>
       <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-        {FILTERS.map(f=><button key={f.id} onClick={()=>setCustFilter(f.id)} style={{padding:"6px 12px",borderRadius:8,border:"1px solid "+(custFilter===f.id?C.brand:C.line),background:custFilter===f.id?C.brand:"#fff",color:custFilter===f.id?"#fff":C.ink3,fontSize:12,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{f.l}</button>)}
+        {FILTERS.map(f=><button key={f.id} onClick={()=>setCustFilter(f.id)} style={{padding:"6px 12px",minHeight:38,borderRadius:8,border:"1px solid "+(custFilter===f.id?C.brand:C.line),background:custFilter===f.id?C.brand:"#fff",color:custFilter===f.id?"#fff":C.ink3,fontSize:12,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{f.l}</button>)}
       </div>
       {canEdit&&<Btn icon={I.plus} onClick={()=>{setEditCust(null);setShowCustForm(true);}}>เพิ่มลูกค้า</Btn>}
     </div>
 
-    <div style={{display:"grid",gridTemplateColumns:selCust?"1fr 360px":"1fr",gap:16}}>
+    <div style={{display:"grid",gridTemplateColumns:selCust&&!narrow?"minmax(0,1fr) 360px":"minmax(0,1fr)",gap:16}}>
       {/* Customer list */}
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
         {customers.length===0&&<div style={{textAlign:"center",padding:40,color:C.ink4}}>ยังไม่มีข้อมูลลูกค้า</div>}
         {customers.map(c=>{
           const tier=getTier(c.points||0);
           const tags=getCustomerTags(c,transactions);
-          const myTxns=transactions.filter(t=>t.customer_id===c.id);
+          const myTxns=transactions.filter(t=>t.customer_id===c.id&&isCRMVisit(t));
           const totalSpend=myTxns.reduce((s,t)=>s+(t.amount||0),0);
           const active=selCust?.id===c.id;
-          return <div key={c.id} onClick={()=>setSelCust(active?null:c)} style={{background:"#fff",border:"2px solid "+(active?C.brand:C.line),borderRadius:12,padding:"12px 16px",cursor:"pointer",transition:"all .15s",display:"flex",alignItems:"center",gap:12}}>
+          return <div key={c.id} onClick={()=>{setSelCust(active?null:c);if(narrow&&!active)window.scrollTo({top:0,behavior:"smooth"});}} style={{background:"#fff",border:"2px solid "+(active?C.brand:C.line),borderRadius:12,padding:"12px 16px",cursor:"pointer",transition:"all .15s",display:"flex",alignItems:"center",gap:12}}>
             <div style={{width:44,height:44,borderRadius:"50%",background:`linear-gradient(135deg,${tier.bg},${tier.color}22)`,border:`2px solid ${tier.color}44`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <span style={{fontSize:16,fontWeight:900,color:tier.color}}>{(c.name||"?")[0]}</span>
             </div>
@@ -16262,16 +16285,16 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
               <div style={{fontSize:18,fontWeight:900,color:C.brand}}>{(c.points||0).toLocaleString()}</div>
               <div style={{fontSize:10,color:C.ink4}}>คะแนน</div>
             </div>
-            {canEdit&&<div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
-              <button onClick={()=>{setEditCust(c);setShowCustForm(true);}} style={{padding:"6px",border:"1px solid "+C.line,borderRadius:7,background:"#fff",cursor:"pointer"}}><Ic d={I.pencil} s={13} c={C.ink3}/></button>
-              <button onClick={()=>delCust(c)} style={{padding:"6px",border:"1px solid #FCA5A5",borderRadius:7,background:"#fff",cursor:"pointer"}}><Ic d={I.trash} s={13} c={C.red}/></button>
+            {canEdit&&<div style={{display:"flex",gap:6}} onClick={e=>e.stopPropagation()}>
+              <button title="แก้ไข" onClick={()=>{setEditCust(c);setShowCustForm(true);}} style={{width:36,height:36,padding:0,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid "+C.line,borderRadius:8,background:"#fff",cursor:"pointer"}}><Ic d={I.pencil} s={14} c={C.ink3}/></button>
+              <button title="ลบ" onClick={()=>delCust(c)} style={{width:36,height:36,padding:0,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid "+C.line,borderRadius:8,background:"#fff",cursor:"pointer"}}><Ic d={I.trash} s={14} c={C.red}/></button>
             </div>}
           </div>;
         })}
       </div>
 
       {/* Customer detail panel */}
-      {selCust&&<div style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:16,position:"sticky",top:80,maxHeight:"calc(100vh - 120px)",overflowY:"auto"}}>
+      {selCust&&<div style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:16,position:narrow?"static":"sticky",top:80,maxHeight:narrow?"none":"calc(100vh - 120px)",overflowY:narrow?"visible":"auto",order:narrow?-1:0}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
           <div>
             <div style={{fontWeight:800,fontSize:16,color:C.ink}}>{selCust.name}</div>
@@ -16290,20 +16313,24 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
           </div>
           {nextTier&&<div style={{fontSize:11,color:tier.color,marginTop:4}}>อีก {(nextTier.min-(selCust.points||0)).toLocaleString()} pts → {nextTier.label}</div>}
         </div>;})()}
+        {/* ปุ่มหลักของแผง วางติดกับยอดแต้มที่มันเปลี่ยน (เดิมอยู่ล่างสุดใต้ประวัติ/คูปอง) */}
+        {canEdit&&<Btn full icon={I.bolt} onClick={()=>setShowPoints(true)} s={{marginBottom:12}}>ปรับคะแนน</Btn>}
         {/* Tags */}
         {(()=>{const tags=getCustomerTags(selCust,transactions);return tags.length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>{tags.map((tg,i)=><span key={i} style={{fontSize:12,padding:"3px 10px",borderRadius:20,background:tg.bg,color:tg.c,fontWeight:700}}>{tg.l}</span>)}</div>;})()}
         {/* Info */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-          {[["วันเกิด",selCust.birthdate?fmtD(selCust.birthdate):"—"],["เก้าอี้ที่ชอบ",selCust.seat_pref||"—"],["แพ้อาหาร",selCust.allergies||"—"],["หมายเหตุ",selCust.notes||"—"]].map(([k,v])=><div key={k} style={{background:C.lineLight,borderRadius:8,padding:"8px 10px"}}><div style={{fontSize:10,color:C.ink4,fontWeight:700}}>{k}</div><div style={{fontSize:12,color:C.ink,fontWeight:500,marginTop:2}}>{v}</div></div>)}
+          {[["วันเกิด",selCust.birthdate?fmtD(selCust.birthdate):"—"],["ที่นั่งที่ชอบ",selCust.seat_pref||"—"],["แพ้อาหาร",selCust.allergies||"—"],["หมายเหตุ",selCust.notes||"—"]].map(([k,v])=><div key={k} style={{background:C.lineLight,borderRadius:8,padding:"8px 10px"}}><div style={{fontSize:10,color:C.ink4,fontWeight:700}}>{k}</div><div style={{fontSize:12,color:C.ink,fontWeight:500,marginTop:2}}>{v}</div></div>)}
         </div>
         {/* Transactions */}
         <div style={{marginBottom:12}}>
           <div style={{fontWeight:700,fontSize:13,color:C.ink,marginBottom:6}}>ประวัติธุรกรรม</div>
           <div style={{maxHeight:160,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
-            {transactions.filter(t=>t.customer_id===selCust.id).slice(0,20).map(t=><div key={t.id} style={{display:"flex",justifyContent:"space-between",padding:"5px 8px",background:C.lineLight,borderRadius:7,fontSize:12}}>
+            {transactions.filter(t=>t.customer_id===selCust.id).slice(0,20).map(t=><div key={t.id} style={{display:"grid",gridTemplateColumns:"1fr auto 72px",gap:8,alignItems:"center",padding:"5px 8px",background:C.lineLight,borderRadius:7,fontSize:12}}>
               <span style={{color:C.ink3}}>{fmtD(t.created_at)}</span>
-              <span style={{color:t.points_earned?C.green:C.red,fontWeight:700}}>{t.points_earned?"+"+t.points_earned+" pts":t.points_redeemed?"-"+t.points_redeemed+" pts":"—"}</span>
-              {t.amount>0&&<span style={{color:C.ink}}>฿{t.amount.toLocaleString()}</span>}
+              <span style={{color:t.points_earned?C.green:C.red,fontWeight:700,textAlign:"right"}}>{t.points_earned?"+"+t.points_earned+" pts":t.points_redeemed?"-"+t.points_redeemed+" pts":"—"}</span>
+              <span style={{textAlign:"right",color:t.amount>0?C.ink:C.ink4}}>{t.amount>0?"฿"+t.amount.toLocaleString():"—"}</span>
+              {/* แถวปรับคะแนนมือไม่มียอดบิล — โชว์หมายเหตุว่าปรับเพราะอะไร */}
+              {!(t.amount>0)&&t.note&&<span style={{gridColumn:"1 / -1",fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.note}</span>}
             </div>)}
             {transactions.filter(t=>t.customer_id===selCust.id).length===0&&<div style={{color:C.ink4,fontSize:12,textAlign:"center",padding:8}}>ยังไม่มีธุรกรรม</div>}
           </div>
@@ -16318,23 +16345,20 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
           </div>)}
           {vouchers.filter(v=>v.customer_id===selCust.id).length===0&&<div style={{color:C.ink4,fontSize:12}}>ยังไม่มีคูปอง</div>}
         </div>
-        {canEdit&&<div style={{display:"flex",gap:6}}>
-          <Btn icon={I.bolt} onClick={()=>{setShowPoints(true);}} style={{flex:1}}>ปรับคะแนน</Btn>
-        </div>}
       </div>}
     </div>
 
     {/* Add/Edit Customer Modal */}
     {showCustForm&&<Modal title={editCust?"แก้ไขลูกค้า":"เพิ่มลูกค้าใหม่"} onClose={()=>{setShowCustForm(false);setEditCust(null);}}>
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
-        <Field label="ชื่อ-นามสกุล *"><Inp value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="ชื่อลูกค้า"/></Field>
-        <Field label="เบอร์โทรศัพท์"><Inp value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="0812345678"/></Field>
-        <Field label="วันเกิด"><Inp type="date" value={form.birthdate} onChange={e=>setForm(f=>({...f,birthdate:e.target.value}))}/></Field>
-        <Field label="แพ้อาหาร / ข้อจำกัด"><Inp value={form.allergies} onChange={e=>setForm(f=>({...f,allergies:e.target.value}))} placeholder="เช่น แพ้ถั่ว, ไม่กินหมู"/></Field>
-        <Field label="ที่นั่งที่ชอบ"><Inp value={form.seat_pref} onChange={e=>setForm(f=>({...f,seat_pref:e.target.value}))} placeholder="เช่น โต๊ะริมหน้าต่าง"/></Field>
-        <Field label="หมายเหตุ"><TA value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} placeholder="ข้อมูลเพิ่มเติม"/></Field>
+        <Inp label="ชื่อ-นามสกุล *" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="ชื่อลูกค้า"/>
+        <Inp label="เบอร์โทรศัพท์" value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="0812345678"/>
+        <Inp label="วันเกิด" type="date" value={form.birthdate} onChange={e=>setForm(f=>({...f,birthdate:e.target.value}))}/>
+        <Inp label="แพ้อาหาร / ข้อจำกัด" value={form.allergies} onChange={e=>setForm(f=>({...f,allergies:e.target.value}))} placeholder="เช่น แพ้ถั่ว, ไม่กินหมู"/>
+        <Inp label="ที่นั่งที่ชอบ" value={form.seat_pref} onChange={e=>setForm(f=>({...f,seat_pref:e.target.value}))} placeholder="เช่น โต๊ะริมหน้าต่าง"/>
+        <TA label="หมายเหตุ" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} placeholder="ข้อมูลเพิ่มเติม"/>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-          <Btn onClick={()=>{setShowCustForm(false);setEditCust(null);}} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
+          <Btn v="ghost" onClick={()=>{setShowCustForm(false);setEditCust(null);}}>ยกเลิก</Btn>
           <Btn icon={I.save} onClick={saveCust} disabled={saving}>{saving?"กำลังบันทึก...":"บันทึก"}</Btn>
         </div>
       </div>
@@ -16344,17 +16368,18 @@ function CRMCustomers({customers,allCustomers,transactions,vouchers,custSearch,s
     {showPoints&&selCust&&<Modal title={`ปรับคะแนน — ${selCust.name}`} onClose={()=>setShowPoints(false)}>
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
         <div style={{display:"flex",gap:8}}>
-          {[{id:"earn",l:"บวกคะแนน"},{id:"redeem",l:"หักคะแนน"}].map(opt=><button key={opt.id} onClick={()=>setPtForm(f=>({...f,type:opt.id}))} style={{flex:1,padding:"10px 0",borderRadius:8,border:"2px solid "+(ptForm.type===opt.id?C.brand:C.line),background:ptForm.type===opt.id?C.brand:"#fff",color:ptForm.type===opt.id?"#fff":C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,cursor:"pointer"}}>{opt.l}</button>)}
+          {[{id:"earn",l:"บวกคะแนน"},{id:"redeem",l:"หักคะแนน"}].map(opt=><button key={opt.id} onClick={()=>setPtForm(f=>({...f,type:opt.id}))} style={{flex:1,padding:"10px 0",borderRadius:8,border:"2px solid "+(ptForm.type===opt.id?(opt.id==="earn"?C.green:C.red):C.line),background:ptForm.type===opt.id?(opt.id==="earn"?C.green:C.red):"#fff",color:ptForm.type===opt.id?"#fff":C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,cursor:"pointer"}}>{opt.l}</button>)}
         </div>
-        <Field label="จำนวนคะแนน"><Inp type="number" value={ptForm.amount} onChange={e=>setPtForm(f=>({...f,amount:e.target.value}))} placeholder="เช่น 100"/></Field>
-        <Field label="หมายเหตุ"><Inp value={ptForm.note} onChange={e=>setPtForm(f=>({...f,note:e.target.value}))} placeholder="ซื้อสินค้า, แลกรางวัล ฯลฯ"/></Field>
+        <Inp label="จำนวนคะแนน" type="number" value={ptForm.amount} onChange={e=>setPtForm(f=>({...f,amount:e.target.value}))} placeholder="เช่น 100"/>
+        <Inp label="หมายเหตุ" value={ptForm.note} onChange={e=>setPtForm(f=>({...f,note:e.target.value}))} placeholder="ซื้อสินค้า, แลกรางวัล ฯลฯ"/>
         <div style={{background:C.lineLight,borderRadius:8,padding:10,fontSize:13}}>
           คะแนนปัจจุบัน: <b>{(selCust.points||0).toLocaleString()}</b> pts &nbsp;→&nbsp;
-          หลังปรับ: <b style={{color:ptForm.type==="earn"?C.green:C.red}}>{Math.max(0,(selCust.points||0)+(ptForm.type==="earn"?+ptForm.amount:-+ptForm.amount)).toLocaleString()}</b> pts
+          หลังปรับ: <b style={{color:ptForm.type==="earn"?C.green:C.red}}>{Math.max(0,(selCust.points||0)+(ptForm.type==="earn"?ptAmt:-ptAmt)).toLocaleString()}</b> pts
         </div>
+        {ptOver&&<div style={{color:C.red,fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>หักได้สูงสุด {(selCust.points||0).toLocaleString()} แต้ม</div>}
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-          <Btn onClick={()=>setShowPoints(false)} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
-          <Btn icon={I.check} onClick={adjustPoints} disabled={ptSaving}>{ptSaving?"กำลังบันทึก...":"ยืนยัน"}</Btn>
+          <Btn v="ghost" onClick={()=>setShowPoints(false)}>ยกเลิก</Btn>
+          <Btn v={ptForm.type==="earn"?"success":"danger"} icon={I.check} onClick={adjustPoints} disabled={ptSaving||ptOver||ptAmt<=0}>{ptSaving?"กำลังบันทึก...":(ptForm.type==="earn"?"บวก ":"หัก ")+ptAmt.toLocaleString()+" แต้ม"}</Btn>
         </div>
       </div>
     </Modal>}
@@ -16381,8 +16406,9 @@ function CRMloyalty({customers,transactions,vouchers,setVouchers,showVoucherForm
   async function useVoucher(v){
     if(v.status!=="active")return;
     if(!await confirmDlg({title:"ใช้คูปองแล้ว",message:`ทำเครื่องหมายว่าคูปอง ${v.code} ถูกใช้แล้ว?`,confirmLabel:"✓ ใช้แล้ว",danger:false}))return;
-    try{await api.updateCRMVoucher(v.id,{status:"used"});await reload();}
-    catch(e){alert(e.message);}
+    // เขียนแบบมีเงื่อนไขเหมือนช่อง "ใช้โค้ด" — อีกเครื่องใช้ไปก่อนแล้ว = แจ้ง "ถูกใช้ไปแล้ว" ไม่ทับซ้ำ
+    try{await api.updateCRMVoucherIfStatus(v.id,"active",{status:"used",used_at:new Date().toISOString()});await reload();}
+    catch(e){alert(e.message);await reload();}
   }
   async function deleteVoucher(v){
     if(!await confirmDlg({title:"ลบคูปอง",message:`ลบคูปอง ${v.code}?`,confirmLabel:"ลบ",danger:true}))return;
@@ -16442,8 +16468,8 @@ function CRMloyalty({customers,transactions,vouchers,setVouchers,showVoucherForm
             <div style={{fontWeight:800,color:C.brand,fontSize:15}}>{v.type==="percent"?v.value+"%":"฿"+v.value}</div>
             <span style={{fontSize:11,padding:"3px 9px",borderRadius:20,fontWeight:700,background:v.status==="active"&&!expired?C.greenLight:C.lineLight,color:v.status==="active"&&!expired?C.green:C.ink3}}>{v.status==="used"?"ใช้แล้ว":expired?"หมดอายุ":"ใช้ได้"}</span>
             {canEdit&&<div style={{display:"flex",gap:4}}>
-              {v.status==="active"&&!expired&&<button onClick={()=>useVoucher(v)} title="ทำเครื่องหมายว่าใช้แล้ว" style={{padding:"5px",border:"1px solid "+C.green,borderRadius:6,background:"#fff",cursor:"pointer"}}><Ic d={I.check} s={12} c={C.green}/></button>}
-              <button onClick={()=>deleteVoucher(v)} style={{padding:"5px",border:"1px solid #FCA5A5",borderRadius:6,background:"#fff",cursor:"pointer"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+              {v.status==="active"&&!expired&&<button onClick={()=>useVoucher(v)} title="ทำเครื่องหมายว่าใช้แล้ว" style={{width:36,height:36,padding:0,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid "+C.green,borderRadius:8,background:"#fff",cursor:"pointer"}}><Ic d={I.check} s={14} c={C.green}/></button>}
+              <button onClick={()=>deleteVoucher(v)} title="ลบ" style={{width:36,height:36,padding:0,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid "+C.line,borderRadius:8,background:"#fff",cursor:"pointer"}}><Ic d={I.trash} s={14} c={C.red}/></button>
             </div>}
           </div>;
         })}
@@ -16455,7 +16481,7 @@ function CRMloyalty({customers,transactions,vouchers,setVouchers,showVoucherForm
     {showVoucherForm&&<Modal title="ออกคูปองใหม่" onClose={()=>setShowVoucherForm(false)}>
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
         <Field label="ลูกค้า *">
-          <select value={vForm.customer_id} onChange={e=>setVForm(f=>({...f,customer_id:e.target.value}))} style={{width:"100%",padding:"8px 10px",border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none"}}>
+          <select value={vForm.customer_id} onChange={e=>setVForm(f=>({...f,customer_id:e.target.value}))} style={{...iS,cursor:"pointer"}}>
             <option value="">-- เลือกลูกค้า --</option>
             {customers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.phone||"ไม่มีเบอร์"})</option>)}
           </select>
@@ -16463,11 +16489,11 @@ function CRMloyalty({customers,transactions,vouchers,setVouchers,showVoucherForm
         <div style={{display:"flex",gap:8}}>
           {[{id:"fixed",l:"ส่วนลด (฿)"},{id:"percent",l:"ส่วนลด (%)"}].map(opt=><button key={opt.id} onClick={()=>setVForm(f=>({...f,type:opt.id}))} style={{flex:1,padding:"9px 0",borderRadius:8,border:"2px solid "+(vForm.type===opt.id?C.brand:C.line),background:vForm.type===opt.id?C.brand:"#fff",color:vForm.type===opt.id?"#fff":C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer"}}>{opt.l}</button>)}
         </div>
-        <Field label={vForm.type==="percent"?"ส่วนลด (%)":"มูลค่า (฿)"}><Inp type="number" value={vForm.value} onChange={e=>setVForm(f=>({...f,value:e.target.value}))} placeholder={vForm.type==="percent"?"เช่น 10":"เช่น 50"}/></Field>
-        <Field label="หมดอายุภายใน (วัน)"><Inp type="number" value={vForm.expires_days} onChange={e=>setVForm(f=>({...f,expires_days:e.target.value}))} placeholder="30"/></Field>
-        <Field label="หมายเหตุ"><Inp value={vForm.note} onChange={e=>setVForm(f=>({...f,note:e.target.value}))} placeholder="เช่น วันเกิด, ครบรอบ"/></Field>
+        <Inp label={vForm.type==="percent"?"ส่วนลด (%)":"มูลค่า (฿)"} type="number" value={vForm.value} onChange={e=>setVForm(f=>({...f,value:e.target.value}))} placeholder={vForm.type==="percent"?"เช่น 10":"เช่น 50"}/>
+        <Inp label="หมดอายุภายใน (วัน)" type="number" value={vForm.expires_days} onChange={e=>setVForm(f=>({...f,expires_days:e.target.value}))} placeholder="30"/>
+        <Inp label="หมายเหตุ" value={vForm.note} onChange={e=>setVForm(f=>({...f,note:e.target.value}))} placeholder="เช่น วันเกิด, ครบรอบ"/>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-          <Btn onClick={()=>setShowVoucherForm(false)} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
+          <Btn v="ghost" onClick={()=>setShowVoucherForm(false)}>ยกเลิก</Btn>
           <Btn icon={I.tag} onClick={saveVoucher} disabled={saving}>{saving?"กำลังออก...":"ออกคูปอง"}</Btn>
         </div>
       </div>
@@ -16539,7 +16565,12 @@ function CRMReservations({reservations,bookingRequests=[],customers,showResForm,
 
   const STATUS_MAP={pending:{l:"รอยืนยัน",c:C.yellow,bg:C.yellowLight},confirmed:{l:"ยืนยันแล้ว",c:C.green,bg:C.greenLight},cancelled:{l:"ยกเลิก",c:C.red,bg:C.redLight},done:{l:"เสร็จสิ้น",c:C.ink3,bg:C.lineLight}};
   const FILTERS=[{id:"all",l:"ทั้งหมด"},{id:"pending",l:"รอยืนยัน"},{id:"confirmed",l:"ยืนยันแล้ว"},{id:"done",l:"เสร็จสิ้น"},{id:"cancelled",l:"ยกเลิก"}];
-  const filtered=resFilter==="all"?reservations:reservations.filter(r=>r.status===resFilter);
+  // วันนี้+อนาคตขึ้นก่อน (ใกล้สุดบนสุด) แล้วค่อยของเก่า (ใหม่สุดก่อน) — เดิมเรียงเก่า→ใหม่ จองคืนนี้จมใต้ของเดือนก่อน
+  // วันที่อ่านไม่ได้ (Invalid Date) ตกไปกลุ่มเก่า ไม่หายจากรายการ
+  const base=resFilter==="all"?reservations:reservations.filter(r=>r.status===resFilter);
+  const t0=new Date();t0.setHours(0,0,0,0);
+  const isUp=r=>new Date(r.reserved_at)>=t0;
+  const filtered=[...base.filter(isUp),...base.filter(r=>!isUp(r)).reverse()];
 
   return<div>
     <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center",flexWrap:"wrap"}}>
@@ -16567,27 +16598,29 @@ function CRMReservations({reservations,bookingRequests=[],customers,showResForm,
         const cust=customers.find(c=>c.id===res.customer_id);
         const st=STATUS_MAP[res.status]||STATUS_MAP.pending;
         const resDate=new Date(res.reserved_at);
-        return<div key={res.id} style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:"12px 16px",display:"flex",alignItems:"flex-start",gap:12}}>
-          <div style={{width:44,height:44,borderRadius:10,background:st.bg,border:`1px solid ${st.c}44`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,flexDirection:"column"}}>
+        const isToday=resDate.toDateString()===new Date().toDateString();
+        return<div key={res.id} style={{background:"#fff",border:"1px solid "+C.line,borderRadius:12,padding:"12px 16px",display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+          <div style={{width:44,height:44,borderRadius:10,background:st.bg,border:isToday?`2px solid ${C.brand}`:`1px solid ${st.c}44`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,flexDirection:"column"}}>
             <div style={{fontSize:14,fontWeight:900,color:st.c,lineHeight:1}}>{resDate.getDate()}</div>
-            <div style={{fontSize:9,color:st.c,fontWeight:700}}>{resDate.toLocaleString("th-TH",{month:"short"})}</div>
+            <div style={{fontSize:9,color:isToday?C.brand:st.c,fontWeight:700}}>{isToday?"วันนี้":resDate.toLocaleString("th-TH",{month:"short"})}</div>
           </div>
-          <div style={{flex:1,minWidth:0}}>
+          <div style={{flex:"1 1 220px",minWidth:0}}>
             <div style={{fontWeight:700,fontSize:14,color:C.ink}}>{cust?.name||res.customer_name||"ลูกค้าทั่วไป"} ({res.party_size} คน){!cust&&res.customer_name&&<span style={{fontSize:10,fontWeight:800,color:C.purple,background:"#F5F3FF",padding:"1px 7px",borderRadius:10,marginLeft:6,verticalAlign:"middle"}}>📱 จองผ่าน QR</span>}</div>
             <div style={{fontSize:12,color:C.ink3,marginTop:2}}>{resDate.toLocaleString("th-TH",{hour:"2-digit",minute:"2-digit"})} น. {(res.phone||cust?.phone)&&`• 📞 ${res.phone||cust?.phone}`} {res.table_pref&&`• ที่นั่ง: ${res.table_pref}`}</div>
             {res.special_req&&<div style={{fontSize:11,color:C.ink4,marginTop:2,background:C.yellowLight,borderRadius:6,padding:"2px 8px",display:"inline-block"}}>★ {res.special_req}</div>}
           </div>
-          <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end",marginLeft:"auto"}}>
             <span style={{fontSize:11,padding:"3px 9px",borderRadius:20,fontWeight:700,background:st.bg,color:st.c}}>{st.l}</span>
             {canEdit&&res.status==="pending"&&<>
-              <button onClick={()=>updateStatus(res,"confirmed")} style={{padding:"5px 10px",border:"1px solid "+C.green,borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:C.green,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ยืนยัน</button>
-              <button onClick={()=>updateStatus(res,"cancelled")} style={{padding:"5px 10px",border:"1px solid "+C.red,borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ยกเลิก</button>
+              <Btn v="success" onClick={()=>updateStatus(res,"confirmed")} s={{padding:"7px 14px",fontSize:13,minHeight:36}}>✓ ยืนยัน</Btn>
+              {/* ยกเลิกการจองต้องถามก่อน (เดิมกดทีเดียวยกเลิกเลย) · ปุ่มเบากว่ายืนยัน */}
+              <Btn v="ghost" onClick={async()=>{if(await confirmDlg({title:"ยกเลิกการจอง",message:`ยกเลิกการจองของ ${cust?.name||res.customer_name||"ลูกค้า"}?`,confirmLabel:"ยกเลิกการจอง",cancelLabel:"ไม่ยกเลิก",danger:true}))updateStatus(res,"cancelled");}} s={{padding:"7px 12px",fontSize:13,minHeight:36,color:C.red}}>ยกเลิกจอง</Btn>
             </>}
-            {canEdit&&res.status==="confirmed"&&res.line_user_id&&<button onClick={async()=>{if(await pushCard(res))posToast("📤 ส่งการ์ดยืนยันให้ลูกค้าใน LINE แล้ว","ok");}} style={{padding:"5px 10px",border:"1px solid #06C755",borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:"#06C755",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>📤 ส่งการ์ด</button>}
-            {canEdit&&res.status==="confirmed"&&<button onClick={()=>updateStatus(res,"done")} style={{padding:"5px 10px",border:"1px solid "+C.teal,borderRadius:7,background:"#fff",cursor:"pointer",fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>เสร็จสิ้น</button>}
-            {canEdit&&<div style={{display:"flex",gap:4}}>
-              <button onClick={()=>{setEditRes(res);setShowResForm(true);}} style={{padding:"5px",border:"1px solid "+C.line,borderRadius:6,background:"#fff",cursor:"pointer"}}><Ic d={I.pencil} s={12} c={C.ink3}/></button>
-              <button onClick={()=>delRes(res)} style={{padding:"5px",border:"1px solid #FCA5A5",borderRadius:6,background:"#fff",cursor:"pointer"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+            {canEdit&&res.status==="confirmed"&&res.line_user_id&&<button onClick={async()=>{if(await pushCard(res))posToast("📤 ส่งการ์ดยืนยันให้ลูกค้าใน LINE แล้ว","ok");}} style={{padding:"5px 10px",minHeight:36,border:"1px solid #06C755",borderRadius:7,background:"#fff",cursor:"pointer",fontSize:12,color:"#06C755",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>📤 ส่งการ์ด</button>}
+            {canEdit&&res.status==="confirmed"&&<button onClick={()=>updateStatus(res,"done")} style={{padding:"5px 10px",minHeight:36,border:"1px solid "+C.teal,borderRadius:7,background:"#fff",cursor:"pointer",fontSize:12,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>เสร็จสิ้น</button>}
+            {canEdit&&<div style={{display:"flex",gap:6}}>
+              <button title="แก้ไข" onClick={()=>{setEditRes(res);setShowResForm(true);}} style={{width:36,height:36,padding:0,display:"inline-flex",alignItems:"center",justifyContent:"center",border:"1px solid "+C.line,borderRadius:8,background:"#fff",cursor:"pointer"}}><Ic d={I.pencil} s={14} c={C.ink3}/></button>
+              <button title="ลบ" onClick={()=>delRes(res)} style={{width:36,height:36,padding:0,display:"inline-flex",alignItems:"center",justifyContent:"center",border:"1px solid "+C.line,borderRadius:8,background:"#fff",cursor:"pointer"}}><Ic d={I.trash} s={14} c={C.red}/></button>
             </div>}
           </div>
         </div>;
@@ -16599,22 +16632,22 @@ function CRMReservations({reservations,bookingRequests=[],customers,showResForm,
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
         {form.line_user_id&&<div style={{background:"#F0FDF4",border:"1px solid #86EFAC",borderRadius:10,padding:"9px 12px",fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:13,color:"#166534",fontWeight:800}}>💬 จองให้ลูกค้า LINE: {form.customer_name||"(ไม่มีชื่อ)"}</div><div style={{fontSize:11,marginTop:2,color:"#15803D"}}>กดบันทึกตอนสถานะ "ยืนยันแล้ว" → ระบบส่งการ์ดยืนยันให้ลูกค้าใน LINE อัตโนมัติ</div></div>}
         <Field label="ลูกค้า">
-          <select value={form.customer_id} onChange={e=>setForm(f=>({...f,customer_id:e.target.value}))} style={{width:"100%",padding:"8px 10px",border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none"}}>
+          <select value={form.customer_id} onChange={e=>setForm(f=>({...f,customer_id:e.target.value}))} style={{...iS,cursor:"pointer"}}>
             <option value="">-- ลูกค้าทั่วไป --</option>
             {customers.map(c=><option key={c.id} value={c.id}>{c.name} ({c.phone||"ไม่มีเบอร์"})</option>)}
           </select>
         </Field>
-        <Field label="วันและเวลาจอง *"><Inp type="datetime-local" value={form.reserved_at} onChange={e=>setForm(f=>({...f,reserved_at:e.target.value}))}/></Field>
-        <Field label="จำนวนคน"><Inp type="number" value={form.party_size} onChange={e=>setForm(f=>({...f,party_size:e.target.value}))} placeholder="2"/></Field>
-        <Field label="ที่นั่งที่ต้องการ"><Inp value={form.table_pref} onChange={e=>setForm(f=>({...f,table_pref:e.target.value}))} placeholder="เช่น ริมหน้าต่าง, ห้องส่วนตัว"/></Field>
-        <Field label="คำขอพิเศษ"><TA value={form.special_req} onChange={e=>setForm(f=>({...f,special_req:e.target.value}))} rows={2} placeholder="เค้กวันเกิด, ตกแต่งพิเศษ ฯลฯ"/></Field>
+        <Inp label="วันและเวลาจอง *" type="datetime-local" value={form.reserved_at} onChange={e=>setForm(f=>({...f,reserved_at:e.target.value}))}/>
+        <Inp label="จำนวนคน" type="number" value={form.party_size} onChange={e=>setForm(f=>({...f,party_size:e.target.value}))} placeholder="2"/>
+        <Inp label="ที่นั่งที่ต้องการ" value={form.table_pref} onChange={e=>setForm(f=>({...f,table_pref:e.target.value}))} placeholder="เช่น ริมหน้าต่าง, ห้องส่วนตัว"/>
+        <TA label="คำขอพิเศษ" value={form.special_req} onChange={e=>setForm(f=>({...f,special_req:e.target.value}))} rows={2} placeholder="เค้กวันเกิด, ตกแต่งพิเศษ ฯลฯ"/>
         <Field label="สถานะ">
-          <select value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))} style={{width:"100%",padding:"8px 10px",border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none"}}>
+          <select value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))} style={{...iS,cursor:"pointer"}}>
             <option value="pending">รอยืนยัน</option><option value="confirmed">ยืนยันแล้ว</option><option value="done">เสร็จสิ้น</option><option value="cancelled">ยกเลิก</option>
           </select>
         </Field>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-          <Btn onClick={()=>{setShowResForm(false);setEditRes(null);}} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
+          <Btn v="ghost" onClick={()=>{setShowResForm(false);setEditRes(null);}}>ยกเลิก</Btn>
           <Btn icon={I.save} onClick={saveRes} disabled={saving}>{saving?"กำลังบันทึก...":"บันทึก"}</Btn>
         </div>
       </div>
@@ -16710,7 +16743,7 @@ function CRMFeedback({feedback,customers,showFeedForm,setShowFeedForm,canEdit,cu
     {showFeedForm&&<Modal title="บันทึกรีวิวลูกค้า" onClose={()=>setShowFeedForm(false)}>
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
         <Field label="ลูกค้า">
-          <select value={form.customer_id} onChange={e=>setForm(f=>({...f,customer_id:e.target.value}))} style={{width:"100%",padding:"8px 10px",border:"1px solid "+C.line,borderRadius:8,fontFamily:"'Sarabun',sans-serif",fontSize:13,outline:"none"}}>
+          <select value={form.customer_id} onChange={e=>setForm(f=>({...f,customer_id:e.target.value}))} style={{...iS,cursor:"pointer"}}>
             <option value="">-- ลูกค้าทั่วไป --</option>
             {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
@@ -16721,9 +16754,9 @@ function CRMFeedback({feedback,customers,showFeedForm,setShowFeedForm,canEdit,cu
           </div>
           <div style={{textAlign:"center",fontSize:12,color:C.ink3,marginTop:4}}>{["","แย่มาก","แย่","ปานกลาง","ดี","ดีมาก"][+form.score]}</div>
         </Field>
-        <Field label="ความคิดเห็น"><TA value={form.comment} onChange={e=>setForm(f=>({...f,comment:e.target.value}))} rows={3} placeholder="ความคิดเห็นของลูกค้า..."/></Field>
+        <TA label="ความคิดเห็น" value={form.comment} onChange={e=>setForm(f=>({...f,comment:e.target.value}))} rows={3} placeholder="ความคิดเห็นของลูกค้า..."/>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-          <Btn onClick={()=>setShowFeedForm(false)} style={{background:"#fff",color:C.ink3,border:"1px solid "+C.line}}>ยกเลิก</Btn>
+          <Btn v="ghost" onClick={()=>setShowFeedForm(false)}>ยกเลิก</Btn>
           <Btn icon={I.save} onClick={saveFeedback} disabled={saving}>{saving?"กำลังบันทึก...":"บันทึก"}</Btn>
         </div>
       </div>
@@ -16737,7 +16770,7 @@ function CRMAnalytics({customers,transactions,feedback,reservations}){
 
   const rfm=useMemo(()=>{
     return customers.map(cust=>{
-      const myTxns=transactions.filter(t=>t.customer_id===cust.id&&t.amount>0);
+      const myTxns=transactions.filter(t=>t.customer_id===cust.id&&isCRMVisit(t));
       const lastMs=myTxns.length?Math.max(...myTxns.map(t=>new Date(t.created_at).getTime())):0;
       const recency=lastMs?(now-lastMs)/(1000*3600*24):999;
       const frequency=myTxns.length;
