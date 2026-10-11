@@ -3113,12 +3113,12 @@ section("ปุ่มพิมพ์ไม่สำเร็จ");
     AGENT.includes("await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id, pname: p.name, errs: [err] });"));
   // ป้ายที่โต๊ะต้องบอกชื่อเครื่องที่ไม่ออก ไม่ใช่แค่ว่ามีใบไม่ออก (เจ้าของสั่ง 12 ก.ย. 69)
   ok_("บันทึกชื่อเครื่องที่ควรพิมพ์ใบนั้นไว้ด้วย", AGENT.includes("pnames: x.pname ? [String(x.pname)]"));
-  ok_("ป้ายที่โต๊ะขึ้นชื่อเครื่องที่ไม่ออก", APP.includes("const failPrinterNames=(f)=>{") && APP.includes("{pn?pn+\" ไม่ออก\":\"ใบครัวไม่ออก\"}"));
+  ok_("ป้ายที่โต๊ะขึ้นชื่อเครื่องที่ไม่ออก", APP.includes("const failPrinterNames=(f)=>{") && APP.includes("{pn?`⚠️ ไม่ออก: ${pn}`:\"⚠️ ใบครัวไม่ออก\"}"));
   // กดรีปริ้นแล้วป้ายต้องหายไว ⟹ ผังโต๊ะอ่านรายการสดจากรอบถามเร็ว ไม่ใช่รอบดึงเครื่องพิมพ์ 60 วิ
   ok_("ผังโต๊ะอ่านรายการที่ไม่ออกจากรอบถามเร็ว", APP.includes("const failMap=printFailsOf(failPrinters||printers);") && APP.includes("failPrinters={failPrintersLive}"));
   ok_("รอบถามรายการที่ไม่ออกไม่เกิน 6 วินาที", APP.includes("if(!document.hidden)loadFails();},6000);"));
   ok_("ปุ่มขึ้นข้างปุ่มรายงาน เฉพาะตอนมีรายการค้าง",
-    APP.includes("{failCount>0&&<Btn v=\"danger\" onClick={()=>setShowPrintFails(true)} icon={I.print} s={{padding:\"5px 10px\",fontSize:12}}>พิมพ์ไม่สำเร็จ ({failCount})</Btn>}\n        {failCount===0&&failSplit.old>0&&<Btn v=\"ghost\" onClick={()=>setShowPrintFails(true)} icon={I.print} s={{padding:\"5px 10px\",fontSize:12}}>ใบค้างเก่า ({failSplit.old})</Btn>}\n        <Btn v=\"ghost\" onClick={()=>setShowOrders(true)}"));
+    APP.includes("{failCount>0&&<Btn v=\"danger\" onClick={()=>setShowPrintFails(true)} icon={I.print} s={TB}>พิมพ์ไม่สำเร็จ ({failCount})</Btn>}\n        {failCount===0&&failSplit.old>0&&<Btn v=\"ghost\" onClick={()=>setShowPrintFails(true)} icon={I.print} s={TB}>ใบค้างเก่า ({failSplit.old})</Btn>}\n        <Btn v=\"ghost\" onClick={()=>setShowOrders(true)}"));
   ok_("ถามเฉพาะเครื่องที่มีรายการค้าง (ปกติได้แถวว่าง ไม่เปลืองเน็ต)", APP.includes("description=like.*%22failed%22:%5B%7B*"));
   ok_("รีปริ้นอ่านของล่าสุดก่อนเขียน", APP.includes("async function editPrintFail(holderId,fn){\n  const all=await api.getAllPrinters();"));
   ok_("ในจอมีรีปริ้นท้ายชื่อเมนู + ปุ่มเอาออกเมื่อไม่ต้องพิมพ์แล้ว", APP.includes("onClick={()=>retry(f,[it.k])}") && APP.includes("onClick={()=>dismiss(f)}"));

@@ -18753,7 +18753,7 @@ async function printKitchen(items,tableNum,printers=[]){
 // ══════════════════════════════════════════════════════
 // กฎสีเดียวกันทุกโซน อ่านออกจากระยะไกลบนแท็บเล็ตกลางร้าน:
 //   ขาว/ดำ   = ว่าง                    ยังไม่ได้ทำอะไรกับโต๊ะนี้
-//   เขียว     = พิมพ์ QR สั่งอาหารแล้ว   ลูกค้านั่งแล้ว รอสั่ง
+//   เขียว     = พิมพ์ QR แล้ว · รอสั่ง     ลูกค้านั่งแล้ว รอสั่ง
 //   น้ำเงิน   = สั่งอาหารแล้ว            มีรายการในบิล
 //   ส้ม       = พิมพ์ QR รอจ่ายเงินแล้ว   พนักงานต้องมากดยืนยันชำระ
 // สีพื้นกับสีกรอบเป็นสีเดียวกันเสมอ (พื้นอ่อน กรอบเข้ม) เพื่อให้เห็นชัดทั้งตอนมองผ่านๆ
@@ -18761,7 +18761,7 @@ async function printKitchen(items,tableNum,printers=[]){
 // เพราะยังเป็นสถานะ "มีของในบิล ยังไม่จ่าย" เหมือนกัน ต่างกันแค่ป้ายกำกับ
 const TS={
   available:{bg:C.white,   border:"#111827",text:"#111827",label:"ว่าง"},
-  qrsent:   {bg:"#D1FAE5", border:"#059669",text:"#065F46",label:"พิมพ์ QR สั่งอาหารแล้ว"},
+  qrsent:   {bg:"#D1FAE5", border:"#059669",text:"#065F46",label:"พิมพ์ QR แล้ว · รอสั่ง"},
   occupied: {bg:"#DBEAFE", border:"#2563EB",text:"#1E3A8A",label:"สั่งอาหารแล้ว"},
   bill:     {bg:"#DBEAFE", border:"#2563EB",text:"#1E3A8A",label:"เรียกบิล"},
   waitpay:  {bg:"#FFEDD5", border:"#EA580C",text:"#9A3412",label:"รอชำระเงิน"},
@@ -18971,15 +18971,15 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
     {/* Zone filter row */}
     {(allZoneNames.length>0||onAddZone)&&<div style={{padding:"8px 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:6,overflowX:"auto",flexShrink:0}}>
       <span style={{fontSize:11.5,fontWeight:700,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>โซน:</span>
-      {allZoneNames.map(zn=>{const c=zoneColorMap[zn]||C.ink3;const n=tables.filter(t=>t.zone===zn).length;const active=zoneFilter===zn;const zid=zones.find(z=>z.name===zn)?.id;return <button key={zn} onPointerDown={e=>zoneDown(e,zn,zid)} onPointerMove={zoneMove} onPointerUp={()=>zoneUp(zn)} onPointerCancel={()=>{if(zonePressRef.current){clearTimeout(zonePressRef.current.timer);zonePressRef.current=null;}}} title={(editable&&onRenameZone)?"แตะ = กรอง · กดค้าง = แก้ไข/ลบโซน":undefined} style={{padding:"4px 12px",borderRadius:18,border:active?`2px solid ${c}`:`1px solid ${C.line}`,background:active?`${c}22`:C.white,color:active?c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}><span style={{width:8,height:8,borderRadius:"50%",background:c}}/>{zn} ({n})</button>;})}
-      {tables.some(isUnzoned)&&<button onClick={()=>setZoneFilter("none")} style={{padding:"4px 12px",borderRadius:18,border:zoneFilter==="none"?`2px solid ${C.ink3}`:`1px solid ${C.line}`,background:zoneFilter==="none"?C.lineLight:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>ไม่มีโซน ({tables.filter(isUnzoned).length})</button>}
+      {allZoneNames.map(zn=>{const c=zoneColorMap[zn]||C.ink3;const n=tables.filter(t=>t.zone===zn).length;const active=zoneFilter===zn;const zid=zones.find(z=>z.name===zn)?.id;return <button key={zn} onPointerDown={e=>zoneDown(e,zn,zid)} onPointerMove={zoneMove} onPointerUp={()=>zoneUp(zn)} onPointerCancel={()=>{if(zonePressRef.current){clearTimeout(zonePressRef.current.timer);zonePressRef.current=null;}}} title={(editable&&onRenameZone)?"แตะ = กรอง · กดค้าง = แก้ไข/ลบโซน":undefined} style={{padding:"8px 14px",minHeight:36,borderRadius:18,border:active?`2px solid ${c}`:`1px solid ${C.line}`,background:active?`${c}22`:C.white,color:active?c:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}><span style={{width:8,height:8,borderRadius:"50%",background:c}}/>{zn} ({n})</button>;})}
+      {tables.some(isUnzoned)&&<button onClick={()=>setZoneFilter("none")} style={{padding:"8px 14px",minHeight:36,borderRadius:18,border:zoneFilter==="none"?`2px solid ${C.ink3}`:`1px solid ${C.line}`,background:zoneFilter==="none"?C.lineLight:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,whiteSpace:"nowrap"}}>ไม่มีโซน ({tables.filter(isUnzoned).length})</button>}
       {onAddZone&&(addingZone
         ?<span style={{display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap"}}>
-          <input autoFocus value={newZoneName} onChange={e=>setNewZoneName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")confirmAddZone();else if(e.key==="Escape"){setAddingZone(false);setNewZoneName("");}}} placeholder="ชื่อโซน" style={{padding:"4px 10px",borderRadius:18,border:`1.5px solid ${C.brand}`,fontFamily:"'Sarabun',sans-serif",fontSize:12,width:96,outline:"none"}}/>
-          <button onClick={confirmAddZone} disabled={zoneSaving} title="บันทึกโซน" style={{padding:"4px 11px",borderRadius:18,border:"none",background:C.green,color:"#fff",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,whiteSpace:"nowrap"}}>{zoneSaving?"…":"✓"}</button>
-          <button onClick={()=>{setAddingZone(false);setNewZoneName("");}} title="ยกเลิก" style={{padding:"4px 9px",borderRadius:18,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700}}>✕</button>
+          <input autoFocus value={newZoneName} onChange={e=>setNewZoneName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")confirmAddZone();else if(e.key==="Escape"){setAddingZone(false);setNewZoneName("");}}} placeholder="ชื่อโซน" style={{padding:"8px 12px",minHeight:36,boxSizing:"border-box",borderRadius:18,border:`1.5px solid ${C.brand}`,fontFamily:"'Sarabun',sans-serif",fontSize:13,width:96,outline:"none"}}/>
+          <button onClick={confirmAddZone} disabled={zoneSaving} title="บันทึกโซน" style={{padding:"8px 14px",minHeight:36,borderRadius:18,border:"none",background:C.green,color:"#fff",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,whiteSpace:"nowrap"}}>{zoneSaving?"…":"✓"}</button>
+          <button onClick={()=>{setAddingZone(false);setNewZoneName("");}} title="ยกเลิก" style={{padding:"8px 12px",minHeight:36,borderRadius:18,border:`1px solid ${C.line}`,background:C.white,color:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700}}>✕</button>
         </span>
-        :<button onClick={()=>setAddingZone(true)} title="เพิ่มโซนใหม่" style={{padding:"4px 12px",borderRadius:18,border:`1.5px dashed ${C.brand}`,background:C.white,color:C.brand,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:3}}>＋ เพิ่มโซน</button>
+        :<button onClick={()=>setAddingZone(true)} title="เพิ่มโซนใหม่" style={{padding:"8px 14px",minHeight:36,borderRadius:18,border:`1.5px dashed ${C.brand}`,background:C.white,color:C.brand,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",justifyContent:"center",gap:3}}>＋ เพิ่มโซน</button>
       )}
     </div>}
     {/* Status legend + add-table action */}
@@ -18987,7 +18987,7 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
       {Object.entries(TS).map(([k,v])=>{const n=tables.filter(t=>getStatus(t)===k).length;return n>0?<div key={k} style={{display:"flex",alignItems:"center",gap:5,background:v.bg,border:`1px solid ${v.border}`,borderRadius:8,padding:"3px 10px"}}><div style={{width:8,height:8,borderRadius:"50%",background:v.border}}/><span style={{fontSize:11.5,fontWeight:700,color:v.text,fontFamily:"'Sarabun',sans-serif"}}>{v.label} ({n})</span></div>:null;})}
       {editable&&<div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
         <span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>💡 กดค้างที่โต๊ะ/โซนเพื่อแก้ไข·ลบ · ลากโต๊ะเพื่อย้าย</span>
-        {onAddTable&&<button onClick={()=>setTableForm({table_number:"",label:"",seats:4,shape:"square",zone:(zoneFilter!=="all"&&zoneFilter!=="none")?zoneFilter:""})} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"6px 14px",borderRadius:9,border:"none",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:"#fff",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>➕ เพิ่มโต๊ะ</button>}
+        {onAddTable&&<button onClick={()=>setTableForm({table_number:"",label:"",seats:4,shape:"square",zone:(zoneFilter!=="all"&&zoneFilter!=="none")?zoneFilter:""})} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"6px 14px",minHeight:34,borderRadius:9,border:`1.5px dashed ${C.brand}`,background:C.white,color:C.brand,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>➕ เพิ่มโต๊ะ</button>}
       </div>}
     </div>
     <div ref={canvasRef} onPointerMove={movePress} onPointerUp={endPress} onPointerCancel={endPress} onPointerDown={()=>{if(editId)setEditId(null);}}
@@ -19014,8 +19014,8 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
             :<>{o&&failMap.has(String(o.id))&&(()=>{const f=failMap.get(String(o.id));const pn=failPrinterNames(f);
               // บอกชื่อเครื่องที่ไม่ออกเลย (เจ้าของสั่ง 12 ก.ย. 69) — เดิมบอกแค่ว่าใบครัวไม่ออก ต้องไปไล่หาเองว่าเครื่องไหน
               return <div title={(pn?pn+" ไม่ออก: ":"ใบครัวไม่ออก: ")+(f.names||[]).join(", ")}
-                style={{fontSize:11,fontWeight:900,color:"#fff",background:C.red,borderRadius:6,padding:"1px 6px",marginTop:3,fontFamily:"'Sarabun',sans-serif",maxWidth:"96%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>⚠️ {pn?pn+" ไม่ออก":"ใบครัวไม่ออก"}</div>;})()}
-              <div style={{fontSize:11.5,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:11.5,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
+                style={{fontSize:11,fontWeight:900,color:"#fff",background:C.red,borderRadius:6,padding:"1px 6px",marginTop:3,fontFamily:"'Sarabun',sans-serif",maxWidth:"96%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pn?`⚠️ ไม่ออก: ${pn}`:"⚠️ ใบครัวไม่ออก"}</div>;})()}
+              <div style={{fontSize:11.5,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:14,fontWeight:900,lineHeight:1.2,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
             {active&&<>
               <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();setTableForm({id:t.id,table_number:t.table_number,label:t.label||"",seats:t.seats||4,shape:t.shape||"square",zone:t.zone||""});}} title="แก้ไขโต๊ะ" style={{position:"absolute",top:-13,left:-13,width:30,height:30,borderRadius:"50%",border:"2px solid #fff",background:C.blue,color:"#fff",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,.35)",zIndex:31}}>✏️</button>
               <button onPointerDown={e=>e.stopPropagation()} onClick={async e=>{e.stopPropagation();
@@ -19908,7 +19908,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     {/* Left: menu */}
     <div style={{flex:1,display:isMobile&&mobileView!=="menu"?"none":"flex",flexDirection:"column",borderRight:isMobile?"none":`1px solid ${C.line}`,minWidth:0,minHeight:0}}>
       <div style={{padding:"8px 12px",borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
-        {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"4px 12px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
+        {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"8px 14px",minHeight:36,borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13.5,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
       </div>
       <div style={{padding:"6px 10px",borderBottom:`1px solid ${C.line}`,flexShrink:0}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"7px 12px",fontSize:13}}/>
@@ -19926,7 +19926,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     </div>
 
     {/* Right: order panel */}
-    <div style={{width:isMobile?"100%":280,display:isMobile&&mobileView!=="order"?"none":"flex",flexDirection:"column",background:C.bg,flexShrink:0,minHeight:0}}>
+    <div style={{width:isMobile?"100%":320,display:isMobile&&mobileView!=="order"?"none":"flex",flexDirection:"column",background:C.bg,flexShrink:0,minHeight:0}}>
       {/* Header */}
       <div style={{padding:"10px 12px",borderBottom:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
         <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
@@ -19998,12 +19998,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
                   return <div style={{fontSize:12,color:C.green,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>✓ เสิร์ฟแล้ว{tm?` ${tm}`:""}{sv.by?` · ${sv.by}`:""}</div>;})()}
                 {item.note&&<div onClick={()=>{setNoteIdx(idx);setNoteText(item.note||"");}} style={{fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",fontWeight:600,cursor:"pointer",lineHeight:1.35,overflowWrap:"anywhere",whiteSpace:"pre-wrap",marginTop:1}}>★ {item.note}</div>}
                 <div style={{display:"flex",alignItems:"center",gap:4,marginTop:6}}>
-                  {!item.note&&<div onClick={()=>{setNoteIdx(idx);setNoteText("");}} style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",cursor:"pointer",padding:"4px 0"}}>+ หมายเหตุ</div>}
+                  {!item.note&&<div onClick={()=>{setNoteIdx(idx);setNoteText("");}} style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",cursor:"pointer",padding:"4px 0",flexShrink:0}}>+ หมายเหตุ</div>}
                   <div style={{flex:1}}/>
                   <button onClick={()=>chQty(idx,-1)} aria-label="ลดจำนวน" style={{width:44,height:44,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.minus} s={12}/></button>
                   <span style={{fontSize:14,fontWeight:800,minWidth:20,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
                   <button onClick={()=>chQty(idx,1)} aria-label="เพิ่มจำนวน" style={{width:44,height:44,borderRadius:7,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.plus} s={12}/></button>
-                  <div style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif",minWidth:52,textAlign:"right",flexShrink:0}}>฿{(item.price*item.qty).toFixed(0)}</div>
+                  <div style={{fontSize:13,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif",minWidth:46,textAlign:"right",flexShrink:0}}>฿{(item.price*item.qty).toFixed(0)}</div>
                   <span style={{fontSize:14,color:C.ink4,opacity:.35,flexShrink:0}}>‹</span>
                 </div>
               </div>
@@ -20016,11 +20016,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       <div style={{padding:10,borderTop:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
           <span style={{fontSize:14,color:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>รวม</span>
-          <span style={{fontSize:17,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>฿{subtotal.toFixed(0)}</span>
+          <span style={{fontSize:20,fontWeight:900,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>฿{subtotal.toFixed(0)}</span>
         </div>
         <div style={{display:"flex",gap:6}}>
-          {existingOrder?.id&&<Btn v="yellow" onClick={()=>setShowPay(true)} icon={I.bill} full s={{padding:"8px 10px",fontSize:13}}>💳 เช็คบิล</Btn>}
-          <Btn onClick={saveOrder} icon={I.check} loading={saving} disabled={!hasNewItems} full s={{padding:"8px 10px",fontSize:13}}>{hasNewItems?"ส่งรายการ":(items.length?"ส่งครัวแล้ว":"ส่งรายการ")}</Btn>
+          {existingOrder?.id&&<Btn v={hasNewItems?"ghost":"success"} onClick={()=>setShowPay(true)} full s={{padding:"13px 10px",fontSize:15,fontWeight:900,minWidth:0}}>💳 เช็คบิล</Btn>}
+          <Btn v={(hasNewItems||!existingOrder?.id)?"primary":"ghost"} onClick={saveOrder} icon={I.check} loading={saving} disabled={!hasNewItems} full s={{padding:"13px 10px",fontSize:15,fontWeight:900,minWidth:0}}>{hasNewItems?"ส่งรายการ":(items.length?"ส่งครัวแล้ว":"ส่งรายการ")}</Btn>
         </div>
       </div>
     </div>
@@ -21524,7 +21524,7 @@ function POSModeSelect({onSelect,canManage=true,canReport=true}){
   //   · จัดการหลังบ้าน = แก้ตั้งค่า VAT/ผังโต๊ะ/เครื่องพิมพ์/PIN ⟹ เฉพาะคนที่มีสิทธิ์ตั้งค่า
   const isMobile=useIsMobile();
   const cards=1+(canReport?1:0)+(canManage?1:0);   // กว้างของกล่องกับจำนวนคอลัมน์ต้องตามจำนวนปุ่มจริง
-  return <div style={{minHeight:"calc(100vh - 140px)",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight} 0%,#FFFBEB 100%)`,margin:isMobile?"-14px -12px":"-20px -24px",padding:isMobile?16:24}}>
+  return <div style={{minHeight:"calc(100vh - 94px)",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight} 0%,#FFFBEB 100%)`,margin:isMobile?"-14px -12px":"-24px -28px",padding:isMobile?16:24}}>
     <div style={{background:C.white,borderRadius:isMobile?18:24,padding:isMobile?"24px 18px":"40px 36px",maxWidth:`min(95vw,${cards>=3?940:cards===2?680:520}px)`,width:"100%",boxShadow:"0 30px 80px rgba(255,107,53,.18)"}}>
       <div style={{textAlign:"center",marginBottom:isMobile?20:30}}>
         <div style={{width:isMobile?56:68,height:isMobile?56:68,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:isMobile?16:20,display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:isMobile?10:14,boxShadow:`0 12px 28px ${C.brand}55`}}>
@@ -21534,10 +21534,10 @@ function POSModeSelect({onSelect,canManage=true,canReport=true}){
         <p style={{fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?13:14,color:C.ink3,margin:0}}>เลือกโหมดการใช้งาน</p>
       </div>
       <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":`repeat(${cards},1fr)`,gap:isMobile?10:14,maxWidth:cards>1&&!isMobile?"none":300,margin:cards>1&&!isMobile?0:"0 auto"}}>
-        <button onClick={()=>onSelect('sale')} style={{padding:"26px 18px",border:`2px solid ${C.brandBorder}`,borderRadius:18,background:`linear-gradient(135deg,${C.white},${C.brandLight})`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.brand}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.brandBorder;e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
-          <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>🛒</div>
-          <div style={{fontSize:17,fontWeight:900,color:C.ink,marginBottom:6}}>เข้าสู่การขายหน้าร้าน</div>
-          <div style={{fontSize:12,color:C.ink3,lineHeight:1.6}}>เปิดกะ • รับออเดอร์ • ชำระเงิน<br/>จัดการเงินในลิ้นชัก</div>
+        <button onClick={()=>onSelect('sale')} style={{padding:"26px 18px",border:`2px solid ${C.brand}`,borderRadius:18,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,boxShadow:`0 12px 28px ${C.brand}44`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 16px 34px ${C.brand}66`;}} onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=`0 12px 28px ${C.brand}44`;}}>
+          <div style={{width:48,height:48,background:"rgba(255,255,255,.22)",borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>🛒</div>
+          <div style={{fontSize:17,fontWeight:900,color:C.white,marginBottom:6}}>เข้าสู่การขายหน้าร้าน</div>
+          <div style={{fontSize:12,color:"#fff",fontWeight:600,lineHeight:1.6}}>เปิดกะ • รับออเดอร์ • ชำระเงิน<br/>จัดการเงินในลิ้นชัก</div>
         </button>
         {canReport&&<button onClick={()=>onSelect('report')} style={{padding:"26px 18px",border:`2px solid #BFDBFE`,borderRadius:18,background:`linear-gradient(135deg,${C.white},#EFF6FF)`,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.blue;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 14px 30px ${C.blue}33`;}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#BFDBFE";e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
           <div style={{width:48,height:48,background:`linear-gradient(135deg,${C.blue},#1D4ED8)`,borderRadius:13,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:14,fontSize:24}}>📊</div>
@@ -21600,7 +21600,7 @@ function OpenShiftModal({currentBranch,currentUser,onDone,onCancel}){
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.red,fontWeight:700,marginBottom:8}}>นับเงินจริงในลิ้นชักแล้วใส่ยอด — ใส่ 0 หรือเว้นว่างไม่ได้</div>
         <NumInput value={cash} onValue={setCash} autoFocus placeholder="0" style={{...iS,fontSize:26,fontWeight:900,padding:"14px 18px",textAlign:"center",letterSpacing:1}}/>
         <div style={{display:"flex",gap:6,marginTop:8}}>
-          {[500,1000,2000,3000,5000].map(v=><button key={v} onClick={()=>setCash(String(v))} style={{flex:1,padding:"7px 0",border:`1px solid ${C.line}`,borderRadius:8,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.ink2}}>฿{v.toLocaleString()}</button>)}
+          {[500,1000,2000,3000,5000].map(v=>{const sel=String(cash)===String(v);return <button key={v} onClick={()=>setCash(String(v))} style={{flex:1,padding:"11px 0",minHeight:40,border:`1.5px solid ${sel?C.brand:C.line}`,borderRadius:10,background:sel?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,color:sel?C.brand:C.ink2}}>฿{v.toLocaleString()}</button>;})}
         </div>
         <div style={{marginTop:16}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6}}>หมายเหตุ (ถ้ามี)</div>
@@ -23998,12 +23998,13 @@ function PrintHealthStrip({printers,failPrinters,branchId,onOpenFails}){
   const rows=[];
   if(h.state==="down")rows.push({c:C.red,bg:C.redLight,t:`⛔ โปรแกรมตัวพิมพ์ที่ร้านไม่ตอบมา ${Math.max(1,Math.round((h.ageSec||0)/60))} นาที — ใบครัว/ใบเสร็จจะไม่ออกเลย`,s:"เช็คเครื่องที่รันตัวพิมพ์: เปิดอยู่ไหม · ต่อ Wi-Fi ร้าน · เสียบชาร์จ"});
   if(off.length)rows.push({c:C.red,bg:C.redLight,t:`🔴 เครื่องพิมพ์ ${off.map(p=>p.name).join(" · ")} ไม่ตอบ — ใบที่ส่งเข้าเครื่องนี้จะไม่ออก`,s:"เช็คไฟ · กระดาษ · สายแลน/Wi-Fi ของเครื่อง แล้วรอจุดเขียว"});
-  if(recent.length)rows.push({c:"#92400E",bg:"#FEF3C7",t:`⚠️ ใบไม่ออก ${recent.reduce((s,f)=>s+printFailWeight(f),0)} ใบใน 20 นาทีล่าสุด${last&&Array.isArray(last.pnames)&&last.pnames.length?` (${last.pnames.join(" · ")})`:""}`,s:(lastErr?printErrText(lastErr)+" · ":"")+"แตะเพื่อดูและรีปริ้น",click:true});
+  if(recent.length)rows.push({c:C.red,bg:C.redLight,t:`⚠️ ใบไม่ออก ${recent.reduce((s,f)=>s+printFailWeight(f),0)} ใบใน 20 นาทีล่าสุด${last&&Array.isArray(last.pnames)&&last.pnames.length?` (${last.pnames.join(" · ")})`:""}`,s:lastErr?printErrText(lastErr):"",click:true});
   if(!rows.length)return null;
   return <div style={{flexShrink:0}}>
     {rows.map((r,i)=><div key={i} onClick={r.click?onOpenFails:undefined} style={{padding:"6px 16px",background:r.bg,borderBottom:`1px solid ${r.c}33`,color:r.c,fontFamily:"'Sarabun',sans-serif",cursor:r.click?"pointer":"default",display:"flex",flexWrap:"wrap",alignItems:"baseline",gap:"2px 10px"}}>
       <span style={{fontSize:13,fontWeight:900}}>{r.t}</span>
-      <span style={{fontSize:12,fontWeight:600,opacity:.9}}>{r.s}</span>
+      {r.s&&<span style={{fontSize:12,fontWeight:600,opacity:.9}}>{r.s}</span>}
+      {r.click&&<span style={{marginLeft:"auto",alignSelf:"center",padding:"6px 12px",borderRadius:8,background:r.c,color:C.white,fontSize:12.5,fontWeight:900,whiteSpace:"nowrap"}}>ดูและรีปริ้น ›</span>}
     </div>)}
   </div>;
 }
@@ -24155,6 +24156,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   const[qrPeek,setQrPeek]=useState(null);   // {table,url}
   const[qrPeekErr,setQrPeekErr]=useState(false);
   const[loading,setLoading]=useState(true);
+  const isMobile=useIsMobile();
   const[selTable,setSelTable]=useState(null);const[selOrder,setSelOrder]=useState(null);
   const[showPrinters,setShowPrinters]=useState(false);
   const[showReceipt,setShowReceipt]=useState(false);
@@ -24305,9 +24307,12 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   // QR-สั่งอาหาร tab removed — per-table QR is printed by tapping a table (one place only).
   const PTABS=[{id:"tables",l:"แผนผังโต๊ะ",icon:I.table}];  // "ออเดอร์วันนี้" replaced by the menu-management dropdown
 
+  const TB={padding:"8px 12px",fontSize:13,minHeight:36};   // ปุ่มแถวเครื่องมือจอขาย — สูงพอให้นิ้วกดบนแท็บเล็ต
   if(loading)return <Loading text="กำลังโหลดข้อมูล POS..."/>;
 
-  return <div style={{margin:"-20px -24px",display:"flex",flexDirection:"column",height:"calc(100vh - 150px)"}}>
+  // ชนขอบกรอบให้พอดี: หลังบ้านเว้น 24/28 (มือถือ 14/12) · หน้าขาย PIN เว้น 20/24 และหัวจอมีขอบบนของ iPad/iPhone
+  // ความสูงคิดให้พอดีจอ (เหลือขอบล่างนิดเดียว) ไม่ให้มีแถบเทาว่าง ~90px ใต้ผังโต๊ะ
+  return <div style={{margin:isMobile?"-14px -12px":(saleOnly?"-20px -24px":"-24px -28px"),display:"flex",flexDirection:"column",height:saleOnly?"calc(100vh - 96px - env(safe-area-inset-top, 0px))":(isMobile?"calc(100vh - 94px)":"calc(100vh - 90px)")}}>
     {/* มีเวอร์ชันใหม่ขึ้นระบบแล้ว — แตะเพื่อโหลด (ไม่โหลดเองกลางบิล)
         แถบนี้เฉพาะจอขาย PIN — หลังบ้านมีแถบของ shell อยู่แล้ว ไม่ซ้อนสองแถบ */}
     {hasNewBuild&&saleOnly&&<button onClick={()=>{try{location.reload();}catch{}}}
@@ -24323,19 +24328,21 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
       <span style={{opacity:.85,marginLeft:"auto"}}>{shift.username}</span>
     </div>
     <PrintHealthStrip printers={printers} failPrinters={failPrinters} branchId={currentBranch.id} onOpenFails={()=>setShowPrintFails(true)}/>
-    <div style={{padding:"0 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",height:46,gap:2,flexShrink:0}}>
+    <div style={{padding:"0 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",flexWrap:"wrap",minHeight:46,columnGap:2,flexShrink:0}}>
       {PTABS.map(t=>{const active=posTab===t.id;return <button key={t.id} onClick={()=>setPosTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:"none",cursor:"pointer",fontSize:12,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s"}}><Ic d={t.icon} s={13} c={active?C.brand:C.ink4}/>{t.l}</button>;})}
       {canEdit&&<POSMenuTools currentBranch={currentBranch} variant="dropdown" onChanged={()=>{reloadMenus&&reloadMenus();reloadPosSettings&&reloadPosSettings();}}/>}
-      <div style={{marginLeft:"auto",display:"flex",gap:6}}>
-        {failCount>0&&<Btn v="danger" onClick={()=>setShowPrintFails(true)} icon={I.print} s={{padding:"5px 10px",fontSize:12}}>พิมพ์ไม่สำเร็จ ({failCount})</Btn>}
-        {failCount===0&&failSplit.old>0&&<Btn v="ghost" onClick={()=>setShowPrintFails(true)} icon={I.print} s={{padding:"5px 10px",fontSize:12}}>ใบค้างเก่า ({failSplit.old})</Btn>}
-        <Btn v="ghost" onClick={()=>setShowOrders(true)} icon={I.order} s={{padding:"5px 10px",fontSize:12}}>📊 รายงาน</Btn>
-        <Btn v="success" onClick={onCashDrawer} icon={I.cash} s={{padding:"5px 12px",fontSize:12}}>💰 เงินในลิ้นชัก</Btn>
-        {canEdit&&!saleOnly&&<Btn v="danger" onClick={onCloseShift} s={{padding:"5px 10px",fontSize:12}}>🔚 ปิดกะ</Btn>}
-        {!saleOnly&&<Btn v="ghost" onClick={loadAll} icon={I.refresh} s={{padding:"5px 10px",fontSize:12}}>รีเฟรช</Btn>}
-        <Btn v="ghost" onClick={()=>setShowPrinters(true)} icon={I.print} s={{padding:"5px 10px",fontSize:12}}>🖨 เครื่องพิมพ์</Btn>
-        <Btn v="ghost" onClick={()=>setShowReceipt(true)} icon={I.bill} s={{padding:"5px 10px",fontSize:12}}>🧾 จัดการใบเสร็จ</Btn>
-        {!saleOnly&&<Btn v="ghost" onClick={onExitMode} s={{padding:"5px 10px",fontSize:12}}>← โหมด</Btn>}
+      {/* แถวปุ่มตัดบรรทัดได้ ไม่ให้ปุ่มท้ายแถวล้นจอจนกดไม่ได้บน iPad · ปุ่มสูง ≥36 ให้นิ้วกดง่าย
+          ปิดกะ (ย้อนไม่ได้) แยกไว้ท้ายสุด มีเส้นคั่น ไม่ติดกับปุ่มเงินในลิ้นชักที่กดบ่อย */}
+      <div style={{marginLeft:"auto",display:"flex",flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",gap:6,padding:"5px 0"}}>
+        {failCount>0&&<Btn v="danger" onClick={()=>setShowPrintFails(true)} icon={I.print} s={TB}>พิมพ์ไม่สำเร็จ ({failCount})</Btn>}
+        {failCount===0&&failSplit.old>0&&<Btn v="ghost" onClick={()=>setShowPrintFails(true)} icon={I.print} s={TB}>ใบค้างเก่า ({failSplit.old})</Btn>}
+        <Btn v="ghost" onClick={()=>setShowOrders(true)} s={TB}>📊 รายงาน</Btn>
+        <Btn v="success" onClick={onCashDrawer} s={TB}>💰 เงินในลิ้นชัก</Btn>
+        {!saleOnly&&<Btn v="ghost" onClick={loadAll} icon={I.refresh} s={TB}>รีเฟรช</Btn>}
+        <Btn v="ghost" onClick={()=>setShowPrinters(true)} s={TB}>🖨 เครื่องพิมพ์</Btn>
+        <Btn v="ghost" onClick={()=>setShowReceipt(true)} s={TB}>🧾 จัดการใบเสร็จ</Btn>
+        {!saleOnly&&<Btn v="ghost" onClick={onExitMode} s={TB}>← โหมด</Btn>}
+        {canEdit&&!saleOnly&&<span style={{display:"inline-flex",alignItems:"center",gap:6,alignSelf:"stretch"}}><span style={{width:1,alignSelf:"stretch",background:C.line,margin:"0 4px"}}/><Btn v="ghost" onClick={onCloseShift} s={{...TB,color:C.red,boxShadow:`0 0 0 1.5px ${C.red}66`}}>🔚 ปิดกะ</Btn></span>}
       </div>
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
