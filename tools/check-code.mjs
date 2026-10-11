@@ -3656,8 +3656,8 @@ section("แจ้งเมื่อมีเวอร์ชันใหม่")
   ok_("มีตัวเช็คเวอร์ชันใหม่ในจอขาย", APP.includes("function useNewBuild(){") && APP.includes("const hasNewBuild=useNewBuild();"));
   ok_("เทียบจากชื่อไฟล์โปรแกรมที่มีแฮช (เปลี่ยนทุกครั้งที่ขึ้นระบบ)", APP.includes("assets") && APP.includes("fresh.includes(cur)"));
   ok_("อ่าน index.html แบบไม่เอาของในแคช", APP.includes("fetch(\"/index.html?_=\"+Date.now(),{cache:\"no-store\"})"));
-  ok_("ขึ้นแถบให้แตะเอง ไม่รีโหลดกลางบิล",
-    APP.includes("{hasNewBuild&&<button onClick={()=>{try{location.reload();}catch{}}}") && !APP.includes("setTimeout(()=>location.reload()"));
+  ok_("ขึ้นแถบให้แตะเอง ไม่รีโหลดกลางบิล (จอขาย PIN + หลังบ้าน แถบเดียวต่อจอ)",
+    APP.includes("{hasNewBuild&&saleOnly&&<button onClick={()=>{try{location.reload();}catch{}}}") && APP.includes("{hasNewBuildBO&&<button onClick={()=>{try{location.reload();}catch{}}}") && !APP.includes("setTimeout(()=>location.reload()"));
   ok_("หยุดเช็คเมื่อออกจากจอ และไม่เช็คตอนจอถูกซ่อน", APP.includes("return()=>{stop=true;clearInterval(t);document.removeEventListener(\"visibilitychange\",onVis);};"));
 }
 

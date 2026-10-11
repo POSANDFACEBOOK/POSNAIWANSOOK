@@ -3375,17 +3375,23 @@ function ImgUp({value,onChange,label,compact}){
 // ══════════════════════════════════════════════════════
 function LoginPage({onLogin}){
   const[u,setU]=useState("");const[p,setP]=useState("");const[err,setErr]=useState("");const[show,setShow]=useState(false);const[loading,setLoading]=useState(false);
+  // เบราว์เซอร์เติมชื่อ/รหัสให้เอง (autofill) แต่ยังไม่ส่ง onChange มา → state ว่างทั้งที่ช่องมีค่า อ่านจากช่องจริงสำรอง
+  const uRef=useRef(null),pRef=useRef(null);
   // Cold-start resilient: Supabase free tier sleeps after inactivity, so the FIRST query
   // can be slow or time out. Race each attempt against a 12s timeout and retry up to 3×
   // with a "waking server" message, instead of a silent indefinite hang.
   async function login(){
-    if(!u||!p)return;setLoading(true);setErr("");
+    // ช่องว่างต้องบอก ไม่ใช่ปุ่มกดแล้วเงียบ (เดิม return เฉยๆ พนักงานนึกว่าปุ่มเสีย)
+    const uv=String(u||uRef.current?.value||"").trim(),pv=p||pRef.current?.value||"";
+    if(!uv||!pv){setErr("กรุณากรอกชื่อผู้ใช้และรหัสผ่าน");if(uv)pRef.current?.focus();return;}
+    if(uv!==String(u).trim())setU(uv);if(pv!==p)setP(pv);
+    setLoading(true);setErr("");
     for(let attempt=1;attempt<=3;attempt++){
       try{
         if(attempt>1)setErr(`⏳ กำลังปลุกเซิร์ฟเวอร์... (ครั้งที่ ${attempt}/3)`);
         // iOS เติมตัวพิมพ์ใหญ่ให้เองและมักติดช่องว่างท้ายจากการแตะแป้น
         // ฐานข้อมูลเทียบแบบตรงตัว ("Somchai " ≠ "somchai") → เข้าไม่ได้โดยไม่รู้สาเหตุ
-        const found=await Promise.race([api.loginUser(String(u).trim(),p),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),12000))]);
+        const found=await Promise.race([api.loginUser(uv,pv),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),12000))]);
         if(found&&found.length>0){setErr("");onLogin(found[0]);}
         else setErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
         setLoading(false);return;
@@ -3402,8 +3408,8 @@ function LoginPage({onLogin}){
         <h1 style={{fontSize:20,fontWeight:900,color:C.ink,marginBottom:2,fontFamily:"'Sarabun',sans-serif"}}>NAIWANSOOK FOODCOST</h1>
         <p style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",letterSpacing:1.5}}>BY BOSSMAX</p>
       </div>
-      <div style={{marginBottom:16}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ชื่อผู้ใช้</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.user} s={16} c={C.ink4}/></span><input value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} placeholder="username" autoCapitalize="none" autoCorrect="off" autoComplete="username" spellCheck={false} style={{...iS,paddingLeft:40}} autoFocus/></div></div>
-      <div style={{marginBottom:20}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>รหัสผ่าน</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.lock} s={16} c={C.ink4}/></span><input value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} type={show?"text":"password"} placeholder="password" style={{...iS,paddingLeft:40,paddingRight:44}}/><button onClick={()=>setShow(!show)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer"}}><Ic d={I.eye} s={16} c={C.ink4}/></button></div></div>
+      <div style={{marginBottom:16}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ชื่อผู้ใช้</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.user} s={16} c={C.ink4}/></span><input ref={uRef} value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>{if(e.key!=="Enter")return;if(String(u).trim()&&!p){pRef.current?.focus();return;}login();}} placeholder="username" autoCapitalize="none" autoCorrect="off" autoComplete="username" spellCheck={false} style={{...iS,paddingLeft:40}} autoFocus/></div></div>
+      <div style={{marginBottom:20}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>รหัสผ่าน</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.lock} s={16} c={C.ink4}/></span><input ref={pRef} value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} type={show?"text":"password"} placeholder="password" autoComplete="current-password" style={{...iS,paddingLeft:40,paddingRight:44}}/><button type="button" onClick={()=>setShow(!show)} aria-label={show?"ซ่อนรหัสผ่าน":"แสดงรหัสผ่าน"} title={show?"ซ่อนรหัสผ่าน":"แสดงรหัสผ่าน"} style={{position:"absolute",right:4,top:"50%",transform:"translateY(-50%)",width:40,height:40,display:"flex",alignItems:"center",justifyContent:"center",background:"none",border:"none",cursor:"pointer",borderRadius:8}}><Ic d={show?[...I.eye,"M3 3l18 18"]:I.eye} s={18} c={show?C.brand:C.ink4}/></button></div></div>
       {err&&<div style={{background:C.redLight,color:C.red,borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:600,marginBottom:16,display:"flex",alignItems:"center",gap:6}}><Ic d={I.warning} s={14} c={C.red}/>{err}</div>}
       <Btn onClick={login} full loading={loading}>เข้าสู่ระบบ</Btn>
     </div>
@@ -17860,7 +17866,7 @@ export default function App(){
   useEffect(()=>{
     if(visibleTabs.length>0&&!visibleTabs.find(t=>t.id===tab))setTab(visibleTabs[0].id);
   },[visibleTabsHash]);
-  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",approve:"อนุมัติคำสั่งซื้อที่สาขาส่งมา ก่อนส่งต่อครัวกลาง/ซัพพลายนอก",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",waste:"บันทึกของเสีย (วัตถุดิบ/เมนู) พร้อมรูปและเหตุผล + ดูประวัติตามสาขา",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",fs_sales:"นำเข้ายอดขายจาก FoodStory เพื่อดูเมนูที่ขายได้แต่ละวัน",po:"เปิด/แก้ไข/ปริ้น เอกสารใบสั่งซื้อวัตถุดิบ (Purchase Order)",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",assets:"ทะเบียนสินทรัพย์ของสาขา พร้อมคำนวณค่าเสื่อมราคา",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
+  const DESC={pos:"รับออเดอร์ จัดการโต๊ะ พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร",approve:"อนุมัติคำสั่งซื้อที่สาขาส่งมา ก่อนส่งต่อครัวกลาง/ซัพพลายนอก",crm:"จัดการลูกค้าประจำ สะสมแต้ม คูปอง จองโต๊ะ และวิเคราะห์ RFM",ingredients:"จัดการวัตถุดิบ ราคา สต็อก และซัพพลาย",menus:"คำนวณต้นทุนและกำไรแต่ละเมนู",waste:"บันทึกของเสีย (วัตถุดิบ/เมนู) พร้อมรูปและเหตุผล + ดูประวัติตามสาขา",sop:"ขั้นตอนมาตรฐานพร้อมรูปภาพ",summary:"สรุปต้นทุนและส่งรายการสั่งวัตถุดิบ",fssales:"นำเข้ายอดขายจาก FoodStory เพื่อดูเมนูที่ขายได้แต่ละวัน",production:"บันทึกการผลิตของครัวกลาง",kitchen3d:"แผนผังครัวแบบ 3 มิติ",po:"เปิด/แก้ไข/ปริ้น เอกสารใบสั่งซื้อวัตถุดิบ (Purchase Order)",orders:currentBranch?.type==="central"?"รับและจัดการรายการสั่งวัตถุดิบจากทุกสาขา":"รายการสั่งวัตถุดิบที่ส่งไปครัวกลาง",history:"ประวัติต้นทุนและการแก้ไข",suppliers:"รายชื่อซัพพลายเออร์และข้อมูลติดต่อ",assets:"ทะเบียนสินทรัพย์ของสาขา พร้อมคำนวณค่าเสื่อมราคา",settings:"ตั้งค่าระบบ สาขา และผู้ใช้"};
 
   // Check scan mode
   const params=typeof window!=="undefined"?new URLSearchParams(window.location.search):new URLSearchParams();
@@ -17913,9 +17919,13 @@ export default function App(){
   const sidebarW=240;
   const accentColor=isCentral?C.teal:C.brand;
   const accentDark=isCentral?"#0F766E":C.brandDark;
+  const accentText=isCentral?"#115E59":"#B33A08";   // ตัวอักษรสีประจำสาขาบนพื้นอ่อน/ขาว — เข้มพอให้อ่านออก (ครัวกลาง teal-800, สาขาส้มเข้ม)
 
   return <>
     <style>{globalStyle}</style>
+    {/* แท็บเมนู: จอสัมผัส (iPad) ค้างสถานะ :hover ไว้ที่แท็บที่แตะล่าสุด → แท็บลอยค้าง+แสงวิ่งไม่หยุด
+        ปิดเอฟเฟกต์ hover เฉพาะจอที่ไม่มีเมาส์ (ตอนกดค้างยังยุบตัวตาม .navitem:active เหมือนเดิม) */}
+    <style>{"@media(hover:none){.navitem:hover:not(:active){transform:none;box-shadow:none}.navitem:hover::after{animation:none;opacity:0}}"}</style>
     <ConfirmDlg/>
     <ImgViewerHost/>
     <PhotoGalleryHost/>
@@ -17960,20 +17970,20 @@ export default function App(){
         <nav style={{flex:1,padding:"0 10px 12px"}}>
           {visibleTabs.map(t2=>{
             const active=tab===t2.id;
-            return <button key={t2.id} className="navitem" onClick={()=>setTab(t2.id)}
+            return <button key={t2.id} className="navitem" onClick={e=>{e.currentTarget.style.outline="none";setTab(t2.id);}}
               onMouseEnter={e=>{if(active)return;const t=e.currentTarget;
                 t.style.background="#FFFFFF";t.style.outline=`1.5px solid ${accentColor}66`;t.style.outlineOffset="-1.5px";
                 const sp=t.querySelector("span");if(sp)sp.style.color="#2E2622";
                 const ib=t.querySelector("div");if(ib)ib.style.background=`${accentColor}1F`;}}
-              onMouseLeave={e=>{if(active)return;const t=e.currentTarget;
-                t.style.background="transparent";t.style.outline="none";
+              onMouseLeave={e=>{const t=e.currentTarget;t.style.outline="none";if(active)return;
+                t.style.background="transparent";
                 const sp=t.querySelector("span");if(sp)sp.style.color="#5C4A3F";
                 const ib=t.querySelector("div");if(ib)ib.style.background="transparent";}}
               style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"9px 11px 9px 14px",marginBottom:1,borderRadius:8,border:"none",cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif",transition:"background .16s ease,color .16s ease,outline-color .16s ease",background:active?`${accentColor}29`:"transparent",boxShadow:active?`inset 3px 0 0 0 ${accentColor}`:"none"}}>
               <div style={{width:28,height:28,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"background .14s ease",background:active?`${accentColor}33`:"transparent"}}>
                 <Ic d={t2.icon} s={14} c={active?accentColor:"#75634F"}/>
               </div>
-              <span style={{fontSize:13,color:active?"#B33A08":"#5C4A3F",fontWeight:active?700:500,whiteSpace:"pre-line",lineHeight:1.25,transition:"color .14s ease"}}>{t2.l}</span>
+              <span style={{fontSize:13,color:active?accentText:"#5C4A3F",fontWeight:active?700:500,whiteSpace:"pre-line",lineHeight:1.25,transition:"color .14s ease"}}>{t2.l}</span>
             </button>;
           })}
         </nav>
@@ -17982,7 +17992,7 @@ export default function App(){
         <div style={{padding:"6px 14px 10px"}}>
           <div style={{fontSize:9,fontWeight:700,color:"#75634F",letterSpacing:1.2,textTransform:"uppercase",marginBottom:6}}>{t("lang.label")}</div>
           <div style={{display:"flex",gap:5}}>
-            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .14s ease",background:sel?accentColor:"rgba(74,59,51,0.055)",border:sel?`1px solid ${accentColor}`:"1px solid rgba(74,59,51,0.16)",color:sel?"#fff":"#5C4A3F",boxShadow:sel?`0 1px 6px ${accentColor}66`:"none"}}>{L.l}</button>;})}
+            {LANG_OPTIONS.map(L=>{const sel=lang===L.id;return <button key={L.id} onClick={()=>setLang(L.id)} title={L.l} style={{flex:1,padding:"6px 4px",borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",transition:"all .14s ease",background:sel?"#FFFFFF":"rgba(74,59,51,0.055)",border:sel?`1px solid ${accentColor}`:"1px solid rgba(74,59,51,0.16)",color:sel?accentText:"#5C4A3F",boxShadow:sel?`inset 0 0 0 1px ${accentColor}`:"none"}}>{L.l}</button>;})}
           </div>
         </div>
 
@@ -17998,10 +18008,11 @@ export default function App(){
             </div>
           </div>
           <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"rgba(74,59,51,0.055)",border:"1px solid rgba(74,59,51,0.16)",borderRadius:8,padding:"7px 0",cursor:"pointer",fontSize:11,fontWeight:600,color:"#5C4A3F",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .14s"}}>
-              <Ic d={I.branch} s={11} c="#75634F"/>{t("branch.switch")}
+            <button onClick={()=>setCurrentBranch(null)} style={{flex:1,background:"rgba(74,59,51,0.055)",border:"1px solid rgba(74,59,51,0.16)",borderRadius:8,padding:"9px 0",minHeight:38,cursor:"pointer",fontSize:12,fontWeight:600,color:"#5C4A3F",fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:4,transition:"background .14s"}}>
+              <Ic d={I.branch} s={12} c="#75634F"/>{t("branch.switch")}
             </button>
-            <button onClick={()=>{setCurrentUser(null);setCurrentBranch(null);}} title="ออกจากระบบ" style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.28)",borderRadius:8,padding:"7px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .14s"}}>
+            {/* ออกจากระบบ: ถามก่อน — ไม่ได้จำการเข้าระบบไว้ แตะพลาดครั้งเดียวฟอร์มที่เปิดค้างหายหมดและต้องใส่รหัสใหม่ */}
+            <button onClick={async()=>{if(!await confirmDlg({title:t("auth.logout"),message:"ออกจากระบบตอนนี้?\nงานที่ยังไม่ได้กดบันทึกจะหาย และต้องใส่รหัสผ่านใหม่",danger:false,confirmLabel:t("auth.logout")}))return;setCurrentUser(null);setCurrentBranch(null);}} title={t("auth.logout")} aria-label={t("auth.logout")} style={{background:"rgba(239,68,68,0.10)",border:"1px solid rgba(239,68,68,0.28)",borderRadius:8,padding:"9px 12px",minHeight:38,minWidth:42,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .14s"}}>
               <Ic d={I.logout} s={13} c="#C81E1E"/>
             </button>
           </div>
@@ -18015,7 +18026,7 @@ export default function App(){
             หลังบ้านจึงค้างโค้ดเก่าได้ทั้งวันจนยิงแจ้งเตือนของฟีเจอร์ที่ปิดไปแล้ว) */}
         {hasNewBuildBO&&<button onClick={()=>{try{location.reload();}catch{}}}
           style={{padding:"10px 16px",background:C.brand,color:C.white,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,flexShrink:0,width:"100%"}}>
-          🔄 มีระบบเวอร์ชันใหม่แล้ว — แตะตรงนี้เพื่ออัปเดต (ของที่ค้างอยู่ไม่หาย)
+          🔄 มีระบบเวอร์ชันใหม่แล้ว — บันทึกงานที่ทำค้างก่อน แล้วแตะตรงนี้เพื่ออัปเดต (ต้องเข้าสู่ระบบใหม่)
         </button>}
         {/* Top bar */}
         <div style={{background:"#fff",borderBottom:"1px solid #E2E8F0",padding:isMobile?"0 12px":"0 28px",height:isMobile?52:58,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,position:"sticky",top:0,zIndex:100,boxShadow:"0 1px 3px rgba(15,23,42,0.05)"}}>
@@ -18025,21 +18036,20 @@ export default function App(){
             </button>}
             <div style={{minWidth:0,flex:1}}>
               <h1 style={{fontSize:isMobile?15:18,fontWeight:800,color:"#0F172A",margin:0,letterSpacing:-.3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{visibleTabs.find(t2=>t2.id===tab)?.l}</h1>
-              {!isMobile&&<p style={{fontSize:12,color:"#94A3B8",margin:0}}>{DESC[tab]}</p>}
+              {isMobile?<p style={{fontSize:11,fontWeight:700,color:accentText,margin:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>📍 {currentBranch.name}</p>:(DESC[tab]&&<p style={{fontSize:12,color:C.ink3,margin:0}}>{DESC[tab]}</p>)}
             </div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-            <button onClick={refreshAll} disabled={refreshing} title="โหลดข้อมูลล่าสุดจากเซิร์ฟเวอร์"
-              style={{display:"inline-flex",alignItems:"center",gap:6,background:C.white,border:`1px solid ${C.line}`,borderRadius:8,
-                padding:isMobile?"5px 8px":"5px 12px",cursor:refreshing?"default":"pointer",color:refreshing?C.ink4:C.ink2,
-                fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?10:11.5,fontWeight:700,opacity:refreshing?.65:1}}>
-              <span style={{display:"inline-block",fontSize:isMobile?12:13,lineHeight:1,animation:refreshing?"spin .9s linear infinite":"none"}}>⟳</span>
+            {/* รีเฟรช = ปุ่มจริงปุ่มเดียวบนแถบบน ต้องกดง่าย (≥38px) และใช้ไอคอนเดียวกับปุ่มรีเฟรชอื่นในระบบ */}
+            <button onClick={refreshAll} disabled={refreshing} title="โหลดข้อมูลล่าสุดจากเซิร์ฟเวอร์" aria-label={isMobile?"รีเฟรช":undefined}
+              style={{display:"inline-flex",alignItems:"center",justifyContent:"center",gap:6,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,
+                padding:isMobile?"8px 10px":"8px 14px",minHeight:38,minWidth:38,cursor:refreshing?"default":"pointer",color:refreshing?C.ink4:C.ink2,
+                fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,opacity:refreshing?.65:1}}>
+              <span style={{display:"inline-flex",animation:refreshing?"spin .9s linear infinite":"none"}}><Ic d={I.refresh} s={15} c={refreshing?C.ink4:C.ink2}/></span>
               {!isMobile&&(refreshing?"กำลังโหลด...":"รีเฟรช")}
             </button>
-            <div style={{background:`linear-gradient(135deg,${accentColor}18,${accentColor}0a)`,border:`1px solid ${accentColor}30`,borderRadius:8,padding:isMobile?"4px 8px":"5px 12px",display:"flex",alignItems:"center",gap:5}}>
-              <div style={{width:7,height:7,borderRadius:"50%",background:accentColor}}/>
-              <span style={{fontSize:isMobile?10:11,fontWeight:700,color:accentColor,fontFamily:"'Sarabun',sans-serif"}}>{isMobile?"BOSSMAX":"BY BOSSMAX"}</span>
-            </div>
+            {/* เครดิตผู้ทำ — ตัวหนังสือเงียบแบบหน้าเข้าสู่ระบบ (เดิมเป็นป้ายสีมีจุด ดูเหมือนปุ่ม/ไฟสถานะ ดังกว่าปุ่มรีเฟรช) */}
+            <span style={{fontSize:isMobile?10:11,fontWeight:600,color:C.ink4,letterSpacing:1.5,whiteSpace:"nowrap",fontFamily:"'Sarabun',sans-serif"}}>{isMobile?"BOSSMAX":"BY BOSSMAX"}</span>
           </div>
         </div>
 
@@ -24187,10 +24197,11 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   if(loading)return <Loading text="กำลังโหลดข้อมูล POS..."/>;
 
   return <div style={{margin:"-20px -24px",display:"flex",flexDirection:"column",height:"calc(100vh - 150px)"}}>
-    {/* มีเวอร์ชันใหม่ขึ้นระบบแล้ว — แตะเพื่อโหลด (ไม่โหลดเองกลางบิล) */}
-    {hasNewBuild&&<button onClick={()=>{try{location.reload();}catch{}}}
+    {/* มีเวอร์ชันใหม่ขึ้นระบบแล้ว — แตะเพื่อโหลด (ไม่โหลดเองกลางบิล)
+        แถบนี้เฉพาะจอขาย PIN — หลังบ้านมีแถบของ shell อยู่แล้ว ไม่ซ้อนสองแถบ */}
+    {hasNewBuild&&saleOnly&&<button onClick={()=>{try{location.reload();}catch{}}}
       style={{padding:"10px 16px",background:C.brand,color:C.white,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,flexShrink:0,width:"100%"}}>
-      🔄 มีระบบเวอร์ชันใหม่แล้ว — แตะตรงนี้เพื่ออัปเดต (ของที่ค้างอยู่ไม่หาย)
+      🔄 มีระบบเวอร์ชันใหม่แล้ว — กดส่งรายการที่ค้างก่อน แล้วแตะตรงนี้เพื่ออัปเดต (บิลไม่หาย · ต้องใส่ PIN ใหม่)
     </button>}
     {/* Shift indicator strip */}
     <div style={{padding:"6px 16px",background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,display:"flex",alignItems:"center",gap:14,fontSize:12,fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
