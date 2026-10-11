@@ -20207,8 +20207,8 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
       <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
         <button onClick={onCancelOrder} title="ยกเลิกบิลทั้งโต๊ะ"
-          style={{display:"flex",alignItems:"center",gap:6,padding:"10px 14px",borderRadius:11,border:"2px solid rgba(255,255,255,.5)",background:C.red,color:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:900,flexShrink:0,boxShadow:"0 2px 8px rgba(0,0,0,.2)"}}>
-          <Ic d={I.trash} s={15} c={C.white}/>ยกเลิกบิล
+          style={{display:"flex",alignItems:"center",gap:6,padding:"10px 14px",minHeight:40,borderRadius:11,border:"none",background:C.redLight,color:C.red,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,flexShrink:0}}>
+          <Ic d={I.trash} s={15} c={C.red}/>ยกเลิกบิล
         </button>
         <div style={{flex:1,minWidth:0,textAlign:"center"}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:900,fontSize:20,lineHeight:1.2}}>💳 ชำระเงิน</div>
@@ -20295,9 +20295,9 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
           {payWait&&onUnlockPay&&<Btn v="ghost" onClick={onUnlockPay}
             s={{flex:"1 1 30%",minWidth:120,padding:"15px 10px",fontSize:14,fontWeight:900,lineHeight:1.25,color:C.purple,borderColor:`${C.purple}66`}}>↩︎ ยกเลิกรอชำระ</Btn>}
           <Btn v="primary" onClick={onPrintQR} icon={I.print}
-            s={{flex:payWait?"1 1 30%":"1 1 44%",minWidth:120,padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>{payWait?"พิมพ์ QR ซ้ำ":"พิมพ์ QR จ่ายเงิน"}</Btn>
-          <Btn v="success" onClick={()=>setAskPay("choose")} loading={saving} icon={I.check}
-            s={{flex:payWait?"1 1 36%":"1 1 56%",minWidth:150,padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>✅ ยืนยันชำระ</Btn>
+            s={{flex:payWait?"1 1 30%":"1 1 36%",minWidth:payWait?120:170,padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>{payWait?"พิมพ์ QR ซ้ำ":"พิมพ์ QR จ่ายเงิน"}</Btn>
+          <Btn v="success" onClick={()=>setAskPay("choose")} loading={saving}
+            s={{flex:payWait?"1 1 36%":"1 1 52%",minWidth:payWait?150:170,padding:"15px 12px",fontSize:15.5,fontWeight:900,lineHeight:1.25}}>✅ ยืนยันชำระ</Btn>
         </div>
         {/* ── ป็อปอัพเก็บเงิน ────────────────────────────────────────────
             พร้อมเพย์/ไทยช่วยไทย = กดแล้วจบเลย (พิมพ์ใบเสร็จ + ปิดโต๊ะ)
@@ -20317,19 +20317,21 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
                   style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${m.c}`,background:`${m.c}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left"}}>
                   <span style={{fontSize:30,lineHeight:1}}>{m.icon}</span>
                   <span style={{fontSize:18,fontWeight:900,color:m.c}}>{m.l}</span>
-                  {m.v!=="cash"&&<span style={{marginLeft:"auto",fontSize:12,color:m.c,fontWeight:700,opacity:.85}}>พิมพ์ใบเสร็จ + ปิดโต๊ะ →</span>}
+                  <span style={{marginLeft:"auto",fontSize:13,color:m.c,fontWeight:800}}>{m.v==="cash"?"ใส่เงินที่รับ · คิดเงินทอน →":"กดแล้วปิดบิลทันที + พิมพ์ใบเสร็จ"}</span>
                 </button>)}
               </div>
+              {/* Voucher/แบ่งจ่าย ไม่ใช่ช่องทางจ่าย — แยกไว้ใต้เส้น ตัวเล็กกว่า ให้สามช่องทางจริงเด่นกว่า */}
+              <div style={{fontSize:12.5,fontWeight:700,color:C.ink3,margin:"16px 0 6px",paddingTop:12,borderTop:`1px dashed ${C.line}`}}>ตัวเลือกอื่น</div>
               <button onClick={()=>{setVRef(voucher&&voucher.ref||"");setVMode(voucher&&voucher.mode||"baht");setVVal(voucher?String(voucher.value):"");setAskPay("voucher");}} disabled={saving}
-                style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${C.purple}`,background:`${C.purple}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",width:"100%",marginTop:10,minHeight:48}}>
-                <span style={{fontSize:30,lineHeight:1}}>🎫</span>
-                <span style={{fontSize:18,fontWeight:900,color:C.purple}}>{voucher?"แก้ไข Voucher":"ใช้งาน Voucher"}</span>
+                style={{display:"flex",alignItems:"center",gap:14,padding:"11px 16px",borderRadius:14,border:`1.5px solid ${C.purple}66`,background:`${C.purple}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",width:"100%",marginTop:0,minHeight:48}}>
+                <span style={{fontSize:22,lineHeight:1}}>🎫</span>
+                <span style={{fontSize:15,fontWeight:800,color:C.purple}}>{voucher?"แก้ไข Voucher":"ใช้งาน Voucher"}</span>
                 <span style={{marginLeft:"auto",fontSize:12,color:C.purple,fontWeight:700,opacity:.85}}>{voucher?`ลดอยู่ ${bahtR(voucherDiscount)}`:"ส่วนลดจากคูปอง →"}</span>
               </button>
               <button onClick={()=>{setParts([]);setPartAmt("");setAskPay("split");}} disabled={saving}
-                style={{display:"flex",alignItems:"center",gap:14,padding:"16px 18px",borderRadius:14,border:`2.5px solid ${C.purple}`,background:`${C.purple}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",width:"100%",marginTop:10}}>
-                <span style={{fontSize:30,lineHeight:1}}>✂️</span>
-                <span style={{fontSize:18,fontWeight:900,color:C.purple}}>แบ่งจ่าย</span>
+                style={{display:"flex",alignItems:"center",gap:14,padding:"11px 16px",borderRadius:14,border:`1.5px solid ${C.purple}66`,background:`${C.purple}12`,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",textAlign:"left",width:"100%",marginTop:10,minHeight:48}}>
+                <span style={{fontSize:22,lineHeight:1}}>✂️</span>
+                <span style={{fontSize:15,fontWeight:800,color:C.purple}}>แบ่งจ่าย</span>
                 <span style={{marginLeft:"auto",fontSize:12,color:C.purple,fontWeight:700,opacity:.85}}>จ่ายหลายช่องทาง ทีละขั้น →</span>
               </button>
               <button onClick={()=>setAskPay(null)} disabled={saving} style={{marginTop:14,width:"100%",padding:"11px",borderRadius:12,border:`1.5px solid ${C.line}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,color:C.ink3}}>ย้อนกลับ</button>
@@ -22399,7 +22401,11 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
               <div style={{display:"flex",justifyContent:"space-between",fontWeight:800}}><span>บิลที่ยกเลิกในกะนี้ {totals.cancelCount} ใบ</span><span>฿{totals.cancelAmt.toLocaleString()}</span></div>
               <div style={{fontSize:11,opacity:.9,marginTop:2,lineHeight:1.6}}>{totals.cancelList.map(c=>`${c.table||"#"+c.id} ฿${c.total.toLocaleString()}${c.by?" ("+c.by+")":" (ไม่มีบันทึกผู้ยกเลิก)"}`).join(" · ")}</div>
             </div>}
-            {totals.openCount>0&&<div style={{display:"flex",justifyContent:"space-between",fontWeight:800}}><span>โต๊ะที่ยังไม่ปิดบิล {totals.openCount} โต๊ะ</span><span>฿{totals.openAmt.toLocaleString()}</span></div>}
+            {/* โต๊ะค้างโชว์ที่นี่ที่เดียว (เดิมมีกล่องแดงซ้ำใต้ช่องนับเงิน) — ชื่อโต๊ะ+ยอดแบบเดียวกับบิลยกเลิก */}
+            {totals.openCount>0&&<div>
+              <div style={{display:"flex",justifyContent:"space-between",fontWeight:800}}><span>🪑 ยังมีโต๊ะที่ยังไม่ปิดบิล {openBills.length} โต๊ะ</span><span>฿{totals.openAmt.toLocaleString()}</span></div>
+              <div style={{fontSize:11,opacity:.9,marginTop:2,lineHeight:1.6}}>{totals.openList.map(o=>`${o.table||"บิล #"+o.id} ฿${o.total.toLocaleString()}`).join(" · ")}</div>
+            </div>}
           </div>
         </div>}
         <div style={{background:C.brandLight,borderRadius:14,padding:14,marginBottom:14,border:`1.5px solid ${C.brandBorder}`}}>
@@ -22424,7 +22430,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         </div>
         <div style={{marginBottom:14}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>🧮 นับเงินจริงในลิ้นชัก *</div>
-          <NumInput value={actualCash} onValue={setActualCash} placeholder="0" style={{...iS,fontSize:24,fontWeight:900,padding:"14px 18px",textAlign:"center"}}/>
+          <NumInput value={actualCash} onValue={setActualCash} placeholder="ใส่ยอดที่นับได้" style={{...iS,fontSize:24,fontWeight:900,padding:"14px 18px",textAlign:"center"}}/>
           {actualCash!==""&&<div style={{marginTop:8,padding:"10px 14px",borderRadius:10,background:totals.diff===0?C.greenLight:totals.diff>0?C.blueLight:C.redLight,border:`1.5px solid ${totals.diff===0?C.green:totals.diff>0?C.blue:C.red}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:totals.diff===0?C.green:totals.diff>0?C.blue:C.red}}>
               {totals.diff===0?"✅ ตรงเป๊ะ":totals.diff>0?"📈 เกิน":"📉 ขาด"}
@@ -22433,10 +22439,6 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
           </div>}
         </div>
         <div style={{marginBottom:6}}>
-          {openBills.length>0&&<div style={{marginBottom:12,padding:"10px 13px",borderRadius:11,background:C.redLight,border:`1px solid ${C.red}55`,fontFamily:"'Sarabun',sans-serif"}}>
-            <div style={{fontSize:12.5,fontWeight:900,color:C.red}}>🪑 ยังมีโต๊ะที่ยังไม่ปิดบิล {openBills.length} โต๊ะ</div>
-            <div style={{fontSize:11,color:C.red,marginTop:3,lineHeight:1.6}}>{openBills.map(o=>o.table_number||("บิล #"+o.id)).join(" · ")}</div>
-          </div>}
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink2,marginBottom:6}}>หมายเหตุปิดกะ</div>
           <textarea value={note} onChange={e=>setNote(e.target.value)} rows={2} placeholder="เช่น เงินขาด 50 บาท เพราะจ่ายลูกค้าผิด..." style={{...iS,fontSize:13,resize:"none"}}/>
         </div>
@@ -22444,7 +22446,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
       </div>
       <div style={{padding:"12px 22px",borderTop:`1px solid ${C.line}`,background:C.bg,display:"flex",gap:8,flexShrink:0}}>
         <Btn v="ghost" onClick={onClose} s={{padding:"11px 18px"}}>ยกเลิก</Btn>
-        <Btn onClick={closeShift} v="danger" loading={saving} disabled={actualCash===""||loading} full icon={I.print} s={{padding:"11px",fontSize:14,fontWeight:800}}>🔚 ปิดกะ & พิมพ์ Z-Report</Btn>
+        <Btn onClick={closeShift} v="danger" loading={saving} disabled={actualCash===""||loading} full s={{padding:"13px",minHeight:48,fontSize:15.5,fontWeight:900,...((actualCash===""||loading)?{}:{background:`linear-gradient(135deg,${C.red},#DC2626)`,color:C.white,boxShadow:`0 4px 14px ${C.red}55`})}}>{actualCash===""?"🧮 ใส่ยอดเงินที่นับได้ก่อน":"🔚 ปิดกะ & พิมพ์ Z-Report"}</Btn>
       </div>
     </div>
   </div>;
@@ -23032,11 +23034,11 @@ const MenuMgrCard=memo(function MenuMgrCard({m,cur,nOpt,busy,onAvail,onBind,onHo
       </div>
       <div style={{display:"flex",gap:3,marginTop:"auto"}}>
         {MENU_AVS.map(a=><button key={a.v} onPointerDown={(e)=>e.stopPropagation()} onClick={()=>onAvail(m,a.v)}
-          style={{flex:1,padding:"5px 0",borderRadius:8,cursor:"pointer",fontSize:10.5,fontWeight:700,fontFamily:"'Sarabun',sans-serif",
+          style={{flex:1,padding:"8px 0",minHeight:36,borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",
           border:`1.5px solid ${cur===a.v?a.c:C.line}`,background:cur===a.v?a.c:C.white,color:cur===a.v?C.white:C.ink3}}>{a.l}</button>)}
       </div>
       <button onPointerDown={(e)=>e.stopPropagation()} onClick={()=>onBind(m)}
-        style={{padding:"5px 0",borderRadius:8,cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Sarabun',sans-serif",
+        style={{padding:"8px 0",minHeight:36,borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",
         border:`1.5px solid ${nOpt>0?C.teal:C.line}`,background:nOpt>0?C.tealLight:C.white,color:nOpt>0?C.teal:C.ink3}}>➕ ตัวเลือก{nOpt>0?` (${nOpt})`:""}</button>
     </div>
   </div>;
@@ -23326,7 +23328,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
       <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:12,flexWrap:"wrap"}}>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,flex:1,minWidth:200}}/>
         <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{visible.length} เมนู</span>
-        <Btn v="teal" onClick={()=>{setBulkGroups({});setBulkMenus({});setBulkOpen(true);}} icon={I.plus} s={{padding:"7px 13px",fontSize:12}}>🔗 ผูกหลายเมนูพร้อมกัน</Btn>
+        <Btn v="ghost" onClick={()=>{setBulkGroups({});setBulkMenus({});setBulkOpen(true);}} s={{padding:"9px 14px",minHeight:40,fontSize:12.5}}>🔗 ผูกหลายเมนูพร้อมกัน</Btn>
       </div>
       {catList.length>0&&<>
       <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:5}}>
@@ -24056,19 +24058,21 @@ function PrintFailModal({branchId,branch,posSettings,onClose,onChanged}){
   const recentList=(list||[]).filter(f=>!isOldPrintFail(f,now)),oldList=(list||[]).filter(f=>isOldPrintFail(f,now));
   const card=(f,old)=>{const its=Array.isArray(f.items)?f.items:[];const idle=its.filter(it=>!printRetryWaiting(it,now));const pj=f.kind==="pj";
     const errs=Array.isArray(f.errs)?f.errs:[];
+    // ใบอาจออกไปแล้ว (DRAIN_TIMEOUT) → ปุ่มรีปริ้นคงสีอ่อนไว้ ให้บรรทัด "ถามครัวก่อน" นำ ไม่เชียร์ให้กดซ้ำ
+    const maybeOut=errs.some(e=>e&&e.code==="DRAIN_TIMEOUT");
     return <div key={f.id||`${f.orderId}-${f.at}`} style={{border:`1.5px solid ${old?C.line:C.red+"55"}`,borderRadius:12,overflow:"hidden",opacity:old?.85:1}}>
       <div style={{padding:"9px 12px",background:old?C.lineLight:C.redLight,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",fontFamily:F}}>
         <span style={{fontSize:16,fontWeight:900,color:C.ink}}>{f.table?`โต๊ะ ${f.table}`:pj?"เคาน์เตอร์":"โต๊ะ -"}</span>
         <span style={{fontSize:11.5,fontWeight:800,color:C.red,background:C.white,borderRadius:6,padding:"1px 7px"}}>{pj?(f.what||"ใบจากเคาน์เตอร์"):(KIND[f.kind]||"ใบสั่งอาหาร")}</span>
         <span style={{fontSize:11.5,color:C.ink3}}>{fmtFailAt(f.at)}{f.orderId!=null?` · บิล #${f.orderId}`:""}{Array.isArray(f.pnames)&&f.pnames.length?` · ${f.pnames.join(" · ")}`:""}</span>
-        <button onClick={()=>dismiss(f)} style={{marginLeft:"auto",border:"none",background:"none",color:C.ink4,fontFamily:F,fontSize:11.5,fontWeight:700,cursor:"pointer",textDecoration:"underline",padding:"4px 0"}}>ไม่ต้องพิมพ์แล้ว</button>
+        <button onClick={()=>dismiss(f)} style={{marginLeft:"auto",border:`1px solid ${C.line}`,background:C.white,borderRadius:8,color:C.ink3,fontFamily:F,fontSize:12.5,fontWeight:700,cursor:"pointer",padding:"7px 12px",minHeight:36,whiteSpace:"nowrap",flexShrink:0}}>ไม่ต้องพิมพ์แล้ว</button>
       </div>
       {errs.length>0&&<div style={{padding:"6px 12px",borderTop:`1px solid ${C.line}`,fontFamily:F,fontSize:12,fontWeight:700,color:"#92400E",background:"#FFFBEB",lineHeight:1.5}}>
         {errs.map((e,i)=><div key={i}>⚠️ {e.name?e.name+": ":""}{printErrText(e)}{!pj&&e.code==="DRAIN_TIMEOUT"?" · ใบอาจออกไปแล้ว ถามครัวก่อนกดรีปริ้น":""}</div>)}
       </div>}
       {pj?<div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderTop:`1px solid ${C.line}`,fontFamily:F}}>
           <div style={{flex:1,minWidth:0,fontSize:12.5,color:C.ink3,lineHeight:1.5}}>{f.what==="ใบเสร็จ"&&f.orderId!=null?"กดพิมพ์ใบเสร็จของบิลนี้ใหม่ได้เลย":"ตัวพิมพ์ไม่ได้เก็บใบนี้ไว้ — สั่งพิมพ์ใหม่จากจุดเดิม (เช่น เปิดโต๊ะ/บิลแล้วกดพิมพ์อีกครั้ง) แล้วกด \"ไม่ต้องพิมพ์แล้ว\""}</div>
-          {f.what==="ใบเสร็จ"&&f.orderId!=null&&!old&&<Btn v="danger" onClick={()=>printReceiptAgain(f)} icon={I.print} s={{padding:"8px 12px",fontSize:13,flexShrink:0}}>พิมพ์ใบเสร็จใหม่</Btn>}
+          {f.what==="ใบเสร็จ"&&f.orderId!=null&&!old&&<Btn v="primary" onClick={()=>printReceiptAgain(f)} icon={I.print} s={{padding:"9px 14px",minHeight:40,fontSize:13.5,flexShrink:0}}>พิมพ์ใบเสร็จใหม่</Btn>}
         </div>
       :its.length?its.map(it=>{const wait=printRetryWaiting(it,now);const opt=optionsText(it.options);
         return <div key={it.k} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderTop:`1px solid ${C.line}`}}>
@@ -24078,10 +24082,10 @@ function PrintFailModal({branchId,branch,posSettings,onClose,onChanged}){
             {it.note&&<div style={{fontSize:12.5,fontWeight:600,color:C.ink3}}>★ {it.note}</div>}
             {it.lastTry&&!wait&&<div style={{fontSize:11,fontWeight:800,color:C.red}}>ลองแล้วยังไม่ออก — เช็คเครื่องพิมพ์แล้วกดใหม่</div>}
           </div>
-          {!old&&<Btn v={wait?"ghost":"danger"} disabled={wait} onClick={()=>retry(f,[it.k])} icon={I.print} s={{padding:"8px 12px",fontSize:13,flexShrink:0}}>{wait?"กำลังพิมพ์…":"รีปริ้น"}</Btn>}
+          {!old&&<Btn v={wait?"ghost":(idle.length>1||maybeOut)?"danger":"primary"} disabled={wait} onClick={()=>retry(f,[it.k])} icon={I.print} s={{padding:"9px 14px",minHeight:40,fontSize:13.5,flexShrink:0}}>{wait?"กำลังพิมพ์…":"รีปริ้น"}</Btn>}
         </div>;})
       :<div style={{padding:"9px 12px",fontFamily:F,fontSize:13,color:C.ink2,borderTop:`1px solid ${C.line}`}}>{(f.names||[]).join(" · ")}<div style={{fontSize:11.5,color:C.ink4,marginTop:3}}>รายการจากตัวพิมพ์รุ่นเก่า พิมพ์ใหม่จากที่นี่ไม่ได้ — เปิดโต๊ะแล้วปัดซ้ายที่รายการเพื่อพิมพ์ แล้วกด "ไม่ต้องพิมพ์แล้ว"</div></div>}
-      {!old&&!pj&&idle.length>1&&<div style={{padding:"8px 12px",borderTop:`1px solid ${C.line}`}}><Btn v="danger" full onClick={()=>retry(f,idle.map(it=>it.k))} icon={I.print} s={{padding:"8px",fontSize:13}}>รีปริ้นทั้งหมดของโต๊ะนี้ ({idle.length})</Btn></div>}
+      {!old&&!pj&&idle.length>1&&<div style={{padding:"8px 12px",borderTop:`1px solid ${C.line}`}}><Btn v={maybeOut?"danger":"primary"} full onClick={()=>retry(f,idle.map(it=>it.k))} icon={I.print} s={{padding:"11px",minHeight:42,fontSize:14,fontWeight:900}}>รีปริ้นทั้งหมดของโต๊ะนี้ ({idle.length})</Btn></div>}
       {old&&!pj&&its.length>0&&<div style={{padding:"6px 12px",borderTop:`1px solid ${C.line}`,fontFamily:F,fontSize:11.5,color:C.ink4}}>ค้างเกิน 12 ชม. — รีปริ้นจากที่นี่ไม่ได้ (กันครัวทำของที่เสิร์ฟไปแล้ว)</div>}
     </div>;};
   return <Modal title="🖨️ พิมพ์ไม่สำเร็จ" onClose={onClose}>
