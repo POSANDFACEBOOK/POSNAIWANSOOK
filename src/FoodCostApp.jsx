@@ -9206,12 +9206,14 @@ const priceHistLookup=(map,ingId,unit)=>(map&&map.get(`${+ingId}|${String(unit||
 // ใช้ร่วมกันทั้ง 2 หน้ารับของ (สาขาผ่าน OrderTab · ครัวกลางผ่าน POSection) โดยเจตนา —
 // สองหน้านั้นเป็นโค้ดคนละชุดอยู่แล้ว ถ้าก็อปกล่องนี้ไปอีกชุดจะกลายเป็นกฎเรื่องหน่วย/
 // การกันซ้ำ 2 ที่ที่ต้องแก้ตามกันตลอดไป ซึ่งเป็นแบบที่พลาดง่ายที่สุด
-function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],lastPriceOf,onAdd,isCentral=false}){
+function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],lastPriceOf,onAdd,onDraft,isCentral=false}){
   const[q,setQ]=useState("");
   const[pick,setPick]=useState(null);   // ตัวที่เลือกในช่องค้นหาชั่วคราว ไม่ต้องเก็บเป็น id (ต่างจาก ProductionTab)
   const[qty,setQty]=useState("");
   const[price,setPrice]=useState("");
   const[showAll,setShowAll]=useState(false);
+  // บอกหน้ารับของว่ามีรายการเลือกค้างไว้แต่ยังไม่กด "เพิ่มเข้าใบ" — กันกดยืนยันแล้วของชิ้นนั้นไม่เข้าสต๊อก
+  useEffect(()=>{if(onDraft)onDraft(!!pick);return()=>{if(onDraft)onDraft(false);};},[pick]);// eslint-disable-line react-hooks/exhaustive-deps
   // ใบเก็บชื่อซัพพลาย ไม่ใช่ id — จับกลับเป็น id เพื่อกรองวัตถุดิบ
   const supplierId=useMemo(()=>{
     const nm=(supplierName||"").trim();
@@ -9259,7 +9261,7 @@ function ReceiveAddLine({ings=[],suppliers=[],supplierName,branchId,items=[],las
     setPick(null);setQ("");setQty("");setPrice("");
   }
 
-  return <div style={{background:C.tealLight,border:`1px solid ${C.teal}44`,borderRadius:12,padding:"12px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>
+  return <div style={{background:C.tealLight,border:pick?`2px solid ${C.teal}`:`1px solid ${C.teal}44`,borderRadius:12,padding:"12px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>
     <div style={{fontSize:13,fontWeight:800,color:C.ink2,marginBottom:2}}>➕ สั่งเพิ่มกับซัพพลายทีหลัง?</div>
     <div style={{fontSize:11.5,color:C.ink4,marginBottom:9}}>เพิ่มรายการที่ไม่ได้อยู่ในใบสั่งเดิมได้ที่นี่ — ระบบจะเพิ่มสต๊อกและเก็บราคาให้เหมือนรายการอื่น</div>
     {!pick?<>
@@ -9349,6 +9351,9 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   const[extRecvImages,setExtRecvImages]=useState([]);const[extRecvUploading,setExtRecvUploading]=useState(0);  // receive photos (Drive)
   const[extDeliveryFee,setExtDeliveryFee]=useState("0");  // ค่าจัดส่งของออเดอร์นี้ (0 = ไม่มี)
   const[extDiscMode,setExtDiscMode]=useState("baht");const[extDiscValue,setExtDiscValue]=useState("");   // ส่วนลดทั้งบิล (บาท/เปอร์เซ็นต์)
+  const[extRecvAddDraft,setExtRecvAddDraft]=useState(false);   // กล่อง "สั่งเพิ่มทีหลัง" มีรายการเลือกค้างไว้แต่ยังไม่กด "เพิ่มเข้าใบ"
+  // ภาพตั้งต้นของฟอร์มรับของ — ปิดด้วย ×/Esc/ยกเลิก หลังแก้อะไรไปแล้วต้องถามก่อน (แบบเดียวกับ closeReceiveGuarded ของสาขา)
+  const extSnapRef=useRef(""),extFeeSnapRef=useRef(0),extImgSnapRef=useRef("[]"),extClosingRef=useRef(false);
   const[copyPO,setCopyPO]=useState(null);          // null | po — copy-target branch picker
   const[copyBusy,setCopyBusy]=useState(false);     // true while addPO for a copy is in-flight
   const slipHealRef=useRef(false);                 // guards load()'s SlipTrack self-heal from overlapping
@@ -9460,17 +9465,32 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     setExtRecvImages(Array.isArray(order.receive_images)?order.receive_images:[]);setExtRecvUploading(0);
     setExtDeliveryFee(order.delivery_fee!=null?String(order.delivery_fee):"0");
     setExtDiscMode("baht");setExtDiscValue("");
+    const items=(order.items||[]).map((it,i)=>({
+      ...it,
+      _key:i,
+      receivedQty:it.receivedQty!=null?+it.receivedQty:(+it.qtyNeeded||0),
+      pricePerUnit:it.pricePerUnit!=null?+it.pricePerUnit:(+it.buyPrice||+it.pricePerUnit||0),
+    }));
     setReceivingExtOrder({
       orderId:order.id,
       orderStatus:order.status,
       supplierName:order.supplier_name||"",
-      items:(order.items||[]).map((it,i)=>({
-        ...it,
-        _key:i,
-        receivedQty:it.receivedQty!=null?+it.receivedQty:(+it.qtyNeeded||0),
-        pricePerUnit:it.pricePerUnit!=null?+it.pricePerUnit:(+it.buyPrice||+it.pricePerUnit||0),
-      })),
+      items,
     });
+    extSnapRef.current=JSON.stringify(items);extFeeSnapRef.current=+(order.delivery_fee)||0;extImgSnapRef.current=JSON.stringify(Array.isArray(order.receive_images)?order.receive_images:[]);
+  }
+  async function closeReceiveExtGuarded(){
+    if(extClosingRef.current)return;
+    const now=JSON.stringify((receivingExtOrder&&receivingExtOrder.items)||[]);
+    if(now===extSnapRef.current&&!(+extDiscValue>0)&&(+extDeliveryFee||0)===extFeeSnapRef.current&&JSON.stringify(extRecvImages)===extImgSnapRef.current&&!(extRecvUploading>0)&&!extRecvAddDraft){setReceivingExtOrder(null);return;}
+    extClosingRef.current=true;
+    try{
+      if(await confirmDlg({
+        title:"ยังกรอกค้างไว้",
+        message:"จำนวนรับจริง ราคา ส่วนลด ค่าจัดส่ง และรูปที่แนบไว้จะหายทั้งหมด\n\nต้องการปิดหน้านี้หรือไม่?",
+        confirmLabel:"ปิดทิ้งเลย",
+      }))setReceivingExtOrder(null);
+    }finally{extClosingRef.current=false;}
   }
   // Confirm receipt: write actual qty + actual price back, flip to delivered,
   // and credit central stock via transferStockBetweenBranches(fromBranchId:null).
@@ -9479,6 +9499,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   async function confirmReceiveExt(){
     if(!receivingExtOrder)return;
     if(recvExtBusyRef.current)return;
+    if(extRecvAddDraft){alert('มีรายการ "สั่งเพิ่มทีหลัง" ที่เลือกไว้แต่ยังไม่ได้กด "เพิ่มเข้าใบ" — กดเพิ่มเข้าใบ หรือกด ✕ ทิ้ง ก่อนยืนยัน (ไม่งั้นของชิ้นนั้นจะไม่เข้าสต๊อก)');return;}
     const itemsWithReceived=receivingExtOrder.items.map(it=>{
       const qty=Math.max(0,Math.round((+it.receivedQty||0)*1000)/1000);
       const price=Math.max(0,+it.pricePerUnit||0);
@@ -9492,13 +9513,15 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     if(extRecvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
     const notRecv2=itemsWithReceived.filter(it=>+it.receivedQty===0);
     const warn2=notRecv2.length?`⚠️ มีสินค้า ${notRecv2.length} รายการที่ระบุว่า "ไม่ได้รับ" (จำนวน 0):\n${notRecv2.map(it=>`   • ${it.name}`).join("\n")}\n\nรายการเหล่านี้จะไม่ถูกเพิ่มเข้าสต๊อก — ยืนยันว่าไม่ได้รับจริงใช่ไหม?\n\n`:"";
+    const noPrice2=itemsWithReceived.filter(it=>+it.receivedQty>0&&!(+it.pricePerUnit>0));
+    const warnP2=noPrice2.length?`⚠️ มี ${noPrice2.length} รายการที่รับของแต่ราคา 0:\n${noPrice2.map(it=>`   • ${it.name}`).join("\n")}\n\nถ้าเป็นของแถม กดยืนยันได้ — ถ้าลืมกรอก ให้กดยกเลิกแล้วใส่ราคาตามบิล\n\n`:"";
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
-      message:`${warn2}ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?${extDisc>0?`
+      message:`${warn2}${warnP2}ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?${extDisc>0?`
 
 🏷️ ส่วนลดทั้งบิล ฿${extDisc.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — กระจายลงราคาต่อหน่วยทุกแถว (ยอดค่าสินค้าหลังลด ฿${(extGross-extDisc).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})})`:""}`,
       confirmLabel:"✅ ยืนยัน + เพิ่มสต๊อก",
-      danger:notRecv2.length>0,
+      danger:notRecv2.length>0||noPrice2.length>0,
     }))return;
       // ฐานข้อมูลที่ป่วยจะ "ค้าง" ไม่ใช่ตอบ error — ปุ่มที่ยังกดได้ระหว่างรอทำให้
       // พนักงานกดซ้ำ รอบสองไปชนตัวกันสถานะ แล้วเด้ง error ว่า "ผู้ใช้อื่นแก้ไขแล้ว"
@@ -10626,8 +10649,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
               {myExt.map((o,idx)=>{
                 const itemsTotal=(o.items||[]).reduce((s,it)=>s+(+it.estimatedCost||0),0);
                 const itemsCount=(o.items||[]).length;
-                const stColor=o.status==="pending"?"#F59E0B":"#10B981";
-                const stBg=o.status==="pending"?"#FEF3C7":"#D1FAE5";
+                const stColor=o.status==="pending"?"#F59E0B":"#0EA5E9";   // ซื้อแล้วรอรับเข้า = ฟ้า (กำลังมา) ตรงกับ 🚚 จัดส่งแล้ว ของ PO · เขียวเก็บไว้ให้ "เสร็จแล้ว"
+                const stBg=o.status==="pending"?"#FEF3C7":"#E0F2FE";
                 const stLabel=o.status==="pending"?"รอซื้อ":"ซื้อแล้ว รอรับเข้า";
                 return <tr key={o.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=C.tealLight} onMouseLeave={e=>e.currentTarget.style.background=idx%2===0?C.white:"#FAFBFC"}>
                   <td style={{padding:"11px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{fmtDT(o.requested_at)||"—"}</td>
@@ -10635,7 +10658,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
                     EXT-{o.id}
                     <div style={{fontSize:10,color:C.ink4,fontWeight:500,marginTop:1}}>สร้างโดย {o.requested_by||"—"}</div>
                   </td>
-                  <td style={{padding:"11px 14px",fontSize:13,fontWeight:800,color:C.brand,wordBreak:"break-word",minWidth:140}}>{o.supplier_name||"ไม่ระบุ"}</td>
+                  <td style={{padding:"11px 14px",fontSize:13,fontWeight:800,color:C.ink,wordBreak:"break-word",minWidth:140}}>{o.supplier_name||"ไม่ระบุ"}</td>
                   <td style={{padding:"11px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{itemsCount} รายการ</td>
                   <td style={{padding:"11px 14px",fontSize:14,fontWeight:900,textAlign:"right",whiteSpace:"nowrap",color:C.green}}>฿{fmtMoney(itemsTotal)}</td>
                   <td style={{padding:"11px 14px",textAlign:"center"}}>
@@ -10655,7 +10678,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     })()}
 
     {/* Receive modal for external-supplier orders — actual qty + actual price */}
-    {receivingExtOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingExtOrder.supplierName}`} onClose={()=>setReceivingExtOrder(null)} wide>
+    {receivingExtOrder&&<Modal title={`✅ ยืนยันรับสินค้าจาก ${receivingExtOrder.supplierName}`} onClose={closeReceiveExtGuarded} wide>
       <div style={{background:C.greenLight,border:`1px solid ${C.green}33`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
         💡 <b>กรอก 2 ค่าให้ครบทุกแถว</b> ก่อนกดยืนยัน:<br/>① <b>จำนวนรับจริง</b> · ② <b>ราคา/หน่วยตามบิล</b> (บิลมีส่วนลดท้ายบิล ใส่ที่ช่อง 🏷️ ด้านล่าง) — ระบบจะเพิ่มสต๊อก "{currentBranch.name}" และเก็บราคาเข้าประวัติ
       </div>
@@ -10712,20 +10735,20 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       </div>
       <ReceiveAddLine key={receivingExtOrder.orderId} isCentral={isCentralBranch} ings={ings} suppliers={suppliers} supplierName={receivingExtOrder.supplierName}
         branchId={currentBranch?.id} items={receivingExtOrder.items} lastPriceOf={lastPriceOf}
-        onAdd={ln=>setReceivingExtOrder(s=>({...s,items:[...s.items,ln]}))}/>
+        onAdd={ln=>setReceivingExtOrder(s=>({...s,items:[...s.items,ln]}))} onDraft={setExtRecvAddDraft}/>
       {(()=>{const itemsTotal=billGrossOf(receivingExtOrder.items);const fee=+extDeliveryFee||0;const disc=billDiscountInvalid(itemsTotal,extDiscMode,extDiscValue)?0:billDiscountAmount(itemsTotal,extDiscMode,extDiscValue);return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,color:C.ink3,marginBottom:8}}><span>ยอดค่าสินค้า</span><span style={{fontWeight:700,color:C.ink2}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
         <BillDiscountInput mode={extDiscMode} value={extDiscValue} onMode={setExtDiscMode} onValue={setExtDiscValue} itemsTotal={itemsTotal}/>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
           <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>🚚 ค่าจัดส่ง <span style={{fontSize:11,fontWeight:400,color:C.ink4}}>(ไม่มีใส่ 0)</span></span>
-          <div style={{display:"inline-flex",alignItems:"center",gap:5}}><span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span><input type="text" inputMode="decimal" value={extDeliveryFee} onChange={e=>setExtDeliveryFee(e.target.value)} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${fee>0?C.brand:C.brandBorder}`,background:fee>0?C.brandLight:C.white,color:fee>0?C.brand:C.ink}}/></div>
+          <div style={{display:"inline-flex",alignItems:"center",gap:6}}><span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span><input type="text" inputMode="decimal" value={extDeliveryFee} onChange={e=>setExtDeliveryFee(e.target.value)} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:90,minHeight:38,border:`2px solid ${fee>0?C.brand:C.brandBorder}`,background:fee>0?C.brandLight:C.white,color:fee>0?C.brand:C.ink}}/><span style={{fontSize:13,fontWeight:900,color:fee>0?C.ink2:C.ink4,minWidth:92,textAlign:"right"}}>{fee>0?`+฿${fee.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`:"—"}</span></div>
         </div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,borderTop:`1px dashed ${C.line}`}}><span style={{fontSize:14,fontWeight:800,color:C.ink}}>ยอดรวมทั้งสิ้น</span><span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{(itemsTotal-disc+fee).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,borderTop:`1px dashed ${C.line}`}}><span style={{fontSize:15,fontWeight:800,color:C.ink}}>ยอดรวมทั้งสิ้น</span><span style={{fontSize:22,fontWeight:900,color:C.green}}>฿{(itemsTotal-disc+fee).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
       </div>;})()}
       <ReceivePhotoAttach images={extRecvImages} setImages={setExtRecvImages} uploading={extRecvUploading} setUploading={setExtRecvUploading} minRequired={1}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
-        <Btn v="ghost" onClick={()=>setReceivingExtOrder(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveExt} loading={extRecvUploading>0||recvExtBusy} disabled={extRecvUploading>0||recvExtBusy||extRecvImages.length===0}>✅ ยืนยันรับ + เพิ่มสต๊อก</Btn>
+        <Btn v="ghost" onClick={closeReceiveExtGuarded}>ยกเลิก</Btn>
+        <Btn v="success" onClick={confirmReceiveExt} loading={extRecvUploading>0||recvExtBusy} disabled={extRecvUploading>0||recvExtBusy||extRecvImages.length===0} icon={I.check}>ยืนยันรับ + เพิ่มสต๊อก</Btn>
       </div>
     </Modal>}
 
@@ -12456,15 +12479,18 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   // หน้านับสต็อกมีตัวกันแบบนี้อยู่แล้ว (guardedClose) หน้านี้ก็ต้องมีเหมือนกัน
   const recvSnapRef=useRef("");
   const recvClosingRef=useRef(false);
+  // ค่าจัดส่งกับรูปที่แนบก็เป็นงานที่ทำไปแล้ว (รูปอัปขึ้น Drive แต่ยังไม่ผูกกับใบจนกดยืนยัน)
+  const recvFeeSnapRef=useRef(0),recvImgSnapRef=useRef("[]");
+  const[recvAddDraft,setRecvAddDraft]=useState(false);   // กล่อง "สั่งเพิ่มทีหลัง" มีรายการเลือกค้างไว้แต่ยังไม่กด "เพิ่มเข้าใบ"
   async function closeReceiveGuarded(){
     if(recvClosingRef.current)return;
     const now=JSON.stringify((receivingOrder&&receivingOrder.items)||[]);
-    if(now===recvSnapRef.current&&!(+recvDiscValue>0)){setReceivingOrder(null);return;}
+    if(now===recvSnapRef.current&&!(+recvDiscValue>0)&&(+recvDeliveryFee||0)===recvFeeSnapRef.current&&JSON.stringify(recvImages)===recvImgSnapRef.current&&!(recvUploading>0)&&!recvAddDraft){setReceivingOrder(null);return;}
     recvClosingRef.current=true;
     try{
       if(await confirmDlg({
         title:"ยังกรอกค้างไว้",
-        message:"จำนวนรับจริงและราคาที่พิมพ์ไว้จะหายทั้งหมด\n\nต้องการปิดหน้านี้หรือไม่?",
+        message:"จำนวนรับจริง ราคา ส่วนลด ค่าจัดส่ง และรูปที่แนบไว้จะหายทั้งหมด\n\nต้องการปิดหน้านี้หรือไม่?",
         confirmLabel:"ปิดทิ้งเลย",
       }))setReceivingOrder(null);
     }finally{recvClosingRef.current=false;}
@@ -12678,12 +12704,14 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     });
     // เก็บภาพตั้งต้นไว้เทียบตอนปิด — ถ้าไม่ต่างจากนี้แปลว่ายังไม่ได้แก้อะไร ปิดได้เลย
     recvSnapRef.current=JSON.stringify((order.items||[]).map((it,i)=>({...it,_key:i,receivedQty:it.receivedQty!=null?+it.receivedQty:(+it.qtyNeeded||0)})));
+    recvFeeSnapRef.current=+(order.delivery_fee)||0;recvImgSnapRef.current=JSON.stringify(Array.isArray(order.receive_images)?order.receive_images:[]);
   }
   const recvBusyRef=useRef(false);
   const[recvBusy,setRecvBusy]=useState(false);
   async function confirmReceiveExternal(){
     if(!receivingOrder)return;
     if(recvBusyRef.current)return;
+    if(recvAddDraft){alert('มีรายการ "สั่งเพิ่มทีหลัง" ที่เลือกไว้แต่ยังไม่ได้กด "เพิ่มเข้าใบ" — กดเพิ่มเข้าใบ หรือกด ✕ ทิ้ง ก่อนยืนยัน (ไม่งั้นของชิ้นนั้นจะไม่เข้าสต๊อก)');return;}
     const itemsWithReceived=receivingOrder.items.map(it=>{
       const qty=Math.max(0,Math.round((+it.receivedQty||0)*1000)/1000);
       const price=Math.max(0,+it.pricePerUnit||0);
@@ -12703,14 +12731,17 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     if(!recvImages||recvImages.length===0){alert("📷 กรุณาแนบรูปตอนรับสินค้าอย่างน้อย 1 รูป ก่อนยืนยันรับ (สต๊อกจะยังไม่วิ่งเข้า)");return;}
     if(recvUploading>0){alert("รอรูปอัปโหลดให้เสร็จก่อน");return;}
     const notRecv1=itemsWithReceived.filter(it=>+it.receivedQty===0);
-    const warn1=notRecv1.length?`⚠️ มีสินค้า ${notRecv1.length} รายการที่ระบุว่า "ไม่ได้รับ" (จำนวน 0):\n${notRecv1.map(it=>`   • ${it.name}`).join("\n")}\n\nรายการเหล่านี้จะไม่ถูกเพิ่มเข้าสต็อก — ยืนยันว่าไม่ได้รับจริงใช่ไหม?\n\n`:"";
+    const warn1=notRecv1.length?`⚠️ มีสินค้า ${notRecv1.length} รายการที่ระบุว่า "ไม่ได้รับ" (จำนวน 0):\n${notRecv1.map(it=>`   • ${it.name}`).join("\n")}\n\nรายการเหล่านี้จะไม่ถูกเพิ่มเข้าสต๊อก — ยืนยันว่าไม่ได้รับจริงใช่ไหม?\n\n`:"";
+    // รับของแต่ราคา 0 — ของแถมใส่ 0 ได้ (ดูหมายเหตุที่ billDiscountInvalid) แต่ลืมกรอกต้องเห็นก่อนกดยืนยัน
+    const noPrice1=itemsWithReceived.filter(it=>+it.receivedQty>0&&!(+it.pricePerUnit>0));
+    const warnP1=noPrice1.length?`⚠️ มี ${noPrice1.length} รายการที่รับของแต่ราคา 0:\n${noPrice1.map(it=>`   • ${it.name}`).join("\n")}\n\nถ้าเป็นของแถม กดยืนยันได้ — ถ้าลืมกรอก ให้กดยกเลิกแล้วใส่ราคาตามบิล\n\n`:"";
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
-      message:`${warn1}ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต็อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?${recvDisc>0?`
+      message:`${warn1}${warnP1}ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต๊อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?${recvDisc>0?`
 
 🏷️ ส่วนลดทั้งบิล ฿${recvDisc.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — กระจายลงราคาต่อหน่วยทุกแถว (ยอดค่าสินค้าหลังลด ฿${(recvGross-recvDisc).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})})`:""}`,
-      confirmLabel:"✅ ยืนยัน + เพิ่มสต็อก",
-      danger:notRecv1.length>0,
+      confirmLabel:"✅ ยืนยัน + เพิ่มสต๊อก",
+      danger:notRecv1.length>0||noPrice1.length>0,
     }))return;
     recvBusyRef.current=true;setRecvBusy(true);
     try{
@@ -12789,7 +12820,6 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     }catch(e){alert("ลบไม่สำเร็จ: "+(e.message||e));}
   }
 
-  const statusColor={pending_approval:"purple",pending:"yellow",approved:"green",rejected:"red",delivered:"blue"};
   // External-supplier flow: (รออนุมัติ Area) → pending → (กดพิมพ์ = ส่งให้ซัพ) approved → (ยืนยันรับ + บวกสต็อก) delivered
   const statusLabel={pending_approval:"⏳ รออนุมัติ",pending:"รอส่งซัพพลาย",approved:"ส่งให้ซัพพลายแล้ว",rejected:"ปฏิเสธ",delivered:"รับสินค้าแล้ว"};
 
@@ -12820,11 +12850,13 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         // On a delivered order count only lines actually received (>0) — matches the ฿ total
         // and the reprinted receipt, which both drop not-received (0) lines.
         const itemsCount=order.status==="delivered"?(order.items||[]).filter(it=>{const r=it.receivedQty!=null?+it.receivedQty:(it.received_qty!=null?+it.received_qty:null);return (r==null?(+it.qtyNeeded||0):r)>0;}).length:(order.items||[]).length;
-        const stColor={pending:"#F59E0B",approved:"#10B981",rejected:"#EF4444",delivered:"#3B82F6"}[order.status]||C.ink3;
-        const stBg={pending:"#FEF3C7",approved:"#D1FAE5",rejected:"#FEE2E2",delivered:"#DBEAFE"}[order.status]||C.lineLight;
+        // สีตรงกับแท็บเอกสาร PO: กำลังมา = ฟ้า (เหมือน 🚚 จัดส่งแล้ว) · เสร็จแล้ว = เขียว (เหมือน ✅ จ่ายแล้ว) · รออนุมัติ = ม่วง
+        const stColor={pending_approval:"#A855F7",pending:"#F59E0B",approved:"#0EA5E9",rejected:"#EF4444",delivered:"#10B981"}[order.status]||C.ink3;
+        const stBg={pending_approval:"#F5F3FF",pending:"#FEF3C7",approved:"#E0F2FE",rejected:"#FEE2E2",delivered:"#D1FAE5"}[order.status]||C.lineLight;
+        const needsReceive=order.status==="approved"&&canEditOrder(order);   // แถวเดียวที่รอพนักงานกด ยืนยันรับ
         const isExpanded=!!expandedOrders[order.id];
         const stopBubble=e=>e.stopPropagation();
-        return <Card key={order.id} style={{overflow:"hidden"}}>
+        return <Card key={order.id} style={{overflow:"hidden",...(needsReceive?{border:`1.5px solid ${C.green}`,boxShadow:`0 4px 14px ${C.green}26`}:{})}}>
         {/* Compact row — column layout matching the user-requested order:
             เลขเอกสาร | วันที่+สร้างโดย | ซัพพลาย | รวม | สถานะ | จัดการ */}
         <div style={{padding:"8px 14px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
@@ -12840,43 +12872,46 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
           </div>
           {/* 3. ซัพพลาย */}
           <div style={{flex:1,minWidth:140,fontFamily:"'Sarabun',sans-serif"}}>
-            <div style={{fontSize:13,fontWeight:800,color:C.brand,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{order.supplier_name}</div>
+            <div style={{fontSize:13,fontWeight:800,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{order.supplier_name}</div>
             {isCentral&&<div style={{fontSize:11,color:C.ink4,whiteSpace:"nowrap"}}>สาขา: {order.branch_name}</div>}
           </div>
           {/* 4. จำนวนเงินรวม */}
           <div style={{minWidth:90,textAlign:"right",fontFamily:"'Sarabun',sans-serif"}}>
-            <div style={{fontSize:14,fontWeight:900,color:C.green,whiteSpace:"nowrap"}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
-            <div style={{fontSize:10,color:C.ink4,whiteSpace:"nowrap"}}>{itemsCount} รายการ</div>
+            <div style={{fontSize:14,fontWeight:900,color:itemsTotal>0?C.green:C.ink4,whiteSpace:"nowrap"}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+            <div style={{fontSize:10,color:C.ink4,whiteSpace:"nowrap"}}>{itemsCount} รายการ{itemsTotal===0&&itemsCount>0?" · ไม่มีราคา":""}</div>
           </div>
           {/* 5. สถานะ */}
-          <div style={{minWidth:100,display:"flex",justifyContent:"center"}} onClick={stopBubble}>
+          <div style={{minWidth:110,display:"flex",justifyContent:"center"}} onClick={stopBubble}>
             {order.status==="pending"&&canEditOrder(order)
-              ?<button onClick={()=>orderAndCopy(order)} title="คัดลอกรายการ (วางในไลน์ซัพพลาย) + เปลี่ยนเป็นส่งซัพพลายแล้ว" style={{padding:"6px 14px",borderRadius:18,border:"none",cursor:"pointer",background:copiedId===order.id?`linear-gradient(135deg,${C.green},#059669)`:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,fontSize:11,fontWeight:800,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5,boxShadow:`0 2px 6px ${C.brand}55`,transition:"transform .12s"}} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";}} onMouseLeave={e=>{e.currentTarget.style.transform="";}}>{copiedId===order.id?"✓ คัดลอกแล้ว":"🛒 สั่งของ/คัดลอก"}</button>
+              ?<button onClick={()=>orderAndCopy(order)} title="คัดลอกรายการ (วางในไลน์ซัพพลาย) + เปลี่ยนเป็นส่งซัพพลายแล้ว" style={{padding:"7px 14px",minHeight:36,borderRadius:18,border:"none",cursor:"pointer",background:copiedId===order.id?`linear-gradient(135deg,${C.green},#059669)`:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,fontSize:12,fontWeight:800,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5,boxShadow:`0 2px 6px ${C.brand}55`,transition:"transform .12s"}} onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";}} onMouseLeave={e=>{e.currentTarget.style.transform="";}}>{copiedId===order.id?"✓ คัดลอกแล้ว":"🛒 สั่งของ/คัดลอก"}</button>
               :<span style={{fontSize:11,fontWeight:800,color:stColor,background:stBg,padding:"4px 10px",borderRadius:18,whiteSpace:"nowrap",border:`1px solid ${stColor}33`,fontFamily:"'Sarabun',sans-serif"}}>{statusLabel[order.status]||order.status}</span>}
           </div>
-          {/* 6. จัดการ — flow ใหม่:
-                  pending  ✎ แก้จำนวน · 🖨 พิมพ์ (= ส่งซัพพลาย) · 🗑 ลบ
-                  approved (ส่งแล้ว) ✅ ยืนยันรับ · 🖨 พิมพ์ซ้ำ · 🗑 ลบ
-                  delivered (รับแล้ว) 🖨 พิมพ์ซ้ำ · 🗑 ลบ (rollback)
-                  rejected  🗑 ลบ */}
-          <div onClick={stopBubble} style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+          {/* 6. จัดการ — flow ใหม่ (ปุ่มหลักอยู่ขวาสุดเสมอ · 🗑 อยู่ซ้ายสุด ไม่ติดปุ่มหลัก):
+                  pending  (ปุ่ม 🛒 สั่งของ/คัดลอก อยู่ช่องสถานะ) · 🗑 ลบ (admin)
+                  approved (ส่งแล้ว) 🗑 ลบ (admin) · คัดลอก · 🖨 พิมพ์ซ้ำ · ✅ ยืนยันรับ
+                  delivered (รับแล้ว) คัดลอก · 🖨 พิมพ์ซ้ำ · 📷 รูป
+                  rejected  🗑 ลบ · ✎ แก้ไข */}
+          <div onClick={stopBubble} style={{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:5,flexWrap:"wrap",minWidth:150}}>
             {order.status==="pending_approval"
               // Locked until Area approves — staff can do NOTHING with the order yet.
               ?<span style={{fontSize:11,color:C.ink4,fontStyle:"italic",fontFamily:"'Sarabun',sans-serif",display:"inline-flex",alignItems:"center",gap:4}}><Ic d={I.clock} s={12} c={C.ink4}/>รอ Area อนุมัติก่อน</span>
               :<>
-            {/* คัดลอก — แยกไว้เฉพาะหลังส่งซัพแล้ว (approved/delivered); ตอน pending รวมอยู่ในปุ่ม "สั่งของ/คัดลอก" · ตีกลับ = ไม่มี */}
-            {order.status!=="rejected"&&order.status!=="pending"&&<button onClick={()=>copyOrderText(order)} title="คัดลอกข้อความ (สำหรับวางในไลน์ซัพพลาย)" style={{background:copiedId===order.id?C.greenLight:C.tealLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:copiedId===order.id?C.green:C.teal,transition:"background .15s"}}>
-              <Ic d={copiedId===order.id?I.check:I.copy} s={12} c={copiedId===order.id?C.green:C.teal}/>
-              {copiedId===order.id?"คัดลอกแล้ว":"คัดลอก"}
-            </button>}
-            {/* ตีกลับ → แก้ไขรายการ (เพิ่ม/ลบ/แก้จำนวน) แล้วส่งให้ Area อนุมัติใหม่ */}
-            {order.status==="rejected"&&canEditOrder(order)&&<button onClick={()=>startEditQty(order)} title="แก้ไขรายการ + ส่งอนุมัติใหม่" style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,border:"none",borderRadius:7,padding:"5px 11px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:800,color:C.white,boxShadow:`0 2px 6px ${C.brand}55`}}><Ic d={I.pencil} s={12} c={C.white}/>แก้ไข</button>}
+            {/* ลบได้เฉพาะใบที่ Area ตีกลับ (rejected) — เมื่ออนุมัติแล้ว (pending/approved) พนักงานลบไม่ได้; admin ยังเคลียร์ได้ (ยกเว้นรับแล้ว)
+                วางไว้หน้าสุด เว้นระยะ — ไม่ให้ปุ่มลบไปติดกับปุ่ม ยืนยันรับ / แก้ไข */}
+            {((order.status==="rejected"&&canEditOrder(order))||(currentUser?.role==="admin"&&order.status!=="delivered"))&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",minWidth:36,minHeight:36,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",marginRight:6}}><Ic d={I.trash} s={12} c={C.red}/></button>}
+            {/* คัดลอก — แยกไว้เฉพาะหลังส่งซัพแล้ว (approved/delivered); ตอน pending รวมอยู่ในปุ่ม "สั่งของ/คัดลอก" · ตีกลับ = ไม่มี
+                ใบที่รับของแล้วแทบไม่ต้องคัดลอกอีก — ใช้สีเทาเงียบ ๆ แบบปุ่มพิมพ์ */}
+            {order.status!=="rejected"&&order.status!=="pending"&&(()=>{const done=order.status==="delivered",cp=copiedId===order.id;return <button onClick={()=>copyOrderText(order)} title="คัดลอกข้อความ (สำหรับวางในไลน์ซัพพลาย)" style={{background:cp?C.greenLight:(done?C.lineLight:C.tealLight),border:"none",borderRadius:7,padding:"5px 8px",minHeight:36,cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:cp?C.green:(done?C.ink3:C.teal),transition:"background .15s"}}>
+              <Ic d={cp?I.check:I.copy} s={12} c={cp?C.green:(done?C.ink3:C.teal)}/>
+              {cp?"คัดลอกแล้ว":"คัดลอก"}
+            </button>;})()}
             {/* แก้ไขจำนวนถูกล็อก: ออเดอร์ที่ Area อนุมัติแล้ว (pending = รอส่งซัพ) แก้ไม่ได้ — ถ้าต้องแก้ให้ Area ตีกลับก่อน */}
-            {(order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="พิมพ์ซ้ำ" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>}
-            {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต็อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,display:"flex",alignItems:"center",gap:4,boxShadow:`0 2px 6px ${C.green}55`}}><Ic d={I.check} s={11} c={C.white}/>ยืนยันรับ</button>}
-            {order.status==="delivered"&&(()=>{const n=Array.isArray(order.receive_images)?order.receive_images.length:0;return <button onClick={()=>setPhotoEditOrder(order)} title="ดู / เพิ่มรูปรับสินค้า" style={{background:n>0?C.blueLight:C.bg,border:n>0?"none":`1px dashed ${C.line}`,borderRadius:7,padding:"5px 9px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.blue}}><Ic d={I.img} s={12} c={C.blue}/>{n>0?n:"เพิ่มรูป"}</button>;})()}
-            {/* ลบได้เฉพาะใบที่ Area ตีกลับ (rejected) — เมื่ออนุมัติแล้ว (pending/approved) พนักงานลบไม่ได้; admin ยังเคลียร์ได้ (ยกเว้นรับแล้ว) */}
-            {((order.status==="rejected"&&canEditOrder(order))||(currentUser?.role==="admin"&&order.status!=="delivered"))&&<button onClick={()=>deleteOrder(order)} title="ลบ" style={{background:C.redLight,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>}
+            {(order.status==="approved"||order.status==="delivered")&&<button onClick={()=>printAndMarkSent(order)} disabled={printingId===order.id} title="พิมพ์ซ้ำ" style={{background:C.lineLight,border:"none",borderRadius:7,padding:"5px 8px",minWidth:36,minHeight:36,cursor:printingId===order.id?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",opacity:printingId===order.id?0.5:1}}><Ic d={I.printer} s={12} c={C.ink3}/></button>}
+            {order.status==="delivered"&&(()=>{const n=Array.isArray(order.receive_images)?order.receive_images.length:0;return <button onClick={()=>setPhotoEditOrder(order)} title="ดู / เพิ่มรูปรับสินค้า" style={{background:n>0?C.blueLight:C.bg,border:n>0?"none":`1px dashed ${C.line}`,borderRadius:7,padding:"5px 9px",minHeight:36,cursor:"pointer",display:"flex",alignItems:"center",gap:4,fontFamily:"'Sarabun',sans-serif",fontSize:11,fontWeight:700,color:C.blue}}><Ic d={I.img} s={12} c={C.blue}/>{n>0?n:"เพิ่มรูป"}</button>;})()}
+            {/* ตีกลับ → แก้ไขรายการ (เพิ่ม/ลบ/แก้จำนวน) แล้วส่งให้ Area อนุมัติใหม่ */}
+            {order.status==="rejected"&&canEditOrder(order)&&<button onClick={()=>startEditQty(order)} title="แก้ไขรายการ + ส่งอนุมัติใหม่" style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,border:"none",borderRadius:8,padding:"7px 14px",minHeight:36,cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,color:C.white,whiteSpace:"nowrap",boxShadow:`0 2px 6px ${C.brand}55`}}><Ic d={I.pencil} s={13} c={C.white}/>แก้ไข</button>}
+            {/* ปุ่มหลักของแถว — ใหญ่สุดและอยู่ขวาสุด */}
+            {canEditOrder(order)&&order.status==="approved"&&<button onClick={()=>startReceive(order)} title="ยืนยันรับสินค้า + เพิ่มสต๊อก" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:8,padding:"7px 14px",minHeight:36,cursor:"pointer",fontSize:12.5,fontFamily:"'Sarabun',sans-serif",fontWeight:800,color:C.white,display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",boxShadow:`0 3px 10px ${C.green}66`}}><Ic d={I.check} s={13} c={C.white}/>ยืนยันรับ</button>}
               </>}
           </div>
         </div>
@@ -12887,10 +12922,10 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         {/* Items table — only when expanded */}
         {isExpanded&&<div style={{padding:"4px 14px 12px",borderTop:`1px solid ${C.lineLight}`}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13,marginTop:8}}>
-            <thead><tr style={{background:C.bg}}>{(order.status==="delivered"?["ซัพพลาย","วัตถุดิบ","สั่ง","รับเข้าจริง","ผลต่าง"]:["ซัพพลาย","วัตถุดิบ","จำนวนที่ต้องสั่ง","ราคาประมาณ"]).map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:C.ink3,fontSize:11}}>{h}</th>)}</tr></thead>
+            {/* ใบหนึ่ง = ซัพเดียว (ชื่อซัพอยู่หัวแถวแล้ว) — ไม่ต้องมีคอลัมน์ซัพพลายซ้ำทุกบรรทัด */}
+            <thead><tr style={{background:C.bg}}>{(order.status==="delivered"?["วัตถุดิบ","สั่ง","รับเข้าจริง","ผลต่าง"]:["วัตถุดิบ","สั่งไว้","ราคาประมาณ"]).map(h=><th key={h} style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:C.ink3,fontSize:11}}>{h}</th>)}</tr></thead>
             <tbody>{(order.items||[]).map((it,i)=>{const delivered=order.status==="delivered";const price=+it.pricePerUnit||0;const ord=+it.qtyNeeded||0;const rcv=it.receivedQty!=null?+it.receivedQty:(it.received_qty!=null?+it.received_qty:null);const ordVal=round2(ord*price);const rcvVal=rcv!=null?round2(rcv*price):(+it.estimatedCost||0);const dQty=rcv!=null?round2(rcv-ord):null;const dVal=rcv!=null?round2(rcvVal-ordVal):null;const money=v=>`฿${(+v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`,verticalAlign:"top"}}>
-              <td style={{padding:"7px 10px"}}><Chip color="teal">{it.supplierName||it.supplier_name||"ไม่ระบุ"}</Chip></td>
-              <td style={{padding:"7px 10px",fontWeight:600,color:C.ink}}>{it.name}</td>
+              <td style={{padding:"7px 10px",fontWeight:600,color:C.ink}}>{it.name}{it.addedAtReceive&&<span style={{marginLeft:6,fontSize:10.5,fontWeight:800,color:C.teal,background:C.tealLight,border:`1px solid ${C.teal}44`,borderRadius:8,padding:"2px 7px",whiteSpace:"nowrap"}}>➕ สั่งเพิ่มทีหลัง</span>}{(()=>{const s=it.supplierName||it.supplier_name;return s&&order.supplier_name&&s!==order.supplier_name?<div style={{fontSize:10.5,color:C.teal,fontWeight:600}}>{s}</div>:null;})()}</td>
               {delivered?<>
                 <td style={{padding:"7px 10px"}}><div style={{color:C.brand,fontWeight:700}}>{ord} {it.unit}</div><div style={{fontSize:11,color:C.ink4}}>{money(ordVal)}</div></td>
                 <td style={{padding:"7px 10px"}}><div style={{color:C.blue,fontWeight:800}}>{rcv!=null?`${round2(rcv)} ${it.unit||""}`:"—"}</div><div style={{fontSize:11,color:C.ink4}}>{rcv!=null?money(rcvVal):"—"}</div></td>
@@ -13004,27 +13039,25 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
               <td style={{padding:"7px 10px",textAlign:"right",fontWeight:800,color:lineTotal>0?C.green:C.ink4,whiteSpace:"nowrap"}}>฿{lineTotal.toLocaleString(undefined,{minimumFractionDigits:2})}</td>
             </tr>;
           })}</tbody>
-          <tfoot><tr style={{background:C.bg,borderTop:`2px solid ${C.line}`}}>
-            <td colSpan={4} style={{padding:"10px 10px",textAlign:"right",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2}}>ยอดค่าสินค้า</td>
-            <td style={{padding:"10px 10px",textAlign:"right",fontFamily:"'Sarabun',sans-serif",fontSize:16,fontWeight:900,color:C.ink,whiteSpace:"nowrap"}}>฿{receivingOrder.items.reduce((s,it)=>s+((+it.receivedQty||0)*(+it.pricePerUnit||0)),0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
-          </tr></tfoot>
         </table>
       </div>
       <ReceiveAddLine key={receivingOrder.orderId} isCentral={isCentral} ings={ings} suppliers={suppliers} supplierName={receivingOrder.supplierName}
         branchId={receivingOrder.branchId} items={receivingOrder.items} lastPriceOf={lastPriceOf}
-        onAdd={ln=>setReceivingOrder(s=>({...s,items:[...s.items,ln]}))}/>
+        onAdd={ln=>setReceivingOrder(s=>({...s,items:[...s.items,ln]}))} onDraft={setRecvAddDraft}/>
       {(()=>{const itemsTotal=billGrossOf(receivingOrder.items);const fee=+recvDeliveryFee||0;const disc=billDiscountInvalid(itemsTotal,recvDiscMode,recvDiscValue)?0:billDiscountAmount(itemsTotal,recvDiscMode,recvDiscValue);return <div style={{background:C.bg,borderRadius:10,marginBottom:14,fontFamily:"'Sarabun',sans-serif",padding:"10px 14px"}}>
+        {/* ยอดค่าสินค้าเป็นบรรทัดแรกแบบเงียบ ๆ (เหมือนจอครัวกลาง) — ตัวเลขเด่นมีตัวเดียวคือยอดรวมทั้งสิ้น */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,color:C.ink3,marginBottom:8}}><span>ยอดค่าสินค้า</span><span style={{fontWeight:700,color:C.ink2}}>฿{itemsTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
         <BillDiscountInput mode={recvDiscMode} value={recvDiscValue} onMode={setRecvDiscMode} onValue={setRecvDiscValue} itemsTotal={itemsTotal}/>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
           <span style={{fontSize:13,fontWeight:700,color:C.ink2}}>🚚 ค่าจัดส่ง <span style={{fontSize:11,fontWeight:400,color:C.ink4}}>(ไม่มีใส่ 0)</span></span>
-          <div style={{display:"inline-flex",alignItems:"center",gap:5}}><span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span><input type="text" inputMode="decimal" value={recvDeliveryFee} onChange={e=>setRecvDeliveryFee(e.target.value)} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:100,minHeight:38,border:`2px solid ${fee>0?C.brand:C.brandBorder}`,background:fee>0?C.brandLight:C.white,color:fee>0?C.brand:C.ink}}/></div>
+          <div style={{display:"inline-flex",alignItems:"center",gap:6}}><span style={{fontSize:13,color:C.ink4,fontWeight:700}}>฿</span><input type="text" inputMode="decimal" value={recvDeliveryFee} onChange={e=>setRecvDeliveryFee(e.target.value)} placeholder="0" style={{...iS,padding:"7px 10px",fontSize:14,fontWeight:800,textAlign:"right",width:90,minHeight:38,border:`2px solid ${fee>0?C.brand:C.brandBorder}`,background:fee>0?C.brandLight:C.white,color:fee>0?C.brand:C.ink}}/><span style={{fontSize:13,fontWeight:900,color:fee>0?C.ink2:C.ink4,minWidth:92,textAlign:"right"}}>{fee>0?`+฿${fee.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`:"—"}</span></div>
         </div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,borderTop:`1px dashed ${C.line}`}}><span style={{fontSize:14,fontWeight:800,color:C.ink}}>ยอดรวมทั้งสิ้น</span><span style={{fontSize:18,fontWeight:900,color:C.green}}>฿{(itemsTotal-disc+fee).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:8,borderTop:`1px dashed ${C.line}`}}><span style={{fontSize:15,fontWeight:800,color:C.ink}}>ยอดรวมทั้งสิ้น</span><span style={{fontSize:22,fontWeight:900,color:C.green}}>฿{(itemsTotal-disc+fee).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>
       </div>;})()}
       <ReceivePhotoAttach images={recvImages} setImages={setRecvImages} uploading={recvUploading} setUploading={setRecvUploading} minRequired={1}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
-        <Btn v="ghost" onClick={()=>setReceivingOrder(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveExternal} loading={recvUploading>0||recvBusy} disabled={recvUploading>0||recvBusy||recvImages.length===0} icon={I.check}>ยืนยันรับ + เพิ่มสต็อก</Btn>
+        <Btn v="ghost" onClick={closeReceiveGuarded}>ยกเลิก</Btn>
+        <Btn v="success" onClick={confirmReceiveExternal} loading={recvUploading>0||recvBusy} disabled={recvUploading>0||recvBusy||recvImages.length===0} icon={I.check}>ยืนยันรับ + เพิ่มสต๊อก</Btn>
       </div>
     </Modal>}
 
@@ -13884,7 +13917,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
     return{amount,items,byStatus,topIngs,latestDate};
   },[filtered]);
 
-  const stColor={pending:"#F59E0B",approved:"#10B981",rejected:"#EF4444",delivered:"#3B82F6"};
+  const stColor={pending:"#F59E0B",approved:"#0EA5E9",rejected:"#EF4444",delivered:"#10B981"};   // ตรงกับรายการสั่งซัพ: กำลังมา = ฟ้า · รับแล้ว = เขียว
   const stLabel={pending:"รอส่งซัพ",approved:"ส่งแล้ว",rejected:"ปฏิเสธ",delivered:"รับสินค้าแล้ว"};
   const fmtMoney=n=>(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 
