@@ -9422,7 +9422,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         const pid=+partnerFilter;
         data=data.filter(p=>+p.from_branch_id===pid||+p.branch_id===pid);
       }
-      if(filterStatus)data=data.filter(p=>p.status===filterStatus);
+      // ตัวเลือกเดียวครอบสถานะที่ความหมายเดียวกัน — "จัดส่งแล้ว" ต้องเห็นใบโอนที่รอรับด้วย, "จ่ายแล้ว" รวมชื่อเก่า received
+      if(filterStatus){const ST_GROUP={open:["open","transfer_pending"],shipped:["shipped","transfer_shipped"],paid:["paid","received"]};const want=ST_GROUP[filterStatus]||[filterStatus];data=data.filter(p=>want.includes(p.status));}
       setPOs(data);
     }catch(e){console.error("loadPOs",e);alert("โหลด PO ไม่สำเร็จ: "+e.message);}
     setLoading(false);
@@ -9729,7 +9730,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     const recipient=(branchById[po.branch_id]||{}).name||"ปลายทาง";
     if(!await confirmDlg({
       title:"ยืนยันจัดส่ง + ตัดสต๊อก",
-      message:`จัดส่งใบโอน ${po.po_number||"นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 🚛 ของจะอยู่ในสถานะ "ลอยอยู่ระหว่างทาง"\n• สต๊อก ${recipient} จะเพิ่มเข้าตอนปลายทางกด "✅ รับโอน + กรอกจำนวนรับจริง"`,
+      message:`จัดส่งใบโอน ${po.po_number||"นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 🚛 ของจะอยู่ในสถานะ "ลอยอยู่ระหว่างทาง"\n• สต๊อก ${recipient} จะเพิ่มเข้าตอนปลายทางกด "✅ รับโอน" แล้วกรอกจำนวนรับจริง`,
       confirmLabel:"🚚 จัดส่ง + ตัดสต๊อก",
     }))return;
     setConfirming(po.id);
@@ -10497,11 +10498,15 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
           <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>สถานะ</div>
           <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
             <option value="">— ทุกสถานะ —</option>
+            {APPROVAL_ON&&<option value="pending_approval">⏳ รออนุมัติ</option>}
             <option value="requested">📨 รอครัวกลางรับ</option>
-            <option value="open">📋 รอจัดส่ง</option>
-            <option value="shipped">🚚 จัดส่งแล้ว</option>
+            <option value="open">📋 รอจัดส่ง (รวมใบโอน)</option>
+            <option value="shipped">🚚 จัดส่งแล้ว · รอรับ (รวมใบโอน)</option>
+            <option value="disputed">⚠️ ส่งกลับ</option>
             <option value="awaiting_payment">💰 รอชำระเงิน</option>
             <option value="paid">✅ จ่ายแล้ว</option>
+            <option value="transfer_done">✅ โอนเสร็จสิ้น</option>
+            <option value="cancelled">❌ ยกเลิก</option>
           </select>
         </div>
         <div>
@@ -10512,10 +10517,10 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
           <div style={{fontSize:11,color:C.ink4,fontWeight:700,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>ถึง</div>
           <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{...iS,fontSize:13,padding:"8px 10px"}}/>
         </div>
-        <Btn v="info" onClick={()=>setShowIngReport(true)} s={{padding:"8px 14px",fontSize:12,whiteSpace:"nowrap"}}>📊 รายงานตามวัตถุดิบ</Btn>
+        <Btn v="ghost" onClick={()=>setShowIngReport(true)} s={{padding:"8px 14px",fontSize:12,whiteSpace:"nowrap",color:C.blue}}>📊 รายงานตามวัตถุดิบ</Btn>
       </div>
-      {pos.length>0&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.line}`,display:"flex",justifyContent:"space-between",fontSize:12,fontFamily:"'Sarabun',sans-serif",color:C.ink3}}>
-        <span>📑 พบ <b style={{color:C.ink}}>{pos.length}</b> เอกสาร</span>
+      {pos.length>0&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.line}`,display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6,fontSize:12,fontFamily:"'Sarabun',sans-serif",color:C.ink3}}>
+        <span>📑 พบ <b style={{color:C.ink}}>{pos.length}</b> เอกสาร{(()=>{const n=pos.filter(p=>canConfirmPO(p)||(isReceiver(p)&&p.status==="transfer_shipped")).length;return n>0?<b style={{marginLeft:10,color:"#047857",fontSize:13}}>· 📥 รอตรวจรับ {n} ใบ</b>:null;})()}</span>
         <span>💰 รวม <b style={{color:C.brand,fontSize:14}}>฿{totalAll.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</b></span>
       </div>}
     </Card>
@@ -10541,8 +10546,11 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
               const created=po.created_at?fmtDT(po.created_at):fmtD(po.po_date);
               const recAt=po.received_at?fmtD(po.received_at):null;
               const iCreator=isCreator(po),iReceiver=isReceiver(po);
-              return <tr key={po.id} style={{borderTop:`1px solid ${C.lineLight}`,background:idx%2===0?C.white:"#FAFBFC",transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=idx%2===0?C.white:"#FAFBFC"}>
-                <td style={{padding:"11px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{created}</td>
+              // แถวที่สาขานี้ต้องตรวจรับ/รับโอน — พื้นเขียวอ่อน + แถบซ้าย (แถบอยู่ที่ td เพราะ Safari/iPad ไม่วาด box-shadow บน tr)
+              const needsMe=canConfirmPO(po)||(iReceiver&&po.status==="transfer_shipped");
+              const baseBg=needsMe?C.greenLight:idx%2===0?C.white:"#FAFBFC";
+              return <tr key={po.id} style={{borderTop:`1px solid ${C.lineLight}`,background:baseBg,transition:"background .12s"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=baseBg}>
+                <td style={{padding:"11px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap",boxShadow:needsMe?`inset 4px 0 0 ${C.green}`:undefined}}>{created}</td>
                 <td style={{padding:"11px 14px",fontSize:13,fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>
                   {po.po_number||`#${po.id}`}
                   <div style={{fontSize:10,color:C.ink4,fontWeight:500,marginTop:1}}>{(po.items||[]).length} รายการ</div>
@@ -10717,7 +10725,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       <ReceivePhotoAttach images={extRecvImages} setImages={setExtRecvImages} uploading={extRecvUploading} setUploading={setExtRecvUploading} minRequired={1}/>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:14}}>
         <Btn v="ghost" onClick={()=>setReceivingExtOrder(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveExt} loading={extRecvUploading>0||recvExtBusy} disabled={extRecvUploading>0||recvExtBusy||extRecvImages.length===0} icon={I.check}>✅ ยืนยันรับ + เพิ่มสต๊อก</Btn>
+        <Btn v="success" onClick={confirmReceiveExt} loading={extRecvUploading>0||recvExtBusy} disabled={extRecvUploading>0||recvExtBusy||extRecvImages.length===0}>✅ ยืนยันรับ + เพิ่มสต๊อก</Btn>
       </div>
     </Modal>}
 
@@ -10867,7 +10875,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     {/* Receive transfer — destination confirms received qty per item */}
     {receivingTransfer&&<Modal title={`🔄 รับโอนวัตถุดิบจาก "${(branchById[receivingTransfer.po.from_branch_id]||{}).name||"-"}"`} onClose={()=>setReceivingTransfer(null)} wide>
       <div style={{background:"#E0F2FE",border:`1px solid #0EA5E933`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
-        💡 ใส่จำนวนที่ <b>รับเข้าจริง</b> — ระบบจะ <b>เพิ่มสต๊อกสาขา "{currentBranch.name}"</b> ตามจำนวนนี้ · ต้นทางถูกหักไปแล้วตอนจัดส่ง ถ้ารับน้อยกว่าที่ส่ง <b>ส่วนต่างจะคืนให้ต้นทาง</b>
+        💡 ใส่จำนวนที่ <b>รับเข้าจริง</b> — ระบบจะ <b>เพิ่มสต็อกสาขา "{currentBranch.name}"</b> ตามจำนวนนี้ · ถ้ารับน้อยกว่าที่ส่งมา ส่วนที่ขาดจะ <b>คืนสต็อกให้ต้นทาง</b> (ต้นทางถูกหักไปแล้วตอนกด 🚚 จัดส่ง)
       </div>
       <div style={{maxHeight:"45vh",overflowY:"auto",marginBottom:14}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
@@ -10889,7 +10897,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       </div>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={()=>setReceivingTransfer(null)}>ยกเลิก</Btn>
-        <Btn v="success" onClick={confirmReceiveTransfer} loading={confirming===receivingTransfer?.po?.id} disabled={confirming===receivingTransfer?.po?.id} icon={I.check}>✅ รับโอน + ย้ายสต็อก</Btn>
+        <Btn v="success" onClick={confirmReceiveTransfer} loading={confirming===receivingTransfer?.po?.id} disabled={confirming===receivingTransfer?.po?.id}>✅ รับโอน + เพิ่มสต๊อก</Btn>
       </div>
     </Modal>}
 
@@ -11556,6 +11564,10 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
     onSubmitDispute(updated,disputeNote);
   }
   const allMatch=(po.items||[]).every((it,i)=>+receivedQty[i]===+it.qty);
+  // พรีวิวยอดตอน "สินค้าไม่ครบ" — สูตรเดียวกับ submitDispute (แสดงผลเท่านั้น ไม่ได้บันทึก)
+  const dispRecv=i=>Math.max(0,Math.min(+(po.items||[])[i]?.qty||0,+receivedQty[i]||0));
+  const dispSub=round2((po.items||[]).reduce((s,it,i)=>s+round2(dispRecv(i)*(+it.price_per_unit||0)),0));
+  const dispTotal=round2(dispSub+round2(dispSub*((+po.subtotal||0)>0?(+po.vat||0)/(+po.subtotal):0)));
 
   return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",zIndex:5000,display:"flex",flexDirection:"column"}}>
     {/* Header */}
@@ -11634,7 +11646,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
               {(po.items||[]).map((it,i)=>{
                 const recv=mode==="dispute"?(+receivedQty[i]||0):it.received_qty;
                 const short=recv!=null&&+recv<+it.qty;
-                return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`}}>
+                return <tr key={i} style={{borderTop:`1px solid ${C.lineLight}`,background:mode==="dispute"&&short?"#FEF2F2":undefined}}>
                   {!isMobile&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"center",fontSize:12,color:C.ink4,fontWeight:700}}>{i+1}</td>}
                   <td style={{padding:isMobile?"8px 6px":"9px 12px",fontSize:13,fontWeight:600,color:C.ink,overflowWrap:"anywhere"}}>{isMobile?`${i+1}. `:""}{it.name}{isMobile&&<div style={{fontSize:11.5,color:C.ink3,fontWeight:600,marginTop:2}}>{it.unit||"-"} · ฿{(+it.price_per_unit||0).toFixed(2)}/หน่วย</div>}{it.note?<div style={{fontSize:11,color:C.ink4,marginTop:2}}>★ {it.note}</div>:null}</td>
                   {!isMobile&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"center",fontSize:12,color:C.ink2}}>{it.unit||"-"}</td>}
@@ -11645,7 +11657,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
                   {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"center",fontSize:14,fontWeight:800,color:short?C.red:C.green}}>{recv!=null?recv:it.qty}</td>}
                   {mode==="view"&&(po.items||[]).some(x=>x.received_qty!=null)&&(()=>{const price=+it.price_per_unit||0;const rv=recv!=null?+recv:+it.qty;const dQty=round2(rv-(+it.qty||0));const dVal=round2(dQty*price);return <td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"center"}}>{dQty===0?<span style={{color:C.green,fontWeight:800,fontSize:13}}>✓ ครบ</span>:<><div style={{color:dQty<0?C.red:C.green,fontWeight:800,fontSize:13}}>{dQty<0?`ขาด ${Math.abs(dQty)}`:`เกิน ${dQty}`}</div>{dVal!==0&&<div style={{fontSize:11,color:dQty<0?C.red:C.green,fontWeight:700,marginTop:1}}>{dVal>0?"+":"-"}฿{Math.abs(dVal).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>}</>}</td>;})()}
                   {!isMobile&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"right",fontSize:13,color:C.ink2}}>฿{(+it.price_per_unit||0).toFixed(2)}</td>}
-                  {!(isMobile&&mode==="dispute")&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"right",fontSize:14,fontWeight:800,color:C.brand}}>฿{(+it.line_total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>}
+                  {!(isMobile&&mode==="dispute")&&<td style={{padding:isMobile?"8px 6px":"9px 12px",textAlign:"right",fontSize:14,fontWeight:800,color:C.brand}}>฿{(mode==="dispute"?round2(dispRecv(i)*(+it.price_per_unit||0)):(+it.line_total||0)).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>}
                 </tr>;
               })}
             </tbody>
@@ -11667,6 +11679,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
             <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.brand}}>ยอดรวมทั้งสิ้น</span>
             <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:28,fontWeight:900,color:C.brand}}>฿{(+po.total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
           </div>
+          {mode==="dispute"&&!allMatch&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6,fontFamily:"'Sarabun',sans-serif",color:C.red,fontWeight:800}}><span style={{fontSize:14}}>ยอดหลังหักของที่ขาด</span><span style={{fontSize:20,fontWeight:900}}>฿{dispTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>}
         </div>
 
         {/* 📷 Receive photos — attach (while confirming) or view (after delivered) */}
@@ -11689,22 +11702,25 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
     <div style={{background:C.white,borderTop:`1px solid ${C.line}`,padding:"14px 24px",display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",flexShrink:0,boxShadow:"0 -4px 16px rgba(0,0,0,.08)"}}>
       {mode==="dispute"?<>
         <Btn v="ghost" onClick={()=>setMode("view")}>← กลับ</Btn>
-        <Btn v="success" onClick={submitDisputeNow} disabled={busy||allMatch} loading={busy} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 22px",fontWeight:900}}>{allMatch?"ไม่มีรายการที่ขาด":"📤 ส่งกลับให้ต้นทางตรวจสอบ"}</Btn>
+        {allMatch&&<span style={{flex:"1 1 220px",fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>👉 ลดจำนวนในช่อง "ได้รับจริง" ของรายการที่ขาดก่อน แล้วจึงส่งกลับ</span>}
+        <Btn v="success" onClick={submitDisputeNow} disabled={busy||allMatch} loading={busy} s={{background:allMatch?C.lineLight:"linear-gradient(135deg,#EA580C,#C2410C)",color:allMatch?C.ink3:C.white,boxShadow:allMatch?"none":"0 4px 14px rgba(234,88,12,.4)",padding:"11px 22px",fontWeight:900}}>📤 ส่งกลับให้ต้นทางตรวจสอบ</Btn>
       </>:<>
         <Btn v="ghost" onClick={onClose}>ปิด</Btn>
-        {po.status!=="requested"&&<Btn v="info" icon={I.print} onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์ใบสั่งซื้อ</Btn>}
-        {po.status!=="requested"&&<Btn v="success" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)} s={{padding:"10px 16px"}}>💾 PDF</Btn>}
-        {/* ใบตรวจรับ — ออกได้เมื่อรับของแล้วเท่านั้น (ก่อนนั้นยังไม่มีอะไรให้ตรวจรับ) */}
-        {!!po.received_at&&<Btn v="teal" icon={I.print} onClick={()=>printGRN(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>📥 ใบตรวจรับ</Btn>}
-        {/* ใบลดหนี้ — โชว์เฉพาะใบที่รับของน้อยกว่าที่สั่ง (ยอดหนี้ลดลงจริง จึงต้องมีเอกสารอธิบาย) */}
-        {!!po.received_at&&poHasShortReceive(po)&&<Btn v="danger" icon={I.print} onClick={()=>printCreditNote(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>📉 ใบลดหนี้</Btn>}
+        {/* ปุ่มอันตรายอยู่ซ้ายสุด ห่างจากปุ่มตัดสินใจ · ปุ่มเอกสารเป็นสีเรียบ เพื่อให้ปุ่มตรวจรับเด่นที่สุด */}
         {canCancelPO&&<Btn v="danger" onClick={onCancel} s={{padding:"10px 16px"}}>❌ ยกเลิก PO</Btn>}
-        {canDelete&&<Btn onClick={onDelete} icon={I.trash} s={{padding:"10px 16px",background:C.redLight,color:C.red,border:`1.5px solid #FECACA`}}>🗑 ลบทิ้งถาวร</Btn>}
-        {canEditFromView&&<Btn v="ghost" onClick={onEdit} icon={I.pencil} s={{padding:"10px 16px",background:"#FEF3C7",color:"#92400E"}}>✏️ แก้ไข</Btn>}
+        {canDelete&&<Btn onClick={onDelete} s={{padding:"10px 16px",background:C.redLight,color:C.red,border:`1.5px solid #FECACA`,boxShadow:"none"}}>🗑 ลบทิ้งถาวร</Btn>}
+        {po.status!=="requested"&&<Btn v="ghost" onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์ใบสั่งซื้อ</Btn>}
+        {po.status!=="requested"&&<Btn v="ghost" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)} s={{padding:"10px 16px"}}>💾 PDF</Btn>}
+        {/* ใบตรวจรับ — ออกได้เมื่อรับของแล้วเท่านั้น (ก่อนนั้นยังไม่มีอะไรให้ตรวจรับ) */}
+        {!!po.received_at&&<Btn v="ghost" onClick={()=>printGRN(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์ใบตรวจรับ</Btn>}
+        {/* ใบลดหนี้ — โชว์เฉพาะใบที่รับของน้อยกว่าที่สั่ง (ยอดหนี้ลดลงจริง จึงต้องมีเอกสารอธิบาย) */}
+        {!!po.received_at&&poHasShortReceive(po)&&<Btn v="ghost" onClick={()=>printCreditNote(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px",color:C.red}}>🖨 พิมพ์ใบลดหนี้</Btn>}
+        {(canEditFromView||(canAcceptReq&&onAcceptRequest)||(canShipPO&&onShip)||canDispute||canConfirmReceive||canAcceptDispute||canPayNow)&&<div style={{flex:"1 1 0",minWidth:0}}/>}
+        {canEditFromView&&<Btn v="ghost" onClick={onEdit} s={{padding:"10px 16px",background:"#FEF3C7",color:"#92400E"}}>✏️ แก้ไข</Btn>}
         {canAcceptReq&&onAcceptRequest&&<Btn onClick={onAcceptRequest} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.purple},#7C3AED)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px ${C.purple}55`}}>🖨 ปริ้นเอกสาร</Btn>}
         {canShipPO&&onShip&&<Btn onClick={onShip} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px rgba(14,165,233,.45)`}}>🚚 จัดส่ง + ตัดสต๊อก</Btn>}
-        {canDispute&&<Btn onClick={()=>setMode("dispute")} s={{background:`linear-gradient(135deg,#EA580C,#C2410C)`,padding:"11px 20px",fontWeight:900,color:C.white,boxShadow:"0 4px 14px rgba(234,88,12,.4)"}}>⚠️ สินค้าไม่ครบ</Btn>}
-        {canConfirmReceive&&<Btn v="success" onClick={()=>onConfirmReceive(recvImages)} loading={busy||recvUploading>0} disabled={busy||recvUploading>0} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14,boxShadow:`0 4px 14px ${C.green}55`}}>✅ ยืนยันรับสินค้าครบ</Btn>}
+        {canDispute&&<Btn onClick={()=>setMode("dispute")} s={{background:"#FFF7ED",color:"#C2410C",boxShadow:"0 0 0 2px #FB923C",padding:"11px 20px",fontWeight:900}}>⚠️ สินค้าไม่ครบ</Btn>}
+        {canConfirmReceive&&<Btn v="success" onClick={()=>onConfirmReceive(recvImages)} loading={busy||recvUploading>0} disabled={busy||recvUploading>0} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"13px 28px",fontWeight:900,fontSize:16,boxShadow:`0 4px 14px ${C.green}55`}}>✅ ยืนยันรับสินค้าครบ</Btn>}
         {canAcceptDispute&&<Btn v="success" onClick={onAcceptDispute} loading={busy} disabled={busy} s={{background:`linear-gradient(135deg,${C.green},#059669)`,padding:"11px 22px",fontWeight:900,fontSize:14}}>✅ ยอมรับการแก้ไข</Btn>}
         {canPayNow&&<Btn onClick={onOpenPayment} s={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,padding:"11px 22px",fontWeight:900,fontSize:14,color:C.white,boxShadow:`0 4px 14px ${C.blue}55`}}>💳 ชำระเงิน</Btn>}
       </>}
