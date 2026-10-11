@@ -4578,10 +4578,11 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
         <div onClick={()=>toggle(s)} style={{display:"flex",gap:10,alignItems:"center",padding:"10px 12px",cursor:"pointer",background:on?C.brandLight:C.white}}>
           {s.counter_photo?<img src={driveImgSrc(s.counter_photo)} alt="" loading="lazy" decoding="async" onClick={e=>{e.stopPropagation();openImg(s.counter_photo);}} title="รูปผู้นับ" style={{width:48,height:48,objectFit:"cover",borderRadius:10,border:`1px solid ${C.line}`,cursor:"pointer",flexShrink:0}}/>:<div style={{width:48,height:48,borderRadius:10,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.user||I.box} s={20} c={C.line}/></div>}
           <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{s.counter_name||"—"} {s.status==="approved"?<span style={{fontSize:10,fontWeight:800,color:C.green,background:C.greenLight,padding:"1px 7px",borderRadius:10,verticalAlign:"middle"}}>✅ อนุมัติแล้ว</span>:<span style={{fontSize:10,fontWeight:800,color:"#B45309",background:"#FFFBEB",padding:"1px 7px",borderRadius:10,verticalAlign:"middle"}}>⏳ รออนุมัติ</span>}</div>
-            <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(s.started_at)}{scopeBranches.length>1?` · 🏪 ${s.branch_name||""}`:""}</div>
+            {/* หัวแถว = วันที่ (ตัวแยกแต่ละรอบ) · ผู้นับย้ายไปบรรทัดรอง — บัญชีสาขาใช้ร่วมกันทำให้ชื่อซ้ำทุกแถว */}
+            <div style={{fontSize:14,fontWeight:800,color:C.ink}}>🕘 {fmtDt(s.started_at)} {s.status==="approved"?<span style={{fontSize:11,fontWeight:800,color:C.green,background:C.greenLight,padding:"2px 8px",borderRadius:10,verticalAlign:"middle"}}>✅ อนุมัติแล้ว</span>:<span style={{fontSize:11,fontWeight:900,color:"#B45309",background:"#FFFBEB",border:"1px solid #FCD34D",padding:"1px 8px",borderRadius:10,verticalAlign:"middle"}}>⏳ รออนุมัติ</span>}</div>
+            <div style={{fontSize:11.5,color:C.ink3,marginTop:2}}>ผู้นับ: {s.counter_name||"—"}{scopeBranches.length>1?` · 🏪 ${s.branch_name||""}`:""}</div>
           </div>
-          <button onClick={e=>{e.stopPropagation();exportSession(s);}} disabled={exportingId===s.id} title="ดาวน์โหลดเป็น Excel" style={{background:C.greenLight,border:`1px solid ${C.green}55`,borderRadius:8,padding:"5px 10px",cursor:exportingId===s.id?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:4,fontSize:11,fontWeight:800,color:C.green,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0}}>{exportingId===s.id?"กำลังสร้าง...":"📊 Excel"}</button>
+          <button onClick={e=>{e.stopPropagation();exportSession(s);}} disabled={exportingId===s.id} title="ดาวน์โหลดเป็น Excel" style={{background:C.greenLight,border:`1px solid ${C.green}55`,borderRadius:8,padding:"8px 12px",minHeight:36,cursor:exportingId===s.id?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:4,fontSize:12,fontWeight:800,color:C.green,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0}}>{exportingId===s.id?"กำลังสร้าง...":"📊 Excel"}</button>
           <span style={{fontSize:12,color:C.ink4}}>{on?"▼":"▶"}</span>
         </div>
         {on&&<div style={{borderTop:`1px solid ${C.lineLight}`,padding:"8px 12px",background:C.bg}}>
@@ -4595,7 +4596,8 @@ function StockSessionHistory({currentUser,branches=[],ings=[],onClose}){
 }
 // Gate before stock counting: capture WHO is counting (photo + name) for accountability.
 function StockCounterGate({currentUser,currentBranch,onConfirm,onClose}){
-  const[name,setName]=useState(currentUser?.name||currentUser?.username||"");
+  // เริ่มว่างเสมอ — เดิมเติมชื่อบัญชีให้ แต่บัญชีสาขาใช้ร่วมกัน ทุกรอบเลยถูกบันทึกเป็น "สาขา..." ไม่รู้ว่าใครนับ
+  const[name,setName]=useState("");
   const[photo,setPhoto]=useState(null);
   const[uploading,setUploading]=useState(false);
   const fileRef=useRef();
@@ -4616,11 +4618,12 @@ function StockCounterGate({currentUser,currentBranch,onConfirm,onClose}){
       :<button onClick={()=>fileRef.current?.click()} disabled={uploading} style={{width:150,height:150,borderRadius:14,border:`2px dashed ${C.brandBorder}`,background:C.brandLight,cursor:uploading?"wait":"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,color:C.brand}}>{uploading?<span style={{fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>กำลังอัป...</span>:<><Ic d={I.img} s={34} c={C.brand}/><span style={{fontSize:13,fontWeight:800,fontFamily:"'Sarabun',sans-serif"}}>📷 ถ่ายรูปผู้นับ</span></>}</button>}
       <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onPhoto} style={{display:"none"}}/>
     </div>
-    <Inp label="ชื่อผู้นับสต็อก *" value={name} onChange={e=>setName(e.target.value)} placeholder="ชื่อพนักงานที่นับ"/>
+    <Inp label="ชื่อผู้นับสต็อก *" value={name} onChange={e=>setName(e.target.value)} placeholder="ชื่อเล่นพนักงานที่นับ (ไม่ใช่ชื่อสาขา)"/>
     <div style={{display:"flex",gap:8,justifyContent:"flex-end",paddingTop:14,marginTop:14,borderTop:`1px solid ${C.line}`}}>
       <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
       <Btn v="success" onClick={start} loading={starting} disabled={!ready||starting} icon={I.check}>เริ่มนับสต็อก</Btn>
     </div>
+    {!ready&&!starting&&<div style={{fontSize:12,color:C.ink3,textAlign:"right",marginTop:6,fontFamily:"'Sarabun',sans-serif"}}>{uploading?"กำลังอัปโหลดรูป...":!photo?"📷 ถ่ายรูปผู้นับก่อน จึงจะกดเริ่มได้":"✍️ ใส่ชื่อผู้นับก่อน จึงจะกดเริ่มได้"}</div>}
   </Modal>;
 }
 // Stock-count history for one ingredient at the current branch — every saved count
@@ -4683,7 +4686,7 @@ function StockHistoryModal({ing,currentBranch,branches=[],onClose}){
   const fmtDt=ms=>fmtDT(ms);
   const META={count:{ic:I.clock,c:C.brand,bg:C.brandLight,l:"📋 นับสต็อก"},recv_ext:{ic:I.truck,c:C.teal,bg:C.tealLight,l:"📥 รับจากซัพพลายนอก"},po_in:{ic:I.box,c:C.green,bg:C.greenLight,l:"📥 รับเข้า"},po_out:{ic:I.send,c:C.blue,bg:C.blueLight,l:"📤 ส่งออก"},waste:{ic:I.trash,c:C.red,bg:C.redLight,l:"🗑️ ของเสีย"},sop:{ic:I.leaf,c:C.purple,bg:"#F5F3FF",l:"🍲 ใช้ผลิตตามสูตร (SOP)"},made:{ic:I.leaf,c:C.green,bg:C.greenLight,l:"🍳 ผลิตเสร็จเข้าสต๊อก"}};
   return <Modal title={`🕘 ประวัติการเคลื่อนไหวสต็อก — ${ing.name}`} onClose={onClose} wide>
-    <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>สาขา: <b style={{color:C.ink2}}>{currentBranch?.name||"—"}</b> · รวมทุกการเปลี่ยนแปลง: นับสต็อก · รับจากซัพ · รับ/ส่ง PO · ของเสีย</div>
+    <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>สาขา: <b style={{color:C.ink2}}>{currentBranch?.name||"—"}</b> · รวมทุกการเปลี่ยนแปลง: นับสต็อก · รับจากซัพ · รับ/ส่ง PO · ของเสีย · ผลิต (SOP)</div>
     {rows===null?<div style={{textAlign:"center",padding:"40px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลด...</div>
     :err?<div style={{textAlign:"center",padding:"36px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>โหลดประวัติไม่สำเร็จ — เครือข่าย/เซิร์ฟเวอร์ช้า<div style={{marginTop:10}}><Btn v="ghost" onClick={load}>↻ ลองใหม่</Btn></div></div>
     :rows.length===0?<div style={{textAlign:"center",padding:"50px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติการเคลื่อนไหวสต็อก</div>
@@ -4695,7 +4698,7 @@ function StockHistoryModal({ing,currentBranch,branches=[],onClose}){
           <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"baseline"}}>
             <span style={{fontSize:13,fontWeight:800,color:m.c}}>{m.l}</span>
             {r.k==="count"
-              ?<span style={{fontSize:12.5,color:C.ink4}}>ก่อน <b style={{color:C.ink2}}>{r.prev}</b> → หลัง <b style={{color:C.brand}}>{r.nw}</b> · ต่าง <b style={{color:r.delta>0?C.green:r.delta<0?C.red:C.ink3}}>{r.delta>0?`+${r.delta}`:r.delta}</b> {unit}</span>
+              ?<span style={{display:"inline-flex",alignItems:"baseline",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}><span style={{fontSize:11.5,color:C.ink4}}>ก่อน {round2(r.prev)} → นับได้ <b style={{color:C.ink2}}>{round2(r.nw)}</b></span><span style={{fontSize:15,fontWeight:900,color:r.delta>0?C.green:r.delta<0?C.red:C.ink3}}>{r.delta>0?`+${r.delta}`:r.delta} <span style={{fontSize:11,fontWeight:600,color:C.ink4}}>{unit}</span></span></span>
               :<span style={{fontSize:15,fontWeight:900,color:r.delta>0?C.green:C.red}}>{r.delta>0?`+${round2(r.delta)}`:round2(r.delta)} <span style={{fontSize:11,fontWeight:600,color:C.ink4}}>{unit}</span></span>}
           </div>
           <div style={{fontSize:11,color:C.ink4,marginTop:2}}>🕘 {fmtDt(r.at)}{r.by?` · โดย ${r.by}`:""}{r.ref?` · ${r.ref}`:""}</div>
@@ -4991,6 +4994,8 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   // Aggregate actual purchase prices from delivered external-supplier orders.
   // Central kitchen sees the cross-branch view via allOrders; branches use
   // their own scoped orders. Each entry: {min,max,count,latest}.
+  // ซัพนอกเท่านั้น — ไม่รวม PO ที่รับจากครัวกลาง (PriceHistoryModal รวมให้ แต่ต้องดึงทีละวัตถุดิบ)
+  // การ์ดจึงเขียนว่า "ราคาซัพนอก" ไม่ใช่ "ราคาซื้อจริง" เพื่อไม่ให้ตัวเลขบนการ์ดขัดกับหน้าประวัติ
   const priceRangeByIng=useMemo(()=>{
     const src=isCentral&&allOrders&&allOrders.length?allOrders:(orders||[]);
     const map=new Map();
@@ -5359,7 +5364,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   // Assign a branch-specific supplier to an ingredient (non-central branches pick from their own list)
   async function assignBranchSupplier(item,supplierId){
     const next=setBranchSupplierInJson(item.supplier_by_branch,currentBranch.id,supplierId);
-    try{await api.updateIng(item.id,{supplier_by_branch:next});await reload();}
+    try{await api.updateIng(item.id,{supplier_by_branch:next});await reload();posToast(supplierId?"✅ ตั้งซัพพลายของสาขาแล้ว":"✅ ล้างซัพพลายของสาขาแล้ว","ok");}
     catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
   }
   // Suppliers for current branch (own list)
@@ -5421,6 +5426,11 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   },[ings,currentBranch,isCentral,branches,suppliers]);
   const R=(reportScope==="org"&&report.org)?report.org:report.branch;
   return <div>
+    {/* งานหลักของแท็บนี้ — นับสต็อก อยู่บนสุด เห็นทันทีบน iPad ไม่ต้องเลื่อนผ่านรายงาน/กริดหมวด */}
+    <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+      <Btn v="success" onClick={startStockCount} loading={stockBtnLoading} s={{padding:"12px 24px",fontSize:15,fontWeight:800}}>📦 นับสต็อก</Btn>
+      <Btn v="ghost" onClick={()=>setShowSessionHist(true)}>🕘 ประวัติการนับ</Btn>
+    </div>
     {/* 📊 รายงานวัตถุดิบ — การ์ด KPI กดดูรายละเอียด + สลับมุมมองสาขา/องค์กร */}
     <div style={{marginBottom:16,fontFamily:"'Sarabun',sans-serif"}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
@@ -5441,7 +5451,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
         <RptCard icon={I.truck} label="ซัพพลายเออร์" value={R.supList.length} sub={R.supList[0]?`สูงสุด: ${R.supList[0].name}`:""} accent={C.teal} onClick={()=>setReportModal("sup")}/>
       </div>
     </div>
-    {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>วัตถุดิบจัดการโดยสาขาครัวกลางเท่านั้น • สาขานี้ดูข้อมูลได้อย่างเดียว</span></div>}
+    {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>ข้อมูลวัตถุดิบ (ชื่อ ราคา หมวด หน่วย) แก้ได้ที่ครัวกลางเท่านั้น • สาขานับสต็อกและเลือกซัพพลายของสาขาเองได้</span></div>}
     <div style={{marginBottom:16}}>
       {/* Show-all filter + hint + new-main-group control */}
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
@@ -5527,8 +5537,6 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
       <div style={{position:"relative",flex:1,minWidth:220}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>{setQ(e.target.value);setPg(1);}} placeholder="ค้นหาวัตถุดิบ..." style={{...iS,paddingLeft:40}}/></div>
-      <Btn v="success" onClick={startStockCount} loading={stockBtnLoading} icon={I.box}>📦 นับสต็อก</Btn>
-      <Btn v="ghost" onClick={()=>setShowSessionHist(true)} icon={I.clock}>🕘 ประวัติการนับ</Btn>
       {canE&&<Btn onClick={()=>{setForm(ef);setEditId(null);setOpen(true);}} icon={I.plus}>เพิ่มวัตถุดิบ</Btn>}
       {/* Export เปิดให้ทุก user — สาขาต้องดึงรายการวัตถุดิบของตัวเองไปใช้หน้างานได้เอง
           โดยไม่ต้องรอส่วนกลาง (ไฟล์มีแค่ รหัส/ชื่อ/สต๊อกของสาขานั้น/ซัพพลาย/ช่วงราคา)
@@ -5607,30 +5615,35 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
                   return sn&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:3}}><Ic d={I.truck} s={10} c={C.teal}/>ซัพพลาย: {sn}</div>;})())
                 :<div style={{display:"flex",alignItems:"center",gap:5,marginTop:4}}>
                   <Ic d={I.truck} s={11} c={C.teal}/>
-                  <select value={branchSupplierId(item,currentBranch?.id)||""} onChange={e=>assignBranchSupplier(item,e.target.value||null)} style={{...iS,fontSize:11,padding:"4px 8px",height:26,appearance:"none",flex:1,minWidth:0,background:branchSupplierId(item,currentBranch?.id)?C.tealLight:C.white,color:branchSupplierId(item,currentBranch?.id)?C.teal:C.ink4,fontWeight:700,border:`1px solid ${branchSupplierId(item,currentBranch?.id)?C.teal+"55":C.line}`}}>
-                    <option value="">— เลือกซัพพลาย —</option>
-                    {myBranchSuppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+                  {/* ช่องนี้กดแล้วบันทึกทันที — ใส่ลูกศร ▾ ให้รู้ว่าเป็นตัวเลือก ไม่ใช่ป้ายเฉยๆ */}
+                  <div style={{position:"relative",flex:1,minWidth:0}}>
+                    <select value={branchSupplierId(item,currentBranch?.id)||""} onChange={e=>assignBranchSupplier(item,e.target.value||null)} style={{...iS,fontSize:12,padding:"4px 26px 4px 10px",height:36,appearance:"none",cursor:"pointer",width:"100%",minWidth:0,background:branchSupplierId(item,currentBranch?.id)?C.tealLight:C.white,color:branchSupplierId(item,currentBranch?.id)?C.teal:C.ink4,fontWeight:700,border:`1px solid ${branchSupplierId(item,currentBranch?.id)?C.teal+"55":C.line}`}}>
+                      <option value="">— เลือกซัพพลาย —</option>
+                      {myBranchSuppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                    <span style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",pointerEvents:"none",fontSize:11,color:branchSupplierId(item,currentBranch?.id)?C.teal:C.ink4}}>▾</span>
+                  </div>
                 </div>}
             </div>
           </div>
           <div style={{padding:"10px 14px 14px",borderTop:`1px solid ${C.lineLight}`}}>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:6}}>
-              {[{l:"ซื้อมา",v:`฿${item.buy_price}`,sub:`${item.buy_amount} ${item.buy_unit}`,bg:C.lineLight,tc:C.ink},{l:"รวมกรัม",v:`${(+item.convert_to_gram).toLocaleString()}g`,sub:"ทั้งหมด",bg:C.brandLight,tc:C.brand},{l:"ราคา/กรัม",v:`฿${(+item.price_per_gram).toFixed(3)}`,sub:"ต่อ 1g",bg:C.greenLight,tc:C.green}].map(st=><div key={st.l} style={{background:st.bg,borderRadius:10,padding:"8px 10px",textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>{st.l}</div><div style={{fontSize:13,fontWeight:800,color:st.tc,fontFamily:"'Sarabun',sans-serif"}}>{st.v}</div><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{st.sub}</div></div>)}
+              {[{l:"ซื้อมา",v:`฿${item.buy_price}`,sub:`${item.buy_amount} ${item.buy_unit}`,bg:C.lineLight,tc:C.ink},{l:"รวมกรัม",v:`${(+item.convert_to_gram).toLocaleString()}g`,sub:"ทั้งหมด",bg:C.lineLight,tc:C.ink2},{l:"ราคา/กรัม",v:`฿${(+item.price_per_gram).toFixed(3)}`,sub:"ต่อ 1g",bg:C.greenLight,tc:C.green}].map(st=><div key={st.l} style={{background:st.bg,borderRadius:10,padding:"8px 10px",textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>{st.l}</div><div style={{fontSize:13,fontWeight:800,color:st.tc,fontFamily:"'Sarabun',sans-serif"}}>{st.v}</div><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{st.sub}</div></div>)}
             </div>
-            {(()=>{const r=priceRangeByIng.get(+item.id);const fmt=n=>(+n).toLocaleString(undefined,{minimumFractionDigits:n%1===0?0:2,maximumFractionDigits:2});const same=r&&Math.abs(r.min-r.max)<0.005;const hasHist=!!r;const bg=hasHist?"#FFFBEB":"#F8FAFC";const bd=hasHist?"#FDE68A":C.line;const txt=hasHist?"#92400E":C.ink3;return <button type="button" onClick={()=>setPriceHistoryItem(item)} title="ดูประวัติราคา + ช่วงเวลาที่เคยซื้อ" style={{display:"flex",alignItems:"center",gap:6,fontSize:11,marginBottom:6,padding:"4px 9px",background:bg,border:`1px solid ${bd}`,borderRadius:8,fontFamily:"'Sarabun',sans-serif",flexWrap:"wrap",cursor:"pointer",width:"100%",textAlign:"left",transition:"box-shadow .15s"}} onMouseEnter={e=>e.currentTarget.style.boxShadow=`0 0 0 2px ${bd}66`} onMouseLeave={e=>e.currentTarget.style.boxShadow="none"}>
-              <span style={{color:txt,fontWeight:700}}>💰 ราคาซื้อจริง</span>
+            {(()=>{const r=priceRangeByIng.get(+item.id);const fmt=n=>(+n).toLocaleString(undefined,{minimumFractionDigits:n%1===0?0:2,maximumFractionDigits:2});const same=r&&Math.abs(r.min-r.max)<0.005;const hasHist=!!r;const bg=hasHist?"#FFFBEB":"#F8FAFC";const bd=hasHist?"#FDE68A":C.line;const txt=hasHist?"#92400E":C.ink3;return <button type="button" onClick={()=>setPriceHistoryItem(item)} title={isCentral?"ช่วงราคานี้นับเฉพาะใบสั่งซัพนอกที่รับของแล้ว · กดดูประวัติราคาทั้งหมด":"ช่วงราคานี้นับเฉพาะใบสั่งซัพนอกที่รับของแล้ว · กดดูประวัติทั้งหมด รวมของที่รับจากครัวกลาง"} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,marginBottom:6,padding:"4px 9px",background:bg,border:`1px solid ${bd}`,borderRadius:8,fontFamily:"'Sarabun',sans-serif",flexWrap:"wrap",cursor:"pointer",width:"100%",textAlign:"left",transition:"box-shadow .15s"}} onMouseEnter={e=>e.currentTarget.style.boxShadow=`0 0 0 2px ${bd}66`} onMouseLeave={e=>e.currentTarget.style.boxShadow="none"}>
+              <span style={{color:txt,fontWeight:700}}>💰 ราคาซัพนอก</span>
               {hasHist
                 ?(same
                   ?<b style={{color:txt,fontSize:13}}>฿{fmt(r.min)}/{item.buy_unit||"หน่วย"}</b>
                   :<><b style={{color:txt,fontSize:13}}>฿{fmt(r.min)}</b><span style={{color:txt}}>–</span><b style={{color:txt,fontSize:13}}>฿{fmt(r.max)}</b><span style={{color:txt,fontSize:11}}>/{item.buy_unit||"หน่วย"}</span></>)
-                :<span style={{color:C.ink4,fontStyle:"italic"}}>ยังไม่มีประวัติ</span>}
-              <span style={{marginLeft:"auto",color:C.ink4,fontSize:10,fontWeight:700}}>{hasHist?`เคยซื้อ ${r.count} ครั้ง`:"ดูประวัติ"} <span style={{color:txt}}>›</span></span>
+                :<span style={{color:C.ink4,fontStyle:"italic"}}>ยังไม่เคยซื้อจากซัพนอก</span>}
+              <span style={{marginLeft:"auto",color:C.ink4,fontSize:10,fontWeight:700}}>{hasHist?`${r.count} ครั้ง · ดูทั้งหมด`:(isCentral?"ดูประวัติ":"ดูประวัติ (รวมครัวกลาง)")} <span style={{color:txt}}>›</span></span>
             </button>;})()}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
               <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0,flexWrap:"wrap"}}>
-                {(()=>{const bs=branchStock(item,currentBranch?.id);const safety=branchSafety(item,currentBranch?.id);const low=safety>0&&bs<safety;return <span style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>สต็อก ({currentBranch?.name||"—"}): <b style={{color:low?C.red:C.green}}>{bs} {item.buy_unit}</b>{safety>0&&<span style={{fontSize:10,color:C.ink4,marginLeft:4}}>· safety {safety}</span>}</span>;})()}
-                <button onClick={()=>setStockHistItem(item)} title="ประวัติการนับสต๊อก" style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:7,padding:"2px 8px",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:3,fontSize:10,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0}}><Ic d={I.clock} s={11} c={C.ink3}/>ประวัติ</button>
+                {/* กติกาสีเดียวกับมุมมองตาราง: ติดลบ=แดง+⚠️ · ต่ำกว่า safety=ส้ม · ปกติ=เขียว (เดิมติดลบแต่ไม่ตั้ง safety ขึ้นเขียว) */}
+                {(()=>{const bs=branchStock(item,currentBranch?.id);const safety=branchSafety(item,currentBranch?.id);const neg=bs<-1e-9;const low=safety>0&&bs<safety;return <span style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>สต็อก ({currentBranch?.name||"—"}): <b style={{fontSize:15,fontWeight:900,color:neg?C.red:low?"#EA580C":C.green}}>{round2(bs)}</b> <span style={{fontSize:11,fontWeight:700,color:C.ink3}}>{item.buy_unit}</span>{neg&&" ⚠️"}{safety>0&&<span style={{fontSize:10,color:C.ink4,marginLeft:4}}>· safety {safety}</span>}</span>;})()}
+                <button onClick={()=>setStockHistItem(item)} title="ประวัติการเคลื่อนไหวสต็อก" style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:8,padding:"6px 11px",minHeight:34,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4,fontSize:12,fontWeight:700,color:C.ink3,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap",flexShrink:0}}><Ic d={I.clock} s={13} c={C.ink3}/>ประวัติสต็อก</button>
               </div>
               <EditedBy username={item.edit_by} editAt={item.edit_at}/>
             </div>
