@@ -6281,13 +6281,13 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     XLSX.utils.book_append_sheet(wb,ws,"เมนู");
     XLSX.writeFile(wb,`Menus_${todayStr()}.xlsx`);
   }
-  const catTabBtn=(label,active,onClick)=><button onClick={onClick} style={{padding:"6px 14px",borderRadius:20,border:`1.5px solid ${active?C.brand:C.line}`,background:active?C.brandLight:"transparent",color:active?C.brand:C.ink3,cursor:"pointer",fontSize:13,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{label}</button>;
+  const catTabBtn=(label,active,onClick)=><button onClick={onClick} style={{padding:"8px 16px",minHeight:38,borderRadius:20,border:`1.5px solid ${active?C.brand:C.line}`,background:active?C.brand:C.white,color:active?C.white:C.ink2,cursor:"pointer",fontSize:14,fontWeight:700,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{label}</button>;
   return <div>
-    {!isCentral&&<div style={{background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}><Ic d={I.warning} s={16} c="#F59E0B"/><span style={{fontSize:13,color:"#92400E",fontFamily:"'Sarabun',sans-serif"}}>เมนูจัดการโดยครัวกลางเท่านั้น • หมวดหมู่ก็มาจากครัวกลาง • สาขานี้กำหนดสถานะสินค้าได้</span></div>}
+    {!isCentral&&<div style={{background:C.bg,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}><Ic d={I.lock} s={14} c={C.ink3}/><span style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.5}}>เมนู ราคา และหมวดหมู่ ตั้งจากครัวกลาง{hasPerm(currentUser,"pos")?<> · จะตั้ง "วันนี้หมด" หรือซ่อนเมนู ไปที่ <b style={{color:C.ink2}}>ขายหน้าร้าน → 🍔 จัดการเมนูและหมวดหมู่</b></>:" · สาขานี้ดูข้อมูลได้อย่างเดียว"}</span></div>}
     <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap",alignItems:"center",padding:"10px 14px",background:C.bg,borderRadius:14,border:`1px solid ${C.line}`}}>
       {catTabBtn("ทั้งหมด",selCat==="ทั้งหมด",()=>setSelCat("ทั้งหมด"))}
       {localCats.map(cat=>editingCatId===cat.id
-        ?<input key={cat.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape")setEditingCatId(null);}} autoFocus style={{...iS,width:110,padding:"5px 10px",fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
+        ?<input key={cat.id} value={editingCatName} onChange={e=>setEditingCatName(e.target.value)} onBlur={saveCatRename} onKeyDown={e=>{if(e.key==="Enter")saveCatRename();if(e.key==="Escape")setEditingCatId(null);}} autoFocus style={{...iS,width:110,padding:"5px 10px",minHeight:38,fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
         :<div key={cat.id} style={{display:"flex",alignItems:"center"}}>
           {catTabBtn(cat.name,selCat===cat.name,()=>setSelCat(cat.name))}
           {isCentral&&!cat.noRow&&<button onClick={()=>{setEditingCatId(cat.id);setEditingCatName(cat.name);}} style={{marginLeft:2,background:"none",border:"none",cursor:"pointer",padding:3,display:"flex"}}><Ic d={I.pencil} s={11} c={C.ink4}/></button>}
@@ -6296,15 +6296,15 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
       )}
       {addingCat
         ?<div style={{display:"flex",gap:4,alignItems:"center"}}>
-          <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addCat();if(e.key==="Escape"){setAddingCat(false);setNewCatName("");}}} autoFocus placeholder="ชื่อหมวดหมู่..." style={{...iS,width:120,padding:"5px 10px",fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
+          <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addCat();if(e.key==="Escape"){setAddingCat(false);setNewCatName("");}}} autoFocus placeholder="ชื่อหมวดหมู่..." style={{...iS,width:120,padding:"5px 10px",minHeight:38,fontSize:13,borderRadius:20,border:`1.5px solid ${C.brand}`}}/>
           <Btn v="success" onClick={addCat} s={{padding:"5px 12px",fontSize:12}}>ตกลง</Btn>
           <Btn v="ghost" onClick={()=>{setAddingCat(false);setNewCatName("");}} s={{padding:"5px 10px",fontSize:12}}>ยกเลิก</Btn>
         </div>
-        :isCentral&&<button onClick={()=>setAddingCat(true)} style={{padding:"6px 12px",borderRadius:20,border:`1.5px dashed ${C.line}`,background:"transparent",color:C.ink4,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.plus} s={11} c={C.ink4}/>เพิ่มหมวด</button>
+        :isCentral&&<button onClick={()=>setAddingCat(true)} style={{padding:"6px 12px",minHeight:38,borderRadius:20,border:`1.5px dashed ${C.line}`,background:"transparent",color:C.ink4,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.plus} s={11} c={C.ink4}/>เพิ่มหมวด</button>
       }
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20}}>
-      <div style={{position:"relative",flex:1}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:40}}/></div>
+      <div style={{position:"relative",flex:1}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:40,paddingRight:44}}/>{q&&<button type="button" onClick={()=>setQ("")} aria-label="ล้างคำค้น" title="ล้างคำค้น" style={{position:"absolute",right:4,top:"50%",transform:"translateY(-50%)",width:36,height:36,border:"none",background:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={16} c={C.ink3}/></button>}</div>
       {canE&&selCat!=="ทั้งหมด"&&<Btn onClick={()=>{setForm({name:"",code:"",category:selCat,price:"",description:"",image:null,ingredients:[],sop:[],prep_time:"",packaging:""});setEditId(null);setIngQ("");setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
       {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImportMenu(true)} icon={I.ul}>Import</Btn>}
@@ -6313,13 +6313,20 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
       <div style={{fontSize:36,marginBottom:6,opacity:.5}}>🍽️</div>
       <div style={{fontSize:13}}>{q.trim()?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูในหมวดนี้"}</div>
     </div>}
-    <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(4,minmax(0,1fr))",gap:16}}>
-      {filtered.map(menu=>{const cost=mcost(menu);const profit=menu.price-cost;const mg=menu.price>0?profit/menu.price*100:0;const mc=marginColor(mg);return <Card key={menu.id} hover style={{overflow:"hidden"}}>
+    {/* ไม่เกิน 4 คอลัมน์ (เจ้าของอยากได้ 4 ต่อแถวบนจอคอม — 3b7925c) แต่ iPad แนวนอนเหลือ 3 แนวตั้งเหลือ 2
+        เดิม fix 4 คอลัมน์ทุกจอ ≥768 → บน iPad การ์ดแคบ ~116px ตัวเลขราคา/ต้นทุนล้นทับกัน */}
+    <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(auto-fill,minmax(max(230px,calc((100% - 48px) / 4)),1fr))",gap:16}}>
+      {filtered.map(menu=>{const cost=mcost(menu);const profit=menu.price-cost;
+        // ราคา 0 (เช่นรีฟิลในบุฟเฟต์) หรือยังไม่มีต้นทุน (ไม่มีสูตร/วัตถุดิบไม่มีราคา) → ไม่ตัดสินกำไร
+        // เดิมราคา 0 ขึ้นแดง "ต่ำ" ทั้งที่ตั้งใจให้ฟรี และต้นทุน 0 ขึ้นเขียว "ดี" 100% ทั้งที่ยังไม่รู้ต้นทุน
+        const noPrice=!(+menu.price>0);const noCost=!(cost>0);const mg=noPrice?0:profit/menu.price*100;const mc=(noPrice||noCost)?C.ink4:marginColor(mg);
+        return <Card key={menu.id} hover style={{overflow:"hidden"}}>
         <div style={{height:5,background:`linear-gradient(90deg,${mc},${mc}66)`}}/>
-        {menu.image?<img src={driveImgSrc(menu.image,160)} alt={menu.name} loading="lazy" decoding="async" style={{width:"100%",height:130,objectFit:"cover"}}/>:<div style={{height:80,background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/></div>}
+        {/* หัวการ์ดสูงเท่ากันทุกใบ (มี/ไม่มีรูป) ตัวเลขในแถวเดียวกันจะเรียงตรงกัน · รูปโหลดไม่ได้ → เห็นไอคอนแทน */}
+        <div style={{height:110,position:"relative",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/>{menu.image&&<img src={driveImgSrc(menu.image,160)} alt="" loading="lazy" decoding="async" onError={e=>{e.currentTarget.style.display="none";}} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>}</div>
         <div style={{padding:"12px 16px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-            <div><div style={{fontWeight:800,fontSize:16,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{menu.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>{canE?<select value={menu.category||""} onClick={e=>e.stopPropagation()} onChange={async e=>{try{await api.updateMenu(menu.id,{category:e.target.value});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} title="เปลี่ยนหมวดหมู่ของเมนูนี้" style={{fontSize:11,fontWeight:800,color:C.blue,background:C.blueLight,border:`1px solid ${C.blue}40`,borderRadius:20,padding:"3px 9px",fontFamily:"'Sarabun',sans-serif",cursor:"pointer",maxWidth:160}}><option value="">— ไม่มีหมวด —</option>{localCats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}{menu.category&&!localCats.some(c=>c.name===menu.category)&&<option value={menu.category}>{menu.category}</option>}</select>:<Chip color="blue">{menu.category}</Chip>}{menu.code&&<span style={{fontSize:10,fontWeight:800,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"1px 7px",borderRadius:8,fontFamily:"monospace",whiteSpace:"nowrap"}}>🔖 {menu.code}</span>}</div></div>
+            <div><div style={{fontWeight:800,fontSize:16,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{menu.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>{canE?<select value={menu.category||""} onClick={e=>e.stopPropagation()} onChange={async e=>{try{await api.updateMenu(menu.id,{category:e.target.value});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} title="เปลี่ยนหมวดหมู่ของเมนูนี้" style={{fontSize:11,fontWeight:800,color:C.blue,background:C.blueLight,border:`1px solid ${C.blue}40`,borderRadius:20,padding:"3px 9px",fontFamily:"'Sarabun',sans-serif",cursor:"pointer",maxWidth:160}}><option value="">— ไม่มีหมวด —</option>{localCats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}{menu.category&&!localCats.some(c=>c.name===menu.category)&&<option value={menu.category}>{menu.category}</option>}</select>:<Chip color={menuCatOf(menu)?"blue":"gray"}>{menuCatOf(menu)||"ยังไม่กำหนดหมวด"}</Chip>}{menu.code&&<span style={{fontSize:10,fontWeight:800,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"1px 7px",borderRadius:8,fontFamily:"monospace",whiteSpace:"nowrap"}}>🔖 {menu.code}</span>}</div></div>
             <div style={{display:"flex",gap:4}}>
               {canE&&<button onClick={async()=>{try{const newPos=menu.quick_key_pos!=null?null:(menus.reduce((m,x)=>Math.max(m,x.quick_key_pos||0),0)+1);await api.updateMenu(menu.id,{quick_key_pos:newPos});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} title={menu.quick_key_pos!=null?"ยกเลิกปักหมุด":"ปักหมุดเป็น Quick Key"} style={{background:menu.quick_key_pos!=null?"#FEF3C7":C.lineLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><span style={{fontSize:13}}>{menu.quick_key_pos!=null?"⭐":"☆"}</span></button>}
               {canE&&<button onClick={()=>{setForm({name:menu.name,code:menu.code||"",category:menu.category,price:menu.price,description:menu.description||"",image:menu.image,ingredients:menu.ingredients||[],sop:menu.sop||[],prep_time:menu.prep_time||"",packaging:menu.packaging||""});setEditId(menu.id);setIngQ("");setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:6,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>}
@@ -6327,16 +6334,11 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
             </div>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-            {[{l:"ราคาขาย",v:`฿${menu.price}`,c:C.ink},{l:"ต้นทุน",v:`฿${cost.toFixed(1)}`,c:C.brand},{l:"กำไร %",v:`${mg.toFixed(0)}%`,c:mc}].map(s=><div key={s.l} style={{background:C.bg,borderRadius:10,padding:8,textAlign:"center"}}><div style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:14,fontWeight:800,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div>)}
+            {/* กำไร % คือตัวเลขที่ต้องเห็นก่อน → ใหญ่สุดและมีพื้นสีตามระดับกำไร · ต้นทุนไม่ใช้สีส้ม (สีเตือน/ปุ่มหลัก) */}
+            {[{l:"ราคาขาย",v:`฿${menu.price}`,c:C.ink},{l:"ต้นทุน",v:`฿${cost.toFixed(1)}`,c:C.ink2},{l:"กำไร %",v:(noPrice||noCost)?"—":`${mg.toFixed(0)}%`,c:mc,hi:true}].map(s=><div key={s.l} style={{background:s.hi?`${mc}14`:C.bg,border:`1px solid ${s.hi?`${mc}40`:"transparent"}`,borderRadius:10,padding:"8px 4px",textAlign:"center"}}><div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:s.hi?19:17,fontWeight:800,lineHeight:1.2,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div></div>)}
           </div>
-          <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}><Chip color={mg>=60?"green":mg>=40?"yellow":"red"}>{marginLabel(mg)}</Chip><EditedBy username={menu.edit_by} editAt={menu.edit_at}/></div>
-          {!isCentral&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.lineLight}`}}>
-            <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif"}}>จัดเข้าหมวดหมู่:</div>
-            {/* บล็อกนี้อยู่ใน !isCentral อยู่แล้ว — สาขาดูได้อย่างเดียว ครัวกลางเป็นคนจัด */}
-            <div style={{fontSize:12,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif",padding:"4px 0"}}>
-              {menuCatOf(menu)||"— ยังไม่กำหนดหมวด —"}
-            </div>
-          </div>}
+          <div style={{marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}}>{noPrice?<Chip color="gray">ไม่มีราคาขาย</Chip>:noCost?<Chip color="gray">ยังไม่มีต้นทุน</Chip>:<Chip color={mg>=60?"green":mg>=40?"yellow":"red"}>{marginLabel(mg)}</Chip>}<EditedBy username={menu.edit_by} editAt={menu.edit_at}/></div>
+          {/* สาขา: หมวดแสดงที่ชิปใต้ชื่อเมนูแล้ว (เดิมมีบล็อก "จัดเข้าหมวดหมู่" ซ้ำอีกรอบ ทั้งที่สาขาแก้ไม่ได้) */}
           {isCentral&&<div style={{marginTop:6,padding:"8px 0 2px",borderTop:`1px solid ${C.lineLight}`}}>
             <div style={{fontSize:10,color:C.ink4,marginBottom:4,fontFamily:"'Sarabun',sans-serif",display:"flex",alignItems:"center",gap:4}}><Ic d={I.branch} s={10} c={C.ink4}/>แสดงที่สาขา:</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
