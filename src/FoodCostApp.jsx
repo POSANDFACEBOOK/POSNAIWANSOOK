@@ -8465,7 +8465,7 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
     if(!cart.length){alert("ยังไม่มีรายการ — เพิ่มอย่างน้อย 1 รายการ");return;}
     const nAsset=cart.filter(x=>x.kind==="asset").length,nOther=cart.filter(x=>x.kind==="other").length;
     const lines=cart.map(x=>`• ${x.kind==="other"?"[ใหม่] ":""}${x.name} × ${x.qty} ชิ้น`).join("\n");
-    if(!await confirmDlg({title:"ยืนยันสั่งซื้อสินทรัพย์/อุปกรณ์",message:`${lines}\n\nรวม ${cart.length} รายการ (สินทรัพย์ ${nAsset} · อุปกรณ์อื่น ${nOther})\n\n⚠️ กรุณาแจ้งบอสในไลน์ก่อน — เป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะอนุมัติได้`,confirmLabel:"สั่งซื้อ"}))return;
+    if(!await confirmDlg({title:"ยืนยันสั่งซื้อสินทรัพย์/อุปกรณ์",message:`${lines}\n\nรวม ${cart.length} รายการ (สินทรัพย์ ${nAsset} · อุปกรณ์อื่น ${nOther})\n\n⚠️ กรุณาแจ้งบอสในไลน์ก่อน — เป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะอนุมัติได้`,confirmLabel:"สั่งซื้อ",danger:false}))return;
     savingRef.current=true;setSaving(true);
     try{
       await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"asset",items:cart,reason:null,status:firstDocStatus("pr"),...autoApproved(),created_by:currentUser?.username||currentUser?.name||"",updated_at:new Date().toISOString()});
@@ -8536,7 +8536,7 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
       </div>
       <div style={{marginTop:14,padding:"10px 12px",background:C.yellowLight,border:`1px solid ${C.yellow}`,borderRadius:10,fontSize:12.5,color:"#92600A"}}>⚠️ เมื่อกดสั่งซื้อ กรุณา <b>แจ้งบอสในไลน์ก่อน</b> — เป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะกดอนุมัติได้</div>
       <div style={{display:"flex",gap:8,marginTop:14}}>
-        <Btn onClick={onClose} s={{background:C.bg,color:C.ink3}}>ยกเลิก</Btn>
+        <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
         <Btn onClick={submit} loading={saving} disabled={saving||!cart.length} icon={I.check} s={{flex:1,background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สั่งซื้อ ({cart.length})</Btn>
       </div>
     </div>
@@ -8749,7 +8749,8 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     if(fTo){const t=new Date(fTo+"T23:59:59").getTime();l=l.filter(p=>{const d=parseAnyDate(p.created_at);return d&&d.getTime()<=t;});}
     return l;
   },[prs,fStatus,fBranch,fFrom,fTo]);
-  const estTotal=useMemo(()=>filtered.reduce((s,p)=>s+(p.items||[]).reduce((a,it)=>{const ing=ings.find(x=>+x.id===+it.ingredient_id);return a+(+it.qty||0)*(+ing?.buy_price||0);},0),0),[filtered,ings]);
+  // ใบขอซื้อสินทรัพย์เก็บราคาไว้ที่ price_per_unit ของรายการ (ไม่มีวัตถุดิบให้ดู buy_price) — เดิมขึ้น ฿0
+  const estTotal=useMemo(()=>filtered.reduce((s,p)=>s+(p.items||[]).reduce((a,it)=>{const ing=ings.find(x=>+x.id===+it.ingredient_id);return a+(+it.qty||0)*(+it.price_per_unit||+ing?.buy_price||0);},0),0),[filtered,ings]);
   const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false),[branches]);
   const statusChips=[{v:"",l:"📋 ทั้งหมด",c:C.brand},{v:"pending_approval",l:"⏳ รออนุมัติ",c:"#B45309"},{v:"approved",l:"✅ อนุมัติแล้ว",c:C.teal},{v:"converted",l:"📦 ออกซื้อแล้ว",c:C.blue}];
   return <div>
@@ -8759,14 +8760,15 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         <div style={{fontSize:12,color:C.ink4,marginTop:2}}>ทุกสาขา (รวมครัวกลาง) ขอ → Area อนุมัติ → ครัวกลางออกใบส่ง · <b style={{color:C.ink3}}>ไม่ตัดสต๊อก</b></div>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        {onOrderMaterials&&hasPerm(currentUser,"orders")&&<Btn v="teal" onClick={onOrderMaterials} icon={I.truck}>สั่งวัตถุดิบเปิดPR</Btn>}
+        {/* งานประจำวันของสาขา = ปุ่มหลัก (ใหญ่ สีแบรนด์) · สินทรัพย์/โอน ใช้นานๆ ครั้ง → ghost */}
+        {onOrderMaterials&&hasPerm(currentUser,"orders")&&<Btn v="primary" onClick={onOrderMaterials} icon={I.truck} s={{padding:"12px 24px",fontSize:15,fontWeight:800}}>สั่งวัตถุดิบ (เปิด PR)</Btn>}
         {/* เปิดให้ทุกสาขา (รวมครัวกลาง) และทุก user — เดิมล็อก 2 ชั้นคือ !isCentral และสิทธิ์ orders
             ปุ่มนี้แค่ "ยื่นขอ" ไม่ได้ใช้เงิน ใบที่สร้างเป็น pending_approval เสมอและ Area ต้องอนุมัติ
             ก่อนเกิดผลใดๆ การล็อกไว้จึงกันแค่คนหน้างานที่เห็นของชำรุดจริงไม่ให้แจ้งเข้าระบบ */}
-        <Btn onClick={()=>setShowAssetOrder(true)} icon={I.box} s={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>สั่งซื้อสินทรัพย์/อุปกรณ์อื่นๆ</Btn>
-        {onTransfer&&hasPO&&<Btn v="purple" onClick={onTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
+        <Btn v="ghost" onClick={()=>setShowAssetOrder(true)} icon={I.box}>สั่งซื้อสินทรัพย์/อุปกรณ์</Btn>
+        {onTransfer&&hasPO&&<Btn v="ghost" onClick={onTransfer} icon={I.refresh}>โอนวัตถุดิบ</Btn>}
         {false&&onCreatePO&&hasPO&&<Btn onClick={onCreatePO} icon={I.plus}>สร้างเอกสาร PO</Btn>}{/* ซ่อนไว้ก่อนตามที่ผู้ใช้ขอ — เปลี่ยน false กลับเป็นเงื่อนไขเดิมเพื่อเปิดคืน */}
-        {false&&<Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สร้างใบขอซื้อ</Btn>}{/* ซ่อนไว้ตามที่ผู้ใช้ขอ — PR สร้างผ่านปุ่ม "สั่งวัตถุดิบเปิดPR" แทน */}
+        {false&&<Btn onClick={openForm} icon={I.plus} s={{background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สร้างใบขอซื้อ</Btn>}{/* ซ่อนไว้ตามที่ผู้ใช้ขอ — PR สร้างผ่านปุ่ม "สั่งวัตถุดิบ (เปิด PR)" แทน */}
       </div>
     </div>
     {isCentral&&<div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:420}}>
@@ -8855,16 +8857,16 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
         <span>💰 มูลค่าประมาณ <b style={{color:C.brand,fontSize:14}}>฿{estTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</b></span>
       </div>}
     </Card>
-    {filtered.length===0?<div style={{textAlign:"center",padding:"56px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:44}}>📝</div><p style={{marginTop:10,fontSize:15}}>{(prs||[]).length===0?"ยังไม่มีใบขอซื้อ":"ไม่พบใบขอซื้อตามตัวกรอง"}</p><p style={{fontSize:12}}>{(prs||[]).length===0?'กด "➕ สร้างใบขอซื้อ" เพื่อเริ่ม':"ลองปรับตัวกรอง"}</p></div>
+    {filtered.length===0?<div style={{textAlign:"center",padding:"56px 0",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:44}}>📝</div><p style={{marginTop:10,fontSize:15}}>{(prs||[]).length===0?"ยังไม่มีใบขอซื้อ":"ไม่พบใบขอซื้อตามตัวกรอง"}</p><p style={{fontSize:12}}>{(prs||[]).length===0?(onOrderMaterials&&hasPerm(currentUser,"orders")?'กด "สั่งวัตถุดิบ (เปิด PR)" หรือ "สั่งซื้อสินทรัพย์/อุปกรณ์" ด้านบนเพื่อเริ่ม':'กด "สั่งซื้อสินทรัพย์/อุปกรณ์" ด้านบนเพื่อเริ่ม'):"ลองปรับตัวกรอง"}</p></div>
     :<Card style={{overflow:"hidden",padding:0}}>
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
           <thead><tr style={{background:C.ink}}>
             {[["วันที่","left"],["เลขที่ PR","left"],["สาขา / โดย","left"],["สถานะ","left"],["มูลค่า","right"],["จัดการ","center"]].map(([h,a])=><th key={h} style={{padding:"11px 14px",textAlign:a,fontSize:12,fontWeight:800,color:C.white,whiteSpace:"nowrap"}}>{h}</th>)}
           </tr></thead>
-          <tbody>{filtered.map(pr=>{const st=PR_STATUS[pr.status]||PR_STATUS.pending_approval;const mine=+pr.branch_id===+currentBranch?.id;const n=(pr.items||[]).length;const prVal=(pr.items||[]).reduce((s,it)=>{const ing=ings.find(x=>+x.id===+it.ingredient_id);return s+(+it.qty||0)*(+ing?.buy_price||0);},0);return <tr key={pr.id} style={{borderTop:`1px solid ${C.lineLight}`}}>
+          <tbody>{filtered.map(pr=>{const st=PR_STATUS[pr.status]||PR_STATUS.pending_approval;const mine=+pr.branch_id===+currentBranch?.id;const n=(pr.items||[]).length;const prVal=(pr.items||[]).reduce((s,it)=>{const ing=ings.find(x=>+x.id===+it.ingredient_id);return s+(+it.qty||0)*(+it.price_per_unit||+ing?.buy_price||0);},0);return <tr key={pr.id} style={{borderTop:`1px solid ${C.lineLight}`}}>
             <td style={{padding:"9px 14px",fontSize:12,color:C.ink3,whiteSpace:"nowrap"}}>{fmtDT(pr.created_at)}</td>
-            <td style={{padding:"9px 14px",whiteSpace:"nowrap"}}><div style={{fontSize:13,fontWeight:800,color:C.ink}}>{pr.pr_number||("PR#"+pr.id)}{pr.revised_at&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,color:"#B45309",background:"#FFFBEB",border:"1px solid #FDE68A",padding:"1px 6px",borderRadius:8,verticalAlign:"middle"}}>🔄 แก้ไข</span>}</div><div style={{fontSize:10.5,color:C.ink4}}>{n} รายการ</div></td>
+            <td style={{padding:"9px 14px",whiteSpace:"nowrap"}}><div onClick={()=>setDetailPR(pr)} title="ดูรายละเอียด" style={{fontSize:13,fontWeight:800,color:C.ink,cursor:"pointer",textDecoration:"underline",textDecorationColor:C.ink4,textUnderlineOffset:3}}>{pr.pr_number||("PR#"+pr.id)}{pr.revised_at&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,color:"#B45309",background:"#FFFBEB",border:"1px solid #FDE68A",padding:"1px 6px",borderRadius:8,verticalAlign:"middle",display:"inline-block"}}>🔄 แก้ไข</span>}</div><div style={{fontSize:10.5,color:C.ink4}}>{n} รายการ</div></td>
             <td style={{padding:"9px 14px",fontSize:12,color:C.ink2,whiteSpace:"nowrap"}}>{canSeeAll?<b style={{color:C.ink}}>🏪 {pr.branch_name||branchName(pr.branch_id)}</b>:null}{canSeeAll?" · ":""}โดย {pr.requested_by||"—"}</td>
             <td style={{padding:"9px 14px"}}><span style={{fontSize:11,fontWeight:800,color:st.c,background:st.bg,padding:"3px 10px",borderRadius:14,whiteSpace:"nowrap"}}>{st.l}</span>{pr.status==="rejected"&&pr.reject_reason&&<div style={{fontSize:10.5,color:"#B91C1C",marginTop:3,maxWidth:230,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>❌ {pr.reject_reason}</div>}{pr.status==="converted"&&pr.converted_ref&&<div style={{fontSize:10.5,color:"#185FA5",marginTop:3}}>📦 {pr.converted_ref}</div>}</td>
             <td style={{padding:"9px 14px",textAlign:"right",fontSize:13,fontWeight:800,color:C.brand,whiteSpace:"nowrap"}}>฿{prVal.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
@@ -10270,6 +10272,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       });
       // Stock stays put until the creator presses "🚚 จัดส่ง" on the row.
       setTransferForm(null);
+      posToast('✅ สร้างใบโอนแล้ว — กด "🚚 จัดส่ง" ที่แถวใบโอนเพื่อตัดสต๊อกและส่งของ',"ok",5000);
       await load();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
     finally{xferBusyRef.current=false;setXferBusy(false);}
@@ -10808,7 +10811,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       const matches=branchIngs.filter(i=>!used.has(+i.id)&&(i.name.toLowerCase().includes(q)||(i.category||"").toLowerCase().includes(q))).slice(0,30);
       const branchOpts=branches.filter(b=>+b.id!==+currentBranch.id&&b.active!==false);
       return <Modal title={`🔄 โอนวัตถุดิบ — จากสาขา "${currentBranch.name}"`} onClose={()=>setTransferForm(null)} extraWide>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(240px,100%),1fr))",gap:14,marginBottom:14}}>
           <Sel label="สาขาปลายทาง *" value={transferForm.toBranchId} onChange={e=>setTransferForm(s=>({...s,toBranchId:e.target.value}))} options={[{v:"",l:"— เลือกสาขา —"},...branchOpts.map(b=>({v:b.id,l:b.name}))]}/>
           <Inp label="หมายเหตุ (ถ้ามี)" value={transferForm.notes} onChange={e=>setTransferForm(s=>({...s,notes:e.target.value}))} placeholder="เช่น โอนเพื่อช่วยสาขา..."/>
         </div>
@@ -10845,14 +10848,14 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
                 </td>
                 <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{it.unit||"-"}</td>
                 <td style={{padding:"7px 10px",textAlign:"center"}}>
-                  <button onClick={()=>setTransferForm(s=>({...s,items:s.items.filter((_,i)=>i!==idx)}))} style={{background:C.redLight,border:"none",borderRadius:6,padding:"4px 8px",cursor:"pointer",display:"inline-flex"}}><Ic d={I.trash} s={12} c={C.red}/></button>
+                  <button onClick={()=>setTransferForm(s=>({...s,items:s.items.filter((_,i)=>i!==idx)}))} style={{background:C.redLight,border:"none",borderRadius:8,minWidth:36,minHeight:36,padding:0,cursor:"pointer",display:"inline-flex",alignItems:"center",justifyContent:"center"}} aria-label="ลบรายการ"><Ic d={I.trash} s={15} c={C.red}/></button>
                 </td>
               </tr>;
             })}</tbody>
           </table>
         </div>}
         <div style={{background:"#E0F2FE",border:`1px solid #0EA5E933`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
-          💡 การโอน <b>ไม่มีการคิดเงิน</b> — สต็อกจะถูกตัดที่ต้นทางและเพิ่มที่ปลายทาง <b>เมื่อปลายทางกดยืนยันรับโอนเท่านั้น</b>
+          💡 การโอน <b>ไม่มีการคิดเงิน</b> — ส่งคำสั่งแล้วต้องกด <b>"🚚 จัดส่ง"</b> ที่แถวใบโอนอีกครั้ง · สต๊อกต้นทางถูกหัก<b>ตอนกดจัดส่ง</b> และเพิ่มที่ปลายทาง<b>เมื่อปลายทางกดรับโอน</b>
         </div>
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
           <Btn v="ghost" onClick={()=>setTransferForm(null)}>ยกเลิก</Btn>
@@ -10864,7 +10867,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     {/* Receive transfer — destination confirms received qty per item */}
     {receivingTransfer&&<Modal title={`🔄 รับโอนวัตถุดิบจาก "${(branchById[receivingTransfer.po.from_branch_id]||{}).name||"-"}"`} onClose={()=>setReceivingTransfer(null)} wide>
       <div style={{background:"#E0F2FE",border:`1px solid #0EA5E933`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
-        💡 ใส่จำนวนที่ <b>รับเข้าจริง</b> — ระบบจะ <b>หักสต็อกต้นทาง</b> และ <b>เพิ่มสต็อกสาขา "{currentBranch.name}"</b> ตามจำนวนนี้
+        💡 ใส่จำนวนที่ <b>รับเข้าจริง</b> — ระบบจะ <b>เพิ่มสต๊อกสาขา "{currentBranch.name}"</b> ตามจำนวนนี้ · ต้นทางถูกหักไปแล้วตอนจัดส่ง ถ้ารับน้อยกว่าที่ส่ง <b>ส่วนต่างจะคืนให้ต้นทาง</b>
       </div>
       <div style={{maxHeight:"45vh",overflowY:"auto",marginBottom:14}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
@@ -12775,8 +12778,8 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
   const statusLabel={pending_approval:"⏳ รออนุมัติ",pending:"รอส่งซัพพลาย",approved:"ส่งให้ซัพพลายแล้ว",rejected:"ปฏิเสธ",delivered:"รับสินค้าแล้ว"};
 
   return <div>
-    {/* Back link to PO documents (this tab is reached via the button on POSection) */}
-    {onBack&&<button onClick={onBack} style={{background:"transparent",border:"none",cursor:"pointer",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,padding:"6px 0",marginBottom:8,display:"inline-flex",alignItems:"center",gap:6}}>← กลับไปเอกสาร PO</button>}
+    {/* Back link to ใบขอซื้อ PR (reached via "สั่งวัตถุดิบ (เปิด PR)" on RequisitionView; the "orders" tab's setTab("po") also lands on PR) */}
+    {onBack&&<button onClick={onBack} style={{background:"transparent",border:"none",cursor:"pointer",color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:700,padding:"10px 12px 10px 0",minHeight:40,marginBottom:4,display:"inline-flex",alignItems:"center",gap:6}}>← กลับไปใบขอซื้อ PR</button>}
     {/* Mode toggle: stock check vs orders list. Hidden when the parent already splits
         these into top-level tabs (สั่งวัตถุดิบ button → check only; ซัพพลายนอก toggle → list only). */}
     {!hideModeTabs&&<div style={{display:"flex",gap:6,marginBottom:14,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:480}}>
@@ -13101,7 +13104,8 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     if(isCentral)return ing.supplier_id?+ing.supplier_id:null;
     const bid=currentBranch?.id;
     const v=(ing.supplier_by_branch||{})[String(bid)];
-    if(v!=null&&v!=="")return +v||null;
+    // ซัพที่สาขาตั้งไว้ถูกลบไปแล้ว = ถือว่ายังไม่ได้ตั้ง (เดิมขึ้นกลุ่ม "—" แล้วเขียนใบสั่งไปซัพที่ไม่มีอยู่ ชื่อซัพเอาจากแถวแรก)
+    if(v!=null&&v!==""){const id=+v||null;return id&&suppliers.some(x=>+x.id===id)?id:null;}
     const g=+ing.supplier_id||0;
     if(!g)return null;
     const sup=suppliers.find(x=>+x.id===g);
@@ -13235,7 +13239,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         : "ซัพพลายที่เลือกไว้ไม่มีรายการที่ต้องสั่ง (จำนวนเป็น 0 ทุกแถว)");
       return;
     }
-    if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\n• ของจากครัวกลาง → จะสร้างเป็น "ใบขอซื้อ (PR)" รอ Area อนุมัติ\n• ของจากซัพพลายภายนอก → จะแยกเป็นใบสั่งตามซัพพลาย (พิมพ์ PDF ส่งได้)`,confirmLabel:"ส่งคำสั่งซื้อ"}))return;
+    if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\n• ของจากครัวกลาง → จะสร้างเป็น "ใบขอซื้อ (PR)" รอ Area อนุมัติ\n• ของจากซัพพลายภายนอก → จะแยกเป็นใบสั่งตามซัพพลาย (พิมพ์ PDF ส่งได้)`,confirmLabel:"📤 ส่งคำสั่งซื้อ",danger:false}))return;
     setSaving(true);
     try{
       // Group items by per-branch supplier
@@ -13382,7 +13386,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             มีวัตถุดิบอีก {unorderable.length} รายการที่สาขานี้ใช้ แต่ยังสั่งไม่ได้
           </div>
           <div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:3,lineHeight:1.65}}>
-            ยังไม่ได้ตั้งซัพพลาย หรือซัพที่ตั้งไว้ไม่ได้เปิดให้บริการสาขานี้ — ไปตั้งที่การ์ดวัตถุดิบก่อน แล้วจะขึ้นมาให้สั่งเอง
+            ยังไม่ได้ตั้งซัพพลาย ซัพที่ตั้งไว้ถูกลบไปแล้ว หรือไม่ได้เปิดให้บริการสาขานี้ — ไปตั้งที่การ์ดวัตถุดิบก่อน แล้วจะขึ้นมาให้สั่งเอง
           </div>
           <div style={{fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:5}}>
             {unorderable.slice(0,8).map(i=>String(i.name).trim()).join(" · ")}{unorderable.length>8?` … อีก ${unorderable.length-8} รายการ`:""}
@@ -13405,17 +13409,21 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
           <div style={{padding:"10px 16px",background:`linear-gradient(135deg,${C.tealLight},${C.brandLight})`,borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
             {/* ติ๊กว่าจะสั่งเจ้านี้วันนี้ไหม — ทั้งแถบกดได้ ไม่ต้องเล็งช่องเล็ก ๆ บนแท็บเล็ต */}
             <div onClick={toggle} title={on?"เอาออกจากคำสั่งซื้อวันนี้":"เลือกสั่งเจ้านี้วันนี้"}
-              style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",userSelect:"none"}}>
-              <span style={{width:20,height:20,borderRadius:6,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
-                border:`2px solid ${on?C.brand:C.ink4}`,background:on?C.brand:C.white,color:C.white,fontSize:13,fontWeight:900}}>{on?"✓":""}</span>
+              style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",userSelect:"none",minHeight:40,flexWrap:"wrap"}}>
+              <span style={{width:26,height:26,borderRadius:7,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
+                border:`2px solid ${on?C.brand:C.ink4}`,background:on?C.brand:C.white,color:C.white,fontSize:16,fontWeight:900}}>{on?"✓":""}</span>
               <Ic d={I.truck} s={16} c={C.teal}/>
               <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:14,fontWeight:900,color:C.ink}}>{g.name}</span>
               <span style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>· {g.items.length} รายการ</span>
-              {orderCount>0&&<span style={{fontSize:11,fontWeight:800,color:on?C.brand:C.ink4,opacity:on?1:.55,fontFamily:"'Sarabun',sans-serif"}}>· ต้องสั่ง {orderCount} รายการ{on?"":" (ยังไม่ได้เลือก)"}</span>}
+              {/* ยังไม่ติ๊ก = จะไม่ถูกสั่ง → บอกให้ชัดว่าต้องแตะ (เดิมเป็นตัวเทาจาง .55 อ่านไม่ออก) */}
+              {orderCount>0&&(on
+                ?<span style={{fontSize:11,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>· ต้องสั่ง {orderCount} รายการ</span>
+                :<span style={{fontSize:11.5,fontWeight:800,color:"#B45309",background:C.yellowLight,border:"1px solid #FDE68A",borderRadius:8,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>👆 แตะเพื่อเลือกสั่ง {orderCount} รายการ</span>)}
             </div>
+            {/* ยอด/ป้ายของเจ้าที่ยังไม่ติ๊กใช้สีเทา — สีส้มสงวนไว้ให้เจ้าที่จะสั่งจริง (ยอดล่างนับเฉพาะที่ติ๊ก) */}
             <div style={{display:"flex",alignItems:"center",gap:10}}>
-              {orderCount>0&&<span style={{fontSize:11,color:C.brand,fontFamily:"'Sarabun',sans-serif",fontWeight:800,background:C.brandLight,padding:"3px 9px",borderRadius:10,border:`1px solid ${C.brandBorder}`}}>{orderCount} ต้องสั่ง</span>}
-              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:C.brand}}>฿{round2(supTotal).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+              {orderCount>0&&<span style={{fontSize:11,color:on?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:800,background:on?C.brandLight:C.bg,padding:"3px 9px",borderRadius:10,border:`1px solid ${on?C.brandBorder:C.line}`}}>{orderCount} ต้องสั่ง</span>}
+              <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:900,color:on?C.brand:C.ink3}}>฿{round2(supTotal).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
             </div>
           </div>
           {/* ⚠️ ซัพเจ้านี้ถูกระบุไว้ให้สาขาอื่นสั่ง — เตือนแต่ไม่บล็อค (ดู supplierScopeWarn) */}
@@ -13423,10 +13431,12 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             ⚠️ ซัพ <b>{g.name}</b> ตั้งไว้ให้สาขา <b>{g.warn}</b> ไม่ใช่ <b>{currentBranch?.name||"สาขานี้"}</b> — สั่งได้ แต่เช็คก่อนว่าถูกเจ้า
           </div>}
           <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:isMobile?880:undefined}}>
+            {/* ความกว้างคอลัมน์ตายตัว — ทุกกลุ่มซัพคอลัมน์ตรงกัน ไล่สายตาลงได้ (เดิมแต่ละตารางจัดเองจนคอลัมน์เหลื่อม) */}
+            <table style={{width:"100%",tableLayout:"fixed",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",minWidth:isMobile?878:1018}}>
+              <colgroup><col style={{width:36}}/><col style={{width:isMobile?180:260}}/><col style={{width:110}}/><col style={{width:90}}/><col style={{width:isMobile?90:150}}/><col style={{width:166}}/><col style={{width:96}}/><col style={{width:110}}/></colgroup>
               <thead>
                 <tr style={{background:C.bg}}>
-                  {["#","วัตถุดิบ","📦 สต็อกปัจจุบัน","หน่วย","🛡 safety","✏ สั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:(i<=1||i===3)?"left":"right",letterSpacing:.2,borderBottom:`1px solid ${C.line}`,...(i===1?{position:"sticky",left:0,background:C.bg,zIndex:2,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)"}:{})}}>{h}</th>)}
+                  {["#","วัตถุดิบ","📦 สต็อกปัจจุบัน","หน่วย","🛡 safety","🛒 จำนวนสั่ง","ราคา/หน่วย","รวม"].map((h,i)=><th key={h} style={{padding:"9px 10px",fontSize:11,fontWeight:800,color:C.ink3,whiteSpace:"nowrap",textAlign:(i<=1||i===3)?"left":"right",letterSpacing:.2,borderBottom:`1px solid ${C.line}`,...(i===1?{position:"sticky",left:0,background:C.bg,zIndex:2,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)"}:{}),...(i===5?{color:C.brand,fontWeight:900}:{})}}>{h}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -13444,7 +13454,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
                   const onOrd=onOrdRec&&!onOrdRec.unitMismatch?(+onOrdRec.qty||0):0;
                   return <tr key={ing.id} style={{borderTop:`1px solid ${C.lineLight}`,background:rowBg}}>
                     <td style={{padding:"9px 10px",fontSize:11,color:C.ink4,fontWeight:700}}>{idx+1}</td>
-                    <td style={{padding:"9px 10px",position:"sticky",left:0,background:rowBg,zIndex:1,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)",maxWidth:isMobile?180:undefined}}>
+                    <td style={{padding:"9px 10px",position:"sticky",left:0,background:rowBg,zIndex:1,boxShadow:"2px 0 4px -2px rgba(15,23,42,0.08)"}}>
                       <div style={{display:"flex",alignItems:"center",gap:8}}>
                         <Thumb src={ing.image} alt={ing.name} size={28} radius={6} iconBg={C.brandLight} iconColor={C.brand} iconSize={14}/>
                         <div style={{minWidth:0}}>
@@ -13460,13 +13470,13 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
                       {/* หน่วยในใบที่สั่งค้างไม่ตรง buy_unit → ไม่หักให้ ให้คนเช็คเอง */}
                       {onOrdRec&&onOrdRec.unitMismatch&&<div title={`ใบ #${(onOrdRec.orders||[]).join(", #")} ใช้หน่วยไม่ตรงกับ "${ing.buy_unit}" — ระบบไม่หักให้ เช็คเอง`} style={{fontSize:9.5,color:"#92400E",fontWeight:800,background:"#FFFBEB",borderRadius:5,padding:"0 4px",marginTop:2,display:"inline-block",whiteSpace:"nowrap"}}>⚠️ หน่วยไม่ตรง</div>}
                     </td>
-                    <td style={{padding:"9px 10px",fontSize:12,color:C.ink3,fontWeight:600,whiteSpace:"nowrap"}}>{ing.buy_unit}</td>
+                    <td title={ing.buy_unit} style={{padding:"9px 10px",fontSize:12,color:C.ink3,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ing.buy_unit}</td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder&&!isMobile?<NumStepper value={safetyEdit[ing.id]!==undefined?safetyEdit[ing.id]:(safety||"")} onChange={v=>{setSafetyEdit(s=>({...s,[ing.id]:v}));scheduleSaveSafety(ing,v);}} onBlur={e=>flushSaveSafety(ing,e.target.value)} placeholder="0" btnColor={C.yellow} btnBg="#FFFBEB" inputStyle={{border:`2px solid ${C.yellow}55`,background:"#FFFBEB",color:C.ink}} width={62}/>
+                      {canOrder&&!isMobile?<NumStepper value={safetyEdit[ing.id]!==undefined?safetyEdit[ing.id]:(safety||"")} onChange={v=>{setSafetyEdit(s=>({...s,[ing.id]:v}));scheduleSaveSafety(ing,v);}} onBlur={e=>flushSaveSafety(ing,e.target.value)} placeholder="0" btnColor={C.ink3} btnBg={C.white} inputStyle={{border:`1.5px solid ${C.line}`,background:C.white,color:C.ink3,fontWeight:700}} width={54}/>
                       :<span style={{fontSize:13,fontWeight:800,color:safety>0?"#92400E":C.ink4,background:safety>0?"#FFFBEB":"transparent",border:safety>0?`1px solid ${C.yellow}55`:"none",padding:safety>0?"3px 10px":0,borderRadius:8,display:"inline-block",minWidth:34,textAlign:"center"}}>{safety||"—"}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right"}}>
-                      {canOrder?<NumStepper value={orderQty[ing.id]!==undefined?orderQty[ing.id]:(order||"")} onChange={v=>setOrderQty(q2=>({...q2,[ing.id]:v}))} placeholder="0" btnColor={order>0?C.green:C.brand} btnBg={order>0?C.greenLight:C.bg} inputStyle={{border:`2px ${isSug?"dashed":"solid"} ${order>0?C.green+"55":C.line}`,background:order>0?C.greenLight:C.white,color:order>0?C.green:C.ink}} width={62}/>
+                      {canOrder?<NumStepper value={orderQty[ing.id]!==undefined?orderQty[ing.id]:(order||"")} onChange={v=>setOrderQty(q2=>({...q2,[ing.id]:v}))} placeholder="0" btnColor={order>0?C.green:C.brand} btnBg={order>0?C.greenLight:C.bg} inputStyle={{border:`2px ${isSug?"dashed":"solid"} ${order>0?C.green+"55":C.brandBorder}`,background:order>0?C.greenLight:C.white,color:order>0?C.green:C.ink,fontSize:15}} width={66}/>
                       :<span style={{fontSize:13,fontWeight:900,color:order>0?C.green:C.ink4}}>{order||"—"}</span>}
                     </td>
                     <td style={{padding:"9px 10px",textAlign:"right",fontSize:12,color:C.ink3,whiteSpace:"nowrap"}}>฿{(+ing.buy_price||0).toFixed(2)}</td>
@@ -13580,24 +13590,27 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
 
     {/* FIXED bottom action bar */}
     {canOrder&&grouped.length>0&&<>
-      <div style={{height:isMobile?92:60}}/>
+      <div style={{height:isMobile?100:68}}/>
       <div style={{position:"fixed",left:isMobile?0:240,right:0,bottom:0,zIndex:80,background:"linear-gradient(135deg,#0F172A 0%,#1E293B 70%,#0F172A 100%)",borderTop:`2px solid ${C.brand}`,boxShadow:"0 -6px 18px rgba(15,23,42,0.30)",paddingBottom:"env(safe-area-inset-bottom,0)"}}>
         <div style={{maxWidth:1600,margin:"0 auto",padding:isMobile?"8px 12px":"10px 18px",display:"flex",alignItems:"center",flexDirection:isMobile?"column":"row",gap:isMobile?8:14}}>
           <div style={{flex:isMobile?"none":"1 1 0",width:isMobile?"100%":"auto",display:"flex",alignItems:"center",gap:isMobile?8:14,flexWrap:"wrap"}}>
             <span style={{fontSize:18}}>📋</span>
-            <div style={{display:"inline-flex",alignItems:"baseline",gap:6,whiteSpace:"nowrap"}}>
-              <span style={{fontSize:isMobile?10:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>{pickedSups.size===0?"ยังไม่ได้เลือกซัพพลาย":"รายการต้องสั่ง"}</span>
+            {/* ยังไม่ติ๊กเลย → ปุ่มส่งถูกปิด (กดแล้วไม่มีข้อความ) จึงต้องบอกตรงนี้ว่าต้องทำอะไรก่อน */}
+            {pickedSups.size===0
+              ?<span style={{fontSize:isMobile?11:12.5,color:"#FCD34D",fontWeight:800,fontFamily:"'Sarabun',sans-serif",whiteSpace:"normal"}}>☝ ติ๊กช่อง ☐ หน้าชื่อซัพพลายที่จะสั่งวันนี้ก่อน</span>
+              :<div style={{display:"inline-flex",alignItems:"baseline",gap:6,whiteSpace:"nowrap"}}>
+              <span style={{fontSize:isMobile?10:11,color:"#94A3B8",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>รายการต้องสั่ง</span>
               <span style={{fontSize:isMobile?14:16,color:"#F8FAFC",fontFamily:"'Sarabun',sans-serif",fontWeight:900}}>{totals.itemCount}</span>
               <span style={{fontSize:isMobile?9:10,color:"#64748B",fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>รายการ</span>
-            </div>
+            </div>}
             <div style={{display:"inline-flex",alignItems:"baseline",gap:6,whiteSpace:"nowrap"}}>
               <span style={{fontSize:isMobile?10:11,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ประมาณการ</span>
               <span style={{fontSize:isMobile?14:16,color:"#A7F3D0",fontFamily:"'Sarabun',sans-serif",fontWeight:900}}>฿{totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}</span>
             </div>
           </div>
           <div style={{display:"flex",gap:isMobile?6:8,flexWrap:"wrap",justifyContent:isMobile?"stretch":"flex-end",width:isMobile?"100%":"auto"}}>
-<button onClick={submitOrder} disabled={saving||totals.itemCount===0} style={{background:saving?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:9,padding:isMobile?"9px 14px":"9px 18px",cursor:saving||totals.itemCount===0?"not-allowed":"pointer",color:C.white,fontSize:isMobile?12:13,fontWeight:900,fontFamily:"'Sarabun',sans-serif",boxShadow:saving||totals.itemCount===0?"none":"0 4px 14px rgba(16,185,129,0.42)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:38,opacity:totals.itemCount===0?.5:1}}>
-              <span style={{fontSize:isMobile?13:14}}>{saving?"⏳":"📤"}</span>
+<button onClick={submitOrder} disabled={saving||totals.itemCount===0} style={{background:saving?"#475569":`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:9,padding:isMobile?"12px 16px":"12px 26px",cursor:saving||totals.itemCount===0?"not-allowed":"pointer",color:C.white,fontSize:isMobile?14:15,fontWeight:900,fontFamily:"'Sarabun',sans-serif",boxShadow:saving||totals.itemCount===0?"none":"0 4px 14px rgba(16,185,129,0.42)",display:"flex",alignItems:"center",justifyContent:"center",gap:6,whiteSpace:"nowrap",flex:isMobile?"1 1 100%":"none",minHeight:46,opacity:totals.itemCount===0?.5:1}}>
+              <span style={{fontSize:isMobile?15:16}}>{saving?"⏳":"📤"}</span>
               <span>{saving?"กำลังส่ง...":`ส่งคำสั่งซื้อ (${totals.itemCount})`}</span>
             </button>
           </div>
@@ -18075,7 +18088,7 @@ export default function App(){
                 {[{id:"pr",l:"📝 ใบขอซื้อ PR",c:C.green},{id:"po",l:"📄 เอกสาร PO",c:C.brand},{id:"ext",l:"🚚 ซัพพลายนอก",c:C.teal},...(currentBranch?.type==="central"?[{id:"buy",l:"📋 สรุปต้องซื้อวันนี้",c:C.purple}]:[])].map(s=>{const on=poSubTab===s.id;return <button key={s.id} onClick={()=>setPoSubTab(s.id)} style={{flex:1,padding:"9px 14px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,background:on?s.c:"transparent",color:on?C.white:C.ink3,transition:"all .15s"}}>{s.l}</button>;})}
               </div>}
               {poSubTab==="create"&&hasPerm(currentUser,"orders")
-                ?<OrderTab forcedMode="check" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setPoSubTab("po")}/>
+                ?<OrderTab forcedMode="check" hideModeTabs orders={orders} allOrders={allOrders} reload={reload.orders} reloadIngs={reload.ings} ings={ings} suppliers={suppliers} branches={branches} currentBranch={currentBranch} currentUser={currentUser} onBack={()=>setPoSubTab("pr")}/>
                 :poSubTab==="pr"
                 ?<RequisitionView branches={branches} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reloadOrders={reload.orders} onOrderMaterials={()=>setPoSubTab("create")} onCreatePO={()=>{setPoAction("create");setPoSubTab("po");}} onTransfer={()=>{setPoAction("transfer");setPoSubTab("po");}}/>
                 :poSubTab==="buy"&&hasPerm(currentUser,"orders")&&currentBranch?.type==="central"
