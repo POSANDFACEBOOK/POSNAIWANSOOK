@@ -4706,6 +4706,24 @@ section("ส่วนลดทั้งบิลตอนรับของ ต�
   ok_("ช่องราคาแถวสั่งเพิ่มเติมด้วยราคาตามบิล (กันส่วนลดซ้ำ)", APP.includes('setPrice(h&&(h.lastBill||h.last)>0?String(h.lastBill||h.last):"");'));
 }
 
+section("ของที่ใช้ร่วมกันทุกจอ: อ่านออก กดได้ ไม่หลอกตา");
+{
+  // ป้ายสถานะใบสั่ง: ตัวหนังสือบนพื้นอ่อนต้องคมพอ (WCAG 4.5:1) — สีสด #F59E0B บนเหลืองอ่อนเคยอ่านไม่ออกบนแท็บเล็ต
+  const p0 = APP.indexOf("const PO_STATUS={"), p1 = APP.indexOf("\n};", p0);
+  const blk = p0 > 0 && p1 > p0 ? APP.slice(p0, p1) : "";
+  const lum = h => { const c = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  const rows = [...blk.matchAll(/^\s*(\w+):\s*\{[^}]*color:"(#[0-9A-Fa-f]{6})",bg:"(#[0-9A-Fa-f]{6})"/gm)];
+  const weak = rows.filter(m => ratio(m[2], m[3]) < 4.5).map(m => `${m[1]} ${ratio(m[2], m[3]).toFixed(1)}`);
+  ok_(`ป้ายสถานะใบสั่งทุกแบบ (${rows.length}) ตัวหนังสือคมพอบนพื้น${weak.length ? " — จาง: " + weak.join(", ") : ""}`, rows.length >= 12 && weak.length === 0);
+  // ปุ่ม ⋮ ต้องใหญ่พอให้นิ้วโดน (เคยเล็ก ~26px กดพลาดไปโดนแถว)
+  const rm = APP.slice(APP.indexOf("function RowMenu("), APP.indexOf("function useIsMobile("));
+  ok_("ปุ่ม ⋮ ในแถวใหญ่พอให้นิ้วกด (≥36px)", /minWidth:36,minHeight:36[^>]*>⋮<\/button>/.test(rm));
+  // การ์ดรายงานที่ไม่มีอะไรให้เปิด ห้ามมีลูกศร/ยกตัว — ไม่งั้นพนักงานกดแล้วงงว่าทำไมไม่ไปไหน
+  const rc = APP.slice(APP.indexOf("function RptCard("), APP.indexOf("function WasteReport("));
+  ok_("การ์ดรายงาน: ลูกศร+ยกตัว+มือชี้ เฉพาะการ์ดที่กดเปิดได้", rc.includes("const tap=!!onClick;") && rc.includes("{tap&&<span") && rc.includes('cursor:tap?"pointer":"default"') && rc.includes("onMouseEnter={tap?"));
+}
+
 
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);

@@ -2464,7 +2464,7 @@ function RowMenu({items,title="เพิ่มเติม"}){
   if(list.length===0)return null;
   function toggle(e){e.stopPropagation();if(open){setOpen(false);return;}const r=btnRef.current&&btnRef.current.getBoundingClientRect();if(r)setPos({top:r.bottom+4,right:Math.max(8,window.innerWidth-r.right)});setOpen(true);}
   return <>
-    <button ref={btnRef} onClick={toggle} title={title} style={{background:open?C.brandLight:C.lineLight,border:`1px solid ${open?C.brandBorder:C.line}`,borderRadius:7,padding:"5px 9px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,color:open?C.brand:C.ink2,fontSize:16,lineHeight:1}}>⋮</button>
+    <button ref={btnRef} onClick={toggle} title={title} style={{background:open?C.brandLight:C.lineLight,border:`1px solid ${open?C.brandBorder:C.line}`,borderRadius:7,padding:"5px 9px",minWidth:36,minHeight:36,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,color:open?C.brand:C.ink2,fontSize:16,lineHeight:1}}>⋮</button>
     {open&&pos&&<div onClick={e=>e.stopPropagation()} style={{position:"fixed",top:pos.top,right:pos.right,zIndex:9000,background:C.white,border:`1px solid ${C.line}`,borderRadius:10,boxShadow:"0 10px 30px rgba(15,23,42,0.2)",padding:4,minWidth:156,fontFamily:"'Sarabun',sans-serif"}}>
       {list.map((it,i)=><button key={i} onClick={()=>{setOpen(false);it.onClick&&it.onClick();}} style={{display:"flex",alignItems:"center",gap:10,width:"100%",background:"transparent",border:"none",borderRadius:7,padding:"8px 11px",cursor:"pointer",fontSize:13,fontWeight:600,color:it.danger?C.red:C.ink,textAlign:"left",fontFamily:"'Sarabun',sans-serif"}} onMouseEnter={e=>e.currentTarget.style.background=it.danger?C.redLight:C.bg} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>{it.icon&&<Ic d={it.icon} s={15} c={it.danger?C.red:(it.color||C.ink3)}/>}<span>{it.label}</span></button>)}
     </div>}
@@ -4757,13 +4757,14 @@ function RptBars({rows,color,fmt,total}){
 }
 // Clickable KPI card
 function RptCard({icon,emoji,label,value,sub,accent=C.brand,tint,onClick}){
-  return <button onClick={onClick} style={{textAlign:"left",background:tint||C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:"12px 14px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",display:"flex",flexDirection:"column",gap:3,transition:"transform .12s,box-shadow .12s,border-color .12s",minWidth:0}}
-    onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 8px 20px rgba(15,23,42,.08)";e.currentTarget.style.borderColor=accent;}}
-    onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";e.currentTarget.style.borderColor=C.line;}}>
+  const tap=!!onClick; // ไม่มีอะไรให้เปิด → ไม่ยกตัว ไม่มีลูกศร ไม่ให้ดูเหมือนกดได้
+  return <button onClick={onClick} style={{textAlign:"left",background:tint||C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:"12px 14px",cursor:tap?"pointer":"default",fontFamily:"'Sarabun',sans-serif",display:"flex",flexDirection:"column",gap:3,transition:"transform .12s,box-shadow .12s,border-color .12s",minWidth:0}}
+    onMouseEnter={tap?e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 8px 20px rgba(15,23,42,.08)";e.currentTarget.style.borderColor=accent;}:undefined}
+    onMouseLeave={tap?e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";e.currentTarget.style.borderColor=C.line;}:undefined}>
     <div style={{display:"flex",alignItems:"center",gap:7,width:"100%"}}>
       <span style={{width:30,height:30,borderRadius:8,background:accent+"1F",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{emoji?<span style={{fontSize:16}}>{emoji}</span>:<Ic d={icon} s={16} c={accent}/>}</span>
       <span style={{fontSize:12,color:C.ink3,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{label}</span>
-      <span style={{marginLeft:"auto",display:"flex"}}><Ic d={I.arrowRight} s={14} c={C.ink4}/></span>
+      {tap&&<span style={{marginLeft:"auto",display:"flex"}}><Ic d={I.arrowRight} s={14} c={C.ink4}/></span>}
     </div>
     <div style={{fontSize:20,fontWeight:900,color:accent,lineHeight:1.15,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:2}}>{value}</div>
     {sub&&<div style={{fontSize:11,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sub}</div>}
@@ -8420,25 +8421,25 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
 
 const PO_STATUS={
   // Branch submitted, waiting for an Area Manager to approve before it is released to central.
-  pending_approval:{label:"⏳ รออนุมัติ",       short:"รออนุมัติ",   color:"#A855F7",bg:"#F5F3FF"},
+  pending_approval:{label:"⏳ รออนุมัติ",       short:"รออนุมัติ",   color:"#7E22CE",bg:"#F5F3FF"},
   // Branch sent a stock-check order to central (จาก=สาขา → ถึง=ครัวกลาง).
   // Central must press "รับเอกสาร" to swap from/to and move it into "open".
-  requested:       {label:"📨 รอครัวกลางรับ",  short:"รอครัวกลางรับ",color:"#A855F7",bg:"#F5F3FF"},
+  requested:       {label:"📨 รอครัวกลางรับ",  short:"รอครัวกลางรับ",color:"#7E22CE",bg:"#F5F3FF"},
   // Central accepted the request; document direction is correct (central → branch)
   // but stock has NOT moved yet. Central can print and then press "🚚 จัดส่ง".
-  open:            {label:"📋 รอจัดส่ง",       short:"รอจัดส่ง",    color:"#F59E0B",bg:"#FEF3C7"},
+  open:            {label:"📋 รอจัดส่ง",       short:"รอจัดส่ง",    color:"#B45309",bg:"#FEF3C7"},
   // Stock has moved from central → branch. Branch can press "ตรวจรับ".
-  shipped:         {label:"🚚 จัดส่งแล้ว",     short:"จัดส่งแล้ว",  color:"#0EA5E9",bg:"#E0F2FE"},
-  disputed:        {label:"⚠️ ส่งกลับ",        short:"ส่งกลับ",     color:"#EA580C",bg:"#FFEDD5"},
-  awaiting_payment:{label:"💰 รอชำระเงิน",     short:"รอชำระเงิน",  color:"#3B82F6",bg:"#DBEAFE"},
-  paid:            {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#10B981",bg:"#D1FAE5"},
-  received:        {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#10B981",bg:"#D1FAE5"}, // legacy alias
-  cancelled:       {label:"❌ ยกเลิก",          short:"ยกเลิก",      color:"#94A3B8",bg:"#F1F5F9"},
+  shipped:         {label:"🚚 จัดส่งแล้ว",     short:"จัดส่งแล้ว",  color:"#0369A1",bg:"#E0F2FE"},
+  disputed:        {label:"⚠️ ส่งกลับ",        short:"ส่งกลับ",     color:"#C2410C",bg:"#FFEDD5"},
+  awaiting_payment:{label:"💰 รอชำระเงิน",     short:"รอชำระเงิน",  color:"#1D4ED8",bg:"#DBEAFE"},
+  paid:            {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#047857",bg:"#D1FAE5"},
+  received:        {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#047857",bg:"#D1FAE5"}, // legacy alias
+  cancelled:       {label:"❌ ยกเลิก",          short:"ยกเลิก",      color:"#475569",bg:"#F1F5F9"},
   // Free stock transfer between branches (no payment). Receiver presses
   // "รับโอน" to move stock and flip to transfer_done.
-  transfer_pending:{label:"📋 รอจัดส่ง (โอน)",  short:"รอจัดส่ง",    color:"#F59E0B",bg:"#FEF3C7"},
-  transfer_shipped:{label:"🚚 จัดส่งแล้ว (โอน)",short:"จัดส่งแล้ว",  color:"#0EA5E9",bg:"#E0F2FE"},
-  transfer_done:   {label:"✅ โอนเสร็จสิ้น",     short:"โอนเสร็จ",    color:"#10B981",bg:"#D1FAE5"},
+  transfer_pending:{label:"📋 รอจัดส่ง (โอน)",  short:"รอจัดส่ง",    color:"#B45309",bg:"#FEF3C7"},
+  transfer_shipped:{label:"🚚 จัดส่งแล้ว (โอน)",short:"จัดส่งแล้ว",  color:"#0369A1",bg:"#E0F2FE"},
+  transfer_done:   {label:"✅ โอนเสร็จสิ้น",     short:"โอนเสร็จ",    color:"#047857",bg:"#D1FAE5"},
 };
 // ── ใบขอซื้อ (PR / Purchase Requisition) ──────────────────────────────────
 // Request+approve layer that FEEDS the existing PO/external flow. NEVER moves stock.
