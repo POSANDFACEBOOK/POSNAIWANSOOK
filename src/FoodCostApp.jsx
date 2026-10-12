@@ -1916,7 +1916,9 @@ function acctOutcomeOf(res,paidBills){
   if(!res||typeof res!=="object")return "failed";
   if(res.skipped){
     const notEnabled=res.not_enabled===true||(res.shift_id==null&&res.branch_id!=null);
-    return (notEnabled&&(+paidBills||0)>0)?"not_enabled":"nothing";
+    // จำนวนบิลในจอโหลดไว้ตอนเปิดจอปิดกะ — ระหว่างนับเงินอาจมีบิลปิดเข้ามาอีก ⟹ ใช้ตัวที่เซิร์ฟเวอร์นับสดตอนปิดด้วย
+    const n=Math.max(+paidBills||0,+res.paid_bills||0);
+    return (notEnabled&&n>0)?"not_enabled":"nothing";
   }
   const rows=Array.isArray(res.results)?res.results:[];
   if(res.error||rows.length===0)return "failed";
@@ -1942,13 +1944,36 @@ function forgetAcctUnsent(bid,shiftId){
   try{localStorage.setItem(acctUnsentKey(bid),JSON.stringify(readAcctUnsent(bid).filter(x=>+x.shift_id!==+shiftId)));return true;}catch{return false;}
 }
 // สรุปสั้นๆ ของใบที่ไม่ผ่าน (เลขกะคือสิ่งที่ต้องใช้ส่งซ้ำ — เซิร์ฟเวอร์คำนวณยอดใหม่จากบิลจริงเอง)
+// แยกสามกอง ห้ามรวมเป็นก้อนเดียว: ส่งแล้ว (ห้ามลงซ้ำ) · ไม่เข้าแน่ (ลงได้) · ไม่ทราบผล (ต้องตรวจก่อน)
+// เดิมจดยอดทั้งกะแล้วป้ายบอกว่า "ยังไม่อยู่ในสมุดบัญชี" ⟹ กะคร่อมวันที่วันแรกส่งผ่านแล้ว หรือเน็ตหลุด
+// หลังยิงไปแล้ว (ฝั่งบัญชีลงไปแล้วแต่เราไม่รู้) ฝ่ายบัญชีลงมือเองซ้ำ = รายได้ลงสองรอบ
 function acctUnsentEntry(shift,res,totals){
   const rows=(res&&Array.isArray(res.results))?res.results:[];
   const why=(r)=>r.dropped?"ฝั่งบัญชีมีใบของวันนี้อยู่แล้ว ไม่รับยอดกะนี้":r.blocked?("ด่านตรวจไม่ผ่าน: "+(r.problems||[]).join(" · ")):String(r.error||(r.reply&&(r.reply.error||r.reply.message))||("ระบบบัญชีตอบ "+(r.status||"-")));
+  // ไม่ทราบผล = ยิงไปแล้วแต่ไม่ได้คำตอบที่เชื่อได้ (เน็ตหลุด/หมดเวลา/ระบบบัญชีล่ม 5xx) — ฝั่งบัญชีอาจลงไปแล้ว
+  // ไม่เข้าแน่ = ไม่ได้ยิง (ด่านตรวจ) · ถูกตีกลับ (มีใบของวันนั้นแล้ว) · ถูกปฏิเสธชัด (4xx)
+  const unk=(r)=>!r.dropped&&!r.blocked&&!(+r.status>=400&&+r.status<500);
+  const days=rows.filter(r=>r&&!r.ok&&!r.noSale).map(r=>({date:r.business_date||null,total:round2(+r.total_sales||0),why:why(r).slice(0,200),unknown:unk(r)}));
+  const unknown=rows.length===0;   // ไม่มีผลรายวันเลย (เน็ตหลุด/คำตอบอ่านไม่ได้) = ไม่รู้ว่าวันไหนเข้าแล้วบ้าง
+  const sumOf=(a)=>round2(a.reduce((t,d)=>t+d.total,0));
   return{shift_id:shift&&shift.id,at:new Date().toISOString(),
     total_sales:round2(+(totals&&totals.totalSales)||0),bills:+(totals&&totals.orderCount)||0,
     error:res&&res.error?String(res.error).slice(0,200):null,
-    days:rows.filter(r=>r&&!r.ok&&!r.noSale).map(r=>({date:r.business_date||null,total:round2(+r.total_sales||0),why:why(r).slice(0,200)}))};
+    unknown,
+    unsent_total:sumOf(days.filter(d=>!d.unknown)),
+    unknown_total:unknown?round2(+(totals&&totals.totalSales)||0):sumOf(days.filter(d=>d.unknown)),
+    sent_days:rows.filter(r=>r&&r.ok).map(r=>({date:r.business_date||null,total:round2(+r.total_sales||0)})),
+    days};
+}
+// ตัวเลขที่ป้ายเตือนแสดง — ยอดที่ "ไม่เข้าแน่" เท่านั้นที่บอกให้ลงได้ · ไม่ทราบผล = ตรวจในระบบบัญชีก่อน ห้ามลงเอง
+function acctUnsentView(e){
+  const legacy=!e||e.unsent_total==null;   // จดไว้ก่อนแยกกอง = ไม่รู้ว่ากองไหน ⟹ ถือว่าไม่ทราบผลทั้งกะ
+  const unsent=legacy?0:round2(+e.unsent_total||0);
+  const unknownAmt=legacy?round2(+(e&&e.total_sales)||0):round2(+e.unknown_total||0);
+  const unknown=legacy||!!e.unknown||((e.days||[]).some(d=>d&&d.unknown));
+  const sid=e&&e.shift_id;
+  return{unsent,unknown,unknownAmt,sent:(e&&Array.isArray(e.sent_days))?e.sent_days:[],
+    checkMsg:unknown?`ไม่ทราบผล${unknownAmt>0?" ฿"+unknownAmt.toLocaleString():""} — ให้ฝ่ายบัญชีตรวจในระบบบัญชีก่อนว่ามีใบ pos-<วัน>-<สาขา>-s${sid} แล้วหรือยัง ห้ามลงเองก่อนตรวจ`:""};
 }
 // หาแถวในฐานที่ตรงกับรายการที่พนักงานกดยกเลิก — ผูกด้วย line_uid ก่อนเสมอ (ชี้แถวตรงตัว)
 // เทียบด้วย เมนู+หมายเหตุ+ตัวเลือก เป็นทางสำรองของแถวเก่าที่ยังไม่มี line_uid
@@ -19745,7 +19770,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(L.pay_method)setPayMethod(L.pay_method);
     setSelectedPromoId(L.promo_id!=null?L.promo_id:null);
     // คูปองต้องกลับมาด้วย — ไม่งั้นเปิดโต๊ะจากอีกเครื่องแล้วคูปองหาย ยอดไม่ตรงกับ QR ที่ลูกค้าถืออยู่
-    if(L.voucher&&typeof L.voucher==="object")setVoucher({ref:L.voucher.ref||null,mode:L.voucher.mode||"baht",value:round2(+L.voucher.value||0)});
+    // เฉพาะตอนยังล็อกรอชำระอยู่: ปลดล็อกแล้ว pay_lock ยังค้างอยู่โดยตั้งใจ ถ้าคืนคูปองทุกครั้งที่เปิดโต๊ะ
+    // คูปองที่แคชเชียร์ถอดออกหลังปลดล็อกจะกลับมาเงียบๆ แล้วปิดบิลพร้อมส่วนลดที่ไม่ได้ใช้จริง
+    // (ปลดล็อกแล้วคูปองไม่คืน = ยอดไม่ตรง QR ⟹ จอขึ้นแดงให้เห็นเอง ไม่ใช่หายเงียบ)
+    if(existingOrder.status==="awaiting_payment"&&L.voucher&&typeof L.voucher==="object")setVoucher({ref:L.voucher.ref||null,mode:L.voucher.mode||"baht",value:round2(+L.voucher.value||0)});
   },[existingOrder]);
   // Promotions: auto-evaluate applicable, auto-pick best
   const menusById=useMemo(()=>{const m={};menus.forEach(x=>{m[x.id]=x;});return m;},[menus]);
@@ -21861,20 +21889,24 @@ function AcctUnsentBanner({branchId,canResolve=false}){
   useEffect(()=>{setList(readAcctUnsent(branchId));},[branchId]);
   if(!list.length)return null;
   async function resolve(e){
-    if(!await confirmDlg({title:`ปิดเรื่องกะ #${e.shift_id}?`,message:`ยืนยันว่ายอดกะ #${e.shift_id} (฿${(+e.total_sales||0).toLocaleString()}) ส่งเข้าบัญชีทางอื่นแล้ว หรือแจ้งฝ่ายบัญชีแล้ว\n\nกดแล้วรายการนี้จะหายจากเครื่องนี้`,confirmLabel:"จัดการแล้ว",cancelLabel:"ยังไม่ได้จัดการ"}))return;
+    const v=acctUnsentView(e);
+    if(!await confirmDlg({title:`ปิดเรื่องกะ #${e.shift_id}?`,message:`ยืนยันว่าแจ้งฝ่ายบัญชีเรื่องกะ #${e.shift_id} แล้ว และฝ่ายบัญชีตรวจ/ลงยอดที่ขาดเรียบร้อย${v.unsent>0?` (ยังไม่เข้าบัญชี ฿${v.unsent.toLocaleString()})`:""}${v.unknown?" (มียอดไม่ทราบผล — ต้องตรวจในระบบบัญชีก่อน)":""}\n\nกดแล้วรายการนี้จะหายจากเครื่องนี้`,confirmLabel:"จัดการแล้ว",cancelLabel:"ยังไม่ได้จัดการ"}))return;
     forgetAcctUnsent(branchId,e.shift_id);setList(readAcctUnsent(branchId));
   }
   return <div style={{background:C.redLight,border:`2px solid ${C.red}`,borderRadius:12,padding:"12px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
-    <div style={{fontSize:14.5,fontWeight:900,color:C.red,marginBottom:4}}>⚠️ ยอดปิดกะที่ยังไม่เข้าระบบบัญชี {list.length} กะ</div>
-    <div style={{fontSize:12,color:"#991B1B",lineHeight:1.6,marginBottom:8}}>ส่งเข้าบัญชีไม่ผ่านตอนปิดกะ ยอดนี้ยังไม่อยู่ในสมุดบัญชี — แจ้งฝ่ายบัญชี/ผู้ดูแลระบบพร้อมเลขกะ</div>
-    {list.map(e=><div key={e.shift_id} style={{background:C.white,borderRadius:9,padding:"8px 10px",marginBottom:6,border:`1px solid ${C.red}33`,display:"flex",gap:10,alignItems:"flex-start",flexWrap:"wrap"}}>
+    <div style={{fontSize:14.5,fontWeight:900,color:C.red,marginBottom:4}}>⚠️ ยอดปิดกะที่ต้องให้ฝ่ายบัญชีตรวจ {list.length} กะ</div>
+    <div style={{fontSize:12,color:"#991B1B",lineHeight:1.6,marginBottom:8}}>ส่งเข้าบัญชีไม่สำเร็จหรือไม่ทราบผลตอนปิดกะ — แจ้งฝ่ายบัญชีพร้อมเลขกะ · ลงเองได้เฉพาะยอด "ยังไม่เข้าบัญชี" · ยอด "ไม่ทราบผล" ต้องตรวจในระบบบัญชีก่อน · วันที่ "ส่งแล้ว" ห้ามลงซ้ำ</div>
+    {list.map(e=>{const v=acctUnsentView(e);return <div key={e.shift_id} style={{background:C.white,borderRadius:9,padding:"8px 10px",marginBottom:6,border:`1px solid ${C.red}33`,display:"flex",gap:10,alignItems:"flex-start",flexWrap:"wrap"}}>
       <div style={{flex:1,minWidth:180,fontSize:12.5,color:C.ink2,lineHeight:1.55,overflowWrap:"anywhere"}}>
-        <b style={{color:C.ink}}>กะ #{e.shift_id}</b> · ปิดเมื่อ {fmtDT(e.at)} · {(+e.bills||0).toLocaleString()} บิล · ฿{(+e.total_sales||0).toLocaleString()}
+        <b style={{color:C.ink}}>กะ #{e.shift_id}</b> · ปิดเมื่อ {fmtDT(e.at)} · {(+e.bills||0).toLocaleString()} บิล · ยอดทั้งกะ ฿{(+e.total_sales||0).toLocaleString()}
+        {v.unsent>0&&<div style={{color:C.red,fontWeight:800}}>❌ ยังไม่เข้าบัญชี ฿{v.unsent.toLocaleString()}</div>}
+        {v.unknown&&<div style={{color:"#92400E",fontWeight:800}}>❓ {v.checkMsg}</div>}
+        {v.sent.length>0&&<div style={{color:"#0F6E4C"}}>✅ ส่งเข้าบัญชีแล้ว ห้ามลงซ้ำ: {v.sent.map(d=>`${d.date||"-"} ฿${(+d.total||0).toLocaleString()}`).join(" · ")}</div>}
         {e.error&&<div style={{color:C.red}}>{e.error}</div>}
-        {(e.days||[]).map((d,i)=><div key={i} style={{color:C.red}}>{d.date||"-"} · ฿{(+d.total||0).toLocaleString()} — {d.why}</div>)}
+        {(e.days||[]).map((d,i)=><div key={i} style={{color:d.unknown?"#92400E":C.red}}>{d.date||"-"} · ฿{(+d.total||0).toLocaleString()} — {d.unknown?"ไม่ทราบผล: ":""}{d.why}</div>)}
       </div>
       {canResolve&&<Btn v="ghost" onClick={()=>resolve(e)} s={{padding:"6px 12px",fontSize:12.5}}>จัดการแล้ว</Btn>}
-    </div>)}
+    </div>;})}
     {!canResolve&&<div style={{fontSize:11.5,color:"#991B1B"}}>ผู้จัดการปิดเรื่องได้ที่ ⚙️ จัดการหลังบ้าน ของเครื่องนี้</div>}
   </div>;
 }
@@ -22133,7 +22165,8 @@ function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatch
   sec("โครงสร้างยอด");
   row("ยอดก่อนส่วนลด",b(t.gross));
   const dNP=t.discNoPromo!=null?+t.discNoPromo:Math.round(((+t.disc||0)-(+t.promo||0))*100)/100;   // ส่วนลดที่ไม่ใช่โปรฯ (โปรฯ มีบรรทัดของตัวเอง)
-  if(dNP)row("- ส่วนลด"+(t.discPct?` (${t.discPct}%)`:""),"-"+b(dNP));
+  const dNPPct=t.discNoPromoPct!=null?+t.discNoPromoPct:((+t.gross||0)>0?Math.round(dNP/(+t.gross)*10000)/100:0);   // % ของบรรทัดนี้ (ไม่รวมโปรฯ)
+  if(dNP)row("- ส่วนลด"+(dNPPct?` (${dNPPct}%)`:""),"-"+b(dNP));
   if(t.promo)row("- โปรโมชั่น","-"+b(t.promo));
   if(t.svc)row("+ ค่าบริการ","+"+b(t.svc));
   if(t.nonVatSales)row("ยอดที่ไม่มี VAT",b(t.nonVatSales));
@@ -22281,7 +22314,7 @@ function printZReportWindow({shift,totals,branch,user,note,reprint=false,mismatc
 <div class="div"></div>
 <h3>🧾 โครงสร้างยอด</h3>
 <div class="row"><span>ยอดก่อนส่วนลด</span><span>฿${fmt(totals.gross)}</span></div>
-${totals.discNoPromo?`<div class="row"><span>- ส่วนลด${totals.discPct?` (${totals.discPct}%)`:""}</span><span>-฿${fmt(totals.discNoPromo)}</span></div>`:""}
+${totals.discNoPromo?`<div class="row"><span>- ส่วนลด${totals.discNoPromoPct?` (${totals.discNoPromoPct}%)`:""}</span><span>-฿${fmt(totals.discNoPromo)}</span></div>`:""}
 ${totals.promo?`<div class="row"><span>- โปรโมชั่น</span><span>-฿${fmt(totals.promo)}</span></div>`:""}
 ${totals.svc?`<div class="row"><span>+ ค่าบริการ</span><span>+฿${fmt(totals.svc)}</span></div>`:""}
 ${totals.vat?`<div class="row"><span>VAT${totals.vatIncluded?" (รวมในราคาแล้ว)":""}</span><span>${totals.vatIncluded?"":"+"}฿${fmt(totals.vat)}</span></div>`:""}
@@ -22438,6 +22471,8 @@ function computeShiftTotals({movements,orders,actualCash,cancelled,openBills,edi
       // disc = ส่วนลดทั้งหมด (รวมโปรฯ แล้ว) · ใบที่พิมพ์ "- ส่วนลด" แล้วตามด้วย "- โปรโมชั่น" ต้องใช้ตัวนี้ ไม่งั้นโปรฯ ถูกหักสองรอบ
       discNoPromo:round2(disc-promo),
       discPct:gross>0?round2(disc/gross*100):0,
+      // % คู่กับบรรทัด "- ส่วนลด" (ไม่รวมโปรฯ) — ใช้ discPct (รวมโปรฯ) แล้ว % กับยอดบนบรรทัดเดียวกันไม่ตรงกัน
+      discNoPromoPct:gross>0?round2((disc-promo)/gross*100):0,
       avgBill:orders.length?round2(totalSales/orders.length):0,
       cancelCount:cancelled.length,cancelAmt,
       cancelList:cancelled.map(o=>({id:o.id,table:o.table_number,total:round2(+o.total||0),by:o.cancelled_by||null,reason:o.cancel_reason||null})),
@@ -22579,7 +22614,9 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
       // กะนี้ไม่มีบิลให้ลงบัญชี — ปิดจอไปเลยเหมือนเดิม ไม่ต้องมีจออะไรมาคั่น
       if(outcome==="nothing"){onClosed();return;}
       // สาขายังไม่เปิดท่อบัญชี แต่กะนี้มีบิลที่เก็บเงินแล้ว — ห้ามปิดเงียบ ต้องขึ้นกล่องเหลืองให้กดรับทราบ
-      setAcct(outcome==="not_enabled"?{...acctRes,notEnabled:true,bills:totals.orderCount,sales:round2(totals.totalSales)}:{...(acctRes||{}),kept});
+      // ตัวเลขในกล่องเหลือง: ใช้ที่เซิร์ฟเวอร์นับสดตอนปิดกะถ้ามี (บิลที่ปิดเข้ามาระหว่างนับเงินก็ต้องนับ)
+      const fresh=outcome==="not_enabled"&&acctRes&&acctRes.paid_bills!=null&&+acctRes.paid_bills>=totals.orderCount;
+      setAcct(outcome==="not_enabled"?{...acctRes,notEnabled:true,bills:fresh?+acctRes.paid_bills:totals.orderCount,sales:fresh?round2(+acctRes.paid_total||0):round2(totals.totalSales)}:{...(acctRes||{}),kept});
       return;   // มีผลลงบัญชีให้ดู — ปิดจอเมื่อผู้ใช้กดรับทราบ
     }catch(e){showErr("ปิดกะไม่สำเร็จ",e);}
     setSaving(false);
@@ -22727,7 +22764,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
           <div style={{display:"flex",flexDirection:"column",gap:5,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
             {[
               {l:"ยอดก่อนส่วนลด",v:totals.gross},
-              {l:`- ส่วนลด${totals.discPct>0?` (${totals.discPct}% ของยอดก่อนลด)`:""}`,v:totals.discNoPromo,warn:totals.discPct>=15},
+              {l:`- ส่วนลด${totals.discNoPromoPct>0?` (${totals.discNoPromoPct}% ของยอดก่อนลด)`:""}`,v:totals.discNoPromo,warn:totals.discNoPromoPct>=15},
               {l:"- โปรโมชั่น",v:totals.promo},
               {l:"+ ค่าบริการ",v:totals.svc},
               {l:totals.vatIncluded?`VAT (รวมในราคาแล้ว)`:"+ VAT",v:totals.vat,flat:totals.vatIncluded},
@@ -25662,8 +25699,10 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
   }
   const bizDay=(d)=>{try{return new Date(d).toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});}catch{return "";}};
   const oldDay=bizDay(order.updated_at||order.created_at),today=bizDay(new Date());
-  const pastDay=!!(oldDay&&today&&oldDay!==today);   // บิลของวันก่อน = ยอดวันนั้นส่งบัญชีไปแล้ว
+  const pastDay=!!(oldDay&&today&&oldDay!==today);   // บิลของวันก่อน (ข้ามเที่ยงคืน)
   // บิลของกะที่ปิดแล้ว (วันเดียวกันก็ได้ — ร้านเปิดวันละหลายกะ) = ยอดกะนั้นส่งบัญชีไปแล้ว แก้ตรงนี้ฝั่งบัญชีไม่เปลี่ยนตาม
+  // ตัดสินด้วยกะอย่างเดียว ไม่ใช่วันที่: ส่งบัญชีเกิดตอนปิดกะเท่านั้น ⟹ บิลเมื่อวานในกะที่ยังเปิด (กะคร่อมเที่ยงคืน)
+  // ยังไม่ได้ส่ง ยอดที่แก้จะไปกับใบตอนปิดกะเอง · เดิมบอกให้แจ้งบัญชีแก้วันเก่า = ส่วนต่างลงสองรอบ
   const shiftClosed=billShiftClosed(order,shift);
   const changed=added.length>0||removed.length>0||delta!==0;
   const menuList=useMemo(()=>{
@@ -25726,7 +25765,7 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
         delta,settle_method:delta!==0?method:null,old_total:oldTotal,new_total:T.total,
         items_before:order.items||[],items_after:clean,
         cash_movement_id:(Array.isArray(mv)?(mv[0]&&mv[0].id):(mv&&mv.id))||null,
-        needs_accounting:pastDay||shiftClosed,created_at:at});
+        needs_accounting:shiftClosed,created_at:at});
     }catch(e){noTrail=true;}
     if(noTrail)posToast("⚠️ แก้บิลแล้ว แต่บันทึกร่องรอยไม่ได้ (ยังไม่ได้รันคำสั่ง SQL ของระบบแก้บิล) — แจ้งแอดมิน","warn",9000);
     // ── ครัว: ของที่เพิ่ม = ใบสั่งอาหารปกติ · ของที่ลด/ลบ = ใบยกเลิก ──
@@ -25748,8 +25787,8 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
       ยอดของกะนั้นสรุปและส่งเข้าระบบบัญชีไปแล้ว — แก้ตรงนี้ <b>ยอดฝั่งบัญชีจะไม่เปลี่ยนตาม</b> ต้องแจ้งฝ่ายบัญชีเอง (บิล #{order.id} · วันที่ {fmtD(order.updated_at||order.created_at)}{delta!==0?` · ส่วนต่าง ${delta>0?"+":"-"}฿${Math.abs(delta).toLocaleString()}`:""})
       {delta!==0&&<div style={{fontSize:12,marginTop:2}}>เงินส่วนต่างที่เป็นเงินสดจะลงลิ้นชักของกะที่เปิดอยู่ตอนนี้</div>}
     </div>
-    :pastDay&&<div style={{padding:"9px 12px",borderRadius:10,marginBottom:10,background:"#FFFBEB",border:"1px solid #FDE68A",fontFamily:F,fontSize:12.5,color:"#92400E",lineHeight:1.6}}>
-      บิลนี้เป็นของวันที่ {fmtD(order.updated_at||order.created_at)} ซึ่งปิดกะและส่งยอดเข้าระบบบัญชีไปแล้ว — แก้ได้ แต่ต้องแจ้งฝ่ายบัญชีให้แก้ยอดของวันนั้นด้วย
+    :pastDay&&<div style={{padding:"9px 12px",borderRadius:10,marginBottom:10,background:C.bg,border:`1px solid ${C.line}`,fontFamily:F,fontSize:12.5,color:C.ink3,lineHeight:1.6}}>
+      บิลนี้ปิดเมื่อวันที่ {fmtD(order.updated_at||order.created_at)} แต่ยังอยู่ในกะที่เปิดอยู่ (ยังไม่ได้ส่งยอดเข้าบัญชี) — ยอดที่แก้จะไปกับยอดตอนปิดกะนี้เอง ไม่ต้องแจ้งฝ่ายบัญชี
     </div>}
     {step==="items"?<div>
       <div style={{display:"grid",gap:8,marginBottom:12}}>

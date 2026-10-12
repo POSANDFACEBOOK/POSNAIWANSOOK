@@ -1460,7 +1460,9 @@ section("ปิดกะ · ใบปิดยอด · รายงานยอ
   ok_("จอปิดกะกางโครงสร้างยอดให้เห็น (ไม่ใช่มีแต่ยอดสุทธิ)",
     APP.includes("🧾 โครงสร้างยอดขาย") && APP.includes('{l:"ยอดก่อนส่วนลด",v:totals.gross}'));
   ok_("ส่วนลดโชว์เป็น % ของยอดก่อนลดด้วย และเตือนเมื่อสูงผิดปกติ",
-    APP.includes("discPct:gross>0?round2(disc/gross*100):0") && APP.includes("warn:totals.discPct>=15"));
+    // บรรทัด "- ส่วนลด" ไม่รวมโปรฯ (โปรฯ มีบรรทัดของตัวเอง) ⟹ % และเกณฑ์เตือนต้องคิดจากยอดเดียวกับบรรทัด
+    APP.includes("discPct:gross>0?round2(disc/gross*100):0") && APP.includes("discNoPromoPct:gross>0?round2((disc-promo)/gross*100):0")
+    && APP.includes("warn:totals.discNoPromoPct>=15"));
   ok_("บิลที่ยกเลิกและโต๊ะค้างขึ้นเป็นหัวข้อ 'ต้องตรวจ'",
     APP.includes("⚠️ รายการที่ต้องตรวจ") && APP.includes("cancelCount:cancelled.length,cancelAmt"));
   ok_("บิลยกเลิกที่ไม่มีบันทึกผู้ยกเลิกต้องบอกให้รู้", APP.includes("(ไม่มีบันทึกผู้ยกเลิก)"));
@@ -3293,7 +3295,8 @@ section("แก้ไขบิลที่ปิดแล้ว");
   ok_("บันทึกร่องรอยทุกครั้ง พร้อมเหตุผลและส่วนต่าง", APP.includes("await api.addOrderEdit({order_id:order.id,") && APP.includes("delta,settle_method:delta!==0?method:null,"));
   ok_("เขียนร่องรอยไม่ได้ ต้องบอกดังๆ ไม่ใช่เงียบ", APP.includes('if(noTrail)posToast("⚠️ แก้บิลแล้ว แต่บันทึกร่องรอยไม่ได้'));
   ok_("บิลของวันที่ปิดกะไปแล้ว ต้องเตือนว่าต้องแจ้งบัญชี และติดธงไว้ในร่องรอย",
-    APP.includes("const pastDay=!!(oldDay&&today&&oldDay!==today);") && APP.includes("needs_accounting:pastDay"));
+    // ยอดถูกส่งบัญชีตอน "ปิดกะ" ⟹ ตัดสินด้วยกะของบิล (billShiftClosed) ไม่ใช่วันที่ — บิลเมื่อวานในกะที่ยังเปิดยังไม่ได้ส่ง
+    APP.includes("const shiftClosed=billShiftClosed(order,shift);") && APP.includes("needs_accounting:shiftClosed,"));
   ok_("ของที่เพิ่ม = ใบสั่งอาหารปกติ · ของที่ลด = ใบยกเลิกไปครัว",
     APP.includes('if(added.length)await agentPrintItems(added,String(order.table_number||"-"),branch?.id,{bill:order.id,by:who,kind:""});')
     && APP.includes('kind:"void"}'));
@@ -5616,6 +5619,8 @@ section("POS สาขาที่ 2: เงินและบัญชี");
     const CT = blocks2.computeShiftTotals({ movements: [], orders: ORD, actualCash: 0, cancelled: [], openBills: [] });
     ck("โครงสร้างยอดปิดกะบวกลงตัว: ยอดก่อนลด − ส่วนลด(ไม่รวมโปรฯ) − โปรฯ = ยอดขายสุทธิ",
       { dNP: CT.discNoPromo, sums: r2(CT.gross - CT.discNoPromo - CT.promo + CT.svc + CT.roundAdj) === CT.totalSales }, { dNP: 1262, sums: true });
+    // % ของบรรทัด "- ส่วนลด" ต้องคิดจากยอดบนบรรทัดเดียวกัน (ไม่รวมโปรฯ) · % รวมโปรฯ ยังอยู่ให้การ์ดรายงานใช้
+    ck("% ส่วนลดคู่กับยอดบนบรรทัด (ไม่รวมโปรฯ) และ % รวมยังอยู่", { p: CT.discNoPromoPct, all: CT.discPct }, { p: r2(1262 / 2592 * 100), all: r2(1292 / 2592 * 100) });
   }
   // ใบปิดกะแบบตัวพิมพ์ต้องพิมพ์ "- ส่วนลด" เป็นยอดที่ไม่รวมโปรฯ (โปรฯ มีบรรทัดของตัวเอง)
   {
@@ -5631,10 +5636,15 @@ section("POS สาขาที่ 2: เงินและบัญชี");
       const L = ZL({ shift: { id: 1, opened_at: "2026-10-12T04:00:00Z" }, totals: T0, branch: { name: "กาญจนบุรี" }, user: { name: "x" }, note: "" });
       const disc = L.find((x) => x.l && x.l.startsWith("- ส่วนลด")), pro = L.find((x) => x.l === "- โปรโมชั่น");
       ck("ใบปิดกะ: ส่วนลด 50 + โปรฯ 30 (ไม่ใช่ 80 + 30)", [disc && disc.r, pro && pro.r], ["-฿50.00", "-฿30.00"]);
+      // ส่วนลด 50 จากยอดก่อนลด 500 = 10% (ไม่ใช่ 16% ที่รวมโปรฯ) — ข้อมูลชุดเก่าไม่มี discNoPromoPct ต้องคิดเองได้
+      ck("ใบปิดกะ: % บนบรรทัดส่วนลดตรงกับยอดบนบรรทัด (ข้อมูลไม่มี % แยก)", disc && disc.l, "- ส่วนลด (10%)");
+      const L2 = ZL({ shift: { id: 1, opened_at: "2026-10-12T04:00:00Z" }, totals: { ...T0, discNoPromoPct: 10 }, branch: { name: "กาญจนบุรี" }, user: { name: "x" }, note: "" });
+      ck("ใบปิดกะ: % บนบรรทัดส่วนลดใช้ % ที่ไม่รวมโปรฯ", (L2.find((x) => x.l && x.l.startsWith("- ส่วนลด")) || {}).l, "- ส่วนลด (10%)");
     }
   }
-  ok_("ใบปิดกะหน้าต่างพิมพ์และจอปิดกะใช้ส่วนลดที่ไม่รวมโปรฯ",
-    APP.includes("<span>-฿${fmt(totals.discNoPromo)}</span>") && APP.includes(",v:totals.discNoPromo,warn:totals.discPct>=15},"));
+  ok_("ใบปิดกะหน้าต่างพิมพ์และจอปิดกะใช้ส่วนลดที่ไม่รวมโปรฯ (ทั้งยอด % และเกณฑ์เตือน)",
+    APP.includes("<span>- ส่วนลด${totals.discNoPromoPct?` (${totals.discNoPromoPct}%)`:\"\"}</span><span>-฿${fmt(totals.discNoPromo)}</span>")
+    && APP.includes("{l:`- ส่วนลด${totals.discNoPromoPct>0?` (${totals.discNoPromoPct}% ของยอดก่อนลด)`:\"\"}`,v:totals.discNoPromo,warn:totals.discNoPromoPct>=15},"));
   ok_("รายงานยอดขายไม่บวกโปรฯ ซ้ำในการ์ดส่วนลด",
     APP.includes("const discTotal=paid.reduce((s,o)=>s+(+o.discount||0),0);") && !APP.includes("(+o.discount||0)+(+o.promo_amount||0)"));
 
@@ -5644,15 +5654,30 @@ section("POS สาขาที่ 2: เงินและบัญชี");
     payLn.includes("discount:round2(totalDiscount),total,") && payLn.includes("voucher:voucherCol") && payLn.includes("promo_amount:round2(promoDiscount)"));
   ok_("บิลที่บันทึกและใบเสร็จใช้คูปองก้อนเดียวกัน", APP.includes("const voucherCol=(voucher&&voucherDiscount>0)?{...voucher,amount:round2(voucherDiscount)}:null;")
     && APP.includes("payments:paymentsCol,voucher:voucherCol,") && APP.includes("round_adj:roundAdj,voucher:voucherCol,"));
-  ok_("ล็อกยอด QR เก็บคูปองไว้ และเปิดโต๊ะใหม่ได้คูปองคืน",
-    APP.includes("voucher:voucherCol,pay_method:payMethod,by:") && APP.includes('if(L.voucher&&typeof L.voucher==="object")setVoucher({ref:L.voucher.ref||null,'));
+  // คืนคูปองเฉพาะตอนยังล็อกรอชำระ — ปลดล็อกแล้ว pay_lock ยังค้าง ถ้าคืนทุกครั้ง คูปองที่ถอดออกหลังปลดล็อกจะกลับมาเงียบๆ
+  ok_("ล็อกยอด QR เก็บคูปองไว้ และเปิดโต๊ะใหม่ (ระหว่างรอชำระ) ได้คูปองคืน",
+    APP.includes("voucher:voucherCol,pay_method:payMethod,by:")
+    && APP.includes('if(existingOrder.status==="awaiting_payment"&&L.voucher&&typeof L.voucher==="object")setVoucher({ref:L.voucher.ref||null,'));
+  ok_("ปลดล็อกแล้วเปิดโต๊ะใหม่ ไม่คืนคูปองจากล็อกเก่า (ไม่มีทางคืนคูปองที่ไม่เช็กสถานะ)",
+    (APP.match(/setVoucher\(\{ref:L\.voucher\.ref/g) || []).length === 1 && !/[^&]\(L\.voucher&&typeof L\.voucher==="object"\)setVoucher/.test(APP));
 
   // ── ① + ⑤ จอแก้บิล ──
   ok_("จอแก้บิลคิดยอดด้วยสูตรที่แตกส่วนลดสามก้อน และบันทึกส่วนลดทั้งหมด (+คูปอง) กลับลงบิล",
     APP.includes("const T=paidBillRecalc({order,items,posSettings});") && APP.includes("discount:T.totalDiscount,total:T.total,") && APP.includes("...(T.voucher?{voucher:T.voucher}:{})"));
   ok_("แก้บิลของกะที่ปิดแล้ว: เตือนชัดว่ายอดฝั่งบัญชีไม่เปลี่ยนตาม (ไม่บล็อก) และติดธงในร่องรอย",
     APP.includes("const shiftClosed=billShiftClosed(order,shift);") && APP.includes("{shiftClosed?<div") && APP.includes("ยอดฝั่งบัญชีจะไม่เปลี่ยนตาม")
-    && APP.includes("needs_accounting:pastDay||shiftClosed"));
+    && APP.includes("needs_accounting:shiftClosed,"));
+  // ส่งบัญชีเกิดตอนปิดกะเท่านั้น ⟹ บิลเมื่อวานในกะที่ยังเปิด (คร่อมเที่ยงคืน) ยังไม่ได้ส่ง ยอดที่แก้ไปกับใบตอนปิดกะเอง
+  // ห้ามบอกให้แจ้งบัญชีแก้วันเก่า และห้ามติดธงให้บัญชีตาม — ไม่งั้นส่วนต่างลงสองรอบ
+  ok_("บิลเมื่อวานในกะที่ยังเปิด: ไม่บอกว่าส่งบัญชีแล้ว และไม่ติดธงให้บัญชีตาม",
+    !APP.includes("ซึ่งปิดกะและส่งยอดเข้าระบบบัญชีไปแล้ว — แก้ได้ แต่ต้องแจ้งฝ่ายบัญชีให้แก้ยอดของวันนั้นด้วย")
+    && !/needs_accounting:[^,}]*pastDay/.test(APP) && APP.includes("แต่ยังอยู่ในกะที่เปิดอยู่ (ยังไม่ได้ส่งยอดเข้าบัญชี)"));
+  if (M) {
+    // กะ River เปิด 17:00 วันที่ 12 · บิลจ่าย 23:30 · แก้ตอน 00:30 วันที่ 13 (กะเดิมยังเปิด) = ยังไม่ได้ส่ง ไม่ต้องเตือน
+    const RIV = { id: 41, opened_at: "2026-10-12T10:00:00Z" };
+    ck("บิลคร่อมเที่ยงคืนในกะที่ยังเปิด = ไม่นับว่าส่งบัญชีแล้ว (ทั้งมีเลขกะและบิลเก่าไม่มีเลขกะ)",
+      [M.billShiftClosed({ shift_id: 41, updated_at: "2026-10-12T16:30:00Z" }, RIV), M.billShiftClosed({ updated_at: "2026-10-12T16:30:00Z" }, RIV)], [false, false]);
+  }
 
   // ── ③ + ④ จอปิดกะ ──
   ok_("ปิดกะ: เลิกปิดเงียบทุกกรณีที่ได้ skipped", !APP.includes("if(acctRes&&acctRes.skipped){onClosed();return;}")
@@ -5667,6 +5692,11 @@ section("POS สาขาที่ 2: เงินและบัญชี");
     const ban = (() => { const a = APP.indexOf("function AcctUnsentBanner("), b = APP.indexOf("function OpenShiftModal(", a); return a > 0 && b > a ? APP.slice(a, b) : ""; })();
     // กันลงซ้ำอยู่ที่ฝั่งบัญชี ไม่ใช่ที่เรา + บิลที่แก้หลังปิดกะย้ายวัน ⟹ ห้ามมีปุ่มยิงซ้ำในจอนี้
     ok_("ป้ายเตือนไม่มีปุ่มยิงส่งซ้ำ (ส่งซ้ำหลังผลไม่แน่ชัดอาจลงบัญชีสองรอบ)", !!ban && !ban.includes("fetch(") && !ban.includes("sliptrack-push") && ban.includes("forgetAcctUnsent(branchId,e.shift_id)"));
+    // ป้ายต้องไม่บอกว่า "ทั้งกะยังไม่อยู่ในสมุดบัญชี" — ยอดที่บอกให้ลงได้คือกองที่ไม่เข้าแน่เท่านั้น ไม่ทราบผลต้องตรวจก่อน
+    ok_("ป้ายเตือนแยก ยังไม่เข้า / ไม่ทราบผล / ส่งแล้ว ไม่เหมาทั้งกะว่าไม่อยู่ในสมุดบัญชี",
+      !!ban && !ban.includes("ยอดนี้ยังไม่อยู่ในสมุดบัญชี") && ban.includes("const v=acctUnsentView(e);")
+      && ban.includes("ยังไม่เข้าบัญชี ฿{v.unsent.toLocaleString()}") && ban.includes("{v.unknown&&") && ban.includes("{v.checkMsg}")
+      && ban.includes("ส่งเข้าบัญชีแล้ว ห้ามลงซ้ำ") && ban.includes("ยอดทั้งกะ ฿{(+e.total_sales||0)") && !ban.includes("บิล · ฿{(+e.total_sales||0)"));
   }
   // ที่จดไว้ต้องอยู่รอดข้ามการรีเฟรช แยกต่อสาขา ไม่ซ้ำ และพังเงียบไม่ได้ถ้าเครื่องปิดที่เก็บ
   {
@@ -5695,20 +5725,81 @@ section("POS สาขาที่ 2: เงินและบัญชี");
       ck("เครื่องปิดที่เก็บข้อมูล = ไม่พัง (อ่านได้ว่าง · จดไม่ได้บอกว่าไม่ได้จด)", [broken.readAcctUnsent(5), broken.rememberAcctUnsent(5, ent)], [[], false]);
     }
   }
+  // ── ④ ใบที่ส่งไม่ผ่าน: แยก ส่งแล้ว / ไม่เข้าแน่ / ไม่ทราบผล — ห้ามเหมายอดทั้งกะ ──
+  // กะ #41 คร่อมเที่ยงคืน: วันแรก ฿20,000 เข้าแล้ว วันที่สอง ฿10,000 ด่านบล็อก ⟹ ที่ขาดคือ ฿10,000 ไม่ใช่ ฿30,000
+  // เน็ตหลุดหลังยิง ⟹ ฝั่งบัญชีอาจลงไปแล้ว ⟹ ต้องตรวจก่อน ห้ามบอกว่ายังไม่เข้า (ลงมือซ้ำ = รายได้สองรอบ)
+  {
+    let U = null;
+    try {
+      U = new Function([SRC.round2, grab(APP, "acctUnsentEntry"), grab(APP, "acctUnsentView"), "return {acctUnsentEntry,acctUnsentView};"].join("\n"))();
+    } catch { U = null; }
+    ok_("ดึงตัวแยกกองใบที่ส่งไม่ผ่านมารันได้", !!U);
+    if (U) {
+      const TT = { totalSales: 30000, orderCount: 120 };
+      const d1 = { business_date: "2026-10-12", ok: true, status: 200, total_sales: 20000, bills: 80 };
+      const part = U.acctUnsentEntry({ id: 41 }, { shift_id: 41, results: [d1, { business_date: "2026-10-13", ok: false, blocked: true, problems: ["x"], total_sales: 10000, bills: 40 }] }, TT);
+      const vPart = U.acctUnsentView(part);
+      ck("กะคร่อมวัน วันแรกเข้าแล้ว: ขาดแค่วันที่สอง และบอกวันที่ส่งแล้วว่าห้ามลงซ้ำ",
+        { unsent: vPart.unsent, unknown: vPart.unknown, sent: vPart.sent.map((d) => d.date + "|" + d.total) },
+        { unsent: 10000, unknown: false, sent: ["2026-10-12|20000"] });
+      const net = U.acctUnsentEntry({ id: 41 }, { error: "Failed to fetch" }, TT);
+      const vNet = U.acctUnsentView(net);
+      ck("เน็ตหลุด/คำตอบอ่านไม่ได้: ไม่ทราบผลทั้งกะ ไม่บอกว่ายังไม่เข้า และให้ตรวจเลขใบของกะก่อน",
+        { unsent: vNet.unsent, unknown: vNet.unknown, amt: vNet.unknownAmt, msg: vNet.checkMsg.includes("-s41") && vNet.checkMsg.includes("ห้ามลงเองก่อนตรวจ") },
+        { unsent: 0, unknown: true, amt: 30000, msg: true });
+      const timeout = U.acctUnsentEntry({ id: 41 }, { shift_id: 41, results: [d1, { business_date: "2026-10-13", ok: false, status: 504, total_sales: 10000 }, { business_date: "2026-10-14", ok: false, error: "fetch failed", total_sales: 500 }] }, TT);
+      const vTo = U.acctUnsentView(timeout);
+      ck("ระบบบัญชีหมดเวลา/ล่ม (5xx) หรือยิงแล้วหลุด = ไม่ทราบผลรายวัน ไม่นับเป็นยอดที่ขาดแน่",
+        { unsent: vTo.unsent, unknown: vTo.unknown, amt: vTo.unknownAmt, days: timeout.days.map((d) => d.unknown) }, { unsent: 0, unknown: true, amt: 10500, days: [true, true] });
+      const rej = U.acctUnsentEntry({ id: 41 }, { shift_id: 41, results: [{ business_date: "2026-10-12", ok: false, status: 400, total_sales: 7000 }, { business_date: "2026-10-13", ok: false, dropped: true, status: 200, total_sales: 3000 }] }, TT);
+      const vRej = U.acctUnsentView(rej);
+      ck("ถูกปฏิเสธชัด (4xx) / ถูกตีกลับเพราะมีใบแล้ว = ไม่เข้าแน่ นับเป็นยอดที่ขาด", { unsent: vRej.unsent, unknown: vRej.unknown }, { unsent: 10000, unknown: false });
+      // ที่จดไว้ก่อนแยกกอง (ไม่มี unsent_total) ต้องไม่ถูกอ่านว่า "ขาดทั้งกะ"
+      ck("ข้อมูลที่จดไว้แบบเก่า = ไม่ทราบผล ไม่บอกยอดที่ขาด", (() => { const v = U.acctUnsentView({ shift_id: 9, total_sales: 5000, days: [] }); return { u: v.unsent, k: v.unknown }; })(), { u: 0, k: true });
+    }
+  }
+  // ── ③ ปิดกะตอนจำนวนบิลในจอเก่า: ใช้ตัวที่เซิร์ฟเวอร์นับสดด้วย ──
+  if (M) {
+    ck("สาขายังไม่เปิดท่อ: จอโหลดไว้ 0 บิล แต่เซิร์ฟเวอร์นับได้ 1 บิล = ต้องขึ้นกล่องเหลือง",
+      M.acctOutcomeOf({ skipped: true, not_enabled: true, branch_id: 5, paid_bills: 1, paid_total: 1200 }, 0), "not_enabled");
+    ck("เซิร์ฟเวอร์นับไม่ได้ (ไม่มีตัวเลข) = ใช้ตัวในจอเหมือนเดิม", [M.acctOutcomeOf({ skipped: true, not_enabled: true, branch_id: 5 }, 0), M.acctOutcomeOf({ skipped: true, not_enabled: true, branch_id: 5 }, 2)], ["nothing", "not_enabled"]);
+  }
+  ok_("กล่องเหลืองใช้จำนวนบิล/ยอดที่เซิร์ฟเวอร์นับสดเมื่อมี",
+    APP.includes("const fresh=outcome===\"not_enabled\"&&acctRes&&acctRes.paid_bills!=null&&+acctRes.paid_bills>=totals.orderCount;")
+    && APP.includes("bills:fresh?+acctRes.paid_bills:totals.orderCount,sales:fresh?round2(+acctRes.paid_total||0):round2(totals.totalSales)"));
+
+  // ── ① จอรายละเอียดบิล (BillDetailCard): แถวหักเงินต้องรวมกันลงยอดสุทธิ — ไม่หักคูปอง/โปรฯ ซ้ำ ──
+  // ดึงแถว <Row ... plus="-"/> จริงจากจอ มาคิดกับบิลจริง แล้วเช็กว่า ยอดรวม − แถวหัก + ปัดเศษ = รวมทั้งสิ้น
+  {
+    const bdc = (() => { const a = APP.indexOf("function BillDetailCard("), b = APP.indexOf("\nfunction ", a + 10); return a > 0 && b > a ? APP.slice(a, b) : ""; })();
+    const blk = (() => { const a = bdc.indexOf('<Row l="ยอดรวม"'), b = bdc.indexOf('<Row l="รวมทั้งสิ้น"', a); return a > 0 && b > a ? bdc.slice(a, b) : ""; })();
+    const rowRe = /\{([^{}]+?)&&<Row l=(?:"[^"]*"|\{[^{}]*\}) v=\{m\(([^{}]+?)\)\}((?:[^{}]|\{[^{}]*\})*?)\/>\}/g;
+    const minus = [...blk.matchAll(rowRe)].filter((x) => /plus="-"/.test(x[3])).map((x) => ({ cond: x[1], expr: x[2] }));
+    const hasRound = blk.includes('{+o.round_adj?<Row l="ปัดเศษ"');
+    let F = null;
+    try { F = new Function("o", "dp", "return [" + minus.map((x) => `((${x.cond})?(+(${x.expr})||0):0)`).join(",") + "];"); } catch { F = null; }
+    ok_("อ่านแถวหักเงินของจอรายละเอียดบิลได้ (และจอแตกส่วนลดด้วย billDiscParts)", !!F && minus.length >= 3 && blk.includes("const dp=billDiscParts(o);"));
+    if (F && M) {
+      const net = (o) => { const ded = F(o, M.billDiscParts(o)).reduce((s, x) => s + x, 0); return r2((+o.subtotal || 0) - ded + (hasRound ? (+o.round_adj || 0) : 0)); };
+      ck("จอรายละเอียดบิล: #385 (คูปองเต็มบิล) · สามก้อน · River ปัดลง — แถวบนจอบวกลบลงยอดสุทธิ",
+        [net(B385), net(BMIX), net(B530)], [B385.total, BMIX.total, B530.total]);
+    }
+  }
 
   // ── ①③ ท่อบัญชี (api/sliptrack-push.js) — รันตัวจริงกับ fetch ปลอม ไม่แตะ SlipTrack ──
   {
     const realFetch = globalThis.fetch;
     let okRun = false;
     try {
-      const run = async (shift, orders) => {
+      const run = async (shift, orders, untagged = [], ordersDown = false) => {
         const sent = [];
         globalThis.fetch = async (url, opt) => {
           const u = String(url);
           if (u.includes("sliptrack-pro.vercel.app")) { sent.push(JSON.parse(opt.body)); return { ok: true, status: 200, json: async () => ({ success: true, income: { status: "posted" } }) }; }
           if (u.includes("pos_shifts")) return { ok: true, json: async () => [shift] };
           if (u.includes("/branches?")) return { ok: true, json: async () => [{ name: "กาญจนบุรี The River" }] };
-          if (u.includes("/orders?")) return { ok: true, json: async () => (u.includes("shift_id=eq.") ? orders : []) };
+          if (u.includes("/orders?") && ordersDown) return { ok: false, status: 500, text: async () => "db down" };
+          if (u.includes("/orders?")) return { ok: true, json: async () => (u.includes("shift_id=eq.") ? orders : u.includes("shift_id=is.null") ? untagged : []) };
           if (u.includes("cash_movements")) return { ok: true, json: async () => [] };
           return { ok: false, status: 404, text: async () => "unexpected " + u };
         };
@@ -5747,6 +5838,13 @@ section("POS สาขาที่ 2: เงินและบัญชี");
       // ③ สาขาที่ยังไม่เปิดท่อ ต้องบอกให้ชัดว่า "ยังไม่เปิด" ไม่ใช่แค่ "ข้าม"
       const ne = await run({ ...SH, branch_id: 5 }, [ob({ id: 3, subtotal: 300, discount: 0, total: 300 })]);
       ck("สาขาที่ยังไม่เปิดท่อ: ไม่ยิง และติดธง not_enabled", { sent: ne.sent.length, skipped: !!(ne.out && ne.out.skipped), ne: ne.out && ne.out.not_enabled }, { sent: 0, skipped: true, ne: true });
+      // นับบิลสดตอนปิด (บิลติดเลขกะ + บิลเก่าไม่มีเลขกะในช่วงเวลา · ใบเดียวกันไม่นับซ้ำ) — จอใช้ตัดสินกล่องเหลือง
+      const ne2 = await run({ ...SH, branch_id: 5 }, [ob({ id: 3, total: 700 }), ob({ id: 4, total: 500 })], [ob({ id: 4, total: 500 }), ob({ id: 5, total: 99.5 })]);
+      ck("สาขาที่ยังไม่เปิดท่อ: เซิร์ฟเวอร์นับบิลที่เก็บเงินแล้วสดๆ ตอนปิดกะ", { n: ne2.out && ne2.out.paid_bills, t: ne2.out && ne2.out.paid_total, sent: ne2.sent.length }, { n: 3, t: 1299.5, sent: 0 });
+      const neDown = await run({ ...SH, branch_id: 5 }, [], [], true);
+      ck("นับบิลไม่ได้ (ฐานข้อมูลสะดุด) = ยังตอบ not_enabled ปกติ ไม่กลายเป็นส่งไม่ผ่าน",
+        { skipped: !!(neDown.out && neDown.out.skipped), ne: neDown.out && neDown.out.not_enabled, n: neDown.out && neDown.out.paid_bills, err: !!(neDown.out && neDown.out.error) },
+        { skipped: true, ne: true, n: undefined, err: false });
       const empty = await run(SH, []);
       ck("กะไม่มีบิล (สาขาเปิดท่อแล้ว): ข้ามโดยไม่ติดธง not_enabled", { skipped: !!(empty.out && empty.out.skipped), ne: !!(empty.out && empty.out.not_enabled) }, { skipped: true, ne: false });
       okRun = true;

@@ -207,7 +207,25 @@ export default async function handler(req, res) {
       if (!shift) return res.status(404).json({ error: `ไม่พบกะ #${shiftId}` });
       if (!POS_CLOSING_BRANCHES.includes(Number(shift.branch_id))) {
         // not_enabled แยกจาก "กะนี้ไม่มีบิล" — จอปิดกะต้องเตือนเหลืองถ้ากะมีบิลที่เก็บเงินแล้ว ห้ามปิดเงียบ
-        return res.status(200).json({ skipped: true, not_enabled: true, reason: "สาขานี้ยังไม่เปิดใช้ท่อลงบัญชีอัตโนมัติ", branch_id: shift.branch_id });
+        // นับบิลที่เก็บเงินแล้วของกะนี้สดๆ ตอนปิด (id,total เท่านั้น) — จำนวนในจอโหลดไว้ตอนเปิดจอปิดกะ
+        // ระหว่างนับเงินอาจมีอีกเครื่องปิดบิลเข้ากะนี้ ถ้าใช้ตัวในจอ กะที่มีบิลจะปิดเงียบได้
+        // นับไม่ได้ก็ไม่เป็นไร (ไม่ส่งตัวเลข) จอจะใช้ตัวของมันเองเหมือนเดิม — ห้ามทำให้ผลกลายเป็น "ส่งไม่ผ่าน"
+        let paid = {};
+        try {
+          const bidNE = Number(shift.branch_id);
+          const fromNE = encodeURIComponent(shift.opened_at);
+          const toNE = encodeURIComponent(shift.closed_at || new Date().toISOString());
+          const S = "&select=id,total&limit=2000";
+          const [a, b] = await Promise.all([
+            sbGet(`orders?branch_id=eq.${bidNE}&status=eq.paid&shift_id=eq.${shiftId}${S}`),
+            sbGet(`orders?branch_id=eq.${bidNE}&status=eq.paid&shift_id=is.null&created_at=gte.${fromNE}&created_at=lt.${toNE}${S}`),
+          ]);
+          const seen = new Set();
+          let n = 0, t = 0;
+          for (const o of [...(a || []), ...(b || [])]) if (o && !seen.has(o.id)) { seen.add(o.id); n++; t += Number(o.total) || 0; }
+          paid = { paid_bills: n, paid_total: Math.round(t * 100) / 100 };
+        } catch { paid = {}; }
+        return res.status(200).json({ skipped: true, not_enabled: true, reason: "สาขานี้ยังไม่เปิดใช้ท่อลงบัญชีอัตโนมัติ", branch_id: shift.branch_id, ...paid });
       }
       // กะเดียวอาจออกใบได้หลายวัน (กะคร่อมเที่ยงคืน) ⟹ คีย์ฝั่งบัญชีคือ (วันทำการ, สาขา, กะ)
       const shiftKeyed = SHIFT_KEYED_BRANCHES.includes(Number(shift.branch_id));
