@@ -6210,12 +6210,17 @@ section("POS สาขาที่ 2: หน้าลูกค้าและข
 
   // ── ④ วงจร QR โต๊ะ: ปิดกะ = ปล่อยโต๊ะว่าง · ปุ่มออก QR ใหม่ · ข้อความชี้ไปที่ที่มีจริง ──
   {
-    const run = async ({ open, failIds = [], ordersThrow = false }) => {
+    const run = async ({ open, failIds = [], ordersThrow = false, printed = {}, colMissing = false, tablesThrow = false }) => {
       const paths = [], released = [];
       const f = apiFn("releaseIdleTables", {
         sb: async (p) => {
           paths.push(p);
-          if (p.startsWith("tables?")) return [{ id: 1, table_number: "A1" }, { id: 2, table_number: "A2" }, { id: 3, table_number: "A3" }, { id: 4, table_number: "B1" }];
+          if (p.startsWith("tables?")) {
+            if (tablesThrow) throw new Error("Failed to fetch");
+            if (colMissing && p.includes("qr_printed_at")) throw new Error('{"code":"42703","message":"column tables.qr_printed_at does not exist"}');
+            return [{ id: 1, table_number: "A1" }, { id: 2, table_number: "A2" }, { id: 3, table_number: "A3" }, { id: 4, table_number: "B1" }]
+              .map((t) => (printed[t.id] && !colMissing ? { ...t, qr_printed_at: printed[t.id] } : t));
+          }
           if (p.startsWith("orders?")) { if (ordersThrow) throw new Error("Failed to fetch"); return open.map((t) => ({ table_id: t })); }
           throw new Error("ไม่ควรเรียก " + p);
         },
@@ -6229,14 +6234,25 @@ section("POS สาขาที่ 2: หน้าลูกค้าและข
     const a = await run({ open: [2, 4] });
     ok_("มีตัวปล่อยโต๊ะว่างทั้งสาขา (releaseIdleTables)", !!a);
     if (a) {
-      ck("ปิดกะ: ปล่อยเฉพาะโต๊ะที่ไม่มีบิลเปิด — โต๊ะที่มีบิล (รวมรอชำระ) ไม่ถูกแตะ", [a.released, a.res], [[1, 3], { released: 2, kept: 2, failed: [] }]);
+      ck("ปิดกะ: ปล่อยเฉพาะโต๊ะที่ไม่มีบิลเปิด — โต๊ะที่มีบิล (รวมรอชำระ) ไม่ถูกแตะ", [a.released, a.res], [[1, 3], { released: 2, kept: 2, failed: [], fresh: [] }]);
       const op = a.paths.find((p) => p.startsWith("orders?")) || "";
       ok_("เช็คบิลเปิดด้วยเลขโต๊ะของสาขานั้น นับทุกสถานะที่ไม่ใช่ paid/cancelled",
         a.paths[0].startsWith("tables?branch_id=eq.8&") && op.includes("table_id=in.(1,2,3,4)") && op.includes("status.not.in.(paid,cancelled)") && op.includes("status.is.null"));
       const b = await run({ open: [], ordersThrow: true });
       ck("อ่านบิลไม่ได้ = ไม่ปล่อยสักโต๊ะ (ไม่รู้ว่าโต๊ะไหนมีคน) และแจ้งคนเรียก", [b.threw, b.released], [true, []]);
       const c = await run({ open: [4], failIds: [3] });
-      ck("บางโต๊ะเปลี่ยนไม่สำเร็จ = รายงานเลขโต๊ะนั้น โต๊ะอื่นยังปล่อยต่อ", [c.released, c.res], [[1, 2, 3], { released: 2, kept: 1, failed: ["A3"] }]);
+      ck("บางโต๊ะเปลี่ยนไม่สำเร็จ = รายงานเลขโต๊ะนั้น โต๊ะอื่นยังปล่อยต่อ", [c.released, c.res], [[1, 2, 3], { released: 2, kept: 1, failed: ["A3"], fresh: [] }]);
+      // เปลี่ยนกะกลางมื้อ (River ปิดกะ 16:00-17:00): โต๊ะที่เพิ่งพิมพ์ QR แต่ยังไม่สั่ง = ลูกค้าเพิ่งนั่ง ห้ามทำ QR ในมือเขาตาย
+      const ago = (ms) => new Date(Date.now() - ms).toISOString();
+      const d = await run({ open: [2], printed: { 1: ago(5 * 60e3), 2: ago(5 * 60e3), 3: ago(26 * 3600e3), 4: ago(-2 * 86400e3) } });
+      ck("ปิดกะ: โต๊ะที่พิมพ์ QR 5 นาทีก่อน (ยังไม่มีบิล) ไม่ถูกเปลี่ยนรหัส · ใบของเมื่อวาน/เวลาเพี้ยนไกลยังถูกปล่อย",
+        [d.released, d.res], [[3, 4], { released: 2, kept: 2, failed: [], fresh: ["A1"] }]);
+      ok_("อ่านเวลาพิมพ์ QR มาพร้อมรายชื่อโต๊ะ", (d.paths[0] || "").includes("select=id,table_number,qr_printed_at"));
+      const e = await run({ open: [], printed: { 1: ago(5 * 60e3) }, colMissing: true });
+      ck("ยังไม่มีคอลัมน์เวลาพิมพ์ QR (42703) = ปล่อยทุกโต๊ะว่างแบบเดิม ไม่ล้ม",
+        [e.threw, e.released, e.res && e.res.fresh, e.paths.filter((p) => p.startsWith("tables?")).length], [false, [1, 2, 3, 4], [], 2]);
+      const g = await run({ open: [], tablesThrow: true });
+      ck("อ่านรายชื่อโต๊ะไม่ได้ (เน็ต) = โยน error ไม่ปล่อยสักโต๊ะ ไม่ถอยไปอ่านแบบไม่มีเวลาพิมพ์", [g.threw, g.released, g.paths.length], [true, [], 1]);
     }
     // ขั้นตอนปิดกะตัวจริง รันด้วยของปลอม — ลำดับ/เงื่อนไข/คำเตือน
     const closeSrc = fnBlock("  async function doCloseShift(forced){");
@@ -6245,7 +6261,7 @@ section("POS สาขาที่ 2: หน้าลูกค้าและข
       const runClose = async ({ closeThrows = false, rel }) => {
         const log = [], toasts = [];
         const fn = runWith(closeSrc, "doCloseShift", {
-          confirmDlg: async () => true,
+          confirmDlg: async (o) => { log.push("confirm:" + ((o && o.message) || "")); return true; },
           totals: { expected: 0, actual: 0, diff: 0, totalSales: 100, totalCash: 100, totalTransfer: 0, totalCard: 0, totalOther: 0, payIn: 0, payOut: 0, drops: 0, orderCount: 1 },
           // ขั้นตอนลงบัญชี (กลุ่มเงิน) อยู่ใน doCloseShift ด้วย — ใช้ตัวจัดผลจริง และกะมีบิล 1 ใบ ให้ไปถึงจอผลบัญชี
           acctOutcomeOf: new Function(grab(APP, "acctOutcomeOf") + "\nreturn acctOutcomeOf;")(), rememberAcctUnsent: () => false, acctUnsentEntry: () => ({}),
@@ -6273,6 +6289,10 @@ section("POS สาขาที่ 2: หน้าลูกค้าและข
         r3.toasts.length === 1 && r3.toasts[0].includes("A3") && r3.toasts[0].includes("🔄 ออก QR ใหม่") && r3.log.includes("setAcct"));
       const r4 = await runClose({ rel: () => Promise.reject(new Error("Failed to fetch")) });
       ok_("ปล่อยโต๊ะล้มทั้งก้อน = ปิดกะยังจบ + เตือนพนักงาน", r4.toasts.length === 1 && r4.log.includes("setAcct"));
+      const r5 = await runClose({ rel: async () => ({ released: 2, kept: 1, failed: [], fresh: ["A3"] }) });
+      ok_("โต๊ะที่เพิ่งพิมพ์ QR ถูกเว้นไว้ = บอกเลขโต๊ะ + ชี้ปุ่ม 🔄 ออก QR ใหม่ (ถ้าลูกค้าไปแล้ว) และปิดกะยังจบ",
+        r5.toasts.length === 1 && r5.toasts[0].includes("A3") && r5.toasts[0].includes("🔄 ออก QR ใหม่") && r5.log.includes("setAcct"));
+      ok_("หน้ายืนยันปิดกะบอกว่าโต๊ะที่เพิ่งพิมพ์ QR จะไม่ถูกเปลี่ยน", r5.log.some((x) => x.startsWith("confirm:") && x.includes("ยกเว้นโต๊ะที่เพิ่งพิมพ์ QR")));
     }
     // ปุ่ม "ออก QR ใหม่" บนจอโต๊ะว่าง — ทางแก้ที่ข้อความเตือนทุกอันชี้ไป
     const reSrc = fnBlock("  async function reissueTableQR(t){");
@@ -6305,6 +6325,39 @@ section("POS สาขาที่ 2: หน้าลูกค้าและข
     const want = ["กะที่เปิดค้างเกิน 24 ชม.", "บิลที่ยังไม่ปิดเกิน 24 ชม.", "โต๊ะที่มีบิลเปิดพร้อมกันมากกว่า 1 ใบ", "เครื่องพิมพ์ที่ไม่ได้ผูกสาขา",
       "คำสั่งพิมพ์/เปิดลิ้นชัก ที่ค้างเกิน 3 นาที", "เมนูปักหมุดเครื่องพิมพ์", "ชื่อเมนูซ้ำกันแต่ราคาไม่เท่ากัน"];
     ck("หมอตรวจข้อมูลมีข้อตรวจ POS ครบ 7 ข้อ", want.filter((t) => !DATA.includes(t)), []);
+    // ข้อ 17 (คำสั่งค้าง) รันจริงด้วยแถวปลอม: นับเฉพาะคีย์ที่ตัวพิมพ์ลบเองเมื่อทำเสร็จ
+    // tp ตัวพิมพ์ไม่เคยลบ (ค้างแม้กระดาษออกแล้ว) → ถ้านับจะส่งคนไปตามเครื่องที่ปกติ
+    {
+      const s17 = DATA.indexOf('section("17)');
+      const b0 = s17 < 0 ? -1 : DATA.indexOf("\n  {", s17);
+      let blk = null;
+      if (b0 >= 0) { let dd = 0; for (let i = b0 + 3; i < DATA.length; i++) { if (DATA[i] === "{") dd++; else if (DATA[i] === "}") { dd--; if (dd === 0) { blk = DATA.slice(b0 + 3, i + 1); break; } } } }
+      const NOW = Date.UTC(2026, 9, 12, 10, 0, 0), min = 60e3;
+      const run17 = (descs) => {
+        const out = { warn: [], ok: 0 };
+        new Function("printers", "now", "warn", "ok", "bnP", "ageTxt", blk)(
+          descs.map((d, i) => ({ id: i + 1, branch_id: 5, name: "P" + (i + 1), description: JSON.stringify(d) })), NOW,
+          (_m, rows) => { out.warn.push(...rows); }, () => { out.ok++; }, (b) => "สาขา " + b, (ms) => Math.round(ms / min) + " นาที");
+        return out;
+      };
+      let r17 = null;
+      try { r17 = blk ? run17([
+        { tp: NOW - 86400e3, agentSeen: NOW - 30e3, on: true },          // ทดสอบพิมพ์เมื่อวาน กระดาษออกแล้ว ตัวพิมพ์ยังมีชีวิต
+        { rp: { at: NOW - 10 * min, items: [{ name: "x" }] } },           // ใบครัวค้าง 10 นาที = ค้างจริง
+        { qr: { at: NOW - 60e3 } },                                       // เพิ่งสั่ง 1 นาที = ยังไม่ค้าง
+        { dk: { at: NOW - 5 * min } }, { pj: { at: NOW - 4 * min, b64: "x" } },
+      ]) : null; } catch { r17 = null; }
+      ok_("อ่านข้อ 17 ของหมอตรวจข้อมูลมารันได้", !!r17);
+      if (r17) ck("ข้อ 17: ไม่เตือนทดสอบพิมพ์ (tp) ที่ค้างในแถว · ใบครัว/ลิ้นชัก/ใบเสร็จที่ค้างเกิน 3 นาทียังเตือน",
+        r17.warn.map((x) => (x.match(/\((\w+)\) ค้าง/) || [])[1]), ["rp", "dk", "pj"]);
+      // คีย์ที่ข้อ 17 ตรวจ ต้องเป็นคีย์ที่ตัวพิมพ์ลบเองจริงเท่านั้น (เทียบกับโค้ดตัวพิมพ์)
+      const cleared = new Set([...AGENT.matchAll(/clearCmdKey\(p\.id, "(\w+)"/g)].map((m) => m[1]));
+      if (/\bdelete d\.pj;/.test(AGENT)) cleared.add("pj");
+      const cmdLine = DATA.split("\n").find((l) => l.trim().startsWith("const CMD = {")) || "";
+      const keys = [...cmdLine.matchAll(/(\w+):\s*"/g)].map((m) => m[1]);
+      ck("ข้อ 17 ตรวจครบ rp/qr/pj/dk และทุกคีย์เป็นคำสั่งที่ตัวพิมพ์ลบเองเมื่อทำเสร็จ",
+        [["rp", "qr", "pj", "dk"].filter((k) => !keys.includes(k)), keys.filter((k) => !cleared.has(k))], [[], []]);
+    }
     // ข้อ 18/19 ใช้กติกา "สาขาไหนเห็นเมนู" ของตัวเอง — ต้องตรงกับแอปทุกกรณี ไม่งั้นเตือนผิด/ไม่เตือน
     const vLine = DATA.split("\n").find((l) => l.startsWith("  const visM = "));
     let visD = null;

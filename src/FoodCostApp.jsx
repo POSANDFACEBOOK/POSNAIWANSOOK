@@ -677,22 +677,32 @@ const api = {
   // (แม้ยังไม่เปิดกะ) และโต๊ะค้างเขียว "พิมพ์ QR แล้ว" ไม่หาย (River ค้างอยู่ 24+ โต๊ะ)
   // อ่านบิลเปิด "สดๆ" ด้วยเลขโต๊ะ — โต๊ะที่ยังมีบิล (รวมรอชำระ) ห้ามแตะเด็ดขาด ลูกค้ายังนั่งอยู่
   // อ่านบิลไม่ได้ = โยน error ไม่ปล่อยสักโต๊ะ (ไม่รู้ว่าโต๊ะไหนมีคน) · ทีละ 6 โต๊ะ แต่ละโต๊ะได้รหัสของตัวเอง
-  // คืน {released, kept, failed:[เลขโต๊ะที่เปลี่ยนไม่สำเร็จ]} ให้จอบอกพนักงาน
+  // คืน {released, kept, failed:[เลขโต๊ะที่เปลี่ยนไม่สำเร็จ], fresh:[เลขโต๊ะที่เพิ่งพิมพ์ QR]} ให้จอบอกพนักงาน
   releaseIdleTables: async (bid) => {
-    const tbls = await sb(`tables?branch_id=eq.${+bid}&select=id,table_number`);
+    // คอลัมน์ qr_printed_at ยังไม่มี (42703) → ไม่รู้ว่าโต๊ะไหนเพิ่งพิมพ์ QR ก็ปล่อยทุกโต๊ะว่างแบบเดิม
+    const tq = (cols) => sb(`tables?branch_id=eq.${+bid}&select=${cols}`);
+    let tbls;
+    try { tbls = await tq("id,table_number,qr_printed_at"); }
+    catch (e) { if (!/qr_printed_at|42703|PGRST204|does not exist|schema cache/i.test(String((e && e.message) || e))) throw e; tbls = await tq("id,table_number"); }
     const rows = (Array.isArray(tbls) ? tbls : []).filter((t) => t && +t.id > 0);
-    if (!rows.length) return { released: 0, kept: 0, failed: [] };
+    if (!rows.length) return { released: 0, kept: 0, failed: [], fresh: [] };
     const open = await sb(`orders?table_id=in.(${rows.map((t) => +t.id).join(",")})&or=(status.is.null,status.not.in.(paid,cancelled))&select=table_id`);
     if (!Array.isArray(open)) throw new Error("อ่านบิลที่เปิดอยู่ไม่ได้");
     const busy = new Set(open.map((o) => +o.table_id));
-    const idle = rows.filter((t) => !busy.has(+t.id));
+    // พิมพ์ QR ไม่ถึง 1 ชม. แต่ยังไม่มีบิล = ลูกค้าเพิ่งนั่ง ยังไม่ได้สั่ง — ห้ามเปลี่ยนรหัส
+    // River เปลี่ยนกะกลางมื้อเย็น (16:00-17:00) ถ้าเปลี่ยน ลูกค้ากดส่งแล้วขึ้น "QR หมดอายุ" ต้องตามพิมพ์ใหม่
+    // ใบที่เก่ากว่านั้น (กะก่อน/เมื่อวาน) ยังถูกปล่อยตามเดิม · เวลาเพี้ยนไปอนาคตไกลๆ ไม่นับว่าเพิ่งพิมพ์
+    const now = Date.now();
+    const isFresh = (t) => { const at = Date.parse((t && t.qr_printed_at) || ""); return at > 0 && Math.abs(now - at) < 60 * 60e3; };
+    const fresh = rows.filter((t) => !busy.has(+t.id) && isFresh(t));
+    const idle = rows.filter((t) => !busy.has(+t.id) && !isFresh(t));
     const failed = [];
     for (let i = 0; i < idle.length; i += 6) {
       const part = idle.slice(i, i + 6);
       const res = await Promise.all(part.map((t) => api.releaseTable(t.id).catch(() => false)));
       res.forEach((ok, k) => { if (!ok) failed.push(String(part[k].table_number ?? part[k].id)); });
     }
-    return { released: idle.length - failed.length, kept: rows.length - idle.length, failed };
+    return { released: idle.length - failed.length, kept: rows.length - idle.length, failed, fresh: fresh.map((t) => String(t.table_number ?? t.id)) };
   },
   // Public scan — verify QR token + branch active before returning anything
   scanTable: (branchId,tableId,token) => sb(`tables?id=eq.${+tableId}&branch_id=eq.${+branchId}&qr_token=eq.${encodeURIComponent(token||"")}&active=eq.true`),
@@ -22701,7 +22711,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     await doCloseShift(null);
   }
   async function doCloseShift(forced){
-    if(!await confirmDlg({title:"ยืนยันปิดกะ",message:`ยอดที่ควรมี ฿${totals.expected.toLocaleString()}\nนับจริง ฿${totals.actual.toLocaleString()}\n${totals.diff===0?'ตรงเป๊ะ':totals.diff>0?`เกิน ฿${totals.diff.toLocaleString()}`:`ขาด ฿${Math.abs(totals.diff).toLocaleString()}`}\n\nโต๊ะว่างทุกโต๊ะจะได้ QR ใหม่ (ใบ QR ที่วางค้างไว้จะใช้สั่งไม่ได้)\nต้องการปิดกะใช่หรือไม่?`,confirmLabel:"ปิดกะ",danger:true}))return;
+    if(!await confirmDlg({title:"ยืนยันปิดกะ",message:`ยอดที่ควรมี ฿${totals.expected.toLocaleString()}\nนับจริง ฿${totals.actual.toLocaleString()}\n${totals.diff===0?'ตรงเป๊ะ':totals.diff>0?`เกิน ฿${totals.diff.toLocaleString()}`:`ขาด ฿${Math.abs(totals.diff).toLocaleString()}`}\n\nโต๊ะว่างจะได้ QR ใหม่ (ใบ QR ที่วางค้างไว้จะใช้สั่งไม่ได้)\nยกเว้นโต๊ะที่เพิ่งพิมพ์ QR ไม่ถึง 1 ชม. (ลูกค้าเพิ่งนั่ง ยังไม่สั่ง)\nต้องการปิดกะใช่หรือไม่?`,confirmLabel:"ปิดกะ",danger:true}))return;
     setSaving(true);
     try{
       // Print Z-report FIRST so a popup-blocker / printer issue doesn't strand the audit trail.
@@ -22735,8 +22745,11 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
       const kept=outcome==="failed"&&rememberAcctUnsent(currentBranch.id,acctUnsentEntry(shift,acctRes,totals));
       // รอปล่อยโต๊ะเสร็จก่อนขึ้นผลบัญชี (เพดาน 20 วิ) — ไม่ครบต้องบอก ไม่งั้น QR เก่ายังใช้ได้โดยไม่มีใครรู้
       const rel=await Promise.race([relP,new Promise(r=>setTimeout(()=>r({error:"timeout"}),20000))]);
+      // โต๊ะที่เพิ่งพิมพ์ QR (ลูกค้าเพิ่งนั่ง) ตั้งใจไม่เปลี่ยน — บอกเลขโต๊ะไว้ ถ้าลูกค้าไปแล้วพนักงานออก QR ใหม่เองได้
+      const freshTxt=rel&&Array.isArray(rel.fresh)&&rel.fresh.length?"โต๊ะ "+rel.fresh.join(", ")+" เพิ่งพิมพ์ QR — ยังใช้ QR เดิมได้ (ถ้าลูกค้าไปแล้ว แตะโต๊ะ → กด 🔄 ออก QR ใหม่)":"";
       if(rel&&(rel.error||(Array.isArray(rel.failed)&&rel.failed.length)))
-        posToast("⚠️ ปิดกะแล้ว แต่ออก QR ใหม่ให้โต๊ะว่าง"+(rel.error?"ไม่สำเร็จ":"ไม่ครบ (โต๊ะ "+rel.failed.join(", ")+")")+" — QR เดิมยังใช้ได้อยู่\nแตะโต๊ะนั้น → กด 🔄 ออก QR ใหม่","warn",12000);
+        posToast("⚠️ ปิดกะแล้ว แต่ออก QR ใหม่ให้โต๊ะว่าง"+(rel.error?"ไม่สำเร็จ":"ไม่ครบ (โต๊ะ "+rel.failed.join(", ")+")")+" — QR เดิมยังใช้ได้อยู่\nแตะโต๊ะนั้น → กด 🔄 ออก QR ใหม่"+(freshTxt?"\n"+freshTxt:""),"warn",12000);
+      else if(freshTxt)posToast(freshTxt,"ok",10000);
       setSaving(false);
       // กะนี้ไม่มีบิลให้ลงบัญชี — ปิดจอไปเลยเหมือนเดิม ไม่ต้องมีจออะไรมาคั่น
       if(outcome==="nothing"){onClosed();return;}
