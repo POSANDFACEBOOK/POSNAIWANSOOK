@@ -4744,6 +4744,8 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
     { id: 11, name: "เซตหมู", ip: "10.8.0.157", branch_id: 8, active: true, categories: ["ชาบู", "ยำ"] },
     { id: 12, name: "แคชเชียร์", ip: "10.8.0.147", branch_id: 8, active: true, categories: ["น้ำ"] },
     { id: 13, name: "เครื่องเก่า", ip: "10.8.0.9", branch_id: 8, active: false, categories: ["ชาบู"] },
+    // เครื่องบลูทูธที่เปิดใช้ (รูปเดียวกับที่ฟอร์มเพิ่มเครื่องบันทึก) — อยู่ในลิสต์ตัดสินหมุด แต่ตัวพิมพ์/แอปส่งงานผ่านแลนไม่ได้
+    { id: 14, name: "บลูทูธ", ip: "bluetooth", port: 0, branch_id: 8, active: true, categories: [], description: JSON.stringify({ c: "bt", n: "BT-58" }) },
   ];
   const ofBranch = (b) => ALLP.filter(p => p.branch_id == null || +p.branch_id === +b);
   const SHABU = { id: 95, name: "ชาบูเล็ก", printer_id: 8, category: "ชาบู" };   // ชาบู #95-98 ปักไว้เครื่อง #8 ของสาขา 6
@@ -4751,7 +4753,7 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
   ck("#2 จอบอก: ชาบูที่ปักหมุดเครื่องสาขา 6 → ที่ River ออกเครื่องเซตหมูตามหมวด", idsApp(SHABU, 8), "11");
   ck("#2 จอบอก: ที่สาขา 6 เอง หมุดยังใช้ได้ → ครัว เครื่องเดียว", idsApp(SHABU, 6), "8");
   ck("#2 จอบอก: หมุดชี้เครื่องที่ปิดใช้งาน = ไม่นับหมุด ส่งตามหมวด", idsApp({ ...SHABU, printer_id: 13 }, 8), "11");
-  const MENUS = [SHABU, { ...SHABU, printer_id: "11" }, { ...SHABU, printer_id: 12 }, { ...SHABU, printer_id: 13 }, { ...SHABU, printer_id: 99 }, { ...SHABU, printer_id: "" },
+  const MENUS = [SHABU, { ...SHABU, printer_id: "11" }, { ...SHABU, printer_id: 12 }, { ...SHABU, printer_id: 13 }, { ...SHABU, printer_id: 14 }, { ...SHABU, printer_id: 99 }, { ...SHABU, printer_id: "" },
     { id: 1, category: "น้ำ", printer_id: null }, { id: 2, category: "ไม่มีใครรับ", printer_id: 8 }, { id: 3, category: "", printer_id: null }, { id: 4, category: null, printer_id: 9 }];
   const diff = [];
   for (const b of [5, 6, 8]) {
@@ -4769,11 +4771,15 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
   // แอปส่งพิมพ์ซ้ำ/ใบยกเลิก/ย้ายโต๊ะ (agentPrintItems) ต้องใช้กติกาเดียวกันจริงตอนเลือกเครื่อง
   {
     const writes = [];
+    const appPConn = new Function(grab(APP, "getPConn") + "\nreturn getPConn;")();   // ของจริง — แยกเครื่องบลูทูธออกจากเครื่องที่ส่งผ่านแลนได้
     const fn = new Function("api", "getPConn", "cmdDesc", "printerHandles", "async " + grab(APP, "agentPrintItems") + "\nreturn agentPrintItems;")(
       { getAllPrinters: async () => ALLP, updatePrinter: async (id, body) => { writes.push({ id, body }); } },
-      () => ({ type: "lan" }), (p, k, v) => JSON.stringify({ [k]: v }), appHandles);
-    const r = await fn([{ qty: 1, name: "ชาบูเล็ก", printer_id: 8, category: "ชาบู" }], "A1", 8, { kind: "reprint" }, false);
-    ck("#2 แอปสั่งพิมพ์ซ้ำที่ River: ชาบูที่ปักหมุดสาขาอื่น ไปเครื่องเซตหมู (ไม่หายเงียบ)", { to: writes.map(w => w.id), noPrinter: r.noPrinter }, { to: [11], noPrinter: 0 });
+      appPConn, (p, k, v) => JSON.stringify({ [k]: v }), appHandles);
+    const run = async (pin) => { writes.length = 0; const r = await fn([{ qty: 1, name: "ชาบูเล็ก", printer_id: pin, category: "ชาบู" }], "A1", 8, { kind: "reprint" }, false); return { to: writes.map(w => w.id), noPrinter: r.noPrinter }; };
+    ck("#2 แอปสั่งพิมพ์ซ้ำที่ River: ชาบูที่ปักหมุดสาขาอื่น ไปเครื่องเซตหมู (ไม่หายเงียบ)", await run(8), { to: [11], noPrinter: 0 });
+    // ลิสต์ตัดสินหมุดต้องเป็น "เปิดใช้ + สาขานี้" ชุดเดียวกับตัวพิมพ์ (tick) — ไม่ใช่ทุกเครื่องของสาขา (รวมที่ปิด) และไม่ใช่เฉพาะเครื่องแลน
+    ck("#2 แอปสั่งพิมพ์ซ้ำ: หมุดชี้เครื่องของสาขานี้ที่ปิดใช้งาน → ส่งตามหมวดไปเซตหมู เหมือนใบครัวปกติ", await run(13), { to: [11], noPrinter: 0 });
+    ck("#2 แอปสั่งพิมพ์ซ้ำ: หมุดชี้เครื่องบลูทูธที่เปิดใช้ → หมุดยังนับ ไม่ส่งไปเซตหมู (ตรงกับตัวพิมพ์และจอ)", await run(14), { to: [], noPrinter: 1 });
   }
 
   // ── #12 จด orphan: อ่านของล่าสุดก่อนเขียน · อ่านไม่ได้ไม่เขียน · ชุดเดิมไม่เขียน ──
@@ -4805,17 +4811,34 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
   // ── #16 รหัสประจำเครื่อง: ตัวพิมพ์สองเครื่องรันสาขาเดียวกันต้องมองเห็นได้ (แอปอ่านช่อง agentDev) ──
   {
     const nodeCrypto = await import("node:crypto");
-    const mkLoad = (file) => {
-      const io = { wrote: [] };
-      const fsMock = { readFileSync: () => { if (file == null) { const e = new Error("ENOENT"); e.code = "ENOENT"; throw e; } return file; }, writeFileSync: (p, v) => { io.wrote.push([p, v]); } };
-      const fn = new Function("fs", "DEV_FILE", "require", grab(AGENT, "loadDeviceId") + "\nreturn loadDeviceId;")(fsMock, "/home/.foodcost-agent-id", (m) => (m === "crypto" ? nodeCrypto : null));
+    // ไฟล์ปลอมในหน่วยความจำ: file = เนื้อไฟล์ (null = ยังไม่มี) · ino = เลข inode ของไฟล์บนมือถือเครื่องนี้ (null = อ่านไม่ได้)
+    // เขียนทับไฟล์เดิมไม่เปลี่ยน inode (writeFileSync เปิดแบบ truncate) — ไฟล์ใหม่ได้ inode ตาม newIno
+    const mkLoad = (file, ino, newIno) => {
+      const io = { wrote: [], logs: [], file };
+      let cur = file == null ? null : ino;
+      const enoent = () => { const e = new Error("ENOENT"); e.code = "ENOENT"; return e; };
+      const fsMock = {
+        readFileSync: () => { if (io.file == null) throw enoent(); return io.file; },
+        writeFileSync: (p, v) => { if (io.file == null) cur = newIno == null ? 777 : newIno; io.file = String(v); io.wrote.push([p, String(v)]); },
+        statSync: () => { if (io.file == null) throw enoent(); if (cur == null) throw new Error("EACCES"); return { ino: cur }; },
+      };
+      const fn = new Function("fs", "DEV_FILE", "require", "console", grab(AGENT, "loadDeviceId") + "\nreturn loadDeviceId;")(
+        fsMock, "/home/.foodcost-agent-id", (m) => (m === "crypto" ? nodeCrypto : null), { log: (...x) => io.logs.push(x.join(" ")) });
       return { id: fn(), io };
     };
-    const a = mkLoad(null), b = mkLoad(null), c = mkLoad("a1b2c3d4e5f6\n"), d = mkLoad("{พัง");
-    ok_("#16 เครื่องใหม่: สุ่มรหัสแล้วเก็บลงไฟล์ข้างไฟล์ความจำ · สองเครื่องได้รหัสไม่ซ้ำกัน",
-      /^[0-9a-f]{12}$/.test(a.id) && a.io.wrote.length === 1 && a.io.wrote[0][1] === a.id && a.id !== b.id);
-    ok_("#16 รีสตาร์ท/อัปเดต: ใช้รหัสเดิมจากไฟล์ ไม่สุ่มใหม่ (ไม่ขึ้นเตือนผิดๆ)", c.id === "a1b2c3d4e5f6" && c.io.wrote.length === 0);
-    ok_("#16 ไฟล์รหัสเสีย → สุ่มใหม่แล้วเขียนทับ", /^[0-9a-f]{12}$/.test(d.id) && d.io.wrote.length === 1);
+    const a = mkLoad(null), b = mkLoad(null), c = mkLoad("a1b2c3d4e5f6 4242\n", 4242), d = mkLoad("{พัง", 4242);
+    ok_("#16 เครื่องใหม่: สุ่มรหัสแล้วเก็บลงไฟล์ข้างไฟล์ความจำ (คู่กับ inode ของไฟล์) · สองเครื่องได้รหัสไม่ซ้ำกัน",
+      /^[0-9a-f]{12}$/.test(a.id) && a.io.file === a.id + " 777" && a.id !== b.id && a.io.logs.length === 0);
+    ok_("#16 รีสตาร์ท/อัปเดต: ใช้รหัสเดิมจากไฟล์ ไม่สุ่มใหม่ (ไม่ขึ้นเตือนผิดๆ)", c.id === "a1b2c3d4e5f6" && c.io.wrote.length === 0 && c.io.logs.length === 0);
+    ok_("#16 ไฟล์รหัสเสีย → สุ่มใหม่แล้วเขียนทับ", /^[0-9a-f]{12}$/.test(d.id) && d.io.file === d.id + " 4242");
+    // เครื่องสำรองที่ก๊อป/กู้คืนโฮม Termux มาจากเครื่องหลัก: เนื้อไฟล์เหมือนกันทุกตัวอักษร แต่ไฟล์บนเครื่องใหม่ได้ inode ใหม่
+    const e = mkLoad("a1b2c3d4e5f6 4242", 9191);
+    const e2 = mkLoad(e.io.file, 9191);
+    ok_("#16 โฮม Termux ถูกก๊อปไปเครื่องสำรอง (inode ไม่ตรง) → เครื่องสำรองสุ่มรหัสใหม่ บอกบนจอ และรีสตาร์ทครั้งต่อไปใช้รหัสใหม่นั้นคงที่",
+      /^[0-9a-f]{12}$/.test(e.id) && e.id !== "a1b2c3d4e5f6" && e.io.file === e.id + " 9191" && e.io.logs.some(l => l.includes("a1b2c3d4e5f6")) && e2.id === e.id && e2.io.wrote.length === 0);
+    const f = mkLoad("a1b2c3d4e5f6", 4242), g = mkLoad("a1b2c3d4e5f6 4242", null);
+    ok_("#16 ไฟล์มีแต่รหัส (ยังไม่จด inode) → ใช้รหัสเดิมแล้วจด inode เพิ่ม · อ่าน inode ไม่ได้ → ใช้รหัสเดิม ไม่สุ่มใหม่",
+      f.id === "a1b2c3d4e5f6" && f.io.file === "a1b2c3d4e5f6 4242" && g.id === "a1b2c3d4e5f6" && g.io.wrote.length === 0);
     ok_("#16 ไฟล์รหัสแยกจากไฟล์ความจำ (ลบความจำตอนสลับเครื่องแล้วรหัสไม่หาย) อยู่โฟลเดอร์เดียวกัน",
       AGENT.includes('const DEV_FILE = path.join(process.env.HOME || ".", ".foodcost-agent-id");') && AGENT.includes('const STATE_FILE = path.join(process.env.HOME || ".", ".foodcost-printed.json");'));
     const runHb = async (stored) => {

@@ -34,10 +34,24 @@ const STATE_FILE = path.join(process.env.HOME || ".", ".foodcost-printed.json");
 // ส่งไปกับ heartbeat (agentDev) — ถ้ามีมือถือสองเครื่องรันสาขาเดียวกัน (เครื่องสำรองถูกเปิดค้าง / ตั้งเลขสาขาผิด)
 // แถวเดียวกันจะเห็นรหัสสลับไปมา แอปเอาไปขึ้นแถบแดง — ตัวล็อกพอร์ตด้านล่างกันได้แค่การรันซ้อนในเครื่องเดียวกัน
 const DEV_FILE = path.join(process.env.HOME || ".", ".foodcost-agent-id");
+// ไฟล์เก็บ "รหัส เลขinode" — inode ผูกกับตัวไฟล์บนมือถือเครื่องนี้: รีสตาร์ท/อัปเดตตัวเองได้ inode เดิม = รหัสเดิม
+// ⚠️ เครื่องสำรองมักทำโดยก๊อป/กู้คืนโฮม Termux ของเครื่องหลัก (ดู boot-agent.sh) — รหัสติดไปด้วย สองเครื่องรหัสเดียวกัน
+//    = ไม่มีวันเห็นรหัสสลับกัน แถบแดงไม่ขึ้น ทั้งที่บิลพิมพ์ซ้ำ · ไฟล์ที่ก๊อป/กู้คืนมาได้ inode ใหม่เสมอ ⟹ inode ไม่ตรง = สุ่มรหัสใหม่
 function loadDeviceId() {
-  try { const s = String(fs.readFileSync(DEV_FILE, "utf8")).trim(); if (/^[a-z0-9]{6,32}$/i.test(s)) return s; } catch {}
-  const id = require("crypto").randomBytes(6).toString("hex");
-  try { fs.writeFileSync(DEV_FILE, id); } catch {}   // เขียนไม่ได้ก็ใช้รหัสนี้ไปทั้งรอบ (รีสตาร์ทได้รหัสใหม่ ไม่สลับไปมา)
+  const inoOf = () => { try { return String(fs.statSync(DEV_FILE).ino || ""); } catch { return ""; } };
+  let id = "", ino = "";
+  try { const s = String(fs.readFileSync(DEV_FILE, "utf8")).trim().split(/\s+/); id = s[0] || ""; ino = s[1] || ""; } catch {}
+  if (/^[a-z0-9]{6,32}$/i.test(id)) {
+    const cur = inoOf();
+    if (!ino || !cur || ino === cur) {   // ไฟล์ของเครื่องนี้เอง (อ่าน inode ไม่ได้ = ใช้รหัสเดิม ไม่สุ่มใหม่มั่วๆ)
+      if (!ino && cur) { try { fs.writeFileSync(DEV_FILE, id + " " + cur); } catch {} }   // ไฟล์ยังไม่มี inode — จดเพิ่ม รหัสเดิม
+      return id;
+    }
+    console.log(`⚠️  ไฟล์รหัสเครื่องถูกก๊อปมาจากมือถืออื่น (รหัสเดิม ${id}) — สุ่มรหัสใหม่ให้เครื่องนี้ · เครื่องสำรองห้ามเปิดพร้อมเครื่องหลัก`);
+  }
+  id = require("crypto").randomBytes(6).toString("hex");
+  // เขียนไม่ได้ก็ใช้รหัสนี้ไปทั้งรอบ (รีสตาร์ทได้รหัสใหม่ ไม่สลับไปมา) · writeFileSync ทับไฟล์เดิม inode ไม่เปลี่ยน
+  try { fs.writeFileSync(DEV_FILE, id); const n = inoOf(); if (n) fs.writeFileSync(DEV_FILE, id + " " + n); } catch {}
   return id;
 }
 const AGENT_DEV = loadDeviceId();

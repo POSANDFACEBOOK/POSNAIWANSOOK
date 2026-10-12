@@ -533,11 +533,12 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
 
 // ── #2 หมุดเครื่องพิมพ์รายเมนูใช้ได้เฉพาะเครื่องของสาขาที่กำลังพิมพ์ ──
 {
+  const btFn = new Function(grabLine("function isBluetooth(p) {") + "\nreturn isBluetooth;")();   // ของจริง — แยกเครื่องบลูทูธออกจากเครื่องแลน
   const mk = (sendFails) => {
     const sent = [], orphans = [];
     const fn = new Function("isBluetooth", "renderItemBufs", "printerHandles", "bufsMode", "sendToPrinter", "errOf", "noteOrphan", "console",
       grabTopBlock("async function printItems(") + "\nreturn printItems;")(
-      () => false, async (items) => items.map(() => ({ buf: Buffer.from("x"), raster: true })), handlesFn, () => "รูปภาพ",
+      btFn, async (items) => items.map(() => ({ buf: Buffer.from("x"), raster: true })), handlesFn, () => "รูปภาพ",
       async (ip) => { sent.push(ip); if (sendFails && sendFails.includes(ip)) { const e = new Error("t"); e.code = "CONNECT_TIMEOUT"; throw e; } },
       (p, e) => ({ pid: p.id, code: e.code }), async (target, orphan) => { orphans.push({ target: target && target.id, names: orphan.map(i => i.name) }); }, { log() {} });
     return { fn, sent, orphans };
@@ -557,11 +558,24 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
   const e = mk(["10.8.0.157"]);
   const re = await e.fn([SHABU], "A1", PR8, {}, {});
   ok_("#2 ส่งตามหมวดแล้วเครื่องไม่ออก → รายการเข้ารายการพิมพ์ไม่สำเร็จ (ให้พนักงานกดเอง)", re.ok === false && re.failedItems.length === 1 && re.failedItems[0].name === "ชาบูเล็ก");
+  // ลิสต์ตัดสินหมุด = เครื่องเปิดใช้ทั้งหมดของสาขา (printers จาก tick) ไม่ใช่เฉพาะเครื่องแลนที่มี IP (all) — ไม่งั้นหมุดไปเครื่องบลูทูธ/ยังไม่ใส่ IP
+  // จะถูกตัวพิมพ์ส่งตามหมวดแทน ขณะที่จอกำหนดการพิมพ์ (printersForMenu ใช้เครื่องเปิดใช้ทั้งหมด) บอกว่าออกเครื่องที่ปักไว้เครื่องเดียว
+  const BT = { id: 14, name: "บลูทูธ", ip: "bluetooth", port: 0, branch_id: 8, categories: [], description: JSON.stringify({ c: "bt", n: "BT-58" }) };
+  const NOIP = { id: 15, name: "ยังไม่ใส่ IP", ip: "", branch_id: 8, categories: [] };
+  for (const [lbl, pr] of [["บลูทูธ", BT], ["ยังไม่ใส่ IP", NOIP]]) {
+    const g = mk();
+    const rg = await g.fn([{ ...SHABU, printer_id: pr.id }], "A1", [...PR8, pr], {}, {});
+    ok_("#2 หมุดชี้เครื่อง" + lbl + " ที่เปิดใช้ของสาขานี้ → หมุดยังนับ ไม่ส่งไปเซตหมูตามหมวด · จดเป็นเมนูไม่มีเครื่องรับ (ตรงกับจอ)",
+      g.sent.length === 0 && g.orphans.length === 1 && g.orphans[0].target === 10 && rg.ok && rg.failedItems.length === 0);
+  }
   // ไม่ส่งลิสต์มา (โค้ดเก่า) = เชื่อหมุดแบบเดิม — ของเดิมไม่พัง แต่ทุกจุดในตัวพิมพ์ต้องส่งลิสต์
   ok_("#2 printerHandles ไม่มีลิสต์ = เชื่อหมุดแบบเดิม", handlesFn(PR6[1], SHABU) === false && handlesFn({ id: 8, categories: [] }, SHABU) === true);
   const calls = S.match(/printerHandles\([^)]*\)/g) || [];
   const noList = calls.filter(c => !/^printerHandles\(p, it, list\)$/.test(c) && c.split(",").length < 3);
   ok_("#2 ทุกจุดที่ตัวพิมพ์ตัดสินเส้นทาง ส่งลิสต์เครื่องของสาขาไปด้วย (" + calls.length + " จุด)", calls.length >= 6 && noList.length === 0);
+  // ทุกจุดต้องส่ง printers (เครื่องเปิดใช้ของสาขาจาก tick) — ไม่ใช่ all/usable ที่ตัดเครื่องบลูทูธ/ไม่มี IP ออกแล้ว
+  const wrongList = calls.filter(c => c !== "printerHandles(p, it, list)" && c !== "printerHandles(p, it, printers)");
+  ok_("#2 ทุกจุดส่งลิสต์ printers (เครื่องเปิดใช้ทั้งหมดของสาขา) ไม่ใช่ลิสต์ที่กรองเครื่องแลนแล้ว", wrongList.length === 0);
 }
 
 // ── #12 จด orphan: อ่านของล่าสุดก่อนเขียน · อ่านไม่ได้ไม่เขียน · ชุดเดิมไม่เขียน ──
