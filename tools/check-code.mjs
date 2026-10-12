@@ -4925,8 +4925,22 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
   if (noPrOf) {
     const pr = [P(30, 5, {}, { categories: ["อาหารจานเดียว"] }), P(31, 5, {}, { categories: ["น้ำ"], active: false }), P(12, 8, {})];
     const items = [{ name: "ข้าวผัด", category: "อาหารจานเดียว" }, { name: "ชาบู", category: "ชาบู" }, { name: "โค้ก", category: "น้ำ" }, { name: "หมูปัก", category: "อาหารจานเดียว", printer_id: 12 }];
-    ck("ส่งครัวแล้วไม่มีเครื่องรับ = ได้ชื่อไปเตือน (หมวดไม่มีเครื่อง · เครื่องปิดใช้ · ปักหมุดเครื่องสาขาอื่น)", noPrOf(items, pr, 5).map((i) => i.name), ["ชาบู", "โค้ก", "หมูปัก"]);
+    // หมุดที่ชี้ไปเครื่องสาขาอื่น: ตัวพิมพ์ v46 = หมุดเด็ดขาด (ไม่มีใบ) · v47 (printerHandles รับลิสต์) = ถือว่าไม่ได้ปัก ส่งตามหมวด
+    // คำเตือนต้องตรงกับที่ตัวพิมพ์ทำจริง ⟹ ถามกติกาจาก printerHandles ตัวจริงในไฟล์ (ผ่านได้ทั้งก่อนและหลังรวมโค้ดตัวพิมพ์รุ่นใหม่)
+    const ph = safe(() => new Function(grab(APP, "printerHandles") + "\nreturn printerHandles;")());
+    const pinOutsideIgnored = !!ph && ph({ id: 30, categories: ["อาหารจานเดียว"] }, { printer_id: 12, category: "อาหารจานเดียว" }, [{ id: 30 }]) === true;
+    ck("ส่งครัวแล้วไม่มีเครื่องรับ = ได้ชื่อไปเตือน (หมวดไม่มีเครื่อง · เครื่องปิดใช้ · หมุดตามกติกาเดียวกับตัวพิมพ์)", noPrOf(items, pr, 5).map((i) => i.name), pinOutsideIgnored ? ["ชาบู", "โค้ก"] : ["ชาบู", "โค้ก", "หมูปัก"]);
     ck("สาขาที่ยังไม่มีเครื่องพิมพ์เลย = ไม่เตือน", noPrOf(items, [P(12, 8, {})], 5).length, 0);
+  }
+  // ลิสต์ตัดสินหมุด (ตัวที่ 3 ของ printerHandles) = เครื่องที่เปิดใช้ของสาขานี้ รวมบลูทูธ — ชุดเดียวกับตัวพิมพ์/agentPrintItems
+  // ไม่ส่ง = เมนูที่ปักหมุดเครื่องสาขาอื่น (ชาบู #95-98 → เครื่อง #8 สาขา 6) ขึ้นแดง "ไม่มีเครื่องพิมพ์รับ" ทุกครั้งที่ส่ง ทั้งที่ใบออก
+  const noPrSpy = safe(() => new Function("seen", PA + "\n" + grab(APP, "getPConn") + "\nconst printerHandles=(p,it,list)=>{seen.push(list);return false;};\n" + grab(APP, "itemsWithoutPrinter") + "\nreturn itemsWithoutPrinter;"));
+  ok_("อ่านตัวเช็ครายการที่ไม่มีเครื่องรับ (แบบดูว่าส่งลิสต์อะไรให้ตัวตัดสินหมุด) ได้", !!noPrSpy);
+  if (noPrSpy) {
+    const seen = [];
+    noPrSpy(seen)([{ name: "x", category: "y" }], [P(30, 5, {}), P(31, 5, {}, { active: false }), P(32, 5, { c: "bt", n: "BT" }, { ip: "bluetooth" }), P(40, null, {}), P(12, 8, {})], 5);
+    ok_("ส่งครัว: ตัวตัดสินหมุดได้ลิสต์เครื่องที่เปิดใช้ของสาขานี้ (ไม่ใช่ว่าง/ไม่ใช่ทุกสาขา)",
+      seen.length > 0 && seen.every((l) => Array.isArray(l) && l.map((p) => p.id).sort().join() === "30,32,40"));
   }
   ok_("กดส่งครัวแล้วเตือนทันทีเมื่อมีรายการไม่มีเครื่องรับ (ไม่ขึ้น ✅ ส่งแล้ว)",
     APP.includes("const noPr=itemsWithoutPrinter(toSend,printers,branch.id);") && /if\(noPr\.length\)posToast\(`⚠️ บันทึกแล้ว แต่ไม่มีเครื่องพิมพ์รับ:[^\n]*\n\s*else posToast\("✅ บันทึกรายการแล้ว/.test(APP));
@@ -4944,6 +4958,8 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
     ok_("ข้อมูลค้างจากรอบดึง 60 วิ (เวลาสัญญาณเก่ากว่า) ไม่ทำให้แดงหลอก", af(run([["A", t0, t0], ["B", t0 + 45000, t0 + M], ["A", t0, t0 + 2 * M]]), t0 + 2 * M) === false);
     ok_("สลับไปเครื่องสำรองแล้วสลับกลับอีกชั่วโมง = ไม่ขึ้นแดง", af(run([["A", t0, t0], ["B", t0 + 45000, t0 + M], ["A", t0 + 60 * M, t0 + 61 * M]]), t0 + 61 * M) === false);
     ok_("แถวที่ไม่มี agentDev (ตัวพิมพ์รุ่นเก่า) = ไม่นับ", af(run([[null, t0, t0], ["", t0 + 1, t0 + M], [null, t0 + 2, t0 + 2 * M]]), t0 + 2 * M) === false);
+    // สลับไปกลับเท่านั้นที่นับ — ชื่อเครื่องเปลี่ยนสองครั้งติด (A→B→C) คือเปลี่ยนเครื่องสองหน ไม่ใช่สองเครื่องยิงพร้อมกัน
+    ok_("สามชื่อต่างกัน A→B→C ใน 5 นาที = ไม่ขึ้นแดง (ต้องสลับกลับมาชื่อเดิมเท่านั้น)", af(run([["A", t0, t0], ["B", t0 + 45000, t0 + M], ["C", t0 + 90000, t0 + 2 * M]]), t0 + 2 * M + 1000) === false);
   }
   const strip = fnBody("function PrintHealthStrip(");
   ok_("แถบสถานะ: จับตัวพิมพ์ชนกันจากข้อมูลที่ได้อยู่แล้ว ไม่ถามฐานเพิ่ม ไม่เพิ่มรอบถาม",
@@ -4952,6 +4968,27 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
   ok_("แถบสถานะ: ขึ้นแดงเมื่อมีใบไม่มีเครื่องรับใน 20 นาที พร้อมชื่อเมนู", strip.includes("const orph=printOrphansRecent(all,branchId,now,PRINT_RECENT_MS);") && /if\(orph\)rows\.push\(\{c:C\.red,[^\n]*orph\.names\.join\(" · "\)/.test(strip));
   ok_("แถบสถานะ: มีเครื่องพิมพ์แต่ตัวพิมพ์ไม่เคยเต้นเลย = ขึ้นแดง (เดิมเงียบ)", strip.includes("const never=fresh&&!hh.seen;") && strip.includes("if(never)rows.push({c:C.red,"));
   ok_("แถบสถานะ: ทุกแถวยังเป็นแดง (ไม่มีสีที่สาม)", (strip.match(/rows\.push\(\{c:C\.\w+/g) || []).every((m) => m.endsWith("C.red")));
+  // ── #3 สัญญากับตัวพิมพ์: แถบอ่าน orphan เฉพาะ 20 นาทีล่าสุด ⟹ เมนูเดิมไม่มีเครื่องรับซ้ำ ตัวพิมพ์ต้องจดเวลาใหม่ ──
+  // รุ่น 46 จดทุกครั้ง (เวลาใหม่ทุกบิล) · รุ่นที่จดเฉพาะเมื่อชุดชื่อเปลี่ยน (noteOrphan) = ขึ้นแดงแค่ 20 นาทีแรก
+  // แล้วเงียบตลอดไป ทั้งที่ออเดอร์ QR ของเมนูนั้นยังไม่มีใบออก (ลูกค้าสแกนสั่งไม่มีคำเตือนอื่นเลย)
+  if (AGENT.includes("async function noteOrphan(")) {
+    const pre = AGENT.split("\n").filter((l) => /^(let|const) (_orphan\w*|orphanKey|ORPHAN_\w*)\b/.test(l)).join("\n");
+    const noF = safe(() => new Function("sb", "patchPrinter", "Date", pre + "\nasync " + grab(AGENT, "noteOrphan") + "\nreturn noteOrphan;"));
+    ok_("อ่านตัวจดเมนูไม่มีเครื่องรับของตัวพิมพ์มารันได้", !!noF);
+    if (noF) {
+      let T = 1e12, row = { id: 10, description: "{}" };
+      const note = noF(async () => [{ description: row.description }], async (id, b) => { row = { ...row, description: b.description }; return { ok: true }; }, { now: () => T });
+      const once = () => Promise.resolve(safe(() => note(row, [{ name: "ของหวานใหม่" }]))).catch(() => {});
+      await once();
+      T += 25 * 60000;
+      await once();
+      const oat = +((safe(() => JSON.parse(row.description).orphan) || {}).at || 0);
+      ok_("เมนูเดิมไม่มีเครื่องรับซ้ำอีก 25 นาทีให้หลัง = ตัวพิมพ์จดเวลาใหม่ (แถบ 20 นาทียังขึ้นแดง)", oat > 0 && T - oat < 20 * 60000);
+    }
+  } else {
+    ok_("ตัวพิมพ์จดเวลาใบไม่มีเครื่องรับใหม่ทุกครั้งที่เกิด (แถบ 20 นาทีเห็นทุกครั้ง)",
+      AGENT.includes("d.orphan = { at: Date.now(), names: [...new Set(orphan.map(i => i.name))].slice(0, 12), n: orphan.length };"));
+  }
 
   // ── #11 เครื่องพิมพ์ใหม่ต้องผูกสาขาที่เปิดอยู่ ──
   const saveBr = safe(() => new Function(line("const printerSaveBranch=") + "\nreturn printerSaveBranch;")());
@@ -4975,16 +5012,25 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
   const prbSrc = fnBody("async function printBillReceipt(");
   const prbF = safe(() => new Function("api", "location", "buildReceiptB64", "posToast", "printReceipt",
     [line("const CMD_KEYS="), line("const CMD_FRESH_MS="), grab(APP, "cmdDesc"), grab(APP, "getPConn"), grab(APP, "isReceiptPrinter"), grab(APP, "getReceiptPrinters"),
-      grabConst(APP, "drawerPrinters"), grab(APP, "receiptKickPlan"), line("const withKick="), prbSrc + "\n}"].join("\n") + "\nreturn printBillReceipt;"));
+      grabConst(APP, "drawerPrinters"), grab(APP, "receiptKickPlan"), line("const withKick="), "async " + grab(APP, "kickAfterFail"), prbSrc + "\n}"].join("\n") + "\nreturn printBillReceipt;"));
   ok_("อ่านตัวพิมพ์ใบเสร็จ (พร้อมลิ้นชัก) มารันได้", !!prbF);
+  // ตัวจำลองแถวเครื่องพิมพ์: เขียนไม่ผ่าน (เน็ตร้านสะดุด) ได้ตามสั่ง · อ่านรอบหลัง (ของสด) เห็นสิ่งที่ตัวพิมพ์เพิ่งจดระหว่างรอได้
+  // writes = ที่ลงแถวจริง · tries = ทุกครั้งที่พยายามเขียน (รวมที่ไม่ผ่าน)
+  const rowSim = ({ printers, failWrites = {}, later = null }) => {
+    const writes = [], tries = [], toasts = []; let reads = 0; const fails = { ...failWrites };
+    const api = {
+      getAllPrinters: async () => (reads++ === 0 || !later ? printers : later),
+      updatePrinter: async (id, d) => { const w = { id, d: JSON.parse(d.description) }; tries.push(w); if (fails[id] > 0) { fails[id]--; throw new Error("network"); } writes.push(w); },
+    };
+    return { api, writes, tries, toasts, toast: (m, t) => toasts.push([m, t]) };
+  };
   if (prbF) {
-    const runR = async ({ printers, kick, https = true, renderFail = false }) => {
-      const writes = [], wins = [];
-      const api = { getAllPrinters: async () => printers, updatePrinter: async (id, d) => { writes.push({ id, d: JSON.parse(d.description) }); } };
-      const fn = prbF(api, { protocol: https ? "https:" : "http:" }, async () => { if (renderFail) throw new Error("render"); return "B64"; }, () => {}, () => wins.push(1));
+    const runR = async ({ printers, kick, https = true, renderFail = false, failWrites, later }) => {
+      const wins = [], S = rowSim({ printers, failWrites, later });
+      const fn = prbF(S.api, { protocol: https ? "https:" : "http:" }, async () => { if (renderFail) throw new Error("render"); return "B64"; }, S.toast, () => wins.push(1));
       const ret = await fn({ id: 99, total: 100 }, "A1", { branch: { id: 8, name: "River" }, posSettings: {}, printers, paid: true, kick });
-      await new Promise((r) => setTimeout(r, 0));
-      return { ret, writes, wins, ids: writes.map((w) => w.id).sort().join() };
+      await new Promise((r) => setTimeout(r, 5));
+      return { ret, writes: S.writes, tries: S.tries, toasts: S.toasts, wins, ids: S.writes.map((w) => w.id).sort().join() };
     };
     const river = () => [P(10, 8, {}, { categories: ["อาหารจานเดียว"] }), P(11, 8, {}, { categories: ["หมูกระทะ"] }), P(12, 8, { rcpt: 1, on: 1 }, { categories: ["น้ำ"] })];
     const a = await runR({ printers: river(), kick: true });
@@ -5001,10 +5047,60 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
     ok_("เครื่องในวงแลน (ไม่ใช่ https) = ลิ้นชักยังเปิดผ่านตัวพิมพ์ ใบเสร็จออกหน้าต่างพิมพ์", e.ids === "12" && !!e.writes[0].d.dk && !e.writes[0].d.pj && e.wins.length === 1);
     const f = await runR({ printers: [P(12, 8, { rcpt: 1, qr: { at: now - 1000, url: "x" } })], kick: true });
     ok_("คำสั่งอื่นที่เพิ่งสั่งค้างอยู่ในแถว ไม่ถูกลบตอนเขียนรวม", f.ids === "12" && !!f.writes[0].d.qr && !!f.writes[0].d.pj && !!f.writes[0].d.dk);
+    // ── เขียนรวมไม่ผ่าน (เน็ตร้านสะดุดตอนส่งรูปใบเสร็จ ~30 KB) — ลิ้นชักต้องยังเปิด ──
+    const failRow = { failed: [{ at: now - 2000, orderId: 7, items: [{ name: "ต้มยำ" }] }] };   // ตัวพิมพ์เพิ่งจดใบครัวไม่ออกระหว่างรอ
+    const g = await runR({ printers: river(), kick: true, failWrites: { 12: 1 }, later: [P(10, 8, {}), P(11, 8, {}), P(12, 8, { rcpt: 1, on: 1, ...failRow })] });
+    const gFirst = g.tries[0] && g.tries[0].d;
+    ok_("เขียนรวมไม่ผ่าน = สั่งลิ้นชักแยกที่เครื่องนั้น 1 ครั้ง (dk ตัวเดิม ไม่มีใบ) + บอกพิมพ์ไม่สำเร็จ + หน้าต่างพิมพ์สำรอง",
+      g.ret === false && g.ids === "12" && g.writes.length === 1 && !!g.writes[0].d.dk && !g.writes[0].d.pj && !!gFirst && !!gFirst.pj && !!gFirst.dk
+      && g.writes[0].d.dk.at === gFirst.dk.at && g.wins.length === 1 && g.toasts.some(([m]) => /พิมพ์ไม่สำเร็จ/.test(m)));
+    ok_("สั่งลิ้นชักแยกจากแถวสด — ไม่ลบรายการใบไม่ออกที่ตัวพิมพ์เพิ่งจดระหว่างรอ",
+      g.writes.length === 1 && Array.isArray(g.writes[0].d.failed) && g.writes[0].d.failed.length === 1 && g.writes[0].d.rcpt === 1);
+    const h = await runR({ printers: river(), kick: true, failWrites: { 12: 2 } });
+    ok_("สั่งลิ้นชักแยกก็ยังไม่ผ่าน = บอกแคชเชียร์ให้เปิดเอง (ไม่เงียบ)",
+      h.writes.length === 0 && h.tries.length === 2 && h.toasts.some(([m, t]) => t === "err" && /ลิ้นชักยังไม่เปิด/.test(m) && /เงินในลิ้นชัก/.test(m)));
+    const two = () => [P(12, 8, { rcpt: 1 }), P(14, 8, { rcpt: 1 })];   // ลิ้นชักไม่ได้ติ๊ก = ต่อกับเครื่องใบเสร็จทุกเครื่อง
+    const k = await runR({ printers: [P(12, 8, { rcpt: 1, dw: 1 }), P(14, 8, { rcpt: 1 })], kick: true, failWrites: { 14: 1 } });
+    ok_("เครื่องที่ไม่ผ่านไม่ได้ถือลิ้นชัก = ไม่สั่งลิ้นชักซ้ำที่เครื่องที่ผ่านแล้ว (กันทับใบที่เพิ่งใส่)",
+      k.ret === false && k.writes.length === 1 && k.writes[0].id === 12 && !!k.writes[0].d.pj && !!k.writes[0].d.dk);
+    const m2 = await runR({ printers: two(), kick: true, failWrites: { 12: 1 } });
+    ok_("หลายเครื่องใบเสร็จ: สั่งลิ้นชักแยกเฉพาะเครื่องที่เขียนไม่ผ่าน",
+      m2.ret === false && m2.writes.filter((w) => w.id === 14).length === 1 && !!m2.writes.find((w) => w.id === 14).d.pj
+      && m2.writes.filter((w) => w.id === 12).length === 1 && !m2.writes.find((w) => w.id === 12).d.pj && !!m2.writes.find((w) => w.id === 12).d.dk);
+    const n2 = await runR({ printers: river(), kick: false, failWrites: { 12: 1 } });
+    ok_("ไม่ใช่เงินสด + เขียนไม่ผ่าน = ไม่มีลิ้นชักเลย (เหมือนเดิม)", n2.ret === false && n2.writes.length === 0 && n2.tries.length === 1 && !n2.tries[0].d.dk);
   }
   ok_("ปิดบิลเงินสดส่งลิ้นชักไปกับใบเสร็จ ไม่ยิงแยกอีก", APP.includes("},table.table_number,true,cashPart>0);") && !APP.includes("if(cashPart>0)kickCashDrawer("));
+  // (เดิมเทียบท้ายบรรทัด "?dk:null)})));" — บรรทัดนั้นมี .catch ต่อท้ายแล้ว (เก็บเครื่องที่เขียนไม่ผ่าน) ⟹ เทียบส่วนที่ยังหมายถึงเรื่องเดียวกัน)
   ok_("ยกเลิกบิลคืนเงินสด: ลิ้นชักไปกับใบยกเลิกในการเขียนครั้งเดียว",
-    APP.includes('withKick(cmdDesc(p,"pj",{at:stamp,b64,what:"ใบยกเลิกบิล",') && APP.includes("kp.withRcpt.has(+p.id)?dk:null)})));") && !/kickCashDrawer\(printers,branch\?\.id\)\.catch\(\(\)=>\{\}\);\n\s*\}\n\s*\/\/[^\n]*\n\s*printVoidBillSlip/.test(APP));
+    APP.includes('withKick(cmdDesc(p,"pj",{at:stamp,b64,what:"ใบยกเลิกบิล",') && APP.includes("kp.withRcpt.has(+p.id)?dk:null)}).catch(e=>{bad.push({p,e});})));") && !/kickCashDrawer\(printers,branch\?\.id\)\.catch\(\(\)=>\{\}\);\n\s*\}\n\s*\/\/[^\n]*\n\s*printVoidBillSlip/.test(APP));
+  // ใบยกเลิกบิล: รันตัวจริง (เดิมมีแค่ค้นข้อความ — ลบตัวสั่งลิ้นชักตอนเรนเดอร์ใบไม่ได้ทิ้ง ด่านทั้งหมดยังผ่าน)
+  const pvbF = safe(() => new Function("api", "escposSlipRaster", "posToast", "bahtR", "payMethodLabel", "fmtDT", "stripEmoji",
+    [line("const CMD_KEYS="), line("const CMD_FRESH_MS="), grab(APP, "cmdDesc"), grab(APP, "getPConn"), grab(APP, "isReceiptPrinter"), grab(APP, "getReceiptPrinters"),
+      grabConst(APP, "drawerPrinters"), grab(APP, "receiptKickPlan"), line("const withKick="), "async " + grab(APP, "kickAfterFail"), fnBody("async function printVoidBillSlip(") + "\n}"].join("\n") + "\nreturn printVoidBillSlip;"));
+  ok_("อ่านตัวพิมพ์ใบยกเลิกบิล (พร้อมลิ้นชัก) มารันได้", !!pvbF);
+  if (pvbF) {
+    const runV = async ({ printers, kick, renderFail = false, failWrites }) => {
+      const S = rowSim({ printers, failWrites });
+      const fn = pvbF(S.api, async () => { if (renderFail) throw new Error("render"); return "VB64"; }, S.toast, (x) => String(x), (x) => String(x), (x) => String(x), (x) => String(x));
+      let threw = false;
+      try { await fn({ order: { id: 99, table_number: "A1", total: 100 }, branch: { id: 8, name: "River" }, reason: "ลูกค้ายกเลิก", refundText: "คืนเงินทาง เงินสด", by: "max", at: new Date().toISOString(), printers, kick }); } catch { threw = true; }
+      await new Promise((r) => setTimeout(r, 5));
+      return { threw, writes: S.writes, tries: S.tries, toasts: S.toasts };
+    };
+    const river = () => [P(10, 8, {}), P(11, 8, {}), P(12, 8, { rcpt: 1, on: 1 })];
+    const v1 = await runV({ printers: river(), kick: true });
+    ok_("คืนเงินสด (แบบ River) = ใบยกเลิก+ลิ้นชัก ลงแถวเครื่องแคชเชียร์ครั้งเดียว",
+      !v1.threw && v1.writes.length === 1 && v1.writes[0].id === 12 && !!v1.writes[0].d.pj && v1.writes[0].d.pj.what === "ใบยกเลิกบิล" && !!v1.writes[0].d.dk);
+    const v2 = await runV({ printers: river(), kick: false });
+    ok_("ยกเลิกบิลไม่คืนเงินสด = ใบยกเลิกอย่างเดียว ลิ้นชักไม่เปิด", !v2.threw && v2.writes.length === 1 && !!v2.writes[0].d.pj && !v2.writes[0].d.dk);
+    const v3 = await runV({ printers: river(), kick: true, renderFail: true });
+    ok_("เรนเดอร์ใบยกเลิกไม่ได้ = ลิ้นชักยังเปิด (แถวเครื่องแคชเชียร์ 1 ครั้ง มีลิ้นชัก ไม่มีใบ) และยังแจ้งว่าล้ม",
+      v3.threw && v3.writes.length === 1 && v3.writes[0].id === 12 && !!v3.writes[0].d.dk && !v3.writes[0].d.pj);
+    const v4 = await runV({ printers: river(), kick: true, failWrites: { 12: 1 } });
+    ok_("เขียนใบยกเลิกไม่ผ่าน = สั่งลิ้นชักแยกที่เครื่องนั้น (dk ตัวเดิม ไม่มีใบ) และยังแจ้งว่าล้ม",
+      v4.threw && v4.writes.length === 1 && !!v4.writes[0].d.dk && !v4.writes[0].d.pj && v4.tries.length === 2 && v4.tries[0].d.dk.at === v4.writes[0].d.dk.at);
+  }
 
   // ── #14 "พิมพ์ทั้งหมด" QR: ส่งทีละโต๊ะ ไม่ทับกันเอง · ไม่ติดธงโต๊ะที่ยังไม่ได้ส่ง ──
   const paF = safe(() => new Function("tables", "branch", "printTableQR", "waitPrintJobTaken", "setPrintingAll", "notifyDlg", "posToast", "printingAll", "async " + grab(APP, "printAll") + "\nreturn printAll;"));
@@ -5069,6 +5165,9 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
     const B = stF({ getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); }, removeItem: () => { throw new Error("blocked"); } });
     ok_("เบราว์เซอร์ห้ามใช้ที่เก็บ = ไม่พัง และไม่เป็นสถานี", B.isPrintStation(8) === false && safe(() => (B.setPrintStation(8, true), B.takeOldPrintStation())) === false);
   }
+  // ปุ่มเปิดสถานีพิมพ์ถูกเอาออกไปแล้ว (0c19863) — ข้อความห้ามส่งพนักงานไปหาตัวเลือกที่ไม่มีอยู่
+  ok_("เครื่องที่เคยเป็นสถานีพิมพ์: บอกว่าปิดแล้ว ตัวพิมพ์พิมพ์ให้เอง (ไม่บอกให้ไปเปิดใหม่)",
+    APP.includes('if(takeOldPrintStation())posToast("ℹ️ ปิดโหมดสถานีพิมพ์ของเครื่องนี้แล้ว — โปรแกรมตัวพิมพ์ที่ร้านพิมพ์ใบให้เอง') && !APP.includes("ไปเปิดใหม่ที่ 🖨 เครื่องพิมพ์") && !APP.includes("onClick={toggleStation}"));
   ok_("จอขาย/จอเครื่องพิมพ์อ่าน-เขียนโหมดสถานีพิมพ์ตามสาขาที่เปิดอยู่",
     !/isPrintStation\(\)/.test(APP) && APP.includes("if(!isPrintStation(currentBranch.id))return;") && APP.includes("setPrintStation(currentBranch.id,v);") && APP.includes("useEffect(()=>{setPS(isPrintStation(currentBranch.id));},[currentBranch.id]);"));
 }

@@ -1976,10 +1976,13 @@ function printOrphansRecent(printers,branchId,now,winMs){
 }
 // รายการที่กำลังส่งเข้าครัวแต่ไม่มีเครื่องไหนรับ — กติกาเดียวกับ orphan ของตัวพิมพ์ (เครื่องของสาขา · เปิดใช้ · มี IP · ไม่ใช่บลูทูธ)
 // สาขาที่ไม่มีเครื่องพิมพ์เลย = ไม่เตือน (ยังไม่ได้ใช้ตัวพิมพ์ ไม่ใช่ตั้งหมวดตกหล่น)
+// act = เครื่องที่เปิดใช้ของสาขานี้ ส่งเป็นตัวที่ 3 ให้ printerHandles (ลิสต์ตัดสินหมุด ชุดเดียวกับตัวพิมพ์/agentPrintItems)
+// ไม่ส่ง = หมุดที่ชี้ไปเครื่องสาขาอื่นถูกนับว่า "ไม่มีเครื่องรับ" ทั้งที่ตัวพิมพ์รุ่นใหม่พิมพ์ตามหมวดให้ → เตือนแดงหลอกทุกครั้ง
 function itemsWithoutPrinter(items,printers,branchId){
-  const usable=printersAt(printers,branchId).filter(p=>p&&p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
+  const act=printersAt(printers,branchId).filter(p=>p&&p.active!==false);
+  const usable=act.filter(p=>p.ip&&getPConn(p).type!=="bluetooth");
   if(!usable.length)return [];
-  return (items||[]).filter(it=>it&&!usable.some(p=>printerHandles(p,it)));
+  return (items||[]).filter(it=>it&&!usable.some(p=>printerHandles(p,it,act)));
 }
 // ── ตัวพิมพ์สองเครื่องทำงานพร้อมกัน ───────────────────────────────────────
 // ตัวพิมพ์ของสาขาเต้นสัญญาณชีพลงแถวเดียวกัน (เครื่องพิมพ์ id ต่ำสุด) พร้อมชื่อเครื่องที่รันอยู่ (agentDev)
@@ -18597,6 +18600,16 @@ function receiptKickPlan(rcps,drawers){
 }
 // เติมคำสั่งเปิดลิ้นชักลงคำสั่งที่กำลังจะเขียนอยู่แล้ว (ใช้ตัวเขียนตัวเดิม — งานที่เพิ่งใส่ในก้อนนี้ยังสดอยู่ ไม่ถูกลบ)
 const withKick=(desc,dk)=>dk?cmdDesc({description:desc},"dk",dk):desc;
+// เขียนรวม (ใบ+ลิ้นชัก) ไม่ผ่าน — เน็ตร้านสะดุด/รูปใบก้อนใหญ่ส่งไม่ทัน: ลิ้นชักต้องยังเปิดให้ทอน/คืนเงิน
+// สั่งลิ้นชักแยก (ก้อนเล็ก) เฉพาะเครื่องที่เขียนไม่ผ่าน — เครื่องที่ผ่านแล้วห้ามสั่งซ้ำ (ของที่ถือไว้ไม่มีงานใบ เขียนทับ = ใบหาย)
+// อ่านแถวสดก่อนเขียน: ไม่ทับรายการพิมพ์ไม่ออกที่ตัวพิมพ์เพิ่งจดระหว่างรอ · dk ตัวเดิม (at เดิม) = ถ้าที่จริงเขียนรวมถึงแล้ว ตัวพิมพ์ก็ไม่เปิดซ้ำ
+// ยังส่งไม่ได้อีก = บอกแคชเชียร์ (เดิมเห็นแค่ "พิมพ์ไม่สำเร็จ" ลิ้นชักไม่เปิดไม่มีใครรู้)
+async function kickAfterFail(list,dk){
+  if(!dk||!list||!list.length)return true;
+  let fresh=[];try{const all=await api.getAllPrinters();if(Array.isArray(all))fresh=all;}catch{}
+  try{await Promise.all(list.map(p=>api.updatePrinter(p.id,{description:cmdDesc(fresh.find(x=>x&&+x.id===+p.id)||p,"dk",dk)})));return true;}
+  catch{posToast("⚠️ ลิ้นชักยังไม่เปิด (เน็ตร้านสะดุด) — กด 💰 เงินในลิ้นชัก เพื่อเปิด","err",9000);return false;}
+}
 async function kickCashDrawer(printers,branchId){
   let prs=printers;
   try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
@@ -19984,7 +19997,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       verRef.current=row.updated_at;
       // เงินสด = ต้องเปิดลิ้นชักให้ทอนเงิน — ส่งไปพร้อมใบเสร็จในการเขียนครั้งเดียว (cashPart>0 = kick)
       // เดิมยิงลิ้นชักกับใบเสร็จแยกกันพร้อมกัน ต่างคนต่างเขียนทับแถวเครื่องแคชเชียร์ → ลิ้นชักไม่เด้ง/ใบเสร็จหายเงียบ
-      // เริ่มตรงนี้ (ก่อนลงบันทึกเงินสด) ลิ้นชักจึงเด้งเร็วเหมือนเดิม · ผลใบเสร็จรอทีหลัง · ลิ้นชักพลาดไม่ทำให้ปิดบิลล้ม
+      // เริ่มตรงนี้ (ก่อนลงบันทึกเงินสด) · ลิ้นชักรอเรนเดอร์+ส่งรูปใบเสร็จก่อน จึงเด้งช้ากว่าเดิมราว 1-2 วิ (แลกกับไม่ทับกันเอง)
+      // เขียนใบไม่ผ่าน = สั่งลิ้นชักแยกให้ (kickAfterFail) · ผลใบเสร็จรอทีหลัง · ลิ้นชักพลาดไม่ทำให้ปิดบิลล้ม
       // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
       // passing the combined figure would deduct the promotion twice on the printed receipt.
       const _rcpt=smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:pmCol,payments:paymentsCol,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true,cashPart>0);
@@ -24339,8 +24353,9 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   const[showOrders,setShowOrders]=useState(false);   // today's-orders modal (re-added after the tab was replaced)
   const[printStation,setPS]=useState(()=>isPrintStation(currentBranch.id));   // is THIS device the print station (of THIS branch)?
   useEffect(()=>{setPS(isPrintStation(currentBranch.id));},[currentBranch.id]);   // สลับสาขา = อ่านค่าของสาขานั้น
-  // เครื่องที่เคยเปิดโหมดสถานีพิมพ์แบบเก่า (ไม่ระบุสาขา) — ไม่เปิดให้เอง บอกครั้งเดียวว่าต้องไปเปิดใหม่ถ้ายังใช้
-  useEffect(()=>{if(takeOldPrintStation())posToast("ℹ️ เครื่องนี้เคยตั้งเป็นสถานีพิมพ์ — ตอนนี้แยกตามสาขาแล้ว ถ้ายังใช้อยู่ ไปเปิดใหม่ที่ 🖨 เครื่องพิมพ์","warn",9000);},[]);
+  // เครื่องที่เคยเปิดโหมดสถานีพิมพ์แบบเก่า (ไม่ระบุสาขา) — ไม่เปิดให้เอง บอกครั้งเดียวว่าปิดแล้ว
+  // (ปุ่มเปิด/ปิดสถานีพิมพ์ถูกเอาออกไปแล้วตั้งแต่ใช้ตัวพิมพ์ — ห้ามบอกให้ไปเปิดใหม่ เพราะไม่มีที่ให้เปิด)
+  useEffect(()=>{if(takeOldPrintStation())posToast("ℹ️ ปิดโหมดสถานีพิมพ์ของเครื่องนี้แล้ว — โปรแกรมตัวพิมพ์ที่ร้านพิมพ์ใบให้เอง ไม่ต้องตั้งอะไรเพิ่ม","warn",9000);},[]);
   const timerRef=useRef(null);
   const canEdit=hasPerm(currentUser,"pos");
 
@@ -25097,7 +25112,10 @@ async function printBillReceipt(order,tableNum,{branch,posSettings,printers=[],p
     if(!b64){kickAlone(rcps.filter(p=>kp.withRcpt.has(+p.id)));try{printReceipt(order,tableNum,branch.name,posSettings,{paid});}catch{}return false;}
     try{
       const at=Date.now();
-      await Promise.all(rcps.map(rcp=>api.updatePrinter(rcp.id,{description:withKick(cmdDesc(rcp,"pj",{at,b64,what:paid?"ใบเสร็จ":"ใบแจ้งยอด",bill:order&&order.id!=null?order.id:null,table:String(tableNum??"")}),kp.withRcpt.has(+rcp.id)?dk:null)})));
+      // ให้ทุกเครื่องเขียนจนจบ แล้วดูว่าเครื่องไหนไม่ถึง — ลิ้นชักที่ฝากไปกับใบนั้นต้องสั่งแยก (kickAfterFail)
+      const bad=[];
+      await Promise.all(rcps.map(rcp=>api.updatePrinter(rcp.id,{description:withKick(cmdDesc(rcp,"pj",{at,b64,what:paid?"ใบเสร็จ":"ใบแจ้งยอด",bill:order&&order.id!=null?order.id:null,table:String(tableNum??"")}),kp.withRcpt.has(+rcp.id)?dk:null)}).catch(e=>{bad.push({p:rcp,e});})));
+      if(bad.length){kickAfterFail(bad.map(x=>x.p).filter(p=>kp.withRcpt.has(+p.id)),dk);throw bad[0].e;}
       posToast(`🧾 ส่ง${paid?"ใบเสร็จ":"ใบแจ้งยอด"}ไป ${rcps.length} เครื่องแล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ`,"ok");
       return true;   // ส่งเข้าตัวพิมพ์แล้วจริง (ผู้เรียกบางที่ใช้ตัดสินว่าเอารายการ "ไม่ออก" เดิมออกได้)
     }catch(e){posToast("พิมพ์ไม่สำเร็จ: "+(e&&e.message||e),"warn");try{printReceipt(order,tableNum,branch.name,posSettings,{paid});}catch{}}
@@ -25247,7 +25265,10 @@ async function printVoidBillSlip({order,branch,reason,refundText,by,at,printers=
   let b64;
   try{b64=await escposSlipRaster(L,576);}catch(e){kickAlone(rcps.filter(p=>kp.withRcpt.has(+p.id)));throw e;}
   const stamp=Date.now();
-  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:withKick(cmdDesc(p,"pj",{at:stamp,b64,what:"ใบยกเลิกบิล",bill:order.id,table:String(order.table_number||"")}),kp.withRcpt.has(+p.id)?dk:null)})));
+  // เขียนไม่ถึงบางเครื่อง = ลิ้นชักที่ฝากไปด้วยไม่ถึง → สั่งแยกเฉพาะเครื่องนั้น (เหตุผลเดียวกับใบเสร็จบิลเงินสด)
+  const bad=[];
+  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:withKick(cmdDesc(p,"pj",{at:stamp,b64,what:"ใบยกเลิกบิล",bill:order.id,table:String(order.table_number||"")}),kp.withRcpt.has(+p.id)?dk:null)}).catch(e=>{bad.push({p,e});})));
+  if(bad.length){kickAfterFail(bad.map(x=>x.p).filter(p=>kp.withRcpt.has(+p.id)),dk);throw bad[0].e;}
   posToast("🧾 ส่งใบยกเลิกบิลไปเครื่องพิมพ์แล้ว","ok");
 }
 // ── ยกเลิกบิลที่ปิดไปแล้ว (Void) — ผู้จัดการขอไว้ 21 ก.ย. 69 ──────────────
