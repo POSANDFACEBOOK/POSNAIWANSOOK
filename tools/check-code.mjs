@@ -5248,7 +5248,8 @@ section("POS สาขาที่ 2: สิทธิ์และตั้งค
   // ── ตัวคำนวณ "ช่องที่แก้จริง" + ประวัติ VAT/พร้อมเพย์ ดึงมารันจริงด้วย api จำลอง ──
   const apiLog = []; let histFail = false;
   const fakeApi = {
-    getPOSSettings: async () => [{ branch_id: 5, vat_enabled: false, vat_rate: 7, promptpay_id: "0811111111", sales_staff: [{ name: "เช้า", pin: "4321" }] }],
+    // เลขในฐานข้อมูลต่างจากค่าตอนเปิดจอ (อีกเครื่องเพิ่งแก้) — ประวัติต้องใช้ค่านี้เป็น "ค่าเดิม" ไม่ใช่ค่าตอนเปิดจอ
+    getPOSSettings: async () => [{ branch_id: 5, vat_enabled: false, vat_rate: 7, promptpay_id: "0833333333", sales_staff: [{ name: "เช้า", pin: "4321" }] }],
     patchPOSSettings: async (bid, p) => { apiLog.push(["patch", bid, p]); return { branch_id: bid, ...p }; },
     addActionHist: async (d) => { apiLog.push(["hist", d]); if (histFail) throw new Error("rls"); return [d]; },
   };
@@ -5270,6 +5271,11 @@ section("POS สาขาที่ 2: สิทธิ์และตั้งค
     ok_("ประวัติไม่มี PIN และไม่จดช่องที่ไม่เกี่ยวกับเงิน (หัวใบเสร็จ)", !txt.includes("9876") && !txt.includes("4321") && !txt.includes("ใหม่"));
     ok_("แก้แค่หัวใบเสร็จ = ไม่จดประวัติ", PS.posSettingsAuditText(row, { receipt_header: "x" }, "max", { id: 8, name: "R" }) === "");
     ok_("รูป QR พร้อมเพย์ที่เปลี่ยนก็จดประวัติ", PS.posSettingsAuditText(row, { promptpay_qr_image: "https://drive/x" }, "max", { id: 8, name: "R" }).includes("รูป QR พร้อมเพย์"));
+    ok_("ชื่อบัญชีพร้อมเพย์ที่เปลี่ยนก็จดประวัติ", PS.posSettingsAuditText(row, { promptpay_name: "x" }, "max", { id: 8, name: "R" }).includes("ชื่อบัญชีพร้อมเพย์"));
+    // ทุกช่องเรื่อง VAT/พร้อมเพย์ในฟอร์ม ต้องจดประวัติเมื่อเปลี่ยน (เอาช่องไหนออกจากรายการจด = ด่านนี้ร้อง)
+    const moneyKeys = PS.POS_FORM_KEYS.filter(k => /^vat_|promptpay/.test(k));
+    const unAudited = moneyKeys.filter(k => PS.posSettingsAuditText(row, { [k]: typeof row[k] === "boolean" ? !row[k] : "9" + String(row[k] ?? "") }, "max", { id: 8, name: "R" }) === "");
+    ck("ทุกช่อง VAT/พร้อมเพย์ในฟอร์ม (" + moneyKeys.length + " ช่อง) จดประวัติเมื่อเปลี่ยน", moneyKeys.length >= 7 ? unAudited : ["พบแค่ " + moneyKeys.length + " ช่อง"], []);
     // บันทึกจริงผ่าน api จำลอง
     apiLog.length = 0;
     const r0 = await PS.savePOSFormSettings({ id: 5, name: "กาญจนบุรี" }, row, { ...row }, { name: "max" });
@@ -5279,8 +5285,8 @@ section("POS สาขาที่ 2: สิทธิ์และตั้งค
     const pt = apiLog.find(x => x[0] === "patch"), hs = apiLog.filter(x => x[0] === "hist");
     ok_("แก้เลขพร้อมเพย์ = PATCH เฉพาะ promptpay_id (+เวลาแก้) ของสาขานั้น",
       r1.changed === true && !!pt && pt[1] === 5 && JSON.stringify(Object.keys(pt[2]).sort()) === '["promptpay_id","updated_at"]');
-    ok_("แก้เลขพร้อมเพย์ = จดประวัติ 1 รายการ ใช้ค่าเดิมล่าสุดจากฐานข้อมูล",
-      hs.length === 1 && hs[0][1].action.includes("ผู้จัดการ") && hs[0][1].action.includes("0811111111 → 0822222222") && hs[0][1].time === "2026-10-12T00:00:00.000Z");
+    ok_("แก้เลขพร้อมเพย์ = จดประวัติ 1 รายการ ใช้ค่าเดิมล่าสุดจากฐานข้อมูล (ไม่ใช่ค่าตอนเปิดจอ)",
+      hs.length === 1 && hs[0][1].action.includes("ผู้จัดการ") && hs[0][1].action.includes("0833333333 → 0822222222") && !hs[0][1].action.includes("0811111111") && hs[0][1].time === "2026-10-12T00:00:00.000Z");
     apiLog.length = 0; histFail = true; const cw = console.warn; console.warn = () => {};
     let threw = false; try { await PS.savePOSFormSettings({ id: 5, name: "ก" }, row, { ...row, vat_enabled: true }, { name: "max" }); } catch { threw = true; }
     histFail = false; console.warn = cw;
@@ -5289,6 +5295,89 @@ section("POS สาขาที่ 2: สิทธิ์และตั้งค
     await PS.savePOSFormSettings({ id: 5, name: "ก" }, row, { ...row, receipt_footer: "ขอบคุณ" }, { name: "max" });
     ok_("แก้ท้ายใบเสร็จ = บันทึก แต่ไม่จดประวัติเงิน", apiLog.filter(x => x[0] === "patch").length === 1 && apiLog.filter(x => x[0] === "hist").length === 0);
   } else ok_("ดึงตัวบันทึกตั้งค่า POS มารันได้", false);
+
+  // ── รายชื่อ PIN / คลังตัวเลือก: แก้บนรายการล่าสุดจากฐานข้อมูล ไม่ใช่สำเนาตอนเปิดจอ ──
+  // เหตุ: ผู้จัดการ (pos_admin) ปิด PIN คนลาออกจากอีกเครื่อง แล้ว Max เพิ่มคนใหม่จากจอที่เปิดค้างไว้
+  // → ส่งรายชื่อเก่าทั้งก้อน PIN คนลาออกกลับมาใช้ได้เงียบๆ · ดึงฟังก์ชันจริงในคอมโพเนนต์มารันกับฐานข้อมูลจำลอง
+  const SP = comp("POSSellerPanel");
+  const selBlk = APP.slice(APP.indexOf("const posSellerKey="), APP.indexOf("function POSSellerPanel("));
+  const A = { id: "a", name: "เอ", pin: "1111", active: true }, B = { id: "b", name: "บี", pin: "2222", active: true }, D = { id: "d", name: "ดี", pin: "4444", active: true };
+  // staff = รายชื่อที่ค้างบนจอ (โหลดตอนเปิดจอ: A,B เปิดทั้งคู่) · db = ของจริงในฐานข้อมูลตอนกดบันทึก (null = อ่านไม่ได้)
+  const mkSeller = (db, form = { name: "", pin: "" }, editWho = null, staff = [A, B]) => {
+    const out = { patches: [], alerts: [], staff: null };
+    const api = {
+      getPOSSettings: async () => { if (db === null) throw new Error("offline"); return [{ branch_id: 5, sales_staff: JSON.parse(JSON.stringify(db)) }]; },
+      patchPOSSettings: async (bid, p) => { out.patches.push([bid, p]); return { branch_id: bid, ...p }; },
+    };
+    const f = new Function("api", "currentBranch", "setSaving", "setSettings", "staff", "setStaff", "settings", "alert", "confirmDlg", "form", "editWho", "setForm", "setEditWho",
+      selBlk + "\nasync " + grab(SP, "persist") + "\nasync " + grab(SP, "submit") + "\nasync " + grab(SP, "toggleActive") + "\nasync " + grab(SP, "remove") + "\nreturn {submit,toggleActive,remove};")(
+      api, { id: 5 }, () => {}, () => {}, staff, v => { out.staff = v; }, null, m => out.alerts.push(String(m)), async () => true, form, editWho, () => {}, () => {});
+    return { ...f, out };
+  };
+  let SL = null; try { SL = mkSeller([]); } catch (e) { console.log("       ดึงจอพนักงานขายไม่ได้: " + e.message); }
+  if (SL) {
+    const Boff = { ...B, active: false };
+    const sent = (o) => (o.patches[0] && o.patches[0][1].sales_staff) || null;
+    const by = (L, id) => (L || []).find(x => x.id === id) || {};   // ไม่เจอ = {} (ด่านต้องร้อง ไม่ใช่ทำทั้งไฟล์ล้ม)
+    // จอค้าง [A,B เปิด] · ฐานข้อมูล B ถูกปิดแล้ว · เครื่องนี้เพิ่ม C
+    let s = mkSeller([A, Boff], { name: "ซี", pin: "3333" }); await s.submit();
+    let L = sent(s.out);
+    ok_("เพิ่มคนใหม่จากจอค้าง: PIN คนลาออกที่อีกเครื่องปิดไว้ ยังปิดอยู่",
+      !!L && L.length === 3 && by(L, "b").active === false && L.some(x => x.name === "ซี" && x.pin === "3333" && x.active === true));
+    // จอค้างไม่รู้จัก D ที่อีกเครื่องเพิ่งเพิ่ม · ปิด A
+    s = mkSeller([D, A, B]); await s.toggleActive(A);
+    L = sent(s.out);
+    ok_("ปิด PIN จากจอค้าง: PIN ที่อีกเครื่องเพิ่งเพิ่มไม่หาย และปิดถูกคน (อ้างด้วย id ไม่ใช่ลำดับ)",
+      !!L && L.length === 3 && by(L, "d").active === true && by(L, "a").active === false && by(L, "b").active === true);
+    // จอยังเห็น B เปิด กด "ปิด" แต่อีกเครื่องปิดไปแล้ว → ต้องยังปิด ไม่ใช่สลับกลับเป็นเปิด
+    s = mkSeller([A, Boff]); await s.toggleActive(B);
+    L = sent(s.out);
+    ok_("กดปิดคนที่อีกเครื่องปิดไปแล้ว = ยังปิดอยู่ (ไม่สลับกลับเป็นเปิด)", !!L && by(L, "b").active === false);
+    s = mkSeller([A, D], { name: "อี", pin: "4444" }, null, [A]); await s.submit();
+    ok_("PIN ซ้ำกับคนที่อีกเครื่องเพิ่งเพิ่ม = ไม่บันทึก และแจ้งเตือน", s.out.patches.length === 0 && s.out.alerts.some(m => m.includes("PIN นี้ถูกใช้แล้ว")));
+    s = mkSeller([D, A, B], { name: "เอใหม่", pin: "1212" }, A); await s.submit();
+    L = sent(s.out);
+    ok_("แก้ชื่อ/PIN ถูกคนแม้ลำดับในฐานข้อมูลเลื่อนไป", !!L && by(L, "a").name === "เอใหม่" && by(L, "a").pin === "1212" && by(L, "d").name === "ดี");
+    s = mkSeller([A, D], { name: "บีใหม่", pin: "2323" }, B); await s.submit();
+    ok_("แก้คนที่อีกเครื่องลบไปแล้ว = ไม่บันทึก ไม่ชุบชีวิตกลับมา", s.out.patches.length === 0 && s.out.alerts.length === 1 && JSON.stringify(s.out.staff) === JSON.stringify([A, D]));
+    s = mkSeller([D, A, B]); await s.remove(B);
+    L = sent(s.out);
+    ok_("ลบจากจอค้าง: ลบถูกคน และไม่ทำให้คนที่อีกเครื่องเพิ่มหาย", !!L && JSON.stringify(L.map(x => x.id)) === '["d","a"]');
+    s = mkSeller(null, { name: "ซี", pin: "3333" }); await s.submit();
+    ok_("อ่านรายชื่อล่าสุดไม่ได้ = ไม่บันทึก (ไม่เดาจากรายชื่อบนจอ)", s.out.patches.length === 0 && s.out.alerts.some(m => m.includes("บันทึกไม่สำเร็จ")));
+  } else ok_("ดึงจอพนักงานขายมารันได้", false);
+
+  const OL = comp("POSOptionLibrary");
+  const G1 = { id: "g1", name: "ขนาด", required: false, choices: [{ id: "c1", name: "ใหญ่", price: 20 }] };
+  const G2 = { id: "g2", name: "ท็อปปิ้ง", required: false, choices: [{ id: "c2", name: "ไข่", price: 10 }] };
+  // lib = คลังที่ค้างบนจอ (โหลดตอนเปิดจอ: มีแค่ G1) · db = ของจริงในฐานข้อมูลตอนกดบันทึก
+  const mkOpt = (db, st = {}) => {
+    const out = { patches: [], alerts: [], lib: null };
+    const api = {
+      getPOSSettings: async () => [{ branch_id: 5, option_library: JSON.parse(JSON.stringify(db)) }],
+      patchPOSSettings: async (bid, p) => { out.patches.push([bid, p]); return { branch_id: bid, ...p }; },
+    };
+    const gone = (OL.match(/const GONE="[^"]*";/) || [""])[0];
+    const f = new Function("api", "currentBranch", "setBusy", "setSettings", "lib", "setLib", "settings", "alert", "confirmDlg", "ci", "setCi", "gName", "gReq", "gPick", "setGName", "setGReq", "setGPick", "eg", "editG", "setEditG",
+      gone + "\nasync " + grab(OL, "persist") + "\nasync " + grab(OL, "addGroup") + "\nasync " + grab(OL, "delGroup") + "\nasync " + grab(OL, "addChoice") + "\nasync " + grab(OL, "delChoice") + "\nreturn {addGroup,delGroup,addChoice,delChoice};")(
+      api, { id: 5 }, () => {}, () => {}, st.lib || [G1], v => { out.lib = v; }, null, m => out.alerts.push(String(m)), async () => true,
+      st.ci || {}, () => {}, st.gName || "", false, 1, () => {}, () => {}, () => {}, {}, null, () => {});
+    return { ...f, out };
+  };
+  let OK = null; try { OK = mkOpt([]); } catch (e) { console.log("       ดึงคลังตัวเลือกไม่ได้: " + e.message); }
+  if (OK) {
+    const lib = (o) => (o.patches[0] && o.patches[0][1].option_library) || null;
+    let o = mkOpt([G1, G2], { ci: { g1: { name: "เล็ก", price: "0" } } }); await o.addChoice(G1);
+    let L = lib(o.out);
+    ok_("เพิ่มตัวเลือกจากจอค้าง: กลุ่มที่อีกเครื่องเพิ่งเพิ่มไม่หาย", !!L && L.length === 2 && L.some(g => g.id === "g2") && ((L.find(g => g.id === "g1") || {}).choices || []).length === 2);
+    o = mkOpt([G2], { ci: { g1: { name: "เล็ก", price: "0" } } }); await o.addChoice(G1);
+    ok_("เพิ่มตัวเลือกในกลุ่มที่อีกเครื่องลบไปแล้ว = ไม่บันทึก ไม่ชุบกลุ่มกลับมา", o.out.patches.length === 0 && o.out.alerts.length === 1 && JSON.stringify(o.out.lib) === JSON.stringify([G2]));
+    o = mkOpt([G1, G2], { gName: "ท็อปปิ้ง" }); await o.addGroup();
+    ok_("ชื่อกลุ่มซ้ำกับที่อีกเครื่องเพิ่งเพิ่ม = ไม่บันทึก", o.out.patches.length === 0 && o.out.alerts.some(m => m.includes("มีกลุ่มนี้แล้ว")));
+    o = mkOpt([G2, G1]); await o.delGroup(G1);
+    L = lib(o.out);
+    ok_("ลบกลุ่มจากจอค้าง: ลบถูกกลุ่ม ไม่ทำให้กลุ่มอื่นหาย", !!L && JSON.stringify(L.map(g => g.id)) === '["g2"]');
+  } else ok_("ดึงคลังตัวเลือกมารันได้", false);
 
   // ── เปลี่ยนพนักงานกลางกะ (โหมด PIN): กลับหน้า PIN + โหลดรายชื่อ PIN ใหม่ + ไม่แตะกะ ──
   let SW = null; const swApi = []; const st = { seller: "x", pin: "12", shiftOpen: true, staff: null };

@@ -23111,6 +23111,22 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
   </div>;
 }
 
+// ── แก้รายชื่อ PIN บน "รายชื่อล่าสุดจากฐานข้อมูล" ไม่ใช่สำเนาตอนเปิดจอ ─────────────
+// เดิมส่งทั้งรายชื่อที่ค้างบนจอ: ผู้จัดการอีกเครื่องปิด PIN คนลาออกตอน 22:00 → เครื่องนี้เพิ่มคนใหม่ 22:30
+// → PIN คนลาออกกลับมาใช้ได้เงียบๆ (หรือ PIN ที่อีกเครื่องเพิ่งเพิ่มหายไป)
+// อ้างตัวคนด้วย id (แถวเก่าที่ไม่มี id ใช้ PIN) ไม่ใช้ลำดับในรายการ · คืนข้อความ = ไม่บันทึก ให้แจ้งเตือน
+const posSellerKey=s=>s&&s.id?"i:"+s.id:"p:"+String(s&&s.pin);
+function posSellerApply(fresh,op){
+  const list=Array.isArray(fresh)?fresh:[];
+  const at=op.who?list.findIndex(s=>posSellerKey(s)===posSellerKey(op.who)):-1;
+  if(op.who&&at<0)return op.type==="remove"?list:"พนักงานคนนี้ถูกลบจากอีกเครื่องไปแล้ว — รายชื่อบนจอโหลดใหม่ให้แล้ว";
+  if(op.type==="remove")return list.filter((_,i)=>i!==at);
+  // ตั้งเป็นค่าที่ผู้ใช้เลือกจากจอ ไม่ใช่สลับค่า — อีกเครื่องปิดไปแล้ว กด "ปิด" ซ้ำต้องยังปิดอยู่
+  if(op.type==="active")return list.map((s,i)=>i===at?{...s,active:!!op.active}:s);
+  if(list.some((s,i)=>String(s.pin)===String(op.pin)&&i!==at))return "PIN นี้ถูกใช้แล้ว — เลือกเลขอื่น";
+  if(op.type==="edit")return list.map((s,i)=>i===at?{...s,name:op.name,pin:op.pin}:s);
+  return [...list,{id:`s_${Date.now()}_${Math.floor(Math.random()*1000)}`,name:op.name,pin:op.pin,active:true}];
+}
 // Manage this branch's cashier PINs + show the sell link. Staff are stored in
 // pos_settings.sales_staff (jsonb array) so no extra table/RLS is needed.
 function POSSellerPanel({currentBranch}){
@@ -23120,13 +23136,18 @@ function POSSellerPanel({currentBranch}){
   const[loading,setLoading]=useState(true);
   const[saving,setSaving]=useState(false);
   const[form,setForm]=useState({name:"",pin:""});
-  const[editIdx,setEditIdx]=useState(null);
+  const[editWho,setEditWho]=useState(null);   // คนที่กำลังแก้ (เก็บตัวคน ไม่ใช่ลำดับ — รายชื่อโหลดใหม่ทุกครั้งที่บันทึก)
   const sellLink=(typeof window!=="undefined"?window.location.origin+window.location.pathname:"")+"?pos=1&branch="+currentBranch.id;
   async function load(){setLoading(true);try{const ps=await api.getPOSSettings(currentBranch.id);const s=ps&&ps[0]?ps[0]:{branch_id:currentBranch.id};setSettings(s);setStaff(Array.isArray(s.sales_staff)?s.sales_staff:[]);}catch(e){console.error("loadSellers",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
-  async function persist(next){
+  async function persist(op){
     setSaving(true);
     try{
+      // อ่านรายชื่อล่าสุดก่อนแก้ทุกครั้ง (อีกเครื่องอาจเพิ่งปิด/เพิ่ม PIN) — อ่านไม่ได้ = ไม่บันทึก ไม่เดาจากจอ
+      const ps=await api.getPOSSettings(currentBranch.id);
+      const fresh=Array.isArray(ps?.[0]?.sales_staff)?ps[0].sales_staff:[];
+      const next=posSellerApply(fresh,op);
+      if(typeof next==="string"){setStaff(fresh);alert(next);return false;}
       // แก้เฉพาะรายชื่อ PIN — ห้ามส่งทั้งแถวจากค่าตอนเปิดจอ ไม่งั้น VAT/พร้อมเพย์ที่อีกเครื่องเพิ่งแก้ถูกเขียนกลับเป็นค่าเก่า
       const row=await api.patchPOSSettings(currentBranch.id,{sales_staff:next});
       setSettings(row||{...(settings||{}),sales_staff:next});setStaff(next);return true;
@@ -23137,12 +23158,10 @@ function POSSellerPanel({currentBranch}){
     const name=(form.name||"").trim();const pin=(form.pin||"").trim();
     if(!name)return alert("ใส่ชื่อพนักงาน");
     if(!/^\d{4}$/.test(pin))return alert("PIN ต้องเป็นตัวเลข 4 หลักเท่านั้น");
-    if(staff.some((s,i)=>String(s.pin)===pin&&i!==editIdx))return alert("PIN นี้ถูกใช้แล้ว — เลือกเลขอื่น");
-    const next=editIdx!=null?staff.map((s,i)=>i===editIdx?{...s,name,pin}:s):[...staff,{id:`s_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,pin,active:true}];
-    if(await persist(next)){setForm({name:"",pin:""});setEditIdx(null);}
+    if(await persist(editWho?{type:"edit",who:editWho,name,pin}:{type:"add",name,pin})){setForm({name:"",pin:""});setEditWho(null);}
   }
-  async function toggleActive(idx){await persist(staff.map((s,i)=>i===idx?{...s,active:s.active===false}:s));}
-  async function remove(idx){if(!await confirmDlg({title:"ลบพนักงานขาย",message:`ลบ "${staff[idx]?.name}" ออกจากระบบขาย?`}))return;await persist(staff.filter((_,i)=>i!==idx));}
+  async function toggleActive(s){await persist({type:"active",who:s,active:s.active===false});}
+  async function remove(s){if(!await confirmDlg({title:"ลบพนักงานขาย",message:`ลบ "${s.name}" ออกจากระบบขาย?`}))return;await persist({type:"remove",who:s});}
   if(loading)return <Loading text="โหลดพนักงานขาย..."/>;
   return <div>
     <div style={{background:`linear-gradient(135deg,${C.brandLight},${C.tealLight})`,border:`1px solid ${C.brandBorder}`,borderRadius:14,padding:"14px 16px",marginBottom:18}}>
@@ -23165,12 +23184,12 @@ function POSSellerPanel({currentBranch}){
       </div>
     </div>
     <Card style={{padding:"14px 16px",marginBottom:16}}>
-      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}>{editIdx!=null?"✏️ แก้ไขพนักงานขาย":"➕ เพิ่มพนักงานขาย"}</div>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}>{editWho?"✏️ แก้ไขพนักงานขาย":"➕ เพิ่มพนักงานขาย"}</div>
       <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
         <div style={{flex:"2 1 180px"}}><label style={lbl}>ชื่อพนักงาน</label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น น้องเอ" style={iS}/></div>
         <div style={{flex:"1 1 120px"}}><label style={lbl}>PIN (4 หลัก)</label><input value={form.pin} onChange={e=>setForm(f=>({...f,pin:e.target.value.replace(/\D/g,"").slice(0,4)}))} inputMode="numeric" placeholder="0000" style={{...iS,letterSpacing:4,fontWeight:800}}/></div>
-        <Btn onClick={submit} loading={saving} icon={I.check}>{editIdx!=null?"บันทึก":"เพิ่ม"}</Btn>
-        {editIdx!=null&&<Btn v="ghost" onClick={()=>{setForm({name:"",pin:""});setEditIdx(null);}}>ยกเลิก</Btn>}
+        <Btn onClick={submit} loading={saving} icon={I.check}>{editWho?"บันทึก":"เพิ่ม"}</Btn>
+        {editWho&&<Btn v="ghost" onClick={()=>{setForm({name:"",pin:""});setEditWho(null);}}>ยกเลิก</Btn>}
       </div>
     </Card>
     {staff.length===0?<div style={{textAlign:"center",padding:40,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><Ic d={I.user} s={44} c={C.line}/><p style={{marginTop:10,fontSize:13}}>ยังไม่มีพนักงานขาย — เพิ่มด้านบนเพื่อให้เข้าขายด้วย PIN</p></div>
@@ -23184,9 +23203,9 @@ function POSSellerPanel({currentBranch}){
           <Chip color={inactive?"gray":"green"}>{inactive?"ปิด":"ใช้งาน"}</Chip>
         </div>
         <div style={{display:"flex",gap:6,marginTop:10}}>
-          <button onClick={()=>{setForm({name:s.name,pin:String(s.pin)});setEditIdx(idx);}} style={{flex:1,padding:"6px 0",border:`1px solid ${C.line}`,borderRadius:8,background:C.blueLight,color:C.blue,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>แก้ไข</button>
-          <button onClick={()=>toggleActive(idx)} style={{flex:1,padding:"6px 0",border:`1px solid ${C.line}`,borderRadius:8,background:inactive?C.greenLight:C.bg,color:inactive?C.green:C.ink3,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{inactive?"เปิด":"ปิด"}</button>
-          <button onClick={()=>remove(idx)} style={{padding:"6px 10px",border:`1px solid ${C.line}`,borderRadius:8,background:C.redLight,color:C.red,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ลบ</button>
+          <button onClick={()=>{setForm({name:s.name,pin:String(s.pin)});setEditWho(s);}} style={{flex:1,padding:"6px 0",border:`1px solid ${C.line}`,borderRadius:8,background:C.blueLight,color:C.blue,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>แก้ไข</button>
+          <button onClick={()=>toggleActive(s)} style={{flex:1,padding:"6px 0",border:`1px solid ${C.line}`,borderRadius:8,background:inactive?C.greenLight:C.bg,color:inactive?C.green:C.ink3,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>{inactive?"เปิด":"ปิด"}</button>
+          <button onClick={()=>remove(s)} style={{padding:"6px 10px",border:`1px solid ${C.line}`,borderRadius:8,background:C.redLight,color:C.red,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif"}}>ลบ</button>
         </div>
       </Card>;})}
     </div>}
@@ -23727,12 +23746,15 @@ function POSOptionLibrary({currentBranch,onClose}){
   async function load(){setLoading(true);try{const ps=await api.getPOSSettings(currentBranch.id);const s=ps&&ps[0]?ps[0]:{branch_id:currentBranch.id};setSettings(s);setLib(Array.isArray(s.option_library)?s.option_library:[]);}catch(e){console.error("optLib",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
   // แก้เฉพาะคลังตัวเลือก — ไม่ส่งทั้งแถว (กันทับ VAT/PIN ที่อีกเครื่องแก้ระหว่างเปิดจอนี้)
-  async function persist(next){setBusy(true);try{const row=await api.patchPOSSettings(currentBranch.id,{option_library:next});setSettings(row||{...(settings||{}),option_library:next});setLib(next);return true;}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));return false;}finally{setBusy(false);}}
-  async function addGroup(){const name=gName.trim();if(!name)return alert("ใส่ชื่อกลุ่มตัวเลือก");if(lib.some(g=>g.name===name))return alert("มีกลุ่มนี้แล้ว");if(await persist([...lib,{id:`g_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,required:gReq,pick:gReq?Math.max(1,+gPick||1):1,choices:[]}])){setGName("");setGReq(false);setGPick(1);}}
-  async function delGroup(g){if(!await confirmDlg({title:"ลบกลุ่มตัวเลือก",message:`ลบกลุ่ม "${g.name}" และตัวเลือกย่อยทั้งหมด?`}))return;await persist(lib.filter(x=>x.id!==g.id));}
-  async function saveEditG(){const name=(eg.name||"").trim();if(!name)return;if(await persist(lib.map(g=>g.id===editG?{...g,name,required:!!eg.required,pick:eg.required?Math.max(1,+eg.pick||1):1}:g)))setEditG(null);}
-  async function addChoice(g){const f=ci[g.id]||{};const name=(f.name||"").trim();const price=+f.price||0;if(!name)return alert("ใส่ชื่อตัวเลือกย่อย");const next=lib.map(x=>x.id===g.id?{...x,choices:[...(x.choices||[]),{id:`c_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,price}]}:x);if(await persist(next))setCi(s=>({...s,[g.id]:{name:"",price:""}}));}
-  async function delChoice(g,cid){await persist(lib.map(x=>x.id===g.id?{...x,choices:(x.choices||[]).filter(c=>c.id!==cid)}:x));}
+  // และแก้บนคลังล่าสุดจากฐานข้อมูลตาม id (fn รับคลังล่าสุด คืนคลังใหม่ หรือคืนข้อความ = ไม่บันทึก)
+  // ไม่ใช้สำเนาตอนเปิดจอ — ไม่งั้นตัวเลือกที่อีกเครื่องเพิ่งเพิ่ม/ลบ ถูกเขียนกลับเงียบๆ
+  async function persist(fn){setBusy(true);try{const ps=await api.getPOSSettings(currentBranch.id);const fresh=Array.isArray(ps?.[0]?.option_library)?ps[0].option_library:[];const next=fn(fresh);if(typeof next==="string"){setLib(fresh);alert(next);return false;}const row=await api.patchPOSSettings(currentBranch.id,{option_library:next});setSettings(row||{...(settings||{}),option_library:next});setLib(next);return true;}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));return false;}finally{setBusy(false);}}
+  const GONE="กลุ่มนี้ถูกลบจากอีกเครื่องไปแล้ว — รายการบนจอโหลดใหม่ให้แล้ว";
+  async function addGroup(){const name=gName.trim();if(!name)return alert("ใส่ชื่อกลุ่มตัวเลือก");if(await persist(l=>l.some(g=>g.name===name)?"มีกลุ่มนี้แล้ว":[...l,{id:`g_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,required:gReq,pick:gReq?Math.max(1,+gPick||1):1,choices:[]}])){setGName("");setGReq(false);setGPick(1);}}
+  async function delGroup(g){if(!await confirmDlg({title:"ลบกลุ่มตัวเลือก",message:`ลบกลุ่ม "${g.name}" และตัวเลือกย่อยทั้งหมด?`}))return;await persist(l=>l.filter(x=>x.id!==g.id));}
+  async function saveEditG(){const name=(eg.name||"").trim();if(!name)return;if(await persist(l=>!l.some(g=>g.id===editG)?GONE:l.map(g=>g.id===editG?{...g,name,required:!!eg.required,pick:eg.required?Math.max(1,+eg.pick||1):1}:g)))setEditG(null);}
+  async function addChoice(g){const f=ci[g.id]||{};const name=(f.name||"").trim();const price=+f.price||0;if(!name)return alert("ใส่ชื่อตัวเลือกย่อย");if(await persist(l=>!l.some(x=>x.id===g.id)?GONE:l.map(x=>x.id===g.id?{...x,choices:[...(x.choices||[]),{id:`c_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,price}]}:x)))setCi(s=>({...s,[g.id]:{name:"",price:""}}));}
+  async function delChoice(g,cid){await persist(l=>l.map(x=>x.id===g.id?{...x,choices:(x.choices||[]).filter(c=>c.id!==cid)}:x));}
   return <Modal title="➕ ตัวเลือกในเมนู (กลุ่ม add-on)" onClose={onClose} extraWide>
     {loading?<Loading text="โหลดตัวเลือก..."/>:<>
       {/* Add group */}
