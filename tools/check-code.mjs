@@ -1716,7 +1716,9 @@ try {
       ck("ซ่อนไม่เกี่ยวกับวัน ยังซ่อนเหมือนเดิม", k.menuAvailAt(m("hidden"), 8), "hidden");
       ok_("ตัวตีตราหมดเขียนวันทำการปัจจุบัน", k.soldOutMark() === "sold_out@" + today);
     }
-    ok_("หลังบ้านกดวันนี้หมด = เขียนพร้อมวันที่", APP.includes('else avail[currentBranch.id]=status==="sold_out"?soldOutMark():status;'));
+    // setAvail เปลี่ยนไปเขียนผ่าน writeMenuBranchKey (อ่านค่าล่าสุดก่อน) — ยังต้องตีตราวันที่ตอนกดหมด
+    ok_("หลังบ้านกดวันนี้หมด = เขียนพร้อมวันที่",
+      (APP.split("\n").find(l => l.includes("const setAvail=useCallback(async function setAvail(")) || "").includes('status==="sold_out"?soldOutMark():status'));
     ok_("ปุ่มหลังบ้านติดไฟตามสถานะจริง (หมดอายุแล้วขึ้นขาย)", APP.includes("cur={menuAvailAt(m,currentBranch.id)}"));
     ok_("ไม่มีจอไหนเทียบคำว่า sold_out ตรงๆ อีก (ต้องผ่านกติกาเดียว)",
       !/\[(bidSale|branchId|currentBranch\.id)\]==="sold_out"/.test(APP) && !/\|\|\{\}\)\[[a-zA-Z.]+\]==="sold_out"/.test(APP));
@@ -5858,6 +5860,132 @@ section("POS สาขาที่ 2: เงินและบัญชี");
     ok_("ใบปิดยอดไม่ใช้ upsert", !!pc && !pc.includes("upsert"));
     ok_("ยังไม่เปิดท่อให้สาขา 5 (รอเจ้าของ + ฝ่ายบัญชี)", SLIPPUSH.includes("const POS_CLOSING_BRANCHES = [8];") && SLIPPUSH.includes("const SHIFT_KEYED_BRANCHES = [8];"));
   }
+}
+
+// เปิด POS สาขาที่ 2 (กาญจนบุรี) ขณะที่ River ใช้อยู่ — ของสาขาหนึ่งห้ามไปทับอีกสาขา
+//   #5 Import เมนูเคยจับคู่ชื่อกับเมนูทั้งเครือ → ราคาเมนูที่ใช้ร่วมกับ River เปลี่ยนทันที
+//   #7 เมนูใหม่ไม่ตั้ง visible_branches → null = ขึ้นจอขาย/หน้า QR ทุกสาขา รวม River
+//   #10 วันนี้หมด/ผูกตัวเลือก เขียนทั้งก้อนจากค่าค้างบนจอ → สถานะของ River หาย
+// ══════════════════════════════════════════════════════════════════════════
+section("POS สาขาที่ 2: เมนูต่อสาขา");
+{
+  const lineOf = (needle) => APP.split("\n").find(l => l.includes(needle)) || "";
+  // ── #5 แผน Import: แก้ได้เฉพาะเมนูที่เปิดให้ชุดสาขาที่เลือก "พอดี" ──
+  let P = null;
+  try {
+    P = new Function(grabConst(APP, "menuVisibleAt") + "\n" + lineOf("const vbSetKey=") + "\n" + grab(APP, "planMenuImport") + "\nreturn planMenuImport;")();
+  } catch { P = null; }
+  ok_("ดึงตัววางแผน Import มารันได้", typeof P === "function");
+  if (P) {
+    const menus = [
+      { id: 1, name: "เบียร์ช้าง", price: 80, visible_branches: null },          // ทุกสาขา (รวม River)
+      { id: 2, name: "เบียร์ช้าง", price: 75, visible_branches: [8] },            // River เท่านั้น
+      { id: 3, name: "ข้าวผัด", price: 60, visible_branches: [5] },
+      { id: 4, name: "ต้มยำ", price: 120, visible_branches: [2, 3, 4, 5, 8] },
+      { id: 5, name: "ส้มตำ", price: 50, visible_branches: [5] },
+      { id: 6, name: "ส้มตำ", price: 55, visible_branches: ["5"] },
+      { id: 7, name: "น้ำแข็ง", price: 10, visible_branches: [8] },
+      { id: 8, name: "ชาเย็น", price: 35, visible_branches: [5] },
+      { id: 9, name: "โซดา", price: 20, visible_branches: [8, 5] },
+    ];
+    const row = (name, price, extra) => ({ name, price, selected: true, ...(extra || {}) });
+    const rows = [row("เบียร์ช้าง", 85), row(" ข้าวผัด ", 65), row("ต้มยำ", 120), row("ส้มตำ", 50), row("น้ำแข็ง", 12),
+      row("เมนูใหม่", 99), row("ชาเย็น", 35), row("ข้าวผัด", 70), row("โซดา", 25)];
+    const plan = P(rows, menus, [5]);
+    ck("Import ให้สาขา 5: ใช้ร่วม=ข้าม · ของสาขา 5=แก้ · ชื่อซ้ำ=ข้าม · ของ River อย่างเดียว=สร้างใหม่",
+      plan.map(p => p.kind), ["shared", "price", "shared", "dup", "new", "new", "update", "dupfile", "shared"]);
+    const touched = plan.filter(p => p.menu).map(p => p.menu.id);
+    ok_("ไม่มีแถวไหนไปแก้เมนูที่ใช้ร่วมกับ River หรือเมนูของ River", touched.length > 0 && !touched.some(id => [1, 2, 4, 7, 9].includes(id)));
+    ok_("เปลี่ยนราคาเฉพาะเมนูที่เปิดให้สาขา 5 อย่างเดียว", !!plan[1].menu && plan[1].menu.id === 3);
+    const p2 = P([row("โซดา", 25)], menus, [5, 8]);
+    ok_("เลือกชุด 5+8 → แก้เมนูที่เปิด [8,5] ได้ (เทียบแบบเซต ไม่สนลำดับ)", p2[0].kind === "price" && p2[0].menu.id === 9);
+    ok_("ยังไม่เลือกสาขา = ไม่มีแถวไหนบันทึกได้", P(rows, menus, null).every(p => p.kind === "pick"));
+    ok_("แถวที่ไม่ได้ติ๊ก ไม่ถูกนับ", P([row("เมนูใหม่", 1, { selected: false })], menus, [5])[0].kind === "off");
+    ok_("ลบชื่อจนว่าง = ข้าม ไม่สร้างเมนูไร้ชื่อ", P([row("   ", 1)], menus, [5])[0].kind === "noname");
+    ok_("นำเข้าแบบซ่อนไว้ก่อน ไม่แก้เมนูที่เปิดขายอยู่", P([row("ข้าวผัด", 1), row("เบียร์ช้าง", 1)], menus, []).every(p => p.kind === "new"));
+  }
+  let IC = null;
+  try { IC = new Function(lineOf("const importCatOf=") + "\nreturn importCatOf;")(); } catch { IC = null; }
+  ok_("หมวดไม่รู้จัก → เว้นว่าง + จำชื่อเดิมไว้ติดธง (ไม่โยนไปหมวดแรก)",
+    !!IC && JSON.stringify(IC("เครื่องดื่มแปลก", ["อาหาร", "เครื่องดื่ม"])) === JSON.stringify({ category: "", catRaw: "เครื่องดื่มแปลก" }));
+  ok_("หมวดที่รู้จัก → ใช้ตามไฟล์ · ไม่มีหมวด → ว่าง",
+    !!IC && IC(" เครื่องดื่ม ", ["อาหาร", "เครื่องดื่ม"]).category === "เครื่องดื่ม" && IC(undefined, ["อาหาร"]).category === "");
+  // คอมโพเนนต์รับพารามิเตอร์แบบ {…} → grab จะจบที่วงเล็บพารามิเตอร์ · ตัดถึงฟังก์ชันถัดไปแทน
+  const imp0 = APP.indexOf("function ImportMenuModal("), imp = imp0 < 0 ? "" : APP.slice(imp0, APP.indexOf("\nfunction ", imp0 + 10));
+  ok_("Import ไม่มีการโยนไปหมวดแรก (defaultCat) อีก", imp.length > 3000 && imp.includes("doImport") && !imp.includes("defaultCat") && !imp.includes("menuCats[0]"));
+  ok_("Import บันทึกตามแผนเดียวกับตารางตัวอย่าง",
+    imp.includes("const plan=useMemo(()=>planMenuImport(rows,menus,target)") && imp.includes("const todo=rows.map((r,i)=>({row:r,p:plan[i]}))"));
+  ok_("Import อ่าน visible_branches ล่าสุดก่อนแก้เมนูเดิม (เพิ่งกลายเป็นเมนูร่วม = ข้าม)",
+    imp.includes('freshVisibleBranches("menus",p.menu.id)') && imp.includes("if(vbSetKey(live)!==tk)"));
+  ok_("Import เมนูใหม่เปิดเฉพาะชุดสาขาที่เลือก", imp.includes("visible_branches:vbNew") && imp.includes("const vbNew=newMenuVisibleBranches(target,branches);"));
+  ok_("ปุ่มบันทึก Import กดไม่ได้จนกว่าจะเลือกสาขา", imp.includes("disabled={!Array.isArray(target)||!nAct||saving}"));
+
+  // ── #7 เมนูใหม่ต้องระบุสาขาที่เห็นเสมอ (ไม่มี null) ──
+  let NV = null;
+  try { NV = new Function(grab(APP, "newMenuVisibleBranches") + "\nreturn newMenuVisibleBranches;")(); } catch { NV = null; }
+  const BR = [{ id: 1, type: "central" }, { id: 5, type: "branch" }, { id: 8, type: "branch" }];
+  ok_("ดึงตัวกำหนดสาขาของเมนูใหม่มารันได้", typeof NV === "function");
+  if (NV) {
+    ck("สร้างจากสาขา 5 → [5]", NV([5], BR), [5]);
+    ck("ครัวกลางไม่เลือกสาขา → [] (ซ่อน) ไม่ใช่ null", NV([], BR), []);
+    ck("ไม่มีข้อมูลสาขาเลย → [] ไม่ใช่ null", NV(undefined, BR), []);
+    ck("ตัดครัวกลาง/ซ้ำ/สตริง/เลขเพี้ยนทิ้ง", NV(["8", 5, 1, 5, null, "x"], BR), [5, 8]);
+  }
+  // ทุกที่ที่เรียก api.addMenu( ต้องส่ง visible_branches — กันทางสร้างเมนูใหม่ที่ลืมในอนาคตด้วย
+  const addCalls = [];
+  for (let i = APP.indexOf("api.addMenu("); i >= 0; i = APP.indexOf("api.addMenu(", i + 1)) {
+    let d = 0, j = i + "api.addMenu".length;
+    for (; j < APP.length; j++) { if (APP[j] === "(") d++; else if (APP[j] === ")") { d--; if (d === 0) break; } }
+    addCalls.push(APP.slice(i, j + 1));
+  }
+  const noVb = addCalls.filter(c => !c.includes("visible_branches"));
+  ok_(`ทุกทางสร้างเมนู (${addCalls.length}) ส่ง visible_branches${noVb.length ? " — ขาด: " + noVb.map(c => c.slice(0, 50)).join(" | ") : ""}`,
+    addCalls.length >= 4 && noVb.length === 0);
+  const saveLn = lineOf("async function save(){if(!form.name||!form.price)return;");
+  ok_("ฟอร์มเพิ่มเมนู: ครัวกลางใช้สาขาที่ติ๊ก · สาขาใช้สาขาตัวเอง",
+    saveLn.includes("const vb=newMenuVisibleBranches(isCentral?form.vb:[currentBranch.id],branches);await api.addMenu({...item,visible_branches:vb});"));
+  const itemDef = saveLn.slice(saveLn.indexOf("const item={"), saveLn.indexOf(";if(editId){"));
+  const editBr = saveLn.slice(saveLn.indexOf("if(editId){"), saveLn.indexOf("}else{"));
+  ok_("แก้ไขเมนูเดิมไม่แตะ visible_branches (ใช้ปุ่มติ๊กที่อ่านค่าล่าสุดแทน)",
+    itemDef.length > 20 && editBr.length > 10 && !itemDef.includes("visible_branches") && !editBr.includes("visible_branches"));
+
+  // ── #10 แตะเฉพาะคีย์สาขาตัวเอง จากค่าล่าสุดในฐานข้อมูล ──
+  let W = null; const calls = { get: [], patch: [] }; let dbRow = {};
+  try {
+    W = new Function("sb", "api", lineOf("const patchBranchKey=") + "\nasync " + grab(APP, "writeMenuBranchKey") + "\nreturn writeMenuBranchKey;")(
+      async (path) => { calls.get.push(path); return dbRow == null ? [] : [JSON.parse(JSON.stringify(dbRow))]; },
+      { updateMenu: async (id, d) => { calls.patch.push({ id, d }); } });
+  } catch { W = null; }
+  ok_("ดึงตัวเขียนค่ารายสาขามารันได้", typeof W === "function");
+  if (W) {
+    // จอสาขา 5 เปิดค้างไว้ตอนยังว่าง · ระหว่างนั้น River ตั้ง "8":"hidden"
+    dbRow = { availability: { 8: "hidden" } };
+    const out = await W(77, "availability", 5, "sold_out@2569-10-12");
+    ck("กดหมดที่สาขา 5 ไม่ลบสถานะของ River", calls.patch.at(-1), { id: 77, d: { availability: { 8: "hidden", 5: "sold_out@2569-10-12" } } });
+    ok_("อ่านค่าล่าสุดของเมนูนั้นก่อนเขียนทุกครั้ง", calls.get.at(-1) === "menus?select=availability&id=eq.77&limit=1" && out[8] === "hidden");
+    dbRow = { availability: { 8: "hidden", 5: "sold_out@2569-10-12" } };
+    await W(77, "availability", 5, null);
+    ck("กลับเป็นขายที่สาขา 5 ลบเฉพาะคีย์สาขา 5", calls.patch.at(-1).d, { availability: { 8: "hidden" } });
+    dbRow = { options_by_branch: { 8: ["g_river"] } };
+    await W(90, "options_by_branch", 5, ["g_kan"]);
+    ck("ผูกตัวเลือกสาขา 5 ไม่ทับที่ผูกของ River", calls.patch.at(-1).d, { options_by_branch: { 8: ["g_river"], 5: ["g_kan"] } });
+    dbRow = { options_by_branch: { 8: ["g_river"], 5: ["g_kan"] } };
+    await W(90, "options_by_branch", 5, []);
+    ck("ล้างตัวเลือกสาขา 5 = เก็บ [] ของสาขา 5 (ของ River อยู่ครบ)", calls.patch.at(-1).d, { options_by_branch: { 8: ["g_river"], 5: [] } });
+    dbRow = { availability: null };
+    await W(78, "availability", 5, "hidden");
+    ck("แถวที่ยังไม่เคยตั้ง (null) ก็เขียนได้", calls.patch.at(-1).d, { availability: { 5: "hidden" } });
+    const n0 = calls.patch.length; dbRow = null; let threw = false;
+    try { await W(79, "availability", 5, "hidden"); } catch { threw = true; }
+    ok_("อ่านค่าล่าสุดไม่ได้ = ไม่เขียน (ไม่เดาด้วยค่าค้างบนจอ)", threw && calls.patch.length === n0);
+  }
+  ok_("ปุ่มวันนี้หมด/ซ่อน/ขาย เขียนผ่านตัวอ่านค่าล่าสุด",
+    lineOf("const setAvail=useCallback(async function setAvail(").includes('writeMenuBranchKey(m.id,"availability",currentBranch.id,') &&
+    !APP.includes("const avail={...(m.availability||{})}"));
+  ok_("ผูกตัวเลือกทีละเมนู/หลายเมนู เขียนผ่านตัวอ่านค่าล่าสุด",
+    APP.includes('writeMenuBranchKey(bindMenu.id,"options_by_branch",currentBranch.id,chosen)') &&
+    APP.includes('writeMenuBranchKey(mid,"options_by_branch",currentBranch.id,groupIds)') &&
+    !APP.includes("{...(bindMenu.options_by_branch||{})}") && !APP.includes("const map={...(m.options_by_branch||{})}"));
 }
 
 

@@ -472,6 +472,21 @@ async function freshVisibleBranches(table, id) {
   return rows[0].visible_branches;
 }
 
+// ── ค่ารายสาขาในคอลัมน์ JSON ของเมนู (availability / options_by_branch) ─────────
+// เดิมเอาก้อนที่ค้างบนจอ (โหลดตอนเปิดจอ) มาแก้คีย์ตัวเองแล้วเขียนทับทั้งก้อน
+// → River กด "วันนี้หมด" 18:00 · สาขา 5 เปิดจอค้างไว้แล้วมากดเมนูเดียวกัน 18:30 = สถานะของ River หาย
+// ตอนนี้อ่านค่าล่าสุดของแถวนั้นก่อนเขียน แล้วแตะเฉพาะคีย์ของสาขาตัวเอง คีย์สาขาอื่นคงเดิม
+// เหลือช่องว่างเสี้ยววินาทีระหว่างอ่านกับเขียน — ปิดสนิทต้องใช้ RPC jsonb_set ฝั่งฐานข้อมูล
+// val เป็น null/undefined = ลบคีย์สาขานี้ (กลับเป็น "ขาย") · [] คือค่าจริง ไม่ใช่การลบ
+const patchBranchKey=(obj,branchId,val)=>{const o=(obj&&typeof obj==="object"&&!Array.isArray(obj))?{...obj}:{};const k=String(branchId);if(val==null)delete o[k];else o[k]=val;return o;};
+async function writeMenuBranchKey(menuId,field,branchId,val){
+  const rows=await sb(`menus?select=${field}&id=eq.${menuId}&limit=1`);
+  if(!Array.isArray(rows)||!rows.length)throw new Error("อ่านค่าล่าสุดไม่ได้ — ลองใหม่อีกครั้ง");
+  const next=patchBranchKey(rows[0][field],branchId,val);
+  await api.updateMenu(menuId,{[field]:next});
+  return next;
+}
+
 const api = {
   getIngs: () => sbAll("ingredients?order=id.asc"),   // แบ่งหน้า — 931/1000 แล้ว อีก 69 รายการจะหายเงียบ
   addIng: (d) => sb("ingredients", { method: "POST", body: JSON.stringify(d) }),
@@ -2080,6 +2095,15 @@ const menuVisibleAt=(m,bid)=>{
   if(vb.length===0)return false;
   return vb.map(Number).includes(+bid);
 };
+// ── เมนูที่สร้างใหม่: สาขาไหนเห็น ───────────────────────────────────────────
+// เดิมทุกทางสร้าง (ฟอร์มเพิ่มเมนู / Import / สร้างจาก FoodStory) ไม่ส่ง visible_branches
+// → ได้ null = เปิดทุกสาขาทันที เมนูที่ทำให้สาขา 5 ไปขึ้นจอขายและหน้า QR ของ River ด้วย
+// สร้างจากสาขา = [สาขานั้น] · จากครัวกลาง = สาขาที่ติ๊กเลือก ไม่ได้เลือก = [] (ซ่อนไว้ก่อน)
+// คืน array เสมอ ไม่คืน null · ตัดครัวกลาง/เลขเพี้ยนทิ้ง · ตัดซ้ำ · เรียงเลข
+function newMenuVisibleBranches(branchIds,branches){
+  const central=new Set((branches||[]).filter(b=>b&&b.type==="central").map(b=>+b.id));
+  return [...new Set((Array.isArray(branchIds)?branchIds:[]).map(Number))].filter(id=>id>0&&!central.has(id)).sort((a,b)=>a-b);
+}
 // Print-agent liveness for a branch, read from the heartbeat the agent stamps onto a printer's
 // description (agentSeen/agentVer). Stale (or missing) = the shop's print program is down and the
 // kitchen is silently getting nothing → staff must reopen it on the PC.
@@ -4021,16 +4045,56 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
 // ══════════════════════════════════════════════════════
 // ── IMPORT MENU MODAL ─────────────────────────────────
 // ══════════════════════════════════════════════════════
-function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],onDone}){
+// ── Import เมนู: วางแผนก่อนเขียน (ตัวเดียวกับที่ตารางตัวอย่างโชว์ และที่ปุ่มบันทึกใช้) ─────────
+// เดิมจับคู่ "ชื่อ" กับเมนูทั้งเครือ แล้วเขียนทับราคา/หมวด → เมนูที่ใช้ร่วมกับ River เปลี่ยนราคาทันที
+// และเมนูใหม่ไม่ได้ตั้งสาขา (null = เปิดทุกสาขา) · หมวดที่ไม่รู้จักถูกโยนไปหมวดแรกเงียบๆ
+// กติกา: แก้ได้เฉพาะเมนูที่ visible_branches = ชุดสาขาที่เลือกนำเข้า "พอดี" (เทียบแบบเซต ไม่สนลำดับ/ชนิด)
+//   รหัส/ชื่อตรงกับเมนูที่สาขาเป้าหมายเห็นแต่ใช้ร่วมกับสาขาอื่น (null หรือมีสาขาอื่นปน) → ข้าม + แจ้ง
+//   ตรงหลายเมนูในชุดเดียวกัน → ข้าม (ไม่เดาว่าตัวไหน) · แถวซ้ำในไฟล์ → ใช้แถวแรก
+//   ไม่ตรงกับเมนูที่สาขาเป้าหมายเห็นเลย → สร้างใหม่ เปิดเฉพาะชุดสาขาที่เลือก
+// target: null = ยังไม่เลือกสาขา (บันทึกไม่ได้) · [] = ซ่อนไว้ก่อน · [ids]
+const vbSetKey=(vb)=>Array.isArray(vb)?[...new Set(vb.map(Number))].sort((a,b)=>a-b).join(","):null;
+function planMenuImport(rows,menus,target){
+  const tk=Array.isArray(target)?vbSetKey(target):null;
+  const tids=Array.isArray(target)?target.map(Number):[];
+  const norm=s=>String(s==null?"":s).trim().toLowerCase();
+  const seenRow=new Set();
+  return (rows||[]).map(r=>{
+    if(!r||!r.selected)return{kind:"off"};
+    if(tk==null)return{kind:"pick"};
+    const ck=norm(r.code),nk=norm(r.name);
+    if(!nk)return{kind:"noname"};   // ลบชื่อในตารางจนว่าง → ไม่สร้างเมนูไร้ชื่อ
+    const rk=ck?"c:"+ck:"n:"+nk;
+    if(seenRow.has(rk))return{kind:"dupfile"};
+    seenRow.add(rk);
+    let cands=ck?(menus||[]).filter(m=>norm(m.code)===ck):[];
+    if(!cands.length&&nk)cands=(menus||[]).filter(m=>norm(m.name)===nk);
+    const own=cands.filter(m=>vbSetKey(m.visible_branches)===tk);
+    if(own.length>1)return{kind:"dup",menus:own};
+    if(own.length===1)return{kind:+own[0].price!==+r.price?"price":"update",menu:own[0]};
+    const shared=cands.filter(m=>tids.some(b=>menuVisibleAt(m,b)));
+    if(shared.length)return{kind:"shared",menus:shared};
+    return{kind:"new"};
+  });
+}
+// หมวดจากไฟล์: ตรงกับหมวดที่มีอยู่ = ใช้เลย · ไม่ตรง/ว่าง = เว้นว่าง + จำค่าดิบไว้ติดธง (ไม่เดาให้)
+const importCatOf=(raw,list)=>{const s=String(raw==null?"":raw).trim();return{category:(s&&(list||[]).includes(s))?s:"",catRaw:s};};
+function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],branches=[],onDone}){
   const[step,setStep]=useState(1);const[rows,setRows]=useState([]);const[saving,setSaving]=useState(false);const[progress,setProgress]=useState(0);
-  const[result,setResult]=useState({added:0,updated:0,failed:0});
+  const[result,setResult]=useState({added:0,updated:0,failed:0,shared:[],changed:[]});
   const fileRef=useRef();
   const xlsxRef=useRef();
-  const defaultCat=menuCats[0]?.name||"อาหารจานเดียว";
   const allMenuCatList=menuCats.map(c=>c.name);
-  // Code/name → existing menu (for upsert match)
-  const codeIdx=useMemo(()=>{const m=new Map();menus.forEach(x=>{if(x.code)m.set(String(x.code).trim().toLowerCase(),x);});return m;},[menus]);
-  const nameIdx=useMemo(()=>{const m=new Map();menus.forEach(x=>{if(x.name)m.set(String(x.name).trim().toLowerCase(),x);});return m;},[menus]);
+  // นำเข้าให้สาขาไหน — ต้องเลือกเองทุกครั้ง (เปิดจากสาขา = สาขานั้น)
+  const branchOpts=activeBranches(branches).filter(b=>b.type!=="central");
+  const[target,setTarget]=useState(currentBranch&&currentBranch.type!=="central"&&currentBranch.id!=null?[+currentBranch.id]:null);
+  const plan=useMemo(()=>planMenuImport(rows,menus,target),[rows,menus,target]);
+  // ติดธงหมวด: เมนูใหม่ที่ไม่มีหมวด · หรือไฟล์ระบุหมวดที่ไม่รู้จัก (เมนูเดิมจะคงหมวดเดิม ไม่ย้ายไปหมวดแรก)
+  const catFlag=(row,p)=>!!row&&!!row.selected&&!row.category&&(p.kind==="new"||((p.kind==="update"||p.kind==="price")&&!!row.catRaw));
+  const cnt=useMemo(()=>{const c={new:0,price:0,update:0,shared:0,dup:0,dupfile:0,cat:0};plan.forEach((p,i)=>{if(c[p.kind]!=null)c[p.kind]++;if(catFlag(rows[i],p))c.cat++;});return c;},[plan,rows]);
+  const nAct=cnt.new+cnt.price+cnt.update;
+  const vbLabel=(vb)=>!Array.isArray(vb)?"ทุกสาขา":vb.length===0?"ซ่อนทุกสาขา":vb.map(id=>(branches.find(b=>+b.id===+id)||{}).name||("#"+id)).join(", ");
+  const sharedList=plan.map((p,i)=>p.kind==="shared"?{name:rows[i].name,where:[...new Set(p.menus.map(m=>vbLabel(m.visible_branches)))].join(" / ")}:null).filter(Boolean);
 
   function handleXlsxFile(e){
     const f=e.target.files?.[0];if(!f)return;
@@ -4046,10 +4110,9 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
         const parsed=json.map(row=>{
           const code=String(pickKey(row,"🔖 รหัส","รหัส","code","Code","SKU")||"").trim();
           const name=String(pickKey(row,"ชื่อเมนู","ชื่อ","name","Name")||"").trim();
-          const category=String(pickKey(row,"หมวดหมู่","หมวด","category")||"").trim()||defaultCat;
           const price=+pickKey(row,"ราคาขาย","ราคา","price")||0;
           const description=String(pickKey(row,"รายละเอียด","description","desc")||"").trim();
-          return{_kid:randId(),code,name,category:allMenuCatList.includes(category)?category:defaultCat,price,description,selected:!!name};
+          return{_kid:randId(),code,name,...importCatOf(pickKey(row,"หมวดหมู่","หมวด","category"),allMenuCatList),price,description,selected:!!name};
         }).filter(r=>r.name);
         if(parsed.length===0){alert("ไม่พบรายการในไฟล์ — กรุณาตรวจสอบหัวคอลัมน์");return;}
         setRows(parsed);setStep(2);
@@ -4069,9 +4132,8 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
       if(["ชื่อเมนู","เมนู","ราคา","หมวด"].includes(name))return;
       const priceRaw=parts[1]||"";
       const price=parseFloat(priceRaw.replace(/[^0-9.]/g,""))||0;
-      const cat=parts[2]||defaultCat;
       const desc=parts[3]||"";
-      parsed.push({_kid:randId(),name,price,category:allMenuCatList.includes(cat)?cat:defaultCat,description:desc,selected:true});
+      parsed.push({_kid:randId(),name,price,...importCatOf(parts[2],allMenuCatList),description:desc,selected:true});
     });
     return parsed.filter(r=>r.name&&r.name.length>=2);
   }
@@ -4080,33 +4142,35 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
   function handlePaste(e){const parsed=parseMenuText(e.target.value);if(parsed.length>0){setRows(parsed);setStep(2);}}
 
   async function doImport(){
-    const selected=rows.filter(r=>r.selected);if(!selected.length)return;
+    if(!Array.isArray(target))return;
+    const tk=vbSetKey(target);
+    const todo=rows.map((r,i)=>({row:r,p:plan[i]})).filter(x=>x.p.kind==="new"||x.p.kind==="update"||x.p.kind==="price");
+    if(!todo.length)return;
     setSaving(true);setProgress(0);
-    let done=0,added=0,updated=0,failed=0;
-    for(const row of selected){
+    let done=0,added=0,updated=0,failed=0;const changed=[];
+    const vbNew=newMenuVisibleBranches(target,branches);
+    for(const {row,p} of todo){
       try{
-        const codeKey=row.code?String(row.code).trim().toLowerCase():"";
-        const nameKey=row.name?String(row.name).trim().toLowerCase():"";
-        const existing=(codeKey&&codeIdx.get(codeKey))||(nameKey&&nameIdx.get(nameKey))||null;
-        const item={
-          name:row.name,
-          code:row.code?String(row.code).trim()||null:null,
-          category:row.category,
-          price:+row.price||0,
-          description:row.description||"",
-          edit_by:currentUser.username,edit_at:nowStr(),
-          branch_id:currentBranch.id,
-        };
-        if(existing){
-          await api.updateMenu(existing.id,item);updated++;
+        const code=String(row.code||"").trim();
+        const desc=String(row.description||"").trim();
+        const base={name:row.name,price:+row.price||0,edit_by:currentUser.username,edit_at:nowStr()};
+        if(p.kind==="new"){
+          // เมนูใหม่เปิดเฉพาะชุดสาขาที่เลือก · หมวดไม่รู้จัก = เว้นว่าง (ติดธงไว้ในตารางแล้ว)
+          await api.addMenu({...base,code:code||null,category:row.category||"",description:desc,branch_id:currentBranch.id,image:null,ingredients:[],sop:[],visible_branches:vbNew});added++;
         }else{
-          await api.addMenu({...item,image:null,ingredients:[],sop:[]});added++;
+          // อ่าน visible_branches ล่าสุดก่อนเขียน — ระหว่างดูตัวอย่างอาจมีคนเพิ่งเปิดเมนูนี้ให้สาขาอื่น (กลายเป็นเมนูร่วม) → ข้าม
+          const live=await freshVisibleBranches("menus",p.menu.id);
+          if(vbSetKey(live)!==tk){changed.push(row.name);}
+          else{
+            // แตะเฉพาะที่ไฟล์บอก: หมวดว่าง = คงหมวดเดิม · รายละเอียดว่าง = คงของเดิม · ไม่มีรหัส = คงรหัสเดิม · ไม่แตะ visible_branches
+            await api.updateMenu(p.menu.id,{...base,...(row.category?{category:row.category}:{}),...(desc?{description:desc}:{}),...(code?{code}:{})});updated++;
+          }
         }
       }catch(e){console.error("skip:",row.name,e.message);failed++;}
-      done++;setProgress(Math.round(done/selected.length*100));
+      done++;setProgress(Math.round(done/todo.length*100));
     }
     setSaving(false);
-    setResult({added,updated,failed});
+    setResult({added,updated,failed,shared:sharedList.map(s=>s.name),changed});
     setStep(3);
     onDone();
   }
@@ -4117,7 +4181,8 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
         <div style={{fontSize:13,fontWeight:700,color:C.green,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📊 Excel (.xlsx) — แนะนำ</div>
         <div style={{fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.7}}>
           Export → แก้ราคา/หมวด → Import กลับ<br/>
-          🔖 มีรหัส/ชื่อตรง → <b style={{color:C.green}}>อัพเดท</b> · ไม่ตรง → <b style={{color:C.brand}}>เพิ่มใหม่</b>
+          🔖 รหัส/ชื่อตรงกับเมนูของสาขาที่เลือก → <b style={{color:C.green}}>อัพเดท</b> · ไม่ตรง → <b style={{color:C.brand}}>เพิ่มใหม่ (เปิดเฉพาะสาขานั้น)</b><br/>
+          เมนูที่ใช้ร่วมกับสาขาอื่น → <b style={{color:C.red}}>ข้าม ไม่แก้</b> · ดูตารางสรุปก่อนกดบันทึกทุกครั้ง
         </div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(220px,100%),1fr))",gap:12,marginBottom:14}}>
@@ -4128,7 +4193,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
         </div>
         <div onClick={()=>fileRef.current?.click()} style={{border:`2px dashed ${C.line}`,borderRadius:14,padding:"28px 18px",textAlign:"center",cursor:"pointer",transition:"all .2s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.brand;e.currentTarget.style.background=C.brandLight;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.line;e.currentTarget.style.background="transparent";}}>
           <Ic d={I.ul} s={32} c={C.brand}/>
-          <div style={{fontWeight:700,fontSize:14,color:C.ink,marginTop:8,fontFamily:"'Sarabun',sans-serif"}}>.txt / .csv (เพิ่มอย่างเดียว)</div>
+          <div style={{fontWeight:700,fontSize:14,color:C.ink,marginTop:8,fontFamily:"'Sarabun',sans-serif"}}>.txt / .csv (เพิ่ม + อัพเดทตามชื่อ)</div>
           <div style={{fontSize:11,color:C.ink4,marginTop:3,fontFamily:"'Sarabun',sans-serif"}}>คอลัมน์: ชื่อเมนู ราคา หมวด</div>
         </div>
       </div>
@@ -4141,6 +4206,29 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
     </div>}
 
     {step===2&&<div>
+      {/* ① นำเข้าให้สาขาไหน — ตัวตัดสินว่าแก้เมนูไหนได้ และเมนูใหม่เปิดที่สาขาไหน */}
+      <div style={{background:C.bg,border:`1.5px solid ${target==null?C.red:C.line}`,borderRadius:12,padding:"10px 12px",marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:13,fontWeight:800,color:C.ink,marginBottom:6}}>นำเข้าเป็นเมนูของสาขา <span style={{fontSize:12,fontWeight:400,color:C.ink3}}>· แก้เฉพาะเมนูที่เปิดให้สาขาที่เลือก "พอดี" · เมนูใหม่เปิดเฉพาะสาขานี้</span></div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {branchOpts.map(b=>{const on=Array.isArray(target)&&target.map(Number).includes(+b.id);return <button key={b.id} type="button" onClick={()=>setTarget(t=>{const cur=Array.isArray(t)?t.map(Number):[];const nx=cur.includes(+b.id)?cur.filter(x=>x!==+b.id):[...cur,+b.id];return nx.length?nx:null;})} style={{padding:"6px 12px",minHeight:36,borderRadius:8,fontSize:13,fontWeight:700,border:`1.5px solid ${on?C.green:C.line}`,background:on?C.greenLight:C.white,color:on?C.green:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{on?"✓ ":""}{b.name}</button>;})}
+          {(()=>{const on=Array.isArray(target)&&target.length===0;return <button type="button" onClick={()=>setTarget(on?null:[])} style={{padding:"6px 12px",minHeight:36,borderRadius:8,fontSize:13,fontWeight:700,border:`1.5px dashed ${on?C.ink2:C.line}`,background:on?C.lineLight:C.white,color:on?C.ink:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{on?"✓ ":""}ซ่อนไว้ก่อน (ยังไม่เปิดสาขาใด)</button>;})()}
+        </div>
+        {target==null&&<div style={{marginTop:6,fontSize:12,fontWeight:700,color:C.red}}>เลือกสาขาก่อน จึงจะบันทึกได้</div>}
+      </div>
+      {/* ② สรุปสิ่งที่จะเกิดก่อนกดบันทึก */}
+      {Array.isArray(target)&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+        <Chip color="green">ใหม่ {cnt.new}</Chip>
+        <Chip color="orange">เปลี่ยนราคา {cnt.price}</Chip>
+        <Chip color="blue">อัพเดท (ราคาเดิม) {cnt.update}</Chip>
+        {cnt.shared>0&&<Chip color="red">ข้าม · ใช้ร่วมสาขาอื่น {cnt.shared}</Chip>}
+        {cnt.dup>0&&<Chip color="red">ข้าม · ชื่อซ้ำหลายเมนู {cnt.dup}</Chip>}
+        {cnt.dupfile>0&&<Chip color="gray">ซ้ำในไฟล์ {cnt.dupfile}</Chip>}
+        {cnt.cat>0&&<Chip color="red">หมวดไม่รู้จัก/ว่าง {cnt.cat}</Chip>}
+      </div>}
+      {sharedList.length>0&&<div style={{background:C.redLight,border:`1px solid ${C.red}55`,borderRadius:10,padding:"8px 12px",marginBottom:10,fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
+        <b style={{color:C.red}}>ข้าม {sharedList.length} เมนูที่ใช้ร่วมกับสาขาอื่น</b> — ถ้าแก้ ราคา/หมวดจะเปลี่ยนที่สาขาอื่นด้วย ถ้าราคาสาขานี้ต่างจริง ให้สร้างเมนูแยกของสาขานี้ แล้วติ๊กปิดสาขานี้ที่เมนูตัวร่วม
+        <div style={{maxHeight:90,overflowY:"auto",marginTop:4}}>{sharedList.map((s,i)=><div key={i}>• {s.name} <span style={{color:C.ink3}}>(เปิดที่: {s.where})</span></div>)}</div>
+      </div>}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
         <div style={{fontFamily:"'Sarabun',sans-serif"}}><span style={{fontWeight:800,fontSize:15,color:C.ink}}>พบ {rows.length} เมนู</span><span style={{fontSize:13,color:C.ink3,marginLeft:8}}>เลือก {rows.filter(r=>r.selected).length} รายการ</span></div>
         <div style={{display:"flex",gap:8}}>
@@ -4148,19 +4236,29 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
           <Btn v="ghost" onClick={()=>setRows(r=>r.map(x=>({...x,selected:false})))} s={{padding:"6px 12px",fontSize:12}}>ยกเลิก</Btn>
         </div>
       </div>
-      <div style={{maxHeight:380,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:12,overflow:"hidden"}}>
+      {/* overflow:"auto" — เดิม overflow:"hidden" ทับ overflowY ทำให้ตารางยาวเลื่อนดูไม่ได้ (ตรวจไม่ครบก่อนบันทึก) */}
+      <div style={{maxHeight:380,overflow:"auto",border:`1px solid ${C.line}`,borderRadius:12}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
           <thead><tr style={{background:C.bg}}>
             <th style={{padding:"8px 12px",width:40,textAlign:"center"}}><input type="checkbox" checked={rows.every(r=>r.selected)} onChange={e=>setRows(r=>r.map(x=>({...x,selected:e.target.checked})))} style={{accentColor:C.brand,width:15,height:15}}/></th>
-            {["ชื่อเมนู","ราคา (฿)","หมวดหมู่","รายละเอียด"].map(h=><th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}
+            {["ผลที่จะเกิด","ชื่อเมนู","ราคา (฿)","หมวดหมู่","รายละเอียด"].map(h=><th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}
           </tr></thead>
-          <tbody>{rows.map((row,idx)=><tr key={row._kid||idx} style={{borderTop:`1px solid ${C.lineLight}`,opacity:row.selected?1:.5}}>
+          <tbody>{rows.map((row,idx)=>{const p=plan[idx]||{kind:"off"};const cf=catFlag(row,p);return <tr key={row._kid||idx} style={{borderTop:`1px solid ${C.lineLight}`,opacity:row.selected?1:.5}}>
             <td style={{padding:"8px 12px",textAlign:"center"}}><input type="checkbox" checked={!!row.selected} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,selected:e.target.checked}:x))} style={{accentColor:C.brand,width:15,height:15}}/></td>
+            <td style={{padding:"8px 12px",whiteSpace:"nowrap"}}>{p.kind==="pick"?<span style={{fontSize:11,color:C.ink4}}>เลือกสาขาก่อน</span>
+              :p.kind==="new"?<Chip color="green">ใหม่</Chip>
+              :p.kind==="price"?<Chip color="orange">฿{+p.menu.price||0} → ฿{+row.price||0}</Chip>
+              :p.kind==="update"?<Chip color="blue">อัพเดท</Chip>
+              :p.kind==="shared"?<Chip color="red">ข้าม · ใช้ร่วม</Chip>
+              :p.kind==="dup"?<Chip color="red">ข้าม · ชื่อซ้ำ {p.menus.length} เมนู</Chip>
+              :p.kind==="dupfile"?<Chip color="gray">ซ้ำในไฟล์</Chip>
+              :p.kind==="noname"?<Chip color="gray">ไม่มีชื่อ · ข้าม</Chip>:null}</td>
             <td style={{padding:"8px 12px"}}><input value={row.name} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,name:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13}}/></td>
             <td style={{padding:"8px 12px"}}><input type="text" inputMode="decimal" value={row.price} onChange={e=>{const t=e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1");setRows(r=>r.map((x,i)=>i===idx?{...x,price:t===""?"":(t.endsWith(".")?t:+t)}:x));}} style={{...iS,padding:"4px 8px",fontSize:13,width:90}}/></td>
-            <td style={{padding:"8px 12px"}}><select value={row.category} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,category:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:12,appearance:"none"}}>{allMenuCatList.map(c=><option key={c}>{c}</option>)}</select></td>
+            <td style={{padding:"8px 12px"}}><select value={row.category||""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,category:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:12,appearance:"none",...(cf?{border:`1.5px solid ${C.red}`,color:C.red}:{})}}><option value="">{row.catRaw?`⚠ ไม่รู้จัก: ${row.catRaw}`:"— ไม่มีหมวด —"}</option>{allMenuCatList.map(c=><option key={c} value={c}>{c}</option>)}</select>
+              {!row.category&&(p.kind==="update"||p.kind==="price")&&<div style={{fontSize:10,color:C.ink3,marginTop:2}}>คงหมวดเดิม: {p.menu.category||"-"}</div>}</td>
             <td style={{padding:"8px 12px"}}><input value={row.description} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,description:e.target.value}:x))} placeholder="รายละเอียด..." style={{...iS,padding:"4px 8px",fontSize:12}}/></td>
-          </tr>)}
+          </tr>;})}
           </tbody>
         </table>
       </div>
@@ -4170,7 +4268,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
       </div>}
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:14}}>
         <Btn v="ghost" onClick={()=>setStep(1)}>← กลับ</Btn>
-        <Btn onClick={doImport} icon={I.check} disabled={!rows.filter(r=>r.selected).length} loading={saving}>Import {rows.filter(r=>r.selected).length} เมนู</Btn>
+        <Btn onClick={doImport} icon={I.check} disabled={!Array.isArray(target)||!nAct||saving} loading={saving}>{Array.isArray(target)?`บันทึก ${nAct} เมนู`:"เลือกสาขาก่อน"}</Btn>
       </div>
     </div>}
 
@@ -4191,6 +4289,11 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],on
           <div style={{fontSize:22,fontWeight:900,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>{result.failed}</div>
         </div>}
       </div>
+      {/* เมนูที่ไม่ได้แก้ ต้องบอกชื่อ — ไม่งั้นนึกว่าราคาเปลี่ยนแล้ว */}
+      {((result.shared||[]).length>0||(result.changed||[]).length>0)&&<div style={{textAlign:"left",maxWidth:480,margin:"0 auto 18px",background:C.redLight,border:`1px solid ${C.red}55`,borderRadius:10,padding:"8px 12px",fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>
+        {(result.shared||[]).length>0&&<div><b style={{color:C.red}}>ไม่ได้แก้ {result.shared.length} เมนูที่ใช้ร่วมกับสาขาอื่น:</b> {result.shared.join(", ")}</div>}
+        {(result.changed||[]).length>0&&<div style={{marginTop:4}}><b style={{color:C.red}}>ข้าม {result.changed.length} เมนูที่เพิ่งถูกเปิดให้สาขาอื่นระหว่างนำเข้า:</b> {result.changed.join(", ")}</div>}
+      </div>}
       <Btn onClick={onClose}>ปิดและดูเมนู</Btn>
     </div>}
   </Modal>;
@@ -6492,7 +6595,8 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     setNi({ingredientId:"",amountGram:""});
     setIngQ("");  // clear the search box so the list resets too
   }
-  async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,code:(form.code||"").trim()||null,category:form.category||selCat||"",price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,...(hasSopMeta?{prep_time:(form.prep_time||"").trim()||null,packaging:(form.packaging||"").trim()||null}:{})};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{await api.addMenu(item);addH(`เพิ่มเมนู: ${form.name}`);}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
+  // เมนูใหม่ต้องระบุสาขาที่เห็นเสมอ (ไม่ส่ง = null = เปิดทุกสาขารวม River) · แก้ไขเมนูเดิมไม่แตะ visible_branches (ใช้ปุ่มติ๊กบนการ์ด)
+  async function save(){if(!form.name||!form.price)return;setSaving(true);try{const item={name:form.name,code:(form.code||"").trim()||null,category:form.category||selCat||"",price:+form.price,description:form.description,image:form.image,ingredients:form.ingredients,sop:form.sop||[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,...(hasSopMeta?{prep_time:(form.prep_time||"").trim()||null,packaging:(form.packaging||"").trim()||null}:{})};if(editId){await api.updateMenu(editId,item);addH(`แก้ไขเมนู: ${form.name}`);}else{const vb=newMenuVisibleBranches(isCentral?form.vb:[currentBranch.id],branches);await api.addMenu({...item,visible_branches:vb});addH(`เพิ่มเมนู: ${form.name}`+(vb.length?"":" (ซ่อนไว้ทุกสาขา)"));}await reload();setOpen(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setSaving(false);}
   async function del(id,name){if(!await confirmDlg({title:"ลบเมนู",message:`ต้องการลบเมนู "${name}" ใช่หรือไม่?`}))return;try{await api.deleteMenu(id);addH(`ลบเมนู: ${name}`);await reload();}catch(e){alert("ลบไม่สำเร็จ");}}
   async function exportXlsx(){
     if(filtered.length===0){alert("ไม่มีรายการให้ Export");return;}
@@ -6538,7 +6642,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     </div>
     <div style={{display:"flex",gap:10,marginBottom:20}}>
       <div style={{position:"relative",flex:1}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.search} s={16} c={C.ink4}/></span><input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,paddingLeft:40,paddingRight:44}}/>{q&&<button type="button" onClick={()=>setQ("")} aria-label="ล้างคำค้น" title="ล้างคำค้น" style={{position:"absolute",right:4,top:"50%",transform:"translateY(-50%)",width:36,height:36,border:"none",background:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.x} s={16} c={C.ink3}/></button>}</div>
-      {canE&&selCat!=="ทั้งหมด"&&<Btn onClick={()=>{setForm({name:"",code:"",category:selCat,price:"",description:"",image:null,ingredients:[],sop:[],prep_time:"",packaging:""});setEditId(null);setIngQ("");setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
+      {canE&&selCat!=="ทั้งหมด"&&<Btn onClick={()=>{setForm({name:"",code:"",category:selCat,price:"",description:"",image:null,ingredients:[],sop:[],prep_time:"",packaging:"",vb:[]});setEditId(null);setIngQ("");setOpen(true);}} icon={I.plus}>เพิ่มเมนู</Btn>}
       {canE&&<Btn v="success" onClick={exportXlsx} disabled={filtered.length===0}>📊 Export</Btn>}
       {canE&&<Btn v="info" onClick={()=>setShowImportMenu(true)} icon={I.ul}>Import</Btn>}
     </div>
@@ -6582,7 +6686,8 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
         </div>
       </Card>;})}
     </div>
-    {showImportMenu&&<ImportMenuModal onClose={()=>setShowImportMenu(false)} menuCats={menuCats} currentUser={currentUser} currentBranch={currentBranch} menus={menus} onDone={async()=>{await reload();setShowImportMenu(false);}}/>}
+    {/* หมวด = ชุดเดียวกับชิป/ฟอร์มเมนู (รวมหมวดที่เมนูใช้จริง) · onDone แค่โหลดใหม่ ไม่ปิดเอง — ให้เห็นสรุปว่าเมนูไหนถูกข้าม */}
+    {showImportMenu&&<ImportMenuModal onClose={()=>setShowImportMenu(false)} menuCats={allMenuCats} currentUser={currentUser} currentBranch={currentBranch} menus={menus} branches={branches} onDone={()=>reload()}/>}
     {open&&<Modal title={editId?"✏️ แก้ไขเมนู":"➕ เพิ่มเมนูใหม่"} onClose={()=>setOpen(false)} wide>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
         <div>
@@ -6602,6 +6707,12 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
             <Inp label="⏱ เวลาทำ" hint="ขึ้นบนใบ SOP" value={form.prep_time} onChange={e=>setForm(f=>({...f,prep_time:e.target.value}))} placeholder="เช่น 5 นาที"/>
             <Inp label="🍽 บรรจุภัณฑ์" hint="ขึ้นบนใบ SOP" value={form.packaging} onChange={e=>setForm(f=>({...f,packaging:e.target.value}))} placeholder="เช่น จานของทอดใหญ่"/>
           </div>}
+          {/* เมนูใหม่จากครัวกลาง: เลือกสาขาที่จะเห็นตั้งแต่ตอนสร้าง — ไม่เลือก = ซ่อนไว้ทุกสาขา (เดิมเปิดทุกสาขาทันที รวม River) */}
+          {!editId&&isCentral&&(()=>{const opts=activeBranches(branches).filter(b=>b.type!=="central");const sel=(form.vb||[]).map(Number);return <div style={{marginTop:4}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>แสดงที่สาขา</div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{opts.map(b=>{const on=sel.includes(+b.id);return <button key={b.id} type="button" onClick={()=>setForm(f=>{const cur=(f.vb||[]).map(Number);return{...f,vb:cur.includes(+b.id)?cur.filter(x=>x!==+b.id):[...cur,+b.id]};})} style={{padding:"6px 12px",minHeight:36,borderRadius:8,fontSize:12,fontWeight:700,border:`1.5px solid ${on?C.green:C.line}`,background:on?C.greenLight:"transparent",color:on?C.green:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>{on?"✓ ":""}{b.name}</button>;})}</div>
+            {sel.length===0&&<div style={{marginTop:6,fontSize:12,color:C.ink2,background:C.yellowLight,border:`1px solid ${C.yellow}55`,borderRadius:8,padding:"6px 10px",fontFamily:"'Sarabun',sans-serif"}}>ยังไม่ได้เลือกสาขา — เมนูนี้จะ<b>ซ่อนไว้ทุกสาขา</b> ยังไม่ขึ้นจอขาย/หน้า QR ที่ไหน · เปิดทีหลังได้ที่ปุ่มสาขาบนการ์ดเมนู</div>}
+          </div>;})()}
         </div>
         <div>
           <div style={{fontSize:13,fontWeight:700,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>วัตถุดิบ</div>
@@ -8330,6 +8441,8 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
     setCreating(menuName);
     try{
       await ensureCategory(d.category);
+      // เห็นเฉพาะสาขาที่ขายเมนูนี้จริงในยอด FoodStory ที่เปิดอยู่ (เดิม null = ขึ้นจอขาย/หน้า QR ทุกสาขา รวม River)
+      const vb=newMenuVisibleBranches(rows.filter(x=>x.menu_name===menuName).map(x=>x.branch_id),branches);
       await api.addMenu({
         name:d.menu_name,
         category:d.category,
@@ -8341,9 +8454,11 @@ function FSSalesTab({branches,currentBranch,currentUser,menus=[],ings=[],reloadM
         edit_by:currentUser?.username||null,
         edit_at:nowStr(),
         branch_id:currentBranch?.id||null,
+        visible_branches:vb,
       });
       if(reloadMenus)await reloadMenus();
       if(reloadCats)await reloadCats();
+      if(!vb.length)alert(`สร้างเมนู "${d.menu_name}" แล้ว แต่ซ่อนไว้ทุกสาขา (ไม่รู้ว่าเป็นของสาขาไหน) — เปิดสาขาได้ที่แท็บ "เมนู"`);
     }catch(e){showErr("สร้างเมนูไม่สำเร็จ",e);}
     setCreating(null);
   }
@@ -12550,6 +12665,8 @@ function EditSnapshotModal({snapshot,branches,menus,ings,currentUser,reloadMenus
         if(!exists)await api.addCat({type:"menu",name:it.category});
         if(reloadCats)await reloadCats();
       }
+      // เห็นเฉพาะสาขาของสรุปต้นทุนนี้ (เดิม null = ขึ้นจอขาย/หน้า QR ทุกสาขา รวม River) · ไม่มีสาขา = ซ่อนไว้ก่อน
+      const vb=newMenuVisibleBranches([snapshot.branch_id],branches);
       await api.addMenu({
         name:it.menu_name,
         category:it.category||"",
@@ -12558,12 +12675,13 @@ function EditSnapshotModal({snapshot,branches,menus,ings,currentUser,reloadMenus
         image:null,ingredients:[],sop:[],
         edit_by:currentUser?.username||null,edit_at:nowStr(),
         branch_id:snapshot.branch_id||null,
+        visible_branches:vb,
       });
       if(reloadMenus)await reloadMenus();
       // The new menu has NO recipe yet, so its cost is UNKNOWN — mark it as such, never matched
       // (matched:true with cost 0 would report this menu's whole revenue as profit).
       setItems(arr=>arr.map(x=>x.menu_name===menuName?{...x,matched:false,no_recipe:true,cost:null,cost_per_unit:null,profit:null}:x));
-      alert("✅ สร้างเมนูเรียบร้อย — ไปแท็บ \"เมนู\" เพื่อใส่วัตถุดิบ");
+      alert("✅ สร้างเมนูเรียบร้อย — ไปแท็บ \"เมนู\" เพื่อใส่วัตถุดิบ"+(vb.length?`\n\nเมนูนี้เปิดเฉพาะสาขา ${br?.name||snapshot.branch_id}`:"\n\nเมนูนี้ซ่อนไว้ทุกสาขา — เปิดสาขาได้ที่แท็บ \"เมนู\""));
     }catch(e){alert("สร้างเมนูไม่สำเร็จ: "+e.message);}
     setCreating(null);
   }
@@ -23510,7 +23628,8 @@ function POSMenuAvailManager({currentBranch,onClose}){
     .filter(m=>{const okB=isCentral||menuVisibleAt(m,currentBranch.id);if(!okB)return false;if(cat&&menuCatOf(m)!==cat)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;})
     .sort(menuSorter(catOrder,menuOrder)),[menus,cat,q,isCentral,currentBranch.id,catOrder,menuOrder]);
   stRef.current={visible,menus,catOrder,menuOrder,isCentral,bid:currentBranch.id};
-  const setAvail=useCallback(async function setAvail(m,status){setBusyId(m.id);const avail={...(m.availability||{})};if(!status)delete avail[currentBranch.id];else avail[currentBranch.id]=status==="sold_out"?soldOutMark():status;try{await api.updateMenu(m.id,{availability:avail});setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);},[currentBranch.id]);
+  // อ่าน availability ล่าสุดของเมนูนี้ก่อนเขียน แตะเฉพาะคีย์สาขานี้ (เมนูใช้ร่วมกับ River — ห้ามทับสถานะของสาขาอื่นด้วยค่าที่ค้างบนจอ)
+  const setAvail=useCallback(async function setAvail(m,status){setBusyId(m.id);try{const avail=await writeMenuBranchKey(m.id,"availability",currentBranch.id,!status?null:status==="sold_out"?soldOutMark():status);setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);},[currentBranch.id]);
   // หมวดที่มีอยู่จริงในเมนูของสาขานี้ — ไม่เอาหมวดของสาขาอื่นมาให้กดแล้วว่างเปล่า
   // นับจำนวนเมนูต่อหมวดไว้ด้วย จะได้รู้ว่ากดแล้วเจออะไรบ้างโดยไม่ต้องกดลองทีละอัน
   useEffect(()=>{let ok=true;(async()=>{
@@ -23746,8 +23865,8 @@ function POSMenuAvailManager({currentBranch,onClose}){
   async function saveBind(){
     if(!bindMenu)return;setBindBusy(true);
     const chosen=lib.filter(g=>bindSel[g.id]).map(g=>g.id);  // store group IDs (reference — library edits propagate live)
-    const map={...(bindMenu.options_by_branch||{})};map[String(currentBranch.id)]=chosen;
-    try{await api.updateMenu(bindMenu.id,{options_by_branch:map});setMenus(ms=>ms.map(x=>x.id===bindMenu.id?{...x,options_by_branch:map}:x));setBindMenu(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
+    // อ่าน options_by_branch ล่าสุดก่อนเขียน แทนที่เฉพาะคีย์สาขานี้ (ไม่ทับที่ผูกของสาขาอื่นด้วยค่าที่ค้างบนจอ)
+    try{const map=await writeMenuBranchKey(bindMenu.id,"options_by_branch",currentBranch.id,chosen);setMenus(ms=>ms.map(x=>x.id===bindMenu.id?{...x,options_by_branch:map}:x));setBindMenu(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
     setBindBusy(false);
   }
   // Bulk-bind: apply the SAME option group(s) to many menus at once → they all become consistent.
@@ -23757,11 +23876,12 @@ function POSMenuAvailManager({currentBranch,onClose}){
     if(menuIds.length===0){alert("เลือกเมนูอย่างน้อย 1 เมนู");return;}
     if(groupIds.length===0&&!await confirmDlg({title:"ล้างตัวเลือก?",message:`ยังไม่ได้เลือกกลุ่มตัวเลือก — เมนูที่เลือก (${menuIds.length}) จะถูก “ล้างตัวเลือกออกทั้งหมด” ใช่ไหม?`,confirmLabel:"ล้างตัวเลือก",cancelLabel:"ยกเลิก",danger:true}))return;
     setBulkBusy(true);
+    let done=0;
     try{
-      for(const mid of menuIds){const m=menus.find(x=>x.id===mid);if(!m)continue;const map={...(m.options_by_branch||{})};map[String(currentBranch.id)]=groupIds;await api.updateMenu(mid,{options_by_branch:map});}
-      setMenus(ms=>ms.map(x=>menuIds.includes(x.id)?{...x,options_by_branch:{...(x.options_by_branch||{}),[String(currentBranch.id)]:groupIds}}:x));
-      setBulkOpen(false);posToast(`✅ ผูกตัวเลือกให้ ${menuIds.length} เมนูเหมือนกันแล้ว`);
-    }catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
+      // ทีละเมนู: อ่านค่าล่าสุดของแถวนั้นก่อน แล้วแทนที่เฉพาะคีย์สาขานี้ · อัปเดตจอทีละตัว (พังกลางทางก็ไม่หลอกว่าครบ)
+      for(const mid of menuIds){if(!menus.some(x=>x.id===mid))continue;const map=await writeMenuBranchKey(mid,"options_by_branch",currentBranch.id,groupIds);setMenus(ms=>ms.map(x=>x.id===mid?{...x,options_by_branch:map}:x));done++;}
+      setBulkOpen(false);posToast(`✅ ผูกตัวเลือกให้ ${done} เมนูเหมือนกันแล้ว`);
+    }catch(e){alert(`บันทึกไม่สำเร็จ (ทำไปแล้ว ${done} จาก ${menuIds.length} เมนู): `+(e&&e.message||e));}
     setBulkBusy(false);
   }
   return <Modal title="🍔 เมนูทั้งหมด — สถานะ & ตัวเลือก" onClose={onClose} extraWide>
