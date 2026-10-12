@@ -700,7 +700,11 @@ const api = {
   getPrinters: (bid) => sb(`printers?order=id.asc${bid?`&branch_id=eq.${bid}`:"&branch_id=is.null"}`),
   getAllPrinters: () => sb(`printers?order=id.asc`),
   // เฉพาะเครื่องที่มีรายการพิมพ์ไม่ออกค้าง (ปกติไม่มี = ได้แถวว่าง ประหยัดเน็ต) — ปุ่ม "พิมพ์ไม่สำเร็จ" ถามถี่ได้
-  getPrintersWithFails: () => sb(`printers?select=id,branch_id,description&description=like.*%22failed%22:%5B%7B*&order=id.asc`),
+  // bid = เฉพาะเครื่องของสาขานั้น + เครื่อง "ทุกสาขา" (กติกาเดียวกับ printersAt) — จอขายถามทุก 6 วิ
+  // เดิมไม่กรอง เครื่องขายสาขาอื่นดาวน์โหลดรายการค้างของ River (~15 KB) ทุกรอบไปทิ้ง
+  getPrintersWithFails: (bid) => sb(`printers?select=id,branch_id,description&description=like.*%22failed%22:%5B%7B*${bid!=null&&bid!==""?`&or=(branch_id.is.null,branch_id.eq.${+bid})`:""}&order=id.asc`),
+  // งานรูป (pj) ที่ฝากไว้ ยังค้างอยู่ในแถวไหม — ได้แค่เลข id (ไม่ดึงรูป) · ว่าง = ตัวพิมพ์รับไปแล้ว
+  printJobPending: (ids, at) => sb(`printers?select=id&id=in.(${(ids||[]).map(Number).filter(x=>x>0).join(",")})&description=like.*%22pj%22:%7B%22at%22:${+at},*`),
   addPrinter: (d) => sb("printers", {method:"POST", body:JSON.stringify(d)}),
   updatePrinter: (id,d) => sb(`printers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deletePrinter: (id) => sb(`printers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
@@ -1859,6 +1863,9 @@ const splitEvenly=(total,n)=>{
 // กติกาเดียวกับที่ print-agent.js ใช้เลือกเครื่องของตัวเอง — ต้องตรงกัน
 // ไม่งั้นในจอเห็นเครื่องของสาขาอื่น แต่กดสั่งพิมพ์แล้วไม่มีตัวไหนรับ
 const printersAt=(list,bid)=>(list||[]).filter(p=>p.branch_id==null||+p.branch_id===+bid);
+// สาขาของเครื่องพิมพ์ตอนกดบันทึก — เพิ่มใหม่ = สาขาที่เปิดอยู่เท่านั้น (ห้าม null "ทุกสาขา": ตัวพิมพ์ทุกสาขาจะยิงไป IP นั้น)
+// แก้ไข = ตามที่เลือก (แถวเก่าที่เป็น null คงไว้ได้ ไม่บังคับย้าย)
+const printerSaveBranch=(editing,formBid,curBid)=>editing?(formBid||null):((+curBid)||null);
 // ใบครัวที่พิมพ์ไม่ออก — ตัวพิมพ์บันทึกไว้ใน description.failed (print-agent.js)
 // ระบบไม่ลองพิมพ์ใหม่เองแล้ว (เจ้าของสั่ง 8 ก.ย. 69) พนักงานต้องเห็นแล้วกดเอง
 // ถ้าไม่เอามาแสดง ใบที่ไม่ออกจะเงียบหายไปเลย ครัวไม่รู้ ลูกค้ารอ
@@ -1948,6 +1955,59 @@ function agentHealth(printers,branchId){
   if(!seen)return{state:"unknown",seen:0,ver:null,ageSec:null};        // never heard from (old agent / never ran)
   const ageSec=Math.round((Date.now()-seen)/1000);
   return{state:ageSec>120?"down":"ok",seen,ver,ageSec};                // >2min silence = treat as down
+}
+// ── ใบครัวที่ไม่มีเครื่องไหนรับ (orphan) ───────────────────────────────────
+// ตัวพิมพ์เขียน description.orphan={at,names,n} เมื่อเจอรายการที่ไม่มีเครื่องรับ (printItems ใน print-agent.js)
+// เดิมแอปไม่เคยอ่าน ⟹ หมวดใหม่ที่ยังไม่ได้ติ๊กให้เครื่องไหน ใบไม่ออกเงียบ ครัวไม่รู้ ลูกค้าต้องตามเอง
+// รับได้ทั้งแบบก้อนเดียวและแบบรายการ (เผื่อตัวพิมพ์รุ่นหลังเก็บหลายครั้ง)
+function printOrphansRecent(printers,branchId,now,winMs){
+  const names=[];let at=0;
+  for(const p of printersAt(printers,branchId)){
+    let d={};try{d=JSON.parse((p&&p.description)||"{}");}catch{}
+    const list=Array.isArray(d.orphan)?d.orphan:(d.orphan?[d.orphan]:[]);
+    for(const o of list){
+      const t=o&&typeof o==="object"?(+o.at||0):0;
+      if(!t||now-t>=winMs)continue;
+      if(t>at)at=t;
+      for(const n of (Array.isArray(o.names)?o.names:[]))if(n!=null&&String(n).trim()&&!names.includes(String(n).trim()))names.push(String(n).trim());
+    }
+  }
+  return at?{at,names}:null;
+}
+// รายการที่กำลังส่งเข้าครัวแต่ไม่มีเครื่องไหนรับ — กติกาเดียวกับ orphan ของตัวพิมพ์ (เครื่องของสาขา · เปิดใช้ · มี IP · ไม่ใช่บลูทูธ)
+// สาขาที่ไม่มีเครื่องพิมพ์เลย = ไม่เตือน (ยังไม่ได้ใช้ตัวพิมพ์ ไม่ใช่ตั้งหมวดตกหล่น)
+function itemsWithoutPrinter(items,printers,branchId){
+  const usable=printersAt(printers,branchId).filter(p=>p&&p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
+  if(!usable.length)return [];
+  return (items||[]).filter(it=>it&&!usable.some(p=>printerHandles(p,it)));
+}
+// ── ตัวพิมพ์สองเครื่องทำงานพร้อมกัน ───────────────────────────────────────
+// ตัวพิมพ์ของสาขาเต้นสัญญาณชีพลงแถวเดียวกัน (เครื่องพิมพ์ id ต่ำสุด) พร้อมชื่อเครื่องที่รันอยู่ (agentDev)
+// สองเครื่องรันพร้อมกัน (เปิดมือถือสำรองโดยไม่ปิดเครื่องหลัก) = ใบครัวออกซ้ำทุกใบ เพราะต่างเครื่องต่างจำว่าพิมพ์อะไรไปแล้ว
+// เห็นได้จาก agentDev ที่สลับไปกลับ A→B→A · เปลี่ยนครั้งเดียว (A→B) = สลับเครื่อง/รีสตาร์ท ไม่นับ
+// เรียงตามเวลาสัญญาณ (agentSeen) — ข้อมูลค้างจากรอบดึง 60 วิ (เก่ากว่าที่เคยเห็น) ไม่นับ ไม่งั้นขึ้นแดงหลอก
+const AGENT_FIGHT_SHOW_MS=3*60*1000;   // ขึ้นแดงเมื่อเห็นค่าสลับกลับภายใน 3 นาทีล่าสุด
+const AGENT_FIGHT_GAP_MS=5*60*1000;    // A หายไปแล้วกลับมาภายใน 5 นาที = รันอยู่ทั้งคู่ (ไม่ใช่สลับไปแล้วสลับกลับทีหลัง)
+function trackAgentDev(hist,rows,now){
+  for(const p of rows||[]){
+    if(!p||p.id==null)continue;
+    let d={};try{d=JSON.parse(p.description||"{}");}catch{}
+    if(d.agentDev==null||d.agentDev==="")continue;
+    const dev=String(d.agentDev),seen=+d.agentSeen||0;
+    const h=hist.get(+p.id)||[];
+    const last=h[h.length-1];
+    if(last&&seen<=last.seen)continue;   // เก่ากว่า/ซ้ำกับที่เคยเห็น
+    if(last&&last.dev===dev){last.seen=seen;last.lastAt=now;continue;}
+    h.push({dev,seen,at:now,lastAt:now});
+    hist.set(+p.id,h.slice(-6));
+  }
+  return hist;
+}
+function agentFight(hist,now){
+  for(const h of hist.values())
+    for(let i=h.length-1;i>=2;i--)
+      if(h[i].dev===h[i-2].dev&&h[i].at-h[i-2].lastAt<AGENT_FIGHT_GAP_MS&&now-h[i].at<AGENT_FIGHT_SHOW_MS)return true;
+  return false;
 }
 const menuCost=(menu,ings)=>(menu.ingredients||[]).reduce((s,x)=>{const i=ings.find(g=>g.id===x.ingredientId);if(!i)return s;const ppg=(+i.avg_price_per_gram>0?+i.avg_price_per_gram:+i.price_per_gram)||0;return s+ppg*x.amountGram;},0);
 // ── สต๊อกของสาขา ────────────────────────────────────────────────────────────
@@ -15230,7 +15290,9 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   }
   const bF0={name:"",type:"branch",active:true,line_url:"",address:"",map_url:"",open_hours:"",phone:""};
   const[branchForm,setBranchForm]=useState(bF0);const[editBID,setEditBID]=useState(null);const[showBranch,setShowBranch]=useState(false);
-  const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
+  // เครื่องใหม่ผูกสาขาที่เปิดอยู่เสมอ — เดิมค่าเริ่มต้นเป็น "ทุกสาขา" (null) ลืมเลือกทีเดียว ตัวพิมพ์ทุกสาขาจะยิงใบไปที่ IP นั้น
+  // (สองร้านใช้วง 192.168.1.x เหมือนกัน ใบออกผิดร้านหรือไม่ออกทั้งสองฝั่ง) · แถวเก่าที่เป็น null ยังแก้ไข/แสดงได้เหมือนเดิม
+  const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:(currentBranch&&currentBranch.id)||null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
   const[testResults,setTestResults]=useState({});const[btScanning,setBtScanning]=useState(false);
   const[slipSyncing,setSlipSyncing]=useState(null); // null | {done,total,ok,fail}
@@ -15360,9 +15422,11 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   async function savePrinter(){
     const isBT=pForm.conn==="bluetooth";
     if(!pForm.name||(isBT?!pForm.btName:!pForm.ip))return;
+    const bid=printerSaveBranch(editPID,pForm.branch_id,currentBranch&&currentBranch.id);
+    if(!editPID&&!bid){notifyDlg("ยังไม่รู้ว่าเครื่องนี้เป็นของสาขาไหน — เปิดสาขาที่จะใช้เครื่องนี้ก่อน แล้วค่อยเพิ่มเครื่องพิมพ์");return;}
     setPSaving(true);
     try{
-      const d={name:pForm.name,ip:isBT?"bluetooth":pForm.ip,port:isBT?0:+pForm.port||9100,type:pForm.type,branch_id:pForm.branch_id||null,active:true,description:isBT?JSON.stringify({c:"bt",n:pForm.btName}):pForm.description};
+      const d={name:pForm.name,ip:isBT?"bluetooth":pForm.ip,port:isBT?0:+pForm.port||9100,type:pForm.type,branch_id:bid,active:true,description:isBT?JSON.stringify({c:"bt",n:pForm.btName}):pForm.description};
       if(editPID)await api.updatePrinter(editPID,d);else await api.addPrinter(d);
       await reloadPrinters();setPForm(pF0);setEditPID(null);
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -15502,7 +15566,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
                 {[{v:"ip",label:"🌐 IP Network"},{v:"bluetooth",label:"📶 Bluetooth"}].map(o=><button key={o.v} onClick={()=>setPForm(f=>({...f,conn:o.v}))} style={{flex:1,padding:"9px 0",border:"none",background:pForm.conn===o.v?`linear-gradient(135deg,${C.brand},${C.brandDark})`:C.white,color:pForm.conn===o.v?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer",transition:"all .15s"}}>{o.label}</button>)}
               </div>
             </div>
-                        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{(branches||[]).filter(b=>+b.id===+((currentBranch&&currentBranch.id)||0)).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+                        <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={editPID?(pForm.branch_id||""):((currentBranch&&currentBranch.id)||"")} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}>{editPID&&pForm.branch_id==null&&<option value="">ทุกสาขา (แถวเดิม)</option>}{(branches||[]).filter(b=>+b.id===+((currentBranch&&currentBranch.id)||0)).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
           </div>
           {/* Row 2: IP fields OR BT scan */}
           {pForm.conn==="ip"?<div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:14,marginBottom:14,alignItems:"flex-end"}}>
@@ -18523,6 +18587,16 @@ const drawerPrinters=(printers)=>{
   const flagged=usable.filter(p=>{try{return JSON.parse(p.description||"{}").dw===1;}catch{return false;}});
   return flagged.length?flagged:getReceiptPrinters(usable);
 };
+// ลิ้นชักคู่กับใบเสร็จ (บิลเงินสด): withRcpt = เครื่องที่ได้ทั้งใบเสร็จและลิ้นชัก → ต้องเขียนรวมในครั้งเดียว
+// alone = เครื่องที่ต่อลิ้นชักแต่ไม่ได้รับใบเสร็จ → สั่งแยกที่แถวของมันได้เลย (ไม่มีงานอื่นของบิลนี้ไปแข่ง)
+function receiptKickPlan(rcps,drawers){
+  const r=new Set((rcps||[]).map(p=>+p.id));
+  const withRcpt=new Set(),alone=[];
+  for(const p of drawers||[]){if(r.has(+p.id))withRcpt.add(+p.id);else alone.push(p);}
+  return{withRcpt,alone};
+}
+// เติมคำสั่งเปิดลิ้นชักลงคำสั่งที่กำลังจะเขียนอยู่แล้ว (ใช้ตัวเขียนตัวเดิม — งานที่เพิ่งใส่ในก้อนนี้ยังสดอยู่ ไม่ถูกลบ)
+const withKick=(desc,dk)=>dk?cmdDesc({description:desc},"dk",dk):desc;
 async function kickCashDrawer(printers,branchId){
   let prs=printers;
   try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
@@ -18736,9 +18810,15 @@ function posToast(msg,type="ok",ms=3200){
 // no override on iOS). So ONE device on the LAN — an Android phone in Chrome with
 // "insecure content" allowed — is flagged as the PRINT STATION: it auto-prints
 // every new order and is the only device that talks to the printer. The iPads just
-// take orders; the station prints them within a few seconds. Flag is per-device.
-function isPrintStation(){try{return localStorage.getItem("fc_print_station")==="1";}catch{return false;}}
-function setPrintStation(on){try{localStorage.setItem("fc_print_station",on?"1":"0");}catch{}}
+// take orders; the station prints them within a few seconds. Flag is per-device AND per-branch.
+// จำแยกตามสาขา (fc_print_station_<สาขา>) — เดิมคีย์เดียวทั้งเครื่อง: iPad ที่เคยเป็นสถานีพิมพ์ของ River
+// ยกไปใช้สาขาอื่นแล้วยังพิมพ์เองต่อ คู่กับตัวพิมพ์ของสาขานั้น = ใบครัวออกซ้ำสองใบ
+// คีย์เก่าไม่ได้บอกว่าเป็นของสาขาไหน ⟹ ไม่เอามาใช้ (ห้ามเดา) — อ่านครั้งเดียวเพื่อบอกพนักงาน แล้วลบทิ้ง
+const PRINT_STATION_OLD_KEY="fc_print_station";
+const printStationKey=(bid)=>"fc_print_station_"+(+bid||0);
+function isPrintStation(bid){try{return bid!=null&&localStorage.getItem(printStationKey(bid))==="1";}catch{return false;}}
+function setPrintStation(bid,on){try{if(bid!=null)localStorage.setItem(printStationKey(bid),on?"1":"0");}catch{}}
+function takeOldPrintStation(){try{const v=localStorage.getItem(PRINT_STATION_OLD_KEY);if(v==null)return false;localStorage.removeItem(PRINT_STATION_OLD_KEY);return v==="1";}catch{return false;}}
 // Print kitchen slips. Each item routes to its resolved printer; items sharing a
 // printer print as one batch. IP printers get ESC/POS sent DIRECTLY (no browser
 // popup). Bluetooth uses Web-BT. Only items with NO configured printer fall back
@@ -19745,7 +19825,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   }
 
   // พิมพ์ใบเสร็จ — iPad/https พิมพ์ผ่านตัวพิมพ์ (agent) เป็นรูปภาพไทยคมชัด · เดสก์ท็อป/LAN ใช้หน้าต่างพิมพ์ปกติ
-  const smartPrintReceipt=(order,tableNum,paid)=>printBillReceipt(order,tableNum,{branch,posSettings,printers,paid});
+  // kick=true (บิลเงินสด) = เปิดลิ้นชักไปพร้อมใบเสร็จในการเขียนครั้งเดียว
+  const smartPrintReceipt=(order,tableNum,paid,kick)=>printBillReceipt(order,tableNum,{branch,posSettings,printers,paid,kick:!!kick});
   // พิมพ์ใบแจ้งยอดพร้อม QR ท้ายใบ ให้ลูกค้าสแกนจ่าย — สั่งจากป็อปอัพเช็คบิล
   // ใช้ยอด "สด" ชุดเดียวกับที่ป็อปอัพแสดงอยู่ ไม่ใช่ค่าจากแถวบิลที่ยังไม่ปิด
   // (แถวที่ยังไม่ปิดเก็บแค่ยอดรวมดิบ ไม่มีค่าบริการ/VAT — เคยพิมพ์ QR ยอดน้อยกว่าที่ต้องจ่ายมาแล้ว)
@@ -19816,7 +19897,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         onDone();onClose();setSavingGuard(false);return;
       }
       // NOTE: ไม่พิมพ์ที่นี่ — "ตัวพิมพ์ (agent)" ที่ร้าน poll ออเดอร์แล้วพิมพ์รายการใหม่เอง (จุดเดียว กันพิมพ์ซ้ำ + ใช้ได้กับ iPad)
-      posToast("✅ บันทึกรายการแล้ว — ส่งให้ตัวพิมพ์แล้ว (ใบไม่ออกจะขึ้นเตือนที่โต๊ะ)","ok");
+      // รายการที่ไม่มีเครื่องไหนรับ ใบจะไม่ออกเลย (ตัวพิมพ์ไม่นับเป็น "พิมพ์ไม่สำเร็จ") — ต้องบอกตอนนี้ ไม่ใช่รอครัวไม่ได้ใบ
+      const noPr=itemsWithoutPrinter(toSend,printers,branch.id);
+      if(noPr.length)posToast(`⚠️ บันทึกแล้ว แต่ไม่มีเครื่องพิมพ์รับ: ${[...new Set(noPr.map(i=>i.name))].join(", ")}\nใบครัวรายการนี้จะไม่ออก — บอกครัวเอง แล้วตั้งหมวดใน 🖨 กำหนดการพิมพ์`,"err",9000);
+      else posToast("✅ บันทึกรายการแล้ว — ส่งให้ตัวพิมพ์แล้ว (ใบไม่ออกจะขึ้นเตือนที่โต๊ะ)","ok");
       onDone();onClose();
     }catch(e){
       // ของหมดระหว่างที่ยังไม่ได้กดส่ง — ดึงเมนูใหม่ให้การ์ดขึ้น "ของหมด" แล้วบอกชื่อเมนู
@@ -19898,11 +19982,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         else{notifyDlg("⚠️ มีการเพิ่ม/แก้รายการของโต๊ะนี้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — ยังไม่ได้ตัดเงิน\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อตรวจสอบยอดล่าสุดก่อนชำระเงิน");setSavingGuard(false);onDone();onClose();return;}
       }
       verRef.current=row.updated_at;
+      // เงินสด = ต้องเปิดลิ้นชักให้ทอนเงิน — ส่งไปพร้อมใบเสร็จในการเขียนครั้งเดียว (cashPart>0 = kick)
+      // เดิมยิงลิ้นชักกับใบเสร็จแยกกันพร้อมกัน ต่างคนต่างเขียนทับแถวเครื่องแคชเชียร์ → ลิ้นชักไม่เด้ง/ใบเสร็จหายเงียบ
+      // เริ่มตรงนี้ (ก่อนลงบันทึกเงินสด) ลิ้นชักจึงเด้งเร็วเหมือนเดิม · ผลใบเสร็จรอทีหลัง · ลิ้นชักพลาดไม่ทำให้ปิดบิลล้ม
+      // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
+      // passing the combined figure would deduct the promotion twice on the printed receipt.
+      const _rcpt=smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:pmCol,payments:paymentsCol,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true,cashPart>0);
       // record cash movement if cash payment — skip if one already exists for this order (the
       // reconcile path above can re-enter after a lost response; a duplicate would inflate the
       // shift's expected cash).
-      // เงินสด = ต้องเปิดลิ้นชักให้ทอนเงิน · ยิงแบบไม่รอผลและกลืน error เด็ดขาด (ปิดบิลสำคัญกว่าลิ้นชัก)
-      if(cashPart>0)kickCashDrawer(printers,branch?.id).catch(()=>{});
       if(cashPart>0&&shift){
         try{
           const existingMoves=await api.getCashMovements(shift.id).catch(()=>[]);
@@ -19910,9 +19998,6 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           if(!already)await api.addCashMovement({shift_id:_pls.id,branch_id:branch.id,type:"sale",amount:cashPart,reason:`ขายโต๊ะ ${table.table_number}`+(payParts?" (แบ่งจ่าย)":""),order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
         }catch(err){console.error("บันทึก cash movement ไม่สำเร็จ:",err);}
       }
-      // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
-      // passing the combined figure would deduct the promotion twice on the printed receipt.
-      const _rcpt=smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:pmCol,payments:paymentsCol,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true);
       // บอกเงินทอนก่อนงานอื่นทั้งหมด — ลิ้นชักเพิ่งเปิด เงินอยู่ในมือ ต้องรู้ตอนนี้ว่าทอนเท่าไร
       // (ใบเสร็จส่งไปตัวพิมพ์แล้ว รอผลทีหลัง — พลาดก็ยังขึ้นเตือนเหมือนเดิม ไม่กลืนเงียบ)
       if(cashPart>0&&typeof onCashChange==="function"){
@@ -21172,11 +21257,12 @@ async function printTableQR(table,branch,printers=[],onPrinted,onUrl){
   // 1) If a Bluetooth printer is configured for this branch, print the QR slip
   //    DIRECTLY via ESC/POS — no browser dialog, straight out the connected printer.
   const btP=(prs||[]).find(p=>p&&p.active!==false&&(p.branch_id==null||+p.branch_id===+branch.id)&&getPConn(p).type==="bluetooth");
+  // คืนค่า: false = ไม่ได้ส่ง · true = ส่งแล้ว · {ids,at} = ฝากตัวพิมพ์ไว้ (ใช้รอให้ตัวพิมพ์รับก่อนส่งโต๊ะถัดไปใน "พิมพ์ทั้งหมด")
   if(btP){
     try{
       await btPrint(b64Bytes(await buildTableQRB64(table,branch,url)),getPConn(btP).btName);
       await stamp();
-      return;
+      return true;
     }catch(e){
       console.error("BT QR print failed — falling back to print window",e);
       // fall through to the browser-window path below
@@ -21193,21 +21279,35 @@ async function printTableQR(table,branch,printers=[],onPrinted,onUrl){
       await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64,what:"QR โต๊ะ",table:String(table.table_number||"")})})));
       posToast("🔳 ส่งคำสั่งพิมพ์ QR โต๊ะ "+table.table_number+" ไปเครื่องพิมพ์ใบเสร็จแล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ","ok");
       await stamp();
-      return;
-    }catch(e){alert("ส่งคำสั่งพิมพ์ QR ไม่สำเร็จ: "+(e&&e.message||e));return;}
+      return {ids:rcps.map(p=>+p.id),at};
+    }catch(e){alert("ส่งคำสั่งพิมพ์ QR ไม่สำเร็จ: "+(e&&e.message||e));return false;}
   }
   // ไม่มีเครื่องพิมพ์ใบเสร็จที่ติ๊กไว้ + อยู่บน https (iPad) → เตือนให้ไปติ๊กก่อน (เปิดหน้าต่างพิมพ์ก็ส่งเข้าเครื่อง LAN ไม่ได้)
   if(typeof location!=="undefined"&&location.protocol==="https:"){
     posToast("⚠️ ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ไปที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์ → ติ๊ก \"🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ\"","warn");
-    return;
+    return false;
   }
   // 3) Fallback: เดสก์ท็อปที่ไม่มี agent → เปิดหน้าต่างพิมพ์ของเบราว์เซอร์
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(url)}&margin=10`;
   const w=openPrintWindow(340,420);
-  if(!w)return;
+  if(!w)return false;
   w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR โต๊ะ ${table.table_number}</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;text-align:center;padding:20px;margin:0}h2{font-size:22px;margin:8px 0}p{color:#64748b;font-size:13px;margin:4px 0}.box{border:2px dashed #e2e8f0;border-radius:16px;padding:20px;display:inline-block}@media print{@page{margin:0;size:auto}}</style></head><body><div class="box"><p style="font-size:11px;font-weight:700;letter-spacing:2px;color:#94a3b8;text-transform:uppercase">${branch.name}</p><h2>โต๊ะ ${table.table_number}</h2>${table.label?`<p>${table.label}</p>`:""}<img src="${qrUrl}" style="width:200px;height:200px;margin:12px 0;border-radius:8px"/><p style="font-size:12px">สแกนเพื่อดูเมนูและสั่งอาหาร</p><p style="font-size:11px;color:#94a3b8">Scan to order</p></div><br/><script>window.onload=()=>setTimeout(()=>window.print(),500)<\/script></body></html>`);
   w.document.close();addPrintClose(w);
   await stamp();
+  return true;
+}
+// รอให้ตัวพิมพ์รับงานรูป (pj) ที่เพิ่งฝากไว้ — งานหายจากแถว = ตัวพิมพ์รับไปแล้ว (ออก/ไม่ออก ดูที่ปุ่มพิมพ์ไม่สำเร็จ)
+// ใช้กับ "พิมพ์ทั้งหมด" เท่านั้น ระหว่างที่คนกดรออยู่: ถามแบบเบา (ได้แค่เลข id) ทุก ~1.5 วิ ไม่เกิน ~20 วิต่อโต๊ะ แล้วเลิก
+// — ไม่ใช่รอบถามถาวร · งานยังค้าง = ไม่ส่งโต๊ะถัดไป (ช่องคำสั่งมีช่องเดียว ส่งต่อ = ทับใบที่ยังไม่ออก)
+async function waitPrintJobTaken(ids,at,maxMs=20000){
+  const list=(ids||[]).map(Number).filter(x=>x>0);
+  if(!list.length||!at)return true;
+  const t0=Date.now();
+  while(Date.now()-t0<maxMs){
+    await new Promise(r=>setTimeout(r,1500));
+    try{const r=await api.printJobPending(list,at);if(Array.isArray(r)&&!r.length)return true;}catch{}
+  }
+  return false;
 }
 function POSQRPage({branch,tables,onTablesChanged}){
   const baseUrl=publicBaseUrl();
@@ -21221,6 +21321,26 @@ function POSQRPage({branch,tables,onTablesChanged}){
     try{await api.rotateTableToken(t.id);if(onTablesChanged)await onTablesChanged();}
     catch(e){showErr("หมุน QR ไม่สำเร็จ",e);}
     setRotating(false);
+  }
+  // "พิมพ์ทั้งหมด": เครื่องพิมพ์มีช่องคำสั่งช่องเดียว — เดิมยิงทุกโต๊ะพร้อมกัน ใบหลังทับใบก่อน ออกจริง 1-2 ใบ
+  // แต่ทุกโต๊ะถูกติดธงว่าพิมพ์แล้ว ⟹ ส่งทีละโต๊ะ และส่งโต๊ะถัดไปเมื่อตัวพิมพ์รับใบก่อนไปแล้วเท่านั้น
+  // ตัวพิมพ์ไม่รับ/ส่งไม่ได้ = หยุด โต๊ะที่ยังไม่ได้ส่งไม่ถูกติดธง และบอกบนจอว่าเหลือกี่โต๊ะ
+  const[printingAll,setPrintingAll]=useState(null);   // null | {done,total}
+  async function printAll(){
+    if(printingAll||!tables.length)return;
+    const list=tables.slice();let done=0;
+    setPrintingAll({done:0,total:list.length});
+    try{
+      for(const t of list){
+        const r=await printTableQR(t,branch);
+        if(!r)break;
+        done++;setPrintingAll({done,total:list.length});
+        if(typeof r==="object"&&done<list.length&&!(await waitPrintJobTaken(r.ids,r.at)))break;
+      }
+    }finally{setPrintingAll(null);}
+    const left=list.length-done;
+    if(left>0)notifyDlg(`ส่ง QR แล้ว ${done} โต๊ะ · ยังไม่ได้ส่ง ${left} โต๊ะ (ไม่ได้ติดธงว่าพิมพ์แล้ว)\n\nตัวพิมพ์ยังไม่รับใบก่อนหน้า หรือส่งไม่สำเร็จ — เช็คเครื่องพิมพ์ใบเสร็จ แล้วกด 🖨 พิมพ์ ทีละโต๊ะที่เหลือ`);
+    else if(done)posToast(`✅ ส่ง QR ครบ ${done} โต๊ะแล้ว`,"ok");
   }
   async function rotateAll(){
     if(!await confirmDlg({title:"หมุน QR ทุกโต๊ะ",message:`สร้าง QR ใหม่สำหรับทุกโต๊ะของ "${branch.name}"?\n\nQR เก่าทั้งหมดจะใช้งานไม่ได้ — ต้องพิมพ์ใหม่ทั้งหมด`,confirmLabel:"🔄 หมุนทั้งหมด",danger:true}))return;
@@ -21236,7 +21356,7 @@ function POSQRPage({branch,tables,onTablesChanged}){
       </div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
         <Btn v="ghost" s={{fontSize:12}} onClick={rotateAll} disabled={rotating} icon={I.refresh}>หมุน QR ทั้งหมด</Btn>
-        <Btn v="ghost" s={{fontSize:12}} onClick={()=>{tables.forEach(t=>printTableQR(t,branch));}} icon={I.print}>พิมพ์ทั้งหมด</Btn>
+        <Btn v="ghost" s={{fontSize:12}} onClick={printAll} disabled={!!printingAll} icon={I.print}>{printingAll?`กำลังส่ง ${printingAll.done}/${printingAll.total}…`:"พิมพ์ทั้งหมด"}</Btn>
       </div>
     </div>
     {grouped.map(g=><div key={g.zone||"no-zone"} style={{marginBottom:20}}>
@@ -21248,7 +21368,7 @@ function POSQRPage({branch,tables,onTablesChanged}){
           <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><QRImg url={url} size={110}/></div>
           <div style={{display:"flex",gap:4,marginBottom:4}}>
             <button onClick={()=>window.open(url,"_blank")} style={{flex:1,padding:"5px 0",border:`1px solid ${C.line}`,borderRadius:7,cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink3,background:C.white}}>ทดสอบ</button>
-            <button onClick={()=>printTableQR(t,branch)} style={{flex:1,padding:"5px 0",border:"none",borderRadius:7,cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,background:C.brand}}>🖨 พิมพ์</button>
+            <button onClick={()=>printTableQR(t,branch)} disabled={!!printingAll} style={{flex:1,padding:"5px 0",border:"none",borderRadius:7,cursor:printingAll?"not-allowed":"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,background:C.brand,opacity:printingAll?.6:1}}>🖨 พิมพ์</button>
           </div>
           <button onClick={()=>rotateOne(t)} disabled={rotating} title="สร้าง QR ใหม่ — QR เก่าใช้ไม่ได้ทันที" style={{width:"100%",padding:"4px 0",border:`1px dashed ${C.line}`,borderRadius:7,cursor:rotating?"not-allowed":"pointer",fontSize:10,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.ink3,background:C.bg,opacity:rotating?.6:1}}>🔄 หมุน QR ใหม่</button>
         </div>;})}
@@ -23658,7 +23778,8 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
   // ถ้าเลือกสาขาอื่นได้ จะสร้างเสร็จแล้วหายไปจากจอทันที หาไม่เจอว่าไปอยู่ไหน
   const branchOpts=(branches||[]).filter(b=>+b.id===+((currentBranch&&currentBranch.id)||0));
   const isAdmin=hasPerm(currentUser,"settings");
-  const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:null,active:true,conn:"ip",btName:""};
+  // เครื่องใหม่ผูกสาขาที่เปิดอยู่เสมอ (เดิมค่าเริ่มต้น "ทุกสาขา" — ลืมเลือก = ตัวพิมพ์ทุกสาขายิงใบไป IP นี้)
+  const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:(currentBranch&&currentBranch.id)||null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
   const[testResults,setTestResults]=useState({});const[btScanning,setBtScanning]=useState(false);
   // Category routing state
@@ -23790,9 +23911,11 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
   async function savePrinter(){
     const isBT=pForm.conn==="bluetooth";
     if(!pForm.name||(isBT?!pForm.btName:!pForm.ip))return;
+    const bid=printerSaveBranch(editPID,pForm.branch_id,currentBranch&&currentBranch.id);
+    if(!editPID&&!bid){notifyDlg("ยังไม่รู้ว่าเครื่องนี้เป็นของสาขาไหน — เปิดสาขาที่จะใช้เครื่องนี้ก่อน แล้วค่อยเพิ่มเครื่องพิมพ์");return;}
     setPSaving(true);
     try{
-      const d={name:pForm.name,ip:isBT?"bluetooth":pForm.ip,port:isBT?0:+pForm.port||9100,type:pForm.type,branch_id:pForm.branch_id||null,active:true,description:isBT?JSON.stringify({c:"bt",n:pForm.btName}):pForm.description};
+      const d={name:pForm.name,ip:isBT?"bluetooth":pForm.ip,port:isBT?0:+pForm.port||9100,type:pForm.type,branch_id:bid,active:true,description:isBT?JSON.stringify({c:"bt",n:pForm.btName}):pForm.description};
       if(editPID)await api.updatePrinter(editPID,d);else await api.addPrinter(d);
       await reloadPrinters();setPForm(pF0);setEditPID(null);
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -23829,7 +23952,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
               {[{v:"ip",label:"🌐 IP"},{v:"bluetooth",label:"📶 BT"}].map(o=><button key={o.v} onClick={()=>setPForm(f=>({...f,conn:o.v}))} style={{flex:1,padding:"9px 0",border:"none",background:pForm.conn===o.v?`linear-gradient(135deg,${C.brand},${C.brandDark})`:C.white,color:pForm.conn===o.v?C.white:C.ink3,fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,cursor:"pointer"}}>{o.label}</button>)}
             </div>
           </div>
-                    <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={pForm.branch_id||""} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}><option value="">ทุกสาขา</option>{branchOpts.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+                    <div><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>สาขา</label><select value={editPID?(pForm.branch_id||""):((currentBranch&&currentBranch.id)||"")} onChange={e=>setPForm(f=>({...f,branch_id:e.target.value?+e.target.value:null}))} style={{...iS,appearance:"none"}}>{editPID&&pForm.branch_id==null&&<option value="">ทุกสาขา (แถวเดิม)</option>}{branchOpts.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
         </div>
         {pForm.conn==="ip"?<div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:12,marginBottom:12,alignItems:"flex-end"}}>
           <Inp label="IP Address *" value={pForm.ip} onChange={e=>setPForm(f=>({...f,ip:e.target.value}))} placeholder="192.168.1.100"/>
@@ -24015,7 +24138,8 @@ const printRetryWaiting=(it,now)=>!!(it&&it.r&&now-(+it.r||0)<PRINT_RETRY_TTL);
 const samePrintFail=(a,b)=>!!(a&&b&&(b.id?a.id===b.id:(!a.id&&a.at===b.at&&String(a.orderId)===String(b.orderId))));
 // ── แถบสถานะการพิมพ์บนจอขาย ─────────────────────────────────────────────
 // เหตุจริง 10 ต.ค. 69 (The River): ใบครัว/ใบเสร็จไม่ออกครึ่งวัน แต่จอขายไม่บอกอะไร ทุกปุ่มขึ้น ✅
-// ขึ้นเฉพาะตอนมีปัญหา (ปกติไม่กินที่จอ): ตัวพิมพ์ไม่ตอบ · เครื่องพิมพ์ออฟไลน์ · ใบไม่ออกใน 20 นาทีล่าสุด
+// ขึ้นเฉพาะตอนมีปัญหา (ปกติไม่กินที่จอ): ตัวพิมพ์ไม่ตอบ/ไม่เคยเต้น · ตัวพิมพ์ 2 เครื่องชนกัน · เครื่องพิมพ์ออฟไลน์
+// · ใบที่ไม่มีเครื่องรับ (orphan) · ใบไม่ออกใน 20 นาทีล่าสุด — ทุกแถวเป็นแดง
 // ค่า on ของเครื่องเชื่อได้เฉพาะตอนตัวพิมพ์ยังหายใจ (agentSeen) — ตัวพิมพ์ดับ = ค่า on ค้างจากรอบสุดท้าย
 const PRINT_RECENT_MS=20*60*1000;
 function PrintHealthStrip({printers,failPrinters,branchId,onOpenFails}){
@@ -24024,6 +24148,9 @@ function PrintHealthStrip({printers,failPrinters,branchId,onOpenFails}){
   // รายชื่อเครื่องพิมพ์มาจากรอบดึง 60 วิ (หยุดตอนสลับแท็บ) — ตัดสินว่า "ตัวพิมพ์ไม่ตอบ" จากอายุสัญญาณ ณ ตอนที่ได้ข้อมูลมา
   // ไม่ใช่ ณ ตอนนี้ ไม่งั้นกลับมาจากแท็บอื่นแล้วขึ้นแดงหลอกจนกว่ารอบดึงจะมาถึง · ข้อมูลเก่าเกิน 2.5 นาที = ไม่พูดอะไรเรื่องเครื่อง
   const gotAt=useMemo(()=>Date.now(),[printers]);
+  // จำค่า agentDev ล่าสุดของแต่ละแถว — ใช้ข้อมูลที่แถบได้อยู่แล้ว (รอบ 60 วิ + รอบรายการค้าง 6 วิ) ไม่ถามฐานเพิ่ม
+  const devHistRef=useRef(new Map());
+  useMemo(()=>{trackAgentDev(devHistRef.current,printersAt([...(printers||[]),...(failPrinters||[])],branchId),Date.now());},[printers,failPrinters,branchId]);
   const now=Date.now();
   const all=printersAt(printers,branchId);
   const mine=all.filter(p=>p&&p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
@@ -24031,13 +24158,20 @@ function PrintHealthStrip({printers,failPrinters,branchId,onOpenFails}){
   const fresh=now-gotAt<150000;
   const hh=agentHealth(all,branchId);
   const h=!fresh||!hh.seen?{state:"unknown"}:{...hh,state:(gotAt-hh.seen)>120000?"down":"ok",ageSec:Math.round((now-hh.seen)/1000)};
+  // มีเครื่องพิมพ์แต่ไม่เคยได้สัญญาณจากตัวพิมพ์เลย (สาขาใหม่ยังไม่ได้ติดตั้ง/ไม่เคยเปิด) — เดิมเงียบ ทุกอย่างดูปกติ
+  const never=fresh&&!hh.seen;
   const off=h.state==="ok"?mine.filter(p=>{try{return JSON.parse(p.description||"{}").on===0;}catch{return false;}}):[];
+  const orph=printOrphansRecent(all,branchId,now,PRINT_RECENT_MS);
+  const fight=agentFight(devHistRef.current,now);
   const recent=printFailList(failPrinters).filter(f=>now-(+f.at||0)<PRINT_RECENT_MS);
   const last=recent[recent.length-1];
   const lastErr=last&&Array.isArray(last.errs)?last.errs[0]:null;
   const rows=[];
+  if(never)rows.push({c:C.red,bg:C.redLight,t:"⛔ ยังไม่เคยได้สัญญาณจากโปรแกรมตัวพิมพ์ของสาขานี้ — ใบครัว/ใบเสร็จจะไม่ออกเลย",s:"เปิดโปรแกรมตัวพิมพ์ที่มือถือของร้าน · ต่อ Wi-Fi ร้าน · เสียบชาร์จ แล้วรอสักครู่"});
   if(h.state==="down")rows.push({c:C.red,bg:C.redLight,t:`⛔ โปรแกรมตัวพิมพ์ที่ร้านไม่ตอบมา ${Math.max(1,Math.round((h.ageSec||0)/60))} นาที — ใบครัว/ใบเสร็จจะไม่ออกเลย`,s:"เช็คเครื่องที่รันตัวพิมพ์: เปิดอยู่ไหม · ต่อ Wi-Fi ร้าน · เสียบชาร์จ"});
+  if(fight)rows.push({c:C.red,bg:C.redLight,t:"⛔ มีตัวพิมพ์ 2 เครื่องทำงานพร้อมกัน — ใบครัวจะออกซ้ำ",s:"ปิดโปรแกรมตัวพิมพ์ให้เหลือเครื่องเดียว (เครื่องสำรองต้องปิดไว้)"});
   if(off.length)rows.push({c:C.red,bg:C.redLight,t:`🔴 เครื่องพิมพ์ ${off.map(p=>p.name).join(" · ")} ไม่ตอบ — ใบที่ส่งเข้าเครื่องนี้จะไม่ออก`,s:"เช็คไฟ · กระดาษ · สายแลน/Wi-Fi ของเครื่อง แล้วรอจุดเขียว"});
+  if(orph)rows.push({c:C.red,bg:C.redLight,t:`🔴 ใบครัวไม่ออก — ไม่มีเครื่องพิมพ์รับ: ${orph.names.length?orph.names.join(" · "):"บางรายการ"}`,s:"บอกครัวเอง แล้วติ๊กหมวดนี้ให้เครื่องพิมพ์ใน 🖨 → กำหนดการพิมพ์"});
   if(recent.length)rows.push({c:C.red,bg:C.redLight,t:`⚠️ ใบไม่ออก ${recent.reduce((s,f)=>s+printFailWeight(f),0)} ใบใน 20 นาทีล่าสุด${last&&Array.isArray(last.pnames)&&last.pnames.length?` (${last.pnames.join(" · ")})`:""}`,s:lastErr?printErrText(lastErr):"",click:true});
   if(!rows.length)return null;
   return <div style={{flexShrink:0}}>
@@ -24052,7 +24186,7 @@ function PrintFailModal({branchId,branch,posSettings,onClose,onChanged}){
   const[list,setList]=useState(null);
   const[now,setNow]=useState(()=>Date.now());
   // ถามทุก 4 วิระหว่างเปิดจอนี้ — เห็นทันทีว่าออกแล้ว (รายการหาย) หรือยังไม่ออก (ขึ้นให้กดใหม่)
-  const load=useCallback(async()=>{try{const r=await api.getPrintersWithFails();setList(printFailList(printersAt(r,branchId)));setNow(Date.now());}catch{}},[branchId]);
+  const load=useCallback(async()=>{try{const r=await api.getPrintersWithFails(branchId);setList(printFailList(printersAt(r,branchId)));setNow(Date.now());}catch{}},[branchId]);
   useEffect(()=>{load();const t=setInterval(()=>{if(!document.hidden)load();},4000);return()=>clearInterval(t);},[load]);
   async function retry(f,ks){
     try{
@@ -24181,7 +24315,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   const hasNewBuild=useNewBuild();   // มีเวอร์ชันใหม่รออยู่ไหม (ไม่รีโหลดเอง)
   const[failPrinters,setFailPrinters]=useState([]);
   const[showPrintFails,setShowPrintFails]=useState(false);
-  const loadFails=useCallback(async()=>{try{const r=await api.getPrintersWithFails();if(Array.isArray(r))setFailPrinters(printersAt(r,currentBranch.id));}catch{}},[currentBranch.id]);
+  const loadFails=useCallback(async()=>{try{const r=await api.getPrintersWithFails(currentBranch.id);if(Array.isArray(r))setFailPrinters(printersAt(r,currentBranch.id));}catch{}},[currentBranch.id]);
   useEffect(()=>{loadFails();const t=setInterval(()=>{if(!document.hidden)loadFails();},6000);return()=>clearInterval(t);},[loadFails]);
   // ปุ่มแดงนับเฉพาะของ 12 ชม.ล่าสุด · ของเก่ากว่านั้นแยกเป็นปุ่มเทา (ล้างทีเดียวได้ในแผง)
   // เดิมนับรวม รายการ 28 ก.ย. จึงทำปุ่มแดงติดตลอด 12 วัน — วันที่ใบไม่ออกจริงก็ไม่มีใครสังเกต
@@ -24203,7 +24337,10 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   const[showPrinters,setShowPrinters]=useState(false);
   const[showReceipt,setShowReceipt]=useState(false);
   const[showOrders,setShowOrders]=useState(false);   // today's-orders modal (re-added after the tab was replaced)
-  const[printStation,setPS]=useState(isPrintStation());   // is THIS device the print station?
+  const[printStation,setPS]=useState(()=>isPrintStation(currentBranch.id));   // is THIS device the print station (of THIS branch)?
+  useEffect(()=>{setPS(isPrintStation(currentBranch.id));},[currentBranch.id]);   // สลับสาขา = อ่านค่าของสาขานั้น
+  // เครื่องที่เคยเปิดโหมดสถานีพิมพ์แบบเก่า (ไม่ระบุสาขา) — ไม่เปิดให้เอง บอกครั้งเดียวว่าต้องไปเปิดใหม่ถ้ายังใช้
+  useEffect(()=>{if(takeOldPrintStation())posToast("ℹ️ เครื่องนี้เคยตั้งเป็นสถานีพิมพ์ — ตอนนี้แยกตามสาขาแล้ว ถ้ายังใช้อยู่ ไปเปิดใหม่ที่ 🖨 เครื่องพิมพ์","warn",9000);},[]);
   const timerRef=useRef(null);
   const canEdit=hasPerm(currentUser,"pos");
 
@@ -24215,7 +24352,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   // Only the designated print station auto-prints — and it prints EVERY new order
   // (staff + customer), since the iPads can't print themselves.
   function autoPrintNew(orders){
-    if(!isPrintStation())return;
+    if(!isPrintStation(currentBranch.id))return;
     // First pass after (re)becoming the station: record what's already open WITHOUT
     // printing, so a restart doesn't spew a reprint of every active order.
     if(!stationPrimedRef.current){
@@ -24487,8 +24624,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const[sDraw,setSDraw]=useState(false);           // ลิ้นชักเก็บเงินเสียบสาย RJ11 อยู่กับเครื่องนี้ (description.dw)
   const aliveRef=useRef(true);   // กันอัปเดต state หลังปิด modal (ระหว่างวนค้นหา 15 วินาที)
   useEffect(()=>()=>{aliveRef.current=false;},[]);
-  const[station,setStation]=useState(printStation||isPrintStation());
-  function toggleStation(){const v=!station;setStation(v);setPrintStation(v);onTogglePrintStation&&onTogglePrintStation(v);}
+  const[station,setStation]=useState(printStation||isPrintStation(currentBranch.id));
+  function toggleStation(){const v=!station;setStation(v);setPrintStation(currentBranch.id,v);onTogglePrintStation&&onTogglePrintStation(v);}
   async function load(){setLoading(true);try{const all=await api.getAllPrinters();if(aliveRef.current)setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}if(aliveRef.current)setLoading(false);}
   async function loadSilent(){try{const all=await api.getAllPrinters();if(aliveRef.current)setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}}
   async function findPrinters(){
@@ -24940,16 +25077,27 @@ function BillDetailCard({order,branch=null,cfg=null,onBack,onEdit=null,onVoid=nu
 
 // พิมพ์ใบเสร็จ — ใช้ร่วมกันทั้งจอโต๊ะและจอแก้บิลที่ปิดแล้ว (ใบเดียวกันเป๊ะ)
 // iPad/https พิมพ์ผ่านตัวพิมพ์ (agent) เป็นรูปภาพไทยคมชัด · เดสก์ท็อป/LAN ใช้หน้าต่างพิมพ์ปกติ
-async function printBillReceipt(order,tableNum,{branch,posSettings,printers=[],paid=true}){
+async function printBillReceipt(order,tableNum,{branch,posSettings,printers=[],paid=true,kick=false}){
   const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
   let prs=printers;   // ดึงเครื่องพิมพ์ล่าสุดจาก DB — กันค่าค้างหลังเพิ่งติ๊ก "เครื่องพิมพ์ใบเสร็จ"
   try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
   const rcps=isHttps?getReceiptPrinters(prs):[];
+  // kick = บิลเงินสด ต้องเปิดลิ้นชักด้วย · เครื่องเดียวกับใบเสร็จ = ไปในการเขียนครั้งเดียวกับใบเสร็จ
+  // (เดิมยิงสองงานพร้อมกัน ต่างคนต่างอ่าน-แก้-เขียนแถวเดียวกัน → ลิ้นชักไม่เด้งหรือใบเสร็จหายเงียบ)
+  // เครื่องลิ้นชักที่ไม่ได้รับใบเสร็จ = สั่งทันทีที่แถวของมันเอง (ไม่ชนใคร) · ปิดบิลสำคัญกว่าลิ้นชัก: กลืน error
+  const kp=receiptKickPlan(rcps,kick?drawerPrinters(prs):[]);
+  const dk=kp.alone.length||kp.withRcpt.size?{at:Date.now()}:null;
+  const kickAlone=(list)=>{if(dk&&list.length)Promise.all(list.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"dk",dk)}))).catch(()=>{});};
+  kickAlone(kp.alone);
   if(isHttps&&rcps.length){
+    let b64=null;
+    try{b64=await buildReceiptB64(order,tableNum,branch.name,posSettings,paid);}
+    catch(e){posToast("พิมพ์ไม่สำเร็จ: "+(e&&e.message||e),"warn");}
+    // เรนเดอร์ใบไม่ได้ (ยังไม่ได้เขียนอะไร) — ลิ้นชักยังต้องเปิด สั่งแยกได้เพราะไม่มีใบเสร็จไปแข่ง
+    if(!b64){kickAlone(rcps.filter(p=>kp.withRcpt.has(+p.id)));try{printReceipt(order,tableNum,branch.name,posSettings,{paid});}catch{}return false;}
     try{
-      const b64=await buildReceiptB64(order,tableNum,branch.name,posSettings,paid);
       const at=Date.now();
-      await Promise.all(rcps.map(rcp=>api.updatePrinter(rcp.id,{description:cmdDesc(rcp,"pj",{at,b64,what:paid?"ใบเสร็จ":"ใบแจ้งยอด",bill:order&&order.id!=null?order.id:null,table:String(tableNum??"")})})));
+      await Promise.all(rcps.map(rcp=>api.updatePrinter(rcp.id,{description:withKick(cmdDesc(rcp,"pj",{at,b64,what:paid?"ใบเสร็จ":"ใบแจ้งยอด",bill:order&&order.id!=null?order.id:null,table:String(tableNum??"")}),kp.withRcpt.has(+rcp.id)?dk:null)})));
       posToast(`🧾 ส่ง${paid?"ใบเสร็จ":"ใบแจ้งยอด"}ไป ${rcps.length} เครื่องแล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ`,"ok");
       return true;   // ส่งเข้าตัวพิมพ์แล้วจริง (ผู้เรียกบางที่ใช้ตัดสินว่าเอารายการ "ไม่ออก" เดิมออกได้)
     }catch(e){posToast("พิมพ์ไม่สำเร็จ: "+(e&&e.message||e),"warn");try{printReceipt(order,tableNum,branch.name,posSettings,{paid});}catch{}}
@@ -25071,7 +25219,7 @@ function PayChannelFixModal({order,branch,currentUser,shift,onDone,onClose}){
 // ── ใบยกเลิกบิล — ออกที่เครื่องใบเสร็จทุกครั้งที่กด Void ────────────────
 // เอกสารกระดาษคือสิ่งเดียวที่ผู้จัดการตรวจย้อนหลังได้โดยไม่ต้องเปิดคอม
 // ห้ามเงียบ: ถ้ายังไม่ได้ติ๊กเครื่องใบเสร็จต้องบอกบนจอ ไม่ใช่ปล่อยผ่าน
-async function printVoidBillSlip({order,branch,reason,refundText,by,at,printers=[]}){
+async function printVoidBillSlip({order,branch,reason,refundText,by,at,printers=[],kick=false}){
   const L=[];
   L.push({t:(branch&&branch.name)||"",size:30,bold:true,align:"center",mb:2});
   L.push({t:"*** ยกเลิกบิล ***",size:34,bold:true,align:"center",mb:2});
@@ -25090,10 +25238,16 @@ async function printVoidBillSlip({order,branch,reason,refundText,by,at,printers=
   let prs=printers;
   try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
   const rcps=getReceiptPrinters(prs);
+  // kick = คืนเงินสด ต้องเปิดลิ้นชัก — เครื่องเดียวกับใบยกเลิก เขียนรวมครั้งเดียว (เหตุผลเดียวกับใบเสร็จบิลเงินสด)
+  const kp=receiptKickPlan(rcps,kick?drawerPrinters(prs):[]);
+  const dk=kp.alone.length||kp.withRcpt.size?{at:Date.now()}:null;
+  const kickAlone=(list)=>{if(dk&&list.length)Promise.all(list.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"dk",dk)}))).catch(()=>{});};
+  kickAlone(kp.alone);
   if(!rcps.length){posToast("⚠️ ยกเลิกบิลแล้ว แต่ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ใบยกเลิกไม่ได้พิมพ์","warn",7000);return;}
-  const b64=await escposSlipRaster(L,576);
+  let b64;
+  try{b64=await escposSlipRaster(L,576);}catch(e){kickAlone(rcps.filter(p=>kp.withRcpt.has(+p.id)));throw e;}
   const stamp=Date.now();
-  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at:stamp,b64,what:"ใบยกเลิกบิล",bill:order.id,table:String(order.table_number||"")})})));
+  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:withKick(cmdDesc(p,"pj",{at:stamp,b64,what:"ใบยกเลิกบิล",bill:order.id,table:String(order.table_number||"")}),kp.withRcpt.has(+p.id)?dk:null)})));
   posToast("🧾 ส่งใบยกเลิกบิลไปเครื่องพิมพ์แล้ว","ok");
 }
 // ── ยกเลิกบิลที่ปิดไปแล้ว (Void) — ผู้จัดการขอไว้ 21 ก.ย. 69 ──────────────
@@ -25136,9 +25290,9 @@ function VoidBillModal({order,branch,currentUser,shift,printers=[],onDone,onClos
           await api.addCashMovement({shift_id:_ls.id,branch_id:branch.id,type:"refund",amount:total,
           reason:"ยกเลิกบิล #"+o.id+" โต๊ะ "+o.table_number+" — "+reason.trim(),order_id:o.id,user_id:currentUser?.id,username:who});}
         catch(err){console.error("บันทึกคืนเงินไม่สำเร็จ:",err);posToast("⚠️ ยกเลิกบิลแล้ว แต่บันทึกคืนเงินสดไม่สำเร็จ — ลงบันทึกที่ลิ้นชักเงินสดด้วยตัวเอง","warn",8000);}
-        kickCashDrawer(printers,branch?.id).catch(()=>{});
       }
-      printVoidBillSlip({order:o,branch,reason:reason.trim(),refundText,by:who,at,printers}).catch(()=>{});
+      // คืนเงินสด = ลิ้นชักเปิดไปพร้อมใบยกเลิกในการเขียนครั้งเดียว (เดิมยิงแยกสองงานแข่งกันเขียนแถวเครื่องแคชเชียร์)
+      printVoidBillSlip({order:o,branch,reason:reason.trim(),refundText,by:who,at,printers,kick:refund==="cash"&&!!shift}).catch(()=>{});
       posToast("ยกเลิกบิล #"+o.id+" แล้ว","ok");
       onDone&&onDone();
     }catch(e){notifyDlg("ยกเลิกบิลไม่สำเร็จ: "+friendlyError(e));}

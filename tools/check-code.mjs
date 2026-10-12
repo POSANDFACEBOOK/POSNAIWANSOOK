@@ -3296,7 +3296,7 @@ section("แก้ไขบิลที่ปิดแล้ว");
     && APP.includes('kind:"void"}'));
   ok_("แก้เสร็จพิมพ์ใบเสร็จใบใหม่ให้ลูกค้า", APP.includes("await printBillReceipt({...order,...full,id:order.id},order.table_number,"));
   ok_("ใบเสร็จจอโต๊ะกับจอแก้บิลใช้ตัวพิมพ์ตัวเดียวกัน",
-    APP.includes("const smartPrintReceipt=(order,tableNum,paid)=>printBillReceipt(order,tableNum,{branch,posSettings,printers,paid});"));
+    APP.includes("const smartPrintReceipt=(order,tableNum,paid,kick)=>printBillReceipt(order,tableNum,{branch,posSettings,printers,paid,kick:!!kick});"));
   ok_("ส่วนลดรายเมนูคิดใหม่เมื่อจำนวนเปลี่ยน (ไม่ลดเกินราคาอาหาร)", APP.includes("function recalcItemDiscounts(items){") && APP.includes("const amt=t===\"percent\"?round2(line*v/100):Math.min(v,line);"));
   ok_("ช่องทางเก็บเพิ่ม/คืนเงิน ใช้รายชื่อเดียวกับตอนปิดบิล ไม่มีรายชื่อซ้อนที่สอง",
     APP.includes("const SETTLE_METHODS=()=>[...PAY_METHODS,...OTHER_PAY_METHODS];"));
@@ -3381,19 +3381,29 @@ section("เปิดลิ้นชักเก็บเงิน");
   ok_("จำคำสั่งที่ทำแล้วข้ามการรีสตาร์ท", AGENT.includes("if (!state.kicked) state.kicked = {};"));
   // เงินสดเข้า/ออกจริงเมื่อไหร่ ลิ้นชักต้องเปิดเมื่อนั้น — และห้ามทำให้การปิดบิลล้มเด็ดขาด
   // บิลใบเดียวจ่ายได้หลายช่องทาง ⟹ เงื่อนไขคือ "มีส่วนที่เป็นเงินสดจริง" ไม่ใช่ "ทั้งบิลเป็นเงินสด"
+  // 12 ต.ค. 69: ลิ้นชักของบิลเงินสดไปพร้อมใบเสร็จในการเขียนครั้งเดียว (kick) — เดิมยิงแยกสองงานแข่งกันเขียนแถวเดียว
+  // ความหมายเดิมคงไว้: มีเงินสด = ลิ้นชักเปิด · ไม่รอผลก่อนบอกเงินทอน · ลิ้นชักพลาดไม่ทำให้ปิดบิลล้ม (กลืน error)
   ok_("มีเงินสดในบิล = ลิ้นชักเปิดให้ทอน (ยิงแบบไม่รอผล กลืน error)",
-    APP.includes('if(cashPart>0)kickCashDrawer(printers,branch?.id).catch(()=>{});'));
+    APP.includes("},table.table_number,true,cashPart>0);")
+    && APP.includes("const kickAlone=(list)=>{if(dk&&list.length)Promise.all(list.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,\"dk\",dk)}))).catch(()=>{});};"));
   ok_("แก้บิลแล้วเก็บเพิ่ม/คืนเป็นเงินสด = ลิ้นชักเปิดด้วย",
     APP.includes('if(delta!==0&&method==="cash")kickCashDrawer(printers,branch?.id).catch(()=>{});'));
   // จ่ายพร้อมเพย์/ช่องทางอื่น ลิ้นชักต้องไม่เปิด — ทุกจุดที่สั่งเปิดต้องผูกกับเงื่อนไขเงินสดหรือปุ่มที่คนกดเอง
   // จ่ายเงินสด: กดตกลง → ลิ้นชักเปิด → บอกเงินทอนทันที แล้วค่อยรอใบเสร็จ/เปลี่ยนรหัส QR โต๊ะ
   // ถ้าป็อปอัพเงินทอนไปอยู่หลังการเปลี่ยน QR (รอได้ถึง 4 วิ) พนักงานจะยืนรอโดยไม่รู้ว่าต้องทอนเท่าไร
+  // เดิมเทียบตำแหน่ง 'if(pm==="cash")kickCashDrawer' ซึ่งไม่มีแล้ว (indexOf = -1 ผ่านเสมอ = ด่านว่าง)
+  // ตอนนี้ลิ้นชักอยู่ในคำสั่งเดียวกับใบเสร็จ: สั่งทันทีหลังตัดเงิน (ก่อนลงบันทึกเงินสด) และตัวพิมพ์เปิดลิ้นชักก่อนพิมพ์ใบ
   ok_("กดตกลงเงินสด = สั่งเปิดลิ้นชักก่อนพิมพ์ใบเสร็จ",
-    APP.indexOf('if(pm==="cash")kickCashDrawer') < APP.indexOf('const _rcpt=smartPrintReceipt('));
+    APP.indexOf("const _rcpt=smartPrintReceipt(") > 0
+    && APP.indexOf("const _rcpt=smartPrintReceipt(") < APP.indexOf("if(cashPart>0&&shift){")
+    && AGENT.indexOf("        await handleDrawerRequests(rows);\n        await handlePJRequests(rows);") > 0);
   ok_("บอกเงินทอนก่อนรอใบเสร็จและก่อนเปลี่ยนรหัส QR โต๊ะ",
     APP.indexOf("onCashChange({change:round2") < APP.indexOf("await _rcpt;"));
-  ck("จุดที่สั่งเปิดลิ้นชักมีเท่าที่ตั้งใจไว้ (ประกาศ + จอลิ้นชัก + ปิดบิลเงินสด + แก้บิลเงินสด)",
-    (APP.match(/kickCashDrawer\(/g) || []).length, 5);   // + คืนเงินสดตอนยกเลิกบิล (21 ก.ย. 69)
+  // ปิดบิลเงินสด + คืนเงินสดตอนยกเลิกบิล ย้ายไปสั่งพร้อมใบเสร็จ/ใบยกเลิก (receiptKickPlan) แทน kickCashDrawer (12 ต.ค. 69)
+  ck("จุดที่สั่งเปิดลิ้นชักมีเท่าที่ตั้งใจไว้ (ประกาศ + จอลิ้นชัก + แก้บิลเงินสด)",
+    (APP.match(/kickCashDrawer\(/g) || []).length, 3);
+  ck("ลิ้นชักที่ไปพร้อมใบ มีเท่าที่ตั้งใจไว้ (ใบเสร็จบิลเงินสด + ใบยกเลิกคืนเงินสด)",
+    (APP.match(/const kp=receiptKickPlan\(rcps,kick\?drawerPrinters\(prs\):\[\]\);/g) || []).length, 2);
   ok_("ขยับเวอร์ชันตัวพิมพ์แล้ว (ร้านอัปเดตเอง)", +((AGENT.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 41);
 }
 
@@ -3470,7 +3480,7 @@ section("แบ่งจ่ายหลายช่องทาง");
   ok_("ใบตัวอย่างหารกันเอง ยังเข้าถึงได้ และชื่อไม่ชนกับแบ่งจ่าย",
     APP.includes("พิมพ์ใบตัวอย่างหารกันเอง (ไม่ใช่การชำระเงิน)") && !APP.includes("แบ่งบิลตามคน"));
   // ── เงินสดของบิลแบ่งจ่าย ──
-  ok_("ลิ้นชักเปิดเฉพาะเมื่อมีขั้นที่เป็นเงินสด", APP.includes("if(cashPart>0)kickCashDrawer(printers,branch?.id).catch(()=>{});"));
+  ok_("ลิ้นชักเปิดเฉพาะเมื่อมีขั้นที่เป็นเงินสด", APP.includes("},table.table_number,true,cashPart>0);"));
   ok_("ลิ้นชักได้เฉพาะยอดส่วนที่เป็นเงินสด ไม่ใช่ทั้งบิล",
     APP.includes('type:"sale",amount:cashPart,') && APP.includes("if(cashPart>0&&shift){"));
   ok_("เงินทอนคิดจากขั้นเงินสด ไม่ใช่ยอดบิล", APP.includes("onCashChange({change:round2(Math.max(0,(+cashReceived||0)-cashPart)),received:+cashReceived||0,total:cashPart,"));
@@ -3892,11 +3902,11 @@ section("ปุ่มยกเลิกบิล (Void)");
   ok_("เขียนทับกันด้วยเวลาแก้ล่าสุด (กันสองเครื่องยกเลิกพร้อมกัน)",
     APP.includes("row=await api.updatePOSOrderIfUnchanged(o.id,o.updated_at,{...patch,void_log:"));
   ok_("คืนเงินสด = บันทึกเงินออกจากลิ้นชัก + เปิดลิ้นชักให้หยิบเงิน",
-    APP.includes('if(refund==="cash"&&shift){') && APP.includes('type:"refund",amount:total,'));
+    APP.includes('if(refund==="cash"&&shift){') && APP.includes('type:"refund",amount:total,') && APP.includes('kick:refund==="cash"&&!!shift}).catch(()=>{});'));
   ok_("บันทึกคืนเงินไม่สำเร็จต้องเตือน ไม่ใช่เงียบ",
     APP.includes("⚠️ ยกเลิกบิลแล้ว แต่บันทึกคืนเงินสดไม่สำเร็จ"));
   ok_("ออกใบยกเลิกบิลที่เครื่องใบเสร็จทุกครั้ง",
-    APP.includes("async function printVoidBillSlip({order,branch,reason,refundText,by,at,printers=[]}){")
+    APP.includes("async function printVoidBillSlip({order,branch,reason,refundText,by,at,printers=[],kick=false}){")
     && APP.includes('L.push({t:"*** ยกเลิกบิล ***"'));
   ok_("ไม่มีเครื่องใบเสร็จ = บอกบนจอ ไม่ใช่เงียบ",
     APP.includes("⚠️ ยกเลิกบิลแล้ว แต่ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ"));
@@ -4875,6 +4885,192 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
       AGENT.includes("    if (kickBusy) return;\n    if (updatePending) { exitIfIdle(); return; }") && AGENT.includes("    finally { kickBusy = false; exitIfIdle(); }"));
   }
   ok_("ขยับเวอร์ชันตัวพิมพ์แล้ว (ร้านอัปเดตเอง)", +((AGENT.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 47);
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// POS สาขาที่ 2 (กาญจนบุรี เลิก FoodStory) — จอเครื่องพิมพ์ · ตรวจความพร้อม 12 ต.ค. 69
+// River ใช้ POS นี้อยู่ ⟹ ทุกข้อต้องไม่เปลี่ยนพฤติกรรมเดิม ยกเว้นตัวที่แก้
+//   #3  เมนูที่ไม่มีเครื่องรับ ใบไม่ออกเงียบ (แอปไม่เคยอ่าน orphan) · ตัวพิมพ์ไม่เคยเต้นก็เงียบ · ตัวพิมพ์ 2 เครื่องชนกัน
+//   #11 ฟอร์มเพิ่มเครื่องพิมพ์ค่าเริ่มต้น "ทุกสาขา" (null) → ตัวพิมพ์ทุกสาขายิงใบไป IP นั้น (สองร้านวง 192.168.1.x เหมือนกัน)
+//   #14 ลิ้นชัก+ใบเสร็จแข่งกันเขียนแถวเดียว · "พิมพ์ทั้งหมด" QR ทับกันเองแต่ติดธงว่าพิมพ์แล้วทุกโต๊ะ
+//   #25 จอขายดึงรายการพิมพ์ไม่ออกของทุกสาขาทุก 6 วิ · #29 โหมดสถานีพิมพ์จำทั้งเครื่อง ไม่แยกสาขา
+// ══════════════════════════════════════════════════════════════════════════
+section("POS สาขาที่ 2: จอเครื่องพิมพ์");
+{
+  const L = APP.split("\n");
+  const line = (head) => L.find((l) => l.startsWith(head)) || "";
+  const fnBody = (sig) => { const a = APP.indexOf(sig); if (a < 0) return ""; const b = APP.indexOf("\n}\n", a); return b > a ? APP.slice(a, b) : ""; };
+  const safe = (f) => { try { return f(); } catch { return null; } };
+  const PA = line("const printersAt=");
+  const now = Date.now();
+  const P = (id, bid, d, extra) => ({ id, branch_id: bid, ip: "192.168.1." + id, active: true, categories: null, description: JSON.stringify(d || {}), ...(extra || {}) });
+
+  // ── #3 ใบที่ไม่มีเครื่องรับ (orphan) ต้องขึ้นแดงพร้อมชื่อเมนู ──
+  const orphOf = safe(() => new Function(PA + "\n" + grab(APP, "printOrphansRecent") + "\nreturn printOrphansRecent;")());
+  ok_("อ่านตัวหารายการที่ไม่มีเครื่องรับได้", !!orphOf);
+  if (orphOf) {
+    const W = 20 * 60 * 1000;
+    const pr = [P(10, 5, { orphan: { at: now - 5 * 60000, names: ["ยำใหม่", "ส้มตำปู"], n: 2 } }), P(11, 5, {}), P(20, 8, { orphan: { at: now - 60000, names: ["ของ River"], n: 1 } })];
+    const r = orphOf(pr, 5, now, W);
+    ok_("ใบไม่มีเครื่องรับใน 20 นาที = ขึ้นแดงพร้อมชื่อเมนู", !!r && r.names.join() === "ยำใหม่,ส้มตำปู");
+    ok_("ใบไม่มีเครื่องรับของสาขาอื่น ไม่ขึ้นที่สาขานี้", !!r && !r.names.includes("ของ River"));
+    ok_("เก่ากว่า 20 นาที = ไม่ขึ้น", orphOf([P(10, 5, { orphan: { at: now - 21 * 60000, names: ["เก่า"] } })], 5, now, W) === null);
+    ok_("แบบรายการหลายครั้ง (ตัวพิมพ์รุ่นหลัง) ก็อ่านได้ ชื่อไม่ซ้ำ", (orphOf([P(10, 5, { orphan: [{ at: now - 1000, names: ["ก"] }, { at: now - 2000, names: ["ข", "ก"] }] })], 5, now, W) || { names: [] }).names.join() === "ก,ข");
+    ok_("ช่องข้อมูลเสีย ไม่ทำให้แถบพัง", safe(() => orphOf([{ id: 1, branch_id: 5, description: "{พัง" }], 5, now, W)) === null);
+  }
+  // ── #3 กดส่งครัวแล้วมีรายการที่ไม่มีเครื่องรับ = เตือนทันที (กติกาเดียวกับตัวพิมพ์) ──
+  const noPrOf = safe(() => new Function(PA + "\n" + grab(APP, "getPConn") + "\n" + grab(APP, "printerHandles") + "\n" + grab(APP, "itemsWithoutPrinter") + "\nreturn itemsWithoutPrinter;")());
+  ok_("อ่านตัวเช็ครายการที่ไม่มีเครื่องรับตอนส่งครัวได้", !!noPrOf);
+  if (noPrOf) {
+    const pr = [P(30, 5, {}, { categories: ["อาหารจานเดียว"] }), P(31, 5, {}, { categories: ["น้ำ"], active: false }), P(12, 8, {})];
+    const items = [{ name: "ข้าวผัด", category: "อาหารจานเดียว" }, { name: "ชาบู", category: "ชาบู" }, { name: "โค้ก", category: "น้ำ" }, { name: "หมูปัก", category: "อาหารจานเดียว", printer_id: 12 }];
+    ck("ส่งครัวแล้วไม่มีเครื่องรับ = ได้ชื่อไปเตือน (หมวดไม่มีเครื่อง · เครื่องปิดใช้ · ปักหมุดเครื่องสาขาอื่น)", noPrOf(items, pr, 5).map((i) => i.name), ["ชาบู", "โค้ก", "หมูปัก"]);
+    ck("สาขาที่ยังไม่มีเครื่องพิมพ์เลย = ไม่เตือน", noPrOf(items, [P(12, 8, {})], 5).length, 0);
+  }
+  ok_("กดส่งครัวแล้วเตือนทันทีเมื่อมีรายการไม่มีเครื่องรับ (ไม่ขึ้น ✅ ส่งแล้ว)",
+    APP.includes("const noPr=itemsWithoutPrinter(toSend,printers,branch.id);") && /if\(noPr\.length\)posToast\(`⚠️ บันทึกแล้ว แต่ไม่มีเครื่องพิมพ์รับ:[^\n]*\n\s*else posToast\("✅ บันทึกรายการแล้ว/.test(APP));
+  // ── #3 ตัวพิมพ์ 2 เครื่องทำงานพร้อมกัน (agentDev สลับไปกลับ) ──
+  const fightOf = safe(() => new Function([line("const AGENT_FIGHT_SHOW_MS="), line("const AGENT_FIGHT_GAP_MS="), grab(APP, "trackAgentDev"), grab(APP, "agentFight")].join("\n") + "\nreturn {tr:trackAgentDev,af:agentFight};")());
+  ok_("อ่านตัวจับตัวพิมพ์ 2 เครื่องชนกันได้", !!fightOf);
+  if (fightOf) {
+    const { tr, af } = fightOf;
+    const M = 60000, t0 = 1e12;
+    const run = (seq) => { const h = new Map(); for (const [dev, seen, at] of seq) tr(h, [P(10, 5, { agentDev: dev, agentSeen: seen })], at); return h; };
+    const fight = run([["A", t0, t0], ["B", t0 + 45000, t0 + M], ["A", t0 + 90000, t0 + 2 * M]]);
+    ok_("ค่าสลับไปกลับ A→B→A = ตัวพิมพ์ 2 เครื่องทำงานพร้อมกัน (ขึ้นแดง)", af(fight, t0 + 2 * M + 1000) === true);
+    ok_("ไม่เห็นสลับอีกเกิน 3 นาที = แถวแดงหายเอง", af(fight, t0 + 6 * M) === false);
+    ok_("เปลี่ยนครั้งเดียว A→B (สลับเครื่อง/รีสตาร์ท/อัปเดตเอง) = ไม่ขึ้นแดง", af(run([["A", t0, t0], ["B", t0 + 45000, t0 + M], ["B", t0 + 90000, t0 + 2 * M]]), t0 + 2 * M) === false);
+    ok_("ข้อมูลค้างจากรอบดึง 60 วิ (เวลาสัญญาณเก่ากว่า) ไม่ทำให้แดงหลอก", af(run([["A", t0, t0], ["B", t0 + 45000, t0 + M], ["A", t0, t0 + 2 * M]]), t0 + 2 * M) === false);
+    ok_("สลับไปเครื่องสำรองแล้วสลับกลับอีกชั่วโมง = ไม่ขึ้นแดง", af(run([["A", t0, t0], ["B", t0 + 45000, t0 + M], ["A", t0 + 60 * M, t0 + 61 * M]]), t0 + 61 * M) === false);
+    ok_("แถวที่ไม่มี agentDev (ตัวพิมพ์รุ่นเก่า) = ไม่นับ", af(run([[null, t0, t0], ["", t0 + 1, t0 + M], [null, t0 + 2, t0 + 2 * M]]), t0 + 2 * M) === false);
+  }
+  const strip = fnBody("function PrintHealthStrip(");
+  ok_("แถบสถานะ: จับตัวพิมพ์ชนกันจากข้อมูลที่ได้อยู่แล้ว ไม่ถามฐานเพิ่ม ไม่เพิ่มรอบถาม",
+    strip.includes("trackAgentDev(devHistRef.current,printersAt([...(printers||[]),...(failPrinters||[])],branchId),Date.now())") && (strip.match(/setInterval\(/g) || []).length === 1 && !/api\.|\bsb\(/.test(strip));
+  ok_("แถบสถานะ: ขึ้นแดง \"มีตัวพิมพ์ 2 เครื่องทำงานพร้อมกัน\"", strip.includes("const fight=agentFight(devHistRef.current,now);") && /if\(fight\)rows\.push\(\{c:C\.red,[^\n]*มีตัวพิมพ์ 2 เครื่องทำงานพร้อมกัน/.test(strip));
+  ok_("แถบสถานะ: ขึ้นแดงเมื่อมีใบไม่มีเครื่องรับใน 20 นาที พร้อมชื่อเมนู", strip.includes("const orph=printOrphansRecent(all,branchId,now,PRINT_RECENT_MS);") && /if\(orph\)rows\.push\(\{c:C\.red,[^\n]*orph\.names\.join\(" · "\)/.test(strip));
+  ok_("แถบสถานะ: มีเครื่องพิมพ์แต่ตัวพิมพ์ไม่เคยเต้นเลย = ขึ้นแดง (เดิมเงียบ)", strip.includes("const never=fresh&&!hh.seen;") && strip.includes("if(never)rows.push({c:C.red,"));
+  ok_("แถบสถานะ: ทุกแถวยังเป็นแดง (ไม่มีสีที่สาม)", (strip.match(/rows\.push\(\{c:C\.\w+/g) || []).every((m) => m.endsWith("C.red")));
+
+  // ── #11 เครื่องพิมพ์ใหม่ต้องผูกสาขาที่เปิดอยู่ ──
+  const saveBr = safe(() => new Function(line("const printerSaveBranch=") + "\nreturn printerSaveBranch;")());
+  ok_("อ่านตัวเลือกสาขาตอนบันทึกเครื่องพิมพ์ได้", !!saveBr);
+  if (saveBr) {
+    ck("เพิ่มเครื่องใหม่ = สาขาที่เปิดอยู่ (ไม่ใช่ทุกสาขา)", saveBr(null, null, 5), 5);
+    ck("เพิ่มเครื่องใหม่ = สาขาที่เปิดอยู่ แม้ฟอร์มค้างค่าสาขาอื่น", saveBr(null, 8, 5), 5);
+    ck("ไม่รู้สาขา = ไม่มีค่า (ฟอร์มต้องไม่บันทึก)", saveBr(null, null, undefined), null);
+    ck("แก้เครื่องเดิมที่เป็นทุกสาขา = คงไว้ (ไม่บังคับย้าย)", saveBr(7, null, 5), null);
+    ck("แก้เครื่องเดิม = ตามที่เลือก", saveBr(7, 8, 5), 8);
+  }
+  ok_("ฟอร์มเพิ่มเครื่องพิมพ์ทั้งสองจอ: ค่าเริ่มต้นเป็นสาขาที่เปิดอยู่",
+    (APP.match(/const pF0=\{name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:\(currentBranch&&currentBranch\.id\)\|\|null,/g) || []).length === 2 && !APP.includes('type:"kitchen",branch_id:null,active:true,conn:"ip"'));
+  ok_("ฟอร์มเพิ่มเครื่องพิมพ์ทั้งสองจอ: บันทึกผ่านตัวเลือกสาขา · ไม่รู้สาขา = ไม่บันทึก",
+    (APP.match(/const bid=printerSaveBranch\(editPID,pForm\.branch_id,currentBranch&&currentBranch\.id\);\n\s*if\(!editPID&&!bid\)\{notifyDlg\(/g) || []).length === 2 && !APP.includes("branch_id:pForm.branch_id||null"));
+  ok_("ตัวเลือก \"ทุกสาขา\" ไม่มีตอนเพิ่มเครื่องใหม่ (แถวเดิมที่เป็นทุกสาขายังแสดงได้)",
+    !APP.includes('<option value="">ทุกสาขา</option>') && (APP.match(/\{editPID&&pForm\.branch_id==null&&<option value="">ทุกสาขา \(แถวเดิม\)<\/option>\}/g) || []).length === 2);
+
+  // ── #14 บิลเงินสด: ลิ้นชักกับใบเสร็จต้องลงแถวเครื่องในการเขียนครั้งเดียว ──
+  // (พารามิเตอร์เป็น {…} — grab นับปีกกาแล้วหยุดที่พารามิเตอร์ ⟹ ตัดถึง "\n}\n" แทน)
+  const prbSrc = fnBody("async function printBillReceipt(");
+  const prbF = safe(() => new Function("api", "location", "buildReceiptB64", "posToast", "printReceipt",
+    [line("const CMD_KEYS="), line("const CMD_FRESH_MS="), grab(APP, "cmdDesc"), grab(APP, "getPConn"), grab(APP, "isReceiptPrinter"), grab(APP, "getReceiptPrinters"),
+      grabConst(APP, "drawerPrinters"), grab(APP, "receiptKickPlan"), line("const withKick="), prbSrc + "\n}"].join("\n") + "\nreturn printBillReceipt;"));
+  ok_("อ่านตัวพิมพ์ใบเสร็จ (พร้อมลิ้นชัก) มารันได้", !!prbF);
+  if (prbF) {
+    const runR = async ({ printers, kick, https = true, renderFail = false }) => {
+      const writes = [], wins = [];
+      const api = { getAllPrinters: async () => printers, updatePrinter: async (id, d) => { writes.push({ id, d: JSON.parse(d.description) }); } };
+      const fn = prbF(api, { protocol: https ? "https:" : "http:" }, async () => { if (renderFail) throw new Error("render"); return "B64"; }, () => {}, () => wins.push(1));
+      const ret = await fn({ id: 99, total: 100 }, "A1", { branch: { id: 8, name: "River" }, posSettings: {}, printers, paid: true, kick });
+      await new Promise((r) => setTimeout(r, 0));
+      return { ret, writes, wins, ids: writes.map((w) => w.id).sort().join() };
+    };
+    const river = () => [P(10, 8, {}, { categories: ["อาหารจานเดียว"] }), P(11, 8, {}, { categories: ["หมูกระทะ"] }), P(12, 8, { rcpt: 1, on: 1 }, { categories: ["น้ำ"] })];
+    const a = await runR({ printers: river(), kick: true });
+    ok_("บิลเงินสด (แบบ River: ลิ้นชักต่อเครื่องใบเสร็จ) = เขียนแถวเครื่องแคชเชียร์ครั้งเดียว มีทั้งใบเสร็จและลิ้นชัก",
+      a.ret === true && a.ids === "12" && a.writes[0].d.pj && a.writes[0].d.pj.b64 === "B64" && a.writes[0].d.pj.what === "ใบเสร็จ" && !!a.writes[0].d.dk && a.writes[0].d.rcpt === 1 && a.writes[0].d.on === 1);
+    const b = await runR({ printers: river(), kick: false });
+    ok_("จ่ายช่องทางอื่น = ใบเสร็จอย่างเดียว ลิ้นชักไม่เปิด (เหมือนเดิม)", b.ret === true && b.ids === "12" && !!b.writes[0].d.pj && !b.writes[0].d.dk);
+    const c = await runR({ printers: [P(12, 8, { rcpt: 1 }), P(13, 8, { dw: 1 })], kick: true });
+    const w12 = c.writes.filter((w) => w.id === 12), w13 = c.writes.filter((w) => w.id === 13);
+    ok_("ลิ้นชักต่อเครื่องอื่น = ใบเสร็จที่เครื่องใบเสร็จ · ลิ้นชักที่เครื่องของมัน อย่างละครั้ง", w12.length === 1 && !!w12[0].d.pj && !w12[0].d.dk && w13.length === 1 && !!w13[0].d.dk && !w13[0].d.pj);
+    const d = await runR({ printers: river(), kick: true, renderFail: true });
+    ok_("เรนเดอร์ใบเสร็จไม่ได้ = ลิ้นชักยังเปิด + เปิดหน้าต่างพิมพ์สำรอง (เหมือนเดิม)", d.ret === false && d.ids === "12" && !!d.writes[0].d.dk && !d.writes[0].d.pj && d.wins.length === 1);
+    const e = await runR({ printers: river(), kick: true, https: false });
+    ok_("เครื่องในวงแลน (ไม่ใช่ https) = ลิ้นชักยังเปิดผ่านตัวพิมพ์ ใบเสร็จออกหน้าต่างพิมพ์", e.ids === "12" && !!e.writes[0].d.dk && !e.writes[0].d.pj && e.wins.length === 1);
+    const f = await runR({ printers: [P(12, 8, { rcpt: 1, qr: { at: now - 1000, url: "x" } })], kick: true });
+    ok_("คำสั่งอื่นที่เพิ่งสั่งค้างอยู่ในแถว ไม่ถูกลบตอนเขียนรวม", f.ids === "12" && !!f.writes[0].d.qr && !!f.writes[0].d.pj && !!f.writes[0].d.dk);
+  }
+  ok_("ปิดบิลเงินสดส่งลิ้นชักไปกับใบเสร็จ ไม่ยิงแยกอีก", APP.includes("},table.table_number,true,cashPart>0);") && !APP.includes("if(cashPart>0)kickCashDrawer("));
+  ok_("ยกเลิกบิลคืนเงินสด: ลิ้นชักไปกับใบยกเลิกในการเขียนครั้งเดียว",
+    APP.includes('withKick(cmdDesc(p,"pj",{at:stamp,b64,what:"ใบยกเลิกบิล",') && APP.includes("kp.withRcpt.has(+p.id)?dk:null)})));") && !/kickCashDrawer\(printers,branch\?\.id\)\.catch\(\(\)=>\{\}\);\n\s*\}\n\s*\/\/[^\n]*\n\s*printVoidBillSlip/.test(APP));
+
+  // ── #14 "พิมพ์ทั้งหมด" QR: ส่งทีละโต๊ะ ไม่ทับกันเอง · ไม่ติดธงโต๊ะที่ยังไม่ได้ส่ง ──
+  const paF = safe(() => new Function("tables", "branch", "printTableQR", "waitPrintJobTaken", "setPrintingAll", "notifyDlg", "posToast", "printingAll", "async " + grab(APP, "printAll") + "\nreturn printAll;"));
+  ok_("อ่านปุ่มพิมพ์ทั้งหมดมารันได้", !!paF);
+  if (paF) {
+    // เครื่องพิมพ์ใบเสร็จมีช่องคำสั่งช่องเดียว · ตัวพิมพ์รับงาน (ล้างช่อง) ตามจำนวนที่กำหนด
+    const sim = async (takeN) => {
+      let slot = null, taken = 0; const flagged = [], over = [], notes = [];
+      const tables = [1, 2, 3, 4, 5].map((n) => ({ id: n, table_number: "T" + n }));
+      const ptq = async (t) => { await new Promise((r) => setTimeout(r, 1)); if (slot != null) over.push(slot); slot = t.id; flagged.push(t.id); return { ids: [12], at: 1000 + t.id }; };
+      const wait = async () => { await new Promise((r) => setTimeout(r, 1)); if (taken < takeN) { taken++; slot = null; return true; } return false; };
+      await paF(tables, { id: 5 }, ptq, wait, () => {}, (m) => notes.push(m), () => {}, null)();
+      return { flagged, over, notes };
+    };
+    const ok1 = await sim(99);
+    ok_("พิมพ์ทั้งหมด: ส่งครบทุกโต๊ะ ไม่มีใบไหนถูกทับก่อนตัวพิมพ์รับ", ok1.flagged.length === 5 && ok1.over.length === 0 && ok1.notes.length === 0);
+    const st = await sim(2);
+    ok_("พิมพ์ทั้งหมด: ตัวพิมพ์ไม่รับ = หยุด · โต๊ะที่ยังไม่ได้ส่งไม่ถูกติดธง · บอกบนจอว่าเหลือกี่โต๊ะ",
+      st.flagged.join() === "1,2,3" && st.over.length === 0 && st.notes.length === 1 && /ยังไม่ได้ส่ง 2 โต๊ะ/.test(st.notes[0]));
+  }
+  ok_("ปุ่มพิมพ์ทั้งหมดใช้ตัวส่งทีละโต๊ะ (ไม่ยิงพร้อมกันทุกโต๊ะ)", APP.includes("onClick={printAll} disabled={!!printingAll}") && !APP.includes("tables.forEach(t=>printTableQR("));
+  const wptF = safe(() => new Function("api", "setTimeout", "async " + grab(APP, "waitPrintJobTaken") + "\nreturn waitPrintJobTaken;"));
+  ok_("อ่านตัวรอให้ตัวพิมพ์รับงานได้", !!wptF);
+  if (wptF) {
+    const calls = [], fast = (fn) => fn();
+    const gone = await wptF({ printJobPending: async (ids, at) => { calls.push([ids, at]); return []; } }, fast)([12], 111, 50);
+    ok_("รอตัวพิมพ์รับงาน: งานหายจากแถว = รับแล้ว", gone === true && calls.length === 1 && calls[0][0].join() === "12" && calls[0][1] === 111);
+    const stuck = await wptF({ printJobPending: async () => [{ id: 12 }] }, fast)([12], 111, 30);
+    ok_("รอตัวพิมพ์รับงาน: ค้างเกินเวลา = เลิกรอ (ไม่วนถามตลอดไป)", stuck === false);
+  }
+  const pjp = line("  printJobPending: ");
+  const pjpF = safe(() => new Function("sb", "return " + pjp.trim().replace(/^printJobPending:\s*/, "").replace(/,$/, ""))((u) => u));
+  ok_("ถามงานค้างแบบเบา: ได้แค่เลข id (ไม่ดึงรูปใบเสร็จทั้งก้อน) และเจาะจงงานของเรา",
+    typeof pjpF === "function" && pjpF([12, 13], 111) === "printers?select=id&id=in.(12,13)&description=like.*%22pj%22:%7B%22at%22:111,*");
+
+  // ── #25 จอขายถามรายการพิมพ์ไม่ออกเฉพาะสาขาตัวเอง ──
+  const gpw = line("  getPrintersWithFails: ");
+  const gpwF = safe(() => new Function("sb", "return " + gpw.trim().replace(/^getPrintersWithFails:\s*/, "").replace(/,$/, ""))((u) => u));
+  ok_("อ่านคำขอรายการพิมพ์ไม่ออกได้", typeof gpwF === "function");
+  if (typeof gpwF === "function") {
+    const u5 = gpwF(5);
+    ok_("ส่งสาขา = เฉพาะเครื่องสาขานั้น + เครื่องทุกสาขา (กติกาเดียวกับ printersAt)",
+      u5.includes("&or=(branch_id.is.null,branch_id.eq.5)") && u5.includes("description=like.*%22failed%22:%5B%7B*") && u5.startsWith("printers?select=id,branch_id,description&"));
+    ok_("ไม่ส่งสาขา = แบบเดิม (ไม่กรอง)", !gpwF().includes("or=("));
+  }
+  ok_("ทั้งสองจุดที่ถามรายการพิมพ์ไม่ออก (รอบ 6 วิ · แผงรีปริ้น) ส่งสาขาไปด้วย",
+    APP.includes("api.getPrintersWithFails(currentBranch.id)") && APP.includes("api.getPrintersWithFails(branchId)") && !APP.includes("api.getPrintersWithFails()"));
+  ok_("getAllPrinters ยังไม่รับสาขา (ด่านรีปริ้นล็อกไว้)", APP.includes("  getAllPrinters: () => sb(`printers?order=id.asc`),"));
+
+  // ── #29 โหมดสถานีพิมพ์แยกตามสาขา ──
+  const stF = safe(() => new Function("localStorage", [line("const PRINT_STATION_OLD_KEY="), line("const printStationKey="), grab(APP, "isPrintStation"), grab(APP, "setPrintStation"), grab(APP, "takeOldPrintStation")].join("\n") + "\nreturn {isPrintStation,setPrintStation,takeOldPrintStation};"));
+  ok_("อ่านตัวจำโหมดสถานีพิมพ์ได้", !!stF);
+  if (stF) {
+    const mem = new Map([["fc_print_station", "1"]]);
+    const S = stF({ getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) });
+    ok_("คีย์เก่า (ไม่รู้ว่าสาขาไหน) ไม่ทำให้เครื่องเป็นสถานีพิมพ์ของสาขาไหนเลย (ห้ามเดา)", S.isPrintStation(5) === false && S.isPrintStation(8) === false);
+    ok_("คีย์เก่าอ่านครั้งเดียวเพื่อบอกพนักงาน แล้วลบทิ้ง", S.takeOldPrintStation() === true && S.takeOldPrintStation() === false && !mem.has("fc_print_station"));
+    S.setPrintStation(8, true);
+    ok_("เปิดสถานีพิมพ์ที่ River ไม่ติดไปเมื่อยกเครื่องไปสาขาอื่น", S.isPrintStation(8) === true && S.isPrintStation(5) === false && mem.get("fc_print_station_8") === "1");
+    S.setPrintStation(8, false);
+    ok_("ปิดแล้วปิดจริง", S.isPrintStation(8) === false);
+    const B = stF({ getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); }, removeItem: () => { throw new Error("blocked"); } });
+    ok_("เบราว์เซอร์ห้ามใช้ที่เก็บ = ไม่พัง และไม่เป็นสถานี", B.isPrintStation(8) === false && safe(() => (B.setPrintStation(8, true), B.takeOldPrintStation())) === false);
+  }
+  ok_("จอขาย/จอเครื่องพิมพ์อ่าน-เขียนโหมดสถานีพิมพ์ตามสาขาที่เปิดอยู่",
+    !/isPrintStation\(\)/.test(APP) && APP.includes("if(!isPrintStation(currentBranch.id))return;") && APP.includes("setPrintStation(currentBranch.id,v);") && APP.includes("useEffect(()=>{setPS(isPrintStation(currentBranch.id));},[currentBranch.id]);"));
 }
 
 
