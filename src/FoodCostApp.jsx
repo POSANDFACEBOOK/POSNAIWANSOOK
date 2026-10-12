@@ -471,6 +471,13 @@ async function freshVisibleBranches(table, id) {
   if (!Array.isArray(rows) || !rows.length) throw new Error("อ่านค่าล่าสุดไม่ได้ — ลองใหม่อีกครั้ง");
   return rows[0].visible_branches;
 }
+// ── เมนูที่สาขานี้เห็น กรองที่ฐานข้อมูล (หน้าลูกค้า) ──────────────────────
+// กติกาเดียวกับ menuVisibleAt: null = เปิดหมด · [] = ปิดหมด · [ids] = เฉพาะที่ระบุ
+// visible_branches เป็น jsonb → ต้องใช้ cs.[5] (cs.{5} คือรูปแบบ array ของ postgres ได้ 400)
+// ใส่ "5" แบบข้อความด้วย — menuVisibleAt ยอมรับเลขสาขาที่เก็บเป็นข้อความ ฐานต้องคืนครบเท่ากัน
+// เดิมโหลดเมนูทั้งเครือ (~105 KB) ทุกครั้งแล้วค่อยกรองในมือถือ — สาขา 5 ใช้จริงแค่ ~14 KB
+// ไม่รู้สาขา = ไม่กรอง (แบบเดิม) หน้าลูกค้ายังกรองซ้ำด้วย menuVisibleAt อีกชั้นเสมอ
+const menuVisibleQS=(bid)=>Number.isFinite(+bid)&&bid!==null&&bid!==""?`&or=(visible_branches.is.null,visible_branches.cs.%5B${+bid}%5D,visible_branches.cs.%5B%22${+bid}%22%5D)`:"";
 
 // ── ค่ารายสาขาในคอลัมน์ JSON ของเมนู (availability / options_by_branch) ─────────
 // เดิมเอาก้อนที่ค้างบนจอ (โหลดตอนเปิดจอ) มาแก้คีย์ตัวเองแล้วเขียนทับทั้งก้อน
@@ -502,9 +509,9 @@ const api = {
   getMenus: () => sbAll("menus?order=id.asc"),   // แบ่งหน้าไว้ก่อน — โตทางเดียว เพดานเดียวกับวัตถุดิบ
   // หน้าลูกค้าเป็นหน้าสาธารณะ — ห้ามส่ง ingredients/sop (สูตรอาหาร) ออกไป
   // และเอาเฉพาะฟิลด์ที่หน้านั้นใช้จริง: 315 KB -> 78 KB ต่อครั้ง
-  getMenusPublic: () => sbAll("menus?select=id,name,category,price,description,image,availability,printer_id,visible_branches,options_by_branch&price=gt.0&order=id.asc"),
-  // ระหว่างมื้อ สิ่งเดียวที่เปลี่ยนคือ "วันนี้หมด/ซ่อน" — 12 KB พอ
-  getMenuAvail: () => sb(`menus?select=id,availability&price=gt.0`),
+  getMenusPublic: (bid) => sbAll(`menus?select=id,name,category,price,description,image,availability,printer_id,visible_branches,options_by_branch&price=gt.0&order=id.asc${menuVisibleQS(bid)}`),
+  // ระหว่างมื้อ สิ่งเดียวที่เปลี่ยนคือ "วันนี้หมด/ซ่อน" — เฉพาะเมนูของสาขานี้ (~2 KB)
+  getMenuAvail: (bid) => sb(`menus?select=id,availability&price=gt.0${menuVisibleQS(bid)}`),
   addMenu: (d) => sb("menus", { method: "POST", body: JSON.stringify(d) }),
   updateMenu: (id, d) => sb(`menus?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteMenu: (id) => sb(`menus?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
@@ -646,8 +653,6 @@ const api = {
   getSummaryBatches: (bid) => sb(`order_requests?select=id,supplier_name,items,status,note,created_at,requested_by&note=like.${encodeURIComponent(SUMMARY_BATCH_PREFIX+"*")}${bid?`&branch_id=eq.${bid}`:""}&order=created_at.desc&limit=600`),
   // POS
   getPOSTables: (bid) => sb(`tables?order=table_number.asc&branch_id=eq.${bid}&active=eq.true`),
-  // Rotate QR token for a single table (cuts off any leaked / stale QRs)
-  rotateTableToken: (id) => sb(`tables?id=eq.${id}`, {method:"PATCH", body:JSON.stringify({qr_token:uuidv4()})}),
   // ── ปล่อยโต๊ะให้ลูกค้าคนต่อไป ─────────────────────────────────────────
   // เจ้าของสั่ง 11 ก.ย. 69: ปิดโต๊ะแล้ว QR ต้องเปลี่ยนใหม่ ลูกค้าคนใหม่ที่ลงโต๊ะเดิมได้ QR ใหม่
   // QR ของลูกค้าคนก่อน (ถ่ายรูปไว้/เก็บกลับบ้าน/เปิดค้างในมือถือ) ต้องสั่งเข้าโต๊ะนี้ไม่ได้อีก
@@ -667,11 +672,27 @@ const api = {
   },
   // รหัส QR ล่าสุดของโต๊ะ — ใช้ก่อนพิมพ์ QR เสมอ ห้ามพิมพ์จากข้อมูลโต๊ะที่ค้างอยู่ในจอ
   getTableFresh: (id) => sb(`tables?id=eq.${+id}&select=id,table_number,label,qr_token&limit=1`),
-  // Rotate all active tables in a branch in one batch
-  rotateAllTableTokens: async (bid) => {
-    const tbls=await sb(`tables?branch_id=eq.${bid}&active=eq.true&select=id`);
-    for(const t of tbls){await sb(`tables?id=eq.${t.id}`, {method:"PATCH", body:JSON.stringify({qr_token:uuidv4()})});}
-    return tbls.length;
+  // ── ปิดกะ = ปล่อยทุกโต๊ะที่ไม่มีบิลเปิด (QR ใหม่ + ล้างธงพิมพ์ QR) ─────────────
+  // ลูกค้าเดินออกก่อนสั่ง = ไม่มีบิลให้ปิด โต๊ะจึงไม่เคยถูกปล่อย: ใบ QR ที่พิมพ์ไปแล้วสั่งเข้าครัวได้ข้ามวัน
+  // (แม้ยังไม่เปิดกะ) และโต๊ะค้างเขียว "พิมพ์ QR แล้ว" ไม่หาย (River ค้างอยู่ 24+ โต๊ะ)
+  // อ่านบิลเปิด "สดๆ" ด้วยเลขโต๊ะ — โต๊ะที่ยังมีบิล (รวมรอชำระ) ห้ามแตะเด็ดขาด ลูกค้ายังนั่งอยู่
+  // อ่านบิลไม่ได้ = โยน error ไม่ปล่อยสักโต๊ะ (ไม่รู้ว่าโต๊ะไหนมีคน) · ทีละ 6 โต๊ะ แต่ละโต๊ะได้รหัสของตัวเอง
+  // คืน {released, kept, failed:[เลขโต๊ะที่เปลี่ยนไม่สำเร็จ]} ให้จอบอกพนักงาน
+  releaseIdleTables: async (bid) => {
+    const tbls = await sb(`tables?branch_id=eq.${+bid}&select=id,table_number`);
+    const rows = (Array.isArray(tbls) ? tbls : []).filter((t) => t && +t.id > 0);
+    if (!rows.length) return { released: 0, kept: 0, failed: [] };
+    const open = await sb(`orders?table_id=in.(${rows.map((t) => +t.id).join(",")})&or=(status.is.null,status.not.in.(paid,cancelled))&select=table_id`);
+    if (!Array.isArray(open)) throw new Error("อ่านบิลที่เปิดอยู่ไม่ได้");
+    const busy = new Set(open.map((o) => +o.table_id));
+    const idle = rows.filter((t) => !busy.has(+t.id));
+    const failed = [];
+    for (let i = 0; i < idle.length; i += 6) {
+      const part = idle.slice(i, i + 6);
+      const res = await Promise.all(part.map((t) => api.releaseTable(t.id).catch(() => false)));
+      res.forEach((ok, k) => { if (!ok) failed.push(String(part[k].table_number ?? part[k].id)); });
+    }
+    return { released: idle.length - failed.length, kept: rows.length - idle.length, failed };
   },
   // Public scan — verify QR token + branch active before returning anything
   scanTable: (branchId,tableId,token) => sb(`tables?id=eq.${+tableId}&branch_id=eq.${+branchId}&qr_token=eq.${encodeURIComponent(token||"")}&active=eq.true`),
@@ -687,8 +708,7 @@ const api = {
   },
   markTableQRPrinted: (id) => api._qrFlag(`tables?id=eq.${+id}`, new Date().toISOString()),
   clearTableQRPrinted: (id) => api._qrFlag(`tables?id=eq.${+id}`, null),
-  // กวาดทั้งสาขาตอนปิดกะ — โต๊ะที่พิมพ์ QR แล้วลูกค้าไม่ได้สั่งเลย จะไม่ค้างเขียวข้ามวัน
-  clearBranchQRPrinted: (bid) => api._qrFlag(`tables?branch_id=eq.${+bid}&qr_printed_at=not.is.null`, null),
+  // (กวาดธงทั้งสาขาตอนปิดกะ ย้ายไปอยู่ใน releaseIdleTables — ล้างธงพร้อมเปลี่ยนรหัส QR)
   deletePOSTable: (id) => sb(`tables?id=eq.${id}`, { method:"DELETE", headers:{"Prefer":"return=minimal"} }),
   getPOSOrders: (bid) => sb(`orders?order=created_at.desc&branch_id=eq.${bid}&limit=200`),
   // บิลทั้งหมดตั้งแต่เวลาที่ระบุ (ใช้ตอนปิดกะ/Z-Report) — แบ่งหน้าจนครบ ไม่ตัดที่ 200
@@ -726,12 +746,12 @@ const api = {
   // เดิมไม่กรอง เครื่องขายสาขาอื่นดาวน์โหลดรายการค้างของ River (~15 KB) ทุกรอบไปทิ้ง
   getPrintersWithFails: (bid) => sb(`printers?select=id,branch_id,description&description=like.*%22failed%22:%5B%7B*${bid!=null&&bid!==""?`&or=(branch_id.is.null,branch_id.eq.${+bid})`:""}&order=id.asc`),
   // งานรูป (pj) ที่ฝากไว้ ยังค้างอยู่ในแถวไหม — ได้แค่เลข id (ไม่ดึงรูป) · ว่าง = ตัวพิมพ์รับไปแล้ว
-  printJobPending: (ids, at) => sb(`printers?select=id&id=in.(${(ids||[]).map(Number).filter(x=>x>0).join(",")})&description=like.*%22pj%22:%7B%22at%22:${+at},*`),
   addPrinter: (d) => sb("printers", {method:"POST", body:JSON.stringify(d)}),
   updatePrinter: (id,d) => sb(`printers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deletePrinter: (id) => sb(`printers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   getActiveOrders: (bid) => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${bid}&limit=200`),
-  getOrderByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&select=id,items,status,created_at,subtotal,discount,total&order=created_at.desc&limit=1`),
+  // หน้าลูกค้าใช้ — pay_lock ต้องมาด้วย: พิมพ์ QR จ่ายเงินแล้ว (อาจมีส่วนลด) มือถือต้องโชว์ยอดบน QR ใบนั้น
+  getOrderByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&select=id,items,status,created_at,subtotal,discount,total,pay_lock&order=created_at.desc&limit=1`),
   createPOSOrder: (d) => sb("orders", { method:"POST", body:JSON.stringify(d) }),
   updatePOSOrder: (id, d) => sb(`orders?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   getPOSOrderById: (id) => sb(`orders?id=eq.${id}&limit=1`),
@@ -984,6 +1004,17 @@ const api = {
     if(Array.isArray(r)&&r.length)return r[0];
     const ins = await sb("pos_settings", {method:"POST", body:JSON.stringify({...p,branch_id:bid}), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}});
     return Array.isArray(ins)?(ins[0]||null):ins;
+  },
+  // หน้าลูกค้า (สาธารณะ แค่สแกน QR ก็เปิดได้) — เอาเฉพาะค่าที่หน้านั้นใช้: คิดยอด VAT/ค่าบริการ/ปัดเศษ
+  // ตัวเลือกเสริม และลำดับหมวด/เมนู · ห้าม select=* : แถวเดียวกันมี sales_staff (ชื่อ+PIN พนักงาน)
+  // คอลัมน์เสริมยังไม่มีในฐาน (42703) → ถอยไปชุดหลักที่มีมาแต่แรก ยอด VAT/ค่าบริการยังถูก หน้าไม่ล้ม
+  getPOSSettingsPublic: async (bid) => {
+    const q = (cols) => sb(`pos_settings?branch_id=eq.${+bid}&select=${cols}&limit=1`);
+    try { return await q("branch_id,vat_enabled,vat_rate,vat_included,service_charge_enabled,service_charge_rate,rounding,option_library,category_order,menu_order"); }
+    catch (e) {
+      if (/42703|PGRST204|does not exist|schema cache/i.test(String((e && e.message) || e))) return q("branch_id,vat_enabled,vat_rate,vat_included,service_charge_enabled,service_charge_rate");
+      throw e;
+    }
   },
   // แก้เฉพาะลำดับหมวด — ห้าม upsert ทั้งแถว ไม่งั้นทับ VAT/ค่าบริการ/QR ที่เครื่องอื่นเพิ่งแก้
   setCategoryOrder: async (bid, order) => {
@@ -19260,7 +19291,7 @@ function MoveTableModal({from,order,tables,activeOrders,branch,currentUser,onClo
       // โต๊ะต้นทางว่างแล้ว → เปลี่ยนรหัส QR ของมัน · ไม่งั้นลูกค้าที่ย้ายไปแล้วยังถือ QR โต๊ะเดิม
       // สแกนสั่งเมื่อไหร่ จะเปิดบิลใหม่ที่โต๊ะเดิม ซึ่งอาจมีลูกค้าคนใหม่นั่งอยู่แล้ว (อาหารไปผิดโต๊ะ)
       const released=await Promise.race([api.releaseTable(from.id),new Promise(r=>setTimeout(()=>r(false),4000))]).catch(()=>false);
-      if(!released)posToast("⚠️ เปลี่ยน QR โต๊ะ "+from.table_number+" ไม่สำเร็จ — QR เดิมยังใช้ได้อยู่ ไปที่ QR โต๊ะ → หมุน QR ใหม่","warn",10000);
+      if(!released)posToast("⚠️ เปลี่ยน QR โต๊ะ "+from.table_number+" ไม่สำเร็จ — QR เดิมยังใช้ได้อยู่\nแตะโต๊ะ "+from.table_number+" → กด 🔄 ออก QR ใหม่","warn",10000);
       posToast(sent
         ?`ย้ายไปโต๊ะ ${t.table_number} แล้ว — ส่งใบแจ้งครัวให้ตัวพิมพ์แล้ว (ไม่ออกจะขึ้นเตือนที่โต๊ะ) · อย่าลืมพิมพ์ QR โต๊ะใหม่ให้ลูกค้า`
         :`ย้ายไปโต๊ะ ${t.table_number} แล้ว — แต่แจ้งครัวไม่สำเร็จ กรุณาบอกครัวด้วยตัวเอง`, sent?"ok":"warn");
@@ -20101,7 +20132,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(!table||!table.id)return;
     let ok=false;
     try{ok=await Promise.race([api.releaseTable(table.id),new Promise(r=>setTimeout(()=>r(false),4000))]);}catch{ok=false;}
-    if(!ok)posToast("⚠️ เปลี่ยน QR โต๊ะ "+table.table_number+" ไม่สำเร็จ — QR เดิมยังใช้ได้อยู่\nไปที่ QR โต๊ะ → หมุน QR ใหม่ ก่อนรับลูกค้าคนต่อไป","warn",10000);
+    if(!ok)posToast("⚠️ เปลี่ยน QR โต๊ะ "+table.table_number+" ไม่สำเร็จ — QR เดิมยังใช้ได้อยู่\nแตะโต๊ะ "+table.table_number+" → กด 🔄 ออก QR ใหม่ ก่อนรับลูกค้าคนต่อไป","warn",10000);
   };
   // ติ๊ก/เอาติ๊กเสิร์ฟออก — ขึ้นทันทีบนจอ แล้วค่อยบันทึก ถ้าบันทึกไม่ได้ต้องถอยกลับและบอก
   // (ปล่อยให้จอติ๊กค้างทั้งที่ฐานไม่มี = เครื่องอื่นเห็นว่ายังไม่เสิร์ฟ แล้วครัวทำซ้ำ)
@@ -21150,7 +21181,8 @@ function CustomerPage({branchId,tableId,token}){
         const matches=await api.scanTable(branchId,tableId,token);
         if(!Array.isArray(matches)||matches.length===0){setGateError("bad_token");setBranch(b);setGateLoading(false);return;}
         const t=matches[0];
-        const[ms,ps]=await Promise.all([api.getMenusPublic(),api.getPOSSettings(branchId)]);
+        // เมนูกรองสาขาที่ฐาน · ตั้งค่าเอาเฉพาะคอลัมน์ที่หน้านี้ใช้ (ไม่มีรายชื่อ/PIN พนักงาน)
+        const[ms,ps]=await Promise.all([api.getMenusPublic(branchId),api.getPOSSettingsPublic(branchId)]);
         setBranch(b);setTable(t);
         // กรองที่ตอนโหลด ลูกค้าจะได้ไม่เห็นเมนูของสาขาอื่นแม้แต่ในข้อมูลที่ส่งไป
         setMenus(ms.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
@@ -21165,17 +21197,17 @@ function CustomerPage({branchId,tableId,token}){
         // ไม่งั้นลูกค้าสั่งของที่ครัวเพิ่งกด "วันนี้หมด" แล้วครัวได้ใบสั่งที่ทำไม่ได้
         const refreshMenus=async()=>{
           try{
-            const fresh=await api.getMenusPublic();
+            const fresh=await api.getMenusPublic(branchId);
             setMenus(fresh.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
           }catch{}   // เน็ตสะดุดชั่วคราว — ใช้ก้อนเดิมไปก่อน ไม่ต้องรบกวนลูกค้า
         };
         // ของหมด/ซ่อน/เมนูถูกลบ = ต้องถึงมือถือลูกค้าเร็ว → เช็คทุกนาทีเหมือนเดิม
-        // แต่ดึงแค่สถานะ (12 KB) ไม่ใช่เมนูทั้งก้อน (78 KB) — คนละเรื่องกันเรื่องปริมาณ
+        // แต่ดึงแค่สถานะของเมนูสาขานี้ (~2 KB) ไม่ใช่เมนูทั้งก้อน — คนละเรื่องกันเรื่องปริมาณ
         // หมายเหตุ: การ "เอากลับมาขาย" (un-hide) จะเห็นในรอบเมนูเต็มถัดไป
         // ตั้งใจเช่นนี้ — ทิศที่พลาดไม่ได้คือ "หมดแล้วยังสั่งได้" ไม่ใช่ทางกลับกัน
         const refreshAvail=async()=>{
           try{
-            const rows=await api.getMenuAvail();
+            const rows=await api.getMenuAvail(branchId);
             const by=new Map((rows||[]).map(r=>[r.id,r.availability||{}]));
             setMenus(ms=>ms.filter(m=>by.has(m.id)&&by.get(m.id)[branchId]!=="hidden")
                            .map(m=>({...m,availability:by.get(m.id)})));
@@ -21565,7 +21597,7 @@ function QRImg({url,size=120}){
   return <img src={qrUrl} alt="QR Code" style={{width:size,height:size,borderRadius:8,border:`1px solid ${C.line}`}}/>;
 }
 // ── ลิงก์ที่ลูกค้าได้จากการสแกน QR โต๊ะ — ประกอบที่นี่ที่เดียว ─────────────
-// ใช้ทั้งตอนพิมพ์ QR ลงกระดาษ · ป็อปอัพให้พนักงานสแกนเช็ค · หน้าจัดการ QR
+// ใช้ทั้งตอนพิมพ์ QR ลงกระดาษ · ป็อปอัพให้พนักงานสแกนเช็ค
 // ถ้าต่างคนต่างประกอบ วันหนึ่งจะไม่ตรงกัน แล้วพนักงานเช็คหน้าที่ไม่ใช่หน้าที่ลูกค้าได้จริง
 // (t = รหัสลับของโต๊ะ ใช้กันคนสุ่มเลขโต๊ะสั่งแทน — ต้องติดไปกับทุก QR เหมือนกัน)
 function tableScanUrl(table,branch){
@@ -21629,86 +21661,6 @@ async function printTableQR(table,branch,printers=[],onPrinted,onUrl){
   w.document.close();addPrintClose(w);
   await stamp();
   return true;
-}
-// รอให้ตัวพิมพ์รับงานรูป (pj) ที่เพิ่งฝากไว้ — งานหายจากแถว = ตัวพิมพ์รับไปแล้ว (ออก/ไม่ออก ดูที่ปุ่มพิมพ์ไม่สำเร็จ)
-// ใช้กับ "พิมพ์ทั้งหมด" เท่านั้น ระหว่างที่คนกดรออยู่: ถามแบบเบา (ได้แค่เลข id) ทุก ~1.5 วิ ไม่เกิน ~20 วิต่อโต๊ะ แล้วเลิก
-// — ไม่ใช่รอบถามถาวร · งานยังค้าง = ไม่ส่งโต๊ะถัดไป (ช่องคำสั่งมีช่องเดียว ส่งต่อ = ทับใบที่ยังไม่ออก)
-async function waitPrintJobTaken(ids,at,maxMs=20000){
-  const list=(ids||[]).map(Number).filter(x=>x>0);
-  if(!list.length||!at)return true;
-  const t0=Date.now();
-  while(Date.now()-t0<maxMs){
-    await new Promise(r=>setTimeout(r,1500));
-    try{const r=await api.printJobPending(list,at);if(Array.isArray(r)&&!r.length)return true;}catch{}
-  }
-  return false;
-}
-function POSQRPage({branch,tables,onTablesChanged}){
-  const baseUrl=publicBaseUrl();
-  const zones=[...new Set(tables.map(t=>t.zone).filter(Boolean))];
-  const grouped=[...zones.map(z=>({zone:z,tables:tables.filter(t=>t.zone===z)})),{zone:null,tables:tables.filter(t=>!t.zone)}].filter(g=>g.tables.length>0);
-  const buildUrl=(t)=>tableScanUrl(t,branch);
-  const[rotating,setRotating]=useState(false);
-  async function rotateOne(t){
-    if(!await confirmDlg({title:"หมุน QR ใหม่",message:`สร้าง QR ใหม่สำหรับโต๊ะ ${t.table_number}?\n\nQR เก่าจะใช้งานไม่ได้ทันที — ต้องพิมพ์ใหม่และวางที่โต๊ะ`,confirmLabel:"🔄 หมุน QR ใหม่"}))return;
-    setRotating(true);
-    try{await api.rotateTableToken(t.id);if(onTablesChanged)await onTablesChanged();}
-    catch(e){showErr("หมุน QR ไม่สำเร็จ",e);}
-    setRotating(false);
-  }
-  // "พิมพ์ทั้งหมด": เครื่องพิมพ์มีช่องคำสั่งช่องเดียว — เดิมยิงทุกโต๊ะพร้อมกัน ใบหลังทับใบก่อน ออกจริง 1-2 ใบ
-  // แต่ทุกโต๊ะถูกติดธงว่าพิมพ์แล้ว ⟹ ส่งทีละโต๊ะ และส่งโต๊ะถัดไปเมื่อตัวพิมพ์รับใบก่อนไปแล้วเท่านั้น
-  // ตัวพิมพ์ไม่รับ/ส่งไม่ได้ = หยุด โต๊ะที่ยังไม่ได้ส่งไม่ถูกติดธง และบอกบนจอว่าเหลือกี่โต๊ะ
-  const[printingAll,setPrintingAll]=useState(null);   // null | {done,total}
-  async function printAll(){
-    if(printingAll||!tables.length)return;
-    const list=tables.slice();let done=0;
-    setPrintingAll({done:0,total:list.length});
-    try{
-      for(const t of list){
-        const r=await printTableQR(t,branch);
-        if(!r)break;
-        done++;setPrintingAll({done,total:list.length});
-        if(typeof r==="object"&&done<list.length&&!(await waitPrintJobTaken(r.ids,r.at)))break;
-      }
-    }finally{setPrintingAll(null);}
-    const left=list.length-done;
-    if(left>0)notifyDlg(`ส่ง QR แล้ว ${done} โต๊ะ · ยังไม่ได้ส่ง ${left} โต๊ะ (ไม่ได้ติดธงว่าพิมพ์แล้ว)\n\nตัวพิมพ์ยังไม่รับใบก่อนหน้า หรือส่งไม่สำเร็จ — เช็คเครื่องพิมพ์ใบเสร็จ แล้วกด 🖨 พิมพ์ ทีละโต๊ะที่เหลือ`);
-    else if(done)posToast(`✅ ส่ง QR ครบ ${done} โต๊ะแล้ว`,"ok");
-  }
-  async function rotateAll(){
-    if(!await confirmDlg({title:"หมุน QR ทุกโต๊ะ",message:`สร้าง QR ใหม่สำหรับทุกโต๊ะของ "${branch.name}"?\n\nQR เก่าทั้งหมดจะใช้งานไม่ได้ — ต้องพิมพ์ใหม่ทั้งหมด`,confirmLabel:"🔄 หมุนทั้งหมด",danger:true}))return;
-    setRotating(true);
-    try{const n=await api.rotateAllTableTokens(branch.id);if(onTablesChanged)await onTablesChanged();alert(`✅ หมุน QR ใหม่ ${n} โต๊ะเรียบร้อย`);}
-    catch(e){showErr("หมุน QR ไม่สำเร็จ",e);}
-    setRotating(false);
-  }
-  return <div style={{padding:20}}>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,gap:10,flexWrap:"wrap"}}>
-      <div>
-        <h2 style={{fontFamily:"'Sarabun',sans-serif",fontSize:17,fontWeight:800,color:C.ink,marginBottom:4}}>QR Code สั่งอาหาร</h2>
-      </div>
-      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-        <Btn v="ghost" s={{fontSize:12}} onClick={rotateAll} disabled={rotating} icon={I.refresh}>หมุน QR ทั้งหมด</Btn>
-        <Btn v="ghost" s={{fontSize:12}} onClick={printAll} disabled={!!printingAll} icon={I.print}>{printingAll?`กำลังส่ง ${printingAll.done}/${printingAll.total}…`:"พิมพ์ทั้งหมด"}</Btn>
-      </div>
-    </div>
-    {grouped.map(g=><div key={g.zone||"no-zone"} style={{marginBottom:20}}>
-      {g.zone&&<div style={{fontSize:12,fontWeight:800,color:C.ink3,letterSpacing:1,textTransform:"uppercase",marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>📍 {g.zone}</div>}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(170px,1fr))",gap:12}}>
-        {g.tables.map(t=>{const url=buildUrl(t);return <div key={t.id} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:14,padding:"14px",textAlign:"center",boxShadow:"0 1px 4px rgba(0,0,0,.05)"}}>
-          <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:2}}>โต๊ะ {t.table_number}</div>
-          {t.label&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>{t.label}</div>}
-          <div style={{display:"flex",justifyContent:"center",marginBottom:8}}><QRImg url={url} size={110}/></div>
-          <div style={{display:"flex",gap:4,marginBottom:4}}>
-            <button onClick={()=>window.open(url,"_blank")} style={{flex:1,padding:"5px 0",border:`1px solid ${C.line}`,borderRadius:7,cursor:"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink3,background:C.white}}>ทดสอบ</button>
-            <button onClick={()=>printTableQR(t,branch)} disabled={!!printingAll} style={{flex:1,padding:"5px 0",border:"none",borderRadius:7,cursor:printingAll?"not-allowed":"pointer",fontSize:11,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.white,background:C.brand,opacity:printingAll?.6:1}}>🖨 พิมพ์</button>
-          </div>
-          <button onClick={()=>rotateOne(t)} disabled={rotating} title="สร้าง QR ใหม่ — QR เก่าใช้ไม่ได้ทันที" style={{width:"100%",padding:"4px 0",border:`1px dashed ${C.line}`,borderRadius:7,cursor:rotating?"not-allowed":"pointer",fontSize:10,fontFamily:"'Sarabun',sans-serif",fontWeight:700,color:C.ink3,background:C.bg,opacity:rotating?.6:1}}>🔄 หมุน QR ใหม่</button>
-        </div>;})}
-      </div>
-    </div>)}
-  </div>;
 }
 
 // ══════════════════════════════════════════════════════
@@ -22749,7 +22701,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     await doCloseShift(null);
   }
   async function doCloseShift(forced){
-    if(!await confirmDlg({title:"ยืนยันปิดกะ",message:`ยอดที่ควรมี ฿${totals.expected.toLocaleString()}\nนับจริง ฿${totals.actual.toLocaleString()}\n${totals.diff===0?'ตรงเป๊ะ':totals.diff>0?`เกิน ฿${totals.diff.toLocaleString()}`:`ขาด ฿${Math.abs(totals.diff).toLocaleString()}`}\n\nต้องการปิดกะใช่หรือไม่?`,confirmLabel:"ปิดกะ",danger:true}))return;
+    if(!await confirmDlg({title:"ยืนยันปิดกะ",message:`ยอดที่ควรมี ฿${totals.expected.toLocaleString()}\nนับจริง ฿${totals.actual.toLocaleString()}\n${totals.diff===0?'ตรงเป๊ะ':totals.diff>0?`เกิน ฿${totals.diff.toLocaleString()}`:`ขาด ฿${Math.abs(totals.diff).toLocaleString()}`}\n\nโต๊ะว่างทุกโต๊ะจะได้ QR ใหม่ (ใบ QR ที่วางค้างไว้จะใช้สั่งไม่ได้)\nต้องการปิดกะใช่หรือไม่?`,confirmLabel:"ปิดกะ",danger:true}))return;
     setSaving(true);
     try{
       // Print Z-report FIRST so a popup-blocker / printer issue doesn't strand the audit trail.
@@ -22763,6 +22715,10 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
       await api.closeShift(shift.id,{status:"closed",closed_at:new Date().toISOString(),closing_cash:round2(totals.actual),expected_cash:round2(totals.expected),cash_diff:round2(totals.diff),total_sales:round2(totals.totalSales),total_cash:round2(totals.totalCash),total_transfer:round2(totals.totalTransfer),total_card:round2(totals.totalCard),total_other:round2(totals.totalOther),total_pay_in:round2(totals.payIn),total_pay_out:round2(totals.payOut),total_drop:round2(totals.drops),order_count:totals.orderCount,notes:noteFull||null});
       // Clear auto-print dedup so next shift starts fresh
       try{sessionStorage.removeItem("fc_printed_orders");}catch{}
+      // ── ปล่อยโต๊ะว่างทั้งสาขา (QR ใหม่ + ล้างธงพิมพ์ QR) ── ทำหลังกะปิดสำเร็จแล้วเท่านั้น
+      // ใบ QR ที่วางไว้แต่ลูกค้าไม่ได้สั่ง ต้องใช้สั่งเข้าครัวข้ามกะ/ข้ามวันไม่ได้อีก
+      // โต๊ะที่ยังมีบิลเปิด (ปิดกะทั้งที่ค้าง) ไม่ถูกแตะ · วิ่งคู่กับการส่งบัญชี ล้มก็ไม่ขวางการปิดกะ
+      const relP=api.releaseIdleTables(currentBranch.id).catch(e=>({error:String((e&&e.message)||e)}));
       // ── ส่งยอดขายเข้าระบบบัญชี (SlipTrack) ──────────────────────────────
       // เซิร์ฟเวอร์อ่านบิลจริงจาก DB คำนวณเอง แล้วยิงเป็นใบปิดยอดรายวัน
       // ห้ามทำให้การปิดกะล้ม — กะปิดไปแล้วเรียบร้อย ตรงนี้ล้มก็แค่ยิงใหม่ทีหลังได้
@@ -22777,6 +22733,10 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
       // ส่งไม่ผ่าน = จำเลขกะไว้ในเครื่องนี้ (แยกต่อสาขา) ขึ้นเตือนค้างที่หลังบ้าน/จอเปิดกะ จนผู้จัดการกดว่าจัดการแล้ว
       // เดิมขึ้นแดงครั้งเดียวแล้วหายไปกับจอ ยอดวันนั้นไม่เคยเข้าบัญชีและไม่มีใครตามได้
       const kept=outcome==="failed"&&rememberAcctUnsent(currentBranch.id,acctUnsentEntry(shift,acctRes,totals));
+      // รอปล่อยโต๊ะเสร็จก่อนขึ้นผลบัญชี (เพดาน 20 วิ) — ไม่ครบต้องบอก ไม่งั้น QR เก่ายังใช้ได้โดยไม่มีใครรู้
+      const rel=await Promise.race([relP,new Promise(r=>setTimeout(()=>r({error:"timeout"}),20000))]);
+      if(rel&&(rel.error||(Array.isArray(rel.failed)&&rel.failed.length)))
+        posToast("⚠️ ปิดกะแล้ว แต่ออก QR ใหม่ให้โต๊ะว่าง"+(rel.error?"ไม่สำเร็จ":"ไม่ครบ (โต๊ะ "+rel.failed.join(", ")+")")+" — QR เดิมยังใช้ได้อยู่\nแตะโต๊ะนั้น → กด 🔄 ออก QR ใหม่","warn",12000);
       setSaving(false);
       // กะนี้ไม่มีบิลให้ลงบัญชี — ปิดจอไปเลยเหมือนเดิม ไม่ต้องมีจออะไรมาคั่น
       if(outcome==="nothing"){onClosed();return;}
@@ -24854,6 +24814,19 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   }
 
   async function loadTables(){const t=await api.getPOSTables(currentBranch.id);setTables(t);}
+  // ── ออก QR ใหม่ให้โต๊ะว่าง ── ทางแก้เมื่อปล่อยโต๊ะไม่สำเร็จ (เน็ตสะดุดตอนปิดบิล/ย้ายโต๊ะ/ปิดกะ)
+  // หรือใบ QR หลุดไปอยู่กับคนที่ไม่ควรมี · เช็คบิลเปิด "สดๆ" ก่อนเสมอ — โต๊ะที่ยังมีบิล ห้ามเปลี่ยนรหัส
+  // (ลูกค้าที่นั่งอยู่จะสั่งต่อไม่ได้) · อ่านบิลไม่ได้ = ไม่ทำ ให้ลองใหม่
+  async function reissueTableQR(t){
+    if(!t||!t.id)return;
+    if(!await confirmDlg({title:"ออก QR ใหม่",message:`โต๊ะ ${t.table_number}: QR เดิมทุกใบจะใช้สั่งไม่ได้ทันที\nถ้าจะมีลูกค้านั่งโต๊ะนี้ ต้องพิมพ์ QR ใหม่ให้`,confirmLabel:"🔄 ออก QR ใหม่"}))return;
+    let open=null;try{open=await api.getOrderByTable(t.id);}catch{}
+    if(!Array.isArray(open)){posToast("⚠️ เช็คบิลของโต๊ะนี้ไม่ได้ (เน็ตสะดุด) — ลองอีกครั้ง","warn",6000);return;}
+    if(open.length){posToast("โต๊ะ "+t.table_number+" มีบิลเปิดอยู่ — ออก QR ใหม่ไม่ได้ (ลูกค้าที่นั่งอยู่จะสั่งต่อไม่ได้)","warn",7000);loadAll({silent:true});return;}
+    const ok=await api.releaseTable(t.id).catch(()=>false);
+    posToast(ok?"🔄 ออก QR ใหม่ให้โต๊ะ "+t.table_number+" แล้ว — QR เดิมใช้ไม่ได้แล้ว":"⚠️ ออก QR ใหม่ไม่สำเร็จ — QR เดิมยังใช้ได้อยู่ ลองอีกครั้ง",ok?"ok":"warn",ok?4000:8000);
+    loadAll({silent:true});
+  }
   // Table editing from the floor plan (optimistic local update + persist)
   async function handleAddTable(d){try{await api.addPOSTable({...d,branch_id:currentBranch.id,status:"available",active:true});await loadTables();}catch(e){alert("เพิ่มโต๊ะไม่สำเร็จ: "+(e&&e.message||e));}}
   async function handleUpdateTable(id,d){setTables(p=>p.map(t=>t.id===id?{...t,...d}:t));try{await api.updatePOSTable(id,d);}catch(e){alert("แก้ไขโต๊ะไม่สำเร็จ: "+(e&&e.message||e));loadTables();}}
@@ -24993,6 +24966,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:10,flexShrink:0,flexWrap:"wrap"}}>
         {selOrder?.id&&<button onClick={()=>setMoveFrom({table:selTable,order:selOrder})} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.blue}55`,background:C.blueLight,cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>🔀 ย้ายโต๊ะ</button>}
         <button onClick={()=>{setQrPeekErr(false);setQrPeek({table:selTable,url:null});printTableQR(selTable,currentBranch,printers,()=>loadAll({silent:true}),(u)=>setQrPeek(p=>p?{...p,url:u}:p));}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
+        {!selOrder?.id&&<button onClick={()=>reissueTableQR(selTable)} title="เปลี่ยนรหัส QR ของโต๊ะว่างนี้ — QR เดิมทุกใบใช้ไม่ได้ทันที" style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px dashed ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink3}}>🔄 ออก QR ใหม่</button>}
       </div>
       <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onCashChange={setChangeDlg} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})}/>
     </Modal>}

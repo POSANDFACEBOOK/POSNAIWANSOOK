@@ -40,7 +40,7 @@ const main = async () => {
   console.log(`หมอตรวจข้อมูล FOODCOST · ${new Date().toISOString()}`);
   const [ings, menus, ords, pos, branches, sups] = await Promise.all([
     gAll("ingredients?select=id,name,buy_unit,sub_unit,sub_per_buy,buy_price,convert_to_gram,price_per_gram,stock_by_branch,has_sop,ingredients,supplier_id,supplier_by_branch,visible_branches&order=id.asc"),
-    gAll("menus?select=id,name,price,category,visible_branches,ingredients&order=id.asc"),
+    gAll("menus?select=id,name,price,category,visible_branches,ingredients,printer_id&order=id.asc"),
     gAll("order_requests?select=id,branch_id,supplier_id,supplier_name,status,requested_at,items,stock_pending&order=id.asc"),
     gAll("purchase_orders?select=id,po_number,branch_id,from_branch_id,status,items,stock_pending&order=id.asc"),
     gAll("branches?select=id,name,type,active"),
@@ -264,6 +264,116 @@ const main = async () => {
     for (const m of menus) for (const l of m.ingredients || []) if (legacy(l)) bad.push(line(`เมนู "${String(m.name).trim()}"`, l));
     for (const i of ings) if (i.has_sop) for (const l of i.ingredients || []) if (legacy(l)) bad.push(line(`SOP "${String(i.name).trim()}"`, l));
     bad.length ? warn(`${bad.length} บรรทัด — ครัวกลางต้องเปิดแก้ไข SOP แล้วเลือกวัตถุดิบนั้นใหม่ (จอ SOP ขึ้นป้าย ⚠️ ให้คนแก้ได้เห็น)`, bad) : ok("ไม่มี");
+  }
+
+  // ══ 13–19) จอขาย POS / หน้าลูกค้า / ตัวพิมพ์ ══════════════════════════════
+  // เพิ่มตอนตรวจความพร้อมก่อนสาขา 5 ย้ายจาก FoodStory (12/10/2569) — ทุกข้อเจอจริง:
+  // กะค้าง บิลค้างตั้งแต่ มิ.ย. คำสั่งพิมพ์ค้างหลายเดือน ชาบูปักหมุดเครื่องของสาขาอื่น ชื่อเมนูซ้ำคนละราคา
+  const HOUR = 3600e3, now = Date.now();
+  const ageTxt = (ms) => ms >= 48 * HOUR ? `${Math.floor(ms / 864e5)} วัน` : ms >= HOUR ? `${Math.floor(ms / HOUR)} ชม.` : `${Math.max(1, Math.round(ms / 60000))} นาที`;
+  const p2 = (n) => String(n).padStart(2, "0");
+  const thTime = (iso) => { const d = new Date(new Date(iso).getTime() + 7 * HOUR); return `${p2(d.getUTCDate())}/${p2(d.getUTCMonth() + 1)}/${d.getUTCFullYear() + 543} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`; };
+  const bnP = (id) => id == null ? "ทุกสาขา" : bn(id);
+  const [shifts, openBills, printers, tables] = await Promise.all([
+    gAll("pos_shifts?select=id,branch_id,username,opened_at&status=eq.open&order=opened_at.asc"),
+    gAll("orders?select=id,branch_id,table_id,table_number,status,total,created_at&or=(status.is.null,status.not.in.(paid,cancelled))&order=created_at.asc"),
+    gAll("printers?select=id,name,branch_id,active,description&order=id.asc"),
+    gAll("tables?select=id,branch_id&order=id.asc"),
+  ]);
+  // กติกาเดียวกับ menuVisibleAt ในแอป: null = เปิดหมด · [] = ปิดหมด · [ids] = เฉพาะที่ระบุ
+  const visM = (m, b) => { const vb = m.visible_branches; if (vb == null || !Array.isArray(vb)) return true; if (!vb.length) return false; return vb.map(Number).includes(+b); };
+  const posBranch = new Set(tables.map((t) => +t.branch_id));   // สาขาที่มีผังโต๊ะ = ใช้จอขายนี้จริง
+  // สาขาที่ขายของ (ไม่นับครัวกลาง) — สาขาที่ใช้จอขายขึ้นก่อน
+  const sellers = branches.filter((b) => b.type !== "central" && b.active !== false)
+    .sort((a, b) => (posBranch.has(+b.id) - posBranch.has(+a.id)) || (+a.id - +b.id));
+
+  section("13) POS: กะที่เปิดค้างเกิน 24 ชม.");
+  {
+    const bad = shifts.filter((s) => now - new Date(s.opened_at).getTime() > 24 * HOUR)
+      .map((s) => `${bn(s.branch_id)} กะ #${s.id} เปิด ${thTime(s.opened_at)} โดย ${s.username || "-"} (ค้าง ${ageTxt(now - new Date(s.opened_at).getTime())})`);
+    bad.length ? warn(`${bad.length} กะ — ยอดขายยังไม่ถูกส่งเข้าบัญชีจนกว่าจะปิดกะ และยอดหลายวันไปกองอยู่ในกะเดียว`, bad) : ok(`ไม่มี (กะที่เปิดอยู่ตอนนี้ ${shifts.length} กะ)`);
+  }
+
+  section("14) POS: บิลที่ยังไม่ปิดเกิน 24 ชม.");
+  {
+    const bad = openBills.filter((o) => now - new Date(o.created_at).getTime() > 24 * HOUR)
+      .map((o) => `${bn(o.branch_id)} บิล #${o.id} โต๊ะ ${o.table_number || "-"} [${o.status || "ไม่มีสถานะ"}] ฿${(+o.total || 0).toLocaleString()} เปิด ${thTime(o.created_at)} (ค้าง ${ageTxt(now - new Date(o.created_at).getTime())})`);
+    bad.length ? warn(`${bad.length} บิล — โต๊ะขึ้นว่ามีลูกค้าตลอด ปิดกะทุกครั้งจะเตือนโต๊ะค้าง ต้องเก็บเงินหรือยกเลิกบิล`, bad) : ok(`ไม่มี (บิลเปิดอยู่ตอนนี้ ${openBills.length} ใบ)`);
+  }
+
+  section("15) POS: โต๊ะที่มีบิลเปิดพร้อมกันมากกว่า 1 ใบ");
+  {
+    const by = new Map();
+    for (const o of openBills) { if (o.table_id == null) continue; const k = +o.table_id; if (!by.has(k)) by.set(k, []); by.get(k).push(o); }
+    const bad = [...by.values()].filter((a) => a.length > 1)
+      .map((a) => `${bn(a[0].branch_id)} โต๊ะ ${a[0].table_number || "#" + a[0].table_id}: ` + a.map((o) => `บิล #${o.id} ฿${(+o.total || 0).toLocaleString()}`).join(" + "));
+    bad.length ? warn(`${bad.length} โต๊ะ — ตัวกัน 1 โต๊ะ 1 บิล (sql/orders-open-per-table.sql) อาจหายไป ใบหนึ่งออกใบครัวแต่ไม่มีใครเก็บเงิน`, bad) : ok("ไม่มี — ทุกโต๊ะมีบิลเปิดไม่เกิน 1 ใบ");
+  }
+
+  section("16) เครื่องพิมพ์ที่ไม่ได้ผูกสาขา (branch_id ว่าง)");
+  {
+    const bad = printers.filter((p) => p.branch_id == null).map((p) => `เครื่อง #${p.id} "${String(p.name || "").trim()}"${p.active === false ? " (ปิดใช้งาน)" : ""}`);
+    bad.length ? warn(`${bad.length} เครื่อง — ทุกสาขาเห็นเครื่องนี้ และตัวพิมพ์ทุกสาขาจะส่งงานเข้าเครื่องนี้ ต้องเลือกสาขาให้`, bad) : ok("ไม่มี — ทุกเครื่องผูกสาขาแล้ว");
+  }
+
+  section("17) คำสั่งพิมพ์/เปิดลิ้นชัก ที่ค้างเกิน 3 นาที (ตัวพิมพ์ไม่ได้หยิบไปทำ)");
+  {
+    // คำสั่งเก็บใน printers.description: tp = เวลาเปล่าๆ · ที่เหลือ = {at,...} — ตัวพิมพ์ทำเสร็จแล้วลบเอง
+    const CMD = { tp: "ทดสอบพิมพ์", rp: "ใบครัว/พิมพ์ซ้ำ", qr: "QR โต๊ะ", pj: "ใบเสร็จ/รูปภาพ", dk: "เปิดลิ้นชัก" };
+    const bad = [];
+    for (const p of printers) {
+      let d = {};
+      try { d = JSON.parse(p.description || "{}") || {}; } catch { continue; }
+      for (const [k, label] of Object.entries(CMD)) {
+        const v = d[k];
+        if (v == null) continue;
+        const at = (v && typeof v === "object") ? +v.at : +v;
+        const age = at > 0 ? now - at : Infinity;
+        if (age > 3 * 60e3) bad.push(`${bnP(p.branch_id)} เครื่อง "${String(p.name || "").trim()}" #${p.id}: ${label} (${k}) ค้าง ${at > 0 ? ageTxt(age) : "ไม่มีเวลา"}`);
+      }
+    }
+    bad.length ? warn(`${bad.length} คำสั่ง — ไม่มีกระดาษออก (ตัวพิมพ์ดับ หรือไม่มีตัวพิมพ์ของสาขานั้น)`, bad) : ok("ไม่มี");
+  }
+
+  section("18) เมนูปักหมุดเครื่องพิมพ์ที่สาขาซึ่งขายเมนูนั้นใช้ไม่ได้ (ใบครัวไม่ออก)");
+  {
+    // printer_id มีช่องเดียวทั้งเครือ: ปักหมุดแล้วเมนูนั้นออก "เครื่องนั้นเครื่องเดียว" ไม่มีทางสำรอง
+    // ตัวพิมพ์แต่ละสาขาเห็นเฉพาะเครื่องของสาขาตัวเอง ⟹ สาขาอื่นที่ขายเมนูนี้ สั่งแล้วใบครัวไม่ออก
+    // เคสจริง 12/10/2569: ชาบู 4 เมนูปักหมุดเครื่อง "ครัว" ของสาขา 6 แต่เปิดให้เห็นเฉพาะสาขา 2,3,4,5
+    const prById = new Map(printers.map((p) => [+p.id, p]));
+    const bad = [];
+    for (const m of menus) {
+      if (m.printer_id == null || m.printer_id === "" || !(+m.price > 0)) continue;
+      const see = sellers.filter((b) => visM(m, b.id)).map((b) => +b.id);
+      if (!see.length) continue;   // ไม่มีสาขาไหนขาย
+      const nm = `#${m.id} "${String(m.name).trim()}"`;
+      const p = prById.get(+m.printer_id);
+      if (!p) { bad.push(`${nm} ปักหมุดเครื่อง #${m.printer_id} ที่ถูกลบไปแล้ว — ไม่มีสาขาไหนได้ใบครัว`); continue; }
+      if (p.active === false) { bad.push(`${nm} ปักหมุดเครื่อง "${String(p.name || "").trim()}" ที่ปิดใช้งานอยู่ — ไม่มีสาขาไหนได้ใบครัว`); continue; }
+      if (p.branch_id == null) continue;   // เครื่องทุกสาขา — ข้อ 16 ดูแลอยู่
+      const miss = see.filter((b) => b !== +p.branch_id);
+      if (!miss.length) continue;
+      bad.push(`${nm} ปักหมุด "${String(p.name || "").trim()}" ของ${bn(p.branch_id)}${see.includes(+p.branch_id) ? "" : " (สาขานั้นไม่เห็นเมนูนี้เลย)"} — ใบครัวไม่ออกที่: ${miss.map((b) => bn(b) + (posBranch.has(b) ? " (ใช้จอขาย)" : "")).join(", ")}`);
+    }
+    bad.length ? warn(`${bad.length} เมนู — เอาหมุดออกให้ไปตามหมวด หรือเปิดให้เห็นเฉพาะสาขาของเครื่องนั้น`, bad) : ok("ไม่มี");
+  }
+
+  section("19) ชื่อเมนูซ้ำกันแต่ราคาไม่เท่ากัน ในเมนูที่สาขาเดียวกันเห็น");
+  {
+    // พนักงาน/ลูกค้าเห็นสองปุ่มชื่อเดียวกัน กดผิดตัว = เก็บเงินผิดราคา (เคสจริง: ข้าวกะเพรา ฿109 กับ ฿89)
+    const bad = [];
+    for (const b of sellers) {
+      const by = new Map();
+      for (const m of menus) {
+        if (!(+m.price > 0) || !visM(m, b.id)) continue;
+        const k = String(m.name || "").trim().replace(/\s+/g, " ").toLowerCase();
+        if (!k) continue;
+        if (!by.has(k)) by.set(k, []);
+        by.get(k).push(m);
+      }
+      for (const g of by.values()) if (new Set(g.map((m) => +m.price)).size > 1) bad.push(`${bn(b.id)}: "${String(g[0].name).trim()}" ` + g.map((m) => `฿${+m.price} (#${m.id})`).join(" / "));
+    }
+    bad.length ? warn(`${bad.length} คู่ — ถ้าตั้งใจ (เช่นราคาโปร) ให้ตั้งชื่อต่างกัน ไม่งั้นพนักงาน/ลูกค้ากดผิดตัว`, bad) : ok("ไม่มี");
   }
 
   console.log(`\n${"═".repeat(50)}`);

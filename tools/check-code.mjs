@@ -424,7 +424,8 @@ const guards = [
     if (!ln) return false;
     return !ln.includes("ingredients") && !ln.includes("sop");
   })()],
-  ["หน้าลูกค้าโหลดครั้งแรกใช้ getMenusPublic", APP.includes("await Promise.all([api.getMenusPublic(),api.getPOSSettings(branchId)])")],
+  // (เมนูกรองสาขาที่ฐานแล้ว ต้องส่งเลขสาขา · ตั้งค่าใช้ตัวสาธารณะที่ไม่มีรายชื่อ/PIN พนักงาน)
+  ["หน้าลูกค้าโหลดครั้งแรกใช้ getMenusPublic", APP.includes("await Promise.all([api.getMenusPublic(branchId),api.getPOSSettingsPublic(branchId)])")],
   ["สถานะของหมดยังเช็คทุก 1 นาที", APP.includes("menuPollId=setInterval(()=>{if(!document.hidden)refreshAvail();},60000)")],
   ["ตัวจับเวลาเมนูเต็มถูกเคลียร์ตอนออกจากหน้า", APP.includes("if(fullPollId)clearInterval(fullPollId);")],
   // เครื่องพิมพ์: จอต้องเห็นเฉพาะของสาขาที่เปิดอยู่ (+ ที่ตั้งเป็นทุกสาขา)
@@ -804,7 +805,7 @@ const guards = [
   // ตารางที่โตทางเดียวต้องดึงแบบแบ่งหน้า — ถ้าใครเผลอเปลี่ยนกลับเป็น sb() ตรงๆ จะแดงทันที
   ["วัตถุดิบดึงแบบแบ่งหน้า", APP.includes('getIngs: () => sbAll("ingredients?order=id.asc")')],
   ["เมนูดึงแบบแบ่งหน้า", APP.includes('getMenus: () => sbAll("menus?order=id.asc")')],
-  ["เมนูหน้าลูกค้าดึงแบบแบ่งหน้า", APP.includes('getMenusPublic: () => sbAll("menus?select=')],
+  ["เมนูหน้าลูกค้าดึงแบบแบ่งหน้า", /getMenusPublic: \(\w*\) => sbAll\([`"]menus\?select=/.test(APP)],
   ["สินทรัพย์ยังดึงแบบแบ่งหน้าอยู่", APP.includes('getAssets: () => sbAll("assets?order=id.desc")')],
   // แบ่งหน้าโดยไม่เรียงลำดับ = ลำดับไม่คงที่ ข้อมูลข้ามหน้าซ้ำบ้างหายบ้าง
   ["ทุกจุดที่แบ่งหน้าต้องสั่งเรียงลำดับด้วย",
@@ -2796,7 +2797,9 @@ section("ป็อปอัพ QR โต๊ะ");
     ck("ไม่มีรหัสลับ = ไม่มี t ห้อยท้าย", fn({ id: 12 }, { id: 8 }), "https://x.app/?scan=1&branch=8&table=12");
   }
   ok_("ตัวพิมพ์ QR ใช้ลิงก์ตัวเดียวกัน", APP.includes("  const url=tableScanUrl(table,branch);"));
-  ok_("หน้าจัดการ QR ใช้ลิงก์ตัวเดียวกัน", APP.includes("  const buildUrl=(t)=>tableScanUrl(t,branch);"));
+  // หน้าจัดการ QR (POSQRPage) ถูกลบแล้วเพราะไม่มีที่ไหนเปิด — กติกาเดิมยังต้องคุม:
+  // ทุกที่ที่ได้ลิงก์สแกนโต๊ะต้องผ่าน tableScanUrl ห้ามมีที่ไหนประกอบ ?scan=1&branch= เอง
+  ok_("ไม่มีจอไหนประกอบลิงก์สแกนโต๊ะเอง (ทุกที่ใช้ tableScanUrl)", (APP.match(/\?scan=1&branch=/g) || []).length === 1);
   // ปุ่มพิมพ์ QR โต๊ะนี้: เด้งป็อปอัพด้วยลิงก์ตัวเดียวกัน ก่อนสั่งพิมพ์ (พิมพ์ไม่ออกก็ยังเช็คได้)
   // ป็อปอัพรับลิงก์ "จากตัวพิมพ์" หลังอ่านรหัสล่าสุดแล้ว — กระดาษกับจอเป็นลิงก์เดียวกันแน่นอน
   ok_("ปุ่มพิมพ์ QR โต๊ะนี้ เด้งป็อปอัพด้วยลิงก์ตัวเดียวกับที่พิมพ์",
@@ -5111,40 +5114,9 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
       v4.threw && v4.writes.length === 1 && !!v4.writes[0].d.dk && !v4.writes[0].d.pj && v4.tries.length === 2 && v4.tries[0].d.dk.at === v4.writes[0].d.dk.at);
   }
 
-  // ── #14 "พิมพ์ทั้งหมด" QR: ส่งทีละโต๊ะ ไม่ทับกันเอง · ไม่ติดธงโต๊ะที่ยังไม่ได้ส่ง ──
-  const paF = safe(() => new Function("tables", "branch", "printTableQR", "waitPrintJobTaken", "setPrintingAll", "notifyDlg", "posToast", "printingAll", "async " + grab(APP, "printAll") + "\nreturn printAll;"));
-  ok_("อ่านปุ่มพิมพ์ทั้งหมดมารันได้", !!paF);
-  if (paF) {
-    // เครื่องพิมพ์ใบเสร็จมีช่องคำสั่งช่องเดียว · ตัวพิมพ์รับงาน (ล้างช่อง) ตามจำนวนที่กำหนด
-    const sim = async (takeN) => {
-      let slot = null, taken = 0; const flagged = [], over = [], notes = [];
-      const tables = [1, 2, 3, 4, 5].map((n) => ({ id: n, table_number: "T" + n }));
-      const ptq = async (t) => { await new Promise((r) => setTimeout(r, 1)); if (slot != null) over.push(slot); slot = t.id; flagged.push(t.id); return { ids: [12], at: 1000 + t.id }; };
-      const wait = async () => { await new Promise((r) => setTimeout(r, 1)); if (taken < takeN) { taken++; slot = null; return true; } return false; };
-      await paF(tables, { id: 5 }, ptq, wait, () => {}, (m) => notes.push(m), () => {}, null)();
-      return { flagged, over, notes };
-    };
-    const ok1 = await sim(99);
-    ok_("พิมพ์ทั้งหมด: ส่งครบทุกโต๊ะ ไม่มีใบไหนถูกทับก่อนตัวพิมพ์รับ", ok1.flagged.length === 5 && ok1.over.length === 0 && ok1.notes.length === 0);
-    const st = await sim(2);
-    ok_("พิมพ์ทั้งหมด: ตัวพิมพ์ไม่รับ = หยุด · โต๊ะที่ยังไม่ได้ส่งไม่ถูกติดธง · บอกบนจอว่าเหลือกี่โต๊ะ",
-      st.flagged.join() === "1,2,3" && st.over.length === 0 && st.notes.length === 1 && /ยังไม่ได้ส่ง 2 โต๊ะ/.test(st.notes[0]));
-  }
-  ok_("ปุ่มพิมพ์ทั้งหมดใช้ตัวส่งทีละโต๊ะ (ไม่ยิงพร้อมกันทุกโต๊ะ)", APP.includes("onClick={printAll} disabled={!!printingAll}") && !APP.includes("tables.forEach(t=>printTableQR("));
-  const wptF = safe(() => new Function("api", "setTimeout", "async " + grab(APP, "waitPrintJobTaken") + "\nreturn waitPrintJobTaken;"));
-  ok_("อ่านตัวรอให้ตัวพิมพ์รับงานได้", !!wptF);
-  if (wptF) {
-    const calls = [], fast = (fn) => fn();
-    const gone = await wptF({ printJobPending: async (ids, at) => { calls.push([ids, at]); return []; } }, fast)([12], 111, 50);
-    ok_("รอตัวพิมพ์รับงาน: งานหายจากแถว = รับแล้ว", gone === true && calls.length === 1 && calls[0][0].join() === "12" && calls[0][1] === 111);
-    const stuck = await wptF({ printJobPending: async () => [{ id: 12 }] }, fast)([12], 111, 30);
-    ok_("รอตัวพิมพ์รับงาน: ค้างเกินเวลา = เลิกรอ (ไม่วนถามตลอดไป)", stuck === false);
-  }
-  const pjp = line("  printJobPending: ");
-  const pjpF = safe(() => new Function("sb", "return " + pjp.trim().replace(/^printJobPending:\s*/, "").replace(/,$/, ""))((u) => u));
-  ok_("ถามงานค้างแบบเบา: ได้แค่เลข id (ไม่ดึงรูปใบเสร็จทั้งก้อน) และเจาะจงงานของเรา",
-    typeof pjpF === "function" && pjpF([12, 13], 111) === "printers?select=id&id=in.(12,13)&description=like.*%22pj%22:%7B%22at%22:111,*");
-
+  // ── #14 "พิมพ์ทั้งหมด" QR: ปุ่มนี้อยู่ในหน้า POSQRPage ที่ไม่เคยถูกเปิดใช้ — เอาออกทั้งหน้าแล้ว (12 ต.ค. 69)
+  //    ทางยิง QR ทุกโต๊ะพร้อมกัน (ช่องคำสั่งเดียวต่อเครื่อง → ทับกัน แต่ทุกโต๊ะติดธงว่าพิมพ์แล้ว) จึงไม่มีแล้ว ห้ามเอากลับมาแบบยิงพร้อมกัน
+  ok_("ไม่มีปุ่มพิมพ์ QR ทุกโต๊ะพร้อมกันเหลืออยู่ (หน้า POSQRPage ถูกเอาออก)", !APP.includes("function POSQRPage(") && !/async function printAll\(/.test(APP));
   // ── #25 จอขายถามรายการพิมพ์ไม่ออกเฉพาะสาขาตัวเอง ──
   const gpw = line("  getPrintersWithFails: ");
   const gpwF = safe(() => new Function("sb", "return " + gpw.trim().replace(/^getPrintersWithFails:\s*/, "").replace(/,$/, ""))((u) => u));
@@ -6089,6 +6061,273 @@ section("POS สาขาที่ 2: เมนูต่อสาขา");
     APP.includes('writeMenuBranchKey(bindMenu.id,"options_by_branch",currentBranch.id,chosen)') &&
     APP.includes('writeMenuBranchKey(mid,"options_by_branch",currentBranch.id,groupIds)') &&
     !APP.includes("{...(bindMenu.options_by_branch||{})}") && !APP.includes("const map={...(m.options_by_branch||{})}"));
+}
+
+// POS สาขาที่ 2 (กาญจนบุรี ย้ายจาก FoodStory) — หน้าลูกค้า + วงจร QR โต๊ะ + ข้อมูล
+// ① ตั้งค่าที่หน้าลูกค้าโหลด ห้ามมีรายชื่อ/PIN พนักงาน  ② บิลหน้าลูกค้าต้องมี pay_lock (ยอดหลังส่วนลด)
+// ③ เมนูกรองสาขาที่ฐาน ผลต้องเท่ากับ menuVisibleAt เป๊ะ  ④ ปิดกะ = ปล่อยโต๊ะว่าง (บิลเปิดไม่ถูกแตะ)
+// ⑤ หมอตรวจข้อมูลยังอ่านอย่างเดียว + มีข้อตรวจ POS  ⑥ DDL ตัวกัน 1 โต๊ะ 1 บิล อยู่ใน repo
+// ══════════════════════════════════════════════════════════════════════════
+section("POS สาขาที่ 2: หน้าลูกค้าและข้อมูล");
+{
+  // ดึงเมธอดของ api มารันจริง — แบบบรรทัดเดียว หรือแบบบล็อก async (...) => { ... }
+  const apiFn = (name, deps = {}) => {
+    const head = `\n  ${name}: `;
+    const st = APP.indexOf(head);
+    if (st < 0) return null;
+    const s0 = st + head.length;
+    const line = APP.slice(s0, APP.indexOf("\n", s0));
+    let expr = null;
+    if (/=>\s*\{\s*$/.test(line)) {
+      let d = 0;
+      for (let i = APP.indexOf("{", s0 + line.lastIndexOf("=>")); i < APP.length; i++) {
+        if (APP[i] === "{") d++;
+        else if (APP[i] === "}") { d--; if (d === 0) { expr = APP.slice(s0, i + 1); break; } }
+      }
+    } else expr = line.replace(/,\s*$/, "");
+    const ks = Object.keys(deps);
+    try { return new Function(...ks, "return (" + expr + ");")(...ks.map((k) => deps[k])); } catch { return null; }
+  };
+  // ดึงฟังก์ชันในคอมโพเนนต์ (ขึ้นต้นด้วยหัวที่ให้) จนจบบล็อก
+  const fnBlock = (head) => {
+    const st = APP.indexOf(head);
+    if (st < 0) return null;
+    let d = 0;
+    for (let i = st + head.length - 1; i < APP.length; i++) {
+      if (APP[i] === "{") d++;
+      else if (APP[i] === "}") { d--; if (d === 0) return APP.slice(st, i + 1).trim(); }
+    }
+    return null;
+  };
+  const runWith = (src, name, deps) => { const ks = Object.keys(deps); return new Function(...ks, src + "\nreturn " + name + ";")(...ks.map((k) => deps[k])); };
+  const CP = (() => { const st = APP.indexOf("function CustomerPage("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
+  const selOf = (path) => ((String(path).match(/[?&]select=([^&]*)/) || [])[1] || "").split(",").filter(Boolean);
+  const visApp = new Function(grabConst(APP, "menuVisibleAt") + "\nreturn menuVisibleAt;")();
+  const VB_SAMPLES = [null, [], [5], [8], ["5"], [5, 8], [2, 3, 4], ["8", "5"], [6]];
+
+  // ── ① ตั้งค่าหน้าลูกค้า (หน้าสาธารณะ แค่สแกน QR ก็เปิดได้) ──
+  {
+    const calls = [];
+    const f = apiFn("getPOSSettingsPublic", { sb: async (p) => { calls.push(p); return [{}]; } });
+    ok_("มีตัวโหลดตั้งค่าสำหรับหน้าลูกค้า (getPOSSettingsPublic)", !!f);
+    if (f) {
+      await f(5);
+      const cols = selOf(calls[0]);
+      // ฟิลด์ที่หน้าลูกค้าอ่านจริง: posCfg.xxx + s.option_library + ฟิลด์ที่ตัวช่วย (ปัดเศษ/ลำดับหมวด/ลำดับเมนู) อ่าน
+      const need = new Set();
+      for (const m of CP.matchAll(/posCfg(?:&&posCfg)?\??\.(\w+)/g)) need.add(m[1]);
+      for (const m of CP.matchAll(/\bs&&s\.(\w+)/g)) need.add(m[1]);
+      for (const m of CP.matchAll(/(\w+)\(posCfg\)/g)) {
+        const ln = APP.split("\n").find((l) => l.startsWith(`const ${m[1]}=`)) || "";
+        for (const x of ln.matchAll(/\b(?:cfg|s)&&(?:cfg|s)\.(\w+)/g)) need.add(x[1]);
+      }
+      ok_("อ่านรายชื่อฟิลด์ที่หน้าลูกค้าใช้ได้ครบ (VAT/ค่าบริการ/ปัดเศษ/ลำดับ/ตัวเลือก)",
+        ["vat_rate", "vat_included", "service_charge_rate", "rounding", "category_order", "menu_order", "option_library"].every((k) => need.has(k)));
+      ck("ตั้งค่าหน้าลูกค้า: ขอครบทุกฟิลด์ที่หน้านั้นใช้ (ขาด = ยอดในมือถือเพี้ยนจากบิลจริง)", [...need].filter((k) => !cols.includes(k)), []);
+      ok_("ตั้งค่าหน้าลูกค้า: ระบุคอลัมน์ ไม่ใช่ทั้งแถว (select=*)", cols.length > 0 && !cols.includes("*"));
+      ck("ตั้งค่าหน้าลูกค้า: ไม่มีรายชื่อ/PIN พนักงาน ข้อมูลพร้อมเพย์ หรือหัวใบเสร็จติดไป", cols.filter((k) => /sales_staff|promptpay|receipt_/.test(k)), []);
+      ok_("ตั้งค่าหน้าลูกค้า: เฉพาะสาขานั้น", /branch_id=eq\.5&/.test(calls[0] || ""));
+      // คอลัมน์เสริมยังไม่มีในฐาน → ถอยไปชุดหลัก หน้าลูกค้าไม่ล้ม ยอด VAT/ค่าบริการยังถูก
+      const c2 = [];
+      let r2 = null;
+      try { r2 = await apiFn("getPOSSettingsPublic", { sb: async (p) => { c2.push(p); if (c2.length === 1) throw new Error('{"code":"42703","message":"column pos_settings.rounding does not exist"}'); return [{ vat_rate: 7 }]; } })(5); } catch { r2 = "โยน error"; }
+      const cols2 = selOf(c2[1]);
+      ck("คอลัมน์เสริมยังไม่มี (42703) → ถอยไปชุดหลัก ไม่ล้ม และยังไม่มีข้อมูลพนักงาน",
+        [c2.length, Array.isArray(r2), ["vat_enabled", "vat_rate", "vat_included", "service_charge_enabled", "service_charge_rate"].every((k) => cols2.includes(k)), cols2.some((k) => /sales_staff|\*/.test(k))],
+        [2, true, true, false]);
+      let threw = false;
+      try { await apiFn("getPOSSettingsPublic", { sb: async () => { throw new Error("Failed to fetch"); } })(5); } catch { threw = true; }
+      ok_("เน็ตล่ม = โยนต่อให้หน้าลูกค้าขึ้น 'เน็ตสะดุด' (ไม่กลืนเงียบแล้วคิดยอดผิด)", threw);
+    }
+    ok_("หน้าลูกค้าใช้ตัวโหลดตั้งค่าสาธารณะ ไม่ใช่ทั้งแถว (getPOSSettings)",
+      CP.length > 0 && !CP.includes("api.getPOSSettings(") && CP.includes("api.getPOSSettingsPublic(branchId)"));
+  }
+
+  // ── ② บิลที่หน้าลูกค้าดึง ต้องมีทุกฟิลด์ที่หน้านั้นอ่าน (pay_lock = ยอดหลังส่วนลดบน QR) ──
+  {
+    let path = "";
+    const f = apiFn("getOrderByTable", { sb: (p) => { path = p; return []; } });
+    ok_("มีตัวดึงบิลของโต๊ะ (หน้าลูกค้า)", !!f);
+    if (f) {
+      f(63);
+      const cols = selOf(path);
+      const need = new Set();
+      for (const m of CP.matchAll(/myOrder(?:&&myOrder)?\??\.(\w+)/g)) need.add(m[1]);
+      ok_("หน้าลูกค้าอ่านยอดที่ล็อกไว้ (pay_lock) จากบิล", need.has("pay_lock"));
+      ck("บิลหน้าลูกค้า: ดึงทุกฟิลด์ที่หน้านั้นอ่าน (ขาด pay_lock = โชว์ยอดก่อนหักส่วนลด)", [...need].filter((k) => !cols.includes(k)), []);
+      ok_("บิลหน้าลูกค้า: เฉพาะโต๊ะนั้น และเฉพาะบิลที่ยังไม่ปิด", /table_id=eq\.63&/.test(path) && path.includes("status=neq.paid") && path.includes("status=neq.cancelled"));
+    }
+  }
+
+  // ── ③ เมนูหน้าลูกค้ากรองสาขาที่ฐาน — ต้องได้ชุดเดียวกับ menuVisibleAt ทุกกรณี ──
+  {
+    const qsLine = APP.split("\n").find((l) => l.startsWith("const menuVisibleQS="));
+    let qs = null;
+    try { qs = qsLine ? new Function(qsLine + "\nreturn menuVisibleQS;")() : null; } catch { qs = null; }
+    ok_("มีตัวกรองเมนูตามสาขาฝั่งฐานข้อมูล (menuVisibleQS)", !!qs);
+    if (qs) {
+      // จำลองกติกา PostgREST: or=(a,b,...) · is.null · cs.<json> บน jsonb (5 กับ "5" คนละค่า)
+      // รูปแบบอื่น (เช่น cs.{5} ที่ฐานตอบ 400) แปลไม่ได้ = ด่านตก
+      const serverSees = (q, vb) => {
+        const m = decodeURIComponent(q).match(/^&or=\((.*)\)$/);
+        if (!m) throw new Error("ไม่ใช่ &or=(...)");
+        const parts = []; let d = 0, cur = "";
+        for (const ch of m[1]) { if (ch === "[" || ch === "(") d++; if (ch === "]" || ch === ")") d--; if (ch === "," && d === 0) { parts.push(cur); cur = ""; } else cur += ch; }
+        parts.push(cur);
+        return parts.some((p) => {
+          if (p === "visible_branches.is.null") return vb === null;
+          const c = p.match(/^visible_branches\.cs\.(.+)$/);
+          if (!c) throw new Error("แปลไม่ได้: " + p);
+          const want = JSON.parse(c[1]);   // cs.{5} พังตรงนี้ เหมือนฐานตอบ 400
+          if (!Array.isArray(want)) throw new Error("cs ต้องเป็น array ของ jsonb");
+          return Array.isArray(vb) && want.every((w) => vb.some((x) => x === w));
+        });
+      };
+      const diff = [];
+      let err = "";
+      for (const bid of [5, 8, "5", "8"]) for (const vb of VB_SAMPLES) {
+        try { if (serverSees(qs(bid), vb) !== visApp({ visible_branches: vb }, bid)) diff.push(`สาขา ${JSON.stringify(bid)} vb=${JSON.stringify(vb)}`); }
+        catch (e) { err = e.message; }
+      }
+      ck("ตัวกรองฝั่งฐานแปลได้ (ไม่ใช่ cs.{5} ที่ฐานตอบ 400)", err, "");
+      ck("ฐานคืนเมนูชุดเดียวกับ menuVisibleAt ทุกกรณี (null/[]/[ids]/เลขสาขาเป็นข้อความ)", diff, []);
+      ck("ไม่รู้สาขา = ไม่กรอง (แบบเดิม หน้าลูกค้ายังกรองซ้ำอีกชั้น)", [qs(undefined), qs(null), qs("")], ["", "", ""]);
+    }
+    let pm = "", pa = "";
+    const gm = apiFn("getMenusPublic", { sbAll: (p) => { pm = p; return []; }, menuVisibleQS: qs || (() => "") });
+    const ga = apiFn("getMenuAvail", { sb: (p) => { pa = p; return []; }, menuVisibleQS: qs || (() => "") });
+    ok_("อ่านตัวดึงเมนู/สถานะของหน้าลูกค้ามารันได้", !!gm && !!ga);
+    if (gm && ga) {
+      gm(5); ga(5);
+      ok_("เมนูหน้าลูกค้ากรองสาขาที่ฐาน (ไม่โหลดเมนูทั้งเครือทุกครั้ง)", decodeURIComponent(pm).includes("visible_branches.cs.[5]") && decodeURIComponent(pm).includes("visible_branches.is.null"));
+      ok_("สถานะของหมดรายนาทีก็กรองสาขาที่ฐาน", decodeURIComponent(pa).includes("visible_branches.cs.[5]"));
+      ok_("เมนูหน้าลูกค้ายังไม่ส่งสูตร (ingredients/sop) และยังเรียงลำดับ/เฉพาะที่มีราคา",
+        !/ingredients|sop/.test(selOf(pm).join(",")) && pm.includes("order=id.asc") && pm.includes("price=gt.0"));
+    }
+    ok_("ทุกจุดที่เรียกเมนู/สถานะของหน้าลูกค้าส่งเลขสาขา",
+      !/api\.getMenusPublic\(\)|api\.getMenuAvail\(\)/.test(APP) && (CP.match(/api\.getMenusPublic\(branchId\)/g) || []).length === 2 && CP.includes("api.getMenuAvail(branchId)"));
+  }
+
+  // ── ④ วงจร QR โต๊ะ: ปิดกะ = ปล่อยโต๊ะว่าง · ปุ่มออก QR ใหม่ · ข้อความชี้ไปที่ที่มีจริง ──
+  {
+    const run = async ({ open, failIds = [], ordersThrow = false }) => {
+      const paths = [], released = [];
+      const f = apiFn("releaseIdleTables", {
+        sb: async (p) => {
+          paths.push(p);
+          if (p.startsWith("tables?")) return [{ id: 1, table_number: "A1" }, { id: 2, table_number: "A2" }, { id: 3, table_number: "A3" }, { id: 4, table_number: "B1" }];
+          if (p.startsWith("orders?")) { if (ordersThrow) throw new Error("Failed to fetch"); return open.map((t) => ({ table_id: t })); }
+          throw new Error("ไม่ควรเรียก " + p);
+        },
+        api: { releaseTable: async (id) => { released.push(+id); return !failIds.includes(+id); } },
+      });
+      if (!f) return null;
+      let res = null, threw = false;
+      try { res = await f(8); } catch { threw = true; }
+      return { res, threw, paths, released: released.sort((a, b) => a - b) };
+    };
+    const a = await run({ open: [2, 4] });
+    ok_("มีตัวปล่อยโต๊ะว่างทั้งสาขา (releaseIdleTables)", !!a);
+    if (a) {
+      ck("ปิดกะ: ปล่อยเฉพาะโต๊ะที่ไม่มีบิลเปิด — โต๊ะที่มีบิล (รวมรอชำระ) ไม่ถูกแตะ", [a.released, a.res], [[1, 3], { released: 2, kept: 2, failed: [] }]);
+      const op = a.paths.find((p) => p.startsWith("orders?")) || "";
+      ok_("เช็คบิลเปิดด้วยเลขโต๊ะของสาขานั้น นับทุกสถานะที่ไม่ใช่ paid/cancelled",
+        a.paths[0].startsWith("tables?branch_id=eq.8&") && op.includes("table_id=in.(1,2,3,4)") && op.includes("status.not.in.(paid,cancelled)") && op.includes("status.is.null"));
+      const b = await run({ open: [], ordersThrow: true });
+      ck("อ่านบิลไม่ได้ = ไม่ปล่อยสักโต๊ะ (ไม่รู้ว่าโต๊ะไหนมีคน) และแจ้งคนเรียก", [b.threw, b.released], [true, []]);
+      const c = await run({ open: [4], failIds: [3] });
+      ck("บางโต๊ะเปลี่ยนไม่สำเร็จ = รายงานเลขโต๊ะนั้น โต๊ะอื่นยังปล่อยต่อ", [c.released, c.res], [[1, 2, 3], { released: 2, kept: 1, failed: ["A3"] }]);
+    }
+    // ขั้นตอนปิดกะตัวจริง รันด้วยของปลอม — ลำดับ/เงื่อนไข/คำเตือน
+    const closeSrc = fnBlock("  async function doCloseShift(forced){");
+    ok_("อ่านขั้นตอนปิดกะมารันได้", !!closeSrc);
+    if (closeSrc) {
+      const runClose = async ({ closeThrows = false, rel }) => {
+        const log = [], toasts = [];
+        const fn = runWith(closeSrc, "doCloseShift", {
+          confirmDlg: async () => true,
+          totals: { expected: 0, actual: 0, diff: 0, totalSales: 100, totalCash: 100, totalTransfer: 0, totalCard: 0, totalOther: 0, payIn: 0, payOut: 0, drops: 0, orderCount: 1 },
+          // ขั้นตอนลงบัญชี (กลุ่มเงิน) อยู่ใน doCloseShift ด้วย — ใช้ตัวจัดผลจริง และกะมีบิล 1 ใบ ให้ไปถึงจอผลบัญชี
+          acctOutcomeOf: new Function(grab(APP, "acctOutcomeOf") + "\nreturn acctOutcomeOf;")(), rememberAcctUnsent: () => false, acctUnsentEntry: () => ({}),
+          setSaving: () => {}, note: "", printZReport: () => log.push("z"), shift: { id: 41 }, currentBranch: { id: 8 }, currentUser: { id: 1, username: "t" },
+          api: {
+            addCashMovement: async () => { log.push("cash"); },
+            closeShift: async () => { if (closeThrows) throw new Error("boom"); log.push("close"); },
+            releaseIdleTables: (bid) => { log.push("release:" + bid); return rel(); },
+          },
+          round2: (n) => n, sessionStorage: { removeItem() {} },
+          fetch: async () => { log.push("acct"); return { ok: true, status: 200, json: async () => ({ results: [] }) }; },
+          setAcct: () => log.push("setAcct"), onClosed: () => log.push("closed"), showErr: () => log.push("err"),
+          posToast: (m) => toasts.push(m), setTimeout: () => 0,
+        });
+        await fn(null);
+        return { log, toasts };
+      };
+      const r1 = await runClose({ rel: async () => ({ released: 3, kept: 1, failed: [] }) });
+      ck("ปิดกะ: ปล่อยโต๊ะว่างของสาขานั้น หลังกะปิดสำเร็จ · ครบแล้วไม่มีคำเตือน",
+        [r1.log.indexOf("close") >= 0 && r1.log.indexOf("close") < r1.log.indexOf("release:8"), r1.toasts.length, r1.log.includes("setAcct")], [true, 0, true]);
+      const r2 = await runClose({ closeThrows: true, rel: async () => ({ released: 0, kept: 0, failed: [] }) });
+      ck("ปิดกะไม่สำเร็จ = ไม่แตะโต๊ะเลย", [r2.log.some((x) => x.startsWith("release")), r2.log.includes("err")], [false, true]);
+      const r3 = await runClose({ rel: async () => ({ released: 2, kept: 0, failed: ["A3"] }) });
+      ok_("ปล่อยไม่ครบ = เตือนเลขโต๊ะ + ชี้ปุ่มที่มีจริง (🔄 ออก QR ใหม่) และปิดกะยังจบ",
+        r3.toasts.length === 1 && r3.toasts[0].includes("A3") && r3.toasts[0].includes("🔄 ออก QR ใหม่") && r3.log.includes("setAcct"));
+      const r4 = await runClose({ rel: () => Promise.reject(new Error("Failed to fetch")) });
+      ok_("ปล่อยโต๊ะล้มทั้งก้อน = ปิดกะยังจบ + เตือนพนักงาน", r4.toasts.length === 1 && r4.log.includes("setAcct"));
+    }
+    // ปุ่ม "ออก QR ใหม่" บนจอโต๊ะว่าง — ทางแก้ที่ข้อความเตือนทุกอันชี้ไป
+    const reSrc = fnBlock("  async function reissueTableQR(t){");
+    ok_("มีปุ่มออก QR ใหม่ บนจอโต๊ะที่ไม่มีบิล",
+      !!reSrc && APP.includes("{!selOrder?.id&&<button onClick={()=>reissueTableQR(selTable)}") && APP.includes(">🔄 ออก QR ใหม่</button>"));
+    if (reSrc) {
+      const runRe = async (open) => {
+        const rel = [];
+        await runWith(reSrc, "reissueTableQR", {
+          confirmDlg: async () => true, posToast: () => {}, loadAll: () => {},
+          api: { getOrderByTable: async () => { if (open === "net") throw new Error("Failed to fetch"); return open; }, releaseTable: async (id) => { rel.push(id); return true; } },
+        })({ id: 63, table_number: "A1" });
+        return rel;
+      };
+      ck("ออก QR ใหม่: โต๊ะว่าง = เปลี่ยนรหัส · มีบิลเปิด = ไม่แตะ · เช็คบิลไม่ได้ = ไม่แตะ",
+        [await runRe([]), await runRe([{ id: 521 }]), await runRe("net")], [[63], [], []]);
+    }
+    // ข้อความเตือนต้องชี้ไปที่ที่มีอยู่จริง — หน้า "QR โต๊ะ → หมุน QR ใหม่" ไม่มีเมนูไหนเปิดได้
+    ok_("ไม่มีข้อความไหนชี้ไปหน้า QR ที่ไม่มีอยู่จริงอีก", !APP.includes("หมุน QR ใหม่") && !APP.includes("ไปที่ QR โต๊ะ"));
+    ck("ข้อความปล่อยโต๊ะไม่สำเร็จ (ย้ายโต๊ะ/ปิดบิล) ชี้ไปปุ่ม 🔄 ออก QR ใหม่ ของโต๊ะนั้น",
+      (APP.match(/ไม่สำเร็จ — QR เดิมยังใช้ได้อยู่\\nแตะโต๊ะ "\+[\w.]+\+" → กด 🔄 ออก QR ใหม่/g) || []).length, 2);
+    ok_("หน้าจัดการ QR ที่ไม่มีทางเปิดถูกลบ และไม่เหลือตัวหมุน QR ที่ไม่ดูบิลเปิด/ไม่ล้างธง",
+      !APP.includes("function POSQRPage(") && !APP.includes("rotateAllTableTokens") && !APP.includes("rotateTableToken"));
+  }
+
+  // ── ⑤ หมอตรวจข้อมูล: อ่านอย่างเดียวเสมอ + มีข้อตรวจ POS ──
+  {
+    const DATA = rd("tools/check-data.mjs");
+    ok_("หมอตรวจข้อมูลยังอ่านอย่างเดียว (ไม่มี POST/PATCH/PUT/DELETE/rpc)", !/method\s*:\s*["'`](POST|PATCH|PUT|DELETE)/i.test(DATA) && !/\/rpc\//.test(DATA));
+    const want = ["กะที่เปิดค้างเกิน 24 ชม.", "บิลที่ยังไม่ปิดเกิน 24 ชม.", "โต๊ะที่มีบิลเปิดพร้อมกันมากกว่า 1 ใบ", "เครื่องพิมพ์ที่ไม่ได้ผูกสาขา",
+      "คำสั่งพิมพ์/เปิดลิ้นชัก ที่ค้างเกิน 3 นาที", "เมนูปักหมุดเครื่องพิมพ์", "ชื่อเมนูซ้ำกันแต่ราคาไม่เท่ากัน"];
+    ck("หมอตรวจข้อมูลมีข้อตรวจ POS ครบ 7 ข้อ", want.filter((t) => !DATA.includes(t)), []);
+    // ข้อ 18/19 ใช้กติกา "สาขาไหนเห็นเมนู" ของตัวเอง — ต้องตรงกับแอปทุกกรณี ไม่งั้นเตือนผิด/ไม่เตือน
+    const vLine = DATA.split("\n").find((l) => l.startsWith("  const visM = "));
+    let visD = null;
+    try { visD = vLine ? new Function(vLine + "\nreturn visM;")() : null; } catch { visD = null; }
+    ok_("หมอตรวจข้อมูลมีตัวเช็คว่าสาขาไหนเห็นเมนู", !!visD);
+    if (visD) {
+      const diff = [];
+      for (const bid of [5, 8, "5"]) for (const vb of VB_SAMPLES) if (visD({ visible_branches: vb }, bid) !== visApp({ visible_branches: vb }, bid)) diff.push(`${bid}:${JSON.stringify(vb)}`);
+      ck("กติกาสาขาเห็นเมนูในหมอตรวจข้อมูล ตรงกับ menuVisibleAt ของแอป", diff, []);
+    }
+  }
+
+  // ── ⑥ ตัวกัน 1 โต๊ะ 1 บิลเปิด: DDL อยู่ใน repo ให้สร้างใหม่ได้ ──
+  {
+    let SQL = "";
+    try { SQL = rd("sql/orders-open-per-table.sql"); } catch { SQL = ""; }
+    const ddl = SQL.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n").replace(/\s+/g, " ").toLowerCase();
+    ok_("มี DDL ตัวกัน 1 โต๊ะ 1 บิลเปิด ใน repo (สร้างใหม่ได้หลังกู้ฐาน)",
+      ddl.includes("create unique index if not exists uniq_open_order_per_table on public.orders (table_id) where status not in ('paid','cancelled')"));
+    ok_("มีคำสั่งตรวจยืนยันใน pg_indexes (คอมเมนต์ไว้ ไม่รันเอง)", /--.*from pg_indexes/i.test(SQL) && /--.*uniq_open_order_per_table/.test(SQL));
+    ok_("แอปยังพึ่งตัวกันนี้: ชนกัน (duplicate key) = วนไปต่อท้ายบิลที่เพิ่งเปิด ไม่สร้างใบซ้ำ",
+      APP.includes('}catch(e){ if(/duplicate key/i.test((e&&e.message)||""))continue; throw e; }'));
+  }
 }
 
 
