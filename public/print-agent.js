@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 46;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 47;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 2000;
@@ -30,6 +30,17 @@ const DRAWER_POLL_MS = 800;
 // ถ้าไม่มีตาข่ายนี้ ใบครัวที่พลาดจะพลาดถาวร — ครัวไม่มีทางรู้เลย
 const FULL_EVERY = 60;
 const STATE_FILE = path.join(process.env.HOME || ".", ".foodcost-printed.json");
+// รหัสประจำเครื่องที่รันตัวพิมพ์ — สุ่มครั้งแรกแล้วเก็บไว้ข้างไฟล์ความจำ (คนละไฟล์ ลบความจำตอนสลับเครื่องแล้วรหัสยังอยู่)
+// ส่งไปกับ heartbeat (agentDev) — ถ้ามีมือถือสองเครื่องรันสาขาเดียวกัน (เครื่องสำรองถูกเปิดค้าง / ตั้งเลขสาขาผิด)
+// แถวเดียวกันจะเห็นรหัสสลับไปมา แอปเอาไปขึ้นแถบแดง — ตัวล็อกพอร์ตด้านล่างกันได้แค่การรันซ้อนในเครื่องเดียวกัน
+const DEV_FILE = path.join(process.env.HOME || ".", ".foodcost-agent-id");
+function loadDeviceId() {
+  try { const s = String(fs.readFileSync(DEV_FILE, "utf8")).trim(); if (/^[a-z0-9]{6,32}$/i.test(s)) return s; } catch {}
+  const id = require("crypto").randomBytes(6).toString("hex");
+  try { fs.writeFileSync(DEV_FILE, id); } catch {}   // เขียนไม่ได้ก็ใช้รหัสนี้ไปทั้งรอบ (รีสตาร์ทได้รหัสใหม่ ไม่สลับไปมา)
+  return id;
+}
+const AGENT_DEV = loadDeviceId();
 
 if (!BRANCH) { console.error("❌ ต้องใส่ branch id ด้วย เช่น:  node print-agent.js 6"); process.exit(1); }
 
@@ -44,14 +55,6 @@ async function sb(query) {
   if (!res.ok) throw new Error(await res.text());
   const txt = await res.text();
   return txt ? JSON.parse(txt) : [];
-}
-// เช็คเวอร์ชันใหม่จากเซิร์ฟเวอร์ทุก 20 นาที — ถ้ามีใหม่กว่า → ออก (ตัว launcher จะโหลดใหม่+รันใหม่เอง)
-async function checkUpdate() {
-  try {
-    const txt = await (await fetch(`${AGENT_URL}?_=${Date.now()}`)).text();
-    const m = txt.match(/AGENT_VERSION\s*=\s*(\d+)/);
-    if (m && +m[1] > AGENT_VERSION) { console.log(`⬆️  พบเวอร์ชันใหม่ (v${m[1]}) — อัปเดต+รีสตาร์ทอัตโนมัติ...`); process.exit(0); }
-  } catch {}
 }
 // รอบปกติดึงแค่ "หัวบิล" (id + เวลาแก้ล่าสุด) ~55 ไบต์/บิล
 // เดิมลากรายการในบิลทั้งร้านมาทุก 5 วินาที = หลายสิบ GB ต่อเดือน
@@ -73,6 +76,11 @@ async function sbCols(path, cols, tail) {
 }
 // ดึงเฉพาะเครื่องพิมพ์ของสาขานี้ (+ที่ใช้ร่วมทุกสาขา branch_id=null) — ไม่ดึงข้ามสาขา (ทุก caller กรองแบบนี้อยู่แล้ว)
 const getPrinters = () => sb(`printers?or=(branch_id.is.null,branch_id.eq.${BRANCH})&order=id.asc`);
+// รอบเร็ว (0.8 วิ) ถามเฉพาะแถวที่มีคำสั่งค้าง "ของสาขานี้" (+เครื่องที่ใช้ร่วมทุกสาขา) — กรองที่ฐานข้อมูล ไม่ใช่ในเครื่อง
+// เดิมดึงแถวทุกสาขามาแล้วค่อยทิ้ง: ตัวพิมพ์สาขาอื่นดับตอนมีใบเสร็จรูป (~24KB) ค้าง = ตัวพิมพ์เราดาวน์โหลดรูปนั้น
+// ทุก 0.8 วิ (~108,000 ครั้ง/วัน) — กลไกเดียวกับเหตุ Disk IO หมด 9 ก.ย. 69
+// or=(...) สองชุดใน PostgREST = "และ" กัน (ลองกับฐานจริงแล้ว 12 ต.ค. 69) ชุดแรกคือคำสั่งค้าง ชุดหลังคือสาขา
+const getCmdRows = () => sb(`printers?select=id,name,ip,port,branch_id,description&or=(description.like.*%22dk%22:%7B*,description.like.*%22pj%22:%7B*,description.like.*%22rp%22:%7B*,description.like.*%22qr%22:%7B*)&or=(branch_id.is.null,branch_id.eq.${BRANCH})`);
 // รายชื่อเครื่องพิมพ์เปลี่ยนไม่บ่อย แต่เป็นก้อนใหญ่ (description พกคำสั่ง/สถานะ) — ใช้ซ้ำได้ 6 วิ
 // ทำให้ถามบิลถี่ขึ้นได้โดยไม่เพิ่มภาระฐานข้อมูล (บทเรียน Disk IO 30 ก.ค. 69: ตัวการคือ polling ของหนัก)
 let _prCache = null, _prAt = 0;
@@ -354,12 +362,41 @@ async function itemsToBuffer(items, tableNum, meta) {
   return { buf: Buffer.concat(parts.map(p => p.buf)), mode: bufsMode(parts) };
 }
 // เครื่องนี้ต้องพิมพ์รายการนี้ไหม — ตาม "กำหนดการพิมพ์" เป๊ะๆ: ปักหมุดเมนู(printer_id)→เฉพาะเครื่องนั้น · ไม่งั้น categories=null(พิมพ์ทุกหมวด) หรือมีหมวดนั้นในลิสต์
-function printerHandles(p, it) {
-  if (it.printer_id != null && it.printer_id !== "") return +p.id === +it.printer_id;
+// list = เครื่องของสาขาที่กำลังพิมพ์ให้ (ตัวพิมพ์นี้) — หมุดใช้ได้เฉพาะเมื่อเครื่องที่ปักอยู่ในลิสต์นี้
+// เมนูใช้ร่วมกันทั้งเครือแต่ printer_id มีช่องเดียว: ชาบู #95-98 ปักไว้เครื่อง #8 ของสาขา 6 → สาขาอื่นไม่มีใบออกเลย
+// หมุดที่ชี้ไปเครื่องนอกสาขา = ถือว่าไม่ได้ปัก ส่งตามหมวดตามปกติ (ต้องตรงกับ printerHandles/printersForMenu ในแอป)
+function printerHandles(p, it, list) {
+  const pin = it.printer_id != null && it.printer_id !== "" && (!Array.isArray(list) || list.some(x => x && +x.id === +it.printer_id));
+  if (pin) return +p.id === +it.printer_id;
   if (p.categories === null || p.categories === undefined) return true;
   if (!Array.isArray(p.categories) || it.category == null) return false;
   const c = String(it.category).trim();
   return p.categories.some(x => String(x).trim() === c);
+}
+// จด "เมนูที่ไม่มีเครื่องรับ" ลงแถวเครื่องพิมพ์ (description.orphan)
+// ⚠️ อ่านของล่าสุดก่อนเขียนเสมอ — เดิมเขียนจากแคชรายชื่อเครื่องอายุถึง 6 วิ ทุกบิลที่มีหมวดยังไม่ผูกเครื่อง
+//    = ทับคำสั่งใบเสร็จ/ลิ้นชัก ค่าติ๊กเครื่องใบเสร็จ หรือรายการพิมพ์ไม่ออกที่เพิ่งเขียนเข้ามา หายเงียบ
+// อ่านไม่ได้ = ไม่เขียน (แบบ pushFail) · ชุดชื่อเดิม = ไม่เขียน (ไม่เพิ่มภาระฐานข้อมูลทุกบิล)
+let _orphanLast = "";   // เครื่อง|ชุดชื่อ ที่จดไว้ล่าสุด — ชุดเดิมไม่ต้องอ่านซ้ำด้วย
+const orphanKey = (names) => names.map(String).sort().join("\u0001");
+async function noteOrphan(target, orphan) {
+  if (!target || !orphan || !orphan.length) return false;
+  const names = [...new Set(orphan.map(i => i.name))].slice(0, 12);
+  const key = target.id + "|" + orphanKey(names);
+  if (key === _orphanLast) return false;
+  let d;
+  try {
+    const r = await sb(`printers?id=eq.${target.id}&select=description`);
+    if (!r || !r[0]) return false;
+    d = JSON.parse(r[0].description || "{}");
+    if (!d || typeof d !== "object" || Array.isArray(d)) return false;
+  } catch { return false; }
+  if (d.orphan && Array.isArray(d.orphan.names) && orphanKey(d.orphan.names) === orphanKey(names)) { _orphanLast = key; return false; }
+  d.orphan = { at: Date.now(), names, n: orphan.length };
+  const res = await patchPrinter(target.id, { description: JSON.stringify(d) });
+  if (res && res.ok === false) return false;   // เขียนไม่ผ่าน — รอบหน้าลองใหม่
+  _orphanLast = key;
+  return true;
 }
 // alreadyDone = { [printerId]: 1 } เครื่องที่พิมพ์ "ใบชุดนี้" สำเร็จไปแล้วในรอบก่อน
 // คืนค่า { ok, okIds } — okIds คือเครื่องที่เพิ่งส่งผ่าน
@@ -382,7 +419,7 @@ async function printItems(items, tableNum, printers, alreadyDone, meta) {
   // ส่งไปทุกเครื่องพร้อมกัน (คนละเครื่อง = ไม่ชนกัน) — เครื่องเดียวกันไม่ถูกยิงซ้อน เพราะ tick พิมพ์ทีละออเดอร์
   const jobs = usable.map(p => {
     const idxs = [];
-    items.forEach((it, i) => { if (printerHandles(p, it)) idxs.push(i); });
+    items.forEach((it, i) => { if (printerHandles(p, it, printers)) idxs.push(i); });
     if (!idxs.length) return null;
     const parts = idxs.map(i => bufs[i]);
     return { p, buf: Buffer.concat(parts.map(x => x.buf)), mode: bufsMode(parts), n: idxs.length };
@@ -396,18 +433,12 @@ async function printItems(items, tableNum, printers, alreadyDone, meta) {
   ));
   // orphan ดูจากเครื่องทั้งหมด ไม่ใช่เฉพาะที่ยังไม่ได้พิมพ์ — ไม่งั้นพอเครื่องที่รับ
   // หมวดนั้นพิมพ์ผ่านแล้ว รอบถัดไปจะหลงคิดว่าไม่มีเครื่องรับ แล้วรายงานผิด
-  const orphan = items.filter(it => !all.some(p => printerHandles(p, it)));
+  const orphan = items.filter(it => !all.some(p => printerHandles(p, it, printers)));
   if (orphan.length) {
     console.log("  ⚠️  ไม่มีเครื่องพิมพ์สำหรับ (ยังไม่ได้กำหนดหมวด):", orphan.map(i => i.name).join(", "));
     // เขียนกลับให้แอปเห็น — ไม่งั้นรู้อยู่คนเดียวบนจอ Termux ครัวไม่ได้ใบแล้วไม่มีใครรู้
-    try {
-      const p0 = usable[0] || (printers || [])[0];
-      if (p0) {
-        let d = {}; try { d = JSON.parse(p0.description || "{}"); } catch {}
-        d.orphan = { at: Date.now(), names: [...new Set(orphan.map(i => i.name))].slice(0, 12), n: orphan.length };
-        await patchPrinter(p0.id, { description: JSON.stringify(d) });
-      }
-    } catch {}
+    // เป้าหมายคงที่ (เครื่องแรกที่มี IP) — เดิมใช้ usable[0] ซึ่งเปลี่ยนไปตามเครื่องที่พิมพ์ผ่านแล้ว
+    try { await noteOrphan(all[0] || (printers || [])[0], orphan); } catch {}
   }
   // สำเร็จ = ไม่มีเครื่องไหน "ส่งไม่ผ่าน"
   //
@@ -424,7 +455,7 @@ async function printItems(items, tableNum, printers, alreadyDone, meta) {
   // เครื่องที่พิมพ์ผ่านไปแล้วรอบก่อน (alreadyDone) ถือว่าส่งถึงแล้ว ไม่นับว่าพลาด
   const delivered = new Set([...okIds, ...Object.keys(alreadyDone || {}).map(Number)]);
   const failedItems = items.filter(it => {
-    const hs = all.filter(p => printerHandles(p, it));
+    const hs = all.filter(p => printerHandles(p, it, printers));
     return hs.length > 0 && !hs.some(p => delivered.has(+p.id));
   });
   return { ok: !anyFail, okIds, failedItems, errs };
@@ -661,7 +692,7 @@ async function recordPrintFail(printers, order, items, extra) {
       names: [...new Set(items.map(i => i.name))].slice(0, 20),
       // ชื่อเครื่องที่ควรพิมพ์ใบนี้ — แอปเอาไปขึ้นที่โต๊ะว่า "เครื่องไหนไม่ออก" พนักงานจะได้เดินไปดูถูกเครื่อง
       pnames: x.pname ? [String(x.pname)]
-        : [...new Set(items.flatMap((it) => (printers || []).filter((p) => printerHandles(p, it)).map((p) => p.name)).filter(Boolean))].slice(0, 4),
+        : [...new Set(items.flatMap((it) => (printers || []).filter((p) => printerHandles(p, it, printers)).map((p) => p.name)).filter(Boolean))].slice(0, 4),
       n: items.reduce((a, i) => a + (+i.qty || 0), 0),
       items: items.slice(0, 30).map(failItem),
       // เหตุที่ไม่ออก รายเครื่อง — แอปแปลเป็นภาษาคน ("ต่อเครื่องไม่ติด" vs "ต่อติดแต่เครื่องค้าง")
@@ -725,7 +756,7 @@ async function handleFailRetries(printers) {
             const ok = new Set((r && r.okIds || []).map(Number));
             errs = (r && r.errs) || [];
             // ออก = มีเครื่องที่รับรายการนี้พิมพ์ผ่านอย่างน้อยหนึ่งเครื่อง · ไม่มีเครื่องรับเลย ≠ ออก (ห้ามลบทิ้งเงียบๆ)
-            fresh.forEach(it => { if (all.some(p => printerHandles(p, it) && ok.has(+p.id))) okKs.add(it.k); });
+            fresh.forEach(it => { if (all.some(p => printerHandles(p, it, printers) && ok.has(+p.id))) okKs.add(it.k); });
           }
         } catch (e) { console.log(`  ❌ พิมพ์ใหม่ (พนักงานกด) → โต๊ะ ${f.table}: ${e.message}`); }
       }
@@ -925,15 +956,55 @@ async function heartbeat() {
     // read the freshest description right before writing so we merge, not clobber, live commands
     let d = {}; try { const r = await sb(`printers?id=eq.${target.id}&select=description`); if (r && r[0]) { try { d = JSON.parse(r[0].description || "{}"); } catch {} } }
     catch { try { d = JSON.parse(target.description || "{}"); } catch {} }
-    d.agentSeen = Date.now(); d.agentVer = AGENT_VERSION; d.agentPrinters = online;
+    // อีกเครื่องเพิ่งเต้นลงแถวเดียวกันด้วยรหัสอื่น = มีตัวพิมพ์สองเครื่องรันสาขานี้ (บิลอาจพิมพ์ซ้ำ) — บอกบนจอ Termux ด้วย
+    if (d.agentDev && d.agentDev !== AGENT_DEV && Date.now() - (+d.agentSeen || 0) < 120 * 1000) console.log(`⚠️  พบตัวพิมพ์อีกเครื่อง (รหัส ${d.agentDev}) รันสาขา ${BRANCH} อยู่ด้วย — ปิดให้เหลือเครื่องเดียว กันใบพิมพ์ซ้ำ`);
+    d.agentSeen = Date.now(); d.agentVer = AGENT_VERSION; d.agentPrinters = online; d.agentDev = AGENT_DEV;
     try { await patchPrinter(target.id, { description: JSON.stringify(d) }); } catch {}
   } catch {} finally { hbBusy = false; }
 }
+
+// ── อัปเดตอัตโนมัติ ─────────────────────────────────────────────────────────
+// เช็คเวอร์ชันใหม่จากเซิร์ฟเวอร์ทุก 5 นาที — ถ้ามีใหม่กว่า → ออก (ตัว launcher จะโหลดใหม่+รันใหม่เอง)
+// ⚠️ ห้ามออกกลางรอบพิมพ์: เดิม process.exit ทันที ถ้า deploy ตอนพีค ใบที่เพิ่งส่งเข้าเครื่องแต่ยังไม่ได้จด
+//    ว่าพิมพ์แล้ว (state จดตอนท้ายรอบ) พอเปิดใหม่จะพิมพ์ซ้ำ — ตัวพิมพ์ทุกสาขาอัปเดตพร้อมกันภายใน 5 นาที
+// ⟹ ตั้งธงไว้ก่อน ไม่เริ่มรอบใหม่ แล้วออกเมื่อรอบหลัก (tick) และรอบเร็ว (ลิ้นชัก/ใบเสร็จ) จบทั้งคู่ + บันทึกความจำแล้ว
+let updatePending = 0;   // เลขเวอร์ชันใหม่ที่รออยู่ (0 = ไม่มี)
+// กัน tick ซ้อน — ถ้ารอบก่อนยังไม่จบ (พีค: render ใบ 9 วิ + ส่งเครื่อง 8 วิ)
+// ต้องข้ามรอบนี้ ไม่งั้นรอบใหม่เห็น state.sig เดิมแล้วสั่งพิมพ์ใบเดิมซ้ำ
+let tickBusy = false;
+// รอบเร็วของลิ้นชัก — กันซ้อนรอบเดียวกับ tick หลัก ถ้ารอบก่อนยังไม่จบก็ข้าม
+let kickBusy = false;
+function exitIfIdle() {
+  if (!updatePending || tickBusy || kickBusy) return false;
+  saveState();
+  console.log(`⬆️  รอบพิมพ์จบแล้ว — อัปเดตเป็น v${updatePending} + รีสตาร์ทอัตโนมัติ...`);
+  process.exit(0);
+  return true;
+}
+async function checkUpdate() {
+  try {
+    const txt = await (await fetch(`${AGENT_URL}?_=${Date.now()}`)).text();
+    const m = txt.match(/AGENT_VERSION\s*=\s*(\d+)/);
+    if (m && +m[1] > AGENT_VERSION) {
+      if (!updatePending) console.log(`⬆️  พบเวอร์ชันใหม่ (v${m[1]}) — รอรอบพิมพ์ที่ทำอยู่ให้จบก่อน แล้วอัปเดต+รีสตาร์ทอัตโนมัติ...`);
+      updatePending = +m[1];
+      exitIfIdle();
+    }
+  } catch {}
+}
+const tickSafe = async () => {
+  if (tickBusy) { console.log("⏭️  ข้ามรอบ — รอบก่อนยังทำงานอยู่ (กันพิมพ์ซ้ำ)"); return; }
+  if (updatePending) { exitIfIdle(); return; }   // รออัปเดต — ไม่เริ่มรอบใหม่
+  tickBusy = true;
+  try { await tick(); } catch (e) { console.log("⚠️ tick ผิดพลาด:", e.message); }
+  finally { tickBusy = false; exitIfIdle(); }
+};
 
 (async () => {
   console.log("════════════════════════════════════════");
   console.log(" FOODCOST — ตัวพิมพ์ผ่านคลาวด์ (Print Agent)");
   console.log(" สาขา (branch):", BRANCH);
+  console.log(" รหัสเครื่องนี้:", AGENT_DEV);
   console.log("════════════════════════════════════════");
   try {
     let printers = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH);
@@ -945,27 +1016,17 @@ async function heartbeat() {
     await greetNewPrinters();
   } catch (e) { console.log("⚠️ โหลดเครื่องพิมพ์ไม่ได้:", e.message); }
   console.log("\n⏳ เริ่มเฝ้าออเดอร์... (Ctrl+C เพื่อหยุด)\n");
-  // กัน tick ซ้อน — ถ้ารอบก่อนยังไม่จบ (พีค: render ใบ 9 วิ + ส่งเครื่อง 8 วิ)
-  // ต้องข้ามรอบนี้ ไม่งั้นรอบใหม่เห็น state.sig เดิมแล้วสั่งพิมพ์ใบเดิมซ้ำ
-  let tickBusy = false;
-  const tickSafe = async () => {
-    if (tickBusy) { console.log("⏭️  ข้ามรอบ — รอบก่อนยังทำงานอยู่ (กันพิมพ์ซ้ำ)"); return; }
-    tickBusy = true;
-    try { await tick(); } catch (e) { console.log("⚠️ tick ผิดพลาด:", e.message); }
-    finally { tickBusy = false; }
-  };
   await tickSafe();
   setInterval(tickSafe, POLL_MS);
-  // รอบเร็วของลิ้นชัก — กันซ้อนรอบเดียวกับ tick หลัก ถ้ารอบก่อนยังไม่จบก็ข้าม
-  let kickBusy = false;
   setInterval(async () => {
     if (kickBusy) return;
+    if (updatePending) { exitIfIdle(); return; }   // รออัปเดต — ไม่เริ่มรอบใหม่
     kickBusy = true;
     try {
       // งานที่ "คนยืนรออยู่หน้าเครื่อง": เปิดลิ้นชัก · ใบเสร็จ/รูป (pj) · พิมพ์ซ้ำ/ใบยกเลิก/ย้ายโต๊ะ (rp) · QR โต๊ะ
       // กรองว่ามีคำสั่งค้างจริงเท่านั้น ⟹ ปกติได้แถวว่าง (ไม่กี่ไบต์) ไม่ใช่ดึงตารางทั้งใบทุก 0.8 วิ
-      // ทุกคำสั่งถูกล้างทิ้งหลังทำ รายการจึงว่างจริงเมื่อไม่มีงาน
-      const rows = (await sb("printers?select=id,name,ip,port,branch_id,description&or=(description.like.*%22dk%22:%7B*,description.like.*%22pj%22:%7B*,description.like.*%22rp%22:%7B*,description.like.*%22qr%22:%7B*)"))
+      // ทุกคำสั่งถูกล้างทิ้งหลังทำ รายการจึงว่างจริงเมื่อไม่มีงาน · กรองสาขาที่ฐานข้อมูลแล้ว (getCmdRows) กรองซ้ำในเครื่องกันพลาด
+      const rows = (await getCmdRows())
         .filter((p) => p.branch_id == null || +p.branch_id === +BRANCH);
       if (rows.length) {
         await handleDrawerRequests(rows);
@@ -974,7 +1035,7 @@ async function heartbeat() {
         await handleReprintRequests(rows);
       }
     } catch { /* เน็ตสะดุดรอบเดียว — รอบหน้าอีก 0.8 วิ */ }
-    finally { kickBusy = false; }
+    finally { kickBusy = false; exitIfIdle(); }
   }, DRAWER_POLL_MS);
   // พิมพ์หน้าทดสอบให้เครื่องที่ "เพิ่งกดเพิ่มใช้งาน" อัตโนมัติ ทุก 30 วินาที
   setInterval(greetNewPrinters, 30 * 1000);

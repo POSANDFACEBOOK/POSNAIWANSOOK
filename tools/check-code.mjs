@@ -73,7 +73,7 @@ const qrBytesOf = (() => {
 })();
 
 const handlesOf = (() => {
-  const st = AGENT.indexOf("function printerHandles(p, it) {");
+  const st = AGENT.indexOf("function printerHandles(p, it, list) {");
   if (st < 0) throw new Error("ไม่เจอ printerHandles");
   let d = 0, started = false, en = -1;
   for (let i = st; i < AGENT.length; i++) {
@@ -464,9 +464,9 @@ const guards = [
     handlesOf({ id: 1, categories: ["ชาบู"] }, { category: "หมูกระทะ" }) === false],
   ["ล้างหมดแล้ว = ไม่รับอะไรเลย (ไม่ใช่รับทุกอย่าง)",
     handlesOf({ id: 1, categories: [] }, { category: "ชาบู" }) === false],
-  ["ปักหมุดเมนูไว้ที่เครื่องไหน = ออกเครื่องนั้นเท่านั้น",
-    handlesOf({ id: 7, categories: [] }, { printer_id: 7, category: "ชาบู" }) === true &&
-    handlesOf({ id: 8, categories: ["ชาบู"] }, { printer_id: 7, category: "ชาบู" }) === false],
+  ["ปักหมุดเมนูไว้ที่เครื่องไหน (ของสาขานี้) = ออกเครื่องนั้นเท่านั้น",
+    handlesOf({ id: 7, categories: [] }, { printer_id: 7, category: "ชาบู" }, [{ id: 7 }, { id: 8 }]) === true &&
+    handlesOf({ id: 8, categories: ["ชาบู"] }, { printer_id: 7, category: "ชาบู" }, [{ id: 7 }, { id: 8 }]) === false],
   ["เครื่องเก่าที่ยังเป็น null ยังรับทุกหมวดอยู่ (ของเดิมไม่พัง)",
     handlesOf({ id: 1, categories: null }, { category: "อะไรก็ได้" }) === true],
   // ── เลิกใช้ catch-all: ติ๊กคือตัวตัดสินอย่างเดียว ──
@@ -2037,11 +2037,13 @@ section("จอบอกว่าออกเครื่องไหน = ท�
     names(app({ id: 2, category: "ของทอด", printer_id: null }, [P[1]])), ["เซตหมู"]);
   ck("น้ำเปล่า (หมวด น้ำ) ออกเครื่องแคชเชียร์เครื่องเดียว — เคสจริงที่เจ้าของถาม",
     names(app({ id: 3, category: "น้ำ", printer_id: null }, noAll)), ["แคชเชียร์"]);
-  ck("เครื่องที่ปิดใช้งานไม่ถูกนับว่ารับ", names(app({ id: 4, category: "น้ำ", printer_id: 13 }, noAll)), []);
+  // หมุดไปเครื่องที่ปิดใช้งาน = เครื่องนั้นไม่อยู่ในลิสต์ที่ตัวพิมพ์ใช้ ⟹ ไม่ถูกนับว่ารับ และไม่นับหมุด (ส่งตามหมวด)
+  ck("เครื่องที่ปิดใช้งานไม่ถูกนับว่ารับ", names(app({ id: 4, category: "น้ำ", printer_id: 13 }, noAll)), ["แคชเชียร์"]);
   ck("ปักหมุดแล้วออกเครื่องนั้นเครื่องเดียว ไม่ตกไปหาหมวด",
     names(app({ id: 5, category: "ของทอด", printer_id: 12 }, noAll)), ["แคชเชียร์"]);
-  ck("ปักหมุดไปเครื่องที่ไม่มีในสาขานี้ = ไม่มีเครื่องรับ (ไม่มีทางสำรอง)",
-    names(app({ id: 6, category: "ของทอด", printer_id: 99 }, noAll)), []);
+  // เมนูใช้ร่วมทั้งเครือ printer_id มีช่องเดียว — ชาบู #95-98 ปักไว้เครื่องสาขา 6 เคยทำให้สาขาอื่นไม่มีใบออกเลย
+  ck("ปักหมุดไปเครื่องที่ไม่มีในสาขานี้ = ไม่นับหมุด ส่งตามหมวดตามปกติ",
+    names(app({ id: 6, category: "ของทอด", printer_id: 99 }, noAll)), ["จานเดียว", "เซตหมู"]);
   ck("ยังไม่จัดหมวด + ทุกเครื่องติ๊กหมวดไว้ = ไม่มีเครื่องรับ",
     names(app({ id: 7, category: "", printer_id: null }, noAll)), []);
   ck("มีเครื่องรับทุกหมวด (categories=null) รับหมดแม้เมนูยังไม่จัดหมวด",
@@ -2061,7 +2063,7 @@ section("จอบอกว่าออกเครื่องไหน = ท�
     for (const m of MENUS) {
       const mine = new Set(app(m, sets).map(p => p.id));
       for (const p of act) {
-        const theirs = agent(p, { printer_id: m.printer_id, category: m.category });
+        const theirs = agent(p, { printer_id: m.printer_id, category: m.category }, act);   // act = ลิสต์ที่ตัวพิมพ์ใช้จริง (สาขานี้ + เปิดใช้)
         if (mine.has(p.id) === !!theirs) same++;
         else diff.push(`เมนู ${m.id} × เครื่อง ${p.id}: จอ=${mine.has(p.id)} ตัวพิมพ์=${!!theirs}`);
       }
@@ -3060,7 +3062,7 @@ section("ปุ่มพิมพ์ไม่สำเร็จ");
 
   // ── ฝั่งตัวพิมพ์: พิมพ์เฉพาะที่กด ครั้งเดียว ชนิดใบเดิม ──
   const retrySrc = grabTop(LG, "async function handleFailRetries(printers) {");
-  const handlesSrc = grabTop(LG, "function printerHandles(p, it) {");
+  const handlesSrc = grabTop(LG, "function printerHandles(p, it, list) {");
   if (retrySrc && handlesSrc) {
     const mkRun = (opts) => {
       const calls = { print: [], send: [], buf: [], settle: [] };
@@ -4722,6 +4724,134 @@ section("ของที่ใช้ร่วมกันทุกจอ: อ่
   // การ์ดรายงานที่ไม่มีอะไรให้เปิด ห้ามมีลูกศร/ยกตัว — ไม่งั้นพนักงานกดแล้วงงว่าทำไมไม่ไปไหน
   const rc = APP.slice(APP.indexOf("function RptCard("), APP.indexOf("function WasteReport("));
   ok_("การ์ดรายงาน: ลูกศร+ยกตัว+มือชี้ เฉพาะการ์ดที่กดเปิดได้", rc.includes("const tap=!!onClick;") && rc.includes("{tap&&<span") && rc.includes('cursor:tap?"pointer":"default"') && rc.includes("onMouseEnter={tap?"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// เปิด POS สาขาที่ 2 (กาญจนบุรี สาขา 5) ขณะที่ The River (สาขา 8) ใช้ตัวพิมพ์จริงอยู่ — 12 ต.ค. 69
+// ตัวพิมพ์ทุกสาขาอัปเดตตัวเองภายใน 5 นาทีหลัง deploy ⟹ ทุกข้อรันโค้ดจริงกับข้อมูลรูปเดียวกับฐานจริง
+// (ชุดทดสอบละเอียดของตัวพิมพ์อยู่ที่ tools/check-agent-poll.mjs)
+// ══════════════════════════════════════════════════════════════════════════
+section("POS สาขาที่ 2: ตัวพิมพ์");
+{
+  // ── #2 หมุดเครื่องพิมพ์รายเมนู: ใช้ได้เฉพาะเครื่องของสาขาที่กำลังพิมพ์ — แอปสองจุดกับตัวพิมพ์ต้องตอบตรงกัน ──
+  const appFor = new Function(grabConst(APP, "menuCatOf") + "\n" + grabConst(APP, "printersForMenu") + "\nreturn printersForMenu;")();
+  const appHandles = new Function(grab(APP, "printerHandles") + "\nreturn printerHandles;")();
+  // รูปเดียวกับ GET printers จริง: 8/9 ของสาขา 6 · 10/11/12 ของ River (+เครื่องปิดใช้งานไว้ลองกรณีหมุดชี้เครื่องที่ปิด)
+  const ALLP = [
+    { id: 8, name: "ครัว", ip: "10.6.0.111", branch_id: 6, active: true, categories: ["หมูกระทะ"] },
+    { id: 9, name: "แคชเชียร์6", ip: "10.6.0.157", branch_id: 6, active: true, categories: ["ชาบู", "หมูกระทะ"] },
+    { id: 10, name: "จานเดียว", ip: "10.8.0.111", branch_id: 8, active: true, categories: ["อาหารจานเดียว", "ของทอด"] },
+    { id: 11, name: "เซตหมู", ip: "10.8.0.157", branch_id: 8, active: true, categories: ["ชาบู", "ยำ"] },
+    { id: 12, name: "แคชเชียร์", ip: "10.8.0.147", branch_id: 8, active: true, categories: ["น้ำ"] },
+    { id: 13, name: "เครื่องเก่า", ip: "10.8.0.9", branch_id: 8, active: false, categories: ["ชาบู"] },
+  ];
+  const ofBranch = (b) => ALLP.filter(p => p.branch_id == null || +p.branch_id === +b);
+  const SHABU = { id: 95, name: "ชาบูเล็ก", printer_id: 8, category: "ชาบู" };   // ชาบู #95-98 ปักไว้เครื่อง #8 ของสาขา 6
+  const idsApp = (m, b) => appFor(m, ofBranch(b)).map(p => p.id).join();
+  ck("#2 จอบอก: ชาบูที่ปักหมุดเครื่องสาขา 6 → ที่ River ออกเครื่องเซตหมูตามหมวด", idsApp(SHABU, 8), "11");
+  ck("#2 จอบอก: ที่สาขา 6 เอง หมุดยังใช้ได้ → ครัว เครื่องเดียว", idsApp(SHABU, 6), "8");
+  ck("#2 จอบอก: หมุดชี้เครื่องที่ปิดใช้งาน = ไม่นับหมุด ส่งตามหมวด", idsApp({ ...SHABU, printer_id: 13 }, 8), "11");
+  const MENUS = [SHABU, { ...SHABU, printer_id: "11" }, { ...SHABU, printer_id: 12 }, { ...SHABU, printer_id: 13 }, { ...SHABU, printer_id: 99 }, { ...SHABU, printer_id: "" },
+    { id: 1, category: "น้ำ", printer_id: null }, { id: 2, category: "ไม่มีใครรับ", printer_id: 8 }, { id: 3, category: "", printer_id: null }, { id: 4, category: null, printer_id: 9 }];
+  const diff = [];
+  for (const b of [5, 6, 8]) {
+    const act = ofBranch(b).filter(p => p.active !== false);
+    for (const m of MENUS) {
+      const mine = new Set(appFor(m, ofBranch(b)).map(p => p.id));
+      const it = { printer_id: m.printer_id, category: m.category };
+      for (const p of act) {
+        const ag = !!handlesOf(p, it, act), ap = !!appHandles(p, it, act);
+        if (mine.has(p.id) !== ag || ap !== ag) diff.push(`สาขา ${b} เมนู ${m.id}/${m.printer_id} × เครื่อง ${p.id}: จอ=${mine.has(p.id)} แอป=${ap} ตัวพิมพ์=${ag}`);
+      }
+    }
+  }
+  ck("#2 จอ / แอป (ส่งพิมพ์ซ้ำ) / ตัวพิมพ์ ตัดสินหมุดตรงกันทุกคู่ ทุกสาขา", diff, []);
+  // แอปส่งพิมพ์ซ้ำ/ใบยกเลิก/ย้ายโต๊ะ (agentPrintItems) ต้องใช้กติกาเดียวกันจริงตอนเลือกเครื่อง
+  {
+    const writes = [];
+    const fn = new Function("api", "getPConn", "cmdDesc", "printerHandles", "async " + grab(APP, "agentPrintItems") + "\nreturn agentPrintItems;")(
+      { getAllPrinters: async () => ALLP, updatePrinter: async (id, body) => { writes.push({ id, body }); } },
+      () => ({ type: "lan" }), (p, k, v) => JSON.stringify({ [k]: v }), appHandles);
+    const r = await fn([{ qty: 1, name: "ชาบูเล็ก", printer_id: 8, category: "ชาบู" }], "A1", 8, { kind: "reprint" }, false);
+    ck("#2 แอปสั่งพิมพ์ซ้ำที่ River: ชาบูที่ปักหมุดสาขาอื่น ไปเครื่องเซตหมู (ไม่หายเงียบ)", { to: writes.map(w => w.id), noPrinter: r.noPrinter }, { to: [11], noPrinter: 0 });
+  }
+
+  // ── #12 จด orphan: อ่านของล่าสุดก่อนเขียน · อ่านไม่ได้ไม่เขียน · ชุดเดิมไม่เขียน ──
+  {
+    const o0 = AGENT.indexOf("let _orphanLast"), blk = o0 < 0 ? "" : AGENT.slice(o0, AGENT.indexOf("// alreadyDone = {", o0));
+    const mk = (sbImpl) => { const io = { reads: 0, writes: [] }; const fn = new Function("sb", "patchPrinter", blk + "\nreturn noteOrphan;")(async (q) => { io.reads++; return sbImpl(q); }, async (id, b) => { io.writes.push(JSON.parse(b.description)); }); return { fn, io }; };
+    const stale = { id: 10, description: "{}" };
+    const A = mk(async () => { throw new Error("504"); });
+    await A.fn(stale, [{ name: "น้ำเปล่า" }]);
+    ok_("#12 อ่านแถวเครื่องพิมพ์ไม่ได้ → ไม่เขียน orphan ทับ (ไม่ทำค่าตั้งเครื่อง/คำสั่งหาย)", A.io.writes.length === 0);
+    const B = mk(async () => [{ description: JSON.stringify({ rcpt: 1, dw: 1, pj: { at: 1, b64: "QQ==" }, failed: [{ id: "F" }] }) }]);
+    await B.fn(stale, [{ name: "น้ำเปล่า" }]); await B.fn(stale, [{ name: "น้ำเปล่า" }]);
+    const w = B.io.writes[0] || {};
+    ok_("#12 เขียนจากของล่าสุด (ค่าตั้งเครื่อง/คำสั่ง/รายการไม่ออกอยู่ครบ) และชุดเดิมไม่เขียนซ้ำ",
+      B.io.writes.length === 1 && B.io.reads === 1 && w.rcpt === 1 && w.dw === 1 && w.pj && w.failed && w.failed.length === 1 && w.orphan && w.orphan.names.join() === "น้ำเปล่า");
+  }
+
+  // ── #13 รอบเร็ว 0.8 วิ ถามเฉพาะคำสั่งค้างของสาขานี้ (กรองที่ฐานข้อมูล) ──
+  {
+    const ln = AGENT.split("\n").find(l => l.startsWith("const getCmdRows = "));
+    let q = "";
+    if (ln) await new Function("sb", "BRANCH", ln + "\nreturn getCmdRows;")(async (x) => { q = x; return []; }, "8")();
+    const ors = [...new URLSearchParams(q.slice(q.indexOf("?") + 1))].filter(([k]) => k === "or").map(([, v]) => v);
+    ok_("#13 คิวรีรอบเร็วกรองสาขานี้ (+เครื่องใช้ร่วม) ที่ฐานข้อมูล และยังกรองเฉพาะแถวที่มีคำสั่งค้าง",
+      ors.includes("(branch_id.is.null,branch_id.eq.8)") && ors.some(v => v.includes('description.like.*"pj":{*')) && ors.length === 2);
+    ok_("#13 รอบเร็วเรียกคิวรีที่กรองสาขาแล้ว", AGENT.includes("const rows = (await getCmdRows())"));
+  }
+
+  // ── #16 รหัสประจำเครื่อง: ตัวพิมพ์สองเครื่องรันสาขาเดียวกันต้องมองเห็นได้ (แอปอ่านช่อง agentDev) ──
+  {
+    const nodeCrypto = await import("node:crypto");
+    const mkLoad = (file) => {
+      const io = { wrote: [] };
+      const fsMock = { readFileSync: () => { if (file == null) { const e = new Error("ENOENT"); e.code = "ENOENT"; throw e; } return file; }, writeFileSync: (p, v) => { io.wrote.push([p, v]); } };
+      const fn = new Function("fs", "DEV_FILE", "require", grab(AGENT, "loadDeviceId") + "\nreturn loadDeviceId;")(fsMock, "/home/.foodcost-agent-id", (m) => (m === "crypto" ? nodeCrypto : null));
+      return { id: fn(), io };
+    };
+    const a = mkLoad(null), b = mkLoad(null), c = mkLoad("a1b2c3d4e5f6\n"), d = mkLoad("{พัง");
+    ok_("#16 เครื่องใหม่: สุ่มรหัสแล้วเก็บลงไฟล์ข้างไฟล์ความจำ · สองเครื่องได้รหัสไม่ซ้ำกัน",
+      /^[0-9a-f]{12}$/.test(a.id) && a.io.wrote.length === 1 && a.io.wrote[0][1] === a.id && a.id !== b.id);
+    ok_("#16 รีสตาร์ท/อัปเดต: ใช้รหัสเดิมจากไฟล์ ไม่สุ่มใหม่ (ไม่ขึ้นเตือนผิดๆ)", c.id === "a1b2c3d4e5f6" && c.io.wrote.length === 0);
+    ok_("#16 ไฟล์รหัสเสีย → สุ่มใหม่แล้วเขียนทับ", /^[0-9a-f]{12}$/.test(d.id) && d.io.wrote.length === 1);
+    ok_("#16 ไฟล์รหัสแยกจากไฟล์ความจำ (ลบความจำตอนสลับเครื่องแล้วรหัสไม่หาย) อยู่โฟลเดอร์เดียวกัน",
+      AGENT.includes('const DEV_FILE = path.join(process.env.HOME || ".", ".foodcost-agent-id");') && AGENT.includes('const STATE_FILE = path.join(process.env.HOME || ".", ".foodcost-printed.json");'));
+    const runHb = async (stored) => {
+      const out = { patched: null, logs: [] };
+      const fn = new Function("getPrinters", "BRANCH", "isBluetooth", "sb", "patchPrinter", "AGENT_VERSION", "AGENT_DEV", "console", "let hbBusy = false;\nasync " + grab(AGENT, "heartbeat") + "\nreturn heartbeat;")(
+        async () => [{ id: 11, branch_id: 8, ip: "x", active: true, description: "{}" }, { id: 10, branch_id: 8, ip: "y", active: true, description: "{}" }], "8", () => false,
+        async () => [{ description: JSON.stringify(stored) }], async (id, body) => { out.patched = { id, d: JSON.parse(body.description) }; }, 47, "a1b2c3d4e5f6", { log: (...x) => out.logs.push(x.join(" ")) });
+      await fn();
+      return out;
+    };
+    const h1 = await runHb({ rcpt: 1, failed: [{ id: "F" }], agentSeen: 1, agentVer: 46 });   // แถวจากตัวพิมพ์รุ่นก่อน (ยังไม่มี agentDev)
+    ok_("#16 heartbeat เขียน agentDev (ตัวอักษร) ลงเครื่องเลขน้อยสุดของสาขา โดยค่าอื่นอยู่ครบ",
+      !!h1.patched && h1.patched.id === 10 && h1.patched.d.agentDev === "a1b2c3d4e5f6" && typeof h1.patched.d.agentDev === "string" && h1.patched.d.agentVer === 47 && h1.patched.d.rcpt === 1 && h1.patched.d.failed.length === 1 && h1.logs.length === 0);
+    const h2 = await runHb({ agentSeen: Date.now() - 20000, agentDev: "ffffeeee0000" });
+    const h3 = await runHb({ agentSeen: Date.now() - 20000, agentDev: "a1b2c3d4e5f6" });
+    ok_("#16 อีกเครื่องเพิ่งเต้นด้วยรหัสอื่น → เตือนบนจอตัวพิมพ์ และยังเขียนรหัสตัวเอง · รหัสตัวเองไม่เตือน",
+      h2.logs.some(l => l.includes("ffffeeee0000")) && h2.patched && h2.patched.d.agentDev === "a1b2c3d4e5f6" && h3.logs.length === 0);
+    ok_("#16 ไม่มีการ prime ใหม่ตามอายุไฟล์ความจำ (เสี่ยงทิ้งใบจริง)", AGENT.includes("let primed = stateLoaded;") && !/primed\s*=\s*false/.test(AGENT));
+  }
+
+  // ── #27 เจอเวอร์ชันใหม่: ตั้งธงไว้ ออกหลังรอบพิมพ์จบ + บันทึกความจำแล้ว ──
+  {
+    const u0 = AGENT.indexOf("let updatePending = 0;"), blk = u0 < 0 ? "" : AGENT.slice(u0, AGENT.indexOf("\n(async () => {", u0));
+    const log = []; let gate;
+    const api = new Function("saveState", "process", "console", "fetch", "AGENT_URL", "AGENT_VERSION", "tick", blk + "\nreturn { checkUpdate, tickSafe };")(
+      () => log.push("save"), { exit: (c) => log.push("exit:" + c) }, { log() {} }, async () => ({ text: async () => "const AGENT_VERSION = 48;" }), "u", 47,
+      async () => { log.push("tick"); await new Promise(r => { gate = r; }); });
+    const t = api.tickSafe();
+    await api.checkUpdate();
+    const midway = log.join();
+    gate(); await t;
+    ok_("#27 deploy ตอนกำลังพิมพ์: ไม่ออกกลางรอบ → ออกหลังรอบจบและบันทึกความจำแล้ว", midway === "tick" && log.join() === "tick,save,exit:0");
+    ok_("#27 รอบเร็ว (ลิ้นชัก/ใบเสร็จ) ไม่เริ่มใหม่ตอนรออัปเดต และเช็คออกเมื่อจบรอบ",
+      AGENT.includes("    if (kickBusy) return;\n    if (updatePending) { exitIfIdle(); return; }") && AGENT.includes("    finally { kickBusy = false; exitIfIdle(); }"));
+  }
+  ok_("ขยับเวอร์ชันตัวพิมพ์แล้ว (ร้านอัปเดตเอง)", +((AGENT.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 47);
 }
 
 

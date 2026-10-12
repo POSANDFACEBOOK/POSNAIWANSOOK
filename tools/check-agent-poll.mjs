@@ -298,7 +298,7 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
     ok_("ผ่านครบแล้วไม่ส่งอะไรอีก", pick([A, B], { 1: 1, 2: 1 }).length === 0);
   }
   ok_("orphan ดูจากเครื่องทั้งหมด ไม่ใช่เฉพาะที่ยังไม่ส่ง",
-    SRC.includes("const orphan = items.filter(it => !all.some(p => printerHandles(p, it)));"));
+    SRC.includes("const orphan = items.filter(it => !all.some(p => printerHandles(p, it, printers)));"));
   ok_("printItems คืนรายชื่อเครื่องที่ผ่าน + รายการที่ไม่ได้พิมพ์", SRC.includes("return { ok: !anyFail, okIds, failedItems, errs };"));
   ok_("tick จำเครื่องที่ผ่านไว้ใน state.done", SRC.includes("const done = state.done[dk] || {};"));
   ok_("ไม่ลองพิมพ์ใหม่เองเลย (เจ้าของสั่ง: ให้แจ้งเตือนแล้วรอพนักงานกด)", !SRC.includes("state.tries"));
@@ -508,6 +508,181 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
     SRC.includes('kind: (meta && meta.kind) ? String(meta.kind) : ""') && SRC.includes('from: (meta && meta.from) ? String(meta.from) : ""'));
   ok_("พิมพ์ซ้ำ: ยังมาร์คก่อนส่งอยู่ (ห้ามตัวพิมพ์ลองพิมพ์ใหม่เอง)",
     SRC.includes("state.reprinted[p.id] = rp.at; saveState();"));
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// เตรียมสาขาที่ 2 ขึ้น POS (กาญจนบุรี สาขา 5) ขณะที่ The River (สาขา 8) ใช้จริงอยู่ — 12 ต.ค. 69
+// ทุกข้อดึงโค้ดจริงจากตัวพิมพ์มารันกับของปลอม แล้วดูว่า "ส่งไปไหน / เขียนอะไร / ออกเมื่อไร"
+// ════════════════════════════════════════════════════════════════════════
+const S = SRC.split("\r\n").join("\n"), SL = S.split("\n");
+// ดึงก้อนโค้ดระดับบนสุด: จากบรรทัดหัว ถึงบรรทัดปิดตัวแรกหลังบรรทัด until (บรรทัดที่เป็น "}" หรือ "};" ล้วน)
+const grabTopBlock = (head, until) => {
+  const a = SL.findIndex(l => l.startsWith(head));
+  if (a < 0) throw new Error("ไม่พบ: " + head);
+  const u = until ? SL.findIndex((l, i) => i >= a && l.startsWith(until)) : a;
+  if (u < 0) throw new Error("ไม่พบ: " + until);
+  const b = SL.findIndex((l, i) => i > u && (l === "}" || l === "};"));
+  return SL.slice(a, b + 1).join("\n");
+};
+const handlesFn = new Function(grabTopBlock("function printerHandles(p, it, list) {") + "\nreturn printerHandles;")();
+// ข้อมูลจริงจากฐาน (GET printers 12 ต.ค. 69): เครื่อง 8/9 ของสาขา 6 · 10/11/12 ของ River
+const PR6 = [{ id: 8, name: "ครัว", ip: "10.6.0.111", branch_id: 6, categories: ["หมูกระทะ"] }, { id: 9, name: "แคชเชียร์", ip: "10.6.0.157", branch_id: 6, categories: ["ชาบู", "หมูกระทะ"] }];
+const PR8 = [{ id: 10, name: "จานเดียว", ip: "10.8.0.111", branch_id: 8, categories: ["อาหารจานเดียว", "ของทอด"] }, { id: 11, name: "เซตหมู", ip: "10.8.0.157", branch_id: 8, categories: ["ชาบู", "ยำ"] }, { id: 12, name: "แคชเชียร์", ip: "10.8.0.147", branch_id: 8, categories: ["น้ำ"] }];
+// ชาบู #95-98 ปักหมุดไว้เครื่อง #8 (ของสาขา 6) แต่เปิดขายหลายสาขา
+const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_id: 8, category: "ชาบู" };
+
+// ── #2 หมุดเครื่องพิมพ์รายเมนูใช้ได้เฉพาะเครื่องของสาขาที่กำลังพิมพ์ ──
+{
+  const mk = (sendFails) => {
+    const sent = [], orphans = [];
+    const fn = new Function("isBluetooth", "renderItemBufs", "printerHandles", "bufsMode", "sendToPrinter", "errOf", "noteOrphan", "console",
+      grabTopBlock("async function printItems(") + "\nreturn printItems;")(
+      () => false, async (items) => items.map(() => ({ buf: Buffer.from("x"), raster: true })), handlesFn, () => "รูปภาพ",
+      async (ip) => { sent.push(ip); if (sendFails && sendFails.includes(ip)) { const e = new Error("t"); e.code = "CONNECT_TIMEOUT"; throw e; } },
+      (p, e) => ({ pid: p.id, code: e.code }), async (target, orphan) => { orphans.push({ target: target && target.id, names: orphan.map(i => i.name) }); }, { log() {} });
+    return { fn, sent, orphans };
+  };
+  const a = mk();
+  const ra = await a.fn([SHABU], "A1", PR8, {}, {});
+  ok_("#2 หมุดชี้เครื่องสาขาอื่น → River ส่งตามหมวด (ชาบู → เซตหมู) ไม่หายเงียบ", a.sent.join() === "10.8.0.157" && a.orphans.length === 0 && ra.ok && ra.failedItems.length === 0);
+  const b = mk();
+  await b.fn([SHABU], "A1", PR6, {}, {});
+  ok_("#2 หมุดชี้เครื่องของสาขาตัวเอง → ยังออกเครื่องนั้นเครื่องเดียว (ไม่ตกไปหาหมวด)", b.sent.join() === "10.6.0.111" && b.orphans.length === 0);
+  const c = mk();
+  await c.fn([{ ...SHABU, printer_id: "11" }], "A1", PR8, {}, {});
+  ok_("#2 หมุดเป็นตัวอักษร '11' ก็ยังจับคู่เครื่อง 11 ได้", c.sent.join() === "10.8.0.157");
+  const d = mk();
+  await d.fn([{ name: "ของแปลก", qty: 1, printer_id: 99, category: "ไม่มีใครรับ" }], "A1", PR8, {}, {});
+  ok_("#2 หมุดชี้เครื่องที่ไม่มี + หมวดไม่มีใครรับ → ไม่พิมพ์ และจดเป็นเมนูไม่มีเครื่องรับที่เครื่องแรกของสาขา", d.sent.length === 0 && d.orphans.length === 1 && d.orphans[0].target === 10);
+  const e = mk(["10.8.0.157"]);
+  const re = await e.fn([SHABU], "A1", PR8, {}, {});
+  ok_("#2 ส่งตามหมวดแล้วเครื่องไม่ออก → รายการเข้ารายการพิมพ์ไม่สำเร็จ (ให้พนักงานกดเอง)", re.ok === false && re.failedItems.length === 1 && re.failedItems[0].name === "ชาบูเล็ก");
+  // ไม่ส่งลิสต์มา (โค้ดเก่า) = เชื่อหมุดแบบเดิม — ของเดิมไม่พัง แต่ทุกจุดในตัวพิมพ์ต้องส่งลิสต์
+  ok_("#2 printerHandles ไม่มีลิสต์ = เชื่อหมุดแบบเดิม", handlesFn(PR6[1], SHABU) === false && handlesFn({ id: 8, categories: [] }, SHABU) === true);
+  const calls = S.match(/printerHandles\([^)]*\)/g) || [];
+  const noList = calls.filter(c => !/^printerHandles\(p, it, list\)$/.test(c) && c.split(",").length < 3);
+  ok_("#2 ทุกจุดที่ตัวพิมพ์ตัดสินเส้นทาง ส่งลิสต์เครื่องของสาขาไปด้วย (" + calls.length + " จุด)", calls.length >= 6 && noList.length === 0);
+}
+
+// ── #12 จด orphan: อ่านของล่าสุดก่อนเขียน · อ่านไม่ได้ไม่เขียน · ชุดเดิมไม่เขียน ──
+{
+  const block = grabTopBlock("let _orphanLast", "async function noteOrphan(");
+  const mk = (sbImpl, patchRes) => {
+    const io = { reads: 0, writes: [] };
+    const fn = new Function("sb", "patchPrinter", block + "\nreturn noteOrphan;")(
+      async (q) => { io.reads++; return sbImpl(q); }, async (id, body) => { io.writes.push({ id, d: JSON.parse(body.description) }); return patchRes; });
+    return { fn, io };
+  };
+  const stale = { id: 10, description: JSON.stringify({ on: 1 }) };   // แคชอายุ 6 วิ — ยังไม่เห็นคำสั่งที่เพิ่งเข้ามา
+  const live = { on: 1, rcpt: 1, dw: 1, failed: [{ id: "F1" }], pj: { at: 5, b64: "QQ==" } };
+  const A = mk(async () => { throw new Error("504"); });
+  ok_("#12 อ่านแถวไม่ได้ → ไม่เขียนเลย (ไม่ทับค่าตั้งเครื่อง)", (await A.fn(stale, [{ name: "น้ำเปล่า" }])) === false && A.io.writes.length === 0);
+  const B = mk(async () => [{ description: "{พัง" }]);
+  ok_("#12 description อ่านไม่ออก → ไม่เขียน", (await B.fn(stale, [{ name: "น้ำเปล่า" }])) === false && B.io.writes.length === 0);
+  const C = mk(async () => []);
+  ok_("#12 ไม่เจอแถว → ไม่เขียน", (await C.fn(stale, [{ name: "น้ำเปล่า" }])) === false && C.io.writes.length === 0);
+  const D = mk(async () => [{ description: JSON.stringify(live) }]);
+  await D.fn(stale, [{ name: "น้ำเปล่า" }, { name: "โค้ก" }, { name: "น้ำเปล่า" }]);
+  const w = D.io.writes[0] && D.io.writes[0].d;
+  ok_("#12 เขียนทับจากของล่าสุด: คำสั่งใบเสร็จ/ลิ้นชัก/ติ๊กใบเสร็จ/รายการไม่ออก อยู่ครบ",
+    D.io.writes.length === 1 && !!w && w.rcpt === 1 && w.dw === 1 && w.failed.length === 1 && w.pj.at === 5 && w.orphan.names.join() === "น้ำเปล่า,โค้ก" && w.orphan.n === 3);
+  await D.fn(stale, [{ name: "โค้ก" }, { name: "น้ำเปล่า" }]);
+  ok_("#12 บิลถัดไปชุดเดิม (สลับลำดับ) → ไม่อ่าน ไม่เขียนซ้ำ", D.io.reads === 1 && D.io.writes.length === 1);
+  await D.fn(stale, [{ name: "ยำ" }]);
+  ok_("#12 ชุดเปลี่ยน → อ่านใหม่แล้วเขียน", D.io.reads === 2 && D.io.writes.length === 2 && D.io.writes[1].d.orphan.names.join() === "ยำ");
+  const E = mk(async () => [{ description: JSON.stringify({ ...live, orphan: { at: 1, names: ["โค้ก", "น้ำเปล่า"], n: 2 } }) }]);
+  await E.fn(stale, [{ name: "น้ำเปล่า" }, { name: "โค้ก" }]);
+  ok_("#12 เพิ่งรีสตาร์ท แต่ในแถวเป็นชุดเดียวกันอยู่แล้ว → ไม่เขียน", E.io.reads === 1 && E.io.writes.length === 0);
+  const F = mk(async () => [{ description: JSON.stringify(live) }], { ok: false });
+  await F.fn(stale, [{ name: "น้ำเปล่า" }]); await F.fn(stale, [{ name: "น้ำเปล่า" }]);
+  ok_("#12 เขียนไม่ผ่าน → รอบหน้าลองจดใหม่ (ไม่จำว่าจดแล้ว)", F.io.reads === 2 && F.io.writes.length === 2);
+  ok_("#12 printItems ไม่เขียนแถวเครื่องพิมพ์เองอีก (ผ่าน noteOrphan ที่เดียว)",
+    !grabTopBlock("async function printItems(").includes("patchPrinter(") && grabTopBlock("async function printItems(").includes("await noteOrphan("));
+}
+
+// ── #13 รอบเร็ว 0.8 วิ ต้องถามเฉพาะแถวของสาขานี้ (กรองที่ฐานข้อมูล) ──
+{
+  // ตัวประเมินเงื่อนไข PostgREST แบบย่อ — พอสำหรับ or=(...) · col.is.null · col.eq.x · col.like.*x* (หลาย or = "และ")
+  const cond = (row, c) => {
+    const m = c.match(/^([a-z_]+)\.(is|eq|like)\.(.*)$/);
+    if (!m) throw new Error("อ่านเงื่อนไขไม่ออก: " + c);
+    const v = row[m[1]];
+    if (m[2] === "is") return m[3] === "null" ? v == null : false;
+    if (m[2] === "eq") return v != null && String(v) === m[3];
+    const re = new RegExp("^" + m[3].split("*").map(x => x.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$");
+    return v != null && re.test(String(v));
+  };
+  const runQuery = (q, rows) => {
+    const params = [...new URLSearchParams(q.slice(q.indexOf("?") + 1))].filter(([k]) => k !== "select" && k !== "order");
+    return rows.filter(r => params.every(([k, v]) => k === "or" ? v.replace(/^\(|\)$/g, "").split(",").some(c => cond(r, c)) : cond(r, k + "." + v)));
+  };
+  const qOf = (branch) => { let q = null; new Function("sb", "BRANCH", grabLine("const getCmdRows = ") + "\nreturn getCmdRows;")(async (x) => { q = x; return []; }, branch)(); return q; };
+  const ROWS = [
+    { id: 1, branch_id: 5, description: JSON.stringify({ pj: { at: 1, b64: "x".repeat(24000) } }) },   // ใบเสร็จรูปค้างของสาขา 5 (ตัวพิมพ์ดับ)
+    { id: 2, branch_id: 8, description: JSON.stringify({ dk: { at: 2 } }) },
+    { id: 3, branch_id: null, description: JSON.stringify({ rp: { at: 3, items: [] } }) },
+    { id: 4, branch_id: 8, description: JSON.stringify({ on: 1, agentSeen: 9 }) },
+    { id: 5, branch_id: 6, description: JSON.stringify({ qr: { at: 4 } }) },
+  ];
+  const r8 = runQuery(qOf("8"), ROWS).map(r => r.id).join();
+  const r5 = runQuery(qOf("5"), ROWS).map(r => r.id).join();
+  ok_("#13 River ไม่ดาวน์โหลดใบเสร็จรูปที่ค้างของสาขาอื่น (ได้แค่แถวตัวเอง + ที่ใช้ร่วม)", r8 === "2,3");
+  ok_("#13 สาขา 5 เห็นคำสั่งของตัวเองครบ", r5 === "1,3");
+  ok_("#13 ยังกรองเฉพาะแถวที่มีคำสั่งค้าง (แถวสถานะล้วนไม่ถูกดึง)", !r8.split(",").includes("4"));
+  ok_("#13 รอบเร็วใช้คิวรีที่กรองสาขานี้", S.includes("const rows = (await getCmdRows())") && !/await sb\("printers\?select=id,name,ip,port,branch_id,description/.test(S));
+}
+
+// ── #27 เจอเวอร์ชันใหม่: ตั้งธง ไม่เริ่มรอบใหม่ ออกเมื่อรอบหลัก+รอบเร็วจบและบันทึกความจำแล้ว ──
+{
+  const block = grabTopBlock("let updatePending = 0;", "const tickSafe = async () => {");
+  const ka = SL.findIndex((l, i) => l === "  setInterval(async () => {" && SL[i + 1] === "    if (kickBusy) return;");
+  const kb = SL.findIndex((l, i) => i > ka && l === "  }, DRAWER_POLL_MS);");
+  const kickBody = ka >= 0 && kb > ka ? SL.slice(ka + 1, kb).join("\n") : null;
+  ok_("#27 อ่านรอบเร็วตัวจริงได้", !!kickBody);
+  const deferred = () => { let r; const p = new Promise(x => { r = x; }); return { p, r }; };
+  const mk = (remoteVer, opts) => {
+    const o = opts || {};
+    const log = [];
+    const env = { tickGate: null, kickGate: null, ticks: 0, cmdPolls: 0 };
+    const api = new Function("saveState", "process", "console", "fetch", "AGENT_URL", "AGENT_VERSION", "tick", "getCmdRows", "BRANCH",
+      "handleDrawerRequests", "handlePJRequests", "handleQRRequests", "handleReprintRequests",
+      block + "\nconst kickRound = async () => {\n" + kickBody + "\n};\nreturn { checkUpdate, exitIfIdle, tickSafe, kickRound, st: () => ({ updatePending, tickBusy, kickBusy }) };")(
+      () => log.push("save"), { exit: (c) => log.push("exit:" + c) }, { log() {} },
+      async () => { if (o.netFail) throw new Error("offline"); return { text: async () => `const AGENT_VERSION = ${remoteVer};` }; }, "http://x", 47,
+      async () => { env.ticks++; log.push("tick"); if (env.tickGate) await env.tickGate.p; },
+      async () => { env.cmdPolls++; return [{ id: 10, branch_id: 8, description: "{}" }]; }, "8",
+      async () => { log.push("kick"); if (env.kickGate) await env.kickGate.p; }, async () => {}, async () => {}, async () => {});
+    return { api, log, env };
+  };
+  { const { api, log } = mk(48);
+    await api.checkUpdate();
+    ok_("#27 ว่างอยู่ → บันทึกความจำแล้วออกทันที", log.join() === "save,exit:0"); }
+  { const { api, log, env } = mk(48);
+    env.tickGate = deferred();
+    const t = api.tickSafe();
+    await api.checkUpdate();
+    ok_("#27 กำลังพิมพ์รอบหลัก → ยังไม่ออก (ตั้งธงไว้)", !log.some(x => x.startsWith("exit")) && api.st().updatePending === 48);
+    await api.tickSafe();
+    ok_("#27 รอบหลักยังไม่จบ → ไม่เริ่มรอบซ้อน", env.ticks === 1);
+    env.tickGate.r(); await t;
+    ok_("#27 รอบหลักจบ → บันทึกความจำ แล้วออกครั้งเดียว", log.join() === "tick,save,exit:0"); }
+  { const { api, log, env } = mk(48);
+    env.kickGate = deferred();
+    const k = api.kickRound();
+    await new Promise(r => setTimeout(r, 0));
+    await api.checkUpdate();
+    await api.tickSafe();
+    ok_("#27 รอบเร็ว (ลิ้นชัก/ใบเสร็จ) กำลังส่ง → ไม่ออก และไม่เริ่มรอบหลักใหม่", !log.some(x => x.startsWith("exit")) && env.ticks === 0);
+    env.kickGate.r(); await k;
+    ok_("#27 รอบเร็วจบ → บันทึกความจำ แล้วออก", log.join() === "kick,save,exit:0");
+    const polls = env.cmdPolls;
+    await api.kickRound();
+    ok_("#27 รออัปเดตอยู่ → รอบเร็วไม่ถามคำสั่งใหม่", env.cmdPolls === polls); }
+  { const { api, log } = mk(47); await api.checkUpdate();
+    ok_("#27 เวอร์ชันเท่าเดิม → ไม่ตั้งธง ไม่ออก", log.length === 0 && api.st().updatePending === 0); }
+  { const { api, log } = mk(48, { netFail: true }); await api.checkUpdate();
+    ok_("#27 เช็คเวอร์ชันไม่ได้ (เน็ตสะดุด) → ทำงานต่อตามปกติ", log.length === 0); }
+  ok_("#27 ไม่เหลือการออกทันทีตอนเจอเวอร์ชันใหม่", (S.match(/process\.exit\(0\)/g) || []).length === 1 && grabTopBlock("function exitIfIdle(").includes("process.exit(0)"));
 }
 
 console.log("\n" + "=".repeat(52));

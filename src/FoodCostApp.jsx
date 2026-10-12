@@ -1916,11 +1916,12 @@ const printFailWeight=(f)=>Array.isArray(f.items)&&f.items.length?f.items.length
 // จนหมดกลายเป็นเปิดให้ทุกสาขาแทน (บั๊คที่เจอ 27/08/2569)
 // เครื่องไหนจะได้พิมพ์เมนูนี้ — ต้องตรงกับ printerHandles ใน public/print-agent.js เป๊ะๆ
 // ถ้าสองที่นี้คิดไม่เหมือนกัน จอจะบอกว่ามีเครื่องรับ แต่ของจริงไม่มีใบออกมา (หรือกลับกัน)
-// กติกา: ปักหมุดเมนู (printer_id) → เครื่องนั้นเครื่องเดียว ไม่มีทางสำรอง
+// กติกา: ปักหมุดเมนู (printer_id) ไปเครื่องของสาขานี้ → เครื่องนั้นเครื่องเดียว ไม่มีทางสำรอง
+//        หมุดชี้ไปเครื่องที่ไม่อยู่ในสาขานี้ (เมนูใช้ร่วมทั้งเครือ แต่ printer_id มีช่องเดียว) = ถือว่าไม่ได้ปัก
 //        ไม่ปักหมุด → เครื่องที่ categories เป็น null รับทุกหมวด · ไม่งั้นต้องมีชื่อหมวดนั้นในลิสต์
 const printersForMenu=(m,printers)=>{
   const act=(printers||[]).filter(p=>p&&p.active!==false);
-  if(m&&m.printer_id!=null&&m.printer_id!=="")return act.filter(p=>+p.id===+m.printer_id);
+  if(m&&m.printer_id!=null&&m.printer_id!==""&&act.some(p=>+p.id===+m.printer_id))return act.filter(p=>+p.id===+m.printer_id);
   const c=menuCatOf(m);
   return act.filter(p=>{
     if(p.categories===null||p.categories===undefined)return true;
@@ -18643,9 +18644,11 @@ function resolvePrinter(item,printers){
 }
 // เครื่องนี้ต้องพิมพ์รายการนี้ไหม — ตาม "กำหนดการพิมพ์" เป๊ะๆ: ปักหมุดเมนู(printer_id)→เฉพาะเครื่องนั้น · ไม่งั้น categories=null(พิมพ์ทุกหมวด) หรือมีหมวดนั้นในลิสต์
 // (จานเดียวออกได้หลายเครื่องถ้าตั้งรับหมวดเดียวกัน — ตั้งทุกเครื่องพิมพ์ทุกหมวด=ออกทุกเครื่อง)
-function printerHandles(p,item){
+// list = เครื่องที่เปิดใช้ของสาขานี้ — หมุดที่ชี้ไปเครื่องนอกลิสต์ = ถือว่าไม่ได้ปัก ส่งตามหมวด (ตรงกับตัวพิมพ์ public/print-agent.js)
+function printerHandles(p,item,list){
   if(!p)return false;
-  if(item.printer_id!=null&&item.printer_id!=="")return +p.id===+item.printer_id;
+  const pin=item.printer_id!=null&&item.printer_id!==""&&(!Array.isArray(list)||list.some(x=>x&&+x.id===+item.printer_id));
+  if(pin)return +p.id===+item.printer_id;
   if(p.categories===null||p.categories===undefined)return true;
   if(!Array.isArray(p.categories)||item.category==null)return false;
   const c=String(item.category).trim();
@@ -18659,14 +18662,15 @@ function printerHandles(p,item){
 async function agentPrintItems(items,tableLabel,branchId,meta,fallbackAll){
   let prs=[];
   try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
-  const usable=prs.filter(p=>p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
+  const act=prs.filter(p=>p.active!==false);   // ลิสต์ตัดสินหมุด — ชุดเดียวกับที่ตัวพิมพ์ใช้ (เปิดใช้ + สาขานี้)
+  const usable=act.filter(p=>p.ip&&getPConn(p).type!=="bluetooth");
   const list=items||[];
   // ใบย้ายโต๊ะ: เลือกเครื่องตามรายการในบิล (ครัวที่ทำของโต๊ะนี้) แต่ส่งไปแค่ "ใบเดียว" ต่อเครื่อง
   // ไม่แนบรายการอาหาร — ใบบอกแค่จากโต๊ะไหนไปโต๊ะไหน (ตัวพิมพ์ทุกรุ่นพิมพ์หนึ่งใบต่อหนึ่งรายการ)
   const slipBody=(its)=>(meta&&meta.kind==="move")?[{qty:1,name:"ย้ายโต๊ะ",options:[],note:""}]:its;
   const ups=[];const sentItems=new Set();
   for(const p of usable){
-    const mine=list.filter(it=>printerHandles(p,it));
+    const mine=list.filter(it=>printerHandles(p,it,act));
     if(!mine.length)continue;
     ups.push(api.updatePrinter(p.id,{description:cmdDesc(p,"rp",{at:Date.now(),items:slipBody(mine),table:tableLabel,...(meta||{})})}));
     mine.forEach(it=>sentItems.add(it));
@@ -18677,7 +18681,7 @@ async function agentPrintItems(items,tableLabel,branchId,meta,fallbackAll){
     sentItems.add("__all");
   }
   if(ups.length)await Promise.all(ups);
-  return {sent:sentItems.size,noPrinter:list.filter(it=>!usable.some(p=>printerHandles(p,it))).length};
+  return {sent:sentItems.size,noPrinter:list.filter(it=>!usable.some(p=>printerHandles(p,it,act))).length};
 }
 // Concatenate several Uint8Arrays into one ESC/POS byte stream
 function _concatBytes(arrs){const len=arrs.reduce((a,b)=>a+b.length,0);const out=new Uint8Array(len);let off=0;for(const a of arrs){out.set(a,off);off+=a.length;}return out;}
