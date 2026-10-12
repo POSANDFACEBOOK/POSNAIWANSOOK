@@ -570,8 +570,9 @@ const guards = [
   ["ยกเลิกบิลยังอยู่ในแถวเดิม", APP.includes("onClick={onCancelOrder}") && APP.includes("onCancelOrder={cancelOrder}")],
   ["แบ่งจ่ายยังอยู่ในแถวเดิม", APP.includes("onClick={onSplit}") && APP.includes("onSplit={()=>setShowSplitBill(true)}")],
   ["ป็อปอัพแบ่งจ่ายซ้อนเหนือเช็คบิล (ไม่ไปโผล่ข้างหลัง)", APP.includes("zIndex:4500")],
+  // ส่วนลดที่ส่งไปพิมพ์เป็น "ส่วนลดทั้งหมด" รูปเดียวกับที่เก็บลงบิล (ตัวพิมพ์แตกโปรฯ/คูปองเอง — billDiscParts)
   ["ใบ QR จ่ายเงินใช้ยอดสด ไม่ใช่ยอดจากแถวบิลที่ยังไม่ปิด",
-    APP.includes("function printPayQR(){") && APP.includes("subtotal,discount:round2(manualDiscount),total,")],
+    APP.includes("function printPayQR(){") && APP.includes("subtotal,discount:round2(totalDiscount),total,")],
   // ── ป็อปอัพเลื่อนแล้วพื้นหลังต้องอยู่นิ่ง ──
   ["กันเลื่อนทะลุไปพื้นหลัง", APP.includes("div{overscroll-behavior:contain}")],
   // เปิดจากไอคอนหน้าจอโฮม เนื้อหากินขึ้นไปใต้แถบสถานะ iOS — หัวจอต้องเผื่อไว้
@@ -1369,10 +1370,11 @@ try {
       [["2026-09-08", 1000], ["2026-09-09", 1000]]);
   }
   // ③ ส่วนลด/โปรโมชั่น — สมการของฝั่งบัญชีต้องเป็นจริงเสมอ
+  // บิลจริงเก็บ discount = ส่วนลดทั้งหมด (รวมโปรฯ แล้ว — billTotalsOf.totalDiscount) ข้อมูลทดสอบต้องเป็นรูปเดียวกัน
   {
     const { sent } = await run(SHIFT, [
       bill(1, 900, "cash", 9, { subtotal: 1000, discount: 100 }),
-      bill(2, 450, "cash", 9, { subtotal: 500, promo_amount: 50 }),
+      bill(2, 450, "cash", 9, { subtotal: 500, discount: 50, promo_amount: 50 }),
     ], "กาญจนบุรี The River");
     const p = sent[0];
     ck("ส่วนลดรวมโปรโมชั่นด้วย", p.discount, 150);
@@ -1564,7 +1566,8 @@ section("ปัดเศษท้ายบิล");
   ok_("จอสั่งอาหารปัดยอดสุดท้ายตามที่ตั้ง",
     APP.includes("const total=roundBill(rawTotal,roundModeOf(posSettings));") && APP.includes("const rawTotal=_T.rawTotal,total=_T.total;"));
   // ปัดแล้วไม่บอก = ตัวเลขบนใบบวกไม่ลง และยอดขายในระบบไม่ตรงกับเงินที่รับมา
-  ok_("ส่วนต่างจากการปัดถูกคำนวณไว้", APP.includes("roundAdj:round2(total-rawTotal)") && APP.includes("const roundAdj=_T.roundAdj;"));
+  // ส่วนต่างการปัดคิดจากยอดหลังปัดเทียบกับฐาน + ภาษีที่คิดใหม่หลังปัด (VAT ในราคา = total − rawTotal เท่าเดิม)
+  ok_("ส่วนต่างจากการปัดถูกคำนวณไว้", APP.includes("const roundAdj=round2(total-(vatIncluded?subAfterDisc+sc:subAfterDisc+sc+vatF));") && APP.includes("const roundAdj=_T.roundAdj;"));
   ok_("ใบเสร็จพิมพ์บรรทัดปัดเศษ", APP.includes('if(order.round_adj)L.push({l:"ปัดเศษ"'));
   ok_("บิลที่ปิดเก็บส่วนต่างการปัดลงฐานข้อมูล", APP.includes("total,round_adj:roundAdj,payment_method:pm"));
   ok_("ใบแจ้งยอด/QR ก็พกส่วนต่างไปด้วย", APP.includes("promo_name:selectedPromo?.name||null,round_adj:roundAdj,"));
@@ -2419,7 +2422,7 @@ section("ป็อปอัพเก็บเงิน + เงินทอน")
   ok_("ส่วนลดรายเมนูคำนวณที่เดียว ใช้ร่วมทุกใบ",
     APP.includes("const itemsWithDisc=useMemo(()=>items.map(clean).map((i,idx)=>{"));
   ck("ทุกใบที่พิมพ์พกส่วนลดรายเมนูไปด้วย",
-    ["smartPrintReceipt({...(existingOrder||{}),items:itemsWithDisc,", "items:itemsWithDisc,subtotal,discount:round2(manualDiscount)"]
+    ["smartPrintReceipt({...(existingOrder||{}),items:itemsWithDisc,", "items:itemsWithDisc,subtotal,discount:round2(totalDiscount)"]
       .filter((x) => !APP.includes(x)), []);
   ok_("ตัวพิมพ์ราสเตอร์ยังพิมพ์บรรทัดส่วนลดรายเมนู",
     APP.includes('if(disc>0)L.push({t:"   ลด "+(i.item_discount_type==="percent"?i.item_discount_value+"%":bahtR(i.item_discount_value)),size:18});'));
@@ -5398,6 +5401,365 @@ section("POS สาขาที่ 2: สิทธิ์และตั้งค
   } else ok_("ดึง switchSeller มารันได้", false);
   const GATE = comp("POSPinGate");
   ok_("ปุ่มเปลี่ยนพนักงานอยู่บนแถบบนของจอขายโหมด PIN", GATE.indexOf("onClick={switchSeller}") > GATE.indexOf("if(seller){") && GATE.indexOf("onClick={switchSeller}") < GATE.indexOf("// PIN pad"));
+}
+
+// POS สาขาที่ 2 (กาญจนบุรีเลิกใช้ FoodStory) — ตรวจความพร้อมด้านเงินและบัญชี 12 ต.ค. 69
+// ① คูปอง/โปรฯ ถูกนับซ้ำ: orders.discount เก็บ "ส่วนลดทั้งหมด" (ลดเอง+โปรฯ+คูปอง) แต่ใบพิมพ์ซ้ำ ใบปิดกะ
+//    รายงาน และจอแก้บิล หักโปรฯ/คูปองซ้ำอีกรอบ (บิลจริง #385: คูปอง ฿992 ขึ้นส่วนลด ฿1,984)
+//    ส่วนใบตอนปิดบิลกลับไม่มีบรรทัดคูปองเลย ยอดบนใบบวกลบไม่ลง
+// ② ภาษีคิดก่อนปัดเศษ: ด่านภาษีฝั่งบัญชี (คลาดได้ ฿1) คลาดสะสม 0.07×Σปัดเศษ → วันที่บิลเยอะถูกบล็อกทุกวัน
+// ③ สาขาที่ยังไม่เปิดท่อบัญชี ปิดกะแล้วจอปิดเงียบ ยอดไม่ถึงบัญชีโดยไม่มีใครรู้
+// ④ ใบปิดยอดที่ส่งไม่ผ่านหายไปกับจอ — ต้องจดไว้และเตือนค้าง (ไม่มีปุ่มส่งซ้ำ: กันลงซ้ำพิสูจน์ไม่ได้จากฝั่งเรา)
+// ⑤ แก้บิลของกะที่ปิดแล้ว ต้องเตือนชัดว่ายอดฝั่งบัญชีไม่เปลี่ยนตาม
+// ══════════════════════════════════════════════════════════════════════════
+section("POS สาขาที่ 2: เงินและบัญชี");
+{
+  const LN = APP.split("\n");
+  const lineOf = (head) => LN.find((l) => l.startsWith(head)) || "";
+  // ดึงฟังก์ชันที่ลายเซ็นมีปีกกา (พารามิเตอร์แบบแตกค่า/ค่าตั้งต้น {}) — นับจากปีกกาของตัวฟังก์ชัน
+  const grabSig = (head) => {
+    const st = APP.indexOf(head); if (st < 0) return "";
+    let d = 0, started = false;
+    for (let i = st + head.length - 1; i < APP.length; i++) {
+      if (APP[i] === "{") { d++; started = true; }
+      else if (APP[i] === "}") { d--; if (started && d === 0) return APP.slice(st, i + 1); }
+    }
+    return "";
+  };
+  const safe = (f) => { try { return f(); } catch { return ""; } };
+  const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+  const SRC = {
+    round2: lineOf("const round2 = "),
+    roundModeOf: lineOf("const roundModeOf="),
+    roundBill: safe(() => grabConst(APP, "roundBill")),
+    billTotalsOf: grabSig("function billTotalsOf({items,manualDiscount=0,promoDiscount=0,voucherDiscount=0,posSettings=null}){"),
+    billDiscParts: safe(() => grabConst(APP, "billDiscParts")),
+    voucherAmountOf: safe(() => grabConst(APP, "voucherAmountOf")),
+    paidBillRecalc: grabSig("function paidBillRecalc({order,items,posSettings=null}){"),
+    billShiftClosed: safe(() => grabConst(APP, "billShiftClosed")),
+    acctOutcomeOf: safe(() => grab(APP, "acctOutcomeOf")),
+  };
+  let M = null;
+  try {
+    M = new Function(Object.values(SRC).join("\n") +
+      "\nreturn {billTotalsOf,billDiscParts,voucherAmountOf,paidBillRecalc,billShiftClosed,acctOutcomeOf};")();
+  } catch { M = null; }
+  ok_("อ่านสูตรเงินชุดสาขาที่ 2 มารันได้ (ยอดบิล · แตกส่วนลด · แก้บิล · ผลส่งบัญชี)", !!M);
+
+  // บิลจริงจากฐาน (GET 12 ต.ค. 69) — #385 คูปองเต็มบิล · #530 ส่วนลดรายเมนู 30% + ปัดลง (The River)
+  const B385 = { id: 385, status: "paid", table_number: "A1", subtotal: 992, discount: 992, promo_amount: 0, total: 0, vat: 0, vat_rate: 7, vat_included: true, round_adj: 0,
+    payment_method: "cash", voucher: { ref: "bd09-1149  / bd09-1150", mode: "baht", value: 1000, amount: 992 },
+    items: [{ name: "ชุดหมูกระทะ", qty: 1, price: 992 }] };
+  const B530 = { id: 530, status: "paid", table_number: "B2", subtotal: 69, discount: 20.7, promo_amount: 0, total: 48, vat: 3.16, vat_rate: 7, vat_included: true, round_adj: -0.3,
+    payment_method: "cash", voucher: null,
+    items: [{ name: "ชาเย็น", qty: 1, price: 69, item_discount: 20.7, item_discount_type: "percent", item_discount_value: 30 }] };
+  // บิลที่มีครบสามก้อน: ลดรายเมนู 100 + โปรฯ 30 + คูปอง 50 = discount 180
+  const BMIX = { id: 900, status: "paid", table_number: "C1", subtotal: 1000, discount: 180, promo_amount: 30, promo_name: "ลดวันเกิด", total: 820, vat: 0, vat_rate: 0, round_adj: 0,
+    payment_method: "cash", voucher: { ref: "V50", mode: "baht", value: 50, amount: 50 },
+    items: [{ name: "หมูสไลด์", qty: 2, price: 500, item_discount: 100, item_discount_type: "percent", item_discount_value: 10 }] };
+
+  if (M) {
+    // ── ① แตกส่วนลดสามก้อน ──
+    ck("บิล #385: ส่วนลดทั้งหมดคือคูปองล้วน ไม่มีลดเอง", M.billDiscParts(B385), { total: 992, promo: 0, voucher: 992, manual: 0 });
+    ck("บิล #530 (River ส่วนลดรายเมนู): ไม่มีโปรฯ/คูปอง ส่วนลดคงเดิมทั้งก้อน", M.billDiscParts(B530), { total: 20.7, promo: 0, voucher: 0, manual: 20.7 });
+    ck("บิลสามก้อน: ลดเอง = รวม − โปรฯ − คูปอง", M.billDiscParts(BMIX), { total: 180, promo: 30, voucher: 50, manual: 100 });
+    ck("บิลไม่มีส่วนลด/ค่าว่าง ไม่พัง", M.billDiscParts({}), { total: 0, promo: 0, voucher: 0, manual: 0 });
+
+    // ── ② ภาษีหลังปัดเศษ ──
+    const RIVER = { vat_enabled: true, vat_rate: 7, vat_included: true, rounding: "down" };
+    const t530 = M.billTotalsOf({ items: [{ price: 69, qty: 1 }], manualDiscount: 20.7, posSettings: RIVER });
+    ck("ปัดลงแล้วภาษีคิดจากยอดที่เก็บจริง (48 × 7/107)", { total: t530.total, vat: t530.vat, adj: t530.roundAdj }, { total: 48, vat: r2(48 * 7 / 107), adj: -0.3 });
+    const noRound = M.billTotalsOf({ items: [{ price: 69, qty: 1 }], manualDiscount: 20.7, posSettings: { ...RIVER, rounding: null } });
+    ck("ไม่ตั้งปัดเศษ (rounding ว่าง) = ภาษีและยอดเหมือนเดิมทุกสตางค์", { total: noRound.total, vat: noRound.vat, adj: noRound.roundAdj }, { total: 48.3, vat: r2(48.3 * 7 / 107), adj: 0 });
+    // ยอดเต็มบาทอยู่แล้ว ปัดก็ไม่ขยับ ⟹ ภาษีต้องไม่ขยับด้วย (บิล River ส่วนใหญ่)
+    const whole = M.billTotalsOf({ items: [{ price: 276, qty: 1 }], posSettings: RIVER });
+    ck("ยอดเต็มบาทแล้ว ภาษีเท่าเดิม", whole.vat, r2(276 * 7 / 107));
+    const ex = M.billTotalsOf({ items: [{ price: 68.4, qty: 1 }], posSettings: { vat_enabled: true, vat_rate: 7, vat_included: false, rounding: "up" } });
+    ck("VAT บวกเพิ่ม + ปัดขึ้น: ภาษีคิดจากยอดหลังปัด และใบยังบวกลงตัว",
+      { total: ex.total, vat: ex.vat, sumsUp: r2(ex.subtotal - ex.totalDiscount + ex.sc + ex.vat + ex.roundAdj) === ex.total },
+      { total: 74, vat: r2(74 * 7 / 107), sumsUp: true });
+    // ด่านเดียวกับฝั่งบัญชี: ภาษี ≈ (ยอดขาย − ภาษี) × 7% คลาดได้ไม่เกิน ฿1 — 150 บิลที่ต้องปัดทุกใบ (วันขายดี)
+    const prices = [69, 89, 119, 159, 199, 249, 299];
+    const day = Array.from({ length: 150 }, (_, i) => {
+      const p = prices[i % prices.length], q = 1 + (i % 3);
+      return M.billTotalsOf({ items: [{ price: p, qty: q }], manualDiscount: r2(p * q * 0.3), posSettings: RIVER });
+    });
+    const T = r2(day.reduce((s, b) => s + b.total, 0)), V = r2(day.reduce((s, b) => s + b.vat, 0));
+    ok_(`วันขาย 150 บิลที่ปัดทุกใบ: ภาษีผ่านด่าน ±฿1 ของบัญชี (คลาด ${r2((T - V) * 7 / 100 - V)})`, Math.abs(r2((T - V) * 7 / 100) - V) <= 1);
+    ok_("ทุกบิลในวันนั้นบวกลงตัว (ยอดก่อนลด − ส่วนลด + ปัดเศษ = ยอดสุทธิ)", day.every((b) => r2(b.subtotal - b.totalDiscount + b.roundAdj) === b.total));
+
+    // ── ⑤ + ① จอแก้บิล: ไม่ได้แก้อะไร = ยอดเท่าเดิมเป๊ะ (เดิมสั่งเก็บเงินเพิ่มเท่าค่าคูปอง / หักโปรฯ ซ้ำ) ──
+    const NOVAT = { vat_enabled: false };
+    const e385 = M.paidBillRecalc({ order: B385, items: B385.items, posSettings: RIVER });
+    ck("แก้บิล #385 โดยไม่แตะอะไร = ยอด 0 เท่าเดิม คูปองยังอยู่", { total: e385.total, disc: e385.totalDiscount, v: e385.voucher && e385.voucher.amount }, { total: 0, disc: 992, v: 992 });
+    const eMix = M.paidBillRecalc({ order: BMIX, items: BMIX.items, posSettings: NOVAT });
+    ck("แก้บิลสามก้อนโดยไม่แตะอะไร = ยอดเดิม ส่วนลดรวมเดิม", { total: eMix.total, disc: eMix.totalDiscount }, { total: 820, disc: 180 });
+    const BPRO = { ...BMIX, id: 901, items: [{ name: "หมูหมัก", qty: 1, price: 500 }], subtotal: 500, discount: 30, promo_amount: 30, voucher: null, total: 470 };
+    ck("บิลโปรฯ (ไม่มีส่วนลดรายเมนู) แก้โดยไม่แตะ = โปรฯ ไม่ถูกหักซ้ำ", M.paidBillRecalc({ order: BPRO, items: BPRO.items, posSettings: NOVAT }).total, 470);
+    const lessMix = M.paidBillRecalc({ order: BMIX, items: [{ ...BMIX.items[0], qty: 1, item_discount: 50 }], posSettings: NOVAT });
+    ck("ลดจำนวนในบิลสามก้อน: คูปองบาทคงเดิม ยอดลดลงเท่าของที่ลดจริง", { total: lessMix.total, v: lessMix.voucherDiscount }, { total: 370, v: 50 });
+    const BPCT = { ...BMIX, id: 902, items: [{ name: "เซ็ต", qty: 1, price: 1000 }], discount: 100, promo_amount: 0, voucher: { ref: "P10", mode: "percent", value: 10, amount: 100 }, total: 900 };
+    ck("คูปอง % คิดใหม่ตามยอดใหม่ เหมือนจอเก็บเงิน", M.paidBillRecalc({ order: BPCT, items: [...BPCT.items, { name: "น้ำ", qty: 1, price: 200 }], posSettings: NOVAT }).voucherDiscount, 120);
+    // ภาษีตามบิลใบนั้น ไม่ใช่การตั้งค่าวันนี้ (ร้านเคยสลับเปิด-ปิด VAT กลางกะ)
+    ck("บิลที่ปิดตอนไม่มี VAT แก้วันนี้ (เปิด VAT แล้ว) ยังไม่มี VAT",
+      M.paidBillRecalc({ order: { ...BPRO, vat_rate: 0 }, items: BPRO.items, posSettings: RIVER }).vat, 0);
+    ck("บิลที่ปิดตอนมี VAT แก้วันนี้ (ปิด VAT แล้ว) ยังคิด VAT แบบเดิม",
+      M.paidBillRecalc({ order: { ...B530, vat_rate: 7 }, items: B530.items, posSettings: { vat_enabled: false, rounding: "down" } }).vat, r2(48 * 7 / 107));
+
+    // ── ⑤ บิลของกะที่ปิดแล้ว ──
+    const CUR = { id: 31, opened_at: "2026-10-12T04:00:00Z" };
+    ck("บิลของกะที่เปิดอยู่ = ไม่เตือน", M.billShiftClosed({ shift_id: 31 }, CUR), false);
+    ck("บิลของกะก่อน (วันเดียวกันก็ได้) = เตือน", M.billShiftClosed({ shift_id: 30, updated_at: "2026-10-12T03:00:00Z" }, CUR), true);
+    ck("ไม่มีกะเปิดอยู่ = กะของบิลปิดไปแล้วแน่นอน", M.billShiftClosed({ shift_id: 30 }, null), true);
+    ck("บิลเก่าไม่มีเลขกะ: ปิดก่อนกะนี้เริ่ม = เตือน · หลังเริ่ม = ไม่เตือน",
+      [M.billShiftClosed({ updated_at: "2026-10-12T03:59:00Z" }, CUR), M.billShiftClosed({ updated_at: "2026-10-12T05:00:00Z" }, CUR)], [true, false]);
+
+    // ── ③ ผลส่งบัญชี: แยก "ไม่มีบิล" ออกจาก "สาขายังไม่เปิดท่อ" ──
+    ck("สาขายังไม่เปิดท่อ + กะมีบิลที่เก็บเงินแล้ว = ต้องขึ้นกล่องเหลือง",
+      M.acctOutcomeOf({ skipped: true, not_enabled: true, branch_id: 5 }, 120), "not_enabled");
+    ck("สาขายังไม่เปิดท่อ แต่กะไม่มีบิลเลย = ปิดเงียบได้", M.acctOutcomeOf({ skipped: true, not_enabled: true, branch_id: 5 }, 0), "nothing");
+    ck("กะไม่มีบิล (สาขาที่เปิดท่อแล้ว) = ปิดเงียบเหมือนเดิม", M.acctOutcomeOf({ skipped: true, shift_id: 9, reason: "x" }, 0), "nothing");
+    ck("เซิร์ฟเวอร์รุ่นเก่า (ไม่มีธง) ก็ยังแยกออก", M.acctOutcomeOf({ skipped: true, branch_id: 5, reason: "x" }, 3), "not_enabled");
+    ck("เน็ตหลุด/ระบบบัญชีล่ม/ตีกลับ/ด่านไม่ผ่าน = ไม่สำเร็จ",
+      [M.acctOutcomeOf({ error: "fetch failed" }, 5), M.acctOutcomeOf(null, 5), M.acctOutcomeOf({ results: [{ ok: false, dropped: true }] }, 5),
+       M.acctOutcomeOf({ results: [{ ok: true }, { ok: false, blocked: true }] }, 5), M.acctOutcomeOf({ results: [] }, 5)],
+      ["failed", "failed", "failed", "failed", "failed"]);
+    ck("ส่งผ่าน / วันที่ไม่มียอดขาย = ไม่ใช่ความผิดพลาด",
+      [M.acctOutcomeOf({ results: [{ ok: true }] }, 5), M.acctOutcomeOf({ results: [{ ok: false, noSale: true }] }, 0)], ["ok", "ok"]);
+  }
+
+  // ── ① ใบเสร็จแบบตัวพิมพ์ (raster) — ดึงตัวจริงมาพิมพ์ แล้วบวกลบบรรทัดเงินบนใบให้ลงยอดสุทธิ ──
+  let RL = null;
+  try {
+    RL = new Function([SRC.round2, SRC.billDiscParts,
+      "const bahtR=(n)=>'B'+(Math.round((+n||0)*100)/100).toFixed(2);", "const stripEmoji=(s)=>String(s||'');",
+      "const optionsText=()=>'';", "const fmtDT=()=>'DT';", "const cashPartOf=()=>0;", "const payHeadOf=()=>'cash';", "const payMethodLabel=(m)=>m;",
+      grab(APP, "buildReceiptLines"), "return buildReceiptLines;"].join("\n"))();
+  } catch { RL = null; }
+  ok_("ดึงตัวสร้างใบเสร็จ (ตัวพิมพ์) มารันได้", !!RL);
+  if (RL) {
+    const amt = (r) => { const s = String(r); const neg = s.startsWith("-"); const v = parseFloat(s.replace(/^[+-]/, "").replace(/^B/, "")); return neg ? -v : v; };
+    // ยอดรวม − ทุกบรรทัดหัก + ทุกบรรทัดบวก (VAT ในราคาไม่บวก) ต้องเท่า "รวมทั้งสิ้น"
+    const recon = (L) => {
+      let s = null;
+      for (const x of L) {
+        if (!x || !x.l) continue;
+        if (x.l === "ยอดรวม") { s = amt(x.r); continue; }
+        if (s === null) continue;
+        if (x.l === "รวมทั้งสิ้น" || x.l === "ยอดที่ต้องชำระ") return { sum: r2(s), total: amt(x.r) };
+        if (/^VAT/.test(x.l) && /รวมในราคา/.test(x.l)) continue;
+        s += amt(x.r);
+      }
+      return null;
+    };
+    const l385 = RL(B385, "A1", "กาญจนบุรี", { vat_enabled: true }, true);
+    const rc385 = recon(l385);
+    ck("ใบพิมพ์ซ้ำบิล #385 บวกลบลงยอดสุทธิ (ไม่หักคูปองสองรอบ)", rc385 && rc385.sum === rc385.total, true);
+    ck("ใบ #385 มีบรรทัดคูปองบรรทัดเดียว และไม่มีบรรทัดส่วนลดซ้ำ",
+      { v: l385.filter((x) => x.l && x.l.startsWith("Voucher")).map((x) => x.r), d: l385.filter((x) => x.l && x.l.startsWith("ส่วนลด")).length },
+      { v: ["-B992.00"], d: 0 });
+    // ใบตอนปิดบิล: ตัวเก็บเงินส่งก้อนเดียวกับที่บันทึกลงบิล (discount ทั้งหมด + คูปอง + โปรฯ)
+    const atPay = { ...B385, discount: 992, voucher: { ref: "bd09-1149  / bd09-1150", mode: "baht", value: 1000, amount: 992 }, promo_amount: 0 };
+    const lPay = RL(atPay, "A1", "กาญจนบุรี", { vat_enabled: true }, true);
+    ck("ใบตอนปิดบิลมีบรรทัดคูปอง และบวกลบลงตัว", { v: lPay.some((x) => x.l && x.l.startsWith("Voucher")), ok: (() => { const q = recon(lPay); return !!q && q.sum === q.total; })() }, { v: true, ok: true });
+    const lMix = RL(BMIX, "C1", "กาญจนบุรี", null, true);
+    const rcMix = recon(lMix);
+    ck("ใบบิลสามก้อน: ส่วนลด 100 · โปรฯ 30 · คูปอง 50 แยกบรรทัด และลงยอด 820",
+      { lines: lMix.filter((x) => x.r && String(x.r).startsWith("-")).map((x) => x.r), ok: !!rcMix && rcMix.sum === 820 && rcMix.total === 820 },
+      { lines: ["-B100.00", "-B30.00", "-B50.00"], ok: true });
+    // บิลปกติของ The River (ไม่มีโปรฯ/คูปอง) — ใบต้องเหมือนเดิมทุกบรรทัด ป้าย "ส่วนลดรวม" คงเดิม
+    const l530 = RL(B530, "B2", "กาญจนบุรี The River", { vat_enabled: true }, true);
+    const rc530 = recon(l530);
+    ck("ใบบิล River ปกติ: ป้ายและยอดเหมือนเดิม และบวกลบลงตัว",
+      { lbl: (l530.find((x) => x.l && x.l.startsWith("ส่วนลด")) || {}).l, r: (l530.find((x) => x.l && x.l.startsWith("ส่วนลด")) || {}).r, ok: !!rc530 && rc530.sum === 48 },
+      { lbl: "ส่วนลดรวม", r: "-B20.70", ok: true });
+  }
+
+  // ── ① ใบเสร็จแบบหน้าต่างพิมพ์ (HTML) — เส้นทางสำรองของเดสก์ท็อป/ตัวพิมพ์ล้ม ──
+  let PR = null, html = "";
+  try {
+    PR = new Function([SRC.round2, SRC.billDiscParts,
+      "const openPrintWindow=()=>({document:{write:(h)=>{__out.html=h;},close:()=>{}}});", "const addPrintClose=()=>{};",
+      "const esc=(s)=>String(s==null?'':s);", "const optionsText=()=>'';", "const fmtDT=()=>'DT';", "const cashPartOf=()=>0;",
+      "const payHeadOf=()=>'cash';", "const payMethodLabel=(m)=>m;", "const PAY_LABEL={cash:'cash'};", "const genPromptPayPayload=()=>'';", "const driveImgAbs=(s)=>s;",
+      grabSig("function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){"),
+      "return (o,p)=>{__out.html='';printReceipt(o,'A1','กาญจนบุรี',p,{paid:true});return __out.html;};"].join("\n").replace(/^/, "const __out={html:''};\n"))();
+  } catch { PR = null; }
+  ok_("ดึงตัวสร้างใบเสร็จ (หน้าต่างพิมพ์) มารันได้", !!PR);
+  if (PR) {
+    html = PR(B385, null);
+    const minus = (h) => [...h.matchAll(/-฿([\d.]+)</g)].map((m) => +m[1]);
+    ck("ใบหน้าต่างพิมพ์ #385: หักคูปองครั้งเดียว และมีบรรทัด Voucher", { minus: minus(html), v: html.includes("Voucher (bd09-1149") }, { minus: [992], v: true });
+    const hMix = PR(BMIX, null);
+    ck("ใบหน้าต่างพิมพ์สามก้อน: หัก 100 + 30 + 50 = ลงยอด 820", { minus: minus(hMix), sumsUp: r2(1000 - minus(hMix).reduce((s, x) => s + x, 0)) === 820 }, { minus: [100, 30, 50], sumsUp: true });
+  }
+
+  // ── ① ใบปิดกะ: บล็อกส่วนลด + โครงสร้างยอด ──
+  let blocks2 = null;
+  try {
+    blocks2 = new Function([lineOf("const PAY_LABEL={cash:"), lineOf("function stripEmoji(s){"), lineOf("const payMethodLabel=(v)=>"),
+      lineOf("const PAY_MAIN_METHODS="), lineOf("const isTakeawayTable="),
+      grabSig("function shiftReportBlocks({orders=[],cancelled=[]}={}){"), SRC.round2,
+      grabSig("function computeShiftTotals({movements,orders,actualCash,cancelled,openBills,edits=[]}){"),
+      "return {shiftReportBlocks,computeShiftTotals};"].join("\n"))();
+  } catch { blocks2 = null; }
+  ok_("ดึงตัวคิดใบปิดกะมารันได้", !!blocks2);
+  if (blocks2) {
+    const BBILL = { id: 903, table_number: "D4", subtotal: 600, discount: 120, promo_amount: 0, total: 480, payment_method: "cash", voucher: { ref: "BD20", mode: "baht", value: 20, amount: 20 }, items: [{ name: "เซ็ต", qty: 1, price: 600 }] };
+    const ORD = [B385, BMIX, BBILL];
+    const R = blocks2.shiftReportBlocks({ orders: ORD });
+    const dsum = r2(R.discountLines.reduce((s, x) => s + x.amt, 0));
+    ck("บล็อกส่วนลดรวมกันเท่าส่วนลดจริงของทุกบิล (ไม่นับคูปอง/โปรฯ ซ้ำ)", dsum, r2(ORD.reduce((s, o) => s + o.discount, 0)));
+    ck("บล็อกส่วนลดแยกถูกก้อน",
+      R.discountLines.map((x) => x.name + "|" + x.amt).sort(),
+      ["Voucher BD20|20", "Voucher V50|50", "Voucher bd09-1149  / bd09-1150|992", "ลดท้ายบิล|100", "ลดรายเมนู 10.00%|100", "โปรโมชั่น: ลดวันเกิด|30"].sort());
+    const CT = blocks2.computeShiftTotals({ movements: [], orders: ORD, actualCash: 0, cancelled: [], openBills: [] });
+    ck("โครงสร้างยอดปิดกะบวกลงตัว: ยอดก่อนลด − ส่วนลด(ไม่รวมโปรฯ) − โปรฯ = ยอดขายสุทธิ",
+      { dNP: CT.discNoPromo, sums: r2(CT.gross - CT.discNoPromo - CT.promo + CT.svc + CT.roundAdj) === CT.totalSales }, { dNP: 1262, sums: true });
+  }
+  // ใบปิดกะแบบตัวพิมพ์ต้องพิมพ์ "- ส่วนลด" เป็นยอดที่ไม่รวมโปรฯ (โปรฯ มีบรรทัดของตัวเอง)
+  {
+    const bahtLn = lineOf("function bahtR(n){"), emojiLn = lineOf("function stripEmoji(s){");
+    const body = grabSig("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[]}){");
+    let ZL = null;
+    try { ZL = new Function(bahtLn + "\n" + emojiLn + "\nconst fmtDT=()=>\"DT\";\n" + body + "\nreturn buildZReportLines;")(); } catch { ZL = null; }
+    ok_("ดึงตัวสร้างใบปิดกะ (ตัวพิมพ์) มารันได้", !!ZL);
+    if (ZL) {
+      const T0 = { orderCount: 1, itemQty: 1, avgBill: 420, gross: 500, disc: 80, discNoPromo: 50, discPct: 16, promo: 30, svc: 0, vat: 0, vatIncluded: true, roundAdj: 0, totalSales: 420,
+        totalCash: 420, totalTransfer: 0, totalCard: 0, totalOther: 0, openingCash: 0, salesCash: 420, payIn: 0, payOut: 0, drops: 0, refunds: 0, expected: 420,
+        cancelCount: 0, cancelAmt: 0, cancelList: [], openCount: 0, openAmt: 0, openList: [], actual: 420, diff: 0 };
+      const L = ZL({ shift: { id: 1, opened_at: "2026-10-12T04:00:00Z" }, totals: T0, branch: { name: "กาญจนบุรี" }, user: { name: "x" }, note: "" });
+      const disc = L.find((x) => x.l && x.l.startsWith("- ส่วนลด")), pro = L.find((x) => x.l === "- โปรโมชั่น");
+      ck("ใบปิดกะ: ส่วนลด 50 + โปรฯ 30 (ไม่ใช่ 80 + 30)", [disc && disc.r, pro && pro.r], ["-฿50.00", "-฿30.00"]);
+    }
+  }
+  ok_("ใบปิดกะหน้าต่างพิมพ์และจอปิดกะใช้ส่วนลดที่ไม่รวมโปรฯ",
+    APP.includes("<span>-฿${fmt(totals.discNoPromo)}</span>") && APP.includes(",v:totals.discNoPromo,warn:totals.discPct>=15},"));
+  ok_("รายงานยอดขายไม่บวกโปรฯ ซ้ำในการ์ดส่วนลด",
+    APP.includes("const discTotal=paid.reduce((s,o)=>s+(+o.discount||0),0);") && !APP.includes("(+o.discount||0)+(+o.promo_amount||0)"));
+
+  // ── ① ทางเก็บเงิน: ใบตอนปิดบิล/ใบ QR ส่งก้อนเดียวกับที่บันทึกลงบิล + คูปองไม่หายตอนเปิดโต๊ะจากอีกเครื่อง ──
+  const payLn = lineOf("      const _rcpt=smartPrintReceipt(");
+  ok_("ใบตอนปิดบิลส่งส่วนลดทั้งหมด + คูปอง + โปรฯ (รูปเดียวกับบิลในฐาน)",
+    payLn.includes("discount:round2(totalDiscount),total,") && payLn.includes("voucher:voucherCol") && payLn.includes("promo_amount:round2(promoDiscount)"));
+  ok_("บิลที่บันทึกและใบเสร็จใช้คูปองก้อนเดียวกัน", APP.includes("const voucherCol=(voucher&&voucherDiscount>0)?{...voucher,amount:round2(voucherDiscount)}:null;")
+    && APP.includes("payments:paymentsCol,voucher:voucherCol,") && APP.includes("round_adj:roundAdj,voucher:voucherCol,"));
+  ok_("ล็อกยอด QR เก็บคูปองไว้ และเปิดโต๊ะใหม่ได้คูปองคืน",
+    APP.includes("voucher:voucherCol,pay_method:payMethod,by:") && APP.includes('if(L.voucher&&typeof L.voucher==="object")setVoucher({ref:L.voucher.ref||null,'));
+
+  // ── ① + ⑤ จอแก้บิล ──
+  ok_("จอแก้บิลคิดยอดด้วยสูตรที่แตกส่วนลดสามก้อน และบันทึกส่วนลดทั้งหมด (+คูปอง) กลับลงบิล",
+    APP.includes("const T=paidBillRecalc({order,items,posSettings});") && APP.includes("discount:T.totalDiscount,total:T.total,") && APP.includes("...(T.voucher?{voucher:T.voucher}:{})"));
+  ok_("แก้บิลของกะที่ปิดแล้ว: เตือนชัดว่ายอดฝั่งบัญชีไม่เปลี่ยนตาม (ไม่บล็อก) และติดธงในร่องรอย",
+    APP.includes("const shiftClosed=billShiftClosed(order,shift);") && APP.includes("{shiftClosed?<div") && APP.includes("ยอดฝั่งบัญชีจะไม่เปลี่ยนตาม")
+    && APP.includes("needs_accounting:pastDay||shiftClosed"));
+
+  // ── ③ + ④ จอปิดกะ ──
+  ok_("ปิดกะ: เลิกปิดเงียบทุกกรณีที่ได้ skipped", !APP.includes("if(acctRes&&acctRes.skipped){onClosed();return;}")
+    && APP.includes("const outcome=acctOutcomeOf(acctRes,totals.orderCount);") && APP.includes('if(outcome==="nothing"){onClosed();return;}'));
+  ok_("สาขายังไม่เปิดท่อ: กล่องเหลืองพร้อมข้อความที่ตกลงไว้ และต้องกดรับทราบ",
+    APP.includes("ยอดกะนี้ยังไม่ถูกส่งเข้าบัญชี (สาขานี้ยังไม่ได้เปิดท่อบัญชี)") && APP.includes("{acct.notEnabled?<div")
+    && APP.includes('setAcct(outcome==="not_enabled"?{...acctRes,notEnabled:true,'));
+  ok_("ส่งไม่ผ่าน = จดเลขกะไว้ทุกครั้ง", APP.includes('const kept=outcome==="failed"&&rememberAcctUnsent(currentBranch.id,acctUnsentEntry(shift,acctRes,totals));'));
+  ok_("เตือนค้างทั้งที่จอเปิดกะ (แคชเชียร์) และหลังบ้าน (ผู้จัดการปิดเรื่องได้)",
+    APP.includes("<AcctUnsentBanner branchId={currentBranch.id}/>") && APP.includes("<AcctUnsentBanner branchId={currentBranch.id} canResolve/>"));
+  {
+    const ban = (() => { const a = APP.indexOf("function AcctUnsentBanner("), b = APP.indexOf("function OpenShiftModal(", a); return a > 0 && b > a ? APP.slice(a, b) : ""; })();
+    // กันลงซ้ำอยู่ที่ฝั่งบัญชี ไม่ใช่ที่เรา + บิลที่แก้หลังปิดกะย้ายวัน ⟹ ห้ามมีปุ่มยิงซ้ำในจอนี้
+    ok_("ป้ายเตือนไม่มีปุ่มยิงส่งซ้ำ (ส่งซ้ำหลังผลไม่แน่ชัดอาจลงบัญชีสองรอบ)", !!ban && !ban.includes("fetch(") && !ban.includes("sliptrack-push") && ban.includes("forgetAcctUnsent(branchId,e.shift_id)"));
+  }
+  // ที่จดไว้ต้องอยู่รอดข้ามการรีเฟรช แยกต่อสาขา ไม่ซ้ำ และพังเงียบไม่ได้ถ้าเครื่องปิดที่เก็บ
+  {
+    const mkLS = () => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, _m: m }; };
+    let S = null;
+    try {
+      S = new Function("localStorage", [SRC.round2, lineOf("const ACCT_UNSENT_MAX="), lineOf("const acctUnsentKey="),
+        grab(APP, "readAcctUnsent"), grab(APP, "rememberAcctUnsent"), grab(APP, "forgetAcctUnsent"), grab(APP, "acctUnsentEntry"),
+        "return {readAcctUnsent,rememberAcctUnsent,forgetAcctUnsent,acctUnsentEntry,acctUnsentKey};"].join("\n"));
+    } catch { S = null; }
+    ok_("ดึงที่จดใบปิดยอดที่ส่งไม่ผ่านมารันได้", !!S);
+    if (S) {
+      const ls = mkLS(), A = S(ls);
+      const res = { shift_id: 41, results: [{ business_date: "2026-10-12", ok: false, blocked: true, problems: ["ภาษีที่ควรเป็น 1 ไม่ตรง"], total_sales: 30000, bills: 120 }] };
+      const ent = A.acctUnsentEntry({ id: 41 }, res, { totalSales: 30000, orderCount: 120 });
+      ck("จดเลขกะ ยอด จำนวนบิล และเหตุผลรายวัน", { s: ent.shift_id, t: ent.total_sales, b: ent.bills, d: ent.days.map((d) => d.date + "|" + d.total), why: /ด่านตรวจไม่ผ่าน/.test(ent.days[0].why) },
+        { s: 41, t: 30000, b: 120, d: ["2026-10-12|30000"], why: true });
+      ok_("จดได้", A.rememberAcctUnsent(5, ent) === true);
+      A.rememberAcctUnsent(5, { ...ent, at: "x" });   // ปิดกะเดิมซ้ำ (กดซ้ำ/รีโหลด) ต้องไม่เป็นสองแถว
+      A.rememberAcctUnsent(8, A.acctUnsentEntry({ id: 77 }, { error: "fetch failed" }, { totalSales: 5000, orderCount: 20 }));
+      const again = S(ls);   // เปิดแอปใหม่ (state หายหมด) ต้องยังเห็น
+      ck("เปิดแอปใหม่ยังเห็น · แยกต่อสาขา · กะเดิมไม่ซ้ำ", [again.readAcctUnsent(5).map((x) => x.shift_id), again.readAcctUnsent(8).map((x) => x.shift_id)], [[41], [77]]);
+      again.forgetAcctUnsent(5, 41);
+      ck("ผู้จัดการปิดเรื่องแล้ว = หายเฉพาะกะนั้น", [again.readAcctUnsent(5).length, again.readAcctUnsent(8).length], [0, 1]);
+      const broken = S({ getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } });
+      ck("เครื่องปิดที่เก็บข้อมูล = ไม่พัง (อ่านได้ว่าง · จดไม่ได้บอกว่าไม่ได้จด)", [broken.readAcctUnsent(5), broken.rememberAcctUnsent(5, ent)], [[], false]);
+    }
+  }
+
+  // ── ①③ ท่อบัญชี (api/sliptrack-push.js) — รันตัวจริงกับ fetch ปลอม ไม่แตะ SlipTrack ──
+  {
+    const realFetch = globalThis.fetch;
+    let okRun = false;
+    try {
+      const run = async (shift, orders) => {
+        const sent = [];
+        globalThis.fetch = async (url, opt) => {
+          const u = String(url);
+          if (u.includes("sliptrack-pro.vercel.app")) { sent.push(JSON.parse(opt.body)); return { ok: true, status: 200, json: async () => ({ success: true, income: { status: "posted" } }) }; }
+          if (u.includes("pos_shifts")) return { ok: true, json: async () => [shift] };
+          if (u.includes("/branches?")) return { ok: true, json: async () => [{ name: "กาญจนบุรี The River" }] };
+          if (u.includes("/orders?")) return { ok: true, json: async () => (u.includes("shift_id=eq.") ? orders : []) };
+          if (u.includes("cash_movements")) return { ok: true, json: async () => [] };
+          return { ok: false, status: 404, text: async () => "unexpected " + u };
+        };
+        process.env.SLIPTRACK_API_KEY = "TEST";
+        const mod = await import(new URL("../api/sliptrack-push.js", import.meta.url).href + "?b2=" + Math.random());
+        let out = null;
+        const res = { setHeader() {}, status() { return this; }, json(j) { out = j; return this; } };
+        await mod.default({ method: "POST", body: { kind: "pos_closing", shift_id: shift.id } }, res);
+        globalThis.fetch = realFetch;
+        return { out, sent };
+      };
+      const SH = { id: 41, branch_id: 8, opened_at: "2026-10-12T03:00:00Z", closed_at: "2026-10-12T15:00:00Z" };
+      const at = "2026-10-12T08:00:00Z";
+      const ob = (o) => ({ service_charge: 0, vat: 0, vat_rate: 0, round_adj: 0, payment_method: "cash", payments: null, created_at: at, updated_at: at, voucher: null, promo_amount: 0, ...o });
+      // บิลรูปจริง: discount รวมโปรฯ/คูปองแล้ว
+      const { sent } = await run(SH, [
+        ob({ id: 1, subtotal: 500, discount: 50, promo_amount: 50, total: 450 }),
+        ob({ id: 2, subtotal: 1000, discount: 200, voucher: { ref: "V200", mode: "baht", value: 200, amount: 200 }, total: 800 }),
+      ]);
+      const p = sent[0] || {};
+      ck("ใบปิดยอด: ส่วนลด = ส่วนลดที่ให้ไปจริง (โปรฯ ไม่ถูกบวกซ้ำ)", { disc: p.discount, sub: p.sub_total, net: p.total_sales }, { disc: 250, sub: 1500, net: 1250 });
+      ck("ใบปิดยอด: สมการฝั่งบัญชีลงตัว และคูปองยังส่งช่องของตัวเอง", { eq: r2(p.sub_total - p.discount) === p.total_sales, v: p.voucher_discount }, { eq: true, v: -200 });
+      // วันขายดีของ River ที่ปัดทุกใบ — ด่านภาษีตัวจริงต้องปล่อยผ่าน (เดิมภาษีคิดก่อนปัด ด่านบล็อก)
+      if (M) {
+        const RIVER = { vat_enabled: true, vat_rate: 7, vat_included: true, rounding: "down" };
+        const prices = [69, 89, 119, 159, 199, 249, 299];
+        const bills = Array.from({ length: 150 }, (_, i) => {
+          const pr = prices[i % prices.length], q = 1 + (i % 3);
+          const t = M.billTotalsOf({ items: [{ price: pr, qty: q }], manualDiscount: r2(pr * q * 0.3), posSettings: RIVER });
+          return ob({ id: 100 + i, subtotal: t.subtotal, discount: t.totalDiscount, total: t.total, vat: t.vat, vat_rate: 7, round_adj: t.roundAdj });
+        });
+        const r = await run(SH, bills);
+        const day = (r.out && r.out.results && r.out.results[0]) || {};
+        ck("วันขาย 150 บิลที่ปัดทุกใบ ผ่านด่านภาษีของท่อบัญชีตัวจริง", { blocked: !!day.blocked, sent: r.sent.length }, { blocked: false, sent: 1 });
+      }
+      // ③ สาขาที่ยังไม่เปิดท่อ ต้องบอกให้ชัดว่า "ยังไม่เปิด" ไม่ใช่แค่ "ข้าม"
+      const ne = await run({ ...SH, branch_id: 5 }, [ob({ id: 3, subtotal: 300, discount: 0, total: 300 })]);
+      ck("สาขาที่ยังไม่เปิดท่อ: ไม่ยิง และติดธง not_enabled", { sent: ne.sent.length, skipped: !!(ne.out && ne.out.skipped), ne: ne.out && ne.out.not_enabled }, { sent: 0, skipped: true, ne: true });
+      const empty = await run(SH, []);
+      ck("กะไม่มีบิล (สาขาเปิดท่อแล้ว): ข้ามโดยไม่ติดธง not_enabled", { skipped: !!(empty.out && empty.out.skipped), ne: !!(empty.out && empty.out.not_enabled) }, { skipped: true, ne: false });
+      okRun = true;
+    } catch (e) {
+      globalThis.fetch = realFetch;
+      ok_("รันท่อบัญชีชุดสาขาที่ 2 ได้ (" + String(e && e.message).slice(0, 60) + ")", false);
+    }
+    ok_("ชุดทดสอบท่อบัญชีสาขาที่ 2 รันจนจบ", okRun);
+    // ห้ามใช้ upsert กับใบปิดยอด — ฝั่งบัญชีกันลงซ้ำด้วยการตีกลับ ถ้า upsert จะเขียนทับใบที่ออกใบกำกับไปแล้ว
+    const pc = (() => { const a = SLIPPUSH.indexOf('if (String(body.kind || "") === "pos_closing") {'), b = SLIPPUSH.indexOf("// ── Void path", a); return a > 0 && b > a ? SLIPPUSH.slice(a, b) : ""; })();
+    ok_("ใบปิดยอดไม่ใช้ upsert", !!pc && !pc.includes("upsert"));
+    ok_("ยังไม่เปิดท่อให้สาขา 5 (รอเจ้าของ + ฝ่ายบัญชี)", SLIPPUSH.includes("const POS_CLOSING_BRANCHES = [8];") && SLIPPUSH.includes("const SHIFT_KEYED_BRANCHES = [8];"));
+  }
 }
 
 

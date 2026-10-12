@@ -206,7 +206,8 @@ export default async function handler(req, res) {
       const shift = Array.isArray(shiftRows) && shiftRows[0];
       if (!shift) return res.status(404).json({ error: `ไม่พบกะ #${shiftId}` });
       if (!POS_CLOSING_BRANCHES.includes(Number(shift.branch_id))) {
-        return res.status(200).json({ skipped: true, reason: "สาขานี้ยังไม่เปิดใช้ท่อลงบัญชีอัตโนมัติ", branch_id: shift.branch_id });
+        // not_enabled แยกจาก "กะนี้ไม่มีบิล" — จอปิดกะต้องเตือนเหลืองถ้ากะมีบิลที่เก็บเงินแล้ว ห้ามปิดเงียบ
+        return res.status(200).json({ skipped: true, not_enabled: true, reason: "สาขานี้ยังไม่เปิดใช้ท่อลงบัญชีอัตโนมัติ", branch_id: shift.branch_id });
       }
       // กะเดียวอาจออกใบได้หลายวัน (กะคร่อมเที่ยงคืน) ⟹ คีย์ฝั่งบัญชีคือ (วันทำการ, สาขา, กะ)
       const shiftKeyed = SHIFT_KEYED_BRANCHES.includes(Number(shift.branch_id));
@@ -292,8 +293,10 @@ export default async function handler(req, res) {
       const lastDay = days.length ? days[days.length - 1][0] : null;
       for (const [business_date, list] of days) {
         const total_sales = sum(list, "total");
-        // ส่วนลดที่ให้ไปจริง (รวมโปรโมชั่น) — ตัวเลขนี้ต้องตรงกับความจริงเสมอ
-        const discount = r2(sum(list, "discount") + sum(list, "promo_amount"));
+        // ส่วนลดที่ให้ไปจริง (รวมโปรโมชั่นและคูปอง) — ตัวเลขนี้ต้องตรงกับความจริงเสมอ
+        // orders.discount เก็บ "ส่วนลดทั้งหมด" ของบิลอยู่แล้ว (ลดเอง+โปรฯ+คูปอง = billTotalsOf.totalDiscount)
+        // เดิมบวก promo_amount เพิ่มอีก ⟹ sub_total และ discount สูงเกินจริงเท่ายอดโปรฯ ทุกวันที่มีโปรฯ
+        const discount = sum(list, "discount");
         // คูปองส่งเป็นช่องของตัวเอง (ติดลบ) เหมือนที่ FoodStory ส่งมาจากสาขาอื่น
         // ฝั่งบัญชีขอไว้ 22 ก.ย. 69: ถ้ากลบไว้ใน discount จะมองไม่เห็นว่าวันไหนแจกคูปองไปเท่าไร
         // ⚠️ ต่างจาก FoodStory ตรงฐานภาษี: ของเราหักคูปองก่อนคิด VAT (คูปองคือส่วนลด ณ จุดขาย)

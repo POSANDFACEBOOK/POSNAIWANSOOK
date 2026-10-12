@@ -1856,7 +1856,99 @@ function billTotalsOf({items,manualDiscount=0,promoDiscount=0,voucherDiscount=0,
   const vat=round2(vatRate>0?(vatIncluded?vatBase*vatRate/(100+vatRate):vatBase*vatRate/100):0);
   const rawTotal=round2(vatIncluded?subAfterDisc+sc:subAfterDisc+sc+vat);
   const total=roundBill(rawTotal,roundModeOf(posSettings));
-  return{subtotal,totalDiscount,subAfterDisc,scRate,sc,vatRate,vatIncluded,vat,rawTotal,total,roundAdj:round2(total-rawTotal)};
+  // ปัดเศษแล้ว ภาษีต้องคิดจาก "ยอดที่เก็บเงินจริง" (ยอดหลังปัด) ไม่ใช่ยอดก่อนปัด
+  // เดิมคิดก่อนปัด ⟹ ด่านภาษีฝั่งบัญชี (ภาษี = (ยอดขาย−ภาษี)×7% คลาดได้ ฿1) คลาดสะสม 0.07×Σปัดเศษ
+  // วันที่บิลเยอะ (~100 บิลขึ้นไป) ใบปิดยอดจะถูกบล็อกทุกวัน · ไม่ปัด (rounding ว่าง) = ค่าเดิมทุกตัว
+  // สูตรเดียวใช้ได้ทั้ง VAT ในราคาและบวกเพิ่ม เพราะยอดสุดท้ายมี VAT อยู่ในนั้นแล้วทั้งสองแบบ
+  const vatF=(vatRate>0&&total!==rawTotal)?round2(total*vatRate/(100+vatRate)):vat;
+  const roundAdj=round2(total-(vatIncluded?subAfterDisc+sc:subAfterDisc+sc+vatF));
+  return{subtotal,totalDiscount,subAfterDisc,scRate,sc,vatRate,vatIncluded,vat:vatF,rawTotal,total,roundAdj};
+}
+// ส่วนลดของบิลแตกเป็นสามก้อน — orders.discount เก็บ "ส่วนลดทั้งหมด" ก้อนเดียว (ลดเอง+โปรฯ+คูปอง = totalDiscount)
+// ทั้งบิลจริงในฐาน และใบที่ส่งไปพิมพ์ตอนปิดบิล ต้องใช้รูปเดียวกันนี้ แล้วให้ตัวพิมพ์/ใบปิดกะแตกเองที่นี่ที่เดียว
+// เดิมใบพิมพ์ซ้ำ/ใบปิดกะพิมพ์ "ส่วนลดรวม" (ซึ่งรวมคูปองแล้ว) แล้วพิมพ์บรรทัดคูปองซ้ำอีก
+// ⟹ บิล #385 คูปอง ฿992 ขึ้นส่วนลด ฿1,984 · ใบตอนปิดบิลไม่มีบรรทัดคูปองเลย ยอดบวกลบไม่ลง
+const billDiscParts=(o)=>{
+  const total=round2(Math.max(0,+(o&&o.discount)||0));
+  const promo=round2(Math.max(0,+(o&&o.promo_amount)||0));
+  const voucher=round2(Math.max(0,+(o&&o.voucher&&o.voucher.amount)||0));
+  return{total,promo,voucher,manual:round2(Math.max(0,total-promo-voucher))};
+};
+// มูลค่าคูปองจากยอดที่เหลือหลังหักส่วนลดอื่น — ห้ามเกินยอดนั้น (คูปองไม่กลายเป็นเงินทอน) กติกาเดียวกับจอเก็บเงิน
+const voucherAmountOf=(v,base)=>{
+  if(!v)return 0;
+  const b=Math.max(0,round2(base));
+  const face=v.value!=null?+v.value:+v.amount;
+  const raw=v.mode==="percent"?round2(b*(+v.value||0)/100):round2(+face||0);
+  return Math.min(Math.max(0,raw),b);
+};
+// คิดยอดใหม่ของบิลที่ปิดแล้ว (จอแก้บิล) — ต้องได้ยอดเดิมเป๊ะถ้าไม่ได้แก้อะไร
+// เดิมส่งส่วนลดก้อนรวมเข้าไปเป็น "ลดเอง" แล้วส่งโปรฯ ซ้ำ หรือคิดส่วนลดรายเมนูใหม่แล้วทิ้งคูปอง
+// ⟹ แค่เปิดแก้ ระบบสั่งเก็บเงินลูกค้าเพิ่มเท่าค่าคูปอง · ภาษีใช้แบบของบิลใบนั้น ไม่ใช่การตั้งค่าวันนี้
+function paidBillRecalc({order,items,posSettings=null}){
+  const dp=billDiscParts(order);
+  const hasItemDisc=((order&&order.items)||[]).some(i=>+i.item_discount>0);
+  const manualDiscount=hasItemDisc?round2((items||[]).reduce((s,i)=>s+(+i.item_discount||0),0)):dp.manual;
+  const sub=round2((items||[]).reduce((s,i)=>s+(+i.price||0)*(+i.qty||0),0));
+  const v=order&&order.voucher&&(+order.voucher.amount||0)>0?order.voucher:null;
+  const voucherDiscount=v?voucherAmountOf(v,sub-manualDiscount-dp.promo):0;
+  const cfg=(order&&order.vat_rate!=null)
+    ?{...(posSettings||{}),vat_enabled:+order.vat_rate>0,vat_rate:+order.vat_rate||0,vat_included:order.vat_included!==false}
+    :posSettings;
+  const T=billTotalsOf({items,manualDiscount,promoDiscount:dp.promo,voucherDiscount,posSettings:cfg});
+  return{...T,manualDiscount,promoDiscount:dp.promo,voucherDiscount,voucher:v?{...v,amount:voucherDiscount}:null};
+}
+// บิลนี้อยู่ในกะที่ปิดไปแล้วหรือยัง (สาขาหนึ่งเปิดได้ทีละกะ ⟹ ไม่ใช่กะที่เปิดอยู่ = กะที่ปิดแล้ว)
+// กะที่ปิดแล้ว = ยอดของกะนั้นสรุปและส่งเข้าบัญชีไปแล้ว แก้บิลตรงนี้ ฝั่งบัญชีไม่เปลี่ยนตาม
+const billShiftClosed=(o,cur)=>{
+  if(!o)return false;
+  const curId=cur&&cur.id!=null?+cur.id:null;
+  if(o.shift_id!=null)return curId==null||+o.shift_id!==curId;
+  // บิลเก่าที่ยังไม่มีเลขกะ: ปิดบิลก่อนกะที่เปิดอยู่จะเริ่ม = อยู่กะก่อน
+  const t=Date.parse(o.updated_at||o.created_at||""),s=Date.parse((cur&&cur.opened_at)||"");
+  if(curId==null||!Number.isFinite(s))return true;
+  return Number.isFinite(t)&&t<s;
+};
+// ── ผลส่งยอดปิดกะเข้าบัญชี (pos_closing) ──────────────────────────────
+// "ข้าม" มีสองแบบที่ต้องแยกให้ออก: กะนี้ไม่มีบิล (ปิดเงียบได้) กับ สาขานี้ยังไม่เปิดท่อบัญชี (ต้องเตือน)
+// เดิมปิดเงียบทั้งสองแบบ ⟹ สาขาที่ยังไม่เปิดท่อปิดกะยอดหลายหมื่นแล้วไม่มีใครรู้ว่ายอดไม่ถึงบัญชี
+function acctOutcomeOf(res,paidBills){
+  if(!res||typeof res!=="object")return "failed";
+  if(res.skipped){
+    const notEnabled=res.not_enabled===true||(res.shift_id==null&&res.branch_id!=null);
+    return (notEnabled&&(+paidBills||0)>0)?"not_enabled":"nothing";
+  }
+  const rows=Array.isArray(res.results)?res.results:[];
+  if(res.error||rows.length===0)return "failed";
+  return rows.some(r=>!r||(!r.ok&&!r.noSale))?"failed":"ok";
+}
+// ใบปิดยอดที่ส่งไม่ผ่าน ต้องไม่หายไปกับจอ — จำไว้ในเครื่อง (แยกต่อสาขา) จนกว่าผู้จัดการจะกดว่าจัดการแล้ว
+// ไม่มีปุ่มส่งซ้ำโดยตั้งใจ: กันลงซ้ำอยู่ที่ฝั่งบัญชี ไม่ใช่ที่เรา และบิลที่ถูกแก้หลังปิดกะจะย้ายไปวันใหม่
+// (updated_at เด้ง) ส่งซ้ำแล้วรายได้ลงสองรอบได้ ⟹ ให้คนส่งยอดตามเลขกะ/แจ้งฝ่ายบัญชีแทน
+const ACCT_UNSENT_MAX=30;
+const acctUnsentKey=(bid)=>"fc_acct_unsent_b"+(+bid||0);
+function readAcctUnsent(bid){
+  try{const a=JSON.parse(localStorage.getItem(acctUnsentKey(bid))||"[]");return Array.isArray(a)?a.filter(x=>x&&x.shift_id!=null):[];}catch{return [];}
+}
+function rememberAcctUnsent(bid,entry){
+  if(!entry||entry.shift_id==null)return false;
+  try{
+    const rest=readAcctUnsent(bid).filter(x=>+x.shift_id!==+entry.shift_id);
+    localStorage.setItem(acctUnsentKey(bid),JSON.stringify([entry,...rest].slice(0,ACCT_UNSENT_MAX)));
+    return true;
+  }catch{return false;}
+}
+function forgetAcctUnsent(bid,shiftId){
+  try{localStorage.setItem(acctUnsentKey(bid),JSON.stringify(readAcctUnsent(bid).filter(x=>+x.shift_id!==+shiftId)));return true;}catch{return false;}
+}
+// สรุปสั้นๆ ของใบที่ไม่ผ่าน (เลขกะคือสิ่งที่ต้องใช้ส่งซ้ำ — เซิร์ฟเวอร์คำนวณยอดใหม่จากบิลจริงเอง)
+function acctUnsentEntry(shift,res,totals){
+  const rows=(res&&Array.isArray(res.results))?res.results:[];
+  const why=(r)=>r.dropped?"ฝั่งบัญชีมีใบของวันนี้อยู่แล้ว ไม่รับยอดกะนี้":r.blocked?("ด่านตรวจไม่ผ่าน: "+(r.problems||[]).join(" · ")):String(r.error||(r.reply&&(r.reply.error||r.reply.message))||("ระบบบัญชีตอบ "+(r.status||"-")));
+  return{shift_id:shift&&shift.id,at:new Date().toISOString(),
+    total_sales:round2(+(totals&&totals.totalSales)||0),bills:+(totals&&totals.orderCount)||0,
+    error:res&&res.error?String(res.error).slice(0,200):null,
+    days:rows.filter(r=>r&&!r.ok&&!r.noSale).map(r=>({date:r.business_date||null,total:round2(+r.total_sales||0),why:why(r).slice(0,200)}))};
 }
 // หาแถวในฐานที่ตรงกับรายการที่พนักงานกดยกเลิก — ผูกด้วย line_uid ก่อนเสมอ (ชี้แถวตรงตัว)
 // เทียบด้วย เมนู+หมายเหตุ+ตัวเลือก เป็นทางสำรองของแถวเก่าที่ยังไม่มี line_uid
@@ -18358,7 +18450,11 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
     :"";
   const cashPaidH=cashPartOf(order);
   const cashLine=(paid&&cashPaidH>0&&order.cash_received)?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>รับเงิน</span><span>฿${(+order.cash_received).toFixed(2)}</span></div><div style="display:flex;justify-content:space-between;font-size:12px"><span>เงินทอน</span><span>฿${Math.max(0,(+order.cash_received)-cashPaidH).toFixed(2)}</span></div>`:"";
-  const promoLine=order.promo_amount>0?`<div style="display:flex;justify-content:space-between;color:#7C3AED;font-size:12px"><span>🎁 ${esc(order.promo_name||"โปรโมชั่น")}</span><span>-฿${(+order.promo_amount).toFixed(2)}</span></div>`:"";
+  // ส่วนลดแตกสามก้อน (billDiscParts) — บรรทัดคูปองอยู่ต่อท้ายโปรฯ ต้องเห็นว่าใช้คูปองอะไร
+  const dpH=billDiscParts(order);
+  const discLineH=dpH.manual>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>${(dpH.promo>0||dpH.voucher>0)?"ส่วนลด":"ส่วนลดรวม"}</span><span>-฿${dpH.manual.toFixed(2)}</span></div>`:"";
+  const promoLine=(dpH.promo>0?`<div style="display:flex;justify-content:space-between;color:#7C3AED;font-size:12px"><span>🎁 ${esc(order.promo_name||"โปรโมชั่น")}</span><span>-฿${dpH.promo.toFixed(2)}</span></div>`:"")
+    +(dpH.voucher>0?`<div style="display:flex;justify-content:space-between;color:#7C3AED;font-size:12px"><span>Voucher${order.voucher.ref?" ("+esc(order.voucher.ref)+")":""}${order.voucher.mode==="percent"?" "+esc(order.voucher.value)+"%":""}</span><span>-฿${dpH.voucher.toFixed(2)}</span></div>`:"");
   const scLine=order.service_charge>0?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>Service Charge</span><span>+฿${(+order.service_charge).toFixed(2)}</span></div>`:"";
   // ปัดเศษต้องขึ้นบนใบทางนี้ด้วย ไม่งั้นใบกำกับภาษีอย่างย่อบวกไม่ลง (ทางนี้ใช้ตอนพิมพ์ย้อนหลังด้วย)
   const roundLine=order.round_adj?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>ปัดเศษ</span><span>${(+order.round_adj>0?"+":"-")}฿${Math.abs(+order.round_adj).toFixed(2)}</span></div>`:"";
@@ -18382,7 +18478,7 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const payBlock=paid
     ?`<div class="line"></div><div style="text-align:center;font-size:13px;font-weight:700">ชำระโดย: ${payLabel}</div>${splitLines}${qrBlock}<div style="text-align:center;font-size:11px;margin-top:8px">ขอบคุณที่ใช้บริการครับ 🙏</div>`
     :`<div class="line"></div><div style="text-align:center;font-size:14px;font-weight:800">** ยังไม่ชำระเงิน **</div><div style="text-align:center;font-size:11px;color:#555;margin-top:2px">กรุณาชำระที่เคาน์เตอร์</div>${qrBlock}`;
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;margin:0;padding:0;font-size:13px;background:#e2e8f0}#rcpt{width:72mm;margin:0 auto;padding:10px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.18)}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{body{background:#fff}#rcpt{zoom:1!important;box-shadow:none;margin:0}@page{margin:0;size:72mm auto}}</style></head><body><div id="rcpt"><h2>${esc(branchName)}</h2>${headerExtra}${taxLabel}<div class="tbl-num">โต๊ะ ${esc(tableNum)}</div><div style="text-align:center;font-size:11px;color:#555">${fmtDT()}${rcptNo}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${order.discount>0?`<div style="display:flex;justify-content:space-between;color:#dc2626;font-size:12px"><span>ส่วนลดรวม</span><span>-฿${(+order.discount).toFixed(2)}</span></div>`:""}${promoLine}${scLine}${vatLine}${roundLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>${paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"}</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${vatIncNote}${cashLine}${payBlock}${footerExtra}</div><br/>${autoPrint}</body></html>`);
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title><style>@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700;900&display=swap');body{font-family:'Sarabun',sans-serif;margin:0;padding:0;font-size:13px;background:#e2e8f0}#rcpt{width:72mm;margin:0 auto;padding:10px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.18)}h2{text-align:center;font-size:16px;margin:4px 0}.line{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.tbl-num{text-align:center;font-size:22px;font-weight:900;margin:4px 0}@media print{body{background:#fff}#rcpt{zoom:1!important;box-shadow:none;margin:0}@page{margin:0;size:72mm auto}}</style></head><body><div id="rcpt"><h2>${esc(branchName)}</h2>${headerExtra}${taxLabel}<div class="tbl-num">โต๊ะ ${esc(tableNum)}</div><div style="text-align:center;font-size:11px;color:#555">${fmtDT()}${rcptNo}</div><div class="line"></div><table><thead><tr><th style="text-align:left;font-size:11px">รายการ</th><th style="text-align:center;font-size:11px">จำนวน</th><th style="text-align:right;font-size:11px">ราคา</th></tr></thead><tbody>${rows}</tbody></table><div class="line"></div><div style="display:flex;justify-content:space-between"><span>ยอดรวม</span><span>฿${(+(order.subtotal||0)).toFixed(2)}</span></div>${discLineH}${promoLine}${scLine}${vatLine}${roundLine}<div style="display:flex;justify-content:space-between;font-weight:900;font-size:18px;margin-top:6px;padding-top:6px;border-top:2px solid #000"><span>${paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"}</span><span>฿${(+(order.total||0)).toFixed(2)}</span></div>${vatIncNote}${cashLine}${payBlock}${footerExtra}</div><br/>${autoPrint}</body></html>`);
   w.document.close();addPrintClose(w);
 }
 // ── Bluetooth ESC-POS helpers ────────────────────────────
@@ -18659,12 +18755,14 @@ function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
   });
   L.push({rule:true});
   L.push({l:"ยอดรวม",r:bahtR(order.subtotal||0),size:24});
-  if(order.discount>0)L.push({l:"ส่วนลดรวม",r:"-"+bahtR(order.discount),size:22});
-  if(order.promo_amount>0)L.push({l:stripEmoji(order.promo_name||"โปรโมชั่น"),r:"-"+bahtR(order.promo_amount),size:22});
+  // order.discount = ส่วนลดทั้งหมด (รวมโปรฯ และคูปองแล้ว) — แตกก่อนพิมพ์ ไม่งั้นโปรฯ/คูปองถูกหักซ้ำบนใบ
+  const dp=billDiscParts(order);
+  if(dp.manual>0)L.push({l:(dp.promo>0||dp.voucher>0)?"ส่วนลด":"ส่วนลดรวม",r:"-"+bahtR(dp.manual),size:22});
+  if(dp.promo>0)L.push({l:stripEmoji(order.promo_name||"โปรโมชั่น"),r:"-"+bahtR(dp.promo),size:22});
   // คูปอง — ต้องเห็นบนใบว่าใบไหนถูกใช้ ไม่งั้นตรวจย้อนหลังไม่ได้ว่าส่วนลดมาจากคูปองอะไร
-  if(order.voucher&&(+order.voucher.amount||0)>0)
+  if(dp.voucher>0)
     L.push({l:"Voucher"+(order.voucher.ref?" ("+stripEmoji(String(order.voucher.ref))+")":"")+(order.voucher.mode==="percent"?` ${order.voucher.value}%`:""),
-      r:"-"+bahtR(order.voucher.amount),size:22});
+      r:"-"+bahtR(dp.voucher),size:22});
   if(order.service_charge>0)L.push({l:"ค่าบริการ (Service)",r:"+"+bahtR(order.service_charge),size:22});
   if(order.vat>0)L.push({l:`VAT ${order.vat_rate||7}%${order.vat_included?" (รวมในราคา)":""}`,r:(order.vat_included?"":"+")+bahtR(order.vat),size:22});
   // ปัดเศษต้องเห็นบนใบ ไม่งั้นลูกค้าบวกเลขตามแล้วไม่ตรง และร้านตรวจย้อนหลังไม่ได้ว่าหายไปไหน
@@ -19646,6 +19744,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(L.item_disc&&typeof L.item_disc==="object")setItemDisc(L.item_disc);
     if(L.pay_method)setPayMethod(L.pay_method);
     setSelectedPromoId(L.promo_id!=null?L.promo_id:null);
+    // คูปองต้องกลับมาด้วย — ไม่งั้นเปิดโต๊ะจากอีกเครื่องแล้วคูปองหาย ยอดไม่ตรงกับ QR ที่ลูกค้าถืออยู่
+    if(L.voucher&&typeof L.voucher==="object")setVoucher({ref:L.voucher.ref||null,mode:L.voucher.mode||"baht",value:round2(+L.voucher.value||0)});
   },[existingOrder]);
   // Promotions: auto-evaluate applicable, auto-pick best
   const menusById=useMemo(()=>{const m={};menus.forEach(x=>{m[x.id]=x;});return m;},[menus]);
@@ -19669,6 +19769,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     const raw=voucher.mode==="percent"?round2(base*(+voucher.value||0)/100):round2(+voucher.value||0);
     return Math.min(Math.max(0,raw),base);
   },[voucher,subtotal,manualDiscount,promoDiscount]);
+  // คูปองในรูปที่เก็บลงบิล — ชุดเดียวกันทั้งบิลในฐาน ใบเสร็จ ใบ QR และตัวล็อกยอด
+  const voucherCol=(voucher&&voucherDiscount>0)?{...voucher,amount:round2(voucherDiscount)}:null;
 
   const _T=billTotalsOf({items,manualDiscount,promoDiscount,voucherDiscount,posSettings});
   const totalDiscount=_T.totalDiscount,subAfterDisc=_T.subAfterDisc;
@@ -19869,11 +19971,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(!items.length){notifyDlg("ยังไม่มีรายการในบิล");return;}
     // พิมพ์ก่อน ล็อกทีหลัง — ถ้า await ก่อนเปิดหน้าต่างพิมพ์ เบราว์เซอร์จะบล็อกป็อปอัพ
     // (บางสาขายังไม่มีเครื่องพิมพ์ใบเสร็จ ต้องตกไปทางหน้าต่างพิมพ์)
+    // discount = ส่วนลดทั้งหมด (รูปเดียวกับที่เก็บลงบิล) + คูปอง — ตัวพิมพ์แตกเป็นบรรทัดลดเอง/โปรฯ/คูปองเอง
     smartPrintReceipt({...(existingOrder||{}),items:itemsWithDisc,payment_method:payMethod,
-      subtotal,discount:round2(manualDiscount),total,
+      subtotal,discount:round2(totalDiscount),total,
       service_charge:sc,service_charge_rate:scRate,vat,vat_rate:vatRate,vat_included:vatIncluded,
       subtotal_after_disc:subAfterDisc,
-      promo_amount:promoDiscount,promo_name:selectedPromo?.name||null,round_adj:roundAdj,
+      promo_amount:promoDiscount,promo_name:selectedPromo?.name||null,round_adj:roundAdj,voucher:voucherCol,
       cash_received:null},table.table_number,false);   // false = ยังไม่ชำระ → ใบมี QR ท้ายใบ
     if(!existingOrder?.id)return;
     // ล็อกยอดกับสถานะไว้ที่ตัวบิล: โต๊ะเปลี่ยนสี · ลูกค้าสั่งเพิ่มไม่ได้ · ส่วนลดไม่ขยับ
@@ -19881,7 +19984,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const lock={at:Date.now(),total:round2(total),subtotal:round2(subtotal),
         disc_mode:discMode,disc_type:discType,disc_value:+discValue||0,item_disc:itemDisc,
         promo_id:selectedPromoId??null,promo_name:selectedPromo?.name||null,promo_amount:round2(promoDiscount),
-        pay_method:payMethod,by:currentUser?.username||null};
+        voucher:voucherCol,pay_method:payMethod,by:currentUser?.username||null};
       const row=await api.setPayWaiting(existingOrder.id,verRef.current,lock);
       if(!row){notifyDlg("⚠️ พิมพ์ QR แล้ว แต่ล็อกยอดไม่สำเร็จ — บิลโต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ ตรวจยอดอีกครั้ง แล้วพิมพ์ QR ใหม่");return;}
       verRef.current=row.updated_at;
@@ -19989,7 +20092,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       if(_pls.note)posToast(_pls.note,"warn",9000);
       const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,round_adj:roundAdj,payment_method:pmCol,shift_id:_pls.id||null,updated_at:new Date().toISOString()};
       // paid_by = ใครกดปิดบิลใบนี้ · เดิมไม่มีเลย บิลทุกใบไร้เจ้าของ ตรวจย้อนหลังไม่ได้
-      const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,payments:paymentsCol,voucher:(voucher&&voucherDiscount>0)?{...voucher,amount:round2(voucherDiscount)}:null,paid_by:currentUser?.username||currentUser?.name||null};
+      const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,payments:paymentsCol,voucher:voucherCol,paid_by:currentUser?.username||currentUser?.name||null};
       let row;
       try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,fullPayload);}
       catch(err){
@@ -20021,9 +20124,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // เดิมยิงลิ้นชักกับใบเสร็จแยกกันพร้อมกัน ต่างคนต่างเขียนทับแถวเครื่องแคชเชียร์ → ลิ้นชักไม่เด้ง/ใบเสร็จหายเงียบ
       // เริ่มตรงนี้ (ก่อนลงบันทึกเงินสด) · ลิ้นชักรอเรนเดอร์+ส่งรูปใบเสร็จก่อน จึงเด้งช้ากว่าเดิมราว 1-2 วิ (แลกกับไม่ทับกันเอง)
       // เขียนใบไม่ผ่าน = สั่งลิ้นชักแยกให้ (kickAfterFail) · ผลใบเสร็จรอทีหลัง · ลิ้นชักพลาดไม่ทำให้ปิดบิลล้ม
-      // discount = MANUAL portion only; the promo is printed as its own line (promoMeta), so
-      // passing the combined figure would deduct the promotion twice on the printed receipt.
-      const _rcpt=smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(manualDiscount),total,round_adj:roundAdj,payment_method:pmCol,payments:paymentsCol,cash_received:cashReceived,...promoMeta,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true,cashPart>0);
+      // discount = ส่วนลดทั้งหมด ค่าเดียวกับที่เพิ่งเก็บลงบิล + โปรฯ + คูปอง ⟹ ใบตอนปิดบิลกับใบพิมพ์ซ้ำจากฐานเป็นใบเดียวกัน
+      // ตัวพิมพ์แตกส่วนลดเป็น ลดเอง/โปรฯ/คูปอง เอง (billDiscParts) — เดิมส่งแค่ลดเอง แล้วใบไม่มีบรรทัดคูปอง ยอดบวกลบไม่ลง
+      const _rcpt=smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(totalDiscount),total,round_adj:roundAdj,payment_method:pmCol,payments:paymentsCol,cash_received:cashReceived,...promoMeta,promo_amount:round2(promoDiscount),voucher:voucherCol,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true,cashPart>0);
       // record cash movement if cash payment — skip if one already exists for this order (the
       // reconcile path above can re-enter after a lost response; a duplicate would inflate the
       // shift's expected cash).
@@ -21750,6 +21853,31 @@ function POSModeSelect({onSelect,canManage=true,canReport=true}){
   </div>;
 }
 
+// ── ใบปิดยอดที่ส่งเข้าบัญชีไม่ผ่าน (จดไว้ในเครื่องนี้ตอนปิดกะ) ──────────────
+// เตือนค้างที่จอเปิดกะ (แคชเชียร์เห็น) และหลังบ้าน (ผู้จัดการปิดเรื่องได้) จนกว่าจะกด "จัดการแล้ว"
+// ไม่มีปุ่มส่งซ้ำโดยตั้งใจ (เหตุผลอยู่ที่ acctUnsentKey) — ส่งยอดทางอื่น/แจ้งฝ่ายบัญชีพร้อมเลขกะ แล้วค่อยกด
+function AcctUnsentBanner({branchId,canResolve=false}){
+  const[list,setList]=useState(()=>readAcctUnsent(branchId));
+  useEffect(()=>{setList(readAcctUnsent(branchId));},[branchId]);
+  if(!list.length)return null;
+  async function resolve(e){
+    if(!await confirmDlg({title:`ปิดเรื่องกะ #${e.shift_id}?`,message:`ยืนยันว่ายอดกะ #${e.shift_id} (฿${(+e.total_sales||0).toLocaleString()}) ส่งเข้าบัญชีทางอื่นแล้ว หรือแจ้งฝ่ายบัญชีแล้ว\n\nกดแล้วรายการนี้จะหายจากเครื่องนี้`,confirmLabel:"จัดการแล้ว",cancelLabel:"ยังไม่ได้จัดการ"}))return;
+    forgetAcctUnsent(branchId,e.shift_id);setList(readAcctUnsent(branchId));
+  }
+  return <div style={{background:C.redLight,border:`2px solid ${C.red}`,borderRadius:12,padding:"12px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
+    <div style={{fontSize:14.5,fontWeight:900,color:C.red,marginBottom:4}}>⚠️ ยอดปิดกะที่ยังไม่เข้าระบบบัญชี {list.length} กะ</div>
+    <div style={{fontSize:12,color:"#991B1B",lineHeight:1.6,marginBottom:8}}>ส่งเข้าบัญชีไม่ผ่านตอนปิดกะ ยอดนี้ยังไม่อยู่ในสมุดบัญชี — แจ้งฝ่ายบัญชี/ผู้ดูแลระบบพร้อมเลขกะ</div>
+    {list.map(e=><div key={e.shift_id} style={{background:C.white,borderRadius:9,padding:"8px 10px",marginBottom:6,border:`1px solid ${C.red}33`,display:"flex",gap:10,alignItems:"flex-start",flexWrap:"wrap"}}>
+      <div style={{flex:1,minWidth:180,fontSize:12.5,color:C.ink2,lineHeight:1.55,overflowWrap:"anywhere"}}>
+        <b style={{color:C.ink}}>กะ #{e.shift_id}</b> · ปิดเมื่อ {fmtDT(e.at)} · {(+e.bills||0).toLocaleString()} บิล · ฿{(+e.total_sales||0).toLocaleString()}
+        {e.error&&<div style={{color:C.red}}>{e.error}</div>}
+        {(e.days||[]).map((d,i)=><div key={i} style={{color:C.red}}>{d.date||"-"} · ฿{(+d.total||0).toLocaleString()} — {d.why}</div>)}
+      </div>
+      {canResolve&&<Btn v="ghost" onClick={()=>resolve(e)} s={{padding:"6px 12px",fontSize:12.5}}>จัดการแล้ว</Btn>}
+    </div>)}
+    {!canResolve&&<div style={{fontSize:11.5,color:"#991B1B"}}>ผู้จัดการปิดเรื่องได้ที่ ⚙️ จัดการหลังบ้าน ของเครื่องนี้</div>}
+  </div>;
+}
 // ══════════════════════════════════════════════════════
 // ── OPEN SHIFT ────────────────────────────────────────
 // ══════════════════════════════════════════════════════
@@ -21792,6 +21920,7 @@ function OpenShiftModal({currentBranch,currentUser,onDone,onCancel}){
         </div>
       </div>
       <div style={{padding:24}}>
+        <AcctUnsentBanner branchId={currentBranch.id}/>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:8}}>เงินทอนเริ่มต้นในลิ้นชัก *</div>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11.5,color:C.red,fontWeight:700,marginBottom:8}}>นับเงินจริงในลิ้นชักแล้วใส่ยอด — ใส่ 0 หรือเว้นว่างไม่ได้</div>
         <NumInput value={cash} onValue={setCash} autoFocus placeholder="0" style={{...iS,fontSize:26,fontWeight:900,padding:"14px 18px",textAlign:"center",letterSpacing:1}}/>
@@ -22003,7 +22132,8 @@ function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatch
   // ── โครงสร้างยอด ──
   sec("โครงสร้างยอด");
   row("ยอดก่อนส่วนลด",b(t.gross));
-  if(t.disc)row("- ส่วนลด"+(t.discPct?` (${t.discPct}%)`:""),"-"+b(t.disc));
+  const dNP=t.discNoPromo!=null?+t.discNoPromo:Math.round(((+t.disc||0)-(+t.promo||0))*100)/100;   // ส่วนลดที่ไม่ใช่โปรฯ (โปรฯ มีบรรทัดของตัวเอง)
+  if(dNP)row("- ส่วนลด"+(t.discPct?` (${t.discPct}%)`:""),"-"+b(dNP));
   if(t.promo)row("- โปรโมชั่น","-"+b(t.promo));
   if(t.svc)row("+ ค่าบริการ","+"+b(t.svc));
   if(t.nonVatSales)row("ยอดที่ไม่มี VAT",b(t.nonVatSales));
@@ -22151,7 +22281,7 @@ function printZReportWindow({shift,totals,branch,user,note,reprint=false,mismatc
 <div class="div"></div>
 <h3>🧾 โครงสร้างยอด</h3>
 <div class="row"><span>ยอดก่อนส่วนลด</span><span>฿${fmt(totals.gross)}</span></div>
-${totals.disc?`<div class="row"><span>- ส่วนลด${totals.discPct?` (${totals.discPct}%)`:""}</span><span>-฿${fmt(totals.disc)}</span></div>`:""}
+${totals.discNoPromo?`<div class="row"><span>- ส่วนลด${totals.discPct?` (${totals.discPct}%)`:""}</span><span>-฿${fmt(totals.discNoPromo)}</span></div>`:""}
 ${totals.promo?`<div class="row"><span>- โปรโมชั่น</span><span>-฿${fmt(totals.promo)}</span></div>`:""}
 ${totals.svc?`<div class="row"><span>+ ค่าบริการ</span><span>+฿${fmt(totals.svc)}</span></div>`:""}
 ${totals.vat?`<div class="row"><span>VAT${totals.vatIncluded?" (รวมในราคาแล้ว)":""}</span><span>${totals.vatIncluded?"":"+"}฿${fmt(totals.vat)}</span></div>`:""}
@@ -22229,11 +22359,14 @@ function shiftReportBlocks({orders=[],cancelled=[]}={}){
       const key=i.item_discount_type==="percent"?`ลดรายเมนู ${(+i.item_discount_value||0).toFixed(2)}%`:"ลดรายเมนู (เป็นบาท)";
       addDc(key,v);
     }
-    const billDisc=r2((+o.discount||0)-itemDisc);
+    // o.discount = ส่วนลดทั้งหมดของบิล (รวมโปรฯ และคูปองแล้ว) ⟹ ลดท้ายบิล = ที่เหลือหลังหักรายเมนู โปรฯ คูปอง
+    // เดิมหักแค่รายเมนู แล้วพิมพ์โปรฯ/คูปองแยกอีก = นับซ้ำ (บิล #385 คูปอง ฿992 ขึ้นเป็นส่วนลด ฿1,984)
+    const promoAmt=r2(Math.max(0,+o.promo_amount||0)),vAmt=r2(Math.max(0,+(o.voucher&&o.voucher.amount)||0));
+    const billDisc=r2((+o.discount||0)-itemDisc-promoAmt-vAmt);
     if(billDisc>0.005)addDc("ลดท้ายบิล",billDisc);
-    if((+o.promo_amount||0)>0)addDc("โปรโมชั่น: "+(o.promo_name||"ไม่ระบุชื่อ"),+o.promo_amount||0);
+    if(promoAmt>0)addDc("โปรโมชั่น: "+(o.promo_name||"ไม่ระบุชื่อ"),promoAmt);
     // คูปองแยกบรรทัดของตัวเอง — เจ้าของต้องเห็นว่าแต่ละกะแจกคูปองไปเท่าไร
-    if(o.voucher&&(+o.voucher.amount||0)>0)addDc("Voucher"+(o.voucher.ref?" "+o.voucher.ref:""),+o.voucher.amount||0);
+    if(vAmt>0)addDc("Voucher"+(o.voucher.ref?" "+o.voucher.ref:""),vAmt);
   }
   const discountLines=[...dc].map(([name,v])=>({name,count:v.n,amt:v.amt})).sort((a,b)=>b.amt-a.amt);
   // ── ช่องทางชำระ แบบแม่-ลูก พร้อมจำนวนครั้ง — จัดกลุ่มแบบเดียวกับที่ส่งบัญชี (api/sliptrack-push.js)
@@ -22302,6 +22435,8 @@ function computeShiftTotals({movements,orders,actualCash,cancelled,openBills,edi
       totalCash:round2(totalCash),totalTransfer:round2(totalTransfer),totalCard:round2(totalCard),totalOther:round2(totalOther),
       expected:round2(expected),actual,diff:round2(actual-expected),orderCount:orders.length,
       gross,disc,promo,svc,vat:vatSum,roundAdj:roundSum,vatIncluded,itemQty,
+      // disc = ส่วนลดทั้งหมด (รวมโปรฯ แล้ว) · ใบที่พิมพ์ "- ส่วนลด" แล้วตามด้วย "- โปรโมชั่น" ต้องใช้ตัวนี้ ไม่งั้นโปรฯ ถูกหักสองรอบ
+      discNoPromo:round2(disc-promo),
       discPct:gross>0?round2(disc/gross*100):0,
       avgBill:orders.length?round2(totalSales/orders.length):0,
       cancelCount:cancelled.length,cancelAmt,
@@ -22436,10 +22571,15 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         acctRes=await rr.json().catch(()=>({error:"อ่านคำตอบจากระบบบัญชีไม่ได้"}));
         if(!rr.ok&&!acctRes)acctRes={error:"ระบบบัญชีตอบ "+rr.status};
       }catch(e){acctRes={error:String((e&&e.message)||e)};}
-      setAcct(acctRes);
+      const outcome=acctOutcomeOf(acctRes,totals.orderCount);
+      // ส่งไม่ผ่าน = จำเลขกะไว้ในเครื่องนี้ (แยกต่อสาขา) ขึ้นเตือนค้างที่หลังบ้าน/จอเปิดกะ จนผู้จัดการกดว่าจัดการแล้ว
+      // เดิมขึ้นแดงครั้งเดียวแล้วหายไปกับจอ ยอดวันนั้นไม่เคยเข้าบัญชีและไม่มีใครตามได้
+      const kept=outcome==="failed"&&rememberAcctUnsent(currentBranch.id,acctUnsentEntry(shift,acctRes,totals));
       setSaving(false);
-      // ถ้าสาขานี้ยังไม่เปิดใช้ท่อบัญชี ก็ปิดจอไปเลยเหมือนเดิม ไม่ต้องมีจออะไรมาคั่น
-      if(acctRes&&acctRes.skipped){onClosed();return;}
+      // กะนี้ไม่มีบิลให้ลงบัญชี — ปิดจอไปเลยเหมือนเดิม ไม่ต้องมีจออะไรมาคั่น
+      if(outcome==="nothing"){onClosed();return;}
+      // สาขายังไม่เปิดท่อบัญชี แต่กะนี้มีบิลที่เก็บเงินแล้ว — ห้ามปิดเงียบ ต้องขึ้นกล่องเหลืองให้กดรับทราบ
+      setAcct(outcome==="not_enabled"?{...acctRes,notEnabled:true,bills:totals.orderCount,sales:round2(totals.totalSales)}:{...(acctRes||{}),kept});
       return;   // มีผลลงบัญชีให้ดู — ปิดจอเมื่อผู้ใช้กดรับทราบ
     }catch(e){showErr("ปิดกะไม่สำเร็จ",e);}
     setSaving(false);
@@ -22452,7 +22592,21 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         ต้องขึ้นเป็นจอให้กดรับทราบ ไม่ใช่ toast ที่หายไปเอง
         ถ้ายอดไม่เข้าบัญชีแล้วไม่มีใครรู้ จะไปรู้อีกทีตอนปิดงบแล้วตัวเลขไม่ตรง */}
     {acct&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5300,padding:14}}>
-      {(()=>{
+      {acct.notEnabled?<div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(94vw,460px)",maxHeight:"88vh",overflowY:"auto",fontFamily:"'Sarabun',sans-serif"}}>
+        {/* สาขาที่ยังไม่เปิดท่อบัญชี — กะปิดแล้วจริง แต่ยอดไม่ได้ไปไหน ต้องมีคนส่งยอดทางเดิม */}
+        <div style={{padding:"18px 20px 14px",background:C.yellowLight,borderBottom:`2px solid ${C.yellow}`}}>
+          <div style={{fontSize:32,marginBottom:4}}>📙</div>
+          <div style={{fontSize:17,fontWeight:900,color:"#92400E",lineHeight:1.45}}>ยอดกะนี้ยังไม่ถูกส่งเข้าบัญชี (สาขานี้ยังไม่ได้เปิดท่อบัญชี)</div>
+          <div style={{fontSize:13,color:"#92400E",marginTop:6,lineHeight:1.6}}>
+            ปิดกะเรียบร้อยแล้ว · {(+acct.bills||0).toLocaleString()} บิล · ยอดขาย <b>฿{(+acct.sales||0).toLocaleString()}</b><br/>
+            ระบบบัญชียังไม่ได้รับยอดนี้ — ต้องส่งยอดเข้าบัญชีทางเดิม (ใบปิดยอด/แจ้งฝ่ายบัญชี) ทุกกะ จนกว่าจะเปิดท่อบัญชีให้สาขานี้
+          </div>
+        </div>
+        <div style={{padding:"12px 20px 18px"}}>
+          <Btn onClick={()=>{setAcct(null);onClosed();}} full icon={I.check} s={{padding:"12px",fontSize:14.5,fontWeight:900}}>รับทราบ</Btn>
+        </div>
+      </div>
+      :(()=>{
         const rows=Array.isArray(acct.results)?acct.results:[];
         // วันที่ไม่มียอดขายเลย (ยอด 0) ไม่ใช่ความผิดพลาด — ไม่นับเป็นแดง
         // ถ้าขึ้นแดงบ่อยๆ พนักงานจะชินแล้วมองข้ามวันที่ยอดไม่เข้าบัญชีจริง
@@ -22504,6 +22658,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
             </div>)}
           </div>
           <div style={{padding:"12px 20px 18px",borderTop:`1px solid ${C.line}`}}>
+            {acct.kept&&<div style={{fontSize:12,color:C.ink3,lineHeight:1.6,marginBottom:10}}>📌 จดกะ #{shift.id} ไว้ในเครื่องนี้แล้ว — จะขึ้นเตือนที่จอเปิดกะและหลังบ้านจนกว่าผู้จัดการจะกด "จัดการแล้ว"</div>}
             <Btn onClick={()=>{setAcct(null);onClosed();}} full icon={I.check} s={{padding:"12px",fontSize:14.5,fontWeight:900}}>รับทราบ</Btn>
           </div>
         </div>;
@@ -22572,7 +22727,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
           <div style={{display:"flex",flexDirection:"column",gap:5,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
             {[
               {l:"ยอดก่อนส่วนลด",v:totals.gross},
-              {l:`- ส่วนลด${totals.discPct>0?` (${totals.discPct}% ของยอดก่อนลด)`:""}`,v:totals.disc,warn:totals.discPct>=15},
+              {l:`- ส่วนลด${totals.discPct>0?` (${totals.discPct}% ของยอดก่อนลด)`:""}`,v:totals.discNoPromo,warn:totals.discPct>=15},
               {l:"- โปรโมชั่น",v:totals.promo},
               {l:"+ ค่าบริการ",v:totals.svc},
               {l:totals.vatIncluded?`VAT (รวมในราคาแล้ว)`:"+ VAT",v:totals.vat,flat:totals.vatIncluded},
@@ -23100,6 +23255,7 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
       {SECS.map(s=>{const active=section===s.id;return <button key={s.id} onClick={()=>setSection(s.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 14px",height:54,border:"none",background:active?"rgba(255,255,255,0.1)":"transparent",cursor:"pointer",fontSize:13,fontWeight:active?800:600,color:active?C.white:"rgba(255,255,255,0.5)",fontFamily:"'Sarabun',sans-serif",borderBottom:active?`3px solid ${s.c}`:"3px solid transparent",transition:"all .15s"}}><Ic d={s.icon} s={14} c={active?s.c:"rgba(255,255,255,0.5)"}/>{s.l}</button>;})}
     </div>
     <div style={{flex:1,overflow:"auto",padding:"20px 24px",background:C.bg}}>
+      <AcctUnsentBanner branchId={currentBranch.id} canResolve/>
       {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} zones={zones} reloadZones={reloadZones} onDone={loadTables}/>)}
       {section==="menu"&&<POSMenuTools currentBranch={currentBranch} variant="cards" onChanged={reloadMenus}/>}
       {section==="sellers"&&<POSSellerPanel currentBranch={currentBranch}/>}
@@ -25165,10 +25321,15 @@ function BillDetailCard({order,branch=null,cfg=null,onBack,onEdit=null,onVoid=nu
       </div>
       <div style={{padding:"14px 18px",borderTop:`1px solid ${C.line}`,background:C.bg}}>
         <Row l="ยอดรวม" v={m(o.subtotal)}/>
-        {+o.discount>0&&<Row l="ส่วนลดรวม" v={m(o.discount)} c={C.green} plus="-"/>}
-        {+o.promo_amount>0&&<Row l={stripEmoji(o.promo_name||"โปรโมชั่น")} v={m(o.promo_amount)} c={C.green} plus="-"/>}
+        {/* o.discount = ส่วนลดทั้งหมด (รวมโปรฯ/คูปองแล้ว) — แตกก่อนแสดง ไม่งั้นโปรฯ/คูปองถูกหักซ้ำบนจอ */}
+        {(()=>{const dp=billDiscParts(o);return <>
+          {dp.manual>0&&<Row l={(dp.promo>0||dp.voucher>0)?"ส่วนลด":"ส่วนลดรวม"} v={m(dp.manual)} c={C.green} plus="-"/>}
+          {dp.promo>0&&<Row l={stripEmoji(o.promo_name||"โปรโมชั่น")} v={m(dp.promo)} c={C.green} plus="-"/>}
+          {dp.voucher>0&&<Row l={"Voucher"+(o.voucher.ref?" ("+stripEmoji(String(o.voucher.ref))+")":"")} v={m(dp.voucher)} c={C.green} plus="-"/>}
+        </>;})()}
         {+o.service_charge>0&&<Row l="ค่าบริการ (Service)" v={m(o.service_charge)} plus="+"/>}
         {+o.vat>0&&<Row l={`VAT ${o.vat_rate||7}%${o.vat_included?" (รวมในราคา)":""}`} v={m(o.vat)} plus={o.vat_included?"":"+"}/>}
+        {+o.round_adj?<Row l="ปัดเศษ" v={"฿"+Math.abs(+o.round_adj).toFixed(2)} plus={+o.round_adj>0?"+":"-"}/>:null}
         <div style={{borderTop:`1px solid ${C.line}`,margin:"8px 0 0",paddingTop:10}}><Row l="รวมทั้งสิ้น" v={m(o.total)} big/></div>
         {paid&&cashPartOf(o)>0&&o.cash_received&&<div style={{marginTop:8}}><Row l="รับเงิน" v={m(o.cash_received)}/><Row l="เงินทอน" v={m(Math.max(0,(+o.cash_received)-cashPartOf(o)))}/></div>}
         {paid&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed ${C.lineLight}`,fontSize:12.5,fontFamily:"'Sarabun',sans-serif",color:C.ink3,display:"flex",justifyContent:"space-between"}}><span>ชำระโดย</span><span style={{fontWeight:700,color:C.ink}}>{(Array.isArray(o.payments)&&o.payments.length>1)?payHeadOf(o):(PAY_LABEL[o.payment_method]||o.payment_method||"-")}</span></div>}
@@ -25487,9 +25648,8 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
   const optionLib=useMemo(()=>posSettings?.option_library||[],[posSettings]);
   const origByUid=useMemo(()=>{const m=new Map();for(const i of (order.items||[]))if(i.line_uid)m.set(String(i.line_uid),i);return m;},[order]);
   // ส่วนลดของบิล: ถ้าเป็นส่วนลดรายเมนู คิดใหม่จากรายการจริง · ถ้าเป็นส่วนลดทั้งบิล คงยอดเดิมไว้
-  const hasItemDisc=(order.items||[]).some(i=>+i.item_discount>0);
-  const manualDiscount=hasItemDisc?round2(items.reduce((s,i)=>s+(+i.item_discount||0),0)):round2(+order.discount||0);
-  const T=billTotalsOf({items,manualDiscount,promoDiscount:round2(+order.promo_amount||0),posSettings});
+  // โปรฯ คงเดิม · คูปองคิดใหม่จากยอดใหม่ตามกติกาเดียวกับจอเก็บเงิน · ภาษีแบบเดียวกับตอนปิดบิลใบนี้ (paidBillRecalc)
+  const T=paidBillRecalc({order,items,posSettings});
   const oldTotal=round2(+order.total||0);
   const delta=round2(T.total-oldTotal);
   const added=items.filter(i=>!origByUid.has(String(i.line_uid)));
@@ -25503,6 +25663,8 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
   const bizDay=(d)=>{try{return new Date(d).toLocaleDateString("en-CA",{timeZone:"Asia/Bangkok"});}catch{return "";}};
   const oldDay=bizDay(order.updated_at||order.created_at),today=bizDay(new Date());
   const pastDay=!!(oldDay&&today&&oldDay!==today);   // บิลของวันก่อน = ยอดวันนั้นส่งบัญชีไปแล้ว
+  // บิลของกะที่ปิดแล้ว (วันเดียวกันก็ได้ — ร้านเปิดวันละหลายกะ) = ยอดกะนั้นส่งบัญชีไปแล้ว แก้ตรงนี้ฝั่งบัญชีไม่เปลี่ยนตาม
+  const shiftClosed=billShiftClosed(order,shift);
   const changed=added.length>0||removed.length>0||delta!==0;
   const menuList=useMemo(()=>{
     const s=q.trim().toLowerCase();
@@ -25531,7 +25693,8 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
       ?order.payments
       :[{method:order.payment_method||"cash",amount:oldTotal,at:order.updated_at||order.created_at,by:order.paid_by||null}];
     const payments=delta!==0?[...prevPays,{method,amount:delta,at,by:who,reason:reason.trim()}]:prevPays;
-    const base={items:clean,subtotal:T.subtotal,discount:round2(manualDiscount),total:T.total,vat:T.vat,service_charge:T.sc,round_adj:T.roundAdj,updated_at:at};
+    // discount = ส่วนลดทั้งหมด (ลดเอง+โปรฯ+คูปอง) รูปเดียวกับตอนปิดบิล — เดิมเก็บแค่ส่วนลดรายเมนู โปรฯ/คูปองหลุดจากบิล
+    const base={items:clean,subtotal:T.subtotal,discount:T.totalDiscount,total:T.total,vat:T.vat,service_charge:T.sc,round_adj:T.roundAdj,updated_at:at,...(T.voucher?{voucher:T.voucher}:{})};
     // เงินสดจ่ายพอดี = ยอดรับต้องขยับตามยอดใหม่ ไม่งั้นใบเสร็จโชว์เงินทอนผี
     if(order.payment_method==="cash"&&method==="cash"&&+order.cash_received===oldTotal)base.cash_received=T.total;
     const full={...base,payments,edited_at:at,edited_by:who,edit_count:(+order.edit_count||0)+1};
@@ -25563,7 +25726,7 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
         delta,settle_method:delta!==0?method:null,old_total:oldTotal,new_total:T.total,
         items_before:order.items||[],items_after:clean,
         cash_movement_id:(Array.isArray(mv)?(mv[0]&&mv[0].id):(mv&&mv.id))||null,
-        needs_accounting:pastDay,created_at:at});
+        needs_accounting:pastDay||shiftClosed,created_at:at});
     }catch(e){noTrail=true;}
     if(noTrail)posToast("⚠️ แก้บิลแล้ว แต่บันทึกร่องรอยไม่ได้ (ยังไม่ได้รันคำสั่ง SQL ของระบบแก้บิล) — แจ้งแอดมิน","warn",9000);
     // ── ครัว: ของที่เพิ่ม = ใบสั่งอาหารปกติ · ของที่ลด/ลบ = ใบยกเลิก ──
@@ -25580,7 +25743,12 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
   const F="'Sarabun',sans-serif";
   const REASONS=["ลูกค้าสั่งเพิ่ม","กดสั่งเกิน","กดผิดเมนู","ลูกค้าเปลี่ยนใจ","คิดเงินผิด","แถมให้ลูกค้า"];
   return <Modal title={`✏️ แก้ไขบิล #${order.id} — โต๊ะ ${order.table_number||"-"}`} onClose={saving?undefined:onClose} wide disableEsc>
-    {pastDay&&<div style={{padding:"9px 12px",borderRadius:10,marginBottom:10,background:"#FFFBEB",border:"1px solid #FDE68A",fontFamily:F,fontSize:12.5,color:"#92400E",lineHeight:1.6}}>
+    {shiftClosed?<div style={{padding:"11px 13px",borderRadius:10,marginBottom:10,background:"#FFFBEB",border:"2px solid #F59E0B",fontFamily:F,fontSize:13,color:"#92400E",lineHeight:1.6}}>
+      <div style={{fontSize:14.5,fontWeight:900,marginBottom:2}}>⚠️ บิลนี้อยู่ในกะ{order.shift_id!=null?` #${order.shift_id}`:""} ที่ปิดไปแล้ว</div>
+      ยอดของกะนั้นสรุปและส่งเข้าระบบบัญชีไปแล้ว — แก้ตรงนี้ <b>ยอดฝั่งบัญชีจะไม่เปลี่ยนตาม</b> ต้องแจ้งฝ่ายบัญชีเอง (บิล #{order.id} · วันที่ {fmtD(order.updated_at||order.created_at)}{delta!==0?` · ส่วนต่าง ${delta>0?"+":"-"}฿${Math.abs(delta).toLocaleString()}`:""})
+      {delta!==0&&<div style={{fontSize:12,marginTop:2}}>เงินส่วนต่างที่เป็นเงินสดจะลงลิ้นชักของกะที่เปิดอยู่ตอนนี้</div>}
+    </div>
+    :pastDay&&<div style={{padding:"9px 12px",borderRadius:10,marginBottom:10,background:"#FFFBEB",border:"1px solid #FDE68A",fontFamily:F,fontSize:12.5,color:"#92400E",lineHeight:1.6}}>
       บิลนี้เป็นของวันที่ {fmtD(order.updated_at||order.created_at)} ซึ่งปิดกะและส่งยอดเข้าระบบบัญชีไปแล้ว — แก้ได้ แต่ต้องแจ้งฝ่ายบัญชีให้แก้ยอดของวันนั้นด้วย
     </div>}
     {step==="items"?<div>
@@ -25744,7 +25912,8 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
   const paid=all.filter(o=>o.status==="paid");
   const unpaid=all.filter(o=>o.status!=="paid"&&o.status!=="cancelled");
   const cancelled=all.filter(o=>o.status==="cancelled");
-  const discTotal=paid.reduce((s,o)=>s+(+o.discount||0)+(+o.promo_amount||0),0);
+  // discount ของบิลรวมโปรฯ และคูปองไว้แล้ว (billDiscParts) — บวก promo_amount เพิ่มอีก = โปรฯ นับสองรอบ
+  const discTotal=paid.reduce((s,o)=>s+(+o.discount||0),0);
   const lostTotal=cancelled.reduce((s,o)=>s+(+o.total||0),0);
   const rev=paid.reduce((s,o)=>s+(+o.total||0),0);
   const avg=paid.length?rev/paid.length:0;
