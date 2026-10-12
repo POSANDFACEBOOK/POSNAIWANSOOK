@@ -952,7 +952,17 @@ const api = {
   deleteZone: (id) => sb(`table_zones?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   // POS Settings (per-branch VAT, Service Charge, PromptPay, Receipt)
   getPOSSettings: (bid) => sb(`pos_settings?branch_id=eq.${bid}&limit=1`),
-  upsertPOSSettings: (d) => sb("pos_settings", {method:"POST", body:JSON.stringify(d), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}}),
+  // แก้เฉพาะคอลัมน์ที่ส่งมา — ทุกจอตั้งค่า POS ใช้ตัวนี้ (แบบเดียวกับลำดับหมวดด้านล่าง)
+  // เดิมแต่ละจอ upsert ทั้งแถวจากค่าที่โหลดไว้ตอนเปิดจอ: เครื่องหนึ่งเปิด VAT อีกเครื่องเพิ่ม PIN
+  // → VAT กลับเป็นปิดเงียบๆ หรือ PIN/คลังตัวเลือกหาย · ยังไม่มีแถว = สร้างใหม่ด้วยคอลัมน์ชุดเดียวกัน
+  // (เลิกใช้ upsertPOSSettings ที่ส่งทั้งแถวแล้ว — อย่าเอากลับมา)
+  patchPOSSettings: async (bid, patch) => {
+    const p = {...(patch||{})}; delete p.id; delete p.branch_id;
+    const r = await sb(`pos_settings?branch_id=eq.${bid}`, {method:"PATCH", body:JSON.stringify(p)});
+    if(Array.isArray(r)&&r.length)return r[0];
+    const ins = await sb("pos_settings", {method:"POST", body:JSON.stringify({...p,branch_id:bid}), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}});
+    return Array.isArray(ins)?(ins[0]||null):ins;
+  },
   // แก้เฉพาะลำดับหมวด — ห้าม upsert ทั้งแถว ไม่งั้นทับ VAT/ค่าบริการ/QR ที่เครื่องอื่นเพิ่งแก้
   setCategoryOrder: async (bid, order) => {
     const r = await sb(`pos_settings?branch_id=eq.${bid}`, {method:"PATCH", body:JSON.stringify({category_order:order})});
@@ -1484,6 +1494,8 @@ function useT(){
 
 const ALL_PERMS=[
   {id:"pos",label:"ขายหน้าร้าน"},
+  // ไม่ใช่แท็บ — เปิดหลังบ้าน POS ให้ผู้จัดการสาขา (PIN/ผังโต๊ะ/เครื่องพิมพ์) โดยไม่ต้องให้สิทธิ์ตั้งค่าทั้งระบบ
+  {id:"pos_admin",label:"จัดการ POS (PIN/เครื่องพิมพ์)"},
   {id:"crm",label:"CRM ลูกค้า"},
   {id:"ingredients",label:"วัตถุดิบ"},
   {id:"waste",label:"บันทึกของเสีย"},
@@ -1532,6 +1544,15 @@ function hasPerm(user,perm){
   if(!user)return false;
   if(user.role==="admin")return true;
   return getUserPerms(user).includes(perm);
+}
+// ── สิทธิ์ POS สองชั้น ─────────────────────────────────────────────────────
+// settings  = ทุกอย่าง รวมเรื่องเงิน (VAT/ค่าบริการ/ปัดเศษ/พร้อมเพย์/หัว-ท้ายใบเสร็จ/โปรโมชั่น)
+// admin     = งานประจำของผู้จัดการสาขา: PIN พนักงานขาย ผังโต๊ะ เพิ่ม/ลบเครื่องพิมพ์ — ได้จาก settings หรือ pos_admin
+// คนที่เข้าด้วย PIN (saleOnly) ไม่ได้ทั้งสองชั้นเสมอ ไม่ว่าผู้ใช้จำลองจะถูกแก้ให้มีสิทธิ์อะไรก็ตาม
+function posAccess(user,saleOnly){
+  const settings=!saleOnly&&hasPerm(user,"settings");
+  const admin=settings||(!saleOnly&&hasPerm(user,"pos_admin"));
+  return{settings,admin};
 }
 const ROLES={admin:{label:"Admin",color:"purple"},area:{label:"Area / พื้นที่",color:"orange"},manager:{label:"Manager",color:"blue"},staff:{label:"Staff",color:"green"},viewer:{label:"Viewer",color:"gray"}};
 const ppg=(price,gram)=>(gram>0?price/gram:0);
@@ -19456,7 +19477,7 @@ function MenuOptionPicker({menu,groups,onConfirm,onClose}){
 // ── POS ORDER PANEL ───────────────────────────────────
 // ══════════════════════════════════════════════════════
 // จัดการใบเสร็จรับเงิน: ตั้งหัว/ท้ายกระดาษ + VAT ตามใบกำกับภาษีอย่างย่อของไทย + พรีวิว
-function ReceiptSettingsModal({currentBranch,onClose,onSaved}){
+function ReceiptSettingsModal({currentBranch,currentUser,onClose,onSaved}){
   const lbl={display:"block",fontSize:12.5,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
   const[loading,setLoading]=useState(true);const[s,setS]=useState(null);const[saving,setSaving]=useState(false);
   const[orig,setOrig]=useState(null);   // ค่าที่โหลดมาตอนแรก — ใช้เทียบว่าแตะ VAT ไปไหม
@@ -19468,7 +19489,8 @@ function ReceiptSettingsModal({currentBranch,onClose,onSaved}){
     // แก้ VAT ระหว่างกะเปิดอยู่ = บิลในกะเดียวกันไม่เหมือนกัน ต้องให้เห็นผลกระทบก่อน
     if(!await okToChangeVatNow(currentBranch.id,orig,s))return;
     setSaving(true);
-    try{const d={...s,branch_id:currentBranch.id,updated_at:new Date().toISOString()};delete d.id;const res=await api.upsertPOSSettings(d);if(Array.isArray(res)&&res[0])setS(res[0]);if(onSaved)await onSaved();posToast("บันทึกรูปแบบใบเสร็จแล้ว","ok");onClose();}
+    // ส่งเฉพาะช่องที่แก้ (ไม่ทับ PIN/ค่าที่อีกเครื่องแก้) + จดประวัติถ้าแตะ VAT/พร้อมเพย์
+    try{const res=await savePOSFormSettings(currentBranch,orig,s,currentUser);if(res.row)setS(res.row);if(onSaved)await onSaved();posToast(res.changed?"บันทึกรูปแบบใบเสร็จแล้ว":"ไม่มีอะไรเปลี่ยน","ok");onClose();}
     catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));}
     setSaving(false);
   }
@@ -22683,6 +22705,40 @@ async function okToChangeVatNow(branchId,before,after){
       +"แนะนำให้ปิดกะก่อน แล้วค่อยเปลี่ยน",
     confirmLabel:"เข้าใจแล้ว เปลี่ยนเลย",cancelLabel:"ไม่เปลี่ยน รอปิดกะก่อน",danger:true});
 }
+// ── บันทึกฟอร์มตั้งค่า POS (🧾 หน้าร้าน และ ⚙️ หลังบ้าน ใช้ฟอร์มเดียวกัน) ─────
+// ส่งเฉพาะช่องในฟอร์มนี้ที่ "ผู้ใช้แก้จริง" เทียบกับค่าตอนเปิดจอ — ไม่ส่งทั้งแถว
+// ช่องที่ไม่ได้แตะจึงไม่ไปทับค่าที่อีกเครื่องเพิ่งแก้ และไม่แตะ PIN/คลังตัวเลือก/ลำดับเมนูเลย
+const POS_FORM_KEYS=["vat_enabled","vat_rate","vat_included","rounding","service_charge_enabled","service_charge_rate","show_qr_promptpay","promptpay_id","promptpay_name","promptpay_qr_image","receipt_header","receipt_footer"];
+function posSettingsPatch(before,after){
+  const p={};
+  for(const k of POS_FORM_KEYS){
+    const a=(after||{})[k];if(a===undefined)continue;
+    if(before&&String(before[k]??"")===String(a??""))continue;   // ไม่ได้แก้ช่องนี้
+    p[k]=a;
+  }
+  return p;
+}
+// เงินเข้าร้านผูกกับ VAT และพร้อมเพย์ — เปลี่ยนเมื่อไหร่ต้องรู้ว่าใคร สาขาไหน จากอะไรเป็นอะไร
+// (เหตุที่ตรวจเจอ: แคชเชียร์เปลี่ยนเลขพร้อมเพย์เป็นของตัวเองได้ และไม่มีร่องรอยเลย)
+// จดเฉพาะช่องในรายการนี้ — PIN พนักงานไม่มีทางหลุดเข้าประวัติ
+const POS_AUDIT_LABEL={vat_enabled:"VAT",vat_rate:"อัตรา VAT",vat_included:"VAT รวมในราคา",show_qr_promptpay:"QR พร้อมเพย์บนใบ",promptpay_id:"เลขพร้อมเพย์",promptpay_name:"ชื่อบัญชีพร้อมเพย์",promptpay_qr_image:"รูป QR พร้อมเพย์"};
+function posSettingsAuditText(before,patch,who,branch){
+  const keys=Object.keys(POS_AUDIT_LABEL).filter(k=>Object.prototype.hasOwnProperty.call(patch||{},k)&&String((before||{})[k]??"")!==String(patch[k]??""));
+  if(!keys.length)return "";
+  const fv=v=>v===true?"เปิด":v===false?"ปิด":(v==null||v==="")?"(ว่าง)":String(v).slice(0,90);
+  return `ตั้งค่า POS · ${(branch&&branch.name)||"-"} (#${(branch&&branch.id)??"-"}) · โดย ${who||"ไม่ทราบชื่อ"} — `
+    +keys.map(k=>`${POS_AUDIT_LABEL[k]}: ${fv((before||{})[k])} → ${fv(patch[k])}`).join(" · ");
+}
+async function savePOSFormSettings(branch,before,after,user){
+  const patch=posSettingsPatch(before,after);
+  if(!Object.keys(patch).length)return{changed:false,row:null};
+  // ค่าเดิมในประวัติใช้ของล่าสุดในฐานข้อมูล (อาจมีอีกเครื่องแก้ไปแล้วหลังเปิดจอนี้)
+  let cur=before;try{const r=await api.getPOSSettings(branch.id);if(Array.isArray(r)&&r[0])cur=r[0];}catch{}
+  const row=await api.patchPOSSettings(branch.id,{...patch,updated_at:new Date().toISOString()});
+  const txt=posSettingsAuditText(cur,patch,user&&(user.name||user.username),branch);
+  if(txt){try{await api.addActionHist({action:txt,time:nowStr()});}catch(e){console.warn("posAudit",e);}}
+  return{changed:true,row};
+}
 function POSSettingsFields({s:settings,set}){
   // ตัวอย่าง QR ที่สร้างจากเบอร์ — โชว์เฉพาะตอนไม่ได้แนบรูปเอง
   const qrPreview=settings.show_qr_promptpay&&settings.promptpay_id?genPromptPayPayload(settings.promptpay_id,100):"";
@@ -22818,7 +22874,7 @@ function POSSettingsFields({s:settings,set}){
   </>;
 }
 
-function POSSettingsPanel({currentBranch}){
+function POSSettingsPanel({currentBranch,currentUser}){
   const[orig,setOrig]=useState(null);   // ค่าที่โหลดมาตอนแรก — ใช้เทียบว่าแตะ VAT ไปไหม
   const[settings,setSettings]=useState(null);const[loading,setLoading]=useState(true);const[saving,setSaving]=useState(false);
   async function load(){setLoading(true);try{const s=await api.getPOSSettings(currentBranch.id);setOrig((s&&s[0])||null);setSettings((s&&s[0])||{branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10,promptpay_id:"",promptpay_name:"",show_qr_promptpay:false,receipt_header:"",receipt_footer:""});}catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}setLoading(false);}
@@ -22827,11 +22883,10 @@ function POSSettingsPanel({currentBranch}){
     if(!await okToChangeVatNow(currentBranch.id,orig,settings))return;   // แก้ VAT ระหว่างกะเปิด = บิลในกะไม่เหมือนกัน
     setSaving(true);
     try{
-      const d={...settings,branch_id:currentBranch.id,updated_at:new Date().toISOString()};
-      delete d.id;
-      const res=await api.upsertPOSSettings(d);
-      if(Array.isArray(res)&&res[0])setSettings(res[0]);
-      alert("บันทึกการตั้งค่าเรียบร้อย");
+      // ส่งเฉพาะช่องที่แก้ + จดประวัติถ้าแตะ VAT/พร้อมเพย์ (ไม่ upsert ทั้งแถวทับ PIN/ค่าที่อีกเครื่องแก้)
+      const res=await savePOSFormSettings(currentBranch,orig,settings,currentUser);
+      if(res.changed){const nx=res.row||{...settings};setSettings(nx);setOrig(nx);}   // ค่าตั้งต้นใหม่ของการบันทึกครั้งถัดไป
+      alert(res.changed?"บันทึกการตั้งค่าเรียบร้อย":"ไม่มีอะไรเปลี่ยน");
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
     setSaving(false);
   }
@@ -23020,6 +23075,8 @@ function calcPromoDiscount(promo,context){
 // ── POS BACK OFFICE (หลังบ้าน) ─────────────────────────
 // ══════════════════════════════════════════════════════
 function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branches,zones=[],reloadZones,menus=[],reloadMenus,onExit}){
+  // ผู้จัดการที่มีแค่ pos_admin: จัดการ PIN/โต๊ะ/เครื่องพิมพ์ได้ แต่เรื่องเงิน (ตั้งค่า POS/โปรโมชั่น) ต้องมีสิทธิ์ตั้งค่า
+  const canMoney=posAccess(currentUser,false).settings;
   const[section,setSection]=useState("tables");
   const[tables,setTables]=useState([]);const[loadingT,setLoadingT]=useState(true);
   const[shifts,setShifts]=useState([]);const[loadingS,setLoadingS]=useState(false);
@@ -23032,8 +23089,8 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
     {id:"menu",l:"เมนู & หมวดหมู่",icon:I.food,c:"#0EA5E9"},
     {id:"sellers",l:"พนักงานขาย",icon:I.user,c:C.teal},
     {id:"printers",l:"เครื่องพิมพ์",icon:I.print,c:C.purple},
-    {id:"settings",l:"ตั้งค่า POS",icon:I.settings,c:C.green},
-    {id:"promotions",l:"โปรโมชั่น",icon:I.tag,c:C.yellow},
+    ...(canMoney?[{id:"settings",l:"ตั้งค่า POS",icon:I.settings,c:C.green},
+    {id:"promotions",l:"โปรโมชั่น",icon:I.tag,c:C.yellow}]:[]),
     {id:"shifts",l:"ประวัติกะ",icon:I.clock,c:C.blue},
   ];
   return <div style={{margin:"-20px -24px",display:"flex",flexDirection:"column",height:"calc(100vh - 150px)"}}>
@@ -23047,8 +23104,8 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
       {section==="menu"&&<POSMenuTools currentBranch={currentBranch} variant="cards" onChanged={reloadMenus}/>}
       {section==="sellers"&&<POSSellerPanel currentBranch={currentBranch}/>}
       {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser} menus={menus} currentBranch={currentBranch}/>}
-      {section==="settings"&&<POSSettingsPanel currentBranch={currentBranch}/>}
-      {section==="promotions"&&<POSPromotionManager currentBranch={currentBranch} menus={menus}/>}
+      {section==="settings"&&canMoney&&<POSSettingsPanel currentBranch={currentBranch} currentUser={currentUser}/>}
+      {section==="promotions"&&canMoney&&<POSPromotionManager currentBranch={currentBranch} menus={menus}/>}
       {section==="shifts"&&<POSShiftHistory shifts={shifts} loading={loadingS} reload={loadShifts} branch={currentBranch} user={currentUser}/>}
     </div>
   </div>;
@@ -23070,9 +23127,9 @@ function POSSellerPanel({currentBranch}){
   async function persist(next){
     setSaving(true);
     try{
-      const payload={...(settings||{}),branch_id:currentBranch.id,sales_staff:next};
-      await api.upsertPOSSettings(payload);
-      setSettings(payload);setStaff(next);return true;
+      // แก้เฉพาะรายชื่อ PIN — ห้ามส่งทั้งแถวจากค่าตอนเปิดจอ ไม่งั้น VAT/พร้อมเพย์ที่อีกเครื่องเพิ่งแก้ถูกเขียนกลับเป็นค่าเก่า
+      const row=await api.patchPOSSettings(currentBranch.id,{sales_staff:next});
+      setSettings(row||{...(settings||{}),sales_staff:next});setStaff(next);return true;
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));return false;}
     finally{setSaving(false);}
   }
@@ -23669,7 +23726,8 @@ function POSOptionLibrary({currentBranch,onClose}){
   const[editG,setEditG]=useState(null);const[eg,setEg]=useState({name:"",required:false});
   async function load(){setLoading(true);try{const ps=await api.getPOSSettings(currentBranch.id);const s=ps&&ps[0]?ps[0]:{branch_id:currentBranch.id};setSettings(s);setLib(Array.isArray(s.option_library)?s.option_library:[]);}catch(e){console.error("optLib",e);}setLoading(false);}
   useEffect(()=>{load();},[currentBranch.id]);
-  async function persist(next){setBusy(true);try{const payload={...(settings||{}),branch_id:currentBranch.id,option_library:next};await api.upsertPOSSettings(payload);setSettings(payload);setLib(next);return true;}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));return false;}finally{setBusy(false);}}
+  // แก้เฉพาะคลังตัวเลือก — ไม่ส่งทั้งแถว (กันทับ VAT/PIN ที่อีกเครื่องแก้ระหว่างเปิดจอนี้)
+  async function persist(next){setBusy(true);try{const row=await api.patchPOSSettings(currentBranch.id,{option_library:next});setSettings(row||{...(settings||{}),option_library:next});setLib(next);return true;}catch(e){alert("บันทึกไม่สำเร็จ: "+(e&&e.message||e));return false;}finally{setBusy(false);}}
   async function addGroup(){const name=gName.trim();if(!name)return alert("ใส่ชื่อกลุ่มตัวเลือก");if(lib.some(g=>g.name===name))return alert("มีกลุ่มนี้แล้ว");if(await persist([...lib,{id:`g_${Date.now()}_${Math.floor(Math.random()*1000)}`,name,required:gReq,pick:gReq?Math.max(1,+gPick||1):1,choices:[]}])){setGName("");setGReq(false);setGPick(1);}}
   async function delGroup(g){if(!await confirmDlg({title:"ลบกลุ่มตัวเลือก",message:`ลบกลุ่ม "${g.name}" และตัวเลือกย่อยทั้งหมด?`}))return;await persist(lib.filter(x=>x.id!==g.id));}
   async function saveEditG(){const name=(eg.name||"").trim();if(!name)return;if(await persist(lib.map(g=>g.id===editG?{...g,name,required:!!eg.required,pick:eg.required?Math.max(1,+eg.pick||1):1}:g)))setEditG(null);}
@@ -23791,7 +23849,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
   // เลือกสาขาได้เฉพาะสาขาที่เปิดอยู่ — รายการด้านล่างกรองตามสาขาแล้ว
   // ถ้าเลือกสาขาอื่นได้ จะสร้างเสร็จแล้วหายไปจากจอทันที หาไม่เจอว่าไปอยู่ไหน
   const branchOpts=(branches||[]).filter(b=>+b.id===+((currentBranch&&currentBranch.id)||0));
-  const isAdmin=hasPerm(currentUser,"settings");
+  const isAdmin=posAccess(currentUser,false).admin;   // สิทธิ์ตั้งค่า หรือ จัดการ POS (pos_admin)
   // เครื่องใหม่ผูกสาขาที่เปิดอยู่เสมอ (เดิมค่าเริ่มต้น "ทุกสาขา" — ลืมเลือก = ตัวพิมพ์ทุกสาขายิงใบไป IP นี้)
   const pF0={name:"",ip:"",port:9100,description:"",type:"kitchen",branch_id:(currentBranch&&currentBranch.id)||null,active:true,conn:"ip",btName:""};
   const[pForm,setPForm]=useState(pF0);const[editPID,setEditPID]=useState(null);const[pSaving,setPSaving]=useState(false);
@@ -24358,6 +24416,9 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   useEffect(()=>{if(takeOldPrintStation())posToast("ℹ️ ปิดโหมดสถานีพิมพ์ของเครื่องนี้แล้ว — โปรแกรมตัวพิมพ์ที่ร้านพิมพ์ใบให้เอง ไม่ต้องตั้งอะไรเพิ่ม","warn",9000);},[]);
   const timerRef=useRef(null);
   const canEdit=hasPerm(currentUser,"pos");
+  // คนเข้าด้วย PIN / พนักงานที่ไม่มีสิทธิ์ตั้งค่า: ห้ามแก้พร้อมเพย์/VAT/หัวใบเสร็จ (เงินเข้าบัญชีใครก็ได้)
+  // และห้ามเพิ่ม/ลบเครื่องพิมพ์ — แต่ทดสอบพิมพ์ ดูสถานะ ดูตาราง 🧭 และย้ายหมวดตอนเครื่องดับ ยังทำได้ทุกคน
+  const posAcc=posAccess(currentUser,saleOnly);
 
   const printedRef=useRef(new Set(JSON.parse(sessionStorage.getItem("fc_printed_orders")||"[]")));
   const lastSigRef=useRef(new Map());
@@ -24534,7 +24595,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
         <Btn v="success" onClick={onCashDrawer} s={TB}>💰 เงินในลิ้นชัก</Btn>
         {!saleOnly&&<Btn v="ghost" onClick={loadAll} icon={I.refresh} s={TB}>รีเฟรช</Btn>}
         <Btn v="ghost" onClick={()=>setShowPrinters(true)} s={TB}>🖨 เครื่องพิมพ์</Btn>
-        <Btn v="ghost" onClick={()=>setShowReceipt(true)} s={TB}>🧾 จัดการใบเสร็จ</Btn>
+        {posAcc.settings&&<Btn v="ghost" onClick={()=>setShowReceipt(true)} s={TB}>🧾 จัดการใบเสร็จ</Btn>}
         {!saleOnly&&<Btn v="ghost" onClick={onExitMode} s={TB}>← โหมด</Btn>}
         {canEdit&&!saleOnly&&<span style={{display:"inline-flex",alignItems:"center",gap:6,alignSelf:"stretch"}}><span style={{width:1,alignSelf:"stretch",background:C.line,margin:"0 4px"}}/><Btn v="ghost" onClick={onCloseShift} s={{...TB,color:C.red,boxShadow:`0 0 0 1.5px ${C.red}66`}}>🔚 ปิดกะ</Btn></span>}
       </div>
@@ -24606,8 +24667,8 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
     </div>}
     {moveFrom&&<MoveTableModal from={moveFrom.table} order={moveFrom.order} tables={tables} activeOrders={activeOrders} branch={currentBranch} currentUser={currentUser}
       onClose={()=>setMoveFrom(null)} onDone={()=>{setMoveFrom(null);setSelTable(null);setSelOrder(null);loadAll({silent:true});}}/>}
-    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} reloadMenus={reloadMenus} onClose={()=>setShowPrinters(false)} onTogglePrintStation={v=>setPS(v)} printStation={printStation}/>}
-    {showReceipt&&<ReceiptSettingsModal currentBranch={currentBranch} onClose={()=>setShowReceipt(false)} onSaved={reloadPosSettings}/>}
+    {showPrinters&&<PrinterStatusModal currentBranch={currentBranch} menus={menus} reloadMenus={reloadMenus} onClose={()=>setShowPrinters(false)} onTogglePrintStation={v=>setPS(v)} printStation={printStation} canAdmin={posAcc.admin}/>}
+    {showReceipt&&posAcc.settings&&<ReceiptSettingsModal currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowReceipt(false)} onSaved={reloadPosSettings}/>}
   </div>;
 }
 
@@ -24617,7 +24678,9 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
 // Lightweight printer panel for cashiers: see each printer online/offline and
 // add a network printer by typing its IP. (Full routing/categories stay in the
 // manager back office.)
-function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printStation=false,onTogglePrintStation}){
+// canAdmin=false (คนเข้าด้วย PIN / ไม่มีสิทธิ์ตั้งค่าหรือจัดการ POS): ซ่อนค้นหา/เพิ่ม/ลบเครื่อง และล็อกติ๊กใบเสร็จ/ลิ้นชัก
+// ส่วนทดสอบพิมพ์ เช็คสถานะ ตาราง 🧭 และย้ายหมวดตอนเครื่องดับกลางร้าน ยังใช้ได้ทุกคน (ไม่ต้องรอผู้จัดการ)
+function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printStation=false,onTogglePrintStation,canAdmin=false}){
   const lbl={display:"block",fontSize:12,fontWeight:600,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
   const[printers,setPrinters]=useState([]);
   const[loading,setLoading]=useState(true);
@@ -24762,6 +24825,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     }
   }
   async function add(){
+    if(!canAdmin)return;   // ปุ่มซ่อนอยู่แล้ว — กันซ้ำอีกชั้น
     const name=(form.name||"").trim();const ip=(form.ip||"").trim();
     if(!name)return alert("ใส่ชื่อเครื่องพิมพ์");
     if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip))return alert("ใส่เลข IP ให้ถูกต้อง เช่น 192.168.1.50");
@@ -24797,8 +24861,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   const notAdded=printers.filter(p=>p.active===false);
   const discovered=searched?notAdded:notAdded.filter(p=>!isIgnored(p));   // กดค้นหาแล้วให้เห็นเครื่องที่เคยซ่อน/ลบด้วย
   // เพิ่มใช้งานเครื่องที่ค้นเจอ — รีเซ็ตชื่อเป็นค่าเริ่มต้น (เลข IP) เสมอ เผื่อเป็นเครื่องที่เคยลบแล้วชื่อเดิมค้างอยู่ · ผู้ใช้ค่อยตั้งชื่อใหม่ตามตำแหน่งจริง
-  async function addDiscovered(p){try{await api.updatePrinter(p.id,{name:`เครื่องพิมพ์ ${p.ip||""}`.trim(),active:true,description:""});await load();posToast("✅ เพิ่มเครื่องพิมพ์เข้าระบบแล้ว — ตั้งชื่อตามจุดที่วางได้ที่ \"กำหนดการพิมพ์\"");}catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}}
-  async function ignoreDiscovered(p){try{await api.updatePrinter(p.id,{description:JSON.stringify({d:1,ig:1})});await load();}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}
+  async function addDiscovered(p){if(!canAdmin)return;try{await api.updatePrinter(p.id,{name:`เครื่องพิมพ์ ${p.ip||""}`.trim(),active:true,description:""});await load();posToast("✅ เพิ่มเครื่องพิมพ์เข้าระบบแล้ว — ตั้งชื่อตามจุดที่วางได้ที่ \"กำหนดการพิมพ์\"");}catch(e){alert("เพิ่มไม่สำเร็จ: "+(e&&e.message||e));}}
+  async function ignoreDiscovered(p){if(!canAdmin)return;try{await api.updatePrinter(p.id,{description:JSON.stringify({d:1,ig:1})});await load();}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // เมนูที่ยังไม่ได้ตั้งหมวดของสาขานี้จะไม่ขึ้นในตัวเลือก และจะพิมพ์ออกเครื่อง "พิมพ์ทุกหมวด" (catch-all)
   const effCat=menuCatOf;
@@ -24839,8 +24903,11 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       // อ่าน description ล่าสุดก่อนรวม flag ใบเสร็จ (กันทับคำสั่งพิมพ์ tp/rp/qr/pj ที่อาจถูกเขียนมาระหว่างเปิดหน้าตั้งค่า)
       let fresh=p;try{const all=await api.getAllPrinters();const f=(all||[]).find(x=>+x.id===+p.id);if(f)fresh=f;}catch{}
       let dd={};try{dd=JSON.parse(fresh.description||"{}");}catch{}
-      if(sRcpt)dd.rcpt=1;else delete dd.rcpt;
-      if(sDraw)dd.dw=1;else delete dd.dw;
+      // ไม่มีสิทธิ์ = ไม่แตะธงใบเสร็จ/ลิ้นชักเลย ใช้ค่าล่าสุดในฐานข้อมูลตามเดิม (ย้ายหมวดอย่างเดียว)
+      if(canAdmin){
+        if(sRcpt)dd.rcpt=1;else delete dd.rcpt;
+        if(sDraw)dd.dw=1;else delete dd.dw;
+      }
       // เก็บเป็นรายการเสมอ ไม่เขียน null อีกแล้ว — null คือ catch-all ซึ่งเลิกใช้
       await api.updatePrinter(p.id,{name,categories:sCats,description:JSON.stringify(dd)});
       const ups=[];(menus||[]).forEach(m=>{const nw=sOverride[m.id]||null;const ol=m.printer_id||null;if(String(nw)!==String(ol))ups.push(api.updateMenu(m.id,{printer_id:nw}));});
@@ -24855,7 +24922,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink3}}>เครื่องพิมพ์ของสาขา <b style={{color:C.ink}}>{currentBranch.name}</b> ({activePrinters.length})</div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-          <Btn v="info" onClick={findPrinters} disabled={searching} icon={I.search} s={{padding:"6px 12px",fontSize:12}}>{searching?"⟳ กำลังค้นหา...":"ค้นหาเครื่องพิมพ์"}</Btn>
+          {canAdmin&&<Btn v="info" onClick={findPrinters} disabled={searching} icon={I.search} s={{padding:"6px 12px",fontSize:12}}>{searching?"⟳ กำลังค้นหา...":"ค้นหาเครื่องพิมพ์"}</Btn>}
           <Btn v="ghost" onClick={recheckStatus} disabled={rechecking} icon={I.refresh} s={{padding:"6px 12px",fontSize:12}}>{rechecking?"⟳ กำลังเช็ค...":"เช็คสถานะใหม่"}</Btn>
         </div>
       </div>
@@ -24871,7 +24938,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           <span style={{fontSize:11.5,fontWeight:800,color:sv.c,background:sv.bg,border:`1px solid ${sv.c}44`,borderRadius:20,padding:"3px 12px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{sv.t}</span>
           <button onClick={()=>openSettings(p)} title="กำหนดหมวดหมู่/เมนู ที่พิมพ์ออกเครื่องนี้ + แก้ชื่อ" style={{background:C.blueLight,border:`1px solid ${C.blue}55`,borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:700,color:C.blue,whiteSpace:"nowrap"}}>🖨️ กำหนดการพิมพ์</button>
           <button onClick={()=>testPrint(p)} title="พิมพ์หน้าทดสอบจริง — ยืนยันชัวร์ที่สุด" style={{background:C.brand,border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,color:C.white,whiteSpace:"nowrap"}}>🧾 ทดสอบพิมพ์</button>
-          <button onClick={async()=>{if(await confirmDlg({title:`🗑 นำเครื่องพิมพ์ "${p.name}" ออก?`,message:`นำเครื่องพิมพ์ "${p.name}" (${p.ip||"-"}) ออกจากการใช้งาน?\n\n⚠️ เมนูที่ส่งมาเครื่องนี้จะไม่ถูกพิมพ์จนกว่าจะเพิ่มกลับ\n\n💡 นำกลับมาได้ทุกเมื่อด้วยปุ่ม "ค้นหาเครื่องพิมพ์"`,confirmLabel:"นำออก",cancelLabel:"ยกเลิก",danger:true})){try{await api.updatePrinter(p.id,{active:false,description:JSON.stringify({d:1,ig:1})});await load();posToast("นำเครื่องพิมพ์ออกแล้ว — กด \"ค้นหาเครื่องพิมพ์\" เพื่อนำกลับ");}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}}} title="นำเครื่องพิมพ์ออก (นำกลับได้ด้วยปุ่มค้นหา)" style={{background:C.redLight,border:`1px solid #FCA5A5`,borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={14} c={C.red}/></button>
+          {canAdmin&&<button onClick={async()=>{if(await confirmDlg({title:`🗑 นำเครื่องพิมพ์ "${p.name}" ออก?`,message:`นำเครื่องพิมพ์ "${p.name}" (${p.ip||"-"}) ออกจากการใช้งาน?\n\n⚠️ เมนูที่ส่งมาเครื่องนี้จะไม่ถูกพิมพ์จนกว่าจะเพิ่มกลับ\n\n💡 นำกลับมาได้ทุกเมื่อด้วยปุ่ม "ค้นหาเครื่องพิมพ์"`,confirmLabel:"นำออก",cancelLabel:"ยกเลิก",danger:true})){try{await api.updatePrinter(p.id,{active:false,description:JSON.stringify({d:1,ig:1})});await load();posToast("นำเครื่องพิมพ์ออกแล้ว — กด \"ค้นหาเครื่องพิมพ์\" เพื่อนำกลับ");}catch(e){alert("ไม่สำเร็จ: "+(e&&e.message||e));}}}} title="นำเครื่องพิมพ์ออก (นำกลับได้ด้วยปุ่มค้นหา)" style={{background:C.redLight,border:`1px solid #FCA5A5`,borderRadius:8,padding:"6px 10px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.trash} s={14} c={C.red}/></button>}
         </div>;})}
       </div>}
       {/* ── หมวดไหนออกเครื่องไหน ──────────────────────────────────────────
@@ -24904,15 +24971,16 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
       {settingsP&&<Modal title={`🖨️ กำหนดการพิมพ์ — ${settingsP.name}`} onClose={()=>setSettingsP(null)} extraWide>
         <label style={lbl}>ชื่อเครื่องพิมพ์ (แก้ไขได้)</label>
         <input value={sName} onChange={e=>setSName(e.target.value)} placeholder="เช่น ครัวร้อน · ครัวเย็น · แคชเชียร์" style={iS}/>
-        <label style={{display:"flex",alignItems:"center",gap:11,margin:"13px 0 4px",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${sRcpt?C.green:C.line}`,background:sRcpt?C.greenLight:C.white,cursor:"pointer"}}>
-          <input type="checkbox" checked={sRcpt} onChange={e=>setSRcpt(e.target.checked)} style={{accentColor:C.green,width:19,height:19,cursor:"pointer",flexShrink:0}}/>
+        {!canAdmin&&<div style={{margin:"12px 0 2px",padding:"9px 12px",borderRadius:10,background:C.bg,border:`1px dashed ${C.line}`,fontSize:11.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>🔒 ตั้งเครื่องใบเสร็จ/ลิ้นชัก ทำได้เฉพาะผู้จัดการ · ย้ายหมวด/เมนูให้ออกเครื่องนี้ (ตอนเครื่องอื่นดับ) ทำได้ตามปกติ</div>}
+        <label style={{display:"flex",alignItems:"center",gap:11,margin:"13px 0 4px",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${sRcpt?C.green:C.line}`,background:sRcpt?C.greenLight:C.white,cursor:canAdmin?"pointer":"not-allowed",opacity:canAdmin?1:.6}}>
+          <input type="checkbox" checked={sRcpt} disabled={!canAdmin} onChange={e=>{if(canAdmin)setSRcpt(e.target.checked);}} style={{accentColor:C.green,width:19,height:19,cursor:canAdmin?"pointer":"not-allowed",flexShrink:0}}/>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:13.5,fontWeight:800,color:sRcpt?C.green:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ</div>
             <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.5}}>เช็คบิล/พิมพ์ใบเสร็จซ้ำ/แบ่งจ่าย จะพิมพ์ออกเครื่องนี้ · ติ๊กได้หลายเครื่อง — ใบเสร็จจะออกทุกเครื่องที่เลือก</div>
           </div>
         </label>
-        <label style={{display:"flex",alignItems:"center",gap:11,margin:"6px 0 4px",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${sDraw?C.brand:C.line}`,background:sDraw?C.brandLight:C.white,cursor:"pointer"}}>
-          <input type="checkbox" checked={sDraw} onChange={e=>setSDraw(e.target.checked)} style={{accentColor:C.brand,width:19,height:19,cursor:"pointer",flexShrink:0}}/>
+        <label style={{display:"flex",alignItems:"center",gap:11,margin:"6px 0 4px",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${sDraw?C.brand:C.line}`,background:sDraw?C.brandLight:C.white,cursor:canAdmin?"pointer":"not-allowed",opacity:canAdmin?1:.6}}>
+          <input type="checkbox" checked={sDraw} disabled={!canAdmin} onChange={e=>{if(canAdmin)setSDraw(e.target.checked);}} style={{accentColor:C.brand,width:19,height:19,cursor:canAdmin?"pointer":"not-allowed",flexShrink:0}}/>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:13.5,fontWeight:800,color:sDraw?C.brand:C.ink2,fontFamily:"'Sarabun',sans-serif"}}>💵 ลิ้นชักเก็บเงินต่อกับเครื่องนี้</div>
             <div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",lineHeight:1.5}}>เสียบสายลิ้นชัก (RJ11) ไว้ที่เครื่องนี้ — กดปุ่ม 💰 เงินในลิ้นชัก แล้วลิ้นชักจะเด้งออกเอง · ไม่ติ๊กเลยสักเครื่อง = สั่งไปที่เครื่องพิมพ์ใบเสร็จ</div>
@@ -24963,7 +25031,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           <Btn v="success" onClick={saveSettings} loading={sSaving} icon={I.check}>บันทึก</Btn>
         </div>
       </Modal>}
-      {(discovered.length>0||searched)&&<div style={{background:"#EFF6FF",border:`1px solid ${C.blue}44`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+      {canAdmin&&(discovered.length>0||searched)&&<div style={{background:"#EFF6FF",border:`1px solid ${C.blue}44`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
         <div style={{fontSize:13,fontWeight:800,color:C.blue,fontFamily:"'Sarabun',sans-serif",marginBottom:searched?4:8}}>{searched?`🔍 ผลการค้นหาในเครือข่าย (${discovered.length})`:`🔍 พบในเครือข่าย (${discovered.length}) — แตะ "เพิ่มใช้งาน" เฉพาะเครื่องที่ต้องการ`}</div>
         {searched&&<div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:8,lineHeight:1.6}}>แสดงทุกเครื่องที่พบในวง LAN รวมเครื่องที่<b>เคยซ่อน/ลบ</b>ไปแล้ว · เครื่องที่ <b>เพิ่มในระบบแล้ว</b> อยู่ด้านบน (กดเพิ่มซ้ำไม่ได้) · เครื่องที่ปิดอยู่/ไม่ได้ต่อสายจะไม่แสดง</div>}
         {discovered.length===0?<div style={{fontSize:12.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",textAlign:"center",padding:"12px 6px",lineHeight:1.7,whiteSpace:"pre-line"}}>{searching?"⟳ กำลังค้นหาเครื่องพิมพ์ในวง LAN...":printers.length===0?"ยังไม่มีตัวพิมพ์ที่สาขานี้ จึงไม่มีใครไปสแกนวง LAN ให้\n\nกดปุ่ม \"ค้นหาเครื่องพิมพ์\" ตอนนี้จะไม่ได้ผล ต้องรันตัวพิมพ์ที่สาขานี้ก่อน (ดูคำอธิบายด้านบน)":"ไม่พบเครื่องพิมพ์อื่นในเครือข่าย\n(เครื่องที่เพิ่มแล้วอยู่ด้านบน · เครื่องที่ปิดอยู่/ไม่ได้ต่อสายจะไม่แสดง)\n\nเพิ่งเสียบเครื่องใหม่? ตัวพิมพ์สแกนเองทุก ~2 นาที — รอสักครู่แล้วกด \"ค้นหาเครื่องพิมพ์\" อีกครั้ง"}</div>
@@ -24978,7 +25046,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           </div>;})}
         </div>}
       </div>}
-      <div style={{background:C.bg,border:`1px dashed ${C.line}`,borderRadius:12,padding:"14px 16px"}}>
+      {!canAdmin&&<div style={{background:C.bg,border:`1px dashed ${C.line}`,borderRadius:12,padding:"12px 14px",fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink3,lineHeight:1.65}}>🔒 เพิ่ม/นำเครื่องพิมพ์ออก ทำได้เฉพาะผู้จัดการ (สิทธิ์ตั้งค่า หรือ จัดการ POS) · เครื่องดับกลางร้าน: กด "🖨️ กำหนดการพิมพ์" ที่เครื่องที่ยังใช้ได้ แล้วติ๊กหมวดของเครื่องที่ดับเพิ่ม</div>}
+      {canAdmin&&<div style={{background:C.bg,border:`1px dashed ${C.line}`,borderRadius:12,padding:"14px 16px"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,color:C.ink,marginBottom:10}}>➕ เพิ่มเครื่องพิมพ์ (เครือข่าย / IP) ด้วยตัวเอง</div>
         <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
           <div style={{flex:"2 1 160px"}}><label style={lbl}>ชื่อเครื่องพิมพ์</label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ครัวร้อน" style={iS}/></div>
@@ -24987,7 +25056,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           <Btn onClick={add} loading={saving} icon={I.plus}>เพิ่ม</Btn>
         </div>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:C.ink4,marginTop:8,lineHeight:1.6}}>💡 ใช้เครื่องพิมพ์ความร้อนที่ต่อ LAN/WiFi · พอร์ตมาตรฐานคือ 9100 · ตั้งหมวดหมู่/เลือกเมนูให้แต่ละเครื่องได้ที่ "จัดการหลังบ้าน → เครื่องพิมพ์"</div>
-      </div>
+      </div>}
     </>}
   </Modal>;
 }
@@ -25889,10 +25958,12 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   useEffect(()=>{if(closeShiftSignal>0&&mode==='sale'&&shift)setShowCloseShift(true);},[closeShiftSignal]);// eslint-disable-line
 
   // เจ้าของสั่ง 24 ก.ย. 69: รายงานยอดขายเปิดให้ทุกคนที่เข้าหน้าขายได้ (พนักงานสาขาต้องดูยอดของตัวเองได้)
-  // แต่จัดการหลังบ้านยังจำกัดเฉพาะคนที่มีสิทธิ์ตั้งค่า เพราะจอนั้นแก้ VAT/ผังโต๊ะ/เครื่องพิมพ์/PIN ได้
+  // แต่จัดการหลังบ้านยังจำกัดเฉพาะคนที่มีสิทธิ์ตั้งค่า หรือ "จัดการ POS" (pos_admin) — ผู้จัดการสาขาปิด PIN คนลาออกได้เองตอนดึก
+  // ส่วนเรื่องเงินในหลังบ้าน (VAT/พร้อมเพย์/โปรโมชั่น) POSBackOffice ซ่อนเองถ้าไม่มีสิทธิ์ตั้งค่า
   // โหมดแคชเชียร์ที่เข้าด้วย PIN (ลิงก์ขายของสาขา) ยังเป็นจอขายล้วน — ไม่มีตัวเลือกโหมดให้กดอยู่แล้ว
   const canReport=!saleOnly;
-  const canManage=!saleOnly&&hasPerm(currentUser,"settings");
+  const posAcc=posAccess(currentUser,saleOnly);
+  const canManage=posAcc.admin;
   // Where "exit" goes: kiosk cashier → logout to PIN gate; normal user → mode chooser.
   const exitSale=()=>{if(saleOnly){onExit&&onExit();}else{setMode(null);}};
   if(mode===null)return <POSModeSelect onSelect={setMode} canManage={canManage} canReport={canReport}/>;
@@ -25961,6 +26032,16 @@ function POSPinGate({branchId}){
     else{setShake(true);setTimeout(()=>{setShake(false);setPin("");},480);}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[pin]);
+  // ── เปลี่ยนพนักงานกลางกะ ─────────────────────────────────────────────────
+  // เดิมไม่มีทางเปลี่ยนคนบน iPad เครื่องเดิม → บิลที่ปิด/ยกเลิกตอนบ่ายขึ้นชื่อพนักงานกะเช้าทั้งหมด
+  // กลับไปหน้า PIN อย่างเดียว ไม่แตะกะ (กะอยู่ในฐานข้อมูล คนถัดไปใส่ PIN แล้วเข้ากะเดิมต่อ)
+  // และโหลดรายชื่อ PIN ใหม่ — PIN ที่เพิ่งเพิ่ม/ปิด (คนลาออก) ต้องมีผลทันทีโดยไม่ต้องรีโหลดหน้า
+  async function reloadStaff(){try{const ps=await api.getPOSSettings(branchId);const st=ps&&ps[0]?ps[0]:null;setStaff(Array.isArray(st?.sales_staff)?st.sales_staff:[]);}catch{}}
+  async function switchSeller(){
+    if(!await confirmDlg({title:"👤 เปลี่ยนพนักงาน?",message:"กลับไปหน้าใส่ PIN ให้พนักงานคนถัดไป\n\nกะยังเปิดอยู่ตามเดิม ไม่ต้องปิดกะ — บิลต่อจากนี้จะขึ้นชื่อคนที่ใส่ PIN ใหม่\n\nถ้ามีโต๊ะที่กำลังเปิดอยู่และยังไม่ได้กดส่ง/บันทึก รายการนั้นจะหายไป",confirmLabel:"เปลี่ยนพนักงาน",cancelLabel:"ยกเลิก"}))return;
+    setSeller(null);setPin("");setShiftOpen(false);
+    reloadStaff();
+  }
   const isMobile=useIsMobile();
   if(loading)return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.brandLight},#FEF3C7)`}}><Loading text="กำลังโหลด..."/></div></>;
   if(err)return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.redLight},#FEF3C7)`,padding:20,fontFamily:"'Sarabun',sans-serif"}}>
@@ -25984,6 +26065,7 @@ function POSPinGate({branchId}){
               <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:"#94A3B8"}}>พนักงาน: {seller.name}</div>
             </div>
             <button onClick={()=>setPosRefreshTick(t=>t+1)} title="รีเฟรชข้อมูลโต๊ะ/ออเดอร์" style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:"#E2E8F0",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,flexShrink:0,display:"inline-flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}><Ic d={I.refresh} s={13} c="#E2E8F0"/>รีเฟรช</button>
+            <button onClick={switchSeller} title="เปลี่ยนพนักงาน — กลับหน้าใส่ PIN (กะยังเปิดอยู่)" style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"6px 12px",cursor:"pointer",color:"#E2E8F0",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:800,flexShrink:0,display:"inline-flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}>👤 {isMobile?"เปลี่ยนคน":"เปลี่ยนพนักงาน"}</button>
           </div>
           {shiftOpen&&<button onClick={()=>setCloseShiftReq(n=>n+1)} title="ปิดกะการขาย & พิมพ์สรุปยอด" style={{background:"linear-gradient(135deg,#EF4444,#DC2626)",border:"none",borderRadius:11,padding:isMobile?"10px 18px":"12px 26px",cursor:"pointer",color:"#fff",fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?14.5:16,fontWeight:900,flexShrink:0,display:"inline-flex",alignItems:"center",gap:7,boxShadow:"0 3px 12px rgba(239,68,68,.4)",whiteSpace:"nowrap"}}>🔚 ปิดกะ</button>}
         </div>

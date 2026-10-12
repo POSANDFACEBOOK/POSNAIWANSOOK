@@ -4287,8 +4287,9 @@ section("รายงานยอดขาย POS");
   // ── ทางเข้า: ปุ่มที่สามในตัวเลือกโหมด เปิดเฉพาะคนที่เข้าหลังบ้านได้ ──
   // สิทธิ์สองชั้นคนละเรื่อง: รายงาน = อ่านอย่างเดียว เปิดให้ทุกคน · หลังบ้าน = แก้ตั้งค่าได้ จึงยังจำกัด
   ok_("ปุ่มรายงานใช้สิทธิ์ของตัวเอง ไม่ผูกกับสิทธิ์จัดการ", APP.includes("{canReport&&<button onClick={()=>onSelect('report')}"));
-  ok_("ปุ่มจัดการหลังบ้านยังผูกกับสิทธิ์ตั้งค่าเหมือนเดิม",
-    APP.includes('const canManage=!saleOnly&&hasPerm(currentUser,"settings");') && APP.includes("{canManage&&<button onClick={()=>onSelect('manage')}"));
+  // (12 ต.ค. 69) เพิ่มสิทธิ์ pos_admin — พฤติกรรมของ posAccess ทดสอบจริงในหมวด "POS สาขาที่ 2: สิทธิ์และตั้งค่า"
+  ok_("ปุ่มจัดการหลังบ้านยังผูกกับสิทธิ์จัดการ (ตั้งค่า หรือ จัดการ POS) และคนเข้าด้วย PIN ไม่เห็น",
+    APP.includes('const posAcc=posAccess(currentUser,saleOnly);\n  const canManage=posAcc.admin;') && APP.includes("{canManage&&<button onClick={()=>onSelect('manage')}"));
   ok_("รายงานเปิดให้ทุกคนที่เข้าหน้าขายได้", APP.includes("const canReport=!saleOnly;"));
   // ── ประวัติราคาซื้อต้องครบทุกแหล่งที่ของเข้าสต็อก (เจ้าของสั่ง 27 ก.ย. 69) ──
   // เดิมอ่านเฉพาะใบสั่งของจากซัพพลาย ⟹ ของที่รับจากครัวกลาง (PO) ไม่ขึ้นเลย ทั้งที่เป็นการเพิ่มสต็อกที่มีราคาครบ
@@ -5170,6 +5171,142 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
     APP.includes('if(takeOldPrintStation())posToast("ℹ️ ปิดโหมดสถานีพิมพ์ของเครื่องนี้แล้ว — โปรแกรมตัวพิมพ์ที่ร้านพิมพ์ใบให้เอง') && !APP.includes("ไปเปิดใหม่ที่ 🖨 เครื่องพิมพ์") && !APP.includes("onClick={toggleStation}"));
   ok_("จอขาย/จอเครื่องพิมพ์อ่าน-เขียนโหมดสถานีพิมพ์ตามสาขาที่เปิดอยู่",
     !/isPrintStation\(\)/.test(APP) && APP.includes("if(!isPrintStation(currentBranch.id))return;") && APP.includes("setPrintStation(currentBranch.id,v);") && APP.includes("useEffect(()=>{setPS(isPrintStation(currentBranch.id));},[currentBranch.id]);"));
+section("POS สาขาที่ 2: สิทธิ์และตั้งค่า");
+{
+  // ── สิทธิ์สองชั้น: settings (รวมเรื่องเงิน) · admin = settings หรือ pos_admin · คนเข้าด้วย PIN ไม่ได้ทั้งคู่ ──
+  // เหตุที่ตรวจเจอก่อนเปิดสาขา 5: แคชเชียร์ที่เข้าด้วย PIN เปลี่ยนเลขพร้อมเพย์เป็นของตัวเองได้จากจอขาย (River ก็เปิดอยู่)
+  // และมีแค่ max คนเดียวที่ปิด PIN คนลาออกได้ เพราะหลังบ้านผูกกับสิทธิ์ตั้งค่าทั้งระบบ
+  let PA = null;
+  try {
+    const blk = APP.slice(APP.indexOf("const ALL_PERMS=["), APP.indexOf("const ROLES={"));
+    PA = new Function("APPROVAL_ON", blk + "\nreturn {ALL_PERMS,normalizePerms,hasPerm,posAccess};")(false);
+  } catch (e) { PA = null; console.log("       ดึงตัวตัดสิทธิ์ไม่ได้: " + e.message); }
+  const acc = (u, so) => PA ? PA.posAccess(u, so) : { settings: "?", admin: "?" };
+  const pinUser = { id: null, username: "ติ๊ก", name: "ติ๊ก", role: "staff", perms: ["pos"] };   // ผู้ใช้จำลองของโหมด PIN
+  ck("คนเข้าด้วย PIN: ไม่มีสิทธิ์แก้เงิน และไม่มีสิทธิ์จัดการ", acc(pinUser, true), { settings: false, admin: false });
+  ck("โหมด PIN ปิดทั้งสองชั้นเสมอ แม้ผู้ใช้จำลองถูกแก้ให้เป็น admin", acc({ role: "admin", perms: ["settings"] }, true), { settings: false, admin: false });
+  ck("admin (max) ล็อกอินปกติ: ได้ทั้งสองชั้น", acc({ role: "admin", perms: [] }, false), { settings: true, admin: true });
+  ck("พนักงานที่มีแค่สิทธิ์ขาย (แบบบัญชี River): ไม่ได้ทั้งสองชั้น", acc({ role: "staff", perms: ["pos", "crm", "menus"] }, false), { settings: false, admin: false });
+  ck("ผู้จัดการที่มี pos_admin แต่ไม่มี settings: จัดการ PIN/เครื่องพิมพ์ได้ แต่แตะ VAT/พร้อมเพย์ไม่ได้", acc({ role: "manager", perms: ["pos", "pos_admin"] }, false), { settings: false, admin: true });
+  ck("สิทธิ์ตั้งค่าอย่างเดียวก็จัดการ POS ได้ (เหมือนเดิม)", acc({ role: "staff", perms: ["settings"] }, false), { settings: true, admin: true });
+  ok_("pos_admin อยู่ในรายการสิทธิ์ และบันทึกผู้ใช้แล้วไม่ถูกตัดทิ้ง", !!PA && PA.ALL_PERMS.some(p => p.id === "pos_admin" && /POS/.test(p.label)) && PA.normalizePerms(["pos", "pos_admin"]).includes("pos_admin"));
+
+  // ── ต่อสายจริงทุกจอ ──
+  // grab() เริ่มนับปีกกาที่พารามิเตอร์ ({...}) ของคอมโพเนนต์ — ต้องเริ่มที่ตัวฟังก์ชันจริงหลัง "){"
+  const comp = (name) => { const s0 = APP.indexOf(`function ${name}(`); if (s0 < 0) return ""; const b0 = APP.indexOf("){", s0) + 1; let d = 0; for (let j = b0; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(s0, j + 1); } } return ""; };
+  const SALE = comp("POSSaleMode"), PSM = comp("PrinterStatusModal"), BO = comp("POSBackOffice"), PPP = comp("POSPrinterPanel");
+  ok_("จอขายคิดสิทธิ์จาก posAccess พร้อมโหมด PIN", SALE.includes("const posAcc=posAccess(currentUser,saleOnly);"));
+  ok_("ปุ่ม 🧾 จัดการใบเสร็จ เห็นเฉพาะคนมีสิทธิ์ตั้งค่า (คนเข้าด้วย PIN ไม่เห็น)",
+    SALE.includes("{posAcc.settings&&<Btn v=\"ghost\" onClick={()=>setShowReceipt(true)}") && SALE.includes("{showReceipt&&posAcc.settings&&<ReceiptSettingsModal"));
+  ok_("ปุ่ม 🖨 เครื่องพิมพ์ ยังเห็นทุกคน (ทดสอบพิมพ์/ดูสถานะ/ย้ายหมวดตอนเครื่องดับ)",
+    /\n\s*<Btn v="ghost" onClick=\{\(\)=>setShowPrinters\(true\)\} s=\{TB\}>🖨 เครื่องพิมพ์<\/Btn>/.test(SALE) && SALE.includes("canAdmin={posAcc.admin}"));
+  ok_("จอเครื่องพิมพ์: ค่าเริ่มต้นคือล็อก (ลืมส่งสิทธิ์ = ปลอดภัยไว้ก่อน)", PSM.includes(",canAdmin=false}){"));
+  ok_("จอเครื่องพิมพ์: ค้นหา/เพิ่มที่พบ/เพิ่มด้วย IP/นำออก ซ่อนเมื่อไม่มีสิทธิ์",
+    PSM.includes("{canAdmin&&<Btn v=\"info\" onClick={findPrinters}") && PSM.includes("{canAdmin&&(discovered.length>0||searched)&&")
+    && PSM.includes("{canAdmin&&<button onClick={async()=>{if(await confirmDlg({title:`🗑 นำเครื่องพิมพ์") && PSM.includes("{canAdmin&&<div style={{background:C.bg,border:`1px dashed ${C.line}`,borderRadius:12,padding:\"14px 16px\"}}>")
+    && PSM.includes("async function add(){\n    if(!canAdmin)return;") && PSM.includes("async function addDiscovered(p){if(!canAdmin)return;"));
+  ok_("จอเครื่องพิมพ์: ทดสอบพิมพ์ เช็คสถานะ และกำหนดการพิมพ์ ไม่ถูกล็อก",
+    PSM.includes("<button onClick={()=>testPrint(p)}") && !PSM.includes("canAdmin&&<button onClick={()=>testPrint(p)}")
+    && PSM.includes("<button onClick={()=>openSettings(p)}") && !PSM.includes("canAdmin&&<button onClick={()=>openSettings(p)}")
+    && PSM.includes("<Btn v=\"ghost\" onClick={recheckStatus}") && !PSM.includes("canAdmin&&<Btn v=\"ghost\" onClick={recheckStatus}")
+    && /\{routing\.length>0&&<div/.test(PSM));
+  ok_("ติ๊กใบเสร็จ/ลิ้นชักล็อกเมื่อไม่มีสิทธิ์ และตอนบันทึกไม่แตะธงเดิมในฐานข้อมูล",
+    (PSM.match(/disabled=\{!canAdmin\}/g) || []).length === 2
+    && PSM.includes("if(canAdmin){\n        if(sRcpt)dd.rcpt=1;else delete dd.rcpt;\n        if(sDraw)dd.dw=1;else delete dd.dw;\n      }"));
+  ok_("หลังบ้าน: เรื่องเงิน (ตั้งค่า POS/โปรโมชั่น) เฉพาะสิทธิ์ตั้งค่า · PIN/เครื่องพิมพ์ เปิดให้ pos_admin",
+    BO.includes("const canMoney=posAccess(currentUser,false).settings;") && BO.includes("...(canMoney?[{id:\"settings\"")
+    && BO.includes("{section===\"settings\"&&canMoney&&<POSSettingsPanel") && BO.includes("{section===\"promotions\"&&canMoney&&<POSPromotionManager")
+    && BO.includes("{section===\"sellers\"&&<POSSellerPanel") && PPP.includes("const isAdmin=posAccess(currentUser,false).admin;"));
+
+  // ── แต่ละจอบันทึกเฉพาะคอลัมน์ของตัวเอง (ไม่ upsert ทั้งแถวจากค่าตอนเปิดจอ) ──
+  ok_("ไม่มีที่ไหนเรียก upsert ทั้งแถวของ pos_settings แล้ว", !/upsertPOSSettings\s*\(/.test(APP) && !/api\.upsertPOSSettings/.test(APP));
+  let patchFn = null; const sbCalls = []; let sbRows = [];
+  try {
+    const st = APP.indexOf("patchPOSSettings: async (bid, patch) => {");
+    let d = 0, en = -1;
+    for (let j = APP.indexOf("{", st); j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) { en = j + 1; break; } } }
+    const src = APP.slice(st + "patchPOSSettings: ".length, en);
+    patchFn = new Function("sb", "return " + src)(async (path, opts) => { sbCalls.push({ path, method: opts && opts.method, body: opts && opts.body ? JSON.parse(opts.body) : null }); return opts.method === "PATCH" ? sbRows : [{ ...(JSON.parse(opts.body)) }]; });
+  } catch (e) { console.log("       ดึง patchPOSSettings ไม่ได้: " + e.message); }
+  if (patchFn) {
+    sbRows = [{ branch_id: 5, sales_staff: [] }];
+    await patchFn(5, { sales_staff: [{ name: "ก", pin: "1111" }], id: 9, branch_id: 77 });
+    ok_("แก้ PIN = PATCH แถวของสาขานั้น ส่งเฉพาะ sales_staff (ไม่มี VAT/พร้อมเพย์/id ติดไป)",
+      sbCalls.length === 1 && sbCalls[0].method === "PATCH" && sbCalls[0].path === "pos_settings?branch_id=eq.5" && JSON.stringify(Object.keys(sbCalls[0].body)) === '["sales_staff"]');
+    sbCalls.length = 0; sbRows = [];
+    const ins = await patchFn(6, { option_library: [] });
+    ok_("สาขาที่ยังไม่มีแถวตั้งค่า: สร้างใหม่ด้วยคอลัมน์ชุดเดียวกัน + branch_id",
+      sbCalls.length === 2 && sbCalls[1].method === "POST" && sbCalls[1].body.branch_id === 6 && JSON.stringify(Object.keys(sbCalls[1].body).sort()) === '["branch_id","option_library"]' && !!ins);
+  } else ok_("ดึง patchPOSSettings มารันได้", false);
+  ok_("พนักงานขาย (PIN) และคลังตัวเลือก ส่งเฉพาะคอลัมน์ของตัวเอง",
+    APP.includes("await api.patchPOSSettings(currentBranch.id,{sales_staff:next});") && APP.includes("await api.patchPOSSettings(currentBranch.id,{option_library:next});"));
+  ok_("จอ 🧾 หน้าร้าน และ ⚙️ ตั้งค่า POS หลังบ้าน ใช้ตัวบันทึกเฉพาะช่องที่แก้ตัวเดียวกัน",
+    (APP.match(/await savePOSFormSettings\(currentBranch,orig,(s|settings),currentUser\)/g) || []).length === 2);
+
+  // ── ตัวคำนวณ "ช่องที่แก้จริง" + ประวัติ VAT/พร้อมเพย์ ดึงมารันจริงด้วย api จำลอง ──
+  const apiLog = []; let histFail = false;
+  const fakeApi = {
+    getPOSSettings: async () => [{ branch_id: 5, vat_enabled: false, vat_rate: 7, promptpay_id: "0811111111", sales_staff: [{ name: "เช้า", pin: "4321" }] }],
+    patchPOSSettings: async (bid, p) => { apiLog.push(["patch", bid, p]); return { branch_id: bid, ...p }; },
+    addActionHist: async (d) => { apiLog.push(["hist", d]); if (histFail) throw new Error("rls"); return [d]; },
+  };
+  let PS = null;
+  try {
+    const blk = APP.slice(APP.indexOf("const POS_FORM_KEYS=["), APP.indexOf("function POSSettingsFields("));
+    PS = new Function("api", "nowStr", blk + "\nreturn {POS_FORM_KEYS,posSettingsPatch,posSettingsAuditText,savePOSFormSettings};")(fakeApi, () => "2026-10-12T00:00:00.000Z");
+  } catch (e) { console.log("       ดึงตัวบันทึกตั้งค่า POS ไม่ได้: " + e.message); }
+  if (PS) {
+    const row = { branch_id: 8, vat_enabled: false, vat_rate: 7, vat_included: true, rounding: "none", service_charge_enabled: false, service_charge_rate: 10, show_qr_promptpay: true, promptpay_id: "0811111111", promptpay_name: "ร้าน", promptpay_qr_image: null, receipt_header: "หัว", receipt_footer: "ท้าย", sales_staff: [{ name: "เช้า", pin: "4321" }], option_library: [{ id: "g1" }], category_order: ["a"], menu_order: [1, 2] };
+    ck("เปิด VAT อย่างเดียว = ส่งแค่ vat_enabled (ไม่ทับ PIN/ตัวเลือก/ลำดับเมนู/ช่องอื่น)", PS.posSettingsPatch(row, { ...row, vat_enabled: true, sales_staff: [] }), { vat_enabled: true });
+    ck("ไม่ได้แก้อะไร = ไม่ส่งอะไรเลย · 7 กับ \"7\" ถือว่าเท่ากัน", PS.posSettingsPatch(row, { ...row, vat_rate: "7" }), {});
+    ok_("รายการช่องของฟอร์มไม่มี PIN/คลังตัวเลือก/ลำดับ/branch_id", !!PS.POS_FORM_KEYS.length && !PS.POS_FORM_KEYS.some(k => ["sales_staff", "option_library", "category_order", "menu_order", "branch_id", "id"].includes(k)));
+    const first = PS.posSettingsPatch(null, { branch_id: 5, vat_enabled: false, vat_rate: 7, receipt_header: "" });
+    ck("สาขายังไม่มีแถว = ส่งค่าเริ่มต้นของฟอร์ม (ไม่มี branch_id ปนใน patch)", first, { vat_enabled: false, vat_rate: 7, receipt_header: "" });
+    const txt = PS.posSettingsAuditText(row, { promptpay_id: "0899999999", vat_enabled: true, receipt_header: "ใหม่", sales_staff: [{ pin: "9876" }] }, "max", { id: 8, name: "กาญจนบุรี The River" });
+    ok_("ประวัติบอกใคร สาขาไหน จากอะไรเป็นอะไร (เลขพร้อมเพย์ + VAT)",
+      txt.includes("max") && txt.includes("กาญจนบุรี The River") && txt.includes("#8") && txt.includes("0811111111 → 0899999999") && txt.includes("VAT: ปิด → เปิด"));
+    ok_("ประวัติไม่มี PIN และไม่จดช่องที่ไม่เกี่ยวกับเงิน (หัวใบเสร็จ)", !txt.includes("9876") && !txt.includes("4321") && !txt.includes("ใหม่"));
+    ok_("แก้แค่หัวใบเสร็จ = ไม่จดประวัติ", PS.posSettingsAuditText(row, { receipt_header: "x" }, "max", { id: 8, name: "R" }) === "");
+    ok_("รูป QR พร้อมเพย์ที่เปลี่ยนก็จดประวัติ", PS.posSettingsAuditText(row, { promptpay_qr_image: "https://drive/x" }, "max", { id: 8, name: "R" }).includes("รูป QR พร้อมเพย์"));
+    // บันทึกจริงผ่าน api จำลอง
+    apiLog.length = 0;
+    const r0 = await PS.savePOSFormSettings({ id: 5, name: "กาญจนบุรี" }, row, { ...row }, { name: "max" });
+    ok_("กดบันทึกโดยไม่ได้แก้ = ไม่เขียนฐานข้อมูล ไม่จดประวัติ", r0.changed === false && apiLog.length === 0);
+    apiLog.length = 0;
+    const r1 = await PS.savePOSFormSettings({ id: 5, name: "กาญจนบุรี" }, row, { ...row, promptpay_id: "0822222222" }, { name: "ผู้จัดการ", username: "mgr" });
+    const pt = apiLog.find(x => x[0] === "patch"), hs = apiLog.filter(x => x[0] === "hist");
+    ok_("แก้เลขพร้อมเพย์ = PATCH เฉพาะ promptpay_id (+เวลาแก้) ของสาขานั้น",
+      r1.changed === true && !!pt && pt[1] === 5 && JSON.stringify(Object.keys(pt[2]).sort()) === '["promptpay_id","updated_at"]');
+    ok_("แก้เลขพร้อมเพย์ = จดประวัติ 1 รายการ ใช้ค่าเดิมล่าสุดจากฐานข้อมูล",
+      hs.length === 1 && hs[0][1].action.includes("ผู้จัดการ") && hs[0][1].action.includes("0811111111 → 0822222222") && hs[0][1].time === "2026-10-12T00:00:00.000Z");
+    apiLog.length = 0; histFail = true; const cw = console.warn; console.warn = () => {};
+    let threw = false; try { await PS.savePOSFormSettings({ id: 5, name: "ก" }, row, { ...row, vat_enabled: true }, { name: "max" }); } catch { threw = true; }
+    histFail = false; console.warn = cw;
+    ok_("จดประวัติไม่สำเร็จ ไม่ทำให้การบันทึกตั้งค่าล้ม", !threw && apiLog.some(x => x[0] === "patch"));
+    apiLog.length = 0;
+    await PS.savePOSFormSettings({ id: 5, name: "ก" }, row, { ...row, receipt_footer: "ขอบคุณ" }, { name: "max" });
+    ok_("แก้ท้ายใบเสร็จ = บันทึก แต่ไม่จดประวัติเงิน", apiLog.filter(x => x[0] === "patch").length === 1 && apiLog.filter(x => x[0] === "hist").length === 0);
+  } else ok_("ดึงตัวบันทึกตั้งค่า POS มารันได้", false);
+
+  // ── เปลี่ยนพนักงานกลางกะ (โหมด PIN): กลับหน้า PIN + โหลดรายชื่อ PIN ใหม่ + ไม่แตะกะ ──
+  let SW = null; const swApi = []; const st = { seller: "x", pin: "12", shiftOpen: true, staff: null };
+  let confirmAns = true;
+  try {
+    const apiProxy = new Proxy({}, { get: (_, k) => async () => { swApi.push(String(k)); return k === "getPOSSettings" ? [{ sales_staff: [{ name: "บ่าย", pin: "2222", active: true }] }] : []; } });
+    SW = new Function("confirmDlg", "api", "branchId", "setSeller", "setPin", "setShiftOpen", "setStaff",
+      "async " + grab(APP, "reloadStaff") + "\nasync " + grab(APP, "switchSeller") + "\nreturn switchSeller;")(
+      async () => confirmAns, apiProxy, 5, v => { st.seller = v; }, v => { st.pin = v; }, v => { st.shiftOpen = v; }, v => { st.staff = v; });
+  } catch (e) { console.log("       ดึง switchSeller ไม่ได้: " + e.message); }
+  if (SW) {
+    confirmAns = false; await SW(); await new Promise(r => setTimeout(r, 0));
+    ok_("กดเปลี่ยนพนักงานแล้วกดยกเลิก = ยังเป็นคนเดิม", st.seller === "x" && swApi.length === 0);
+    confirmAns = true; await SW(); await new Promise(r => setTimeout(r, 0));
+    ok_("ยืนยันเปลี่ยนพนักงาน = กลับหน้า PIN (ล้างคนขายและ PIN ที่พิมพ์ค้าง)", st.seller === null && st.pin === "" && st.shiftOpen === false);
+    ok_("โหลดรายชื่อ PIN ใหม่ทันที (PIN ที่เพิ่งเพิ่ม/ปิดมีผลโดยไม่ต้องรีโหลดหน้า)", Array.isArray(st.staff) && st.staff[0] && st.staff[0].pin === "2222");
+    ok_("เปลี่ยนพนักงานไม่แตะกะ — เรียกฐานข้อมูลแค่อ่านรายชื่อ PIN", JSON.stringify(swApi) === '["getPOSSettings"]');
+  } else ok_("ดึง switchSeller มารันได้", false);
+  const GATE = comp("POSPinGate");
+  ok_("ปุ่มเปลี่ยนพนักงานอยู่บนแถบบนของจอขายโหมด PIN", GATE.indexOf("onClick={switchSeller}") > GATE.indexOf("if(seller){") && GATE.indexOf("onClick={switchSeller}") < GATE.indexOf("// PIN pad"));
 }
 
 
