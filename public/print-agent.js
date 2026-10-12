@@ -391,13 +391,16 @@ function printerHandles(p, it, list) {
 // ⚠️ อ่านของล่าสุดก่อนเขียนเสมอ — เดิมเขียนจากแคชรายชื่อเครื่องอายุถึง 6 วิ ทุกบิลที่มีหมวดยังไม่ผูกเครื่อง
 //    = ทับคำสั่งใบเสร็จ/ลิ้นชัก ค่าติ๊กเครื่องใบเสร็จ หรือรายการพิมพ์ไม่ออกที่เพิ่งเขียนเข้ามา หายเงียบ
 // อ่านไม่ได้ = ไม่เขียน (แบบ pushFail) · ชุดชื่อเดิม = ไม่เขียน (ไม่เพิ่มภาระฐานข้อมูลทุกบิล)
+// ยกเว้นเวลาที่จดไว้เก่าเกิน 10 นาที → จดเวลาใหม่ (แถบในแอปดูแค่ 20 นาทีล่าสุด — ไม่จดซ้ำ = แดงแค่ครั้งแรกแล้วเงียบ ทั้งที่ใบยังไม่ออก)
 let _orphanLast = "";   // เครื่อง|ชุดชื่อ ที่จดไว้ล่าสุด — ชุดเดิมไม่ต้องอ่านซ้ำด้วย
+let _orphanAt = 0;      // เวลาที่จดชุดนั้นไว้ในแถว
+const ORPHAN_REFRESH_MS = 10 * 60000;
 const orphanKey = (names) => names.map(String).sort().join("\u0001");
 async function noteOrphan(target, orphan) {
   if (!target || !orphan || !orphan.length) return false;
   const names = [...new Set(orphan.map(i => i.name))].slice(0, 12);
   const key = target.id + "|" + orphanKey(names);
-  if (key === _orphanLast) return false;
+  if (key === _orphanLast && Date.now() - _orphanAt < ORPHAN_REFRESH_MS) return false;
   let d;
   try {
     const r = await sb(`printers?id=eq.${target.id}&select=description`);
@@ -405,11 +408,12 @@ async function noteOrphan(target, orphan) {
     d = JSON.parse(r[0].description || "{}");
     if (!d || typeof d !== "object" || Array.isArray(d)) return false;
   } catch { return false; }
-  if (d.orphan && Array.isArray(d.orphan.names) && orphanKey(d.orphan.names) === orphanKey(names)) { _orphanLast = key; return false; }
-  d.orphan = { at: Date.now(), names, n: orphan.length };
+  if (d.orphan && Array.isArray(d.orphan.names) && orphanKey(d.orphan.names) === orphanKey(names) && Date.now() - (+d.orphan.at || 0) < ORPHAN_REFRESH_MS) { _orphanLast = key; _orphanAt = +d.orphan.at; return false; }
+  const at = Date.now();
+  d.orphan = { at, names, n: orphan.length };
   const res = await patchPrinter(target.id, { description: JSON.stringify(d) });
   if (res && res.ok === false) return false;   // เขียนไม่ผ่าน — รอบหน้าลองใหม่
-  _orphanLast = key;
+  _orphanLast = key; _orphanAt = at;
   return true;
 }
 // alreadyDone = { [printerId]: 1 } เครื่องที่พิมพ์ "ใบชุดนี้" สำเร็จไปแล้วในรอบก่อน

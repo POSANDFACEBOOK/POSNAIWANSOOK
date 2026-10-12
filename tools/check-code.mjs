@@ -5171,6 +5171,8 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
     APP.includes('if(takeOldPrintStation())posToast("ℹ️ ปิดโหมดสถานีพิมพ์ของเครื่องนี้แล้ว — โปรแกรมตัวพิมพ์ที่ร้านพิมพ์ใบให้เอง') && !APP.includes("ไปเปิดใหม่ที่ 🖨 เครื่องพิมพ์") && !APP.includes("onClick={toggleStation}"));
   ok_("จอขาย/จอเครื่องพิมพ์อ่าน-เขียนโหมดสถานีพิมพ์ตามสาขาที่เปิดอยู่",
     !/isPrintStation\(\)/.test(APP) && APP.includes("if(!isPrintStation(currentBranch.id))return;") && APP.includes("setPrintStation(currentBranch.id,v);") && APP.includes("useEffect(()=>{setPS(isPrintStation(currentBranch.id));},[currentBranch.id]);"));
+}
+
 section("POS สาขาที่ 2: สิทธิ์และตั้งค่า");
 {
   // ── สิทธิ์สองชั้น: settings (รวมเรื่องเงิน) · admin = settings หรือ pos_admin · คนเข้าด้วย PIN ไม่ได้ทั้งคู่ ──

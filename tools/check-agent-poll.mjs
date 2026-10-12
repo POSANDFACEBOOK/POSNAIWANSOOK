@@ -604,9 +604,13 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
   ok_("#12 บิลถัดไปชุดเดิม (สลับลำดับ) → ไม่อ่าน ไม่เขียนซ้ำ", D.io.reads === 1 && D.io.writes.length === 1);
   await D.fn(stale, [{ name: "ยำ" }]);
   ok_("#12 ชุดเปลี่ยน → อ่านใหม่แล้วเขียน", D.io.reads === 2 && D.io.writes.length === 2 && D.io.writes[1].d.orphan.names.join() === "ยำ");
-  const E = mk(async () => [{ description: JSON.stringify({ ...live, orphan: { at: 1, names: ["โค้ก", "น้ำเปล่า"], n: 2 } }) }]);
+  const E = mk(async () => [{ description: JSON.stringify({ ...live, orphan: { at: Date.now() - 60000, names: ["โค้ก", "น้ำเปล่า"], n: 2 } }) }]);
   await E.fn(stale, [{ name: "น้ำเปล่า" }, { name: "โค้ก" }]);
   ok_("#12 เพิ่งรีสตาร์ท แต่ในแถวเป็นชุดเดียวกันอยู่แล้ว → ไม่เขียน", E.io.reads === 1 && E.io.writes.length === 0);
+  // แถบในแอปดูแค่ 20 นาทีล่าสุด — ชุดเดิมที่จดไว้นานเกิน 10 นาทีต้องจดเวลาใหม่ ไม่งั้นแดงแค่ครั้งแรกแล้วเงียบทั้งที่ใบยังไม่ออก
+  const G = mk(async () => [{ description: JSON.stringify({ ...live, orphan: { at: Date.now() - 11 * 60000, names: ["โค้ก", "น้ำเปล่า"], n: 2 } }) }]);
+  await G.fn(stale, [{ name: "น้ำเปล่า" }, { name: "โค้ก" }]);
+  ok_("#12 ชุดเดิมแต่เวลาที่จดเก่าเกิน 10 นาที → จดเวลาใหม่ (แถบแดงในแอปไม่หายไปเอง)", G.io.writes.length === 1 && Date.now() - G.io.writes[0].d.orphan.at < 5000);
   const F = mk(async () => [{ description: JSON.stringify(live) }], { ok: false });
   await F.fn(stale, [{ name: "น้ำเปล่า" }]); await F.fn(stale, [{ name: "น้ำเปล่า" }]);
   ok_("#12 เขียนไม่ผ่าน → รอบหน้าลองจดใหม่ (ไม่จำว่าจดแล้ว)", F.io.reads === 2 && F.io.writes.length === 2);
