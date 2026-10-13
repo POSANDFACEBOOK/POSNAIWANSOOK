@@ -1186,7 +1186,7 @@ const api = {
 // but accounting consolidates ALL of that unit's POs under "คุณนายตื่นสาย", so both
 // map to it. If a branch is renamed/added, update the alias map below.
 // ───────────────────────────────────────────────────────────────────────
-const SLIPTRACK_CANON_BRANCHES=["กาญจนบุรี","ครัวกลาง","คลองสาม","บางใหญ่","อยุธยา","คุณนายตื่นสาย","คุณนายแจ่วฮ้อน"];
+const SLIPTRACK_CANON_BRANCHES=["กาญจนบุรี","กาญจนบุรี The River","ครัวกลาง","คลองสาม","บางใหญ่","อยุธยา","คุณนายตื่นสาย","คุณนายแจ่วฮ้อน"];
 const SLIPTRACK_BRANCH_ALIAS={
   "คุณนายตื่นสาย/แจ่วฮ้อน":"คุณนายตื่นสาย", // paired form  → canonical
   "คุณนายแจ่วฮ้อน":"คุณนายตื่นสาย",        // split form   → canonical (unit merged at accounting)
@@ -1210,6 +1210,63 @@ function sliptrackBranchName(name){
 // ตัดคีย์ "โอนเข้าบัญชีบริษัท" ทิ้งทั้งที่มีจริง เพราะเป็นเงิน "เข้า" ไม่ใช่จ่ายออก
 // การมีตัวเลือกผิดทางในฟอร์มจ่ายเงิน = รอให้มีคนกดพลาดเท่านั้นเอง
 const PO_CASH_SOURCES=["โอนจากบัญชีบริษัท","เงินสดย่อย","เงินในตู้เซฟ","ลิ้นชักเก็บเงิน"];
+// ── ใบโอนวัตถุดิบระหว่างสาขา (คิดเงิน · เจ้าของสั่ง 13 ต.ค. 69) ─────────────────
+// ใบโอนที่สร้างหลังเปิดคิดเงิน พอรับของแล้วจะไปอยู่ awaiting_payment/paid เหมือน PO ปกติ
+// ⟹ ดูจากสถานะอย่างเดียวแยกไม่ออกว่าเป็นใบโอน ต้องดูเลขใบ TR- ด้วย ทุกจอ/รายงานใช้ตัวนี้ตัวเดียว
+function isTransferPO(po){
+  return !!po&&(/^transfer_/.test(String(po.status||""))||/^TR-/.test(String(po.po_number||"")));
+}
+// ใครกด "ชำระเงิน" ใบโอนได้ — เงินไหลจากสาขาที่รับของ (ปลายทาง) ไปหาสาขาที่ส่งของ (ต้นทาง)
+// ปลายทางจ่ายเอง หรือครัวกลาง/แอดมินบันทึกแทนได้ · สาขาผู้ส่งห้ามกด เพราะเป็นฝ่ายได้เงิน
+function canPayTransfer(po,branch,user){
+  if(!po||!branch)return false;
+  if(+po.from_branch_id===+branch.id)return false;
+  return +po.branch_id===+branch.id||branch.type==="central"||(user&&user.role)==="admin";
+}
+// ราคาใบโอน = ราคาซื้อในทะเบียนวัตถุดิบ (buy_price ต่อ buy_unit) แหล่งเดียวกับ PO ครัวกลาง
+// ตรึงลงใบตอนสร้าง พนักงานแก้ไม่ได้ · VAT 0 · ใช้ทั้งตอนโชว์ในฟอร์มและตอนบันทึก (จอ = ที่บันทึก)
+// คืนรายการที่บันทึกไม่ได้แยกไว้: ไม่มีราคา / หน่วยไม่ตรงหน่วยซื้อ / โอนเกินสต๊อกที่มี
+function buildTransferItems(lines,ingById,stockOf){
+  const items=[],noPrice=[],badUnit=[],overStock=[];
+  for(const it of (lines||[])){
+    const qty=+it.qty||0;
+    if(!(qty>0))continue;
+    const ing=ingById.get(+it.ingredient_id);
+    const name=it.name||(ing&&ing.name)||"";
+    const price=ing?(+ing.buy_price||0):0;
+    if(!(price>0)){noPrice.push(name);continue;}
+    const unit=it.unit||"หน่วย";
+    if(String(unit).trim()!==String(ing.buy_unit||"หน่วย").trim()){badUnit.push(name);continue;}
+    const have=+stockOf(ing)||0;
+    if(qty>have+1e-9)overStock.push(`${name} (โอน ${qty} · มี ${have} ${unit})`);
+    items.push({ingredient_id:+it.ingredient_id,name,unit,qty,price_per_unit:price,line_total:round2(qty*price),note:""});
+  }
+  const subtotal=round2(items.reduce((s,x)=>s+x.line_total,0));
+  return{items,noPrice,badUnit,overStock,subtotal,vat:0,total:subtotal};
+}
+// จำนวนรับจริงของใบโอน: ไม่ติดลบ และไม่เกินที่ส่งมา (รับเกิน = เสกสต๊อก) — ใช้ทั้งจอและตอนบันทึก
+function clampTransferReceived(items){
+  return (items||[]).map(({_key,...rest})=>{
+    const ordered=+rest.qty||0;
+    const qty=Math.min(ordered,Math.max(0,Math.round((+rest.receivedQty||0)*1000)/1000));
+    return{...rest,received_qty:qty,receivedQty:qty};
+  });
+}
+// เงินของใบโอนตอนรับของ = จำนวนรับจริง × ราคาที่ตรึงในใบ (สูตรเดียวกับ acceptDispute)
+// ใบเก่าก่อนเปิดคิดเงิน (ยอดในใบ = 0) ห้ามแตะเงิน: total 0 ⟹ จบที่ transfer_done ไม่ส่งบัญชี
+// ตัดสินว่า "คิดเงิน" จากยอดที่บันทึกไว้ตอนสร้างใบเท่านั้น ห้ามดูราคาวัตถุดิบวันนี้
+function transferReceiveBill(po,items){
+  if(!((+(po&&po.total)||0)>0))return{priced:false,items:items||[],subtotal:0,vat:0,total:0};
+  const out=(items||[]).map(it=>{
+    const orig=+it.qty||0;
+    const recv=it.received_qty!=null?Math.max(0,Math.min(orig,+it.received_qty||0)):orig;
+    return{...it,received_qty:recv,line_total:round2(recv*(+it.price_per_unit||0))};
+  });
+  const subtotal=round2(out.reduce((s,it)=>s+(+it.line_total||0),0));
+  const vatRate=(+po.subtotal||0)>0?(+po.vat||0)/(+po.subtotal):0;
+  const vat=round2(subtotal*vatRate);
+  return{priced:true,items:out,subtotal,vat,total:round2(subtotal+vat)};
+}
 async function pushPOToSlipTrack(po, branches, opts={}){
   // Returns {ok, status?, error?, skipped?}; existing callers ignore the value
   // (fire-and-forget). Bulk-sync uses the return value to count successes.
@@ -1276,7 +1333,11 @@ async function pushPOToSlipTrack(po, branches, opts={}){
       if(opts.cashSource)payload.cash_source=opts.cashSource;   // เงินออกจากบัญชีธนาคาร หรือเงินสด — บัญชีแยกฝั่งด้วยค่านี้
     }else{
       // Stage 1: include description + items so the new rows are descriptive.
-      payload.description=po.notes?`ซื้อวัตถุดิบ — ${po.notes}`:`ซื้อวัตถุดิบ ${externalId}`;
+      // ใบโอนระหว่างสาขาต้องบอกบัญชีว่าเป็น "โอน" ไม่ใช่ "ซื้อ" — ข้อความนี้ต้องตรงกับตัวกวาด
+      // api/sliptrack-sweep.js ทุกตัวอักษร (ใครส่งก่อนก็ได้แถวเดียวกัน ?upsert=1 เขียนทับ)
+      payload.description=isTransferPO(po)
+        ?`โอนวัตถุดิบระหว่างสาขา ${fromName} → ${toName}${po.notes?` — ${po.notes}`:""}`
+        :(po.notes?`ซื้อวัตถุดิบ — ${po.notes}`:`ซื้อวัตถุดิบ ${externalId}`);
       payload.reference_no=po.po_number||externalId;
       // Same received-qty lines the header `amount` was derived from (0-qty lines dropped
       // — they aren't billed), so the SlipTrack lines always reconcile with the header.
@@ -1309,7 +1370,7 @@ async function pushPOToSlipTrack(po, branches, opts={}){
 
 // Record the last SlipTrack push outcome on the PO so a silently-swallowed failure
 // becomes visible + auto-retryable (see the load() self-heal). 'ok' = synced,
-// 'skip' = correctly not billable (transfer/zero/same-branch), 'failed' = retry.
+// 'skip' = correctly not billable (zero-amount incl. legacy free transfers / same-branch), 'failed' = retry.
 // Best-effort: patches ONLY sliptrack_sync (never updated_at, so it can't disturb an
 // optimistic lock) and if the column doesn't exist yet the PATCH throws and we ignore
 // it — the whole feature degrades to a no-op until the column is added.
@@ -4411,24 +4472,27 @@ function priceHistSummary(all,buyUnit,win){
   const normU=(u)=>{const s=String(u||"").trim();return s==="กก."||s==="กก"?"กิโลกรัม":s;};
   const f=(win&&win[0])||"",t=(win&&win[1])||"";
   const rows=(f||t)?all.filter(r=>r.day&&(!f||r.day>=f)&&(!t||r.day<=t)):all;
-  const priced=rows.filter(r=>r.price>0);
+  // ใบโอนระหว่างสาขา (xfer) ไม่ใช่การซื้อ — ราคาเป็นราคาในทะเบียน ไม่ใช่ราคาที่ซื้อได้จริง
+  // โชว์เป็นแถวในตารางได้ แต่ห้ามเข้าช่วงราคา/ค่าเฉลี่ย/ยอดจ่าย/แยกตามแหล่ง (สถิติราคาซื้อจะเพี้ยน)
+  const buy=rows.filter(r=>!r.xfer);
+  const priced=buy.filter(r=>r.price>0);
   const cnt=new Map();for(const r of priced){const u=normU(r.unit);cnt.set(u,(cnt.get(u)||0)+1);}
   const bu=normU(buyUnit);
   // หน่วยหลัก = หน่วยซื้อที่ตั้งไว้ ถ้ามีรับเป็นหน่วยนั้นจริง · ไม่งั้นใช้หน่วยที่รับบ่อยสุด
   const unit=cnt.has(bu)?bu:([...cnt].sort((a,b)=>b[1]-a[1])[0]||[bu])[0];
-  const isMain=(r)=>r.price>0&&normU(r.unit)===unit;
+  const isMain=(r)=>!r.xfer&&r.price>0&&normU(r.unit)===unit;
   const main=rows.filter(isMain);
   const ps=main.map(r=>r.price);
   const qty=main.reduce((s,r)=>s+r.qty,0),spentMain=main.reduce((s,r)=>s+r.total,0);
   const src=new Map();
-  for(const r of rows){const u=normU(r.unit),k=r.supplier+"|"+u;
+  for(const r of buy){const u=normU(r.unit),k=r.supplier+"|"+u;
     const e=src.get(k)||{key:k,name:r.supplier,kind:r.kind,unit:u,n:0,qty:0,total:0};
     e.n++;if(r.price>0){e.qty+=r.qty;e.total+=r.total;}src.set(k,e);}
   return{rows,unit,isMain,
     min:ps.length?Math.min(...ps):0,max:ps.length?Math.max(...ps):0,
     avg:qty>0?spentMain/qty:(ps.length?ps.reduce((s,n)=>s+n,0)/ps.length:0),
     qty,spent:priced.reduce((s,r)=>s+r.total,0),
-    otherUnitN:priced.length-main.length,noPriceN:rows.length-priced.length,
+    otherUnitN:priced.length-main.length,noPriceN:buy.length-priced.length,xferN:rows.length-buy.length,
     undatedN:(f||t)?all.filter(r=>!r.day).length:0,
     bySource:[...src.values()].map(e=>({...e,avg:e.qty>0?e.total/e.qty:0})).sort((a,b)=>b.total-a.total||b.n-a.n)};
 }
@@ -4454,13 +4518,14 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
           const from=(branches||[]).find(b=>+b.id===+po.from_branch_id)||null;
           const kind=from&&from.type==="central"?"central":"branch";
           const source=from?from.name:("สาขา #"+po.from_branch_id);
+          const xfer=isTransferPO(po);   // ใบโอน: โชว์เป็นแถว แต่ไม่นับในสถิติราคาซื้อ (ดู priceHistSummary)
           for(const it of (po.items||[])){
             if(+it.ingredient_id!==+ing.id)continue;
             // จำนวนที่รับจริง — ใบที่รับไม่ครบ/แจ้งของไม่ตรงเก็บไว้ที่ received_qty (บางใบเก่าเป็น receivedQty)
             const qty=it.received_qty!=null?+it.received_qty:(it.receivedQty!=null?+it.receivedQty:+it.qty||0);
             const price=+it.price_per_unit||0;
             if(!(qty>0))continue;   // รับจริง 0 = ของไม่มา ไม่ใช่การเข้าสต็อก · ไม่มีราคาแต่ของเข้าจริง ยังต้องโชว์
-            out.push({orderId:"po"+po.id,kind,ref:po.po_number||("PO #"+po.id),date:po.received_at||po.po_date||"",
+            out.push({orderId:"po"+po.id,kind,xfer,ref:po.po_number||("PO #"+po.id),date:po.received_at||po.po_date||"",
               supplier:source,branch:currentBranch.name||"",qty,unit:it.unit||ing.buy_unit||"หน่วย",price,
               total:Math.round(qty*price*100)/100});
           }
@@ -4561,9 +4626,10 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
         </div>)}
       </div>
     </div>}
-    {(S.otherUnitN>0||S.noPriceN>0)&&<div style={{marginBottom:10,padding:"7px 11px",borderRadius:9,background:C.bg,color:C.ink3,fontSize:11.5,lineHeight:1.55,fontFamily:"'Sarabun',sans-serif"}}>
+    {(S.otherUnitN>0||S.noPriceN>0||S.xferN>0)&&<div style={{marginBottom:10,padding:"7px 11px",borderRadius:9,background:C.bg,color:C.ink3,fontSize:11.5,lineHeight:1.55,fontFamily:"'Sarabun',sans-serif"}}>
       {S.otherUnitN>0&&<div>ℹ️ ช่วงราคาและค่าเฉลี่ยคิดเฉพาะที่รับเป็น <b>{S.unit}</b> · มีรับเป็นหน่วยอื่นอีก {S.otherUnitN} ครั้ง (ราคาต่อหน่วยเทียบกันตรงๆ ไม่ได้ ดูในตาราง)</div>}
       {S.noPriceN>0&&<div>ℹ️ รับของเข้าสต็อกแต่เอกสารไม่มีราคา {S.noPriceN} ครั้ง — แสดงในตารางให้เห็นว่ามาจากไหน แต่ไม่นำไปคิดราคา</div>}
+      {S.xferN>0&&<div>ℹ️ รับโอนจากสาขาอื่น {S.xferN} ครั้ง — แสดงในตาราง แต่ไม่นำไปคิดราคาซื้อ (ราคาโอนคือราคาในระบบ ไม่ใช่ราคาที่ซื้อจริง)</div>}
     </div>}
     {poState==="error"&&<div style={{marginBottom:10,padding:"8px 11px",borderRadius:9,background:C.yellowLight,color:"#92400E",fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>⚠️ โหลดรายการรับจากครัวกลางไม่สำเร็จ — ตอนนี้แสดงเฉพาะซัพพลายภายนอก ลองปิดแล้วเปิดใหม่</div>}
 
@@ -4598,11 +4664,12 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
                 {isCentral&&<td style={{padding:"10px",color:C.ink3,fontSize:12,wordBreak:"break-word"}}>{r.branch||"—"}</td>}
                 <td style={{padding:"10px",textAlign:"right",color:C.ink2,whiteSpace:"nowrap"}}>{fmtQty(r.qty)} <span style={{fontSize:10,color:C.ink4}}>{r.unit}</span></td>
                 <td style={{padding:"10px",textAlign:"right",whiteSpace:"nowrap"}}>
-                  {r.price>0?<span style={{fontWeight:900,color:isMin?C.green:isMax?C.red:"#92400E",fontSize:14}}>฿{fmtMoney(r.price)}</span>:<span style={{fontWeight:700,color:C.ink4,fontSize:12}}>ไม่มีราคา</span>}
+                  {r.price>0?<span style={{fontWeight:900,color:r.xfer?C.ink3:isMin?C.green:isMax?C.red:"#92400E",fontSize:14}}>฿{fmtMoney(r.price)}</span>:<span style={{fontWeight:700,color:C.ink4,fontSize:12}}>ไม่มีราคา</span>}
+                  {r.xfer&&r.price>0&&<div style={{fontSize:9,color:C.ink4,fontWeight:800}}>ราคาโอน · ไม่นับ</div>}
                   {isMin&&<div style={{fontSize:9,color:C.green,fontWeight:800}}>ต่ำสุด</div>}
                   {isMax&&<div style={{fontSize:9,color:C.red,fontWeight:800}}>สูงสุด</div>}
                 </td>
-                <td style={{padding:"10px",textAlign:"right",fontWeight:800,color:r.price>0?C.green:C.ink4,whiteSpace:"nowrap"}}>{r.price>0?`฿${fmtMoney(r.total)}`:"—"}</td>
+                <td style={{padding:"10px",textAlign:"right",fontWeight:800,color:r.price>0&&!r.xfer?C.green:C.ink4,whiteSpace:"nowrap"}}>{r.price>0?`฿${fmtMoney(r.total)}`:"—"}</td>
               </tr>;
             })}
           </tbody>
@@ -7766,11 +7833,17 @@ function buildPOHTML(po,toBranchName,fromBranchName){
     <td style="text-align:right;padding:6px 8px;border:1px solid #ddd">${fmt(it.price_per_unit)}</td>
     <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:700">฿${fmt(it.line_total)}</td>
   </tr>`).join("");
-  const stLabel=po.status==='received'?'✅ รับสินค้าแล้ว':po.status==='cancelled'?'❌ ยกเลิก':po.status==='paid'?'✅ ชำระแล้ว':po.status==='disputed'?'⚠️ ส่งกลับ':po.status==='awaiting_payment'?'💰 รอชำระเงิน':'⏳ เปิดอยู่';
+  const xfer=isTransferPO(po);   // ใบโอนระหว่างสาขา (TR-) ห้ามพิมพ์ออกมาเป็น "ใบสั่งซื้อ"
+  const stLabel=po.status==='received'?'✅ รับสินค้าแล้ว':po.status==='cancelled'?'❌ ยกเลิก':po.status==='paid'?'✅ ชำระแล้ว':po.status==='disputed'?'⚠️ ส่งกลับ':po.status==='awaiting_payment'?'💰 รอชำระเงิน':po.status==='transfer_pending'?'📋 รอจัดส่ง (โอน)':po.status==='transfer_shipped'?'🚚 จัดส่งแล้ว (โอน)':po.status==='transfer_done'?'✅ โอนเสร็จสิ้น':'⏳ เปิดอยู่';
+  const title=xfer?`<span style="letter-spacing:1px">🔄</span> ใบโอนวัตถุดิบระหว่างสาขา`:`<span style="letter-spacing:1px">📄</span> ใบสั่งซื้อ (Purchase Order)`;
+  // ใบโอนคิดเงิน: บอกบนกระดาษว่าใครจ่ายใคร · ใบโอนเก่า (฿0) บอกว่าไม่คิดเงิน
+  const xferNote=!xfer?"":(+po.total>0
+    ?`<div style="grid-column:1/3;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;padding:8px 12px;color:#1E3A8A"><b>การชำระเงิน:</b> สาขา ${esc(toBranchName||"-")} จ่ายให้สาขา ${esc(fromBranchName||"-")} ตามยอดในใบนี้ (ราคาวัตถุดิบในระบบ ไม่มี VAT)</div>`
+    :`<div style="grid-column:1/3;color:#64748B"><b>การชำระเงิน:</b> ใบโอนแบบเดิม ไม่คิดเงิน</div>`);
   return `<div id="po-doc" style="font-family:'Sarabun','Noto Sans Thai','Leelawadee UI',Thonburi,Tahoma,sans-serif;padding:32px;color:#0F172A;font-size:13px;line-height:1.5;max-width:780px;margin:0 auto;background:#fff">
 <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #FF6B35;padding-bottom:14px;margin-bottom:18px">
   <div>
-    <h1 style="margin:0;font-size:28px;color:#FF6B35"><span style="letter-spacing:1px">📄</span> ใบสั่งซื้อ (Purchase Order)</h1>
+    <h1 style="margin:0;font-size:28px;color:#FF6B35">${title}</h1>
     <div style="margin-top:6px;font-size:13px;color:#475569">${esc(fromBranchName||"-")} <span style="color:#FF6B35;font-weight:700">→</span> ${esc(toBranchName||"-")}</div>
   </div>
   <div style="text-align:right">
@@ -7780,10 +7853,11 @@ function buildPOHTML(po,toBranchName,fromBranchName){
   </div>
 </div>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;font-size:13px">
-  <div><b style="color:#475569;font-weight:600">จาก (ผู้ออก):</b> ${esc(fromBranchName||"-")}</div>
-  <div><b style="color:#475569;font-weight:600">ถึง (ผู้รับ):</b> ${esc(toBranchName||"-")}</div>
+  <div><b style="color:#475569;font-weight:600">${xfer?"จาก (สาขาผู้ส่ง)":"จาก (ผู้ออก)"}:</b> ${esc(fromBranchName||"-")}</div>
+  <div><b style="color:#475569;font-weight:600">${xfer?"ถึง (สาขาผู้รับ)":"ถึง (ผู้รับ)"}:</b> ${esc(toBranchName||"-")}</div>
   ${po.received_at?`<div><b style="color:#475569;font-weight:600">รับเมื่อ:</b> ${esc(fmtDT(po.received_at))}${po.received_by?` โดย ${esc(po.received_by)}`:""}</div>`:""}
   ${po.notes?`<div style="grid-column:1/3"><b style="color:#475569;font-weight:600">หมายเหตุ:</b> ${esc(po.notes)}</div>`:""}
+  ${xferNote}
 </div>
 <table style="width:100%;border-collapse:collapse;margin:14px 0">
   <thead><tr>
@@ -7802,8 +7876,8 @@ function buildPOHTML(po,toBranchName,fromBranchName){
   </tbody>
 </table>
 <div style="margin-top:40px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:12px">
-  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:50px;color:#64748B">ผู้สั่งซื้อ / วันที่</div></div>
-  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:50px;color:#64748B">ผู้รับ-ตรวจสินค้า / วันที่</div></div>
+  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:50px;color:#64748B">${xfer?"ผู้ส่งของ (ต้นทาง) / วันที่":"ผู้สั่งซื้อ / วันที่"}</div></div>
+  <div><div style="border-top:1px dashed #94A3B8;padding-top:8px;text-align:center;margin-top:50px;color:#64748B">${xfer?"ผู้รับของ (ปลายทาง) / วันที่":"ผู้รับ-ตรวจสินค้า / วันที่"}</div></div>
 </div>
 </div>`;
 }
@@ -7908,7 +7982,7 @@ function buildGRNHTML(po,toBranchName,fromBranchName){
   </div>
   <div style="text-align:right">
     <div style="font-size:17px;font-weight:900">${esc(grnNumber(po))}</div>
-    <div style="font-size:12px;color:#475569;margin-top:4px">อ้างใบสั่งซื้อ ${esc(po.po_number||"-")}</div>
+    <div style="font-size:12px;color:#475569;margin-top:4px">${isTransferPO(po)?"อ้างใบโอน":"อ้างใบสั่งซื้อ"} ${esc(po.po_number||"-")}</div>
     <div style="font-size:12px;color:#475569">วันที่สั่ง ${esc(fmtD(po.po_date)||"-")}</div>
   </div>
 </div>
@@ -7975,7 +8049,7 @@ function buildCreditNoteHTML(po,toBranchName,fromBranchName){
   </div>
   <div style="text-align:right">
     <div style="font-size:17px;font-weight:900">CN-${esc(po.po_number||po.id)}</div>
-    <div style="font-size:12px;color:#475569;margin-top:4px">อ้างใบสั่งซื้อ ${esc(po.po_number||"-")}</div>
+    <div style="font-size:12px;color:#475569;margin-top:4px">${isTransferPO(po)?"อ้างใบโอน":"อ้างใบสั่งซื้อ"} ${esc(po.po_number||"-")}</div>
     <div style="font-size:12px;color:#475569">วันที่รับของ ${esc(po.received_at?fmtD(po.received_at):"-")}</div>
   </div>
 </div>
@@ -8069,9 +8143,10 @@ ${action==="pdf"?"window.addEventListener('load',function(){whenFontsReady(saveP
 const docFile=(prefix,po)=>`${prefix}-${(po.po_number||po.id)}`.replace(/[^w-]/g,"_")+".pdf";
 
 function printPO(po,toBranchName,action="print",fromBranchName){
+  const xfer=isTransferPO(po);
   printDocWindow(buildPOHTML(po,toBranchName,fromBranchName),{
-    filename:docFile("PO",po),title:po.po_number||"PO",
-    headline:`📄 ${po.po_number||"PO"} — ${fromBranchName||"-"} → ${toBranchName||"-"}`,action});
+    filename:docFile(xfer?"TR":"PO",po),title:po.po_number||"PO",
+    headline:`${xfer?"🔄 ใบโอน":"📄"} ${po.po_number||"PO"} — ${fromBranchName||"-"} → ${toBranchName||"-"}`,action});
 }
 function printGRN(po,toBranchName,action="print",fromBranchName){
   printDocWindow(buildGRNHTML(po,toBranchName,fromBranchName),{
@@ -8094,18 +8169,19 @@ async function exportPOsToExcel(pos,branchById){
   if(!pos||pos.length===0){alert("ไม่มีข้อมูลให้ Export");return;}
   const XLSX=await loadXLSX();
   const stL={open:"รอจัดส่ง",requested:"รอครัวกลางรับ",shipped:"จัดส่งแล้ว",awaiting_payment:"รอชำระเงิน",paid:"จ่ายแล้ว",received:"จ่ายแล้ว",disputed:"ส่งกลับ",cancelled:"ยกเลิก",transfer_pending:"รอจัดส่ง (โอน)",transfer_shipped:"จัดส่งแล้ว (โอน)",transfer_done:"โอนเสร็จสิ้น"};
-  const isTransfer=po=>po.status==="transfer_pending"||po.status==="transfer_shipped"||po.status==="transfer_done";
+  // ใบโอนเก่า (฿0) = ไม่คิดเงิน · ใบโอนคิดเงิน (มียอด) แสดงยอดจริงเหมือน PO
+  const freeXfer=po=>isTransferPO(po)&&!(+po.total>0);
   const summary=pos.map(po=>({
     "เลข PO":po.po_number||"",
-    "ประเภท":isTransfer(po)?"โอนระหว่างสาขา":"จัดซื้อ",
+    "ประเภท":isTransferPO(po)?"โอนระหว่างสาขา":"จัดซื้อ",
     "วันที่":fmtD(po.po_date),
     "จาก":branchById[po.from_branch_id]?.name||"",
     "ถึง":branchById[po.branch_id]?.name||"",
     "สถานะ":stL[po.status]||po.status||"",
     "จำนวนรายการ":(po.items||[]).length,
-    "ยอดก่อน VAT":isTransfer(po)?"การโอน":(+po.subtotal||0),
-    "VAT":isTransfer(po)?"-":(+po.vat||0),
-    "ยอดสุทธิ":isTransfer(po)?"การโอน":(+po.total||0),
+    "ยอดก่อน VAT":freeXfer(po)?"การโอน":(+po.subtotal||0),
+    "VAT":freeXfer(po)?"-":(+po.vat||0),
+    "ยอดสุทธิ":freeXfer(po)?"การโอน":(+po.total||0),
     "ผู้สร้าง":po.created_by||"",
     "ผู้รับ":po.received_by||"",
     "วันที่รับ":fmtDT(po.received_at),
@@ -8842,8 +8918,9 @@ const PO_STATUS={
   paid:            {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#047857",bg:"#D1FAE5"},
   received:        {label:"✅ จ่ายแล้ว",       short:"จ่ายแล้ว",    color:"#047857",bg:"#D1FAE5"}, // legacy alias
   cancelled:       {label:"❌ ยกเลิก",          short:"ยกเลิก",      color:"#475569",bg:"#F1F5F9"},
-  // Free stock transfer between branches (no payment). Receiver presses
-  // "รับโอน" to move stock and flip to transfer_done.
+  // Stock transfer between branches (TR-…). Receiver presses "รับโอน" to move stock.
+  // Priced transfer (total>0, new since 13 ต.ค. 69) → awaiting_payment → paid (receiver pays sender).
+  // Legacy free transfer (total 0) → transfer_done, no accounting. Identify transfers with isTransferPO().
   transfer_pending:{label:"📋 รอจัดส่ง (โอน)",  short:"รอจัดส่ง",    color:"#B45309",bg:"#FEF3C7"},
   transfer_shipped:{label:"🚚 จัดส่งแล้ว (โอน)",short:"จัดส่งแล้ว",  color:"#0369A1",bg:"#E0F2FE"},
   transfer_done:   {label:"✅ โอนเสร็จสิ้น",     short:"โอนเสร็จ",    color:"#047857",bg:"#D1FAE5"},
@@ -9388,6 +9465,8 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
   const[from,setFrom]=useState(defaultFrom);
   const[to,setTo]=useState(defaultTo);
   const[pickBranch,setPickBranch]=useState("");   // narrow to one ORDERING branch (branch_id = recipient)
+  // ชนิดเอกสาร — ใบโอนระหว่างสาขา (TR-) ไม่ใช่ PO ครัวกลาง แยกให้เลือกดูได้ และบอกยอดแยกเสมอ
+  const[docKind,setDocKind]=useState("all");      // all | po | xfer
   const[busy,setBusy]=useState(false);
   const[result,setResult]=useState(null);         // {rows,byBranch,capped,scanned}
   const[err,setErr]=useState("");
@@ -9419,8 +9498,12 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
       };
       const byBranchSet=new Set();
       const g=new Map();
+      let xferValue=0;
       for(const po of list){
         if(po.status==="cancelled")continue;                 // cancelled = ไม่ได้สั่งจริง
+        const xfer=isTransferPO(po);
+        if(docKind==="po"&&xfer)continue;
+        if(docKind==="xfer"&&!xfer)continue;
         for(const it of (Array.isArray(po.items)?po.items:[])){
           if(!pick(it))continue;
           byBranchSet.add(+po.branch_id);
@@ -9446,6 +9529,7 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
           cur.qty+=(+it.qty||0);
           cur.recv+=(it.received_qty!=null?(+it.received_qty||0):0);
           cur.value+=(+it.line_total||0);
+          if(xfer)xferValue+=(+it.line_total||0);
           cur.pos.add(po.id);g.set(key,cur);
         }
       }
@@ -9453,7 +9537,7 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
       const bTotals=new Map();
       for(const r of rows)for(const[b,v] of r.perBranch)bTotals.set(b,(bTotals.get(b)||0)+v.value);
       const branchCols=[...bTotals.entries()].sort((a,b)=>b[1]-a[1]).map(([id])=>({id,name:branchName(id)}));
-      setResult({rows,branchCols,branchCount:byBranchSet.size,capped:list.length>=1000,scanned:list.length});
+      setResult({rows,branchCols,branchCount:byBranchSet.size,capped:list.length>=1000,scanned:list.length,xferValue:round2(xferValue),docKind});
     }catch(e){setErr("โหลดข้อมูลไม่สำเร็จ: "+((e&&e.message)||e));}
     setBusy(false);
   }
@@ -9513,6 +9597,8 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
     for(const b2 of bc)totalRow[b2.name]=round2(result.rows.reduce((s2,r)=>s2+((r.perBranch?.get(b2.id)?.value)||0),0));
     totalRow["รับแล้ว"]=mode==="ing"?round2(t.recv):"—";totalRow["ใบ PO"]=t.po;totalRow["มูลค่า (บาท)"]=round2(t.value);
     data.push(totalRow);
+    // ยอดใบโอนระหว่างสาขาที่ปนอยู่ในยอดรวม — แยกบอก ไม่ให้อ่านเป็นยอดสั่งจากครัวกลางทั้งหมด
+    if(result.docKind==="all"&&result.xferValue>0)data.push({...blank(),[col1]:"ในนี้เป็นใบโอนระหว่างสาขา","มูลค่า (บาท)":result.xferValue});
     const ws=XLSX.utils.json_to_sheet(data,{header:cols});
     ws["!cols"]=[{wch:6},{wch:26},{wch:12},{wch:12},{wch:8},...bc.map(()=>({wch:13})),{wch:12},{wch:8},{wch:14}];
     const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"รายงาน");
@@ -9527,7 +9613,7 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
   // จึงเป็นการดูของสาขาเดียวทั้งหมด ชื่อ "ตามสาขา" ตรงกับสิ่งที่คนใช้อยากได้จริง
   const MODES=[{id:"ing",l:"ตามชื่อวัตถุดิบ"},{id:"cat",l:"ตามหมวดหมู่"},{id:"all",l:"ตามสาขา"}];
 
-  return <Modal title="📊 รายงานการสั่งซื้อ (ใบ PO ครัวกลาง→สาขา)" onClose={onClose} extraWide>
+  return <Modal title={docKind==="xfer"?"📊 รายงานใบโอนวัตถุดิบระหว่างสาขา":"📊 รายงานการสั่งซื้อ (ใบ PO ครัวกลาง→สาขา)"} onClose={onClose} extraWide>
     <div style={{display:"flex",gap:5,marginBottom:12,background:C.bg,padding:5,borderRadius:12,border:`1px solid ${C.line}`,maxWidth:430}}>
       {MODES.map(m=>{const on=mode===m.id;return <button key={m.id} onClick={()=>{setMode(m.id);setResult(null);setErr("");}}
         style={{flex:1,padding:"8px 12px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,background:on?C.brand:"transparent",color:on?C.white:C.ink3}}>{m.l}</button>;})}
@@ -9559,6 +9645,14 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
           {activeBranches(branches).map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
       </div>
+      <div>
+        <div style={lbl}>ชนิดเอกสาร</div>
+        <select value={docKind} onChange={e=>{setDocKind(e.target.value);setResult(null);}} style={{...iS,fontSize:13,padding:"8px 10px",appearance:"none"}}>
+          <option value="all">ทั้งหมด (PO + ใบโอน)</option>
+          <option value="po">เฉพาะใบ PO</option>
+          <option value="xfer">เฉพาะใบโอนระหว่างสาขา</option>
+        </select>
+      </div>
       <Btn v="primary" onClick={run} loading={busy} icon={I.search} s={{padding:"9px 16px"}}>ดูรายงาน</Btn>
     </div>
     <div style={{fontSize:12,color:C.ink3,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>
@@ -9572,6 +9666,7 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
           <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
             {result.rows.length} {mode==="ing"?"สาขา":"รายการ"}{mode!=="ing"?` · ${result.branchCount} สาขา`:""} · สแกน {result.scanned} เอกสาร{result.capped?" (ครบเพดาน 1000 — ลองแคบช่วงวันที่)":""}
+            {result.docKind==="all"&&result.xferValue>0&&<b style={{color:C.teal,marginLeft:6}}>· มูลค่าในนี้เป็นใบโอนระหว่างสาขา ฿{nf(result.xferValue)}</b>}
           </div>
           <Btn v="success" onClick={doExport} s={{padding:"7px 14px",fontSize:12}}>📥 Export Excel</Btn>
         </div>
@@ -9872,7 +9967,9 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         data=data.filter(p=>+p.from_branch_id===pid||+p.branch_id===pid);
       }
       // ตัวเลือกเดียวครอบสถานะที่ความหมายเดียวกัน — "จัดส่งแล้ว" ต้องเห็นใบโอนที่รอรับด้วย, "จ่ายแล้ว" รวมชื่อเก่า received
-      if(filterStatus){const ST_GROUP={open:["open","transfer_pending"],shipped:["shipped","transfer_shipped"],paid:["paid","received"]};const want=ST_GROUP[filterStatus]||[filterStatus];data=data.filter(p=>want.includes(p.status));}
+      // "ใบโอนทั้งหมด" ดูจากเลขใบ ไม่ใช่สถานะ — ใบโอนคิดเงินที่รับแล้วอยู่ รอชำระเงิน/จ่ายแล้ว ไม่ใช่ transfer_*
+      if(filterStatus==="transfer")data=data.filter(isTransferPO);
+      else if(filterStatus){const ST_GROUP={open:["open","transfer_pending"],shipped:["shipped","transfer_shipped"],paid:["paid","received"]};const want=ST_GROUP[filterStatus]||[filterStatus];data=data.filter(p=>want.includes(p.status));}
       setPOs(data);
     }catch(e){console.error("loadPOs",e);alert("โหลด PO ไม่สำเร็จ: "+e.message);}
     setLoading(false);
@@ -10195,9 +10292,11 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       }))return;
     }
     const recipient=(branchById[po.branch_id]||{}).name||"ปลายทาง";
+    // ใบโอนคิดเงิน: บอกยอดตอนกดส่ง — แต่ขั้นนี้ไม่ลงบัญชี (ลงตอนปลายทางกดรับโอนเท่านั้น)
+    const xferAmt=+po.total>0?`\n• 💰 มูลค่าใบโอน ฿${(+po.total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — ปลายทางจ่ายให้ ${(branchById[po.from_branch_id]||{}).name||"ต้นทาง"} ตามจำนวนที่รับจริง`:"";
     if(!await confirmDlg({
       title:"ยืนยันจัดส่ง + ตัดสต๊อก",
-      message:`จัดส่งใบโอน ${po.po_number||"นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 🚛 ของจะอยู่ในสถานะ "ลอยอยู่ระหว่างทาง"\n• สต๊อก ${recipient} จะเพิ่มเข้าตอนปลายทางกด "✅ รับโอน" แล้วกรอกจำนวนรับจริง`,
+      message:`จัดส่งใบโอน ${po.po_number||"นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 🚛 ของจะอยู่ในสถานะ "ลอยอยู่ระหว่างทาง"\n• สต๊อก ${recipient} จะเพิ่มเข้าตอนปลายทางกด "✅ รับโอน" แล้วกรอกจำนวนรับจริง${xferAmt}`,
       confirmLabel:"🚚 จัดส่ง + ตัดสต๊อก",
     }))return;
     setConfirming(po.id);
@@ -10430,7 +10529,10 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     setConfirming(null);
   }
   async function submitPayment(po,slipUrl,note,payDate,cashSource){
-    if(!isCreator(po))throw new Error("เฉพาะผู้ออกเอกสารเท่านั้นที่ชำระเงินได้");
+    // ใบโอน: สาขาที่รับของเป็นคนจ่ายให้สาขาที่ส่ง (ครัวกลาง/แอดมินบันทึกแทนได้) — สาขาผู้ส่งห้ามกดจ่ายเอง
+    // PO ปกติ: คงกติกาเดิม ผู้ออกเอกสารเป็นคนบันทึก
+    if(isTransferPO(po)){ if(!canPayTransfer(po,currentBranch,currentUser))throw new Error("ใบโอน: สาขาที่รับของเป็นผู้จ่ายเงิน — สาขาที่ส่งของกดจ่ายไม่ได้"); }
+    else if(!isCreator(po))throw new Error("เฉพาะผู้ออกเอกสารเท่านั้นที่ชำระเงินได้");
     try{
       const now=new Date().toISOString();
       // payment_at = "วันที่โอนจริง" ที่พนักงานเลือก ไม่ใช่เวลาที่กดปุ่ม
@@ -10466,8 +10568,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   }
   // Re-push one PO to SlipTrack for load()'s self-heal (mirrors the manual bulk-sync's
   // per-stage flow) and re-records the outcome. Idempotent via ?upsert=1, so a retry
-  // never duplicates. pushPOToSlipTrack self-skips transfers/zero/same-branch → recorded
-  // as 'skip' so they stop being retried.
+  // never duplicates. Priced transfers (TR-, awaiting_payment/paid) bill like POs; zero-amount
+  // (legacy free transfers) / same-branch self-skip → recorded as 'skip' so they stop being retried.
   async function resyncPOToSlipTrack(po){
     // The self-heal loop is detached and can run seconds after load()'s snapshot, so
     // re-read the row's CURRENT status before deciding what to push — otherwise a
@@ -10602,6 +10704,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   // branch to re-issue this PO's items to (instead of auto-keeping the original
   // direction). Actual copy happens in doCopyPO once a branch is picked.
   function duplicatePO(po){
+    // ใบโอนคัดลอกไม่ได้ — การคัดลอกออกเป็น PO- ใบใหม่ (ไม่ใช่ใบโอน) เงินและสต๊อกจะไปคนละทาง
+    if(isTransferPO(po)){alert('ใบโอนคัดลอกไม่ได้ — สร้างใบโอนใหม่จากปุ่ม "โอนวัตถุดิบ"');return;}
     const canCopy=isCreator(po)||isCentralBranch;
     if(!canCopy){alert("ไม่มีสิทธิ์คัดลอกเอกสารนี้");return;}
     setCopyPO(po);
@@ -10697,9 +10801,12 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   }
   async function onSaved(){setStep(null);setEditPO(null);await load();}
 
-  // ─── Stock transfer (no payment) ─────────────────────────────────────────
-  // Source picks destination + items, then transfer sits in transfer_pending
-  // until destination presses "รับโอน". On receive: branch→branch stock move.
+  // ─── Stock transfer between branches (priced since 13 ต.ค. 69) ───────────
+  // Source picks destination + items; each line's price = catalog buy_price, FROZEN now.
+  // transfer_pending → 🚚 shipTransfer (debit sender, NO accounting) → transfer_shipped →
+  // ✅ รับโอน (credit receiver by received qty, return shortfall to sender) →
+  //   priced (stored total>0): awaiting_payment + bill accounting once → receiver pays → paid
+  //   legacy ฿0 transfer: transfer_done, no accounting (unchanged)
   // ─────────────────────────────────────────────────────────────────────────
   function startTransfer(){setTransferForm({toBranchId:"",items:[],notes:"",search:""});}
   // "สร้างเอกสาร PO" / "โอนวัตถุดิบ" were moved to the ใบขอซื้อ (PR) tab; when tapped there
@@ -10713,34 +10820,29 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     const toId=+transferForm.toBranchId;
     if(!toId){alert("เลือกสาขาปลายทาง");return;}
     if(+toId===+currentBranch.id){alert("สาขาปลายทางต้องไม่ใช่สาขาตัวเอง");return;}
-    const valid=transferForm.items.filter(it=>+it.qty>0);
-    if(valid.length===0){alert("กรุณาเพิ่มวัตถุดิบและใส่จำนวน");return;}
+    // ราคา/ยอดคิดจากตัวเดียวกับที่ฟอร์มโชว์ (จอ = ที่บันทึก) — ราคาวัตถุดิบในระบบ ตรึงลงใบตอนนี้
+    const plan=buildTransferItems(transferForm.items,new Map(ings.map(i=>[+i.id,i])),ing=>branchStock(ing,currentBranch.id));
+    if(plan.noPrice.length){alert(`บันทึกใบโอนไม่ได้ — วัตถุดิบยังไม่มีราคาในระบบ:\n${plan.noPrice.map(n=>"• "+n).join("\n")}\n\nให้ครัวกลางตั้งราคาวัตถุดิบก่อน แล้วค่อยโอน`);return;}
+    if(plan.badUnit.length){alert(`บันทึกใบโอนไม่ได้ — หน่วยไม่ตรงกับหน่วยซื้อในระบบ:\n${plan.badUnit.map(n=>"• "+n).join("\n")}\n\nลบรายการนี้แล้วเพิ่มใหม่`);return;}
+    if(plan.overStock.length){alert(`บันทึกใบโอนไม่ได้ — โอนเกินสต๊อกที่สาขามี:\n${plan.overStock.map(n=>"• "+n).join("\n")}\n\nลดจำนวนก่อน`);return;}
+    if(plan.items.length===0){alert("กรุณาเพิ่มวัตถุดิบและใส่จำนวน");return;}
     xferBusyRef.current=true;setXferBusy(true);
     try{
-      const itemsPayload=valid.map(it=>({
-        ingredient_id:it.ingredient_id,
-        name:it.name,
-        unit:it.unit||"หน่วย",
-        qty:+it.qty||0,
-        price_per_unit:0,
-        line_total:0,
-        note:"",
-      }));
       await api.addPO({
         po_number:genPONumber(currentBranch.id).replace(/^PO-/,"TR-"),
         branch_id:toId,
         from_branch_id:currentBranch.id,
         po_date:todayBkk(),
         status:"transfer_pending",
-        items:itemsPayload,
-        subtotal:0,vat:0,total:0,
+        items:plan.items,
+        subtotal:plan.subtotal,vat:0,total:plan.total,
         notes:transferForm.notes||null,
         created_by:currentUser?.username||null,
         updated_at:new Date().toISOString(),
       });
       // Stock stays put until the creator presses "🚚 จัดส่ง" on the row.
       setTransferForm(null);
-      posToast('✅ สร้างใบโอนแล้ว — กด "🚚 จัดส่ง" ที่แถวใบโอนเพื่อตัดสต๊อกและส่งของ',"ok",5000);
+      posToast(`✅ สร้างใบโอนแล้ว ยอด ฿${plan.total.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — กด "🚚 จัดส่ง" ที่แถวใบโอนเพื่อตัดสต๊อกและส่งของ`,"ok",5000);
       await load();
     }catch(e){alert("บันทึกไม่สำเร็จ: "+(e.message||e));}
     finally{xferBusyRef.current=false;setXferBusy(false);}
@@ -10758,34 +10860,40 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   async function confirmReceiveTransfer(){
     if(!receivingTransfer)return;
     const po=receivingTransfer.po;
-    const itemsWithReceived=receivingTransfer.items.map(({_key,...rest})=>{
-      // Clamp to the ordered qty — receiving MORE than shipped would mint stock
-      // (credit > what the sender was debited at ship time).
-      const ordered=+rest.qty||0;
-      const qty=Math.min(ordered,Math.max(0,Math.round((+rest.receivedQty||0)*1000)/1000));
-      return{...rest,received_qty:qty,receivedQty:qty};
-    });
+    // ตรวจในฟังก์ชันเองด้วย ไม่พึ่งแค่การซ่อนปุ่ม — มีเงินผูกแล้ว ถ้าสาขาอื่นกดรับ หนี้จะไปตั้งผิดสาขา
+    if(!isReceiver(po)){alert("เฉพาะสาขาปลายทาง (ผู้รับของ) เท่านั้นที่กดรับโอนได้");return;}
+    // Clamp to the ordered qty — receiving MORE than shipped would mint stock
+    // (credit > what the sender was debited at ship time).
+    const itemsWithReceived=clampTransferReceived(receivingTransfer.items);
     if(!itemsWithReceived.some(it=>+it.received_qty>0)){
       alert("ยังไม่ได้ระบุจำนวนที่รับเข้าจริง");
       return;
     }
+    // เงิน = จำนวนรับจริง × ราคาที่ตรึงในใบ · ใบเก่า ฿0 ได้ total 0 เสมอ ⟹ จบ transfer_done ไม่ส่งบัญชี
+    const bill=transferReceiveBill(po,itemsWithReceived);
+    const billed=bill.total>0;
+    const fromName=(branchById[po.from_branch_id]||{}).name||"-";
+    const amtTxt=billed?`\n• 💰 ยอดที่ต้องจ่าย ฿${bill.total.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} (รับจริง × ราคาในใบ)\n• ${currentBranch.name} ต้องจ่ายเงินให้ ${fromName} แล้วแนบสลิปที่ปุ่ม "💳 ชำระเงิน"`:"";
     if(!await confirmDlg({
       title:"ยืนยันรับโอน",
-      message:`รับโอนจาก "${(branchById[po.from_branch_id]||{}).name||"-"}"\n\n• 🚛 ของ "ลอยอยู่ระหว่างทาง" จะเข้าสต๊อก ${currentBranch.name} ตามจำนวนที่รับจริง\n• ถ้าจำนวนรับน้อยกว่าที่ส่ง ส่วนต่างจะคืนให้ต้นทาง\n• หลังกด ไม่สามารถแก้ไขจำนวนได้อีก\n\nดำเนินการต่อ?`,
+      message:`รับโอนจาก "${fromName}"\n\n• 🚛 ของ "ลอยอยู่ระหว่างทาง" จะเข้าสต๊อก ${currentBranch.name} ตามจำนวนที่รับจริง\n• ถ้าจำนวนรับน้อยกว่าที่ส่ง ส่วนต่างจะคืนให้ต้นทาง${amtTxt}\n• หลังกด ไม่สามารถแก้ไขจำนวนได้อีก\n\nดำเนินการต่อ?`,
       confirmLabel:"✅ รับโอน + เพิ่มสต๊อก",
     }))return;
     setConfirming(po.id);
     try{
       const receivedAt=new Date().toISOString();
+      // ยอดเงิน + สถานะ เปลี่ยนในคำสั่งเดียวกับที่ล็อกสถานะ (กดซ้ำ/สองเครื่อง = เครื่องที่สองล้มตรงนี้ ไม่มีอะไรขยับ)
       await api.patchPOIfStatus(po.id,"transfer_shipped",{
-        items:itemsWithReceived,
-        status:"transfer_done",
+        items:bill.items,
+        ...(bill.priced?{subtotal:bill.subtotal,vat:bill.vat,total:bill.total}:{}),
+        status:billed?"awaiting_payment":"transfer_done",
         received_at:receivedAt,
         received_by:currentUser?.username||currentUser?.name||null,
         updated_at:receivedAt,
       });
       // End of in-transit: credit receiver with received_qty, return variance to sender.
       const pendGroups=[];
+      const ref=po.po_number||String(po.id),by=currentUser?.username||null;
       const itemsToCredit=itemsWithReceived
         .filter(it=>+it.received_qty>0)
         .map(it=>({ingredient_id:it.ingredient_id||it.ingId,name:it.name,received_qty:+it.received_qty||0}));
@@ -10796,6 +10904,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
           items:itemsToCredit,
           ings,
           autoVisible:true,
+          reason:`รับโอน ${ref}`,refType:"transfer",refId:ref,by,
         });
         const p1=pendingFromAcc(acc1,null,po.branch_id);if(p1)pendGroups.push(p1);
       }
@@ -10809,13 +10918,18 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
           items:variance,
           ings,
           autoVisible:false,
+          reason:`คืนส่วนที่ขาด ${ref}`,refType:"transfer",refId:ref,by,
         });
         const p2=pendingFromAcc(acc2,null,po.from_branch_id);if(p2)pendGroups.push(p2);
       }
       await persistPending(po.id,...pendGroups);   // merge (don't clobber ship-side pending)
       if(reloadIngs)await reloadIngs();
+      // ใบโอนคิดเงิน → ตั้งหนี้ในบัญชีครั้งเดียวตอนรับของ (ท่อเดียวกับ PO: external_id PO-<เลขใบ>, ?upsert=1)
+      // ต้นทาง = รายรับ · ปลายทาง = รายจ่าย · ไม่รอผล แต่จดผลไว้ให้ตัวซ่อม/ตัวกวาดตามต่อ
+      if(billed)pushPOToSlipTrack({...po,status:"awaiting_payment",items:bill.items,subtotal:bill.subtotal,vat:bill.vat,total:bill.total,received_at:receivedAt},branches).then(r=>recordSlipSync(po.id,r));
       setReceivingTransfer(null);
       await load();
+      if(billed)posToast(`✅ รับโอนแล้ว — รอชำระเงิน ฿${bill.total.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} ให้ ${fromName}`,"ok",6000);
     }catch(e){showErr("รับโอนไม่สำเร็จ",e);}
     setConfirming(null);
   }
@@ -10827,8 +10941,11 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   // เก็บแยกตาม "หน่วย" ด้วย เพราะของบางตัวซื้อคละหน่วย (กก./ลัง) ถ้าเทียบข้ามหน่วยจะหลงทาง
   const priceHistByIng=useMemo(()=>buildPriceHistoryMap(orders),[orders]);
   const lastPriceOf=(ingId,unit)=>priceHistLookup(priceHistByIng,ingId,unit);
-  // Transfers don't have a money value — exclude them from the running total
-  const totalAll=pos.reduce((s,p)=>p.status==="transfer_pending"||p.status==="transfer_shipped"||p.status==="transfer_done"?s:s+(+p.total||0),0);
+  // ใบโอนคิดเงินมียอดจริงแล้ว (ใบโอนเก่า ฿0 บวกไปก็ 0) — รวมทุกใบ แต่บอกยอดส่วนที่เป็นใบโอนแยกไว้
+  const totalAll=pos.reduce((s,p)=>s+(+p.total||0),0);
+  const totalXfer=pos.reduce((s,p)=>isTransferPO(p)?s+(+p.total||0):s,0);
+  // ใบโอนที่สาขานี้ต้องจ่าย (รับของแล้ว รอชำระ) — ให้เห็นบนหัวตาราง ไม่ให้หนี้ค้างเงียบ
+  const xferToPay=pos.filter(p=>isTransferPO(p)&&p.status==="awaiting_payment"&&canPayTransfer(p,currentBranch,currentUser)).length;
   // PO filter dropdown — restricted to the branches THIS user has access to
   // (currentUser.allowed_branches). Admin and "all-branch" users see every
   // branch; inactive branches stay visible so old POs can still be filtered.
@@ -10972,7 +11089,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
             <option value="disputed">⚠️ ส่งกลับ</option>
             <option value="awaiting_payment">💰 รอชำระเงิน</option>
             <option value="paid">✅ จ่ายแล้ว</option>
-            <option value="transfer_done">✅ โอนเสร็จสิ้น</option>
+            <option value="transfer_done">✅ โอนเสร็จสิ้น (ใบโอนเก่า ไม่คิดเงิน)</option>
+            <option value="transfer">🔄 ใบโอนทั้งหมด</option>
             <option value="cancelled">❌ ยกเลิก</option>
           </select>
         </div>
@@ -10987,8 +11105,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         <Btn v="ghost" onClick={()=>setShowIngReport(true)} s={{padding:"8px 14px",fontSize:12,whiteSpace:"nowrap",color:C.blue}}>📊 รายงานตามวัตถุดิบ</Btn>
       </div>
       {pos.length>0&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.line}`,display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6,fontSize:12,fontFamily:"'Sarabun',sans-serif",color:C.ink3}}>
-        <span>📑 พบ <b style={{color:C.ink}}>{pos.length}</b> เอกสาร{(()=>{const n=pos.filter(p=>canConfirmPO(p)||(isReceiver(p)&&p.status==="transfer_shipped")).length;return n>0?<b style={{marginLeft:10,color:"#047857",fontSize:13}}>· 📥 รอตรวจรับ {n} ใบ</b>:null;})()}</span>
-        <span>💰 รวม <b style={{color:C.brand,fontSize:14}}>฿{totalAll.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</b></span>
+        <span>📑 พบ <b style={{color:C.ink}}>{pos.length}</b> เอกสาร{(()=>{const n=pos.filter(p=>canConfirmPO(p)||(isReceiver(p)&&p.status==="transfer_shipped")).length;return n>0?<b style={{marginLeft:10,color:"#047857",fontSize:13}}>· 📥 รอตรวจรับ {n} ใบ</b>:null;})()}{xferToPay>0&&<b style={{marginLeft:10,color:C.blue,fontSize:13}}>· 💳 ใบโอนรอจ่าย {xferToPay} ใบ</b>}</span>
+        <span>💰 รวม <b style={{color:C.brand,fontSize:14}}>฿{totalAll.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</b>{totalXfer>0&&<span style={{marginLeft:6,color:C.ink4}}>(ใบโอน ฿{totalXfer.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})})</span>}</span>
       </div>}
     </Card>
 
@@ -11028,7 +11146,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
                 <td style={{padding:"11px 14px",fontSize:13,color:C.ink,fontWeight:700,whiteSpace:"nowrap"}}>
                   {toB?.name||"-"}
                 </td>
-                <td style={{padding:"11px 14px",fontSize:14,fontWeight:900,textAlign:"right",whiteSpace:"nowrap",color:po.status==="transfer_pending"||po.status==="transfer_shipped"||po.status==="transfer_done"?"#0EA5E9":C.brand}}>{po.status==="transfer_pending"||po.status==="transfer_shipped"||po.status==="transfer_done"?<span style={{fontSize:12,fontWeight:800,background:"#E0F2FE",color:"#0369A1",padding:"3px 10px",borderRadius:14,border:"1px solid #BAE6FD"}}>🔄 การโอน</span>:`฿${(+po.total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td>
+                {/* ใบโอนเก่า (฿0) = ป้าย "การโอน" แบบเดิม · ใบโอนคิดเงิน = ยอดจริง + ป้ายเล็กบอกว่าเป็นใบโอน */}
+                <td style={{padding:"11px 14px",fontSize:14,fontWeight:900,textAlign:"right",whiteSpace:"nowrap",color:isTransferPO(po)&&!(+po.total>0)?"#0EA5E9":C.brand}}>{isTransferPO(po)&&!(+po.total>0)?<span style={{fontSize:12,fontWeight:800,background:"#E0F2FE",color:"#0369A1",padding:"3px 10px",borderRadius:14,border:"1px solid #BAE6FD"}}>🔄 การโอน</span>:<>{`฿${(+po.total).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`}{isTransferPO(po)&&<div style={{fontSize:10,fontWeight:800,color:"#0369A1",marginTop:2}}>🔄 ใบโอน</div>}</>}</td>
                 <td style={{padding:"11px 14px",textAlign:"center"}}>
                   <span style={{fontSize:11,fontWeight:700,color:st.color,background:st.bg,padding:"3px 10px",borderRadius:18,whiteSpace:"nowrap",display:"inline-block"}}>{st.label}</span>
                   {(po.status==="awaiting_payment"||po.status==="paid"||po.status==="received")&&recAt&&<div style={{fontSize:10,color:C.green,fontFamily:"'Sarabun',sans-serif",marginTop:3,fontWeight:600}}>รับ: {recAt}{po.received_by?` · ${po.received_by}`:""}</div>}
@@ -11042,10 +11161,10 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
                       :<>
                     <RowMenu items={[
                       {label:"ดูรายละเอียด",icon:I.eye,onClick:()=>setViewPO(po)},
-                      !["requested","transfer_pending","transfer_shipped","transfer_done"].includes(po.status)&&{label:"พิมพ์ใบสั่งซื้อ",icon:I.print,color:C.blue,onClick:()=>printPO(po,toB?.name,'print',fromB?.name)},
+                      po.status!=="requested"&&{label:isTransferPO(po)?"พิมพ์ใบโอน":"พิมพ์ใบสั่งซื้อ",icon:I.print,color:C.blue,onClick:()=>printPO(po,toB?.name,'print',fromB?.name)},
                       !!po.received_at&&{label:"พิมพ์ใบตรวจรับ",icon:I.print,color:C.teal,onClick:()=>printGRN(po,toB?.name,'print',fromB?.name)},
                       !!po.received_at&&poHasShortReceive(po)&&{label:"พิมพ์ใบลดหนี้",icon:I.print,color:C.red,onClick:()=>printCreditNote(po,toB?.name,'print',fromB?.name)},
-                      (isCreator(po)||isCentralBranch)&&hasPO&&{label:"คัดลอก",icon:I.copy,color:"#7C3AED",onClick:()=>duplicatePO(po)},
+                      !isTransferPO(po)&&(isCreator(po)||isCentralBranch)&&hasPO&&{label:"คัดลอก",icon:I.copy,color:"#7C3AED",onClick:()=>duplicatePO(po)},
                       canEditPO(po)&&po.status==="open"&&!isAssetPO(po)&&{label:"แก้ไข",icon:I.pencil,color:"#92400E",onClick:()=>startEdit(po)},
                       canDeletePO(po)&&{label:"ลบ",icon:I.trash,danger:true,onClick:()=>delPO(po)},
                     ]}/>
@@ -11054,7 +11173,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
                     {iCreator&&po.status==="open"&&<button onClick={()=>shipPO(po)} disabled={confirming===po.id} title="จัดส่ง + ตัดสต๊อกครัวกลาง" style={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px rgba(14,165,233,.35)`}}>🚚 จัดส่ง</button>}
                     {iCreator&&po.status==="transfer_pending"&&<button onClick={()=>shipTransfer(po)} disabled={confirming===po.id} title="จัดส่ง + ตัดสต๊อก" style={{background:`linear-gradient(135deg,#0EA5E9,#0284C7)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px rgba(14,165,233,.35)`}}>🚚 จัดส่ง</button>}
                     {isReceiver(po)&&po.status==="transfer_shipped"&&<button onClick={()=>startReceiveTransfer(po)} disabled={confirming===po.id} title="รับโอนวัตถุดิบ" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:confirming===po.id?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>✅ รับโอน</button>}
-                    {iCreator&&po.status==="awaiting_payment"&&<button onClick={()=>setPayPO(po)} title="ชำระเงิน" style={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.blue}55`}}>💳 ชำระเงิน</button>}
+                    {po.status==="awaiting_payment"&&(isTransferPO(po)?canPayTransfer(po,currentBranch,currentUser):iCreator)&&<button onClick={()=>setPayPO(po)} title="ชำระเงิน" style={{background:`linear-gradient(135deg,${C.blue},#2563EB)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.blue}55`}}>💳 ชำระเงิน</button>}
                     {iCreator&&po.status==="disputed"&&<button onClick={()=>acceptDispute(po)} disabled={confirming===po.id} title="ยอมรับการแก้ไข" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,opacity:confirming===po.id?.6:1,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ยอมรับการแก้</button>}
                     {canConfirmPO(po)&&<button onClick={()=>setViewPO(po)} title="ตรวจสอบ + ยืนยันรับ" style={{background:`linear-gradient(135deg,${C.green},#059669)`,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,boxShadow:`0 2px 6px ${C.green}55`}}>✅ ตรวจรับ</button>}
                       </>}
@@ -11275,12 +11394,16 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
 
     {showIngReport&&<IngPOReportModal branches={branches} ings={ings} defaultFrom={dateFrom} defaultTo={dateTo} onClose={()=>setShowIngReport(false)}/>}
 
-    {/* Transfer creation — pick destination + items + qty, no price */}
+    {/* Transfer creation — pick destination + items + qty · price = catalog buy_price (read-only, frozen on save) */}
     {transferForm&&(()=>{
       const branchIngs=ings.filter(i=>{
         if(!ingVisibleAt(i,currentBranch?.id,currentBranch?.type==="central"))return false;
         return branchStock(i,currentBranch?.id)>0;
       });
+      // ตัวคิดเงินตัวเดียวกับตอนกดบันทึก (saveTransfer) — ยอดบนจอ = ยอดที่บันทึกจริง
+      const xIng=new Map(ings.map(i=>[+i.id,i]));
+      const xPlan=buildTransferItems(transferForm.items,xIng,ing=>branchStock(ing,currentBranch?.id));
+      const m2=n=>(+n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
       const used=new Set(transferForm.items.map(it=>+it.ingredient_id));
       const q=(transferForm.search||"").trim().toLowerCase();
       const matches=branchIngs.filter(i=>!used.has(+i.id)&&(i.name.toLowerCase().includes(q)||(i.category||"").toLowerCase().includes(q))).slice(0,30);
@@ -11303,7 +11426,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
               items:[{ingredient_id:ing.id,name:ing.name,unit:ing.buy_unit||"หน่วย",qty:1,max_qty:branchStock(ing,currentBranch?.id),_key:Math.random()},...s.items],
             }))} style={{padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.lineLight}`,fontFamily:"'Sarabun',sans-serif",fontSize:13,display:"flex",justifyContent:"space-between",alignItems:"center"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=C.white}>
               <span><b>{ing.name}</b> {ing.category&&<span style={{color:C.ink4,fontSize:11,marginLeft:6}}>({ing.category})</span>}</span>
-              <span style={{fontSize:11,color:C.green,fontWeight:700}}>มี {branchStock(ing,currentBranch?.id)} {ing.buy_unit}</span>
+              <span style={{fontSize:11,fontWeight:700,textAlign:"right"}}><span style={{color:C.green}}>มี {branchStock(ing,currentBranch?.id)} {ing.buy_unit}</span>{" · "}{+ing.buy_price>0?<span style={{color:C.ink3}}>฿{m2(ing.buy_price)}/{ing.buy_unit||"หน่วย"}</span>:<span style={{color:C.red}}>ยังไม่มีราคา</span>}</span>
             </div>)}
           </div>}
           {q&&matches.length===0&&<div style={{padding:"10px 12px",color:C.ink4,fontSize:12,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบ — หรืออาจไม่มีสต๊อกในสาขานี้</div>}
@@ -11311,17 +11434,24 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         {transferForm.items.length===0?<div style={{padding:"30px 20px",textAlign:"center",color:C.ink4,fontSize:13,fontFamily:"'Sarabun',sans-serif",background:C.bg,borderRadius:10,marginBottom:14}}>ยังไม่มีรายการ — ค้นหาแล้วคลิกเพื่อเพิ่ม</div>
         :<div style={{maxHeight:"40vh",overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:10,marginBottom:14}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
-            <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สต๊อกในสาขา","จำนวนโอน","หน่วย","ลบ"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+            <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","สต๊อกในสาขา","จำนวนโอน","หน่วย","ราคา/หน่วย","รวม","ลบ"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:h==="ราคา/หน่วย"||h==="รวม"?"right":"left",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
             <tbody>{transferForm.items.map((it,idx)=>{
-              const overStock=(+it.qty||0)>(+it.max_qty||0);
-              return <tr key={it._key||idx} style={{borderTop:`1px solid ${C.lineLight}`,background:overStock?"#FEE2E2":"transparent"}}>
+              // ราคาอ่านจากทะเบียนวัตถุดิบ แก้ที่นี่ไม่ได้ — ไม่มีราคา = บันทึกไม่ได้
+              // สต๊อกอ่านสดจากตัวเดียวกับที่ saveTransfer ใช้ตรวจ (แถวแดง = กดบันทึกแล้วไม่ผ่านแน่นอน)
+              const ingX=xIng.get(+it.ingredient_id);
+              const price=ingX?(+ingX.buy_price||0):0;
+              const have=ingX?branchStock(ingX,currentBranch?.id):(+it.max_qty||0);
+              const overStock=(+it.qty||0)>have+1e-9;
+              return <tr key={it._key||idx} style={{borderTop:`1px solid ${C.lineLight}`,background:overStock||!(price>0)?"#FEE2E2":"transparent"}}>
                 <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>{it.name}</td>
-                <td style={{padding:"7px 10px",color:C.ink3,fontSize:12,whiteSpace:"nowrap"}}>{it.max_qty} {it.unit}</td>
+                <td style={{padding:"7px 10px",color:C.ink3,fontSize:12,whiteSpace:"nowrap"}}>{have} {it.unit}</td>
                 <td style={{padding:"7px 10px"}}>
-                  <NumStepper value={it.qty} onChange={v=>setTransferForm(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,qty:v}:x)}))} max={+it.max_qty||999999} width={70}/>
+                  <NumStepper value={it.qty} onChange={v=>setTransferForm(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,qty:v}:x)}))} max={have>0?have:999999} width={70}/>
                   {overStock&&<div style={{fontSize:10,color:C.red,fontWeight:800,marginTop:2}}>เกินสต๊อก!</div>}
                 </td>
                 <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{it.unit||"-"}</td>
+                <td style={{padding:"7px 10px",textAlign:"right",whiteSpace:"nowrap",fontSize:12.5,color:price>0?C.ink2:C.red,fontWeight:price>0?600:800}}>{price>0?`฿${m2(price)}`:"ยังไม่มีราคา"}</td>
+                <td style={{padding:"7px 10px",textAlign:"right",whiteSpace:"nowrap",fontWeight:800,color:C.ink}}>{price>0?`฿${m2(round2((+it.qty||0)*price))}`:"—"}</td>
                 <td style={{padding:"7px 10px",textAlign:"center"}}>
                   <button onClick={()=>setTransferForm(s=>({...s,items:s.items.filter((_,i)=>i!==idx)}))} style={{background:C.redLight,border:"none",borderRadius:8,minWidth:36,minHeight:36,padding:0,cursor:"pointer",display:"inline-flex",alignItems:"center",justifyContent:"center"}} aria-label="ลบรายการ"><Ic d={I.trash} s={15} c={C.red}/></button>
                 </td>
@@ -11329,8 +11459,18 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
             })}</tbody>
           </table>
         </div>}
-        <div style={{background:"#E0F2FE",border:`1px solid #0EA5E933`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
-          💡 การโอน <b>ไม่มีการคิดเงิน</b> — ส่งคำสั่งแล้วต้องกด <b>"🚚 จัดส่ง"</b> ที่แถวใบโอนอีกครั้ง · สต๊อกต้นทางถูกหัก<b>ตอนกดจัดส่ง</b> และเพิ่มที่ปลายทาง<b>เมื่อปลายทางกดรับโอน</b>
+        {transferForm.items.length>0&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",background:C.brandLight,border:`1.5px solid ${C.brandBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>
+          <span style={{fontSize:13,fontWeight:800,color:C.brand}}>ยอดรวมใบโอน <span style={{fontSize:11,fontWeight:600,color:C.ink3}}>(ไม่มี VAT)</span></span>
+          <span style={{fontSize:20,fontWeight:900,color:C.brand}}>฿{m2(xPlan.total)}</span>
+          {(xPlan.noPrice.length>0||xPlan.overStock.length>0||xPlan.badUnit.length>0)&&<div style={{flexBasis:"100%",fontSize:12,color:C.red,fontWeight:700,lineHeight:1.5}}>
+            {xPlan.noPrice.length>0&&<div>⚠️ ยังไม่มีราคา {xPlan.noPrice.length} รายการ — ให้ครัวกลางตั้งราคาวัตถุดิบก่อน แล้วค่อยโอน</div>}
+            {xPlan.overStock.length>0&&<div>⚠️ โอนเกินสต๊อก {xPlan.overStock.length} รายการ — ลดจำนวนก่อน</div>}
+            {xPlan.badUnit.length>0&&<div>⚠️ หน่วยไม่ตรงหน่วยซื้อ {xPlan.badUnit.length} รายการ — ลบแล้วเพิ่มใหม่</div>}
+          </div>}
+        </div>}
+        <div style={{background:"#E0F2FE",border:`1px solid #0EA5E933`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,lineHeight:1.6}}>
+          💰 การโอน<b>คิดเงิน</b>ตามราคาวัตถุดิบในระบบ (แก้ราคาไม่ได้) · ปลายทางกดรับโอนแล้ว ต้อง<b>จ่ายเงินให้ "{currentBranch.name}"</b> ตามจำนวนที่รับจริง<br/>
+          💡 ส่งคำสั่งแล้วต้องกด <b>"🚚 จัดส่ง"</b> ที่แถวใบโอนอีกครั้ง · สต๊อกต้นทางถูกหัก<b>ตอนกดจัดส่ง</b> และเพิ่มที่ปลายทาง<b>เมื่อปลายทางกดรับโอน</b>
         </div>
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
           <Btn v="ghost" onClick={()=>setTransferForm(null)}>ยกเลิก</Btn>
@@ -11340,17 +11480,24 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     })()}
 
     {/* Receive transfer — destination confirms received qty per item */}
-    {receivingTransfer&&<Modal title={`🔄 รับโอนวัตถุดิบจาก "${(branchById[receivingTransfer.po.from_branch_id]||{}).name||"-"}"`} onClose={()=>setReceivingTransfer(null)} wide>
+    {receivingTransfer&&(()=>{
+      // ยอดเงินบนจอคิดด้วยตัวเดียวกับตอนกดรับ (clamp → transferReceiveBill) — จอ = ที่บันทึก/ที่ลงบัญชี
+      const rPO=receivingTransfer.po;
+      const rFrom=(branchById[rPO.from_branch_id]||{}).name||"-";
+      const rBill=transferReceiveBill(rPO,clampTransferReceived(receivingTransfer.items));
+      const m2=n=>(+n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+      return <Modal title={`🔄 รับโอนวัตถุดิบจาก "${rFrom}"`} onClose={()=>setReceivingTransfer(null)} wide>
       <div style={{background:"#E0F2FE",border:`1px solid #0EA5E933`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2}}>
         💡 ใส่จำนวนที่ <b>รับเข้าจริง</b> — ระบบจะ <b>เพิ่มสต็อกสาขา "{currentBranch.name}"</b> ตามจำนวนนี้ · ถ้ารับน้อยกว่าที่ส่งมา ส่วนที่ขาดจะ <b>คืนสต็อกให้ต้นทาง</b> (ต้นทางถูกหักไปแล้วตอนกด 🚚 จัดส่ง)
       </div>
       <div style={{maxHeight:"45vh",overflowY:"auto",marginBottom:14}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
-          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","ส่งมา","รับจริง","หน่วย"].map(h=><th key={h} style={{padding:"8px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
+          <thead style={{position:"sticky",top:0,background:C.bg,zIndex:1}}><tr style={{background:C.bg}}>{["วัตถุดิบ","ส่งมา","รับจริง","หน่วย",...(rBill.priced?["ราคา/หน่วย","รวม"]:[])].map(h=><th key={h} style={{padding:"8px 10px",textAlign:h==="ราคา/หน่วย"||h==="รวม"?"right":"left",fontSize:11,fontWeight:700,color:C.ink3,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
           <tbody>{receivingTransfer.items.map((it,idx)=>{
             const sent=+it.qty||0;
             const got=+it.receivedQty||0;
             const short=got<sent;
+            const line=rBill.priced?rBill.items[idx]:null;
             return <tr key={it._key} style={{borderTop:`1px solid ${C.lineLight}`,background:short?"#FFFBEB":"transparent"}}>
               <td style={{padding:"7px 10px",fontWeight:700,color:C.ink}}>{it.name}</td>
               <td style={{padding:"7px 10px",color:C.ink3,whiteSpace:"nowrap"}}>{sent} {it.unit||""}</td>
@@ -11358,15 +11505,26 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
                 <NumStepper value={it.receivedQty} onChange={v=>setReceivingTransfer(s=>({...s,items:s.items.map((x,i)=>i===idx?{...x,receivedQty:v}:x)}))} width={70} max={sent}/>
               </td>
               <td style={{padding:"7px 10px",color:C.ink3,fontSize:12}}>{it.unit||"-"}{short&&<span style={{marginLeft:8,fontSize:10,color:"#92400E",fontWeight:800}}>ขาด {(sent-got).toFixed(2)}</span>}</td>
+              {line&&<td style={{padding:"7px 10px",textAlign:"right",whiteSpace:"nowrap",fontSize:12.5,color:C.ink2}}>฿{m2(line.price_per_unit)}</td>}
+              {line&&<td style={{padding:"7px 10px",textAlign:"right",whiteSpace:"nowrap",fontWeight:800,color:C.ink}}>฿{m2(line.line_total)}</td>}
             </tr>;
           })}</tbody>
         </table>
       </div>
+      {rBill.priced
+        ?<div style={{background:C.brandLight,border:`1.5px solid ${C.brandBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <span style={{fontSize:13,fontWeight:800,color:C.brand}}>ยอดที่ต้องจ่าย <span style={{fontSize:11,fontWeight:600,color:C.ink3}}>(คิดจากจำนวนรับจริง)</span></span>
+            <span style={{fontSize:20,fontWeight:900,color:C.brand}}>฿{m2(rBill.total)}</span>
+          </div>
+          <div style={{fontSize:12,color:C.ink2,fontWeight:600,marginTop:4,lineHeight:1.5}}>💳 รับแล้ว <b>{currentBranch.name}</b> ต้องจ่ายเงินให้ <b>{rFrom}</b> แล้วแนบสลิปที่ปุ่ม "💳 ชำระเงิน"</div>
+        </div>
+        :<div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:14}}>ใบโอนแบบเดิม — ไม่คิดเงิน</div>}
       <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
         <Btn v="ghost" onClick={()=>setReceivingTransfer(null)}>ยกเลิก</Btn>
         <Btn v="success" onClick={confirmReceiveTransfer} loading={confirming===receivingTransfer?.po?.id} disabled={confirming===receivingTransfer?.po?.id}>✅ รับโอน + เพิ่มสต๊อก</Btn>
       </div>
-    </Modal>}
+    </Modal>;})()}
 
   </div>;
 }
@@ -12022,7 +12180,9 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const canAcceptDispute=canManage&&po.status==="disputed";
   // Items can only be edited where stock hasn't moved yet (requested, open).
   const canEditFromView=canManage&&po.status==="open"&&!isAssetPO(po);   // อนุมัติแล้ว (requested ขึ้นไป) ล็อกแก้ไข · ใบสินทรัพย์แก้ที่นี่ไม่ได้ (ฟอร์มเป็นของวัตถุดิบ)
-  const canPayNow=canManage&&po.status==="awaiting_payment";
+  // ใบโอน: ปลายทาง (ผู้รับของ) จ่าย หรือครัวกลาง/แอดมินบันทึกแทน — ต้นทางห้ามกด · PO ปกติคงเดิม
+  const xfer=isTransferPO(po);
+  const canPayNow=(xfer?canPayTransfer(po,currentBranch,currentUser):canManage)&&po.status==="awaiting_payment";
   const canCancelPO=canManage&&po.status!=="paid"&&po.status!=="cancelled";
 
   async function submitDisputeNow(){
@@ -12147,6 +12307,11 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
             <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:28,fontWeight:900,color:C.brand}}>฿{(+po.total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
           </div>
           {mode==="dispute"&&!allMatch&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6,fontFamily:"'Sarabun',sans-serif",color:C.red,fontWeight:800}}><span style={{fontSize:14}}>ยอดหลังหักของที่ขาด</span><span style={{fontSize:20,fontWeight:900}}>฿{dispTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>}
+          {xfer&&<div style={{marginTop:8,padding:"7px 11px",borderRadius:9,background:"#E0F2FE",color:"#0369A1",fontSize:12.5,fontWeight:700,fontFamily:"'Sarabun',sans-serif",lineHeight:1.55}}>
+            {+po.total>0
+              ?<>🔄 ใบโอนระหว่างสาขา — <b>{toBranch?.name||"ปลายทาง"}</b> จ่ายเงินให้ <b>{fromBranch?.name||"ต้นทาง"}</b> · ราคาวัตถุดิบในระบบ ตรึงตอนสร้างใบ (ไม่มี VAT){po.received_at?" · ยอดคิดจากจำนวนรับจริง":""}</>
+              :<>🔄 ใบโอนแบบเดิม — ไม่คิดเงิน</>}
+          </div>}
         </div>
 
         {/* 📷 Receive photos — attach (while confirming) or view (after delivered) */}
@@ -12176,7 +12341,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
         {/* ปุ่มอันตรายอยู่ซ้ายสุด ห่างจากปุ่มตัดสินใจ · ปุ่มเอกสารเป็นสีเรียบ เพื่อให้ปุ่มตรวจรับเด่นที่สุด */}
         {canCancelPO&&<Btn v="danger" onClick={onCancel} s={{padding:"10px 16px"}}>❌ ยกเลิก PO</Btn>}
         {canDelete&&<Btn onClick={onDelete} s={{padding:"10px 16px",background:C.redLight,color:C.red,border:`1.5px solid #FECACA`,boxShadow:"none"}}>🗑 ลบทิ้งถาวร</Btn>}
-        {po.status!=="requested"&&<Btn v="ghost" onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์ใบสั่งซื้อ</Btn>}
+        {po.status!=="requested"&&<Btn v="ghost" onClick={()=>printPO(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>{xfer?"🖨 พิมพ์ใบโอน":"🖨 พิมพ์ใบสั่งซื้อ"}</Btn>}
         {po.status!=="requested"&&<Btn v="ghost" onClick={()=>printPO(po,toBranch?.name,'pdf',fromBranch?.name)} s={{padding:"10px 16px"}}>💾 PDF</Btn>}
         {/* ใบตรวจรับ — ออกได้เมื่อรับของแล้วเท่านั้น (ก่อนนั้นยังไม่มีอะไรให้ตรวจรับ) */}
         {!!po.received_at&&<Btn v="ghost" onClick={()=>printGRN(po,toBranch?.name,'print',fromBranch?.name)} s={{padding:"10px 16px"}}>🖨 พิมพ์ใบตรวจรับ</Btn>}
@@ -12250,6 +12415,10 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
         <div style={{background:C.brandLight,borderRadius:12,padding:"14px 18px",marginBottom:16,border:`2px solid ${C.brandBorder}`,textAlign:"center"}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.brand,fontWeight:700,marginBottom:4}}>ยอดที่ต้องชำระ</div>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:32,fontWeight:900,color:C.brand}}>฿{(+po.total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+          {/* ใบโอน: บอกให้ชัดว่าใครจ่ายให้ใคร — เงินไปหาสาขาที่ส่งของ ไม่ใช่ครัวกลาง */}
+          {isTransferPO(po)&&<div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,color:C.ink2,fontWeight:700,marginTop:6,lineHeight:1.5}}>
+            🔄 ใบโอน · <b>{toBranch?.name||"ปลายทาง"}</b> จ่ายให้ <b style={{color:C.brand}}>{fromBranch?.name||"ต้นทาง"}</b>
+          </div>}
         </div>
         <div style={{marginBottom:14}}>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6}}>📎 สลิปการโอนเงิน *</div>

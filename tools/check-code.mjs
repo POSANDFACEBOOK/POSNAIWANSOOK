@@ -6401,6 +6401,433 @@ section("ขั้น Area อนุมัติปิดอยู่ = ข้�
   ok_(`ไม่มีข้อความรอ Area ที่ไม่ผูกกับ APPROVAL_ON${bad.length ? " — บรรทัด " + bad.join(", ") : ""}`, !flagOff || bad.length === 0);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ใบโอนวัตถุดิบระหว่างสาขา "คิดเงิน" (เจ้าของสั่ง 13 ต.ค. 69)
+//   ราคา = buy_price ในทะเบียน ตรึงลงใบตอนสร้าง · ปลายทางรับของ → รอชำระเงิน → ปลายทางจ่ายต้นทาง
+//   ลงบัญชีครั้งเดียวตอนรับของ (ท่อ PO เดิม) · ตอนจัดส่งห้ามลงบัญชี
+//   ใบโอนเก่า (ยอด 0) ต้องจบที่ transfer_done แบบเดิม ไม่ส่งบัญชี ไม่ขึ้นรอชำระเงิน
+//   ดึงฟังก์ชันจริงจากไฟล์มารันกับของปลอม (ฐาน/สต๊อก/บัญชีปลอม) ไม่ใช่ค้นข้อความ
+// ══════════════════════════════════════════════════════════════════════════
+section("โอนวัตถุดิบคิดเงิน");
+{
+  const LINE = (pfx) => APP.split("\n").find((l) => l.startsWith(pfx)) || "";
+  const R2 = LINE("const round2 = ");
+  const sg = (name) => { try { return grab(APP, name); } catch { return null; } };
+  const sgAsync = (name) => { const s = sg(name); return s ? "async " + s : null; };
+  // ตัดฟังก์ชันจาก "หัวเต็ม" แล้วนับปีกกาเริ่มที่ปีกกาของตัวฟังก์ชัน — หัวที่มี {..} อยู่ข้างใน
+  // (ค่าตั้งต้น opts={} หรือรับ props แบบ {po,...}) จะหลอกตัวนับแบบหาปีกกาแรกให้ตัดได้แค่หัว
+  const grabSig = (sig) => {
+    const st = APP.indexOf(sig);
+    if (st < 0) return null;
+    let d = 0;
+    for (let j = st + sig.length - 1; j < APP.length; j++) {
+      if (APP[j] === "{") d++;
+      else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(st, j + 1); }
+    }
+    return null;
+  };
+  // สร้างฟังก์ชันจากซอร์สจริง โดยส่งของปลอมเข้าไปแทนตัวแปรรอบตัวที่มันอ้างถึง
+  const mkFn = (src, deps) => { const ks = Object.keys(deps); return new Function(...ks, `return (${src});`)(...ks.map((k) => deps[k])); };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+
+  const HN = ["isTransferPO", "canPayTransfer", "buildTransferItems", "clampTransferReceived", "transferReceiveBill"];
+  const HSRC = HN.map(sg);
+  ok_("ตัวช่วยใบโอนครบ 5 ตัว (แยกใบโอน · ใครจ่าย · ตั้งราคา · จำนวนรับ · ยอดตอนรับ)", HSRC.every(Boolean));
+  let X = null;
+  try { X = new Function(R2 + "\n" + HSRC.join("\n") + "\nreturn {" + HN.join(",") + "};")(); } catch { X = null; }
+  // ตัวประกอบ payload ของตัวกวาดบนเซิร์ฟเวอร์ (ตัวจริง) — ใช้เทียบยอด/คำอธิบายกับหน้าเว็บ
+  let srvBuild = null;
+  try {
+    const st = SWEEP.indexOf("const round2 =");
+    const fnAt = SWEEP.indexOf("function buildPushPayload(po, branchById, paidCtx) {");
+    let d = 0, started = false, en = -1;
+    for (let i = fnAt; i < SWEEP.length; i++) {
+      if (SWEEP[i] === "{") { d++; started = true; }
+      else if (SWEEP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } }
+    }
+    srvBuild = new Function(SWEEP.slice(st, en) + " return buildPushPayload;")();
+  } catch { srvBuild = null; }   // อ่านไม่ได้ = ข้อที่ใช้ srvBuild ข้างล่างได้ null แล้วสอบตกเอง
+
+  // ── ข้อมูลตั้งต้น: กาญจนบุรี (5) โอนให้ The River (8) ──
+  const ING = new Map([
+    [1, { id: 1, name: "หมูสับ", buy_unit: "กก.", buy_price: 120.5 }],
+    [2, { id: 2, name: "ผักบุ้ง", buy_unit: "ถุง", buy_price: 35 }],
+    [3, { id: 3, name: "ซอสใหม่", buy_unit: "ขวด", buy_price: 0 }],
+    [4, { id: 4, name: "ไข่", buy_unit: "แผง", buy_price: 110 }],
+  ]);
+  const STK = { 1: 10, 2: 5, 3: 9, 4: 2 };
+  const stockOf = (ing) => STK[ing.id] ?? 0;
+  const BR_BY = { 1: { id: 1, name: "ครัวกลาง", type: "central" }, 5: { id: 5, name: "กาญจนบุรี" }, 8: { id: 8, name: "กาญจนบุรี The River" } };
+  const BRANCHES = Object.values(BR_BY);
+  const TRP = (over = {}) => ({
+    id: 7, po_number: "TR-202610-B5-AAAAA", from_branch_id: 5, branch_id: 8, status: "transfer_shipped", notes: null,
+    items: [
+      { ingredient_id: 1, name: "หมูสับ", unit: "กก.", qty: 2, price_per_unit: 120, line_total: 240, note: "" },
+      { ingredient_id: 2, name: "ผักบุ้ง", unit: "ถุง", qty: 3, price_per_unit: 35, line_total: 105, note: "" },
+    ],
+    subtotal: 345, vat: 0, total: 345, ...over,
+  });
+  // ใบโอนเก่าก่อนเปิดคิดเงิน — ราคา 0 ทุกบรรทัด ยอด 0 (ของจริง 72 ใบ)
+  const LEGACY = () => TRP({ po_number: "TR-202609-B5-OLD01", subtotal: 0, vat: 0, total: 0,
+    items: TRP().items.map((it) => ({ ...it, price_per_unit: 0, line_total: 0 })) });
+
+  if (X) {
+    // ── ① แยกใบโอนให้ออก แม้รับของแล้วไปอยู่ รอชำระเงิน/จ่ายแล้ว ──
+    ck("แยกใบโอนจากเลขใบ TR- แม้สถานะเป็น รอชำระ/จ่ายแล้ว และไม่เหมา PO ปกติ",
+      [{ status: "transfer_pending", po_number: "TR-202610-B5-AAAAA" }, { status: "awaiting_payment", po_number: "TR-202610-B5-AAAAA" },
+        { status: "paid", po_number: "TR-202610-B5-AAAAA" }, { status: "transfer_done", po_number: "TR-202605-B2-OLD01" },
+        { status: "awaiting_payment", po_number: "PO-202610-B1-XXXXX" }, { status: "paid", po_number: "PO-TR-NOPE" }, null].map(X.isTransferPO),
+      [true, true, true, true, false, false, false]);
+
+    // ── ② ตั้งราคาตอนสร้างใบ: buy_price × จำนวน · ยอดใบ = ผลรวมบรรทัด · VAT 0 ──
+    const P = X.buildTransferItems([
+      { ingredient_id: 1, name: "หมูสับ", unit: "กก.", qty: 2.5 },
+      { ingredient_id: 2, name: "ผักบุ้ง", unit: "ถุง", qty: 3 },
+      { ingredient_id: 4, name: "ไข่", unit: "แผง", qty: 0 },
+    ], ING, stockOf);
+    ck("ราคาต่อหน่วยในใบโอน = buy_price ในทะเบียน", P.items.map((i) => i.price_per_unit), [120.5, 35]);
+    ck("ยอดรายบรรทัด = จำนวน × ราคา", P.items.map((i) => i.line_total), [301.25, 105]);
+    ck("ยอดใบโอน = ผลรวมยอดรายบรรทัด และไม่มี VAT", [P.subtotal, P.vat, P.total, r2(P.items.reduce((s, i) => s + i.line_total, 0))], [406.25, 0, 406.25, 406.25]);
+    const Pn = X.buildTransferItems([{ ingredient_id: 3, name: "ซอสใหม่", unit: "ขวด", qty: 1 }, { ingredient_id: 1, name: "หมูสับ", unit: "กก.", qty: 1 }], ING, stockOf);
+    ck("วัตถุดิบยังไม่มีราคา (buy_price 0) ไม่เข้าใบ และถูกรายงานชื่อ", [Pn.noPrice, Pn.items.map((i) => i.ingredient_id)], [["ซอสใหม่"], [1]]);
+    ck("โอนเกินสต๊อกที่สาขามี ถูกรายงาน", X.buildTransferItems([{ ingredient_id: 4, name: "ไข่", unit: "แผง", qty: 3 }], ING, stockOf).overStock.length, 1);
+    const Pu = X.buildTransferItems([{ ingredient_id: 2, name: "ผักบุ้ง", unit: "กก.", qty: 1 }], ING, stockOf);
+    ck("หน่วยไม่ตรงหน่วยซื้อ ไม่ตั้งราคาให้ (ราคาเป็นราคาต่อหน่วยซื้อ)", [Pu.badUnit, Pu.items.length], [["ผักบุ้ง"], 0]);
+    ck("จำนวนรับจริงไม่ติดลบ และรับเกินที่ส่งไม่ได้ (รับเกิน = เสกสต๊อก)",
+      X.clampTransferReceived([{ qty: 2, receivedQty: 5, _key: 0 }, { qty: 3, receivedQty: -1, _key: 1 }, { qty: 3, receivedQty: 1.2345, _key: 2 }]).map((i) => [i.received_qty, i.receivedQty, "_key" in i]),
+      [[2, 2, false], [0, 0, false], [1.235, 1.235, false]]);
+    ok_("ยอดตอนรับของคิดจากราคาที่ตรึงในใบ ไม่อ่านราคาวัตถุดิบวันนี้", !String(HSRC[4]).includes("buy_price"));
+  }
+
+  // ── ③ กดบันทึกใบโอนจริง (saveTransfer) กับฐานปลอม ──
+  const saveSrc = sgAsync("saveTransfer");
+  ok_("ยังมี saveTransfer ให้ทดสอบ", !!saveSrc);
+  const runSave = async (items) => {
+    const log = { add: [], alert: [] };
+    const fn = mkFn(saveSrc, {
+      transferForm: { toBranchId: "8", items, notes: "" }, xferBusyRef: { current: false }, setXferBusy: () => {},
+      currentBranch: { id: 5, name: "กาญจนบุรี" }, currentUser: { username: "tester" },
+      alert: (m) => log.alert.push(String(m)), buildTransferItems: X && X.buildTransferItems,
+      ings: [...ING.values()], branchStock: (ing, bid) => (+bid === 5 ? (STK[ing.id] ?? 0) : 0),
+      api: { addPO: async (d) => { log.add.push(d); return [d]; } },
+      genPONumber: (b) => `PO-202610-B${b}-TEST1`, todayBkk: () => "2026-10-13",
+      setTransferForm: () => {}, posToast: () => {}, load: async () => {},
+    });
+    await fn();
+    return log;
+  };
+  if (saveSrc && X) {
+    let s1 = null, s2 = null, s3 = null;
+    try {
+      s1 = await runSave([{ ingredient_id: 1, name: "หมูสับ", unit: "กก.", qty: 2.5, max_qty: 10 }, { ingredient_id: 2, name: "ผักบุ้ง", unit: "ถุง", qty: 3, max_qty: 5 }]);
+      s2 = await runSave([{ ingredient_id: 3, name: "ซอสใหม่", unit: "ขวด", qty: 1, max_qty: 9 }]);
+      s3 = await runSave([{ ingredient_id: 4, name: "ไข่", unit: "แผง", qty: 3, max_qty: 99 }]);
+    } catch (e) { console.log("       (saveTransfer โยน: " + (e && e.message) + ")"); }
+    const d = s1 && s1.add[0];
+    ck("บันทึกใบโอน: เลข TR- · รอจัดส่ง · ราคาตรึงจากทะเบียน",
+      d ? [s1.add.length, d.po_number.startsWith("TR-"), d.status, d.items.map((i) => i.price_per_unit)] : null,
+      [1, true, "transfer_pending", [120.5, 35]]);
+    ck("บันทึกใบโอน: ยอดใบ = ผลรวมยอดรายบรรทัด · VAT 0",
+      d ? [d.subtotal, d.vat, d.total, r2(d.items.reduce((s, i) => s + i.line_total, 0))] : null, [406.25, 0, 406.25, 406.25]);
+    ck("ของไม่มีราคา = บันทึกใบโอนไม่ได้ และบอกให้ครัวกลางตั้งราคา",
+      s2 ? [s2.add.length, s2.alert.some((a) => a.includes("ครัวกลาง") && a.includes("ซอสใหม่"))] : null, [0, true]);
+    ck("โอนเกินสต๊อก = บันทึกไม่ได้ (ไม่ใช่แค่แถวแดง)", s3 ? [s3.add.length, s3.alert.length] : null, [0, 1]);
+  }
+
+  // ── ④ จัดส่ง (shipTransfer): ตัดต้นทางอย่างเดียว ห้ามลงบัญชี ──
+  const shipSrc = sgAsync("shipTransfer");
+  ok_("ยังมี shipTransfer ให้ทดสอบ", !!shipSrc);
+  if (shipSrc) {
+    const log = [];
+    try {
+      const fn = mkFn(shipSrc, {
+        isCreator: (p) => +p.from_branch_id === 5, isCentralBranch: false, alert: (m) => log.push(["alert", String(m)]),
+        confirmDlg: async (o) => { log.push(["confirm", o.message]); return true; }, branchById: BR_BY,
+        currentBranch: { id: 5, name: "กาญจนบุรี" }, currentUser: { username: "tester" }, setConfirming: () => {},
+        api: { patchPOIfStatus: async (id, exp, patch) => { log.push(["patch", exp, patch]); return [{}]; } },
+        transferStockBetweenBranches: async (a) => { log.push(["stock", a]); return { notFound: [], zeroQty: [], failedUpdates: [], moves: [] }; },
+        ings: [], persistPending: async () => {}, pendingFromAcc: () => null, reloadIngs: null, load: async () => {},
+        showErr: (t, e) => log.push(["err", String((e && e.message) || e)]),
+        pushPOToSlipTrack: (...a) => { log.push(["push", ...a]); return Promise.resolve({ ok: true }); },
+        recordSlipSync: async () => {}, branches: BRANCHES,
+      });
+      await fn(TRP({ status: "transfer_pending" }));
+      await tick();
+    } catch (e) { log.push(["throw", String(e && e.message)]); }
+    const patch = log.find((x) => x[0] === "patch"), stock = log.filter((x) => x[0] === "stock");
+    ck("จัดส่งใบโอน: รอจัดส่ง → จัดส่งแล้ว และตัดสต๊อกต้นทางครั้งเดียว",
+      [patch && patch[1], patch && patch[2].status, stock.length, stock[0] && stock[0][1].fromBranchId, stock[0] && stock[0][1].toBranchId],
+      ["transfer_pending", "transfer_shipped", 1, 5, null]);
+    ck("จัดส่งใบโอนไม่ลงบัญชีเด็ดขาด (ลงตอนปลายทางรับของเท่านั้น)",
+      [log.filter((x) => x[0] === "push").length, String(shipSrc).includes("pushPOToSlipTrack")], [0, false]);
+    ok_("กล่องยืนยันจัดส่งบอกมูลค่าใบโอน", log.some((x) => x[0] === "confirm" && x[1].includes("มูลค่าใบโอน ฿345.00")));
+  }
+
+  // ── ⑤ รับโอน (confirmReceiveTransfer): สต๊อกเดิมเป๊ะ + เงิน + บัญชีครั้งเดียว ──
+  const recvSrc = sgAsync("confirmReceiveTransfer");
+  ok_("ยังมี confirmReceiveTransfer ให้ทดสอบ", !!recvSrc);
+  const runRecv = async (po, recvQtys, branchId) => {
+    const log = [];
+    try {
+      const fn = mkFn(recvSrc, {
+        receivingTransfer: { po, items: po.items.map((it, i) => ({ ...it, _key: i, receivedQty: recvQtys[i] })) },
+        isReceiver: (p) => +p.branch_id === branchId,
+        clampTransferReceived: X && X.clampTransferReceived, transferReceiveBill: X && X.transferReceiveBill,
+        alert: (m) => log.push(["alert", String(m)]), branchById: BR_BY,
+        currentBranch: { id: branchId, name: (BR_BY[branchId] || {}).name || "สาขา" }, currentUser: { username: "tester" },
+        confirmDlg: async (o) => { log.push(["confirm", o.message]); return true; },
+        setConfirming: () => {}, setReceivingTransfer: () => {}, load: async () => {}, posToast: () => {}, reloadIngs: null,
+        showErr: (t, e) => log.push(["err", String((e && e.message) || e)]),
+        api: { patchPOIfStatus: async (id, exp, patch) => { log.push(["patch", exp, patch]); return [{}]; } },
+        transferStockBetweenBranches: async (a) => { log.push(["stock", a]); return { notFound: [], zeroQty: [], failedUpdates: [], moves: [] }; },
+        // ราคาวัตถุดิบวันนี้เปลี่ยนไปแล้ว — ยอดต้องคิดจากราคาที่ตรึงในใบ ไม่ใช่ตัวนี้
+        ings: [{ id: 1, buy_price: 999 }, { id: 2, buy_price: 999 }],
+        pendingFromAcc: () => null, persistPending: async () => {},
+        pushPOToSlipTrack: (p, br, opts) => { log.push(["push", p, opts]); return Promise.resolve({ ok: true }); },
+        recordSlipSync: async () => {}, branches: BRANCHES,
+      });
+      await fn();
+      await tick();
+    } catch (e) { log.push(["throw", String(e && e.message)]); }
+    return log;
+  };
+  if (recvSrc && X) {
+    // ใบโอนคิดเงิน: ส่งหมู 2 รับจริง 1.5 · ผักบุ้ง 3 รับครบ ⟹ 1.5×120 + 3×35 = 285
+    const L = await runRecv(TRP(), [1.5, 3], 8);
+    const iPatch = L.findIndex((x) => x[0] === "patch");
+    const patch = L[iPatch];
+    const stocks = L.filter((x) => x[0] === "stock");
+    const pushes = L.filter((x) => x[0] === "push");
+    const iPush = L.findIndex((x) => x[0] === "push");
+    const iLastStock = L.map((x) => x[0]).lastIndexOf("stock");
+    ck("รับใบโอนคิดเงิน: ล็อกจาก จัดส่งแล้ว → รอชำระเงิน ในคำสั่งเดียวกับยอดเงิน",
+      patch ? [patch[1], patch[2].status, patch[2].total, patch[2].subtotal, patch[2].vat, !!patch[2].received_at] : L.slice(0, 3),
+      ["transfer_shipped", "awaiting_payment", 285, 285, 0, true]);
+    ck("ยอดรายบรรทัดหลังรับ = รับจริง × ราคาที่ตรึงในใบ",
+      patch ? patch[2].items.map((i) => [i.received_qty, i.line_total]) : null, [[1.5, 180], [3, 105]]);
+    ck("สต๊อกตอนรับเหมือนเดิม: เพิ่มปลายทางตามรับจริง + คืนส่วนขาดให้ต้นทาง (ครั้งละหนึ่ง)",
+      stocks.map((s) => [s[1].fromBranchId, s[1].toBranchId, (s[1].items || []).map((i) => +(i.received_qty ?? i.qty))]),
+      [[null, 8, [1.5, 3]], [null, 5, [0.5]]]);
+    ck("การเคลื่อนไหวสต๊อกตอนรับ ผูกกับเลขใบโอน",
+      stocks.map((s) => [s[1].refType, s[1].refId]), [["transfer", "TR-202610-B5-AAAAA"], ["transfer", "TR-202610-B5-AAAAA"]]);
+    ck("ลงบัญชีครั้งเดียว หลังเปลี่ยนสถานะ และหลังขยับสต๊อกแล้ว",
+      [pushes.length, iPush > iPatch, iPush > iLastStock], [1, true, true]);
+    const pushed = pushes[0] && pushes[0][1];
+    const built = pushed && srvBuild ? srvBuild(pushed, { 5: BR_BY[5], 8: BR_BY[8] }, null) : null;
+    // ยอดในบัญชีต้องเท่ากับยอดหัวใบที่บันทึก (ยอดที่ปลายทางจะเห็นตอนกดจ่าย) — คนละเลข = กระทบยอดไม่ได้
+    ck("ยอดที่ส่งบัญชี = รับจริง × ราคาในใบ = ยอดหัวใบ (ต้นทางรายรับ · ปลายทางรายจ่าย)",
+      built && built.payload ? [built.payload.amount, patch && patch[2].total, built.payload.from_branch, built.payload.to_branch, built.payload.external_id, pushes[0][2]] : null,
+      [285, 285, "กาญจนบุรี", "กาญจนบุรี The River", "PO-TR-202610-B5-AAAAA", undefined]);
+    ok_("กล่องยืนยันรับโอนบอกยอดที่ต้องจ่าย และบอกว่าจ่ายให้ใคร",
+      L.some((x) => x[0] === "confirm" && x[1].includes("฿285.00") && x[1].includes("ต้องจ่ายเงินให้ กาญจนบุรี")));
+
+    // ใบโอนเก่า ฿0: ต้องจบเหมือนเดิมทุกอย่าง
+    const G = await runRecv(LEGACY(), [2, 2], 8);
+    const gp = G.find((x) => x[0] === "patch");
+    ck("ใบโอนเก่า ฿0 รับแล้วจบที่ โอนเสร็จสิ้น ไม่ขึ้นรอชำระเงิน และไม่แตะยอดเงิน",
+      gp ? [gp[2].status, "total" in gp[2], "subtotal" in gp[2]] : G.slice(0, 3), ["transfer_done", false, false]);
+    ck("ใบโอนเก่า ฿0 ไม่ส่งบัญชี แต่สต๊อกยังขยับเหมือนเดิม",
+      [G.filter((x) => x[0] === "push").length, G.filter((x) => x[0] === "stock").length], [0, 2]);
+
+    // สาขาผู้ส่งเปิดหน้ารับโอนเอง (ปุ่มหลุด/แท็บค้าง) ต้องไม่มีอะไรขยับเลย
+    const S = await runRecv(TRP(), [2, 3], 5);
+    ck("สาขาที่ไม่ใช่ปลายทางกดรับโอนไม่ได้ (ตรวจในฟังก์ชันเอง ไม่พึ่งแค่ซ่อนปุ่ม)",
+      ["patch", "stock", "push"].map((k) => S.filter((x) => x[0] === k).length), [0, 0, 0]);
+  }
+
+  // ── ⑥ ใครจ่าย: ปลายทางจ่ายต้นทาง · ต้นทางห้ามกด ──
+  if (X) {
+    const T = { po_number: "TR-202610-B5-AAAAA", status: "awaiting_payment", from_branch_id: 5, branch_id: 8, total: 285 };
+    ck("ใครกดจ่ายใบโอนได้: ต้นทางไม่ได้ (แม้เป็นแอดมิน) · ปลายทางได้ · ครัวกลาง/แอดมินบันทึกแทนได้ · สาขาอื่นไม่ได้",
+      [X.canPayTransfer(T, { id: 5, type: "branch" }, { role: "staff" }), X.canPayTransfer(T, { id: 5, type: "branch" }, { role: "admin" }),
+        X.canPayTransfer(T, { id: 8, type: "branch" }, { role: "staff" }), X.canPayTransfer(T, { id: 1, type: "central" }, { role: "staff" }),
+        X.canPayTransfer(T, { id: 3, type: "branch" }, { role: "admin" }), X.canPayTransfer(T, { id: 3, type: "branch" }, { role: "staff" })],
+      [false, false, true, true, true, false]);
+    ck("ครัวกลางที่เป็นฝ่ายส่งของเอง ก็กดจ่ายใบโอนนั้นไม่ได้",
+      X.canPayTransfer({ ...T, from_branch_id: 1 }, { id: 1, type: "central" }, { role: "admin" }), false);
+  }
+  const paySrc = sgAsync("submitPayment");
+  ok_("ยังมี submitPayment ให้ทดสอบ", !!paySrc);
+  const runPay = async (po, branch) => {
+    const log = [];
+    let threw = false;
+    try {
+      const fn = mkFn(paySrc, {
+        isTransferPO: X && X.isTransferPO, canPayTransfer: X && X.canPayTransfer,
+        currentBranch: branch, currentUser: { username: "tester", role: "staff" },
+        isCreator: (p) => +p.from_branch_id === +branch.id, bkkNoonISO: (v) => (v ? `${v}T05:00:00.000Z` : null),
+        api: { patchPOIfStatus: async (id, exp, patch) => { log.push(["patch", exp, patch]); return [{}]; }, getSlipSignedUrl: async () => "https://x/slip" },
+        pushPOToSlipTrack: (p, br, opts) => { log.push(["push", p, opts]); return Promise.resolve({ ok: true }); },
+        recordSlipSync: async () => {}, load: async () => {}, setViewPO: () => {}, showErr: () => {},
+        location: { origin: "https://x" }, alert: () => {}, branches: BRANCHES,
+      });
+      await fn(po, "drive:abc", "", "2026-10-13", "เงินในตู้เซฟ");
+      await tick();
+    } catch { threw = true; }
+    return { log, threw };
+  };
+  if (paySrc && X) {
+    const TP = TRP({ status: "awaiting_payment", total: 285 });
+    const asSender = await runPay(TP, { id: 5, type: "branch" });
+    ck("สาขาผู้ส่งกดจ่ายใบโอนไม่ได้ (ไม่บันทึก ไม่ส่งบัญชี)", [asSender.threw, asSender.log.length], [true, 0]);
+    const asRecv = await runPay(TP, { id: 8, type: "branch" });
+    const pp = asRecv.log.find((x) => x[0] === "patch"), pu = asRecv.log.find((x) => x[0] === "push");
+    ck("สาขาผู้รับของจ่ายใบโอนได้ ผ่านทางจ่ายเดิม (รอชำระ → จ่ายแล้ว + ส่งบัญชีขั้นจ่ายแล้ว)",
+      [asRecv.threw, pp && pp[1], pp && pp[2].status, pu && pu[2] && pu[2].paid, pu && pu[2] && pu[2].cashSource],
+      [false, "awaiting_payment", "paid", true, "เงินในตู้เซฟ"]);
+    // PO ปกติต้องเหมือนเดิม: ผู้ออกเอกสารจ่าย ผู้รับของกดไม่ได้
+    const PO_ = { ...TP, po_number: "PO-202610-B1-ZZZZZ", from_branch_id: 1, branch_id: 8 };
+    const poCreator = await runPay(PO_, { id: 1, type: "central" });
+    const poRecv = await runPay(PO_, { id: 8, type: "branch" });
+    ck("PO ปกติคงกติกาเดิม: ผู้ออกเอกสารบันทึกจ่าย · ผู้รับของกดไม่ได้", [poCreator.threw, poRecv.threw], [false, true]);
+  }
+  ok_("ปุ่ม 💳 ในแถว: ใบโอนใช้กติกาใบโอน · PO ใช้กติกาเดิม",
+    APP.includes('po.status==="awaiting_payment"&&(isTransferPO(po)?canPayTransfer(po,currentBranch,currentUser):iCreator)&&<button onClick={()=>setPayPO(po)}'));
+  ok_("ปุ่ม 💳 ในหน้ารายละเอียด: ใบโอนใช้กติกาใบโอน · PO ใช้กติกาเดิม",
+    APP.includes('const canPayNow=(xfer?canPayTransfer(po,currentBranch,currentUser):canManage)&&po.status==="awaiting_payment";'));
+  {
+    const payModal = grabSig("function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){") || "";
+    ok_("หน้าจ่ายเงินบอกว่าจ่ายให้สาขาไหน (ใบโอน)",
+      payModal.includes("{isTransferPO(po)&&<div") && payModal.includes("จ่ายให้ <b style={{color:C.brand}}>{fromBranch?.name||\"ต้นทาง\"}</b>"));
+  }
+
+  // ── ⑦ คำอธิบายในบัญชี: หน้าเว็บกับตัวกวาดบนเซิร์ฟเวอร์ต้องเหมือนกันทุกตัวอักษร ──
+  let cli = null;
+  try {
+    const alias = grabConst(APP, "SLIPTRACK_BRANCH_ALIAS");
+    const push = grabSig("async function pushPOToSlipTrack(po, branches, opts={}){");
+    if (!push) throw new Error("ไม่เจอ pushPOToSlipTrack");
+    const src = [R2, LINE("const SLIPTRACK_CANON_BRANCHES="), alias, LINE("const slipWarnings="), sg("isTransferPO"), sg("sliptrackBranchName"), push].join("\n");
+    cli = (fetchMock, consoleMock) => new Function("fetch", "console", src + "\nreturn {pushPOToSlipTrack,sliptrackBranchName};")(fetchMock, consoleMock);
+  } catch { cli = null; }
+  ok_("อ่านตัวส่งบัญชีของหน้าเว็บมารันได้", !!cli);
+  if (cli && srvBuild) try {
+    const warns = [];
+    const quiet = { warn: (...a) => warns.push(a.join(" ")), error: () => {}, log: () => {} };
+    const sendOf = async (po) => {
+      const bodies = [];
+      const C = cli(async (url, init) => { bodies.push(JSON.parse(init.body)); return { ok: true, json: async () => ({}) }; }, quiet);
+      await C.pushPOToSlipTrack(po, BRANCHES);
+      return bodies[0] || null;
+    };
+    const KEYS = ["external_id", "datetime", "amount", "from_branch", "to_branch", "paid", "description", "reference_no", "items"];
+    const pick = (o) => (o ? Object.fromEntries(KEYS.map((k) => [k, o[k]])) : null);
+    const recvTR = (over = {}) => TRP({ status: "awaiting_payment", received_at: "2026-10-13T05:00:00.000Z", subtotal: 285, total: 285,
+      items: TRP().items.map((it, i) => ({ ...it, received_qty: i === 0 ? 1.5 : 3, line_total: i === 0 ? 180 : 105 })), ...over });
+    const c1 = await sendOf(recvTR());
+    const s1 = srvBuild(recvTR(), { 5: BR_BY[5], 8: BR_BY[8] }, null).payload;
+    ck("คำอธิบายในบัญชีบอกว่าเป็นการโอนระหว่างสาขา (ไม่ใช่ ซื้อวัตถุดิบ)", c1 && c1.description, "โอนวัตถุดิบระหว่างสาขา กาญจนบุรี → กาญจนบุรี The River");
+    ck("ใบโอน: หน้าเว็บกับตัวกวาดส่งบัญชีเหมือนกันทุกช่อง", pick(c1), pick(s1));
+    const c2 = await sendOf(recvTR({ notes: "ช่วยสาขาช่วงเทศกาล" }));
+    const s2 = srvBuild(recvTR({ notes: "ช่วยสาขาช่วงเทศกาล" }), { 5: BR_BY[5], 8: BR_BY[8] }, null).payload;
+    ck("ใบโอนมีหมายเหตุ: หน้าเว็บกับตัวกวาดเหมือนกัน", [c2 && c2.description, pick(c2)], [s2.description, pick(s2)]);
+    const PO_ = { id: 1, po_number: "PO-TEST", status: "awaiting_payment", from_branch_id: 1, branch_id: 5, received_at: "2026-09-01T00:00:00.000Z",
+      items: [{ name: "หมู", qty: 2, unit: "กก.", price_per_unit: 100 }], subtotal: 200, vat: 0, total: 200 };
+    const c3 = await sendOf(PO_);
+    const s3 = srvBuild(PO_, { 1: BR_BY[1], 5: BR_BY[5] }, null).payload;
+    ck("PO ปกติคำอธิบายเดิม และสองฝั่งยังเหมือนกัน", [c3 && c3.description, pick(c3)], ["ซื้อวัตถุดิบ PO-PO-TEST", pick(s3)]);
+    ck("ใบโอนเก่า ฿0 ถ้าหลุดไปถึงตัวส่ง = ข้ามแบบยอดศูนย์ (ไม่ตั้งหนี้)",
+      srvBuild(LEGACY(), { 5: BR_BY[5], 8: BR_BY[8] }, null).skip, "zero-amount");
+    warns.length = 0;
+    cli(async () => ({ ok: true, json: async () => ({}) }), quiet).sliptrackBranchName("กาญจนบุรี The River");
+    ck("ชื่อสาขา กาญจนบุรี The River อยู่ในรายชื่อที่บัญชีรู้จัก", warns, []);
+  } catch (e) { ok_("รันตัวส่งบัญชีของหน้าเว็บเทียบตัวกวาดได้ — " + String((e && e.message) || e).slice(0, 80), false); }
+
+  // ── ⑧ ตะแกรงตามบัญชี: ใบโอนคิดเงินถูกตาม · ใบโอนเก่าไม่ถูกแตะ ──
+  {
+    let needs = null;
+    try {
+      const st = APP.indexOf("const poNeedsSlipSync=(p)=>!!p");
+      const en = APP.indexOf(";", APP.indexOf('p.status==="cancelled"', st)) + 1;
+      needs = new Function(APP.slice(st, en) + " return poNeedsSlipSync;")();
+    } catch { needs = null; }
+    const row = (status, flag = null) => ({ status, po_number: "TR-202610-B5-AAAAA", received_at: "2026-10-13T05:00:00.000Z", sliptrack_sync: flag });
+    ck("ใบโอนคิดเงินที่รับแล้วเข้าตะแกรงตามบัญชี · ใบโอนเก่าที่ โอนเสร็จสิ้น ไม่ถูกแตะ",
+      needs ? [needs(row("awaiting_payment")), needs(row("paid", "failed")), needs(row("transfer_done")), needs(row("transfer_done", "failed"))] : null,
+      [true, true, false, false]);
+    ok_("ตัวกวาดบนเซิร์ฟเวอร์ไม่หยิบใบโอนเก่า (เฉพาะ รอชำระ/จ่ายแล้ว/ยกเลิก)",
+      SWEEP.includes("status=in.(awaiting_payment,paid,cancelled)") && SWEEP.includes('if (po.status !== "awaiting_payment" && po.status !== "paid") {'));
+  }
+
+  // ── ⑨ ทุกจอแยกใบโอนด้วย isTransferPO ไม่ใช่สถานะ ──
+  {
+    // พิมพ์: ใบโอนต้องออกเป็น "ใบโอนวัตถุดิบระหว่างสาขา" ไม่ใช่ "ใบสั่งซื้อ"
+    let html = null;
+    try {
+      const build = new Function("fmtD", "fmtDT", LINE("const esc=") + "\n" + sg("isTransferPO") + "\n" + sg("billedQty") + "\n" + sg("buildPOHTML") + "\nreturn buildPOHTML;")((x) => String(x || ""), (x) => String(x || ""));
+      html = { tr: build(TRP({ status: "awaiting_payment", total: 285 }), "กาญจนบุรี The River", "กาญจนบุรี"),
+        old: build(LEGACY(), "กาญจนบุรี The River", "กาญจนบุรี"),
+        po: build({ ...TRP({ po_number: "PO-202610-B1-ZZZZZ", status: "awaiting_payment" }) }, "กาญจนบุรี", "ครัวกลาง") };
+    } catch (e) { html = null; }
+    ck("พิมพ์ใบโอนออกเป็น ใบโอนวัตถุดิบระหว่างสาขา · PO ยังเป็นใบสั่งซื้อ",
+      html ? [html.tr.includes("ใบโอนวัตถุดิบระหว่างสาขา"), html.tr.includes("Purchase Order"), html.po.includes("Purchase Order"), html.po.includes("ใบโอนวัตถุดิบระหว่างสาขา")] : null,
+      [true, false, true, false]);
+    ok_("ใบโอนที่พิมพ์บอกว่าใครจ่ายใคร (ใบเก่าบอกว่าไม่คิดเงิน)",
+      !!html && html.tr.includes("สาขา กาญจนบุรี The River จ่ายให้สาขา กาญจนบุรี") && html.old.includes("ไม่คิดเงิน"));
+    // คัดลอกใบโอน = ได้ PO- ใบใหม่ที่ไม่ใช่ใบโอน เงินกับสต๊อกไปคนละทาง ⟹ ต้องกันทั้งเมนูและในฟังก์ชัน
+    let dup = null;
+    try {
+      const calls = [];
+      const fn = mkFn(sg("duplicatePO"), { isTransferPO: X && X.isTransferPO, alert: () => calls.push("alert"),
+        isCreator: () => true, isCentralBranch: true, setCopyPO: (p) => calls.push("copy:" + (p && p.po_number)) });
+      fn(TRP()); fn({ ...TRP(), po_number: "PO-202610-B1-ZZZZZ", status: "paid" });
+      dup = calls;
+    } catch { dup = null; }
+    ck("คัดลอกใบโอนไม่ได้ · PO ปกติยังคัดลอกได้", dup, ["alert", "copy:PO-202610-B1-ZZZZZ"]);
+    ok_("เมนูแถวซ่อนปุ่มคัดลอกสำหรับใบโอน",
+      APP.includes('!isTransferPO(po)&&(isCreator(po)||isCentralBranch)&&hasPO&&{label:"คัดลอก"'));
+    ok_("เมนูแถวพิมพ์ใบโอนด้วยชื่อใบโอน",
+      APP.includes('po.status!=="requested"&&{label:isTransferPO(po)?"พิมพ์ใบโอน":"พิมพ์ใบสั่งซื้อ"'));
+    ok_("หน้ารายละเอียดพิมพ์ใบโอนด้วยชื่อใบโอน",
+      APP.includes("const xfer=isTransferPO(po);\n  const canPayNow=") && APP.includes('{xfer?"🖨 พิมพ์ใบโอน":"🖨 พิมพ์ใบสั่งซื้อ"}'));
+    ok_("ยอดรวมท้ายรายการแยกยอดใบโอนด้วย isTransferPO",
+      APP.includes("const totalXfer=pos.reduce((s,p)=>isTransferPO(p)?s+(+p.total||0):s,0);"));
+    ok_("ช่องยอดเงิน: ใบโอนเก่า ฿0 = ป้ายการโอน · ใบโอนคิดเงิน = ยอดจริง",
+      APP.includes("{isTransferPO(po)&&!(+po.total>0)?<span"));
+    ok_("ตัวกรอง ใบโอนทั้งหมด ดูจากเลขใบ ไม่ใช่สถานะ", APP.includes('if(filterStatus==="transfer")data=data.filter(isTransferPO);'));
+    ck("ไม่เหลือจุดที่แยกใบโอนด้วยสถานะ transfer_* อย่างเดียว",
+      ['p.status==="transfer_pending"||p.status==="transfer_shipped"', 'po.status==="transfer_pending"||po.status==="transfer_shipped"',
+        '["requested","transfer_pending","transfer_shipped","transfer_done"].includes(po.status)'].filter((s) => APP.includes(s)), []);
+    ok_("รายงานตามวัตถุดิบแยกยอดใบโอนออกจาก PO ครัวกลาง",
+      APP.includes("const xfer=isTransferPO(po);\n        if(docKind===\"po\"&&xfer)continue;") && APP.includes("if(xfer)xferValue+=(+it.line_total||0);"));
+  }
+
+  // ── ⑩ ประวัติราคาซื้อ: ใบโอนโชว์เป็นแถว แต่ไม่ปนสถิติราคาซื้อ ──
+  {
+    const LS = APP.split("\n");
+    const ia = LS.findIndex((l) => l.startsWith("function priceHistWindow("));
+    const ib = LS.findIndex((l, i) => i > ia && l.startsWith("function PriceHistoryModal("));
+    let PH = null;
+    try { PH = new Function(LS.slice(ia, ib).join("\n") + "\nreturn priceHistSummary;")(); } catch { PH = null; }
+    if (PH) {
+      const rows = [
+        { day: "2026-10-01", supplier: "ซัพ", kind: "supplier", unit: "กก.", qty: 10, price: 100, total: 1000 },
+        { day: "2026-10-02", supplier: "กาญจนบุรี", kind: "branch", xfer: true, unit: "กก.", qty: 5, price: 999, total: 4995 },
+        { day: "2026-10-03", supplier: "ครัวกลาง", kind: "central", unit: "กก.", qty: 10, price: 120, total: 1200 },
+      ];
+      const S = PH(rows, "กก.", ["", ""]);
+      ck("ใบโอนไม่ปนสถิติราคาซื้อ (ต่ำสุด/สูงสุด/เฉลี่ย/ยอดจ่าย)", [S.min, S.max, r2(S.avg), S.spent], [100, 120, 110, 2200]);
+      ck("ใบโอนยังโชว์เป็นแถว นับแยกไว้ และไม่เข้ากล่องแยกตามแหล่งซื้อ",
+        [S.rows.length, S.xferN, S.noPriceN, S.bySource.some((s) => s.name === "กาญจนบุรี"), S.isMain(rows[1])], [3, 1, 0, false, false]);
+    } else ok_("อ่านตัวสรุปประวัติราคามารันได้", false);
+    ok_("แถวประวัติราคาจาก PO ติดธงใบโอนด้วย isTransferPO",
+      APP.includes("const xfer=isTransferPO(po);   // ใบโอน: โชว์เป็นแถว") && APP.includes('out.push({orderId:"po"+po.id,kind,xfer,'));
+  }
+
+  // ── ⑪ ข้อความบนจอ: ไม่มีคำว่า "ไม่คิดเงิน" แบบเดิม · ฟอร์ม/หน้ารับโชว์เงินจากตัวคิดเดียวกับที่บันทึก ──
+  ck("ไม่เหลือข้อความว่าการโอนไม่มีการคิดเงิน", ["ไม่มีการคิดเงิน", "Free stock transfer"].filter((s) => APP.includes(s)), []);
+  ok_("ฟอร์มโอนโชว์ราคา/ยอดรายบรรทัด/ยอดรวม จากตัวคิดตัวเดียวกับตอนบันทึก",
+    APP.includes('["วัตถุดิบ","สต๊อกในสาขา","จำนวนโอน","หน่วย","ราคา/หน่วย","รวม","ลบ"]') &&
+    APP.includes("const xPlan=buildTransferItems(transferForm.items,xIng,ing=>branchStock(ing,currentBranch?.id));") &&
+    APP.includes("const plan=buildTransferItems(transferForm.items,new Map(ings.map(i=>[+i.id,i])),ing=>branchStock(ing,currentBranch.id));") &&
+    APP.includes("฿{m2(xPlan.total)}"));
+  ok_("หน้ารับโอนโชว์ยอดที่ต้องจ่ายจากตัวคิดตัวเดียวกับตอนกดรับ และบอกว่าต้องจ่ายให้ต้นทาง",
+    APP.includes("const rBill=transferReceiveBill(rPO,clampTransferReceived(receivingTransfer.items));") &&
+    APP.includes("const itemsWithReceived=clampTransferReceived(receivingTransfer.items);") &&
+    APP.includes("ต้องจ่ายเงินให้ <b>{rFrom}</b>"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

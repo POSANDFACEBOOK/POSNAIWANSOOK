@@ -70,6 +70,9 @@ function sliptrackBranchName(name) {
 // แล้วไม่มีอะไรในระบบพูดถึงมันอีกเลย — บิลจริง เงินจริง ที่บัญชีไม่เคยเห็น
 const SLIP_SKIP_DONE = ["same-branch", "zero-amount"];
 const flagForSkip = (reason) => (SLIP_SKIP_DONE.includes(reason) ? "skip" : "failed");
+// ใบโอนวัตถุดิบระหว่างสาขา (เลข TR-) — พอรับของแล้วอยู่ awaiting_payment/paid เหมือน PO
+// ต้องดูเลขใบด้วย (port จาก isTransferPO ในหน้าเว็บ) คำอธิบายในบัญชีจะได้บอกว่า "โอน" ไม่ใช่ "ซื้อ"
+const isTransferPO = (po) => !!po && (/^transfer_/.test(String(po.status || "")) || /^TR-/.test(String(po.po_number || "")));
 
 function buildPushPayload(po, branchById, paidCtx) {
   const fromB = branchById[+po.from_branch_id];
@@ -110,7 +113,10 @@ function buildPushPayload(po, branchById, paidCtx) {
     if (paidCtx.note) payload.payment_note = paidCtx.note;
     if (paidCtx.cashSource) payload.cash_source = paidCtx.cashSource;
   } else {
-    payload.description = po.notes ? `ซื้อวัตถุดิบ — ${po.notes}` : `ซื้อวัตถุดิบ ${externalId}`;
+    // ต้องตรงกับ pushPOToSlipTrack ในหน้าเว็บทุกตัวอักษร (ด่าน "โอนวัตถุดิบคิดเงิน" รันเทียบสองฝั่ง)
+    payload.description = isTransferPO(po)
+      ? `โอนวัตถุดิบระหว่างสาขา ${fromName} → ${toName}${po.notes ? ` — ${po.notes}` : ""}`
+      : (po.notes ? `ซื้อวัตถุดิบ — ${po.notes}` : `ซื้อวัตถุดิบ ${externalId}`);
     payload.reference_no = po.po_number || externalId;
     const items = recvLines.filter((x) => x.name && x.qty > 0);
     if (items.length) payload.items = items;

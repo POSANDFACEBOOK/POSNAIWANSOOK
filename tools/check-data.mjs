@@ -42,7 +42,7 @@ const main = async () => {
     gAll("ingredients?select=id,name,buy_unit,sub_unit,sub_per_buy,buy_price,convert_to_gram,price_per_gram,stock_by_branch,has_sop,ingredients,supplier_id,supplier_by_branch,visible_branches&order=id.asc"),
     gAll("menus?select=id,name,price,category,visible_branches,ingredients,printer_id&order=id.asc"),
     gAll("order_requests?select=id,branch_id,supplier_id,supplier_name,status,requested_at,items,stock_pending&order=id.asc"),
-    gAll("purchase_orders?select=id,po_number,branch_id,from_branch_id,status,items,stock_pending&order=id.asc"),
+    gAll("purchase_orders?select=id,po_number,branch_id,from_branch_id,status,items,stock_pending,vat,total&order=id.asc"),
     gAll("branches?select=id,name,type,active"),
     gAll("suppliers?select=id,name,visible_branches,active"),
   ]);
@@ -376,6 +376,33 @@ const main = async () => {
       for (const g of by.values()) if (new Set(g.map((m) => +m.price)).size > 1) bad.push(`${bn(b.id)}: "${String(g[0].name).trim()}" ` + g.map((m) => `฿${+m.price} (#${m.id})`).join(" / "));
     }
     bad.length ? warn(`${bad.length} คู่ — ถ้าตั้งใจ (เช่นราคาโปร) ให้ตั้งชื่อต่างกัน ไม่งั้นพนักงาน/ลูกค้ากดผิดตัว`, bad) : ok("ไม่มี");
+  }
+
+  section("20) ใบโอนวัตถุดิบคิดเงิน: ยอด/สถานะ/บัญชี ต้องไปด้วยกัน");
+  {
+    // ใบโอนคิดเงินตั้งแต่ 13 ต.ค. 69 · ใบเก่า (ยอด 0) ต้องจบที่ transfer_done และห้ามถูกตั้งหนี้ย้อนหลัง
+    // ใบโอนดูจากเลขใบ TR- ด้วย เพราะใบที่รับแล้วไปอยู่ awaiting_payment/paid เหมือน PO
+    const isXfer = (p) => /^transfer_/.test(String(p.status || "")) || /^TR-/.test(String(p.po_number || ""));
+    const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+    const bad = [];
+    for (const p of pos) {
+      if (!isXfer(p) || p.status === "cancelled") continue;
+      const tag = `${p.po_number || "#" + p.id} [${p.status}] ${bn(p.from_branch_id)}→${bn(p.branch_id)}`;
+      const total = +p.total || 0;
+      const items = Array.isArray(p.items) ? p.items : [];
+      // มียอดแต่จบที่ transfer_done = รับของแล้วแต่ไม่เคยตั้งหนี้ (เงินหายเงียบ)
+      if (p.status === "transfer_done" && total > 0) bad.push(`${tag} — มียอด ฿${total} แต่จบที่ "โอนเสร็จ" ไม่ได้ตั้งหนี้`);
+      // ฿0 แต่รอชำระ/จ่ายแล้ว = หนี้ผี ไม่มีใครจ่ายได้ บัญชีก็ข้าม
+      if ((p.status === "awaiting_payment" || p.status === "paid") && !(total > 0)) bad.push(`${tag} — ยอด ฿0 แต่อยู่สถานะ ${p.status}`);
+      // ยอดหัวใบต้อง = ผลรวมรายบรรทัด (ใบที่มีราคา) — เพี้ยน = จอ/สลิป/บัญชีเห็นคนละเลข
+      if (total > 0) {
+        const sum = r2(items.reduce((s, it) => s + (+it.line_total || 0), 0) + (+p.vat || 0));
+        if (Math.abs(sum - total) > 0.01) bad.push(`${tag} — ยอดหัวใบ ฿${total} ≠ รวมรายบรรทัด ฿${sum}`);
+        const noPrice = items.filter((it) => !(+it.price_per_unit > 0)).map((it) => it.name);
+        if (noPrice.length) bad.push(`${tag} — มีรายการไม่มีราคา: ${noPrice.slice(0, 3).join(", ")}`);
+      }
+    }
+    bad.length ? warn(`${bad.length} ใบ — ตรวจเส้นทางเงินของใบโอน`, bad) : ok("ไม่มี");
   }
 
   console.log(`\n${"═".repeat(50)}`);
