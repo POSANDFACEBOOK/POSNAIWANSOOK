@@ -8916,7 +8916,7 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
       posToast(APPROVAL_ON?"✅ ส่งใบขอซื้อสินทรัพย์แล้ว — รอ Area อนุมัติ":"✅ ส่งใบขอซื้อสินทรัพย์แล้ว — ส่งต่อครัวกลางทันที","ok");
       if(onSubmitted)await onSubmitted();
       onClose();
-      setTimeout(()=>alert("⚠️ รายการสินทรัพย์/อุปกรณ์นี้ กรุณา \"แจ้งบอสในไลน์ก่อน\"\nเป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะกดอนุมัติได้"),300);
+      setTimeout(()=>alert("⚠️ รายการสินทรัพย์/อุปกรณ์นี้ กรุณา \"แจ้งบอสในไลน์ก่อน\"\nเป็นบอสเท่านั้นที่พิจารณา"+(APPROVAL_ON?" แล้ว Area ถึงจะกดอนุมัติได้":"")),300);
     }catch(e){alert("ส่งไม่สำเร็จ: "+((e&&e.message)||e));}
     savingRef.current=false;setSaving(false);
   }
@@ -8978,7 +8978,7 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
           </div>)}
         </div>}
       </div>
-      <div style={{marginTop:14,padding:"10px 12px",background:C.yellowLight,border:`1px solid ${C.yellow}`,borderRadius:10,fontSize:12.5,color:"#92600A"}}>⚠️ เมื่อกดสั่งซื้อ กรุณา <b>แจ้งบอสในไลน์ก่อน</b> — เป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะกดอนุมัติได้</div>
+      <div style={{marginTop:14,padding:"10px 12px",background:C.yellowLight,border:`1px solid ${C.yellow}`,borderRadius:10,fontSize:12.5,color:"#92600A"}}>⚠️ เมื่อกดสั่งซื้อ กรุณา <b>แจ้งบอสในไลน์ก่อน</b> — เป็นบอสเท่านั้นที่พิจารณา{APPROVAL_ON&&" แล้ว Area ถึงจะกดอนุมัติได้"}</div>
       <div style={{display:"flex",gap:8,marginTop:14}}>
         <Btn v="ghost" onClick={onClose}>ยกเลิก</Btn>
         <Btn onClick={submit} loading={saving} disabled={saving||!cart.length} icon={I.check} s={{flex:1,background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white}}>สั่งซื้อ ({cart.length})</Btn>
@@ -9201,7 +9201,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
       <div style={{fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:18,fontWeight:900,color:C.ink}}>📝 ใบขอซื้อ (PR)</div>
-        <div style={{fontSize:12,color:C.ink4,marginTop:2}}>ทุกสาขา (รวมครัวกลาง) ขอ → Area อนุมัติ → ครัวกลางออกใบส่ง · <b style={{color:C.ink3}}>ไม่ตัดสต๊อก</b></div>
+        <div style={{fontSize:12,color:C.ink4,marginTop:2}}>ทุกสาขา (รวมครัวกลาง) ขอ → {APPROVAL_ON?"Area อนุมัติ → ":""}ครัวกลางออกใบส่ง · <b style={{color:C.ink3}}>ไม่ตัดสต๊อก</b></div>
       </div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         {/* งานประจำวันของสาขา = ปุ่มหลัก (ใหญ่ สีแบรนด์) · สินทรัพย์/โอน ใช้นานๆ ครั้ง → ghost */}
@@ -9346,7 +9346,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     </Modal>;})()}
     {showAssetOrder&&<AssetOrderModal currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowAssetOrder(false)} onSubmitted={load}/>}
     {showForm&&<Modal title={editingPR?"✏️ แก้ไขใบขอซื้อ + ส่งใหม่":"📝 สร้างใบขอซื้อ (PR)"} onClose={()=>{setShowForm(false);setEditingPR(null);}} wide>
-      <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12,background:C.bg,borderRadius:9,padding:"9px 12px",border:`1px solid ${C.line}`}}>สาขา: <b style={{color:C.ink}}>{currentBranch?.name||"—"}</b> · ใบนี้เป็น<b>คำขอ</b> ยังไม่ตัดสต๊อก — Area อนุมัติแล้วครัวกลางจะออกใบส่งให้</div>
+      <div style={{fontSize:12.5,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:12,background:C.bg,borderRadius:9,padding:"9px 12px",border:`1px solid ${C.line}`}}>สาขา: <b style={{color:C.ink}}>{currentBranch?.name||"—"}</b> · ใบนี้เป็น<b>คำขอ</b> ยังไม่ตัดสต๊อก — {APPROVAL_ON?"Area อนุมัติแล้ว":"ส่งแล้ว"}ครัวกลางจะออกใบส่งให้</div>
       <div style={{marginBottom:12,position:"relative"}}>
         <div style={{fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>🔍 เพิ่มวัตถุดิบที่ต้องการ</div>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="พิมพ์ชื่อวัตถุดิบ..." style={{...iS}}/>
@@ -13735,7 +13735,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         : "ซัพพลายที่เลือกไว้ไม่มีรายการที่ต้องสั่ง (จำนวนเป็น 0 ทุกแถว)");
       return;
     }
-    if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\n• ของจากครัวกลาง → จะสร้างเป็น "ใบขอซื้อ (PR)" รอ Area อนุมัติ\n• ของจากซัพพลายภายนอก → จะแยกเป็นใบสั่งตามซัพพลาย (พิมพ์ PDF ส่งได้)`,confirmLabel:"📤 ส่งคำสั่งซื้อ",danger:false}))return;
+    if(!await confirmDlg({title:"ส่งคำสั่งซื้อ",message:`ส่งคำสั่งซื้อ ${items.length} รายการ\nรวมทั้งสิ้น ฿${totals.totalCost.toLocaleString(undefined,{minimumFractionDigits:2})}\n\n• ของจากครัวกลาง → จะสร้างเป็น "ใบขอซื้อ (PR)"${APPROVAL_ON?" รอ Area อนุมัติ":" ส่งต่อครัวกลางทันที"}\n• ของจากซัพพลายภายนอก → จะแยกเป็นใบสั่งตามซัพพลาย (พิมพ์ PDF ส่งได้)`,confirmLabel:"📤 ส่งคำสั่งซื้อ",danger:false}))return;
     setSaving(true);
     try{
       // Group items by per-branch supplier
@@ -14037,7 +14037,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
             </div>
           </div>)}
         </div>
-        <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:10,padding:"9px 12px",background:C.bg,borderRadius:9,lineHeight:1.6,border:`1px solid ${C.line}`}}>💡 ใบนี้ต้องให้ <b>Area อนุมัติ</b>ก่อน แล้วครัวกลางจึงรวมยอดไปสั่งซื้อ — ติดตามได้ที่แท็บ <b style={{color:C.brand}}>"📝 ใบขอซื้อ PR"</b></div>
+        <div style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginTop:10,padding:"9px 12px",background:C.bg,borderRadius:9,lineHeight:1.6,border:`1px solid ${C.line}`}}>💡 {APPROVAL_ON?<>ใบนี้ต้องให้ <b>Area อนุมัติ</b>ก่อน แล้ว</>:""}ครัวกลางจะรวมยอดไปสั่งซื้อ — ติดตามได้ที่แท็บ <b style={{color:C.brand}}>"📝 ใบขอซื้อ PR"</b></div>
       </div>}
 
       {/* External section — items routed to outside suppliers */}

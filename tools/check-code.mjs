@@ -6384,6 +6384,23 @@ section("POS สาขาที่ 2: หน้าลูกค้าและข
 }
 
 
+section("ขั้น Area อนุมัติปิดอยู่ = ข้อความในจอต้องไม่บอกให้รอ Area");
+{
+  // APPROVAL_ON=false ตั้งแต่ 22 ก.ย. 69 — ใบขอซื้อขึ้น อนุมัติแล้ว ทันที แต่เคยมีข้อความ 6 จุดบอกพนักงานให้รอ Area
+  // (หัวแท็บใบขอซื้อ, กล่องยืนยันส่ง, ฟอร์ม PR, กล่องสินทรัพย์, แจ้งเตือนสินทรัพย์, หน้ารายละเอียด PR) — คู่มือพนักงานถ่ายภาพไปเจอ
+  // ยกเว้น: บรรทัดที่ผูก APPROVAL_ON, ป้ายของใบเก่าสถานะ pending_approval, จอแก้ใบตีกลับ (rejected) และกล่องที่อยู่ใต้ if(APPROVAL_ON...)
+  const flagOff = /const APPROVAL_ON=false;/.test(APP);
+  const lines = APP.split("\n");
+  const gatedAbove = (i) => lines.slice(Math.max(0, i - 4), i).some((l) => /if\(APPROVAL_ON/.test(l));
+  const bad = lines.map((l, i) => [i + 1, l]).filter(([n, l]) => {
+    const t = l.trim(); if (t.startsWith("//") || t.startsWith("{/*")) return false;
+    const code = l.replace(/\s\/\/\s.*$/, "");
+    if (!/Area\s*(ถึงจะกด)?อนุมัติ/.test(code)) return false;
+    return !code.includes("APPROVAL_ON") && !code.includes("รอ Area อนุมัติก่อน") && !code.includes('orderStatus==="rejected"') && !gatedAbove(n - 1);
+  }).map(([n]) => n);
+  ok_(`ไม่มีข้อความรอ Area ที่ไม่ผูกกับ APPROVAL_ON${bad.length ? " — บรรทัด " + bad.join(", ") : ""}`, !flagOff || bad.length === 0);
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
