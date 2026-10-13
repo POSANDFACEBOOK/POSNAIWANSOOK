@@ -1241,7 +1241,9 @@ function buildTransferItems(lines,ingById,stockOf){
     if(qty>have+1e-9)overStock.push(`${name} (โอน ${qty} · มี ${have} ${unit})`);
     items.push({ingredient_id:+it.ingredient_id,name,unit,qty,price_per_unit:price,line_total:round2(qty*price),note:""});
   }
-  const subtotal=round2(items.reduce((s,x)=>s+x.line_total,0));
+  // ยอดใบ = ปัดครั้งเดียวจากผลรวม จำนวน×ราคา (ไม่ใช่รวมยอดที่ปัดทีละบรรทัด) — สูตรเดียวกับตัวส่งบัญชี/ตัวกวาด
+  // จำนวนมีทศนิยม ปัดทีละบรรทัดแล้วรวม จะต่างจากบิลในบัญชีได้ 1 สตางค์ (ยอดที่จ่าย ≠ ยอดบิล)
+  const subtotal=round2(items.reduce((s,x)=>s+x.qty*x.price_per_unit,0));
   return{items,noPrice,badUnit,overStock,subtotal,vat:0,total:subtotal};
 }
 // จำนวนรับจริงของใบโอน: ไม่ติดลบ และไม่เกินที่ส่งมา (รับเกิน = เสกสต๊อก) — ใช้ทั้งจอและตอนบันทึก
@@ -1262,10 +1264,21 @@ function transferReceiveBill(po,items){
     const recv=it.received_qty!=null?Math.max(0,Math.min(orig,+it.received_qty||0)):orig;
     return{...it,received_qty:recv,line_total:round2(recv*(+it.price_per_unit||0))};
   });
-  const subtotal=round2(out.reduce((s,it)=>s+(+it.line_total||0),0));
+  // ปัดครั้งเดียวจากผลรวม รับจริง×ราคา — ตรงกับ pushPOToSlipTrack/ตัวกวาดทุกสตางค์ (ยอดที่ปลายทางจ่าย = บิลในบัญชี)
+  const subtotal=round2(out.reduce((s,it)=>s+it.received_qty*(+it.price_per_unit||0),0));
   const vatRate=(+po.subtotal||0)>0?(+po.vat||0)/(+po.subtotal):0;
   const vat=round2(subtotal*vatRate);
   return{priced:true,items:out,subtotal,vat,total:round2(subtotal+vat)};
+}
+// ซ่อมใบโอนคิดเงินที่ถูก "รับโอน" จากแท็บที่ยังรันเวอร์ชันก่อนเปิดคิดเงิน (แอปไม่รีโหลดเอง พนักงานเปิดค้างทั้งวัน)
+// โค้ดเก่าขยับสต๊อกถูกแล้ว แต่จบที่ transfer_done ทั้งที่ใบมียอด · ไม่คิดยอดจากจำนวนรับ · ไม่ส่งบัญชี
+// และไม่มีตะแกรงไหนหยิบ transfer_done ⟹ หนี้หายเงียบ. โค้ดใหม่ไม่มีทางทิ้ง transfer_done ที่ยอด>0
+// (ยอด>0 ⟹ รอชำระเงิน) และใบโอนเก่า (ยอด 0) ไม่เข้าเงื่อนไข ⟹ เจอแบบนี้ = มาจากแท็บเก่าแน่นอน
+// คืนแค่ patch เงิน+สถานะ ห้ามแตะสต๊อก (ขยับไปแล้ว) · sliptrack_sync=null ให้ตัวซ่อมบัญชี/ตัวกวาดตั้งหนี้ต่อ
+function staleTransferHealPatch(p){
+  if(!p||!isTransferPO(p)||p.status!=="transfer_done"||!((+p.total||0)>0)||!p.received_at)return null;
+  const b=transferReceiveBill(p,p.items);
+  return{items:b.items,subtotal:b.subtotal,vat:b.vat,total:b.total,status:b.total>0?"awaiting_payment":"transfer_done",sliptrack_sync:null};
 }
 async function pushPOToSlipTrack(po, branches, opts={}){
   // Returns {ok, status?, error?, skipped?}; existing callers ignore the value
@@ -9942,6 +9955,19 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
         const fixedIds=new Set(done.filter(Boolean));
         data=data.map(p=>fixedIds.has(p.id)?{...p,status:"requested"}:p);
       }
+      // ── ซ่อมใบโอนคิดเงินที่แท็บเวอร์ชันเก่ากดรับ (ดู staleTransferHealPatch) ──────────
+      // ล็อกสถานะ transfer_done (สองเครื่องซ่อมพร้อมกัน = ได้เครื่องเดียว) · ไม่แตะสต๊อก · ต้องอยู่ก่อนตัวซ่อมบัญชีข้างล่าง
+      // ใบที่ซ่อมแล้วเป็น รอชำระเงิน + sliptrack_sync=null ⟹ ตัวซ่อมบัญชีหยิบไปตั้งหนี้ในรอบเดียวกันนี้เลย
+      const staleXfer=data.map(p=>[p,staleTransferHealPatch(p)]).filter(x=>x[1]);
+      if(staleXfer.length){
+        const now=new Date().toISOString();
+        const healed=await Promise.all(staleXfer.map(([p,patch])=>
+          api.patchPOIfStatus(p.id,"transfer_done",{...patch,updated_at:now})
+            .then(()=>({...p,...patch,updated_at:now})).catch(e=>{console.error("ซ่อมใบโอนค้างไม่สำเร็จ #"+p.id,e);return null;})
+        ));
+        const healedById=new Map(healed.filter(Boolean).map(p=>[p.id,p]));
+        data=data.map(p=>healedById.get(p.id)||p);
+      }
       // ── Self-heal unsynced accounting rows ───────────────────────────────
       // Accounting data must never be silently dropped, so re-push any billable PO that
       // hasn't confirmed-synced — both an explicit 'failed' AND a null flag (a push whose
@@ -10142,10 +10168,18 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       // Both sides moved. Reverse each side independently by what ACTUALLY moved:
       //   debit receiver  = recorded − notCredited   ·   credit sender = recorded − notDeducted
       const base=it=>it.received_qty!=null?+it.received_qty:(+it.qty||+it.qtyNeeded||0);
-      const recvItems=(po.items||[]).map(it=>{const id=idOf(it);return{ingredient_id:id,received_qty:Math.max(0,round2(base(it)-(notCreditedRecv[id]||0)))};}).filter(it=>it.ingredient_id&&it.received_qty>0);
-      const sendItems=(po.items||[]).map(it=>{const id=idOf(it);return{ingredient_id:id,received_qty:Math.max(0,round2(base(it)-(notDeducted[id]||0)+(notCreditedSend[id]||0)))};}).filter(it=>it.ingredient_id&&it.received_qty>0);
+      // รวมต่อวัตถุดิบก่อน — ยอดค้าง (notDeducted ฯลฯ) เป็นยอดต่อวัตถุดิบ ถ้าลบทีละบรรทัด วัตถุดิบที่อยู่ 2 บรรทัดจะถูกลบซ้ำ
+      const baseById=new Map();
+      for(const it of (po.items||[])){const id=idOf(it);if(id)baseById.set(id,(baseById.get(id)||0)+base(it));}
+      const recvItems=[...baseById].map(([id,b])=>({ingredient_id:id,received_qty:Math.max(0,round2(b-(notCreditedRecv[id]||0)))})).filter(it=>it.received_qty>0);
+      // ฝั่งต้นทางต้องเก็บเครื่องหมายไว้: ตัดตอนจัดส่งพลาด (ยังค้าง) แต่คืนส่วนขาดตอนรับสำเร็จ ⟹ ต้นทางถือของเกินจริง
+      // ยกเลิกแล้วรายการค้างถูกล้าง (กด 🔁 ไม่ได้อีก) — ติดลบ = ต้องหักต้นทางคืน ไม่ใช่ปัดเป็น 0 แล้วปล่อยของผีค้าง
+      const sendDelta=[...baseById].map(([id,b])=>({ingredient_id:id,d:round2(b-(notDeducted[id]||0)+(notCreditedSend[id]||0))}));
+      const sendItems=sendDelta.filter(x=>x.d>0).map(x=>({ingredient_id:x.ingredient_id,received_qty:x.d}));
+      const sendTakeBack=sendDelta.filter(x=>x.d<0).map(x=>({ingredient_id:x.ingredient_id,received_qty:-x.d}));
       if(recvItems.length){const acc=await transferStockBetweenBranches({fromBranchId:po.branch_id,toBranchId:null,items:recvItems,ings,autoVisible:false});const p=pendingFromAcc(acc,po.branch_id,null);if(p)pend.push(p);}
       if(sendItems.length){const acc=await transferStockBetweenBranches({fromBranchId:null,toBranchId:po.from_branch_id,items:sendItems,ings,autoVisible:false});const p=pendingFromAcc(acc,null,po.from_branch_id);if(p)pend.push(p);}
+      if(sendTakeBack.length){const acc=await transferStockBetweenBranches({fromBranchId:po.from_branch_id,toBranchId:null,items:sendTakeBack,ings,autoVisible:false});const p=pendingFromAcc(acc,po.from_branch_id,null);if(p)pend.push(p);}
     }
     if(reloadIngs)await reloadIngs();
     return pend;

@@ -42,7 +42,7 @@ const main = async () => {
     gAll("ingredients?select=id,name,buy_unit,sub_unit,sub_per_buy,buy_price,convert_to_gram,price_per_gram,stock_by_branch,has_sop,ingredients,supplier_id,supplier_by_branch,visible_branches&order=id.asc"),
     gAll("menus?select=id,name,price,category,visible_branches,ingredients,printer_id&order=id.asc"),
     gAll("order_requests?select=id,branch_id,supplier_id,supplier_name,status,requested_at,items,stock_pending&order=id.asc"),
-    gAll("purchase_orders?select=id,po_number,branch_id,from_branch_id,status,items,stock_pending,vat,total&order=id.asc"),
+    gAll("purchase_orders?select=id,po_number,branch_id,from_branch_id,status,items,stock_pending,vat,total,created_at&order=id.asc"),
     gAll("branches?select=id,name,type,active"),
     gAll("suppliers?select=id,name,visible_branches,active"),
   ]);
@@ -384,20 +384,29 @@ const main = async () => {
     // ใบโอนดูจากเลขใบ TR- ด้วย เพราะใบที่รับแล้วไปอยู่ awaiting_payment/paid เหมือน PO
     const isXfer = (p) => /^transfer_/.test(String(p.status || "")) || /^TR-/.test(String(p.po_number || ""));
     const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+    const ms = (t) => { const v = t ? new Date(t).getTime() : NaN; return Number.isFinite(v) ? v : null; };
+    // วันเปิดคิดเงิน = เวลาสร้างใบโอนคิดเงินใบแรกในฐาน (ไม่ต้องจำวัน deploy) · ยังไม่มีใบคิดเงิน = ยังไม่เปิด
+    const goLive = pos.filter((p) => isXfer(p) && +p.total > 0).map((p) => ms(p.created_at)).filter((v) => v != null).sort((a, b) => a - b)[0] ?? null;
     const bad = [];
     for (const p of pos) {
       if (!isXfer(p) || p.status === "cancelled") continue;
       const tag = `${p.po_number || "#" + p.id} [${p.status}] ${bn(p.from_branch_id)}→${bn(p.branch_id)}`;
       const total = +p.total || 0;
       const items = Array.isArray(p.items) ? p.items : [];
-      // มียอดแต่จบที่ transfer_done = รับของแล้วแต่ไม่เคยตั้งหนี้ (เงินหายเงียบ)
+      // มียอดแต่จบที่ transfer_done = รับของแล้วแต่ไม่เคยตั้งหนี้ (เงินหายเงียบ) — หน้า PO ของเวอร์ชันใหม่ซ่อมให้เองตอนเปิดดู
       if (p.status === "transfer_done" && total > 0) bad.push(`${tag} — มียอด ฿${total} แต่จบที่ "โอนเสร็จ" ไม่ได้ตั้งหนี้`);
       // ฿0 แต่รอชำระ/จ่ายแล้ว = หนี้ผี ไม่มีใครจ่ายได้ บัญชีก็ข้าม
       if ((p.status === "awaiting_payment" || p.status === "paid") && !(total > 0)) bad.push(`${tag} — ยอด ฿0 แต่อยู่สถานะ ${p.status}`);
-      // ยอดหัวใบต้อง = ผลรวมรายบรรทัด (ใบที่มีราคา) — เพี้ยน = จอ/สลิป/บัญชีเห็นคนละเลข
+      // ใบ ฿0 ที่สร้างหลังเปิดคิดเงิน = มาจากเครื่องที่ยังไม่รีโหลดแอป · ห้ามตั้งราคาย้อนหลัง แต่ต้องมีคนรู้ (ตามเก็บเงินเอง)
+      if (!(total > 0) && goLive != null && (ms(p.created_at) ?? 0) > goLive) bad.push(`${tag} — ใบโอน ฿0 สร้างหลังเปิดคิดเงิน (เครื่องที่ยังไม่รีโหลดแอป) ไม่ได้คิดเงิน`);
+      // ยอดหัวใบต้อง = ยอดที่บัญชีเรียกเก็บ (รับจริง×ราคา ปัดครั้งเดียว) — เพี้ยน = จอ/สลิป/บัญชีเห็นคนละเลข
+      // รายบรรทัดปัดทีละบรรทัด ⟹ ผลรวมรายบรรทัดต่างจากยอดหัวใบได้ไม่เกินครึ่งสตางค์ต่อบรรทัด
       if (total > 0) {
+        const qOf = (it) => (it.received_qty != null ? Math.max(0, Math.min(+it.qty || 0, +it.received_qty || 0)) : +it.qty || 0);
+        const billed = r2(r2(items.reduce((s, it) => s + qOf(it) * (+it.price_per_unit || 0), 0)) + (+p.vat || 0));
+        if (Math.abs(billed - total) > 0.001) bad.push(`${tag} — ยอดหัวใบ ฿${total} ≠ ยอดที่บัญชีเรียกเก็บ (จำนวน×ราคา) ฿${billed}`);
         const sum = r2(items.reduce((s, it) => s + (+it.line_total || 0), 0) + (+p.vat || 0));
-        if (Math.abs(sum - total) > 0.01) bad.push(`${tag} — ยอดหัวใบ ฿${total} ≠ รวมรายบรรทัด ฿${sum}`);
+        if (Math.abs(sum - total) > 0.005 * (items.length + 1) + 1e-9) bad.push(`${tag} — ยอดหัวใบ ฿${total} ≠ รวมรายบรรทัด ฿${sum}`);
         const noPrice = items.filter((it) => !(+it.price_per_unit > 0)).map((it) => it.name);
         if (noPrice.length) bad.push(`${tag} — มีรายการไม่มีราคา: ${noPrice.slice(0, 3).join(", ")}`);
       }

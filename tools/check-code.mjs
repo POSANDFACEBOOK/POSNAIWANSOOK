@@ -6826,6 +6826,188 @@ section("โอนวัตถุดิบคิดเงิน");
     APP.includes("const rBill=transferReceiveBill(rPO,clampTransferReceived(receivingTransfer.items));") &&
     APP.includes("const itemsWithReceived=clampTransferReceived(receivingTransfer.items);") &&
     APP.includes("ต้องจ่ายเงินให้ <b>{rFrom}</b>"));
+  // ราคา/ยอดรายบรรทัดในหน้ารับโอน ต้องมาจากบรรทัดที่คิดจากจำนวนรับจริง (rBill) ไม่ใช่บรรทัดตอนสั่ง
+  ok_("หน้ารับโอน: ราคา/ยอดรายบรรทัด มาจากบรรทัดที่คิดจากจำนวนรับจริง",
+    APP.includes("const line=rBill.priced?rBill.items[idx]:null;") && APP.includes("฿{m2(line.line_total)}</td>}") && APP.includes("฿{m2(line.price_per_unit)}</td>}"));
+
+  // ── ⑫ ยอดมีทศนิยม: ยอดหัวใบ (ที่ปลายทางจ่าย) = บิลในบัญชี ทุกสตางค์ ──
+  //   ปัดทีละบรรทัดแล้วรวม ≠ ปัดครั้งเดียวจากผลรวม (ตัวส่งบัญชี/ตัวกวาดใช้แบบหลัง) ⟹ เคยต่างกัน 1 สตางค์
+  if (X && srvBuild) {
+    const INGF = new Map([...ING, [5, { id: 5, name: "เนื้อ", buy_unit: "กก.", buy_price: 89.75 }]]);
+    const STKF = (ing) => ({ 1: 10, 2: 5, 5: 10 })[ing.id] ?? 0;
+    const FL = [{ ingredient_id: 1, name: "หมูสับ", unit: "กก.", qty: 1.235 }, { ingredient_id: 2, name: "ผักบุ้ง", unit: "ถุง", qty: 0.333 }, { ingredient_id: 5, name: "เนื้อ", unit: "กก.", qty: 1.235 }];
+    const PF = X.buildTransferItems(FL, INGF, STKF);
+    const frTR = TRP({ items: PF.items, subtotal: PF.subtotal, vat: 0, total: PF.total });
+    const srvAmt = (po) => { const b = srvBuild(po, { 5: BR_BY[5], 8: BR_BY[8] }, null); return b && b.payload ? b.payload.amount : null; };
+    ck("ยอดมีทศนิยม: ยอดใบตอนสร้าง = ยอดที่บัญชีเรียกเก็บ (1.235@120.5 + 0.333@35 + 1.235@89.75)",
+      [PF.total, srvAmt({ ...frTR, status: "awaiting_payment", received_at: "2026-10-13T05:00:00.000Z" })], [271.31, 271.31]);
+    const RB = X.transferReceiveBill(frTR, frTR.items.map((it, i) => ({ ...it, received_qty: [0.015, 0.005, 0.015][i] })));
+    ck("ยอดมีทศนิยม: ยอดตอนรับของ = ยอดที่บัญชีเรียกเก็บ (รับ 0.015/0.005/0.015)",
+      [RB.total, srvAmt({ ...frTR, status: "awaiting_payment", received_at: "2026-10-13T05:00:00.000Z", items: RB.items, subtotal: RB.subtotal, total: RB.total })], [3.33, 3.33]);
+    if (recvSrc) {
+      const LF = await runRecv(frTR, [0.015, 0.005, 0.015], 8);
+      const fp = LF.find((x) => x[0] === "patch"), fpush = LF.find((x) => x[0] === "push");
+      ck("ยอดมีทศนิยม: กดรับจริง — ยอดที่บันทึกในใบ = ยอดที่ส่งบัญชี",
+        fp && fpush ? [fp[2].total, srvAmt(fpush[1])] : LF.slice(0, 3), [3.33, 3.33]);
+    }
+  }
+
+  // ── ⑬ แท็บเวอร์ชันเก่ากดรับใบโอนคิดเงิน (จบ transfer_done ยอดค้าง ไม่ส่งบัญชี) → หน้า PO ใหม่ซ่อมให้ ──
+  {
+    let HP = null;
+    try { HP = new Function(R2 + "\n" + ["isTransferPO", "transferReceiveBill", "staleTransferHealPatch"].map((n) => grab(APP, n)).join("\n") + "\nreturn staleTransferHealPatch;")(); } catch { HP = null; }
+    ok_("มีตัวซ่อมใบโอนที่แท็บเวอร์ชันเก่ากดรับ (staleTransferHealPatch)", !!HP);
+    // แบบที่โค้ดเก่าเขียน: สถานะ transfer_done · ยอดยังเป็นยอดตอนสั่ง 345 · บรรทัดมี received_qty แล้ว · ไม่เคยส่งบัญชี
+    // (ธงบัญชีเป็น skip ได้ถ้าเคยถูกปุ่มซิงค์รวมของเวอร์ชันเก่ากวาดผ่าน — ตัวซ่อมต้องล้างให้ตามต่อได้)
+    const oldTab = () => TRP({ status: "transfer_done", received_at: "2026-10-13T05:00:00.000Z", sliptrack_sync: "skip",
+      items: TRP().items.map((it, i) => ({ ...it, received_qty: i === 0 ? 1.5 : 3, receivedQty: i === 0 ? 1.5 : 3 })) });
+    if (HP) {
+      const hp = HP(oldTab());
+      ck("ใบโอนคิดเงินที่แท็บเก่ากดรับ → รอชำระเงิน + ยอดคิดใหม่จากจำนวนรับจริง + ให้ตัวซ่อมบัญชีตามต่อ",
+        hp ? [hp.status, hp.total, hp.subtotal, hp.vat, "sliptrack_sync" in hp && hp.sliptrack_sync === null, hp.items.map((i) => i.line_total)] : hp,
+        ["awaiting_payment", 285, 285, 0, true, [180, 105]]);
+      const legacyDone = { ...LEGACY(), status: "transfer_done", received_at: "2026-09-01T05:00:00.000Z" };
+      ck("ไม่แตะ: ใบโอนเก่า ฿0 · ใบโอนที่รอชำระอยู่แล้ว · ใบที่ยังไม่รับของ · PO ปกติ",
+        [HP(legacyDone), HP({ ...oldTab(), status: "awaiting_payment" }), HP({ ...oldTab(), received_at: null }),
+          HP({ ...oldTab(), po_number: "PO-202610-B1-ZZZZZ", status: "paid" })], [null, null, null, null]);
+    }
+    // ตัวซ่อมในหน้า PO: รันบล็อกจริงจาก load() — ล็อกสถานะ transfer_done · ไม่แตะสต๊อก · อยู่ก่อนตัวซ่อมบัญชี
+    const hs = APP.indexOf("// ── ซ่อมใบโอนคิดเงินที่แท็บเวอร์ชันเก่ากดรับ");
+    const he = hs < 0 ? -1 : APP.indexOf("// ── Self-heal unsynced accounting rows", hs);
+    const blk = hs >= 0 && he > hs ? APP.slice(hs, he) : "";
+    ok_("ตัวซ่อมใบโอนอยู่ใน load() ก่อนตัวซ่อมบัญชี และไม่แตะสต๊อก",
+      !!blk && blk.includes("staleTransferHealPatch(p)") && !blk.includes("transferStockBetweenBranches") && !blk.includes("rpcStock"));
+    let healRun = null;
+    if (blk && HP) try {
+      const AF = (async () => {}).constructor;
+      const calls = [];
+      const out = await new AF("data", "api", "staleTransferHealPatch", "console", blk + "\nreturn data;")(
+        [oldTab(), { ...LEGACY(), id: 9, status: "transfer_done", received_at: "2026-09-01T05:00:00.000Z" }],
+        { patchPOIfStatus: async (id, exp, patch) => { calls.push([id, exp, patch.status, patch.total]); return [{}]; } },
+        HP, { error: () => {}, log: () => {}, warn: () => {} });
+      healRun = { calls, rows: out.map((p) => [p.id, p.status, p.total]) };
+    } catch (e) { healRun = { err: String((e && e.message) || e) }; }
+    ck("ตัวซ่อมใน load(): ซ่อมเฉพาะใบโอนคิดเงินที่ค้าง (ล็อกสถานะ transfer_done) · ใบเก่า ฿0 ไม่ถูกแตะ",
+      healRun, { calls: [[7, "transfer_done", "awaiting_payment", 285]], rows: [[7, "awaiting_payment", 285], [9, "transfer_done", 0]]});
+    // ใบที่ซ่อมแล้วต้องเข้าตะแกรงตามบัญชีทันที (ตัวซ่อมบัญชีรอบเดียวกัน + ตัวกวาดบนเซิร์ฟเวอร์)
+    let needs2 = null;
+    try {
+      const st = APP.indexOf("const poNeedsSlipSync=(p)=>!!p");
+      needs2 = new Function(APP.slice(st, APP.indexOf(";", APP.indexOf('p.status==="cancelled"', st)) + 1) + " return poNeedsSlipSync;")();
+    } catch { needs2 = null; }
+    ck("ใบที่ซ่อมแล้วเข้าตะแกรงตามบัญชี · ก่อนซ่อมไม่เข้า (เงินหายเงียบ)",
+      needs2 && HP ? [needs2(oldTab()), needs2({ ...oldTab(), ...HP(oldTab()) })] : null, [false, true]);
+  }
+
+  // ── ⑭ ยกเลิกหลังรับของ: ต้นทางกับปลายทางต้องกลับเป็น 0 ทุกกรณี (รวมตัดตอนจัดส่งพลาด) ──
+  //   บั๊กเดิม: ตัดต้นทางตอนจัดส่งพลาด (ค้าง) + คืนส่วนขาดให้ต้นทางสำเร็จ แล้วยกเลิก ⟹ ยอดคืนติดลบถูกปัดเป็น 0
+  //   และรายการค้างถูกล้าง ⟹ ต้นทางมีของผีเท่าส่วนขาดตลอดไป
+  {
+    const rbSrc = sgAsync("rollbackPOStock");
+    ok_("ยังมี rollbackPOStock ให้ทดสอบ", !!rbSrc);
+    let PFA = null;
+    try { PFA = new Function(grab(APP, "pendingFromAcc") + "\nreturn pendingFromAcc;")(); } catch { PFA = null; }
+    // S=5 ต้นทาง · R=8 ปลายทาง · L = สต๊อกที่ขยับไปแล้วสุทธิ (ก่อนยกเลิก) · ต้องกลับเป็น 0 ทั้งคู่
+    const runRB = async (po, L, opt = {}) => {
+      const led = { ...L };
+      const fn = mkFn(rbSrc, {
+        api: { getPO: async () => [{ stock_pending: po.stock_pending || null }] },
+        transferStockBetweenBranches: async ({ fromBranchId, toBranchId, items }) => {
+          const acc = { notFound: [], zeroQty: [], failedUpdates: [] };
+          for (const it of items) {
+            const q = +(it.received_qty ?? it.qty) || 0;
+            if (opt.failDebitOf != null && +fromBranchId === opt.failDebitOf && toBranchId == null) { acc.failedUpdates.push({ ingId: it.ingredient_id, name: "x", qty: q }); continue; }
+            if (fromBranchId != null) led[fromBranchId] = r2((led[fromBranchId] || 0) - q);
+            if (toBranchId != null) led[toBranchId] = r2((led[toBranchId] || 0) + q);
+          }
+          return acc;
+        },
+        pendingFromAcc: PFA, ings: [], round2: r2, reloadIngs: null,
+      });
+      const pend = await fn(po);
+      return { S: led[5] || 0, R: led[8] || 0, pend };
+    };
+    const rbPO = (status, items, pending) => ({ ...TRP({ status, items }), stock_pending: pending });
+    const line = (q, r) => ({ ingredient_id: 1, name: "หมูสับ", unit: "กก.", qty: q, ...(r != null ? { received_qty: r } : {}), price_per_unit: 120, line_total: 0 });
+    if (rbSrc && PFA) {
+      let res = null;
+      try {
+        res = [
+          // ① ตัดตอนจัดส่งพลาด (ค้าง 10) · รับ 6 สำเร็จ · คืนส่วนขาด 4 สำเร็จ → S +4 (ของผี) R +6
+          await runRB(rbPO("awaiting_payment", [line(10, 6)], [{ from: 5, to: null, items: [{ ingredient_id: 1, qty: 10 }] }]), { 5: 4, 8: 6 }),
+          // ② ทุกขั้นสำเร็จ: S −10+4 · R +6
+          await runRB(rbPO("awaiting_payment", [line(10, 6)], null), { 5: -6, 8: 6 }),
+          // ③ คืนส่วนขาดให้ต้นทางพลาด (ค้าง 4): S −10 · R +6
+          await runRB(rbPO("awaiting_payment", [line(10, 6)], [{ from: null, to: 5, items: [{ ingredient_id: 1, qty: 4 }] }]), { 5: -10, 8: 6 }),
+          // ④ วัตถุดิบเดียวกัน 2 บรรทัด ตัดตอนจัดส่งพลาดทั้งคู่ · รับครบ: S 0 · R +10 (ห้ามหักต้นทางซ้ำ)
+          await runRB(rbPO("awaiting_payment", [line(5, 5), line(5, 5)], [{ from: 5, to: null, items: [{ ingredient_id: 1, qty: 5 }, { ingredient_id: 1, qty: 5 }] }]), { 5: 0, 8: 10 }),
+          // ⑤ ใบโอนเก่า ฿0 ที่โอนเสร็จแล้ว กรณีเดียวกับ ①
+          await runRB({ ...rbPO("transfer_done", [line(10, 6)], [{ from: 5, to: null, items: [{ ingredient_id: 1, qty: 10 }] }]), total: 0 }, { 5: 4, 8: 6 }),
+          // ⑥ ยังลอยระหว่างทาง: ตัดพลาด → ไม่คืน · ตัดสำเร็จ → คืน 10
+          await runRB(rbPO("transfer_shipped", [line(10)], [{ from: 5, to: null, items: [{ ingredient_id: 1, qty: 10 }] }]), { 5: 0 }),
+          await runRB(rbPO("transfer_shipped", [line(10)], null), { 5: -10 }),
+        ];
+      } catch (e) { res = String((e && e.message) || e); }
+      ck("ยกเลิกใบที่รับแล้ว/ลอยอยู่: ต้นทางและปลายทางกลับเป็น 0 ทุกกรณี (รวมตัดตอนจัดส่งพลาด · บรรทัดซ้ำ)",
+        Array.isArray(res) ? res.map((x) => [x.S, x.R]) : res, [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0]]);
+      let fr = null;
+      try { fr = await runRB(rbPO("awaiting_payment", [line(10, 6)], [{ from: 5, to: null, items: [{ ingredient_id: 1, qty: 10 }] }]), { 5: 4, 8: 6 }, { failDebitOf: 5 }); } catch (e) { fr = null; }
+      ck("หักของผีคืนจากต้นทางไม่สำเร็จ → เก็บเป็นรายการค้าง (ตัดต้นทาง 4) ให้กด 🔁 ได้",
+        fr ? fr.pend.filter((g) => g.from === 5 && g.to == null).map((g) => g.items.map((i) => [i.ingredient_id, i.qty])) : null, [[[1, 4]]]);
+    }
+  }
+
+  // ── ⑮ จออื่นที่แยกใบโอน: Excel · ตัวนับใบโอนรอจ่าย (รันจริง ไม่ใช่ค้นข้อความ) ──
+  {
+    let xl = null;
+    try {
+      const sheets = [];
+      const XL = { utils: { book_new: () => ({}), json_to_sheet: (rows) => { sheets.push(rows); return {}; }, book_append_sheet: () => {} }, writeFile: () => {} };
+      const fn = mkFn("async " + grab(APP, "exportPOsToExcel"), { loadXLSX: async () => XL, isTransferPO: X && X.isTransferPO,
+        fmtD: (x) => String(x || ""), fmtDT: (x) => String(x || ""), billedQty: new Function(grab(APP, "billedQty") + "\nreturn billedQty;")(),
+        todayBkk: () => "2026-10-13", alert: () => {} });
+      await fn([TRP({ status: "awaiting_payment", total: 285 }), TRP(), { ...LEGACY(), status: "transfer_done" },
+        { ...TRP({ po_number: "PO-202610-B1-ZZZZZ", status: "paid", total: 200 }) }], BR_BY);
+      xl = (sheets[0] || []).map((r) => [r["ประเภท"], r["ยอดสุทธิ"]]);
+    } catch (e) { xl = String((e && e.message) || e); }
+    ck("Excel: ใบโอนคิดเงิน (รอชำระ/ยังลอยอยู่) เป็น 'โอนระหว่างสาขา' พร้อมยอดจริง · ใบเก่า ฿0 = การโอน · PO = จัดซื้อ",
+      xl, [["โอนระหว่างสาขา", 285], ["โอนระหว่างสาขา", 345], ["โอนระหว่างสาขา", "การโอน"], ["จัดซื้อ", 200]]);
+    let toPay = null;
+    try {
+      const ln = APP.split("\n").find((l) => l.trim().startsWith("const xferToPay=")) || "";
+      const f = new Function("pos", "isTransferPO", "canPayTransfer", "currentBranch", "currentUser", ln + "\nreturn xferToPay;");
+      const P3 = [TRP({ status: "awaiting_payment", total: 285 }), { ...LEGACY(), status: "transfer_done" }, TRP({ po_number: "PO-202610-B1-ZZZZZ", status: "awaiting_payment", from_branch_id: 1 })];
+      toPay = [f(P3, X.isTransferPO, X.canPayTransfer, { id: 5, type: "branch" }, { role: "staff" }), f(P3, X.isTransferPO, X.canPayTransfer, { id: 8, type: "branch" }, { role: "staff" })];
+    } catch (e) { toPay = String((e && e.message) || e); }
+    ck("ตัวนับ 'ใบโอนรอจ่าย' บนหัวตาราง: สาขาผู้ส่งเห็น 0 · สาขาผู้รับเห็น 1", toPay, [0, 1]);
+  }
+
+  // ── ⑯ หมอตรวจข้อมูลข้อ 20 (รันจริงด้วยแถวปลอม) ──
+  {
+    const DATA = rd("tools/check-data.mjs");
+    const s20 = DATA.indexOf('section("20)');
+    const b0 = s20 < 0 ? -1 : DATA.indexOf("\n  {", s20);
+    let blk = null;
+    if (b0 >= 0) { let dd = 0; for (let i = b0 + 3; i < DATA.length; i++) { if (DATA[i] === "{") dd++; else if (DATA[i] === "}") { dd--; if (dd === 0) { blk = DATA.slice(b0 + 3, i + 1); break; } } } }
+    let w20 = null;
+    try {
+      const out = [];
+      const fr = TRP({ items: [{ ingredient_id: 1, name: "หมูสับ", unit: "กก.", qty: 1.235, price_per_unit: 120.5, line_total: 148.82 },
+        { ingredient_id: 2, name: "ผักบุ้ง", unit: "ถุง", qty: 0.333, price_per_unit: 35, line_total: 11.66 },
+        { ingredient_id: 5, name: "เนื้อ", unit: "กก.", qty: 1.235, price_per_unit: 89.75, line_total: 110.84 }], subtotal: 271.31, total: 271.31 });
+      const rows = [
+        { ...LEGACY(), id: 1, po_number: "TR-202610-B5-OLD01", status: "transfer_done", created_at: "2026-10-10T05:00:00Z" },   // ใบเก่าก่อนเปิด = ปกติ
+        { ...fr, id: 2, po_number: "TR-202610-B5-FRAC1", created_at: "2026-10-14T05:00:00Z" },                                   // ทศนิยม ปัดถูก = ปกติ
+        { ...LEGACY(), id: 3, po_number: "TR-202610-B8-STALE", status: "transfer_pending", created_at: "2026-10-15T05:00:00Z" }, // ฿0 หลังเปิด = เตือน
+        { ...fr, id: 4, po_number: "TR-202610-B5-DONE1", status: "transfer_done", received_at: "2026-10-15T06:00:00Z", created_at: "2026-10-15T01:00:00Z" }, // มียอดแต่โอนเสร็จ = เตือน
+        { ...fr, id: 5, po_number: "TR-202610-B5-WRONG", total: 271.32, subtotal: 271.32, created_at: "2026-10-15T02:00:00Z" },   // ยอดหัวใบ ≠ บิล = เตือน
+      ];
+      new Function("pos", "bn", "warn", "ok", blk)(rows, (b) => "สาขา" + b, (_m, list) => out.push(...list), () => {});
+      w20 = out.map((t) => t.split(" ")[0]);
+    } catch (e) { w20 = String((e && e.message) || e); }
+    ck("หมอตรวจข้อ 20: เตือนใบ ฿0 ที่สร้างหลังเปิดคิดเงิน · ใบมียอดที่จบโอนเสร็จ · ยอดหัวใบ ≠ บิล · ไม่เตือนใบเก่า/ใบทศนิยมที่ปัดถูก",
+      w20, ["TR-202610-B8-STALE", "TR-202610-B5-DONE1", "TR-202610-B5-WRONG"]);
+  }
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
