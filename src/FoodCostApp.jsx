@@ -8999,7 +8999,7 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
     if(!cart.length){alert("ยังไม่มีรายการ — เพิ่มอย่างน้อย 1 รายการ");return;}
     const nAsset=cart.filter(x=>x.kind==="asset").length,nOther=cart.filter(x=>x.kind==="other").length;
     const lines=cart.map(x=>`• ${x.kind==="other"?"[ใหม่] ":""}${x.name} × ${x.qty} ชิ้น`).join("\n");
-    if(!await confirmDlg({title:"ยืนยันสั่งซื้อสินทรัพย์/อุปกรณ์",message:`${lines}\n\nรวม ${cart.length} รายการ (สินทรัพย์ ${nAsset} · อุปกรณ์อื่น ${nOther})\n\n⚠️ กรุณาแจ้งบอสในไลน์ก่อน — เป็นบอสเท่านั้นที่พิจารณา แล้ว Area ถึงจะอนุมัติได้`,confirmLabel:"สั่งซื้อ",danger:false}))return;
+    if(!await confirmDlg({title:"ยืนยันสั่งซื้อสินทรัพย์/อุปกรณ์",message:`${lines}\n\nรวม ${cart.length} รายการ (สินทรัพย์ ${nAsset} · อุปกรณ์อื่น ${nOther})\n\n⚠️ กรุณาแจ้งบอสในไลน์ก่อน — เป็นบอสเท่านั้นที่พิจารณา${APPROVAL_ON?" แล้ว Area ถึงจะอนุมัติได้":""}`,confirmLabel:"สั่งซื้อ",danger:false}))return;
     savingRef.current=true;setSaving(true);
     try{
       await api.addPR({pr_number:genPRNumber(currentBranch?.id),branch_id:currentBranch?.id,branch_name:currentBranch?.name,requested_by:currentUser?.username||currentUser?.name||"",type:"asset",items:cart,reason:null,status:firstDocStatus("pr"),...autoApproved(),created_by:currentUser?.username||currentUser?.name||"",updated_at:new Date().toISOString()});
@@ -9286,7 +9286,7 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
   // ใบขอซื้อสินทรัพย์เก็บราคาไว้ที่ price_per_unit ของรายการ (ไม่มีวัตถุดิบให้ดู buy_price) — เดิมขึ้น ฿0
   const estTotal=useMemo(()=>filtered.reduce((s,p)=>s+(p.items||[]).reduce((a,it)=>{const ing=ings.find(x=>+x.id===+it.ingredient_id);return a+(+it.qty||0)*(+it.price_per_unit||+ing?.buy_price||0);},0),0),[filtered,ings]);
   const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false),[branches]);
-  const statusChips=[{v:"",l:"📋 ทั้งหมด",c:C.brand},{v:"pending_approval",l:"⏳ รออนุมัติ",c:"#B45309"},{v:"approved",l:"✅ อนุมัติแล้ว",c:C.teal},{v:"converted",l:"📦 ออกซื้อแล้ว",c:C.blue}];
+  const statusChips=[{v:"",l:"📋 ทั้งหมด",c:C.brand},{v:"pending_approval",l:"⏳ รออนุมัติ",c:"#B45309"},{v:"approved",l:"✅ อนุมัติแล้ว",c:C.teal},{v:"converted",l:"📦 ออกซื้อแล้ว",c:C.blue}].filter(d=>APPROVAL_ON||d.v!=="pending_approval")   // ปิดขั้นอนุมัติ = ไม่มีใบรออนุมัติ ไม่ต้องมีชิปให้งง;
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
       <div style={{fontFamily:"'Sarabun',sans-serif"}}>

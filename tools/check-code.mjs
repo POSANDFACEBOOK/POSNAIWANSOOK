@@ -6395,9 +6395,10 @@ section("ขั้น Area อนุมัติปิดอยู่ = ข้�
   const bad = lines.map((l, i) => [i + 1, l]).filter(([n, l]) => {
     const t = l.trim(); if (t.startsWith("//") || t.startsWith("{/*")) return false;
     const code = l.replace(/\s\/\/\s.*$/, "");
-    if (!/Area\s*(ถึงจะกด)?อนุมัติ/.test(code)) return false;
+    if (!/Area\s*(ถึงจะ(กด)?)?อนุมัติ/.test(code)) return false;
     return !code.includes("APPROVAL_ON") && !code.includes("รอ Area อนุมัติก่อน") && !code.includes('orderStatus==="rejected"') && !gatedAbove(n - 1);
   }).map(([n]) => n);
+  ok_(`ชิป ⏳ รออนุมัติ ในใบขอซื้อ ขึ้นเฉพาะตอนเปิดขั้นอนุมัติ`, !flagOff || /const statusChips=\[[^\n]*\]\.filter\(d=>APPROVAL_ON\|\|d\.v!=="pending_approval"\)/.test(APP));
   ok_(`ไม่มีข้อความรอ Area ที่ไม่ผูกกับ APPROVAL_ON${bad.length ? " — บรรทัด " + bad.join(", ") : ""}`, !flagOff || bad.length === 0);
 }
 
