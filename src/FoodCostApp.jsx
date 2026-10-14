@@ -1210,6 +1210,9 @@ function sliptrackBranchName(name){
 // ตัดคีย์ "โอนเข้าบัญชีบริษัท" ทิ้งทั้งที่มีจริง เพราะเป็นเงิน "เข้า" ไม่ใช่จ่ายออก
 // การมีตัวเลือกผิดทางในฟอร์มจ่ายเงิน = รอให้มีคนกดพลาดเท่านั้นเอง
 const PO_CASH_SOURCES=["โอนจากบัญชีบริษัท","เงินสดย่อย","เงินในตู้เซฟ","ลิ้นชักเก็บเงิน"];
+// ใบโอนระหว่างสาขา: จ่ายด้วยการโอนเงินเท่านั้น — ท่อบัญชีไม่ขยับยอดตู้เซฟ/เงินสด (บัญชีแจ้ง 14 ต.ค. 69)
+// จ่ายเงินสดจากตู้ปลายทางแล้วตู้ในบัญชีไม่ลด ต้นทางไม่เพิ่ม = ยอดตู้ไม่ตรงเงินจริง · เจ้าของเลือกล็อกไว้
+const TRANSFER_CASH_SOURCES=["โอนจากบัญชีบริษัท"];
 // ── ใบโอนวัตถุดิบระหว่างสาขา (คิดเงิน · เจ้าของสั่ง 13 ต.ค. 69) ─────────────────
 // ใบโอนที่สร้างหลังเปิดคิดเงิน พอรับของแล้วจะไปอยู่ awaiting_payment/paid เหมือน PO ปกติ
 // ⟹ ดูจากสถานะอย่างเดียวแยกไม่ออกว่าเป็นใบโอน ต้องดูเลขใบ TR- ด้วย ทุกจอ/รายงานใช้ตัวนี้ตัวเดียว
@@ -10567,7 +10570,10 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   async function submitPayment(po,slipUrl,note,payDate,cashSource){
     // ใบโอน: สาขาที่รับของเป็นคนจ่ายให้สาขาที่ส่ง (ครัวกลาง/แอดมินบันทึกแทนได้) — สาขาผู้ส่งห้ามกดจ่ายเอง
     // PO ปกติ: คงกติกาเดิม ผู้ออกเอกสารเป็นคนบันทึก
-    if(isTransferPO(po)){ if(!canPayTransfer(po,currentBranch,currentUser))throw new Error("ใบโอน: สาขาที่รับของเป็นผู้จ่ายเงิน — สาขาที่ส่งของกดจ่ายไม่ได้"); }
+    if(isTransferPO(po)){
+      if(!canPayTransfer(po,currentBranch,currentUser))throw new Error("ใบโอน: สาขาที่รับของเป็นผู้จ่ายเงิน — สาขาที่ส่งของกดจ่ายไม่ได้");
+      if(cashSource&&!TRANSFER_CASH_SOURCES.includes(cashSource))throw new Error("ใบโอนจ่ายได้เฉพาะ โอนจากบัญชีบริษัท — ถ้าต้องจ่ายเงินสด แจ้งฝ่ายบัญชีก่อน");
+    }
     else if(!isCreator(po))throw new Error("เฉพาะผู้ออกเอกสารเท่านั้นที่ชำระเงินได้");
     try{
       const now=new Date().toISOString();
@@ -12483,10 +12489,10 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:700,color:C.ink2,marginBottom:6}}>🏦 จ่ายจากบัญชีไหน *</div>
           <select value={cashSource} onChange={e=>setCashSource(e.target.value)} disabled={saving} style={{...iS,fontSize:13,fontWeight:cashSource?800:600,borderColor:cashSource?undefined:C.red,background:C.white}}>
             <option value="">— ยังไม่ได้เลือก —</option>
-            {PO_CASH_SOURCES.map(v=><option key={v} value={v}>{v}</option>)}
+            {(isTransferPO(po)?TRANSFER_CASH_SOURCES:PO_CASH_SOURCES).map(v=><option key={v} value={v}>{v}</option>)}
           </select>
           <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:11,color:cashSource?C.ink4:C.red,fontWeight:700,marginTop:4}}>
-            {cashSource?"ระบบบัญชีใช้ช่องนี้แยกว่าเงินออกจากบัญชีธนาคารหรือออกจากเงินสด":"ต้องเลือก — ถ้าไม่ระบุ ยอดจะกระทบยอดกับสเตทเมนต์ธนาคารไม่ได้"}
+            {isTransferPO(po)?"ใบโอนจ่ายได้ด้วยการโอนจากบัญชีเท่านั้น — ถ้าต้องจ่ายเงินสด แจ้งฝ่ายบัญชีก่อน (ยอดตู้เซฟในบัญชีไม่ขยับตาม)":cashSource?"ระบบบัญชีใช้ช่องนี้แยกว่าเงินออกจากบัญชีธนาคารหรือออกจากเงินสด":"ต้องเลือก — ถ้าไม่ระบุ ยอดจะกระทบยอดกับสเตทเมนต์ธนาคารไม่ได้"}
           </div>
         </div>
         <div style={{marginBottom:18}}>

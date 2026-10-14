@@ -6650,12 +6650,15 @@ section("โอนวัตถุดิบคิดเงิน");
   }
   const paySrc = sgAsync("submitPayment");
   ok_("ยังมี submitPayment ให้ทดสอบ", !!paySrc);
-  const runPay = async (po, branch) => {
+  // ใบโอนจ่ายได้เฉพาะ "โอนจากบัญชีบริษัท" (เงินสดไม่ขยับยอดตู้ในบัญชี — เจ้าของเลือกล็อก 14 ต.ค. 69)
+  let TCS = null; try { TCS = new Function(LINE("const TRANSFER_CASH_SOURCES=") + "\nreturn TRANSFER_CASH_SOURCES;")(); } catch { TCS = null; }
+  ok_("ใบโอนมีรายการช่องทางจ่ายของตัวเอง = โอนจากบัญชีบริษัท อย่างเดียว", Array.isArray(TCS) && TCS.join() === "โอนจากบัญชีบริษัท");
+  const runPay = async (po, branch, src = "โอนจากบัญชีบริษัท") => {
     const log = [];
     let threw = false;
     try {
       const fn = mkFn(paySrc, {
-        isTransferPO: X && X.isTransferPO, canPayTransfer: X && X.canPayTransfer,
+        isTransferPO: X && X.isTransferPO, canPayTransfer: X && X.canPayTransfer, TRANSFER_CASH_SOURCES: TCS,
         currentBranch: branch, currentUser: { username: "tester", role: "staff" },
         isCreator: (p) => +p.from_branch_id === +branch.id, bkkNoonISO: (v) => (v ? `${v}T05:00:00.000Z` : null),
         api: { patchPOIfStatus: async (id, exp, patch) => { log.push(["patch", exp, patch]); return [{}]; }, getSlipSignedUrl: async () => "https://x/slip" },
@@ -6663,7 +6666,7 @@ section("โอนวัตถุดิบคิดเงิน");
         recordSlipSync: async () => {}, load: async () => {}, setViewPO: () => {}, showErr: () => {},
         location: { origin: "https://x" }, alert: () => {}, branches: BRANCHES,
       });
-      await fn(po, "drive:abc", "", "2026-10-13", "เงินในตู้เซฟ");
+      await fn(po, "drive:abc", "", "2026-10-13", src);
       await tick();
     } catch { threw = true; }
     return { log, threw };
@@ -6676,12 +6679,16 @@ section("โอนวัตถุดิบคิดเงิน");
     const pp = asRecv.log.find((x) => x[0] === "patch"), pu = asRecv.log.find((x) => x[0] === "push");
     ck("สาขาผู้รับของจ่ายใบโอนได้ ผ่านทางจ่ายเดิม (รอชำระ → จ่ายแล้ว + ส่งบัญชีขั้นจ่ายแล้ว)",
       [asRecv.threw, pp && pp[1], pp && pp[2].status, pu && pu[2] && pu[2].paid, pu && pu[2] && pu[2].cashSource],
-      [false, "awaiting_payment", "paid", true, "เงินในตู้เซฟ"]);
-    // PO ปกติต้องเหมือนเดิม: ผู้ออกเอกสารจ่าย ผู้รับของกดไม่ได้
+      [false, "awaiting_payment", "paid", true, "โอนจากบัญชีบริษัท"]);
+    const cashPay = await runPay(TP, { id: 8, type: "branch" }, "เงินในตู้เซฟ");
+    ck("ใบโอนจ่ายด้วยเงินในตู้เซฟไม่ได้ (ไม่บันทึก ไม่ส่งบัญชี)", [cashPay.threw, cashPay.log.length], [true, 0]);
+    // PO ปกติต้องเหมือนเดิม: ผู้ออกเอกสารจ่าย (เลือกเงินสดได้) ผู้รับของกดไม่ได้
     const PO_ = { ...TP, po_number: "PO-202610-B1-ZZZZZ", from_branch_id: 1, branch_id: 8 };
-    const poCreator = await runPay(PO_, { id: 1, type: "central" });
+    const poCreator = await runPay(PO_, { id: 1, type: "central" }, "เงินในตู้เซฟ");
     const poRecv = await runPay(PO_, { id: 8, type: "branch" });
-    ck("PO ปกติคงกติกาเดิม: ผู้ออกเอกสารบันทึกจ่าย · ผู้รับของกดไม่ได้", [poCreator.threw, poRecv.threw], [false, true]);
+    ck("PO ปกติคงกติกาเดิม: ผู้ออกเอกสารบันทึกจ่าย (เงินสดได้) · ผู้รับของกดไม่ได้", [poCreator.threw, poRecv.threw], [false, true]);
+    ok_("หน้าจ่ายเงิน: ใบโอนแสดงเฉพาะช่องทางของใบโอน",
+      APP.includes("{(isTransferPO(po)?TRANSFER_CASH_SOURCES:PO_CASH_SOURCES).map(v=><option key={v} value={v}>{v}</option>)}"));
   }
   ok_("ปุ่ม 💳 ในแถว: ใบโอนใช้กติกาใบโอน · PO ใช้กติกาเดิม",
     APP.includes('po.status==="awaiting_payment"&&(isTransferPO(po)?canPayTransfer(po,currentBranch,currentUser):iCreator)&&<button onClick={()=>setPayPO(po)}'));
