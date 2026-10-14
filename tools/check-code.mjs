@@ -7010,6 +7010,13 @@ section("โอนวัตถุดิบคิดเงิน");
   }
 }
 
+section("กล่องยืนยันจัดส่งไม่ใช่การลบ");
+{
+  // ConfirmBox ตั้งต้น danger=true = ไอคอนถังขยะ+สีแดง — ปุ่มจัดส่ง PO/ใบโอนเคยขึ้นแบบนั้น (พนักงานนึกว่าลบใบ)
+  const ships = APP.split('confirmLabel:"🚚 จัดส่ง + ตัดสต๊อก",').slice(1).map((t) => t.slice(0, 160));
+  ok_(`ปุ่มจัดส่งทุกจุด (${ships.length}) ใช้กล่องยืนยันแบบเตือน ไม่ใช่แบบลบ`, ships.length >= 2 && ships.every((t) => /danger:false/.test(t)));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

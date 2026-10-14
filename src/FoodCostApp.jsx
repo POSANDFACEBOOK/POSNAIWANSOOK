@@ -10272,6 +10272,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       title:"ยืนยันจัดส่ง + ตัดสต๊อก",
       message:`จัดส่ง ${po.po_number||"PO นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 🚛 ของจะอยู่ในสถานะ "ลอยอยู่ระหว่างทาง" — ยังไม่เข้าสต๊อก ${recipient}\n• สต๊อก ${recipient} จะเพิ่มเข้าตอนปลายทางกด "✅ ยืนยันรับ"\n• สถานะเปลี่ยนเป็น "🚚 จัดส่งแล้ว"`,
       confirmLabel:"🚚 จัดส่ง + ตัดสต๊อก",
+      danger:false,   // จัดส่งไม่ใช่การลบ — ไอคอนถังขยะทำให้พนักงานกลัวกด (คู่มือถ่ายไปเจอ)
     }))return;
     setConfirming(po.id);
     try{
@@ -10332,6 +10333,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       title:"ยืนยันจัดส่ง + ตัดสต๊อก",
       message:`จัดส่งใบโอน ${po.po_number||"นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 🚛 ของจะอยู่ในสถานะ "ลอยอยู่ระหว่างทาง"\n• สต๊อก ${recipient} จะเพิ่มเข้าตอนปลายทางกด "✅ รับโอน" แล้วกรอกจำนวนรับจริง${xferAmt}`,
       confirmLabel:"🚚 จัดส่ง + ตัดสต๊อก",
+      danger:false,   // จัดส่งไม่ใช่การลบ — ไอคอนถังขยะทำให้พนักงานกลัวกด (คู่มือถ่ายไปเจอ)
     }))return;
     setConfirming(po.id);
     try{
