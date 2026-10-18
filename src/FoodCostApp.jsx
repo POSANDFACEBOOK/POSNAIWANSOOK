@@ -2382,6 +2382,24 @@ const billShiftClosed=(o,cur)=>{
 // ── ผลส่งยอดปิดกะเข้าบัญชี (pos_closing) ──────────────────────────────
 // "ข้าม" มีสองแบบที่ต้องแยกให้ออก: กะนี้ไม่มีบิล (ปิดเงียบได้) กับ สาขานี้ยังไม่เปิดท่อบัญชี (ต้องเตือน)
 // เดิมปิดเงียบทั้งสองแบบ ⟹ สาขาที่ยังไม่เปิดท่อปิดกะยอดหลายหมื่นแล้วไม่มีใครรู้ว่ายอดไม่ถึงบัญชี
+// ── ปิดกะ: ตอบ 200 แต่ยอด "ยังไม่ลงสมุด" ── ความหมายสถานะที่ฝั่งบัญชีกำหนดให้ (18 ต.ค. 69)
+// income:    posted / exists = ลงแล้ว · skipped / error = ยังไม่ลง · mismatch = ลงแล้วแต่ยอดอ่านกลับไม่ตรง
+// safe_cash: deposited / exists = เข้าตู้แล้ว · skipped = ปกติ (ใบแรกของกะข้ามเที่ยงคืน / วันไม่มีเงินสด) · error / mismatch = ผิด
+// cash_doc:  skipped = ปกติ (สาขาบุคคลธรรมดาไม่ออก CA-) · blocked / error / mismatch = ผิด
+// เดิมทุกคำตอบ 200 ขึ้นเขียว "ส่งเข้าระบบบัญชีแล้ว" — ยอดที่ไม่ลงสมุดจะไม่มีใครรู้ (บทเรียน duplicate 19-22 ก.ย. ฿32,705)
+// ใช้เฉพาะใบปิดกะ ไม่ปนกับ slipWarnings (ตัวตอบของใบสั่งซื้อไม่มีช่องเหล่านี้)
+function closingStatusWarnings(reply){
+  const st=(k)=>String((reply&&reply[k]&&reply[k].status)||"");
+  const out=[];
+  const inc=st("income");
+  if(inc==="skipped"||inc==="error")out.push("รายรับยังไม่ลงสมุด ("+inc+")");
+  else if(inc==="mismatch")out.push("รายรับลงแล้วแต่ยอดอ่านกลับไม่ตรง (mismatch)");
+  const safe=st("safe_cash");
+  if(safe==="error"||safe==="mismatch")out.push("เงินเข้าตู้เซฟมีปัญหา ("+safe+")");
+  const doc=st("cash_doc");
+  if(doc==="blocked"||doc==="error"||doc==="mismatch")out.push("ใบขายเงินสด CA- ออกไม่ได้ ("+doc+")");
+  return out;
+}
 function acctOutcomeOf(res,paidBills){
   if(!res||typeof res!=="object")return "failed";
   if(res.skipped){
@@ -23834,7 +23852,9 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         const fatal=!!acct.error||(rows.length===0&&!acct.skipped);
         // ส่งผ่าน แต่บัญชีทิ้งบางค่า = ยอดเงินลงแล้วก็จริง แต่เอกสารไม่ครบ
         // เดิมเคสนี้ขึ้นเขียวล้วน "ส่งเข้าระบบบัญชีแล้ว" แล้วไม่มีใครรู้ว่าขาดอะไร
-        const warnRows=rows.filter(r=>r.ok&&slipWarnings(r.reply).length);
+        const warnRows=rows.filter(r=>r.ok&&(slipWarnings(r.reply).length||closingStatusWarnings(r.reply).length));
+        // ถึงระบบบัญชีแล้วแต่ยังลงไม่ครบ (รายรับ skipped/error/mismatch ฯลฯ) — ห้ามบอกว่า "ยอดลงสมุดแล้ว"
+        const stRows=rows.filter(r=>r.ok&&closingStatusWarnings(r.reply).length);
         // วันนั้นมีใบปิดยอดอยู่แล้ว (เปิดวันละ 2 กะ) — ยอดกะนี้ถูกทิ้ง และส่งซ้ำก็ไม่ช่วย
         const dropRows=rows.filter(r=>r.dropped);
         const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0&&openRows.length===0;
@@ -23843,12 +23863,12 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
           <div style={{padding:"18px 20px 12px",background:okAll?C.greenLight:partial?C.yellowLight:C.redLight,borderBottom:`1px solid ${okAll?C.green:partial?C.yellow:C.red}33`}}>
             <div style={{fontSize:32,marginBottom:4}}>{okAll?"📗":partial?"📙":"⚠️"}</div>
             <div style={{fontSize:17,fontWeight:900,color:okAll?"#0F6E4C":partial?"#92400E":C.red}}>
-              {noneToSend?"ปิดกะเรียบร้อย — ไม่มียอดขายให้ลงบัญชี":okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":partial?(openRows.length?"ส่งยอดขายแล้วบางวัน":"ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก"):"ยอดขายยังไม่เข้าระบบบัญชี"}
+              {noneToSend?"ปิดกะเรียบร้อย — ไม่มียอดขายให้ลงบัญชี":okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":partial?(stRows.length?"ส่งถึงระบบบัญชีแล้ว แต่ยังลงไม่ครบ":openRows.length?"ส่งยอดขายแล้วบางวัน":"ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก"):"ยอดขายยังไม่เข้าระบบบัญชี"}
             </div>
             <div style={{fontSize:12,color:okAll?"#0F6E4C":partial?"#92400E":C.red,marginTop:4,lineHeight:1.6,opacity:.95}}>
               {noneToSend?"กะนี้ไม่มีบิลที่เก็บเงินได้ จึงไม่มียอดต้องส่งเข้าบัญชี — ไม่ใช่ความผิดพลาด"
                 :okAll?"กะปิดเรียบร้อยและยอดลงสมุดบัญชีแล้ว"
-                :partial?(openRows.length?"วันที่ระบบบัญชียังไม่เปิดรับจาก POS ต้องส่งยอดทางเดิม (ใบปิดยอด/สแกน) — ห้ามส่งซ้ำจาก POS":"ยอดเงินลงสมุดบัญชีแล้ว แต่ระบบบัญชีไม่รับข้อมูลบางอย่าง — ดูรายละเอียดข้างล่าง แล้วแจ้งผู้ดูแลระบบ")
+                :partial?(stRows.length?"ระบบบัญชีรับใบแล้ว แต่บางส่วนยังไม่ลงสมุด — ดูรายละเอียดข้างล่าง แล้วแจ้งฝ่ายบัญชี (ไม่ต้องส่งซ้ำ)":openRows.length?"วันที่ระบบบัญชียังไม่เปิดรับจาก POS ต้องส่งยอดทางเดิม (ใบปิดยอด/สแกน) — ห้ามส่งซ้ำจาก POS":"ยอดเงินลงสมุดบัญชีแล้ว แต่ระบบบัญชีไม่รับข้อมูลบางอย่าง — ดูรายละเอียดข้างล่าง แล้วแจ้งผู้ดูแลระบบ")
                 :dropRows.length?"กะปิดเรียบร้อยแล้ว แต่วันนี้มีใบปิดยอดของสาขานี้ลงไปแล้ว ระบบบัญชีจึงไม่รับยอดกะนี้ — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ"
                 :"กะปิดเรียบร้อยแล้ว แต่ยอดยังไม่ลงบัญชี — แจ้งผู้ดูแลระบบให้ส่งซ้ำ"}
             </div>
@@ -23861,6 +23881,9 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
               </div>
               {r.ok&&r.reply&&r.reply.income&&<div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>
                 ลงบัญชี: {String(r.reply.income.status)}{r.reply.income.rows?` · ${r.reply.income.rows} แถว`:""}{r.reply.income.vat!=null?` · VAT ฿${(+r.reply.income.vat).toLocaleString()}`:""}
+              </div>}
+              {r.ok&&closingStatusWarnings(r.reply).length>0&&<div style={{fontSize:11.5,color:"#92400E",marginTop:4,padding:"6px 8px",background:C.yellowLight,borderRadius:8,lineHeight:1.55,fontWeight:700}}>
+                ⚠️ {closingStatusWarnings(r.reply).join(" · ")} — แจ้งฝ่ายบัญชี
               </div>}
               {r.ok&&slipWarnings(r.reply).length>0&&<div style={{fontSize:11.5,color:"#92400E",marginTop:4,padding:"6px 8px",background:C.yellowLight,borderRadius:8,lineHeight:1.55}}>
                 ⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(" · ")}

@@ -2267,7 +2267,7 @@ section("วันที่โอนจริง + แหล่งเงิน�
     ["slipWarnings(done)", "slipWarnings(vd)", "slipWarnings(d)", "slipWarnings(r.reply)"].filter((x) => !APP.includes(x)), []);
   // จอปิดกะเคยขึ้นเขียวล้วนแม้บัญชีจะทิ้งค่าไปบางส่วน = คนปิดกะเชื่อว่าเรียบร้อย
   ok_("จอปิดกะแยกสถานะ \"ส่งแล้วแต่ไม่ครบ\" ออกจากเขียวล้วน",
-    APP.includes("const warnRows=rows.filter(r=>r.ok&&slipWarnings(r.reply).length);") &&
+    APP.includes("const warnRows=rows.filter(r=>r.ok&&(slipWarnings(r.reply).length||closingStatusWarnings(r.reply).length));") &&
     APP.includes("const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0&&openRows.length===0;") &&
     APP.includes("ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก"));
   // ── "ข้าม" มีสองแบบ ห้ามเหมารวม ────────────────────────────────────────
@@ -8577,6 +8577,35 @@ section("ปิดกะ: ระบบบัญชียังไม่เปิ
     APP.includes('if(outcome==="not_open"){setAcct({...(acctRes||{}),notEnabled:true,notOpen:true,') &&
     APP.includes("bad=rows.filter(r=>!r.ok&&!r.noSale&&!r.notOpen)") && APP.includes("ระบบบัญชียังไม่เปิดรับยอดจาก POS ของวันนี้ — ส่งยอดทางเดิม"));
   ok_("ส่งไม่ผ่านจริงเท่านั้นที่ถูกจดค้าง (not_open ไม่เข้า rememberAcctUnsent)", APP.includes('const kept=outcome==="failed"&&rememberAcctUnsent('));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ปิดกะ: ตอบ 200 แต่ยอด "ยังไม่ลงสมุด" ต้องไม่ขึ้นเขียว — ความหมายสถานะจากฝั่งบัญชี 18 ต.ค. 69
+// (ได้มาตอน dry-run ใบปิดกะสาขา 5 กับฟังก์ชันจริงของฝั่งบัญชี)
+// ══════════════════════════════════════════════════════════════════════════
+section("ปิดกะ: ตอบ 200 แต่รายรับ/ตู้เซฟ/ใบขาย ยังไม่ลง");
+{
+  let CS = null;
+  try { CS = new Function(grab(APP, "closingStatusWarnings") + "\nreturn closingStatusWarnings;")(); } catch { CS = null; }
+  ok_("ดึงตัวอ่านสถานะใบปิดกะตัวจริงมารันได้", !!CS);
+  if (CS) {
+    const n = (r) => CS(r).length;
+    ck("รายรับ: posted/exists = ลงแล้ว (ไม่เตือน) · skipped/error/mismatch = เตือน",
+      [n({ income: { status: "posted" } }), n({ income: { status: "exists" } }), n({ income: { status: "skipped" } }), n({ income: { status: "error" } }), n({ income: { status: "mismatch" } })],
+      [0, 0, 1, 1, 1]);
+    ck("ตู้เซฟ: deposited/exists/skipped = ปกติ · error/mismatch = เตือน",
+      [n({ safe_cash: { status: "deposited" } }), n({ safe_cash: { status: "exists" } }), n({ safe_cash: { status: "skipped" } }), n({ safe_cash: { status: "error" } }), n({ safe_cash: { status: "mismatch" } })],
+      [0, 0, 0, 1, 1]);
+    ck("ใบขาย CA-: skipped = ปกติ (สาขาบุคคลธรรมดา) · blocked/error/mismatch = เตือน",
+      [n({ cash_doc: { status: "skipped", reason: "ไม่ใช่นิติบุคคล" } }), n({ cash_doc: { status: "blocked" } }), n({ cash_doc: { status: "error" } }), n({ cash_doc: { status: "mismatch" } })],
+      [0, 1, 1, 1]);
+    ck("ใบสาขา 5 ตามผล dry-run ของฝั่งบัญชี (รายรับลง · ตู้เซฟข้ามใบแรก · ไม่ออก CA-) = เขียว · ตอบไม่มีช่องเหล่านี้ = ไม่เตือนมั่ว",
+      [n({ income: { status: "posted" }, safe_cash: { status: "skipped" }, cash_doc: { status: "skipped" } }), n({}), n(null)], [0, 0, 0]);
+  }
+  ok_("จอปิดกะ: สถานะยังไม่ลง = เหลือง \"ส่งถึงระบบบัญชีแล้ว แต่ยังลงไม่ครบ\" ไม่ใช่เขียว และบอกให้แจ้งฝ่ายบัญชี",
+    APP.includes("const warnRows=rows.filter(r=>r.ok&&(slipWarnings(r.reply).length||closingStatusWarnings(r.reply).length));") &&
+    APP.includes("const stRows=rows.filter(r=>r.ok&&closingStatusWarnings(r.reply).length);") &&
+    APP.includes("ส่งถึงระบบบัญชีแล้ว แต่ยังลงไม่ครบ") && APP.includes("⚠️ {closingStatusWarnings(r.reply).join(\" · \")} — แจ้งฝ่ายบัญชี"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
