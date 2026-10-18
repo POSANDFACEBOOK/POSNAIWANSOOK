@@ -2400,6 +2400,17 @@ function closingStatusWarnings(reply){
   if(doc==="blocked"||doc==="error"||doc==="mismatch")out.push("ใบขายเงินสด CA- ออกไม่ได้ ("+doc+")");
   return out;
 }
+// ข้อความจากฝั่งบัญชีในใบปิดกะ แยกสองระดับ (ฝั่งบัญชีแยกให้ 18 ต.ค. 69 · ช่องอยู่ใน reply.income)
+// warnings = ต้องมีคนดู → เหลือง · notices = ให้ข้อมูล ลงถูกตามออกแบบ (เช่น สาขาบุคคลธรรมดา Bartercard ลงบัญชีบุคคล) → เทา
+// ถ้าข้อความให้ข้อมูลขึ้นเหลืองทุกกะ พนักงานจะชินแล้วมองข้ามเหลืองตัวจริง
+// เหลือง = reply.warnings (ระดับใบ แบบเดิม) + income.warnings · ข้อความที่อยู่ใน notices ไม่ขึ้นเหลืองซ้ำ
+const closingNotices=(reply)=>{const n=reply&&reply.income&&reply.income.notices;return Array.isArray(n)?n.filter(Boolean).map(String):[];};
+function closingWarnings(reply){
+  const iw=reply&&reply.income&&reply.income.warnings;
+  const notes=new Set(closingNotices(reply));
+  const all=[...slipWarnings(reply),...(Array.isArray(iw)?iw.filter(Boolean):[])].map(String);
+  return [...new Set(all)].filter(w=>!notes.has(w));
+}
 function acctOutcomeOf(res,paidBills){
   if(!res||typeof res!=="object")return "failed";
   if(res.skipped){
@@ -23852,7 +23863,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         const fatal=!!acct.error||(rows.length===0&&!acct.skipped);
         // ส่งผ่าน แต่บัญชีทิ้งบางค่า = ยอดเงินลงแล้วก็จริง แต่เอกสารไม่ครบ
         // เดิมเคสนี้ขึ้นเขียวล้วน "ส่งเข้าระบบบัญชีแล้ว" แล้วไม่มีใครรู้ว่าขาดอะไร
-        const warnRows=rows.filter(r=>r.ok&&(slipWarnings(r.reply).length||closingStatusWarnings(r.reply).length));
+        const warnRows=rows.filter(r=>r.ok&&(closingWarnings(r.reply).length||closingStatusWarnings(r.reply).length));
         // ถึงระบบบัญชีแล้วแต่ยังลงไม่ครบ (รายรับ skipped/error/mismatch ฯลฯ) — ห้ามบอกว่า "ยอดลงสมุดแล้ว"
         const stRows=rows.filter(r=>r.ok&&closingStatusWarnings(r.reply).length);
         // วันนั้นมีใบปิดยอดอยู่แล้ว (เปิดวันละ 2 กะ) — ยอดกะนี้ถูกทิ้ง และส่งซ้ำก็ไม่ช่วย
@@ -23885,8 +23896,11 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
               {r.ok&&closingStatusWarnings(r.reply).length>0&&<div style={{fontSize:11.5,color:"#92400E",marginTop:4,padding:"6px 8px",background:C.yellowLight,borderRadius:8,lineHeight:1.55,fontWeight:700}}>
                 ⚠️ {closingStatusWarnings(r.reply).join(" · ")} — แจ้งฝ่ายบัญชี
               </div>}
-              {r.ok&&slipWarnings(r.reply).length>0&&<div style={{fontSize:11.5,color:"#92400E",marginTop:4,padding:"6px 8px",background:C.yellowLight,borderRadius:8,lineHeight:1.55}}>
-                ⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(" · ")}
+              {r.ok&&closingNotices(r.reply).length>0&&<div style={{fontSize:11.5,color:C.ink4,marginTop:4,lineHeight:1.55}}>
+                ℹ️ {closingNotices(r.reply).join(" · ")}
+              </div>}
+              {r.ok&&closingWarnings(r.reply).length>0&&<div style={{fontSize:11.5,color:"#92400E",marginTop:4,padding:"6px 8px",background:C.yellowLight,borderRadius:8,lineHeight:1.55}}>
+                ⚠️ ระบบบัญชีแจ้ง: {closingWarnings(r.reply).join(" · ")}
               </div>}
               {!r.ok&&<div style={{fontSize:11.5,color:C.red,marginTop:3}}>
                 {r.noSale

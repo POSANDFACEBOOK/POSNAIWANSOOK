@@ -2264,10 +2264,10 @@ section("วันที่โอนจริง + แหล่งเงิน�
   const slipCalls = APP.split("\n").filter((l) => l.includes('fetch("/api/sliptrack-push"')).length;
   ck("ยังมีทางคุยกับบัญชีครบทุกทาง", slipCalls, 4);
   ck("ทุกทางอ่านคำเตือนจากตัวตอบ",
-    ["slipWarnings(done)", "slipWarnings(vd)", "slipWarnings(d)", "slipWarnings(r.reply)"].filter((x) => !APP.includes(x)), []);
+    ["slipWarnings(done)", "slipWarnings(vd)", "slipWarnings(d)", "closingWarnings(r.reply)", "...slipWarnings(reply),"].filter((x) => !APP.includes(x)), []);
   // จอปิดกะเคยขึ้นเขียวล้วนแม้บัญชีจะทิ้งค่าไปบางส่วน = คนปิดกะเชื่อว่าเรียบร้อย
   ok_("จอปิดกะแยกสถานะ \"ส่งแล้วแต่ไม่ครบ\" ออกจากเขียวล้วน",
-    APP.includes("const warnRows=rows.filter(r=>r.ok&&(slipWarnings(r.reply).length||closingStatusWarnings(r.reply).length));") &&
+    APP.includes("const warnRows=rows.filter(r=>r.ok&&(closingWarnings(r.reply).length||closingStatusWarnings(r.reply).length));") &&
     APP.includes("const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0&&openRows.length===0;") &&
     APP.includes("ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก"));
   // ── "ข้าม" มีสองแบบ ห้ามเหมารวม ────────────────────────────────────────
@@ -2366,8 +2366,8 @@ section("วันที่โอนจริง + แหล่งเงิน�
   ok_("ยกเลิกบิลก็ยังเคลียร์ธงเหมือนเดิม",
     APP.includes("...(wasReceived&&{sliptrack_sync:null})"));
 
-  ok_("จอปิดกะบอกด้วยว่าบัญชีไม่รับอะไรไปบ้าง",
-    APP.includes("⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(\" · \")}"));
+  ok_("จอปิดกะบอกด้วยว่าบัญชีแจ้งอะไร (เหลือง) — ข้อความให้ข้อมูลแยกเป็นเทา",
+    APP.includes("⚠️ ระบบบัญชีแจ้ง: {closingWarnings(r.reply).join(\" · \")}"));
   ok_("ยังไม่ได้เพิ่มคอลัมน์ cash_source แล้วยังบันทึกการจ่ายเงินได้",
     APP.includes("const {cash_source,...rest}=patch;") &&
     APP.includes('await api.patchPOIfStatus(po.id,"awaiting_payment",rest);'));
@@ -8603,9 +8603,30 @@ section("ปิดกะ: ตอบ 200 แต่รายรับ/ตู้เ
       [n({ income: { status: "posted" }, safe_cash: { status: "skipped" }, cash_doc: { status: "skipped" } }), n({}), n(null)], [0, 0, 0]);
   }
   ok_("จอปิดกะ: สถานะยังไม่ลง = เหลือง \"ส่งถึงระบบบัญชีแล้ว แต่ยังลงไม่ครบ\" ไม่ใช่เขียว และบอกให้แจ้งฝ่ายบัญชี",
-    APP.includes("const warnRows=rows.filter(r=>r.ok&&(slipWarnings(r.reply).length||closingStatusWarnings(r.reply).length));") &&
+    APP.includes("const warnRows=rows.filter(r=>r.ok&&(closingWarnings(r.reply).length||closingStatusWarnings(r.reply).length));") &&
     APP.includes("const stRows=rows.filter(r=>r.ok&&closingStatusWarnings(r.reply).length);") &&
     APP.includes("ส่งถึงระบบบัญชีแล้ว แต่ยังลงไม่ครบ") && APP.includes("⚠️ {closingStatusWarnings(r.reply).join(\" · \")} — แจ้งฝ่ายบัญชี"));
+}
+
+// ── ใบปิดกะ: ข้อความให้ข้อมูล (income.notices) เป็นเทา ไม่ใช่เหลือง — ฝั่งบัญชีแยกช่องให้ 18 ต.ค. 69 ──
+// ถ้าข้อความ "Bartercard ลงบัญชีบุคคล" ของสาขาบุคคลธรรมดาขึ้นเหลืองทุกกะ พนักงานจะชินแล้วมองข้ามเหลืองจริง
+section("ปิดกะ: หมายเหตุให้ข้อมูลจากฝั่งบัญชีเป็นสีเทา");
+{
+  let F = null;
+  try { F = new Function([APP.split("\n").find((l) => l.startsWith("const slipWarnings=")) || "", APP.split("\n").find((l) => l.startsWith("const closingNotices=")) || "", grab(APP, "closingWarnings"), "return {closingWarnings,closingNotices};"].join("\n"))(); } catch { F = null; }
+  ok_("ดึงตัวแยกเหลือง/เทาของใบปิดกะตัวจริงมารันได้", !!F);
+  if (F) {
+    const r = { warnings: ["ยอดแตกไม่เท่าใบ"], income: { status: "posted", warnings: ["ผลรวมช่องทาง ≠ ยอดขาย", "ยอดแตกไม่เท่าใบ"], notices: ["Bartercard ลงบัญชีบุคคล"] } };
+    ck("เหลือง = warnings ระดับใบ + income.warnings (ไม่ซ้ำ) · เทา = income.notices",
+      [F.closingWarnings(r), F.closingNotices(r)], [["ยอดแตกไม่เท่าใบ", "ผลรวมช่องทาง ≠ ยอดขาย"], ["Bartercard ลงบัญชีบุคคล"]]);
+    ck("ข้อความที่อยู่ใน notices ไม่ขึ้นเหลืองซ้ำ (แม้ตัวรับรุ่นเก่ายังส่งใน warnings ด้วย)",
+      F.closingWarnings({ warnings: ["Bartercard ลงบัญชีบุคคล"], income: { notices: ["Bartercard ลงบัญชีบุคคล"] } }), []);
+    ck("ใบกาญจนบุรีตามผล dry-run (มีแต่ notices) = ไม่มีเหลือง · ตอบไม่มีช่องเหล่านี้ = ว่าง",
+      [F.closingWarnings({ income: { status: "posted", notices: ["ช่องทางอื่น ลงบัญชีบุคคล", "Bartercard ลงบัญชีบุคคล"] } }).length, F.closingWarnings(null).length, F.closingNotices({}).length], [0, 0, 0]);
+  }
+  ok_("จอปิดกะใช้ตัวแยกนี้ทั้งตอนตัดสินสีและตอนแสดง (เทา ℹ️ · เหลือง ⚠️)",
+    APP.includes("ℹ️ {closingNotices(r.reply).join(\" · \")}") && APP.includes("⚠️ ระบบบัญชีแจ้ง: {closingWarnings(r.reply).join(\" · \")}") &&
+    !APP.includes("⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(\" · \")}"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
