@@ -306,6 +306,9 @@ const grabConst = (src, name) => {
   }
   throw new Error(`อ่าน ${name} ไม่จบ`);
 };
+// ตัวแยก "ใบครัว / รายการแพ็คเกจ" ตัวจริงของแอป (บรรทัดเดียว) — ด่านที่ดึงเส้นทางพิมพ์ของแอปมารันต้องแนบไปด้วย
+// ไม่มีในไฟล์ = ใช้ตัวที่ถือว่าทุกรายการเป็นใบครัว (ด่านแพ็คเกจบุฟเฟต์ท้ายไฟล์จะแดงเอง)
+const APP_KITCHEN = (APP.match(/^const isKitchenLine\s*=.*$/m) || [])[0] || "const isKitchenLine = it => !!it;";
 
 // ══════════════════════════════════════════════════════════════════════════
 // ① ใครเห็นอะไร — ปุ่มติ๊ก "เปิด/ปิดให้สาขาเห็น"
@@ -3078,8 +3081,10 @@ section("ปุ่มพิมพ์ไม่สำเร็จ");
       const calls = { print: [], send: [], buf: [], settle: [] };
       const state = { retried: {} };
       const printerHandles = new Function(handlesSrc + "\nreturn printerHandles;")();
+      // ตัวแยกใบครัว/แพ็คเกจตัวจริงจากไฟล์ (v48) — ไม่มีในไฟล์ (รุ่นก่อน) = ทุกรายการเป็นใบครัว
+      const kitchenSrc = (AGENT.match(/^const isKitchenLine\s*=.*$/m) || [])[0] || "const isKitchenLine = it => !!it;";
       const fn = new Function("state", "saveState", "isBluetooth", "itemsToBuffer", "sendToPrinter", "printItems", "printerHandles", "settleFail", "RETRY_TTL", "console", "errOf",
-        retrySrc + "\nreturn handleFailRetries;")(
+        kitchenSrc + "\n" + retrySrc + "\nreturn handleFailRetries;")(
         state, () => {}, () => false,
         async (items, t, meta) => { calls.buf.push({ items, t, meta }); return { buf: Buffer.from("x") }; },
         async (ip) => { calls.send.push(ip); if (opts.sendFails) throw new Error("offline"); },
@@ -3302,9 +3307,10 @@ section("แก้ไขบิลที่ปิดแล้ว");
   ok_("บิลของวันที่ปิดกะไปแล้ว ต้องเตือนว่าต้องแจ้งบัญชี และติดธงไว้ในร่องรอย",
     // ยอดถูกส่งบัญชีตอน "ปิดกะ" ⟹ ตัดสินด้วยกะของบิล (billShiftClosed) ไม่ใช่วันที่ — บิลเมื่อวานในกะที่ยังเปิดยังไม่ได้ส่ง
     APP.includes("const shiftClosed=billShiftClosed(order,shift);") && APP.includes("needs_accounting:shiftClosed,"));
+  // (v48) ส่งเฉพาะรายการอาหาร — addedK/removedK คือ added/removed ที่กรองรายการแพ็คเกจออกแล้ว
   ok_("ของที่เพิ่ม = ใบสั่งอาหารปกติ · ของที่ลด = ใบยกเลิกไปครัว",
-    APP.includes('if(added.length)await agentPrintItems(added,String(order.table_number||"-"),branch?.id,{bill:order.id,by:who,kind:""});')
-    && APP.includes('kind:"void"}'));
+    APP.includes('if(addedK.length)await agentPrintItems(addedK,String(order.table_number||"-"),branch?.id,{bill:order.id,by:who,kind:""});')
+    && APP.includes("if(removedK.length)await agentPrintItems(removedK.map(") && APP.includes('kind:"void"}'));
   ok_("แก้เสร็จพิมพ์ใบเสร็จใบใหม่ให้ลูกค้า", APP.includes("await printBillReceipt({...order,...full,id:order.id},order.table_number,"));
   ok_("ใบเสร็จจอโต๊ะกับจอแก้บิลใช้ตัวพิมพ์ตัวเดียวกัน",
     APP.includes("const smartPrintReceipt=(order,tableNum,paid,kick)=>printBillReceipt(order,tableNum,{branch,posSettings,printers,paid,kick:!!kick});"));
@@ -4794,7 +4800,7 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
   {
     const writes = [];
     const appPConn = new Function(grab(APP, "getPConn") + "\nreturn getPConn;")();   // ของจริง — แยกเครื่องบลูทูธออกจากเครื่องที่ส่งผ่านแลนได้
-    const fn = new Function("api", "getPConn", "cmdDesc", "printerHandles", "async " + grab(APP, "agentPrintItems") + "\nreturn agentPrintItems;")(
+    const fn = new Function("api", "getPConn", "cmdDesc", "printerHandles", APP_KITCHEN + "\nasync " + grab(APP, "agentPrintItems") + "\nreturn agentPrintItems;")(
       { getAllPrinters: async () => ALLP, updatePrinter: async (id, body) => { writes.push({ id, body }); } },
       appPConn, (p, k, v) => JSON.stringify({ [k]: v }), appHandles);
     const run = async (pin) => { writes.length = 0; const r = await fn([{ qty: 1, name: "ชาบูเล็ก", printer_id: pin, category: "ชาบู" }], "A1", 8, { kind: "reprint" }, false); return { to: writes.map(w => w.id), noPrinter: r.noPrinter }; };
@@ -4932,7 +4938,7 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
     ok_("ช่องข้อมูลเสีย ไม่ทำให้แถบพัง", safe(() => orphOf([{ id: 1, branch_id: 5, description: "{พัง" }], 5, now, W)) === null);
   }
   // ── #3 กดส่งครัวแล้วมีรายการที่ไม่มีเครื่องรับ = เตือนทันที (กติกาเดียวกับตัวพิมพ์) ──
-  const noPrOf = safe(() => new Function(PA + "\n" + grab(APP, "getPConn") + "\n" + grab(APP, "printerHandles") + "\n" + grab(APP, "itemsWithoutPrinter") + "\nreturn itemsWithoutPrinter;")());
+  const noPrOf = safe(() => new Function(PA + "\n" + APP_KITCHEN + "\n" + grab(APP, "getPConn") + "\n" + grab(APP, "printerHandles") + "\n" + grab(APP, "itemsWithoutPrinter") + "\nreturn itemsWithoutPrinter;")());
   ok_("อ่านตัวเช็ครายการที่ไม่มีเครื่องรับตอนส่งครัวได้", !!noPrOf);
   if (noPrOf) {
     const pr = [P(30, 5, {}, { categories: ["อาหารจานเดียว"] }), P(31, 5, {}, { categories: ["น้ำ"], active: false }), P(12, 8, {})];
@@ -4946,7 +4952,7 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
   }
   // ลิสต์ตัดสินหมุด (ตัวที่ 3 ของ printerHandles) = เครื่องที่เปิดใช้ของสาขานี้ รวมบลูทูธ — ชุดเดียวกับตัวพิมพ์/agentPrintItems
   // ไม่ส่ง = เมนูที่ปักหมุดเครื่องสาขาอื่น (ชาบู #95-98 → เครื่อง #8 สาขา 6) ขึ้นแดง "ไม่มีเครื่องพิมพ์รับ" ทุกครั้งที่ส่ง ทั้งที่ใบออก
-  const noPrSpy = safe(() => new Function("seen", PA + "\n" + grab(APP, "getPConn") + "\nconst printerHandles=(p,it,list)=>{seen.push(list);return false;};\n" + grab(APP, "itemsWithoutPrinter") + "\nreturn itemsWithoutPrinter;"));
+  const noPrSpy = safe(() => new Function("seen", PA + "\n" + APP_KITCHEN + "\n" + grab(APP, "getPConn") + "\nconst printerHandles=(p,it,list)=>{seen.push(list);return false;};\n" + grab(APP, "itemsWithoutPrinter") + "\nreturn itemsWithoutPrinter;"));
   ok_("อ่านตัวเช็ครายการที่ไม่มีเครื่องรับ (แบบดูว่าส่งลิสต์อะไรให้ตัวตัดสินหมุด) ได้", !!noPrSpy);
   if (noPrSpy) {
     const seen = [];
@@ -7023,6 +7029,157 @@ section("กล่องยืนยันจัดส่งไม่ใช่�
   // ConfirmBox ตั้งต้น danger=true = ไอคอนถังขยะ+สีแดง — ปุ่มจัดส่ง PO/ใบโอนเคยขึ้นแบบนั้น (พนักงานนึกว่าลบใบ)
   const ships = APP.split('confirmLabel:"🚚 จัดส่ง + ตัดสต๊อก",').slice(1).map((t) => t.slice(0, 160));
   ok_(`ปุ่มจัดส่งทุกจุด (${ships.length}) ใช้กล่องยืนยันแบบเตือน ไม่ใช่แบบลบ`, ships.length >= 2 && ships.every((t) => /danger:false/.test(t)));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// แพ็คเกจบุฟเฟต์ (สาขา 5 กาญจนบุรี) — บิลโต๊ะบุฟเฟต์มีรายการเงิน "แพ็คเกจ · ผู้ใหญ่ ×4" (kind:"pkg") ปนกับอาหาร
+// ห้ามขึ้นใบครัว (เครื่องรับทุกหมวดเคยรับทุกอย่าง) และห้ามขึ้นแดง "ไม่มีเครื่องรับ" ทุกโต๊ะ
+// แอปกับตัวพิมพ์ต้องใช้ตัวแยกตัวเดียวกัน และเลือกเครื่องให้รายการชุดเดียวกันตรงกันทุกเครื่อง
+// จอขายเปิดโต๊ะแพ็คเกจได้เมื่อสาขาไม่มีเครื่องพิมพ์แลน หรือตัวพิมพ์เต้นมาเป็นรุ่น 48 ขึ้นไป
+// (ชุดทดสอบ tick/พิมพ์ซ้ำ/รีปริ้นของตัวพิมพ์อยู่ที่ tools/check-agent-poll.mjs)
+// ══════════════════════════════════════════════════════════════════════════
+section("แพ็คเกจบุฟเฟต์: ใบครัวไม่พิมพ์รายการแพ็คเกจ");
+{
+  const safe = (f) => { try { return f(); } catch { return null; } };
+  const lineIn = (src, head) => src.split("\n").find((l) => l.startsWith(head)) || "";
+  const appK = lineIn(APP, "const isKitchenLine ="), agK = lineIn(AGENT, "const isKitchenLine =");
+  ok_("ตัวแยกใบครัว/แพ็คเกจ มีทั้งในแอปและตัวพิมพ์ (ระดับบนสุด) และเหมือนกันทุกตัวอักษร", !!appK && appK === agK);
+  // ตัวที่เอาไปรันทดสอบพฤติกรรม: หาแบบไม่สนช่องว่าง — แค่เขียนต่างรูปจะแดงข้อบนข้อเดียว ไม่ล้มทั้งชุด
+  const appKRun = APP_KITCHEN, agKRun = (AGENT.match(/^const isKitchenLine\s*=.*$/m) || [])[0] || "const isKitchenLine = it => !!it;";
+  const kApp = safe(() => new Function(appKRun + "\nreturn isKitchenLine;")());
+  const kAg = safe(() => new Function(agKRun + "\nreturn isKitchenLine;")());
+  const PK = (key, label, qty) => ({ line_uid: `pkg:pk_mgx1_ab12:${key}`, kind: "pkg", pkg: { id: "pk_mgx1_ab12", name: "บุฟเฟต์หมูกระทะ", key, label, guest: key === "adult" || key === "child" },
+    menu_id: null, name: "บุฟเฟต์หมูกระทะ · " + label, price: 299, qty, options: [], note: "", printer_id: null, category: "แพ็คเกจบุฟเฟต์" });
+  const FD = (id, name, category, qty, pin) => ({ line_uid: "f" + id, menu_id: id, name, price: 0, qty: qty || 1, options: [], note: "", printer_id: pin == null ? null : pin, category });
+  const isPkgName = (n) => /^บุฟเฟต์หมูกระทะ · /.test(String(n));
+  const cases = [PK("adult", "ผู้ใหญ่", 4), FD(201, "ส้มตำไทย", "ยำบุฟเฟต์"), null, undefined, { qty: 1, name: "ย้ายโต๊ะ" }, { kind: "x", name: "อื่น" }];
+  const want = [false, true, false, false, true, true];
+  ck("ตัวแยกแอป = ตัวพิมพ์ ทุกกรณี (แพ็คเกจ = ไม่ใช่ใบครัว · อาหาร/ใบย้ายโต๊ะ = ใบครัว · ว่าง = ไม่ใช่)",
+    [kApp ? cases.map(kApp) : null, kAg ? cases.map(kAg) : null], [want, want]);
+
+  // ── เครื่องสาขา 5 (แบบที่น่าจะตั้งจริง) + เครื่องรับทุกหมวด + เครื่องบลูทูธ + เครื่อง River ──
+  const P = (id, bid, cats, d, extra) => ({ id, name: "เครื่อง" + id, branch_id: bid, ip: "10.5.0." + id, port: 9100, active: true, categories: cats, description: JSON.stringify(d || {}), ...(extra || {}) });
+  const PR = [P(51, 5, ["ยำบุฟเฟต์", "เมนูสั่งเพิ่มบุฟเฟต์"]), P(52, 5, ["น้ำ"], { rcpt: 1 }), P(53, 5, null), P(54, 5, [], { c: "bt", n: "BT" }, { ip: "bluetooth" }), P(12, 8, ["น้ำ"])];
+  const ITEMS = [PK("adult", "ผู้ใหญ่", 4), FD(201, "ส้มตำไทย", "ยำบุฟเฟต์"), FD(301, "โค้ก", "น้ำ", 2), PK("child", "เด็ก", 2), FD(401, "หมูสามชั้น", "เมนูสั่งเพิ่มบุฟเฟต์", 1, 52), PK("x_mgx2", "เตาเพิ่ม", 1)];
+  const getPConnApp = new Function(grab(APP, "getPConn") + "\nreturn getPConn;")();
+  const handlesApp = new Function(grab(APP, "printerHandles") + "\nreturn printerHandles;")();
+
+  // ── แอป: ส่งพิมพ์ซ้ำ/ใบยกเลิก/ย้ายโต๊ะ/แก้บิล ผ่าน agentPrintItems ──
+  const mkSend = (prs) => {
+    const writes = [];
+    const fn = safe(() => new Function("api", "getPConn", "cmdDesc", "printerHandles", appKRun + "\nasync " + grab(APP, "agentPrintItems") + "\nreturn agentPrintItems;")(
+      { getAllPrinters: async () => prs, updatePrinter: async (id, body) => { writes.push({ id, rp: JSON.parse(body.description).rp }); } },
+      getPConnApp, (p, k, v) => JSON.stringify({ [k]: v }), handlesApp));
+    return { fn, writes };
+  };
+  const perPrinter = (pairs) => { const m = {}; for (const [id, names] of pairs) (m[id] = m[id] || []).push(...names); for (const k in m) m[k].sort(); return m; };
+  let appRoute = null;
+  {
+    const S = mkSend(PR);
+    ok_("อ่านตัวส่งคำสั่งพิมพ์ของแอป (agentPrintItems) ได้", !!S.fn);
+    if (S.fn) {
+      const r = await S.fn(ITEMS, "B1", 5, { kind: "reprint" }, false);
+      appRoute = perPrinter(S.writes.map((w) => [w.id, w.rp.items.map((i) => i.name)]));
+      ok_("แอปส่งพิมพ์ซ้ำ: ไม่มีรายการแพ็คเกจในคำสั่งของเครื่องไหนเลย (รวมเครื่องรับทุกหมวด)", S.writes.length > 0 && !S.writes.some((w) => w.rp.items.some((i) => isPkgName(i.name) || i.kind === "pkg")));
+      ck("แอปส่งพิมพ์ซ้ำ: นับ 'ไม่มีเครื่องรับ' เฉพาะอาหาร (แพ็คเกจไม่นับ)", r.noPrinter, 0);
+      const V = mkSend(PR);
+      const rv = await V.fn([PK("adult", "ผู้ใหญ่", 2)], "B1", 5, { kind: "void" }, false);
+      ok_("แอป: ใบยกเลิกรายการแพ็คเกจล้วน → ไม่เขียนคำสั่งพิมพ์ใดๆ", V.writes.length === 0 && rv.sent === 0 && rv.noPrinter === 0);
+      const M = mkSend(PR);
+      await M.fn([PK("adult", "ผู้ใหญ่", 2), PK("child", "เด็ก", 1)], "B9", 5, { kind: "move", from: "B1" }, true);
+      ok_("แอป: ย้ายโต๊ะที่มีแต่แพ็คเกจ → ใบย้ายโต๊ะ (ไม่มีชื่อแพ็คเกจ) ไปทุกเครื่องแลนของสาขา เหมือนบิลว่าง",
+        M.writes.map((w) => w.id).sort().join() === "51,52,53" && M.writes.every((w) => w.rp.items.length === 1 && w.rp.items[0].name === "ย้ายโต๊ะ"));
+    }
+  }
+  // ── ตัวพิมพ์: printItems ตัวจริง ชุดเครื่อง/รายการเดียวกัน → ต้องได้เครื่องละรายการเท่ากับแอปทุกเครื่อง ──
+  {
+    const sent = [];
+    const pi = safe(() => new Function("isBluetooth", "renderItemBufs", "printerHandles", "bufsMode", "sendToPrinter", "errOf", "noteOrphan", "console",
+      agKRun + "\n" + grab(AGENT, "printItems").replace(/^function/, "async function") + "\nreturn printItems;")(
+      new Function(lineIn(AGENT, "function isBluetooth(p) {") + "\nreturn isBluetooth;")(),
+      async (items) => items.map((it) => ({ buf: Buffer.from("<" + it.name + ">"), raster: true })), handlesOf, () => "รูปภาพ",
+      async (ip, port, buf) => { sent.push([ip, [...String(buf).matchAll(/<([^<>]*)>/g)].map((m) => m[1])]); }, () => ({}), async () => {}, { log() {} }));
+    ok_("อ่าน printItems ของตัวพิมพ์ได้", !!pi);
+    if (pi && appRoute) {
+      const act = PR.filter((p) => p.branch_id === 5 && p.active !== false);
+      await pi(ITEMS, "B1", act, {}, {});
+      const agentRoute = perPrinter(sent.map(([ip, names]) => [act.find((p) => p.ip === ip).id, names]));
+      ok_("ตัวพิมพ์: ไม่มีรายการแพ็คเกจออกเครื่องไหนเลย (รวมเครื่องรับทุกหมวด)", sent.length > 0 && !sent.some(([, n]) => n.some(isPkgName)));
+      ck("แอป (พิมพ์ซ้ำ) กับตัวพิมพ์ (ใบครัว) เลือกเครื่องให้รายการชุดเดียวกันตรงกันทุกเครื่อง", agentRoute, appRoute);
+    }
+  }
+
+  // ── แอป: คำเตือน "ไม่มีเครื่องพิมพ์รับ" ตอนกดส่งครัว ──
+  const PA = lineIn(APP, "const printersAt=");
+  const noPr = safe(() => new Function(PA + "\n" + appKRun + "\n" + grab(APP, "getPConn") + "\n" + grab(APP, "printerHandles") + "\n" + grab(APP, "itemsWithoutPrinter") + "\nreturn itemsWithoutPrinter;")());
+  ok_("อ่านตัวเตือนไม่มีเครื่องรับของแอปได้", !!noPr);
+  if (noPr) {
+    const noCatchAll = PR.filter((p) => p.id !== 53);
+    ck("ส่งครัว: รายการแพ็คเกจไม่ขึ้นแดง 'ไม่มีเครื่องรับ' · อาหารที่ไม่มีเครื่องรับยังเตือนเหมือนเดิม",
+      noPr([...ITEMS, FD(999, "เมนูใหม่", "ยังไม่ผูกเครื่อง")], noCatchAll, 5).map((i) => i.name), ["เมนูใหม่"]);
+  }
+
+  // ── แอป: สถานีพิมพ์ (เบราว์เซอร์) printKitchen — รายการแพ็คเกจไม่ส่งเครื่อง ไม่เปิดหน้าต่างพิมพ์ ──
+  {
+    const esc = [], win = [];
+    const pk = safe(() => new Function("resolvePrinter", "getPConn", "_concatBytes", "buildKitchenESC", "sendESCPOSToIP", "btPrint", "printKitchenWindow", "alert", "posToast", "setTimeout",
+      appKRun + "\nasync " + grab(APP, "printKitchen") + "\nreturn printKitchen;")(
+      new Function(grab(APP, "resolvePrinter") + "\nreturn resolvePrinter;")(), getPConnApp, (a) => a,
+      (it) => { esc.push(it.name); return it.name; }, async () => {}, async () => {}, (it) => { win.push(it.name); }, () => {}, () => {}, (f) => f()));
+    ok_("อ่าน printKitchen ของแอปได้", !!pk);
+    if (pk) {
+      await pk(ITEMS, "B1", [P(53, 5, null)]);
+      await pk([PK("adult", "ผู้ใหญ่", 4)], "B2", []);
+      ok_("สถานีพิมพ์: เครื่องรับทุกหมวดได้แต่อาหาร · บิลแพ็คเกจล้วนไม่เด้งหน้าต่างพิมพ์",
+        esc.length === 3 && !esc.some(isPkgName) && win.length === 0);
+    }
+  }
+
+  // ── แอป: ทางส่งใบครัวในจอ (อยู่ในคอมโพเนนต์ ดึงมารันตรงไม่ได้) — ต้องกรองก่อนส่ง ──
+  {
+    const ap0 = APP.indexOf("function autoPrintNew(orders){"), apF = APP.indexOf("orders=(orders||[]).map(o=>o&&Array.isArray(o.items)?{...o,items:o.items.filter(isKitchenLine)}:o);", ap0), apP = APP.indexOf("if(!stationPrimedRef.current){", ap0);
+    ok_("สถานีพิมพ์ (autoPrintNew): ตัดรายการแพ็คเกจก่อนคิดลายเซ็น/ส่วนต่าง", ap0 >= 0 && apF > ap0 && apF < apP);
+    ok_("ยกเลิกรายการ: ใบยกเลิกออกเฉพาะรายการอาหาร (แพ็คเกจไม่มีใบยกเลิก)",
+      /if\(isKitchenLine\(target\)\)try\{\s*await agentReprint\(\[\{\.\.\.target,/.test(APP));
+    ok_("พิมพ์ซ้ำในจอ: ส่งเฉพาะรายการอาหาร (แพ็คเกจล้วน = บอกว่าไม่มีใบครัว ไม่ใช่ 'ไม่มีเครื่องรับ')",
+      APP.includes("const kl=(list||[]).filter(isKitchenLine);") && APP.includes("const r=await agentPrintItems(kl,table.table_number,branch?.id,"));
+    ok_("ย้ายโต๊ะ: เลือกเครื่องจากรายการอาหารเท่านั้น", APP.includes("agentPrintItems((order.items||[]).filter(isKitchenLine).map(i=>({...i})),String(t.table_number),branch?.id,"));
+    ok_("แก้บิลที่ปิดแล้ว: ใบเพิ่ม/ใบยกเลิกไปครัวเฉพาะอาหาร", APP.includes("const addedK=added.filter(isKitchenLine),removedK=removed.filter(isKitchenLine);"));
+  }
+
+  // ── ตัวพิมพ์: จุดกรองจุดเดียวก่อนคิดลายเซ็น + บิลรายการอาหารว่างต้องถูกจดว่าเห็นแล้ว ──
+  {
+    const o0 = AGENT.indexOf("  orders = orders || [];"), oF = AGENT.indexOf("  orders = orders.map(o => (o && Array.isArray(o.items)) ? { ...o, items: o.items.filter(isKitchenLine) } : o);"), oP = AGENT.indexOf("  if (!primed) {");
+    ok_("ตัวพิมพ์: ตัดรายการแพ็คเกจจุดเดียว ก่อน prime/ลายเซ็น/ส่วนต่าง/พิมพ์", o0 >= 0 && oF > o0 && oF < oP);
+    ok_("ตัวพิมพ์: บิลที่รายการอาหารว่าง (แพ็คเกจล้วน) ไม่ถูกข้าม — จดว่าเห็นแล้ว ไม่ดึงซ้ำทุก 2 วิ",
+      AGENT.includes("    if (!o || !o.items) continue;") && !AGENT.includes("if (!o || !o.items || !o.items.length) continue;"));
+  }
+
+  // ── จอขาย: เปิดโต๊ะแพ็คเกจได้เมื่อไหร่ (ตัวพิมพ์รุ่นเก่าพิมพ์ "4x ผู้ใหญ่" เข้าครัว) ──
+  const agVer = +((AGENT.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0);
+  const minVer = +((APP.match(/^const PKG_AGENT_MIN_VER=(\d+);/m) || [])[1] || 0);
+  ok_("ตัวพิมพ์เวอร์ชัน 48 ขึ้นไป และเกณฑ์ของแอป = 48 ไม่เกินรุ่นที่ปล่อยจริง (ไม่งั้นเปิดโต๊ะแพ็คเกจไม่ได้เลย)", agVer >= 48 && minVer === 48 && minVer <= agVer);
+  const canOpen = safe(() => new Function([PA, lineIn(APP, "const PKG_AGENT_MIN_VER="), grab(APP, "getPConn"), grab(APP, "agentHealth"), grab(APP, "canOpenPackageTables")].join("\n") + "\nreturn canOpenPackageTables;")());
+  ok_("มีตัวตัดสิน canOpenPackageTables(printers, branchId) ระดับบนสุด", !!canOpen && APP.includes("\nfunction canOpenPackageTables(printers,branchId){"));
+  if (canOpen) {
+    const now = Date.now();
+    const hb = (ver, ageMs) => ({ agentSeen: now - (ageMs || 20000), agentVer: ver });
+    const RIVER48 = P(12, 8, ["น้ำ"], hb(48));
+    const got = [
+      canOpen([], 5),                                                            // ยังไม่มีเครื่องพิมพ์เลย (สาขา 5 วันนี้)
+      canOpen([RIVER48, P(10, 8, null, hb(47))], 5),                              // มีแต่เครื่องสาขาอื่น
+      canOpen([P(54, 5, [], { c: "bt", n: "BT" }, { ip: "bluetooth" })], 5),      // บลูทูธล้วน (ตัวพิมพ์ไม่พิมพ์)
+      canOpen([P(51, 5, null, {}, { active: false })], 5),                        // เครื่องแลนที่ยังไม่เปิดใช้
+      canOpen([P(51, 5, ["ยำบุฟเฟต์"])], 5),                                      // มีเครื่องแลน แต่ไม่เคยได้ยินตัวพิมพ์
+      canOpen([P(51, 5, ["ยำบุฟเฟต์"], hb(47))], 5),                              // ตัวพิมพ์รุ่น 47
+      canOpen([P(51, 5, ["ยำบุฟเฟต์"], hb(48))], 5),                              // รุ่น 48
+      canOpen([P(51, 5, ["ยำบุฟเฟต์"], hb(49))], 5),                              // รุ่นใหม่กว่า
+      canOpen([P(51, 5, ["ยำบุฟเฟต์"], hb(47, 30000)), P(12, 8, ["น้ำ"], hb(48, 5000))], 5),   // River เพิ่งเต้นเป็น 48 แต่สาขานี้ยัง 47
+      canOpen([P(51, 5, ["ยำบุฟเฟต์"], hb(47, 300000)), P(52, 5, ["น้ำ"], hb(48))], 5),   // เต้นล่าสุดเป็น 48 (อัปเดตแล้ว)
+    ];
+    ck("เปิดโต๊ะแพ็คเกจ: ไม่มีเครื่องแลนของสาขา = ได้ · มีเครื่องแลน = ต้องได้ยินตัวพิมพ์รุ่น 48+ ของสาขานี้เอง",
+      got, [true, true, true, true, false, false, true, true, false, true]);
+  }
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

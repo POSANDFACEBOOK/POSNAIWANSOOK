@@ -2261,15 +2261,31 @@ function printOrphansRecent(printers,branchId,now,winMs){
   }
   return at?{at,names}:null;
 }
+// ── ใบครัวพิมพ์เฉพาะอาหาร ──────────────────────────────────────────────────
+// รายการแพ็คเกจบุฟเฟต์ในบิล (kind:"pkg" — ผู้ใหญ่/เด็ก/เตาเพิ่ม) คือเงิน ไม่ใช่ของที่ครัวทำ
+// ทุกทางที่ส่งใบครัว (ใบยกเลิก/ย้ายโต๊ะ/พิมพ์ซ้ำ/แก้บิล · สถานีพิมพ์) และคำเตือน "ไม่มีเครื่องรับ" กรองด้วยตัวนี้
+// ต้องเหมือนตัวใน public/print-agent.js ทุกตัวอักษร (check-code เทียบสองไฟล์)
+const isKitchenLine = it => !!it && it.kind !== "pkg";
+// ตัวพิมพ์รุ่นแรกที่รู้จักรายการแพ็คเกจ — รุ่นก่อนหน้าพิมพ์ "4x ผู้ใหญ่" ออกเครื่องที่รับทุกหมวด หรือขึ้นแดง "ไม่มีเครื่องรับ" ทุกโต๊ะ
+const PKG_AGENT_MIN_VER=48;
+// เปิดโต๊ะแบบแพ็คเกจได้ไหม: สาขาไม่มีเครื่องพิมพ์แลนที่เปิดใช้ (ไม่มีตัวพิมพ์มาพิมพ์อะไรเลย) หรือตัวพิมพ์เต้นมาเป็นรุ่น 48 ขึ้นไป
+// false = จอขายต้องบอก "อัปเดตโปรแกรมตัวพิมพ์ก่อน (ต้องเวอร์ชัน 48)" · ยังไม่เคยได้ยินตัวพิมพ์ (ไม่รู้รุ่น) = false
+function canOpenPackageTables(printers,branchId){
+  const net=printersAt(printers,branchId).filter(p=>p&&p.active!==false&&p.ip&&getPConn(p).type!=="bluetooth");
+  if(!net.length)return true;
+  const h=agentHealth(printers,branchId);
+  return h.ver!=null&&+h.ver>=PKG_AGENT_MIN_VER;
+}
 // รายการที่กำลังส่งเข้าครัวแต่ไม่มีเครื่องไหนรับ — กติกาเดียวกับ orphan ของตัวพิมพ์ (เครื่องของสาขา · เปิดใช้ · มี IP · ไม่ใช่บลูทูธ)
 // สาขาที่ไม่มีเครื่องพิมพ์เลย = ไม่เตือน (ยังไม่ได้ใช้ตัวพิมพ์ ไม่ใช่ตั้งหมวดตกหล่น)
 // act = เครื่องที่เปิดใช้ของสาขานี้ ส่งเป็นตัวที่ 3 ให้ printerHandles (ลิสต์ตัดสินหมุด ชุดเดียวกับตัวพิมพ์/agentPrintItems)
 // ไม่ส่ง = หมุดที่ชี้ไปเครื่องสาขาอื่นถูกนับว่า "ไม่มีเครื่องรับ" ทั้งที่ตัวพิมพ์รุ่นใหม่พิมพ์ตามหมวดให้ → เตือนแดงหลอกทุกครั้ง
+// รายการแพ็คเกจไม่ใช่ใบครัว = ไม่เตือน
 function itemsWithoutPrinter(items,printers,branchId){
   const act=printersAt(printers,branchId).filter(p=>p&&p.active!==false);
   const usable=act.filter(p=>p.ip&&getPConn(p).type!=="bluetooth");
   if(!usable.length)return [];
-  return (items||[]).filter(it=>it&&!usable.some(p=>printerHandles(p,it,act)));
+  return (items||[]).filter(it=>isKitchenLine(it)&&!usable.some(p=>printerHandles(p,it,act)));
 }
 // ── ตัวพิมพ์สองเครื่องทำงานพร้อมกัน ───────────────────────────────────────
 // ตัวพิมพ์ของสาขาเต้นสัญญาณชีพลงแถวเดียวกัน (เครื่องพิมพ์ id ต่ำสุด) พร้อมชื่อเครื่องที่รันอยู่ (agentDev)
@@ -19314,7 +19330,7 @@ async function agentPrintItems(items,tableLabel,branchId,meta,fallbackAll){
   try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
   const act=prs.filter(p=>p.active!==false);   // ลิสต์ตัดสินหมุด — ชุดเดียวกับที่ตัวพิมพ์ใช้ (เปิดใช้ + สาขานี้)
   const usable=act.filter(p=>p.ip&&getPConn(p).type!=="bluetooth");
-  const list=items||[];
+  const list=(items||[]).filter(isKitchenLine);   // ใบครัวเฉพาะอาหาร — รายการแพ็คเกจไม่ส่ง (แม้เครื่องรับทุกหมวด)
   // ใบย้ายโต๊ะ: เลือกเครื่องตามรายการในบิล (ครัวที่ทำของโต๊ะนี้) แต่ส่งไปแค่ "ใบเดียว" ต่อเครื่อง
   // ไม่แนบรายการอาหาร — ใบบอกแค่จากโต๊ะไหนไปโต๊ะไหน (ตัวพิมพ์ทุกรุ่นพิมพ์หนึ่งใบต่อหนึ่งรายการ)
   const slipBody=(its)=>(meta&&meta.kind==="move")?[{qty:1,name:"ย้ายโต๊ะ",options:[],note:""}]:its;
@@ -19403,7 +19419,7 @@ function takeOldPrintStation(){try{const v=localStorage.getItem(PRINT_STATION_OL
 async function printKitchen(items,tableNum,printers=[]){
   // Group items by resolved printer so each printer prints one batch
   const groups=new Map();  // printer.id (or "_window") → {printer, items[]}
-  for(const item of items){
+  for(const item of (items||[]).filter(isKitchenLine)){   // ใบครัวเฉพาะอาหาร — รายการแพ็คเกจไม่พิมพ์ ไม่เปิดหน้าต่างพิมพ์
     const printer=resolvePrinter(item,printers);
     const key=printer?printer.id:"_window";
     if(!groups.has(key))groups.set(key,{printer,items:[]});
@@ -19505,7 +19521,8 @@ function MoveTableModal({from,order,tables,activeOrders,branch,currentUser,onClo
       // ครัวต้องรู้ ไม่งั้นเสิร์ฟไปโต๊ะเดิมที่มีลูกค้าใหม่นั่งอยู่แล้ว
       let sent=0;
       try{
-        const r=await agentPrintItems((order.items||[]).map(i=>({...i})),String(t.table_number),branch?.id,
+        // เลือกเครื่องจากรายการอาหารเท่านั้น — รายการแพ็คเกจไม่พาใบย้ายโต๊ะไปเครื่องไหน
+        const r=await agentPrintItems((order.items||[]).filter(isKitchenLine).map(i=>({...i})),String(t.table_number),branch?.id,
           {bill:order.id,by:currentUser?.username||null,kind:"move",from:String(from.table_number)},true);
         sent=r.sent;
       }catch(err){console.warn("แจ้งครัวเรื่องย้ายโต๊ะไม่สำเร็จ",err);}
@@ -20314,7 +20331,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           verRef.current=row.updated_at;
           // แจ้งครัวว่ารายการนี้ถูกยกเลิก — ตัวพิมพ์เห็นแค่ "รายการที่เพิ่มขึ้น"
           // ของที่หายไปจึงเงียบสนิท ครัวจะทำอาหารที่ลูกค้ายกเลิกไปแล้ว
-          try{
+          // รายการแพ็คเกจ (ผู้ใหญ่/เด็ก) ครัวไม่เคยได้ใบ ⟹ ไม่มีใบยกเลิก
+          if(isKitchenLine(target))try{
             await agentReprint([{...target,qty:target.qty,name:`ยกเลิก: ${target.name}`,note:[target.note,`ยกเลิกโดย ${currentUser?.username||"พนักงาน"}`].filter(Boolean).join(" · ")}],
               {kind:"void",okMsg:"❌ ส่งใบยกเลิกรายการนี้ให้ตัวพิมพ์แล้ว — ไม่ออกจะขึ้นในปุ่ม พิมพ์ไม่สำเร็จ",
                noneMsg:"⚠️ ยกเลิกในระบบแล้ว แต่เมนูนี้ไม่มีเครื่องพิมพ์รับ — กรุณาบอกครัวด้วยตัวเอง"});
@@ -20333,8 +20351,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   async function agentReprint(list,opts){
     const o=opts||{};
     let sent=0,noPrinter=0;
+    const kl=(list||[]).filter(isKitchenLine);   // รายการแพ็คเกจไม่มีใบครัว — ไม่ต้องบอกว่า "ไม่มีเครื่องพิมพ์รับ"
+    if(!kl.length){posToast("รายการแพ็คเกจไม่มีใบครัว","warn");return;}
     try{
-      const r=await agentPrintItems(list,table.table_number,branch?.id,
+      const r=await agentPrintItems(kl,table.table_number,branch?.id,
         {bill:existingOrder?.id??null,by:currentUser?.username||null,kind:o.kind||"reprint"});
       sent=r.sent;noPrinter=r.noPrinter;
     }catch(e){notifyDlg("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
@@ -24997,6 +25017,8 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   // (staff + customer), since the iPads can't print themselves.
   function autoPrintNew(orders){
     if(!isPrintStation(currentBranch.id))return;
+    // ใบครัวเฉพาะอาหาร — ตัดรายการแพ็คเกจออกก่อนคิดลายเซ็น/ส่วนต่าง (เพิ่ม-ลดคนไม่มีใบ)
+    orders=(orders||[]).map(o=>o&&Array.isArray(o.items)?{...o,items:o.items.filter(isKitchenLine)}:o);
     // First pass after (re)becoming the station: record what's already open WITHOUT
     // printing, so a restart doesn't spew a reprint of every active order.
     if(!stationPrimedRef.current){
@@ -26135,10 +26157,11 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
         needs_accounting:shiftClosed,created_at:at});
     }catch(e){noTrail=true;}
     if(noTrail)posToast("⚠️ แก้บิลแล้ว แต่บันทึกร่องรอยไม่ได้ (ยังไม่ได้รันคำสั่ง SQL ของระบบแก้บิล) — แจ้งแอดมิน","warn",9000);
-    // ── ครัว: ของที่เพิ่ม = ใบสั่งอาหารปกติ · ของที่ลด/ลบ = ใบยกเลิก ──
+    // ── ครัว: ของที่เพิ่ม = ใบสั่งอาหารปกติ · ของที่ลด/ลบ = ใบยกเลิก (เฉพาะอาหาร — รายการแพ็คเกจไม่ไปครัว) ──
     try{
-      if(added.length)await agentPrintItems(added,String(order.table_number||"-"),branch?.id,{bill:order.id,by:who,kind:""});
-      if(removed.length)await agentPrintItems(removed.map(i=>({...i,name:`ยกเลิก: ${i.name}`,note:[i.note,`แก้บิลโดย ${who}`].filter(Boolean).join(" · ")})),String(order.table_number||"-"),branch?.id,{bill:order.id,by:who,kind:"void"});
+      const addedK=added.filter(isKitchenLine),removedK=removed.filter(isKitchenLine);
+      if(addedK.length)await agentPrintItems(addedK,String(order.table_number||"-"),branch?.id,{bill:order.id,by:who,kind:""});
+      if(removedK.length)await agentPrintItems(removedK.map(i=>({...i,name:`ยกเลิก: ${i.name}`,note:[i.note,`แก้บิลโดย ${who}`].filter(Boolean).join(" · ")})),String(order.table_number||"-"),branch?.id,{bill:order.id,by:who,kind:"void"});
     }catch(e){posToast("⚠️ แก้บิลแล้ว แต่แจ้งครัวไม่สำเร็จ — กรุณาบอกครัวด้วยตัวเอง","warn",9000);}
     // ── ใบเสร็จใหม่ (ยอดที่ถูกต้อง) ──
     try{await printBillReceipt({...order,...full,id:order.id},order.table_number,{branch,posSettings,printers,paid:true});}catch{}

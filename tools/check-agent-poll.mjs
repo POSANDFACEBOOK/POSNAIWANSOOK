@@ -525,6 +525,8 @@ const grabTopBlock = (head, until) => {
   return SL.slice(a, b + 1).join("\n");
 };
 const handlesFn = new Function(grabTopBlock("function printerHandles(p, it, list) {") + "\nreturn printerHandles;")();
+// ตัวแยกใบครัว/รายการแพ็คเกจตัวจริง (v48) — printItems ใช้ ต้องแนบไปทุกครั้งที่ดึงมารัน
+const KITCHEN_SRC = (S.match(/^const isKitchenLine\s*=.*$/m) || [])[0] || "const isKitchenLine = it => !!it;";
 // ข้อมูลจริงจากฐาน (GET printers 12 ต.ค. 69): เครื่อง 8/9 ของสาขา 6 · 10/11/12 ของ River
 const PR6 = [{ id: 8, name: "ครัว", ip: "10.6.0.111", branch_id: 6, categories: ["หมูกระทะ"] }, { id: 9, name: "แคชเชียร์", ip: "10.6.0.157", branch_id: 6, categories: ["ชาบู", "หมูกระทะ"] }];
 const PR8 = [{ id: 10, name: "จานเดียว", ip: "10.8.0.111", branch_id: 8, categories: ["อาหารจานเดียว", "ของทอด"] }, { id: 11, name: "เซตหมู", ip: "10.8.0.157", branch_id: 8, categories: ["ชาบู", "ยำ"] }, { id: 12, name: "แคชเชียร์", ip: "10.8.0.147", branch_id: 8, categories: ["น้ำ"] }];
@@ -537,7 +539,7 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
   const mk = (sendFails) => {
     const sent = [], orphans = [];
     const fn = new Function("isBluetooth", "renderItemBufs", "printerHandles", "bufsMode", "sendToPrinter", "errOf", "noteOrphan", "console",
-      grabTopBlock("async function printItems(") + "\nreturn printItems;")(
+      KITCHEN_SRC + "\n" + grabTopBlock("async function printItems(") + "\nreturn printItems;")(
       btFn, async (items) => items.map(() => ({ buf: Buffer.from("x"), raster: true })), handlesFn, () => "รูปภาพ",
       async (ip) => { sent.push(ip); if (sendFails && sendFails.includes(ip)) { const e = new Error("t"); e.code = "CONNECT_TIMEOUT"; throw e; } },
       (p, e) => ({ pid: p.id, code: e.code }), async (target, orphan) => { orphans.push({ target: target && target.id, names: orphan.map(i => i.name) }); }, { log() {} });
@@ -701,6 +703,208 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
   { const { api, log } = mk(48, { netFail: true }); await api.checkUpdate();
     ok_("#27 เช็คเวอร์ชันไม่ได้ (เน็ตสะดุด) → ทำงานต่อตามปกติ", log.length === 0); }
   ok_("#27 ไม่เหลือการออกทันทีตอนเจอเวอร์ชันใหม่", (S.match(/process\.exit\(0\)/g) || []).length === 1 && grabTopBlock("function exitIfIdle(").includes("process.exit(0)"));
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// แพ็คเกจบุฟเฟต์ (สาขา 5 กาญจนบุรี) — ใบครัวพิมพ์เฉพาะอาหาร (ตัวพิมพ์ v48)
+// บิลโต๊ะบุฟเฟต์มีรายการเงิน "แพ็คเกจ · ผู้ใหญ่ ×4" (kind:"pkg", menu_id null) ปนกับอาหาร
+// ถ้าไม่กรอง: เครื่องรับทุกหมวดพิมพ์ "4x ผู้ใหญ่" เข้าครัว · ไม่มีเครื่องรับทุกหมวด = แดง "ไม่มีเครื่องรับ" ทุกโต๊ะ
+// ทุกข้อรัน tick / printItems / พิมพ์ซ้ำ (rp) / รีปริ้นรายการไม่ออก ตัวจริงจากไฟล์ กับเครื่องพิมพ์ปลอม
+// ════════════════════════════════════════════════════════════════════════
+{
+  const btReal = new Function(grabLine("function isBluetooth(p) {") + "\nreturn isBluetooth;")();
+  const PK = "pk_mgx1_ab12";
+  const pkg = (key, label, price, qty) => ({ line_uid: `pkg:${PK}:${key}`, kind: "pkg", pkg: { id: PK, name: "บุฟเฟต์หมูกระทะ", key, label, guest: key === "adult" || key === "child" },
+    menu_id: null, name: `บุฟเฟต์หมูกระทะ · ${label}`, price, qty, options: [], note: "", printer_id: null, category: "แพ็คเกจบุฟเฟต์", sent_at: "2026-10-18T05:00:00Z" });
+  let uid = 0;
+  const food = (id, name, cat, qty) => ({ line_uid: "u" + (++uid), menu_id: id, name, price: 0, qty, options: [], note: "", printer_id: null, category: cat });
+  // เครื่องสาขา 5 แบบที่น่าจะตั้งจริง + เครื่องรับทุกหมวด (categories=null) — ตัวที่รับทุกอย่างรวมรายการที่ไม่มีหมวดให้ใคร
+  const KIT = { id: 51, name: "ครัวบุฟเฟต์", ip: "10.5.0.11", branch_id: 5, active: true, categories: ["เมนูสั่งเพิ่มบุฟเฟต์", "ยำบุฟเฟต์"] };
+  const BAR = { id: 52, name: "แคชเชียร์", ip: "10.5.0.12", branch_id: 5, active: true, categories: ["น้ำ"], description: JSON.stringify({ rcpt: 1 }) };
+  const ALL = { id: 53, name: "รับทุกหมวด", ip: "10.5.0.13", branch_id: 5, active: true, categories: null };
+  const isPkgName = (n) => /บุฟเฟต์หมูกระทะ · /.test(n);
+  // ใบปลอมพกชื่อรายการไว้ในไบต์ — ดูได้ว่าแต่ละเครื่องได้อะไรจริงๆ
+  const fakeRender = async (items) => items.map(it => ({ buf: Buffer.from("<" + it.name + "×" + it.qty + ">"), raster: true }));
+  const namesIn = (buf) => [...String(buf).matchAll(/<([^<>]*)×(\d+)>/g)].map(m => m[1] + "×" + m[2]);
+  const byIp = (sent) => { const m = {}; for (const s of sent) (m[s.ip] = m[s.ip] || []).push(...s.names); return m; };
+  const anyPkg = (sent) => sent.some(s => s.names.some(isPkgName));
+  const noop = async () => {};
+  const errOfFake = (p, e) => ({ pid: p && p.id, code: (e && e.code) || "ERR" });
+
+  // ── tick ตัวจริง (พร้อม sigOf/newItemsVs/printItems/printerHandles ตัวจริง) — ฐานข้อมูลปลอมมี trigger ขยับ updated_at เหมือนของจริง ──
+  const tickSrc = [KITCHEN_SRC, grabLine("function optionsText(opts) {"), grabLine("const sigOf ="), grabLine("const lastSigOf ="), grabLine("const isFirstSight ="),
+    grabTopBlock("function sumByKey(rows) {"), grabTopBlock("function newItemsVs(oldSig, items) {"), grabTopBlock("function tableLabel(o) {"),
+    grabTopBlock("function printerHandles(p, it, list) {"), grabTopBlock("async function printItems("),
+    "let primed = true, fullTick = 0;", grabTopBlock("async function tick() {")].join("\n");
+  const isOpen = (o) => o.status !== "paid" && o.status !== "cancelled";
+  // opts.sendFail = IP ที่ส่งไม่ผ่าน · opts.failThrows = จำนวนครั้งที่การจดรายการไม่ออกล้มกลางรอบ (จำลองรอบพังหลังพิมพ์ ก่อนจดลายเซ็น)
+  const mkShop = (printers, opts) => {
+    const o_ = opts || {};
+    let throwsLeft = o_.failThrows || 0;
+    const db = [], io = { sent: [], orphans: [], fails: [], remembered: [], fetched: [], crashed: 0 };
+    const state = { sig: {}, init: {}, uat: {}, done: {} };
+    let clock = 100;
+    const bump = (o) => { o.updated_at = "T" + (++clock); };   // trigger บนตาราง orders: ทุก UPDATE ได้เวลาใหม่
+    const tick = new Function("getActiveOrderHeads", "getPrintersCached", "getActiveOrders", "getOrdersByIds", "BRANCH", "state", "saveState", "FULL_EVERY",
+      "tpOf", "rpOf", "qrOf", "pjOf", "handleTestRequests", "handleReprintRequests", "handleFailRetries", "handleQRRequests", "handlePJRequests", "handleDrawerRequests", "handlePingRequests", "handleScanRequests",
+      "isBluetooth", "renderItemBufs", "bufsMode", "sendToPrinter", "errOf", "noteOrphan", "recordPrintFail", "rememberPrinted", "_noPrintedSig", "console",
+      tickSrc + "\nreturn tick;")(
+      async () => db.filter(isOpen).map(o => ({ id: o.id, updated_at: o.updated_at })),
+      async () => printers,
+      async () => { io.fetched.push("all"); return JSON.parse(JSON.stringify(db.filter(isOpen))); },
+      async (ids) => { io.fetched.push(ids.join()); return JSON.parse(JSON.stringify(db.filter(o => isOpen(o) && ids.map(String).includes(String(o.id))))); },
+      "5", state, () => {}, 60,
+      () => 0, () => null, () => null, () => null, noop, noop, noop, noop, noop, noop, noop, noop,
+      btReal, fakeRender, () => "รูปภาพ",
+      async (ip, port, buf) => { if ((o_.sendFail || []).includes(ip)) { const e = new Error("t"); e.code = "CONNECT_TIMEOUT"; throw e; } io.sent.push({ ip, names: namesIn(buf) }); },
+      errOfFake,
+      async (target, orphan) => { io.orphans.push(orphan.map(i => i.name)); return true; },
+      async (prs, o, items) => { if (throwsLeft > 0) { throwsLeft--; throw new Error("รอบพังกลางทาง"); } io.fails.push(items.map(i => i.name)); },
+      (id, sig) => { io.remembered.push({ id, sig }); const o = db.find(x => x.id === id); if (o) { o.printed_sig = sig; bump(o); } }, false, { log() {} });
+    // ตัวจริงห่อ tick ด้วย tickSafe (จับ error แล้วรอรอบหน้า) — จำลองแบบเดียวกัน
+    const run = async (n) => { for (let i = 0; i < (n || 1); i++) { try { await tick(); } catch { io.crashed++; } } };
+    return { db, io, state, run, bump };
+  };
+
+  { // ① เปิดโต๊ะด้วยแพ็คเกจล้วน (ยังไม่สั่งอาหาร)
+    const S = mkShop([KIT, BAR, ALL]);
+    S.db.push({ id: 901, table_number: "B1", status: "pending", updated_at: "T1", items: [pkg("adult", "ผู้ใหญ่", 299, 4), pkg("child", "เด็ก", 149, 2)] });
+    await S.run(6);
+    ok_("แพ็คเกจ: บิลมีแต่รายการแพ็คเกจ → ไม่มีใบออกเครื่องไหนเลย (รวมเครื่องรับทุกหมวด)", S.io.sent.length === 0);
+    ok_("แพ็คเกจ: บิลแพ็คเกจล้วน → ไม่จดเป็น 'ไม่มีเครื่องรับ' และไม่เข้ารายการพิมพ์ไม่ออก", S.io.orphans.length === 0 && S.io.fails.length === 0);
+    ok_("แพ็คเกจ: บิลแพ็คเกจล้วน → จดว่าเห็นแล้ว (init/uat) ไม่ถูกดึงรายการซ้ำทุกรอบ",
+      S.state.init[901] === 1 && S.state.uat[901] === S.db[0].updated_at && S.io.fetched.length <= 2);
+    const writes = S.io.remembered.length;
+    S.db[0].items[0] = { ...S.db[0].items[0], qty: 6 }; S.bump(S.db[0]);            // เพิ่มผู้ใหญ่ 4 → 6
+    S.db[0].items.push(pkg("x_mgx2_cd34", "เตาเพิ่ม", 50, 1)); S.bump(S.db[0]);     // เพิ่มบรรทัดนับพิเศษ
+    await S.run(3);
+    ok_("แพ็คเกจ: เพิ่ม/ลดคน → ไม่มีใบ ไม่มีแดง และลายเซ็นใบครัวไม่ขยับ (ไม่เขียนบิลซ้ำ)",
+      S.io.sent.length === 0 && S.io.orphans.length === 0 && S.io.remembered.length === writes);
+  }
+  { // ② แพ็คเกจ + อาหาร: ออกเฉพาะอาหาร ตามหมวด · เครื่องรับทุกหมวดก็ได้แต่อาหาร
+    const S = mkShop([KIT, BAR, ALL]);
+    S.db.push({ id: 902, table_number: "B2", status: "pending", updated_at: "T1",
+      items: [pkg("adult", "ผู้ใหญ่", 299, 3), food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 1), food(301, "โค้ก", "น้ำ", 2), pkg("child", "เด็ก", 149, 1)] });
+    await S.run(2);
+    const m1 = byIp(S.io.sent);
+    ok_("แพ็คเกจ+อาหาร: ครัวได้ส้มตำ · แคชเชียร์ได้โค้ก · เครื่องรับทุกหมวดได้อาหารสองอย่าง — ไม่มีรายการแพ็คเกจในใบไหนเลย",
+      !anyPkg(S.io.sent) && (m1["10.5.0.11"] || []).join() === "ส้มตำไทย×1" && (m1["10.5.0.12"] || []).join() === "โค้ก×2" && (m1["10.5.0.13"] || []).sort().join() === "ส้มตำไทย×1,โค้ก×2");
+    ok_("แพ็คเกจ+อาหาร: ไม่มี 'ไม่มีเครื่องรับ'", S.io.orphans.length === 0);
+    S.io.sent.length = 0;
+    S.db[0].items = [...S.db[0].items.map(i => i.kind === "pkg" && i.pkg.key === "adult" ? { ...i, qty: 5 } : i), food(202, "ลาบหมู", "ยำบุฟเฟต์", 2)]; S.bump(S.db[0]);
+    await S.run(2);
+    const m2 = byIp(S.io.sent);
+    ok_("แพ็คเกจ+อาหาร: สั่งเพิ่มพร้อมเพิ่มคน → ใบใหม่มีแค่ลาบหมู ×2",
+      !anyPkg(S.io.sent) && (m2["10.5.0.11"] || []).join() === "ลาบหมู×2" && (m2["10.5.0.13"] || []).join() === "ลาบหมู×2" && !m2["10.5.0.12"]);
+  }
+  { // ③ ยกเลิกอาหารจนเหลือแต่แพ็คเกจ แล้วลูกค้าสั่งจานเดิมอีก — ครัวต้องได้ใบ (เดิมข้ามบิลรายการว่าง ลายเซ็นเก่าค้าง = เงียบ)
+    const S = mkShop([KIT]);
+    S.db.push({ id: 903, table_number: "B3", status: "pending", updated_at: "T1", items: [pkg("adult", "ผู้ใหญ่", 299, 2), food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 1)] });
+    await S.run(2);
+    const first = S.io.sent.length;
+    S.db[0].items = [S.db[0].items[0]]; S.bump(S.db[0]);              // ยกเลิกส้มตำ
+    await S.run(2);
+    S.db[0].items = [S.db[0].items[0], food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 1)]; S.bump(S.db[0]);   // สั่งใหม่
+    await S.run(2);
+    ok_("แพ็คเกจ: ยกเลิกอาหารหมดแล้วสั่งจานเดิมใหม่ → ครัวได้ใบใหม่ 1 ใบ", first === 1 && S.io.sent.length === 2 && S.io.sent[1].names.join() === "ส้มตำไทย×1");
+  }
+  { // ④ River (ไม่มีแพ็คเกจ): บิลค้างตอนอัปเดตเป็น v48 ต้องไม่พิมพ์ซ้ำ — ลายเซ็นต้องเท่ารุ่นก่อนทุกตัวอักษร
+    const S = mkShop([KIT, ALL]);
+    const o = { id: 904, table_number: "A4", status: "pending", updated_at: "T2", items: [food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 2), food(301, "โค้ก", "น้ำ", 1)] };
+    S.db.push(o);
+    const sigV47 = new Function(grabLine("function optionsText(opts) {") + "\n" + grabLine("const sigOf =") + "\nreturn sigOf;")()(o);
+    S.state.sig[904] = sigV47; S.state.init[904] = 1; S.state.uat[904] = "T1";   // จำไว้จากรุ่นก่อน แล้วบิลขยับ (เช่นติ๊กเสิร์ฟ)
+    await S.run(3);
+    ok_("แพ็คเกจ: บิลไม่มีแพ็คเกจ (River) อัปเดตเป็น v48 แล้วไม่มีใบซ้ำ", S.io.sent.length === 0 && S.state.sig[904] === sigV47);
+  }
+  { // ⑤ บิลอาหารล้วน: สั่งลาบเพิ่ม → ยกเลิกลาบ → สั่งลาบใหม่ (ลายเซ็นวนกลับมาเท่าเดิม) — ครัวต้องได้ใบลาบรอบหลังด้วย
+    const S = mkShop([KIT]);
+    const som = food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 1);
+    S.db.push({ id: 905, table_number: "A5", status: "pending", updated_at: "T1", items: [som] });
+    await S.run(2);
+    S.db[0].items = [som, food(202, "ลาบหมู", "ยำบุฟเฟต์", 1)]; S.bump(S.db[0]); await S.run(2);
+    S.db[0].items = [som]; S.bump(S.db[0]); await S.run(2);
+    S.db[0].items = [som, food(202, "ลาบหมู", "ยำบุฟเฟต์", 1)]; S.bump(S.db[0]); await S.run(2);
+    ok_("ยกเลิกแล้วสั่งจานเดิมใหม่ (ลายเซ็นซ้ำของเดิม) → ใบลาบออกอีกใบ ไม่ถูกข้ามเพราะ 'เคยพิมพ์ชุดนี้แล้ว'",
+      S.io.sent.map(s => s.names.join()).join("|") === "ส้มตำไทย×1|ลาบหมู×1|ลาบหมู×1");
+  }
+  { // ⑥ รอบพังหลังพิมพ์ ก่อนจดลายเซ็น — รอบถัดไปต้องไม่พิมพ์ซ้ำเครื่องที่ออกไปแล้ว (หน้าที่เดิมของ state.done ต้องยังอยู่)
+    const S = mkShop([KIT, BAR], { sendFail: ["10.5.0.12"], failThrows: 1 });
+    S.db.push({ id: 906, table_number: "A6", status: "pending", updated_at: "T1", items: [pkg("adult", "ผู้ใหญ่", 299, 2), food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 1), food(301, "โค้ก", "น้ำ", 1)] });
+    await S.run(3);
+    ok_("รอบพังกลางทาง → รอบถัดไปครัวไม่ได้ส้มตำซ้ำ · โค้กเข้ารายการพิมพ์ไม่ออก (ไม่มีรายการแพ็คเกจ)",
+      S.io.crashed === 1 && S.io.sent.filter(s => s.ip === "10.5.0.11").length === 1 && S.io.fails.length === 1 && S.io.fails[0].join() === "โค้ก");
+  }
+
+  // ── printItems ตัวจริง เรียกตรง (เส้นทางรีปริ้นรายการไม่ออกก็เรียกตัวนี้) ──
+  const mkPrint = () => {
+    const io = { sent: [], orphans: [] };
+    const fn = new Function("isBluetooth", "renderItemBufs", "printerHandles", "bufsMode", "sendToPrinter", "errOf", "noteOrphan", "console",
+      KITCHEN_SRC + "\n" + grabTopBlock("async function printItems(") + "\nreturn printItems;")(
+      btReal, fakeRender, handlesFn, () => "รูปภาพ", async (ip, port, buf) => { io.sent.push({ ip, names: namesIn(buf) }); }, errOfFake,
+      async (t, orphan) => { io.orphans.push(orphan.map(i => i.name)); }, { log() {} });
+    return { fn, io };
+  };
+  {
+    const A = mkPrint();
+    const ra = await A.fn([pkg("adult", "ผู้ใหญ่", 299, 4), food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 1), pkg("child", "เด็ก", 149, 1)], "B1", [ALL], {}, {});
+    ok_("แพ็คเกจ: printItems กับเครื่องรับทุกหมวด → ได้แต่ส้มตำ", !anyPkg(A.io.sent) && A.io.sent.map(s => s.names.join()).join() === "ส้มตำไทย×1" && ra.ok && ra.failedItems.length === 0);
+    const B = mkPrint();
+    const rb = await B.fn([pkg("adult", "ผู้ใหญ่", 299, 4)], "B1", [KIT, BAR], {}, {});
+    ok_("แพ็คเกจ: printItems แพ็คเกจล้วน (ไม่มีเครื่องรับทุกหมวด) → ไม่ส่ง ไม่จดไม่มีเครื่องรับ ผลถือว่าเรียบร้อย",
+      B.io.sent.length === 0 && B.io.orphans.length === 0 && rb.ok === true && rb.failedItems.length === 0);
+  }
+
+  // ── พิมพ์ซ้ำ/ใบยกเลิก/ย้ายโต๊ะจากแอป (description.rp) ──
+  {
+    const mkRp = () => {
+      const io = { sent: [], cleared: [], fails: [] };
+      const state = { reprinted: {} };
+      const fn = new Function("isBluetooth", "rpOf", "state", "saveState", "renderItemBufs", "bufsMode", "sendToPrinter", "errOf", "recordPrintFail", "clearCmdKey", "console",
+        [KITCHEN_SRC, grabTopBlock("async function itemsToBuffer("), grabTopBlock("async function handleReprintRequests(")].join("\n") + "\nreturn handleReprintRequests;")(
+        btReal, new Function(grabLine("function rpOf(p) {") + "\nreturn rpOf;")(), state, () => {}, fakeRender, () => "รูปภาพ",
+        async (ip, port, buf) => { io.sent.push({ ip, names: namesIn(buf) }); }, errOfFake,
+        async (...a) => { io.fails.push(a); }, async (id, key, at, ok) => { io.cleared.push({ id, key, at, ok }); }, { log() {} });
+      return { fn, io };
+    };
+    const rpRow = (items) => ({ ...ALL, description: JSON.stringify({ rp: { at: 77, items, table: "B1", kind: "reprint", bill: 902 } }) });
+    const A = mkRp();
+    await A.fn([rpRow([pkg("adult", "ผู้ใหญ่", 299, 4), food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 1)])]);
+    ok_("แพ็คเกจ: คำสั่งพิมพ์ซ้ำที่มีรายการแพ็คเกจปน → เครื่องรับทุกหมวดได้แต่ส้มตำ", !anyPkg(A.io.sent) && A.io.sent.map(s => s.names.join()).join() === "ส้มตำไทย×1" && A.io.cleared.length === 1);
+    const B = mkRp();
+    await B.fn([rpRow([pkg("adult", "ผู้ใหญ่", 299, 4)])]);
+    ok_("แพ็คเกจ: คำสั่งพิมพ์ซ้ำแพ็คเกจล้วน → ไม่พิมพ์ แต่ล้างคำสั่งทิ้ง (ไม่ค้างให้รอบเร็วดึงทุก 0.8 วิ)",
+      B.io.sent.length === 0 && B.io.fails.length === 0 && B.io.cleared.length === 1 && B.io.cleared[0].key === "rp" && B.io.cleared[0].at === 77);
+  }
+
+  // ── รายการพิมพ์ไม่ออกที่พนักงานกดรีปริ้น (description.failed) ──
+  {
+    const failItem = new Function(grabTopBlock("function failItem(it, k) {") + "\nreturn failItem;")();
+    ok_("แพ็คเกจ: บันทึกรายการไม่ออกเก็บชนิดรายการไว้ (อาหารไม่มีช่องนี้เพิ่ม)",
+      failItem(pkg("adult", "ผู้ใหญ่", 299, 4), 0).kind === "pkg" && !("kind" in failItem(food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 1), 1)));
+    const runRetry = async (f) => {
+      const io = { sent: [], settle: [] };
+      const pr = mkPrint();
+      const fn = new Function("state", "saveState", "isBluetooth", "itemsToBuffer", "sendToPrinter", "printItems", "printerHandles", "settleFail", "RETRY_TTL", "console", "errOf",
+        KITCHEN_SRC + "\n" + grabTopBlock("async function handleFailRetries(printers) {") + "\nreturn handleFailRetries;")(
+        { retried: {} }, () => {}, btReal,
+        async (items) => ({ buf: Buffer.concat((await fakeRender(items)).map(x => x.buf)) }),
+        async (ip, port, buf) => { io.sent.push({ ip, names: namesIn(buf) }); },
+        async (...a) => { const r = await pr.fn(...a); io.sent.push(...pr.io.sent.splice(0)); return r; },
+        handlesFn, async (hid, fid, want, okKs) => { io.settle.push({ want: want.map(i => i.k).sort().join(), ok: [...okKs].sort().join() }); },
+        600000, { log() {} }, errOfFake);
+      await fn([{ ...ALL, description: JSON.stringify({ failed: [f] }) }]);
+      return io;
+    };
+    const now = Date.now();
+    const its = [{ ...failItem(pkg("adult", "ผู้ใหญ่", 299, 4), 0), r: now }, { ...failItem(food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 1), 1), r: now }];
+    const a = await runRetry({ id: "F1", orderId: 902, table: "B2", kind: "", pid: null, items: its });
+    ok_("แพ็คเกจ: กดรีปริ้นรายการไม่ออกที่มีแพ็คเกจปน → พิมพ์แต่ส้มตำ · แพ็คเกจถูกเอาออกจากรายการ (ไม่ค้างเป็นปุ่มแดง)",
+      !anyPkg(a.sent) && a.sent.map(s => s.names.join()).join() === "ส้มตำไทย×1" && a.settle.length === 1 && a.settle[0].ok === "0,1");
+    const b = await runRetry({ id: "F2", orderId: 902, table: "B2", kind: "void", pid: 53, items: its });
+    ok_("แพ็คเกจ: รีปริ้นแบบระบุเครื่อง (ใบยกเลิก/ย้ายโต๊ะ) → เครื่องนั้นได้แต่ส้มตำ", !anyPkg(b.sent) && b.sent.map(s => s.names.join()).join() === "ส้มตำไทย×1");
+  }
+  ok_("แพ็คเกจ: ตัวพิมพ์เวอร์ชัน 48 ขึ้นไป (แอปใช้เลขนี้ตัดสินว่าเปิดโต๊ะแพ็คเกจได้)", +((S.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 48);
 }
 
 console.log("\n" + "=".repeat(52));

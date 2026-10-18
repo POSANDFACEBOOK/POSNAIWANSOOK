@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 47;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 48;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 2000;
@@ -290,6 +290,9 @@ function saveState() {
     fs.renameSync(tmp, STATE_FILE);
   } catch {}
 }
+// รายการแพ็คเกจบุฟเฟต์ในบิล (kind:"pkg" — ผู้ใหญ่/เด็ก/เตาเพิ่ม) คือเงิน ไม่ใช่อาหาร ⟹ ไม่ขึ้นใบครัว และไม่นับเป็น "ไม่มีเครื่องรับ"
+// ต้องเหมือนตัวในแอป (src/FoodCostApp.jsx) ทุกตัวอักษร — check-code เทียบสองไฟล์
+const isKitchenLine = it => !!it && it.kind !== "pkg";
 const sigOf = o => JSON.stringify((o.items || []).map(i => [i.menu_id, i.qty, i.note || "", optionsText(i.options)]));
 // ลายเซ็นล่าสุดที่ "พิมพ์ไปแล้ว" ของบิลนี้ — ในเครื่องก่อน ไม่มีค่อยดูที่ตัวบิล
 const lastSigOf = (o) => state.sig[o.id] || o.printed_sig || null;
@@ -429,6 +432,9 @@ function tableLabel(o) {
 }
 
 async function printItems(items, tableNum, printers, alreadyDone, meta) {
+  // ใบครัวเฉพาะอาหาร — รายการแพ็คเกจไม่ส่งแม้เครื่องรับทุกหมวด (categories=null) และไม่จดเป็นเมนูไม่มีเครื่องรับ
+  items = (items || []).filter(isKitchenLine);
+  if (!items.length) return { ok: true, okIds: [], failedItems: [], errs: [] };
   // ส่งรายการไป "ทุกเครื่องที่ตั้งค่าให้รับ" (ไม่ใช่เครื่องเดียว) — ตั้งทุกเครื่องพิมพ์ทุกหมวด = ออกทุกเครื่อง · ตั้งคนละหมวด = แยกกัน · ตรงตามที่ตั้งใน "กำหนดการพิมพ์"
   const all = (printers || []).filter(p => !isBluetooth(p) && p.ip);
   const usable = all.filter(p => !(alreadyDone && alreadyDone[p.id]));   // ข้ามเครื่องที่ผ่านแล้ว
@@ -501,8 +507,10 @@ async function handleReprintRequests(printers) {
     const rp = rpOf(p);
     if (rp && String(state.reprinted[p.id]) !== String(rp.at)) {
       state.reprinted[p.id] = rp.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำจาก tick ซ้อน
-      const its = Array.isArray(rp.items) ? rp.items : [];
-      if (!its.length) continue;
+      // ใบครัวเฉพาะอาหาร (รายการแพ็คเกจไม่ออก) · ไม่เหลืออะไรให้พิมพ์ = ล้างคำสั่งทิ้ง
+      // ปล่อยค้างไว้ = รอบเร็วดึงแถวนี้ทุก 0.8 วิ ไปจนกว่าจะมีคำสั่งใหม่มาทับ
+      const its = (Array.isArray(rp.items) ? rp.items : []).filter(isKitchenLine);
+      if (!its.length) { await clearCmdKey(p.id, "rp", rp.at); continue; }
       // การเรนเดอร์ต้องอยู่ในกันชนเดียวกับการส่ง — เดิมอยู่นอกกันชน พอมันโยน
       // คำสั่งก็ถูกกินไปแล้วจากบรรทัดบน (มาร์คก่อนส่ง) และ tick ทั้งรอบตายกลางทาง
       // = กดปุ่มพิมพ์ซ้ำแล้วเงียบสนิท ไม่มีอะไรเกิดขึ้น และออเดอร์ปกติในรอบนั้นก็ไม่ได้พิมพ์ด้วย
@@ -671,7 +679,8 @@ async function handleScanRequests(printers) {
 const FAIL_CAP = 60;
 function failItem(it, k) {
   return { k, name: String(it.name || ""), qty: it.qty, options: Array.isArray(it.options) ? it.options : [], note: it.note || "",
-    menu_id: it.menu_id != null ? it.menu_id : null, printer_id: it.printer_id != null ? it.printer_id : null, category: it.category != null ? it.category : null };
+    menu_id: it.menu_id != null ? it.menu_id : null, printer_id: it.printer_id != null ? it.printer_id : null, category: it.category != null ? it.category : null,
+    ...(it.kind != null ? { kind: it.kind } : {}) };   // เก็บชนิดรายการไว้ — รีปริ้นต้องรู้ว่าเป็นแพ็คเกจ (ไม่พิมพ์)
 }
 // เพิ่มรายการเข้า failed ของเครื่องแรกที่มี IP (อ่านของล่าสุดก่อนเขียนเสมอ — แอปเขียนช่องเดียวกันอยู่)
 // ⚠️ อ่านไม่ได้ = ไม่เขียน (fail closed) — แถวนี้เก็บค่าตั้งเครื่องด้วย (rcpt ใบเสร็จ · dw ลิ้นชัก · สถานะ)
@@ -756,8 +765,9 @@ async function handleFailRetries(printers) {
       const want = flagged.filter(it => String(state.retried[f.id + ":" + it.k]) !== String(it.r));
       if (!want.length) continue;
       want.forEach(it => { state.retried[f.id + ":" + it.k] = it.r; }); saveState();   // มาร์คก่อนส่ง กันยิงซ้ำจาก tick ซ้อน
-      const fresh = want.filter(it => Date.now() - (+it.r || 0) <= RETRY_TTL);
-      const okKs = new Set();
+      // รายการแพ็คเกจไม่ใช่ใบครัว — ไม่พิมพ์ เอาออกจากรายการไม่ออกเลย (นับว่าจบ)
+      const fresh = want.filter(it => Date.now() - (+it.r || 0) <= RETRY_TTL && isKitchenLine(it));
+      const okKs = new Set(want.filter(it => !isKitchenLine(it)).map(it => it.k));
       let errs = [];
       if (fresh.length) {
         const meta = { bill: f.orderId, by: f.by, kind: f.kind, from: f.from };
@@ -827,6 +837,10 @@ async function tick() {
     else orders = [];
   } catch (e) { console.log("⚠️  ดึงรายการในบิลไม่ได้ (เช็คเน็ต):", e.message); return; }
   orders = orders || [];
+  // ใบครัวพิมพ์เฉพาะอาหาร — ตัดรายการแพ็คเกจบุฟเฟต์ออกตั้งแต่ตรงนี้ จุดเดียว
+  // ลายเซ็น / ส่วนต่าง / พิมพ์ / ไม่มีเครื่องรับ / พิมพ์ไม่ออก ด้านล่างจึงเห็นแต่อาหาร (เพิ่ม-ลดคน = ลายเซ็นไม่ขยับ ไม่มีใบ)
+  // บิลที่ไม่มีแพ็คเกจได้รายการเท่าเดิมทุกตัว ⟹ ลายเซ็นเดิมเป๊ะ อัปเดตแล้วไม่มีใบซ้ำ
+  orders = orders.map(o => (o && Array.isArray(o.items)) ? { ...o, items: o.items.filter(isKitchenLine) } : o);
 
   if (!primed) {
     for (const o of orders) if (o && o.items) { state.sig[o.id] = sigOf(o); state.init[o.id] = 1; state.uat[o.id] = uatOf.get(String(o.id)) || null; }
@@ -844,7 +858,9 @@ async function tick() {
   await handlePingRequests(printers);   // เช็คสถานะเครื่องทันทีเมื่อกด "เช็คสถานะใหม่" ในแอป
   await handleScanRequests(printers);   // สแกนหาเครื่องพิมพ์ใหม่ทันทีเมื่อกด "ค้นหาเครื่องพิมพ์" ในแอป
   for (const o of orders) {
-    if (!o || !o.items || !o.items.length) continue;
+    // รายการอาหารว่าง (โต๊ะแพ็คเกจที่ยังไม่สั่งอาหาร / ยกเลิกหมด) ต้องผ่านลงไปจดว่าเห็นแล้วด้วย
+    // ข้ามไปเฉยๆ = ไม่เคยจด init/uat ⟹ บิลนี้ถูกนับว่า "เปลี่ยน" แล้วดึงรายการซ้ำทุก 2 วิ (บทเรียน Disk IO)
+    if (!o || !o.items) continue;
     const sig = sigOf(o), last = lastSigOf(o), first = isFirstSight(o);
     // มาร์คว่า "จัดการแล้ว" เฉพาะเมื่อพิมพ์ผ่านจริง — ถ้ากระดาษหมด/หลุดแลน
     // ต้องปล่อยให้ sig เดิมค้างไว้ รอบถัดไป (5 วิ) จะลองพิมพ์ให้ใหม่เอง
@@ -863,7 +879,7 @@ async function tick() {
       return r ? r.ok : true;
     };
     if (first) {
-      console.log(`🆕 ออเดอร์ใหม่ โต๊ะ ${o.table_number} (${new Date().toLocaleTimeString("th-TH")})`);
+      if (o.items.length) console.log(`🆕 ออเดอร์ใหม่ โต๊ะ ${o.table_number} (${new Date().toLocaleTimeString("th-TH")})`);
       const items = last ? newItemsVs(last, o.items) : o.items;
       if (items.length) ok = mark(await printItems(items, tableLabel(o), printers, done, { bill: o.id, by: o.ordered_by }));
       if (ok) state.init[o.id] = 1;
@@ -884,6 +900,10 @@ async function tick() {
     // รอบหน้าจะเห็นว่า "ไม่เปลี่ยน" แล้วไม่เปิดดูรายการอีกเลย = ใบครัวหายถาวร
     if (ok) { state.sig[o.id] = sig; state.uat[o.id] = uatOf.get(String(o.id)) || null; if (!_noPrintedSig && o.printed_sig !== sig) rememberPrinted(o.id, sig); }
     else console.log(`  🔁 จะลองพิมพ์ใหม่รอบหน้า — โต๊ะ ${o.table_number}`);
+    // "เครื่องไหนพิมพ์ใบชุดนี้แล้ว" (state.done) ใช้กันซ้ำเฉพาะรอบที่ล้มก่อนจดลายเซ็นเท่านั้น — จดแล้วต้องลืมของบิลนี้ทิ้ง
+    // ไม่งั้นยกเลิกแล้วสั่งจานเดิมใหม่ (ลายเซ็นวนกลับมาเท่าเดิม เช่นโต๊ะบุฟเฟต์ยกเลิกหมูแล้วสั่งหมูอีก)
+    // เครื่องถูกข้ามเพราะ "เคยพิมพ์ชุดนี้แล้ว" = ครัวไม่ได้ใบ เงียบ ไม่มีแดง
+    if (ok) for (const k of Object.keys(state.done)) if (k.startsWith(o.id + "|")) delete state.done[k];
   }
   // prune state ให้เหลือเฉพาะออเดอร์ที่ยัง active
   // ⚠️ ต้องอิง heads (บิลที่เปิดอยู่ "ทั้งหมด") ไม่ใช่ orders (เฉพาะบิลที่เปลี่ยน)
