@@ -2392,7 +2392,9 @@ function acctOutcomeOf(res,paidBills){
   }
   const rows=Array.isArray(res.results)?res.results:[];
   if(res.error||rows.length===0)return "failed";
-  return rows.some(r=>!r||(!r.ok&&!r.noSale))?"failed":"ok";
+  // notOpen (ฝั่งบัญชีตอบ 409 not_open) = ยังไม่เปิดรับยอดจาก POS ของวันนั้น ยอดยังมาทางใบสแกน — ไม่ใช่ส่งพลาด ห้ามส่งซ้ำ/ลงซ้ำ
+  if(rows.some(r=>!r||(!r.ok&&!r.noSale&&!r.notOpen)))return "failed";
+  return rows.some(r=>r&&r.notOpen)&&!rows.some(r=>r&&r.ok)?"not_open":"ok";
 }
 // ใบปิดยอดที่ส่งไม่ผ่าน ต้องไม่หายไปกับจอ — จำไว้ในเครื่อง (แยกต่อสาขา) จนกว่าผู้จัดการจะกดว่าจัดการแล้ว
 // ไม่มีปุ่มส่งซ้ำโดยตั้งใจ: กันลงซ้ำอยู่ที่ฝั่งบัญชี ไม่ใช่ที่เรา และบิลที่ถูกแก้หลังปิดกะจะย้ายไปวันใหม่
@@ -2423,7 +2425,8 @@ function acctUnsentEntry(shift,res,totals){
   // ไม่ทราบผล = ยิงไปแล้วแต่ไม่ได้คำตอบที่เชื่อได้ (เน็ตหลุด/หมดเวลา/ระบบบัญชีล่ม 5xx) — ฝั่งบัญชีอาจลงไปแล้ว
   // ไม่เข้าแน่ = ไม่ได้ยิง (ด่านตรวจ) · ถูกตีกลับ (มีใบของวันนั้นแล้ว) · ถูกปฏิเสธชัด (4xx)
   const unk=(r)=>!r.dropped&&!r.blocked&&!(+r.status>=400&&+r.status<500);
-  const days=rows.filter(r=>r&&!r.ok&&!r.noSale).map(r=>({date:r.business_date||null,total:round2(+r.total_sales||0),why:why(r).slice(0,200),unknown:unk(r)}));
+  // วันที่ฝั่งบัญชียังไม่เปิดรับ (notOpen) ไม่ใช่ยอดค้างให้ลงเอง — วันนั้นมีใบสแกนอยู่แล้ว ลงเองซ้ำ = รายรับสองรอบ
+  const days=rows.filter(r=>r&&!r.ok&&!r.noSale&&!r.notOpen).map(r=>({date:r.business_date||null,total:round2(+r.total_sales||0),why:why(r).slice(0,200),unknown:unk(r)}));
   const unknown=rows.length===0;   // ไม่มีผลรายวันเลย (เน็ตหลุด/คำตอบอ่านไม่ได้) = ไม่รู้ว่าวันไหนเข้าแล้วบ้าง
   const sumOf=(a)=>round2(a.reduce((t,d)=>t+d.total,0));
   return{shift_id:shift&&shift.id,at:new Date().toISOString(),
@@ -23790,6 +23793,8 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
       if(outcome==="nothing"){onClosed();return;}
       // สาขายังไม่เปิดท่อบัญชี แต่กะนี้มีบิลที่เก็บเงินแล้ว — ห้ามปิดเงียบ ต้องขึ้นกล่องเหลืองให้กดรับทราบ
       // ตัวเลขในกล่องเหลือง: ใช้ที่เซิร์ฟเวอร์นับสดตอนปิดกะถ้ามี (บิลที่ปิดเข้ามาระหว่างนับเงินก็ต้องนับ)
+      // ฝั่งบัญชียังไม่เปิดรับยอดจาก POS ของวันในกะนี้ (409 not_open) — กล่องเหลืองแบบเดียวกับสาขาที่ยังไม่เปิดท่อ ไม่ใช่จอแดง
+      if(outcome==="not_open"){setAcct({...(acctRes||{}),notEnabled:true,notOpen:true,bills:totals.orderCount,sales:round2(totals.totalSales)});return;}
       const fresh=outcome==="not_enabled"&&acctRes&&acctRes.paid_bills!=null&&+acctRes.paid_bills>=totals.orderCount;
       setAcct(outcome==="not_enabled"?{...acctRes,notEnabled:true,bills:fresh?+acctRes.paid_bills:totals.orderCount,sales:fresh?round2(+acctRes.paid_total||0):round2(totals.totalSales)}:{...(acctRes||{}),kept});
       return;   // มีผลลงบัญชีให้ดู — ปิดจอเมื่อผู้ใช้กดรับทราบ
@@ -23808,7 +23813,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         {/* สาขาที่ยังไม่เปิดท่อบัญชี — กะปิดแล้วจริง แต่ยอดไม่ได้ไปไหน ต้องมีคนส่งยอดทางเดิม */}
         <div style={{padding:"18px 20px 14px",background:C.yellowLight,borderBottom:`2px solid ${C.yellow}`}}>
           <div style={{fontSize:32,marginBottom:4}}>📙</div>
-          <div style={{fontSize:17,fontWeight:900,color:"#92400E",lineHeight:1.45}}>ยอดกะนี้ยังไม่ถูกส่งเข้าบัญชี (สาขานี้ยังไม่ได้เปิดท่อบัญชี)</div>
+          <div style={{fontSize:17,fontWeight:900,color:"#92400E",lineHeight:1.45}}>{acct.notOpen?"ระบบบัญชียังไม่เปิดรับยอดจาก POS ของสาขานี้":"ยอดกะนี้ยังไม่ถูกส่งเข้าบัญชี (สาขานี้ยังไม่ได้เปิดท่อบัญชี)"}</div>
           <div style={{fontSize:13,color:"#92400E",marginTop:6,lineHeight:1.6}}>
             ปิดกะเรียบร้อยแล้ว · {(+acct.bills||0).toLocaleString()} บิล · ยอดขาย <b>฿{(+acct.sales||0).toLocaleString()}</b><br/>
             ระบบบัญชียังไม่ได้รับยอดนี้ — ต้องส่งยอดเข้าบัญชีทางเดิม (ใบปิดยอด/แจ้งฝ่ายบัญชี) ทุกกะ จนกว่าจะเปิดท่อบัญชีให้สาขานี้
@@ -23822,7 +23827,9 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         const rows=Array.isArray(acct.results)?acct.results:[];
         // วันที่ไม่มียอดขายเลย (ยอด 0) ไม่ใช่ความผิดพลาด — ไม่นับเป็นแดง
         // ถ้าขึ้นแดงบ่อยๆ พนักงานจะชินแล้วมองข้ามวันที่ยอดไม่เข้าบัญชีจริง
-        const good=rows.filter(r=>r.ok),bad=rows.filter(r=>!r.ok&&!r.noSale);
+        const good=rows.filter(r=>r.ok),bad=rows.filter(r=>!r.ok&&!r.noSale&&!r.notOpen);
+        // วันที่ฝั่งบัญชียังไม่เปิดรับจาก POS (409 not_open) — ส่งทางเดิม ไม่ใช่แดง ไม่ใช่ "ส่งซ้ำ"
+        const openRows=rows.filter(r=>r.notOpen);
         const noneToSend=rows.length>0&&rows.every(r=>r.noSale);
         const fatal=!!acct.error||(rows.length===0&&!acct.skipped);
         // ส่งผ่าน แต่บัญชีทิ้งบางค่า = ยอดเงินลงแล้วก็จริง แต่เอกสารไม่ครบ
@@ -23830,26 +23837,26 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         const warnRows=rows.filter(r=>r.ok&&slipWarnings(r.reply).length);
         // วันนั้นมีใบปิดยอดอยู่แล้ว (เปิดวันละ 2 กะ) — ยอดกะนี้ถูกทิ้ง และส่งซ้ำก็ไม่ช่วย
         const dropRows=rows.filter(r=>r.dropped);
-        const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0;
-        const partial=!fatal&&bad.length===0&&rows.length>0&&warnRows.length>0;
+        const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0&&openRows.length===0;
+        const partial=!fatal&&bad.length===0&&rows.length>0&&(warnRows.length>0||openRows.length>0);
         return <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(94vw,460px)",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
           <div style={{padding:"18px 20px 12px",background:okAll?C.greenLight:partial?C.yellowLight:C.redLight,borderBottom:`1px solid ${okAll?C.green:partial?C.yellow:C.red}33`}}>
             <div style={{fontSize:32,marginBottom:4}}>{okAll?"📗":partial?"📙":"⚠️"}</div>
             <div style={{fontSize:17,fontWeight:900,color:okAll?"#0F6E4C":partial?"#92400E":C.red}}>
-              {noneToSend?"ปิดกะเรียบร้อย — ไม่มียอดขายให้ลงบัญชี":okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":partial?"ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก":"ยอดขายยังไม่เข้าระบบบัญชี"}
+              {noneToSend?"ปิดกะเรียบร้อย — ไม่มียอดขายให้ลงบัญชี":okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":partial?(openRows.length?"ส่งยอดขายแล้วบางวัน":"ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก"):"ยอดขายยังไม่เข้าระบบบัญชี"}
             </div>
             <div style={{fontSize:12,color:okAll?"#0F6E4C":partial?"#92400E":C.red,marginTop:4,lineHeight:1.6,opacity:.95}}>
               {noneToSend?"กะนี้ไม่มีบิลที่เก็บเงินได้ จึงไม่มียอดต้องส่งเข้าบัญชี — ไม่ใช่ความผิดพลาด"
                 :okAll?"กะปิดเรียบร้อยและยอดลงสมุดบัญชีแล้ว"
-                :partial?"ยอดเงินลงสมุดบัญชีแล้ว แต่ระบบบัญชีไม่รับข้อมูลบางอย่าง — ดูรายละเอียดข้างล่าง แล้วแจ้งผู้ดูแลระบบ"
+                :partial?(openRows.length?"วันที่ระบบบัญชียังไม่เปิดรับจาก POS ต้องส่งยอดทางเดิม (ใบปิดยอด/สแกน) — ห้ามส่งซ้ำจาก POS":"ยอดเงินลงสมุดบัญชีแล้ว แต่ระบบบัญชีไม่รับข้อมูลบางอย่าง — ดูรายละเอียดข้างล่าง แล้วแจ้งผู้ดูแลระบบ")
                 :dropRows.length?"กะปิดเรียบร้อยแล้ว แต่วันนี้มีใบปิดยอดของสาขานี้ลงไปแล้ว ระบบบัญชีจึงไม่รับยอดกะนี้ — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ"
                 :"กะปิดเรียบร้อยแล้ว แต่ยอดยังไม่ลงบัญชี — แจ้งผู้ดูแลระบบให้ส่งซ้ำ"}
             </div>
           </div>
           <div style={{flex:1,overflowY:"auto",padding:"12px 20px",minHeight:0,fontSize:12.5,color:C.ink2,lineHeight:1.7}}>
             {acct.error&&<div style={{color:C.red,fontWeight:700}}>{String(acct.error)}</div>}
-            {rows.map((r,i)=><div key={i} style={{padding:"9px 11px",marginBottom:6,borderRadius:10,background:(r.ok||r.noSale)?C.bg:C.redLight,border:`1px solid ${(r.ok||r.noSale)?C.line:C.red+"44"}`}}>
-              <div style={{display:"flex",justifyContent:"space-between",gap:8,fontWeight:800,color:(r.ok||r.noSale)?C.ink:C.red}}>
+            {rows.map((r,i)=><div key={i} style={{padding:"9px 11px",marginBottom:6,borderRadius:10,background:(r.ok||r.noSale||r.notOpen)?C.bg:C.redLight,border:`1px solid ${(r.ok||r.noSale||r.notOpen)?C.line:C.red+"44"}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:8,fontWeight:800,color:(r.ok||r.noSale||r.notOpen)?C.ink:C.red}}>
                 <span>{r.business_date} · {r.bills} บิล</span><span>฿{(+r.total_sales||0).toLocaleString()}</span>
               </div>
               {r.ok&&r.reply&&r.reply.income&&<div style={{fontSize:11.5,color:C.ink4,marginTop:2}}>
@@ -23861,6 +23868,8 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
               {!r.ok&&<div style={{fontSize:11.5,color:C.red,marginTop:3}}>
                 {r.noSale
                   ?<span style={{color:C.ink4}}>ℹ️ วันนี้ไม่มียอดขาย จึงไม่มีอะไรต้องส่งเข้าบัญชี</span>
+                  :r.notOpen
+                  ?<span style={{color:"#92400E"}}>📙 ระบบบัญชียังไม่เปิดรับยอดจาก POS ของวันนี้ — ส่งยอดทางเดิม (ใบปิดยอด/สแกน) ห้ามส่งซ้ำ</span>
                   :r.dropped
                   ?<>❌ วันที่ {r.business_date} มีใบปิดยอดของสาขานี้อยู่แล้ว ยอดกะนี้จึงไม่ถูกบันทึก — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ</>
                   :r.blocked

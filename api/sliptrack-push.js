@@ -82,12 +82,17 @@ function buildPaymentLines(bills) {
 // ไม่ตรง = มีเงินสดหลุดไปกะอื่น (เครื่องแคชเชียร์ค้างกะเก่า) หรือบันทึกลิ้นชักพลาด
 // เหตุจริง 22 ก.ย. 69 The River: ใบส่ง cash_sales = 0 ทั้งที่บรรทัดช่องทางเงินสดมี ฿272
 // เงินเข้าตู้เซฟจึงขาดทั้งก้อน และไม่มีใครรู้จนมีคนทัก ⟹ ต้องส่งธงเตือนไปกับใบ ห้ามเงียบ
-function cashWarnings(drawer, payment) {
+// payment = บรรทัดช่องทางของ "ทั้งกะ" (ทุกวันในกะ) ไม่ใช่ของวันสุดท้าย — ลิ้นชักเป็นตัวเลขทั้งกะ
+// refundSold = เงินคืนของบิลที่ขายในกะนี้ (ยกเลิกบิลเงินสด / แก้บิลลดยอด) — บิลนั้นออกจากยอดเงินสดของบิลไปแล้ว
+//   แต่รายการ "ขาย" ในลิ้นชักยังอยู่ ⟹ ต้องหักออกฝั่งลิ้นชักด้วย ไม่งั้นฟ้องขาดทั้งที่ลิ้นชักลงตัว
+// (ตรวจเจอ 18 ต.ค. 69: กะข้ามเที่ยงคืนฟ้องขาดเท่ายอดเงินสดก่อนเที่ยงคืน · ยกเลิกบิลเงินสดฟ้องขาดเท่ายอดบิล
+//  ไม่ได้ทำเงินลงผิด แต่ฝั่งบัญชีจะไล่หาเงินที่ไม่ได้หาย แล้วเลิกเชื่อธงนี้ตอนที่เงินหายจริง)
+function cashWarnings(drawer, payment, refundSold) {
   const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
   if (!drawer) return [];
   const cashLine = (payment || []).find((p) => p && p.name_en === "Cash");
   const fromBills = r2(cashLine ? cashLine.amount : 0);
-  const inDrawer = r2(drawer.cash_sales);
+  const inDrawer = r2((Number(drawer.cash_sales) || 0) - (Number(refundSold) || 0));
   if (Math.abs(fromBills - inDrawer) < 0.005) return [];
   return ["⚠️ เงินสดไม่ตรงกัน: บิลเก็บเงินสด " + fromBills.toFixed(2) +
     " แต่ลิ้นชักบันทึกไว้ " + inDrawer.toFixed(2) +
@@ -181,6 +186,11 @@ export default async function handler(req, res) {
   //     พร้อมเพย์เป็นชั้นย่อยของบัตรเครดิต ห้ามบวกซ้ำเข้าผลรวม
   //   · ฝั่งเขากันลงซ้ำให้แล้วสองชั้น (409 day_already_closed / income.status exists)
   if (String(body.kind || "") === "pos_closing") {
+    // ── สาขา 5 "กาญจนบุรี" (18 ต.ค. 69): เจ้าของอนุมัติลงบัญชีอัตโนมัติแล้ว แต่ **ห้ามเติมจนกว่าฝั่งบัญชีแจ้งว่าพร้อม**
+    //    (เขาต้องใส่วัน X ใน POS_AUTO_POST_START ก่อน · ระหว่างนั้นตัวรับตอบ 409 not_open)
+    //    วันเปิด: เติม 5 ใน **ทั้งสอง array พร้อมกัน** (POS_CLOSING + SHIFT_KEYED) — เติมแค่ตัวนี้ = สองกะในวันเดียวได้ external_id ซ้ำ
+    //    กะที่สองถูกตีกลับเป็น duplicate · สาขา 5 มี INV- 0 ใบ และเป็นบุคคลธรรมดา (ไม่ออก CA-) ฝั่งบัญชียืนยันว่ารายกะได้
+    //    ต้องแก้ด่านใน tools/check-code.mjs ที่ล็อก [8] ไว้ด้วย (ตั้งใจให้แดง จะได้ไม่มีใครเติมโดยไม่รู้ตัว)
     const POS_CLOSING_BRANCHES = [8];   // เฉพาะ The River ตามที่เจ้าของสั่ง สาขาอื่นยังใช้สแกนรูป
     // ── สาขาที่ฝั่งบัญชี "เปิดคีย์รายกะ" ให้แล้ว = ลงได้หลายใบต่อวัน ──────────
     // ว่าง = ยังใช้รูปแบบเดิม (วันละใบ) · เติมเลขสาขาได้เฉพาะ "วัน cutover ที่นัดกับฝั่งบัญชี"
@@ -253,7 +263,7 @@ export default async function handler(req, res) {
       for (const o of [...(tagged || []), ...(timed || [])]) if (o && !seenIds.has(o.id)) { seenIds.add(o.id); orders.push(o); }
 
       // เงินในลิ้นชักของกะนี้ — ฝั่งบัญชีดึงเงินเข้าตู้เซฟจากบล็อกนี้ ไม่ใช่จาก payment
-      const moves = await sbGet(`cash_movements?shift_id=eq.${shiftId}&select=type,amount&limit=2000`);
+      const moves = await sbGet(`cash_movements?shift_id=eq.${shiftId}&select=type,amount,order_id&limit=2000`);
       const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
       // วันที่ทำการ = วันที่ "ปิดบิล" ตามเวลาไทย (โต๊ะเปิด 4 ทุ่มจ่ายตีหนึ่ง = รายได้ของวันที่จ่าย)
       const bizDate = (o) => new Date(o.updated_at || o.created_at)
@@ -306,6 +316,13 @@ export default async function handler(req, res) {
           total_bills: bills,
         };
       };
+      // ธงเงินสดสองทาง: เทียบเงินสดจากบิล "ทั้งกะ" กับลิ้นชัก "ทั้งกะ" (กะข้ามเที่ยงคืนมีหลายวัน แต่ลิ้นชักมีก้อนเดียว)
+      // เงินคืนนับเฉพาะของบิลที่มีรายการขายในกะนี้ — คืนเงินบิลของกะก่อน (แก้/ยกเลิกทีหลัง) ไม่เกี่ยวกับบิลชุดนี้
+      // ที่ยังเหลือ: แก้บิลของกะก่อนแล้วเก็บเงินสดเพิ่ม (รายการขายเข้ากะนี้ แต่บิลไม่อยู่ในชุดนี้) ยังฟ้องได้ — เกิดน้อย และควรมีคนดู
+      const shiftPayment = buildPaymentLines(orders).payment;
+      const soldHere = new Set((moves || []).filter((m) => m.type === "sale" && m.order_id != null).map((m) => String(m.order_id)));
+      const refundSold = r2((moves || []).filter((m) => m.type === "refund" && m.order_id != null && soldHere.has(String(m.order_id)))
+        .reduce((a, m) => a + (Number(m.amount) || 0), 0));
       const results = [];
       const days = [...byDay.entries()].sort();
       const lastDay = days.length ? days[days.length - 1][0] : null;
@@ -404,7 +421,7 @@ export default async function handler(req, res) {
           // แนบเงินลิ้นชักเฉพาะวันสุดท้ายของกะ — นับเงินจริงเกิดครั้งเดียวตอนปิดกะ
           ...(business_date === lastDay ? (() => {
             const drawer = mkDrawer(list.length);
-            const warnings = cashWarnings(drawer, payment);
+            const warnings = cashWarnings(drawer, shiftPayment, refundSold);
             return warnings.length ? { drawer, warnings } : { drawer };
           })() : {}),
           payment,
@@ -427,10 +444,16 @@ export default async function handler(req, res) {
             data.day_already_closed === true ||
             String(data.error || "") === "day_already_closed" ||
             String((data.income && data.income.status) || "") === "exists");
+          // ── 409 not_open: ฝั่งบัญชียังไม่เปิดรับยอดจาก POS ของสาขานี้สำหรับวันนั้น ──
+          // ฝั่งบัญชีมีวันเริ่มรับรายสาขา (POS_AUTO_POST_START ของเขา · ตกลง 18 ต.ค. 69) ก่อนวันนั้นยอดยังมาจากใบสแกน FoodStory
+          // ⟹ ไม่ใช่ "ส่งไม่ผ่าน": ห้ามส่งซ้ำ และห้ามให้ใครลงยอดเองซ้ำ (วันนั้นมีใบสแกนอยู่แล้ว = รายรับลงสองรอบ)
+          const notOpen = r.status === 409 && ["status", "error", "code"].some((k) => String((data && data[k]) || "") === "not_open");
           results.push({
             business_date, ok: r.ok && !dropped, dropped, status: r.status,
+            ...(notOpen ? { notOpen: true } : {}),
             bills: list.length, total_sales, sent: payload, reply: data,
-            ...(dropped ? { error: `วันที่ ${business_date} มีใบปิดยอดของสาขานี้อยู่แล้ว ระบบบัญชีจึงไม่รับยอดกะนี้ (฿${total_sales.toLocaleString()}) — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ` } : {}),
+            ...(dropped ? { error: `วันที่ ${business_date} มีใบปิดยอดของสาขานี้อยู่แล้ว ระบบบัญชีจึงไม่รับยอดกะนี้ (฿${total_sales.toLocaleString()}) — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ` }
+              : notOpen ? { error: `ระบบบัญชียังไม่เปิดรับยอดจาก POS ของสาขานี้สำหรับวันที่ ${business_date} — ยอดวันนั้นส่งทางเดิม (ใบปิดยอด/สแกน) ห้ามส่งซ้ำ` } : {}),
           });
         } catch (err) {
           results.push({ business_date, ok: false, error: String((err && err.message) || err), total_sales, bills: list.length });

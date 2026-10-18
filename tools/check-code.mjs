@@ -2268,7 +2268,7 @@ section("วันที่โอนจริง + แหล่งเงิน�
   // จอปิดกะเคยขึ้นเขียวล้วนแม้บัญชีจะทิ้งค่าไปบางส่วน = คนปิดกะเชื่อว่าเรียบร้อย
   ok_("จอปิดกะแยกสถานะ \"ส่งแล้วแต่ไม่ครบ\" ออกจากเขียวล้วน",
     APP.includes("const warnRows=rows.filter(r=>r.ok&&slipWarnings(r.reply).length);") &&
-    APP.includes("const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0;") &&
+    APP.includes("const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0&&openRows.length===0;") &&
     APP.includes("ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก"));
   // ── "ข้าม" มีสองแบบ ห้ามเหมารวม ────────────────────────────────────────
   // ไม่มีอะไรต้องลงบัญชี (ย้ายในหน่วยเดียวกัน/ยอดศูนย์) = จบ
@@ -4080,7 +4080,7 @@ section("เงินสดต้องเข้ากะที่เปิด�
     APP.includes("const _pls=await liveShift(branch.id,shift);") && APP.includes("addCashMovement({shift_id:_pls.id,"));
   // ใบปิดยอดต้องฟ้องเองเมื่อเงินสดสองทางไม่ตรง — ฝั่งบัญชีขอไว้ 22 ก.ย. 69
   {
-    const st = SLIPPUSH.indexOf("function cashWarnings(drawer, payment) {");
+    const st = SLIPPUSH.indexOf("function cashWarnings(drawer, payment, refundSold) {");
     let fn = null;
     if (st >= 0) {
       let d = 0, started = false, en = -1;
@@ -4099,8 +4099,17 @@ section("เงินสดต้องเข้ากะที่เปิด�
       ok_("ลิ้นชักมากกว่าบิลก็ต้องเตือน", fn({ cash_sales: 300 }, cash(272)).length === 1);
       ck("วันที่ไม่มีบล็อกลิ้นชัก = ไม่เตือนมั่ว", fn(null, cash(272)).length, 0);
       ck("ไม่มีเงินสดเลยทั้งสองทาง = เงียบ", fn({ cash_sales: 0 }, []).length, 0);
+      // ตรวจเจอ 18 ต.ค. 69 (ก่อนเปิดท่อสาขา 5): ยกเลิก/แก้บิลเงินสดในกะ = บิลออกจากยอด แต่รายการขายในลิ้นชักยังอยู่
+      ck("ยกเลิกบิลเงินสด ฿344 แล้วคืนเงิน (ลิ้นชักลงตัว) = ไม่ฟ้อง · ไม่หักเงินคืน = ฟ้องผิด",
+        [fn({ cash_sales: 1344 }, cash(1000), 344).length, fn({ cash_sales: 1344 }, cash(1000)).length], [0, 1]);
+      ok_("หักเงินคืนแล้วยังขาดจริง = ยังฟ้อง", fn({ cash_sales: 1344 }, cash(900), 344).length === 1);
     }
-    ok_("ธงถูกแนบไปกับใบปิดยอดจริง", SLIPPUSH.includes("const warnings = cashWarnings(drawer, payment);") && SLIPPUSH.includes("return warnings.length ? { drawer, warnings } : { drawer };"));
+    ok_("ธงถูกแนบไปกับใบปิดยอดจริง", SLIPPUSH.includes("const warnings = cashWarnings(drawer, shiftPayment, refundSold);") && SLIPPUSH.includes("return warnings.length ? { drawer, warnings } : { drawer };"));
+    // กะข้ามเที่ยงคืน: ลิ้นชักเป็นตัวเลขทั้งกะ ⟹ ฝั่งบิลต้องเป็นทั้งกะด้วย (เดิมใช้แค่วันสุดท้าย ฟ้องขาดเท่ายอดก่อนเที่ยงคืน)
+    ok_("ธงเงินสดเทียบทั้งกะกับทั้งกะ · เงินคืนนับเฉพาะบิลที่ขายในกะนี้ · ลิ้นชักดึง order_id มาด้วย",
+      SLIPPUSH.includes("const shiftPayment = buildPaymentLines(orders).payment;") &&
+      SLIPPUSH.includes('m.type === "refund" && m.order_id != null && soldHere.has(String(m.order_id))') &&
+      SLIPPUSH.includes("select=type,amount,order_id&limit=2000"));
   }
   ok_("เปิดกะซ้อนกันไม่ได้ (สาขาละกะเดียว)",
     APP.includes("const r=await api.getActiveShift(currentBranch.id);") && APP.includes('title:"มีกะเปิดอยู่แล้ว"'));
@@ -4248,7 +4257,7 @@ section("ท่อบัญชี: กติกา leaf + คีย์ราย�
     SLIPPUSH.includes("results.push({ business_date, ok: false, noSale: true, total_sales, bills: list.length });")
     && !SLIPPUSH.includes("problems.push(`total_sales ต้องมากกว่า 0"));
   ok_("จอปิดกะไม่นับวันไม่มียอดขายเป็นสีแดง",
-    APP.includes("bad=rows.filter(r=>!r.ok&&!r.noSale);") && APP.includes("const noneToSend=rows.length>0&&rows.every(r=>r.noSale);"));
+    APP.includes("bad=rows.filter(r=>!r.ok&&!r.noSale&&!r.notOpen);") && APP.includes("const noneToSend=rows.length>0&&rows.every(r=>r.noSale);"));
   ok_("จอปิดกะบอกตรงๆ ว่าวันนี้ไม่มียอดขาย", APP.includes("ℹ️ วันนี้ไม่มียอดขาย จึงไม่มีอะไรต้องส่งเข้าบัญชี"));
 
   // ── คีย์รายกะ: โค้ดพร้อมแล้ว แต่ต้องปิดสวิตช์ไว้จนถึงวัน cutover ที่นัดกับฝั่งบัญชี ──
@@ -8530,6 +8539,46 @@ section("ปุ่มเรียกพนักงาน + ภาษาไท�
   ok_("จอโต๊ะ: ปุ่มพิมพ์ QR มีปุ่มเดียว — แถบเปิดโต๊ะขึ้นเมื่อไร ปุ่มเล็กด้านบนซ่อน (เงื่อนไขตรงข้ามกันเป๊ะ)",
     APP.includes(banner) && APP.includes(toolbar) && (APP.match(/onClick={printSelQR}/g) || []).length === 2);
 }
+// ══════════════════════════════════════════════════════════════════════════
+// ปิดกะ: ระบบบัญชีตอบ 409 not_open = ยังไม่เปิดรับยอดจาก POS ของสาขา/วันนั้น (ตกลงกับฝั่งบัญชี 18 ต.ค. 69)
+// ฝั่งบัญชีมีวันเริ่มรายสาขา (POS_AUTO_POST_START) — ก่อนวันนั้นยอดยังมาทางใบสแกน FoodStory
+// ⟹ ห้ามขึ้นแดง "ส่งไม่ผ่าน · แจ้งให้ส่งซ้ำ" และห้ามเข้ากอง "ยอดไม่เข้าแน่ ลงเองได้"
+//    (วันนั้นมีใบสแกนอยู่แล้ว ลงเองซ้ำ = รายรับและเงินเข้าตู้เซฟลงสองรอบ เงียบๆ)
+// ══════════════════════════════════════════════════════════════════════════
+section("ปิดกะ: ระบบบัญชียังไม่เปิดรับยอดของสาขา (409 not_open)");
+{
+  const m = SLIPPUSH.match(/const notOpen = ([\s\S]*?);\n/);
+  let isNotOpen = null;
+  try { isNotOpen = new Function("r", "data", "return (" + (m && m[1]) + ");"); } catch {}
+  ok_("อ่านตัวตัดสิน not_open ตัวจริงออกมารันได้", !!isNotOpen);
+  if (isNotOpen) ck("409 + status/error/code เป็น not_open = ยังไม่เปิด · 409 อย่างอื่น / 500 / 200 = ไม่ใช่",
+    [isNotOpen({ status: 409 }, { status: "not_open" }), isNotOpen({ status: 409 }, { error: "not_open" }), isNotOpen({ status: 409 }, { code: "not_open" }),
+      isNotOpen({ status: 409 }, { status: "duplicate" }), isNotOpen({ status: 500 }, { status: "not_open" }), isNotOpen({ status: 200 }, { status: "created" }), isNotOpen({ status: 409 }, null)],
+    [true, true, true, false, false, false, false]);
+  ok_("ผลรายวันติดธง notOpen และยังเป็น ok=false (ไม่นับว่าลงบัญชีแล้ว)",
+    SLIPPUSH.includes("...(notOpen ? { notOpen: true } : {}),") && SLIPPUSH.includes("ok: r.ok && !dropped, dropped,"));
+  const AO = new Function(grab(APP, "acctOutcomeOf") + "\nreturn acctOutcomeOf;")();
+  ck("จอปิดกะ: ทุกวันยังไม่เปิด = กล่องเหลือง · ปนวันที่ส่งผ่าน = ok · ปนวันที่ส่งพลาดจริง = แดงเหมือนเดิม",
+    [AO({ results: [{ ok: false, notOpen: true, status: 409 }] }, 5), AO({ results: [{ ok: false, notOpen: true }, { ok: false, noSale: true }] }, 5),
+      AO({ results: [{ ok: true }, { ok: false, notOpen: true }] }, 5), AO({ results: [{ ok: false, notOpen: true }, { ok: false, status: 500 }] }, 5),
+      AO({ results: [{ ok: false, status: 409 }] }, 5)],
+    ["not_open", "not_open", "ok", "failed", "failed"]);
+  let U = null;
+  const round2Src = APP.split("\n").find((l) => l.startsWith("const round2 = ")) || "";
+  try { U = new Function([round2Src, grab(APP, "acctUnsentEntry"), "return acctUnsentEntry;"].join("\n"))(); } catch { U = null; }
+  ok_("ดึงตัวจดใบที่ส่งไม่ผ่านมารันได้", !!U);
+  if (U) {
+    const e = U({ id: 60 }, { results: [{ business_date: "2026-10-30", ok: false, notOpen: true, status: 409, total_sales: 8000, bills: 30 },
+      { business_date: "2026-10-31", ok: false, status: 500, total_sales: 2000, bills: 9 }] }, { totalSales: 10000, orderCount: 39 });
+    ck("กะคร่อมวัน: วันที่ยังไม่เปิดไม่เข้ากองยอดค้าง (ลงเองซ้ำไม่ได้) · วันที่ส่งพลาดจริงยังถูกจดครบ",
+      e.days.map((d) => d.date), ["2026-10-31"]);
+  }
+  ok_("จอปิดกะ: ยังไม่เปิดทั้งกะ → กล่องเหลือง (ไม่ใช่จอแดงให้ส่งซ้ำ) · รายวันบอกให้ส่งทางเดิม ห้ามส่งซ้ำ",
+    APP.includes('if(outcome==="not_open"){setAcct({...(acctRes||{}),notEnabled:true,notOpen:true,') &&
+    APP.includes("bad=rows.filter(r=>!r.ok&&!r.noSale&&!r.notOpen)") && APP.includes("ระบบบัญชียังไม่เปิดรับยอดจาก POS ของวันนี้ — ส่งยอดทางเดิม"));
+  ok_("ส่งไม่ผ่านจริงเท่านั้นที่ถูกจดค้าง (not_open ไม่เข้า rememberAcctUnsent)", APP.includes('const kept=outcome==="failed"&&rememberAcctUnsent('));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
