@@ -995,7 +995,7 @@ const guards = [
   // ใบครัวคือกระดาษใบเดียวที่ครัวมี ต้องมีทุกอย่างที่ต้องใช้
   ["ใบครัวพิมพ์เลขบิลและผู้สั่ง", SLIP.includes("const foot = [body.bill ?")],
   ["ลูกค้าสแกนสั่งเองต้องอ่านออกบนใบครัว", SLIP.includes('"ลูกค้าสแกนสั่งเอง"')],
-  ["ชื่อโต๊ะยังเป็นตัวใหญ่สุดบนใบ", SLIP.includes('{ t: String(body.table || ""), size: 76, bold: true, align: "center" }')],
+  ["ชื่อโต๊ะยังเป็นตัวใหญ่สุดบนใบ (ชื่อยาวย่อให้พอดี ไม่ล้นขอบ)", SLIP.includes('{ t: String(body.table || ""), size: 76, bold: true, align: "center", fit: true }')],
   ["ตัวเลือกและหมายเหตุยังพิมพ์ครบ", SLIP.includes('lines.push({ t: "- " + n + ') && SLIP.includes('lines.push({ t: "* " + it.note,')],
   ["ไม่มีจุดไหนใส่รายการดิบลง state อีก",
     !APP.includes("setPrinters(pr);") && !APP.includes("setPrinters(d);") && !APP.includes("setPrinters(prs||[]);")],
@@ -4591,7 +4591,12 @@ section("สำรองข้อมูลครอบคลุมทุกต�
   const tb = BACKUP.slice(BACKUP.indexOf("const TABLES = ["), BACKUP.indexOf("].map((t) =>", BACKUP.indexOf("const TABLES = [")));
   // ตัดคอมเมนต์ทิ้งก่อน — ชื่อที่ถูก // ปิดไว้ไม่ได้ถูกสำรองจริง (ด่านเวอร์ชันแรกนับมันด้วยแล้วผ่านทั้งที่ขาด)
   const inBackup = new Set([...tb.replace(/\/\/[^\n]*/g, "").matchAll(/["']([a-z_][a-z0-9_]*)["']/g)].map((m) => m[1]));
-  const missing = [...used.keys()].filter((t) => !inBackup.has(t)).sort();
+  // ตารางที่ api/backup.js ข้ามโดยเจตนา (IGNORE_DRIFT) ไม่ต้องอยู่ในชุดสำรอง — แต่ล็อกไว้ว่ามีได้แค่คิวเรียกพนักงาน
+  // ใครเอาตารางจริงไปซ่อนใน IGNORE_DRIFT เพื่อให้ด่านนี้ผ่าน = ด่านถัดไปแดง
+  const skipped = [...used.keys()].filter((t) => !inBackup.has(t) && driftRe.test(t)).sort();
+  ok_("ตารางที่ข้ามการสำรองโดยเจตนามีแค่ staff_calls (คิวปุ่มเรียกพนักงาน อายุ 90 วิ)" + (skipped.length ? " — ข้ามอยู่: " + skipped.join(", ") : ""),
+    skipped.join() === "staff_calls" && driftRe.test("staff_calls") && !driftRe.test("staff_calls_x") && !driftRe.test("orders"));
+  const missing = [...used.keys()].filter((t) => !inBackup.has(t) && !driftRe.test(t)).sort();
   ok_("อ่านรายชื่อตารางที่โค้ดใช้ได้จริง (กันด่านว่างเปล่า)", used.size >= 30 && used.has("orders") && used.has("purchase_orders"));
   // ── ที่สำรองไว้ต้องกู้คืนได้ด้วย (6 ต.ค. 69) ──
   // เดิม 4 ตารางอยู่ในไฟล์สำรองครบ แต่ปุ่มกู้คืน/สคริปต์/ฟังก์ชันในฐานไม่รู้จัก ⟹ วันที่ต้องกู้จริง ตารางพวกนี้จะถูกข้ามเงียบๆ
@@ -8392,6 +8397,131 @@ section("แพ็คเกจบุฟเฟต์: จอค้าง · ร�
     });
     ck("ขั้นเปิดโต๊ะ: เลือกแพ็คเกจแล้วเริ่มผู้ใหญ่ 1 · เด็ก/บรรทัดเสริม 0", ch, ["pk_r2", { adult: 1, child: 0, x_st: 0 }]);
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ปุ่มเรียกพนักงาน + ภาษาไทยบนใบพิมพ์ (18 ต.ค. 69) — เจ้าของสั่ง "ตรวจการปริ้นให้อ่านออก ภาษาไม่เพี้ยน"
+// ตรวจจากภาพใบจริงเจอ: วรรณยุกต์ชื่อโต๊ะตัวใหญ่ (ริมน้ำ) ชนบรรทัดบน · ชื่อเมนูยาวตัดกลางคำ (เพิ|่ม) · เหตุผลลดคนล้นขอบกระดาษ
+// ทุกข้อรันฟังก์ชันตัวจริง (เรนเดอร์ใบด้วยผ้าใบจำลองที่บอกขนาดหมึกได้) ไม่ใช่ค้นข้อความ
+// ══════════════════════════════════════════════════════════════════════════
+section("ปุ่มเรียกพนักงาน + ภาษาไทยบนใบพิมพ์ไม่เพี้ยน");
+{
+  const topFn = (src, head) => { const L = src.split("\n"); const a = L.findIndex((l) => l.startsWith(head)); if (a < 0) throw new Error("ไม่พบ " + head); const b = L.findIndex((l, i) => i > a && l === "}"); return L.slice(a, b + 1).join("\n"); };
+  const buildLines = new Function(topFn(SLIP, "function buildLines(body) {") + "\nreturn buildLines;")();
+  const render = new Function("Buffer", topFn(SLIP, "function render(createCanvas, lines, W) {") + "\nreturn render;")(Buffer);
+  // ผ้าใบจำลอง: กว้าง = จำนวนตัวอักษร×(ขนาด×0.5) · หมึกขึ้นเหนือขอบบน/ลงใต้ขอบล่างตามที่สั่งต่อข้อความ
+  const fakeCanvas = (ink) => {
+    const draws = []; let H = 0;
+    const createCanvas = (w, h) => ({ getContext: () => { H = h; const ctx = { font: "", textBaseline: "", fillStyle: "",
+      measureText: (t) => { const sz = +((/(\d+)px/.exec(ctx.font) || [])[1] || 28); const k = (ink && ink(String(t), sz)) || {}; return { width: k.w != null ? k.w : String(t).length * sz * 0.5, actualBoundingBoxAscent: k.up || 0, actualBoundingBoxDescent: k.down != null ? k.down : Math.round(sz * 1.1) }; },
+      fillRect() {}, fillText: (t, x, y) => draws.push({ t: String(t), x, y, sz: +((/(\d+)px/.exec(ctx.font) || [])[1] || 28) }),
+      getImageData: () => ({ data: new Uint8ClampedArray(w * h * 4) }) }; return ctx; } });
+    return { createCanvas, draws, h: () => H };
+  };
+  const KL = [{ t: "ใบสั่งอาหาร", size: 28, bold: true, align: "center" }, { t: "ริมน้ำ 5", size: 76, bold: true, align: "center", fit: true },
+    { t: "18/10/2569 14:54", size: 20, align: "center" }, { rule: true }, { c1: "1", c2: "หมูกระทะ", size: 46, bold: true, mb: 3 }];
+  { const F = fakeCanvas(() => ({ up: 0 }));
+    render(F.createCanvas, KL, 576);
+    ck("ใบที่ไม่มีหมึกล้นกล่องตัวอักษร: ตำแหน่ง/ความสูงเท่าเดิมทุกพิกเซล (ไม่เปลืองกระดาษเพิ่ม)", [F.h(), F.draws.map((d) => d.y).join()], [261, "8,47,149,190,190"]); }
+  { const UP = { "ริมน้ำ 5": 34, "หมูกระทะ": 6 }, DOWN = { "ใบสั่งอาหาร": 33, "18/10/2569 14:54": 24 };
+    const ink = (t, sz) => ({ up: UP[t] || 0, down: DOWN[t] != null ? DOWN[t] : Math.round(sz * 1.1) });
+    const F = fakeCanvas(ink);
+    render(F.createCanvas, KL, 576);
+    const d = F.draws.filter((x) => x.t !== "1");
+    const clear = d.every((x, i) => i === 0 || (x.y - (UP[x.t] || 0)) >= d[i - 1].y + (DOWN[d[i - 1].t] != null ? DOWN[d[i - 1].t] : Math.round(d[i - 1].sz * 1.1)) + 1);
+    ok_("วรรณยุกต์ชื่อโต๊ะตัวใหญ่ (ริมน้ำ) ไม่ชนบรรทัด \"ใบสั่งอาหาร\" ด้านบน — ทุกคู่บรรทัดมีช่องว่างระหว่างหมึก", clear && F.h() > 261); }
+  // ตัดบรรทัดที่รอยต่อคำ — ไม่มีบรรทัดขึ้นต้นด้วยสระบน/ล่าง/วรรณยุกต์ หรือช่องว่าง · ต่อกลับได้ข้อความเดิม · ทุกจุดตัดตรงรอยต่อคำ
+  const SEG = new Intl.Segmenter("th", { granularity: "word" });
+  const bounds = (s) => { const b = new Set(); let i = 0; for (const x of SEG.segment(s)) { i += x.segment.length; b.add(i); } return b; };
+  const COMB = /^[ัำ-ฺ็-๎\s]/;
+  const goodWrap = (orig, parts) => { const b = bounds(orig); let pos = 0, okB = true;
+    for (const p of parts) { const at = orig.indexOf(p, pos); if (at < 0) return false; if (at > 0 && !b.has(at) && !/\s/.test(orig[at - 1])) okB = false; pos = at + p.length; }
+    return okB && parts.length > 1 && parts.every((p) => !COMB.test(p)) && parts.join("").replace(/\s/g, "") === orig.replace(/\s/g, ""); };
+  const LONG = "ข้าวผัดปู ไข่ดาวไม่สุก เพิ่มพิเศษ ใส่ซีอิ๊วหวาน", LONG2 = "ชามะพร้าวสาคูใบเตยปั่นนมสดหวานน้อยพิเศษ";
+  { const F = fakeCanvas(() => ({}));
+    render(F.createCanvas, [{ c1: "5", c2: LONG, size: 46, bold: true }, { c1: "1", c2: LONG2, size: 46, bold: true }], 576);
+    const T = F.draws.map((x) => x.t), i1 = T.indexOf("1"), p1 = T.slice(1, i1), p2 = T.slice(i1 + 1);   // ลำดับที่วาด: "5" ชื่อแรก… "1" ชื่อที่สอง…
+    ok_("ใบครัว: ชื่อเมนูยาวขึ้นบรรทัดใหม่ที่รอยต่อคำ ไม่ตัดกลางคำ (เดิม \"เพิ|่มพิเศษ\") ไม่มีวรรณยุกต์ลอยต้นบรรทัด", goodWrap(LONG, p1) && goodWrap(LONG2, p2) && !p1.some((x) => x.startsWith("่"))); }
+  { const F = fakeCanvas(() => ({}));
+    render(F.createCanvas, [{ t: "ห้องวีไอพีริมน้ำ ชั้นสอง ฝั่งแม่น้ำ 12", size: 96, bold: true, align: "center", fit: true }, { t: "A2", size: 96, bold: true, align: "center", fit: true }], 576);
+    const big = F.draws[0], a2 = F.draws[1];
+    ok_("ชื่อโต๊ะยาวย่อให้พอดีกระดาษบรรทัดเดียว (ไม่ล้นขอบ) · ชื่อสั้นคงขนาดเดิม", big.sz < 96 && big.sz >= 22 && big.t.length * big.sz * 0.5 <= 560 && a2.sz === 96); }
+  // ใบเรียกพนักงาน
+  { const all = (ls) => ls.map((l) => [l.t, l.box].filter(Boolean).join("")).join("|");
+    const one = buildLines({ kind: "call", table: "A2", time: "18/10/2569 22:05:11" }), three = buildLines({ kind: "call", table: "กลับบ้าน2", n: 3, time: "x" });
+    ok_("ใบเรียกพนักงาน: กล่อง \"เรียกพนักงาน\" · โต๊ะ · เลขโต๊ะตัวใหญ่ย่อให้พอดี · ด่วน · เวลา", one[0].box === "เรียกพนักงาน" && one.some((l) => l.t === "A2" && l.size >= 76 && l.fit) && all(one).includes("ด่วน") && all(one).includes("18/10/2569 22:05:11") && !all(one).includes("เรียกซ้ำ"));
+    ok_("ใบเรียกพนักงาน: โต๊ะเดิมเรียกซ้ำ → บอก \"เรียกซ้ำ ครั้งที่ N\"", all(three).includes("เรียกซ้ำ ครั้งที่ 3"));
+    const chars = [...all(one), ...all(three)].filter((c) => !(c.charCodeAt(0) < 0x7f || (c >= "ก" && c <= "๛")));
+    ok_("ใบเรียกพนักงาน: ไม่มีอีโมจิ/อักษรนอกไทย-อังกฤษ (ฟอนต์ไม่มี = กล่องสี่เหลี่ยม)", chars.length === 0);
+    ok_("ใบเรียกพนักงาน: ไม่มีรายการอาหาร (ครัวไม่ได้ใบนี้)", !one.some((l) => l.c1 != null || l.c2 != null) && !all(one).includes("ใบสั่งอาหาร")); }
+  ok_("ตัวเรนเดอร์บอกชนิดใบที่วาดจริง (X-Slip-Kind) ก่อนส่งรูป — ตัวพิมพ์ใช้กันใบเปล่าตอนเว็บถอยเวอร์ชัน",
+    SLIP.indexOf('res.setHeader("X-Slip-Kind", String(body.kind || "order"));') > 0 && SLIP.indexOf('res.setHeader("X-Slip-Kind"') < SLIP.indexOf("return res.status(200).send(out);"));
+
+  // ── ใบสั้นที่เครื่องแคชเชียร์ (ใบเปิดโต๊ะ/ลดคน/ใบเสร็จ) — เรนเดอร์ในเบราว์เซอร์ ──
+  const SW = (() => { const a = APP.indexOf("// ── ตัดบรรทัดภาษาไทยบนใบพิมพ์"), b = APP.indexOf("async function escposSlipRaster(", a); if (a < 0 || b < 0) throw new Error("ไม่พบตัวตัดบรรทัดใบพิมพ์"); return APP.slice(a, b); })();
+  const SWF = new Function(SW + "\nreturn { slipWrap, fitSlipRows, slipClusters };")();
+  const mw = (bold, sz, t) => String(t).length * sz * 0.5;
+  { const short = { t: "ตอนนี้: ผู้ใหญ่ 8 · เด็ก 2", size: 24, mb: 2 }, rule = { rule: true }, lr = { l: LONG + LONG, r: "฿99", size: 24 };
+    const reason = "ลดคน B7: ผู้ใหญ่ 10→8 (ลูกค้าแจ้งว่านับคนผิดตั้งแต่ตอนเปิดโต๊ะ เด็กสองคนนับเป็นผู้ใหญ่)";
+    const out = SWF.fitSlipRows([short, rule, lr, { t: reason, size: 24, mb: 5 }, { t: "โต๊ะ ห้องจัดเลี้ยงริมน้ำชั้นสองฝั่งแม่น้ำ", size: 44, bold: true, align: "center" }], 548, mw);
+    const parts = out.filter((l) => l && l.t && reason.includes(l.t) && l.t !== "โต๊ะ"), title = out[out.length - 1];
+    ok_("ใบสั้น: แถวที่พอดีอยู่แล้วไม่ถูกแตะ (ใบเสร็จเดิมได้ภาพเดิม) · เส้น/แถวซ้าย-ขวาไม่ถูกแตะ", out[0] === short && out[1] === rule && out[2] === lr);
+    ok_("ใบสั้น: เหตุผลลดคนที่ยาวเกินกระดาษขึ้นบรรทัดใหม่ที่รอยต่อคำ ไม่ล้นขอบ (เดิมถูกตัดกลางประโยค)",
+      goodWrap(reason, parts.map((l) => l.t)) && parts.every((l) => mw(false, 24, l.t) <= 548) && parts[parts.length - 1].mb === 5 && parts[0].mb === 2);
+    ok_("ใบสั้น: หัวกึ่งกลางที่ยาว (ชื่อโต๊ะ) ย่อตัวอักษรให้พอดีบรรทัดเดียว", title.size < 44 && title.size >= 18 && mw(true, title.size, title.t) <= 548); }
+  { // ตัวตัดบรรทัดของใบครัว (เซิร์ฟเวอร์) กับใบแคชเชียร์ (เบราว์เซอร์) ต้องได้ผลเดียวกัน
+    const F = fakeCanvas((t, sz) => ({ w: String(t).length * sz * 0.5 }));
+    render(F.createCanvas, [{ t: LONG + " " + LONG2, size: 30 }], 576);
+    ck("ตัวตัดบรรทัดภาษาไทยของใบครัว = ของใบแคชเชียร์ (ข้อความ/ความกว้างเดียวกัน → บรรทัดเดียวกัน)", F.draws.map((d) => d.t), SWF.slipWrap((t) => String(t).length * 30 * 0.5, LONG + " " + LONG2, 560)); }
+  { // บรรทัดแคบ (~10 ตัวอักษร) — ตัดกลุ่มอักษรเฉยๆ จะได้ "ชามะพร้าวส|าคู" · ต้องตัดที่รอยต่อคำทั้งสองตัว
+    const F = fakeCanvas(() => ({}));
+    render(F.createCanvas, [{ c1: "1", c2: LONG2, size: 20 }], 216);
+    const api = F.draws.map((x) => x.t).slice(1), app = SWF.slipWrap((t) => String(t).length * 10, LONG2, 100);
+    ok_("บรรทัดแคบ: ใบครัวและใบแคชเชียร์ตัดที่รอยต่อคำ (ไม่ใช่ \"ชามะพร้าวส|าคู\") และได้บรรทัดเดียวกัน", goodWrap(LONG2, api) && goodWrap(LONG2, app) && api.join("|") === app.join("|")); }
+  ok_("ใบสั้น: ตัดบรรทัด/ย่อก่อนคำนวณความสูงใบ", (() => { const a = APP.indexOf("    lines=fitSlipRows(lines,width-pad*2,"), b = APP.indexOf("  const lineH=l=>l.rule?16:l.img?"); return a > 0 && b > a && b - a < 400; })());
+
+  // ── หน้าลูกค้า: กดเรียก → บอกผลตามจริง (จำลองนาฬิกา) ──
+  const CO = new Function(topFn(APP, "function callOutcome(status){") + "\nreturn callOutcome;")();
+  ck("หน้าลูกค้า: \"แจ้งแล้ว\" เฉพาะเมื่อใบออก (printed) หรือโต๊ะนี้เพิ่งออกไป (merged) · ยังไม่รู้ผล = รอ",
+    ["printed", "merged", "failed", "rejected", "expired", "new", "printing", null].map(CO), ["ok", "ok", "fail", "fail", "fail", "wait", "wait", "wait"]);
+  const SEND = (() => { const L = APP.split("\n"); const a = L.findIndex((l) => l === "  async function sendCall(){"); const b = L.findIndex((l, i) => i > a && l === "  }"); if (a < 0 || b < 0) throw new Error("ไม่พบ sendCall"); return L.slice(a, b + 1).join("\n"); })();
+  const runCall = async (sc) => {
+    let clock = 0; const timers = []; const log = { phases: [], cooldown: [], expires: 0, gets: 0, inserts: 0 };
+    let cur = null;
+    const fn = new Function("api", "setCall", "setCallAsk", "setCallCooldown", "callTimerRef", "callRunRef", "callBusy", "callUntil", "table", "branchId", "tableId", "token",
+      "setTimeout", "clearTimeout", "Date", "console", "CALL_WAIT_MS", "CALL_GRACE_MS", "callOutcome", SEND + "\nreturn sendCall;")(
+      { callStaff: async () => { log.inserts++; if (sc.insertFails) throw new Error("net"); return { id: 7, status: "new" }; },
+        getStaffCall: async () => { log.gets++; const s = sc.status(clock); if (s === "ERR") throw new Error("net"); return [{ id: 7, status: s }]; },
+        expireStaffCall: async () => { log.expires++; return sc.expire ? sc.expire(clock) : [{ id: 7 }]; } },
+      (c) => { cur = typeof c === "function" ? c(cur) : c; log.phases.push(cur && cur.phase); if (cur && (cur.phase === "ok" || cur.phase === "fail") && log.finAt == null) log.finAt = clock; }, () => {}, (on) => log.cooldown.push(on),
+      { current: null }, { current: 0 }, false, 0, { table_number: "A2" }, 5, 51, "tok",
+      (f, ms) => { timers.push({ due: clock + (ms || 0), f }); return timers.length; }, () => {}, { now: () => clock }, { error() {} }, 30000, 30000, CO);
+    const p = fn();
+    for (let k = 0; k < 400; k++) { await new Promise((r) => setImmediate(r)); timers.sort((x, y) => x.due - y.due); const t = timers.shift(); if (!t || t.due > 200000) break; clock = Math.max(clock, t.due); t.f(); }
+    await p; await new Promise((r) => setImmediate(r));
+    log.final = cur && cur.phase; log.at = clock; return log;
+  };
+  { const a = await runCall({ status: (t) => (t >= 3000 ? "printed" : "printing") });
+    ok_("หน้าลูกค้า: ใบออก → \"แจ้งแล้ว\" แล้วพักปุ่ม 1 นาที (พักครั้งเดียว ตอนรู้ผลแล้วเท่านั้น)", a.phases.includes("ok") && a.cooldown.join() === "true" && a.expires === 0); }
+  { const b = await runCall({ status: () => "new", expire: () => [{ id: 7 }] });
+    ok_("หน้าลูกค้า: 30 วิแล้วตัวพิมพ์ยังไม่หยิบ → ปิดแถวเอง (new→expired) แล้วบอกให้โบกมือ · ไม่พักปุ่ม (กดใหม่ได้)",
+      b.final === "fail" && b.expires === 1 && b.cooldown.length === 0 && b.finAt >= 30000 && b.finAt < 40000); }
+  { const c = await runCall({ status: (t) => (t >= 41000 ? "printed" : "new"), expire: () => [] });
+    ok_("หน้าลูกค้า: ปิดแถวไม่ได้ (ตัวพิมพ์จองไปพิมพ์แล้ว) → รอผลต่อ ใบออก → \"แจ้งแล้ว\" ไม่ใช่บอกให้โบกมือทั้งที่ใบกำลังออก",
+      c.phases.includes("ok") && c.expires === 1 && !c.phases.includes("fail")); }
+  { const d = await runCall({ status: () => "printing" });
+    ok_("หน้าลูกค้า: ตัวพิมพ์จองแล้วค้าง (ดับกลางทาง) → ไม่พยายามปิดแถว · ครบ 60 วิ บอกให้โบกมือ", d.final === "fail" && d.expires === 0 && d.finAt >= 60000 && d.finAt < 70000 && d.cooldown.length === 0); }
+  { const e = await runCall({ insertFails: true, status: () => "new" });
+    ok_("หน้าลูกค้า: ส่งไม่ได้ (ยังไม่รัน SQL / เน็ตหลุด) → บอกให้โบกมือทันที ไม่ถามผลแถวที่ไม่มี", e.final === "fail" && e.gets === 0 && e.cooldown.length === 0); }
+  { const f = await runCall({ status: () => "ERR", expire: () => [] });
+    ok_("หน้าลูกค้า: อ่านผลไม่ได้ตลอด → มีเส้นตายเสมอ (ไม่ค้าง \"กำลังแจ้ง\" ตลอดไป)", f.final === "fail" && f.finAt <= 62000); }
+  const CP = (() => { const st = APP.indexOf("function CustomerPage("); return APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
+  ok_("หน้าลูกค้า: ปุ่มเรียกทุกจุดต้องผ่านกล่องยืนยันก่อน (ไม่ส่งทันทีที่แตะ) · กล่องยืนยันเป็นที่เดียวที่ส่ง",
+    (CP.match(/onClick=\{\(\)=>\{if\(!callBusy&&!callUntil\)setCallAsk\(true\);\}\}/g) || []).length === 2 && (CP.match(/onClick=\{sendCall\}/g) || []).length === 1);
+  ok_("หน้าลูกค้า: ปิดแถวตอนหมดเวลาใช้เงื่อนไข status=eq.new (ตัวพิมพ์จองด้วยเงื่อนไขเดียวกัน — ใบที่ปิดแล้วไม่มีทางออก)",
+    APP.includes("expireStaffCall: (id) => sb(`staff_calls?id=eq.${+id}&status=eq.new&select=id`,{method:\"PATCH\""));
+  ok_("แผงพิมพ์ไม่สำเร็จ: ใบเรียกพนักงาน กด \"รับทราบ\" เอาออกได้เลย (ไม่ใช่กล่องแดงเรื่องบอกครัว) · บอกให้ไปดูที่โต๊ะ",
+    APP.includes("if(!(f.kind===\"pj\"&&f.what===\"เรียกพนักงาน\")&&!await confirmDlg({title:\"ไม่ต้องพิมพ์แล้ว?\"") && APP.includes("{pj&&f.what===\"เรียกพนักงาน\"?\"รับทราบ\":\"ไม่ต้องพิมพ์แล้ว\"}") && APP.includes("แต่ใบไม่ออก — เดินไปดูที่โต๊ะ"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

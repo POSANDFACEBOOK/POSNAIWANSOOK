@@ -26,14 +26,28 @@ function buildLines(body) {
   // เลขบิลคือตัวอ้างอิงเดียวที่ตามกลับไปหาบิลในระบบได้ — ครัวถือกระดาษมาถามได้ตรงใบ
   // ผู้สั่งไว้ตรวจย้อนหลังตอนมีปัญหาว่าใครเป็นคนรับออเดอร์ หรือลูกค้าสแกนสั่งเอง
   const foot = [body.bill ? `บิล #${body.bill}` : "", body.by ? (String(body.by) === "customer" ? "ลูกค้าสแกนสั่งเอง" : String(body.by)) : ""].filter(Boolean).join("  ·  ");
+  // ใบเรียกพนักงาน (ลูกค้ากดปุ่มในหน้าสแกน) — ออกเฉพาะเครื่องใบเสร็จ · ไม่มีรายการอาหาร
+  // n = ครั้งที่เท่าไรใน 15 นาทีของโต๊ะนี้ (ตัวพิมพ์นับให้) — เรียกซ้ำ = ยังไม่มีใครไป ต้องรีบ
+  if (kind === "call") {
+    const n = Math.floor(+body.n || 0);
+    const lines = [
+      { box: "เรียกพนักงาน", size: 56 },
+      { t: "โต๊ะ", size: 30, bold: true, align: "center" },
+      { t: String(body.table || "-"), size: 96, bold: true, align: "center", fit: true },
+      { t: "ด่วน - ลูกค้ากดเรียกจากมือถือ", size: 28, bold: true, align: "center", fit: true },
+    ];
+    if (n > 1) lines.push({ t: `เรียกซ้ำ ครั้งที่ ${n}`, size: 34, bold: true, align: "center", fit: true });
+    if (time) lines.push(time);
+    return lines;
+  }
   // ใบย้ายโต๊ะ: บอกแค่ "จากโต๊ะไหน ไปโต๊ะไหน" ใบเดียว ไม่มีรายการอาหาร (ครัวไม่ต้องทำอะไรใหม่)
   if (kind === "move") {
     const lines = [
       { box: "ย้ายโต๊ะ", size: 52 },
       { t: "จากโต๊ะ", size: 26, align: "center" },
-      { t: String(body.from || "-"), size: 76, bold: true, align: "center" },
+      { t: String(body.from || "-"), size: 76, bold: true, align: "center", fit: true },
       { t: "ย้ายไปโต๊ะ", size: 26, align: "center" },
-      { t: String(body.table || "-"), size: 76, bold: true, align: "center" },
+      { t: String(body.table || "-"), size: 76, bold: true, align: "center", fit: true },
       { t: "ไม่ต้องทำอาหารใหม่ - เสิร์ฟที่โต๊ะใหม่", size: 24, bold: true, align: "center" },
     ];
     if (time) lines.push(time);
@@ -44,7 +58,7 @@ function buildLines(body) {
   const lines = [
     // ใบยกเลิก: หัวเป็นกล่องดำทึบตัวขาว "ยกเลิก" — ครัวต้องไม่มีทางอ่านเป็นออเดอร์ใหม่
     kind === "void" ? { box: "ยกเลิก", size: 60 } : { t: "ใบสั่งอาหาร", size: 28, bold: true, align: "center" },
-    { t: String(body.table || ""), size: 76, bold: true, align: "center" },   // เบอร์โต๊ะตัวใหญ่มาก ครัวเห็นชัด
+    { t: String(body.table || ""), size: 76, bold: true, align: "center", fit: true },   // เบอร์โต๊ะตัวใหญ่มาก ครัวเห็นชัด
   ];
   if (mark) lines.push({ t: mark, size: 26, bold: true, align: "center" });
   if (time) lines.push(time);
@@ -69,12 +83,24 @@ function render(createCanvas, lines, W) {
   const PRE = /[เแโใไ]/;        // สระหน้า — ต้องอยู่กับพยัญชนะที่ตามมา (ห้ามค้างท้ายบรรทัด)
   const COMB = /[ัำิ-ฺ็-๎]/;    // สระบน/ล่าง/ำ + วรรณยุกต์ — อยู่กับพยัญชนะที่นำหน้า
   const clusters = s => { const out = []; let pre = ""; for (const ch of s) { if (PRE.test(ch)) { pre += ch; continue; } if (out.length && !pre && COMB.test(ch)) { out[out.length - 1] += ch; continue; } out.push(pre + ch); pre = ""; } if (pre) out.push(pre); return out; };
+  // ตัดบรรทัดที่ "รอยต่อคำ" (Intl.Segmenter ภาษาไทย — Node บน Vercel มี ICU เต็ม) ไม่ใช่กลางคำ: เดิม "เพิ|่มพิเศษ"
+  // คำเดียวยาวเกินบรรทัด ค่อยตัดด้วยกลุ่มอักษร (ไม่แยกสระ/วรรณยุกต์ออกจากพยัญชนะ) · ไม่มี Segmenter = ใช้กลุ่มอักษรแบบเดิม
+  const seg = (typeof Intl !== "undefined" && Intl.Segmenter) ? new Intl.Segmenter("th", { granularity: "word" }) : null;
+  const units = s => seg ? Array.from(seg.segment(s), x => x.segment) : clusters(s);
   function wrap(text, size, bold, maxW) {
     meas.font = `${bold ? "bold " : ""}${size}px Sarabun, sans-serif`;
     const s = String(text); if (meas.measureText(s).width <= maxW) return [s];
     const out = []; let cur = "";
-    for (const c of clusters(s)) { if (meas.measureText(cur + c).width <= maxW || cur === "") cur += c; else { out.push(cur); cur = c; } }
-    if (cur) out.push(cur); return out.length ? out : [s];
+    const push = () => { const t = cur.replace(/s+$/, ""); if (t) out.push(t); cur = ""; };
+    for (const u of units(s)) {
+      if (cur === "" && /^s+$/.test(u)) continue;            // บรรทัดใหม่ไม่ขึ้นต้นด้วยช่องว่าง
+      if (meas.measureText(cur + u).width <= maxW) { cur += u; continue; }
+      if (cur !== "") push();
+      if (/^s+$/.test(u)) continue;
+      if (meas.measureText(u).width <= maxW) { cur = u; continue; }
+      for (const c of clusters(u)) { if (cur === "" || meas.measureText(cur + c).width <= maxW) cur += c; else { push(); cur = c; } }
+    }
+    push(); return out.length ? out : [s];
   }
   const nameMaxW = W - pad - QCOL - RPAD, fullMaxW = W - pad * 2;
   const rows = [];   // ขยายบรรทัดที่ยาวเกินเป็นหลายบรรทัด
@@ -85,19 +111,50 @@ function render(createCanvas, lines, W) {
       nl.forEach((t, i) => rows.push({ c1: i === 0 ? l.c1 : "", c2: t, size: l.size, bold: l.bold, mb: i === nl.length - 1 ? (l.mb || 0) : 0 }));
       continue;
     }
-    if (l.align === "center") { rows.push(l); continue; }   // หัว/กึ่งกลาง: สั้น ไม่ต้อง wrap
+    if (l.align === "center") {   // หัว/กึ่งกลาง: สั้น ไม่ต้อง wrap
+      // fit = ชื่อโต๊ะยาว (ภาษาไทย "กลับบ้าน2" / ชื่อที่ร้านตั้งเอง) ห้ามล้นขอบกระดาษ — ย่อตัวอักษรลงจนพอดีบรรทัดเดียว
+      // ไม่ตัดเป็นสองบรรทัด: เลขโต๊ะต้องอ่านเป็นก้อนเดียว · ย่อสุดแค่ 22px (ยังอ่านออก ไม่ล้นแน่นอนในชื่อจริงของร้าน)
+      if (l.fit) {
+        let size = l.size || 28;
+        const fits = (s) => { meas.font = `${l.bold ? "bold " : ""}${s}px Sarabun, sans-serif`; return meas.measureText(String(l.t || "")).width <= fullMaxW; };
+        while (size > 22 && !fits(size)) size -= 2;
+        rows.push(size === l.size ? l : { ...l, size });
+        continue;
+      }
+      rows.push(l); continue;
+    }
     const tl = wrap(l.t || "", l.size, l.bold, l.indent ? nameMaxW : fullMaxW);
     tl.forEach((t, i) => rows.push({ t, size: l.size, bold: l.bold, indent: l.indent, mb: i === tl.length - 1 ? (l.mb || 0) : 0 }));
   }
   const lineH = l => l.rule ? 12 : l.box ? Math.round(l.size * 1.3) + 18 : Math.round((l.size || 28) * 1.3) + (l.mb != null ? l.mb : 3);
-  let h = pad * 2; rows.forEach(l => { h += lineH(l); });
+  // ระยะบรรทัดตาม "หมึกจริง" ไม่ใช่แค่ขนาดฟอนต์: วรรณยุกต์ซ้อนบนสระบน (น้ำ ชั้น ซ้ำ อิ๊) สูงเกินกล่องตัวอักษร
+  // ชื่อโต๊ะตัวใหญ่จึงชนบรรทัด "ใบสั่งอาหาร"/"โต๊ะ" ด้านบน และสระล่าง (ปู ครู) ทับบรรทัดถัดไป (ตรวจจากภาพ 18 ต.ค. 69)
+  // วัดขอบหมึกบน/ล่างของทุกแถว แล้วขยับแถวถัดไปลงเฉพาะเท่าที่ชนจริง — ใบที่ไม่มีอะไรชนได้ตำแหน่งเดิมทุกพิกเซล
+  const GAP = 3;
+  meas.textBaseline = "top";
+  const inkOf = l => {
+    if (l.rule) return { top: 5, bottom: 7 };
+    if (l.box) return { top: 0, bottom: lineH(l) - 8 };
+    meas.font = `${l.bold ? "bold " : ""}${l.size || 28}px Sarabun, sans-serif`;
+    let up = 0, down = 0;
+    for (const t of [l.t, l.c1, l.c2]) { if (t == null || t === "") continue; const m = meas.measureText(String(t)); up = Math.max(up, m.actualBoundingBoxAscent || 0); down = Math.max(down, m.actualBoundingBoxDescent || 0); }
+    return { top: -Math.ceil(up), bottom: Math.ceil(down) };
+  };
+  const ink = rows.map(inkOf);
+  const ys = []; let yy0 = pad + Math.max(0, -(ink[0] ? ink[0].top : 0) - pad);
+  rows.forEach((l, i) => {
+    if (i > 0) { const p = i - 1; yy0 = Math.max(ys[p] + lineH(rows[p]), ys[p] + ink[p].bottom + GAP - ink[i].top); }
+    ys.push(yy0);
+  });
+  const last = rows.length - 1;
+  const h = last < 0 ? pad * 2 : ys[last] + Math.max(lineH(rows[last]), ink[last].bottom + GAP) + pad;
   const cv = createCanvas(W, h);
   const ctx = cv.getContext("2d");
   ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, h);
   ctx.fillStyle = "#000"; ctx.textBaseline = "top";
-  let y = pad;
-  for (const l of rows) {
-    if (l.rule) { ctx.fillRect(pad, y + 5, W - pad * 2, 2); y += lineH(l); continue; }
+  rows.forEach((l, i) => {
+    const y = ys[i];
+    if (l.rule) { ctx.fillRect(pad, y + 5, W - pad * 2, 2); return; }
     if (l.box) {   // กล่องดำทึบ ตัวอักษรขาวกลางกล่อง (สีขาว = ไม่พิมพ์ = เนื้อกระดาษ)
       const bh = lineH(l) - 8;
       ctx.fillRect(pad, y, W - pad * 2, bh);
@@ -106,19 +163,18 @@ function render(createCanvas, lines, W) {
       const bw = ctx.measureText(l.box).width;
       ctx.fillText(l.box, Math.max(pad, Math.round((W - bw) / 2)), y + Math.round((bh - l.size * 1.3) / 2) + 2);
       ctx.fillStyle = "#000";
-      y += lineH(l); continue;
+      return;
     }
     ctx.font = `${l.bold ? "bold " : ""}${l.size || 28}px Sarabun, sans-serif`;
     if (l.c1 != null || l.c2 != null) {
       if (l.c1) ctx.fillText(String(l.c1), pad, y);
       if (l.c2) ctx.fillText(String(l.c2), pad + QCOL, y);
-      y += lineH(l); continue;
+      return;
     }
     const txt = l.t || ""; let x = l.indent ? pad + QCOL : pad;
     if (l.align === "center") { const w = ctx.measureText(txt).width; x = Math.max(pad, Math.round((W - w) / 2)); }
     ctx.fillText(txt, x, y);
-    y += lineH(l);
-  }
+  });
   const img = ctx.getImageData(0, 0, W, h).data;
   const bpr = Math.ceil(W / 8);
   const ras = Buffer.alloc(bpr * h);
@@ -151,6 +207,9 @@ export default async function handler(req, res) {
     const width = Math.max(256, Math.min(832, +body.width || 576));   // 576=80mm, 384=58mm
     const out = render(createCanvas, buildLines(body), width);
     res.setHeader("Content-Type", "application/octet-stream");
+    // บอกว่าเรนเดอร์ใบชนิดไหนจริง — ตัวพิมพ์รุ่นใหม่ส่งใบชนิดใหม่ (เช่น "call") มาที่เวอร์ชันเว็บเก่า (ถอยเวอร์ชันบน Vercel)
+    // จะได้ใบสั่งอาหารเปล่าๆ กลับไป · ตัวพิมพ์เช็คหัวนี้ ไม่ตรง = ใช้ใบตัวอักษรสำรองของตัวเองแทน
+    res.setHeader("X-Slip-Kind", String(body.kind || "order"));
     return res.status(200).send(out);
   } catch (e) {
     return res.status(500).json({ error: String((e && e.message) || e) });

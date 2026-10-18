@@ -895,6 +895,19 @@ const api = {
   },
   // Public scan — verify QR token + branch active before returning anything
   scanTable: (branchId,tableId,token) => sb(`tables?id=eq.${+tableId}&branch_id=eq.${+branchId}&qr_token=eq.${encodeURIComponent(token||"")}&active=eq.true`),
+  // ── ปุ่มเรียกพนักงาน (หน้าลูกค้า) — ตาราง staff_calls (sql/staff-calls.sql) ──
+  // เพิ่มแถวอย่างเดียว ไม่แตะแถวเครื่องพิมพ์ (ช่อง pj ของใบเสร็จมีที่เดียว เขียนคั่นแล้วใบเสร็จหาย)
+  // ตัวพิมพ์ v49 ของสาขาพิมพ์ที่เครื่องใบเสร็จ แล้วจดผลกลับ — คืนเลขแถวไว้ให้หน้าลูกค้าถามผล
+  callStaff: async (branchId,tableId,tableNumber,token) => {
+    const r=await sb("staff_calls?select=id,status",{method:"POST",body:JSON.stringify({branch_id:+branchId,table_id:+tableId,table_number:String(tableNumber??""),token:String(token||"")})});
+    const row=Array.isArray(r)?r[0]:r;
+    if(!row||row.id==null)throw new Error("no_row");
+    return row;
+  },
+  getStaffCall: (id) => sb(`staff_calls?id=eq.${+id}&select=id,status,printers&limit=1`),
+  // หน้าลูกค้าหมดเวลารอ → ปิดแถวเฉพาะเมื่อยังเป็น new (ตัวพิมพ์จองด้วยเงื่อนไขเดียวกัน ⟹ ไม่มีทางพิมพ์ใบที่ปิดแล้ว)
+  // คืนแถวที่ปิดได้ · [] = ตัวพิมพ์จองไปแล้ว/มีผลแล้ว
+  expireStaffCall: (id) => sb(`staff_calls?id=eq.${+id}&status=eq.new&select=id`,{method:"PATCH",body:JSON.stringify({status:"expired",note:"customer_timeout",done_at:new Date().toISOString()})}),
   addPOSTable: (d) => sb("tables", { method:"POST", body:JSON.stringify(d) }),
   updatePOSTable: (id, d) => sb(`tables?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   // ── ธง "พิมพ์ QR สั่งอาหารให้โต๊ะนี้แล้ว" ────────────────────────────
@@ -19350,6 +19363,39 @@ async function btPrint(escData,btName){
   for(let i=0;i<escData.length;i+=512){const s=escData.slice(i,i+512);try{if(char.properties.writeWithoutResponse)await char.writeValueWithoutResponse(s);else await char.writeValue(s);}catch{await char.writeValue(s);}await new Promise(r=>setTimeout(r,50));}
   try{device.gatt.disconnect();}catch{}return device.name;
 }
+// ── ตัดบรรทัดภาษาไทยบนใบพิมพ์ ── ตัดที่รอยต่อคำ (Intl.Segmenter) ไม่ใช่กลางคำ · คำเดียวยาวเกินบรรทัดค่อยตัดเป็นกลุ่มอักษร
+// กลุ่มอักษร = พยัญชนะ + สระหน้า/บน/ล่าง + วรรณยุกต์ ไม่แยกจากกัน (แยกแล้ววรรณยุกต์ไปลอยต้นบรรทัดใหม่ อ่านไม่ออก)
+// ตัวเดียวกับ wrap() ใน api/kitchen-slip.js (ใบครัวเรนเดอร์ฝั่งเซิร์ฟเวอร์) — check-code รันทั้งสองตัวเทียบกัน
+function slipClusters(s){const PRE=/[เแโใไ]/,COMB=/[ัำิ-ฺ็-๎]/;const out=[];let pre="";for(const ch of String(s)){if(PRE.test(ch)){pre+=ch;continue;}if(out.length&&!pre&&COMB.test(ch)){out[out.length-1]+=ch;continue;}out.push(pre+ch);pre="";}if(pre)out.push(pre);return out;}
+function slipUnits(s){try{if(typeof Intl!=="undefined"&&Intl.Segmenter)return Array.from(new Intl.Segmenter("th",{granularity:"word"}).segment(String(s)),x=>x.segment);}catch{}return slipClusters(s);}
+function slipWrap(measure,text,maxW){
+  const s=String(text);if(measure(s)<=maxW)return [s];
+  const out=[];let cur="";const push=()=>{const t=cur.replace(/s+$/,"");if(t)out.push(t);cur="";};
+  for(const u of slipUnits(s)){
+    if(cur===""&&/^s+$/.test(u))continue;
+    if(measure(cur+u)<=maxW){cur+=u;continue;}
+    if(cur!=="")push();
+    if(/^s+$/.test(u))continue;
+    if(measure(u)<=maxW){cur=u;continue;}
+    for(const c of slipClusters(u)){if(cur===""||measure(cur+c)<=maxW)cur+=c;else{push();cur=c;}}
+  }
+  push();return out.length?out:[s];
+}
+// ข้อความที่ยาวเกินกระดาษ: แถวชิดซ้าย = ขึ้นบรรทัดใหม่ · แถวกึ่งกลาง = ย่อตัวอักษรให้พอดี (ไม่พอค่อยขึ้นบรรทัดใหม่)
+// เดิมล้นขอบแล้วหายเงียบ — เหตุผล "ลดคน" ที่พนักงานพิมพ์ยาวถูกตัดกลางประโยค (ตรวจจากภาพใบจริง 18 ต.ค. 69)
+// แถวที่พอดีอยู่แล้วไม่ถูกแตะเลย (ใบเสร็จ/QR/ใบปิดกะที่ไม่มีอะไรล้น ได้ภาพเดิมทุกพิกเซล)
+function fitSlipRows(lines,maxW,measureWith){
+  const out=[];
+  for(const l of lines||[]){
+    if(!l||l.rule||l.img||l.l!=null||l.r!=null||l.t==null||l.t===""){out.push(l);continue;}
+    const size=l.size||28,txt=String(l.t),m=(sz)=>(t)=>measureWith(l.bold,sz,t);
+    if(m(size)(txt)<=maxW){out.push(l);continue;}
+    if(l.align==="center"){let sz=size;while(sz>18&&m(sz)(txt)>maxW)sz-=2;if(m(sz)(txt)<=maxW){out.push({...l,size:sz});continue;}}
+    const parts=slipWrap(m(size),txt,maxW);
+    parts.forEach((t,i)=>out.push({...l,t,mb:i===parts.length-1?l.mb:2}));
+  }
+  return out;
+}
 // ─────────────────────────────────────────────────────────
 // เรนเดอร์ข้อความเป็น "รูปภาพขาวดำ" ด้วยฟอนต์ Sarabun (ไทยถูกต้อง 100% สระ/วรรณยุกต์เรียงสวย)
 // แล้วแปลงเป็นคำสั่ง ESC/POS raster (GS v 0) → พิมพ์ไทยคมชัดทุกเครื่อง ไม่ต้องพึ่ง code page เครื่องพิมพ์
@@ -19371,6 +19417,8 @@ async function escposSlipRaster(lines,width=576,opts={}){
     catch{imgCache.set(l.img,null);}   // โหลดไม่ได้ = เว้นที่ไว้ ใบยังออก ดีกว่าไม่ได้ใบเลย
   }
   const pad=14;
+  {const mc=document.createElement("canvas").getContext("2d");
+    lines=fitSlipRows(lines,width-pad*2,(bold,sz,t)=>{mc.font=`${bold?"bold ":""}${sz}px 'Sarabun',sans-serif`;return mc.measureText(t).width;});}
   const lineH=l=>l.rule?16:l.img?((l.h||300)+(l.mb||8)):Math.round((l.size||28)*1.45)+(l.mb||4);
   let h=pad*2; lines.forEach(l=>{h+=lineH(l);});
   const cv=document.createElement("canvas");cv.width=width;cv.height=h;
@@ -21876,6 +21924,16 @@ function CRMJoinPage({initialBranchId,initialGo}){
   </>);
 }
 
+// ── ปุ่มเรียกพนักงาน (หน้าลูกค้า) ── ผลจากสถานะแถว staff_calls ที่ตัวพิมพ์จดกลับ
+// "ok" ต้องรู้จริงว่าใบออก (printed) หรือใบของโต๊ะนี้เพิ่งออกไม่ถึงนาที (merged) — ห้ามบอกว่า "แจ้งแล้ว" ทั้งที่ไม่รู้
+// ยังไม่มีผล (new / printing / อ่านไม่ได้) = "wait" — เส้นตายอยู่ที่ sendCall
+// รอผลไม่เกิน 30 วิ แล้วปิดแถวเอง (ดู sendCall) · ถูกตัวพิมพ์จองไปแล้วรอต่ออีกไม่เกิน 30 วิ
+const CALL_COOLDOWN_MS=60*1000,CALL_WAIT_MS=30*1000,CALL_GRACE_MS=30*1000;
+function callOutcome(status){
+  if(status==="printed"||status==="merged")return "ok";
+  if(status==="failed"||status==="rejected"||status==="expired")return "fail";
+  return "wait";
+}
 function CustomerPage({branchId,tableId,token}){
   // ⚠️ ต้องอยู่บนสุดก่อน return ทุกทาง — hook ที่อยู่หลัง early return ทำให้จอลูกค้าพังทั้งจอ (เจอจริง 20 ก.ย. 69)
   // หัวจอสูงเท่าไร (ชื่อสาขายาวขึ้นบรรทัดที่สองได้) — แถบหมวดต้องติดใต้หัวพอดี ไม่ทับกัน
@@ -21930,6 +21988,64 @@ function CustomerPage({branchId,tableId,token}){
   const[gateError,setGateError]=useState(null);  // null | "no_token" | "bad_token" | "branch_closed" | "net"
   const[gateTry,setGateTry]=useState(0);         // กดลองใหม่ = รันประตูซ้ำ (ใช้เป็น dep ของ effect)
   const[posCfg,setPosCfg]=useState(null);        // ตั้งค่า POS ของสาขา (VAT/service charge) — ใช้คิดยอดให้ตรงบิล
+  // ── ปุ่มเรียกพนักงาน ── กด → ยืนยัน → เพิ่มแถว staff_calls → ถามผลทุก 2 วิ → บอกตามจริง ("แจ้งแล้ว" เฉพาะเมื่อใบออกจริง)
+  // ใบออกที่เครื่องพิมพ์ใบเสร็จเท่านั้น (ตัวพิมพ์ v49) · ใบออกแล้วพักปุ่ม 1 นาทีต่อมือถือ (จำใน localStorage รีเฟรชแล้วนับต่อ)
+  // ส่งไม่ได้ / ใบไม่ออก = ปลดรอ กดใหม่ได้ทันที — ไม่ขังลูกค้าไว้กับปุ่มที่ใช้ไม่ได้
+  const CALL_KEY=`fc_call_${tableId}`;
+  const[callAsk,setCallAsk]=useState(false);
+  const[call,setCall]=useState(null);            // null | {phase:"sending"|"wait"|"ok"|"fail", merged?}
+  const[callUntil,setCallUntil]=useState(()=>{try{const t=+localStorage.getItem(`fc_call_${tableId}`)||0;return t>Date.now()&&t-Date.now()<=CALL_COOLDOWN_MS?t:0;}catch{return 0;}});
+  const callTimerRef=useRef(null);
+  const callRunRef=useRef(0);   // เลขรอบการเรียก — ผลของรอบเก่าที่ยังค้างอยู่ห้ามมาทับหน้าจอ (ปิดหน้า/กดใหม่ = รอบเก่าตาย)
+  useEffect(()=>()=>{callRunRef.current++;if(callTimerRef.current)clearTimeout(callTimerRef.current);},[]);
+  // ครบนาทีแล้วปลดปุ่ม — ตั้งเวลาครั้งเดียว ไม่นับถอยหลังทุกวินาที (จอนี้มีรูปเมนูเต็มจอ วาดใหม่ทุกวิ = มือถือรุ่นเก่ากระตุก)
+  useEffect(()=>{if(!callUntil)return;const t=setTimeout(()=>setCallUntil(0),Math.max(0,callUntil-Date.now()));return()=>clearTimeout(t);},[callUntil]);
+  const setCallCooldown=(on)=>{const until=on?Date.now()+CALL_COOLDOWN_MS:0;try{until?localStorage.setItem(CALL_KEY,String(until)):localStorage.removeItem(CALL_KEY);}catch{}setCallUntil(until);};
+  const callBusy=!!(call&&(call.phase==="sending"||call.phase==="wait"));
+  // เส้นตายเดียวต่อการเรียก: 30 วิยังไม่รู้ผล → ปิดแถวเองแบบมีเงื่อนไข (new → expired) ให้ตัวพิมพ์ไม่หยิบไปพิมพ์ทีหลัง
+  //   ปิดได้ = ตัวพิมพ์ยังไม่ได้แตะ → บอกให้โบกมือ (ใบจะไม่โผล่มาทีหลังแน่นอน)
+  //   ปิดไม่ได้ = ตัวพิมพ์จองไปพิมพ์อยู่แล้ว → รอผลจริงต่ออีกไม่เกิน 30 วิ (ส่งเครื่องละ ≤8 วิ + เรนเดอร์ ≤9 วิ)
+  // คำขอแต่ละครั้งมีเพดานเวลา (เน็ตค้าง fetch ไม่มีวันหมดเวลาเอง) · พักปุ่ม 1 นาทีเฉพาะเมื่อรู้แน่ว่าใบออก
+  async function sendCall(){
+    setCallAsk(false);
+    if(callBusy||callUntil)return;
+    if(callTimerRef.current){clearTimeout(callTimerRef.current);callTimerRef.current=null;}
+    const run=++callRunRef.current;const live=()=>callRunRef.current===run;
+    const within=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),ms))]);
+    const finish=(phase,merged)=>{
+      if(!live())return;callRunRef.current++;
+      if(phase==="ok"){setCallCooldown(true);setCall({phase:"ok",merged:!!merged});callTimerRef.current=setTimeout(()=>setCall(c=>c&&c.phase==="ok"?null:c),8000);}
+      else setCall({phase:"fail"});
+    };
+    const t0=Date.now();
+    setCall({phase:"sending"});
+    let row;
+    try{row=await within(api.callStaff(branchId,tableId,table&&table.table_number,token),10000);}
+    catch(e){console.error("callStaff",e);finish("fail");return;}
+    if(!live())return;
+    setCall({phase:"wait"});
+    let claimed=false;
+    const poll=async()=>{
+      if(!live())return;
+      let st=null;
+      try{const r=await within(api.getStaffCall(row.id),6000);st=(Array.isArray(r)&&r[0]&&r[0].status)||null;}catch{}
+      if(!live())return;
+      const res=callOutcome(st);
+      if(res!=="wait")return finish(res,st==="merged");
+      if(st==="printing")claimed=true;
+      const age=Date.now()-t0;
+      if(age>=CALL_WAIT_MS&&!claimed){
+        let closed=null;
+        try{closed=await within(api.expireStaffCall(row.id),6000);}catch{}
+        if(!live())return;
+        if(Array.isArray(closed)&&closed.length)return finish("fail");   // ตัวพิมพ์ยังไม่หยิบ — ปิดแล้ว จะไม่ออกทีหลัง
+        if(Array.isArray(closed))claimed=true;                             // ปิดไม่ได้ = ถูกจองไปแล้ว (หรือเพิ่งได้ผล) → ถามผลต่อ
+      }
+      if(age>=CALL_WAIT_MS+CALL_GRACE_MS)return finish("fail");
+      callTimerRef.current=setTimeout(poll,2000);
+    };
+    callTimerRef.current=setTimeout(poll,1500);
+  }
   // ── โต๊ะบุฟเฟต์ (บิลเปิดด้วยแพ็คเกจ) ── เห็นเฉพาะเมนูในแพ็คเกจ รวมเมนู ฿0 ("รวมในแพ็คเกจ")
   // ไม่มีบิล/บิลไม่มีแพ็คเกจ = หน้าเดิมทุกอย่าง (เมนูราคา > 0)
   const[pkgMenus,setPkgMenus]=useState(null);    // null = ยังไม่ได้โหลด · [] = แพ็คเกจไม่มีเมนูที่สาขานี้เปิดขาย
@@ -22310,7 +22426,8 @@ function CustomerPage({branchId,tableId,token}){
       </div>
       <div style={{padding:"8px 12px",background:C.white,borderBottom:`1px solid ${C.line}`,flexShrink:0}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"9px 14px"}}/></div>
       </div>
-      <div style={{padding:10,display:"grid",gridTemplateColumns:"repeat(2,1fr)",gridAutoRows:"max-content",gap:10,alignContent:"start"}}>
+      {/* เว้นล่าง 84px ให้แถวสุดท้ายเลื่อนพ้นปุ่มลอย "เรียกพนักงาน" (ไม่บังปุ่ม + ของเมนูท้ายสุด) */}
+      <div style={{padding:"10px 10px 84px",display:"grid",gridTemplateColumns:"repeat(2,1fr)",gridAutoRows:"max-content",gap:10,alignContent:"start"}}>
         {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=menuSoldOutAt(m,branchId);const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
           <div style={{position:"relative",width:"100%",height:130,flexShrink:0}}>
             {m.image?<img src={driveImgSrc(m.image,160)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
@@ -22404,6 +22521,11 @@ function CustomerPage({branchId,tableId,token}){
             <div style={{fontSize:14.5,fontWeight:900,color:C.brand,lineHeight:1.5}}>📲 กรุณานำ QR Code ไปชำระเงินที่แคชเชียร์</div>
           </div>}
         {myOrder&&myOrder.status!=="paid"&&!payWaiting&&<Btn onClick={()=>setStep("menu")} full icon={I.plus} s={{padding:"12px",fontSize:15,fontWeight:900}}>สั่งเพิ่ม</Btn>}
+        {/* เรียกพนักงาน (เช่น ขอเช็คบิล) — หน้านี้มีแถบล่างอยู่แล้ว จึงเป็นปุ่มในแถบ ไม่ใช่ปุ่มลอย */}
+        <button type="button" onClick={()=>{if(!callBusy&&!callUntil)setCallAsk(true);}} aria-disabled={callBusy||!!callUntil}
+          style={{width:"100%",minHeight:46,borderRadius:12,border:`1.5px solid ${callUntil?"#047857":C.ink}`,background:callUntil?C.greenLight:C.white,color:callUntil?"#047857":C.ink,fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,cursor:callBusy||callUntil?"default":"pointer"}}>
+          {callBusy?"⏳ กำลังแจ้ง…":callUntil?"✓ เรียกพนักงานแล้ว — รอสักครู่":"🔔 เรียกพนักงาน"}
+        </button>
       </div>
     </>}
     {step==="cart"&&<>
@@ -22471,6 +22593,36 @@ function CustomerPage({branchId,tableId,token}){
       </div>
     </div>}
     {optPick&&<MenuOptionPicker menu={optPick} groups={getMenuOptions(optPick,branchId,optionLib)} onConfirm={(chosen,qty)=>addToCartWithOptions(optPick,chosen,qty)} onClose={()=>setOptPick(null)}/>}
+    {/* ── เรียกพนักงาน: ปุ่มลอยมุมขวาล่างในหน้าเมนู (หน้าสรุปยอดมีปุ่มในแถบล่าง) ── */}
+    {step==="menu"&&<button type="button" onClick={()=>{if(!callBusy&&!callUntil)setCallAsk(true);}} aria-disabled={callBusy||!!callUntil}
+      style={{position:"fixed",zIndex:20,bottom:"calc(16px + env(safe-area-inset-bottom, 0px))",right:"max(16px, calc((100vw - 480px) / 2 + 16px))",
+        display:"flex",alignItems:"center",gap:7,minHeight:50,padding:"0 18px",borderRadius:999,border:"none",cursor:callBusy||callUntil?"default":"pointer",
+        background:callUntil?"#047857":C.ink,color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,boxShadow:"0 6px 18px rgba(15,23,42,.32)"}}>
+      {callBusy?"⏳ กำลังแจ้ง…":callUntil?"✓ เรียกพนักงานแล้ว":"🔔 เรียกพนักงาน"}
+    </button>}
+    {callAsk&&<div role="dialog" aria-modal="true" onClick={()=>setCallAsk(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,padding:"24px 20px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:44,marginBottom:6}}>🔔</div>
+        <div style={{fontSize:18,fontWeight:900,color:C.ink,marginBottom:6}}>เรียกพนักงาน</div>
+        <div style={{fontSize:14.5,color:C.ink3,lineHeight:1.7,marginBottom:18}}>ให้พนักงานมาที่ <b style={{color:C.ink}}>โต๊ะ {table.table_number}</b> ใช่ไหม?</div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn v="ghost" onClick={()=>setCallAsk(false)} full s={{padding:"12px",fontSize:15}}>ยกเลิก</Btn>
+          <Btn onClick={sendCall} full s={{padding:"12px",fontSize:15,fontWeight:900}}>เรียกเลย</Btn>
+        </div>
+      </div>
+    </div>}
+    {call&&<div role="status" aria-live="polite" style={{position:"fixed",zIndex:3100,top:headH+8,left:0,right:0,margin:"0 auto",maxWidth:448,padding:"0 12px",boxSizing:"border-box",pointerEvents:"none"}}>
+      <div style={{pointerEvents:"auto",display:"flex",alignItems:"flex-start",gap:10,borderRadius:14,padding:"12px 14px",fontFamily:"'Sarabun',sans-serif",boxShadow:"0 8px 22px rgba(15,23,42,.25)",
+        background:call.phase==="ok"?C.greenLight:call.phase==="fail"?"#FFFBEB":C.ink,border:`1.5px solid ${call.phase==="ok"?C.green:call.phase==="fail"?"#F59E0B":C.ink}`,
+        color:call.phase==="ok"?"#065F46":call.phase==="fail"?"#92400E":C.white}}>
+        <div style={{flex:1,minWidth:0,fontSize:14.5,fontWeight:900,lineHeight:1.5}}>
+          {call.phase==="ok"?<>✅ แจ้งพนักงานแล้ว — พนักงานกำลังมาที่โต๊ะ {table.table_number}{call.merged&&<div style={{fontSize:12.5,fontWeight:700}}>(โต๊ะนี้เพิ่งเรียกไปเมื่อสักครู่)</div>}</>
+            :call.phase==="fail"?<>⚠️ แจ้งผ่านระบบไม่สำเร็จ<div style={{fontSize:13,fontWeight:700}}>กรุณาโบกมือเรียกพนักงานได้เลย หรือกดเรียกใหม่อีกครั้ง</div></>
+            :"⏳ กำลังแจ้งพนักงาน…"}
+        </div>
+        {(call.phase==="ok"||call.phase==="fail")&&<button type="button" aria-label="ปิด" onClick={()=>setCall(null)} style={{flexShrink:0,width:32,height:32,borderRadius:8,border:"none",background:"rgba(0,0,0,.06)",color:"inherit",fontSize:16,fontWeight:900,cursor:"pointer"}}>×</button>}
+      </div>
+    </div>}
   </div>;
 }
 
@@ -25753,7 +25905,8 @@ function PrintFailModal({branchId,branch,posSettings,onClose,onChanged}){
     await load();onChanged&&onChanged();
   }
   async function dismiss(f){
-    if(!await confirmDlg({title:"ไม่ต้องพิมพ์แล้ว?",message:`โต๊ะ ${f.table||"-"}: ${(f.names||[]).join(", ")}\n\nเอาออกจากรายการโดยไม่พิมพ์ — ใช้เมื่อบอกครัวด้วยปากแล้ว หรือไม่ต้องทำแล้ว`,confirmLabel:"เอาออก",cancelLabel:"ไม่เอาออก",danger:true}))return;
+    // ใบเรียกพนักงานที่ไม่ออก: ไม่มีอะไรให้พิมพ์ใหม่ — "รับทราบ" = เอาออกเลย ไม่ใช่กล่องแดงเรื่องบอกครัว
+    if(!(f.kind==="pj"&&f.what==="เรียกพนักงาน")&&!await confirmDlg({title:"ไม่ต้องพิมพ์แล้ว?",message:`โต๊ะ ${f.table||"-"}: ${(f.names||[]).join(", ")}\n\nเอาออกจากรายการโดยไม่พิมพ์ — ใช้เมื่อบอกครัวด้วยปากแล้ว หรือไม่ต้องทำแล้ว`,confirmLabel:"เอาออก",cancelLabel:"ไม่เอาออก",danger:true}))return;
     try{await editPrintFail(f.holder,l=>l.filter(x=>!samePrintFail(x,f)));}catch(e){notifyDlg("เอาออกไม่สำเร็จ: "+friendlyError(e));}
     await load();onChanged&&onChanged();
   }
@@ -25794,13 +25947,13 @@ function PrintFailModal({branchId,branch,posSettings,onClose,onChanged}){
         <span style={{fontSize:16,fontWeight:900,color:C.ink}}>{f.table?`โต๊ะ ${f.table}`:pj?"เคาน์เตอร์":"โต๊ะ -"}</span>
         <span style={{fontSize:11.5,fontWeight:800,color:C.red,background:C.white,borderRadius:6,padding:"1px 7px"}}>{pj?(f.what||"ใบจากเคาน์เตอร์"):(KIND[f.kind]||"ใบสั่งอาหาร")}</span>
         <span style={{fontSize:11.5,color:C.ink3}}>{fmtFailAt(f.at)}{f.orderId!=null?` · บิล #${f.orderId}`:""}{Array.isArray(f.pnames)&&f.pnames.length?` · ${f.pnames.join(" · ")}`:""}</span>
-        <button onClick={()=>dismiss(f)} style={{marginLeft:"auto",border:`1px solid ${C.line}`,background:C.white,borderRadius:8,color:C.ink3,fontFamily:F,fontSize:12.5,fontWeight:700,cursor:"pointer",padding:"7px 12px",minHeight:36,whiteSpace:"nowrap",flexShrink:0}}>ไม่ต้องพิมพ์แล้ว</button>
+        <button onClick={()=>dismiss(f)} style={{marginLeft:"auto",border:`1px solid ${C.line}`,background:C.white,borderRadius:8,color:C.ink3,fontFamily:F,fontSize:12.5,fontWeight:700,cursor:"pointer",padding:"7px 12px",minHeight:36,whiteSpace:"nowrap",flexShrink:0}}>{pj&&f.what==="เรียกพนักงาน"?"รับทราบ":"ไม่ต้องพิมพ์แล้ว"}</button>
       </div>
       {errs.length>0&&<div style={{padding:"6px 12px",borderTop:`1px solid ${C.line}`,fontFamily:F,fontSize:12,fontWeight:700,color:"#92400E",background:"#FFFBEB",lineHeight:1.5}}>
         {errs.map((e,i)=><div key={i}>⚠️ {e.name?e.name+": ":""}{printErrText(e)}{!pj&&e.code==="DRAIN_TIMEOUT"?" · ใบอาจออกไปแล้ว ถามครัวก่อนกดรีปริ้น":""}</div>)}
       </div>}
       {pj?<div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderTop:`1px solid ${C.line}`,fontFamily:F}}>
-          <div style={{flex:1,minWidth:0,fontSize:12.5,color:C.ink3,lineHeight:1.5}}>{f.what==="ใบเสร็จ"&&f.orderId!=null?"กดพิมพ์ใบเสร็จของบิลนี้ใหม่ได้เลย":"ตัวพิมพ์ไม่ได้เก็บใบนี้ไว้ — สั่งพิมพ์ใหม่จากจุดเดิม (เช่น เปิดโต๊ะ/บิลแล้วกดพิมพ์อีกครั้ง) แล้วกด \"ไม่ต้องพิมพ์แล้ว\""}</div>
+          <div style={{flex:1,minWidth:0,fontSize:12.5,color:C.ink3,lineHeight:1.5}}>{f.what==="เรียกพนักงาน"?(f.note==="no_rcpt"?"ลูกค้าโต๊ะนี้กดเรียกพนักงาน แต่สาขานี้ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — เดินไปดูที่โต๊ะ แล้วตั้งที่ 🖨 เครื่องพิมพ์ → ติ๊ก \"ใช้เป็นเครื่องพิมพ์ใบเสร็จ\"":"ลูกค้าโต๊ะนี้กดเรียกพนักงาน แต่ใบไม่ออก — เดินไปดูที่โต๊ะ แล้วกด \"รับทราบ\" (มือถือลูกค้าขึ้นให้โบกมือเรียกแล้ว)"):f.what==="ใบเสร็จ"&&f.orderId!=null?"กดพิมพ์ใบเสร็จของบิลนี้ใหม่ได้เลย":"ตัวพิมพ์ไม่ได้เก็บใบนี้ไว้ — สั่งพิมพ์ใหม่จากจุดเดิม (เช่น เปิดโต๊ะ/บิลแล้วกดพิมพ์อีกครั้ง) แล้วกด \"ไม่ต้องพิมพ์แล้ว\""}</div>
           {f.what==="ใบเสร็จ"&&f.orderId!=null&&!old&&<Btn v="primary" onClick={()=>printReceiptAgain(f)} icon={I.print} s={{padding:"9px 14px",minHeight:40,fontSize:13.5,flexShrink:0}}>พิมพ์ใบเสร็จใหม่</Btn>}
         </div>
       :its.length?its.map(it=>{const wait=printRetryWaiting(it,now);const opt=optionsText(it.options);

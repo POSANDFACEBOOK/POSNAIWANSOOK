@@ -907,6 +907,165 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
   ok_("แพ็คเกจ: ตัวพิมพ์เวอร์ชัน 48 ขึ้นไป (แอปใช้เลขนี้ตัดสินว่าเปิดโต๊ะแพ็คเกจได้)", +((S.match(/const AGENT_VERSION = (\d+);/) || [])[1] || 0) >= 48);
 }
 
+// ── #30 ปุ่มเรียกพนักงาน (staff_calls · v49) — รันก้อนจริงของตัวพิมพ์กับร้านจำลอง ────────────────
+// เดิมพัน (เจ้าของสั่ง 18 ต.ค. 69): ใบเรียกต้องออกเครื่องใบเสร็จเท่านั้น ไม่ออกครัว · ไม่พิมพ์ซ้ำเมื่อมีตัวพิมพ์สองเครื่อง
+// · ไม่บอกลูกค้าว่า "แจ้งแล้ว" ทั้งที่ไม่ออก · ใบเก่าไม่ออกย้อนหลัง · ไม่ออก = ขึ้นแผงพิมพ์ไม่สำเร็จ (ไม่ลองใหม่เอง) แต่ไม่ท่วมแผง
+{
+  const a = S.indexOf('// ── ปุ่ม "เรียกพนักงาน" ในหน้าลูกค้า'), b = S.indexOf("async function handlePingRequests(", a);
+  ok_("#30 อ่านก้อนปุ่มเรียกพนักงานตัวจริงได้", a > 0 && b > a);
+  const CALL_SRC = S.slice(a, b);
+  const THAI_SRC = grabTopBlock("function thaiBytes(") + "\n" + ((S.match(/^const THAI_CP\s*=.*$/m) || [""])[0]) + "\n" + ((S.match(/^const SET_THAI\s*=.*$/m) || [""])[0]);
+  const now = Date.now(), iso = (t) => new Date(t).toISOString();
+  const mkCalls = (o) => {
+    const io = { sent: [], bufs: [], fails: [], patches: [], renders: [], tableReads: 0 };
+    const db = o.db || { rows: [], tables: [] };
+    if (o.rows) db.rows.push(...o.rows.map(r => ({ ...r })));
+    if (o.tables) db.tables.push(...o.tables);
+    const serverNow = o.serverNow != null ? o.serverNow : Date.now();
+    const hdr = { get: (k) => String(k).toLowerCase() === "date" ? new Date(serverNow).toUTCString() : null };
+    const fakeFetch = async (url, init) => {
+      const u = decodeURIComponent(String(url)); const method = (init && init.method) || "GET";
+      if (method === "GET") {
+        if (o.getError) return { ok: false, headers: hdr, text: async () => o.getError };
+        const br = (/branch_id=eq\.(\d+)/.exec(u) || [])[1];
+        const rows = db.rows.filter(r => String(r.branch_id) === br && r.status === "new");
+        return { ok: true, headers: hdr, text: async () => JSON.stringify(rows) };
+      }
+      const q = u.slice(u.indexOf("?") + 1), body = JSON.parse(init.body);
+      io.patches.push({ q, body });
+      const inM = /id=in\.\(([^)]*)\)/.exec(q), eqM = /id=eq\.(\d+)/.exec(q);
+      const ids = inM ? inM[1].split(",").map(Number) : eqM ? [+eqM[1]] : [];
+      const hit = db.rows.filter(r => ids.includes(+r.id) && (!q.includes("status=eq.new") || r.status === "new"));
+      hit.forEach(r => Object.assign(r, body));
+      return { ok: true, headers: hdr, text: async () => JSON.stringify(hit) };
+    };
+    const sbStub = async (q) => {
+      const m = /^tables\?id=eq\.(\d+)&branch_id=eq\.(\d+)/.exec(q);
+      if (!m) throw new Error("unexpected sb " + q);
+      io.tableReads++;
+      if (o.tableReadFails) throw new Error("net");
+      return db.tables.filter(t => +t.id === +m[1] && String(t.branch_id) === m[2]);
+    };
+    const api = new Function("fetch", "sb", "SUPA_URL", "SUPA_KEY", "BRANCH", "AGENT_DEV", "getPrintersCached", "isBluetooth", "fetchSlipRaster", "sendToPrinter", "errOf", "pushFail", "console", "Buffer",
+      THAI_SRC + "\nlet callBusy = false;\n" + CALL_SRC + "\nreturn { handleStaffCalls, callDecision, buildCallESC, st: () => ({ callBusy, callsOffUntil, callSkew }) };")(
+      fakeFetch, sbStub, "https://x", "k", o.branch || "5", o.dev || "dev1",
+      async () => o.printers || [], (p) => { try { return JSON.parse(p.description || "{}").c === "bt"; } catch { return false; } },
+      async (items, table, meta) => { io.renders.push({ table, meta }); return o.noRaster ? null : Buffer.from("RASTER:" + table); },
+      async (ip, port, buf) => { if ((o.down || []).includes(ip)) { const e = new Error("down"); e.code = "CONNECT_TIMEOUT"; throw e; } io.sent.push(ip); io.bufs.push(buf); },
+      (p, e) => ({ pid: p && p.id, name: (p && p.name) || "", code: (e && e.code) || "ERR" }),
+      async (printers, entry) => { io.fails.push(entry); return true; },
+      { log() {} }, Buffer);
+    return { api, io, db };
+  };
+  const RC = (id, ip, extra) => ({ id, name: "แคชเชียร์" + id, ip, port: 9100, branch_id: 5, active: true, description: JSON.stringify({ rcpt: 1, ...(extra || {}) }) });
+  const KITCHEN = { id: 1, name: "ครัว", ip: "10.0.0.1", port: 9100, branch_id: 5, active: true, description: "{}" };
+  const T = (id, num, tok, extra) => ({ id, table_number: num, qr_token: tok, active: true, branch_id: 5, ...(extra || {}) });
+  const R = (id, table_id, token, ageMs, branch_id) => ({ id, branch_id: branch_id || 5, table_id, token, status: "new", created_at: iso(now - (ageMs == null ? 1000 : ageMs)) });
+
+  { const X = mkCalls({ rows: [R(1, 51, "tokA")], tables: [T(51, "A2", "tokA")], printers: [KITCHEN, RC(2, "10.0.0.2"), RC(3, "10.0.0.3"), RC(4, "10.0.0.4", { c: "bt" }), { ...RC(5, "10.0.0.5"), active: false }] });
+    await X.api.handleStaffCalls();
+    const claim = X.io.patches[0];
+    ok_("#30 ใบเรียกออกเฉพาะเครื่องใบเสร็จ (ครบทุกเครื่องที่ใช้งาน) — ไม่ออกเครื่องครัว/บลูทูธ/ที่ปิดใช้", X.io.sent.slice().sort().join() === "10.0.0.2,10.0.0.3");
+    ok_("#30 จองก่อนพิมพ์: new→printing ด้วยเงื่อนไข status=eq.new", !!claim && claim.body.status === "printing" && /status=eq\.new/.test(claim.q));
+    ok_("#30 ออกแล้วจด printed + จำนวนเครื่อง · ชื่อโต๊ะบนใบมาจากตารางโต๊ะ · ขอรูปชนิด call เท่านั้น",
+      X.db.rows[0].status === "printed" && X.db.rows[0].printers === 2 && X.io.renders[0].table === "A2" && X.io.renders[0].meta.kind === "call" && X.io.renders[0].meta.needKind === "call" && X.io.fails.length === 0); }
+
+  { const db = { rows: [], tables: [] };
+    const A = mkCalls({ db, rows: [R(1, 51, "tokA")], tables: [T(51, "A2", "tokA")], printers: [RC(2, "10.0.0.2")], dev: "a" });
+    const B = mkCalls({ db, printers: [RC(2, "10.0.0.2")], dev: "b" });
+    await Promise.all([A.api.handleStaffCalls(), B.api.handleStaffCalls()]);
+    ok_("#30 ตัวพิมพ์สองเครื่องในสาขาเดียวกันเห็นแถวเดียวกัน → พิมพ์ครั้งเดียว", A.io.sent.length + B.io.sent.length === 1 && db.rows[0].status === "printed"); }
+
+  { const X = mkCalls({ rows: [R(1, 51, ""), R(2, 52, "x"), R(3, 51, "tokOther"), R(4, 53, "tok53"), R(6, 99, "tok99")],
+      tables: [T(51, "A2", ""), T(52, "A3", null), T(53, "A4", "tok53", { active: false })], printers: [RC(2, "10.0.0.2")] });
+    await X.api.handleStaffCalls();
+    ok_("#30 รหัส QR ว่าง/ไม่ตรง/โต๊ะปิดใช้/โต๊ะไม่มีในสาขา → rejected ไม่พิมพ์", X.io.sent.length === 0 && X.db.rows.every(r => r.status === "rejected")); }
+
+  { const X = mkCalls({ rows: [R(1, 51, "tokA", 3000), R(2, 51, "tokA", 2000), R(3, 52, "tokB", 1000)], tables: [T(51, "A2", "tokA"), T(52, "A3", "tokB")], printers: [RC(2, "10.0.0.2")] });
+    await X.api.handleStaffCalls();
+    ok_("#30 โต๊ะเดิมกดซ้ำภายใน 1 นาทีหลังใบออก → merged ไม่พิมพ์ซ้ำ · โต๊ะอื่นยังพิมพ์ปกติ",
+      X.db.rows.map(r => r.status).join() === "printed,merged,printed" && X.io.sent.length === 2); }
+
+  { const X = mkCalls({ rows: [R(1, 51, "tokA", 120000), R(2, 52, "tokB", 1000)], tables: [T(51, "A2", "tokA"), T(52, "A3", "tokB")], printers: [RC(2, "10.0.0.2")] });
+    await X.api.handleStaffCalls();
+    ok_("#30 ค้างเกิน 90 วิ (ตัวพิมพ์ดับไป) → expired ไม่พิมพ์ย้อนหลัง ไม่อ่านโต๊ะ · ใบใหม่ไม่ต้องรอคิว",
+      X.db.rows[0].status === "expired" && X.db.rows[1].status === "printed" && X.io.sent.length === 1 && X.io.tableReads === 1); }
+
+  { const skewed = now - 5 * 60 * 1000;   // นาฬิกามือถือตัวพิมพ์เร็วไป 5 นาที (เวลาเซิร์ฟเวอร์ช้ากว่ามือถือ)
+    const X = mkCalls({ serverNow: skewed, rows: [{ ...R(1, 51, "tokA"), created_at: iso(skewed - 1000) }], tables: [T(51, "A2", "tokA")], printers: [RC(2, "10.0.0.2")] });
+    await X.api.handleStaffCalls();
+    ok_("#30 อายุแถววัดด้วยเวลาเซิร์ฟเวอร์ — นาฬิกามือถือเพี้ยน 5 นาทีก็ยังพิมพ์ ไม่ expired เงียบ", X.db.rows[0].status === "printed" && X.io.sent.length === 1); }
+
+  { const X = mkCalls({ rows: [R(1, 51, "tokA", 3000)], tables: [T(51, "A2", "tokA")], printers: [RC(2, "10.0.0.2"), RC(3, "10.0.0.3")], down: ["10.0.0.2", "10.0.0.3"] });
+    await X.api.handleStaffCalls();
+    const f = X.io.fails[0] || {};
+    ok_("#30 ไม่ออกทุกเครื่อง → failed (ลูกค้าถูกบอกให้โบกมือ) + ขึ้นแผงพิมพ์ไม่สำเร็จหนึ่งรายการ บอกทุกเครื่องที่ไม่ออก",
+      X.db.rows[0].status === "failed" && X.db.rows[0].printers === 0 && X.io.fails.length === 1 && f.kind === "pj" && f.what === "เรียกพนักงาน" && f.table === "A2" && (f.items || []).length === 0 && (f.pnames || []).length === 2);
+    X.db.rows.push(R(2, 51, "tokA", 1000));
+    await X.api.handleStaffCalls();
+    ok_("#30 เครื่องยังดับแล้วโต๊ะเดิมกดซ้ำ → ไม่ถูกกันว่า 'เพิ่งเรียก' (ลองส่งจริง) แต่ไม่เพิ่มรายการในแผงซ้ำภายใน 5 นาที",
+      X.db.rows[1].status === "failed" && X.io.fails.length === 1); }
+
+  { const X = mkCalls({ rows: [R(1, 51, "tokA")], tables: [T(51, "A2", "tokA")], printers: [RC(2, "10.0.0.2"), RC(3, "10.0.0.3")], down: ["10.0.0.3"] });
+    await X.api.handleStaffCalls();
+    ok_("#30 ออกบางเครื่อง → printed (บอกลูกค้าว่าแจ้งแล้วตามจริง) และไม่ขึ้นแผงว่าไม่ออก", X.db.rows[0].status === "printed" && X.db.rows[0].printers === 1 && X.io.fails.length === 0); }
+
+  { const X = mkCalls({ rows: [R(1, 51, "tokA", 2000), R(2, 52, "tokB", 1000)], tables: [T(51, "A2", "tokA"), T(52, "A3", "tokB")], printers: [KITCHEN] });
+    await X.api.handleStaffCalls();
+    ok_("#30 สาขายังไม่ได้ติ๊กเครื่องใบเสร็จ → ไม่ถอยไปออกเครื่องครัว · failed (no_rcpt) · เตือนที่แผงครั้งเดียว",
+      X.io.sent.length === 0 && X.db.rows.every(r => r.status === "failed" && r.note === "no_rcpt") && X.io.fails.length === 1 && X.io.fails[0].note === "no_rcpt"); }
+
+  { const rows = [], tables = [];
+    for (let i = 0; i < 25; i++) { rows.push(R(100 + i, 200 + i, "t" + i)); tables.push(T(200 + i, "T" + i, "t" + i)); }
+    const X = mkCalls({ rows, tables, printers: [RC(2, "10.0.0.2")] });
+    await X.api.handleStaffCalls();
+    ok_("#30 ยิงคำขอรัวทั้งสาขา → พิมพ์ไม่เกิน 20 ใบ/นาที ที่เหลือ failed (flood) ไม่ขึ้นแผง",
+      X.io.sent.length === 20 && X.db.rows.filter(r => r.status === "failed" && r.note === "flood").length === 5 && X.io.fails.length === 0); }
+
+  { const X = mkCalls({ getError: '{"code":"PGRST205","details":null,"hint":null,"message":"Could not find the table \'public.staff_calls\' in the schema cache"}' });
+    await X.api.handleStaffCalls();
+    const Y = mkCalls({ getError: '{"code":"PGRST002","details":null,"hint":null,"message":"Could not query the database for the schema cache. Retrying."}' });
+    await Y.api.handleStaffCalls();
+    ok_("#30 ยังไม่ได้รัน SQL (PGRST205) → พักถาม 10 นาที · ฐานกำลังฟื้น (PGRST002) → ไม่พัก ถามรอบหน้าตามปกติ",
+      X.api.st().callsOffUntil > Date.now() + 9 * 60 * 1000 && Y.api.st().callsOffUntil === 0 && !X.api.st().callBusy && !Y.api.st().callBusy); }
+
+  { const X = mkCalls({ rows: [R(1, 51, "tokA")], tables: [T(51, "กลับบ้าน2", "tokA")], printers: [RC(2, "10.0.0.2")], noRaster: true });
+    await X.api.handleStaffCalls();
+    const buf = X.io.bufs[0] || Buffer.alloc(0);
+    ok_("#30 เรนเดอร์รูปไม่ได้ → ใบตัวอักษรสำรองยังออก (printed)", X.db.rows[0].status === "printed" && buf.length > 20 && !buf.toString("latin1").startsWith("RASTER")); }
+
+  // ใบตัวอักษรสำรอง: ไทยต้องเป็น TIS-620 หลังเลือกโค้ดเพจ · ไม่มี '?' แทนตัวอักษร · ขยาย (GS !) เฉพาะเลขโต๊ะอังกฤษ/ตัวเลข
+  { const X = mkCalls({});
+    const tis = (buf) => { let s = ""; for (const c of buf) s += (c >= 0xa1 && c <= 0xfb) ? String.fromCharCode(c - 0xa0 + 0x0e00) : String.fromCharCode(c); return s; };
+    const gsBig = (buf) => { const out = []; for (let i = 0; i + 2 < buf.length; i++) if (buf[i] === 0x1d && buf[i + 1] === 0x21 && buf[i + 2] !== 0) out.push(i); return out; };
+    const thai = X.api.buildCallESC("กลับบ้าน2", 3), ascii = X.api.buildCallESC("A12", 1);
+    const tt = tis(thai), cpAt = thai.indexOf(Buffer.from([0x1b, 0x74])), firstThai = thai.findIndex(c => c >= 0xa1);
+    ok_("#30 ใบสำรอง: ข้อความไทยถอดกลับได้ครบ (เรียกพนักงาน · โต๊ะ · กลับบ้าน2 · ด่วน · เรียกซ้ำ ครั้งที่ 3) ไม่มี '?'",
+      tt.includes("เรียกพนักงาน") && tt.includes("โต๊ะ") && tt.includes("กลับบ้าน2") && tt.includes("ด่วน - ลูกค้ากดเรียกจากมือถือ") && tt.includes("เรียกซ้ำ ครั้งที่ 3") && !thai.includes(0x3f));
+    ok_("#30 ใบสำรอง: เลือกโค้ดเพจไทยก่อนอักษรไทยตัวแรก · ตัดกระดาษท้ายใบ", cpAt >= 0 && cpAt < firstThai && thai.subarray(-4).equals(Buffer.from([0x1d, 0x56, 0x41, 0x00])));
+    const bigA = gsBig(ascii);
+    ok_("#30 ใบสำรอง: ขยายตัวอักษรเฉพาะเลขโต๊ะอังกฤษ/ตัวเลข (ชื่อโต๊ะไทยไม่ขยาย — สระลอยผิดที่)",
+      gsBig(thai).length === 0 && bigA.length === 1 && ascii.subarray(bigA[0] + 3).indexOf(Buffer.from("A12")) >= 0 && ascii.subarray(bigA[0] + 3).indexOf(Buffer.from("A12")) < 4); }
+}
+// ── #31 รอบเรียกพนักงานกำลังพิมพ์ → อัปเดตตัวเองต้องรอ (แถวค้าง printing = ใบไม่ออก ลูกค้ารอเก้อ) ──
+{
+  const ex = grabTopBlock("function exitIfIdle(");
+  const run = (busy) => { const log = []; new Function("updatePending", "tickBusy", "kickBusy", "callBusy", "saveState", "process", "console", ex + "\nreturn exitIfIdle();")(49, false, false, busy, () => log.push("save"), { exit: (c) => log.push("exit:" + c) }, { log() {} }); return log.join(); };
+  ok_("#31 มีเวอร์ชันใหม่ระหว่างพิมพ์ใบเรียก → ยังไม่ออก · รอบจบ → บันทึกความจำแล้วออก", run(true) === "" && run(false) === "save,exit:0");
+  ok_("#31 รอบเรียกพนักงานเรียก exitIfIdle ตอนจบทุกครั้ง และไม่เริ่มรอบใหม่ระหว่างรออัปเดต",
+    S.includes("handleStaffCalls().catch(() => {}).finally(() => exitIfIdle());") && /setInterval\(\(\) => \{\n\s+if \(updatePending\) \{ exitIfIdle\(\); return; \}[^\n]*\n\s+handleStaffCalls\(\)/.test(S));
+}
+// ── #32 ใบชนิดใหม่ต้องได้รูปของชนิดนั้นจริง — เว็บถอยเวอร์ชันแล้วคืนใบสั่งอาหารเปล่า ห้ามพิมพ์ ──
+{
+  const fsr = grabTopBlock("async function fetchSlipRaster(");
+  const mk = (kindHdr) => new Function("fetch", "SLIP_RENDER_URL", "AbortController", "Buffer", fsr + "\nreturn fetchSlipRaster;")(
+    async () => ({ ok: true, headers: { get: (k) => String(k).toLowerCase() === "x-slip-kind" ? kindHdr : null }, arrayBuffer: async () => new Uint8Array(64).fill(1).buffer }), "https://x", AbortController, Buffer);
+  const got = async (kindHdr, meta) => !!(await mk(kindHdr)([], "A2", meta));
+  ok_("#32 ขอรูปใบเรียกแต่เว็บคืนชนิดอื่น/ไม่บอกชนิด → ไม่ใช้รูปนั้น (ถอยเป็นใบตัวอักษร) · ชนิดตรง → ใช้",
+    !(await got("order", { kind: "call", needKind: "call" })) && !(await got(null, { kind: "call", needKind: "call" })) && (await got("call", { kind: "call", needKind: "call" })));
+  ok_("#32 ใบครัวเดิม (ไม่ระบุ needKind) ใช้รูปเหมือนเดิม แม้เว็บรุ่นเก่าไม่ส่งหัวชนิด", (await got(null, { kind: "" })) && (await got("order", {})));
+}
+
 console.log("\n" + "=".repeat(52));
 console.log(fail === 0 ? "OK ผ่านทั้งหมด " + pass + " ข้อ" : "FAIL ล้มเหลว " + fail + " ข้อ (ผ่าน " + pass + ")");
 process.exitCode = fail ? 1 : 0;

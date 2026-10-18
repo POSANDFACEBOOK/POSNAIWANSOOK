@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 48;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 49;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 2000;
@@ -344,10 +344,14 @@ async function fetchSlipRaster(items, tableNum, meta) {
       body: JSON.stringify({ table: String(tableNum || ""), time: new Date().toLocaleString("th-TH"),
         bill: (meta && meta.bill != null) ? String(meta.bill) : "", by: (meta && meta.by) ? String(meta.by) : "",
         kind: (meta && meta.kind) ? String(meta.kind) : "", from: (meta && meta.from) ? String(meta.from) : "",
+        ...((meta && +meta.n > 0) ? { n: +meta.n } : {}),   // ใบเรียกพนักงาน: ครั้งที่เท่าไรของโต๊ะนี้
         items: (items || []).map(it => ({ qty: it.qty, name: it.name, options: it.options || [], note: it.note || "" })) }),
       ...(ctrl ? { signal: ctrl.signal } : {}),
     });
     if (!res.ok) return null;
+    // needKind: ใบชนิดใหม่ต้องได้รูปของชนิดนั้นจริง — เว็บเวอร์ชันเก่า (ถอยเวอร์ชันบน Vercel) ไม่รู้จัก "call"
+    // จะคืนใบสั่งอาหารเปล่าๆ มาแทน (พิมพ์ออก = ใบผิด แต่บอกลูกค้าว่าแจ้งแล้ว) → ไม่ตรง = ใช้ใบตัวอักษรสำรอง
+    if (meta && meta.needKind && String((res.headers && res.headers.get && res.headers.get("x-slip-kind")) || "") !== String(meta.needKind)) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     return buf.length > 30 ? buf : null;
   } catch (e) { return null; }
@@ -648,6 +652,172 @@ async function handlePJRequests(printers) {
 }
 
 // ปุ่ม "เช็คสถานะใหม่" ในแอปเขียน description.pingReq = เวลาที่กด → agent เช็คสถานะเครื่องทันที (ไม่ต้องรอรอบ 30 วิ)
+// ── ปุ่ม "เรียกพนักงาน" ในหน้าลูกค้า (ตาราง staff_calls · sql/staff-calls.sql · เจ้าของสั่ง 18 ต.ค. 69) ──
+// ลูกค้ากด → แอปเพิ่มแถว status 'new' → ตัวพิมพ์ถามทุก 2 วิ → จองแถว → พิมพ์ "เรียกพนักงาน · โต๊ะ X"
+// ที่เครื่องที่ติ๊ก "ใช้เป็นเครื่องพิมพ์ใบเสร็จ" (rcpt) เท่านั้น ไม่ออกเครื่องครัว → จดผลกลับให้มือถือลูกค้าบอกตามจริง
+// ไม่ใช้ช่อง description.pj: มีช่องเดียวต่อเครื่อง และแอปเขียนแบบอ่าน-แก้-ทับทั้งก้อน
+//   มือถือลูกค้าเขียนคั่นจังหวะที่แคชเชียร์สั่งใบเสร็จ = ใบเสร็จหายเงียบ · ตารางนี้เพิ่มแถวอย่างเดียว ไม่ทับใคร
+// ไม่ลองพิมพ์ใหม่เอง (กติกาเหล็ก) — ไม่ออก = ขึ้นปุ่ม "พิมพ์ไม่สำเร็จ" ที่จอขาย + มือถือลูกค้าบอกให้โบกมือเรียก
+// tools/check-agent-poll.mjs รันก้อนนี้ตัวจริง (ตัดสินใจ · จอง · เลือกเครื่อง · ผลที่จดกลับ · กันท่วม)
+const CALL_POLL_MS = 2000;
+const CALL_MAX_AGE_MS = 90 * 1000;          // เห็นช้ากว่านี้ (ตัวพิมพ์ดับ/เน็ตหลุด) = ไม่พิมพ์ย้อนหลัง — ลูกค้าได้ข้อความให้โบกมือไปแล้ว
+const CALL_DEDUPE_MS = 60 * 1000;           // โต๊ะเดิมกดซ้ำภายใน 1 นาทีหลังใบออก = ไม่พิมพ์ซ้ำ (กดรัว / สองมือถือโต๊ะเดียวกัน)
+const CALL_REPEAT_WIN_MS = 15 * 60 * 1000;  // นับ "เรียกซ้ำ ครั้งที่ N" ภายใน 15 นาที — เรียกซ้ำ = ยังไม่มีใครไป
+const CALL_FLOOD_MAX = 20;                  // ทั้งสาขาไม่เกิน 20 ครั้ง/นาที (นับทั้งที่ออกและไม่ออก) — กันคนยิงคำขอรัวจนกระดาษหมดม้วน
+const CALL_FAIL_NOTE_MS = 5 * 60 * 1000;    // ใบไม่ออก: ขึ้นแผง "พิมพ์ไม่สำเร็จ" โต๊ะละครั้งต่อ 5 นาที (รายการมี 60 ช่อง ห้ามเบียดใบครัวที่ไม่ออก)
+const CALL_NORCPT_NOTE_MS = 10 * 60 * 1000; // สาขายังไม่ได้ติ๊กเครื่องใบเสร็จ: เตือนที่แผงครั้งเดียวต่อ 10 นาที
+const CALL_MISSING_BACKOFF_MS = 10 * 60 * 1000;  // ยังไม่ได้รัน sql/staff-calls.sql = พักถาม 10 นาที ไม่ยิงคำขอที่พังทุก 2 วิ
+// อายุของแถวต้องวัดด้วยนาฬิกาเดียวกับ created_at (เวลาฐานข้อมูล) — มือถือตัวพิมพ์ที่ปิดตั้งเวลาอัตโนมัติแล้วเดินเร็ว 2 นาที
+// จะเห็นทุกใบ "หมดอายุ" เงียบๆ · เอาเวลาจากหัว Date ของคำตอบฐานข้อมูล (ละเอียด 1 วิ พอสำหรับหน้าต่าง 90 วิ)
+let callSkew = 0;   // เวลาเซิร์ฟเวอร์ − เวลามือถือ (ms)
+// ถามเฉพาะแถว 'new' ของสาขานี้ (ดัชนีบางส่วน ปกติว่าง = คำตอบ [] ไม่กี่ไบต์)
+async function getNewCalls() {
+  const res = await fetch(`${SUPA_URL}/rest/v1/staff_calls?branch_id=eq.${BRANCH}&status=eq.new&select=id,table_id,token,created_at&order=id.asc&limit=40`,
+    { headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` } });
+  if (!res.ok) throw new Error(await res.text());
+  const d = Date.parse((res.headers && res.headers.get && res.headers.get("date")) || "");
+  if (d > 0) {
+    const sk = d - Date.now();
+    if (Math.abs(sk) > 30000 && Math.abs(sk - callSkew) > 30000) console.log(`⚠️  นาฬิกามือถือตัวพิมพ์ต่างจากเซิร์ฟเวอร์ ${Math.round(-sk / 1000)} วิ — เปิด "ตั้งเวลาอัตโนมัติ" ในมือถือ (ปุ่มเรียกพนักงานใช้เวลาเซิร์ฟเวอร์แทนแล้ว)`);
+    callSkew = sk;
+  }
+  const txt = await res.text();
+  return txt ? JSON.parse(txt) : [];
+}
+async function patchCalls(filter, d, returning) {
+  const res = await fetch(`${SUPA_URL}/rest/v1/staff_calls?${filter}`, { method: "PATCH",
+    headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: returning ? "return=representation" : "return=minimal" },
+    body: JSON.stringify(d) });
+  if (!res.ok) throw new Error(await res.text());
+  if (!returning) return null;
+  const txt = await res.text();
+  return txt ? JSON.parse(txt) : [];
+}
+// เครื่องใบเสร็จ = ติ๊ก "🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ" (description.rcpt=1) — กติกาเดียวกับ isReceiptPrinter/getReceiptPrinters ในแอป
+function isRcptPrinter(p) { try { return JSON.parse(p.description || "{}").rcpt === 1; } catch { return false; } }
+const callTimes = new Map();   // table_id → [เวลาที่ใบเรียกออก] · ในหน่วยความจำ (รีสตาร์ทแล้วนับใหม่ — ไม่กระทบความถูกต้อง)
+const callFailAt = new Map();  // table_id | "no_rcpt" → เวลาที่ขึ้นแผงพิมพ์ไม่สำเร็จล่าสุด
+let callFloodAt = [];          // เวลาที่ลงมือพิมพ์ใบเรียกทั้งสาขา (กันท่วม)
+let callsOffUntil = 0;         // callBusy อยู่ข้าง kickBusy (exitIfIdle ต้องรอรอบเรียกพนักงานจบก่อนรีสตาร์ทอัปเดต)
+const callStale = (row, now) => { const at = Date.parse((row && row.created_at) || ""); return !(at > 0) || now - at > CALL_MAX_AGE_MS; };
+// ตัดสินใจรายแถว — ฟังก์ชันล้วน · now = เวลาเซิร์ฟเวอร์
+// tbl = แถวโต๊ะจากฐาน (สาขานี้เท่านั้น) · times = เวลาที่ใบของโต๊ะนี้ออก · flood = ครั้งที่ลงมือพิมพ์ทั้งสาขาใน 1 นาที
+function callDecision(row, tbl, now, times, flood) {
+  if (callStale(row, now)) return { status: "expired" };
+  // รหัส QR ต้องตรงโต๊ะ และต้องมีจริง (โต๊ะที่ยังไม่เคยพิมพ์ QR มีรหัสว่าง — ว่างเทียบว่างห้ามผ่าน)
+  if (!row.token || !tbl || tbl.active === false || String(tbl.qr_token || "") !== String(row.token)) return { status: "rejected" };
+  const recent = (Array.isArray(times) ? times : []).filter(t => now - t < CALL_REPEAT_WIN_MS);
+  if (recent.some(t => now - t < CALL_DEDUPE_MS)) return { status: "merged" };
+  if (flood >= CALL_FLOOD_MAX) return { status: "failed", note: "flood" };
+  return { status: "print", n: recent.length + 1 };
+}
+// ใบสำรอง (ตัวอักษร TIS-620) เมื่อเรนเดอร์รูปไม่ได้ — ภาษาไทยขนาดปกติเท่านั้น (ตัวใหญ่พิเศษทำสระ/วรรณยุกต์ลอยผิดที่)
+// เลขโต๊ะขยายได้เฉพาะเมื่อเป็นอักษรอังกฤษ/ตัวเลขล้วน (A12) · ชื่อโต๊ะภาษาไทย (กลับบ้าน2) ใช้ตัวหนาขนาดปกติ
+function buildCallESC(tableNum, n) {
+  const bufs = []; const b = (...x) => bufs.push(Buffer.from(x)); const t = s => bufs.push(thaiBytes(s));
+  const tn = String(tableNum == null || tableNum === "" ? "-" : tableNum);
+  b(0x1b, 0x40); b(...SET_THAI); b(0x1b, 0x61, 0x01);
+  b(0x1d, 0x21, 0x00); b(0x1b, 0x45, 0x01); b(0x1d, 0x42, 0x01); t("    เรียกพนักงาน    \n"); b(0x1d, 0x42, 0x00); b(0x1b, 0x45, 0x00);
+  t("\n");
+  b(0x1b, 0x45, 0x01); t("โต๊ะ\n"); b(0x1b, 0x45, 0x00);
+  if (/^[\x20-\x7e]+$/.test(tn)) { b(0x1d, 0x21, tn.length <= 10 ? 0x22 : 0x11); b(0x1b, 0x45, 0x01); t(tn + "\n"); b(0x1b, 0x45, 0x00); b(0x1d, 0x21, 0x00); }
+  else { b(0x1b, 0x45, 0x01); t(tn + "\n"); b(0x1b, 0x45, 0x00); }
+  b(0x1b, 0x45, 0x01); t("ด่วน - ลูกค้ากดเรียกจากมือถือ\n"); if (+n > 1) t(`เรียกซ้ำ ครั้งที่ ${+n}\n`); b(0x1b, 0x45, 0x00);
+  t(new Date().toLocaleString("th-TH") + "\n");
+  b(0x1b, 0x64, 0x05); b(0x1d, 0x56, 0x41, 0x00);
+  return Buffer.concat(bufs);
+}
+// ใบเรียกที่ไม่ออก → แผง "พิมพ์ไม่สำเร็จ" ที่จอขาย หนึ่งรายการต่อการเรียก (บอกทุกเครื่องที่ไม่ออก) · โต๊ะละครั้งต่อ 5 นาที
+// kind "pj" + items ว่าง = ตัวพิมพ์ไม่พิมพ์ซ้ำเอง (handleFailRetries ข้าม) · แอปขึ้นข้อความ "ไปดูที่โต๊ะ" + ปุ่ม "รับทราบ"
+async function noteCallFail(printers, row, table, bad, reason) {
+  const now = Date.now();
+  const key = reason === "no_rcpt" ? "no_rcpt" : String(row.table_id);
+  if (now - (callFailAt.get(key) || 0) < (reason === "no_rcpt" ? CALL_NORCPT_NOTE_MS : CALL_FAIL_NOTE_MS)) return;
+  callFailAt.set(key, now);
+  try {
+    const ok = await pushFail(printers, {
+      id: `call-${row.id}-${now}`, at: now, orderId: null, table: String(table), kind: "pj", what: "เรียกพนักงาน",
+      from: "", by: "", pid: bad.length ? bad[0].p.id : null,
+      names: [reason === "no_rcpt" ? "เรียกพนักงาน — ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ" : "เรียกพนักงาน"],
+      pnames: bad.map(x => x.p.name).filter(Boolean).slice(0, 4), n: 1, items: [], errs: bad.map(x => x.err).slice(0, 4),
+      ...(reason ? { note: reason } : {}),
+    });
+    if (ok) console.log(`  📌 ใบเรียกพนักงาน โต๊ะ ${table} ไม่ออก — ขึ้นในปุ่ม "พิมพ์ไม่สำเร็จ" แล้ว`);
+  } catch (e) { console.log("  ⚠️ บันทึกใบเรียกพนักงานที่ไม่ออกไม่สำเร็จ:", e.message); }
+}
+async function printOneCall(row, printers, rcps) {
+  const now = Date.now() + callSkew;
+  const fin = async (status, extra) => {
+    try { await patchCalls(`id=eq.${+row.id}`, { status, done_at: new Date(Date.now() + callSkew).toISOString(), ...(extra || {}) }); }
+    catch (e) { console.log(`  ⚠️ จดผลใบเรียกพนักงาน #${row.id} ไม่ได้:`, e.message); }
+  };
+  let tbl = null;
+  try { const r = await sb(`tables?id=eq.${+row.table_id}&branch_id=eq.${BRANCH}&select=id,table_number,qr_token,active&limit=1`); tbl = (r && r[0]) || null; }
+  catch (e) { console.log("  ⚠️ อ่านข้อมูลโต๊ะไม่ได้ — ใบเรียกพนักงานนี้ไม่พิมพ์:", e.message); return fin("failed", { note: "table_read" }); }
+  callFloodAt = callFloodAt.filter(t => now - t < 60 * 1000);
+  const d = callDecision(row, tbl, now, callTimes.get(+row.table_id), callFloodAt.length);
+  // ชื่อโต๊ะบนใบเอาจากฐาน (tables) ไม่ใช่ที่มือถือส่งมา
+  const table = tbl && tbl.table_number != null ? String(tbl.table_number) : String(row.table_id);
+  if (d.status !== "print") { console.log(`  🔕 เรียกพนักงาน #${row.id} โต๊ะ ${table} — ${d.status}${d.note ? " (" + d.note + ")" : ""} ไม่พิมพ์`); return fin(d.status, d.note ? { note: d.note } : null); }
+  if (!rcps.length) {
+    console.log(`  ❌ โต๊ะ ${table} เรียกพนักงาน — สาขานี้ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ (ไม่ออกเครื่องครัว)`);
+    await noteCallFail(printers, row, table, [], "no_rcpt");
+    return fin("failed", { note: "no_rcpt", printers: 0 });
+  }
+  callFloodAt.push(now);   // นับทุกครั้งที่ลงมือ (ออกหรือไม่ออก) — เครื่องดับแล้วลูกค้ากดรัวก็ยังติดเพดาน
+  // เรนเดอร์ครั้งเดียว ส่งทุกเครื่องใบเสร็จ (เหมือนใบเสร็จ) — รูปภาพไทยคมชัดก่อน ไม่ได้ค่อยถอยเป็นตัวอักษร
+  const raster = await fetchSlipRaster([], table, { kind: "call", n: d.n, needKind: "call" });
+  const buf = raster || buildCallESC(table, d.n);
+  let okN = 0; const bad = [];
+  for (const p of rcps) {
+    try { await sendToPrinter(p.ip, p.port, buf); okN++; console.log(`  🔔 เรียกพนักงาน โต๊ะ ${table}${d.n > 1 ? " (ครั้งที่ " + d.n + ")" : ""} → ${p.name} (${p.ip}) [${raster ? "รูปภาพ" : "ตัวอักษร(สำรอง)"}]`); }
+    catch (e) { bad.push({ p, err: errOf(p, e) }); console.log(`  ❌ ใบเรียกพนักงาน โต๊ะ ${table} → ${p.name} (${p.ip}): ${e.message}`); }
+  }
+  // นับ "เพิ่งเรียก" เฉพาะเมื่อออกจริง — ไม่ออกเลย ลูกค้ากดใหม่ได้ทันทีเมื่อเครื่องกลับมา
+  if (okN > 0) callTimes.set(+row.table_id, [...(callTimes.get(+row.table_id) || []).filter(t => now - t < CALL_REPEAT_WIN_MS), now]);
+  // ไม่ออกเลย = ขึ้นแผง · ออกบางเครื่อง = ไม่ขึ้น (ลูกค้าได้ "แจ้งแล้ว" ตามจริง เครื่องที่ดับขึ้นจุดแดงที่จอเครื่องพิมพ์อยู่แล้ว)
+  if (okN === 0) await noteCallFail(printers, row, table, bad);
+  return fin(okN > 0 ? "printed" : "failed", { printers: okN });
+}
+async function handleStaffCalls() {
+  if (callBusy || Date.now() < callsOffUntil) return;
+  callBusy = true;
+  try {
+    let rows;
+    try { rows = await getNewCalls(); }
+    catch (e) {
+      // พักเฉพาะ "ไม่มีตารางนี้จริง" (PGRST205 / 42P01) — PGRST002 "...schema cache. Retrying." คือฐานกำลังฟื้น ห้ามพัก 10 นาที
+      const m = String((e && e.message) || e);
+      if (/PGRST205|42P01/.test(m) && /staff_calls/.test(m)) {
+        callsOffUntil = Date.now() + CALL_MISSING_BACKOFF_MS;
+        console.log("ℹ️  ยังไม่มีตาราง staff_calls (ปุ่มเรียกพนักงาน) — รัน sql/staff-calls.sql แล้วตัวพิมพ์จะเริ่มรับเองภายใน 10 นาที");
+      }
+      return;   // เน็ตสะดุดรอบเดียว — รอบหน้าอีก 2 วิ
+    }
+    if (!rows || !rows.length) return;
+    const nowS = Date.now() + callSkew;
+    // ค้างเกินอายุ (ตัวพิมพ์ดับไป) — ปิดทีเดียวทั้งก้อน ไม่พิมพ์ย้อนหลัง ไม่อ่านโต๊ะทีละแถว (ใบใหม่ไม่ต้องต่อคิวหลังใบเก่า)
+    const stale = rows.filter(r => callStale(r, nowS)), fresh = rows.filter(r => !callStale(r, nowS));
+    if (stale.length) {
+      try { await patchCalls(`id=in.(${stale.map(r => +r.id).join(",")})&status=eq.new`, { status: "expired", done_at: new Date(nowS).toISOString(), note: "agent " + AGENT_DEV }); console.log(`  🔕 ใบเรียกพนักงานค้างเกิน ${CALL_MAX_AGE_MS / 1000} วิ ${stale.length} ใบ — ไม่พิมพ์ย้อนหลัง`); }
+      catch (e) { console.log("  ⚠️ ปิดใบเรียกที่ค้างไม่ได้:", e.message); }
+    }
+    if (!fresh.length) return;
+    // จองก่อนพิมพ์: new → printing เฉพาะแถวที่ยังเป็น new — ตัวพิมพ์สองเครื่องในสาขาเดียวกันได้คนละแถว ไม่พิมพ์ซ้ำ
+    // หน้าลูกค้าที่หมดเวลารอก็ปิดแถวด้วยเงื่อนไขเดียวกัน (new → expired) ⟹ ใบที่ลูกค้าถูกบอกให้โบกมือแล้วจะไม่ออกตามมาทีหลัง
+    // ค้าง printing (ตัวพิมพ์ดับกลางทาง) = ไม่มีใครพิมพ์ซ้ำให้ (ไม่ลองใหม่เอง) มือถือลูกค้าหมดเวลารอแล้วบอกให้โบกมือ
+    let mine;
+    try { mine = await patchCalls(`id=in.(${fresh.map(r => +r.id).join(",")})&status=eq.new`, { status: "printing", note: "agent " + AGENT_DEV }, true); }
+    catch (e) { console.log("  ⚠️ จองใบเรียกพนักงานไม่ได้:", e.message); return; }
+    mine = (mine || []).slice().sort((a, b) => a.id - b.id);
+    if (!mine.length) return;
+    let printers = [];
+    try { printers = ((await getPrintersCached()) || []).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false); } catch {}
+    const rcps = printers.filter(p => p.ip && !isBluetooth(p) && isRcptPrinter(p));
+    for (const row of mine) await printOneCall(row, printers, rcps);
+  } finally { callBusy = false; }
+}
+
 async function handlePingRequests(printers) {
   let need = false;
   for (const p of printers) {
@@ -1012,8 +1182,10 @@ let updatePending = 0;   // เลขเวอร์ชันใหม่ที�
 let tickBusy = false;
 // รอบเร็วของลิ้นชัก — กันซ้อนรอบเดียวกับ tick หลัก ถ้ารอบก่อนยังไม่จบก็ข้าม
 let kickBusy = false;
+// รอบปุ่มเรียกพนักงาน (handleStaffCalls) — กำลังพิมพ์อยู่ห้ามรีสตาร์ทอัปเดต ไม่งั้นแถวค้าง printing ใบไม่ออก ลูกค้ารอเก้อ
+let callBusy = false;
 function exitIfIdle() {
-  if (!updatePending || tickBusy || kickBusy) return false;
+  if (!updatePending || tickBusy || kickBusy || callBusy) return false;
   saveState();
   console.log(`⬆️  รอบพิมพ์จบแล้ว — อัปเดตเป็น v${updatePending} + รีสตาร์ทอัตโนมัติ...`);
   process.exit(0);
@@ -1075,6 +1247,11 @@ const tickSafe = async () => {
     } catch { /* เน็ตสะดุดรอบเดียว — รอบหน้าอีก 0.8 วิ */ }
     finally { kickBusy = false; exitIfIdle(); }
   }, DRAWER_POLL_MS);
+  // ปุ่มเรียกพนักงานในหน้าลูกค้า — รอบของตัวเอง (ไม่รอรอบใบครัวที่อาจช้าเพราะเรนเดอร์หลายใบ) · มีตัวกันซ้อนรอบในตัว
+  setInterval(() => {
+    if (updatePending) { exitIfIdle(); return; }   // รออัปเดต — ไม่เริ่มรอบใหม่
+    handleStaffCalls().catch(() => {}).finally(() => exitIfIdle());
+  }, CALL_POLL_MS);
   // พิมพ์หน้าทดสอบให้เครื่องที่ "เพิ่งกดเพิ่มใช้งาน" อัตโนมัติ ทุก 30 วินาที
   setInterval(greetNewPrinters, 30 * 1000);
   // อุ่นตัวเรนเดอร์ใบครัวไว้ทุก 4 นาที — ถ้าปล่อยเย็น ใบแรกหลังร้านเงียบจะช้าขึ้นหลายวินาที

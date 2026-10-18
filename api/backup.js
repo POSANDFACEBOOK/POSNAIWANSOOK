@@ -56,7 +56,10 @@ const TABLES = [
 ].map((t) => (typeof t === "string" ? { name: t, pk: "id" } : { name: t.name, pk: t.pk || "id" }));
 
 // Postgres system/internal tables that legitimately live in `public` but are not app data.
-const IGNORE_DRIFT = /^(pg_|_|spatial_ref_sys$|geometry_columns$|geography_columns$|branch7_backup$|purchase_orders_branch7_backup$)/;
+// staff_calls = คิวปุ่ม "เรียกพนักงาน" ของหน้าลูกค้า (sql/staff-calls.sql) แถวหมดความหมายใน 90 วินาที — ไม่สำรองโดยเจตนา
+// (สำรองแล้วต้องเพิ่มในรายชื่อกู้คืน 4 ที่ + ให้เจ้าของรันฟังก์ชันกู้คืนใหม่ ไม่งั้นกดกู้คืนทั้งชุดแล้วพังที่ตารางนี้)
+// check-code ล็อกไว้: ตารางของระบบที่ข้ามได้มีแค่ตัวนี้ตัวเดียว
+const IGNORE_DRIFT = /^(pg_|_|spatial_ref_sys$|geometry_columns$|geography_columns$|branch7_backup$|purchase_orders_branch7_backup$|staff_calls$)/;
 
 function loadSA() {
   const raw = (SA_B64 || "").trim();
