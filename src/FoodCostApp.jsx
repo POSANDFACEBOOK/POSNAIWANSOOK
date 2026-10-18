@@ -1172,9 +1172,12 @@ const api = {
   // อ่านบิลสด → แก้เฉพาะบรรทัดนั้น → คิดยอดใหม่จากทุกบรรทัด → เขียนเฉพาะเมื่อยังไม่มีใครแก้ (ชน = อ่านใหม่แล้วลองอีก)
   // รอชำระ/ปิดแล้ว/ยกเลิก = ห้าม (ยอดบน QR ที่ลูกค้าถือจะไม่ตรง) · ลดต้องมีเหตุผล และจดลง void_log ให้ใบปิดกะเห็น
   // ต้องเหลือลูกค้าอย่างน้อย 1 คนเสมอ — ไม่มีลูกค้าแล้วให้ยกเลิกบิล
-  posSetPkgQty: async (orderId, key, newQty, {by, reason, table}={}) => {
+  // expect = จำนวนที่คนกดเห็นบนจอ · ในฐานไม่ตรง = อีกเครื่องเพิ่งแก้ (จอนี้ค้าง) → ไม่เขียน คืนบิลสดให้จอดู
+  // (ไม่เช็ค: จอค้าง 2 ในฐาน 3 กด + → ส่ง 3 = "ทำแล้ว" เงียบๆ ลูกค้าคนที่ 4 ไม่ถูกคิดเงิน · กด − → ลดทีเดียวหลายคน)
+  posSetPkgQty: async (orderId, key, newQty, {by, reason, table, expect}={}) => {
     const want=Math.floor(+newQty);
     if(!Number.isFinite(want)||want<0)throw new Error("จำนวนไม่ถูกต้อง");
+    const exp=expect==null?null:Math.floor(+expect);
     const colErr=(e)=>/42703|PGRST204|does not exist|schema cache/i.test(String((e&&e.message)||e));
     for(let attempt=0;attempt<8;attempt++){
       const r=await sb(`orders?id=eq.${+orderId}&limit=1`);
@@ -1188,13 +1191,19 @@ const api = {
       const at=items.findIndex(it=>isPkgLine(it)&&it.pkg&&String(it.pkg.key)===String(key));
       const line=at>=0?items[at]:null;
       const old=line?(+line.qty||0):0;
+      // เช็คทุกรอบที่อ่านใหม่ (รวมรอบที่ชนแล้วลองอีก) — ก่อนเช็ค "เท่าเดิม" ไม่งั้นจอค้างกด + แล้วเงียบ
+      if(exp!=null&&old!==exp){const err=new Error(`จำนวนเพิ่งถูกแก้จากอีกเครื่อง (ตอนนี้ ${old}) — ตรวจแล้วกดใหม่`);err.stale=true;err.row=cur;err.now=old;throw err;}
       if(want===old)return {row:cur,line,from:old,to:want,noop:true};
       let next;
       if(line)next=want>0?items.map((it,i)=>i===at?{...it,qty:want}:it):items.filter((_,i)=>i!==at);
       else{
-        // บรรทัดที่ตอนเปิดโต๊ะเป็น 0 (เช่น เด็ก/เตาเพิ่ม) — ราคาจากคลังของสาขา ณ ตอนนี้
-        const def=(await buffetPkgRead(cur.branch_id)).packages.find(p=>String(p.id)===String(pk.id));
-        const made=def?pkgLinesOf(def,{[key]:want},new Date().toISOString()):[];
+        // บรรทัดที่ยังไม่มีในบิล (ตอนเปิดเป็น 0 เช่น เด็ก/เตาเพิ่ม · ลดจนหมดแล้วเพิ่มกลับ)
+        // ราคา/ชื่อตามที่จดไว้ในบิลตอนเปิดโต๊ะ (pkg.snap) — ผู้จัดการแก้ราคาคลังกลางมื้อไม่กระทบโต๊ะที่เปิดอยู่
+        // บิลที่เปิดก่อนมีการจด (ไม่มี snap) = ราคาจากคลังของสาขา ณ ตอนนี้
+        let src=null;
+        if(Array.isArray(pk.snap)&&pk.snap.length)src={id:pk.id,name:pk.name,lines:pk.snap};
+        else{const def=(await buffetPkgRead(cur.branch_id)).packages.find(p=>String(p.id)===String(pk.id));if(def)src={...def,name:pk.name||def.name};}
+        const made=src?pkgLinesOf(src,{[key]:want},new Date().toISOString()):[];
         if(!made.length)throw new Error("แพ็คเกจนี้ไม่มีรายการนี้แล้ว — แจ้งผู้จัดการ");
         const last=items.reduce((m,it,i)=>isPkgLine(it)?i:m,-1);
         next=[...items.slice(0,last+1),made[0],...items.slice(last+1)];
@@ -19784,12 +19793,15 @@ const isPkgLine=it=>!!it&&it.kind==="pkg";
 const pkgLibOf=(s)=>normalizeBuffetPackages(s&&s.buffet_packages);
 const activePkgsOf=(s)=>pkgLibOf(s).filter(p=>p.active!==false);
 // แพ็คเกจ + จำนวน → บรรทัดในบิล (ราคา ณ ตอนนี้ · เฉพาะบรรทัดที่จำนวน ≥ 1)
+// pkg.snap = ราคาทุกบรรทัดของแพ็คเกจ ณ ตอนเปิดโต๊ะ (รวมบรรทัดที่เป็น 0) — เพิ่มเด็ก/เตาทีหลังคิดราคานี้ ไม่ใช่ราคาคลังที่ถูกแก้กลางมื้อ
 function pkgLinesOf(pkg,counts,at){
   if(!pkg||pkg.id==null)return [];
   const c=counts||{};const ts=at||new Date().toISOString();
-  return (Array.isArray(pkg.lines)?pkg.lines:[]).filter(l=>l&&l.key!=null).map(l=>({
+  const ls=(Array.isArray(pkg.lines)?pkg.lines:[]).filter(l=>l&&l.key!=null);
+  const snap=ls.map(l=>({key:l.key,label:l.label||"",price:round2(Math.max(0,+l.price||0)),guest:!!l.guest}));
+  return ls.map(l=>({
     line_uid:`pkg:${pkg.id}:${l.key}`,kind:"pkg",
-    pkg:{id:pkg.id,name:pkg.name||"",key:l.key,label:l.label||"",guest:!!l.guest},
+    pkg:{id:pkg.id,name:pkg.name||"",key:l.key,label:l.label||"",guest:!!l.guest,snap},
     menu_id:null,name:`${pkg.name||"แพ็คเกจ"} · ${l.label||""}`,
     price:round2(Math.max(0,+l.price||0)),qty:Math.max(0,Math.floor(+c[l.key]||0)),
     options:[],note:"",printer_id:null,category:PKG_CAT,sent_at:ts,
@@ -19801,6 +19813,8 @@ const pkgCountsOf=(items)=>{const o={};for(const it of (items||[]))if(isPkgLine(
 const guestCountOf=(items)=>(items||[]).reduce((s,it)=>s+(isPkgLine(it)&&it.pkg&&it.pkg.guest?(+it.qty||0):0),0);
 // แพ็คเกจของบิล (อ่านจากบรรทัดแพ็คเกจ) · ไม่มี = null
 const pkgOfBill=(items)=>{const l=(items||[]).find(isPkgLine);return l&&l.pkg?l.pkg:null;};
+// บรรทัดของแพ็คเกจที่บิลนี้ใช้ (หัวบิล −/+) = ที่จดไว้ตอนเปิดโต๊ะ (snap) · บิลที่ไม่ได้จด = คลังปัจจุบัน
+const pkgDefLinesOf=(bp,def)=>((bp&&Array.isArray(bp.snap)&&bp.snap.length)?bp.snap:((def&&Array.isArray(def.lines))?def.lines:[])).filter(l=>l&&l.key!=null);
 // "ผู้ใหญ่ 2 · เด็ก 1" · guestOnly = เฉพาะบรรทัดที่เป็นคน (การ์ดโต๊ะ)
 const pkgCountsText=(items,guestOnly)=>(items||[]).filter(it=>isPkgLine(it)&&it.pkg&&(!guestOnly||it.pkg.guest)).map(it=>`${it.pkg.label||it.name} ${+it.qty||0}`).join(" · ");
 // มีแต่บรรทัดแพ็คเกจ = เปิดโต๊ะแล้ว ยังไม่ได้สั่งอาหาร (ไม่ใช่ "สั่งอาหารแล้ว")
@@ -19848,7 +19862,24 @@ function pkgChangeSlipText({table,label,guest,from,to,reason}){
 }
 // พิมพ์ใบสั้นออกเครื่องพิมพ์ใบเสร็จ (rcpt=1) ทางเดียวกับใบเสร็จ/QR — ไม่มีเครื่อง = คืน none ให้ผู้เรียกขึ้นเตือนเอง
 // ช่องคำสั่งรูป (pj) มีช่องเดียวต่อเครื่อง: งานก่อนหน้ายังไม่ถูกหยิบ = รอครั้งเดียวสั้นๆ แล้วค่อยเขียน
+// ใบจากเครื่องนี้เข้าคิวทีละใบ — กด +/− ติดกันสองใบเขียนช่องเดียวกันพร้อมกัน = ใบหนึ่งหายเงียบ (ไม่ขึ้นพิมพ์ไม่สำเร็จ)
+// ตัวพิมพ์หยิบงานทุก 0.8 วิ ⟹ ใบถัดไปเว้นจากใบก่อนอย่างน้อย 1.6 วิ (ไม่พึ่งตัวเช็คช่องไม่ว่าง ซึ่งอ่านรายชื่อเครื่องไม่ได้ก็พลาด)
+let cashierSlipQ=Promise.resolve(),cashierSlipLastAt=0;
 async function printCashierSlip(lines,{branchId,printers=[],what,table}){
+  const prev=cashierSlipQ;let done=()=>{};
+  cashierSlipQ=new Promise(r=>{done=r;});
+  try{await prev;}catch{}
+  try{
+    const gap=1600-(Date.now()-cashierSlipLastAt);
+    if(gap>0)await new Promise(r=>setTimeout(r,gap));
+    const res=await sendCashierSlip(lines,{branchId,printers,what,table});
+    if(res&&res.at)cashierSlipLastAt=+res.at;
+    return res;
+  }finally{done();}
+}
+// รอใบในคิวของเครื่องนี้เขียนเสร็จ → เวลาที่เขียนใบล่าสุด (QR โต๊ะใช้ช่องเดียวกัน ต้องเว้นจังหวะจากเวลานี้)
+const cashierSlipIdle=()=>cashierSlipQ.then(()=>cashierSlipLastAt,()=>cashierSlipLastAt);
+async function sendCashierSlip(lines,{branchId,printers=[],what,table}){
   const load=async()=>{let prs=printers;try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}return getReceiptPrinters(prs).filter(p=>p.branch_id==null||+p.branch_id===+branchId);};
   const busy=(p)=>{try{const d=JSON.parse(p.description||"{}");return !!(d.pj&&Date.now()-(+d.pj.at||0)<4000);}catch{return false;}};
   let rcps=await load();
@@ -20844,11 +20875,13 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     if(pkgBusyRef.current||!existingOrder?.id||!billPkg)return;
     if(payWait){notifyDlg("โต๊ะนี้รอชำระเงินอยู่ (พิมพ์ QR จ่ายเงินแล้ว) — กด \"ยกเลิกรอชำระ\" ในหน้าเช็คบิลก่อน แล้วค่อยแก้จำนวนคน");return;}
     const cur=pkgLines.find(l=>l.pkg&&String(l.pkg.key)===String(key));
-    const def=((pkgScope&&pkgScope.def&&pkgScope.def.lines)||[]).find(l=>l&&String(l.key)===String(key));
+    const def=pkgDefLinesOf(billPkg,pkgScope&&pkgScope.def).find(l=>String(l.key)===String(key));
     const label=(cur&&cur.pkg.label)||(def&&def.label)||String(key);
     const guest=cur?!!cur.pkg.guest:!!(def&&def.guest);
     const from=cur?(+cur.qty||0):0,to=from+d;
     if(to<0)return;
+    // ลดคนสุดท้าย = ระบบไม่ยอมอยู่แล้ว — บอกก่อนให้กรอกเหตุผล (ฐานยังเช็คซ้ำอีกชั้น)
+    if(d<0&&guest&&guestCountOf(items)<=1){notifyDlg("ต้องมีลูกค้าอย่างน้อย 1 คน — ถ้าลูกค้าไม่อยู่แล้ว ให้ยกเลิกบิล");return;}
     let reason=null;
     if(d<0){
       reason=await reasonDlg({title:`ลด${label} — โต๊ะ ${table.table_number}`,
@@ -20859,21 +20892,23 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     pkgBusyRef.current=true;setPkgBusy(true);
     try{
       const who=currentUser?.username||currentUser?.name||null;
-      const r=await api.posSetPkgQty(existingOrder.id,key,to,{by:who,reason,table:table.table_number});
+      // expect:from = จำนวนที่คนกดเห็น — อีกเครื่องเพิ่งแก้ (จอนี้ค้าง) ฐานไม่เขียน คืนบิลสดมาให้ดู
+      const r=await api.posSetPkgQty(existingOrder.id,key,to,{by:who,reason,table:table.table_number,expect:from});
       adoptRow(r.row);
       if(!r.noop){
         const after=pkgCountsText(r.row&&r.row.items);
-        printCashierSlip(pkgSlipLines(to>from?(guest?"เพิ่มคน":"เพิ่ม"):(guest?"ลดคน":"ลด"),table.table_number,[
-          pkgChangeSlipText({table:table.table_number,label,guest,from,to,reason}),
+        printCashierSlip(pkgSlipLines(r.to>r.from?(guest?"เพิ่มคน":"เพิ่ม"):(guest?"ลดคน":"ลด"),table.table_number,[
+          pkgChangeSlipText({table:table.table_number,label,guest,from:r.from,to:r.to,reason}),
           after?"ตอนนี้: "+after:"",pkgTimeOf()+" · "+(who||"-")]),
           {branchId:branch?.id,printers,what:"แก้จำนวนคน",table:table.table_number})
           .then(res=>{if(res&&res.none)posToast("⚠️ แก้จำนวนแล้ว แต่ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ใบแจ้งแคชเชียร์ไม่ได้พิมพ์","warn",7000);})
           .catch(()=>posToast("⚠️ แก้จำนวนแล้ว แต่ส่งใบแจ้งแคชเชียร์ไม่สำเร็จ","warn",6000));
-        posToast(`${label} ${from} → ${to} แล้ว`,"ok");
+        posToast(`${label} ${r.from} → ${r.to} แล้ว`,"ok");
       }
       onDone&&onDone();
     }catch(e){
-      notifyDlg("แก้จำนวนไม่สำเร็จ: "+friendlyError(e));
+      if(e&&e.stale){adoptRow(e.row);notifyDlg(`${label}ในบิลตอนนี้ ${e.now} (เพิ่งถูกแก้จากอีกเครื่อง หรือกดซ้ำตอนเน็ตช้า)\nครั้งนี้ยังไม่ได้แก้อะไร — ตรวจจำนวนแล้วค่อยกดใหม่`);}
+      else notifyDlg("แก้จำนวนไม่สำเร็จ: "+friendlyError(e));
       if(e&&e.locked){onDone&&onDone();}
     }
     pkgBusyRef.current=false;setPkgBusy(false);
@@ -21155,7 +21190,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       {billPkg&&(()=>{
         // หัวบิลแพ็คเกจ — อยู่กับที่ ไม่ปนกับรายการอาหาร (ไม่มีปัดยกเลิก/พิมพ์ซ้ำ/ติ๊กเสิร์ฟ)
         // แสดงทุกบรรทัดของแพ็คเกจ — บรรทัดที่ยังเป็น 0 (เด็ก/เตาเพิ่ม) กด + เพิ่มทีหลังได้
-        const defLines=((pkgScope&&pkgScope.def&&Array.isArray(pkgScope.def.lines))?pkgScope.def.lines:[]).filter(l=>l&&l.key!=null);
+        // บรรทัดที่เป็น 0 แสดงราคาตามที่จดไว้ตอนเปิดโต๊ะ (= ราคาที่จะคิดจริงตอนกด +) ไม่ใช่ราคาคลังที่แก้ทีหลัง
+        const defLines=pkgDefLinesOf(billPkg,pkgScope&&pkgScope.def);
+        const lastGuest=guestCountOf(items)<=1;   // เหลือลูกค้าคนเดียว — ลดไม่ได้ (ไม่มีลูกค้า = ยกเลิกบิล)
         const keys=[...pkgLines.map(l=>String(l.pkg.key)),...defLines.map(l=>String(l.key)).filter(k=>!pkgLines.some(x=>String(x.pkg.key)===k))];
         const pkgSum=pkgLines.reduce((s,l)=>s+(+l.price||0)*(+l.qty||0),0);
         const sBtn={width:40,height:40,borderRadius:8,border:"1.5px solid #059669",background:C.white,color:"#065F46",fontSize:18,fontWeight:900,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",padding:0};
@@ -21168,9 +21205,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
             const l=pkgLines.find(x=>String(x.pkg.key)===k),d=defLines.find(x=>String(x.key)===k);
             const qty=l?(+l.qty||0):0,price=l?(+l.price||0):(+(d&&d.price)||0),label=(l&&l.pkg.label)||(d&&d.label)||k;
             const off=pkgBusy||!existingOrder?.id;
+            const noDown=off||qty<=0||(!!l.pkg.guest&&lastGuest);
             return <div key={k} style={{display:"flex",alignItems:"center",gap:6,padding:"2px 0"}}>
               <div style={{flex:1,minWidth:0,fontSize:13,fontWeight:700,color:C.ink2,overflowWrap:"anywhere"}}>{label} <span style={{color:C.ink4,fontWeight:600,fontSize:12}}>฿{price}</span></div>
-              <button onClick={()=>chPkg(k,-1)} disabled={off||qty<=0} aria-label={"ลด "+label} style={{...sBtn,opacity:(off||qty<=0)?.4:1}}>−</button>
+              <button onClick={()=>chPkg(k,-1)} disabled={noDown} aria-label={"ลด "+label} style={{...sBtn,opacity:noDown?.4:1}}>−</button>
               <span style={{minWidth:26,textAlign:"center",fontSize:15,fontWeight:900,color:C.ink}}>{qty}</span>
               <button onClick={()=>chPkg(k,1)} disabled={off} aria-label={"เพิ่ม "+label} style={{...sBtn,opacity:off?.4:1}}>+</button>
             </div>;
@@ -21955,7 +21993,8 @@ function CustomerPage({branchId,tableId,token}){
           setPosCfg(s||null);}   // เก็บ VAT/service charge ไว้คิดยอดให้ตรงกับบิลจริง
         setGateError(null);
         // Only start polling order state AFTER the gate passes — don't leak existence of orders to bad-token visitors
-        loadMyOrder();
+        // รอบิลก่อนเปิดหน้า — โต๊ะบุฟเฟต์ยังไม่รู้แพ็คเกจ = เห็นเมนูตามสั่งแวบหนึ่ง (ของนอกแพ็คเกจกดใส่ตะกร้าได้ แล้วส่งไม่ผ่าน)
+        await loadMyOrder();
         pollId=setInterval(()=>{if(!document.hidden)loadMyOrder();},45000);
         // ดึงเมนูใหม่ระหว่างมื้อ — ของหมด/ราคาเปลี่ยนต้องถึงมือถือลูกค้า
         // ไม่งั้นลูกค้าสั่งของที่ครัวเพิ่งกด "วันนี้หมด" แล้วครัวได้ใบสั่งที่ทำไม่ได้
@@ -22150,6 +22189,8 @@ function CustomerPage({branchId,tableId,token}){
     if(back.length)setCart(p=>[...back,...p]);
     // ให้หน้าจอขึ้น "ของหมด" ทันที ไม่ต้องรอรอบดึงสถานะถัดไป
     setMenus(ms=>ms.map(m=>gone.has(+m.id)?{...m,availability:{...(m.availability||{}),[branchId]:soldOutMark()}}:m));
+    // โต๊ะบุฟเฟต์แสดงเมนูจากชุดของแพ็คเกจ (pkgMenus) ไม่ใช่ menus — ต้องติดป้ายหมดที่ชุดนั้นด้วย
+    setPkgMenus(ms=>Array.isArray(ms)?ms.map(m=>gone.has(+m.id)?{...m,availability:{...(m.availability||{}),[branchId]:soldOutMark()}}:m):ms);
     setSoldOutMsg((e&&e.unavailableNames)||[]);
   }
   // ไม่อยู่ในแพ็คเกจของโต๊ะ / รายการผิดรูป = ปฏิเสธถาวร (ส่งซ้ำก็ไม่ผ่าน) — ห้ามเข้าคิววนส่ง
@@ -24512,7 +24553,8 @@ function MenuPickList({menus,branchId,sel,onChange,readOnly=false,extra,initialC
     {!readOnly&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
       {cat&&<button onClick={()=>setMany(inCat,true)} style={{...sb2,borderColor:accent,color:accent}}>เลือกทั้งหมวด ({inCat.length})</button>}
       {cat&&<button onClick={()=>setMany(inCat,false)} style={sb2}>เอาออกทั้งหมวด</button>}
-      <button onClick={()=>setMany(list,true)} style={sb2}>เลือกทั้งหมด</button>
+      {/* เลือกเฉพาะที่เห็นบนจอ (หมวด/คำค้นที่กรองอยู่) — เดิมเลือกทุกเมนูของสาขา: กรองน้ำแล้วกดเลือก = ผูกตัวเลือกให้ทั้งร้าน */}
+      <button onClick={()=>setMany(shown,true)} style={sb2}>{(cat||String(q).trim())?`เลือกที่แสดง (${shown.length})`:"เลือกทั้งหมด"}</button>
       <button onClick={()=>onChange&&onChange({})} style={sb2}>ล้าง</button>
     </div>}
     <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight,overflowY:"auto"}}>
@@ -25852,8 +25894,18 @@ function POSOpenTableStep({table,branch,posSettings,currentUser,printers=[],onCa
       const okAgent=canOpenPackageTables(await freshPrinters(),branch.id);
       setAgentOld(!okAgent);
       if(!okAgent){notifyDlg(PKG_AGENT_OLD_MSG);busyRef.current=false;setBusy(false);return;}
+      // ราคาที่จดลงบิลต้องเป็นราคาล่าสุดในคลัง — จอนี้อาจเปิดค้างไว้ระหว่างที่ผู้จัดการแก้ราคา/ลบแพ็คเกจ
+      // อ่านสดก่อนเปิดทุกครั้ง · ถูกลบ = เปิดไม่ได้ · ราคา/รายการเปลี่ยน = แสดงของใหม่ให้ตรวจแล้วกดอีกครั้ง
+      const fresh=(await api.getBuffetPackages(branch.id)).packages.filter(p=>p&&p.active!==false);
+      const cur=fresh.find(p=>String(p.id)===String(pkg.id));
+      const sig=(p)=>JSON.stringify([p.name,(Array.isArray(p.lines)?p.lines:[]).map(l=>[l.key,l.label,+l.price||0,!!l.guest])]);
+      if(!cur||sig(cur)!==sig(pkg)){
+        setLib(fresh);if(!cur)setPick(null);
+        notifyDlg(cur?"ราคา/รายการของแพ็คเกจนี้เพิ่งถูกแก้ — ตรวจราคาใหม่แล้วกดเปิดโต๊ะอีกครั้ง":"แพ็คเกจนี้เพิ่งถูกลบ — เลือกแพ็คเกจอื่น");
+        busyRef.current=false;setBusy(false);return;
+      }
       const who=currentUser?.username||currentUser?.name||null;
-      const r=await api.posOpenTable({branch_id:branch.id,table_id:table.id,table_number:table.table_number,pkg,counts,opened_by:who});
+      const r=await api.posOpenTable({branch_id:branch.id,table_id:table.id,table_number:table.table_number,pkg:cur,counts,opened_by:who});
       if(r&&r.existing){posToast("โต๊ะ "+table.table_number+" มีบิลเปิดอยู่แล้ว — แสดงบิลเดิม (ไม่ได้เปิดซ้ำ)","warn",6000);onOpened(r.existing,{existing:true});return;}
       if(!r||!r.row)throw new Error("ไม่ได้รับบิลกลับมา — ลองใหม่อีกครั้ง");
       // ใบเปิดโต๊ะออกเครื่องพิมพ์ใบเสร็จ (แคชเชียร์) เท่านั้น — ไม่รอผล โต๊ะเปิดแล้วจริง ห้ามให้การพิมพ์ขวาง
@@ -25940,12 +25992,12 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   const[justOpened,setJustOpened]=useState(null);   // {id,at}
   const hasPkgs=activePkgsOf(posSettings).length>0;
   // ใบเปิดโต๊ะกับใบ QR ใช้ช่องคำสั่งรูปช่องเดียวกันของเครื่องแคชเชียร์ — กดพิมพ์ QR ทันทีหลังเปิดโต๊ะ
-  // ใบที่สองจะเขียนทับใบแรกก่อนตัวพิมพ์หยิบ ⟹ เว้นจังหวะให้ใบเปิดโต๊ะออกก่อน
+  // ใบที่สองจะเขียนทับใบแรกก่อนตัวพิมพ์หยิบ ⟹ รอใบในคิว (เปิดโต๊ะ/เพิ่ม-ลดคน) เขียนเสร็จจริง แล้วเว้นจากเวลาที่เขียน
+  // (เดิมนับจากตอนเปิดโต๊ะเสร็จ — แต่ใบเปิดโต๊ะอาจรอช่องว่างอีก 1.5 วิ ก่อนเขียน แล้วไปชนกับ QR พอดี)
   const printSelQR=()=>{
     const t=selTable;if(!t)return;
-    const wait=(justOpened&&justOpened.id===t.id)?Math.max(0,2500-(Date.now()-(+justOpened.at||0))):0;
     setQrPeekErr(false);setQrPeek({table:t,url:null});
-    setTimeout(()=>printTableQR(t,currentBranch,printers,()=>loadAll({silent:true}),(u)=>setQrPeek(p=>p?{...p,url:u}:p)),wait);
+    cashierSlipIdle().then(lastAt=>setTimeout(()=>printTableQR(t,currentBranch,printers,()=>loadAll({silent:true}),(u)=>setQrPeek(p=>p?{...p,url:u}:p)),Math.max(0,2500-(Date.now()-(+lastAt||0)))));
   };
   const[showPrinters,setShowPrinters]=useState(false);
   const[showReceipt,setShowReceipt]=useState(false);
@@ -26165,7 +26217,10 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
       onCancel={()=>setOpenStep(null)}
       onAlaCarte={()=>{const t=openStep;setOpenStep(null);setSelTable(t);setSelOrder(null);}}
       onOpened={(row,info)=>{const t=openStep;setOpenStep(null);setSelOrder(row||null);setSelTable(t);
-        setJustOpened(info&&info.existing?null:{id:t.id,at:(info&&info.slipAt)||Date.now()});loadAll({silent:true});}}/>}
+        setJustOpened(info&&info.existing?null:{id:t.id,at:(info&&info.slipAt)||Date.now()});loadAll({silent:true});
+        // ขั้นเปิดโต๊ะอ่านคลังสด แต่จอโต๊ะหาเมนูจากตั้งค่าที่โหลดไว้ (ทุก 60 วิ) — แพ็คเกจที่เพิ่งสร้างยังไม่อยู่ในนั้น
+        // = ป้ายแดง "หาแพ็คเกจไม่เจอ" + กริดว่าง ⟹ อ่านตั้งค่าใหม่ครั้งเดียวเฉพาะตอนนั้น
+        {const sc=row&&pkgMenuScopeOf(row.items,pkgLibOf(posSettings));if(sc&&sc.missing&&reloadPosSettings)reloadPosSettings();}}}/>}
     {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);setJustOpened(null);loadAll({silent:true});}} wide noScroll>
       {justOpened&&justOpened.id===selTable.id&&<div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",padding:"9px 12px",marginBottom:8,borderRadius:11,background:"#ECFDF5",border:"1.5px solid #059669",fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
         <span style={{flex:1,minWidth:160,fontSize:13,fontWeight:800,color:"#065F46"}}>✅ เปิดโต๊ะแล้ว — พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร</span>

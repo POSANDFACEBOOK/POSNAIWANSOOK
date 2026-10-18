@@ -318,7 +318,7 @@ const PKG_SRC = (() => {
   // คลังอ่านผ่านตัวกรองของคลัง (normalizeBuffetPackages) ตัวเดียว — แนบไปด้วย
   return [grabConst(APP, "bpPrice"), grab(APP, "normalizeBuffetPackages"),
     one("const PKG_CAT="), one("const isPkgLine="), one("const pkgLibOf="), one("const activePkgsOf="),
-    one("const pkgCountsOf="), one("const guestCountOf="), one("const pkgOfBill="), one("const pkgCountsText="), one("const isPkgOnlyBill="),
+    one("const pkgCountsOf="), one("const guestCountOf="), one("const pkgOfBill="), one("const pkgDefLinesOf="), one("const pkgCountsText="), one("const isPkgOnlyBill="),
     grab(APP, "pkgLinesOf"), grab(APP, "pkgMenuScopeOf"), grab(APP, "receiptRowsOf"), grab(APP, "pkgGuestRowsOf")].join("\n");
 })();
 
@@ -7648,12 +7648,19 @@ section("แพ็คเกจบุฟเฟต์: เปิดโต๊ะแ
     const pts = writes(x.db.calls).filter((c) => c.method === "PATCH");
     ck("ชนกับเครื่องอื่น (ลูกค้าสั่งพร้อมกัน) = อ่านใหม่แล้วเขียนทับเฉพาะเมื่อเวลาตรงกับที่อ่านใหม่",
       [pts.length, /updated_at=eq\.t0/.test(pts[0] && pts[0].path), /updated_at=eq\.t-other0/.test(pts[1] && pts[1].path), !!(x.r && x.r.row)], [2, true, true, true]);
-    x = await run(BILL, "child", 2, { by: "ผึ้ง", table: "A1" }, { lib: [{ ...PKG, lines: PKG.lines.map((l) => l.key === "child" ? { ...l, price: 159 } : l) }] });
+    // ผู้จัดการแก้ราคาเด็กในคลังเป็น 159 + เปลี่ยนชื่อแพ็คเกจ หลังโต๊ะนี้เปิดไปแล้ว
+    const LIB2 = [{ ...PKG, name: "หมูกระทะ 349", lines: PKG.lines.map((l) => l.key === "child" ? { ...l, price: 159 } : l) }];
+    x = await run(BILL, "child", 2, { by: "ผึ้ง", table: "A1" }, { lib: LIB2 });
     const ch = x.patch && x.patch.body.items.find((i) => i.line_uid === "pkg:pk_a1_x:child");
-    ck("เพิ่มบรรทัดที่ตอนเปิดเป็น 0 (เด็ก) = ราคาจากคลังของสาขา ณ ตอนนี้ วางต่อท้ายบรรทัดแพ็คเกจ",
-      ch ? [ch.qty, ch.price, x.patch.body.items.map((i) => i.line_uid).indexOf(ch.line_uid), x.patch.body.subtotal] : String(x.err && x.err.message), [2, 159, 2, 1056]);
+    ck("เพิ่มบรรทัดที่ตอนเปิดเป็น 0 (เด็ก) = ราคา/ชื่อตามที่จดไว้ตอนเปิดโต๊ะ (149) ไม่ใช่ราคาคลังที่แก้ทีหลัง · วางต่อท้ายบรรทัดแพ็คเกจ",
+      ch ? [ch.qty, ch.price, ch.name, x.patch.body.items.map((i) => i.line_uid).indexOf(ch.line_uid), x.patch.body.subtotal] : String(x.err && x.err.message), [2, 149, "หมูกระทะ 299 · เด็ก", 2, 1036]);
+    const OLDBILL = { ...BILL, items: BILL.items.map((i) => i.kind === "pkg" ? { ...i, pkg: { ...i.pkg, snap: undefined } } : i) };
+    x = await run(OLDBILL, "child", 2, { by: "ผึ้ง", table: "A1" }, { lib: LIB2 });
+    const ch0 = x.patch && x.patch.body.items.find((i) => i.line_uid === "pkg:pk_a1_x:child");
+    ck("บิลที่เปิดก่อนมีการจดราคา (ไม่มี snap) = ราคาคลังปัจจุบัน แต่ชื่อแพ็คเกจตามบิล",
+      ch0 ? [ch0.price, ch0.name, x.patch.body.subtotal] : String(x.err && x.err.message), [159, "หมูกระทะ 299 · เด็ก", 1056]);
     ok_("จอโต๊ะรับบิลสดหลังแก้จำนวน (รายการ+ตัวกันชนพร้อมกัน) และลดต้องถามเหตุผล",
-      APP.includes("const r=await api.posSetPkgQty(existingOrder.id,key,to,{by:who,reason,table:table.table_number});\n      adoptRow(r.row);") &&
+      APP.includes("const r=await api.posSetPkgQty(existingOrder.id,key,to,{by:who,reason,table:table.table_number,expect:from});\n      adoptRow(r.row);") &&
       /if\(d<0\)\{\s*reason=await reasonDlg\(/.test(APP) && APP.includes("verRef.current=row.updated_at;\n    if(row.served_items"));
     ok_("ยกเลิกรายการแล้วจอรับบิลสดทั้งใบ (เดิมขยับแค่ตัวกันชน → เช็คบิลทับของที่ลูกค้าเพิ่งสั่ง)",
       APP.includes("adoptRow(row);adopted=true;") && APP.includes("if(!adopted)setItems(newLocal);") && !APP.includes("setItems(newLocal);verRef.current=fresh.updated_at;"));
@@ -7807,7 +7814,7 @@ section("แพ็คเกจบุฟเฟต์: เปิดโต๊ะแ
       ["เปิดโต๊ะ A1 · หมูกระทะ 299 · ผู้ใหญ่ 3 เด็ก 0 (+เตาเพิ่ม 1) · HH:MM · ผึ้ง", "ลดคน A1: เด็ก 1→0 (นับผิด)", "เพิ่ม A1: เตาเพิ่ม 0→1"]);
     const runSlip = async (printers) => {
       const ups = [];
-      const f = new Function("api", "escposSlipRaster", "cmdDesc", [grab(APP, "getPConn"), grab(APP, "isReceiptPrinter"), grab(APP, "getReceiptPrinters"), grabFn("async function printCashierSlip(lines,{branchId,printers=[],what,table}){"), "return printCashierSlip;"].join("\n"))(
+      const f = new Function("api", "escposSlipRaster", "cmdDesc", [grab(APP, "getPConn"), grab(APP, "isReceiptPrinter"), grab(APP, "getReceiptPrinters"), lineOf("let cashierSlipQ="), grabFn("async function printCashierSlip(lines,{branchId,printers=[],what,table}){"), grabFn("async function sendCashierSlip(lines,{branchId,printers=[],what,table}){"), "return printCashierSlip;"].join("\n"))(
         { getAllPrinters: async () => printers, updatePrinter: async (id, d) => { ups.push([id, JSON.parse(d.description)]); return [{}]; } },
         async () => "B64", (p, k, v) => JSON.stringify({ [k]: v }));
       const r = await f([{ t: "x" }], { branchId: 5, printers: [], what: "เปิดโต๊ะ", table: "A1" });
@@ -7934,13 +7941,15 @@ section("แพ็คเกจบุฟเฟต์: ต่อกันครบ
     const OTS = compSrc("POSOpenTableStep");
     K = {
       OTS, BLK, canOpen, slip,
+      // ตัวอ่านคลังสดตัวจริง (api.getBuffetPackages) — open() อ่านราคาล่าสุดก่อนสร้างบิล
+      read: (sb) => new Function("sb", [R2, PKG_SRC, READ, "return buffetPkgRead;"].join("\n"))(sb),
       lib: (sb) => new Function("sb", libDeps + "\n" + BLK + "\nreturn {normalizeBuffetPackages,buffetPkgSave,buffetPkgOp,buffetFormToLines};")(sb),
       H: new Function(R2 + "\n" + PKG_SRC + "\nreturn {pkgLibOf,activePkgsOf,pkgMenuScopeOf,pkgLinesOf};")(),
       apiOf: (name, sb) => new Function("sb", [R2, STRIP, lineOf("const BIZ_DAY_CUT_H="), lineOf("const bizDayBkk="), lineOf("const soldOutMark="),
         lineOf("const menuAvailAt="), lineOf("const menuSoldOutAt="), lineOf("const menuHiddenAt="), PKG_SRC, READ, "return (" + apiExpr(name) + ");"].join("\n"))(sb),
       // ใบแคชเชียร์ตัวจริง (เลือกเครื่องใบเสร็จ + เขียนคำสั่ง pj ด้วย cmdDesc จริง) — ตัวทำรูปแทนด้วยข้อความ
       cashier: (api) => new Function("api", [GPC, lineOf("function isReceiptPrinter(p){"), grab(APP, "getReceiptPrinters"), lineOf("const CMD_KEYS="), lineOf("const CMD_FRESH_MS="), grab(APP, "cmdDesc"),
-        "const escposSlipRaster=async(lines)=>JSON.stringify(lines);", grabFn("async function printCashierSlip(lines,{branchId,printers=[],what,table}){"), "return printCashierSlip;"].join("\n"))(api),
+        "const escposSlipRaster=async(lines)=>JSON.stringify(lines);", lineOf("let cashierSlipQ="), grabFn("async function printCashierSlip(lines,{branchId,printers=[],what,table}){"), grabFn("async function sendCashierSlip(lines,{branchId,printers=[],what,table}){"), "return printCashierSlip;"].join("\n"))(api),
       // open() ของจอเปิดโต๊ะ + freshPrinters ตัวจริง
       openOf: (deps) => {
         const names = Object.keys(deps);
@@ -7990,16 +7999,17 @@ section("แพ็คเกจบุฟเฟต์: ต่อกันครบ
     const pkg = shown[0];
     const counts = { adult: 3, child: 0, [XKEY]: 1 };
     const runOpen = async ({ fresh, props, throwFresh }) => {
-      const out = { notes: [], toasts: [], opened: [], agentOld: [], pj: [], cmds: [] };
+      const out = { notes: [], toasts: [], opened: [], agentOld: [], pj: [], cmds: [], libs: [], picks: [] };
       const fakeApi = {
         getAllPrinters: async () => { if (throwFresh) throw new Error("network"); return fresh; },
         posOpenTable: (a) => K.apiOf("posOpenTable", W.sb)(a),
+        getBuffetPackages: (bid) => K.read(W.sb)(bid),
         updatePrinter: async (id, b) => { const d = JSON.parse(b.description); out.cmds.push([id, Object.keys(d).filter((k) => ["tp", "rp", "qr", "pj", "dk"].includes(k))]); if (d.pj) out.pj.push([id, d.pj]); return [{}]; },
       };
       const busyRef = { current: false };
       const open = K.openOf({
         api: fakeApi, printers: props, branch: { id: 5, name: "กาญจนบุรี" }, table: { id: 9, table_number: "A1" }, pkg, counts, guests: 3,
-        currentUser: { username: "ผึ้ง" }, busyRef, setBusy: () => {}, setAgentOld: (v) => out.agentOld.push(v), notifyDlg: (m) => out.notes.push(String(m)),
+        currentUser: { username: "ผึ้ง" }, busyRef, setBusy: () => {}, setLib: (v) => out.libs.push(v), setPick: (v) => out.picks.push(v), setAgentOld: (v) => out.agentOld.push(v), notifyDlg: (m) => out.notes.push(String(m)),
         posToast: (m, t) => out.toasts.push([String(m), t || "ok"]), onOpened: (row) => out.opened.push(row), friendlyError: (e) => String((e && e.message) || e),
         printCashierSlip: K.cashier(fakeApi), canOpenPackageTables: K.canOpen, PKG_AGENT_OLD_MSG: K.oldMsg,
         pkgOpenSlipParts: K.slip.pkgOpenSlipParts, pkgOpenSlipText: K.slip.pkgOpenSlipText, pkgSlipLines: K.slip.pkgSlipLines,
@@ -8070,21 +8080,24 @@ section("แพ็คเกจบุฟเฟต์: ต่อกันครบ
         [ag, sent.length > 0 && !sent.some(([, n]) => n.some(pkgName)), orphans.some((a) => JSON.stringify(a).includes("หมูกระทะ 299 ·"))], [["เมนู212"], true, false]);
     }
 
-    // ── ⑧ แก้จำนวนคน: เพิ่มบรรทัดที่ตอนเปิดเป็น 0 อ่านราคาจากคลังผ่านตัวกรองของคลัง ──
+    // ── ⑧ แก้จำนวนคน: เพิ่มบรรทัดที่ตอนเปิดเป็น 0 = ราคาที่บิลจดไว้ตอนเปิดโต๊ะ (คลังแก้/เพี้ยนทีหลังไม่กระทบ) · จอค้างไม่เขียน ──
     if (bill) {
       const setQty = async (key, n, meta) => { const before = writesTo(W, /^orders\?/).length; try { await K.apiOf("posSetPkgQty", W.sb)(bill.id, key, n, meta); return "เขียน"; } catch (e) { return writesTo(W, /^orders\?/).length === before ? "ปฏิเสธ" : "เขียนทั้งที่ปฏิเสธ"; } };
       const good = W.raw[0];
-      W.raw = [{ ...good, lines: good.lines.map((l) => l.key === "child" ? { ...l, price: -1 } : l) }];   // ราคาเด็กในฐานเพี้ยน
-      const bad = await setQty("child", 1, { by: "ผึ้ง", table: "A1" });
-      const hadChild = bill.items.some((i) => i.line_uid === "pkg:pk_mgx_t1:child");
-      W.raw = [{ ...good, lines: good.lines.map((l) => l.key === "child" ? { ...l, price: 159 } : l) }];  // ผู้จัดการแก้ราคาเด็กเป็น 159
+      const childOf = () => bill.items.find((i) => i.line_uid === "pkg:pk_mgx_t1:child");
+      W.raw = [{ ...good, lines: good.lines.map((l) => l.key === "child" ? { ...l, price: -1 } : l) }];   // ราคาเด็กในฐานเพี้ยนหลังเปิดโต๊ะ
+      const ok0 = await setQty("child", 1, { by: "ผึ้ง", table: "A1" });
+      const p0 = childOf() && childOf().price;
+      const rm = await setQty("child", 0, { by: "ผึ้ง", table: "A1", reason: "นับผิด" });
+      W.raw = [{ ...good, lines: good.lines.map((l) => l.key === "child" ? { ...l, price: 159 } : l) }];  // ผู้จัดการแก้ราคาเด็กเป็น 159 กลางมื้อ
       const ok1 = await setQty("child", 1, { by: "ผึ้ง", table: "A1" });
-      const ch = bill.items.find((i) => i.line_uid === "pkg:pk_mgx_t1:child");
-      const dn = await setQty("adult", 2, { by: "ผึ้ง", table: "A1", reason: "นับคนผิด" });
+      const p1 = childOf() && childOf().price;
+      const st = await setQty("adult", 4, { by: "ผึ้ง", table: "A1", expect: 1 });   // จอค้าง: เห็น 1 · ในฐาน 3
+      const dn = await setQty("adult", 2, { by: "ผึ้ง", table: "A1", reason: "นับคนผิด", expect: 3 });
       const vl = (bill.void_log || []).slice(-1)[0];
-      ck("เพิ่มเด็กจาก 0: ราคาในคลังเพี้ยน = ปฏิเสธ (ไม่ใส่เด็กฟรี) · ราคาถูกต้อง = ราคาคลังปัจจุบัน · ลดผู้ใหญ่จดยกเลิก kind:pkg · ยอด = Σ",
-        [bad, hadChild, ok1, ch && ch.price, dn, vl && [vl.kind, vl.qty, vl.reason], bill.subtotal === sumOf(bill.items)],
-        ["ปฏิเสธ", false, "เขียน", 159, "เขียน", ["pkg", 1, "นับคนผิด"], true]);
+      ck("เพิ่มเด็กจาก 0 / ลดจนหมดแล้วเพิ่มกลับ = ราคาที่บิลจดไว้ตอนเปิด (149) แม้คลังเพี้ยน/ถูกแก้เป็น 159 · จอค้าง = ไม่เขียน · ลดผู้ใหญ่จดยกเลิก kind:pkg · ยอด = Σ",
+        [ok0, p0, rm, ok1, p1, st, dn, vl && [vl.kind, vl.qty, vl.reason], bill.subtotal === sumOf(bill.items)],
+        ["เขียน", 149, "เขียน", "เขียน", 149, "ปฏิเสธ", "เขียน", ["pkg", 1, "นับคนผิด"], true]);
       W.raw = [good];
     }
 
@@ -8101,6 +8114,283 @@ section("แพ็คเกจบุฟเฟต์: ต่อกันครบ
     ok_("จอขายส่งรายชื่อเครื่องพิมพ์ให้ขั้นเปิดโต๊ะ · ตัวพิมพ์เก่า = ป้ายแดง + ปุ่มเปิดโต๊ะกดไม่ได้ ('ไม่ใช้แพ็คเกจ' ยังกดได้)",
       /<POSOpenTableStep table=\{openStep\}[^>]*printers=\{printers\}/.test(APP) && K.OTS.includes("{agentOld&&<div role=\"alert\"") && K.OTS.includes("disabled={!pkg||guests<1||agentOld}")
       && /<button onClick=\{onAlaCarte\} disabled=\{busy\}/.test(K.OTS));
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// แพ็คเกจบุฟเฟต์: ผลตรวจทานรอบสอง — จอค้างแก้จำนวนคน · ราคาที่จดตอนเปิดโต๊ะ · คิวใบแคชเชียร์ · หน้าลูกค้า · จอเลือกเมนู
+// จอโต๊ะไม่ได้รับบิลสดระหว่างเปิดค้าง ⟹ "จำนวนใหม่" ที่คิดจากจอค้างห้ามเขียนทับของอีกเครื่อง (ลูกค้าหาย/คิดเงินขาด)
+// ทุกข้อทดลองใส่บั๊กเดิมกลับแล้วด่านแดงจริง
+// ══════════════════════════════════════════════════════════════════════════
+section("แพ็คเกจบุฟเฟต์: จอค้าง · ราคาที่จดไว้ · คิวใบแคชเชียร์ · จอเลือกเมนู");
+{
+  const L = APP.split("\n");
+  const lineOf = (p) => { const l = L.find((x) => x.startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; };
+  const grabFn = (sig, src = APP) => {
+    const st = src.indexOf(sig);
+    if (st < 0) throw new Error("ไม่พบ " + sig.slice(0, 50));
+    let d = 0;
+    for (let i = st + sig.length - 1; i < src.length; i++) {
+      if (src[i] === "{") d++;
+      else if (src[i] === "}") { d--; if (d === 0) return src.slice(st, i + 1); }
+    }
+    throw new Error("อ่านไม่จบ " + sig.slice(0, 50));
+  };
+  const apiExpr = (name) => {
+    const head = `\n  ${name}: `;
+    const st = APP.indexOf(head);
+    if (st < 0) throw new Error("ไม่พบ api." + name);
+    const s0 = st + head.length;
+    const ln = APP.slice(s0, APP.indexOf("\n", s0));
+    let d = 0;
+    for (let i = APP.indexOf("{", s0 + ln.lastIndexOf("=>")); i < APP.length; i++) {
+      if (APP[i] === "{") d++;
+      else if (APP[i] === "}") { d--; if (d === 0) return APP.slice(s0, i + 1); }
+    }
+    throw new Error("อ่าน api." + name + " ไม่จบ");
+  };
+  const compSrc = (name) => { const s = APP.indexOf(`function ${name}(`); if (s < 0) return ""; const b = APP.indexOf("){", s) + 1; let d = 0; for (let j = b; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(s, j + 1); } } return ""; };
+  const safe = async (f) => { try { return await f(); } catch (e) { return "พัง: " + ((e && e.message) || e); } };
+  const R2 = lineOf("const round2 = "), STRIP = lineOf("const stripNewFlags=");
+  const READ = lineOf("const bpMissingCol=") + "\nasync " + grab(APP, "buffetPkgRead");
+  const H = new Function(R2 + "\n" + PKG_SRC + "\nreturn {pkgLinesOf,pkgDefLinesOf,pkgOfBill,guestCountOf,pkgCountsText,isPkgLine};")();
+  const PKG = { id: "pk_r2", name: "หมูกระทะ 299", active: true, menu_ids: [212],
+    lines: [{ key: "adult", label: "ผู้ใหญ่", price: 299, guest: true }, { key: "child", label: "เด็ก", price: 149, guest: true }, { key: "x_st", label: "เตาเพิ่ม", price: 50, guest: false }] };
+  const sumOf = (its) => Math.round((its || []).reduce((s, i) => s + (+i.price || 0) * (+i.qty || 0), 0) * 100) / 100;
+  const billOf = (counts) => { const items = H.pkgLinesOf(PKG, counts, "T0"); const s = sumOf(items); return { id: 77, branch_id: 5, table_id: 9, table_number: "A1", status: "pending", updated_at: "v0", items, subtotal: s, total: s, discount: 0, void_log: [] }; };
+  // ฐานปลอม: บิลใบเดียว กันชนด้วย updated_at จริง (เขียนด้วยเวลาเก่า = ได้ [] กลับ เหมือน PostgREST)
+  const mkDB = (bill, lib) => {
+    let cur = JSON.parse(JSON.stringify(bill)), n = 0; const calls = [];
+    const sb = async (path, opt) => {
+      const method = (opt && opt.method) || "GET", body = opt && opt.body ? JSON.parse(opt.body) : null;
+      calls.push({ path, method, body });
+      if (/^pos_settings\?/.test(path)) return [{ buffet_packages: JSON.parse(JSON.stringify(lib || [PKG])) }];
+      if (/^orders\?/.test(path) && method === "GET") return [JSON.parse(JSON.stringify(cur))];
+      if (/^orders\?/.test(path) && method === "PATCH") {
+        const g = (path.match(/updated_at=eq\.([^&]+)/) || [])[1];
+        if (g == null || decodeURIComponent(g) !== String(cur.updated_at)) return [];
+        cur = { ...cur, ...body, updated_at: "v" + (++n) }; return [JSON.parse(JSON.stringify(cur))];
+      }
+      return [];
+    };
+    return { sb, calls, get cur() { return cur; } };
+  };
+  const setQtyOf = (db) => new Function("sb", [R2, STRIP, PKG_SRC, READ, "return (" + apiExpr("posSetPkgQty") + ");"].join("\n"))(db.sb);
+  const patches = (db) => db.calls.filter((c) => c.method === "PATCH");
+  const qtyOf = (row, key) => { const l = ((row && row.items) || []).find((i) => i && i.kind === "pkg" && i.pkg && i.pkg.key === key); return l ? l.qty : 0; };
+  const staleOf = (e) => ({ stale: !!(e && e.stale), now: e && e.now, row: e && qtyOf(e.row, "adult") });
+
+  // ── ① api: จำนวนที่คนกดเห็น (expect) ไม่ตรงกับฐาน = ไม่เขียน — เช็คทุกรอบที่อ่านใหม่ ──
+  {
+    const db = mkDB(billOf({ adult: 2 }));
+    const f = setQtyOf(db);
+    const go = (who) => f(77, "adult", 3, { by: who, table: "A1", expect: 2 }).then((r) => ({ ok: !r.noop, to: r.to }), staleOf);
+    const both = await safe(() => Promise.all([go("แคชเชียร์"), go("พนักงาน")]));
+    const res = Array.isArray(both) ? [both.find((x) => x.ok) || null, both.find((x) => !x.ok) || null] : both;
+    ck("สองเครื่องกด + จากจอที่เห็น 2 คนพร้อมกัน (ลูกค้ามา 2 คน): เขียนครั้งเดียว · อีกเครื่องถูกปฏิเสธพร้อมจำนวนจริง ไม่ใช่ 'ทำแล้ว' เงียบๆ",
+      [res, qtyOf(db.cur, "adult"), db.cur.updated_at, db.cur.subtotal === sumOf(db.cur.items)],
+      [[{ ok: true, to: 3 }, { stale: true, now: 3, row: 3 }], 3, "v1", true]);
+    const db2 = mkDB(billOf({ adult: 4 }));
+    let e2 = null; try { await setQtyOf(db2)(77, "adult", 1, { by: "แคชเชียร์", table: "A1", reason: "ลูกค้ากลับก่อน", expect: 2 }); } catch (e) { e2 = e; }
+    ck("จอเห็น 2 แต่อีกเครื่องเพิ่มเป็น 4 แล้ว กด − : ไม่เขียน ไม่จดยกเลิก (เดิมลดทีเดียว 4→1 = คิดเงินขาด 2 หัว)",
+      [staleOf(e2), patches(db2).length, qtyOf(db2.cur, "adult"), db2.cur.void_log.length], [{ stale: true, now: 4, row: 4 }, 0, 4, 0]);
+    const db3 = mkDB(billOf({ adult: 3 }));
+    let e3 = null; try { await setQtyOf(db3)(77, "adult", 3, { by: "แคชเชียร์", table: "A1", expect: 2 }); } catch (e) { e3 = e; }
+    ck("กด + ซ้ำหลังเน็ตหลุด (ครั้งแรกเข้าฐานแล้ว จอยังเห็น 2): ไม่เขียนซ้ำ และไม่ถือว่าสำเร็จเงียบๆ — คืนจำนวนจริงให้จอ",
+      [staleOf(e3), patches(db3).length], [{ stale: true, now: 3, row: 3 }, 0]);
+  }
+
+  // ── ② จอโต๊ะ: chPkg ตัวจริง ส่งจำนวนที่เห็น · จอค้าง = รับบิลสด + บอกจำนวนจริง ไม่พิมพ์ใบ · คนสุดท้ายไม่ถามเหตุผลก่อนแล้วค่อยปฏิเสธ ──
+  {
+    const runCh = async (screen, dbCounts, key, d) => {
+      const db = mkDB(billOf(dbCounts));
+      const items = billOf(screen).items, pkgLines = items.filter(H.isPkgLine);
+      const out = { notes: [], adopted: [], slips: [], asked: 0 };
+      const deps = {
+        pkgBusyRef: { current: false }, existingOrder: { id: 77 }, billPkg: pkgLines[0] ? pkgLines[0].pkg : null, payWait: false,
+        notifyDlg: (m) => out.notes.push(String(m)), pkgLines, pkgScope: { def: PKG, ids: new Set(), missing: false }, items,
+        reasonDlg: async () => { out.asked++; return "ลูกค้ากลับก่อน"; }, table: { table_number: "A1" }, setPkgBusy: () => {}, currentUser: { username: "ผึ้ง" },
+        api: { posSetPkgQty: setQtyOf(db) }, adoptRow: (r) => out.adopted.push(qtyOf(r, "adult")),
+        printCashierSlip: (lines) => { out.slips.push(lines.map((x) => x.t).join(" | ")); return Promise.resolve({ sent: 1 }); },
+        pkgSlipLines: (h, t, rows) => [{ t: h }, ...(rows || []).filter(Boolean).map((t) => ({ t }))],
+        pkgChangeSlipText: new Function(grabFn("function pkgChangeSlipText({table,label,guest,from,to,reason}){") + "\nreturn pkgChangeSlipText;")(),
+        pkgCountsText: H.pkgCountsText, pkgTimeOf: () => "HH:MM", branch: { id: 5 }, printers: [], posToast: () => {}, onDone: () => {},
+        friendlyError: (e) => String((e && e.message) || e), pkgDefLinesOf: H.pkgDefLinesOf, guestCountOf: H.guestCountOf,
+      };
+      const names = Object.keys(deps);
+      const ch = new Function(...names, "return (async " + grab(APP, "chPkg") + ");")(...names.map((n) => deps[n]));
+      await ch(key, d);
+      return [patches(db).length, qtyOf(db.cur, "adult"), out.adopted, out.notes.some((m) => m.includes("ตอนนี้ " + qtyOf(db.cur, "adult"))), out.slips.length, out.asked];
+    };
+    ck("จอเห็นผู้ใหญ่ 2 · อีกเครื่องเพิ่มเป็น 4 แล้ว · กด − ใส่เหตุผล: ไม่เขียน · จอรับบิลสด (4) · บอกจำนวนจริง · ไม่พิมพ์ใบลดคน",
+      await safe(() => runCh({ adult: 2 }, { adult: 4 }, "adult", -1)), [0, 4, [4], true, 0, 1]);
+    ck("จอเห็น 2 · ในฐาน 3 แล้ว · กด + (ลูกค้าคนที่ 4): ไม่เงียบ — ไม่เขียน รับบิลสด บอกให้ตรวจแล้วกดใหม่",
+      await safe(() => runCh({ adult: 2 }, { adult: 3 }, "adult", 1)), [0, 3, [3], true, 0, 0]);
+    const okRun = await safe(() => runCh({ adult: 2 }, { adult: 2 }, "adult", 1));
+    ck("จอตรงกับฐาน กด + : เขียน 2→3 และพิมพ์ใบเพิ่มคน 1 ใบ", okRun, [1, 3, [3], false, 1, 0]);
+    ck("เหลือลูกค้าคนเดียว กด − : บอกทันทีว่าต้องมีอย่างน้อย 1 คน ไม่ถามเหตุผลก่อน ไม่เขียน",
+      await safe(async () => { const r = await runCh({ adult: 1, x_st: 1 }, { adult: 1, x_st: 1 }, "adult", -1); return [r[0], r[5]]; }), [0, 0]);
+  }
+
+  // ── ③ ราคาที่จดไว้ตอนเปิดโต๊ะ (pkg.snap): หัวบิลแสดง · เพิ่มกลับคิดราคานี้ · บิลเก่าไม่มีที่จด = คลังปัจจุบัน ──
+  {
+    const LIBUP = [{ ...PKG, name: "หมูกระทะ 349", lines: PKG.lines.map((l) => l.key === "child" ? { ...l, price: 249 } : l) }];
+    const db = mkDB(billOf({ adult: 2, child: 1 }), LIBUP);
+    const f = setQtyOf(db);
+    const r = await safe(async () => {
+      await f(77, "child", 0, { by: "ผึ้ง", table: "A1", reason: "นับผิด", expect: 1 });
+      await f(77, "child", 1, { by: "ผึ้ง", table: "A1", expect: 0 });
+      const c = db.cur.items.find((i) => i.line_uid === "pkg:pk_r2:child");
+      return [c && c.price, c && c.name, db.cur.subtotal];
+    });
+    const bp = H.pkgOfBill(billOf({ adult: 2 }).items);
+    ck("ผู้จัดการขึ้นราคาเด็กเป็น 249 กลางมื้อ · ลดเด็กจนหมดแล้วเพิ่มกลับ = 149 ตามที่จดไว้ ยอดกลับเท่าเดิม (747) · หัวบิลแสดงราคาที่จดไว้",
+      [r, H.pkgDefLinesOf(bp, LIBUP[0]).map((l) => [l.key, l.price])], [[149, "หมูกระทะ 299 · เด็ก", 747], [["adult", 299], ["child", 149], ["x_st", 50]]]);
+    const old = billOf({ adult: 2 }); old.items = old.items.map((i) => ({ ...i, pkg: { ...i.pkg, snap: undefined } }));
+    const dbo = mkDB(old, [{ ...PKG, lines: PKG.lines.map((l) => l.key === "child" ? { ...l, price: -1 } : l) }]);
+    let eo = null; try { await setQtyOf(dbo)(77, "child", 1, { by: "ผึ้ง", table: "A1", expect: 0 }); } catch (e) { eo = e; }
+    ck("บิลที่เปิดก่อนมีการจด + ราคาในคลังเพี้ยน = ปฏิเสธ (ไม่ใส่เด็กฟรี) · หัวบิลใช้คลังปัจจุบัน",
+      [!!eo, patches(dbo).length, H.pkgDefLinesOf(H.pkgOfBill(old.items), PKG).length], [true, 0, 3]);
+  }
+
+  // ── ④ ขั้นเปิดโต๊ะ: อ่านแพ็คเกจสดก่อนสร้างบิล — ถูกลบ/ราคาเปลี่ยนระหว่างที่จอเปิดค้าง = ไม่เปิด ──
+  {
+    const OTS = compSrc("POSOpenTableStep");
+    const runOpen = async (fresh, readErr) => {
+      const out = { notes: [], opened: [], calls: [], libs: [], picks: [] };
+      const busyRef = { current: false };
+      const api = {
+        getAllPrinters: async () => [],
+        getBuffetPackages: async () => { if (readErr) throw new Error("network"); return { packages: fresh }; },
+        posOpenTable: async (a) => { out.calls.push(a.pkg); return { row: { id: 900, items: [] } }; },
+      };
+      const deps = {
+        api, printers: [], branch: { id: 5 }, table: { id: 9, table_number: "A1" }, pkg: PKG, counts: { adult: 2 }, guests: 2,
+        currentUser: { username: "ผึ้ง" }, busyRef, setBusy: () => {}, setAgentOld: () => {}, notifyDlg: (m) => out.notes.push(String(m)),
+        posToast: () => {}, onOpened: (row) => out.opened.push(row && row.id), friendlyError: (e) => String((e && e.message) || e),
+        printCashierSlip: async () => ({ sent: 1, at: 1 }), canOpenPackageTables: () => true, PKG_AGENT_OLD_MSG: "OLD",
+        pkgOpenSlipParts: () => ({ name: "", heads: "", time: "", by: "" }), pkgOpenSlipText: () => "", pkgSlipLines: () => [],
+        setLib: (v) => out.libs.push(v), setPick: (v) => out.picks.push(v),
+      };
+      const names = Object.keys(deps);
+      const open = new Function(...names, grabConst(OTS, "freshPrinters") + "\nasync " + grab(OTS, "open") + "\nreturn open;")(...names.map((n) => deps[n]));
+      await open();
+      return { ...out, released: busyRef.current === false };
+    };
+    const up = await safe(() => runOpen([{ ...PKG, lines: PKG.lines.map((l) => l.key === "adult" ? { ...l, price: 349 } : l) }]));
+    ck("ผู้จัดการขึ้นราคาผู้ใหญ่เป็น 349 ระหว่างที่จอเปิดโต๊ะค้าง: ไม่สร้างบิลราคาเก่า · แสดงราคาใหม่ให้ตรวจ · ปุ่มกลับมากดได้",
+      typeof up === "string" ? up : [up.calls.length, up.libs.length && up.libs[0][0].lines[0].price, up.notes.some((m) => m.includes("เพิ่งถูกแก้")), up.released], [0, 349, true, true]);
+    const del = await safe(() => runOpen([{ ...PKG, active: false }]));
+    ck("แพ็คเกจถูกลบระหว่างที่จอเปิดค้าง: ไม่เปิดโต๊ะ · เอาแพ็คเกจที่เลือกออก",
+      typeof del === "string" ? del : [del.calls.length, del.picks, del.notes.some((m) => m.includes("ถูกลบ")), del.released], [0, [null], true, true]);
+    const same = await safe(() => runOpen([{ ...PKG, updated_at: "fresh" }]));
+    ck("ราคาไม่เปลี่ยน: เปิดโต๊ะด้วยแพ็คเกจที่เพิ่งอ่านสด (ไม่ใช่ก้อนที่จอถือไว้)",
+      typeof same === "string" ? same : [same.calls.map((p) => p && p.updated_at), same.opened], [["fresh"], [900]]);
+    const err = await safe(() => runOpen([], true));
+    ck("อ่านแพ็คเกจสดไม่ได้ (เน็ตสะดุด) = ไม่เปิดด้วยราคาที่ค้าง · บอกให้ลองใหม่",
+      typeof err === "string" ? err : [err.calls.length, err.notes.some((m) => m.includes("เปิดโต๊ะไม่สำเร็จ")), err.released], [0, true, true]);
+  }
+
+  // ── ⑤ ใบแคชเชียร์: คิวทีละใบ เว้น ≥ 1.6 วิ (ช่อง pj มีช่องเดียว ตัวพิมพ์หยิบทุก 0.8 วิ) · QR โต๊ะรอคิวก่อน ──
+  {
+    const mkSlip = (readFails) => {
+      let clock = 1000000; const ups = [];
+      const PRS = [{ id: 1, branch_id: 5, ip: "10.0.0.1", description: '{"rcpt":1}' }];
+      const api = {
+        getAllPrinters: async () => { if (readFails) throw new Error("network"); return JSON.parse(JSON.stringify(PRS)); },
+        updatePrinter: async (id, d) => { ups.push({ id, at: clock, pj: JSON.parse(d.description).pj }); PRS.find((p) => p.id === id).description = d.description; return [{}]; },
+      };
+      const fakeDate = { now: () => clock };
+      const fakeTimeout = (fn, ms) => { clock += Math.max(0, +ms || 0); Promise.resolve().then(fn); return 0; };
+      const f = new Function("api", "escposSlipRaster", "cmdDesc", "Date", "setTimeout", [lineOf("function getPConn(p){"), lineOf("function isReceiptPrinter(p){"), grab(APP, "getReceiptPrinters"),
+        lineOf("let cashierSlipQ="), grabFn("async function printCashierSlip(lines,{branchId,printers=[],what,table}){"), grabFn("async function sendCashierSlip(lines,{branchId,printers=[],what,table}){"),
+        lineOf("const cashierSlipIdle="), "return {printCashierSlip,cashierSlipIdle};"].join("\n"))(
+        api, async () => "B64", (p, k, v) => JSON.stringify({ ...JSON.parse(p.description || "{}"), [k]: v }), fakeDate, fakeTimeout);
+      return { f, ups, PRS };
+    };
+    const run2 = async (readFails) => {
+      const S = mkSlip(readFails);
+      const o = { branchId: 5, printers: S.PRS.map((p) => ({ ...p })) };
+      const [r1, r2] = await Promise.all([S.f.printCashierSlip([{ t: "a" }], { ...o, what: "เปิดโต๊ะ", table: "A1" }), S.f.printCashierSlip([{ t: "b" }], { ...o, what: "แก้จำนวนคน", table: "A1" })]);
+      const idle = await S.f.cashierSlipIdle();
+      return [S.ups.map((u) => u.pj && u.pj.what), S.ups.length === 2 && S.ups[1].at - S.ups[0].at >= 1600, !!(r1 && r2 && r2.at === S.ups[1].pj.at), idle === (S.ups[1] && S.ups[1].pj.at)];
+    };
+    ck("ใบแคชเชียร์สองใบจากเครื่องเดียวติดกัน (เปิดโต๊ะ+เพิ่มคน): เขียนทีละใบตามลำดับ ห่าง ≥ 1.6 วิ · รอคิวว่างได้เวลาใบล่าสุด",
+      await safe(() => run2(false)), [["เปิดโต๊ะ", "แก้จำนวนคน"], true, true, true]);
+    ck("อ่านรายชื่อเครื่องสดไม่ได้ (ตัวเช็คช่องไม่ว่างมองไม่เห็นงานค้าง) ก็ยังเว้น ≥ 1.6 วิ",
+      await safe(() => run2(true)), [["เปิดโต๊ะ", "แก้จำนวนคน"], true, true, true]);
+    const SM = compSrc("POSSaleMode");
+    ok_("พิมพ์ QR โต๊ะ (แถบเขียวหลังเปิดโต๊ะ) รอใบในคิวเขียนเสร็จ แล้วเว้นจากเวลาที่เขียนจริง ไม่ใช่เวลาที่เปิดโต๊ะเสร็จ",
+      SM.includes("cashierSlipIdle().then(lastAt=>setTimeout(()=>printTableQR(") && SM.includes("Math.max(0,2500-(Date.now()-(+lastAt||0)))") && !SM.includes("justOpened.at"));
+    ok_("เปิดโต๊ะด้วยแพ็คเกจที่จอโต๊ะยังไม่รู้จัก = อ่านตั้งค่าใหม่ครั้งเดียว (ไม่ขึ้นป้ายแดงหาแพ็คเกจไม่เจอ/กริดว่าง 60 วิ)",
+      /onOpened=\{\(row,info\)=>\{[\s\S]{0,700}const sc=row&&pkgMenuScopeOf\(row\.items,pkgLibOf\(posSettings\)\);if\(sc&&sc\.missing&&reloadPosSettings\)reloadPosSettings\(\);/.test(SM));
+  }
+
+  // ── ⑥ หน้าลูกค้า: ของหมดติดป้ายในชุดเมนูแพ็คเกจด้วย · รอบิลก่อนเปิดหน้า (ไม่เห็นเมนูตามสั่งแวบหนึ่ง) ──
+  {
+    const st = { menus: [{ id: 7, availability: {} }], pkg: [{ id: 7, name: "เนื้อ ฿0", price: 0, availability: {} }, { id: 8, availability: {} }] };
+    const set = (k) => (u) => { st[k] = typeof u === "function" ? u(st[k]) : u; };
+    const hu = new Function("writeOutbox", "setOutbox", "setCart", "setMenus", "setPkgMenus", "setSoldOutMsg", "soldOutMark", "branchId", grab(APP, "handleUnavailable") + "\nreturn handleUnavailable;");
+    const r = await safe(() => {
+      const f = hu(() => {}, () => {}, () => {}, set("menus"), set("pkg"), () => {}, () => "SOLD", 5);
+      f({ unavailableIds: [7], unavailableNames: ["เนื้อ"] }, [{ menu_id: 7 }, { menu_id: 8 }]);
+      const a = st.pkg.map((m) => (m.availability || {})[5] || "-");
+      st.pkg = null; f({ unavailableIds: [7] }, []);
+      return [a, st.pkg, st.menus[0].availability[5]];
+    });
+    ck("ครัวกด 'วันนี้หมด' เมนู ฿0 ของแพ็คเกจ แล้วลูกค้าสั่งโดน: การ์ดในชุดแพ็คเกจขึ้นหมดทันที (ไม่รอ 60 วิ) · ยังไม่โหลดชุดแพ็คเกจ = ไม่แตะ",
+      r, [["SOLD", "-"], null, "SOLD"]);
+    const g0 = APP.indexOf("// Only start polling order state AFTER the gate passes");
+    const gate = g0 < 0 ? "" : APP.slice(g0, APP.indexOf("pollId=setInterval(", g0));
+    ok_("หน้าลูกค้า: รอบิลรอบแรกก่อนเลิกหมุน — โต๊ะบุฟเฟต์ไม่เห็นเมนูตามสั่ง (ของนอกแพ็คเกจ) แวบหนึ่งแล้วกดใส่ตะกร้าได้",
+      gate.includes("await loadMyOrder();") && !/\n\s*loadMyOrder\(\);\s*$/.test(gate));
+  }
+
+  // ── ⑦ จอเลือกเมนู (MenuPickList ตัวเดียวกันทั้ง ผูกหลายเมนู + แพ็คเกจ) · ขั้นเปิดโต๊ะเริ่มผู้ใหญ่ 1 ──
+  {
+    const MPL = compSrc("MenuPickList");
+    const r = await safe(() => {
+      const mpf = new Function(grabConst(APP, "menuCatOf") + "\n" + lineOf("const MPL_NOCAT=") + "\n" + grabConst(APP, "menuPickFilter") + "\nreturn menuPickFilter;")();
+      const list = [{ id: 1, name: "หมูหมัก", category: "หมู" }, { id: 2, name: "น้ำเปล่า", category: "น้ำ" }, { id: 3, name: "เบียร์ช้าง", category: "แอลกอฮอล์" }, { id: 4, name: "โค้ก", category: "น้ำ" }];
+      const i = MPL.search(/>\{[^}]*เลือกที่แสดง/);
+      if (i < 0) throw new Error("ไม่เจอปุ่มเลือกที่แสดง");
+      const b = MPL.lastIndexOf("<button onClick={", i);
+      const s0 = b + "<button onClick={".length;
+      let d = 1, e = s0; for (; e < MPL.length && d > 0; e++) { if (MPL[e] === "{") d++; else if (MPL[e] === "}") d--; }
+      const arrow = MPL.slice(s0, e - 1);
+      const setManyLine = (MPL.match(/const setMany=.*?;\};|const setMany=[^\n]*/) || [""])[0];
+      const pick = (cat, q) => {
+        let got = null;
+        const shown = mpf(list, cat, q), inCat = cat ? mpf(list, cat, "") : [];
+        new Function("list", "shown", "inCat", "sel", "onChange", setManyLine + "\nreturn (" + arrow + ");")(list, shown, inCat, {}, (n) => { got = n; })();
+        return Object.keys(got || {}).map(Number).sort();
+      };
+      return [pick("น้ำ", ""), pick("", "เบียร์"), pick("", "")];
+    });
+    ck("ปุ่มเลือกทั้งหมด/เลือกที่แสดง เลือกเฉพาะที่เห็น: กรองหมวดน้ำ = น้ำ 2 เมนู · ค้น 'เบียร์' = เบียร์เท่านั้น · ไม่กรอง = ทุกเมนู",
+      r, [[2, 4], [3], [1, 2, 3, 4]]);
+    ok_("ป้ายสถานะในรายการติ๊ก: วันนี้หมด · ซ่อน · ไม่มีหมวด · ฿0 · บรรทัดรอง (ป้ายแพ็คเกจอื่น/จำนวนกลุ่มตัวเลือก)",
+      MPL.includes('{av==="sold_out"&&tag("วันนี้หมด"') && MPL.includes('{av==="hidden"&&tag("ซ่อน"') && MPL.includes('{!menuCatOf(m)&&tag("ไม่มีหมวด"')
+      && MPL.includes('(+m.price||0)===0?tag("฿0"') && MPL.includes("const x=extra?extra(m):null;") && MPL.includes("{x&&<span"));
+    ok_("ดูอย่างเดียว (คนเข้าด้วย PIN): ช่องติ๊กกดไม่ได้ และไม่มีปุ่มเลือก/ล้างทีละหลายเมนู",
+      MPL.includes('<input type="checkbox" checked={v} disabled={readOnly}') && MPL.includes("{!readOnly&&<div"));
+    const BP = compSrc("POSBuffetPackages");
+    const ex = await safe(() => {
+      const m = BP.match(/extra=\{(m=>\{const o=\(inPkgs[\s\S]*?:null;\})\}/);
+      if (!m) throw new Error("ไม่เจอป้ายแพ็คเกจอื่น");
+      const inPkgs = new Map([[212, [{ id: "pk_a", name: "หมูกระทะ 299" }, { id: "pk_b", name: "ชาบู 399" }]], [300, [{ id: "pk_a", name: "หมูกระทะ 299" }]]]);
+      const f = new Function("inPkgs", "pk", "return (" + m[1] + ");")(inPkgs, { id: "pk_a" });
+      return [f({ id: 212 }), f({ id: 300 }), f({ id: 999 })];
+    });
+    ck("จอเลือกเมนูของแพ็คเกจ: บอกว่าเมนูอยู่ในแพ็คเกจอื่นไหน (ไม่นับแพ็คเกจที่กำลังแก้)", ex, ["อยู่ในแพ็คเกจอื่น: ชาบู 399", null, null]);
+    const OTS = compSrc("POSOpenTableStep");
+    const ch = await safe(() => {
+      let pick = null, counts = null;
+      const line = (OTS.match(/const choose=\(p\)=>\{[^\n]*\};/) || [""])[0];
+      new Function("setPick", "setCounts", line + "\nreturn choose;")((v) => { pick = v; }, (v) => { counts = v; })(PKG);
+      return [pick, counts];
+    });
+    ck("ขั้นเปิดโต๊ะ: เลือกแพ็คเกจแล้วเริ่มผู้ใหญ่ 1 · เด็ก/บรรทัดเสริม 0", ch, ["pk_r2", { adult: 1, child: 0, x_st: 0 }]);
   }
 }
 
