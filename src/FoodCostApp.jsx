@@ -697,6 +697,10 @@ const api = {
   getMenusPublic: (bid) => sbAll(`menus?select=id,name,category,price,description,image,availability,printer_id,visible_branches,options_by_branch&price=gt.0&order=id.asc${menuVisibleQS(bid)}`),
   // ระหว่างมื้อ สิ่งเดียวที่เปลี่ยนคือ "วันนี้หมด/ซ่อน" — เฉพาะเมนูของสาขานี้ (~2 KB)
   getMenuAvail: (bid) => sb(`menus?select=id,availability&price=gt.0${menuVisibleQS(bid)}`),
+  // โต๊ะที่เปิดด้วยแพ็คเกจบุฟเฟต์ — หน้าลูกค้าต้องเห็นเมนูในแพ็คเกจ "รวม ฿0" (ตัวบนกรองราคา > 0 ไว้)
+  // ขอเฉพาะ id ในแพ็คเกจ · คอลัมน์ชุดเดียวกับข้างบน (ไม่มีสูตร) · ยังกรองสาขาที่ฐานเหมือนเดิม · ไม่มี id = ไม่ถามฐาน
+  getMenusByIdsPublic: (bid, ids) => { const q=[...new Set((ids||[]).map(Number).filter(n=>Number.isFinite(n)&&n>0))]; return q.length?sbAll(`menus?select=id,name,category,price,description,image,availability,printer_id,visible_branches,options_by_branch&id=in.(${q.join(",")})&order=id.asc${menuVisibleQS(bid)}`):Promise.resolve([]); },
+  getMenuAvailByIds: (bid, ids) => { const q=[...new Set((ids||[]).map(Number).filter(n=>Number.isFinite(n)&&n>0))]; return q.length?sb(`menus?select=id,availability&id=in.(${q.join(",")})${menuVisibleQS(bid)}`):Promise.resolve([]); },
   addMenu: (d) => sb("menus", { method: "POST", body: JSON.stringify(d) }),
   updateMenu: (id, d) => sb(`menus?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteMenu: (id) => sb(`menus?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
@@ -1034,6 +1038,17 @@ const api = {
     // เวลาที่ส่งเข้าครัวของแต่ละรายการ — ติดตรงนี้เพราะทุกทาง (พนักงานกดส่ง + ลูกค้าสแกนสั่ง) ผ่านที่นี่
     // จอโต๊ะเอาไปโชว์เป็นเวลาเล็กๆ ท้ายรายการ ไล่เช็คได้ว่ารอบไหนส่งไปแล้ว จะได้ไม่ส่งซ้ำ (เจ้าของสั่ง 12 ก.ย. 69)
     { const _at=new Date().toISOString(); newItems=(newItems||[]).map(i=>(i&&i.sent_at)?i:{...i,sent_at:_at}); }
+    // ── บรรทัดที่ห้ามเข้าทางนี้ (ทุกทาง ทั้งพนักงานและลูกค้า) ─────────────────
+    // แพ็คเกจบุฟเฟต์ (หัวลูกค้า) เปลี่ยนได้ทาง posSetPkgQty ทางเดียว — ลดคนต้องมีเหตุผลและร่องรอย
+    // จำนวน ≤ 0 หรือราคาติดลบ = ยอดบิลถูกหักเงียบๆ ผ่านช่องทางที่ไม่มีใครเห็น
+    {
+      const bad=newItems.filter(i=>!i||isPkgLine(i)||!((+i.qty||0)>0)||(+i.price||0)<0);
+      if(bad.length){
+        const err=new Error("รายการนี้ส่งเข้าบิลไม่ได้: "+bad.map(i=>(i&&i.name)||"-").join(", "));
+        err.badLine=true;err.rejectUids=bad.map(i=>i&&i.line_uid).filter(Boolean);err.rejectNames=bad.map(i=>(i&&i.name)||"-");
+        throw err;
+      }
+    }
     // ── เมนูที่หมด/ซ่อน ห้ามหลุดเข้าบิล ────────────────────────────────────
     // หน้าจอกันกดไว้แล้วก็จริง แต่มือถือลูกค้าเห็นสถานะช้าได้ถึงนาที และของที่ใส่ตะกร้าไว้
     // ก่อนครัวกด "วันนี้หมด" ยังค้างอยู่ในตะกร้า กดส่งได้ ทั้งที่ครัวไม่มีของให้ทำแล้ว
@@ -1075,6 +1090,7 @@ const api = {
       return (incoming||[]).filter(i=>!(i&&i.line_uid&&seen.has(i.line_uid)));
     };
     let sawOpenBill=false;   // เคยเห็นบิลเปิดของโต๊ะนี้ในรอบนี้ไหม
+    let pkgAllowed;          // บิลแพ็คเกจ: เมนูที่ลูกค้าสั่งได้ (อ่านครั้งเดียว — แพ็คเกจเปลี่ยนหลังเปิดโต๊ะไม่ได้)
     for(let attempt=0; attempt<10; attempt++){
       const ex = await sb(`orders?table_id=eq.${table_id}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`);
       if(Array.isArray(ex)&&ex.length>0){
@@ -1083,6 +1099,20 @@ const api = {
         // กันที่นี่ด้วย ไม่ใช่แค่ซ่อนปุ่มบนจอ — หน้าที่ค้างอยู่ในมือลูกค้าอาจยังไม่รู้สถานะใหม่
         // (พนักงานเพิ่ม/ลบเองได้อยู่ ตรงนี้บล็อกเฉพาะทางที่ส่งธงมา = หน้าลูกค้าสแกน)
         if(blockIfAwaiting&&cur.status==="awaiting_payment"){const err=new Error("AWAITING_PAYMENT");err.awaitingPayment=true;throw err;}
+        // โต๊ะบุฟเฟต์: ลูกค้าสั่งได้เฉพาะเมนูในแพ็คเกจของโต๊ะ — หน้าที่เปิดค้าง/ตะกร้าที่เลือกไว้ก่อนเปิดโต๊ะ
+        // ยังมีเมนูนอกแพ็คเกจได้ (เช่นเมนู ฿0 ของแพ็คเกจที่แพงกว่า) · พนักงานไม่ถูกกันตรงนี้
+        if(ordered_by==="customer"&&pkgAllowed===undefined){
+          pkgAllowed=null;
+          if(pkgOfBill(cur.items)){const sc=pkgMenuScopeOf(cur.items,await readBranchPackages(branch_id));pkgAllowed=sc?sc.ids:null;}
+        }
+        if(pkgAllowed){
+          const out=newItems.filter(i=>!pkgAllowed.has(String(i&&i.menu_id)));
+          if(out.length){
+            const err=new Error("ไม่อยู่ในแพ็คเกจของโต๊ะนี้: "+out.map(i=>i.name).join(", "));
+            err.notInPackage=true;err.rejectUids=out.map(i=>i.line_uid).filter(Boolean);err.rejectNames=out.map(i=>i.name);
+            throw err;
+          }
+        }
         const fresh=dedupe(cur.items,newItems);
         if(fresh.length===0)return cur;                       // already recorded — nothing to do
         const merged=[...(cur.items||[]),...fresh]; const s=sum(merged);
@@ -1105,6 +1135,87 @@ const api = {
       }
     }
     throw new Error("มีผู้สั่งพร้อมกันจำนวนมาก — กรุณาลองใหม่อีกครั้ง");
+  },
+  // ── เปิดโต๊ะด้วยแพ็คเกจบุฟเฟต์ ──────────────────────────────────────────
+  // สร้างบิลใหม่เท่านั้น ห้ามต่อท้ายบิลที่มีอยู่: สองเครื่องกดเปิดโต๊ะเดียวกันพร้อมกัน
+  // ถ้าใช้ posAppendItems (ชนแล้วต่อท้าย) บิลจะได้หัวลูกค้าสองชุด = เก็บเงินซ้ำ
+  // มีบิลเปิดอยู่แล้ว / ชนตัวกัน 1 โต๊ะ 1 บิล = คืน {existing} ให้จอแสดงบิลเดิม
+  // ไม่ใช้แพ็คเกจ (pkg ว่าง) = ไม่สร้างอะไร — บิลเกิดตอนส่งรายการแรกเหมือนเดิม
+  posOpenTable: async ({branch_id, table_id, table_number, pkg, counts, opened_by}) => {
+    if(!pkg||pkg.id==null)return null;
+    const at=new Date().toISOString();
+    const lines=pkgLinesOf(pkg,counts,at);
+    if(!lines.some(l=>l.pkg.guest&&l.qty>=1))throw new Error("ต้องมีลูกค้าอย่างน้อย 1 คน");
+    const readOpen=async()=>{const r=await sb(`orders?table_id=eq.${+table_id}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`);return Array.isArray(r)&&r[0]?r[0]:null;};
+    const ex=await readOpen();
+    if(ex)return {existing:ex};
+    if((table_number==null||String(table_number).trim()==="")&&table_id!=null){
+      try{const r=await sb(`tables?id=eq.${+table_id}&select=table_number&limit=1`);if(Array.isArray(r)&&r[0]&&r[0].table_number)table_number=r[0].table_number;}catch{}
+    }
+    const s=round2(lines.reduce((t,l)=>t+(+l.price||0)*(+l.qty||0),0));
+    try{
+      const res=await sb("orders",{method:"POST",body:JSON.stringify({branch_id,table_id,table_number,items:lines,subtotal:s,discount:0,total:s,status:"pending",ordered_by:opened_by||null,updated_at:at})});
+      const row=Array.isArray(res)?res[0]:res;
+      if(row&&row.id!=null)return {row};
+      const back=await readOpen();   // ไม่ได้แถวกลับมา — อ่านให้แน่ว่าเปิดแล้วจริง
+      if(back)return {row:back};
+      throw new Error("เปิดโต๊ะไม่สำเร็จ — ลองใหม่อีกครั้ง");
+    }catch(e){
+      if(!/duplicate key/i.test(String((e&&e.message)||"")))throw e;
+      const ex2=await readOpen();
+      if(ex2)return {existing:ex2};
+      throw new Error("โต๊ะนี้เพิ่งถูกเปิดจากเครื่องอื่น — ปิดแล้วแตะโต๊ะนี้ใหม่");
+    }
+  },
+  // ── เปลี่ยนจำนวนคน/บรรทัดของแพ็คเกจในบิล ────────────────────────────────
+  // ตั้ง "จำนวนใหม่" ตรงๆ (ไม่ใช่ +1/−1) — กดซ้ำเพราะเน็ตสะดุดได้ผลเดิม ไม่บวกซ้ำ
+  // อ่านบิลสด → แก้เฉพาะบรรทัดนั้น → คิดยอดใหม่จากทุกบรรทัด → เขียนเฉพาะเมื่อยังไม่มีใครแก้ (ชน = อ่านใหม่แล้วลองอีก)
+  // รอชำระ/ปิดแล้ว/ยกเลิก = ห้าม (ยอดบน QR ที่ลูกค้าถือจะไม่ตรง) · ลดต้องมีเหตุผล และจดลง void_log ให้ใบปิดกะเห็น
+  // ต้องเหลือลูกค้าอย่างน้อย 1 คนเสมอ — ไม่มีลูกค้าแล้วให้ยกเลิกบิล
+  posSetPkgQty: async (orderId, key, newQty, {by, reason, table}={}) => {
+    const want=Math.floor(+newQty);
+    if(!Number.isFinite(want)||want<0)throw new Error("จำนวนไม่ถูกต้อง");
+    const colErr=(e)=>/42703|PGRST204|does not exist|schema cache/i.test(String((e&&e.message)||e));
+    for(let attempt=0;attempt<8;attempt++){
+      const r=await sb(`orders?id=eq.${+orderId}&limit=1`);
+      const cur=Array.isArray(r)?r[0]:null;
+      if(!cur)throw new Error("ไม่พบบิลนี้แล้ว");
+      if(cur.status==="awaiting_payment"){const err=new Error("รอชำระเงินอยู่ — ยกเลิกการรอชำระก่อน แล้วค่อยแก้จำนวนคน");err.locked=true;throw err;}
+      if(cur.status==="paid"||cur.status==="cancelled"){const err=new Error("บิลนี้ปิดไปแล้ว");err.locked=true;throw err;}
+      const items=stripNewFlags(cur.items);
+      const pk=pkgOfBill(items);
+      if(!pk)throw new Error("บิลนี้ไม่ได้เปิดด้วยแพ็คเกจ");
+      const at=items.findIndex(it=>isPkgLine(it)&&it.pkg&&String(it.pkg.key)===String(key));
+      const line=at>=0?items[at]:null;
+      const old=line?(+line.qty||0):0;
+      if(want===old)return {row:cur,line,from:old,to:want,noop:true};
+      let next;
+      if(line)next=want>0?items.map((it,i)=>i===at?{...it,qty:want}:it):items.filter((_,i)=>i!==at);
+      else{
+        // บรรทัดที่ตอนเปิดโต๊ะเป็น 0 (เช่น เด็ก/เตาเพิ่ม) — ราคาจากคลังของสาขา ณ ตอนนี้
+        const def=(await readBranchPackages(cur.branch_id)).find(p=>String(p.id)===String(pk.id));
+        const made=def?pkgLinesOf(def,{[key]:want},new Date().toISOString()):[];
+        if(!made.length)throw new Error("แพ็คเกจนี้ไม่มีรายการนี้แล้ว — แจ้งผู้จัดการ");
+        const last=items.reduce((m,it,i)=>isPkgLine(it)?i:m,-1);
+        next=[...items.slice(0,last+1),made[0],...items.slice(last+1)];
+      }
+      if(!next.some(it=>isPkgLine(it)&&it.pkg&&it.pkg.guest&&(+it.qty||0)>=1))throw new Error("ต้องมีลูกค้าอย่างน้อย 1 คน — ถ้าลูกค้าไม่อยู่แล้ว ให้ยกเลิกบิล");
+      const down=want<old;
+      if(down&&!String(reason||"").trim())throw new Error("ลดจำนวนต้องระบุเหตุผล");
+      const ref=line||next.find(it=>isPkgLine(it)&&it.pkg&&String(it.pkg.key)===String(key));
+      const s=round2(next.reduce((t,it)=>t+(+it.price||0)*(+it.qty||0),0));
+      const body={items:next,subtotal:s,total:s,updated_at:new Date().toISOString()};
+      if(down)body.void_log=[...(Array.isArray(cur.void_log)?cur.void_log:[]),
+        {kind:"pkg",name:ref.name,qty:old-want,price:+ref.price||0,at:body.updated_at,by:by||null,table:table||cur.table_number||null,reason:String(reason).trim()}];
+      const guard=cur.updated_at==null?"is.null":`eq.${encodeURIComponent(cur.updated_at)}`;
+      const st=cur.status==null?"is.null":`eq.${encodeURIComponent(cur.status)}`;
+      let res;
+      try{res=await sb(`orders?id=eq.${+orderId}&updated_at=${guard}&status=${st}`,{method:"PATCH",body:JSON.stringify(body)});}
+      catch(e){if(down&&colErr(e))throw new Error("ลดจำนวนไม่ได้ — ฐานข้อมูลยังไม่มีที่เก็บประวัติการยกเลิก (void_log) แจ้งผู้ดูแลระบบ");throw e;}
+      if(Array.isArray(res)&&res.length)return {row:res[0],line:ref,from:old,to:want};
+      await new Promise(r2=>setTimeout(r2,60*(attempt+1)+Math.floor(Math.random()*120)));
+    }
+    throw new Error("บิลโต๊ะนี้ถูกแก้พร้อมกันหลายเครื่อง — ลองอีกครั้ง");
   },
   // CRM
   getCRMCustomers: (bid) => sb(`crm_customers?order=id.desc&limit=5000${bid?`&branch_id=eq.${bid}`:""}`),
@@ -1203,12 +1314,20 @@ const api = {
   // หน้าลูกค้า (สาธารณะ แค่สแกน QR ก็เปิดได้) — เอาเฉพาะค่าที่หน้านั้นใช้: คิดยอด VAT/ค่าบริการ/ปัดเศษ
   // ตัวเลือกเสริม และลำดับหมวด/เมนู · ห้าม select=* : แถวเดียวกันมี sales_staff (ชื่อ+PIN พนักงาน)
   // คอลัมน์เสริมยังไม่มีในฐาน (42703) → ถอยไปชุดหลักที่มีมาแต่แรก ยอด VAT/ค่าบริการยังถูก หน้าไม่ล้ม
+  // ถอยเป็นขั้น: คลังแพ็คเกจบุฟเฟต์ (คอลัมน์ใหม่) ยังไม่มี → ชุดเดิมครบทุกตัว → ชุดหลัก
+  // ห้ามถอยรวดเดียวไปชุดหลัก: River (ยังไม่มีแพ็คเกจ) จะเสียการปัดเศษ/ตัวเลือกบังคับ/ลำดับเมนู ทั้งที่ไม่เกี่ยวเลย
   getPOSSettingsPublic: async (bid) => {
     const q = (cols) => sb(`pos_settings?branch_id=eq.${+bid}&select=${cols}&limit=1`);
-    try { return await q("branch_id,vat_enabled,vat_rate,vat_included,service_charge_enabled,service_charge_rate,rounding,option_library,category_order,menu_order"); }
+    const colErr = (e) => /42703|PGRST204|does not exist|schema cache/i.test(String((e && e.message) || e));
+    const FULL = "branch_id,vat_enabled,vat_rate,vat_included,service_charge_enabled,service_charge_rate,rounding,option_library,category_order,menu_order";
+    try { return await q(FULL + ",buffet_packages"); }
     catch (e) {
-      if (/42703|PGRST204|does not exist|schema cache/i.test(String((e && e.message) || e))) return q("branch_id,vat_enabled,vat_rate,vat_included,service_charge_enabled,service_charge_rate");
-      throw e;
+      if (!colErr(e)) throw e;
+      try { return await q(FULL); }
+      catch (e2) {
+        if (colErr(e2)) return q("branch_id,vat_enabled,vat_rate,vat_included,service_charge_enabled,service_charge_rate");
+        throw e2;
+      }
     }
   },
   // แก้เฉพาะลำดับหมวด — ห้าม upsert ทั้งแถว ไม่งั้นทับ VAT/ค่าบริการ/QR ที่เครื่องอื่นเพิ่งแก้
@@ -19092,7 +19211,7 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   const autoPrint=opts.preview
     ?`<script>(function(){var r=document.getElementById('rcpt');if(!r)return;function fit(){r.style.zoom=Math.max(1.5,Math.min(3.4,(window.innerWidth*0.94)/272));}fit();window.addEventListener('resize',fit);window.onbeforeprint=function(){r.style.zoom=1;};window.onafterprint=fit;})();<\/script>`
     :`<script>window.onload=()=>window.print();<\/script>`;
-  const rows=(order.items||[]).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${esc(i.name)}${i.options&&i.options.length?`<br/><span style="font-size:11px;color:#0D9488">+ ${esc(optionsText(i.options))}</span>`:""}${i.note?`<br/><span style="font-size:11px;color:#666">★${esc(i.note)}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?esc(i.item_discount_value)+"%":"฿"+esc(i.item_discount_value)}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
+  const rows=receiptRowsOf(order.items).map(i=>{const lineTotal=i.price*i.qty;const disc=i.item_discount||0;return `<tr><td style="padding:2px 4px;font-size:13px">${esc(i.name)}${i.options&&i.options.length?`<br/><span style="font-size:11px;color:#0D9488">+ ${esc(optionsText(i.options))}</span>`:""}${i.note?`<br/><span style="font-size:11px;color:#666">★${esc(i.note)}</span>`:""}${disc>0?`<br/><span style="font-size:10px;color:#dc2626">ลด ${i.item_discount_type==="percent"?esc(i.item_discount_value)+"%":"฿"+esc(i.item_discount_value)}</span>`:""}</td><td style="padding:2px 4px;text-align:center;font-size:13px">${i.qty}</td><td style="padding:2px 4px;text-align:right;font-size:13px">${disc>0?`<s style="color:#999;font-size:11px">฿${lineTotal.toFixed(0)}</s><br/>฿${(lineTotal-disc).toFixed(0)}`:`฿${lineTotal.toFixed(0)}`}</td></tr>`;}).join("");
   const payLabel=(Array.isArray(order.payments)&&order.payments.length>1)?esc(payHeadOf(order)):(PAY_LABEL[order.payment_method]||esc(order.payment_method||"-"));
   const splitLines=(Array.isArray(order.payments)&&order.payments.length>1)
     ?order.payments.map((p,i)=>`<div style="display:flex;justify-content:space-between;font-size:12px"><span>${i+1}. ${esc(payMethodLabel(p.method))}</span><span>฿${(+p.amount||0).toFixed(2)}</span></div>`).join("")
@@ -19395,7 +19514,9 @@ function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
   L.push({t:"โต๊ะ "+tableNum,size:42,bold:true,align:"center"});
   L.push({t:fmtDT()+(order.id!=null?(" · เลขที่ "+order.id):""),size:18,align:"center"});
   L.push({rule:true});
-  (order.items||[]).forEach(i=>{
+  // บิลแพ็คเกจบุฟเฟต์: อาหาร ฿0 รวมเป็นบรรทัดเดียว "อาหารในแพ็คเกจ N รายการ" (ยอดบนใบเท่าเดิม)
+  receiptRowsOf(order.items).forEach(i=>{
+    if(i._pkgFree){L.push({l:i.name,r:bahtR(0),size:26});return;}
     const lineTotal=i.price*i.qty;const disc=i.item_discount||0;
     L.push({l:`${i.qty}x ${i.name}`,r:bahtR(lineTotal-disc),size:26});
     if(i.options&&i.options.length)L.push({t:"   + "+optionsText(i.options),size:20});
@@ -19648,6 +19769,110 @@ async function printKitchen(items,tableNum,printers=[]){
 }
 
 // ══════════════════════════════════════════════════════
+// ── แพ็คเกจบุฟเฟต์ (ฝั่งขาย): เปิดโต๊ะ · บิล · หน้าลูกค้า · รายงาน ──
+// ══════════════════════════════════════════════════════
+// เงินของแพ็คเกจ = บรรทัดธรรมดาใน orders.items (kind:"pkg") ราคา×จำนวน เหมือนอาหาร
+// ⟹ ยอดรวม VAT ส่วนลด ใบเสร็จ ใบปิดกะ ท่อบัญชี คิดถูกเองโดยไม่ต้องแก้สูตรไหนเลย
+// บิลหนึ่งใบมีแพ็คเกจเดียว เลือกได้ตอนเปิดโต๊ะเท่านั้น · ห้ามเก็บบรรทัดจำนวน 0
+// บรรทัดแพ็คเกจไม่ใช่จาน — ครัวห้ามได้ (ตัวพิมพ์กรองด้วย isKitchenLine) · รายงานไม่นับเป็นจาน
+const PKG_CAT="แพ็คเกจบุฟเฟต์";
+const isPkgLine=it=>!!it&&it.kind==="pkg";
+// คลังแพ็คเกจของสาขา (pos_settings.buffet_packages) · ยังไม่ได้รัน SQL = ไม่มีคอลัมน์ = [] = ขายแบบเดิมทุกอย่าง
+const pkgLibOf=(s)=>Array.isArray(s&&s.buffet_packages)?s.buffet_packages.filter(p=>p&&p.id!=null):[];
+const activePkgsOf=(s)=>pkgLibOf(s).filter(p=>p.active!==false);
+// อ่านคลังสดจากฐาน (ราคาปัจจุบันตอนเปิดโต๊ะ/เพิ่มบรรทัด) · คอลัมน์ยังไม่มี = [] · เน็ตล่ม = โยนต่อ (ห้ามเดา)
+async function readBranchPackages(bid){
+  try{
+    const r=await sb(`pos_settings?branch_id=eq.${+bid}&select=buffet_packages&limit=1`);
+    return pkgLibOf(Array.isArray(r)?r[0]:null);
+  }catch(e){
+    if(/42703|PGRST204|does not exist|schema cache/i.test(String((e&&e.message)||e)))return [];
+    throw e;
+  }
+}
+// แพ็คเกจ + จำนวน → บรรทัดในบิล (ราคา ณ ตอนนี้ · เฉพาะบรรทัดที่จำนวน ≥ 1)
+function pkgLinesOf(pkg,counts,at){
+  if(!pkg||pkg.id==null)return [];
+  const c=counts||{};const ts=at||new Date().toISOString();
+  return (Array.isArray(pkg.lines)?pkg.lines:[]).filter(l=>l&&l.key!=null).map(l=>({
+    line_uid:`pkg:${pkg.id}:${l.key}`,kind:"pkg",
+    pkg:{id:pkg.id,name:pkg.name||"",key:l.key,label:l.label||"",guest:!!l.guest},
+    menu_id:null,name:`${pkg.name||"แพ็คเกจ"} · ${l.label||""}`,
+    price:round2(Math.max(0,+l.price||0)),qty:Math.max(0,Math.floor(+c[l.key]||0)),
+    options:[],note:"",printer_id:null,category:PKG_CAT,sent_at:ts,
+  })).filter(x=>x.qty>=1);
+}
+// จำนวนต่อบรรทัดของแพ็คเกจในบิล {adult:2,child:1}
+const pkgCountsOf=(items)=>{const o={};for(const it of (items||[]))if(isPkgLine(it)&&it.pkg&&it.pkg.key!=null)o[it.pkg.key]=(o[it.pkg.key]||0)+(+it.qty||0);return o;};
+// จำนวนลูกค้า = บรรทัดที่เป็นคน (ผู้ใหญ่/เด็ก) · เตาเพิ่ม ฯลฯ ไม่นับ
+const guestCountOf=(items)=>(items||[]).reduce((s,it)=>s+(isPkgLine(it)&&it.pkg&&it.pkg.guest?(+it.qty||0):0),0);
+// แพ็คเกจของบิล (อ่านจากบรรทัดแพ็คเกจ) · ไม่มี = null
+const pkgOfBill=(items)=>{const l=(items||[]).find(isPkgLine);return l&&l.pkg?l.pkg:null;};
+// "ผู้ใหญ่ 2 · เด็ก 1" · guestOnly = เฉพาะบรรทัดที่เป็นคน (การ์ดโต๊ะ)
+const pkgCountsText=(items,guestOnly)=>(items||[]).filter(it=>isPkgLine(it)&&it.pkg&&(!guestOnly||it.pkg.guest)).map(it=>`${it.pkg.label||it.name} ${+it.qty||0}`).join(" · ");
+// มีแต่บรรทัดแพ็คเกจ = เปิดโต๊ะแล้ว ยังไม่ได้สั่งอาหาร (ไม่ใช่ "สั่งอาหารแล้ว")
+const isPkgOnlyBill=(o)=>{const its=(o&&o.items)||[];return its.length>0&&its.every(isPkgLine);};
+// เมนูที่บิลแพ็คเกจสั่งได้ = เมนูในแพ็คเกจ (คลังของสาขา) · แพ็คเกจถูกลบ/ปิด = เฉพาะเมนูที่อยู่ในบิลแล้ว (missing)
+// บิลไม่มีแพ็คเกจ = null (สั่งตามเมนูปกติ) · ทุกจอยังกรองปุ่มติ๊กสาขา (menuVisibleAt) ซ้ำอีกชั้นเสมอ
+function pkgMenuScopeOf(items,lib){
+  const p=pkgOfBill(items);if(!p)return null;
+  const def=(lib||[]).find(x=>x&&String(x.id)===String(p.id))||null;
+  if(def&&def.active!==false)return {ids:new Set((Array.isArray(def.menu_ids)?def.menu_ids:[]).map(String)),missing:false,def};
+  return {ids:new Set((items||[]).filter(it=>!isPkgLine(it)&&it&&it.menu_id!=null).map(it=>String(it.menu_id))),missing:true,def};
+}
+// ใบเสร็จบิลแพ็คเกจ: อาหาร ฿0 รวมเป็นบรรทัดเดียว (บุฟเฟต์มื้อยาวๆ ใบจะยาวหลายสิบบรรทัด)
+// บรรทัดแพ็คเกจกับของที่มีราคาอยู่ครบ — ยอดบนใบบวกได้เท่าเดิม · บิลไม่มีแพ็คเกจ = เหมือนเดิมทุกบรรทัด
+function receiptRowsOf(items){
+  const its=Array.isArray(items)?items:[];
+  if(!its.some(isPkgLine))return its;
+  const free=its.filter(i=>!isPkgLine(i)&&!(+i.price||0));
+  if(!free.length)return its;
+  const n=free.reduce((s,i)=>s+(+i.qty||0),0);
+  return [...its.filter(isPkgLine),{name:`อาหารในแพ็คเกจ ${n} รายการ`,qty:n,price:0,_pkgFree:true},...its.filter(i=>!isPkgLine(i)&&(+i.price||0))];
+}
+// ลูกค้าบุฟเฟต์ของรายงาน [{label,qty}] — รวมทุกบิล แยกตามชื่อบรรทัดที่เป็นคน (ผู้ใหญ่/เด็ก)
+function pkgGuestRowsOf(orders){
+  const m=new Map();
+  for(const o of (orders||[]))for(const it of ((o&&o.items)||[]))if(isPkgLine(it)&&it.pkg&&it.pkg.guest){const k=it.pkg.label||it.name||"-";m.set(k,(m.get(k)||0)+(+it.qty||0));}
+  return [...m].map(([label,qty])=>({label,qty}));
+}
+// ข้อความใบเปิดโต๊ะ / ใบเพิ่ม-ลดคน (ออกเครื่องพิมพ์ใบเสร็จเท่านั้น — ครัวได้แต่อาหาร)
+const pkgTimeOf=(at)=>{try{return new Date(at||Date.now()).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Bangkok"});}catch{return "";}};
+// ส่วนประกอบใบเปิดโต๊ะ: คน (ผู้ใหญ่/เด็ก) แสดงเสมอแม้เป็น 0 · บรรทัดเสริม (เตาเพิ่ม ฯลฯ) แสดงเฉพาะที่มี
+function pkgOpenSlipParts({pkg,counts,at,by}){
+  const ls=(pkg&&Array.isArray(pkg.lines))?pkg.lines.filter(l=>l&&l.key!=null):[];
+  const c=counts||{};const q=(l)=>Math.max(0,Math.floor(+c[l.key]||0));
+  const g=ls.filter(l=>l.guest).map(l=>`${l.label} ${q(l)}`).join(" ");
+  const x=ls.filter(l=>!l.guest&&q(l)>0).map(l=>`${l.label} ${q(l)}`).join(" ");
+  return {name:(pkg&&pkg.name)||"แพ็คเกจ",heads:g+(x?` (+${x})`:""),time:pkgTimeOf(at),by:by||"-"};
+}
+function pkgOpenSlipText(a){const p=pkgOpenSlipParts(a||{});return `เปิดโต๊ะ ${(a&&a.table)||""} · ${p.name} · ${p.heads} · ${p.time} · ${p.by}`;}
+function pkgChangeSlipText({table,label,guest,from,to,reason}){
+  const up=(+to||0)>(+from||0);
+  return `${up?"เพิ่ม":"ลด"}${guest?"คน":""} ${table}: ${label} ${+from||0}→${+to||0}${reason?` (${reason})`:""}`;
+}
+// พิมพ์ใบสั้นออกเครื่องพิมพ์ใบเสร็จ (rcpt=1) ทางเดียวกับใบเสร็จ/QR — ไม่มีเครื่อง = คืน none ให้ผู้เรียกขึ้นเตือนเอง
+// ช่องคำสั่งรูป (pj) มีช่องเดียวต่อเครื่อง: งานก่อนหน้ายังไม่ถูกหยิบ = รอครั้งเดียวสั้นๆ แล้วค่อยเขียน
+async function printCashierSlip(lines,{branchId,printers=[],what,table}){
+  const load=async()=>{let prs=printers;try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}return getReceiptPrinters(prs).filter(p=>p.branch_id==null||+p.branch_id===+branchId);};
+  const busy=(p)=>{try{const d=JSON.parse(p.description||"{}");return !!(d.pj&&Date.now()-(+d.pj.at||0)<4000);}catch{return false;}};
+  let rcps=await load();
+  if(!rcps.length)return {sent:0,none:true};
+  if(rcps.some(busy)){await new Promise(r=>setTimeout(r,1500));const again=await load();if(again.length)rcps=again;}
+  const b64=await escposSlipRaster(lines,576);
+  const at=Date.now();
+  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64,what:what||"ใบสั้น",table:String(table??"")})})));
+  return {sent:rcps.length,none:false,at};
+}
+// หน้าตาใบสั้น: หัว · โต๊ะตัวใหญ่ · บรรทัดรายละเอียด
+const pkgSlipLines=(head,table,rows)=>[
+  {t:head,size:28,bold:true,align:"center",mb:2},
+  {t:"โต๊ะ "+table,size:44,bold:true,align:"center",mb:4},
+  {rule:true},
+  ...(rows||[]).filter(Boolean).map(t=>({t:stripEmoji(t),size:24,mb:2})),
+];
+
+// ══════════════════════════════════════════════════════
 // ── TABLE STATUS COLORS ───────────────────────────────
 // ══════════════════════════════════════════════════════
 // กฎสีเดียวกันทุกโซน อ่านออกจากระยะไกลบนแท็บเล็ตกลางร้าน:
@@ -19661,7 +19886,9 @@ async function printKitchen(items,tableNum,printers=[]){
 const TS={
   available:{bg:C.white,   border:"#111827",text:"#111827",label:"ว่าง"},
   qrsent:   {bg:"#D1FAE5", border:"#059669",text:"#065F46",label:"พิมพ์ QR แล้ว · รอสั่ง"},
-  occupied: {bg:"#DBEAFE", border:"#2563EB",text:"#1E3A8A",label:"สั่งอาหารแล้ว"},
+  // เปิดโต๊ะบุฟเฟต์แล้ว แต่ยังไม่มีอาหารในบิล = ลูกค้านั่งรอสั่ง (สีเขียวกลุ่มเดียวกับ "รอสั่ง")
+  opened:   {bg:"#D1FAE5", border:"#059669",text:"#065F46",label:"เปิดโต๊ะแล้ว · รอสั่ง"},
+  occupied:{bg:"#DBEAFE", border:"#2563EB",text:"#1E3A8A",label:"สั่งอาหารแล้ว"},
   bill:     {bg:"#DBEAFE", border:"#2563EB",text:"#1E3A8A",label:"เรียกบิล"},
   waitpay:  {bg:"#FFEDD5", border:"#EA580C",text:"#9A3412",label:"รอชำระเงิน"},
 };
@@ -19784,6 +20011,7 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
     if(!o)return t.qr_printed_at?"qrsent":"available";
     if(o.status==="awaiting_payment")return "waitpay";
     if(o.status==="bill_requested")return "bill";
+    if(isPkgOnlyBill(o))return "opened";   // บุฟเฟต์: เปิดโต๊ะแล้ว ยังไม่ได้สั่งอาหาร
     return "occupied";
   }
   const cols=Math.max(1,Math.floor((canvasW-PAD)/(TW+GAP)));
@@ -19901,7 +20129,8 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
           const p=displayPos(t,idx);
           const st=getStatus(t);const sv=TS[st]||TS.available;
           const o=getTableOrder(t.id);
-          const itemCount=(o?.items||[]).reduce((s,i)=>s+i.qty,0);
+          const itemCount=(o?.items||[]).reduce((s,i)=>s+(isPkgLine(i)?0:(+i.qty||0)),0);   // จานอาหารเท่านั้น (หัวลูกค้าไม่ใช่จาน)
+          const tPkg=o?pkgOfBill(o.items):null;
           const zoneColor=t.zone?zoneColorMap[t.zone]:null;
           const borderColor=sv.border;   // สถานะเท่านั้น — โซนบอกด้วยจุดมุมขวาบน
           const active=editId===t.id;
@@ -19915,7 +20144,10 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
               // บอกชื่อเครื่องที่ไม่ออกเลย (เจ้าของสั่ง 12 ก.ย. 69) — เดิมบอกแค่ว่าใบครัวไม่ออก ต้องไปไล่หาเองว่าเครื่องไหน
               return <div title={(pn?pn+" ไม่ออก: ":"ใบครัวไม่ออก: ")+(f.names||[]).join(", ")}
                 style={{fontSize:11,fontWeight:900,color:"#fff",background:C.red,borderRadius:6,padding:"1px 6px",marginTop:3,fontFamily:"'Sarabun',sans-serif",maxWidth:"96%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pn?`⚠️ ไม่ออก: ${pn}`:"⚠️ ใบครัวไม่ออก"}</div>;})()}
-              <div style={{fontSize:11.5,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div><div style={{fontSize:14,fontWeight:900,lineHeight:1.2,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
+              {tPkg?<>
+                <div style={{fontSize:11,fontWeight:800,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2,maxWidth:"94%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tPkg.name}</div>
+                <div style={{fontSize:11,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",maxWidth:"96%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pkgCountsText(o.items,true)}</div>
+              </>:<div style={{fontSize:11.5,fontWeight:700,color:sv.text,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>{itemCount} รายการ</div>}<div style={{fontSize:14,fontWeight:900,lineHeight:1.2,color:sv.text,fontFamily:"'Sarabun',sans-serif"}}>฿{(o?.total||0).toFixed(0)}</div></>}
             {active&&<>
               <button onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();setTableForm({id:t.id,table_number:t.table_number,label:t.label||"",seats:t.seats||4,shape:t.shape||"square",zone:t.zone||""});}} title="แก้ไขโต๊ะ" style={{position:"absolute",top:-13,left:-13,width:30,height:30,borderRadius:"50%",border:"2px solid #fff",background:C.blue,color:"#fff",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(0,0,0,.35)",zIndex:31}}>✏️</button>
               <button onPointerDown={e=>e.stopPropagation()} onClick={async e=>{e.stopPropagation();
@@ -20319,6 +20551,21 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // (compare-and-set) writes. Updated after every successful guarded write so multiple
   // ops in one session (e.g. void → checkout) don't false-conflict with themselves.
   const verRef=useRef(existingOrder?.updated_at||null);
+  // รายการที่ "ฐานมีแล้ว" ชุดล่าสุดที่จอนี้รู้ — ใช้ตัดสินว่าลดจำนวนได้แค่ไหน (ของที่ส่งครัวแล้วลดด้วย − ไม่ได้)
+  // เดิมอ่านจาก prop existingOrder ซึ่งเป็นภาพนิ่งตอนเปิดโต๊ะ — พอจอรับบิลสดมา (แก้จำนวนคน/ยกเลิกรายการ)
+  // ของที่ลูกค้าสแกนสั่งเข้ามาระหว่างนั้นจะถูกนับเป็น "ยังไม่ส่ง" แล้วกด − ทิ้งได้ = เก็บเงินขาด
+  const sentBaseRef=useRef(stripNewFlags(existingOrder&&existingOrder.items));
+  // รับบิลสดจากฐานเข้าจอ "พร้อมกัน" ทั้งรายการและตัวกันชน (verRef) — ถ้าขยับแค่ verRef
+  // การปิดบิลครั้งถัดไปจะผ่านด่านกันชนทั้งที่ถือรายการเก่า แล้วเขียนทับของที่ลูกค้าเพิ่งสั่ง (ไม่ได้เก็บเงิน)
+  // แถวที่ยังไม่ได้กดส่ง (_new) เก็บไว้ตามเดิม
+  const adoptRow=(row)=>{
+    if(!row)return;
+    const fresh=stripNewFlags(row.items);
+    sentBaseRef.current=fresh;
+    setItems(p=>[...fresh,...p.filter(i=>i&&i._new)]);
+    verRef.current=row.updated_at;
+    if(row.served_items&&typeof row.served_items==="object")setServed(row.served_items);
+  };
   // ghost-click บน iOS ยิงซ้ำภายในเฟรมเดียว — state ตามไม่ทัน ต้องใช้ ref ที่ตั้งค่าทันที
   // (สำคัญเป็นพิเศษเพราะ line_uid สร้างใหม่ทุกครั้ง ตัวกันซ้ำฝั่งเซิร์ฟเวอร์จับไม่ได้)
   const savingRef=useRef(false);
@@ -20351,14 +20598,20 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   const bidSale=branch?.id;
+  // ── บิลแพ็คเกจบุฟเฟต์ ── โต๊ะนี้สั่งได้เฉพาะเมนูในแพ็คเกจ (ปุ่มติ๊กสาขายังตัดสินซ้ำอีกชั้นเหมือนเดิม)
+  // แพ็คเกจถูกลบ/ปิดไปแล้ว = สั่งได้เฉพาะเมนูที่อยู่ในบิลแล้ว + เตือนให้แจ้งผู้จัดการ
+  const pkgLines=useMemo(()=>items.filter(isPkgLine),[items]);
+  const billPkg=pkgLines.length?pkgLines[0].pkg:null;
+  const pkgScope=useMemo(()=>pkgMenuScopeOf(items,pkgLibOf(posSettings)),[items,posSettings]);
   const cats=useMemo(()=>{
-    const seen=[...new Set(menus.filter(m=>menuVisibleAt(m,bidSale)).map(menuCatOf).filter(Boolean))];
+    const seen=[...new Set(menus.filter(m=>menuVisibleAt(m,bidSale)&&(!pkgScope||pkgScope.ids.has(String(m.id)))).map(menuCatOf).filter(Boolean))];
     return ["ทั้งหมด",...seen.sort(catSorter(catOrderOf(posSettings)))];
-  },[menus,bidSale,posSettings]);
+  },[menus,bidSale,posSettings,pkgScope]);
   const filtered=useMemo(()=>{
     const ms=menuSorter(catOrderOf(posSettings),menuOrderOf(posSettings));
     return menus.filter(m=>{
       if(!menuVisibleAt(m,bidSale))return false;            // สาขานี้ไม่ได้เปิดขายเมนูนี้
+      if(pkgScope&&!pkgScope.ids.has(String(m.id)))return false;   // ไม่อยู่ในแพ็คเกจของโต๊ะนี้
       // "ซ่อน" = ซ่อนจากลูกค้าที่สแกน QR เท่านั้น — จอพนักงานต้องยังเห็นและสั่งให้ลูกค้าได้
       // (เดิมกรองทิ้งตรงนี้ด้วย พนักงานเลยสั่งเมนูที่ตั้งใจเก็บไว้สั่งผ่านพนักงานไม่ได้เลย)
       const c=menuCatOf(m);
@@ -20366,7 +20619,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
       return m.name.toLowerCase().includes(search.toLowerCase());
     }).sort(ms);
-  },[menus,selCat,search,bidSale,posSettings]);
+  },[menus,selCat,search,bidSale,posSettings,pkgScope]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   // มีรายการใหม่ที่ยังไม่ได้ส่งพิมพ์ไหม (เทียบกับที่ส่งไปแล้วใน existingOrder) → ใช้เปิด/ปิดปุ่ม "ส่งรายการ"
   const sentKey=i=>`${i.menu_id}|${i.note||""}|${optionsText(i.options)}`;
@@ -20454,7 +20707,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   function chQty(idx,d){
     const it=items[idx];if(!it)return;
     // floor = จำนวนที่ "ส่งครัวไปแล้ว" ของเมนูนี้ — ลดต่ำกว่านี้ด้วยปุ่ม − ไม่ได้ (ต้องปัดซ้ายยกเลิก เพื่อให้ครัว/QR ตรงกัน)
-    const base=new Map();stripNewFlags(existingOrder&&existingOrder.items).forEach(b=>base.set(sentKey(b),(base.get(sentKey(b))||0)+b.qty));
+    if(isPkgLine(it))return;   // จำนวนคนของแพ็คเกจแก้ที่หัวบิลเท่านั้น (ลดต้องมีเหตุผล)
+    const base=new Map();sentBaseRef.current.forEach(b=>base.set(sentKey(b),(base.get(sentKey(b))||0)+b.qty));
     // This row may hold only PART of what was sent for this dish — the floor is whatever the other
     // rows of the same dish don't already cover, else a row gets pinned above its true sent amount.
     // แถวที่เพิ่งกดเพิ่ม (ยังไม่ส่งครัว) ลดได้ถึง 0 — ยังไม่มีใครทำ ไม่ต้องแจ้งครัว
@@ -20477,8 +20731,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   async function voidItem(idx){
     if(existingOrder?.status==="paid"){notifyDlg("ไม่สามารถยกเลิกรายการของบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'รับเงินเข้า/จ่ายออก' ในเงินในลิ้นชัก");return;}
     const target=items[idx];if(!target)return;
+    if(isPkgLine(target))return;   // จำนวนคนของแพ็คเกจแก้ที่หัวบิลเท่านั้น (ลดต้องมีเหตุผล)
     if(!await confirmDlg({message:`ยกเลิก "${target.name}"?`,title:"ยกเลิกรายการ",confirmLabel:"ยกเลิกรายการ",cancelLabel:"ไม่ยกเลิก",danger:true}))return;
     const newLocal=items.filter((_,i)=>i!==idx);
+    let adopted=false;   // รับบิลสดจากฐานเข้าจอแล้ว (ไม่ต้องใช้สำเนาในจอ)
     // ยังไม่ได้ส่งครัว = ไม่มีอะไรใน DB ให้ลบ และไม่ต้องแจ้งครัว แค่เอาออกจากจอ
     if(target._new){setItems(newLocal);return;}
     // ถ้าออเดอร์มีใน DB แล้ว และรายการที่ยกเลิกเป็น "รายการที่ส่งไปแล้ว" → อัปเดต DB (ครัว/QR ลูกค้าตรงกัน)
@@ -20494,7 +20750,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         const at=findSentIndex(dbItems,target,sentKey);
         if(at<0){
           // ไม่มีในฐานแล้ว = มีคนเอาออกไปก่อนหน้านี้แล้ว → เอาออกจากจอให้ตรงกัน แต่ต้องบอกว่าไม่ได้แจ้งครัวซ้ำ
-          setItems(newLocal);verRef.current=fresh.updated_at;
+          adoptRow(fresh);   // รับบิลจริงทั้งใบ (รายการ+ตัวกันชน) ไม่ใช่ขยับแค่ตัวกันชน
           posToast("รายการนี้ถูกเอาออกไปก่อนหน้านี้แล้ว — จอถูกอัปเดตให้ตรงกับบิลจริง","warn",6000);
           onDone&&onDone();
           return;
@@ -20517,7 +20773,9 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
             row=await api.updatePOSOrderIfUnchanged(existingOrder.id,fresh.updated_at,basePatch);
           }
           if(!row){notifyDlg("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อดูรายการล่าสุดก่อนยกเลิก");onDone();onClose();return;}
-          verRef.current=row.updated_at;
+          // เดิมขยับแค่ verRef แล้วจอถือรายการเก่า — ของที่ลูกค้าสแกนสั่งเข้ามาหลังเปิดจอ
+          // หายจากบิลตอนกดเช็คบิล (ด่านกันชนผ่านเพราะ verRef ใหม่) = ครัวทำแล้วแต่ไม่ได้เก็บเงิน
+          adoptRow(row);adopted=true;
           // แจ้งครัวว่ารายการนี้ถูกยกเลิก — ตัวพิมพ์เห็นแค่ "รายการที่เพิ่มขึ้น"
           // ของที่หายไปจึงเงียบสนิท ครัวจะทำอาหารที่ลูกค้ายกเลิกไปแล้ว
           // รายการแพ็คเกจ (ผู้ใหญ่/เด็ก) ครัวไม่เคยได้ใบ ⟹ ไม่มีใบยกเลิก
@@ -20532,7 +20790,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         }
       }catch(e){notifyDlg("ยกเลิกรายการไม่สำเร็จ: "+friendlyError(e));return;}
     }
-    setItems(newLocal);
+    if(!adopted)setItems(newLocal);
     onDone&&onDone();   // ให้จอแม่ดึงบิลใหม่ เปิดโต๊ะนี้อีกครั้งจะได้ไม่เห็นรายการที่ยกเลิกไปแล้ว
   }
 
@@ -20580,8 +20838,51 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     }
   }
   // นับเฉพาะรายการที่ส่งครัวแล้ว — รายการที่ยังไม่ส่งยังเสิร์ฟไม่ได้อยู่แล้ว
-  const sentRows=items.filter(i=>!i._new&&i.line_uid);
+  const sentRows=items.filter(i=>!i._new&&i.line_uid&&!isPkgLine(i));   // หัวลูกค้าไม่ใช่จานที่ต้องเสิร์ฟ
   const servedCount=sentRows.filter(i=>served[String(i.line_uid)]).length;
+  // ── หัวบิลแพ็คเกจ: เพิ่ม/ลดจำนวนคน ──────────────────────────────────────
+  // เพิ่ม = กดได้เลย · ลด = ต้องมีเหตุผล (จดลงใบปิดกะเหมือนยกเลิกรายการ) · รอชำระอยู่ = ห้ามแก้
+  // ทุกครั้งพิมพ์ใบสั้นออกเครื่องพิมพ์ใบเสร็จ (ครัวไม่ได้ — ครัวได้แต่อาหาร)
+  const[pkgBusy,setPkgBusy]=useState(false);
+  const pkgBusyRef=useRef(false);
+  async function chPkg(key,d){
+    if(pkgBusyRef.current||!existingOrder?.id||!billPkg)return;
+    if(payWait){notifyDlg("โต๊ะนี้รอชำระเงินอยู่ (พิมพ์ QR จ่ายเงินแล้ว) — กด \"ยกเลิกรอชำระ\" ในหน้าเช็คบิลก่อน แล้วค่อยแก้จำนวนคน");return;}
+    const cur=pkgLines.find(l=>l.pkg&&String(l.pkg.key)===String(key));
+    const def=((pkgScope&&pkgScope.def&&pkgScope.def.lines)||[]).find(l=>l&&String(l.key)===String(key));
+    const label=(cur&&cur.pkg.label)||(def&&def.label)||String(key);
+    const guest=cur?!!cur.pkg.guest:!!(def&&def.guest);
+    const from=cur?(+cur.qty||0):0,to=from+d;
+    if(to<0)return;
+    let reason=null;
+    if(d<0){
+      reason=await reasonDlg({title:`ลด${label} — โต๊ะ ${table.table_number}`,
+        message:`${label} ${from} → ${to}\nระบบจะบันทึกชื่อผู้ลด เวลา และเหตุผล (ขึ้นในใบปิดกะ)`,
+        presets:["นับคนผิด","ลูกค้ากลับก่อน","กดเพิ่มเกิน"],confirmLabel:"ยืนยันลด",cancelLabel:"ไม่ลด"});
+      if(reason==null)return;
+    }
+    pkgBusyRef.current=true;setPkgBusy(true);
+    try{
+      const who=currentUser?.username||currentUser?.name||null;
+      const r=await api.posSetPkgQty(existingOrder.id,key,to,{by:who,reason,table:table.table_number});
+      adoptRow(r.row);
+      if(!r.noop){
+        const after=pkgCountsText(r.row&&r.row.items);
+        printCashierSlip(pkgSlipLines(to>from?(guest?"เพิ่มคน":"เพิ่ม"):(guest?"ลดคน":"ลด"),table.table_number,[
+          pkgChangeSlipText({table:table.table_number,label,guest,from,to,reason}),
+          after?"ตอนนี้: "+after:"",pkgTimeOf()+" · "+(who||"-")]),
+          {branchId:branch?.id,printers,what:"แก้จำนวนคน",table:table.table_number})
+          .then(res=>{if(res&&res.none)posToast("⚠️ แก้จำนวนแล้ว แต่ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ใบแจ้งแคชเชียร์ไม่ได้พิมพ์","warn",7000);})
+          .catch(()=>posToast("⚠️ แก้จำนวนแล้ว แต่ส่งใบแจ้งแคชเชียร์ไม่สำเร็จ","warn",6000));
+        posToast(`${label} ${from} → ${to} แล้ว`,"ok");
+      }
+      onDone&&onDone();
+    }catch(e){
+      notifyDlg("แก้จำนวนไม่สำเร็จ: "+friendlyError(e));
+      if(e&&e.locked){onDone&&onDone();}
+    }
+    pkgBusyRef.current=false;setPkgBusy(false);
+  }
   async function cancelOrder(){
     if(!existingOrder?.id)return;
     if(existingOrder.status==="paid"){notifyDlg("ไม่สามารถยกเลิกบิลที่ชำระเงินแล้วได้\nหากต้องการคืนเงิน ใช้ปุ่ม 'จ่ายออก' ในเงินในลิ้นชัก");return;}
@@ -20682,7 +20983,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const delta=newRows.map(clean);
       if(existingOrder?.id&&!delta.length){posToast("ไม่มีรายการใหม่ที่ต้องส่ง","warn");setSavingGuard(false);return;}
       const toSend=existingOrder?.id?delta:items;
-      const before=(existingOrder?.items||[]).length;
+      const before=sentBaseRef.current.length;   // บิลชุดล่าสุดที่จอรู้ (ไม่ใช่ภาพนิ่งตอนเปิดโต๊ะ)
       const row=await api.posAppendItems({branch_id:branch.id,table_id:table.id,table_number:table.table_number,newItems:toSend,ordered_by:currentUser.username});
       // Never claim success blind: if the append deduped everything away, the kitchen got nothing.
       const after=Array.isArray(row?.items)?row.items.length:before+toSend.length;
@@ -20810,7 +21111,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
 
   // Quick keys: pinned menus
 
-  const itemTotalQty=items.reduce((s,i)=>s+i.qty,0);
+  const dishRows=items.filter(i=>!isPkgLine(i));   // จานอาหาร (บรรทัดแพ็คเกจอยู่ที่หัวบิล ไม่ใช่ในรายการ)
+  const itemTotalQty=dishRows.reduce((s,i)=>s+i.qty,0);
   // flex:1 + minHeight:0 = กินความสูงที่โมดัลเหลือให้พอดี แล้วปล่อยให้ลูกข้างใน
   // (กริดเมนู / รายการในตะกร้า) เลื่อนเองทีละส่วน ส่วนท้ายที่มีปุ่มส่งรายการอยู่กับที่
   // เดิมใส่ minHeight 75vh ไว้ ซึ่งดันแผงให้สูงเกินโมดัลจนตัวโมดัลต้องเลื่อนแทน
@@ -20820,11 +21122,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       <button onClick={()=>setMobileView("menu")} style={{flex:1,padding:"12px 10px",border:"none",background:mobileView==="menu"?C.brandLight:C.white,color:mobileView==="menu"?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:13,borderBottom:`3px solid ${mobileView==="menu"?C.brand:"transparent"}`,minHeight:48}}>🍽️ เมนู</button>
       <button onClick={()=>setMobileView("order")} style={{flex:1,padding:"12px 10px",border:"none",background:mobileView==="order"?C.brandLight:C.white,color:mobileView==="order"?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:800,fontSize:13,borderBottom:`3px solid ${mobileView==="order"?C.brand:"transparent"}`,minHeight:48,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
         🧾 ออเดอร์
-        {items.length>0&&<span style={{background:C.brand,color:C.white,fontSize:12,fontWeight:900,minWidth:24,height:24,padding:"0 7px",borderRadius:12,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{itemTotalQty}</span>}
+        {dishRows.length>0&&<span style={{background:C.brand,color:C.white,fontSize:12,fontWeight:900,minWidth:24,height:24,padding:"0 7px",borderRadius:12,display:"inline-flex",alignItems:"center",justifyContent:"center"}}>{itemTotalQty}</span>}
       </button>
     </div>}
     {/* Left: menu */}
     <div style={{flex:1,display:isMobile&&mobileView!=="menu"?"none":"flex",flexDirection:"column",borderRight:isMobile?"none":`1px solid ${C.line}`,minWidth:0,minHeight:0}}>
+      {pkgScope&&<div style={{padding:"6px 12px",borderBottom:`1px solid ${C.line}`,flexShrink:0,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,
+        background:pkgScope.missing?C.redLight:"#ECFDF5",color:pkgScope.missing?C.red:"#065F46"}}>
+        {pkgScope.missing?"⚠️ แพ็คเกจถูกลบ — แจ้งผู้จัดการ (สั่งได้เฉพาะเมนูที่อยู่ในบิลแล้ว)":`🍖 เมนูของแพ็คเกจ ${billPkg?billPkg.name:""}`}
+      </div>}
       <div style={{padding:"8px 12px",borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
         {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"8px 14px",minHeight:36,borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13.5,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
       </div>
@@ -20848,9 +21154,34 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       {/* Header */}
       <div style={{padding:"10px 12px",borderBottom:`1px solid ${C.line}`,background:C.white,flexShrink:0}}>
         <div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>โต๊ะ {table.table_number}{table.label?` — ${table.label}`:""}</div>
-        <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{table.seats} ที่นั่ง {items.length>0&&`• ${items.length} รายการ`}{sentRows.length>0&&<span style={{color:servedCount===sentRows.length?C.green:C.ink3,fontWeight:800}}>{` • เสิร์ฟแล้ว ${servedCount}/${sentRows.length}`}</span>}</div>
+        <div style={{fontSize:12,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{table.seats} ที่นั่ง {dishRows.length>0&&`• ${dishRows.length} รายการ`}{sentRows.length>0&&<span style={{color:servedCount===sentRows.length?C.green:C.ink3,fontWeight:800}}>{` • เสิร์ฟแล้ว ${servedCount}/${sentRows.length}`}</span>}</div>
       </div>
 
+      {billPkg&&(()=>{
+        // หัวบิลแพ็คเกจ — อยู่กับที่ ไม่ปนกับรายการอาหาร (ไม่มีปัดยกเลิก/พิมพ์ซ้ำ/ติ๊กเสิร์ฟ)
+        // แสดงทุกบรรทัดของแพ็คเกจ — บรรทัดที่ยังเป็น 0 (เด็ก/เตาเพิ่ม) กด + เพิ่มทีหลังได้
+        const defLines=((pkgScope&&pkgScope.def&&Array.isArray(pkgScope.def.lines))?pkgScope.def.lines:[]).filter(l=>l&&l.key!=null);
+        const keys=[...pkgLines.map(l=>String(l.pkg.key)),...defLines.map(l=>String(l.key)).filter(k=>!pkgLines.some(x=>String(x.pkg.key)===k))];
+        const pkgSum=pkgLines.reduce((s,l)=>s+(+l.price||0)*(+l.qty||0),0);
+        const sBtn={width:40,height:40,borderRadius:8,border:"1.5px solid #059669",background:C.white,color:"#065F46",fontSize:18,fontWeight:900,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",padding:0};
+        return <div style={{margin:"8px 8px 0",padding:"9px 11px",borderRadius:11,background:"#ECFDF5",border:"1.5px solid #059669",flexShrink:0,fontFamily:"'Sarabun',sans-serif"}}>
+          <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:3}}>
+            <div style={{flex:1,minWidth:0,fontSize:13.5,fontWeight:900,color:"#065F46",overflowWrap:"anywhere"}}>🍖 {billPkg.name}</div>
+            <div style={{fontSize:13,fontWeight:900,color:"#065F46",flexShrink:0}}>฿{pkgSum.toFixed(0)}</div>
+          </div>
+          {keys.map(k=>{
+            const l=pkgLines.find(x=>String(x.pkg.key)===k),d=defLines.find(x=>String(x.key)===k);
+            const qty=l?(+l.qty||0):0,price=l?(+l.price||0):(+(d&&d.price)||0),label=(l&&l.pkg.label)||(d&&d.label)||k;
+            const off=pkgBusy||!existingOrder?.id;
+            return <div key={k} style={{display:"flex",alignItems:"center",gap:6,padding:"2px 0"}}>
+              <div style={{flex:1,minWidth:0,fontSize:13,fontWeight:700,color:C.ink2,overflowWrap:"anywhere"}}>{label} <span style={{color:C.ink4,fontWeight:600,fontSize:12}}>฿{price}</span></div>
+              <button onClick={()=>chPkg(k,-1)} disabled={off||qty<=0} aria-label={"ลด "+label} style={{...sBtn,opacity:(off||qty<=0)?.4:1}}>−</button>
+              <span style={{minWidth:26,textAlign:"center",fontSize:15,fontWeight:900,color:C.ink}}>{qty}</span>
+              <button onClick={()=>chPkg(k,1)} disabled={off} aria-label={"เพิ่ม "+label} style={{...sBtn,opacity:off?.4:1}}>+</button>
+            </div>;
+          })}
+        </div>;
+      })()}
       {(()=>{
         // ใบครัวที่พิมพ์ไม่ออก — ระบบไม่ลองใหม่เอง พนักงานต้องกดเอง
         // วางไว้เหนือรายการอาหาร เพราะถ้าซ่อนอยู่ล่างๆ จะไม่มีใครเห็น
@@ -20883,9 +21214,10 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         </div>;
       })()}
       <div ref={listRef} style={{flex:1,minHeight:0,overflowY:"auto",padding:8}}>
-        {items.length===0
+        {dishRows.length===0
           ?<div style={{textAlign:"center",padding:"30px 0",color:C.ink4}}><Ic d={I.food} s={36} c={C.line}/><p style={{marginTop:8,fontFamily:"'Sarabun',sans-serif",fontSize:13}}>กดเมนูทางซ้ายเพื่อเพิ่ม</p></div>
           :items.map((item,idx)=>({item,idx,unsent:!!item._new}))
+            .filter(r=>!isPkgLine(r.item))   // บรรทัดแพ็คเกจอยู่ที่หัวบิล — ไม่มีปัดยกเลิก/พิมพ์ซ้ำ/ติ๊กเสิร์ฟ
             .sort((a,b)=>(a.unsent?1:0)-(b.unsent?1:0))   // ส่งครัวแล้วอยู่บน · เมนูที่เพิ่งกดเข้ามา (ยังไม่ส่ง) ลงไปอยู่ล่างสุด
             // สีส้มเดิมจางเกินจนแยกไม่ออกว่าอันไหนยังไม่ได้ส่ง — เข้มขึ้น + แถบข้าง + ป้าย "ใหม่"
             .map(({item,idx,unsent})=><SwipeRow key={idx} actionWidth={existingOrder?.id?86:46} bg={unsent?"#FFE8CC":C.greenLight} accent={unsent?"#F97316":null} actions={<>
@@ -21565,6 +21897,13 @@ function CustomerPage({branchId,tableId,token}){
   const[gateError,setGateError]=useState(null);  // null | "no_token" | "bad_token" | "branch_closed" | "net"
   const[gateTry,setGateTry]=useState(0);         // กดลองใหม่ = รันประตูซ้ำ (ใช้เป็น dep ของ effect)
   const[posCfg,setPosCfg]=useState(null);        // ตั้งค่า POS ของสาขา (VAT/service charge) — ใช้คิดยอดให้ตรงบิล
+  // ── โต๊ะบุฟเฟต์ (บิลเปิดด้วยแพ็คเกจ) ── เห็นเฉพาะเมนูในแพ็คเกจ รวมเมนู ฿0 ("รวมในแพ็คเกจ")
+  // ไม่มีบิล/บิลไม่มีแพ็คเกจ = หน้าเดิมทุกอย่าง (เมนูราคา > 0)
+  const[pkgMenus,setPkgMenus]=useState(null);    // null = ยังไม่ได้โหลด · [] = แพ็คเกจไม่มีเมนูที่สาขานี้เปิดขาย
+  const[pkgLoadErr,setPkgLoadErr]=useState(false);
+  const[rejectMsg,setRejectMsg]=useState(null);  // {pkg,names} ส่งไม่ได้เพราะไม่อยู่ในแพ็คเกจ/รายการผิด
+  const pkgIdsRef=useRef([]);const pkgMenusRef=useRef(null);const loadPkgMenusRef=useRef(null);
+  const pkgCfgRetryRef=useRef("");
   // ยอดที่ต้องจ่ายจริง — สูตรเดียวกับที่แคชเชียร์ใช้ตอนปิดบิล (ดู POSOrderPanel)
   // บิลปิดแล้วใช้ total ที่บันทึกไว้จริง ไม่คำนวณซ้ำ
   const custBill=useMemo(()=>{
@@ -21630,6 +21969,11 @@ function CustomerPage({branchId,tableId,token}){
             const fresh=await api.getMenusPublic(branchId);
             setMenus(fresh.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
           }catch{}   // เน็ตสะดุดชั่วคราว — ใช้ก้อนเดิมไปก่อน ไม่ต้องรบกวนลูกค้า
+          // โต๊ะบุฟเฟต์: ผู้จัดการเพิ่ม/เอาเมนูออกจากแพ็คเกจระหว่างมื้อ — อ่านคลังใหม่ในรอบเดียวกัน (ไม่เพิ่มรอบใหม่ · โต๊ะไม่มีแพ็คเกจไม่ถาม)
+          if(pkgIdsRef.current.length){
+            try{const ps2=await api.getPOSSettingsPublic(branchId);const row=Array.isArray(ps2)?ps2[0]:null;if(row)setPosCfg(row);}catch{}
+            if(loadPkgMenusRef.current)loadPkgMenusRef.current();
+          }
         };
         // ของหมด/ซ่อน/เมนูถูกลบ = ต้องถึงมือถือลูกค้าเร็ว → เช็คทุกนาทีเหมือนเดิม
         // แต่ดึงแค่สถานะของเมนูสาขานี้ (~2 KB) ไม่ใช่เมนูทั้งก้อน — คนละเรื่องกันเรื่องปริมาณ
@@ -21642,6 +21986,17 @@ function CustomerPage({branchId,tableId,token}){
             setMenus(ms=>ms.filter(m=>by.has(m.id)&&by.get(m.id)[branchId]!=="hidden")
                            .map(m=>({...m,availability:by.get(m.id)})));
           }catch{}   // เน็ตสะดุด — ใช้สถานะเดิมไปก่อน
+          // เมนูแพ็คเกจ (รวม ฿0 ที่ตัวบนไม่ได้ถาม) — ถามสถานะเฉพาะ id ในแพ็คเกจ ในรอบเดียวกันนี้
+          // ไม่ถามแยก = ของ ฿0 ที่ครัวกด "วันนี้หมด" จะยังสั่งได้บนมือถือลูกค้า
+          const pids=pkgIdsRef.current;
+          if(pids.length){
+            if(pkgMenusRef.current===null){if(loadPkgMenusRef.current)loadPkgMenusRef.current();}   // โหลดครั้งแรกไม่ผ่าน — ลองใหม่ในรอบนี้
+            else try{
+              const rows=await api.getMenuAvailByIds(branchId,pids);
+              const by=new Map((rows||[]).map(r=>[r.id,r.availability||{}]));
+              setPkgMenus(ms=>Array.isArray(ms)?ms.filter(m=>by.has(m.id)&&by.get(m.id)[branchId]!=="hidden").map(m=>({...m,availability:by.get(m.id)})):ms);
+            }catch{}
+          }
         };
         menuPollId=setInterval(()=>{if(!document.hidden)refreshAvail();},60000);
         // เมนูใหม่/ราคาเปลี่ยน ไม่ได้เกิดกลางมื้อ — 10 นาทีครั้งพอ
@@ -21666,16 +22021,45 @@ function CustomerPage({branchId,tableId,token}){
   },[branchId,tableId,token,gateTry]);
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // the Menu screen for this branch. No local categories → only "ทั้งหมด".
-  const cats=useMemo(()=>["ทั้งหมด",...[...new Set(menus.map(menuCatOf).filter(Boolean))].sort(catSorter(catOrderOf(posCfg)))],[menus,posCfg]);
+  // ── โต๊ะบุฟเฟต์: เมนูที่หน้านี้แสดง = เมนูในแพ็คเกจของบิล ∩ สาขาเปิดขาย ∩ ไม่ได้ซ่อน ──
+  // แพ็คเกจถูกลบ/ปิด = เฉพาะเมนูที่อยู่ในบิลแล้ว (ไม่เปิดเมนูทั้งร้านให้เด็ดขาด)
+  const pkgScope=useMemo(()=>pkgMenuScopeOf(myOrder&&myOrder.items,pkgLibOf(posCfg)),[myOrder,posCfg]);
+  const pkgIdsKey=pkgScope?[...pkgScope.ids].sort().join(","):"";
+  const billPkg=pkgOfBill(myOrder&&myOrder.items);
+  const billPkgId=billPkg?String(billPkg.id):"";
+  // แพ็คเกจของบิลไม่อยู่ในคลังที่โหลดไว้ (สร้างหลังลูกค้าเปิดหน้านี้) — อ่านตั้งค่าใหม่ครั้งเดียวต่อแพ็คเกจ
+  useEffect(()=>{
+    if(!billPkgId||!pkgScope||pkgScope.def||pkgCfgRetryRef.current===billPkgId)return;
+    pkgCfgRetryRef.current=billPkgId;
+    api.getPOSSettingsPublic(branchId).then(ps=>{const row=Array.isArray(ps)?ps[0]:null;if(row)setPosCfg(row);}).catch(()=>{});
+  },[billPkgId,pkgScope,branchId]);
+  const loadPkgMenus=useCallback(async()=>{
+    const ids=pkgIdsRef.current;
+    if(!ids.length)return;
+    try{
+      const rows=await api.getMenusByIdsPublic(branchId,ids);
+      const list=(rows||[]).filter(m=>menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden");
+      pkgMenusRef.current=list;setPkgMenus(list);setPkgLoadErr(false);
+    }catch{setPkgLoadErr(true);}   // เน็ตสะดุด — รอบเช็คของหมดรายนาทีลองใหม่ให้เอง
+  },[branchId]);
+  loadPkgMenusRef.current=loadPkgMenus;
+  useEffect(()=>{
+    pkgIdsRef.current=pkgIdsKey?pkgIdsKey.split(","):[];
+    pkgMenusRef.current=null;setPkgMenus(null);setPkgLoadErr(false);
+    if(pkgIdsRef.current.length)loadPkgMenus();
+  },[pkgIdsKey,loadPkgMenus]);
+  const shownMenus=pkgScope?(pkgIdsKey?(pkgMenus||[]):[]):menus;
+  const pkgLoading=!!pkgScope&&!!pkgIdsKey&&pkgMenus===null;
+  const cats=useMemo(()=>["ทั้งหมด",...[...new Set(shownMenus.map(menuCatOf).filter(Boolean))].sort(catSorter(catOrderOf(posCfg)))],[shownMenus,posCfg]);
   const filtered=useMemo(()=>{
     const ms=menuSorter(catOrderOf(posCfg),menuOrderOf(posCfg));
-    return menus.filter(m=>{
+    return shownMenus.filter(m=>{
       const c=menuCatOf(m);
       if(!c)return false;                                    // ยังไม่จัดหมวด → ลูกค้าไม่เห็น
       if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
       return m.name.toLowerCase().includes(search.toLowerCase());
     }).sort(ms);
-  },[menus,selCat,search,branchId,posCfg]);
+  },[shownMenus,selCat,search,branchId,posCfg]);
   const total=cart.reduce((s,i)=>s+i.price*i.qty,0);
   const itemCount=cart.reduce((s,i)=>s+i.qty,0);
   // line_uid identifies this cart line for its whole life. Re-sending a cart (lost response,
@@ -21740,6 +22124,7 @@ function CustomerPage({branchId,tableId,token}){
         return;
       }
       if(e&&e.unavailable){handleUnavailable(e,sending);setSending(false);loadMyOrder();return;}
+      if(e&&(e.notInPackage||e.badLine)){handleRejected(e,sending);setSending(false);loadMyOrder();return;}
       // Do NOT clear the cart and do NOT drop the outbox — it retries on reconnect. Re-sending is
       // safe: the append ignores any line_uid the order already carries.
       setOutbox(readOutbox());
@@ -21772,6 +22157,15 @@ function CustomerPage({branchId,tableId,token}){
     setMenus(ms=>ms.map(m=>gone.has(+m.id)?{...m,availability:{...(m.availability||{}),[branchId]:soldOutMark()}}:m));
     setSoldOutMsg((e&&e.unavailableNames)||[]);
   }
+  // ไม่อยู่ในแพ็คเกจของโต๊ะ / รายการผิดรูป = ปฏิเสธถาวร (ส่งซ้ำก็ไม่ผ่าน) — ห้ามเข้าคิววนส่ง
+  // ⟹ ทิ้งคิว · เอาเฉพาะรายการที่โดนปฏิเสธออก ที่เหลือคืนตะกร้า · ขึ้นบอกชื่อเมนู
+  function handleRejected(e,lines){
+    const gone=new Set((e&&e.rejectUids)||[]);
+    writeOutbox(null);setOutbox(null);
+    const back=(Array.isArray(lines)?lines:[]).filter(l=>!(l&&gone.has(l.line_uid)));
+    if(back.length)setCart(p=>[...back,...p]);
+    setRejectMsg({pkg:!!(e&&e.notInPackage),names:(e&&e.rejectNames)||[]});
+  }
   useEffect(()=>{if(payWaiting)setPayWaitMsg(true);},[payWaiting]);
   async function flushOutbox(){
     const o=readOutbox();
@@ -21796,6 +22190,7 @@ function CustomerPage({branchId,tableId,token}){
         setPayWaitMsg(true);loadMyOrder();
       }
       else if(e&&e.unavailable){handleUnavailable(e,o&&o.lines);loadMyOrder();}
+      else if(e&&(e.notInPackage||e.badLine)){handleRejected(e,o&&o.lines);loadMyOrder();}
     }
     flushingRef.current=false;
     setOutboxBusy(false);
@@ -21835,7 +22230,8 @@ function CustomerPage({branchId,tableId,token}){
       <Btn onClick={()=>{setDone(false);setCart([]);setStep("menu");}}>สั่งเพิ่ม</Btn>
     </div>
   </div>;
-  const myOrderItemCount=myOrder?(myOrder.items||[]).reduce((s,i)=>s+i.qty,0):0;
+  const myOrderItemCount=myOrder?(myOrder.items||[]).reduce((s,i)=>s+(isPkgLine(i)?0:i.qty),0):0;   // จานอาหาร (หัวลูกค้าไม่ใช่จาน)
+  const inPkgFree=(m)=>!!pkgScope&&!(+(m&&m.price)>0);   // เมนู ฿0 ของแพ็คเกจ = "รวมในแพ็คเกจ"
   // .cust-shell สูงอย่างน้อยเท่าจอ แล้วปล่อยให้ "ทั้งหน้า" เลื่อน (ดู index.html)
   // ไม่งั้นกล่องรายการเมนูข้างในจะยืดตามเนื้อหาแทนที่จะเลื่อน แล้วลูกค้าเลื่อนดูเมนูไม่ได้
   return <div className="cust-shell" style={{background:C.bg,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column"}}>
@@ -21868,6 +22264,9 @@ function CustomerPage({branchId,tableId,token}){
       <div style={{fontSize:13,fontWeight:900,color:C.purple}}>🔒 กำลังรอการชำระเงิน</div>
       <div style={{fontSize:11.5,color:C.purple,marginTop:2,lineHeight:1.5,opacity:.9}}>ยอดถูกล็อกไว้แล้ว สั่งเพิ่มไม่ได้ · ถ้าต้องการสั่งเพิ่ม กรุณาแจ้งพนักงาน</div>
     </div>}
+    {billPkg&&step==="menu"&&<div style={{background:pkgScope&&pkgScope.missing?C.redLight:"#ECFDF5",borderBottom:`1px solid ${pkgScope&&pkgScope.missing?C.red:"#059669"}55`,padding:"7px 14px",flexShrink:0,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,color:pkgScope&&pkgScope.missing?C.red:"#065F46"}}>
+      {pkgScope&&pkgScope.missing?"⚠️ เมนูแพ็คเกจปิดอยู่ — กรุณาแจ้งพนักงาน":`🍖 ${billPkg.name} · ${pkgCountsText(myOrder&&myOrder.items,true)}`}
+    </div>}
     {step==="menu"&&<>
       <div style={{position:"sticky",top:headH,zIndex:12,background:C.white,flexShrink:0}}>
       <div style={{padding:"8px 10px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
@@ -21888,7 +22287,9 @@ function CustomerPage({branchId,tableId,token}){
             <div style={{fontWeight:700,fontSize:13.5,color:soldOut?C.ink4:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:2}}>{m.name}</div>
             {m.description&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:6,lineHeight:1.4,overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{m.description}</div>}
             <div style={{marginTop:"auto",display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
-              <span style={{fontSize:16,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</span>
+              {inPkgFree(m)
+                ?<span style={{fontSize:12.5,fontWeight:900,color:soldOut?C.ink4:"#059669",fontFamily:"'Sarabun',sans-serif",lineHeight:1.2}}>รวมในแพ็คเกจ</span>
+                :<span style={{fontSize:16,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}</span>}
               {soldOut?<span style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>หมด</span>
                 /* เมนูที่มีตัวเลือก: ปุ่ม + เด้งป๊อปอัพเลือกเสมอ · เมนูปกติในตะกร้า: ใช้ตัวเพิ่ม-ลด */
                 :(inC&&!hasOpts)?<div style={{display:"flex",alignItems:"center",gap:5}}>
@@ -21901,8 +22302,9 @@ function CustomerPage({branchId,tableId,token}){
         </div>;})}
         {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"48px 20px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
           <Ic d={I.food} s={46} c={C.line}/>
-          <p style={{marginTop:12,fontSize:14,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูให้สั่ง"}</p>
-          {!search&&<p style={{marginTop:6,fontSize:12,color:C.ink4,lineHeight:1.7}}>ร้านกำลังจัดเมนู กรุณาสอบถามพนักงาน</p>}
+          <p style={{marginTop:12,fontSize:14,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":pkgLoading?(pkgLoadErr?"โหลดเมนูแพ็คเกจไม่ได้":"กำลังโหลดเมนูแพ็คเกจ..."):"ยังไม่มีเมนูให้สั่ง"}</p>
+          {!search&&pkgLoading&&pkgLoadErr&&<button onClick={()=>loadPkgMenus()} style={{marginTop:10,padding:"9px 18px",borderRadius:10,border:"none",background:C.brand,color:"#fff",fontWeight:800,fontSize:13,fontFamily:"'Sarabun',sans-serif",cursor:"pointer"}}>🔄 ลองใหม่</button>}
+          {!search&&!pkgLoading&&<p style={{marginTop:6,fontSize:12,color:C.ink4,lineHeight:1.7}}>{pkgScope?"กรุณาแจ้งพนักงาน":"ร้านกำลังจัดเมนู กรุณาสอบถามพนักงาน"}</p>}
         </div>}
       </div>
     </>}
@@ -21932,12 +22334,20 @@ function CustomerPage({branchId,tableId,token}){
               <span>{new Date(myOrder.created_at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"})}</span>
             </div>
           </div>
-          {(myOrder.items||[]).map((it,idx)=><div key={idx} style={{background:C.white,borderRadius:10,padding:"10px 12px",marginBottom:6,border:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          {/* โต๊ะบุฟเฟต์: แพ็คเกจ + จำนวนคนอยู่หัวบิล ไม่ได้ปนเป็นจานอาหาร */}
+          {billPkg&&<div style={{background:"#ECFDF5",borderRadius:10,padding:"10px 12px",marginBottom:6,border:"1.5px solid #059669",fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
+              <div style={{fontWeight:900,fontSize:13.5,color:"#065F46"}}>🍖 {billPkg.name}</div>
+              <div style={{fontSize:14,fontWeight:900,color:"#065F46"}}>฿{(myOrder.items||[]).filter(isPkgLine).reduce((s,it)=>s+(+it.price||0)*(+it.qty||0),0).toFixed(0)}</div>
+            </div>
+            <div style={{fontSize:12.5,color:C.ink2,marginTop:2}}>{pkgCountsText(myOrder.items)}</div>
+          </div>}
+          {(myOrder.items||[]).filter(it=>!isPkgLine(it)).map((it,idx)=><div key={idx} style={{background:C.white,borderRadius:10,padding:"10px 12px",marginBottom:6,border:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div style={{flex:1}}>
               <div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{it.qty}x {it.name}</div>
               {it.note&&<div style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>★ {it.note}</div>}
             </div>
-            <div style={{fontSize:14,fontWeight:900,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{(it.price*it.qty).toFixed(0)}</div>
+            <div style={{fontSize:billPkg&&!(+it.price>0)?12:14,fontWeight:900,color:billPkg&&!(+it.price>0)?"#059669":C.brand,fontFamily:"'Sarabun',sans-serif"}}>{billPkg&&!(+it.price>0)?"รวมในแพ็คเกจ":`฿${(it.price*it.qty).toFixed(0)}`}</div>
           </div>)}
           <div style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:12,padding:"14px 16px",marginTop:10,color:C.white,fontFamily:"'Sarabun',sans-serif"}}>
             <div style={{display:"flex",justifyContent:"space-between",fontSize:13,opacity:0.9}}><span>ยอดรวม</span><span>฿{(myOrder.subtotal||0).toFixed(0)}</span></div>
@@ -21964,7 +22374,7 @@ function CustomerPage({branchId,tableId,token}){
       <div style={{padding:10}}>
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:10}}>รายการที่สั่ง</h3>
         {cart.map((item,idx)=><div key={idx} style={{background:C.white,borderRadius:10,padding:"10px",marginBottom:6,border:`1px solid ${C.line}`,display:"flex",alignItems:"center",gap:8}}>
-          <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.brand,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>📝 {item.note}</div>}{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}<div style={{fontSize:12,color:C.brand,fontWeight:700}}>฿{item.price} × {item.qty} = ฿{(item.price*item.qty).toFixed(0)}</div></div>
+          <div style={{flex:1}}><div style={{fontWeight:700,fontSize:13,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>{item.name}</div>{item.note&&<div style={{fontSize:11,color:C.brand,fontFamily:"'Sarabun',sans-serif",marginTop:2}}>📝 {item.note}</div>}{item.options&&item.options.length>0&&<div style={{fontSize:11,color:C.teal,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>+ {optionsText(item.options)}</div>}{item.note&&<div style={{fontSize:11,color:C.ink4}}>★ {item.note}</div>}<div style={{fontSize:12,color:inPkgFree(item)?"#059669":C.brand,fontWeight:700}}>{inPkgFree(item)?`รวมในแพ็คเกจ × ${item.qty}`:`฿${item.price} × ${item.qty} = ฿${(item.price*item.qty).toFixed(0)}`}</div></div>
           <div style={{display:"flex",alignItems:"center",gap:5}}>
             <button onClick={()=>chQty(idx,-1)} style={{width:34,height:34,borderRadius:8,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={12}/></button>
             <span style={{fontWeight:900,fontSize:14,minWidth:20,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>{item.qty}</span>
@@ -21991,6 +22401,15 @@ function CustomerPage({branchId,tableId,token}){
         <div style={{fontSize:14.5,color:C.ink,fontWeight:800,lineHeight:1.7,marginBottom:6}}>{(soldOutMsg||[]).join(", ")}</div>
         <div style={{fontSize:13,color:C.ink3,lineHeight:1.7,marginBottom:18}}>เอาออกจากรายการให้แล้ว<br/>รายการอื่นยังอยู่ในตะกร้า กดสั่งต่อได้เลย</div>
         <Btn onClick={()=>setSoldOutMsg(null)} full s={{padding:"12px",fontSize:15,fontWeight:900}}>รับทราบ</Btn>
+      </div>
+    </div>}
+    {rejectMsg&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
+      <div style={{background:C.white,borderRadius:18,padding:"26px 22px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:46,marginBottom:8}}>🙏</div>
+        <div style={{fontSize:18,fontWeight:900,color:C.ink,marginBottom:7}}>{rejectMsg.pkg?"เมนูนี้ไม่อยู่ในแพ็คเกจของโต๊ะ":"รายการนี้ส่งไม่ได้"}</div>
+        <div style={{fontSize:14.5,color:C.ink,fontWeight:800,lineHeight:1.7,marginBottom:6}}>{(rejectMsg.names||[]).join(", ")}</div>
+        <div style={{fontSize:13,color:C.ink3,lineHeight:1.7,marginBottom:18}}>เอาออกจากรายการให้แล้ว<br/>รายการอื่นยังอยู่ในตะกร้า กดสั่งต่อได้เลย · สงสัยกรุณาแจ้งพนักงาน</div>
+        <Btn onClick={()=>setRejectMsg(null)} full s={{padding:"12px",fontSize:15,fontWeight:900}}>รับทราบ</Btn>
       </div>
     </div>}
     {payWaitMsg&&payWaiting&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
@@ -22126,8 +22545,10 @@ function posSalesSeries(paid,fromD,toD){
   const h0=hit.length?hit[0].i:0,h1=hit.length?hit[hit.length-1].i:0;
   const hours=hit.length?hrs.slice(h0,h1+1).map((h,i)=>({k:h0+i,label:String(h0+i).padStart(2,"0"),value:h.amt,count:h.n})):[];
   // ── เมนูขายดี — ราคาก่อนหักส่วนลด เพื่อให้รวมรายเมนู = ยอดก่อนส่วนลด (กติกาเดียวกับใบปิดกะ)
+  // หัวลูกค้าบุฟเฟต์ไม่ใช่เมนู — ไม่ขึ้นเป็นเมนูขายดี (ยอดของแพ็คเกจดูที่หมวด "แพ็คเกจบุฟเฟต์")
   const mm=new Map();
   for(const o of paid)for(const i of (o.items||[])){
+    if(isPkgLine(i))continue;
     const k=(i&&i.name)||"ไม่ระบุชื่อ";
     const e=mm.get(k)||{qty:0,amt:0};
     e.qty+=(+i.qty||0);e.amt=r2(e.amt+r2((+i.price||0)*(+i.qty||0)));mm.set(k,e);
@@ -22251,7 +22672,7 @@ function POSSalesReport({currentBranch,currentUser,onExit}){
       {loading?<Loading text="รวบรวมยอดขาย..."/>:err?<div style={{...box,color:C.red,fontWeight:700}}>โหลดข้อมูลไม่สำเร็จ: {err}</div>:<>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(152px,1fr))",gap:10}}>
           <RptCard emoji="💰" label="ยอดขายสุทธิ" value={`฿${rB(T.totalSales)}`} sub={`${T.orderCount} บิล · เฉลี่ยวันละ ฿${rB(T.totalSales/nDays)}`} accent={C.green} tint={C.greenLight}/>
-          <RptCard emoji="🧾" label="เฉลี่ยต่อบิล" value={`฿${rB(T.avgBill)}`} sub={`${T.itemQty} รายการอาหาร`} accent={C.brand}/>
+          <RptCard emoji="🧾" label="เฉลี่ยต่อบิล" value={`฿${rB(T.avgBill)}`} sub={`${T.itemQty} รายการอาหาร`+((T.guests||[]).length?` · ลูกค้าบุฟเฟต์: ${T.guests.map(g=>`${g.label} ${g.qty}`).join(" · ")}`:"")} accent={C.brand}/>
           <RptCard emoji="🏷️" label="ส่วนลดที่ให้ไป" value={`฿${rB(T.disc)}`} sub={`${T.discPct.toFixed(1)}% ของยอดก่อนลด ฿${rB(T.gross)}`} accent={C.purple}/>
           <RptCard emoji="💵" label="เงินสด" value={`฿${rB(T.totalCash)}`} sub={`โอน/พร้อมเพย์ ฿${rB(T.totalTransfer)}`} accent={C.teal}/>
           <RptCard emoji="🧮" label="ภาษีมูลค่าเพิ่ม" value={`฿${rB(T.vat)}`} sub={T.svc>0?`ค่าบริการ ฿${rB(T.svc)}`:"รวมอยู่ในราคาขายแล้ว"} accent={C.blue}/>
@@ -22701,6 +23122,8 @@ function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatch
   sec("สรุปจำนวน");
   row("จำนวนบิล",n0(t.orderCount)+" บิล");
   row("จำนวนรายการอาหาร",n0(t.itemCount!=null?t.itemCount:t.itemQty)+" ชิ้น");
+  // ลูกค้าบุฟเฟต์ (นับจากบรรทัดแพ็คเกจที่เป็นคน) — ไม่ปนกับจำนวนจาน
+  if(Array.isArray(t.guests)&&t.guests.length)row("ลูกค้าบุฟเฟต์",t.guests.map(g=>stripEmoji(g.label)+" "+n0(g.qty)).join(" · "));
   row("เฉลี่ยต่อบิล",b(t.avgBill));
 
   // ── ขายตามหมวด ── ตัวเลขชุดนี้คือที่เจ้าของใช้ดูว่าหมวดไหนขายได้เท่าไรในกะนั้น
@@ -22859,6 +23282,7 @@ function printZReportWindow({shift,totals,branch,user,note,reprint=false,mismatc
 <h3>📊 ยอดขาย</h3>
 <div class="row"><span>จำนวนบิล</span><span class="bold">${totals.orderCount} บิล</span></div>
 <div class="row"><span>จำนวนรายการอาหาร</span><span>${fmt(totals.itemQty)} ชิ้น</span></div>
+${Array.isArray(totals.guests)&&totals.guests.length?`<div class="row"><span>ลูกค้าบุฟเฟต์</span><span>${totals.guests.map(g=>esc(g.label)+" "+fmt(g.qty)).join(" · ")}</span></div>`:""}
 <div class="row"><span>เฉลี่ยต่อบิล</span><span>฿${fmt(totals.avgBill)}</span></div>
 <div class="div"></div>
 <h3>🧾 โครงสร้างยอด</h3>
@@ -22984,7 +23408,10 @@ function shiftReportBlocks({orders=[],cancelled=[]}={}){
   const voidAmt=r2(voids.reduce((t,v)=>t+r2((+v.price||0)*(+v.qty||0)),0));
   // บิลที่ถูกยกเลิก "หลังจากรับเงินไปแล้ว" ต้องแยกให้เห็น เพราะเป็นการคืนเงิน ไม่ใช่แค่ล้างโต๊ะ
   const voidAfterPaid=cancelled.filter(o=>!!o.paid_by);
-  return{byCategory,itemCount:byCategory.reduce((t,c)=>t+c.qty,0),
+  // จำนวนจาน = เฉพาะอาหาร · หัวลูกค้าบุฟเฟต์ไม่ใช่จาน (เงินของแพ็คเกจยังอยู่ในหมวด "แพ็คเกจบุฟเฟต์" ครบ)
+  const dishQty=orders.reduce((t,o)=>t+(o.items||[]).reduce((a,i)=>a+(isPkgLine(i)?0:(+i.qty||0)),0),0);
+  const guests=pkgGuestRowsOf(orders);
+  return{byCategory,itemCount:dishQty,guests,guestCount:guests.reduce((t,g)=>t+g.qty,0),
     channel:ch,discountLines,payment,paymentTotal,
     voids,voidCount:voids.length,voidQty,voidAmt,
     voidAfterPaidCount:voidAfterPaid.length,voidAfterPaidAmt:r2(voidAfterPaid.reduce((t,o)=>t+(+o.total||0),0))};
@@ -23010,7 +23437,7 @@ function computeShiftTotals({movements,orders,actualCash,cancelled,openBills,edi
     const gross=sum("subtotal"),disc=sum("discount"),promo=sum("promo_amount");
     const svc=sum("service_charge"),vatSum=sum("vat"),roundSum=sum("round_adj");
     const vatIncluded=orders.length?orders[0].vat_included!==false:true;
-    const itemQty=orders.reduce((a,o)=>a+(o.items||[]).reduce((b,i)=>b+(+i.qty||0),0),0);
+    const itemQty=orders.reduce((a,o)=>a+(o.items||[]).reduce((b,i)=>b+(isPkgLine(i)?0:(+i.qty||0)),0),0);   // จานอาหาร ไม่นับหัวลูกค้าบุฟเฟต์
     const cancelAmt=round2(cancelled.reduce((a,o)=>a+(+o.total||0),0));
     const openAmt=round2(openBills.reduce((a,o)=>a+(+o.total||0),0));
     return{openingCash,payIn,payOut,drops,refunds,salesCash,totalSales:round2(totalSales),
@@ -23312,6 +23739,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
               {l:"อื่นๆ",v:`฿${totals.totalOther.toLocaleString()}`,c:C.ink3},
               {l:"เฉลี่ยต่อบิล",v:`฿${totals.avgBill.toLocaleString()}`,c:C.ink2},
               {l:"จำนวนรายการอาหาร",v:`${totals.itemQty.toLocaleString()} ชิ้น`,c:C.ink2},
+              ...(Array.isArray(totals.guests)&&totals.guests.length?[{l:"ลูกค้าบุฟเฟต์",v:totals.guests.map(g=>`${g.label} ${g.qty.toLocaleString()}`).join(" · "),c:"#065F46"}]:[]),
             ].map((s,i)=><div key={i} style={{background:C.white,borderRadius:10,padding:"8px 12px",border:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span style={{fontSize:11,color:C.ink3,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{s.l}</span>
               <span style={{fontSize:14,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</span>
@@ -25398,6 +25826,81 @@ function useNewBuild(){
   },[]);
   return has;
 }
+// ── เปิดโต๊ะ (สาขาที่มีแพ็คเกจบุฟเฟต์) ──────────────────────────────────
+// แตะโต๊ะว่าง → เลือกแพ็คเกจ + จำนวนคน → เปิดโต๊ะ (สร้างบิลพร้อมบรรทัดแพ็คเกจ)
+// หรือ "ไม่ใช้แพ็คเกจ" = สั่งตามเมนูแบบเดิมทุกอย่าง (โต๊ะกลับบ้าน/เดลิเวอรี)
+// แพ็คเกจเลือกได้ครั้งเดียวตอนนี้ เปลี่ยนทีหลังไม่ได้ · ราคาอ่านสดจากคลังตอนเปิดจอนี้
+function POSOpenTableStep({table,branch,posSettings,currentUser,printers=[],onCancel,onAlaCarte,onOpened}){
+  const[lib,setLib]=useState(()=>activePkgsOf(posSettings));
+  const[pick,setPick]=useState(null);
+  const[counts,setCounts]=useState({});
+  const[busy,setBusy]=useState(false);
+  const busyRef=useRef(false);
+  useEffect(()=>{let off=false;readBranchPackages(branch.id).then(l=>{if(!off)setLib(l.filter(p=>p.active!==false));}).catch(()=>{});return()=>{off=true;};},[branch.id]);
+  const pkg=lib.find(p=>String(p.id)===String(pick))||null;
+  const lines=pkg&&Array.isArray(pkg.lines)?pkg.lines.filter(l=>l&&l.key!=null):[];
+  const choose=(p)=>{setPick(p.id);const c={};(Array.isArray(p.lines)?p.lines:[]).forEach(l=>{if(l&&l.key!=null)c[l.key]=l.key==="adult"?1:0;});setCounts(c);};
+  const setQ=(k,v)=>setCounts(c=>({...c,[k]:Math.max(0,Math.min(999,Math.floor(+v||0)))}));
+  const guests=lines.filter(l=>l.guest).reduce((s,l)=>s+(+counts[l.key]||0),0);
+  const sum=round2(lines.reduce((s,l)=>s+(+l.price||0)*(+counts[l.key]||0),0));
+  async function open(){
+    if(busyRef.current||!pkg)return;
+    if(guests<1){notifyDlg("ต้องมีลูกค้าอย่างน้อย 1 คน");return;}
+    busyRef.current=true;setBusy(true);
+    try{
+      const who=currentUser?.username||currentUser?.name||null;
+      const r=await api.posOpenTable({branch_id:branch.id,table_id:table.id,table_number:table.table_number,pkg,counts,opened_by:who});
+      if(r&&r.existing){posToast("โต๊ะ "+table.table_number+" มีบิลเปิดอยู่แล้ว — แสดงบิลเดิม (ไม่ได้เปิดซ้ำ)","warn",6000);onOpened(r.existing,{existing:true});return;}
+      if(!r||!r.row)throw new Error("ไม่ได้รับบิลกลับมา — ลองใหม่อีกครั้ง");
+      // ใบเปิดโต๊ะออกเครื่องพิมพ์ใบเสร็จ (แคชเชียร์) เท่านั้น — ไม่รอผล โต๊ะเปิดแล้วจริง ห้ามให้การพิมพ์ขวาง
+      const at=new Date().toISOString();
+      const p=pkgOpenSlipParts({pkg,counts,at,by:who});
+      printCashierSlip(pkgSlipLines("เปิดโต๊ะ",table.table_number,[p.name,p.heads,`${p.time} · ${p.by}`]),{branchId:branch.id,printers,what:"เปิดโต๊ะ",table:table.table_number})
+        .then(res=>{if(res&&res.none)posToast("⚠️ เปิดโต๊ะแล้ว แต่ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ใบเปิดโต๊ะไม่ได้พิมพ์","warn",7000);})
+        .catch(()=>posToast("⚠️ เปิดโต๊ะแล้ว แต่ส่งใบเปิดโต๊ะไปเครื่องพิมพ์ไม่สำเร็จ","warn",6000));
+      posToast("✅ "+pkgOpenSlipText({table:table.table_number,pkg,counts,at,by:who}),"ok",5000);
+      onOpened(r.row,{slipAt:Date.now()});
+      return;
+    }catch(e){notifyDlg("เปิดโต๊ะไม่สำเร็จ: "+friendlyError(e));}
+    busyRef.current=false;setBusy(false);
+  }
+  const sBtn={width:44,height:44,borderRadius:10,border:`1.5px solid ${C.line}`,background:C.white,fontSize:20,fontWeight:900,color:C.ink2,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",padding:0};
+  return <Modal title={`เปิดโต๊ะ ${table.table_number}${table.label?` — ${table.label}`:""}`} onClose={onCancel}>
+    <div style={{fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>เลือกแพ็คเกจ <span style={{fontWeight:600,color:C.ink4,fontSize:12}}>(เปลี่ยนทีหลังไม่ได้)</span></div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8,marginBottom:10}}>
+        {lib.map(p=>{const on=String(p.id)===String(pick);const ls=(Array.isArray(p.lines)?p.lines:[]).filter(l=>l&&l.guest);
+          return <button key={p.id} onClick={()=>choose(p)} disabled={busy} style={{textAlign:"left",padding:"10px 12px",borderRadius:12,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",
+            border:`2px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white}}>
+            <div style={{fontSize:14,fontWeight:900,color:on?C.brand:C.ink,overflowWrap:"anywhere"}}>{p.name}</div>
+            <div style={{fontSize:12,color:C.ink3,marginTop:2,lineHeight:1.5}}>{ls.map(l=>`${l.label} ฿${+l.price||0}`).join(" · ")}</div>
+          </button>;})}
+        {lib.length===0&&<div style={{gridColumn:"1/-1",fontSize:12.5,color:C.ink4,padding:"8px 0"}}>ยังไม่มีแพ็คเกจที่เปิดใช้</div>}
+      </div>
+      <button onClick={onAlaCarte} disabled={busy} style={{width:"100%",padding:"11px 12px",borderRadius:12,border:`1.5px dashed ${C.ink4}`,background:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:800,color:C.ink2,marginBottom:12}}>ไม่ใช้แพ็คเกจ (สั่งตามเมนู)</button>
+      {pkg&&<div style={{background:C.bg,borderRadius:12,padding:"10px 12px",marginBottom:12}}>
+        {lines.map(l=>{const q=+counts[l.key]||0;return <div key={l.key} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:800,color:C.ink,overflowWrap:"anywhere"}}>{l.label}</div>
+            <div style={{fontSize:12,color:C.ink4}}>฿{+l.price||0}{l.guest?" / คน":""}</div>
+          </div>
+          <button onClick={()=>setQ(l.key,q-1)} disabled={busy||q<=0} aria-label={"ลด "+l.label} style={{...sBtn,opacity:q<=0?.4:1}}>−</button>
+          <input type="text" inputMode="numeric" value={String(q)} onChange={e=>setQ(l.key,e.target.value.replace(/[^0-9]/g,""))} aria-label={"จำนวน "+l.label}
+            style={{width:52,height:44,textAlign:"center",fontSize:17,fontWeight:900,border:`1.5px solid ${C.line}`,borderRadius:10,fontFamily:"'Sarabun',sans-serif",boxSizing:"border-box"}}/>
+          <button onClick={()=>setQ(l.key,q+1)} disabled={busy} aria-label={"เพิ่ม "+l.label} style={sBtn}>+</button>
+        </div>;})}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",borderTop:`1px solid ${C.line}`,marginTop:6,paddingTop:8}}>
+          <span style={{fontSize:13,color:C.ink3,fontWeight:700}}>ลูกค้า {guests} คน</span>
+          <span style={{fontSize:20,fontWeight:900,color:C.brand}}>฿{sum.toLocaleString("en-US",{maximumFractionDigits:2})}</span>
+        </div>
+      </div>}
+      <div style={{display:"flex",gap:8}}>
+        <Btn v="ghost" onClick={onCancel} full s={{padding:"12px"}}>ยกเลิก</Btn>
+        <Btn onClick={open} loading={busy} disabled={!pkg||guests<1} full icon={I.check} s={{padding:"12px",fontWeight:900}}>เปิดโต๊ะ</Btn>
+      </div>
+    </div>
+  </Modal>;
+}
 function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode,saleOnly=false,reloadPosSettings,refreshTick=0,reloadZones}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);
@@ -25426,6 +25929,19 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   const[loading,setLoading]=useState(true);
   const isMobile=useIsMobile();
   const[selTable,setSelTable]=useState(null);const[selOrder,setSelOrder]=useState(null);
+  // แพ็คเกจบุฟเฟต์: โต๊ะว่างที่กำลังเลือกแพ็คเกจ · โต๊ะที่เพิ่งเปิด (ขึ้นแถบชวนพิมพ์ QR)
+  // สาขาที่ไม่มีแพ็คเกจ (เช่น River) ไม่เห็นขั้นนี้เลย — แตะโต๊ะแล้วสั่งได้ทันทีเหมือนเดิม
+  const[openStep,setOpenStep]=useState(null);
+  const[justOpened,setJustOpened]=useState(null);   // {id,at}
+  const hasPkgs=activePkgsOf(posSettings).length>0;
+  // ใบเปิดโต๊ะกับใบ QR ใช้ช่องคำสั่งรูปช่องเดียวกันของเครื่องแคชเชียร์ — กดพิมพ์ QR ทันทีหลังเปิดโต๊ะ
+  // ใบที่สองจะเขียนทับใบแรกก่อนตัวพิมพ์หยิบ ⟹ เว้นจังหวะให้ใบเปิดโต๊ะออกก่อน
+  const printSelQR=()=>{
+    const t=selTable;if(!t)return;
+    const wait=(justOpened&&justOpened.id===t.id)?Math.max(0,2500-(Date.now()-(+justOpened.at||0))):0;
+    setQrPeekErr(false);setQrPeek({table:t,url:null});
+    setTimeout(()=>printTableQR(t,currentBranch,printers,()=>loadAll({silent:true}),(u)=>setQrPeek(p=>p?{...p,url:u}:p)),wait);
+  };
   const[showPrinters,setShowPrinters]=useState(false);
   const[showReceipt,setShowReceipt]=useState(false);
   const[showOrders,setShowOrders]=useState(false);   // today's-orders modal (re-added after the tab was replaced)
@@ -25636,17 +26152,26 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
       </div>
     </div>
     <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} printers={printers} failPrinters={failPrintersLive} onSelectTable={(t,o)=>{if(!canEdit)return;setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined} onRenameZone={canEdit?handleRenameZone:undefined} onDeleteZone={canEdit?handleDeleteZone:undefined}/>}
+      {posTab==="tables"&&<POSTableMap tables={tables} activeOrders={activeOrders} zones={zones} printers={printers} failPrinters={failPrintersLive} onSelectTable={(t,o)=>{if(!canEdit)return;if(!o&&hasPkgs){setOpenStep(t);return;}setSelTable(t);setSelOrder(o||null);}} onAddZone={canEdit?async(name)=>{if(zones.some(z=>String(z.name).toLowerCase()===name.toLowerCase())){alert("มีโซนนี้อยู่แล้ว");return;}const sortMax=zones.reduce((m,z)=>Math.max(m,z.sort_order||0),0);await api.addZone({branch_id:currentBranch.id,name,color:ZONE_COLORS[zones.length%ZONE_COLORS.length],sort_order:sortMax+1});if(reloadZones)await reloadZones();}:undefined} onAddTable={canEdit?handleAddTable:undefined} onUpdateTable={canEdit?handleUpdateTable:undefined} onDeleteTable={canEdit?handleDeleteTable:undefined} onMoveTable={canEdit?handleMoveTable:undefined} onRenameZone={canEdit?handleRenameZone:undefined} onDeleteZone={canEdit?handleDeleteZone:undefined}/>}
       {showOrders&&<SalesReportModal currentBranch={currentBranch} menus={menus} printers={printers} posSettings={posSettings} shift={shift} currentUser={currentUser} onEdited={loadAll} onClose={()=>setShowOrders(false)}/>}
       {showPrintFails&&<PrintFailModal branchId={currentBranch.id} branch={currentBranch} posSettings={posSettings} onChanged={loadFails} onClose={()=>{setShowPrintFails(false);loadFails();try{reloadPrinters&&reloadPrinters();}catch{}}}/>}
     </div>
-    {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);loadAll({silent:true});}} wide noScroll>
+    {openStep&&<POSOpenTableStep table={openStep} branch={currentBranch} posSettings={posSettings} currentUser={currentUser} printers={printers}
+      onCancel={()=>setOpenStep(null)}
+      onAlaCarte={()=>{const t=openStep;setOpenStep(null);setSelTable(t);setSelOrder(null);}}
+      onOpened={(row,info)=>{const t=openStep;setOpenStep(null);setSelOrder(row||null);setSelTable(t);
+        setJustOpened(info&&info.existing?null:{id:t.id,at:(info&&info.slipAt)||Date.now()});loadAll({silent:true});}}/>}
+    {selTable&&<Modal title={`โต๊ะ ${selTable.table_number}${selTable.label?` — ${selTable.label}`:""}`} onClose={()=>{setSelTable(null);setSelOrder(null);setJustOpened(null);loadAll({silent:true});}} wide noScroll>
+      {justOpened&&justOpened.id===selTable.id&&<div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",padding:"9px 12px",marginBottom:8,borderRadius:11,background:"#ECFDF5",border:"1.5px solid #059669",fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
+        <span style={{flex:1,minWidth:160,fontSize:13,fontWeight:800,color:"#065F46"}}>✅ เปิดโต๊ะแล้ว — พิมพ์ QR ให้ลูกค้าสแกนสั่งอาหาร</span>
+        <Btn onClick={printSelQR} icon={I.print} s={{padding:"8px 14px",fontSize:13}}>พิมพ์ QR โต๊ะนี้</Btn>
+      </div>}
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:10,flexShrink:0,flexWrap:"wrap"}}>
         {selOrder?.id&&<button onClick={()=>setMoveFrom({table:selTable,order:selOrder})} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.blue}55`,background:C.blueLight,cursor:"pointer",fontSize:12,fontWeight:700,color:C.blue,fontFamily:"'Sarabun',sans-serif"}}>🔀 ย้ายโต๊ะ</button>}
-        <button onClick={()=>{setQrPeekErr(false);setQrPeek({table:selTable,url:null});printTableQR(selTable,currentBranch,printers,()=>loadAll({silent:true}),(u)=>setQrPeek(p=>p?{...p,url:u}:p));}} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
+        <button onClick={printSelQR} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>
         {!selOrder?.id&&<button onClick={()=>reissueTableQR(selTable)} title="เปลี่ยนรหัส QR ของโต๊ะว่างนี้ — QR เดิมทุกใบใช้ไม่ได้ทันที" style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px dashed ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink3}}>🔄 ออก QR ใหม่</button>}
       </div>
-      <POSOrderPanel table={selTable} existingOrder={selOrder} menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onCashChange={setChangeDlg} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})}/>
+      <POSOrderPanel table={selTable} key={selOrder&&selOrder.id!=null?"o"+selOrder.id:"t"+selTable.id} existingOrder={selOrder}menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onCashChange={setChangeDlg} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})}/>
     </Modal>}
     {/* ── เงินทอน ── ปิดบิลเงินสดเสร็จแล้ว โต๊ะว่างแล้ว เหลืออย่างเดียวคือทอนเงิน
         ตัวเลขใหญ่ที่สุดบนจอคือยอดที่ต้องทอน เพราะนั่นคือสิ่งเดียวที่ต้องทำต่อ */}
@@ -26788,14 +27313,16 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
   const svcTotal=paid.reduce((s2,o)=>s2+(+o.service_charge||0),0);
   const roundTotal=paid.reduce((s2,o)=>s2+(+o.round_adj||0),0);
   const discPct=grossTotal>0?(discTotal/grossTotal*100):0;
-  const itemQty=paid.reduce((s2,o)=>s2+(o.items||[]).reduce((a,i)=>a+(+i.qty||0),0),0);
+  const itemQty=paid.reduce((s2,o)=>s2+(o.items||[]).reduce((a,i)=>a+(isPkgLine(i)?0:(+i.qty||0)),0),0);   // จานอาหาร ไม่นับหัวลูกค้าบุฟเฟต์
   const avgItem=itemQty>0?rev/itemQty:0;
+  const pkgGuests=pkgGuestRowsOf(paid);   // ลูกค้าบุฟเฟต์ (ผู้ใหญ่/เด็ก) ของบิลที่ปิดแล้ว
   // บิลที่ยกเลิกโดยไม่มีบันทึกว่าใครยกเลิก = ตรวจย้อนหลังไม่ได้เลย ต้องเห็นตัวเลขนี้
   const cancelNoWho=cancelled.filter(o=>!o.cancelled_by).length;
   // เมนูขายดี — นับจากบิลที่ปิดแล้วเท่านั้น
   const topMenus=(()=>{
     const m2=new Map();
     for(const o of paid)for(const i of (o.items||[])){
+      if(isPkgLine(i))continue;   // หัวลูกค้าบุฟเฟต์ไม่ใช่เมนู
       const k=String(i.name||"").trim();if(!k)continue;
       const cur=m2.get(k)||{qty:0,amt:0};
       cur.qty+=(+i.qty||0);cur.amt+=(+i.price||0)*(+i.qty||0);m2.set(k,cur);
@@ -26877,7 +27404,8 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
           ...(vatTotal>0?[{l:"📊 VAT",v:`฿${m(vatTotal)}`,c:C.blue}]:[]),
           ...(roundTotal!==0?[{l:"🪙 ปัดเศษรวม",v:`${roundTotal>0?"+":"-"}฿${m(Math.abs(roundTotal))}`,c:C.ink3}]:[]),
           {l:"📈 เฉลี่ย/บิล",v:`฿${m(avg)}`,c:C.brand},
-          ...(itemQty>0?[{l:"🍽️ จำนวนรายการที่ขาย",v:`${m(itemQty)} ชิ้น`,c:C.ink2,sub:`เฉลี่ย ฿${m(avgItem)}/ชิ้น`}]:[])].map(s=><div key={s.l} style={{flex:"1 1 190px",background:C.white,borderRadius:12,padding:"14px 18px",border:`1px solid ${s.warn?C.red+"55":C.line}`}}><div style={{fontSize:14,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:28,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div>{s.sub&&<div style={{fontSize:12.5,color:s.warn?C.red:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2,lineHeight:1.4}}>{s.sub}</div>}</div>)}
+          ...(itemQty>0?[{l:"🍽️ จำนวนรายการที่ขาย",v:`${m(itemQty)} ชิ้น`,c:C.ink2,sub:`เฉลี่ย ฿${m(avgItem)}/ชิ้น`}]:[]),
+          ...(pkgGuests.length?[{l:"🍖 ลูกค้าบุฟเฟต์",v:`${m(pkgGuests.reduce((t,g)=>t+g.qty,0))} คน`,c:"#065F46",sub:pkgGuests.map(g=>`${g.label} ${g.qty}`).join(" · ")}]:[])].map(s=><div key={s.l} style={{flex:"1 1 190px",background:C.white,borderRadius:12,padding:"14px 18px",border:`1px solid ${s.warn?C.red+"55":C.line}`}}><div style={{fontSize:14,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</div><div style={{fontSize:28,fontWeight:900,color:s.c,fontFamily:"'Sarabun',sans-serif"}}>{s.v}</div>{s.sub&&<div style={{fontSize:12.5,color:s.warn?C.red:C.ink4,fontFamily:"'Sarabun',sans-serif",marginTop:2,lineHeight:1.4}}>{s.sub}</div>}</div>)}
       </div>
       {PB.rows.length>0&&<div style={{background:C.bg,borderRadius:12,padding:"12px 16px",marginBottom:14,border:`1px solid ${C.line}`}}>
         <div style={{fontSize:15,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:9}}>💳 แยกตามวิธีชำระเงิน</div>

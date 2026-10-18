@@ -414,6 +414,67 @@ const main = async () => {
     bad.length ? warn(`${bad.length} ใบ — ตรวจเส้นทางเงินของใบโอน`, bad) : ok("ไม่มี");
   }
 
+  // ══ 21) แพ็คเกจบุฟเฟต์ (สาขา 5) ═══════════════════════════════════════════
+  // เงินของแพ็คเกจเป็นบรรทัดใน orders.items (kind:"pkg") — ยอดรวมของบิลต้อง = Σ ราคา×จำนวน เสมอ
+  // ไม่งั้น VAT/ใบเสร็จ/ใบปิดกะ/ท่อบัญชี (ซึ่งอ่านคนละที่) จะเห็นตัวเลขไม่ตรงกัน
+  // บิลล่าสุด 7 วัน + บิลที่ยังเปิดทุกใบ (อ่านอย่างเดียว) · คลังแพ็คเกจอ่านจาก pos_settings.buffet_packages
+  const sinceISO = new Date(now - 7 * 24 * HOUR).toISOString();
+  const [recentBills, openWithItems] = await Promise.all([
+    gAll(`orders?select=id,branch_id,table_id,table_number,status,items,subtotal,created_at&created_at=gte.${encodeURIComponent(sinceISO)}&order=id.asc`),
+    gAll("orders?select=id,branch_id,table_id,table_number,status,items,subtotal,created_at&or=(status.is.null,status.not.in.(paid,cancelled))&order=id.asc"),
+  ]);
+  const billsById = new Map();
+  for (const o of [...recentBills, ...openWithItems]) billsById.set(+o.id, o);
+  const pkgBills = [...billsById.values()];
+  let pkgLib = null;   // null = อ่านคลังไม่ได้ (ยังไม่ได้รัน sql/buffet-packages.sql)
+  try { pkgLib = await gAll("pos_settings?select=branch_id,buffet_packages"); } catch { pkgLib = null; }
+
+  section("21) แพ็คเกจบุฟเฟต์: ยอดบิล · บรรทัดแพ็คเกจ · คลังของสาขา");
+  {
+    const isPkg = (it) => !!it && it.kind === "pkg";
+    const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+    const tag = (o) => `${bn(o.branch_id)} บิล #${o.id} โต๊ะ ${o.table_number || "-"} [${o.status || "-"}]`;
+    const bad = [];
+    for (const o of pkgBills) {
+      const its = Array.isArray(o.items) ? o.items : [];
+      const sum = r2(its.reduce((s, i) => s + (+(i && i.price) || 0) * (+(i && i.qty) || 0), 0));
+      if (Math.abs(sum - r2(o.subtotal)) > 0.01) bad.push(`${tag(o)} — ยอด subtotal ฿${r2(o.subtotal)} ≠ Σ ราคา×จำนวน ฿${sum}`);
+      const pl = its.filter(isPkg);
+      for (const l of pl) if (!((+l.qty || 0) > 0) || (+l.price || 0) < 0 || !Number.isFinite(+l.price)) bad.push(`${tag(o)} — บรรทัดแพ็คเกจ "${l.name}" จำนวน ${l.qty} ราคา ${l.price} (ต้องจำนวน ≥ 1 และราคาไม่ติดลบ)`);
+      const ids = [...new Set(pl.map((l) => String((l.pkg && l.pkg.id) ?? "")))];
+      if (ids.length > 1) bad.push(`${tag(o)} — มีแพ็คเกจมากกว่า 1 แบบในบิลเดียว (${ids.join(", ")})`);
+      if (pl.length && !pl.some((l) => l.pkg && l.pkg.guest && (+l.qty || 0) >= 1)) bad.push(`${tag(o)} — บิลแพ็คเกจไม่มีลูกค้าเลย (ผู้ใหญ่/เด็ก = 0)`);
+    }
+    if (pkgLib === null) {
+      const nPkg = pkgBills.filter((o) => (o.items || []).some(isPkg)).length;
+      (nPkg ? warn : ok)(`อ่านคลังแพ็คเกจไม่ได้ — ยังไม่ได้รัน sql/buffet-packages.sql (บิลที่มีแพ็คเกจ ${nPkg} ใบ)`);
+    } else {
+      const libOf = (b) => { const row = pkgLib.find((r) => +r.branch_id === +b); return Array.isArray(row && row.buffet_packages) ? row.buffet_packages.filter((p) => p && p.id != null) : []; };
+      // บิลที่ยังเปิดอยู่ ต้องหาแพ็คเกจเจอและยังเปิดใช้ — ไม่งั้นจอพนักงาน/หน้าลูกค้าสั่งได้แค่เมนูที่อยู่ในบิลแล้ว
+      for (const o of pkgBills) {
+        if (o.status === "paid" || o.status === "cancelled") continue;
+        const l = (o.items || []).find(isPkg);
+        if (!l || !l.pkg) continue;
+        const def = libOf(o.branch_id).find((p) => String(p.id) === String(l.pkg.id));
+        if (!def) bad.push(`${tag(o)} — แพ็คเกจ "${l.pkg.name}" (${l.pkg.id}) ไม่มีในคลังของสาขาแล้ว`);
+        else if (def.active === false) bad.push(`${tag(o)} — แพ็คเกจ "${def.name}" ถูกปิดใช้ ทั้งที่โต๊ะยังเปิดอยู่`);
+      }
+      // เมนูในแพ็คเกจที่สาขาไม่ได้ติ๊กเปิดขาย/ถูกลบ = ลูกค้าไม่เห็นทั้งที่อยู่ในแพ็คเกจ (ปุ่มติ๊กชนะเสมอ ห้ามผ่อน)
+      const mById = new Map(menus.map((m) => [+m.id, m]));
+      for (const row of pkgLib) for (const p of (Array.isArray(row.buffet_packages) ? row.buffet_packages : [])) {
+        if (!p || p.active === false) continue;
+        const gone = [], hidden = [];
+        for (const id of (Array.isArray(p.menu_ids) ? p.menu_ids : [])) {
+          const m = mById.get(+id);
+          if (!m) gone.push(`#${id}`); else if (!visM(m, row.branch_id)) hidden.push(`"${String(m.name).trim()}" #${m.id}`);
+        }
+        if (gone.length) bad.push(`${bn(row.branch_id)} แพ็คเกจ "${p.name}" — เมนูถูกลบไปแล้ว: ${gone.slice(0, 5).join(", ")}${gone.length > 5 ? " …" : ""}`);
+        if (hidden.length) bad.push(`${bn(row.branch_id)} แพ็คเกจ "${p.name}" — สาขาไม่ได้ติ๊กเปิดขาย: ${hidden.slice(0, 5).join(", ")}${hidden.length > 5 ? " …" : ""}`);
+      }
+    }
+    bad.length ? warn(`${bad.length} จุด — ตรวจบิลแพ็คเกจ/คลังแพ็คเกจ`, bad) : ok(`ไม่มี (ตรวจ ${pkgBills.length} บิล)`);
+  }
+
   console.log(`\n${"═".repeat(50)}`);
   console.log(warns === 0 ? "✅ สะอาดทุกข้อ" : `⚠️ พบ ${warns} เรื่องที่ควรจัดการ (รายละเอียดด้านบน)`);
 };
