@@ -8524,6 +8524,12 @@ section("ปุ่มเรียกพนักงาน + ภาษาไท�
     APP.includes("if(!(f.kind===\"pj\"&&f.what===\"เรียกพนักงาน\")&&!await confirmDlg({title:\"ไม่ต้องพิมพ์แล้ว?\"") && APP.includes("{pj&&f.what===\"เรียกพนักงาน\"?\"รับทราบ\":\"ไม่ต้องพิมพ์แล้ว\"}") && APP.includes("แต่ใบไม่ออก — เดินไปดูที่โต๊ะ"));
 }
 
+// ── จอโต๊ะ: ปุ่มพิมพ์ QR มีปุ่มเดียวเสมอ (เจ้าของสั่ง 18 ต.ค. 69 — โต๊ะที่เพิ่งเปิดเคยขึ้นสองปุ่มซ้ำกัน) ──
+{
+  const banner = "{justOpened&&justOpened.id===selTable.id&&<div", toolbar = "{!(justOpened&&justOpened.id===selTable.id)&&<button onClick={printSelQR}";
+  ok_("จอโต๊ะ: ปุ่มพิมพ์ QR มีปุ่มเดียว — แถบเปิดโต๊ะขึ้นเมื่อไร ปุ่มเล็กด้านบนซ่อน (เงื่อนไขตรงข้ามกันเป๊ะ)",
+    APP.includes(banner) && APP.includes(toolbar) && (APP.match(/onClick={printSelQR}/g) || []).length === 2);
+}
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
