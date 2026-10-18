@@ -450,14 +450,15 @@ const main = async () => {
       (nPkg ? warn : ok)(`อ่านคลังแพ็คเกจไม่ได้ — ยังไม่ได้รัน sql/buffet-packages.sql (บิลที่มีแพ็คเกจ ${nPkg} ใบ)`);
     } else {
       const libOf = (b) => { const row = pkgLib.find((r) => +r.branch_id === +b); return Array.isArray(row && row.buffet_packages) ? row.buffet_packages.filter((p) => p && p.id != null) : []; };
-      // บิลที่ยังเปิดอยู่ ต้องหาแพ็คเกจเจอและยังเปิดใช้ — ไม่งั้นจอพนักงาน/หน้าลูกค้าสั่งได้แค่เมนูที่อยู่ในบิลแล้ว
+      // บิลที่ยังเปิดอยู่ ต้องหาแพ็คเกจเจอ — ไม่เจอ = จอพนักงาน/หน้าลูกค้าสั่งได้แค่เมนูที่อยู่ในบิลแล้ว
+      // ลบจากคลัง (active:false) หลังเปิดโต๊ะ = โต๊ะนั้นยังสั่งเมนูของแพ็คเกจได้จนปิดบิล (แจ้งไว้ให้รู้ ไม่ใช่ของเสีย)
       for (const o of pkgBills) {
         if (o.status === "paid" || o.status === "cancelled") continue;
         const l = (o.items || []).find(isPkg);
         if (!l || !l.pkg) continue;
         const def = libOf(o.branch_id).find((p) => String(p.id) === String(l.pkg.id));
         if (!def) bad.push(`${tag(o)} — แพ็คเกจ "${l.pkg.name}" (${l.pkg.id}) ไม่มีในคลังของสาขาแล้ว`);
-        else if (def.active === false) bad.push(`${tag(o)} — แพ็คเกจ "${def.name}" ถูกปิดใช้ ทั้งที่โต๊ะยังเปิดอยู่`);
+        else if (def.active === false) bad.push(`${tag(o)} — แพ็คเกจ "${def.name}" ถูกลบจากคลังแล้ว แต่โต๊ะยังเปิดอยู่ (ยังสั่งเมนูเดิมได้จนปิดบิล)`);
       }
       // เมนูในแพ็คเกจที่สาขาไม่ได้ติ๊กเปิดขาย/ถูกลบ = ลูกค้าไม่เห็นทั้งที่อยู่ในแพ็คเกจ (ปุ่มติ๊กชนะเสมอ ห้ามผ่อน)
       const mById = new Map(menus.map((m) => [+m.id, m]));

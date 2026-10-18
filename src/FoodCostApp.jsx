@@ -1103,7 +1103,7 @@ const api = {
         // ยังมีเมนูนอกแพ็คเกจได้ (เช่นเมนู ฿0 ของแพ็คเกจที่แพงกว่า) · พนักงานไม่ถูกกันตรงนี้
         if(ordered_by==="customer"&&pkgAllowed===undefined){
           pkgAllowed=null;
-          if(pkgOfBill(cur.items)){const sc=pkgMenuScopeOf(cur.items,await readBranchPackages(branch_id));pkgAllowed=sc?sc.ids:null;}
+          if(pkgOfBill(cur.items)){const sc=pkgMenuScopeOf(cur.items,(await buffetPkgRead(branch_id)).packages);pkgAllowed=sc?sc.ids:null;}
         }
         if(pkgAllowed){
           const out=newItems.filter(i=>!pkgAllowed.has(String(i&&i.menu_id)));
@@ -1193,7 +1193,7 @@ const api = {
       if(line)next=want>0?items.map((it,i)=>i===at?{...it,qty:want}:it):items.filter((_,i)=>i!==at);
       else{
         // บรรทัดที่ตอนเปิดโต๊ะเป็น 0 (เช่น เด็ก/เตาเพิ่ม) — ราคาจากคลังของสาขา ณ ตอนนี้
-        const def=(await readBranchPackages(cur.branch_id)).find(p=>String(p.id)===String(pk.id));
+        const def=(await buffetPkgRead(cur.branch_id)).packages.find(p=>String(p.id)===String(pk.id));
         const made=def?pkgLinesOf(def,{[key]:want},new Date().toISOString()):[];
         if(!made.length)throw new Error("แพ็คเกจนี้ไม่มีรายการนี้แล้ว — แจ้งผู้จัดการ");
         const last=items.reduce((m,it,i)=>isPkgLine(it)?i:m,-1);
@@ -2576,6 +2576,7 @@ function printOrphansRecent(printers,branchId,now,winMs){
 const isKitchenLine = it => !!it && it.kind !== "pkg";
 // ตัวพิมพ์รุ่นแรกที่รู้จักรายการแพ็คเกจ — รุ่นก่อนหน้าพิมพ์ "4x ผู้ใหญ่" ออกเครื่องที่รับทุกหมวด หรือขึ้นแดง "ไม่มีเครื่องรับ" ทุกโต๊ะ
 const PKG_AGENT_MIN_VER=48;
+const PKG_AGENT_OLD_MSG="อัปเดตโปรแกรมตัวพิมพ์ก่อน (ต้องเวอร์ชัน 48) — ปิดแล้วเปิดโปรแกรมตัวพิมพ์ในมือถือของร้านใหม่ · ระหว่างนี้ใช้ \"ไม่ใช้แพ็คเกจ\" ได้";
 // เปิดโต๊ะแบบแพ็คเกจได้ไหม: สาขาไม่มีเครื่องพิมพ์แลนที่เปิดใช้ (ไม่มีตัวพิมพ์มาพิมพ์อะไรเลย) หรือตัวพิมพ์เต้นมาเป็นรุ่น 48 ขึ้นไป
 // false = จอขายต้องบอก "อัปเดตโปรแกรมตัวพิมพ์ก่อน (ต้องเวอร์ชัน 48)" · ยังไม่เคยได้ยินตัวพิมพ์ (ไม่รู้รุ่น) = false
 function canOpenPackageTables(printers,branchId){
@@ -19778,18 +19779,10 @@ async function printKitchen(items,tableNum,printers=[]){
 const PKG_CAT="แพ็คเกจบุฟเฟต์";
 const isPkgLine=it=>!!it&&it.kind==="pkg";
 // คลังแพ็คเกจของสาขา (pos_settings.buffet_packages) · ยังไม่ได้รัน SQL = ไม่มีคอลัมน์ = [] = ขายแบบเดิมทุกอย่าง
-const pkgLibOf=(s)=>Array.isArray(s&&s.buffet_packages)?s.buffet_packages.filter(p=>p&&p.id!=null):[];
+// ผ่านตัวกรองของคลัง (normalizeBuffetPackages) ตัวเดียว — ของเสีย/ราคาเพี้ยนไม่หลุดเข้าบิล
+// อ่านสดจากฐาน (ราคาตอนเปิดโต๊ะ/เพิ่มบรรทัด) = api.getBuffetPackages → buffetPkgRead ตัวเดียวกับจอคลัง
+const pkgLibOf=(s)=>normalizeBuffetPackages(s&&s.buffet_packages);
 const activePkgsOf=(s)=>pkgLibOf(s).filter(p=>p.active!==false);
-// อ่านคลังสดจากฐาน (ราคาปัจจุบันตอนเปิดโต๊ะ/เพิ่มบรรทัด) · คอลัมน์ยังไม่มี = [] · เน็ตล่ม = โยนต่อ (ห้ามเดา)
-async function readBranchPackages(bid){
-  try{
-    const r=await sb(`pos_settings?branch_id=eq.${+bid}&select=buffet_packages&limit=1`);
-    return pkgLibOf(Array.isArray(r)?r[0]:null);
-  }catch(e){
-    if(/42703|PGRST204|does not exist|schema cache/i.test(String((e&&e.message)||e)))return [];
-    throw e;
-  }
-}
 // แพ็คเกจ + จำนวน → บรรทัดในบิล (ราคา ณ ตอนนี้ · เฉพาะบรรทัดที่จำนวน ≥ 1)
 function pkgLinesOf(pkg,counts,at){
   if(!pkg||pkg.id==null)return [];
@@ -19812,13 +19805,15 @@ const pkgOfBill=(items)=>{const l=(items||[]).find(isPkgLine);return l&&l.pkg?l.
 const pkgCountsText=(items,guestOnly)=>(items||[]).filter(it=>isPkgLine(it)&&it.pkg&&(!guestOnly||it.pkg.guest)).map(it=>`${it.pkg.label||it.name} ${+it.qty||0}`).join(" · ");
 // มีแต่บรรทัดแพ็คเกจ = เปิดโต๊ะแล้ว ยังไม่ได้สั่งอาหาร (ไม่ใช่ "สั่งอาหารแล้ว")
 const isPkgOnlyBill=(o)=>{const its=(o&&o.items)||[];return its.length>0&&its.every(isPkgLine);};
-// เมนูที่บิลแพ็คเกจสั่งได้ = เมนูในแพ็คเกจ (คลังของสาขา) · แพ็คเกจถูกลบ/ปิด = เฉพาะเมนูที่อยู่ในบิลแล้ว (missing)
+// เมนูที่บิลแพ็คเกจสั่งได้ = เมนูในแพ็คเกจ (คลังของสาขา)
+// ลบจากคลัง (active:false = ลบแบบเก็บไว้) = เลือกตอนเปิดโต๊ะใหม่ไม่ได้ แต่โต๊ะที่เปิดไว้ก่อนยังสั่งเมนูของแพ็คเกจได้จนปิดบิล (retired)
+// หาแพ็คเกจไม่เจอเลย (ข้อมูลเสีย/อ่านคลังไม่ได้) = เฉพาะเมนูที่อยู่ในบิลแล้ว (missing — ไม่เปิดทั้งร้าน)
 // บิลไม่มีแพ็คเกจ = null (สั่งตามเมนูปกติ) · ทุกจอยังกรองปุ่มติ๊กสาขา (menuVisibleAt) ซ้ำอีกชั้นเสมอ
 function pkgMenuScopeOf(items,lib){
   const p=pkgOfBill(items);if(!p)return null;
   const def=(lib||[]).find(x=>x&&String(x.id)===String(p.id))||null;
-  if(def&&def.active!==false)return {ids:new Set((Array.isArray(def.menu_ids)?def.menu_ids:[]).map(String)),missing:false,def};
-  return {ids:new Set((items||[]).filter(it=>!isPkgLine(it)&&it&&it.menu_id!=null).map(it=>String(it.menu_id))),missing:true,def};
+  if(def)return {ids:new Set((Array.isArray(def.menu_ids)?def.menu_ids:[]).map(String)),missing:false,def,retired:def.active===false};
+  return {ids:new Set((items||[]).filter(it=>!isPkgLine(it)&&it&&it.menu_id!=null).map(it=>String(it.menu_id))),missing:true,def:null};
 }
 // ใบเสร็จบิลแพ็คเกจ: อาหาร ฿0 รวมเป็นบรรทัดเดียว (บุฟเฟต์มื้อยาวๆ ใบจะยาวหลายสิบบรรทัด)
 // บรรทัดแพ็คเกจกับของที่มีราคาอยู่ครบ — ยอดบนใบบวกได้เท่าเดิม · บิลไม่มีแพ็คเกจ = เหมือนเดิมทุกบรรทัด
@@ -19920,7 +19915,7 @@ function MoveTableModal({from,order,tables,activeOrders,branch,currentUser,onClo
     .filter(t=>t.active!==false&&String(t.id)!==String(from.id)&&!taken.has(String(t.id)))
     .filter(t=>{const s=q.trim().toLowerCase();return !s||String(t.table_number||"").toLowerCase().includes(s)||String(t.label||"").toLowerCase().includes(s)||String(t.zone||"").toLowerCase().includes(s);})
     .sort((a,b)=>thCmp(a.zone||"",b.zone||"")||thCmp(a.table_number,b.table_number));
-  const nItems=(order?.items||[]).reduce((s,i)=>s+(+i.qty||0),0);
+  const nItems=(order?.items||[]).reduce((s,i)=>s+(isPkgLine(i)?0:(+i.qty||0)),0);   // จานอาหาร (หัวลูกค้าบุฟเฟต์ไม่ใช่จาน)
   const total=(order?.items||[]).reduce((s,i)=>s+(+i.price||0)*(+i.qty||0),0);
   async function doMove(t){
     if(busy)return;
@@ -20599,7 +20594,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   const bidSale=branch?.id;
   // ── บิลแพ็คเกจบุฟเฟต์ ── โต๊ะนี้สั่งได้เฉพาะเมนูในแพ็คเกจ (ปุ่มติ๊กสาขายังตัดสินซ้ำอีกชั้นเหมือนเดิม)
-  // แพ็คเกจถูกลบ/ปิดไปแล้ว = สั่งได้เฉพาะเมนูที่อยู่ในบิลแล้ว + เตือนให้แจ้งผู้จัดการ
+  // ลบจากคลังหลังเปิดโต๊ะ = โต๊ะนี้ยังสั่งเมนูของแพ็คเกจได้จนปิดบิล · หาแพ็คเกจไม่เจอ = เฉพาะเมนูในบิลแล้ว + เตือนให้แจ้งผู้จัดการ
   const pkgLines=useMemo(()=>items.filter(isPkgLine),[items]);
   const billPkg=pkgLines.length?pkgLines[0].pkg:null;
   const pkgScope=useMemo(()=>pkgMenuScopeOf(items,pkgLibOf(posSettings)),[items,posSettings]);
@@ -20890,7 +20885,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     // เลยต้องมีเหตุผลทุกครั้ง และต้องรู้ว่าใครกด ไม่งั้นไม่มีอะไรให้ตรวจย้อนหลังเลย
     const reason=await reasonDlg({
       title:`ยกเลิกบิล — โต๊ะ ${table.table_number}`,
-      message:`ยอด ฿${(+total||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})} · ${items.length} รายการ\nระบบจะบันทึกชื่อผู้ยกเลิก เวลา และเหตุผลไว้ ดูย้อนหลังได้ที่รายงานยอดขาย`,
+      message:`ยอด ฿${(+total||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})} · ${items.filter(i=>!isPkgLine(i)).length} รายการ${billPkg?` · ${billPkg.name} ${pkgCountsText(items,true)}`:""}\nระบบจะบันทึกชื่อผู้ยกเลิก เวลา และเหตุผลไว้ ดูย้อนหลังได้ที่รายงานยอดขาย`,
       presets:["ลูกค้าไม่มา","เปิดโต๊ะผิด","กดสั่งผิด","ลูกค้ายกเลิกรายการ","ย้ายไปรวมโต๊ะอื่น"],
       confirmLabel:"ยืนยันยกเลิกบิล",
       cancelLabel:"ไม่ยกเลิก",
@@ -21129,7 +21124,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     <div style={{flex:1,display:isMobile&&mobileView!=="menu"?"none":"flex",flexDirection:"column",borderRight:isMobile?"none":`1px solid ${C.line}`,minWidth:0,minHeight:0}}>
       {pkgScope&&<div style={{padding:"6px 12px",borderBottom:`1px solid ${C.line}`,flexShrink:0,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,
         background:pkgScope.missing?C.redLight:"#ECFDF5",color:pkgScope.missing?C.red:"#065F46"}}>
-        {pkgScope.missing?"⚠️ แพ็คเกจถูกลบ — แจ้งผู้จัดการ (สั่งได้เฉพาะเมนูที่อยู่ในบิลแล้ว)":`🍖 เมนูของแพ็คเกจ ${billPkg?billPkg.name:""}`}
+        {pkgScope.missing?"⚠️ หาแพ็คเกจของโต๊ะนี้ไม่เจอ — แจ้งผู้จัดการ (สั่งได้เฉพาะเมนูที่อยู่ในบิลแล้ว)":`🍖 เมนูของแพ็คเกจ ${billPkg?billPkg.name:""}${pkgScope.retired?" · ลบจากคลังแล้ว (โต๊ะนี้สั่งได้จนปิดบิล)":""}`}
       </div>}
       <div style={{padding:"8px 12px",borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
         {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"8px 14px",minHeight:36,borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13.5,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
@@ -22022,7 +22017,7 @@ function CustomerPage({branchId,tableId,token}){
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // the Menu screen for this branch. No local categories → only "ทั้งหมด".
   // ── โต๊ะบุฟเฟต์: เมนูที่หน้านี้แสดง = เมนูในแพ็คเกจของบิล ∩ สาขาเปิดขาย ∩ ไม่ได้ซ่อน ──
-  // แพ็คเกจถูกลบ/ปิด = เฉพาะเมนูที่อยู่ในบิลแล้ว (ไม่เปิดเมนูทั้งร้านให้เด็ดขาด)
+  // ลบจากคลังหลังเปิดโต๊ะ = ยังเห็นเมนูของแพ็คเกจจนปิดบิล · หาแพ็คเกจไม่เจอ = เฉพาะเมนูที่อยู่ในบิลแล้ว (ไม่เปิดเมนูทั้งร้านให้เด็ดขาด)
   const pkgScope=useMemo(()=>pkgMenuScopeOf(myOrder&&myOrder.items,pkgLibOf(posCfg)),[myOrder,posCfg]);
   const pkgIdsKey=pkgScope?[...pkgScope.ids].sort().join(","):"";
   const billPkg=pkgOfBill(myOrder&&myOrder.items);
@@ -25836,7 +25831,12 @@ function POSOpenTableStep({table,branch,posSettings,currentUser,printers=[],onCa
   const[counts,setCounts]=useState({});
   const[busy,setBusy]=useState(false);
   const busyRef=useRef(false);
-  useEffect(()=>{let off=false;readBranchPackages(branch.id).then(l=>{if(!off)setLib(l.filter(p=>p.active!==false));}).catch(()=>{});return()=>{off=true;};},[branch.id]);
+  useEffect(()=>{let off=false;api.getBuffetPackages(branch.id).then(r=>{if(!off&&r&&Array.isArray(r.packages))setLib(r.packages.filter(p=>p.active!==false));}).catch(()=>{});return()=>{off=true;};},[branch.id]);
+  // ตัวพิมพ์รุ่นเก่า (<48) พิมพ์หัวลูกค้าเข้าครัว — เปิดแบบแพ็คเกจไม่ได้จนกว่าจะอัปเดต ("ไม่ใช้แพ็คเกจ" ยังใช้ได้)
+  // รายชื่อเครื่องบนจออาจยังไม่โหลด (ว่าง = ผ่าน) หรือค้าง 60 วิ ⟹ ถามสดครั้งเดียวตอนเปิดจอนี้ และอีกครั้งตอนกดเปิดโต๊ะ
+  const freshPrinters=async()=>{try{const all=await api.getAllPrinters();if(Array.isArray(all))return all;}catch{}return printers;};
+  const[agentOld,setAgentOld]=useState(()=>!canOpenPackageTables(printers,branch.id));
+  useEffect(()=>{let off=false;freshPrinters().then(prs=>{if(!off)setAgentOld(!canOpenPackageTables(prs,branch.id));});return()=>{off=true;};},[branch.id]);// eslint-disable-line react-hooks/exhaustive-deps
   const pkg=lib.find(p=>String(p.id)===String(pick))||null;
   const lines=pkg&&Array.isArray(pkg.lines)?pkg.lines.filter(l=>l&&l.key!=null):[];
   const choose=(p)=>{setPick(p.id);const c={};(Array.isArray(p.lines)?p.lines:[]).forEach(l=>{if(l&&l.key!=null)c[l.key]=l.key==="adult"?1:0;});setCounts(c);};
@@ -25848,6 +25848,10 @@ function POSOpenTableStep({table,branch,posSettings,currentUser,printers=[],onCa
     if(guests<1){notifyDlg("ต้องมีลูกค้าอย่างน้อย 1 คน");return;}
     busyRef.current=true;setBusy(true);
     try{
+      // ถามรุ่นตัวพิมพ์สดก่อนเปิดทุกครั้ง · อ่านไม่ได้ = ใช้รายชื่อบนจอ
+      const okAgent=canOpenPackageTables(await freshPrinters(),branch.id);
+      setAgentOld(!okAgent);
+      if(!okAgent){notifyDlg(PKG_AGENT_OLD_MSG);busyRef.current=false;setBusy(false);return;}
       const who=currentUser?.username||currentUser?.name||null;
       const r=await api.posOpenTable({branch_id:branch.id,table_id:table.id,table_number:table.table_number,pkg,counts,opened_by:who});
       if(r&&r.existing){posToast("โต๊ะ "+table.table_number+" มีบิลเปิดอยู่แล้ว — แสดงบิลเดิม (ไม่ได้เปิดซ้ำ)","warn",6000);onOpened(r.existing,{existing:true});return;}
@@ -25867,6 +25871,7 @@ function POSOpenTableStep({table,branch,posSettings,currentUser,printers=[],onCa
   const sBtn={width:44,height:44,borderRadius:10,border:`1.5px solid ${C.line}`,background:C.white,fontSize:20,fontWeight:900,color:C.ink2,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",padding:0};
   return <Modal title={`เปิดโต๊ะ ${table.table_number}${table.label?` — ${table.label}`:""}`} onClose={onCancel}>
     <div style={{fontFamily:"'Sarabun',sans-serif"}}>
+      {agentOld&&<div role="alert" style={{background:C.redLight,color:C.red,border:`1px solid ${C.red}55`,borderRadius:10,padding:"8px 10px",fontSize:12.5,fontWeight:800,lineHeight:1.5,marginBottom:10}}>⚠️ {PKG_AGENT_OLD_MSG}</div>}
       <div style={{fontSize:13,fontWeight:800,color:C.ink2,marginBottom:8}}>เลือกแพ็คเกจ <span style={{fontWeight:600,color:C.ink4,fontSize:12}}>(เปลี่ยนทีหลังไม่ได้)</span></div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8,marginBottom:10}}>
         {lib.map(p=>{const on=String(p.id)===String(pick);const ls=(Array.isArray(p.lines)?p.lines:[]).filter(l=>l&&l.guest);
@@ -25896,7 +25901,7 @@ function POSOpenTableStep({table,branch,posSettings,currentUser,printers=[],onCa
       </div>}
       <div style={{display:"flex",gap:8}}>
         <Btn v="ghost" onClick={onCancel} full s={{padding:"12px"}}>ยกเลิก</Btn>
-        <Btn onClick={open} loading={busy} disabled={!pkg||guests<1} full icon={I.check} s={{padding:"12px",fontWeight:900}}>เปิดโต๊ะ</Btn>
+        <Btn onClick={open} loading={busy} disabled={!pkg||guests<1||agentOld} full icon={I.check} s={{padding:"12px",fontWeight:900}}>เปิดโต๊ะ</Btn>
       </div>
     </div>
   </Modal>;
