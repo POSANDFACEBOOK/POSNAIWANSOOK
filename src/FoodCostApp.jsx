@@ -501,6 +501,191 @@ async function writeMenuBranchKey(menuId,field,branchId,val){
   throw new Error("มีสาขาอื่นแก้เมนูนี้พร้อมกัน — กดใหม่อีกครั้ง");
 }
 
+// ── แพ็คเกจบุฟเฟต์: คลังแพ็คเกจรายสาขา (pos_settings.buffet_packages) ─────────────
+// [{id:'pk_…',name,active,lines:[{key:'adult'|'child'|'x_…',label,price,guest}],menu_ids:[เลขเมนู],updated_at,updated_by}]
+// ลำดับใน array = ลำดับที่โชว์ · ลบ = active:false (โต๊ะที่เปิดด้วยแพ็คเกจนั้นยังหาเมนูเจอ)
+// ราคาถูกจดลงบิลตอนเปิดโต๊ะ — แก้ราคาที่นี่ไม่ย้อนไปเปลี่ยนโต๊ะที่เปิดอยู่
+// ยังไม่ได้รัน sql/buffet-packages.sql (42703/PGRST204) = ถือว่ายังไม่มีแพ็คเกจ ไม่ใช่ error
+const bpPrice=(v)=>{
+  if(v==null||v===""||typeof v==="boolean")return null;
+  const n=typeof v==="number"?v:Number(String(v).trim());
+  return Number.isFinite(n)&&n>=0?Math.round(n*100)/100:null;
+};
+// อ่านของในฐานแล้วกรองของเสียทิ้ง: ไม่มี id/ชื่อ · id ซ้ำ · ราคาไม่ใช่ตัวเลข/ติดลบ · ไม่มีบรรทัดนับคน
+// ราคาเป็นข้อความ ("299") แปลงเป็นตัวเลข ปัดทศนิยม 2 ตำแหน่ง · ลำดับเดิมคงไว้
+function normalizeBuffetPackages(raw){
+  if(!Array.isArray(raw))return [];
+  const out=[],seen=new Set();
+  for(const p of raw){
+    if(!p||typeof p!=="object"||Array.isArray(p))continue;
+    const id=typeof p.id==="string"?p.id.trim():"";
+    const name=typeof p.name==="string"?p.name.trim():"";
+    if(!id||!name||seen.has(id))continue;
+    const lines=[],keys=new Set();
+    for(const l of (Array.isArray(p.lines)?p.lines:[])){
+      if(!l||typeof l!=="object")continue;
+      const key=typeof l.key==="string"?l.key.trim():"";
+      const price=bpPrice(l.price);
+      if(!key||keys.has(key)||price==null)continue;
+      const label=(typeof l.label==="string"&&l.label.trim())||(key==="adult"?"ผู้ใหญ่":key==="child"?"เด็ก":"");
+      if(!label)continue;
+      keys.add(key);
+      lines.push({...l,key,label,price,guest:key==="adult"||key==="child"});   // นับเป็นคน = ผู้ใหญ่/เด็กเท่านั้น (รายการเพิ่มไม่นับ)
+    }
+    if(!lines.some(l=>l.guest))continue;   // ไม่มีบรรทัดนับคน = เปิดโต๊ะด้วยแพ็คเกจนี้ไม่ได้
+    const menu_ids=[],ms=new Set();
+    for(const v of (Array.isArray(p.menu_ids)?p.menu_ids:[])){const n=Number(v);if(Number.isInteger(n)&&n>0&&!ms.has(n)){ms.add(n);menu_ids.push(n);}}
+    seen.add(id);
+    out.push({...p,id,name,active:p.active!==false,lines,menu_ids,updated_at:p.updated_at||null,updated_by:p.updated_by||null});
+  }
+  return out;
+}
+const bpMissingCol=(e)=>/42703|PGRST204|does not exist|schema cache/i.test(String((e&&e.message)||e));
+const BP_NO_COL="ต้องรัน SQL เพิ่มคอลัมน์ก่อน (sql/buffet-packages.sql ครั้งเดียว)";
+// เงื่อนไขเขียนแบบมีเงื่อนไข: ปกติเทียบทั้งก้อน (eq.<json>) แบบเดียวกับ writeMenuBranchKey
+// ก้อนใหญ่จน URL ยาว (ทดสอบกับฐานจริง: ~20 KB ผ่าน · ~30 KB ได้ 400) → เทียบ "ลายนิ้วมือ" แทน
+// = จำนวนแพ็คเกจ + id และ updated_at ของทุกตำแหน่ง (ทุกการแก้จากจอนี้ตั้ง updated_at ใหม่ให้แพ็คเกจที่แก้เสมอ)
+const BP_CAS_MAX=6000;
+function bpCasFilter(raw){
+  if(raw==null)return "buffet_packages=is.null";
+  const full="buffet_packages=eq."+encodeURIComponent(JSON.stringify(raw));
+  if(full.length<=BP_CAS_MAX||!Array.isArray(raw))return full;
+  const f=[`buffet_packages->>${raw.length}=is.null`,`buffet_packages->>${raw.length-1}=not.is.null`];
+  raw.forEach((p,i)=>{
+    const id=p&&p.id,at=p&&p.updated_at;
+    f.push(`buffet_packages->${i}->>id=`+(id==null?"is.null":"eq."+encodeURIComponent(String(id))));
+    f.push(`buffet_packages->${i}->>updated_at=`+(at==null?"is.null":"eq."+encodeURIComponent(String(at))));
+  });
+  return f.join("&");
+}
+async function buffetPkgRead(bid){
+  try{
+    const r=await sb(`pos_settings?branch_id=eq.${+bid}&select=buffet_packages&limit=1`);
+    const row=Array.isArray(r)&&r[0]?r[0]:null;
+    const raw=row?(row.buffet_packages??null):null;
+    return {packages:normalizeBuffetPackages(raw),raw,hasRow:!!row,missingColumn:false};
+  }catch(e){
+    if(bpMissingCol(e))return {packages:[],raw:null,hasRow:false,missingColumn:true};
+    throw e;
+  }
+}
+// change(คลังล่าสุด) → คลังใหม่ หรือข้อความ (= ไม่บันทึก แจ้งผู้ใช้) · prev = ค่าดิบที่จอถืออยู่ (undefined = อ่านก่อน)
+// PATCH เฉพาะคอลัมน์นี้ เมื่อค่าในฐานยังเท่ากับที่อ่านมา — อีกเครื่องแทรกเขียนก่อน = ได้ [] กลับมา
+// → อ่านใหม่ แล้วทำ "การแก้ครั้งเดียวของผู้ใช้" ซ้ำบนค่าล่าสุด (ลองใหม่สูงสุด 3 รอบ) ไม่เขียนทับของอีกเครื่อง
+// ยังไม่มีแถวตั้งค่าของสาขา = สร้างแถวด้วยคอลัมน์นี้อย่างเดียว (ชนกับอีกเครื่อง = ไม่ทับ วนอ่านใหม่)
+async function buffetPkgSave(bid,change,prev){
+  let raw=prev,hasRow=true;
+  for(let i=0;i<4;i++){
+    if(i>0||raw===undefined){
+      const cur=await buffetPkgRead(bid);
+      if(cur.missingColumn){const e=new Error(BP_NO_COL);e.missingColumn=true;throw e;}
+      raw=cur.raw;hasRow=cur.hasRow;
+    }
+    const before=normalizeBuffetPackages(raw);
+    const next=change(normalizeBuffetPackages(raw));   // สำเนาใหม่ — change แก้ของตัวเองได้ ไม่กระทบ before
+    if(typeof next==="string")return {ok:false,msg:next,packages:before,raw};
+    const body=normalizeBuffetPackages(next);
+    if(JSON.stringify(body)===JSON.stringify(before))return {ok:true,packages:before,raw,before,unchanged:true};   // ไม่มีอะไรเปลี่ยน ไม่ต้องเขียน
+    let r;
+    try{
+      r=hasRow
+        ?await sb(`pos_settings?branch_id=eq.${+bid}&${bpCasFilter(raw)}&select=buffet_packages`,{method:"PATCH",body:JSON.stringify({buffet_packages:body})})
+        :await sb("pos_settings?select=buffet_packages",{method:"POST",body:JSON.stringify({branch_id:+bid,buffet_packages:body}),headers:{"Prefer":"resolution=ignore-duplicates,return=representation"}});
+    }catch(e){if(bpMissingCol(e)){const e2=new Error(BP_NO_COL);e2.missingColumn=true;throw e2;}throw e;}
+    if(Array.isArray(r)&&r.length){const w=r[0].buffet_packages??null;return {ok:true,packages:normalizeBuffetPackages(w),raw:w,before};}
+  }
+  throw new Error("มีเครื่องอื่นแก้แพ็คเกจพร้อมกัน — กดบันทึกอีกครั้ง");
+}
+const bpNameKey=(s)=>String(s||"").trim().replace(/\s+/g," ").toLowerCase();
+const bpNewId=(pre)=>`${pre}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;
+// การแก้หนึ่งครั้งของผู้ใช้ ทำบนคลังล่าสุดจากฐาน (เรียกซ้ำได้เมื่อชนกับอีกเครื่อง) · คืนข้อความ = ไม่บันทึก
+// op.at/op.by ประทับให้เฉพาะแพ็คเกจที่แก้ · ชื่อซ้ำดูเฉพาะแพ็คเกจที่ยังใช้อยู่ (ชื่อที่ลบไปแล้วใช้ใหม่ได้)
+function buffetPkgOp(list,op){
+  const L=Array.isArray(list)?list:[];
+  const GONE="แพ็คเกจนี้ถูกลบจากอีกเครื่องไปแล้ว — รายการบนจอโหลดใหม่ให้แล้ว";
+  const dup=(name,selfId)=>L.some(p=>p.active&&p.id!==selfId&&bpNameKey(p.name)===bpNameKey(name));
+  const stamp={updated_at:op.at,updated_by:op.by||null};
+  if(op.type==="create"){
+    if(dup(op.name,null))return "มีแพ็คเกจชื่อนี้แล้ว";
+    return [...L,{id:op.id,name:String(op.name).trim(),active:true,lines:op.lines,menu_ids:[],...stamp}];
+  }
+  const cur=L.find(p=>p.id===op.id);
+  if(!cur||(!cur.active&&op.type!=="delete"))return GONE;
+  if(op.type==="edit"){
+    // ราคา: ถ้าอีกเครื่องเพิ่งแก้แพ็คเกจเดียวกัน ห้ามเขียนทับเงียบๆ ให้ดูราคาล่าสุดก่อน
+    if((cur.updated_at||null)!==(op.base||null))return "แพ็คเกจนี้เพิ่งถูกแก้จากอีกเครื่อง — โหลดราคาล่าสุดให้แล้ว ตรวจแล้วกดบันทึกอีกครั้ง";
+    if(dup(op.name,cur.id))return "มีแพ็คเกจชื่อนี้แล้ว";
+    return L.map(p=>p.id===cur.id?{...p,name:String(op.name).trim(),lines:op.lines,...stamp}:p);
+  }
+  if(op.type==="menus"){
+    // เมนูในแพ็คเกจ: ทำเฉพาะส่วนต่าง (เพิ่ม/เอาออก) — เมนูที่อีกเครื่องเพิ่งติ๊กเพิ่มไม่หาย
+    const rm=new Set((op.remove||[]).map(Number)),have=new Set(cur.menu_ids.map(Number));
+    const ids=[...cur.menu_ids.filter(id=>!rm.has(+id)),...(op.add||[]).map(Number).filter(id=>!have.has(id)&&!rm.has(id))];
+    return L.map(p=>p.id===cur.id?{...p,menu_ids:[...new Set(ids)],...stamp}:p);
+  }
+  if(op.type==="delete"){
+    if(!cur.active)return L;   // อีกเครื่องลบไปแล้ว = ผลเหมือนกัน ไม่ต้องเขียน
+    return L.map(p=>p.id===cur.id?{...p,active:false,...stamp}:p);
+  }
+  return "ไม่รู้จักคำสั่งนี้";
+}
+// ฟอร์มแพ็คเกจ → บรรทัดราคา (หรือข้อความบอกช่องที่ผิด) · ราคา 0 ขึ้นไป ทศนิยมไม่เกิน 2 ตำแหน่ง
+// form = {name,adult,child,extras:[{key?,label,price}]} · key เดิมของรายการเพิ่มคงไว้ตอนแก้ (บิลอ้าง key นี้)
+const BP_PRICE_RE=/^\d+(\.\d{1,2})?$/;
+// ช่องราคาตอนพิมพ์: เหลือแค่ตัวเลขกับจุดเดียว ทศนิยมไม่เกิน 2 ตำแหน่ง (ติดลบพิมพ์ไม่ได้)
+const bpPriceInput=(v)=>{let s=String(v??"").replace(/[^\d.]/g,"");const i=s.indexOf(".");if(i>=0)s=s.slice(0,i+1)+s.slice(i+1).replace(/\./g,"").slice(0,2);return s;};
+function buffetFormToLines(form){
+  const f=form||{};
+  if(!String(f.name||"").trim())return "ใส่ชื่อแพ็คเกจ";
+  const px=(v)=>{const s=String(v??"").trim();return BP_PRICE_RE.test(s)?Math.round(Number(s)*100)/100:null;};
+  const a=px(f.adult),c=px(f.child);
+  if(a==null)return "ราคาผู้ใหญ่ต้องเป็นตัวเลข 0 ขึ้นไป ทศนิยมไม่เกิน 2 ตำแหน่ง";
+  if(c==null)return "ราคาเด็กต้องเป็นตัวเลข 0 ขึ้นไป ทศนิยมไม่เกิน 2 ตำแหน่ง";
+  const lines=[{key:"adult",label:"ผู้ใหญ่",price:a,guest:true},{key:"child",label:"เด็ก",price:c,guest:true}];
+  const names=new Set(["ผู้ใหญ่","เด็ก"].map(bpNameKey));
+  for(const x of (Array.isArray(f.extras)?f.extras:[])){
+    const label=String((x&&x.label)||"").trim();
+    if(!label)return "ใส่ชื่อรายการเพิ่มให้ครบ (เช่น เด็กเล็ก เตาเพิ่ม)";
+    if(names.has(bpNameKey(label)))return `ชื่อรายการ "${label}" ซ้ำ`;
+    const p=px(x.price);
+    if(p==null)return `ราคา "${label}" ต้องเป็นตัวเลข 0 ขึ้นไป ทศนิยมไม่เกิน 2 ตำแหน่ง`;
+    names.add(bpNameKey(label));
+    const key=typeof x.key==="string"&&/^x_/.test(x.key)?x.key:bpNewId("x");
+    lines.push({key,label,price:p,guest:false});
+  }
+  return lines;
+}
+// ประวัติการแก้ (action_history) — ใคร สาขาไหน แพ็คเกจไหน จากอะไรเป็นอะไร · ไม่มีอะไรเปลี่ยน = ""
+// nameOf(id) = ชื่อเมนู (ไม่รู้ชื่อ = #id)
+function buffetAuditText(before,after,who,branch,nameOf){
+  const fm=(n)=>"฿"+(+n||0).toLocaleString("en-US",{maximumFractionDigits:2});
+  const mn=(id)=>{const n=nameOf&&nameOf(id);return n||("#"+id);};
+  const head=`แพ็คเกจบุฟเฟต์ · ${(branch&&branch.name)||"-"} (#${(branch&&branch.id)??"-"}) · โดย ${who||"ไม่ทราบชื่อ"} — `;
+  const lineTxt=(l)=>`${l.label} ${fm(l.price)}`;
+  if(!before&&after)return head+`สร้าง "${after.name}": `+after.lines.map(lineTxt).join(" · ");
+  if(!before||!after)return "";
+  if(before.active&&!after.active)return head+`ลบ "${before.name}"`;
+  const ch=[];
+  if(before.name!==after.name)ch.push(`ชื่อ: ${before.name} → ${after.name}`);
+  const bk=new Map(before.lines.map(l=>[l.key,l])),ak=new Map(after.lines.map(l=>[l.key,l]));
+  for(const l of after.lines){
+    const o=bk.get(l.key);
+    if(!o){ch.push("เพิ่ม "+lineTxt(l));continue;}
+    if(o.label!==l.label)ch.push(`ชื่อรายการ: ${o.label} → ${l.label}`);
+    if(+o.price!==+l.price)ch.push(`${l.label}: ${fm(o.price)} → ${fm(l.price)}`);
+  }
+  for(const o of before.lines)if(!ak.has(o.key))ch.push("เอาออก "+lineTxt(o));
+  const bm=new Set(before.menu_ids),am=new Set(after.menu_ids);
+  const add=after.menu_ids.filter(id=>!bm.has(id)),rem=before.menu_ids.filter(id=>!am.has(id));
+  const lst=(ids)=>ids.slice(0,8).map(mn).join(", ")+(ids.length>8?` และอีก ${ids.length-8}`:"");
+  if(add.length)ch.push(`เพิ่มเมนู ${add.length}: ${lst(add)}`);
+  if(rem.length)ch.push(`เอาเมนูออก ${rem.length}: ${lst(rem)}`);
+  if(!ch.length)return "";
+  return head+`แก้ "${after.name}": `+ch.join(" · ");
+}
+// เมนูที่เลือกใส่แพ็คเกจได้ = เมนูที่สาขานี้เห็นตามปุ่มติ๊กเท่านั้น (menuVisibleAt ห้ามผ่อนปรน) เรียงแบบเดียวกับที่ลูกค้าเห็น
+const bpPickableMenus=(menus,bid,catOrder,menuOrder)=>(Array.isArray(menus)?menus:[]).filter(m=>menuVisibleAt(m,bid)).sort(menuSorter(catOrder,menuOrder));
+
 const api = {
   getIngs: () => sbAll("ingredients?order=id.asc"),   // แบ่งหน้า — 931/1000 แล้ว อีก 69 รายการจะหายเงียบ
   addIng: (d) => sb("ingredients", { method: "POST", body: JSON.stringify(d) }),
@@ -1038,6 +1223,10 @@ const api = {
     if(Array.isArray(r)&&r.length)return r[0];
     return await sb("pos_settings", {method:"POST", body:JSON.stringify({branch_id:bid,menu_order:order}), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}});
   },
+  // แพ็คเกจบุฟเฟต์ — อ่าน/เขียนเฉพาะคอลัมน์ buffet_packages (ไม่ผ่าน patchPOSSettings / ฟอร์มตั้งค่า POS)
+  // ยังไม่รัน SQL = {packages:[], missingColumn:true} · บันทึก = เขียนแบบมีเงื่อนไข (ดู buffetPkgSave)
+  getBuffetPackages: (bid) => buffetPkgRead(bid),
+  saveBuffetPackages: (bid, change, prev) => buffetPkgSave(bid, change, prev),
   // Promotions
   getPromotions: (bid) => sb(`promotions?or=(branch_id.eq.${bid},branch_id.is.null)&order=sort_order.asc`),
   addPromotion: (d) => sb("promotions", {method:"POST", body:JSON.stringify(d)}),
@@ -23665,7 +23854,7 @@ function POSBackOffice({currentBranch,currentUser,printers,reloadPrinters,branch
     <div style={{flex:1,overflow:"auto",padding:"20px 24px",background:C.bg}}>
       <AcctUnsentBanner branchId={currentBranch.id} canResolve/>
       {section==="tables"&&(loadingT?<Loading text="โหลดโต๊ะ..."/>:<POSTableManage tables={tables} branch={currentBranch} zones={zones} reloadZones={reloadZones} onDone={loadTables}/>)}
-      {section==="menu"&&<POSMenuTools currentBranch={currentBranch} variant="cards" onChanged={reloadMenus}/>}
+      {section==="menu"&&<POSMenuTools currentBranch={currentBranch} currentUser={currentUser} saleOnly={false} menus={menus} variant="cards" onChanged={reloadMenus}/>}
       {section==="sellers"&&<POSSellerPanel currentBranch={currentBranch}/>}
       {section==="printers"&&<POSPrinterPanel printers={printers} reloadPrinters={reloadPrinters} branches={branches} currentUser={currentUser} menus={menus} currentBranch={currentBranch}/>}
       {section==="settings"&&canMoney&&<POSSettingsPanel currentBranch={currentBranch} currentUser={currentUser}/>}
@@ -23781,13 +23970,16 @@ function POSSellerPanel({currentBranch}){
 // ══════════════════════════════════════════════════════
 // Same management surface from two places: a dropdown on the sale screen and a
 // section in the back office. Branch-level only — set availability & assign a
-// (local) category; the price/recipe stays central. (Add-on options = next.)
-function POSMenuTools({currentBranch,variant="dropdown",onChanged}){
+// (local) category; the price/recipe stays central.
+// ทั้งสองที่ส่ง currentUser + saleOnly มาเหมือนกัน → แพ็คเกจบุฟเฟต์คิดสิทธิ์ด้วย posAccess ชุดเดียวกัน
+// (คนเข้าด้วย PIN บนจอขาย = ดูอย่างเดียว) · menus = เมนูที่จอแม่โหลดไว้แล้ว ไม่ต้องดึงก้อนใหญ่ซ้ำ
+function POSMenuTools({currentBranch,currentUser,saleOnly=false,menus,variant="dropdown",onChanged}){
   const[open,setOpen]=useState(false);
-  const[active,setActive]=useState(null);  // 'menus' | 'options' | null
+  const[active,setActive]=useState(null);  // 'menus' | 'options' | 'packages' | null
   const items=[
     {id:"menus",l:"เมนูทั้งหมด",icon:"🍔",sub:"สถานะ + จัดหมวด"},
     {id:"options",l:"ตัวเลือกในเมนู",icon:"➕",sub:"add-on รายเมนู"},
+    {id:"packages",l:"แพ็คเกจบุฟเฟต์",icon:"🍖",sub:"ราคา/คน + เลือกเมนู"},
   ];
   return <>
     {variant==="dropdown"
@@ -23809,6 +24001,7 @@ function POSMenuTools({currentBranch,variant="dropdown",onChanged}){
       </div>}
     {active==="menus"&&<POSMenuAvailManager currentBranch={currentBranch} onClose={()=>{setActive(null);onChanged&&onChanged();}}/>}
     {active==="options"&&<POSOptionLibrary currentBranch={currentBranch} onClose={()=>{setActive(null);onChanged&&onChanged();}}/>}
+    {active==="packages"&&<POSBuffetPackages currentBranch={currentBranch} currentUser={currentUser} saleOnly={saleOnly} menus={menus} onClose={()=>{setActive(null);onChanged&&onChanged();}}/>}
   </>;
 }
 
@@ -23856,6 +24049,68 @@ const MenuMgrCard=memo(function MenuMgrCard({m,cur,nOpt,busy,onAvail,onBind,onHo
   </div>;
 });
 
+// ── รายการติ๊กเลือกเมนู — ใช้ร่วมกัน: "ผูกตัวเลือกหลายเมนู" และ "เลือกเมนูในแพ็คเกจบุฟเฟต์" ──
+// menus = เมนูที่สาขานี้เห็นแล้ว เรียงแล้ว (คนเรียกกรองด้วยปุ่มติ๊กเอง) · sel = {id:true} · onChange(selใหม่)
+// ค้นหา + ชิปหมวด (จำนวน/ที่เลือก) + เลือกทั้งหมวด + เลือกทั้งหมด/ล้าง
+// ป้าย: ฿0 · วันนี้หมด · ซ่อน · ไม่มีหมวด (จอขายไม่แสดง) · extra(m) = ป้ายเพิ่มของแต่ละจอ · readOnly = ดูอย่างเดียว
+const MPL_NOCAT="__nocat";
+const menuPickFilter=(menus,cat,q)=>{
+  const t=String(q||"").trim().toLowerCase();
+  return (Array.isArray(menus)?menus:[]).filter(m=>{
+    const c=menuCatOf(m);
+    if(cat===MPL_NOCAT){if(c)return false;}else if(cat&&c!==cat)return false;
+    return !t||String((m&&m.name)||"").toLowerCase().includes(t);
+  });
+};
+function MenuPickList({menus,branchId,sel,onChange,readOnly=false,extra,initialCat="",initialQ="",accent=C.teal,accentLight=C.tealLight,maxHeight="40vh"}){
+  const[q,setQ]=useState(initialQ||"");const[cat,setCat]=useState(initialCat||"");
+  const list=Array.isArray(menus)?menus:[];
+  const on=(m)=>!!(sel&&sel[m.id]);
+  const chips=useMemo(()=>{const mp=new Map();for(const m of list){const c=menuCatOf(m)||MPL_NOCAT;mp.set(c,(mp.get(c)||0)+1);}return [...mp.entries()];},[list]);
+  const shown=useMemo(()=>menuPickFilter(list,cat,q),[list,cat,q]);
+  const inCat=cat?menuPickFilter(list,cat,""):[];
+  const setMany=(ms,v)=>{const n={...(sel||{})};ms.forEach(m=>{if(v)n[m.id]=true;else delete n[m.id];});onChange&&onChange(n);};
+  const nSel=list.filter(on).length;
+  const sb2={padding:"5px 11px",borderRadius:8,border:`1px solid ${C.line}`,background:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11.5,fontWeight:700,minHeight:32};
+  const tag=(t,fg,bg,title)=><span title={title||""} style={{fontSize:10.5,fontWeight:800,color:fg,background:bg,borderRadius:8,padding:"1px 7px",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{t}</span>;
+  return <div>
+    <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,flex:"1 1 180px",padding:"8px 12px",fontSize:14}}/>
+      <span style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>เลือกแล้ว <b style={{color:accent}}>{nSel}</b> / {list.length}</span>
+    </div>
+    {chips.length>0&&<div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6,marginBottom:6}}>
+      {[["","ทั้งหมด",list.length],...chips.map(([c,n])=>[c,c===MPL_NOCAT?"ไม่มีหมวด":c,n])].map(([v,l,n])=>{
+        const act=cat===v;const k=v?list.filter(m=>(menuCatOf(m)||MPL_NOCAT)===v&&on(m)).length:nSel;
+        return <button key={v||"__all"} onClick={()=>setCat(v)} style={{flexShrink:0,padding:"5px 12px",borderRadius:16,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12,fontWeight:act?800:600,whiteSpace:"nowrap",border:`1px solid ${act?accent:C.line}`,background:act?accent:C.white,color:act?C.white:C.ink2}}>
+          {l} <span style={{opacity:.75,fontSize:11}}>{k>0?`${k}/`:""}{n}</span>
+        </button>;
+      })}
+    </div>}
+    {!readOnly&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+      {cat&&<button onClick={()=>setMany(inCat,true)} style={{...sb2,borderColor:accent,color:accent}}>เลือกทั้งหมวด ({inCat.length})</button>}
+      {cat&&<button onClick={()=>setMany(inCat,false)} style={sb2}>เอาออกทั้งหมวด</button>}
+      <button onClick={()=>setMany(list,true)} style={sb2}>เลือกทั้งหมด</button>
+      <button onClick={()=>onChange&&onChange({})} style={sb2}>ล้าง</button>
+    </div>}
+    <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight,overflowY:"auto"}}>
+      {shown.map(m=>{const v=on(m);const av=menuAvailAt(m,branchId);const x=extra?extra(m):null;return <label key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",borderRadius:9,cursor:readOnly?"default":"pointer",background:v?accentLight:C.white,border:`1.5px solid ${v?accent:C.line}`}}>
+        <input type="checkbox" checked={v} disabled={readOnly} onChange={()=>setMany([m],!v)} style={{accentColor:accent,width:17,height:17,flexShrink:0}}/>
+        <span style={{flex:1,minWidth:0}}>
+          <span style={{display:"block",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:v?800:600,color:v?accent:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.name}</span>
+          {x&&<span style={{display:"block",fontFamily:"'Sarabun',sans-serif",fontSize:10.5,color:C.ink4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x}</span>}
+        </span>
+        <span style={{display:"flex",gap:4,alignItems:"center",flexShrink:0}}>
+          {av==="sold_out"&&tag("วันนี้หมด","#92400E","#FEF3C7")}
+          {av==="hidden"&&tag("ซ่อน",C.white,C.red,"ลูกค้าที่สแกน QR ไม่เห็น")}
+          {!menuCatOf(m)&&tag("ไม่มีหมวด",C.red,C.redLight,"จอขายไม่แสดงเมนูที่ไม่มีหมวด")}
+          {(+m.price||0)===0?tag("฿0","#92400E","#FEF9C3"):<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>฿{(+m.price||0).toLocaleString()}</span>}
+        </span>
+      </label>;})}
+      {shown.length===0&&<div style={{padding:20,textAlign:"center",color:C.ink4,fontSize:12.5,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>}
+    </div>
+  </div>;
+}
+
 function POSMenuAvailManager({currentBranch,onClose}){
   const isCentral=currentBranch?.type==="central";
   const[menus,setMenus]=useState([]);const[lib,setLib]=useState([]);const[loading,setLoading]=useState(true);
@@ -23880,6 +24135,8 @@ function POSMenuAvailManager({currentBranch,onClose}){
   const visible=useMemo(()=>menus
     .filter(m=>{const okB=isCentral||menuVisibleAt(m,currentBranch.id);if(!okB)return false;if(cat&&menuCatOf(m)!==cat)return false;if(q.trim()&&!m.name.toLowerCase().includes(q.toLowerCase()))return false;return true;})
     .sort(menuSorter(catOrder,menuOrder)),[menus,cat,q,isCentral,currentBranch.id,catOrder,menuOrder]);
+  // เมนูทั้งหมดของสาขา (ไม่ผูกกับคำค้น/หมวดบนจอ) — ให้รายการติ๊กของ "ผูกหลายเมนู" ค้น/กรองเองได้
+  const branchAll=useMemo(()=>menus.filter(m=>isCentral||menuVisibleAt(m,currentBranch.id)).sort(menuSorter(catOrder,menuOrder)),[menus,isCentral,currentBranch.id,catOrder,menuOrder]);
   stRef.current={visible,menus,catOrder,menuOrder,isCentral,bid:currentBranch.id};
   // อ่าน availability ล่าสุดของเมนูนี้ก่อนเขียน แตะเฉพาะคีย์สาขานี้ (เมนูใช้ร่วมกับ River — ห้ามทับสถานะของสาขาอื่นด้วยค่าที่ค้างบนจอ)
   const setAvail=useCallback(async function setAvail(m,status){setBusyId(m.id);try{const avail=await writeMenuBranchKey(m.id,"availability",currentBranch.id,!status?null:status==="sold_out"?soldOutMark():status);setMenus(ms=>ms.map(x=>x.id===m.id?{...x,availability:avail}:x));}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setBusyId(null);},[currentBranch.id]);
@@ -24125,7 +24382,7 @@ function POSMenuAvailManager({currentBranch,onClose}){
   // Bulk-bind: apply the SAME option group(s) to many menus at once → they all become consistent.
   async function applyBulk(){
     const groupIds=lib.filter(g=>bulkGroups[g.id]).map(g=>g.id);
-    const menuIds=visible.filter(m=>bulkMenus[m.id]).map(m=>m.id);
+    const menuIds=branchAll.filter(m=>bulkMenus[m.id]).map(m=>m.id);
     if(menuIds.length===0){alert("เลือกเมนูอย่างน้อย 1 เมนู");return;}
     if(groupIds.length===0&&!await confirmDlg({title:"ล้างตัวเลือก?",message:`ยังไม่ได้เลือกกลุ่มตัวเลือก — เมนูที่เลือก (${menuIds.length}) จะถูก “ล้างตัวเลือกออกทั้งหมด” ใช่ไหม?`,confirmLabel:"ล้างตัวเลือก",cancelLabel:"ยกเลิก",danger:true}))return;
     setBulkBusy(true);
@@ -24205,19 +24462,10 @@ function POSMenuAvailManager({currentBranch,onClose}){
         <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
           {lib.map(g=>{const on=!!bulkGroups[g.id];return <button key={g.id} onClick={()=>setBulkGroups(s=>({...s,[g.id]:!s[g.id]}))} style={{padding:"7px 13px",borderRadius:20,border:`1.5px solid ${on?C.brand:C.line}`,background:on?C.brandLight:C.white,color:on?C.brand:C.ink3,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:700}}>{on?"✓ ":""}📦 {g.name}{g.required?" *":""}</button>;})}
         </div>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,flexWrap:"wrap",gap:8}}>
-          <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>2️⃣ เลือกเมนูที่จะผูก</div>
-          <div style={{display:"flex",gap:6}}>
-            <button onClick={()=>setBulkMenus(Object.fromEntries(visible.map(m=>[m.id,true])))} style={{padding:"5px 11px",borderRadius:8,border:`1px solid ${C.line}`,background:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11.5,fontWeight:700}}>เลือกทั้งหมด</button>
-            <button onClick={()=>setBulkMenus({})} style={{padding:"5px 11px",borderRadius:8,border:`1px solid ${C.line}`,background:C.white,color:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:11.5,fontWeight:700}}>ล้าง</button>
-          </div>
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight:"40vh",overflowY:"auto",marginBottom:14}}>
-          {visible.map(m=>{const on=!!bulkMenus[m.id];const nOpt=getMenuOptions(m,currentBranch.id,lib).length;return <label key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",borderRadius:9,cursor:"pointer",background:on?C.tealLight:C.white,border:`1.5px solid ${on?C.teal:C.line}`}}>
-            <input type="checkbox" checked={on} onChange={()=>setBulkMenus(s=>({...s,[m.id]:!s[m.id]}))} style={{accentColor:C.teal,width:17,height:17,flexShrink:0}}/>
-            <span style={{flex:1,fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:on?800:600,color:on?C.teal:C.ink}}>{m.name}</span>
-            {nOpt>0&&<span style={{fontSize:10.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>มี {nOpt} กลุ่ม</span>}
-          </label>;})}
+        <div style={{fontSize:12.5,fontWeight:800,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>2️⃣ เลือกเมนูที่จะผูก</div>
+        <div style={{marginBottom:14}}>
+          <MenuPickList menus={branchAll} branchId={currentBranch.id} sel={bulkMenus} onChange={setBulkMenus} initialCat={cat} initialQ={q}
+            extra={m=>{const nOpt=getMenuOptions(m,currentBranch.id,lib).length;return nOpt>0?`มี ${nOpt} กลุ่ม`:null;}}/>
         </div>
         <div style={{display:"flex",justifyContent:"flex-end",gap:10,paddingTop:12,borderTop:`1px solid ${C.line}`}}>
           <Btn v="ghost" onClick={()=>setBulkOpen(false)}>ยกเลิก</Btn>
@@ -24369,6 +24617,190 @@ function POSOptionLibrary({currentBranch,onClose}){
         </div>;})}
       </div>}
     </>}
+  </Modal>;
+}
+
+// ══════════════════════════════════════════════════════
+// "แพ็คเกจบุฟเฟต์" — คลังแพ็คเกจของสาขา: ราคา/คน (ผู้ใหญ่ เด็ก + รายการนับเพิ่ม) + เมนูที่โต๊ะแพ็คเกจนั้นเห็น
+// จอเดียวกันทั้งหลังบ้าน และ "จัดการเมนูและหมวดหมู่" บนจอขาย (มาทาง POSMenuTools ทั้งคู่)
+// สิทธิ์: สร้าง/ลบ/แก้ชื่อ-ราคา = สิทธิ์ตั้งค่า (เรื่องเงิน) · เลือกเมนู = ตั้งค่า หรือ pos_admin · PIN = ดูอย่างเดียว
+// ทุกการแก้จดประวัติ · เขียนเฉพาะคอลัมน์ buffet_packages แบบมีเงื่อนไข (buffetPkgSave) ไม่ทับของอีกเครื่อง
+// ราคาถูกจดลงบิลตอนเปิดโต๊ะ — แก้ระหว่างกะได้ โต๊ะที่เปิดอยู่ยังคิดราคาเดิม
+// ══════════════════════════════════════════════════════
+const bpFm=(n)=>"฿"+(+n||0).toLocaleString("en-US",{maximumFractionDigits:2});
+const bpFormOf=(p)=>{
+  const ln=(k)=>{const l=p&&p.lines.find(x=>x.key===k);return l?String(l.price):"";};
+  return p?{id:p.id,name:p.name,adult:ln("adult"),child:ln("child"),base:p.updated_at||null,
+    extras:p.lines.filter(l=>l.key!=="adult"&&l.key!=="child").map(l=>({key:l.key,label:l.label,price:String(l.price)}))}
+    :{id:null,name:"",adult:"",child:"",base:null,extras:[]};
+};
+function POSBuffetPackages({currentBranch,currentUser,saleOnly=false,menus:menusProp,onClose}){
+  const bid=currentBranch.id;
+  const acc=posAccess(currentUser,saleOnly);
+  const canMoney=acc.settings;   // สร้าง/ลบ/แก้ชื่อ-ราคา
+  const canMenus=acc.admin;      // เลือกเมนูในแพ็คเกจ
+  const who=(currentUser&&(currentUser.name||currentUser.username))||"";
+  const LOCK_MONEY="สร้าง/ลบ/แก้ราคาแพ็คเกจ ต้องมีสิทธิ์ตั้งค่า";
+  const LOCK_MENUS="เลือกเมนูในแพ็คเกจ ต้องมีสิทธิ์ตั้งค่า หรือจัดการ POS";
+  const lbl={display:"block",fontSize:12,fontWeight:700,color:C.ink2,marginBottom:5,fontFamily:"'Sarabun',sans-serif"};
+  const[loading,setLoading]=useState(true);const[busy,setBusy]=useState(false);
+  const[pkgs,setPkgs]=useState([]);const[raw,setRaw]=useState(undefined);const[noCol,setNoCol]=useState(false);
+  const[menus,setMenus]=useState(Array.isArray(menusProp)?menusProp:[]);
+  const[order,setOrder]=useState({cat:[],menu:[]});
+  const[shiftOpen,setShiftOpen]=useState(false);
+  const[form,setForm]=useState(null);   // ฟอร์มสร้าง/แก้ {id|null,name,adult,child,extras,base}
+  const[pick,setPick]=useState(null);   // เลือกเมนู {id,sel:{id:true},opened:[ids]}
+  async function load(){
+    setLoading(true);
+    try{
+      const[bp,ps,sh,ms]=await Promise.all([
+        api.getBuffetPackages(bid),
+        api.getPOSSettings(bid).catch(()=>null),
+        api.getActiveShift(bid).catch(()=>null),
+        (Array.isArray(menusProp)&&menusProp.length)?menusProp:api.getMenus().catch(()=>[]),
+      ]);
+      setPkgs(bp.packages);setRaw(bp.raw);setNoCol(!!bp.missingColumn);
+      const s=Array.isArray(ps)&&ps[0]?ps[0]:null;setOrder({cat:catOrderOf(s),menu:menuOrderOf(s)});
+      setShiftOpen(Array.isArray(sh)&&!!sh[0]);
+      setMenus(Array.isArray(ms)?ms:[]);
+    }catch(e){notifyDlg("โหลดแพ็คเกจไม่สำเร็จ: "+friendlyError(e));}
+    setLoading(false);
+  }
+  useEffect(()=>{load();},[bid]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const pickable=useMemo(()=>bpPickableMenus(menus,bid,order.cat,order.menu),[menus,bid,order]);
+  const pickIds=useMemo(()=>new Set(pickable.map(m=>+m.id)),[pickable]);
+  const active=pkgs.filter(p=>p.active);
+  // เมนูนี้อยู่ในแพ็คเกจไหนบ้าง (เฉพาะที่ยังใช้อยู่) — ป้าย "อยู่ในแพ็คเกจอื่น" ในจอเลือกเมนู
+  const inPkgs=useMemo(()=>{const mp=new Map();for(const p of pkgs){if(!p.active)continue;for(const id of p.menu_ids){const a=mp.get(id)||[];a.push(p);mp.set(id,a);}}return mp;},[pkgs]);
+  // การแก้หนึ่งครั้ง → เขียนบนคลังล่าสุดในฐาน → จดประวัติ → อัปเดตจอ · คืน {ok,packages}
+  async function persist(op){
+    setBusy(true);
+    try{
+      const res=await api.saveBuffetPackages(bid,(L)=>buffetPkgOp(L,op),raw);
+      setPkgs(res.packages);setRaw(res.raw);
+      if(!res.ok){notifyDlg(res.msg);return res;}
+      if(!res.unchanged){
+        const b=(res.before||[]).find(p=>p.id===op.id)||null,a=res.packages.find(p=>p.id===op.id)||null;
+        const txt=buffetAuditText(b,a,who,currentBranch,(id)=>{const m=menus.find(x=>+x.id===+id);return m&&m.name;});
+        if(txt){try{await api.addActionHist({action:txt,time:nowStr()});}catch(e){console.warn("bpAudit",e);}}
+      }
+      return res;
+    }catch(e){
+      if(e&&e.missingColumn)setNoCol(true);
+      notifyDlg("บันทึกไม่สำเร็จ: "+(e&&e.missingColumn?BP_NO_COL:friendlyError(e)));
+      return {ok:false,packages:null};
+    }finally{setBusy(false);}
+  }
+  async function saveForm(){
+    if(!canMoney){notifyDlg(LOCK_MONEY);return;}
+    if(!form||busy)return;
+    const lines=buffetFormToLines(form);
+    if(typeof lines==="string"){notifyDlg(lines);return;}
+    const name=String(form.name).trim(),at=nowStr();
+    const op=form.id?{type:"edit",id:form.id,name,lines,base:form.base,at,by:who}:{type:"create",id:bpNewId("pk"),name,lines,at,by:who};
+    const res=await persist(op);
+    if(res.ok){
+      setForm(null);
+      if(shiftOpen)posToast("บันทึกแล้ว — โต๊ะที่เปิดอยู่ยังคิดราคาเดิม (จดไว้ตอนเปิดโต๊ะ) · โต๊ะที่เปิดใหม่ใช้ราคาใหม่","warn",7000);
+      else posToast("✅ บันทึกแพ็คเกจแล้ว");
+    }else if(res.packages&&form.id){
+      // อีกเครื่องเพิ่งแก้/ลบ — เปิดฟอร์มด้วยค่าล่าสุดให้ตรวจก่อน (ไม่เขียนทับราคาที่ไม่เคยเห็น)
+      const p=res.packages.find(x=>x.id===form.id);
+      setForm(p&&p.active?bpFormOf(p):null);
+    }
+  }
+  async function del(p){
+    if(!canMoney){notifyDlg(LOCK_MONEY);return;}
+    if(busy)return;
+    if(!await confirmDlg({title:"ลบแพ็คเกจ",message:`ลบแพ็คเกจ "${p.name}"?\nโต๊ะที่เปิดด้วยแพ็คเกจนี้อยู่ ยังใช้ต่อได้จนปิดบิล · เปิดโต๊ะใหม่จะไม่เห็นแพ็คเกจนี้แล้ว`,confirmLabel:"ลบแพ็คเกจ",cancelLabel:"ยกเลิก",danger:true}))return;
+    if((await persist({type:"delete",id:p.id,at:nowStr(),by:who})).ok)posToast("ลบแพ็คเกจแล้ว");
+  }
+  function openPick(p){
+    const sel={};p.menu_ids.forEach(id=>{if(pickIds.has(+id))sel[id]=true;});
+    setPick({id:p.id,sel,opened:p.menu_ids.slice()});
+  }
+  async function savePick(){
+    if(!canMenus){notifyDlg(LOCK_MENUS);return;}
+    if(!pick||busy)return;
+    const chosen=new Set(Object.keys(pick.sel).filter(k=>pick.sel[k]).map(Number));
+    const opened=new Set(pick.opened.map(Number));
+    // ส่งเฉพาะส่วนต่าง เรียงตามลำดับที่โชว์ · เมนูที่สาขามองไม่เห็นแล้วหลุดออกตอนบันทึก (ติ๊กไม่ได้อยู่แล้ว)
+    const add=pickable.filter(m=>chosen.has(+m.id)&&!opened.has(+m.id)).map(m=>+m.id);
+    const remove=[...opened].filter(id=>!chosen.has(id));
+    if(!add.length&&!remove.length){setPick(null);return;}
+    const res=await persist({type:"menus",id:pick.id,add,remove,at:nowStr(),by:who});
+    if(res.ok){setPick(null);posToast(`✅ บันทึกเมนูในแพ็คเกจแล้ว (${chosen.size} เมนู)`);}
+    else if(res.packages&&!res.packages.some(p=>p.id===pick.id&&p.active))setPick(null);
+  }
+  const setF=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const setX=(i,k,v)=>setForm(f=>({...f,extras:f.extras.map((x,j)=>j===i?{...x,[k]:v}:x)}));
+  const note=(bg,bd,fg,children)=><div style={{background:bg,border:`1px solid ${bd}`,color:fg,borderRadius:10,padding:"9px 12px",fontSize:12.5,fontWeight:600,lineHeight:1.6,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>{children}</div>;
+  const btn=(c,bg)=>({background:bg,border:"none",borderRadius:8,padding:"8px 12px",minHeight:36,cursor:"pointer",fontSize:12,fontWeight:700,color:c,fontFamily:"'Sarabun',sans-serif"});
+  const pk=pick?pkgs.find(x=>x.id===pick.id):null;
+  const stale=pk?pk.menu_ids.filter(id=>!pickIds.has(+id)).length:0;
+  return <Modal title="🍖 แพ็คเกจบุฟเฟต์" onClose={onClose} wide>
+    {loading?<Loading text="โหลดแพ็คเกจ..."/>
+    :noCol?note("#FEF3C7","#F59E0B","#92400E",<><b>ต้องรัน SQL เพิ่มคอลัมน์ก่อน</b><br/>ผู้ดูแลระบบรันไฟล์ sql/buffet-packages.sql ใน Supabase ครั้งเดียว แล้วเปิดหน้านี้ใหม่ · ระหว่างนี้ร้านขายแบบสั่งตามเมนูได้ตามปกติ</>)
+    :<>
+      {!canMenus?note(C.bg,C.line,C.ink3,<>🔒 ดูได้อย่างเดียว — {LOCK_MONEY}</>)
+        :!canMoney?note(C.bg,C.line,C.ink3,<>🔒 {LOCK_MONEY} · เลือกเมนูในแพ็คเกจได้</>):null}
+      {shiftOpen&&note("#FFFBEB","#FCD34D","#92400E",<>⚠️ กะเปิดอยู่ — แก้ราคาตอนนี้ได้ โต๊ะที่เปิดไปแล้วยังคิดราคาเดิม (จดไว้ในบิลตอนเปิดโต๊ะ) · โต๊ะที่เปิดใหม่ใช้ราคาใหม่</>)}
+      {canMoney&&<div style={{marginBottom:12}}><Btn onClick={()=>setForm(bpFormOf(null))} icon={I.plus}>สร้างแพ็คเกจ</Btn></div>}
+      {active.length===0?<div style={{textAlign:"center",padding:"32px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}><div style={{fontSize:40,marginBottom:6}}>🍖</div><p style={{fontSize:13}}>ยังไม่มีแพ็คเกจ{canMoney?" — กด \"สร้างแพ็คเกจ\"":""}</p></div>
+      :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(260px,100%),1fr))",gap:10}}>
+        {active.map(p=>{const n=p.menu_ids.filter(id=>pickIds.has(+id)).length;return <div key={p.id} style={{border:`1.5px solid ${C.line}`,borderRadius:14,background:C.white,padding:"12px 14px",display:"flex",flexDirection:"column",gap:8}}>
+          <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15.5,fontWeight:900,color:C.ink}}>🍖 {p.name}</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+            {p.lines.map(l=><span key={l.key} style={{fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",borderRadius:8,padding:"2px 8px",background:l.guest?C.brandLight:C.bg,color:l.guest?C.brand:C.ink2,border:`1px solid ${l.guest?C.brandBorder:C.line}`}}>{l.label} {bpFm(l.price)}</span>)}
+          </div>
+          <div style={{fontSize:12,color:n?C.ink3:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{n} เมนู{n===0?" — ยังไม่ได้เลือกเมนู":""}</div>
+          <div style={{display:"flex",gap:6,marginTop:"auto"}}>
+            <button onClick={()=>openPick(p)} style={{...btn(C.teal,C.tealLight),flex:1}}>🍽 {canMenus?"เลือกเมนู":"ดูเมนู"}</button>
+            {canMoney&&<button onClick={()=>setForm(bpFormOf(p))} style={btn(C.blue,C.blueLight)}>แก้ไข</button>}
+            {canMoney&&<button onClick={()=>del(p)} style={btn(C.red,C.redLight)}>ลบ</button>}
+          </div>
+        </div>;})}
+      </div>}
+    </>}
+    {form&&<Modal title={form.id?"แก้แพ็คเกจ":"สร้างแพ็คเกจ"} onClose={()=>setForm(null)}>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <div><label style={lbl}>ชื่อแพ็คเกจ</label><input value={form.name} onChange={e=>setF("name",e.target.value)} placeholder="เช่น หมูกระทะ 299" style={iS}/></div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <div><label style={lbl}>ผู้ใหญ่ ฿ / คน</label><input type="text" inputMode="decimal" value={form.adult} onChange={e=>setF("adult",bpPriceInput(e.target.value))} placeholder="0" style={{...iS,textAlign:"right",fontWeight:800}}/></div>
+          <div><label style={lbl}>เด็ก ฿ / คน</label><input type="text" inputMode="decimal" value={form.child} onChange={e=>setF("child",bpPriceInput(e.target.value))} placeholder="0" style={{...iS,textAlign:"right",fontWeight:800}}/></div>
+        </div>
+        <div>
+          <label style={lbl}>รายการนับเพิ่ม <span style={{fontWeight:500,color:C.ink4}}>(เช่น เด็กเล็ก ผู้สูงอายุ เตาเพิ่ม · ไม่คิดเงินใส่ 0)</span></label>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {form.extras.map((x,i)=><div key={x.key||i} style={{display:"flex",gap:6,alignItems:"center"}}>
+              <input value={x.label} onChange={e=>setX(i,"label",e.target.value)} placeholder="ชื่อรายการ" style={{...iS,flex:"2 1 120px",padding:"9px 12px",fontSize:14}}/>
+              <input type="text" inputMode="decimal" value={x.price} onChange={e=>setX(i,"price",bpPriceInput(e.target.value))} placeholder="฿" style={{...iS,flex:"1 1 80px",padding:"9px 12px",fontSize:14,textAlign:"right",fontWeight:800}}/>
+              <button onClick={()=>setForm(f=>({...f,extras:f.extras.filter((_,j)=>j!==i)}))} aria-label="เอารายการนี้ออก" style={{...btn(C.red,C.redLight),flexShrink:0}}>ลบ</button>
+            </div>)}
+            <button onClick={()=>setForm(f=>({...f,extras:[...f.extras,{key:bpNewId("t"),label:"",price:""}]}))} style={{...btn(C.ink2,C.bg),border:`1px dashed ${C.line}`,alignSelf:"flex-start"}}>+ เพิ่มรายการ</button>
+          </div>
+        </div>
+        {shiftOpen&&<div style={{fontSize:12,color:"#92400E",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>⚠️ กะเปิดอยู่ — โต๊ะที่เปิดไปแล้วยังคิดราคาเดิม · โต๊ะที่เปิดใหม่ใช้ราคาใหม่</div>}
+        <div style={{display:"flex",justifyContent:"flex-end",gap:10,paddingTop:12,borderTop:`1px solid ${C.line}`}}>
+          <Btn v="ghost" onClick={()=>setForm(null)}>ยกเลิก</Btn>
+          <Btn onClick={saveForm} loading={busy} icon={I.check}>บันทึก</Btn>
+        </div>
+      </div>
+    </Modal>}
+    {pick&&pk&&<Modal title={`🍽 เมนูในแพ็คเกจ — ${pk.name}`} onClose={()=>setPick(null)} wide>
+      <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:10}}>
+        โต๊ะที่เปิดด้วยแพ็คเกจนี้เห็น<b>เฉพาะเมนูที่ติ๊ก</b> (ทั้งหน้าลูกค้าและจอพนักงาน) · คิดเงินตามราคาเมนู (฿0 = รวมในแพ็คเกจ) · เครื่องดื่ม/เบียร์ ติ๊กใส่ถ้าจะให้สั่งได้
+      </div>
+      {!canMenus&&note(C.bg,C.line,C.ink3,<>🔒 ดูได้อย่างเดียว — {LOCK_MENUS}</>)}
+      {stale>0&&note("#FFFBEB","#FCD34D","#92400E",<>มี {stale} เมนูในแพ็คเกจที่สาขานี้มองไม่เห็นแล้ว (ถูกปิดติ๊กหรือถูกลบ){canMenus?" — กดบันทึกแล้วจะเอาออก":""}</>)}
+      <MenuPickList menus={pickable} branchId={bid} sel={pick.sel} onChange={sel=>setPick(s=>s&&({...s,sel}))} readOnly={!canMenus}
+        accent={C.brand} accentLight={C.brandLight} maxHeight="46vh"
+        extra={m=>{const o=(inPkgs.get(+m.id)||[]).filter(p=>p.id!==pk.id).map(p=>p.name);return o.length?`อยู่ในแพ็คเกจอื่น: ${o.join(", ")}`:null;}}/>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:10,paddingTop:12,marginTop:12,borderTop:`1px solid ${C.line}`}}>
+        <Btn v="ghost" onClick={()=>setPick(null)}>{canMenus?"ยกเลิก":"ปิด"}</Btn>
+        {canMenus&&<Btn onClick={savePick} loading={busy} icon={I.check}>บันทึก</Btn>}
+      </div>
+    </Modal>}
   </Modal>;
 }
 
@@ -25188,7 +25620,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
     <PrintHealthStrip printers={printers} failPrinters={failPrinters} branchId={currentBranch.id} onOpenFails={()=>setShowPrintFails(true)}/>
     <div style={{padding:"0 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",flexWrap:"wrap",minHeight:46,columnGap:2,flexShrink:0}}>
       {PTABS.map(t=>{const active=posTab===t.id;return <button key={t.id} onClick={()=>setPosTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:"none",cursor:"pointer",fontSize:12,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s"}}><Ic d={t.icon} s={13} c={active?C.brand:C.ink4}/>{t.l}</button>;})}
-      {canEdit&&<POSMenuTools currentBranch={currentBranch} variant="dropdown" onChanged={()=>{reloadMenus&&reloadMenus();reloadPosSettings&&reloadPosSettings();}}/>}
+      {canEdit&&<POSMenuTools currentBranch={currentBranch} currentUser={currentUser} saleOnly={saleOnly} menus={menus} variant="dropdown" onChanged={()=>{reloadMenus&&reloadMenus();reloadPosSettings&&reloadPosSettings();}}/>}
       {/* แถวปุ่มตัดบรรทัดได้ ไม่ให้ปุ่มท้ายแถวล้นจอจนกดไม่ได้บน iPad · ปุ่มสูง ≥36 ให้นิ้วกดง่าย
           ปิดกะ (ย้อนไม่ได้) แยกไว้ท้ายสุด มีเส้นคั่น ไม่ติดกับปุ่มเงินในลิ้นชักที่กดบ่อย */}
       <div style={{marginLeft:"auto",display:"flex",flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center",gap:6,padding:"5px 0"}}>

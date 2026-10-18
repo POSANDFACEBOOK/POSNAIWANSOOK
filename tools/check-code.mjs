@@ -7182,6 +7182,305 @@ section("แพ็คเกจบุฟเฟต์: ใบครัวไม่
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// แพ็คเกจบุฟเฟต์ (สาขา 5 ขายบุฟเฟต์ตามแพ็คเกจ) — คลังแพ็คเกจ pos_settings.buffet_packages
+// ราคา/คน คือเงินเข้าร้านตรงๆ: อ่านของเสียต้องไม่หลุดเข้าบิล · สองเครื่องแก้พร้อมกันต้องไม่ทับกันเงียบๆ
+// · เขียนเฉพาะคอลัมน์นี้ (ไม่ทับ VAT/PIN) · ยังไม่รัน SQL ต้องไม่ล้ม · PIN แก้ราคาไม่ได้
+// ดึงโค้ดจริงมารันกับฐานข้อมูลจำลองที่ทำ PATCH แบบมีเงื่อนไขจริง (eq ทั้งก้อน / is.null / ลายนิ้วมือ)
+// ══════════════════════════════════════════════════════════════════════════
+section("แพ็คเกจบุฟเฟต์: คลังแพ็คเกจ");
+{
+  const LN = APP.split("\n");
+  const s0 = APP.indexOf("// ── แพ็คเกจบุฟเฟต์: คลังแพ็คเกจรายสาขา");
+  const s1 = s0 < 0 ? -1 : APP.indexOf("\nconst api = {", s0);
+  const BLK = s0 >= 0 && s1 > s0 ? APP.slice(s0, s1) : "";
+  const NEED = ["function normalizeBuffetPackages(", "async function buffetPkgRead(", "async function buffetPkgSave(", "function buffetPkgOp(", "function buffetFormToLines(", "function buffetAuditText(", "const bpPickableMenus="];
+  ok_("คลังแพ็คเกจอยู่บล็อกเดียวก่อน api (อ่าน/บันทึก/การแก้/ตรวจฟอร์ม/ประวัติ/เมนูที่เลือกได้)", !!BLK && NEED.every((s) => BLK.includes(s)));
+  const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  let LIB = null;
+  try {
+    const deps = [LN.find((l) => l.startsWith("const _thColl=")), LN.find((l) => l.startsWith("const thCmp=")),
+      grabConst(APP, "menuCatOf"), grabConst(APP, "catSorter"), grabConst(APP, "menuSorter"), grabConst(APP, "menuVisibleAt")].join("\n");
+    LIB = (sb) => new Function("sb", deps + "\n" + BLK + "\nreturn {normalizeBuffetPackages,bpCasFilter,buffetPkgRead,buffetPkgSave,buffetPkgOp,buffetFormToLines,buffetAuditText,bpPickableMenus,bpPriceInput,BP_CAS_MAX,BP_NO_COL,bpNewId};")(sb);
+    LIB(async () => []);
+  } catch (e) { LIB = null; console.log("       ดึงคลังแพ็คเกจมารันไม่ได้: " + e.message); }
+  if (LIB) {
+    const B = LIB(async () => []);
+    // ── ① อ่านของในฐาน: ของเสียต้องไม่หลุดเข้าบิล ──
+    const N = B.normalizeBuffetPackages;
+    ck("ไม่ใช่ array (null/ก้อนเพี้ยน) = ไม่มีแพ็คเกจ", [N(null), N(undefined), N({}), N("x")], [[], [], [], []]);
+    const n = N([
+      { id: "pk_a", name: " หมูกระทะ 299 ", lines: [{ key: "adult", label: "ผู้ใหญ่", price: "299", guest: false }, { key: "child", label: "", price: "159.555" },
+        { key: "x_1", label: "เตาเพิ่ม", price: 50, guest: true }, { key: "x_2", label: "ติดลบ", price: -5 }, { key: "x_3", label: "ตัวหนังสือ", price: "abc" },
+        { key: "x_4", label: "ว่าง", price: "" }, { key: "adult", label: "key ซ้ำ", price: 1 }], menu_ids: ["212", 213, 213, 0, -1, "x", 2.5] },
+      { id: "pk_a", name: "id ซ้ำ", lines: [{ key: "adult", price: 1 }] },
+      { id: "", name: "ไม่มี id", lines: [{ key: "adult", price: 1 }] },
+      { id: "pk_b", name: "  ", lines: [{ key: "adult", price: 1 }] },
+      { id: "pk_c", name: "ไม่มีบรรทัดนับคน", lines: [{ key: "x_9", label: "เตา", price: 10 }] },
+      { id: "pk_d", name: "ลบแล้ว", active: false, lines: [{ key: "child", price: 0 }] },
+      null, "x", [1],
+    ]);
+    ck("เก็บเฉพาะแพ็คเกจที่ใช้ได้ ลำดับเดิม (id ซ้ำ/ไม่มี id/ไม่มีชื่อ/ไม่มีบรรทัดนับคน ถูกทิ้ง)", n.map((p) => p.id), ["pk_a", "pk_d"]);
+    const a = n[0] || { lines: [] };
+    ck("ราคาข้อความ → ตัวเลข ปัด 2 ตำแหน่ง · ราคาติดลบ/ไม่ใช่ตัวเลข/ว่าง/key ซ้ำ ถูกทิ้ง · นับเป็นคนเฉพาะผู้ใหญ่/เด็ก",
+      a.lines.map((l) => [l.key, l.label, l.price, l.guest]), [["adult", "ผู้ใหญ่", 299, true], ["child", "เด็ก", 159.56, true], ["x_1", "เตาเพิ่ม", 50, false]]);
+    ck("เลขเมนูเป็นจำนวนเต็มบวก ไม่ซ้ำ ลำดับเดิม · ชื่อตัดช่องว่าง · ยังใช้อยู่ถ้าไม่ได้ลบ", [a.menu_ids, a.name, a.active, (n[1] || {}).active], [[212, 213], "หมูกระทะ 299", true, false]);
+    ck("ช่องราคาตอนพิมพ์: ตัวเลขกับจุดเดียว ทศนิยม ≤ 2 ติดลบพิมพ์ไม่ได้", ["12a.3.45", "-5", "0.999", "299"].map(B.bpPriceInput), ["12.34", "5", "0.99", "299"]);
+
+    // ── ② ฟอร์ม: ราคา ≥ 0 ทศนิยม ≤ 2 · ชื่อรายการครบ ไม่ซ้ำ ──
+    const F = B.buffetFormToLines;
+    const good = F({ name: "หมู 299", adult: "299", child: "0", extras: [{ key: "x_old", label: "เตาเพิ่ม", price: "50.5" }, { key: "t_tmp", label: "เด็กเล็ก", price: "0" }] });
+    ok_("ฟอร์มถูก: ผู้ใหญ่/เด็กนับคน ราคาเป็นตัวเลข · รายการเพิ่มไม่นับคน คง key เดิม · รายการใหม่ได้ key x_ ใหม่",
+      Array.isArray(good) && good.length === 4 && same(good.slice(0, 3).map((l) => [l.key, l.price, l.guest]), [["adult", 299, true], ["child", 0, true], ["x_old", 50.5, false]])
+      && /^x_[0-9a-z]+_[0-9a-z]+$/.test(good[3].key) && good[3].guest === false && good[3].label === "เด็กเล็ก");
+    const bad = [
+      { name: " ", adult: "1", child: "1" }, { name: "ก", adult: "", child: "1" }, { name: "ก", adult: "1.234", child: "1" }, { name: "ก", adult: "1", child: "-1" },
+      { name: "ก", adult: "1", child: "1", extras: [{ label: "", price: "1" }] }, { name: "ก", adult: "1", child: "1", extras: [{ label: "ผู้ใหญ่", price: "1" }] },
+      { name: "ก", adult: "1", child: "1", extras: [{ label: "เตา", price: "1" }, { label: " เตา ", price: "2" }] }, { name: "ก", adult: "1", child: "1", extras: [{ label: "เตา", price: "abc" }] },
+    ].map((f) => typeof F(f));
+    ck("ฟอร์มผิดไม่บันทึก: ไม่มีชื่อ · ราคาว่าง/ทศนิยม 3 ตำแหน่ง/ติดลบ · รายการเพิ่มไม่มีชื่อ/ชื่อซ้ำ/ราคาไม่ใช่ตัวเลข", bad, bad.map(() => "string"));
+
+    // ── ③ การแก้หนึ่งครั้ง (ทำซ้ำบนคลังล่าสุดได้) ──
+    const P = (id, name, x = {}) => ({ id, name, active: true, lines: [{ key: "adult", label: "ผู้ใหญ่", price: 299, guest: true }, { key: "child", label: "เด็ก", price: 159, guest: true }], menu_ids: [1, 2], updated_at: "t0", updated_by: "a", ...x });
+    const OP = B.buffetPkgOp;
+    const L1 = [P("pk_a", "หมู 299"), P("pk_b", "ชาบู", { active: false })];
+    const NL = [{ key: "adult", label: "ผู้ใหญ่", price: 349, guest: true }, { key: "child", label: "เด็ก", price: 159, guest: true }];
+    ck("สร้างชื่อซ้ำกับแพ็คเกจที่ใช้อยู่ = ไม่บันทึก (ไม่สนช่องว่าง/ตัวพิมพ์)", typeof OP(clone(L1), { type: "create", id: "pk_n", name: "  หมู   299 ", lines: NL, at: "t1", by: "m" }), "string");
+    const cr = OP(clone(L1), { type: "create", id: "pk_n", name: "ชาบู", lines: NL, at: "t1", by: "m" });
+    ok_("ชื่อของแพ็คเกจที่ลบไปแล้วใช้ใหม่ได้ · แพ็คเกจใหม่ยังไม่มีเมนู ประทับเวลา/คนแก้", Array.isArray(cr) && cr.length === 3 && same(cr[2], { id: "pk_n", name: "ชาบู", active: true, lines: NL, menu_ids: [], updated_at: "t1", updated_by: "m" }));
+    const ed = OP(clone(L1), { type: "edit", id: "pk_a", name: "หมู 349", lines: NL, base: "t0", at: "t1", by: "m" });
+    ok_("แก้ราคา: แก้เฉพาะแพ็คเกจนั้น (เมนูคงเดิม) แพ็คเกจอื่นไม่ถูกแตะ", Array.isArray(ed) && ed[0].name === "หมู 349" && ed[0].lines[0].price === 349 && same(ed[0].menu_ids, [1, 2]) && ed[0].updated_at === "t1" && same(ed[1], L1[1]));
+    ck("แก้ราคาทับแพ็คเกจที่อีกเครื่องเพิ่งแก้ (updated_at ไม่ตรงกับตอนเปิดฟอร์ม) = ไม่บันทึก ให้ดูราคาล่าสุดก่อน",
+      typeof OP(clone(L1), { type: "edit", id: "pk_a", name: "หมู 349", lines: NL, base: "t-old", at: "t1" }), "string");
+    ck("แก้แพ็คเกจที่ถูกลบ/ไม่มีแล้ว · เปลี่ยนชื่อชนแพ็คเกจอื่น = ไม่บันทึก (ไม่ชุบกลับมา)",
+      [OP(clone(L1), { type: "edit", id: "pk_b", name: "x", lines: NL, base: "t0", at: "t1" }), OP(clone(L1), { type: "edit", id: "pk_zz", name: "x", lines: NL, base: "t0", at: "t1" }),
+        OP(clone([...L1, P("pk_c", "ชาบู 399")]), { type: "edit", id: "pk_c", name: "หมู 299", lines: NL, base: "t0", at: "t1" })].map((x) => typeof x), ["string", "string", "string"]);
+    const fresh = [P("pk_a", "หมู 299", { menu_ids: [1, 2, 7] })];   // อีกเครื่องเพิ่งติ๊กเมนู 7 เพิ่ม
+    const mn = OP(clone(fresh), { type: "menus", id: "pk_a", add: [3], remove: [2], at: "t1", by: "m" });
+    ck("เลือกเมนู = ทำเฉพาะส่วนต่าง: เมนูที่อีกเครื่องเพิ่งเพิ่มไม่หาย", Array.isArray(mn) ? mn[0].menu_ids : mn, [1, 7, 3]);
+    const dl = OP(clone(L1), { type: "delete", id: "pk_a", at: "t1", by: "m" });
+    ok_("ลบ = active:false (เมนู/ราคายังอยู่ให้โต๊ะที่เปิดค้างหาเจอ) ไม่ใช่ลบทิ้ง", Array.isArray(dl) && dl.length === 2 && dl[0].active === false && same(dl[0].menu_ids, [1, 2]) && dl[0].lines.length === 2);
+    ok_("ลบแพ็คเกจที่อีกเครื่องลบไปแล้ว = ไม่เปลี่ยนอะไร", same(OP(clone(L1), { type: "delete", id: "pk_b", at: "t1" }), L1));
+
+    // ── ④ อ่านจากฐาน: ยังไม่รัน SQL ต้องไม่ล้ม ──
+    const rdCalls = [];
+    const R1 = await LIB(async (p) => { rdCalls.push(p); return [{ buffet_packages: [P("pk_a", "หมู")] }]; }).buffetPkgRead(5);
+    ok_("อ่านเฉพาะคอลัมน์ buffet_packages ของสาขานั้น (ไม่ select=* ที่มี PIN พนักงาน)",
+      R1.packages.length === 1 && R1.missingColumn === false && rdCalls.length === 1 && /branch_id=eq\.5/.test(rdCalls[0]) && /select=buffet_packages(&|$)/.test(rdCalls[0]));
+    const miss = [];
+    for (const msg of ['{"code":"42703","message":"column pos_settings.buffet_packages does not exist"}', '{"code":"PGRST204","message":"Could not find the \'buffet_packages\' column of \'pos_settings\' in the schema cache"}']) {
+      try { miss.push(await LIB(async () => { throw new Error(msg); }).buffetPkgRead(5)); } catch (e) { miss.push("โยน error"); }
+    }
+    ck("ยังไม่รัน SQL (42703/PGRST204) = ไม่มีแพ็คเกจ + บอกว่าต้องรัน SQL ไม่ล้ม", miss.map((x) => x && [x.packages, x.missingColumn]), [[[], true], [[], true]]);
+    let netThrow = false; try { await LIB(async () => { throw new Error("Failed to fetch"); }).buffetPkgRead(5); } catch { netThrow = true; }
+    ok_("เน็ตหลุด = โยน error (ไม่เดาว่าไม่มีแพ็คเกจ)", netThrow);
+    const R0 = await LIB(async () => []).buffetPkgRead(5);
+    ok_("สาขายังไม่มีแถวตั้งค่า = ไม่มีแพ็คเกจ (hasRow:false)", same(R0.packages, []) && R0.hasRow === false && R0.missingColumn === false);
+
+    // ── ⑤ บันทึก: ฐานจำลองที่ทำ PATCH แบบมีเงื่อนไขจริง ──
+    const pathGet = (row, k) => {
+      const seg = k.split(/->>?/);
+      let v = row[seg[0]];
+      for (let i = 1; i < seg.length; i++) { if (v == null) return null; v = Array.isArray(v) ? v[+seg[i]] : v[seg[i]]; }
+      return v === undefined ? null : v;
+    };
+    const mkDB = (init, opt = {}) => {
+      const db = { rows: init === undefined ? [] : [{ branch_id: 5, buffet_packages: clone(init), vat_enabled: true, sales_staff: [{ name: "เอ", pin: "1111" }], option_library: [{ id: "g1" }] }], calls: [] };
+      let hooks = opt.onPatch || 0;
+      const cond = (row, qs) => qs.every(([k, v]) => {
+        if (k === "select" || k === "limit") return true;
+        if (k === "branch_id") return v === "eq." + row.branch_id;
+        const val = pathGet(row, k);
+        if (v === "is.null") return val == null;
+        if (v === "not.is.null") return val != null;
+        if (v.startsWith("eq.")) {
+          const lit = decodeURIComponent(v.slice(3));
+          if (k === "buffet_packages") { try { return same(JSON.parse(lit), val); } catch { return false; } }
+          return val != null && String(val) === lit;
+        }
+        return false;
+      });
+      db.sb = async (path, opts = {}) => {
+        const q = path.slice(path.indexOf("?") + 1);
+        const qs = q.split("&").filter(Boolean).map((s) => { const i = s.indexOf("="); return [s.slice(0, i), s.slice(i + 1)]; });
+        const m = opts.method || "GET";
+        db.calls.push({ m, path, body: opts.body ? JSON.parse(opts.body) : null, headers: opts.headers || null });
+        if (opt.missing) throw new Error('{"code":"42703","message":"column pos_settings.buffet_packages does not exist"}');
+        if (m === "GET") return db.rows.filter((r) => cond(r, qs)).map((r) => ({ buffet_packages: r.buffet_packages ?? null }));
+        if (m === "PATCH") {
+          if (hooks && typeof hooks === "function") { const h = hooks; if (!opt.everyPatch) hooks = 0; h(db); }   // อีกเครื่องเขียนแทรกก่อนเรา
+          const hit = db.rows.filter((r) => cond(r, qs));
+          hit.forEach((r) => Object.assign(r, clone(JSON.parse(opts.body))));
+          return hit.map((r) => ({ buffet_packages: r.buffet_packages }));
+        }
+        if (m === "POST") { const b = JSON.parse(opts.body); if (db.rows.some((r) => r.branch_id === b.branch_id)) return []; db.rows.push(clone(b)); return [{ buffet_packages: b.buffet_packages }]; }
+        return [];
+      };
+      return db;
+    };
+    const pk = (db) => (db.rows[0] && db.rows[0].buffet_packages) || [];
+    const patches = (db) => db.calls.filter((c) => c.m === "PATCH");
+    // บันทึกที่โยน error ต้องขึ้นเป็นข้อที่ไม่ผ่าน ไม่ใช่ทำทั้งไฟล์ล้ม
+    const trySave = async (db, change, prev) => { try { return await LIB(db.sb).buffetPkgSave(5, change, prev); } catch (e) { return { ok: "threw", msg: String((e && e.message) || e), packages: [] }; } };
+    // ก. บันทึกปกติ
+    let db = mkDB([P("pk_a", "หมู 299")]);
+    let res = await trySave(db, (L) => OP(L, { type: "edit", id: "pk_a", name: "หมู 349", lines: NL, base: "t0", at: "t1", by: "m" }));
+    ok_("แก้ราคา = PATCH แถวของสาขานั้น ส่งเฉพาะ buffet_packages (VAT/PIN/คลังตัวเลือกไม่ถูกแตะ)",
+      res.ok === true && patches(db).length === 1 && same(Object.keys(patches(db)[0].body), ["buffet_packages"]) && /branch_id=eq\.5/.test(patches(db)[0].path)
+      && db.rows[0].vat_enabled === true && same(db.rows[0].sales_staff, [{ name: "เอ", pin: "1111" }]) && same(db.rows[0].option_library, [{ id: "g1" }]) && pk(db)[0].lines[0].price === 349);
+    ok_("PATCH มีเงื่อนไข: ค่าในฐานต้องยังเท่ากับที่อ่านมา (buffet_packages=eq.<ทั้งก้อน>)", /&buffet_packages=eq\./.test(patches(db)[0].path));
+    ok_("ผลบันทึกคืนคลังก่อน/หลัง (ใช้จดประวัติจากค่าจริงในฐาน)", !!res.before && res.before[0].lines[0].price === 299 && res.packages[0].lines[0].price === 349);
+    // ข. จอค้าง: อีกเครื่องเพิ่มแพ็คเกจไปแล้ว แต่จอนี้ถือค่าเก่า
+    db = mkDB([P("pk_a", "หมู 299"), P("pk_x", "อีกเครื่อง")]);
+    res = await trySave(db, (L) => OP(L, { type: "create", id: "pk_n", name: "ใหม่", lines: NL, at: "t1", by: "m" }), [P("pk_a", "หมู 299")]);
+    ok_("จอค้าง (ถือค่าเก่า): เขียนรอบแรกไม่ติด → อ่านใหม่แล้วสร้างซ้ำบนค่าล่าสุด · แพ็คเกจของอีกเครื่องไม่หาย",
+      res.ok === true && same(pk(db).map((p) => p.id), ["pk_a", "pk_x", "pk_n"]) && patches(db).length === 2);
+    // ค. อีกเครื่องเขียนแทรกระหว่างที่เราอ่านกับเขียน
+    db = mkDB([P("pk_a", "หมู 299", { menu_ids: [1] })], { onPatch: (d) => { d.rows[0].buffet_packages[0].menu_ids.push(9); d.rows[0].buffet_packages[0].updated_at = "t-other"; } });
+    res = await trySave(db, (L) => OP(L, { type: "menus", id: "pk_a", add: [3], remove: [], at: "t1", by: "m" }));
+    ck("อีกเครื่องเขียนแทรก: ลองใหม่บนค่าล่าสุด ได้ทั้งสองฝั่ง (เมนู 9 ของอีกเครื่อง + เมนู 3 ของเรา)", [res.ok, pk(db)[0].menu_ids, patches(db).length], [true, [1, 9, 3], 2]);
+    // ง. การแก้ไม่ผ่าน (ชื่อซ้ำ) = ไม่เขียน
+    db = mkDB([P("pk_a", "หมู 299")]);
+    res = await trySave(db, (L) => OP(L, { type: "create", id: "pk_n", name: "หมู 299", lines: NL, at: "t1" }));
+    ok_("การแก้ถูกปฏิเสธ (ชื่อซ้ำ) = ไม่เขียนฐาน คืนข้อความ + คลังล่าสุด", res.ok === false && typeof res.msg === "string" && patches(db).length === 0 && res.packages.length === 1);
+    // จ. ยังไม่รัน SQL
+    db = mkDB([], { missing: true });
+    let me = null; try { await LIB(db.sb).buffetPkgSave(5, (L) => L); } catch (e) { me = e; }
+    ok_("ยังไม่รัน SQL: บันทึกไม่ได้ บอกให้รัน SQL (ไม่เขียนคอลัมน์อื่นแทน)", !!me && me.missingColumn === true && me.message.includes("ต้องรัน SQL") && db.calls.every((c) => c.m === "GET"));
+    // ฉ. ชนตลอด = ยอมแพ้ บอกให้กดใหม่ ไม่เขียนทับ
+    db = mkDB([P("pk_a", "หมู 299")], { everyPatch: true, onPatch: (d) => { d.rows[0].buffet_packages = [...d.rows[0].buffet_packages, P("pk_" + d.calls.length, "อื่น" + d.calls.length)]; } });
+    me = null; try { await LIB(db.sb).buffetPkgSave(5, (L) => OP(L, { type: "delete", id: "pk_a", at: "t1" })); } catch (e) { me = e; }
+    ok_("อีกเครื่องเขียนแทรกทุกรอบ: ลองไม่เกิน 4 ครั้งแล้วแจ้งให้กดใหม่ · ไม่มีรอบไหนเขียนทับ",
+      !!me && /พร้อมกัน/.test(me.message) && patches(db).length <= 4 && pk(db).every((p) => p.active !== false));
+    // ช. สาขายังไม่มีแถว / คอลัมน์ยังว่าง
+    db = mkDB(undefined);
+    res = await trySave(db, (L) => OP(L, { type: "create", id: "pk_n", name: "ใหม่", lines: NL, at: "t1" }));
+    const post = db.calls.find((c) => c.m === "POST");
+    ok_("สาขายังไม่มีแถวตั้งค่า: สร้างแถวด้วย branch_id + buffet_packages เท่านั้น แบบไม่ทับ (ignore-duplicates)",
+      res.ok === true && !!post && same(Object.keys(post.body).sort(), ["branch_id", "buffet_packages"]) && /ignore-duplicates/.test(JSON.stringify(post.headers)) && !/merge-duplicates/.test(JSON.stringify(post.headers)));
+    db = mkDB(null);
+    res = await trySave(db, (L) => OP(L, { type: "create", id: "pk_n", name: "ใหม่", lines: NL, at: "t1" }), null);
+    ok_("คอลัมน์ยังว่าง (null): PATCH แบบมีเงื่อนไข buffet_packages=is.null", res.ok === true && patches(db).length === 1 && /&buffet_packages=is\.null/.test(patches(db)[0].path));
+    db = mkDB([P("pk_a", "หมู 299")]);
+    res = await trySave(db, (L) => L);
+    ok_("ไม่มีอะไรเปลี่ยน = ไม่เขียนฐาน", res.ok === true && patches(db).length === 0);
+    // ซ. คลังใหญ่: URL ต้องไม่ยาวจนฐานตอบ 400 (ทดสอบกับฐานจริง ~30 KB = 400) และยังจับการเขียนแทรกได้
+    const big = Array.from({ length: 30 }, (_, i) => P("pk_" + i, "แพ็คเกจบุฟเฟต์ทดสอบ " + i, { menu_ids: Array.from({ length: 90 }, (_, j) => 200 + j), updated_at: "2026-10-18T10:00:" + String(i).padStart(2, "0") + ".000Z" }));
+    db = mkDB(big, { onPatch: (d) => { d.rows[0].buffet_packages[7].lines[0].price = 1; d.rows[0].buffet_packages[7].updated_at = "t-other"; } });
+    res = await trySave(db, (L) => OP(L, { type: "menus", id: "pk_3", add: [999], remove: [], at: "t1", by: "m" }));
+    const ps = patches(db);
+    ok_("คลังใหญ่ (30 แพ็คเกจ × 90 เมนู): URL เขียนสั้นกว่า 8 KB (เทียบลายนิ้วมือแทนทั้งก้อน)", ps.length >= 1 && ps.every((c) => c.path.length < 8000 && !/buffet_packages=eq\./.test(c.path)));
+    ok_("คลังใหญ่: อีกเครื่องแก้ราคาแพ็คเกจอื่นแทรก → จับได้ ลองใหม่ ราคาของอีกเครื่องไม่หาย",
+      res.ok === true && ps.length === 2 && pk(db)[7].lines[0].price === 1 && pk(db)[3].menu_ids.includes(999));
+    const small = B.bpCasFilter([P("pk_a", "หมู")]);
+    ok_("คลังเล็ก: เทียบทั้งก้อน (eq.<json>) ตามสัญญา", small.startsWith("buffet_packages=eq.") && B.bpCasFilter(null) === "buffet_packages=is.null");
+
+    // ── ⑥ ประวัติการแก้ (action_history) ──
+    const br = { id: 5, name: "กาญจนบุรี" };
+    const nm = (id) => ({ 1: "หมูหมัก", 3: "น้ำแข็ง" })[id];
+    const before = P("pk_a", "หมู 299");
+    const t1 = B.buffetAuditText(null, before, "max", br, nm);
+    const t2 = B.buffetAuditText(before, { ...before, lines: [{ ...before.lines[0], price: 349 }, before.lines[1], { key: "x_1", label: "เตาเพิ่ม", price: 50, guest: false }], menu_ids: [1, 3] }, "ผู้จัดการ", br, nm);
+    const t3 = B.buffetAuditText(before, { ...before, active: false }, "max", br, nm);
+    ok_("ประวัติสร้าง: ใคร สาขาไหน ชื่อแพ็คเกจ ราคาทุกบรรทัด", t1.includes("max") && t1.includes("กาญจนบุรี") && t1.includes("#5") && t1.includes("สร้าง") && t1.includes("หมู 299") && t1.includes("ผู้ใหญ่ ฿299") && t1.includes("เด็ก ฿159"));
+    ok_("ประวัติแก้: ราคาจากอะไรเป็นอะไร · รายการเพิ่ม · เมนูเข้า/ออก (ไม่รู้ชื่อ = #id)",
+      t2.includes("ผู้จัดการ") && t2.includes("ผู้ใหญ่: ฿299 → ฿349") && t2.includes("เพิ่ม เตาเพิ่ม ฿50") && t2.includes("เพิ่มเมนู 1: น้ำแข็ง") && t2.includes("เอาเมนูออก 1: #2"));
+    ok_("ประวัติลบ + ไม่มีอะไรเปลี่ยน = ไม่จด", t3.includes("ลบ \"หมู 299\"") && B.buffetAuditText(before, clone(before), "max", br, nm) === "");
+
+    // ── ⑦ เมนูที่เลือกใส่แพ็คเกจได้ = ปุ่มติ๊กของสาขาเท่านั้น ──
+    const VB_SAMPLES_BP = [null, [], [5], [8], ["5"], [5, 8], [2, 3, 4], ["8", "5"], [6]];
+    const ms = VB_SAMPLES_BP.map((vb, i) => ({ id: i + 1, name: "m" + i, category: i % 2 ? "น้ำ" : "หมู", visible_branches: vb }));
+    const vis = new Function(grabConst(APP, "menuVisibleAt") + "\nreturn menuVisibleAt;")();
+    const got = B.bpPickableMenus(ms, 5, ["หมู", "น้ำ"], []).map((m) => m.id);
+    const want = ms.filter((m) => vis(m, 5)).sort((x, y) => (x.category === y.category ? 0 : x.category === "หมู" ? -1 : 1)).map((m) => m.id);
+    ck("เลือกได้เฉพาะเมนูที่สาขาเห็นตามปุ่มติ๊ก (null=ทุกสาขา · []=ไม่มีใคร · ['5'] ก็นับ) เรียงตามหมวดที่ร้านจัด", got, want);
+    ok_("ตัวอย่างครอบคลุม: [] และ [8] ไม่โผล่ · null และ ['5'] โผล่", !got.includes(2) && !got.includes(4) && got.includes(1) && got.includes(5));
+  } else ok_("ดึงคลังแพ็คเกจมารันได้", false);
+
+  // ── ⑧ จอแพ็คเกจ: สิทธิ์ (ดึงตัวจัดการปุ่มจริงมารันกับ api จำลอง) ──
+  const compOf = (name) => { const s = APP.indexOf(`function ${name}(`); if (s < 0) return ""; const b = APP.indexOf("){", s) + 1; let d = 0; for (let j = b; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(s, j + 1); } } return ""; };
+  const BP = compOf("POSBuffetPackages");
+  ok_("จอแพ็คเกจคิดสิทธิ์จาก posAccess(ผู้ใช้, โหมด PIN): ราคา = สิทธิ์ตั้งค่า · เลือกเมนู = ตั้งค่า/จัดการ POS",
+    BP.includes("const acc=posAccess(currentUser,saleOnly);") && BP.includes("const canMoney=acc.settings;") && BP.includes("const canMenus=acc.admin;"));
+  let H = null;
+  const mkUI = (o = {}) => {
+    const out = { saves: [], notes: [], toasts: [], hist: [], form: "same", pick: "same" };
+    const LL = o.lib || [{ id: "pk_a", name: "หมู 299", active: true, lines: [{ key: "adult", label: "ผู้ใหญ่", price: 299, guest: true }, { key: "child", label: "เด็ก", price: 159, guest: true }], menu_ids: [1], updated_at: "t0", updated_by: "a" }];
+    const fakeApi = {
+      saveBuffetPackages: async (bid, change, prev) => { const next = change(clone(LL)); out.saves.push({ bid, next, prev }); return typeof next === "string" ? { ok: false, msg: next, packages: LL, raw: LL } : { ok: true, packages: next, raw: next, before: clone(LL) }; },
+      addActionHist: async (d) => { out.hist.push(d.action); return [d]; },
+    };
+    const names = ["api", "bid", "raw", "setPkgs", "setRaw", "notifyDlg", "buffetPkgOp", "buffetAuditText", "who", "currentBranch", "menus", "nowStr", "setBusy", "setNoCol", "BP_NO_COL", "friendlyError",
+      "canMoney", "canMenus", "LOCK_MONEY", "LOCK_MENUS", "form", "busy", "buffetFormToLines", "bpNewId", "posToast", "shiftOpen", "setForm", "bpFormOf", "confirmDlg", "pick", "pickable", "setPick", "console"];
+    const libB = LIB ? LIB(async () => []) : {};
+    const vals = [fakeApi, 5, clone(LL), () => {}, () => {}, (m) => out.notes.push(String(m)), libB.buffetPkgOp, libB.buffetAuditText, "max", { id: 5, name: "กาญจนบุรี" }, [{ id: 1, name: "หมูหมัก" }, { id: 3, name: "น้ำแข็ง" }], () => "t9", () => {}, () => {}, "SQL", (e) => String(e),
+      !!o.money, !!o.menus, "LOCKM", "LOCKN", o.form || null, false, libB.buffetFormToLines, libB.bpNewId, (m, t) => out.toasts.push([m, t || "ok"]), !!o.shift, (v) => { out.form = v; }, (p) => ({ id: p.id, fresh: true }), async () => true,
+      o.pick || null, [{ id: 1, name: "หมูหมัก" }, { id: 3, name: "น้ำแข็ง" }], (v) => { out.pick = v; }, { warn: () => {} }];
+    const f = new Function(...names, "async " + grab(BP, "persist") + "\nasync " + grab(BP, "saveForm") + "\nasync " + grab(BP, "del") + "\nasync " + grab(BP, "savePick") + "\nreturn {saveForm,del,savePick};")(...vals);
+    return { ...f, out };
+  };
+  try { if (BP && LIB) H = mkUI(); } catch (e) { console.log("       ดึงตัวจัดการปุ่มของจอแพ็คเกจไม่ได้: " + e.message); }
+  if (H) {
+    const FORM = { id: "pk_a", name: "หมู 299", adult: "349", child: "159", extras: [], base: "t0" };
+    let u = mkUI({ money: false, menus: true, form: FORM }); await u.saveForm();
+    ok_("ผู้จัดการ pos_admin (ไม่มีสิทธิ์ตั้งค่า) กดบันทึกราคา = ไม่บันทึก แจ้งว่าต้องมีสิทธิ์", u.out.saves.length === 0 && u.out.notes.includes("LOCKM"));
+    u = mkUI({ money: false, menus: true }); await u.del({ id: "pk_a", name: "หมู 299" });
+    ok_("ไม่มีสิทธิ์ตั้งค่า กดลบแพ็คเกจ = ไม่ลบ", u.out.saves.length === 0 && u.out.notes.includes("LOCKM"));
+    u = mkUI({ money: false, menus: false, pick: { id: "pk_a", sel: { 1: true, 3: true }, opened: [1] } }); await u.savePick();
+    ok_("คนเข้าด้วย PIN (ดูอย่างเดียว) กดบันทึกเมนู = ไม่บันทึก", u.out.saves.length === 0 && u.out.notes.includes("LOCKN"));
+    u = mkUI({ money: false, menus: true, pick: { id: "pk_a", sel: { 1: true, 3: true }, opened: [1] } }); await u.savePick();
+    ok_("ผู้จัดการ pos_admin เลือกเมนูในแพ็คเกจได้ + จดประวัติชื่อเมนู",
+      u.out.saves.length === 1 && same(u.out.saves[0].next[0].menu_ids, [1, 3]) && u.out.hist.length === 1 && u.out.hist[0].includes("น้ำแข็ง") && u.out.pick === null);
+    u = mkUI({ money: true, menus: true, form: FORM, shift: true }); await u.saveForm();
+    ok_("สิทธิ์ตั้งค่า แก้ราคาระหว่างกะเปิด: บันทึก + จดประวัติราคา + เตือนว่าโต๊ะที่เปิดอยู่ยังคิดราคาเดิม",
+      u.out.saves.length === 1 && u.out.saves[0].prev !== undefined && u.out.hist.length === 1 && u.out.hist[0].includes("ผู้ใหญ่: ฿299 → ฿349")
+      && u.out.toasts.some(([m, t]) => t === "warn" && m.includes("ราคาเดิม")) && u.out.form === null);
+    u = mkUI({ money: true, menus: true, form: { ...FORM, adult: "1.234" } }); await u.saveForm();
+    ok_("ราคาผิดรูปแบบ = ไม่บันทึก แจ้งช่องที่ผิด", u.out.saves.length === 0 && u.out.notes.some((m) => m.includes("ผู้ใหญ่")));
+    u = mkUI({ money: true, menus: true, form: { ...FORM, base: "t-old" } }); await u.saveForm();
+    ok_("อีกเครื่องเพิ่งแก้ราคา: ไม่ทับ เปิดฟอร์มใหม่ด้วยค่าล่าสุด", u.out.saves.length === 1 && typeof u.out.saves[0].next === "string" && u.out.form && u.out.form.id === "pk_a" && u.out.form.fresh === true && u.out.hist.length === 0);
+  } else ok_("ดึงตัวจัดการปุ่มของจอแพ็คเกจมารันได้", false);
+
+  // ── ⑨ ต่อสายจอ: ที่เดียวกันทั้งหลังบ้านและจอขาย ──
+  const MT = compOf("POSMenuTools");
+  ok_("เมนู \"จัดการเมนูและหมวดหมู่\" มีการ์ดที่ 3 แพ็คเกจบุฟเฟต์ เปิดจอเดียวกัน",
+    MT.includes('{id:"packages",l:"แพ็คเกจบุฟเฟต์",icon:"🍖",sub:"ราคา/คน + เลือกเมนู"}') && MT.includes('{active==="packages"&&<POSBuffetPackages currentBranch={currentBranch} currentUser={currentUser} saleOnly={saleOnly} menus={menus}'));
+  const calls = APP.split("<POSMenuTools ").slice(1).map((t) => t.slice(0, t.indexOf("/>")));
+  ok_("ทั้งสองที่เรียก (หลังบ้าน + จอขาย) ส่งผู้ใช้และโหมด PIN จริง — หลังบ้าน saleOnly={false} · จอขาย saleOnly={saleOnly}",
+    calls.length === 2 && calls.every((c) => c.includes("currentUser={currentUser}") && c.includes("menus={menus}"))
+    && calls.some((c) => c.includes('variant="cards"') && c.includes("saleOnly={false}")) && calls.some((c) => c.includes('variant="dropdown"') && c.includes("saleOnly={saleOnly}")));
+  const MPL = compOf("MenuPickList");
+  ok_("ช่องราคาในจอแพ็คเกจเป็น type=text + inputMode=decimal (iOS) ไม่มี type=number",
+    (BP.match(/type="text" inputMode="decimal"/g) || []).length >= 3 && !/type="number"/.test(BP) && !/type="number"/.test(MPL));
+  const AM = compOf("POSMenuAvailManager");
+  ok_("รายการติ๊กเลือกเมนูตัวเดียวกัน (MenuPickList) ใช้ทั้ง \"ผูกหลายเมนู\" และ \"เลือกเมนูในแพ็คเกจ\"",
+    (APP.match(/<MenuPickList /g) || []).length === 2 && AM.includes("<MenuPickList menus={branchAll}") && BP.includes("<MenuPickList menus={pickable}")
+    && AM.includes("const menuIds=branchAll.filter(m=>bulkMenus[m.id]).map(m=>m.id);") && !AM.includes("setBulkMenus(Object.fromEntries(visible.map"));
+  ok_("จอเลือกเมนูในแพ็คเกจใช้เมนูตามปุ่มติ๊ก (bpPickableMenus) ไม่ใช่เมนูทั้งเครือ", BP.includes("bpPickableMenus(menus,bid,order.cat,order.menu)"));
+  try {
+    const mpf = new Function(grabConst(APP, "menuCatOf") + "\n" + LN.find((l) => l.startsWith("const MPL_NOCAT=")) + "\n" + grabConst(APP, "menuPickFilter") + "\nreturn {menuPickFilter,MPL_NOCAT};")();
+    const ml = [{ id: 1, name: "หมูหมัก", category: "หมู" }, { id: 2, name: "น้ำเปล่า", category: "น้ำ" }, { id: 3, name: "หมูสามชั้น", category: "" }, { id: 4, name: "โค้ก", category: "น้ำ" }];
+    ck("รายการติ๊ก: กรองหมวด / ค้นชื่อ / ไม่มีหมวด", [mpf.menuPickFilter(ml, "น้ำ", "").map((m) => m.id), mpf.menuPickFilter(ml, "", "หมู").map((m) => m.id), mpf.menuPickFilter(ml, mpf.MPL_NOCAT, "").map((m) => m.id), mpf.menuPickFilter(ml, "", "").length], [[2, 4], [1, 3], [3], 4]);
+  } catch (e) { ok_("ดึงตัวกรองรายการติ๊กมารันได้: " + e.message, false); }
+
+  // ── ⑩ ไม่ปนกับตั้งค่า POS ทั้งแถว + api + SQL ──
+  try {
+    const blk = APP.slice(APP.indexOf("const POS_FORM_KEYS=["), APP.indexOf("function POSSettingsFields("));
+    const PSx = new Function("api", "nowStr", blk + "\nreturn {POS_FORM_KEYS,posSettingsPatch};")({}, () => "");
+    ok_("ฟอร์มตั้งค่า POS ไม่ส่ง buffet_packages (แก้ VAT ไม่ทับแพ็คเกจ)", !PSx.POS_FORM_KEYS.includes("buffet_packages")
+      && same(PSx.posSettingsPatch({ vat_enabled: false, buffet_packages: [] }, { vat_enabled: false, buffet_packages: [{ id: "pk_x" }] }), {}));
+  } catch (e) { ok_("ดึงฟอร์มตั้งค่า POS มารันได้: " + e.message, false); }
+  const wr = (s) => (s.match(/JSON\.stringify\(\{[^)]*buffet_packages\s*:/g) || []).length;
+  ok_("ไม่มีที่ไหนเขียนแพ็คเกจผ่าน patchPOSSettings — ทุกคำขอที่ส่ง buffet_packages อยู่ในตัวเขียนแบบมีเงื่อนไขเท่านั้น",
+    !/patchPOSSettings\([^)]*buffet_packages/.test(APP) && wr(BLK) >= 2 && wr(APP) === wr(BLK));
+  ok_("api.getBuffetPackages / saveBuffetPackages ชี้ไปตัวอ่าน/ตัวเขียนของคลัง",
+    APP.includes("  getBuffetPackages: (bid) => buffetPkgRead(bid),") && APP.includes("  saveBuffetPackages: (bid, change, prev) => buffetPkgSave(bid, change, prev),"));
+  let SQLBP = ""; try { SQLBP = rd("sql/buffet-packages.sql"); } catch {}
+  ok_("sql/buffet-packages.sql: เพิ่มคอลัมน์ jsonb แบบรันซ้ำได้ + reload schema + วิธีตรวจแบบอ่านอย่างเดียว",
+    SQLBP.includes("alter table public.pos_settings add column if not exists buffet_packages jsonb;") && SQLBP.includes("notify pgrst, 'reload schema';") && /--\s+GET .*pos_settings\?select=branch_id,buffet_packages/.test(SQLBP));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
