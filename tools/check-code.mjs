@@ -7828,8 +7828,13 @@ section("แพ็คเกจบุฟเฟต์: เปิดโต๊ะแ
     ok_("จอโต๊ะ: บรรทัดแพ็คเกจไม่อยู่ในรายการ (ไม่มีปัดยกเลิก/พิมพ์ซ้ำ/ติ๊กเสิร์ฟ) และปุ่ม −/ยกเลิกรายการไม่แตะมัน",
       APP.includes(".filter(r=>!isPkgLine(r.item))") && APP.includes("const sentRows=items.filter(i=>!i._new&&i.line_uid&&!isPkgLine(i));") &&
       (APP.match(/if\(isPkgLine\((it|target)\)\)return;/g) || []).length === 2);
-    ok_("จอโต๊ะ: กริดเมนูของบิลแพ็คเกจ = เมนูในแพ็คเกจ ∩ สาขาเปิดขาย",
-      APP.includes("if(!menuVisibleAt(m,bidSale))return false;            // สาขานี้ไม่ได้เปิดขายเมนูนี้\n      if(pkgScope&&!pkgScope.ids.has(String(m.id)))return false;") &&
+    // เจ้าของสั่ง 19 ต.ค. 69: พนักงานเห็น/สั่งได้ทุกเมนูของสาขาไม่ว่าแพ็คเกจไหน · ลูกค้าสแกนยังเห็นเฉพาะเมนูในแพ็คเกจ (ด่านหน้าลูกค้าแยก)
+    ok_("จอโต๊ะ (พนักงาน): โต๊ะแพ็คเกจเห็นทุกเมนูที่สาขาเปิดขาย · ชิป 🍖 ในแพ็คเกจ กรองดูเฉพาะเมนูแพ็คเกจ · การ์ดมีป้าย ในแพ็คเกจ",
+      APP.includes("if(!menuVisibleAt(m,bidSale))return false;            // สาขานี้ไม่ได้เปิดขายเมนูนี้") &&
+      !APP.includes("if(pkgScope&&!pkgScope.ids.has(String(m.id)))return false;") &&
+      APP.includes("const seen=[...new Set(menus.filter(m=>menuVisibleAt(m,bidSale)).map(menuCatOf).filter(Boolean))];") &&
+      APP.includes("if(selCat===PKG_CHIP){if(!(pkgScope&&pkgScope.ids.has(String(m.id))))return false;}") &&
+      APP.includes("inPkg={!!pkgScope&&!pkgScope.missing&&pkgScope.ids.has(String(m.id))}") && APP.includes("{inPkg&&<span style={MC_PKG}>ในแพ็คเกจ</span>}") &&
       APP.includes("หาแพ็คเกจของโต๊ะนี้ไม่เจอ — แจ้งผู้จัดการ"));
   }
 

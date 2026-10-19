@@ -20825,9 +20825,12 @@ const MC_HID={position:"absolute",left:"50%",bottom:3,transform:"translateX(-50%
 const MC_OPT={...MC_BADGE,color:C.teal,background:C.tealLight};
 const MC_ICON={height:40,display:"flex",alignItems:"center",justifyContent:"center"};
 const MC_NAME={fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3};
-const MenuCard=memo(function MenuCard({m,soldOut,hiddenFromCustomer,hasOpts,onPick}){
+// เมนูที่อยู่ในแพ็คเกจของโต๊ะนี้ (โต๊ะแพ็คเกจ) — มุมซ้ายบน ไม่ชนป้าย "+ ตัวเลือก" มุมขวา
+const MC_PKG={...MC_BADGE,left:4,right:"auto",color:"#065F46",background:"#D1FAE5",border:"1px solid #6EE7B7"};
+const MenuCard=memo(function MenuCard({m,soldOut,hiddenFromCustomer,hasOpts,inPkg,onPick}){
   return <div className={soldOut?undefined:"mcard"} onClick={()=>{if(!soldOut)onPick(m);}} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:soldOut?"not-allowed":"pointer",textAlign:"center",position:"relative"}}>
     {!soldOut&&hasOpts&&<span style={MC_OPT}>+ ตัวเลือก</span>}
+    {inPkg&&<span style={MC_PKG}>ในแพ็คเกจ</span>}
     <div style={{position:"relative"}}>
     {m.image
       ?<img src={driveImgSrc(m.image,96)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>
@@ -20903,20 +20906,24 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const pkgScope=useMemo(()=>pkgMenuScopeOf(items,pkgLibOf(posSettings)),[items,posSettings]);
   // เวลาสั่งอาหารของโต๊ะบุฟเฟต์ — พนักงานเห็นว่าเหลือเท่าไร/หมดแล้ว (หมดแล้วพนักงานยังสั่งให้ได้)
   const pkgWin=useMemo(()=>existingOrder?pkgOrderWindowOf({...existingOrder,items},pkgLibOf(posSettings)):null,[existingOrder,items,posSettings]);
+  // โต๊ะแพ็คเกจ: พนักงานเห็น/สั่งได้ทุกเมนูของสาขา (เจ้าของสั่ง 19 ต.ค. 69) — ลูกค้าที่สแกนยังเห็นเฉพาะเมนูในแพ็คเกจ
+  // ชิป "🍖 ในแพ็คเกจ" ไว้กรองดูเฉพาะเมนูของแพ็คเกจโต๊ะนี้เร็วๆ · การ์ดเมนูในแพ็คเกจมีป้าย "ในแพ็คเกจ"
+  const PKG_CHIP="🍖 ในแพ็คเกจ";
   const cats=useMemo(()=>{
-    const seen=[...new Set(menus.filter(m=>menuVisibleAt(m,bidSale)&&(!pkgScope||pkgScope.ids.has(String(m.id)))).map(menuCatOf).filter(Boolean))];
-    return ["ทั้งหมด",...seen.sort(catSorter(catOrderOf(posSettings)))];
+    const seen=[...new Set(menus.filter(m=>menuVisibleAt(m,bidSale)).map(menuCatOf).filter(Boolean))];
+    return ["ทั้งหมด",...(pkgScope&&!pkgScope.missing?[PKG_CHIP]:[]),...seen.sort(catSorter(catOrderOf(posSettings)))];
   },[menus,bidSale,posSettings,pkgScope]);
   const filtered=useMemo(()=>{
     const ms=menuSorter(catOrderOf(posSettings),menuOrderOf(posSettings));
     return pkgPriced(menus.filter(m=>{
       if(!menuVisibleAt(m,bidSale))return false;            // สาขานี้ไม่ได้เปิดขายเมนูนี้
-      if(pkgScope&&!pkgScope.ids.has(String(m.id)))return false;   // ไม่อยู่ในแพ็คเกจของโต๊ะนี้
+      // โต๊ะแพ็คเกจไม่กรองเมนูนอกแพ็คเกจที่นี่ — พนักงานสั่งให้ได้ทุกเมนู (ลูกค้าสแกนถูกกันที่หน้าลูกค้า + ตัวส่งเข้าบิล)
       // "ซ่อน" = ซ่อนจากลูกค้าที่สแกน QR เท่านั้น — จอพนักงานต้องยังเห็นและสั่งให้ลูกค้าได้
       // (เดิมกรองทิ้งตรงนี้ด้วย พนักงานเลยสั่งเมนูที่ตั้งใจเก็บไว้สั่งผ่านพนักงานไม่ได้เลย)
       const c=menuCatOf(m);
       if(!c)return false;                                  // ครัวกลางยังไม่ได้จัดหมวด → ไม่ขึ้นในหน้าขาย
-      if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
+      if(selCat===PKG_CHIP){if(!(pkgScope&&pkgScope.ids.has(String(m.id))))return false;}
+      else if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
       return m.name.toLowerCase().includes(search.toLowerCase());
     }).sort(ms),pkgScope);   // โต๊ะแพ็คเกจ: ราคาในแพ็คเกจ (ที่การ์ดและตอนกดใส่บิล)
   },[menus,selCat,search,bidSale,posSettings,pkgScope]);
@@ -21435,7 +21442,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     <div style={{flex:1,display:isMobile&&mobileView!=="menu"?"none":"flex",flexDirection:"column",borderRight:isMobile?"none":`1px solid ${C.line}`,minWidth:0,minHeight:0}}>
       {pkgScope&&<div style={{padding:"6px 12px",borderBottom:`1px solid ${C.line}`,flexShrink:0,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,
         background:pkgScope.missing?C.redLight:"#ECFDF5",color:pkgScope.missing?C.red:"#065F46"}}>
-        {pkgScope.missing?"⚠️ หาแพ็คเกจของโต๊ะนี้ไม่เจอ — แจ้งผู้จัดการ (สั่งได้เฉพาะเมนูที่อยู่ในบิลแล้ว)":`🍖 เมนูของแพ็คเกจ ${billPkg?billPkg.name:""}${pkgScope.retired?" · ลบจากคลังแล้ว (โต๊ะนี้สั่งได้จนปิดบิล)":""}`}
+        {pkgScope.missing?"⚠️ หาแพ็คเกจของโต๊ะนี้ไม่เจอ — แจ้งผู้จัดการ (ลูกค้าสแกนสั่งได้เฉพาะเมนูที่อยู่ในบิลแล้ว · พนักงานสั่งได้ทุกเมนู)":`🍖 แพ็คเกจ ${billPkg?billPkg.name:""}${pkgScope.retired?" · ลบจากคลังแล้ว (โต๊ะนี้ใช้ได้จนปิดบิล)":""} · พนักงานสั่งได้ทุกเมนู (ลูกค้าสแกนเห็นเฉพาะเมนูในแพ็คเกจ)`}
         {pkgWin&&<span style={{marginLeft:8}}><OrderCountdown end={pkgWin.end} staff/></span>}
       </div>}
       <div style={{padding:"8px 12px",borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
@@ -21445,7 +21452,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"7px 12px",fontSize:13}}/>
       </div>
       <div style={{flex:1,minHeight:0,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
-        {filtered.map(m=><MenuCard key={m.id} m={m} soldOut={menuSoldOutAt(m,bidSale)} hiddenFromCustomer={menuHiddenAt(m,bidSale)} hasOpts={optsSet.has(m.id)} onPick={pickOrAdd}/>)}
+        {filtered.map(m=><MenuCard key={m.id} m={m} soldOut={menuSoldOutAt(m,bidSale)} hiddenFromCustomer={menuHiddenAt(m,bidSale)} hasOpts={optsSet.has(m.id)} inPkg={!!pkgScope&&!pkgScope.missing&&pkgScope.ids.has(String(m.id))} onPick={pickOrAdd}/>)}
         {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"40px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
           <Ic d={I.food} s={42} c={C.line}/>
           <p style={{marginTop:10,fontSize:13.5,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูที่จัดหมวดหมู่ไว้"}</p>
