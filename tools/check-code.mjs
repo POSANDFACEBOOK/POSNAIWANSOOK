@@ -8629,6 +8629,126 @@ section("ปิดกะ: หมายเหตุให้ข้อมูลจ
     !APP.includes("⚠️ ระบบบัญชีไม่รับ: {slipWarnings(r.reply).join(\" · \")}"));
 }
 
+// ── หน้าลูกค้า: ข้อความแจ้งตอนสแกน QR ครั้งแรก (19 ต.ค. 69 — แบบ FoodStory "ราคายังไม่รวม VAT 7%" + ปุ่ม "เข้าใจแล้ว") ──
+// ตั้งที่ ตั้งค่า POS ต่อจากข้อความใบเสร็จ · คอลัมน์จาก sql/customer-notice.sql
+section("หน้าลูกค้า: ข้อความแจ้งตอนสแกนครั้งแรก");
+{
+  const L = APP.split("\n");
+  const line = (p) => L.find((x) => x.startsWith(p)) || "";
+  let N = null;
+  try { N = new Function([line("const customerNoticeOf="), line("const noticeMarkOf="), line("const noticeVatWarn="), "return {customerNoticeOf,noticeMarkOf,noticeVatWarn};"].join("\n"))(); } catch { N = null; }
+  ok_("ดึงตัวช่วยข้อความแจ้งลูกค้าตัวจริงมารันได้", !!N);
+  if (N) {
+    const a = N.customerNoticeOf({ customer_notice_text: " ราคายังไม่รวม VAT 7% " });
+    ck("ข้อความว่าง/มีแต่ช่องว่าง/ยังไม่รัน SQL = ไม่มีกล่อง · หัวข้อว่าง = \"เงื่อนไขการใช้บริการ\" · ตัดช่องว่างหัวท้าย",
+      [N.customerNoticeOf(null), N.customerNoticeOf({ customer_notice_title: "หัว", customer_notice_text: "  \n " }), N.customerNoticeOf({ vat_rate: 7 }), a && a.title, a && a.text],
+      [null, null, null, "เงื่อนไขการใช้บริการ", "ราคายังไม่รวม VAT 7%"]);
+    const b = N.customerNoticeOf({ customer_notice_text: "ราคายังไม่รวม VAT 7%" });
+    const c = N.customerNoticeOf({ customer_notice_text: "ราคายังไม่รวม VAT 7%!" });
+    const d = N.customerNoticeOf({ customer_notice_title: "แจ้ง", customer_notice_text: "ราคายังไม่รวม VAT 7%" });
+    const m = N.noticeMarkOf;
+    ck("กดรับแล้ว: QR เดิม ข้อความเดิม = ไม่ขึ้นซ้ำ · แก้ข้อความ/หัวข้อ = ขึ้นใหม่ · QR ใหม่ (ลูกค้ากลุ่มใหม่) = ขึ้นใหม่ · ไม่มีข้อความ = ไม่มีเครื่องหมาย",
+      [m("tk1", a) === m("tk1", b), m("tk1", b) === m("tk1", c), m("tk1", b) === m("tk1", d), m("tk1", b) === m("tk2", b), m("tk1", null)],
+      [true, false, false, false, ""]);
+    ck("เตือนในฟอร์ม: เขียน \"ไม่รวม VAT\" แต่บิลไม่บวก VAT (รวมในราคา/ปิด) = เตือน · ตั้งไม่รวมในราคา = ไม่เตือน · ข้อความเรื่องอื่น = ไม่เตือน",
+      [!!N.noticeVatWarn("ราคายังไม่รวม VAT 7%", { vat_enabled: true, vat_included: true }), !!N.noticeVatWarn("ราคายังไม่รวมภาษีมูลค่าเพิ่ม", { vat_enabled: false }),
+        N.noticeVatWarn("ราคายังไม่รวม VAT 7%", { vat_enabled: true, vat_included: false }), N.noticeVatWarn("งดนำอาหารจากภายนอก", { vat_enabled: true, vat_included: true })],
+      [true, true, "", ""]);
+  }
+
+  // ตัวโหลดหน้าลูกค้า: แต่ละชุดคอลัมน์เสริมถอยของใครของมัน — ยังไม่รัน SQL ข้อความแจ้ง ห้ามลากแพ็คเกจบุฟเฟต์หายไปด้วย (และกลับกัน)
+  const apiExpr = (name) => {
+    const head = `\n  ${name}: `; const st = APP.indexOf(head);
+    if (st < 0) throw new Error("ไม่พบ api." + name);
+    const s0 = st + head.length; let d = 0;
+    for (let i = APP.indexOf("{", APP.indexOf("=>", s0)); i < APP.length; i++) {
+      if (APP[i] === "{") d++;
+      else if (APP[i] === "}") { d--; if (d === 0) return APP.slice(s0, i + 1); }
+    }
+    throw new Error("อ่าน api." + name + " ไม่จบ");
+  };
+  const selOf = (p) => ((String(p).match(/[?&]select=([^&]*)/) || [])[1] || "").split(",").filter(Boolean);
+  let pub = null;
+  try { const src = apiExpr("getPOSSettingsPublic"); pub = (sbf) => new Function("sb", "return (" + src + ");")(sbf); } catch { pub = null; }
+  ok_("ดึงตัวโหลดตั้งค่าหน้าลูกค้ามารันได้", !!pub);
+  if (pub) {
+    // ฐานจำลอง: ตอบ 42703 ระบุ "คอลัมน์แรกที่ไม่มี" ตามลำดับใน select เหมือน Postgres จริง
+    const run = async (missing, netDown) => {
+      const calls = []; let r = null;
+      try {
+        r = await pub(async (p) => {
+          calls.push(p);
+          if (netDown) throw new Error("Failed to fetch");
+          const bad = selOf(p).find((c) => missing.includes(c));
+          if (bad) throw new Error(`{"code":"42703","message":"column pos_settings.${bad} does not exist"}`);
+          return [{ branch_id: 5 }];
+        })(5);
+      } catch (e) { r = "โยน"; }
+      return { n: calls.length, ok: Array.isArray(r), first: selOf(calls[0]), last: selOf(calls[calls.length - 1]) };
+    };
+    const NT = ["customer_notice_title", "customer_notice_text"], OPT = ["rounding", "option_library", "category_order", "menu_order"];
+    const all = await run([]), noN = await run(NT), noB = await run(["buffet_packages"]), noBoth = await run(["buffet_packages", ...NT]), old = await run(["rounding", "buffet_packages", ...NT]), net = await run([], true);
+    ck("รัน SQL ครบ = ขอครั้งเดียว ได้ทั้งแพ็คเกจและข้อความแจ้ง · ไม่มีรายชื่อ/PIN/พร้อมเพย์/หัวใบเสร็จ",
+      [all.n, all.ok, ["buffet_packages", ...NT].every((c) => all.first.includes(c)), all.first.some((k) => /sales_staff|promptpay|receipt_|\*/.test(k))], [1, true, true, false]);
+    ck("ยังไม่รัน SQL ข้อความแจ้ง = ถอยขั้นเดียว ยังได้แพ็คเกจ + ปัดเศษ/ตัวเลือก/ลำดับเมนู (โต๊ะบุฟเฟต์ไม่พัง)",
+      [noN.n, noN.ok, noN.last.includes("buffet_packages"), OPT.every((c) => noN.last.includes(c)), noN.last.some((c) => NT.includes(c))], [2, true, true, true, false]);
+    ck("ยังไม่รัน SQL แพ็คเกจ = ยังได้ข้อความแจ้ง · ไม่มีทั้งคู่ = ชุดเดิมครบ · ฐานเก่ามาก = ชุดหลัก (ยอด VAT/ค่าบริการยังถูก)",
+      [noB.ok, NT.every((c) => noB.last.includes(c)), noB.last.includes("buffet_packages"), noBoth.ok, noBoth.n <= 3, OPT.every((c) => noBoth.last.includes(c)),
+        old.ok, ["vat_enabled", "vat_rate", "vat_included", "service_charge_enabled", "service_charge_rate"].every((c) => old.last.includes(c)), old.last.includes("rounding")],
+      [true, true, false, true, true, true, true, true, false]);
+    ck("เน็ตล่ม = โยนต่อ (ไม่ถอยคอลัมน์มั่ว ไม่วนไม่จบ)", [net.ok, net.n], [false, 1]);
+  }
+
+  // บันทึกฟอร์ม: ยังไม่รัน SQL แล้วแก้ข้อความพร้อม VAT — VAT ต้องบันทึก + จดประวัติ แล้วบอกตรงๆ ว่าข้อความยังไม่ถูกบันทึก
+  const log = []; let mode = "nocol";
+  const fake = {
+    getPOSSettings: async () => [{ branch_id: 5, vat_enabled: false, promptpay_id: "0811111111" }],
+    patchPOSSettings: async (bid, p) => {
+      log.push(["patch", p]);
+      if (mode === "net") throw new Error("Failed to fetch");
+      if (mode === "nocol" && Object.keys(p).some((k) => /^customer_notice_/.test(k))) throw new Error(`{"code":"PGRST204","message":"Could not find the 'customer_notice_text' column of 'pos_settings' in the schema cache"}`);
+      return { branch_id: bid, ...p };
+    },
+    addActionHist: async (d) => { log.push(["hist", d]); return [d]; },
+  };
+  let PS = null;
+  try {
+    const blk = APP.slice(APP.indexOf("const POS_FORM_KEYS=["), APP.indexOf("function POSSettingsFields("));
+    PS = new Function("api", "nowStr", blk + "\nreturn {POS_FORM_KEYS,savePOSFormSettings};")(fake, () => "t");
+  } catch { PS = null; }
+  ok_("ดึงตัวบันทึกฟอร์มตั้งค่า POS มารันได้ (ข้อความแจ้ง)", !!PS);
+  if (PS) {
+    const row = { branch_id: 5, vat_enabled: false, promptpay_id: "0811111111", receipt_footer: "" };
+    const save = async (after, md) => { mode = md; log.length = 0; try { return { r: await PS.savePOSFormSettings({ id: 5, name: "กาญจนบุรี" }, row, after, { name: "max" }) }; } catch (e) { return { err: String(e.message) }; } };
+    ok_("ฟอร์มส่งสองช่องนี้ได้", ["customer_notice_title", "customer_notice_text"].every((k) => PS.POS_FORM_KEYS.includes(k)));
+    const A = await save({ ...row, vat_enabled: true, customer_notice_text: "ราคายังไม่รวม VAT 7%" }, "nocol");
+    const pA = log.filter((x) => x[0] === "patch"), hA = log.filter((x) => x[0] === "hist");
+    ck("ยังไม่รัน SQL + แก้ VAT พร้อมข้อความ = VAT บันทึก (ครั้งที่ 2 ไม่มีช่องข้อความ) · จดประวัติ VAT · บอกให้รัน SQL และบอกว่าค่าอื่นบันทึกแล้ว",
+      [pA.length, pA[1] && pA[1][1].vat_enabled, pA[1] && Object.keys(pA[1][1]).some((k) => /^customer_notice_/.test(k)), hA.length, !!A.err && A.err.includes("sql/customer-notice.sql"), !!A.err && A.err.includes("ค่าอื่นที่แก้ บันทึกแล้ว")],
+      [2, true, false, 1, true, true]);
+    const B = await save({ ...row, customer_notice_title: "แจ้ง" }, "nocol");
+    ck("ยังไม่รัน SQL + แก้แค่ข้อความ = ไม่ยิงซ้ำเปล่าๆ · บอกให้รัน SQL (ไม่บอกว่าสำเร็จ)",
+      [log.filter((x) => x[0] === "patch").length, !!B.err && B.err.includes("sql/customer-notice.sql"), !!B.err && B.err.includes("ค่าอื่น"), !!B.r], [1, true, false, false]);
+    const C = await save({ ...row, customer_notice_text: "ราคายังไม่รวม VAT 7%" }, "ok");
+    ck("รัน SQL แล้ว = บันทึกข้อความครั้งเดียว ไม่จดประวัติเงิน", [log.filter((x) => x[0] === "patch").length, !!(C.r && C.r.changed), log.filter((x) => x[0] === "hist").length, !!C.err], [1, true, 0, false]);
+    const D = await save({ ...row, vat_enabled: true, customer_notice_text: "x" }, "net");
+    ck("เน็ตล่ม = โยน error เดิม ไม่แอบตัดช่องแล้วยิงซ้ำ", [log.filter((x) => x[0] === "patch").length, D.err], [1, "Failed to fetch"]);
+  }
+
+  // หน้าลูกค้า: hook อยู่เหนือ early return · กล่องอยู่บนสุด · กดนอกกล่องไม่ปิด · ฟอร์มมีสองช่องต่อจากข้อความใบเสร็จ
+  const CP = (() => { const st = APP.indexOf("function CustomerPage("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
+  const nSt = CP.indexOf("if(showNotice)return"), dlg = nSt < 0 ? "" : CP.slice(nSt, CP.indexOf("\n  if(", nSt + 5));
+  ok_("หน้าลูกค้า: hook ข้อความแจ้งอยู่เหนือ return แรก (hook หลัง early return = จอลูกค้าพังทั้งจอ)",
+    CP.indexOf("const NOTICE_KEY=") > 0 && CP.indexOf("const NOTICE_KEY=") < CP.indexOf("if(gateLoading)return") && CP.includes("customerNoticeOf(posCfg)"));
+  ok_("หน้าลูกค้า: ข้อความแจ้งขึ้นทั้งจอแทนหน้าเมนู (หลังโหลดโต๊ะ ก่อนจอสั่งสำเร็จ) · ไม่มีทางปิดนอกจากกด \"เข้าใจแล้ว\" · ไม่มีกล่องเลื่อนซ้อน · กดแล้วจำใน localStorage (มี try)",
+    nSt > CP.indexOf("if(!table||!branch)return") && nSt < CP.indexOf("if(done)return") && dlg.length > 0 &&
+    (dlg.match(/onClick=/g) || []).length === 1 && dlg.includes("onClick={ackNotice}") && dlg.includes(">เข้าใจแล้ว</Btn>") && !/overflowY|position:"fixed"/.test(dlg) &&
+    CP.includes("const ackNotice=()=>{try{localStorage.setItem(NOTICE_KEY,noticeMark);}catch{}setNoticeAck(noticeMark);};"));
+  const F = APP.slice(APP.indexOf("function POSSettingsFields("), APP.indexOf("\nfunction ", APP.indexOf("function POSSettingsFields(") + 10));
+  ok_("ฟอร์มตั้งค่า POS: ช่องหัวข้อ + ข้อความ อยู่ต่อจากข้อความใบเสร็จ",
+    F.indexOf("set('customer_notice_title'") > F.indexOf("set('receipt_footer'") && F.indexOf("set('customer_notice_text'") > F.indexOf("set('receipt_footer'") && F.indexOf("set('receipt_footer'") > 0);
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

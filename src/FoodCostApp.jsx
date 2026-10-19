@@ -1336,21 +1336,26 @@ const api = {
   // หน้าลูกค้า (สาธารณะ แค่สแกน QR ก็เปิดได้) — เอาเฉพาะค่าที่หน้านั้นใช้: คิดยอด VAT/ค่าบริการ/ปัดเศษ
   // ตัวเลือกเสริม และลำดับหมวด/เมนู · ห้าม select=* : แถวเดียวกันมี sales_staff (ชื่อ+PIN พนักงาน)
   // คอลัมน์เสริมยังไม่มีในฐาน (42703) → ถอยไปชุดหลักที่มีมาแต่แรก ยอด VAT/ค่าบริการยังถูก หน้าไม่ล้ม
-  // ถอยเป็นขั้น: คลังแพ็คเกจบุฟเฟต์ (คอลัมน์ใหม่) ยังไม่มี → ชุดเดิมครบทุกตัว → ชุดหลัก
+  // ถอยเป็นขั้น: คอลัมน์เสริม (แต่ละชุดมาจาก SQL คนละไฟล์) ยังไม่มีชุดไหน → ตัดเฉพาะชุดนั้น → ชุดเดิมครบทุกตัว → ชุดหลัก
   // ห้ามถอยรวดเดียวไปชุดหลัก: River (ยังไม่มีแพ็คเกจ) จะเสียการปัดเศษ/ตัวเลือกบังคับ/ลำดับเมนู ทั้งที่ไม่เกี่ยวเลย
+  // และห้ามให้ชุดหนึ่งลากอีกชุดหายไปด้วย: ยังไม่รัน SQL ข้อความแจ้งลูกค้า ≠ โต๊ะบุฟเฟต์เสียแพ็คเกจ
+  // (ฐานบอกชื่อคอลัมน์แรกที่ไม่มีในข้อความ error — ตัดชุดที่มีชื่อนั้น · ไม่รู้ว่าชุดไหน = ตัดเสริมทั้งหมด)
   getPOSSettingsPublic: async (bid) => {
     const q = (cols) => sb(`pos_settings?branch_id=eq.${+bid}&select=${cols}&limit=1`);
     const colErr = (e) => /42703|PGRST204|does not exist|schema cache/i.test(String((e && e.message) || e));
     const FULL = "branch_id,vat_enabled,vat_rate,vat_included,service_charge_enabled,service_charge_rate,rounding,option_library,category_order,menu_order";
-    try { return await q(FULL + ",buffet_packages"); }
-    catch (e) {
-      if (!colErr(e)) throw e;
-      try { return await q(FULL); }
-      catch (e2) {
-        if (colErr(e2)) return q("branch_id,vat_enabled,vat_rate,vat_included,service_charge_enabled,service_charge_rate");
-        throw e2;
+    let extra = [["buffet_packages"], ["customer_notice_title", "customer_notice_text"]];   // buffet-packages.sql · customer-notice.sql
+    for (;;) {
+      try { return await q([FULL, ...extra.flat()].join(",")); }
+      catch (e) {
+        if (!colErr(e)) throw e;
+        if (!extra.length) break;
+        const m = String((e && e.message) || e);
+        const left = extra.filter((g) => !g.some((c) => m.includes(c)));
+        extra = left.length < extra.length ? left : [];
       }
     }
+    return q("branch_id,vat_enabled,vat_rate,vat_included,service_charge_enabled,service_charge_rate");
   },
   // แก้เฉพาะลำดับหมวด — ห้าม upsert ทั้งแถว ไม่งั้นทับ VAT/ค่าบริการ/QR ที่เครื่องอื่นเพิ่งแก้
   setCategoryOrder: async (bid, order) => {
@@ -21966,6 +21971,15 @@ function callOutcome(status){
   if(status==="failed"||status==="rejected"||status==="expired")return "fail";
   return "wait";
 }
+// ── ข้อความแจ้งลูกค้าตอนสแกน QR ครั้งแรก (ตั้งที่ ตั้งค่า POS · คอลัมน์จาก sql/customer-notice.sql) ──
+// ข้อความว่าง = ไม่มีกล่อง · หัวข้อว่าง = "เงื่อนไขการใช้บริการ"
+// sig = ลายนิ้วมือของหัวข้อ+ข้อความ: แก้ข้อความเมื่อไหร่ ลูกค้าที่เคยกดรับไปแล้วเห็นข้อความใหม่อีกครั้งตอนเปิดหน้า
+const customerNoticeOf=(cfg)=>{const text=String((cfg&&cfg.customer_notice_text)||"").trim();if(!text)return null;const title=String((cfg&&cfg.customer_notice_title)||"").trim()||"เงื่อนไขการใช้บริการ";const all=title+"\n"+text;let h=5381;for(let i=0;i<all.length;i++)h=(Math.imul(h,33)^all.charCodeAt(i))>>>0;return{title,text,sig:h.toString(36)};};
+// กดรับแล้วหรือยัง จำต่อ "QR ใบนี้" (ปิดโต๊ะแล้วรหัสเปลี่ยน = ลูกค้ากลุ่มใหม่เห็นอีก) + ข้อความชุดนี้
+const noticeMarkOf=(token,notice)=>notice?`${token||""}|${notice.sig}`:"";
+// ข้อความบอก "ยังไม่รวม VAT" แต่ตั้งค่าไม่ได้บวก VAT เพิ่ม (ปิด VAT หรือ VAT รวมในราคา) = ลูกค้าอ่านอย่าง บิลคิดอีกอย่าง
+// เตือนในฟอร์มเท่านั้น ไม่ห้ามบันทึก — ร้านอาจตั้งใจ (เช่น กำลังจะเปิด VAT)
+const noticeVatWarn=(text,cfg)=>{const t=String(text||"");if(!/ไม่รวม/.test(t)||!/vat|ภาษี/i.test(t))return "";if(cfg&&cfg.vat_enabled&&cfg.vat_included===false)return "";return cfg&&cfg.vat_enabled?"ข้อความบอกว่าราคายังไม่รวม VAT แต่ตั้งค่า VAT ด้านบนเป็น \"รวมในราคา\" — บิลจะไม่บวก VAT เพิ่ม ตรวจให้ตรงกัน":"ข้อความบอกว่าราคายังไม่รวม VAT แต่ VAT ปิดอยู่ — บิลจะไม่บวก VAT เพิ่ม ตรวจให้ตรงกัน";};
 function CustomerPage({branchId,tableId,token}){
   // ⚠️ ต้องอยู่บนสุดก่อน return ทุกทาง — hook ที่อยู่หลัง early return ทำให้จอลูกค้าพังทั้งจอ (เจอจริง 20 ก.ย. 69)
   // หัวจอสูงเท่าไร (ชื่อสาขายาวขึ้นบรรทัดที่สองได้) — แถบหมวดต้องติดใต้หัวพอดี ไม่ทับกัน
@@ -22020,6 +22034,14 @@ function CustomerPage({branchId,tableId,token}){
   const[gateError,setGateError]=useState(null);  // null | "no_token" | "bad_token" | "branch_closed" | "net"
   const[gateTry,setGateTry]=useState(0);         // กดลองใหม่ = รันประตูซ้ำ (ใช้เป็น dep ของ effect)
   const[posCfg,setPosCfg]=useState(null);        // ตั้งค่า POS ของสาขา (VAT/service charge) — ใช้คิดยอดให้ตรงบิล
+  // ── ข้อความแจ้งลูกค้าตอนสแกนครั้งแรก (เช่น "ราคายังไม่รวม VAT 7%") — ต้องกด "เข้าใจแล้ว" ก่อนสั่ง ──
+  // จำใน localStorage คีย์เดียวต่อโต๊ะ (ทับของกลุ่มก่อน ไม่สะสม) · ที่เก็บใช้ไม่ได้ (โหมดส่วนตัว) = ขึ้นทุกครั้งที่เปิดหน้า ดีกว่าไม่ขึ้น
+  const NOTICE_KEY=`fc_notice_${tableId}`;
+  const[noticeAck,setNoticeAck]=useState(()=>{try{return localStorage.getItem(NOTICE_KEY)||"";}catch{return "";}});
+  const notice=useMemo(()=>customerNoticeOf(posCfg),[posCfg]);
+  const noticeMark=noticeMarkOf(token,notice);
+  const showNotice=!!notice&&noticeAck!==noticeMark;
+  const ackNotice=()=>{try{localStorage.setItem(NOTICE_KEY,noticeMark);}catch{}setNoticeAck(noticeMark);};
   // ── ปุ่มเรียกพนักงาน ── กด → ยืนยัน → เพิ่มแถว staff_calls → ถามผลทุก 2 วิ → บอกตามจริง ("แจ้งแล้ว" เฉพาะเมื่อใบออกจริง)
   // ใบออกที่เครื่องพิมพ์ใบเสร็จเท่านั้น (ตัวพิมพ์ v49) · ใบออกแล้วพักปุ่ม 1 นาทีต่อมือถือ (จำใน localStorage รีเฟรชแล้วนับต่อ)
   // ส่งไม่ได้ / ใบไม่ออก = ปลดรอ กดใหม่ได้ทันที — ไม่ขังลูกค้าไว้กับปุ่มที่ใช้ไม่ได้
@@ -22404,6 +22426,17 @@ function CustomerPage({branchId,tableId,token}){
     </div>;
   }
   if(!table||!branch)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{textAlign:"center"}}><div style={{width:40,height:40,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 12px"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กำลังโหลดเมนู...</p></div></div>;
+  // ข้อความแจ้งลูกค้าตอนสแกนครั้งแรก — ทั้งจอแทนหน้าเมนู ไม่ใช่กล่องลอย: ข้อความยาวก็เลื่อนทั้งหน้าได้
+  // (เบราว์เซอร์ในแอป LINE/FB เลื่อนกล่องซ้อนไม่ได้) · ไม่มีทางปิดอื่น ต้องกด "เข้าใจแล้ว"
+  // ตะกร้า/คิวส่งออเดอร์/ปุ่มเรียกพนักงาน อยู่ใน hook ข้างบน — แก้ข้อความกลางมื้อแล้วจอนี้ขึ้นแทรก ของในตะกร้าไม่หาย
+  if(showNotice)return <div style={{minHeight:"100vh",background:C.ink,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"24px 18px",boxSizing:"border-box",fontFamily:"'Sarabun',sans-serif"}}>
+    <div style={{color:"rgba(255,255,255,.85)",fontSize:13.5,fontWeight:700,marginBottom:12,textAlign:"center"}}>{branch.name} · โต๊ะ {table.table_number}</div>
+    <div role="dialog" aria-modal="true" aria-labelledby="cust-notice-t" style={{background:C.white,borderRadius:18,padding:"22px 20px 18px",width:"100%",maxWidth:360,boxSizing:"border-box"}}>
+      <div id="cust-notice-t" style={{fontSize:18,fontWeight:900,color:C.ink,textAlign:"center",marginBottom:10}}>{notice.title}</div>
+      <div style={{fontSize:15,color:C.ink2,lineHeight:1.7,whiteSpace:"pre-line",overflowWrap:"anywhere",marginBottom:18}}>{notice.text}</div>
+      <Btn onClick={ackNotice} full s={{padding:"13px",fontSize:16,fontWeight:900}}>เข้าใจแล้ว</Btn>
+    </div>
+  </div>;
   if(done)return <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.greenLight,padding:24,textAlign:"center"}}>
     <div style={{fontSize:72}}>✅</div>
     <h2 style={{fontSize:22,fontWeight:900,color:C.green,fontFamily:"'Sarabun',sans-serif",marginBottom:6,marginTop:12}}>สั่งอาหารสำเร็จ!</h2>
@@ -24122,7 +24155,7 @@ async function okToChangeVatNow(branchId,before,after){
 // ── บันทึกฟอร์มตั้งค่า POS (🧾 หน้าร้าน และ ⚙️ หลังบ้าน ใช้ฟอร์มเดียวกัน) ─────
 // ส่งเฉพาะช่องในฟอร์มนี้ที่ "ผู้ใช้แก้จริง" เทียบกับค่าตอนเปิดจอ — ไม่ส่งทั้งแถว
 // ช่องที่ไม่ได้แตะจึงไม่ไปทับค่าที่อีกเครื่องเพิ่งแก้ และไม่แตะ PIN/คลังตัวเลือก/ลำดับเมนูเลย
-const POS_FORM_KEYS=["vat_enabled","vat_rate","vat_included","rounding","service_charge_enabled","service_charge_rate","show_qr_promptpay","promptpay_id","promptpay_name","promptpay_qr_image","receipt_header","receipt_footer"];
+const POS_FORM_KEYS=["vat_enabled","vat_rate","vat_included","rounding","service_charge_enabled","service_charge_rate","show_qr_promptpay","promptpay_id","promptpay_name","promptpay_qr_image","receipt_header","receipt_footer","customer_notice_title","customer_notice_text"];
 function posSettingsPatch(before,after){
   const p={};
   for(const k of POS_FORM_KEYS){
@@ -24143,14 +24176,25 @@ function posSettingsAuditText(before,patch,who,branch){
   return `ตั้งค่า POS · ${(branch&&branch.name)||"-"} (#${(branch&&branch.id)??"-"}) · โดย ${who||"ไม่ทราบชื่อ"} — `
     +keys.map(k=>`${POS_AUDIT_LABEL[k]}: ${fv((before||{})[k])} → ${fv(patch[k])}`).join(" · ");
 }
+// ข้อความแจ้งลูกค้าตอนสแกน (คอลัมน์จาก sql/customer-notice.sql) — ยังไม่ได้รัน SQL แล้วแก้พร้อม VAT/พร้อมเพย์:
+// ค่าอื่นต้องบันทึกได้ตามปกติ แล้วบอกตรงๆ ว่าข้อความยังไม่ถูกบันทึก (ไม่ใช่ล้มทั้งก้อน หรือบอกว่าสำเร็จทั้งที่ข้อความหาย)
+const POS_NOTICE_KEYS=["customer_notice_title","customer_notice_text"];
 async function savePOSFormSettings(branch,before,after,user){
   const patch=posSettingsPatch(before,after);
   if(!Object.keys(patch).length)return{changed:false,row:null};
   // ค่าเดิมในประวัติใช้ของล่าสุดในฐานข้อมูล (อาจมีอีกเครื่องแก้ไปแล้วหลังเปิดจอนี้)
   let cur=before;try{const r=await api.getPOSSettings(branch.id);if(Array.isArray(r)&&r[0])cur=r[0];}catch{}
-  const row=await api.patchPOSSettings(branch.id,{...patch,updated_at:new Date().toISOString()});
-  const txt=posSettingsAuditText(cur,patch,user&&(user.name||user.username),branch);
+  let sent=patch,row=null,noticeMissing=false;
+  try{row=await api.patchPOSSettings(branch.id,{...patch,updated_at:new Date().toISOString()});}
+  catch(e){
+    const nk=POS_NOTICE_KEYS.filter(k=>Object.prototype.hasOwnProperty.call(patch,k));
+    if(!nk.length||!/42703|PGRST204|does not exist|schema cache/i.test(String((e&&e.message)||e)))throw e;
+    noticeMissing=true;sent={...patch};nk.forEach(k=>{delete sent[k];});
+    if(Object.keys(sent).length)row=await api.patchPOSSettings(branch.id,{...sent,updated_at:new Date().toISOString()});
+  }
+  const txt=posSettingsAuditText(cur,sent,user&&(user.name||user.username),branch);
   if(txt){try{await api.addActionHist({action:txt,time:nowStr()});}catch(e){console.warn("posAudit",e);}}
+  if(noticeMissing)throw new Error("ข้อความแจ้งลูกค้ายังบันทึกไม่ได้ — ต้องรัน sql/customer-notice.sql ใน Supabase ก่อน"+(Object.keys(sent).length?" (ค่าอื่นที่แก้ บันทึกแล้ว)":""));
   return{changed:true,row};
 }
 function POSSettingsFields({s:settings,set}){
@@ -24283,6 +24327,33 @@ function POSSettingsFields({s:settings,set}){
           <textarea rows={3} value={settings.receipt_footer||""} onChange={e=>set('receipt_footer',e.target.value)} placeholder="เช่น ขอบคุณที่ใช้บริการ, FB/Line ID" style={{...iS,fontSize:13,resize:"none",lineHeight:1.5}}/>
         </div>
       </div>
+    </Card>
+
+    {/* ข้อความแจ้งลูกค้าตอนสแกน QR ครั้งแรก — กล่องบนมือถือลูกค้า ต้องกด "เข้าใจแล้ว" */}
+    <Card style={{padding:18}}>
+      <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink,marginBottom:4}}>📢 ข้อความแจ้งลูกค้าตอนสแกนสั่งอาหาร</div>
+      <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:12}}>ขึ้นเป็นกล่องบนมือถือลูกค้าครั้งแรกที่สแกน QR ของโต๊ะ ลูกค้าต้องกด "เข้าใจแล้ว" ก่อนสั่ง · เว้นข้อความว่าง = ไม่มีกล่อง · แก้ข้อความแล้ว ลูกค้าที่เปิดหน้าใหม่จะเห็นข้อความใหม่อีกครั้ง</div>
+      <div style={{display:"grid",gap:10}}>
+        <div>
+          <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>หัวข้อ</div>
+          <input value={settings.customer_notice_title||""} onChange={e=>set('customer_notice_title',e.target.value)} placeholder="เงื่อนไขการใช้บริการ" style={{...iS,fontSize:13}}/>
+        </div>
+        <div>
+          <div style={{fontSize:12,color:C.ink2,fontWeight:700,marginBottom:5,fontFamily:"'Sarabun',sans-serif"}}>ข้อความ</div>
+          <textarea rows={4} value={settings.customer_notice_text||""} onChange={e=>set('customer_notice_text',e.target.value)} placeholder="เช่น ราคาอาหารและเครื่องดื่มยังไม่รวมภาษีมูลค่าเพิ่ม VAT 7%" style={{...iS,fontSize:13,resize:"vertical",lineHeight:1.5}}/>
+        </div>
+      </div>
+      {(()=>{const n=customerNoticeOf(settings);if(!n)return null;const vw=noticeVatWarn(n.text,settings);return <>
+        {vw&&<div style={{marginTop:10,background:C.yellowLight,borderRadius:10,padding:10,fontSize:12,color:"#92400E",fontFamily:"'Sarabun',sans-serif",lineHeight:1.6}}>⚠️ {vw}</div>}
+        <div style={{marginTop:12,fontSize:11.5,color:C.ink4,fontFamily:"'Sarabun',sans-serif",marginBottom:6}}>ตัวอย่างบนมือถือลูกค้า</div>
+        <div style={{background:"rgba(15,23,42,.55)",borderRadius:12,padding:14,display:"flex",justifyContent:"center"}}>
+          <div style={{background:C.white,borderRadius:14,padding:"16px 14px 12px",width:"100%",maxWidth:300,fontFamily:"'Sarabun',sans-serif"}}>
+            <div style={{fontSize:15,fontWeight:900,color:C.ink,textAlign:"center",marginBottom:8}}>{n.title}</div>
+            <div style={{fontSize:13,color:C.ink2,lineHeight:1.65,whiteSpace:"pre-line",overflowWrap:"anywhere",marginBottom:12}}>{n.text}</div>
+            <div style={{background:C.brand,color:C.white,borderRadius:10,padding:"9px",textAlign:"center",fontSize:14,fontWeight:900}}>เข้าใจแล้ว</div>
+          </div>
+        </div>
+      </>;})()}
     </Card>
 
   </>;
