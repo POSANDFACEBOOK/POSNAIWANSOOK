@@ -2690,6 +2690,44 @@ function itemsWithoutPrinter(items,printers,branchId){
   if(!usable.length)return [];
   return (items||[]).filter(it=>isKitchenLine(it)&&!usable.some(p=>printerHandles(p,it,act)));
 }
+// ── แถบแดง "ใบครัวไม่ออก" แบบชัดเจน (เจ้าของสั่ง 19 ต.ค. 69 — ตั้งเครื่องแล้วยังแดง งงว่าทำไม) ──
+// ตัวพิมพ์จดแค่ชื่อเมนู + เวลา (orphan) → หาบรรทัดชื่อเดียวกันในบิลที่เปิดอยู่ ที่ส่งครัว (sent_at) ภายใน 2 นาทีก่อนเวลาที่จด
+// ได้ โต๊ะ · หมวด · บรรทัด (ไว้พิมพ์ซ้ำ) · fixed = ตอนนี้มีเครื่องรับแล้ว (ใบนั้นยังไม่ออก แต่กดพิมพ์ซ้ำได้เลย)
+// หาไม่เจอ (บิลปิดแล้ว/ชื่อเปลี่ยน) = รู้แค่ชื่อกับเวลา · key = บรรทัด (line_uid) ไว้จำว่ารับทราบ/พิมพ์ซ้ำแล้ว
+function orphanTicketsOf(printers,branchId,orders,now,winMs){
+  const recs=[];
+  for(const p of printersAt(printers,branchId)){
+    let d={};try{d=JSON.parse((p&&p.description)||"{}");}catch{}
+    for(const o of (Array.isArray(d.orphan)?d.orphan:(d.orphan?[d.orphan]:[]))){
+      const t=o&&typeof o==="object"?(+o.at||0):0;
+      if(!t||now-t>=winMs)continue;
+      for(const n of (Array.isArray(o.names)?o.names:[]))if(n!=null&&String(n).trim())recs.push({at:t,name:String(n).trim()});
+    }
+  }
+  const out=[],seen=new Set();
+  for(const r of recs.sort((a,b)=>a.at-b.at)){
+    let best=null,bd=Infinity;
+    for(const o of (orders||[]))for(const it of ((o&&o.items)||[])){
+      if(!isKitchenLine(it)||String((it&&it.name)||"").trim()!==r.name)continue;
+      const s=Date.parse((it&&it.sent_at)||"");if(!Number.isFinite(s))continue;
+      const dt=r.at-s;if(dt<-5000||dt>120000)continue;
+      if(Math.abs(dt)<bd){bd=Math.abs(dt);best={order:o,line:it};}
+    }
+    const key=best&&best.line.line_uid?"u:"+best.line.line_uid:"n:"+r.name+"|"+r.at;
+    if(seen.has(key))continue;seen.add(key);
+    out.push({key,at:r.at,name:r.name,table:best?String(best.order.table_number??""):null,orderId:best?best.order.id:null,line:best?best.line:null,
+      category:best?String(best.line.category||""):"",fixed:!!best&&itemsWithoutPrinter([best.line],printers,branchId).length===0});
+  }
+  return out;
+}
+// "รับทราบ"/พิมพ์ซ้ำแล้ว — จำในเครื่องนี้ ใบที่จัดการแล้วไม่ต้องแดงค้างจนครบ 20 นาที · ที่เก็บใช้ไม่ได้ (โหมดส่วนตัว) = แดงจนหมดเวลาเอง
+const ORPH_ACK_EVT="fc-orphan-ack";
+const orphAcked=(bid)=>{try{const a=JSON.parse(localStorage.getItem("fc_orph_ack_"+bid)||"[]");return new Set(Array.isArray(a)?a:[]);}catch{return new Set();}};
+function orphAck(bid,keys){
+  const ks=(keys||[]).filter(Boolean);if(!ks.length)return;
+  try{const cur=[...orphAcked(bid)].filter(k=>!ks.includes(k));localStorage.setItem("fc_orph_ack_"+bid,JSON.stringify([...cur,...ks].slice(-60)));}catch{}
+  try{window.dispatchEvent(new Event(ORPH_ACK_EVT));}catch{}
+}
 // ── ตัวพิมพ์สองเครื่องทำงานพร้อมกัน ───────────────────────────────────────
 // ตัวพิมพ์ของสาขาเต้นสัญญาณชีพลงแถวเดียวกัน (เครื่องพิมพ์ id ต่ำสุด) พร้อมชื่อเครื่องที่รันอยู่ (agentDev)
 // สองเครื่องรันพร้อมกัน (เปิดมือถือสำรองโดยไม่ปิดเครื่องหลัก) = ใบครัวออกซ้ำทุกใบ เพราะต่างเครื่องต่างจำว่าพิมพ์อะไรไปแล้ว
@@ -21034,6 +21072,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         {bill:existingOrder?.id??null,by:currentUser?.username||null,kind:o.kind||"reprint"});
       sent=r.sent;noPrinter=r.noPrinter;
     }catch(e){notifyDlg("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+(e&&e.message||e));return;}
+    if(sent&&!o.kind)orphAck(branch?.id,kl.map(i=>i&&i.line_uid?"u:"+i.line_uid:null));   // พิมพ์ซ้ำแล้ว = แถบ "ใบครัวยังไม่ออก" ของบรรทัดนี้หาย (ใบยกเลิกไม่นับ)
     if(sent&&noPrinter)posToast(`${o.okMsg||"🔁 ส่งพิมพ์ซ้ำแล้ว"} · อีก ${noPrinter} รายการยังไม่ได้กำหนดเครื่องพิมพ์`,"warn");
     else if(sent)posToast(o.okMsg||"🔁 ส่งคำสั่งพิมพ์ใบครัวไปตัวพิมพ์แล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ","ok");
     else posToast(o.noneMsg||"⚠️ เมนูนี้ยังไม่ได้กำหนดเครื่องพิมพ์ — ตั้งที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์","warn");
@@ -26148,9 +26187,23 @@ const samePrintFail=(a,b)=>!!(a&&b&&(b.id?a.id===b.id:(!a.id&&a.at===b.at&&Strin
 // · ใบที่ไม่มีเครื่องรับ (orphan) · ใบไม่ออกใน 20 นาทีล่าสุด — ทุกแถวเป็นแดง
 // ค่า on ของเครื่องเชื่อได้เฉพาะตอนตัวพิมพ์ยังหายใจ (agentSeen) — ตัวพิมพ์ดับ = ค่า on ค้างจากรอบสุดท้าย
 const PRINT_RECENT_MS=20*60*1000;
-function PrintHealthStrip({printers,failPrinters,branchId,onOpenFails}){
+function PrintHealthStrip({printers,failPrinters,branchId,onOpenFails,orders,who}){
   const[,setTick]=useState(0);
   useEffect(()=>{const t=setInterval(()=>setTick(x=>x+1),30000);return()=>clearInterval(t);},[]);   // หน้าต่าง 20 นาที/นาทีที่ไม่ตอบ เดินเองแม้ข้อมูลไม่เปลี่ยน
+  // กดรับทราบ/พิมพ์ซ้ำ (ที่แถบนี้หรือปุ่ม 🖨 ในจอโต๊ะ) = แถบหายทันที ไม่ต้องรอรอบ 30 วิ
+  useEffect(()=>{const f=()=>setTick(x=>x+1);try{window.addEventListener(ORPH_ACK_EVT,f);}catch{}return()=>{try{window.removeEventListener(ORPH_ACK_EVT,f);}catch{}};},[]);
+  const[orphBusy,setOrphBusy]=useState(null);
+  // พิมพ์ซ้ำบรรทัดที่ไม่ออก (ตั้งเครื่องแล้ว) ตรงจากแถบ — ทางเดียวกับปุ่ม 🖨 ในจอโต๊ะ (ส่งทุกเครื่องที่รับหมวดนั้น)
+  async function reprintOrph(o){
+    if(!o||!o.line||orphBusy)return;
+    setOrphBusy(o.key);
+    try{
+      const r=await agentPrintItems([{...o.line}],o.table||"-",branchId,{bill:o.orderId??null,by:who||null,kind:"reprint"});
+      if(r&&r.sent){orphAck(branchId,[o.key]);posToast(`🔁 ส่งพิมพ์ซ้ำ ${o.name}${o.table?" โต๊ะ "+o.table:""} ไปครัวแล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ`,"ok",7000);}
+      else posToast("⚠️ ยังไม่มีเครื่องพิมพ์รับเมนูนี้ — ตั้งที่ 🖨 → กำหนดการพิมพ์","warn",7000);
+    }catch(e){notifyDlg("ส่งคำสั่งพิมพ์ไม่สำเร็จ: "+friendlyError(e));}
+    setOrphBusy(null);
+  }
   // รายชื่อเครื่องพิมพ์มาจากรอบดึง 60 วิ (หยุดตอนสลับแท็บ) — ตัดสินว่า "ตัวพิมพ์ไม่ตอบ" จากอายุสัญญาณ ณ ตอนที่ได้ข้อมูลมา
   // ไม่ใช่ ณ ตอนนี้ ไม่งั้นกลับมาจากแท็บอื่นแล้วขึ้นแดงหลอกจนกว่ารอบดึงจะมาถึง · ข้อมูลเก่าเกิน 2.5 นาที = ไม่พูดอะไรเรื่องเครื่อง
   const gotAt=useMemo(()=>Date.now(),[printers]);
@@ -26167,7 +26220,8 @@ function PrintHealthStrip({printers,failPrinters,branchId,onOpenFails}){
   // มีเครื่องพิมพ์แต่ไม่เคยได้สัญญาณจากตัวพิมพ์เลย (สาขาใหม่ยังไม่ได้ติดตั้ง/ไม่เคยเปิด) — เดิมเงียบ ทุกอย่างดูปกติ
   const never=fresh&&!hh.seen;
   const off=h.state==="ok"?mine.filter(p=>{try{return JSON.parse(p.description||"{}").on===0;}catch{return false;}}):[];
-  const orph=printOrphansRecent(all,branchId,now,PRINT_RECENT_MS);
+  const acked=orphAcked(branchId);
+  const orphs=orphanTicketsOf(all,branchId,orders,now,PRINT_RECENT_MS).filter(o=>!acked.has(o.key));
   const fight=agentFight(devHistRef.current,now);
   const recent=printFailList(failPrinters).filter(f=>now-(+f.at||0)<PRINT_RECENT_MS);
   const last=recent[recent.length-1];
@@ -26177,7 +26231,14 @@ function PrintHealthStrip({printers,failPrinters,branchId,onOpenFails}){
   if(h.state==="down")rows.push({c:C.red,bg:C.redLight,t:`⛔ โปรแกรมตัวพิมพ์ที่ร้านไม่ตอบมา ${Math.max(1,Math.round((h.ageSec||0)/60))} นาที — ใบครัว/ใบเสร็จจะไม่ออกเลย`,s:"เช็คเครื่องที่รันตัวพิมพ์: เปิดอยู่ไหม · ต่อ Wi-Fi ร้าน · เสียบชาร์จ"});
   if(fight)rows.push({c:C.red,bg:C.redLight,t:"⛔ มีตัวพิมพ์ 2 เครื่องทำงานพร้อมกัน — ใบครัวจะออกซ้ำ",s:"ปิดโปรแกรมตัวพิมพ์ให้เหลือเครื่องเดียว (เครื่องสำรองต้องปิดไว้)"});
   if(off.length)rows.push({c:C.red,bg:C.redLight,t:`🔴 เครื่องพิมพ์ ${off.map(p=>p.name).join(" · ")} ไม่ตอบ — ใบที่ส่งเข้าเครื่องนี้จะไม่ออก`,s:"เช็คไฟ · กระดาษ · สายแลน/Wi-Fi ของเครื่อง แล้วรอจุดเขียว"});
-  if(orph)rows.push({c:C.red,bg:C.redLight,t:`🔴 ใบครัวไม่ออก — ไม่มีเครื่องพิมพ์รับ: ${orph.names.length?orph.names.join(" · "):"บางรายการ"}`,s:"บอกครัวเอง แล้วติ๊กหมวดนี้ให้เครื่องพิมพ์ใน 🖨 → กำหนดการพิมพ์"});
+  // ใบครัวที่ไม่มีเครื่องรับ — ทีละรายการ: เมนู · โต๊ะ · เวลา · ตอนนี้ตั้งเครื่องแล้วหรือยัง
+  //   ยังไม่มีเครื่องรับ = แดง บอกหมวดที่ต้องติ๊ก · ตั้งแล้ว = ส้ม "สั่งก่อนตั้งเครื่อง ใบยังไม่ออก" + ปุ่มพิมพ์ซ้ำ
+  for(const o of orphs){
+    const at=`${o.table?"โต๊ะ "+o.table+" · ":""}สั่ง ${pkgTimeOf(o.at)} น.`;
+    if(o.fixed)rows.push({c:"#B45309",bg:"#FFFBEB",t:`🟠 ใบครัวยังไม่ออก: ${o.name} (${at})`,s:`ตอนสั่งยังไม่มีเครื่องพิมพ์รับหมวด "${o.category||"-"}" — ตอนนี้ตั้งแล้ว กดพิมพ์ซ้ำให้ครัว (ครัวทำแล้ว = กดรับทราบ)`,orph:o});
+    else rows.push({c:C.red,bg:C.redLight,t:`🔴 ใบครัวไม่ออก: ${o.name} (${at})`,
+      s:o.line?`ยังไม่มีเครื่องพิมพ์รับหมวด "${o.category||"ไม่มีหมวด"}" — บอกครัวเอง แล้วติ๊กหมวดนี้ใน 🖨 → กำหนดการพิมพ์`:"ไม่มีเครื่องพิมพ์รับ — บอกครัวเอง แล้วติ๊กหมวดของเมนูนี้ใน 🖨 → กำหนดการพิมพ์",orph:o});
+  }
   if(recent.length)rows.push({c:C.red,bg:C.redLight,t:`⚠️ ใบไม่ออก ${recent.reduce((s,f)=>s+printFailWeight(f),0)} ใบใน 20 นาทีล่าสุด${last&&Array.isArray(last.pnames)&&last.pnames.length?` (${last.pnames.join(" · ")})`:""}`,s:lastErr?printErrText(lastErr):"",click:true});
   if(!rows.length)return null;
   return <div style={{flexShrink:0}}>
@@ -26185,6 +26246,10 @@ function PrintHealthStrip({printers,failPrinters,branchId,onOpenFails}){
       <span style={{fontSize:13,fontWeight:900}}>{r.t}</span>
       {r.s&&<span style={{fontSize:12,fontWeight:600,opacity:.9}}>{r.s}</span>}
       {r.click&&<span style={{marginLeft:"auto",alignSelf:"center",padding:"6px 12px",borderRadius:8,background:r.c,color:C.white,fontSize:12.5,fontWeight:900,whiteSpace:"nowrap"}}>ดูและรีปริ้น ›</span>}
+      {r.orph&&<span style={{marginLeft:"auto",alignSelf:"center",display:"flex",gap:6,flexShrink:0}}>
+        {r.orph.fixed&&r.orph.line&&<button type="button" onClick={()=>reprintOrph(r.orph)} disabled={!!orphBusy} style={{padding:"6px 12px",borderRadius:8,border:"none",background:r.c,color:C.white,fontSize:12.5,fontWeight:900,whiteSpace:"nowrap",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",opacity:orphBusy?.6:1}}>{orphBusy===r.orph.key?"กำลังส่ง…":"🖨 พิมพ์ซ้ำ"}</button>}
+        <button type="button" onClick={()=>orphAck(branchId,[r.orph.key])} style={{padding:"6px 12px",borderRadius:8,border:`1.5px solid ${r.c}`,background:C.white,color:r.c,fontSize:12.5,fontWeight:800,whiteSpace:"nowrap",cursor:"pointer",fontFamily:"'Sarabun',sans-serif"}}>รับทราบ</button>
+      </span>}
     </div>)}
   </div>;
 }
@@ -26647,7 +26712,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
       <span style={{opacity:.85}}>· ทอนเริ่มต้น ฿{(+shift.opening_cash||0).toLocaleString()}</span>
       <span style={{opacity:.85,marginLeft:"auto"}}>{shift.username}</span>
     </div>
-    <PrintHealthStrip printers={printers} failPrinters={failPrinters} branchId={currentBranch.id} onOpenFails={()=>setShowPrintFails(true)}/>
+    <PrintHealthStrip printers={printers} failPrinters={failPrinters} branchId={currentBranch.id} onOpenFails={()=>setShowPrintFails(true)} orders={activeOrders} who={currentUser?.username||currentUser?.name||null}/>
     <div style={{padding:"0 16px",background:C.white,borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",flexWrap:"wrap",minHeight:46,columnGap:2,flexShrink:0}}>
       {PTABS.map(t=>{const active=posTab===t.id;return <button key={t.id} onClick={()=>setPosTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:"none",cursor:"pointer",fontSize:12,fontWeight:active?800:500,color:active?C.brand:C.ink3,fontFamily:"'Sarabun',sans-serif",borderBottom:active?`2.5px solid ${C.brand}`:"2.5px solid transparent",transition:"all .15s"}}><Ic d={t.icon} s={13} c={active?C.brand:C.ink4}/>{t.l}</button>;})}
       {canEdit&&<POSMenuTools currentBranch={currentBranch} currentUser={currentUser} saleOnly={saleOnly} menus={menus} variant="dropdown" onChanged={()=>{reloadMenus&&reloadMenus();reloadPosSettings&&reloadPosSettings();}}/>}

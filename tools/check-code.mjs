@@ -5019,7 +5019,10 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
   ok_("แถบสถานะ: จับตัวพิมพ์ชนกันจากข้อมูลที่ได้อยู่แล้ว ไม่ถามฐานเพิ่ม ไม่เพิ่มรอบถาม",
     strip.includes("trackAgentDev(devHistRef.current,printersAt([...(printers||[]),...(failPrinters||[])],branchId),Date.now())") && (strip.match(/setInterval\(/g) || []).length === 1 && !/api\.|\bsb\(/.test(strip));
   ok_("แถบสถานะ: ขึ้นแดง \"มีตัวพิมพ์ 2 เครื่องทำงานพร้อมกัน\"", strip.includes("const fight=agentFight(devHistRef.current,now);") && /if\(fight\)rows\.push\(\{c:C\.red,[^\n]*มีตัวพิมพ์ 2 เครื่องทำงานพร้อมกัน/.test(strip));
-  ok_("แถบสถานะ: ขึ้นแดงเมื่อมีใบไม่มีเครื่องรับใน 20 นาที พร้อมชื่อเมนู", strip.includes("const orph=printOrphansRecent(all,branchId,now,PRINT_RECENT_MS);") && /if\(orph\)rows\.push\(\{c:C\.red,[^\n]*orph\.names\.join\(" · "\)/.test(strip));
+  // 19 ต.ค. 69: ทีละรายการ พร้อมโต๊ะ/เวลา/หมวด · ตั้งเครื่องแล้ว = ส้ม + พิมพ์ซ้ำ (ทดสอบตัวผูกจริงในหมวด "แถบใบครัวไม่ออก")
+  ok_("แถบสถานะ: ขึ้นเตือนเมื่อมีใบไม่มีเครื่องรับใน 20 นาที พร้อมชื่อเมนู โต๊ะ เวลา",
+    strip.includes("const orphs=orphanTicketsOf(all,branchId,orders,now,PRINT_RECENT_MS).filter(o=>!acked.has(o.key));") &&
+    strip.includes("🔴 ใบครัวไม่ออก: ${o.name} (${at})") && strip.includes("🟠 ใบครัวยังไม่ออก: ${o.name} (${at})"));
   ok_("แถบสถานะ: มีเครื่องพิมพ์แต่ตัวพิมพ์ไม่เคยเต้นเลย = ขึ้นแดง (เดิมเงียบ)", strip.includes("const never=fresh&&!hh.seen;") && strip.includes("if(never)rows.push({c:C.red,"));
   ok_("แถบสถานะ: ทุกแถวยังเป็นแดง (ไม่มีสีที่สาม)", (strip.match(/rows\.push\(\{c:C\.\w+/g) || []).every((m) => m.endsWith("C.red")));
   // ── #3 สัญญากับตัวพิมพ์: แถบอ่าน orphan เฉพาะ 20 นาทีล่าสุด ⟹ เมนูเดิมไม่มีเครื่องรับซ้ำ ตัวพิมพ์ต้องจดเวลาใหม่ ──
@@ -8999,6 +9002,62 @@ section("ใบเปิดโต๊ะ (QR + เวลาสั่งอาห�
     ck("ตั้งค่า POS ดึงไม่ผ่าน = ใช้ค่าเดิมต่อ (VAT/แพ็คเกจไม่หาย) · ยังไม่เคยโหลด/ค่าของสาขาอื่น = ค่าเริ่มต้น",
       [direct, typeof fnArg, fnArg && fnArg(prev) === prev, fnArg && fnArg(null).vat_enabled, fnArg && fnArg({ branch_id: 8, vat_enabled: true }).branch_id], [null, "function", true, false, 5]);
   } else ok_("ดึง loadPosSettings มารันได้", false);
+}
+
+// ── แถบใบครัวไม่ออก: บอกโต๊ะ เวลา หมวด และตั้งเครื่องแล้วหรือยัง (เจ้าของสั่ง 19 ต.ค. 69) ──
+// เหตุจริง: โต๊ะ A3 สั่ง "ในวันเบาๆ" 18:36 ก่อนติ๊กหมวดหมูกระทะ → ติ๊กแล้วแถบยังแดง "ไม่มีเครื่องพิมพ์รับ" งงว่าตั้งแล้วทำไมยังแดง
+section("แถบใบครัวไม่ออก: โต๊ะ · เวลา · ตั้งเครื่องแล้วหรือยัง");
+{
+  const L = APP.split("\n");
+  const line = (p) => { const l = L.find((x) => x.startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; };
+  let OT = null;
+  try {
+    OT = new Function([line("const printersAt="), line("function getPConn(p){"), APP_KITCHEN, grab(APP, "printerHandles"), grab(APP, "itemsWithoutPrinter"), grab(APP, "orphanTicketsOf"), "return orphanTicketsOf;"].join("\n"))();
+  } catch (e) { console.log("       ดึง orphanTicketsOf ไม่ได้: " + e.message); }
+  ok_("ดึงตัวผูกใบครัวไม่ออกตัวจริงมารันได้", !!OT);
+  if (OT) {
+    const T = Date.parse("2026-10-19T11:36:29Z"), iso = (ms) => new Date(ms).toISOString();
+    const PR = (cats15) => [
+      { id: 13, branch_id: 5, ip: "10.0.0.13", active: true, categories: ["น้ำ"], description: JSON.stringify({ rcpt: 1, orphan: { at: T, names: ["ในวันเบาๆ"], n: 1 } }) },
+      { id: 15, branch_id: 5, ip: "10.0.0.15", active: true, categories: cats15, description: "{}" },
+      { id: 8, branch_id: 8, ip: "10.0.0.8", active: true, categories: ["หมูกระทะ"], description: "{}" },
+    ];
+    // A11 มาก่อนในรายการ (จอเรียงบิลใหม่สุดก่อน · ลำดับไม่ใช่ตัวตัดสิน) — ต้องเลือก A3 เพราะเวลาส่งครัวใกล้เวลาที่จดที่สุด
+    const ORD = [
+      { id: 604, table_id: 11, table_number: "A11", items: [{ line_uid: "L2", name: "ในวันเบาๆ", category: "หมูกระทะ", qty: 1, sent_at: iso(T - 600000) }] },
+      { id: 608, table_id: 3, table_number: "A3", items: [{ kind: "pkg", name: "ในวันเบาๆ", qty: 5, sent_at: iso(T - 1000) }, { line_uid: "L1", name: "ในวันเบาๆ", category: "หมูกระทะ", qty: 1, sent_at: iso(T - 3000) }] },
+    ];
+    const pick = (r) => r.map((o) => [o.name, o.table, o.category, o.fixed, o.key]);
+    ck("ตอนสั่ง (ยังไม่ติ๊กหมวดหมูกระทะ): ผูกกลับได้โต๊ะ A3 (บรรทัดที่ส่งครัวก่อนเวลาที่จด 3 วิ ไม่ใช่โต๊ะ A11 ที่สั่ง 10 นาทีก่อน) · หมวด · ยังไม่มีเครื่องรับ",
+      pick(OT(PR(["เนื้อบุฟเฟต์"]), 5, ORD, T + 60000, 20 * 60000)), [["ในวันเบาๆ", "A3", "หมูกระทะ", false, "u:L1"]]);
+    ck("ติ๊กหมวดหมูกระทะแล้ว (เครื่องสาขาอื่นไม่นับ): แถบรู้ว่าตั้งแล้ว → บอก \"สั่งก่อนตั้งเครื่อง\" + พิมพ์ซ้ำได้",
+      [pick(OT(PR(["เนื้อบุฟเฟต์", "หมูกระทะ"]), 5, ORD, T + 60000, 20 * 60000)), pick(OT(PR(["เนื้อบุฟเฟต์"]), 5, ORD, T + 60000, 20 * 60000))[0][3]],
+      [[["ในวันเบาๆ", "A3", "หมูกระทะ", true, "u:L1"]], false]);
+    ck("บิลปิดไปแล้ว (หาโต๊ะไม่เจอ) = รู้แค่ชื่อกับเวลา ยังแดง · เกิน 20 นาที = ไม่ขึ้น",
+      [pick(OT(PR(["หมูกระทะ"]), 5, [], T + 60000, 20 * 60000)), OT(PR(["หมูกระทะ"]), 5, ORD, T + 20 * 60000, 20 * 60000).length],
+      [[["ในวันเบาๆ", null, "", false, "n:ในวันเบาๆ|" + T]], 0]);
+  }
+  const strip = (() => { const st = APP.indexOf("function PrintHealthStrip("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
+  ok_("แถบ: ทีละรายการ แดง = ยังไม่มีเครื่องรับ (บอกหมวดที่ต้องติ๊ก) · ส้ม = ตั้งแล้ว ใบยังไม่ออก + ปุ่มพิมพ์ซ้ำ · ทุกแถวมีปุ่มรับทราบ",
+    strip.includes("if(o.fixed)rows.push({c:\"#B45309\"") && strip.includes("ยังไม่มีเครื่องพิมพ์รับหมวด \"${o.category||\"ไม่มีหมวด\"}\"") &&
+    strip.includes("{r.orph.fixed&&r.orph.line&&<button type=\"button\" onClick={()=>reprintOrph(r.orph)}") && strip.includes("onClick={()=>orphAck(branchId,[r.orph.key])}"));
+  ok_("พิมพ์ซ้ำจากแถบ: ส่งทางเดียวกับปุ่ม 🖨 ในจอโต๊ะ (agentPrintItems · kind reprint) · สำเร็จแล้วแถบหาย · กันกดซ้ำ",
+    strip.includes("const r=await agentPrintItems([{...o.line}],o.table||\"-\",branchId,{bill:o.orderId??null,by:who||null,kind:\"reprint\"});") &&
+    strip.includes("if(r&&r.sent){orphAck(branchId,[o.key]);") && strip.includes("if(!o||!o.line||orphBusy)return;"));
+  ok_("กด 🖨 พิมพ์ซ้ำในจอโต๊ะ = แถบของบรรทัดนั้นหายด้วย (ใบยกเลิกไม่นับ) · จอขายส่งบิลที่เปิดอยู่ให้แถบ",
+    APP.includes("if(sent&&!o.kind)orphAck(branch?.id,kl.map(i=>i&&i.line_uid?\"u:\"+i.line_uid:null));") &&
+    APP.includes("<PrintHealthStrip printers={printers} failPrinters={failPrinters} branchId={currentBranch.id} onOpenFails={()=>setShowPrintFails(true)} orders={activeOrders}"));
+  // ที่จำรับทราบ: เก็บต่อสาขา จำกัด 60 · localStorage ใช้ไม่ได้ = ไม่ล้ม
+  try {
+    const store = {}; const ls = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
+    const evs = [];
+    const F = new Function("localStorage", "window", "Event", [line("const ORPH_ACK_EVT="), line("const orphAcked="), grab(APP, "orphAck"), "return {orphAck,orphAcked};"].join("\n"))(ls, { dispatchEvent: (e) => evs.push(e.type) }, class { constructor(t) { this.type = t; } });
+    F.orphAck(5, ["u:L1", null]); F.orphAck(5, ["u:L1", "u:L2"]); for (let i = 0; i < 70; i++) F.orphAck(5, ["k" + i]);
+    const broken = new Function("localStorage", "window", "Event", [line("const ORPH_ACK_EVT="), line("const orphAcked="), grab(APP, "orphAck"), "return {orphAck,orphAcked};"].join("\n"))({ getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } }, { dispatchEvent: () => {} }, class {});
+    let ok = true; try { broken.orphAck(5, ["x"]); } catch { ok = false; }
+    ck("รับทราบ: จำต่อสาขา · ไม่ซ้ำ · เก็บล่าสุด 60 · แจ้งแถบให้หายทันที · ที่เก็บถูกบล็อก = ไม่ล้ม",
+      [F.orphAcked(5).has("k69"), F.orphAcked(5).has("u:L1"), F.orphAcked(5).size, F.orphAcked(8).size, evs.length >= 72, ok, broken.orphAcked(5).size], [true, false, 60, 0, true, true, 0]);
+  } catch (e) { ok_("ดึงที่จำรับทราบมารันได้: " + e.message, false); }
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
