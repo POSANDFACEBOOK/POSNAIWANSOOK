@@ -316,9 +316,9 @@ const PKG_SRC = (() => {
   const L = APP.split("\n");
   const one = (p) => { const l = L.find((x) => x.startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; };
   // คลังอ่านผ่านตัวกรองของคลัง (normalizeBuffetPackages) ตัวเดียว — แนบไปด้วย
-  return [grabConst(APP, "bpPrice"), grab(APP, "normalizeBuffetPackages"),
+  return [grabConst(APP, "bpPrice"), one("const bpMinutes="), grab(APP, "normalizeBuffetPackages"),
     one("const PKG_CAT="), one("const isPkgLine="), one("const pkgLibOf="), one("const activePkgsOf="),
-    one("const pkgCountsOf="), one("const guestCountOf="), one("const pkgOfBill="), one("const pkgDefLinesOf="), one("const pkgCountsText="), one("const isPkgOnlyBill="),
+    one("const pkgCountsOf="), one("const guestCountOf="), one("const pkgPricedLines="), one("const pkgOfBill="), one("const pkgDefLinesOf="), one("const pkgCountsText="), one("const isPkgOnlyBill="),
     grab(APP, "pkgLinesOf"), grab(APP, "pkgMenuScopeOf"), grab(APP, "receiptRowsOf"), grab(APP, "pkgGuestRowsOf")].join("\n");
 })();
 
@@ -1742,7 +1742,8 @@ try {
   }
   // หน้าจอ: จอพนักงานต้องไม่กรองเมนูที่ซ่อนทิ้ง · ของหมดขึ้นกลางรูปทั้งสองฝั่ง
   ok_("จอพนักงานไม่กรองเมนูที่ซ่อนทิ้งแล้ว", !APP.includes('if((m.availability||{})[bidSale]==="hidden")return false;'));
-  ok_("การ์ดพนักงานบอกว่าเมนูนี้ซ่อนจากลูกค้า", APP.includes("{hiddenFromCustomer&&<span style={MC_HID}>ซ่อนจากลูกค้า</span>}") && APP.includes("hiddenFromCustomer={menuHiddenAt(m,bidSale)}"));
+  ok_("การ์ดพนักงานบอกว่าเมนูนี้ซ่อนจากลูกค้า (ป้าย \"ลูกค้าไม่เห็น\" อยู่เหนือรูป ไม่ถูกรูปทับ)", APP.includes("{hiddenFromCustomer&&<span style={MC_HID}>ลูกค้าไม่เห็น</span>}") && APP.includes("hiddenFromCustomer={menuHiddenAt(m,bidSale)}") &&
+    /const MC_HID=\{[^\n]*zIndex:2/.test(APP) && /const MC_BADGE=\{[^\n]*zIndex:2/.test(APP));
   ok_("การ์ดพนักงาน: ของหมดขึ้นกลางรูป", APP.includes("{soldOut&&<span style={MC_SOLDOUT}>ของหมด</span>}") && APP.includes('transform:"translate(-50%,-50%)"'));
   ok_("หน้าลูกค้า: ของหมดขึ้นกลางรูป", APP.includes('fontSize:17,fontWeight:900,borderRadius:999,padding:"6px 18px",fontFamily:"\'Sarabun\',sans-serif",letterSpacing:.3}}>ของหมด</span>'));
   ok_("หน้าลูกค้ายังซ่อนเมนูที่ตั้งซ่อน", APP.includes('setMenus(ms.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));'));
@@ -2874,7 +2875,7 @@ section("ปิดโต๊ะ = QR ใหม่");
   ok_("ย้ายโต๊ะแล้วเตือนให้พิมพ์ QR โต๊ะใหม่", APP.includes("อย่าลืมพิมพ์ QR โต๊ะใหม่ให้ลูกค้า"));
   // พิมพ์ QR ต้องอ่านรหัสล่าสุดจากฐานก่อนประกอบลิงก์ — ห้ามพิมพ์จากค่าค้างในจอ
   {
-    const ps = APP.indexOf("async function printTableQR(table,branch,printers=[],onPrinted,onUrl){");
+    const ps = APP.indexOf("async function printTableQR(table,branch,printers=[],onPrinted,onUrl,opts={}){");
     const fresh = APP.indexOf("const r=await api.getTableFresh(table.id);", ps);
     const build = APP.indexOf("  const url=tableScanUrl(table,branch);", ps);
     ok_("พิมพ์ QR อ่านรหัสล่าสุดจากฐานก่อนประกอบลิงก์", ps > 0 && fresh > ps && build > fresh);
@@ -7852,8 +7853,10 @@ section("แพ็คเกจบุฟเฟต์: เปิดโต๊ะแ
     try { s1 = await runSlip(PRS); s2 = await runSlip(PRS.filter((p) => p.id !== 1)); } catch (e) { s1 = String(e && e.message); }
     ck("ใบเปิดโต๊ะออกเฉพาะเครื่องใบเสร็จของสาขานี้ (เครื่องครัว/พิมพ์ทุกหมวดไม่ได้) · ไม่มีเครื่องใบเสร็จ = บอกผู้เรียก ไม่เขียนอะไร",
       [s1, s2], [[false, 1, [[1, "เปิดโต๊ะ", "A1"]]], [true, 0, []]]);
-    ok_("เปิดโต๊ะ/แก้จำนวนแล้วสั่งใบแคชเชียร์ และเตือนเมื่อไม่มีเครื่องใบเสร็จ (ไม่ล้มการเปิดโต๊ะ)",
-      (APP.match(/printCashierSlip\(pkgSlipLines\(/g) || []).length === 2 && (APP.match(/if\(res&&res\.none\)posToast\(/g) || []).length === 2);
+    // เปิดโต๊ะ: ใบ QR + ใบเปิดโต๊ะ เป็นงานเดียว (printPkgOpenSet — เจ้าของสั่ง 19 ต.ค. 69) · แก้จำนวนคนยังเป็นใบสั้นเดิม
+    ok_("แก้จำนวนแล้วสั่งใบแคชเชียร์ + เตือนเมื่อไม่มีเครื่องใบเสร็จ · เปิดโต๊ะพิมพ์ QR + ใบเปิดโต๊ะผ่าน printPkgOpenSet (ไม่ล้มการเปิดโต๊ะ)",
+      (APP.match(/printCashierSlip\(pkgSlipLines\(/g) || []).length === 1 && (APP.match(/if\(res&&res\.none\)posToast\(/g) || []).length === 1 &&
+      APP.includes("printPkgOpenSet({table,branch,printers,posSettings,items:r.row.items,at,pkg:cur,by:who,onPrinted:onPrintedQR});"));
   }
 
   // ── ⑩ หมอตรวจข้อมูลข้อ 21 (รันจริงด้วยแถวปลอม) ──
@@ -8025,7 +8028,7 @@ section("แพ็คเกจบุฟเฟต์: ต่อกันครบ
     const pkg = shown[0];
     const counts = { adult: 3, child: 0, [XKEY]: 1 };
     const runOpen = async ({ fresh, props, throwFresh }) => {
-      const out = { notes: [], toasts: [], opened: [], agentOld: [], pj: [], cmds: [], libs: [], picks: [] };
+      const out = { notes: [], toasts: [], opened: [], agentOld: [], pj: [], cmds: [], libs: [], picks: [], sets: [] };
       const fakeApi = {
         getAllPrinters: async () => { if (throwFresh) throw new Error("network"); return fresh; },
         posOpenTable: (a) => K.apiOf("posOpenTable", W.sb)(a),
@@ -8039,6 +8042,7 @@ section("แพ็คเกจบุฟเฟต์: ต่อกันครบ
         posToast: (m, t) => out.toasts.push([String(m), t || "ok"]), onOpened: (row) => out.opened.push(row), friendlyError: (e) => String((e && e.message) || e),
         printCashierSlip: K.cashier(fakeApi), canOpenPackageTables: K.canOpen, PKG_AGENT_OLD_MSG: K.oldMsg,
         pkgOpenSlipParts: K.slip.pkgOpenSlipParts, pkgOpenSlipText: K.slip.pkgOpenSlipText, pkgSlipLines: K.slip.pkgSlipLines,
+        posSettings: null, onPrintedQR: () => {}, printPkgOpenSet: (a) => { out.sets.push(a); return Promise.resolve({ at: 1 }); },
       });
       const n0 = W.orders.length;
       await open(); await tick();
@@ -8060,12 +8064,11 @@ section("แพ็คเกจบุฟเฟต์: ต่อกันครบ
       bill ? [bill.items.map((i) => [i.line_uid, i.kind, i.menu_id, i.printer_id, i.category, i.price, i.qty, i.pkg && i.pkg.guest]), bill.subtotal, bill.total, sumOf(bill.items), bill.status] : null,
       [[["pkg:pk_mgx_t1:adult", "pkg", null, null, "แพ็คเกจบุฟเฟต์", 299, 3, true], ["pkg:pk_mgx_t1:" + XKEY, "pkg", null, null, "แพ็คเกจบุฟเฟต์", 50, 1, false]], 947, 947, 947, "pending"]);
 
-    // ── ⑤ ใบแคชเชียร์: เฉพาะเครื่องใบเสร็จของสาขา · เป็นใบรูป (pj) ไม่ใช่คำสั่งใบครัว (rp) ──
-    const slipTxt = Bo && Bo.pj && Bo.pj[0] ? JSON.parse(Bo.pj[0][1].b64).map((x) => x.t || "").join(" | ") : "";
-    ck("ใบเปิดโต๊ะออกเฉพาะเครื่องใบเสร็จสาขา 5 (#52) เป็นใบรูป · เครื่องครัว/รับทุกหมวด/River ไม่ได้อะไร · ไม่มีคำสั่ง rp",
-      typeof Bo === "string" ? Bo : [Bo.cmds.map(([id, k]) => [id, k.join()]), Bo.pj.map(([id, p]) => [id, p.what, p.table])], [[[52, "pj"]], [[52, "เปิดโต๊ะ", "A1"]]]);
-    ok_("ใบเปิดโต๊ะบอก โต๊ะ · แพ็คเกจ · ผู้ใหญ่/เด็ก (+รายการเพิ่ม)",
-      slipTxt.includes("เปิดโต๊ะ") && slipTxt.includes("โต๊ะ A1") && slipTxt.includes("หมูกระทะ 299") && slipTxt.includes("ผู้ใหญ่ 3 เด็ก 0 (+เตาเพิ่ม 1)"));
+    // ── ⑤ ใบ QR + ใบเปิดโต๊ะ: สั่งครั้งเดียวผ่าน printPkgOpenSet (ใบสร้างจากบิลที่เพิ่งเปิด · ไม่เขียนเครื่องพิมพ์ตรงๆ จาก open()) ──
+    const set0 = Bo && Bo.sets && Bo.sets[0];
+    ck("เปิดโต๊ะแล้วสั่งพิมพ์ QR + ใบเปิดโต๊ะ 1 ครั้ง: โต๊ะ A1 · บรรทัดแพ็คเกจของบิลจริง · เวลาเปิด = เวลาบิล · แพ็คเกจจากคลังสด · ไม่เขียนเครื่องพิมพ์เอง",
+      typeof Bo === "string" ? Bo : [Bo.sets.length, set0 && set0.table.table_number, set0 && bill && JSON.stringify(set0.items) === JSON.stringify(bill.items) ? "bill" : "other", set0 && set0.at === (bill && bill.created_at || set0.at), set0 && set0.pkg && set0.pkg.id, Bo.cmds.length],
+      [1, "A1", "bill", true, pkg && pkg.id, 0]);
 
     // ── ⑥ ลูกค้าสั่ง: เมนูในแพ็คเกจ (รวม ฿0) ได้ · นอกแพ็คเกจไม่ได้ — อ่านคลังตัวเดียวกัน ──
     const D = (id, price, qty, cat) => ({ line_uid: "c" + id + "_" + qty, menu_id: id, name: "เมนู" + id, price, qty, options: [], note: "", printer_id: null, category: cat });
@@ -8295,6 +8298,7 @@ section("แพ็คเกจบุฟเฟต์: จอค้าง · ร�
         currentUser: { username: "ผึ้ง" }, busyRef, setBusy: () => {}, setAgentOld: () => {}, notifyDlg: (m) => out.notes.push(String(m)),
         posToast: () => {}, onOpened: (row) => out.opened.push(row && row.id), friendlyError: (e) => String((e && e.message) || e),
         printCashierSlip: async () => ({ sent: 1, at: 1 }), canOpenPackageTables: () => true, PKG_AGENT_OLD_MSG: "OLD",
+        posSettings: null, onPrintedQR: () => {}, printPkgOpenSet: () => Promise.resolve({ at: 1 }),
         pkgOpenSlipParts: () => ({ name: "", heads: "", time: "", by: "" }), pkgOpenSlipText: () => "", pkgSlipLines: () => [],
         setLib: (v) => out.libs.push(v), setPick: (v) => out.picks.push(v),
       };
@@ -8499,7 +8503,7 @@ section("ปุ่มเรียกพนักงาน + ภาษาไท�
     render(F.createCanvas, [{ c1: "1", c2: LONG2, size: 20 }], 216);
     const api = F.draws.map((x) => x.t).slice(1), app = SWF.slipWrap((t) => String(t).length * 10, LONG2, 100);
     ok_("บรรทัดแคบ: ใบครัวและใบแคชเชียร์ตัดที่รอยต่อคำ (ไม่ใช่ \"ชามะพร้าวส|าคู\") และได้บรรทัดเดียวกัน", goodWrap(LONG2, api) && goodWrap(LONG2, app) && api.join("|") === app.join("|")); }
-  ok_("ใบสั้น: ตัดบรรทัด/ย่อก่อนคำนวณความสูงใบ", (() => { const a = APP.indexOf("    lines=fitSlipRows(lines,width-pad*2,"), b = APP.indexOf("  const lineH=l=>l.rule?16:l.img?"); return a > 0 && b > a && b - a < 400; })());
+  ok_("ใบสั้น: ตัดบรรทัด/ย่อก่อนคำนวณความสูงใบ", (() => { const a = APP.indexOf("    lines=fitSlipRows(lines,width-pad*2,"), b = APP.indexOf("  const lineH=l=>l.rule?16:l.box?"); return a > 0 && b > a && b - a < 700; })());
 
   // ── หน้าลูกค้า: กดเรียก → บอกผลตามจริง (จำลองนาฬิกา) ──
   const CO = new Function(topFn(APP, "function callOutcome(status){") + "\nreturn callOutcome;")();
@@ -8549,7 +8553,7 @@ section("ปุ่มเรียกพนักงาน + ภาษาไท�
 {
   const banner = "{justOpened&&justOpened.id===selTable.id&&<div", toolbar = "{!(justOpened&&justOpened.id===selTable.id)&&<button onClick={printSelQR}";
   ok_("จอโต๊ะ: ปุ่มพิมพ์ QR มีปุ่มเดียว — แถบเปิดโต๊ะขึ้นเมื่อไร ปุ่มเล็กด้านบนซ่อน (เงื่อนไขตรงข้ามกันเป๊ะ)",
-    APP.includes(banner) && APP.includes(toolbar) && (APP.match(/onClick={printSelQR}/g) || []).length === 2);
+    APP.includes(banner) && APP.includes(toolbar) && (APP.match(/onClick={printSelQR}/g) || []).length === 1 && (APP.match(/onClick={reprintOpenSet}/g) || []).length === 1);   // แถบเขียว = พิมพ์ QR + ใบเปิดโต๊ะซ้ำ (19 ต.ค. 69)
 }
 // ══════════════════════════════════════════════════════════════════════════
 // ปิดกะ: ระบบบัญชีตอบ 409 not_open = ยังไม่เปิดรับยอดจาก POS ของสาขา/วันนั้น (ตกลงกับฝั่งบัญชี 18 ต.ค. 69)
@@ -8841,6 +8845,160 @@ section("แพ็คเกจบุฟเฟต์: ราคาเมนูใ
     BPU.includes("priceCell={(m,v)=>{") && BPU.includes("if(!v)return null;") && BPU.includes('<input type="text" inputMode="decimal" value={val} placeholder={String(base)}') &&
     BPU.includes("const s=bpPriceInput(e.target.value);") && BPU.includes("if(Object.keys(prices).length&&!canMoney){notifyDlg(LOCK_MONEY);return;}") &&
     BPU.includes("const res=await persist({type:\"menus\",id:pick.id,add,remove,prices,at:nowStr(),by:who});"));
+}
+
+// ── ใบเปิดโต๊ะแบบ FoodStory + พิมพ์ต่อจาก QR ในงานเดียว + เวลาสั่งอาหาร + ตรวจทานราคาในแพ็คเกจ (19 ต.ค. 69) ──
+// เจ้าของ: "ใบนี้ต้องถูกปริ้นออกมาต่อจากใบ QR ตอนเปิดโต๊ะ · เวลาสั่ง 2 ชม. ตัวใหญ่ชัดเจน · บอกรายละเอียดแพ็คเกจ"
+section("ใบเปิดโต๊ะ (QR + เวลาสั่งอาหาร) · ราคาในแพ็คเกจฝั่งตัวส่ง");
+{
+  const L = APP.split("\n");
+  const line = (p) => { const l = L.find((x) => x.startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; };
+  const blk = (from, to) => { const a = APP.indexOf(from), b = APP.indexOf(to, a + 1); if (a < 0 || b < 0) throw new Error("ไม่เจอ " + from); return APP.slice(a, b); };
+  const fnOf = (sig) => { const st = APP.indexOf(sig); if (st < 0) throw new Error("ไม่เจอ " + sig); let d = 0; for (let i = APP.indexOf("{", st + sig.length - 1); i < APP.length; i++) { if (APP[i] === "{") d++; else if (APP[i] === "}") { d--; if (d === 0) return APP.slice(st, i + 1); } } throw new Error("อ่านไม่จบ " + sig); };
+  const safe = async (f) => { try { return await f(); } catch (e) { return "โยน: " + (e && e.message); } };
+
+  // ── เวลาสั่งอาหารของแพ็คเกจ ──
+  let P = null;
+  try {
+    P = new Function([blk("const bpPrice=(v)=>{", "const bpMissingCol="), line("const BP_PRICE_RE="), blk("const bpNameKey=", "// ฟอร์มแพ็คเกจ → บรรทัดราคา"),
+      blk("function buffetAuditText(", "// เมนูที่เลือกใส่แพ็คเกจได้"), "return {normalizeBuffetPackages,buffetPkgOp,buffetAuditText,pkgOrderMinutesOf,pkgDurText};"].join("\n"))();
+  } catch (e) { console.log("       ดึงตัวจัดการเวลาสั่งอาหารไม่ได้: " + e.message); }
+  ok_("ดึงตัวจัดการเวลาสั่งอาหารตัวจริงมารันได้", !!P);
+  if (P) {
+    ck("เวลาสั่งอาหาร: ไม่ได้ตั้ง = 120 นาที (2 ชม.) · 0 = ไม่จำกัด · \"90\" = 90 · ติดลบ/เกินวัน/ทศนิยม = ค่าเริ่มต้น · ข้อความ ชม./นาที",
+      [[{}, { order_minutes: 0 }, { order_minutes: "90" }, { order_minutes: -5 }, { order_minutes: 2000 }, { order_minutes: 1.5 }].map(P.pkgOrderMinutesOf), [120, 90, 45, 0].map(P.pkgDurText)],
+      [[120, 0, 90, 120, 120, 120], ["2 ชม.", "1 ชม. 30 นาที", "45 นาที", "ไม่จำกัดเวลา"]]);
+    const LN = [{ key: "adult", label: "ผู้ใหญ่", price: 199 }, { key: "child", label: "เด็ก", price: 139 }];
+    const N = (x) => P.normalizeBuffetPackages([{ id: "p", name: "B", lines: LN, ...x }])[0];
+    ck("อ่านคลัง: เวลาสั่งอาหาร \"90\"→90 · ผิดรูป/ไม่ได้ตั้ง = ไม่มีช่องนี้ (แพ็คเกจเดิมหน้าตาเหมือนเดิม)",
+      [N({ order_minutes: "90" }).order_minutes, "order_minutes" in N({ order_minutes: "abc" }), "order_minutes" in N({})], [90, false, false]);
+    const c1 = P.normalizeBuffetPackages(P.buffetPkgOp([], { type: "create", id: "p1", name: "B", lines: LN, minutes: 90, at: "t1", by: "x" }))[0];
+    const e1 = P.normalizeBuffetPackages(P.buffetPkgOp([c1], { type: "edit", id: "p1", name: "B", lines: LN, base: "t1", minutes: 0, at: "t2", by: "x" }))[0];
+    const e2 = P.normalizeBuffetPackages(P.buffetPkgOp([c1], { type: "edit", id: "p1", name: "B", lines: LN, base: "t1", at: "t3", by: "x" }))[0];
+    ck("สร้าง/แก้แพ็คเกจ: ตั้งเวลาสั่งอาหารได้ (0 = ไม่จำกัด) · ผู้เรียกรุ่นเก่าที่ไม่ส่งเวลา = คงค่าเดิม", [c1.order_minutes, e1.order_minutes, e2.order_minutes], [90, 0, 90]);
+    const tx = P.buffetAuditText(N({}), N({ order_minutes: 90 }), "ผึ้ง", { id: 5, name: "กาญจนบุรี" }, () => "");
+    ok_("ประวัติจดการแก้เวลาสั่งอาหาร (2 ชม. → 1 ชม. 30 นาที)", tx.includes("ผึ้ง") && tx.includes("เวลาสั่งอาหาร: 2 ชม. → 1 ชม. 30 นาที"));
+  }
+
+  // ── ใบเปิดโต๊ะ: ข้อมูลบนใบ ──
+  let T = null;
+  try {
+    T = new Function([line("const round2 = "), line("const roundModeOf="), blk("const roundBill=", "// สูตรยอดบิล"), blk("function billTotalsOf(", "// ส่วนลดของบิลแตกเป็นสามก้อน"),
+      blk("function parseAnyDate(", "\nconst _b2"), line("const _b2="), line("const fmtD="), line("function stripEmoji"),
+      line("const PKG_ORDER_MIN_DEFAULT="), line("const bpMinutes="), line("const pkgOrderMinutesOf="), line("const pkgDurText="),
+      line("const isPkgLine="), line("const guestCountOf="), line("const pkgTimeOf="), blk("function pkgOpenTicketLines(", "// งานพิมพ์ที่ใช้ช่องคำสั่งรูป"),
+      blk("function slipClusters(", "async function escposSlipRaster"),
+      "return {pkgOpenTicketLines,billTotalsOf,fitSlipRows};"].join("\n"))();
+  } catch (e) { console.log("       ดึงตัวสร้างใบเปิดโต๊ะไม่ได้: " + e.message); }
+  ok_("ดึงตัวสร้างใบเปิดโต๊ะตัวจริงมารันได้", !!T);
+  if (T) {
+    const PL = (key, label, guest, price, qty) => ({ kind: "pkg", pkg: { id: "pk1", name: "Buffef + รีฟิล + เนื้อ", key, label, guest }, name: "x", price, qty, menu_id: null });
+    const PS5 = { vat_enabled: true, vat_rate: 7, vat_included: false, rounding: "down", receipt_header: "ในวันสุข หมูกระทะ กาญจนบุรี\nกาญจนบุรี 71000" };
+    const items = [PL("adult", "ผู้ใหญ่", true, 317, 1), PL("child", "เด็ก", true, 257, 0)];
+    const t1 = T.pkgOpenTicketLines({ branchName: "กาญจนบุรี", posSettings: PS5, table: "A1", items, at: "2026-10-19T09:09:00Z", minutes: 120, by: "ผึ้ง" });
+    const box = t1.find((l) => l.box), row = (lbl) => { const r = t1.find((l) => l.l === lbl); return r ? r.r : null; };
+    ck("ใบเปิดโต๊ะ (ใบจริงสาขา 5 เวลา 16:09): กรอบ เริ่ม 16:09 / หมดเวลาสั่ง 18:09 · โต๊ะ · ลูกค้า · วันที่ พ.ศ. · หัวใบจากตั้งค่าใบเสร็จ",
+      [box && box.box.map((c) => c.value), row("โต๊ะ (Table)"), row("ลูกค้า (Guests)"), row("วันที่ (Date)"), t1.some((l) => l.t === "ในวันสุข หมูกระทะ กาญจนบุรี")],
+      [["16:09", "18:09"], "A1", "1", "19/10/2569", true]);
+    const T1 = T.billTotalsOf({ items, posSettings: PS5 });
+    ck("ใบเปิดโต๊ะ: รายการแพ็คเกจ (ไม่โชว์บรรทัดจำนวน 0) · ยอดจากสูตรบิลตัวเดียวของระบบ (VAT บวกเพิ่ม + ปัดเศษลง = ตรงใบเสร็จ)",
+      [t1.filter((l) => /^\d+ x /.test(l.l || "")).map((l) => [l.l, l.r]), row("รวม (SubTotal)"), row("VAT 7%"), row("ปัดเศษ"), row("ยอดรวม (Total)"), T1.total],
+      [[["1 x ผู้ใหญ่ @317.00", "317.00"]], "317.00", "+22.18", "-0.18", "339.00", 339]);
+    ok_("ใบเปิดโต๊ะ: บอกเวลาสั่งอาหารตัวใหญ่ท้ายใบ + ชื่อแพ็คเกจ", t1.some((l) => l.t === "ลูกค้ามีเวลาสั่งอาหาร 2 ชม." && l.size >= 28 && l.bold) && t1.some((l) => l.t === "Buffef + รีฟิล + เนื้อ"));
+    const t0 = T.pkgOpenTicketLines({ branchName: "ก", posSettings: { vat_enabled: true, vat_rate: 7, vat_included: true }, table: "B1", items: [PL("adult", "ผู้ใหญ่", true, 299, 3)], at: "2026-10-19T09:09:00Z", minutes: 0 });
+    ck("ไม่จำกัดเวลา = ไม่มีกรอบเวลา บอก \"สั่งอาหารได้ไม่จำกัดเวลา\" · VAT รวมในราคา = ไม่มีเครื่องหมาย + · ไม่มีหัวใบ = มีแค่ชื่อสาขา",
+      [t0.some((l) => l.box), t0.some((l) => l.t === "สั่งอาหารได้ไม่จำกัดเวลา"), (t0.find((l) => /^VAT/.test(l.l || "")) || {}).l, (t0.find((l) => /^VAT/.test(l.l || "")) || {}).r, (t0.find((l) => l.l === "ยอดรวม (Total)") || {}).r],
+      [false, true, "VAT 7% (รวมในราคา)", "58.68", "897.00"]);
+    const bx = { box: [{ label: "a", value: "1" }], mb: 10 };
+    ok_("ตัววาดใบ: แถวกรอบผ่านตัวตัดบรรทัดไปตรงๆ · วาดกรอบ + ความสูงกรอบนับในใบ",
+      T.fitSlipRows([bx], 548, (b, sz, t) => t.length * sz)[0] === bx && APP.includes("    if(l.box){") && APP.includes("const lineH=l=>l.rule?16:l.box?(boxH(l)+(l.mb||8)):"));
+  }
+
+  // ── พิมพ์ QR + ใบเปิดโต๊ะ เป็นงานเดียว (printTableQR + appendB64) ──
+  const runQR = async (opts) => {
+    const ups = [], toasts = [];
+    const prs = [{ id: 52, branch_id: 5, ip: "10.0.0.52", description: '{"rcpt":1}' }, { id: 53, branch_id: 5, ip: "10.0.0.53", description: "{}" }];
+    const f = new Function("api", "tableScanUrl", "btPrint", "buildTableQRB64", "posToast", "openPrintWindow", "addPrintClose", "location", "alert",
+      [line("function getPConn(p){"), line("function isReceiptPrinter(p){"), fnOf("function getReceiptPrinters(printers){"), line("const CMD_KEYS="), line("const CMD_FRESH_MS="), fnOf("function cmdDesc(printer,key,val){"),
+        line("const b64Bytes="), line("const catB64="), "async " + fnOf("function printTableQR(table,branch,printers=[],onPrinted,onUrl,opts={}){"), "return printTableQR;"].join("\n"))(
+      { getTableFresh: async () => [{ qr_token: "t" }], getAllPrinters: async () => prs, updatePrinter: async (id, d) => { ups.push([id, JSON.parse(d.description).pj]); return [{}]; }, markTableQRPrinted: async () => {} },
+      () => "https://x/scan", async () => { throw new Error("no bt"); }, async () => btoa("QR"), (m) => toasts.push(String(m)), () => null, () => {}, { protocol: "https:" }, (m) => toasts.push("ALERT " + m));
+    const r = await f({ id: 9, table_number: "A1" }, { id: 5, name: "ก" }, [], null, null, opts);
+    return [ups.map(([id, pj]) => [id, pj && atob(pj.b64), pj && pj.what, pj && pj.table]), !!(r && ups[0] && r.at === ups[0][1].at)];
+  };
+  ck("เปิดโต๊ะ: ใบ QR + ใบเปิดโต๊ะ = งานพิมพ์เดียวที่เครื่องใบเสร็จ (QR มาก่อน ใบเปิดโต๊ะต่อท้าย) · เครื่องครัวไม่ได้ · ผู้เรียกได้เวลาที่เขียน",
+    await safe(() => runQR({ appendB64: btoa("TICKET"), what: "QR + ใบเปิดโต๊ะ" })), [[[52, "QRTICKET", "QR + ใบเปิดโต๊ะ", "A1"]], true]);
+  ck("พิมพ์ QR ธรรมดา (ไม่มีใบต่อท้าย) = เหมือนเดิมทุกอย่าง", await safe(() => runQR(undefined)), [[[52, "QR", "QR โต๊ะ", "A1"]], true]);
+  ok_("ใบ QR + ใบเปิดโต๊ะเข้าคิวช่องคำสั่งเดียวกับใบสั้น · ส่งไม่ได้ = เตือนให้กดพิมพ์ซ้ำ ไม่ขวางการเปิดโต๊ะ",
+    APP.includes("return cashierSlotRun(async()=>printTableQR(table,branch,printers,onPrinted,null,{appendB64:await escposSlipRaster(lines,576),what:\"QR + ใบเปิดโต๊ะ\"}))") &&
+    APP.includes(".catch(e=>{console.error(\"printPkgOpenSet\",e);posToast("));
+
+  // ── คิวช่องคำสั่ง: ใบสั้น + งาน QR/ใบเปิดโต๊ะ จากเครื่องเดียวกัน เขียนทีละงาน ห่าง ≥ 1.6 วิ ──
+  const runQ = async () => {
+    let clock = 1000000; const ups = [];
+    const PRS = [{ id: 1, branch_id: 5, ip: "10.0.0.1", description: '{"rcpt":1}' }];
+    const api = { getAllPrinters: async () => JSON.parse(JSON.stringify(PRS)), updatePrinter: async (id, d) => { ups.push({ at: clock, what: JSON.parse(d.description).pj.what }); PRS[0].description = d.description; return [{}]; } };
+    const f = new Function("api", "escposSlipRaster", "cmdDesc", "Date", "setTimeout", [line("function getPConn(p){"), line("function isReceiptPrinter(p){"), fnOf("function getReceiptPrinters(printers){"),
+      line("let cashierSlipQ="), "async " + fnOf("function printCashierSlip(lines,{branchId,printers=[],what,table}){"), "async " + fnOf("function sendCashierSlip(lines,{branchId,printers=[],what,table}){"),
+      "async " + fnOf("function cashierSlotRun(fn){"), "return {printCashierSlip,cashierSlotRun};"].join("\n"))(
+      api, async () => "B64", (p, k, v) => JSON.stringify({ ...JSON.parse(p.description || "{}"), [k]: v }), { now: () => clock }, (fn, ms) => { clock += Math.max(0, +ms || 0); Promise.resolve().then(fn); return 0; });
+    const o = { branchId: 5, printers: [] };
+    await Promise.all([f.printCashierSlip([{ t: "a" }], { ...o, what: "แก้จำนวนคน", table: "A1" }),
+      f.cashierSlotRun(async () => { ups.push({ at: clock, what: "QR + ใบเปิดโต๊ะ" }); return { at: clock }; }),
+      f.printCashierSlip([{ t: "b" }], { ...o, what: "แก้จำนวนคน2", table: "A1" })]);
+    return [ups.map((u) => u.what), ups.every((u, i) => i === 0 || u.at - ups[i - 1].at >= 1600)];
+  };
+  ck("ใบสั้น → QR + ใบเปิดโต๊ะ → ใบสั้น จากเครื่องเดียวกัน: เขียนตามลำดับ ห่างกัน ≥ 1.6 วิทุกงาน (ไม่เขียนทับช่องคำสั่ง)",
+    await safe(runQ), [["แก้จำนวนคน", "QR + ใบเปิดโต๊ะ", "แก้จำนวนคน2"], true]);
+
+  // ── ราคาในแพ็คเกจ: ตัวส่งเข้าบิลตัดสินเอง (ตรวจทาน 19 ต.ค. 69) ──
+  let PP = null;
+  try { PP = new Function([line("const round2 = "), line("const isPkgLine="), line("const pkgPricedLines="), "return pkgPricedLines;"].join("\n"))(); } catch (e) { console.log("       ดึง pkgPricedLines ไม่ได้: " + e.message); }
+  if (PP) {
+    const sc = { prices: new Map([["301", 49]]) };
+    const ls = [{ menu_id: 301, price: 89, qty: 1 }, { menu_id: 301, price: 99, qty: 1, options: [{ price: 10 }] }, { menu_id: 302, price: 20, qty: 1 }, { kind: "pkg", menu_id: null, price: 299, qty: 2 }];
+    const out = PP(ls, sc);
+    ck("บรรทัดเข้าบิลแพ็คเกจ: เมนูที่มีราคาในแพ็คเกจ = ราคานั้น + ตัวเลือกเสริม · เมนูอื่น/หัวลูกค้า = ก้อนเดิม · ไม่มีแพ็คเกจ = ไม่แตะ",
+      [out.map((l) => l.price), out[2] === ls[2], out[3] === ls[3], PP(ls, null) === ls, PP(ls, { prices: new Map() }) === ls], [[49, 59, 20, 299], true, true, true, true]);
+  } else ok_("ดึง pkgPricedLines มารันได้", false);
+  // ร้อยโค้ดจริงของ posAppendItems กับฐานจำลอง: ตะกร้าทำไว้ตอนยังไม่รู้แพ็คเกจ (เบียร์ ฿89) ส่งเข้าบิลแพ็คเกจที่ตั้งเบียร์ ฿49
+  const apiExpr = (name) => { const head = `\n  ${name}: `; const st = APP.indexOf(head); if (st < 0) throw new Error("ไม่พบ api." + name); const s0 = st + head.length; let d = 0; for (let i = APP.indexOf("{", APP.indexOf("=>", s0)); i < APP.length; i++) { if (APP[i] === "{") d++; else if (APP[i] === "}") { d--; if (d === 0) return APP.slice(s0, i + 1); } } throw new Error("อ่านไม่จบ"); };
+  const runAppend = async (who, libFails) => {
+    const W = { patch: null };
+    const bill = { id: 1, table_id: 9, status: "pending", updated_at: "u1", items: [{ line_uid: "pkg:pk1:adult", kind: "pkg", pkg: { id: "pk1", name: "B", key: "adult", label: "ผู้ใหญ่", guest: true }, menu_id: null, name: "B · ผู้ใหญ่", price: 299, qty: 2 }] };
+    const lib = [{ id: "pk1", name: "B", active: true, lines: [{ key: "adult", label: "ผู้ใหญ่", price: 299, guest: true }], menu_ids: [301, 302], menu_prices: { "301": 49 } }];
+    const sb = async (path, opt) => {
+      const method = (opt && opt.method) || "GET";
+      if (/^menus\?/.test(path)) return [];
+      if (/^pos_settings/.test(path)) { if (libFails) throw new Error("Failed to fetch"); return [{ buffet_packages: lib }]; }
+      if (/^orders\?table_id/.test(path)) return [JSON.parse(JSON.stringify(bill))];
+      if (/^orders\?id=eq\.1/.test(path) && method === "PATCH") { W.patch = JSON.parse(opt.body); return [{ ...bill, ...W.patch }]; }
+      return [];
+    };
+    const f = new Function("sb", [line("const round2 = "), line("const stripNewFlags="), line("const BIZ_DAY_CUT_H="), line("const bizDayBkk="), line("const soldOutMark="),
+      line("const menuAvailAt="), line("const menuSoldOutAt="), line("const menuHiddenAt="), PKG_SRC, line("const bpMissingCol="), "async " + fnOf("function buffetPkgRead(bid){"), "return (" + apiExpr("posAppendItems") + ");"].join("\n"))(sb);
+    await f({ branch_id: 5, table_id: 9, table_number: "A1", newItems: [{ line_uid: "c1", menu_id: 301, name: "เบียร์", price: 89, qty: 1, options: [], note: "" }], ordered_by: who, ...(who === "customer" ? { blockIfAwaiting: true } : {}) });
+    const l = W.patch && W.patch.items.find((i) => i.line_uid === "c1");
+    return [l && l.price, W.patch && W.patch.subtotal];
+  };
+  ck("ลูกค้าส่งตะกร้าราคาเก่า (เบียร์ ฿89) เข้าบิลแพ็คเกจที่ตั้งเบียร์ ฿49 → ลงบิล ฿49 · ยอด = 598 + 49",
+    await safe(() => runAppend("customer", false)), [49, 647]);
+  ck("พนักงานส่ง แต่อ่านคลังแพ็คเกจไม่ได้ (เน็ตสะดุด) → การขายไม่หยุด ลงราคาตามจอ", await safe(() => runAppend("staff", true)), [89, 687]);
+  ck("ลูกค้าส่ง แต่อ่านคลังแพ็คเกจไม่ได้ → โยนต่อ (คิวส่งลองใหม่เอง ไม่ปล่อยเมนูนอกแพ็คเกจ/ราคาเก่า)", typeof (await safe(() => runAppend("customer", true))) === "string", true);
+  ok_("กดเมนูซ้ำ: รวมจำนวนเข้าบรรทัดเดิมเฉพาะราคาเดียวกัน (จอขาย + หน้าลูกค้า) · หน้าลูกค้าคิดราคาตะกร้าใหม่เมื่อราคาในแพ็คเกจเปลี่ยน (ไม่แตะบรรทัดที่ส่งแล้ว)",
+    APP.includes("const ex=p.find(i=>i._new&&i.menu_id===m.id&&i.price===m.price&&!i.note") && APP.includes("const ex=p.find(i=>i.menu_id===m.id&&i.price===m.price&&!i.note") &&
+    APP.includes("setCart(p=>{let ch=false;const n=p.map(l=>{if(!l||isLineLocked(l.line_uid))return l;const b=by.get(String(l.menu_id));"));
+
+  // ── ตั้งค่า POS ดึงไม่ผ่านรอบเดียว ห้ามรีเซ็ต VAT/แพ็คเกจ ──
+  let LP = null;
+  try { LP = (api, set) => new Function("api", "setPosSettings", "currentBranch", line("  async function loadPosSettings(){").trim() + "\nreturn loadPosSettings;")(api, set, { id: 5 }); } catch (e) { LP = null; }
+  if (LP) {
+    let fnArg = null, direct = null;
+    await LP({ getPOSSettings: async () => { throw new Error("Failed to fetch"); } }, (v) => { if (typeof v === "function") fnArg = v; else direct = v; })();
+    const prev = { branch_id: 5, vat_enabled: true, vat_included: false, buffet_packages: [{ id: "p" }] };
+    ck("ตั้งค่า POS ดึงไม่ผ่าน = ใช้ค่าเดิมต่อ (VAT/แพ็คเกจไม่หาย) · ยังไม่เคยโหลด/ค่าของสาขาอื่น = ค่าเริ่มต้น",
+      [direct, typeof fnArg, fnArg && fnArg(prev) === prev, fnArg && fnArg(null).vat_enabled, fnArg && fnArg({ branch_id: 8, vat_enabled: true }).branch_id], [null, "function", true, false, 5]);
+  } else ok_("ดึง loadPosSettings มารันได้", false);
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
