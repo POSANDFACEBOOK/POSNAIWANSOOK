@@ -20312,10 +20312,27 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
   }
   const cols=Math.max(1,Math.floor((canvasW-PAD)/(TW+GAP)));
   function slotFor(idx){return{x:PAD+(idx%cols)*(TW+GAP),y:PAD+Math.floor(idx/cols)*(TH+GAP)};}
+  // ── ตำแหน่งโต๊ะบนผัง: ห้ามมีโต๊ะซ้อนกันจนมองไม่เห็น (เจอจริงสาขา 5 วันที่ 19 ต.ค. 69) ──
+  // เดิมโต๊ะใหม่ได้ช่องที่ "ลำดับ = จำนวนโต๊ะในโซน" — ช่องคำนวณจากความกว้างจอตอนนั้น (จำนวนคอลัมน์)
+  // โต๊ะเดิมวางไว้ตอนจอ 4 คอลัมน์ พอเพิ่มโต๊ะจากจอ 6 คอลัมน์ ช่องที่ได้ตรงกับโต๊ะเดิมพอดี → โต๊ะใหม่ซ้อนใต้ D5 มองไม่เห็น
+  // ตอนนี้: โต๊ะใหม่ได้ช่องว่างแรกที่ไม่ทับโต๊ะไหนในโซนนั้น · ผังที่มีโต๊ะซ้อนอยู่แล้ว (ข้อมูลเก่า) ขยับตัวที่ซ้อนไปช่องว่างบนจอ
+  //   (แสดงอย่างเดียว ไม่เขียนกลับ — ลากวางเมื่อไรค่อยจดตำแหน่งใหม่)
+  const overlapPos=(a,b)=>Math.abs(a.x-b.x)<TW-8&&Math.abs(a.y-b.y)<TH-8;
+  function freeSlot(taken){for(let i=0;i<5000;i++){const s=slotFor(i);if(!taken.some(p=>overlapPos(p,s)))return s;}return slotFor(taken.length);}
+  // list เรียงตามเลขโต๊ะแล้ว → {placed:[ตำแหน่ง], pos: Map(id → ตำแหน่ง)} · ตัวที่ทับตัวก่อนหน้าย้ายไปช่องว่าง
+  function layoutOf(list){
+    const placed=[],pos=new Map();
+    (list||[]).forEach((t,idx)=>{
+      let p=(typeof t.x==="number"&&typeof t.y==="number"&&(t.x||t.y))?{x:Math.max(0,Math.min(t.x,Math.max(0,canvasW-TW-PAD))),y:Math.max(0,t.y)}:slotFor(idx);
+      if(placed.some(q=>overlapPos(q,p)))p=freeSlot(placed);
+      placed.push(p);pos.set(t.id,p);
+    });
+    return {placed,pos};
+  }
   function displayPos(t,idx){
     if(dragPos&&dragPos.id===t.id)return{x:dragPos.x,y:dragPos.y};
-    if(typeof t.x==="number"&&typeof t.y==="number"&&(t.x||t.y))return{x:Math.max(0,Math.min(t.x,Math.max(0,canvasW-TW-PAD))),y:Math.max(0,t.y)};
-    return slotFor(idx);
+    const p=tableLayout&&tableLayout.pos.get(t.id);
+    return p||slotFor(idx);
   }
   function beginPress(e,t,cx,cy){
     const active=editId===t.id;
@@ -20345,7 +20362,8 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
     const d={table_number:String(f.table_number).trim(),label:f.label||"",seats:+f.seats||4,shape:f.shape||"square",zone:f.zone||""};
     try{
       if(f.id){if(onUpdateTable)await onUpdateTable(f.id,d);}
-      else{const s=slotFor(sortedTables.length);if(onAddTable)await onAddTable({...d,w:90,h:80,x:s.x,y:s.y});}
+      // โต๊ะใหม่ = ช่องว่างแรกในโซนที่เลือกในฟอร์ม (เทียบตำแหน่งจริงของทุกโต๊ะในโซนนั้น ไม่ใช่นับจำนวน)
+      else{const s=freeSlot(layoutOf(tables.filter(t=>(t.zone||"")===(d.zone||"")).sort(tableNumCmp)).placed);if(onAddTable)await onAddTable({...d,w:90,h:80,x:s.x,y:s.y});}
       setTableForm(null);
     }catch(e){alert("บันทึกโต๊ะไม่สำเร็จ: "+(e&&e.message||e));}
     setTableSaving(false);
@@ -20382,7 +20400,9 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
   const knownZ=new Set(allZoneNames);
   const isUnzoned=(t)=>!t.zone||!knownZ.has(t.zone);   // ไม่มีโซน หรือโซนถูกลบไปแล้ว → กองที่ "ไม่มีโซน" (ไม่ให้โต๊ะหาย)
   const filteredTables=zoneFilter==="all"?tables:zoneFilter==="none"?tables.filter(isUnzoned):tables.filter(t=>t.zone===zoneFilter);
-  const sortedTables=[...filteredTables].sort((a,b)=>String(a.table_number||"").localeCompare(String(b.table_number||""),undefined,{numeric:true}));
+  const tableNumCmp=(a,b)=>String(a.table_number||"").localeCompare(String(b.table_number||""),undefined,{numeric:true});
+  const sortedTables=[...filteredTables].sort(tableNumCmp);
+  const tableLayout=layoutOf(sortedTables);   // ตำแหน่งที่แสดง (ไม่มีโต๊ะซ้อน) — ทั้งผังและความสูงผังใช้ชุดเดียวกัน
   // ไม่มีปุ่ม "ทั้งหมด" แล้ว → ตั้งค่าเริ่มต้น/แก้สถานะค้างเป็นโซนแรกที่สาขาสร้างไว้
   // (ครอบคลุม: เปิดครั้งแรก = "all", หรือกรองค้างที่โซนที่ถูกลบไปแล้ว → เด้งไปโซนแรกอัตโนมัติ · ถ้าสาขายังไม่มีโซน คงไว้ที่ "all" แสดงโต๊ะทั้งหมด)
   useEffect(()=>{

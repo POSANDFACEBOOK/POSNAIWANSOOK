@@ -9132,6 +9132,41 @@ section("โต๊ะบุฟเฟต์: นับถอยหลังเว
     CP.includes("{ordWin&&!timeUp&&<OrderCountdown end={ordWin.end}/>}") && APP.includes("{pkgWin&&<span style={{marginLeft:8}}><OrderCountdown end={pkgWin.end} staff/></span>}"));
 }
 
+// ── ผังโต๊ะ: เพิ่มโต๊ะแล้วต้องเห็น (ไม่ซ้อนใต้โต๊ะเดิม) — เจอจริงสาขา 5 วันที่ 19 ต.ค. 69 ──
+// โต๊ะเดิม D1–D6 วางไว้ตอนจอ 4 คอลัมน์ · เพิ่มโต๊ะจากจอ 6 คอลัมน์ → ช่อง "ลำดับที่ 6" = (16,126) ตรงกับ D5 พอดี โต๊ะใหม่หายใต้ D5
+section("ผังโต๊ะ: โต๊ะใหม่ไม่ซ้อนโต๊ะเดิม");
+{
+  const MAP = (() => { const st = APP.indexOf("function POSTableMap("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
+  const ln = (p) => { const l = MAP.split("\n").find((x) => x.trim().startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; };
+  const fnOf = (src, sig) => { const st = src.indexOf(sig); if (st < 0) throw new Error("ไม่เจอ " + sig); let d = 0; for (let i = src.indexOf("{", st + sig.length - 1); i < src.length; i++) { if (src[i] === "{") d++; else if (src[i] === "}") { d--; if (d === 0) return src.slice(st, i + 1); } } throw new Error("อ่านไม่จบ"); };
+  let F = null;
+  try {
+    F = (canvasW) => new Function("canvasW", [ln("const TW=116,TH=96,GAP=14,PAD=16;"), ln("const cols=Math.max(1,"), ln("function slotFor(idx){"), ln("const overlapPos="), ln("function freeSlot(taken){"),
+      fnOf(MAP, "function layoutOf(list){"), "return {slotFor,freeSlot,layoutOf,overlapPos};"].join("\n"))(canvasW);
+    F(820);
+  } catch (e) { console.log("       ดึงตัววางโต๊ะไม่ได้: " + e.message); F = null; }
+  ok_("ดึงตัววางตำแหน่งโต๊ะตัวจริงมารันได้", !!F);
+  if (F) {
+    const D = [[136, "D1", 16, 16], [137, "D2", 146, 16], [138, "D3", 276, 16], [139, "D4", 406, 16], [140, "D5", 16, 126], [141, "D6", 146, 126]].map(([id, n, x, y]) => ({ id, table_number: n, x, y, zone: "D" }));
+    const W6 = F(820);   // จอกว้าง 6 คอลัมน์
+    const s = W6.freeSlot(W6.layoutOf(D).placed);
+    ck("จอ 6 คอลัมน์ เพิ่มโต๊ะในโซน D (โต๊ะเดิมวางแบบ 4 คอลัมน์): ได้ช่องว่างจริง ไม่ทับโต๊ะไหน (เดิมได้ (16,126) ทับ D5)",
+      [D.some((t) => W6.overlapPos(t, s)), W6.slotFor(6).x === 16 && W6.slotFor(6).y === 126], [false, true]);
+    const withHidden = [...D, { id: 144, table_number: "ไม่ต้องทำ", x: 16, y: 126, zone: "D" }];
+    const L = W6.layoutOf(withHidden);
+    const pts = withHidden.map((t) => L.pos.get(t.id));
+    const anyOverlap = pts.some((p, i) => pts.some((q, j) => j !== i && W6.overlapPos(p, q)));
+    ck("ผังที่มีโต๊ะซ้อนอยู่แล้ว (ข้อมูลเก่า): โต๊ะที่ซ้อนถูกขยับไปช่องว่างบนจอ · โต๊ะเดิมอยู่ที่เดิม · ไม่มีคู่ไหนทับกัน",
+      [anyOverlap, [L.pos.get(140).x, L.pos.get(140).y], L.pos.get(144).x === 16 && L.pos.get(144).y === 126], [false, [16, 126], false]);
+    const W4 = F(560);   // จอแคบ 4 คอลัมน์ — โต๊ะใหม่ก็ยังได้ช่องว่าง
+    const s4 = W4.freeSlot(W4.layoutOf(D).placed);
+    ck("จอ 4 คอลัมน์: ช่องว่างถัดไปคือ (276,126) ต่อจาก D6", [s4.x, s4.y], [276, 126]);
+  }
+  ok_("ฟอร์มเพิ่มโต๊ะใช้ช่องว่างจริงของโซนที่เลือก · ผังและความสูงผังใช้ตำแหน่งชุดเดียวกัน (ไม่มีโต๊ะซ้อน)",
+    MAP.includes("else{const s=freeSlot(layoutOf(tables.filter(t=>(t.zone||\"\")===(d.zone||\"\")).sort(tableNumCmp)).placed);") &&
+    MAP.includes("const tableLayout=layoutOf(sortedTables);") && MAP.includes("const p=tableLayout&&tableLayout.pos.get(t.id);") && !MAP.includes("slotFor(sortedTables.length)"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;
