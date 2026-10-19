@@ -1151,6 +1151,11 @@ const api = {
           }
           pkgAllowed=ordered_by==="customer"&&pkgSrv?pkgSrv.ids:null;
         }
+        // โต๊ะบุฟเฟต์หมดเวลาสั่ง = ลูกค้าสั่งเองไม่ได้แล้ว (นั่งต่อได้) · พนักงานยังสั่งให้ได้ · เผื่อ 2 นาทีให้ของที่กดสั่งก่อนหมดเวลา
+        if(ordered_by==="customer"&&pkgSrv){
+          const w=pkgOrderWindowOf(cur,pkgSrv.def?[pkgSrv.def]:[]);
+          if(w&&Date.now()>w.end+PKG_ORDER_GRACE_MS){const err=new Error("หมดเวลาสั่งอาหารของแพ็คเกจแล้ว — ต้องการสั่งเพิ่ม กรุณาแจ้งพนักงาน");err.orderTimeUp=true;throw err;}
+        }
         if(pkgAllowed){
           const out=newItems.filter(i=>!pkgAllowed.has(String(i&&i.menu_id)));
           if(out.length){
@@ -19975,7 +19980,7 @@ function pkgLinesOf(pkg,counts,at){
   const snap=ls.map(l=>({key:l.key,label:l.label||"",price:round2(Math.max(0,+l.price||0)),guest:!!l.guest}));
   return ls.map(l=>({
     line_uid:`pkg:${pkg.id}:${l.key}`,kind:"pkg",
-    pkg:{id:pkg.id,name:pkg.name||"",key:l.key,label:l.label||"",guest:!!l.guest,snap},
+    pkg:{id:pkg.id,name:pkg.name||"",key:l.key,label:l.label||"",guest:!!l.guest,snap,mins:pkgOrderMinutesOf(pkg)},
     menu_id:null,name:`${pkg.name||"แพ็คเกจ"} · ${l.label||""}`,
     price:round2(Math.max(0,+l.price||0)),qty:Math.max(0,Math.floor(+c[l.key]||0)),
     options:[],note:"",printer_id:null,category:PKG_CAT,sent_at:ts,
@@ -20014,6 +20019,33 @@ const pkgPriced=(menus,scope)=>{
   if(!mp||!mp.size||!Array.isArray(menus))return menus;
   return menus.map(m=>{const v=m?mp.get(String(m.id)):undefined;return v==null||!Number.isFinite(v)||v===(+m.price||0)?m:{...m,price:v,menu_price:+m.price||0};});
 };
+// ── เวลาสั่งอาหารของโต๊ะบุฟเฟต์ (เจ้าของสั่ง 19 ต.ค. 69: ครบ 2 ชม. ลูกค้าสั่งเองไม่ได้ นั่งต่อได้จนร้านปิด) ──
+// เริ่ม = เวลาเปิดโต๊ะ (บิลสร้าง · ตรงกับ "เริ่ม" บนใบเปิดโต๊ะ) · นาที = ที่จดในบิลตอนเปิด (pkg.mins) → คลังปัจจุบัน → 120
+// คืน {start,end,minutes} · ไม่จำกัดเวลา (0) / ไม่ใช่บิลแพ็คเกจ / ไม่รู้เวลาเปิด = null
+const PKG_ORDER_GRACE_MS=2*60*1000;   // ตัวส่งเข้าบิลเผื่อ 2 นาที: กดสั่งก่อนหมดเวลาแต่เน็ตช้า/คิวส่งลองใหม่ ยังเข้าได้
+function pkgOrderWindowOf(order,lib){
+  const items=(order&&order.items)||[];const bp=pkgOfBill(items);if(!bp)return null;
+  const def=(lib||[]).find(p=>p&&String(p.id)===String(bp.id))||null;
+  const mins=bpMinutes(bp.mins)!=null?bpMinutes(bp.mins):pkgOrderMinutesOf(def);
+  if(!mins)return null;
+  const pl=items.find(isPkgLine);
+  let start=Date.parse((order&&order.created_at)||"");
+  if(!Number.isFinite(start))start=Date.parse((pl&&pl.sent_at)||"");
+  if(!Number.isFinite(start))return null;
+  return {start,end:start+mins*60000,minutes:mins};
+}
+// นับถอยหลัง — คอมโพเนนต์เล็กแยก วาดใหม่ทุกวินาทีเฉพาะตัวเอง (หน้าเมนูรูปเต็มจอไม่วาดตาม มือถือรุ่นเก่าไม่กระตุก)
+// staff = จอพนักงาน (หมดเวลาแล้วบอกว่าลูกค้าสั่งเองไม่ได้) · เหลือ ≤ 10 นาที = ส้ม
+const OrderCountdown=memo(function OrderCountdown({end,staff}){
+  const[now,setNow]=useState(()=>Date.now());
+  useEffect(()=>{const t=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(t);},[]);
+  const left=Math.max(0,(+end||0)-now),s=Math.floor(left/1000),h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60;
+  const txt=(h?h+":"+String(m).padStart(2,"0"):String(m))+":"+String(ss).padStart(2,"0");
+  const warn=left<=10*60000;
+  const st={display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap",fontSize:12,fontWeight:900,borderRadius:999,padding:"2px 9px",fontFamily:"'Sarabun',sans-serif",fontVariantNumeric:"tabular-nums",
+    background:left<=0?"#FEE2E2":warn?"#FFEDD5":"rgba(255,255,255,.75)",color:left<=0?"#B91C1C":warn?"#C2410C":"#065F46",border:`1px solid ${left<=0?"#FCA5A5":warn?"#FDBA74":"#05966955"}`};
+  return <span style={st}>⏱ {left<=0?(staff?"หมดเวลาสั่ง · ลูกค้าสั่งเองไม่ได้แล้ว":"หมดเวลาสั่งแล้ว"):`เหลือเวลาสั่ง ${txt}`}</span>;
+});
 // ใบเสร็จบิลแพ็คเกจ: อาหาร ฿0 รวมเป็นบรรทัดเดียว (บุฟเฟต์มื้อยาวๆ ใบจะยาวหลายสิบบรรทัด)
 // บรรทัดแพ็คเกจกับของที่มีราคาอยู่ครบ — ยอดบนใบบวกได้เท่าเดิม · บิลไม่มีแพ็คเกจ = เหมือนเดิมทุกบรรทัด
 function receiptRowsOf(items){
@@ -20869,6 +20901,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const pkgLines=useMemo(()=>items.filter(isPkgLine),[items]);
   const billPkg=pkgLines.length?pkgLines[0].pkg:null;
   const pkgScope=useMemo(()=>pkgMenuScopeOf(items,pkgLibOf(posSettings)),[items,posSettings]);
+  // เวลาสั่งอาหารของโต๊ะบุฟเฟต์ — พนักงานเห็นว่าเหลือเท่าไร/หมดแล้ว (หมดแล้วพนักงานยังสั่งให้ได้)
+  const pkgWin=useMemo(()=>existingOrder?pkgOrderWindowOf({...existingOrder,items},pkgLibOf(posSettings)):null,[existingOrder,items,posSettings]);
   const cats=useMemo(()=>{
     const seen=[...new Set(menus.filter(m=>menuVisibleAt(m,bidSale)&&(!pkgScope||pkgScope.ids.has(String(m.id)))).map(menuCatOf).filter(Boolean))];
     return ["ทั้งหมด",...seen.sort(catSorter(catOrderOf(posSettings)))];
@@ -21402,6 +21436,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       {pkgScope&&<div style={{padding:"6px 12px",borderBottom:`1px solid ${C.line}`,flexShrink:0,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,
         background:pkgScope.missing?C.redLight:"#ECFDF5",color:pkgScope.missing?C.red:"#065F46"}}>
         {pkgScope.missing?"⚠️ หาแพ็คเกจของโต๊ะนี้ไม่เจอ — แจ้งผู้จัดการ (สั่งได้เฉพาะเมนูที่อยู่ในบิลแล้ว)":`🍖 เมนูของแพ็คเกจ ${billPkg?billPkg.name:""}${pkgScope.retired?" · ลบจากคลังแล้ว (โต๊ะนี้สั่งได้จนปิดบิล)":""}`}
+        {pkgWin&&<span style={{marginLeft:8}}><OrderCountdown end={pkgWin.end} staff/></span>}
       </div>}
       <div style={{padding:"8px 12px",borderBottom:`1px solid ${C.line}`,display:"flex",gap:5,overflowX:"auto",flexShrink:0}}>
         {cats.map(c=><button key={c} onClick={()=>setSelCat(c)} style={{padding:"8px 14px",minHeight:36,borderRadius:20,border:"none",cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13.5,background:selCat===c?C.brand:"transparent",color:selCat===c?C.white:C.ink3,whiteSpace:"nowrap"}}>{c}</button>)}
@@ -22444,6 +22479,7 @@ function CustomerPage({branchId,tableId,token}){
   const[optPick,setOptPick]=useState(null);
   function pickOrAddCart(m){
     if(payWaiting){setPayWaitMsg(true);return;}   // รอชำระเงินอยู่ ห้ามสั่งเพิ่ม
+    if(timeUp){setTimeUpMsg(true);return;}         // โต๊ะบุฟเฟต์หมดเวลาสั่ง
     if(menuHasOptions(m,branchId,optionLib))setOptPick(m);else addToCart(m);
   }
   function addToCartWithOptions(m,chosen,qty){const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);setCart(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:menuCatOf(m)}]);setOptPick(null);}
@@ -22493,6 +22529,8 @@ function CustomerPage({branchId,tableId,token}){
         loadMyOrder();
         return;
       }
+      // หมดเวลาสั่งของโต๊ะบุฟเฟต์ = ปฏิเสธถาวร (ไม่ใช่เน็ตสะดุด) — คืนของเข้าตะกร้า ไม่วนส่งซ้ำ บอกลูกค้าตรงๆ
+      if(e&&e.orderTimeUp){writeOutbox(null);setOutbox(null);setCart(p=>[...sending,...p]);setTimeUpNow(true);setTimeUpMsg(true);setSending(false);loadMyOrder();return;}
       if(e&&e.unavailable){handleUnavailable(e,sending);setSending(false);loadMyOrder();return;}
       if(e&&(e.notInPackage||e.badLine)){handleRejected(e,sending);setSending(false);loadMyOrder();return;}
       // Do NOT clear the cart and do NOT drop the outbox — it retries on reconnect. Re-sending is
@@ -22514,6 +22552,21 @@ function CustomerPage({branchId,tableId,token}){
   // รอชำระเงินอยู่ไหม — โพลล์บิลทุก 45 วินาที และเช็คซ้ำตอนกดส่ง
   const payWaiting=!!myOrder&&myOrder.status==="awaiting_payment";
   const[payWaitMsg,setPayWaitMsg]=useState(false);
+  // ── โต๊ะบุฟเฟต์: เวลาสั่งอาหาร (ค่าเริ่มต้น 2 ชม. นับจากเปิดโต๊ะ) — ครบแล้วสั่งเองไม่ได้ นั่งต่อได้ ──
+  // ตั้งเวลาครั้งเดียวถึงตอนหมดเวลา (ไม่ใช่เช็คทุกวินาที) · ตัวเลขนับถอยหลังวาดในคอมโพเนนต์ของมันเอง
+  const ordWin=useMemo(()=>pkgOrderWindowOf(myOrder,pkgLibOf(posCfg)),[myOrder,posCfg]);
+  const ordEnd=ordWin?ordWin.end:0;
+  const[timeUpNow,setTimeUpNow]=useState(false);
+  useEffect(()=>{
+    if(!ordEnd){setTimeUpNow(false);return;}
+    const left=ordEnd-Date.now();
+    if(left<=0){setTimeUpNow(true);return;}
+    setTimeUpNow(false);
+    const t=setTimeout(()=>setTimeUpNow(true),Math.min(left,2147483000));
+    return()=>clearTimeout(t);
+  },[ordEnd]);
+  const timeUp=!!ordWin&&timeUpNow;
+  const[timeUpMsg,setTimeUpMsg]=useState(false);
   const[soldOutMsg,setSoldOutMsg]=useState(null);   // ชื่อเมนูที่หมดระหว่างที่ลูกค้ากำลังสั่ง
   // ถูกปฏิเสธเพราะเมนูหมด = ปฏิเสธถาวร ไม่ใช่เน็ตสะดุด
   // ถ้าปล่อยเข้าคิวออฟไลน์เหมือน error ทั่วไป คิวจะวนส่งซ้ำไม่จบ และลูกค้าติดอยู่ตรงนั้น
@@ -22561,6 +22614,7 @@ function CustomerPage({branchId,tableId,token}){
         if(back.length)setCart(p=>[...back,...p]);
         setPayWaitMsg(true);loadMyOrder();
       }
+      else if(e&&e.orderTimeUp){const back=(o&&Array.isArray(o.lines))?o.lines:[];writeOutbox(null);setOutbox(null);if(back.length)setCart(p=>[...back,...p]);setTimeUpNow(true);setTimeUpMsg(true);loadMyOrder();}
       else if(e&&e.unavailable){handleUnavailable(e,o&&o.lines);loadMyOrder();}
       else if(e&&(e.notInPackage||e.badLine)){handleRejected(e,o&&o.lines);loadMyOrder();}
     }
@@ -22647,8 +22701,13 @@ function CustomerPage({branchId,tableId,token}){
       <div style={{fontSize:13,fontWeight:900,color:C.purple}}>🔒 กำลังรอการชำระเงิน</div>
       <div style={{fontSize:11.5,color:C.purple,marginTop:2,lineHeight:1.5,opacity:.9}}>ยอดถูกล็อกไว้แล้ว สั่งเพิ่มไม่ได้ · ถ้าต้องการสั่งเพิ่ม กรุณาแจ้งพนักงาน</div>
     </div>}
-    {billPkg&&step==="menu"&&<div style={{background:pkgScope&&pkgScope.missing?C.redLight:"#ECFDF5",borderBottom:`1px solid ${pkgScope&&pkgScope.missing?C.red:"#059669"}55`,padding:"7px 14px",flexShrink:0,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,color:pkgScope&&pkgScope.missing?C.red:"#065F46"}}>
-      {pkgScope&&pkgScope.missing?"⚠️ เมนูแพ็คเกจปิดอยู่ — กรุณาแจ้งพนักงาน":`🍖 ${billPkg.name} · ${pkgCountsText(myOrder&&myOrder.items,true)}`}
+    {timeUp&&!payWaiting&&<div style={{background:"#FFF7ED",borderBottom:"2px solid #EA580C",padding:"9px 14px",flexShrink:0,fontFamily:"'Sarabun',sans-serif"}}>
+      <div style={{fontSize:13,fontWeight:900,color:"#9A3412"}}>⏱ หมดเวลาสั่งอาหารแล้ว{ordWin?` (ครบ ${pkgDurText(ordWin.minutes)} เมื่อ ${pkgTimeOf(ordWin.end)} น.)`:""}</div>
+      <div style={{fontSize:11.5,color:"#9A3412",marginTop:2,lineHeight:1.5}}>นั่งต่อได้ตามสบายจนร้านปิด · ต้องการสั่งเพิ่ม กรุณากดเรียกพนักงาน</div>
+    </div>}
+    {billPkg&&step==="menu"&&<div style={{background:pkgScope&&pkgScope.missing?C.redLight:"#ECFDF5",borderBottom:`1px solid ${pkgScope&&pkgScope.missing?C.red:"#059669"}55`,padding:"7px 14px",flexShrink:0,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,color:pkgScope&&pkgScope.missing?C.red:"#065F46",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+      <span style={{flex:"1 1 auto",minWidth:0}}>{pkgScope&&pkgScope.missing?"⚠️ เมนูแพ็คเกจปิดอยู่ — กรุณาแจ้งพนักงาน":`🍖 ${billPkg.name} · ${pkgCountsText(myOrder&&myOrder.items,true)}`}</span>
+      {ordWin&&!timeUp&&<OrderCountdown end={ordWin.end}/>}
     </div>}
     {step==="menu"&&<>
       <div style={{position:"sticky",top:headH,zIndex:12,background:C.white,flexShrink:0}}>
@@ -22679,7 +22738,7 @@ function CustomerPage({branchId,tableId,token}){
                 :(inC&&!hasOpts)?<div style={{display:"flex",alignItems:"center",gap:5}}>
                 <button onClick={()=>chQty(cart.indexOf(inC),-1)} style={{width:30,height:30,borderRadius:8,border:`1.5px solid ${C.brand}`,background:C.white,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.minus} s={12} c={C.brand}/></button>
                 <span style={{fontWeight:900,fontSize:14,minWidth:16,textAlign:"center",color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{inC.qty}</span>
-                <button onClick={()=>{if(payWaiting){setPayWaitMsg(true);return;}addToCart(m);}} style={{width:30,height:30,borderRadius:8,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={12} c={C.white}/></button>
+                <button onClick={()=>{if(payWaiting){setPayWaitMsg(true);return;}if(timeUp){setTimeUpMsg(true);return;}addToCart(m);}} style={{width:30,height:30,borderRadius:8,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.plus} s={12} c={C.white}/></button>
               </div>:<button onClick={()=>pickOrAddCart(m)} style={{width:34,height:34,borderRadius:10,background:C.brand,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic d={I.plus} s={18} c={C.white}/></button>}
             </div>
           </div>
@@ -22751,7 +22810,7 @@ function CustomerPage({branchId,tableId,token}){
           :<div style={{padding:"13px 14px",background:C.brandLight,border:`1.5px solid ${C.brandBorder}`,borderRadius:12,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
             <div style={{fontSize:14.5,fontWeight:900,color:C.brand,lineHeight:1.5}}>📲 กรุณานำ QR Code ไปชำระเงินที่แคชเชียร์</div>
           </div>}
-        {myOrder&&myOrder.status!=="paid"&&!payWaiting&&<Btn onClick={()=>setStep("menu")} full icon={I.plus} s={{padding:"12px",fontSize:15,fontWeight:900}}>สั่งเพิ่ม</Btn>}
+        {myOrder&&myOrder.status!=="paid"&&!payWaiting&&!timeUp&&<Btn onClick={()=>setStep("menu")} full icon={I.plus} s={{padding:"12px",fontSize:15,fontWeight:900}}>สั่งเพิ่ม</Btn>}
         {/* เรียกพนักงาน (เช่น ขอเช็คบิล) — หน้านี้มีแถบล่างอยู่แล้ว จึงเป็นปุ่มในแถบ ไม่ใช่ปุ่มลอย */}
         <button type="button" onClick={()=>{if(!callBusy&&!callUntil)setCallAsk(true);}} aria-disabled={callBusy||!!callUntil}
           style={{width:"100%",minHeight:46,borderRadius:12,border:`1.5px solid ${callUntil?"#047857":C.ink}`,background:callUntil?C.greenLight:C.white,color:callUntil?"#047857":C.ink,fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,cursor:callBusy||callUntil?"default":"pointer"}}>
@@ -22779,7 +22838,7 @@ function CustomerPage({branchId,tableId,token}){
       </div>
       <div style={{padding:"10px 14px",background:C.white,borderTop:`1px solid ${C.line}`,display:"flex",gap:8,flexShrink:0,position:"sticky",bottom:0,zIndex:12}}>
         <Btn v="ghost" onClick={()=>setStep("menu")} full s={{padding:"10px"}}>← เพิ่มเมนู</Btn>
-        <Btn v="success" onClick={()=>{if(payWaiting){setPayWaitMsg(true);return;}placeOrder();}} loading={sending} disabled={payWaiting} full s={{padding:"10px"}} icon={I.check}>{payWaiting?"รอชำระเงินอยู่":"ยืนยันสั่งอาหาร"}</Btn>
+        <Btn v="success" onClick={()=>{if(payWaiting){setPayWaitMsg(true);return;}if(timeUp){setTimeUpMsg(true);return;}placeOrder();}} loading={sending} disabled={payWaiting||timeUp} full s={{padding:"10px"}} icon={I.check}>{payWaiting?"รอชำระเงินอยู่":timeUp?"หมดเวลาสั่งแล้ว":"ยืนยันสั่งอาหาร"}</Btn>
       </div>
     </>}
     {/* รอชำระเงิน — ต้องเป็นป็อปอัพ ไม่ใช่แถบเล็กๆ ลูกค้าจะได้ไม่กดสั่งซ้ำแล้วงงว่าทำไมไม่เข้า */}
@@ -22799,6 +22858,14 @@ function CustomerPage({branchId,tableId,token}){
         <div style={{fontSize:14.5,color:C.ink,fontWeight:800,lineHeight:1.7,marginBottom:6}}>{(rejectMsg.names||[]).join(", ")}</div>
         <div style={{fontSize:13,color:C.ink3,lineHeight:1.7,marginBottom:18}}>เอาออกจากรายการให้แล้ว<br/>รายการอื่นยังอยู่ในตะกร้า กดสั่งต่อได้เลย · สงสัยกรุณาแจ้งพนักงาน</div>
         <Btn onClick={()=>setRejectMsg(null)} full s={{padding:"12px",fontSize:15,fontWeight:900}}>รับทราบ</Btn>
+      </div>
+    </div>}
+    {timeUpMsg&&<div role="dialog" aria-modal="true" onClick={()=>setTimeUpMsg(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,padding:"24px 20px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
+        <div style={{fontSize:44,marginBottom:6}}>⏱</div>
+        <div style={{fontSize:18,fontWeight:900,color:C.ink,marginBottom:6}}>หมดเวลาสั่งอาหารแล้ว</div>
+        <div style={{fontSize:14.5,color:C.ink3,lineHeight:1.7,marginBottom:18}}>แพ็คเกจนี้สั่งได้ {ordWin?pkgDurText(ordWin.minutes):"ตามเวลาของแพ็คเกจ"} นับจากเปิดโต๊ะ<br/>นั่งต่อได้ตามสบายจนร้านปิด · ต้องการสั่งเพิ่ม กรุณาเรียกพนักงาน</div>
+        <Btn onClick={()=>setTimeUpMsg(false)} full s={{padding:"12px",fontSize:15,fontWeight:900}}>เข้าใจแล้ว</Btn>
       </div>
     </div>}
     {payWaitMsg&&payWaiting&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>

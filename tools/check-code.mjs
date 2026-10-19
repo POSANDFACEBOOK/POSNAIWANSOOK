@@ -316,7 +316,7 @@ const PKG_SRC = (() => {
   const L = APP.split("\n");
   const one = (p) => { const l = L.find((x) => x.startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; };
   // คลังอ่านผ่านตัวกรองของคลัง (normalizeBuffetPackages) ตัวเดียว — แนบไปด้วย
-  return [grabConst(APP, "bpPrice"), one("const bpMinutes="), grab(APP, "normalizeBuffetPackages"),
+  return [grabConst(APP, "bpPrice"), one("const bpMinutes="), one("const PKG_ORDER_MIN_DEFAULT="), one("const pkgOrderMinutesOf="), one("const PKG_ORDER_GRACE_MS="), grab(APP, "pkgOrderWindowOf"), grab(APP, "normalizeBuffetPackages"),
     one("const PKG_CAT="), one("const isPkgLine="), one("const pkgLibOf="), one("const activePkgsOf="),
     one("const pkgCountsOf="), one("const guestCountOf="), one("const pkgPricedLines="), one("const pkgOfBill="), one("const pkgDefLinesOf="), one("const pkgCountsText="), one("const isPkgOnlyBill="),
     grab(APP, "pkgLinesOf"), grab(APP, "pkgMenuScopeOf"), grab(APP, "receiptRowsOf"), grab(APP, "pkgGuestRowsOf")].join("\n");
@@ -1865,7 +1865,7 @@ ok_("ด่านชุดรอชำระเงินรันจนจบ", 
   // ── หน้าลูกค้า ──
   ok_("หน้าลูกค้าขึ้นป็อปอัพว่ากำลังรอชำระเงิน", APP.includes("{payWaitMsg&&payWaiting&&<div style={{position:\"fixed\"") && APP.includes("ตอนนี้สั่งอาหารเพิ่มไม่ได้"));
   ok_("หน้าลูกค้ามีแถบค้างบนหัวจอด้วย ไม่ใช่เห็นแค่ตอนเด้ง", APP.includes("🔒 กำลังรอการชำระเงิน"));
-  ok_("ปุ่มยืนยันสั่งอาหารกดไม่ได้ตอนรอชำระ", APP.includes('disabled={payWaiting} full s={{padding:"10px"}}'));
+  ok_("ปุ่มยืนยันสั่งอาหารกดไม่ได้ตอนรอชำระ (และตอนโต๊ะบุฟเฟต์หมดเวลาสั่ง)", APP.includes('disabled={payWaiting||timeUp} full s={{padding:"10px"}}'));
   ok_("กดการ์ดเมนูตอนรอชำระ = เด้งบอก ไม่ใช่เงียบ", APP.includes("if(payWaiting){setPayWaitMsg(true);return;}   // รอชำระเงินอยู่ ห้ามสั่งเพิ่ม"));
 }
 
@@ -8784,7 +8784,7 @@ section("แพ็คเกจบุฟเฟต์: ราคาเมนูใ
       blk("const bpNameKey=", "// ฟอร์มแพ็คเกจ → บรรทัดราคา"),
       blk("function buffetAuditText(", "// เมนูที่เลือกใส่แพ็คเกจได้"),
       line("const isPkgLine="), line("const pkgOfBill="),
-      blk("function pkgMenuScopeOf(", "// ใบเสร็จบิลแพ็คเกจ"),
+      blk("function pkgMenuScopeOf(", "// ── เวลาสั่งอาหารของโต๊ะบุฟเฟต์"),
       fnOf("function bpPriceDiff("),
       "return {normalizeBuffetPackages,buffetPkgOp,buffetAuditText,pkgMenuScopeOf,pkgPriced,bpPriceDiff};",
     ].join("\n"))();
@@ -9058,6 +9058,73 @@ section("แถบใบครัวไม่ออก: โต๊ะ · เว�
     ck("รับทราบ: จำต่อสาขา · ไม่ซ้ำ · เก็บล่าสุด 60 · แจ้งแถบให้หายทันที · ที่เก็บถูกบล็อก = ไม่ล้ม",
       [F.orphAcked(5).has("k69"), F.orphAcked(5).has("u:L1"), F.orphAcked(5).size, F.orphAcked(8).size, evs.length >= 72, ok, broken.orphAcked(5).size], [true, false, 60, 0, true, true, 0]);
   } catch (e) { ok_("ดึงที่จำรับทราบมารันได้: " + e.message, false); }
+}
+
+// ── โต๊ะบุฟเฟต์: เวลาสั่งอาหาร (นับถอยหลังบนหน้าลูกค้า · ครบเวลาลูกค้าสั่งเองไม่ได้ นั่งต่อได้) — เจ้าของสั่ง 19 ต.ค. 69 ──
+section("โต๊ะบุฟเฟต์: นับถอยหลังเวลาสั่ง · ครบเวลาลูกค้าสั่งเองไม่ได้");
+{
+  const L = APP.split("\n");
+  const line = (p) => { const l = L.find((x) => x.startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; };
+  const fnOf = (sig) => { const st = APP.indexOf(sig); if (st < 0) throw new Error("ไม่เจอ " + sig); let d = 0; for (let i = APP.indexOf("{", st + sig.length - 1); i < APP.length; i++) { if (APP[i] === "{") d++; else if (APP[i] === "}") { d--; if (d === 0) return APP.slice(st, i + 1); } } throw new Error("อ่านไม่จบ " + sig); };
+  const safe = async (f) => { try { return await f(); } catch (e) { return "โยน: " + (e && e.message); } };
+  let W = null;
+  try { W = new Function(line("const round2 = ") + "\n" + PKG_SRC + "\nreturn {pkgOrderWindowOf,pkgLinesOf};")(); } catch (e) { console.log("       ดึง pkgOrderWindowOf ไม่ได้: " + e.message); }
+  ok_("ดึงตัวคิดเวลาสั่งอาหารตัวจริงมารันได้", !!W);
+  if (W) {
+    const LN = [{ key: "adult", label: "ผู้ใหญ่", price: 199, guest: true }];
+    const at = "2026-10-19T09:09:00.000Z", T0 = Date.parse(at);
+    const bill = (pkg, extra) => ({ created_at: at, items: W.pkgLinesOf(pkg, { adult: 2 }, at), ...(extra || {}) });
+    const pk = (x) => ({ id: "pk1", name: "Buffet", lines: LN, ...x });
+    const b120 = bill(pk({})), b90 = bill(pk({ order_minutes: 90 })), b0 = bill(pk({ order_minutes: 0 }));
+    ck("เปิดโต๊ะจดเวลาสั่งลงบิล (ไม่ได้ตั้ง = 120 · ตั้ง 90 = 90 · 0 = ไม่จำกัด)", [b120.items[0].pkg.mins, b90.items[0].pkg.mins, b0.items[0].pkg.mins], [120, 90, 0]);
+    const w = W.pkgOrderWindowOf(b120, []);
+    ck("ช่วงเวลาสั่ง = เวลาเปิดโต๊ะ (บิลสร้าง) ถึง + 2 ชม. · ไม่จำกัดเวลา / ไม่ใช่บิลแพ็คเกจ = ไม่มี",
+      [w && w.start === T0, w && w.end - T0, w && w.minutes, W.pkgOrderWindowOf(b0, []), W.pkgOrderWindowOf({ created_at: at, items: [{ menu_id: 1, name: "x", qty: 1 }] }, [])], [true, 7200000, 120, null, null]);
+    ck("ผู้จัดการแก้เวลาในคลังทีหลัง = โต๊ะที่เปิดอยู่ใช้ค่าที่จดตอนเปิด · บิลรุ่นเก่าไม่มีจด = ใช้คลัง → 120",
+      [W.pkgOrderWindowOf(b90, [pk({ order_minutes: 30 })]).minutes, (() => { const b = bill(pk({})); b.items.forEach((i) => delete i.pkg.mins); return [W.pkgOrderWindowOf(b, [pk({ order_minutes: 45 })]).minutes, W.pkgOrderWindowOf(b, []).minutes]; })()],
+      [90, [45, 120]]);
+    const nb = bill(pk({})); delete nb.created_at;
+    ck("ไม่รู้เวลาบิลสร้าง = ใช้เวลาที่ส่งบรรทัดแพ็คเกจ (เวลาเปิดโต๊ะ)", W.pkgOrderWindowOf(nb, []).start, T0);
+  }
+  // ตัวส่งเข้าบิล: ลูกค้าหลังหมดเวลา (+2 นาที) = ปฏิเสธ · พนักงานยังสั่งได้
+  const apiExpr = (name) => { const head = `\n  ${name}: `; const st = APP.indexOf(head); if (st < 0) throw new Error("ไม่พบ api." + name); const s0 = st + head.length; let d = 0; for (let i = APP.indexOf("{", APP.indexOf("=>", s0)); i < APP.length; i++) { if (APP[i] === "{") d++; else if (APP[i] === "}") { d--; if (d === 0) return APP.slice(s0, i + 1); } } throw new Error("อ่านไม่จบ"); };
+  const runAppend = async (who, minsAgo) => {
+    const opened = new Date(Date.now() - minsAgo * 60000).toISOString();
+    let patched = false;
+    const lib = [{ id: "pk1", name: "B", active: true, lines: [{ key: "adult", label: "ผู้ใหญ่", price: 299, guest: true }], menu_ids: [301] }];
+    const bill = { id: 1, table_id: 9, status: "pending", updated_at: "u1", created_at: opened, items: [{ line_uid: "pkg:pk1:adult", kind: "pkg", pkg: { id: "pk1", name: "B", key: "adult", label: "ผู้ใหญ่", guest: true, mins: 120 }, menu_id: null, name: "B · ผู้ใหญ่", price: 299, qty: 2, sent_at: opened }] };
+    const sb = async (path, opt) => {
+      const method = (opt && opt.method) || "GET";
+      if (/^menus\?/.test(path)) return [];
+      if (/^pos_settings/.test(path)) return [{ buffet_packages: lib }];
+      if (/^orders\?table_id/.test(path)) return [JSON.parse(JSON.stringify(bill))];
+      if (/^orders\?id=eq\.1/.test(path) && method === "PATCH") { patched = true; return [{ ...bill, ...JSON.parse(opt.body) }]; }
+      return [];
+    };
+    const f = new Function("sb", [line("const round2 = "), line("const stripNewFlags="), line("const BIZ_DAY_CUT_H="), line("const bizDayBkk="), line("const soldOutMark="),
+      line("const menuAvailAt="), line("const menuSoldOutAt="), line("const menuHiddenAt="), PKG_SRC, line("const bpMissingCol="), "async " + fnOf("function buffetPkgRead(bid){"), "return (" + apiExpr("posAppendItems") + ");"].join("\n"))(sb);
+    try { await f({ branch_id: 5, table_id: 9, table_number: "A1", newItems: [{ line_uid: "c1", menu_id: 301, name: "หมู", price: 0, qty: 1, options: [], note: "" }], ordered_by: who, ...(who === "customer" ? { blockIfAwaiting: true } : {}) }); return patched ? "รับ" : "ไม่เขียน"; }
+    catch (e) { return e && e.orderTimeUp ? "หมดเวลา" : "error:" + (e && e.message); }
+  };
+  ck("ตัวส่งเข้าบิล: ลูกค้าสั่งช่วงเวลา (1:59) ได้ · เผื่อ 2 นาที (2:01) ได้ · เกิน (2:03) = ปฏิเสธ 'หมดเวลา' · พนักงานสั่งให้หลังหมดเวลาได้",
+    [await safe(() => runAppend("customer", 119)), await safe(() => runAppend("customer", 121)), await safe(() => runAppend("customer", 123)), await safe(() => runAppend("staff", 180))],
+    ["รับ", "รับ", "หมดเวลา", "รับ"]);
+  // หน้าลูกค้า: hook เหนือ return แรก · กันทุกทางที่ใส่ตะกร้า/ส่ง · ตัวส่งปฏิเสธ = คืนของเข้าตะกร้า ไม่วนส่ง
+  const CP = (() => { const st = APP.indexOf("function CustomerPage("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
+  ok_("หน้าลูกค้า: คิดหมดเวลาด้วย hook เหนือ return แรก (ตั้งเวลาครั้งเดียว ไม่เช็คทุกวินาที)",
+    CP.indexOf("const ordWin=useMemo(()=>pkgOrderWindowOf(myOrder,pkgLibOf(posCfg)),[myOrder,posCfg]);") > 0 && CP.indexOf("const ordWin=useMemo(") < CP.indexOf("if(gateLoading)return") &&
+    CP.includes("const t=setTimeout(()=>setTimeUpNow(true),Math.min(left,2147483000));") && !/setInterval\([^)]*setTimeUpNow/.test(CP));
+  ok_("หน้าลูกค้า: หมดเวลา = กดเมนู/ปุ่ม +/ยืนยันสั่ง ไม่ได้ (บอกเหตุผล) · ปุ่มสั่งเพิ่มหาย · มีแถบบอกว่านั่งต่อได้ · เรียกพนักงานยังใช้ได้",
+    CP.includes("if(timeUp){setTimeUpMsg(true);return;}         // โต๊ะบุฟเฟต์หมดเวลาสั่ง") &&
+    CP.includes("if(payWaiting){setPayWaitMsg(true);return;}if(timeUp){setTimeUpMsg(true);return;}addToCart(m);") &&
+    CP.includes("if(payWaiting){setPayWaitMsg(true);return;}if(timeUp){setTimeUpMsg(true);return;}placeOrder();") &&
+    CP.includes("!payWaiting&&!timeUp&&<Btn onClick={()=>setStep(\"menu\")}") && CP.includes("นั่งต่อได้ตามสบายจนร้านปิด") && !/timeUp[^\n]{0,80}setCallAsk/.test(CP));
+  ok_("หน้าลูกค้า: ตัวส่งตอบหมดเวลา (ทั้งกดสั่งและคิวส่งลองใหม่) = คืนของเข้าตะกร้า ล้างคิว ไม่วนส่งซ้ำ บอกลูกค้า",
+    CP.includes("if(e&&e.orderTimeUp){writeOutbox(null);setOutbox(null);setCart(p=>[...sending,...p]);setTimeUpNow(true);setTimeUpMsg(true);") &&
+    CP.includes("else if(e&&e.orderTimeUp){const back=(o&&Array.isArray(o.lines))?o.lines:[];writeOutbox(null);setOutbox(null);if(back.length)setCart(p=>[...back,...p]);setTimeUpNow(true);setTimeUpMsg(true);"));
+  ok_("นับถอยหลังเป็นคอมโพเนนต์แยก (วาดใหม่ทุกวินาทีเฉพาะตัวเอง) · หน้าลูกค้าโชว์ในแถบแพ็คเกจ · จอพนักงานโชว์ในแถบแพ็คเกจของโต๊ะ",
+    APP.includes("const OrderCountdown=memo(function OrderCountdown({end,staff}){") && APP.includes("useEffect(()=>{const t=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(t);},[]);") &&
+    CP.includes("{ordWin&&!timeUp&&<OrderCountdown end={ordWin.end}/>}") && APP.includes("{pkgWin&&<span style={{marginLeft:8}}><OrderCountdown end={pkgWin.end} staff/></span>}"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
