@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 49;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 50;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 2000;
@@ -107,6 +107,10 @@ async function getPrintersCached() {
 }
 const addPrinter = (d) => fetch(`${SUPA_URL}/rest/v1/printers`, { method: "POST", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
 const patchPrinter = (id, d) => fetch(`${SUPA_URL}/rest/v1/printers?id=eq.${id}`, { method: "PATCH", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
+// เขียนแบบมีเงื่อนไข: description ในฐานต้องยังเท่ากับที่อ่านมา (raw) — มีใครเขียนแทรกระหว่างอ่านกับเขียน = ไม่เขียน (ได้ [] กลับ)
+// ใช้กับสัญญาณชีพ: เดิมอ่าน-แก้-เขียนทับทั้งก้อนทุก 45 วิ ถ้าแอปเขียนคำสั่งใบเสร็จ/ลิ้นชักแทรกพอดี คำสั่งหายเงียบ (ตรวจทาน 19 ต.ค. 69)
+const patchPrinterIf = (id, raw, d) => fetch(`${SUPA_URL}/rest/v1/printers?id=eq.${id}&${raw == null ? "description=is.null" : "description=eq." + encodeURIComponent(raw)}&select=id`,
+  { method: "PATCH", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify(d) });
 
 // ── ค้นหาเครื่องพิมพ์อัตโนมัติในวงเครือข่าย (เหมือนสแกน WiFi) ──────────────
 function localSubnet() {
@@ -399,15 +403,22 @@ function printerHandles(p, it, list) {
 //    = ทับคำสั่งใบเสร็จ/ลิ้นชัก ค่าติ๊กเครื่องใบเสร็จ หรือรายการพิมพ์ไม่ออกที่เพิ่งเขียนเข้ามา หายเงียบ
 // อ่านไม่ได้ = ไม่เขียน (แบบ pushFail) · ชุดชื่อเดิม = ไม่เขียน (ไม่เพิ่มภาระฐานข้อมูลทุกบิล)
 // ยกเว้นเวลาที่จดไว้เก่าเกิน 10 นาที → จดเวลาใหม่ (แถบในแอปดูแค่ 20 นาทีล่าสุด — ไม่จดซ้ำ = แดงแค่ครั้งแรกแล้วเงียบ ทั้งที่ใบยังไม่ออก)
-let _orphanLast = "";   // เครื่อง|ชุดชื่อ ที่จดไว้ล่าสุด — ชุดเดิมไม่ต้องอ่านซ้ำด้วย
-let _orphanAt = 0;      // เวลาที่จดชุดนั้นไว้ในแถว
-const ORPHAN_REFRESH_MS = 10 * 60000;
-const orphanKey = (names) => names.map(String).sort().join("\u0001");
-async function noteOrphan(target, orphan) {
+// v50 (ตรวจทาน 19 ต.ค. 69): เดิมจดก้อนเดียวต่อแถว + ข้ามเมื่อ "ชุดชื่อเดิม" ใน 10 นาที ⟹ โต๊ะที่สองสั่งเมนูเดียวกัน (D4 ต่อจาก A3)
+//   ไม่เคยถูกจด · เมนูอื่นมาทับก้อนเดิม = แถวของโต๊ะแรกหายจากแถบทั้งที่ใบยังไม่ออก
+// ตอนนี้: จดเป็นรายการ (d.orphan = [..]) ครั้งละก้อน {at,names,n,uids,keys,table,bill} · เก็บ 20 นาทีล่าสุด สูงสุด 10 ก้อน
+//   ข้ามเฉพาะ "บรรทัด" ที่จดไปแล้วใน 10 นาที (line_uid · ไม่มี uid = บิล+ชื่อ) — บิลใหม่ที่สั่งเมนูเดิม = จดใหม่เสมอ
+//   แอปผูกก้อนกลับไปหาบรรทัดในบิลด้วย uids ตรงๆ (ไม่ต้องเดาจากเวลา)
+const ORPHAN_REFRESH_MS = 10 * 60000;   // บรรทัดเดิมจดซ้ำได้เมื่อเกิน 10 นาที (แถบในแอปดู 20 นาทีล่าสุด)
+const ORPHAN_KEEP_MS = 20 * 60000;      // ก้อนที่เก่ากว่านี้ทิ้งตอนเขียนครั้งถัดไป
+const ORPHAN_MAX = 10;                  // ก้อนในแถวไม่เกินนี้ (แถวไม่บวม)
+const _orphanSeen = new Map();          // คีย์บรรทัด → เวลาที่จดแล้ว (ในหน่วยความจำ ไม่ต้องอ่านฐานทุกรอบ)
+const _orphanKeyOf = (it, info) => (it && it.line_uid) ? "u:" + it.line_uid : "n:" + (info && info.bill != null ? info.bill : "-") + "|" + String((it && it.name) || "");
+async function noteOrphan(target, orphan, info) {
   if (!target || !orphan || !orphan.length) return false;
-  const names = [...new Set(orphan.map(i => i.name))].slice(0, 12);
-  const key = target.id + "|" + orphanKey(names);
-  if (key === _orphanLast && Date.now() - _orphanAt < ORPHAN_REFRESH_MS) return false;
+  const now = Date.now();
+  for (const [k, t] of _orphanSeen) if (now - t >= ORPHAN_REFRESH_MS) _orphanSeen.delete(k);
+  const fresh = orphan.filter(it => !_orphanSeen.has(_orphanKeyOf(it, info)));
+  if (!fresh.length) return false;   // ทุกบรรทัดจดไปแล้ว = ไม่อ่าน ไม่เขียน (ไม่เพิ่มภาระฐานข้อมูลทุกรอบ)
   let d;
   try {
     const r = await sb(`printers?id=eq.${target.id}&select=description`);
@@ -415,12 +426,19 @@ async function noteOrphan(target, orphan) {
     d = JSON.parse(r[0].description || "{}");
     if (!d || typeof d !== "object" || Array.isArray(d)) return false;
   } catch { return false; }
-  if (d.orphan && Array.isArray(d.orphan.names) && orphanKey(d.orphan.names) === orphanKey(names) && Date.now() - (+d.orphan.at || 0) < ORPHAN_REFRESH_MS) { _orphanLast = key; _orphanAt = +d.orphan.at; return false; }
-  const at = Date.now();
-  d.orphan = { at, names, n: orphan.length };
+  const list = (Array.isArray(d.orphan) ? d.orphan : (d.orphan ? [d.orphan] : [])).filter(o => o && typeof o === "object" && now - (+o.at || 0) < ORPHAN_KEEP_MS);
+  // ที่จดในแถวแล้ว (10 นาทีล่าสุด): ก้อนรุ่นนี้ใช้ keys · ก้อนรุ่นเก่า (มีแต่ชื่อ) นับเป็นคีย์ชื่อแบบไม่มีบิล
+  const noted = new Set();
+  for (const o of list) if (now - (+o.at || 0) < ORPHAN_REFRESH_MS) for (const k of (Array.isArray(o.keys) ? o.keys : (Array.isArray(o.names) ? o.names.map(n => "n:-|" + n) : []))) noted.add(k);
+  const add = fresh.filter(it => !noted.has(_orphanKeyOf(it, info)));
+  if (!add.length) { for (const it of fresh) _orphanSeen.set(_orphanKeyOf(it, info), now); return false; }
+  list.push({ at: now, names: [...new Set(add.map(i => i.name))].slice(0, 12), n: add.length,
+    uids: add.map(i => i && i.line_uid).filter(Boolean).slice(0, 40), keys: add.map(i => _orphanKeyOf(i, info)).slice(0, 40),
+    table: info && info.table != null ? String(info.table) : "", bill: info && info.bill != null ? info.bill : null });
+  d.orphan = list.slice(-ORPHAN_MAX);
   const res = await patchPrinter(target.id, { description: JSON.stringify(d) });
-  if (res && res.ok === false) return false;   // เขียนไม่ผ่าน — รอบหน้าลองใหม่
-  _orphanLast = key; _orphanAt = at;
+  if (res && res.ok === false) return false;   // เขียนไม่ผ่าน — รอบหน้าลองใหม่ (ไม่จำว่าจดแล้ว)
+  for (const it of add) _orphanSeen.set(_orphanKeyOf(it, info), now);
   return true;
 }
 // alreadyDone = { [printerId]: 1 } เครื่องที่พิมพ์ "ใบชุดนี้" สำเร็จไปแล้วในรอบก่อน
@@ -466,7 +484,7 @@ async function printItems(items, tableNum, printers, alreadyDone, meta) {
     console.log("  ⚠️  ไม่มีเครื่องพิมพ์สำหรับ (ยังไม่ได้กำหนดหมวด):", orphan.map(i => i.name).join(", "));
     // เขียนกลับให้แอปเห็น — ไม่งั้นรู้อยู่คนเดียวบนจอ Termux ครัวไม่ได้ใบแล้วไม่มีใครรู้
     // เป้าหมายคงที่ (เครื่องแรกที่มี IP) — เดิมใช้ usable[0] ซึ่งเปลี่ยนไปตามเครื่องที่พิมพ์ผ่านแล้ว
-    try { await noteOrphan(all[0] || (printers || [])[0], orphan); } catch {}
+    try { await noteOrphan(all[0] || (printers || [])[0], orphan, { bill: meta && meta.bill != null ? meta.bill : null, table: tableNum }); } catch {}
   }
   // สำเร็จ = ไม่มีเครื่องไหน "ส่งไม่ผ่าน"
   //
@@ -1154,6 +1172,8 @@ async function pingPrinters(force) {
 // getting nothing, and staff see a "เปิดโปรแกรมตัวพิมพ์ที่ PC" banner. No new table needed — this
 // piggybacks on printers.description, read-latest-before-write so it can't clobber app commands.
 let hbBusy = false;
+const HB_CAS_MAX = 6000;   // เงื่อนไข description=eq.<ทั้งก้อน> ใน URL — ยาวเกินนี้ไม่ใช้ (ทดสอบกับฐานจริง: ~20 KB ผ่าน)
+let hbSkips = 0;          // ข้ามรอบติดกันเพราะแถวยาว
 async function heartbeat() {
   if (hbBusy) return; hbBusy = true;
   try {
@@ -1161,13 +1181,21 @@ async function heartbeat() {
     if (!ps.length) return;                       // no printer configured → nowhere to beat (and nothing to print)
     const target = ps.slice().sort((a, b) => +a.id - +b.id)[0];
     const online = ps.filter(p => !isBluetooth(p) && p.ip).length;
-    // read the freshest description right before writing so we merge, not clobber, live commands
-    let d = {}; try { const r = await sb(`printers?id=eq.${target.id}&select=description`); if (r && r[0]) { try { d = JSON.parse(r[0].description || "{}"); } catch {} } }
-    catch { try { d = JSON.parse(target.description || "{}"); } catch {} }
+    // อ่านของสดก่อนเขียนเสมอ — อ่านไม่ได้ = ข้ามรอบนี้ (เดิมถอยไปใช้แคช 6 วิ = เขียนทับคำสั่งที่เพิ่งเข้ามา)
+    let raw = null;
+    try { const r = await sb(`printers?id=eq.${target.id}&select=description`); if (!r || !r[0]) return; raw = r[0].description; } catch { return; }
+    let d = {}; try { d = JSON.parse(raw || "{}"); } catch { return; }
+    if (!d || typeof d !== "object" || Array.isArray(d)) return;
+    // แถวยาว (มีรูปใบเสร็จ/QR ค้างให้รอบเร็วหยิบ) = ข้ามรอบนี้ — เงื่อนไขทั้งก้อนยาวเกิน URL และรูปจะถูกหยิบภายในไม่กี่วิ
+    // ข้ามติดกันเกิน 2 รอบ (แถวยาวค้าง) = เขียนแบบเดิม ไม่งั้นแอปขึ้น "ตัวพิมพ์ไม่ตอบ" หลอก (เกณฑ์ 120 วิ)
+    const long = !!raw && raw.length > HB_CAS_MAX;
+    if (long && hbSkips < 2) { hbSkips++; return; }
     // อีกเครื่องเพิ่งเต้นลงแถวเดียวกันด้วยรหัสอื่น = มีตัวพิมพ์สองเครื่องรันสาขานี้ (บิลอาจพิมพ์ซ้ำ) — บอกบนจอ Termux ด้วย
     if (d.agentDev && d.agentDev !== AGENT_DEV && Date.now() - (+d.agentSeen || 0) < 120 * 1000) console.log(`⚠️  พบตัวพิมพ์อีกเครื่อง (รหัส ${d.agentDev}) รันสาขา ${BRANCH} อยู่ด้วย — ปิดให้เหลือเครื่องเดียว กันใบพิมพ์ซ้ำ`);
     d.agentSeen = Date.now(); d.agentVer = AGENT_VERSION; d.agentPrinters = online; d.agentDev = AGENT_DEV;
-    try { await patchPrinter(target.id, { description: JSON.stringify(d) }); } catch {}
+    hbSkips = 0;
+    // มีคนเขียนแทรก (คำสั่งใหม่จากแอป) = ไม่เขียน รอบหน้า (45 วิ) อ่านใหม่แล้วค่อยเต้น — คำสั่งของแอปไม่หาย
+    try { if (long) await patchPrinter(target.id, { description: JSON.stringify(d) }); else await patchPrinterIf(target.id, raw, { description: JSON.stringify(d) }); } catch {}
   } catch {} finally { hbBusy = false; }
 }
 

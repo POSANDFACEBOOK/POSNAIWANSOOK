@@ -580,9 +580,10 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
   ok_("#2 ทุกจุดส่งลิสต์ printers (เครื่องเปิดใช้ทั้งหมดของสาขา) ไม่ใช่ลิสต์ที่กรองเครื่องแลนแล้ว", wrongList.length === 0);
 }
 
-// ── #12 จด orphan: อ่านของล่าสุดก่อนเขียน · อ่านไม่ได้ไม่เขียน · ชุดเดิมไม่เขียน ──
+// ── #12 จด orphan: อ่านของล่าสุดก่อนเขียน · อ่านไม่ได้ไม่เขียน · บรรทัดเดิมไม่เขียน (v50: เป็นรายการก้อน ผูกบรรทัด/โต๊ะ/บิล) ──
 {
-  const block = grabTopBlock("let _orphanLast", "async function noteOrphan(");
+  const block = grabTopBlock("const ORPHAN_REFRESH_MS", "async function noteOrphan(");
+  const lastOf = (d) => { const o = d && d.orphan; return Array.isArray(o) ? o[o.length - 1] : o; };
   const mk = (sbImpl, patchRes) => {
     const io = { reads: 0, writes: [] };
     const fn = new Function("sb", "patchPrinter", block + "\nreturn noteOrphan;")(
@@ -601,23 +602,41 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
   await D.fn(stale, [{ name: "น้ำเปล่า" }, { name: "โค้ก" }, { name: "น้ำเปล่า" }]);
   const w = D.io.writes[0] && D.io.writes[0].d;
   ok_("#12 เขียนทับจากของล่าสุด: คำสั่งใบเสร็จ/ลิ้นชัก/ติ๊กใบเสร็จ/รายการไม่ออก อยู่ครบ",
-    D.io.writes.length === 1 && !!w && w.rcpt === 1 && w.dw === 1 && w.failed.length === 1 && w.pj.at === 5 && w.orphan.names.join() === "น้ำเปล่า,โค้ก" && w.orphan.n === 3);
+    D.io.writes.length === 1 && !!w && w.rcpt === 1 && w.dw === 1 && w.failed.length === 1 && w.pj.at === 5 && lastOf(w).names.join() === "น้ำเปล่า,โค้ก" && lastOf(w).n === 3);
   await D.fn(stale, [{ name: "โค้ก" }, { name: "น้ำเปล่า" }]);
   ok_("#12 บิลถัดไปชุดเดิม (สลับลำดับ) → ไม่อ่าน ไม่เขียนซ้ำ", D.io.reads === 1 && D.io.writes.length === 1);
   await D.fn(stale, [{ name: "ยำ" }]);
-  ok_("#12 ชุดเปลี่ยน → อ่านใหม่แล้วเขียน", D.io.reads === 2 && D.io.writes.length === 2 && D.io.writes[1].d.orphan.names.join() === "ยำ");
+  ok_("#12 ชุดเปลี่ยน → อ่านใหม่แล้วเขียน", D.io.reads === 2 && D.io.writes.length === 2 && lastOf(D.io.writes[1].d).names.join() === "ยำ");
   const E = mk(async () => [{ description: JSON.stringify({ ...live, orphan: { at: Date.now() - 60000, names: ["โค้ก", "น้ำเปล่า"], n: 2 } }) }]);
   await E.fn(stale, [{ name: "น้ำเปล่า" }, { name: "โค้ก" }]);
   ok_("#12 เพิ่งรีสตาร์ท แต่ในแถวเป็นชุดเดียวกันอยู่แล้ว → ไม่เขียน", E.io.reads === 1 && E.io.writes.length === 0);
   // แถบในแอปดูแค่ 20 นาทีล่าสุด — ชุดเดิมที่จดไว้นานเกิน 10 นาทีต้องจดเวลาใหม่ ไม่งั้นแดงแค่ครั้งแรกแล้วเงียบทั้งที่ใบยังไม่ออก
   const G = mk(async () => [{ description: JSON.stringify({ ...live, orphan: { at: Date.now() - 11 * 60000, names: ["โค้ก", "น้ำเปล่า"], n: 2 } }) }]);
   await G.fn(stale, [{ name: "น้ำเปล่า" }, { name: "โค้ก" }]);
-  ok_("#12 ชุดเดิมแต่เวลาที่จดเก่าเกิน 10 นาที → จดเวลาใหม่ (แถบแดงในแอปไม่หายไปเอง)", G.io.writes.length === 1 && Date.now() - G.io.writes[0].d.orphan.at < 5000);
+  ok_("#12 ชุดเดิมแต่เวลาที่จดเก่าเกิน 10 นาที → จดเวลาใหม่ (แถบแดงในแอปไม่หายไปเอง)", G.io.writes.length === 1 && Date.now() - lastOf(G.io.writes[0].d).at < 5000);
+  // v50: เหตุจริง 19 ต.ค. 69 — A3 สั่ง "ในวันเบาๆ" แล้ว D4 สั่งเมนูเดียวกันอีก 4 นาที (ยังไม่มีเครื่องรับ) → รุ่นเก่าไม่จด D4 เลย
+  let rowH = JSON.stringify(live);
+  const H = mk(async () => [{ description: rowH }]);
+  const Hw = H.io.writes; const hPatch = H.fn;
+  await hPatch(stale, [{ name: "ในวันเบาๆ", line_uid: "L-A3" }], { bill: 608, table: "A3" }); rowH = JSON.stringify(Hw[Hw.length - 1].d);
+  await hPatch(stale, [{ name: "ในวันเบาๆ", line_uid: "L-D4" }], { bill: 607, table: "D4" }); rowH = JSON.stringify(Hw[Hw.length - 1].d);
+  await hPatch(stale, [{ name: "ในวันเบาๆ", line_uid: "L-D4" }], { bill: 607, table: "D4" });
+  const hl = Hw.length ? Hw[Hw.length - 1].d.orphan : null;
+  ok_("#12 v50 สองโต๊ะสั่งเมนูเดียวกันที่ไม่มีเครื่องรับ → จดทั้งสองก้อน (โต๊ะ/บิล/บรรทัด) · บรรทัดเดิมซ้ำไม่เขียน · ของเดิมอยู่ครบ",
+    Hw.length === 2 && Array.isArray(hl) && hl.length === 2 && hl[0].table === "A3" && hl[0].bill === 608 && hl[0].uids.join() === "L-A3" && hl[1].table === "D4" && hl[1].uids.join() === "L-D4" && Hw[1].d.rcpt === 1 && Hw[1].d.pj.at === 5);
+  const old = Date.now() - 25 * 60000;
+  const I = mk(async () => [{ description: JSON.stringify({ ...live, orphan: [...Array.from({ length: 12 }, (_, i) => ({ at: Date.now() - 60000, names: ["x" + i], keys: ["u:k" + i] })), { at: old, names: ["เก่า"], keys: ["u:old"] }] }) }]);
+  await I.fn(stale, [{ name: "ใหม่", line_uid: "u-new" }], { bill: 1, table: "B1" });
+  const il = I.io.writes[0] && I.io.writes[0].d.orphan;
+  ok_("#12 v50 แถวไม่บวม: ก้อนเก่ากว่า 20 นาทีทิ้ง · เก็บไม่เกิน 10 ก้อน (ก้อนใหม่อยู่ท้าย)", Array.isArray(il) && il.length === 10 && il[9].table === "B1" && !il.some((o) => o.names && o.names[0] === "เก่า"));
   const F = mk(async () => [{ description: JSON.stringify(live) }], { ok: false });
   await F.fn(stale, [{ name: "น้ำเปล่า" }]); await F.fn(stale, [{ name: "น้ำเปล่า" }]);
   ok_("#12 เขียนไม่ผ่าน → รอบหน้าลองจดใหม่ (ไม่จำว่าจดแล้ว)", F.io.reads === 2 && F.io.writes.length === 2);
   ok_("#12 printItems ไม่เขียนแถวเครื่องพิมพ์เองอีก (ผ่าน noteOrphan ที่เดียว)",
     !grabTopBlock("async function printItems(").includes("patchPrinter(") && grabTopBlock("async function printItems(").includes("await noteOrphan("));
+  // v50: ก้อนต้องบอกโต๊ะ/บิล — แถบในแอปบอก "โต๊ะไหน" ได้แม้บิลปิดไปแล้ว
+  ok_("#12 v50 printItems ส่งบิล+โต๊ะให้ตัวจด orphan",
+    grabTopBlock("async function printItems(").includes("await noteOrphan(all[0] || (printers || [])[0], orphan, { bill: meta && meta.bill != null ? meta.bill : null, table: tableNum });"));
 }
 
 // ── #13 รอบเร็ว 0.8 วิ ต้องถามเฉพาะแถวของสาขานี้ (กรองที่ฐานข้อมูล) ──

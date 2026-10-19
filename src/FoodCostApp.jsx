@@ -2708,11 +2708,21 @@ function orphanTicketsOf(printers,branchId,orders,now,winMs){
     for(const o of (Array.isArray(d.orphan)?d.orphan:(d.orphan?[d.orphan]:[]))){
       const t=o&&typeof o==="object"?(+o.at||0):0;
       if(!t||now-t>=winMs)continue;
+      // ตัวพิมพ์ v50+: ก้อนมี uids (บรรทัดที่ไม่ออกจริง) + โต๊ะ/บิล → ผูกตรงตัว ไม่ต้องเดาจากเวลา
+      if(Array.isArray(o.uids)&&o.uids.length){for(const u of o.uids)if(u)recs.push({at:t,uid:String(u),name:String((Array.isArray(o.names)&&o.names[0])||""),table:o.table,bill:o.bill});continue;}
       for(const n of (Array.isArray(o.names)?o.names:[]))if(n!=null&&String(n).trim())recs.push({at:t,name:String(n).trim()});
     }
   }
   const out=[],seen=new Set();
   for(const r of recs.sort((a,b)=>a.at-b.at)){
+    if(r.uid){
+      // หาบรรทัดตาม uid ในบิลที่เปิดอยู่ · ไม่เจอ (บิลปิดแล้ว) = รู้แค่ชื่อ/โต๊ะที่ตัวพิมพ์จดไว้
+      let hit=null;for(const o of (orders||[])){const it=((o&&o.items)||[]).find(x=>x&&String(x.line_uid)===r.uid);if(it){hit={order:o,line:it};break;}}
+      const key="u:"+r.uid;if(seen.has(key))continue;seen.add(key);
+      out.push({key,at:r.at,name:hit?String(hit.line.name||r.name):r.name,table:hit?String(hit.order.table_number??""):(r.table?String(r.table):null),orderId:hit?hit.order.id:(r.bill??null),line:hit?hit.line:null,
+        category:hit?String(hit.line.category||""):"",fixed:!!hit&&itemsWithoutPrinter([hit.line],printers,branchId).length===0});
+      continue;
+    }
     // ทุกบรรทัดชื่อนี้ที่ส่งครัวในช่วง (หลายโต๊ะสั่งเมนูเดียวกันที่ยังไม่มีเครื่องรับ = ไม่ออกทุกใบ) — เดิมเอาแค่ใบที่ใกล้สุด
     const hits=[];
     for(const o of (orders||[]))for(const it of ((o&&o.items)||[])){

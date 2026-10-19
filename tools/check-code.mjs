@@ -4848,7 +4848,7 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
 
   // ── #12 จด orphan: อ่านของล่าสุดก่อนเขียน · อ่านไม่ได้ไม่เขียน · ชุดเดิมไม่เขียน ──
   {
-    const o0 = AGENT.indexOf("let _orphanLast"), blk = o0 < 0 ? "" : AGENT.slice(o0, AGENT.indexOf("// alreadyDone = {", o0));
+    const o0 = AGENT.indexOf("const ORPHAN_REFRESH_MS"), blk = o0 < 0 ? "" : AGENT.slice(o0, AGENT.indexOf("// alreadyDone = {", o0));
     const mk = (sbImpl) => { const io = { reads: 0, writes: [] }; const fn = new Function("sb", "patchPrinter", blk + "\nreturn noteOrphan;")(async (q) => { io.reads++; return sbImpl(q); }, async (id, b) => { io.writes.push(JSON.parse(b.description)); }); return { fn, io }; };
     const stale = { id: 10, description: "{}" };
     const A = mk(async () => { throw new Error("504"); });
@@ -4858,7 +4858,7 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
     await B.fn(stale, [{ name: "น้ำเปล่า" }]); await B.fn(stale, [{ name: "น้ำเปล่า" }]);
     const w = B.io.writes[0] || {};
     ok_("#12 เขียนจากของล่าสุด (ค่าตั้งเครื่อง/คำสั่ง/รายการไม่ออกอยู่ครบ) และชุดเดิมไม่เขียนซ้ำ",
-      B.io.writes.length === 1 && B.io.reads === 1 && w.rcpt === 1 && w.dw === 1 && w.pj && w.failed && w.failed.length === 1 && w.orphan && w.orphan.names.join() === "น้ำเปล่า");
+      B.io.writes.length === 1 && B.io.reads === 1 && w.rcpt === 1 && w.dw === 1 && w.pj && w.failed && w.failed.length === 1 && Array.isArray(w.orphan) && w.orphan[w.orphan.length - 1].names.join() === "น้ำเปล่า");
   }
 
   // ── #13 รอบเร็ว 0.8 วิ ถามเฉพาะคำสั่งค้างของสาขานี้ (กรองที่ฐานข้อมูล) ──
@@ -4907,9 +4907,10 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
       AGENT.includes('const DEV_FILE = path.join(process.env.HOME || ".", ".foodcost-agent-id");') && AGENT.includes('const STATE_FILE = path.join(process.env.HOME || ".", ".foodcost-printed.json");'));
     const runHb = async (stored) => {
       const out = { patched: null, logs: [] };
-      const fn = new Function("getPrinters", "BRANCH", "isBluetooth", "sb", "patchPrinter", "AGENT_VERSION", "AGENT_DEV", "console", "let hbBusy = false;\nasync " + grab(AGENT, "heartbeat") + "\nreturn heartbeat;")(
+      const fn = new Function("getPrinters", "BRANCH", "isBluetooth", "sb", "patchPrinter", "patchPrinterIf", "AGENT_VERSION", "AGENT_DEV", "console", "let hbBusy = false;\nconst HB_CAS_MAX = 6000;\nlet hbSkips = 0;\nasync " + grab(AGENT, "heartbeat") + "\nreturn heartbeat;")(
         async () => [{ id: 11, branch_id: 8, ip: "x", active: true, description: "{}" }, { id: 10, branch_id: 8, ip: "y", active: true, description: "{}" }], "8", () => false,
-        async () => [{ description: JSON.stringify(stored) }], async (id, body) => { out.patched = { id, d: JSON.parse(body.description) }; }, 47, "a1b2c3d4e5f6", { log: (...x) => out.logs.push(x.join(" ")) });
+        async () => [{ description: JSON.stringify(stored) }], async (id, body) => { out.patched = { id, d: JSON.parse(body.description), cas: null }; },
+        async (id, raw, body) => { out.patched = { id, d: JSON.parse(body.description), cas: raw }; }, 47, "a1b2c3d4e5f6", { log: (...x) => out.logs.push(x.join(" ")) });
       await fn();
       return out;
     };
@@ -4921,6 +4922,20 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
     ok_("#16 อีกเครื่องเพิ่งเต้นด้วยรหัสอื่น → เตือนบนจอตัวพิมพ์ และยังเขียนรหัสตัวเอง · รหัสตัวเองไม่เตือน",
       h2.logs.some(l => l.includes("ffffeeee0000")) && h2.patched && h2.patched.d.agentDev === "a1b2c3d4e5f6" && h3.logs.length === 0);
     ok_("#16 ไม่มีการ prime ใหม่ตามอายุไฟล์ความจำ (เสี่ยงทิ้งใบจริง)", AGENT.includes("let primed = stateLoaded;") && !/primed\s*=\s*false/.test(AGENT));
+    // v50 (ตรวจทาน 19 ต.ค. 69): สัญญาณชีพเขียนแบบมีเงื่อนไข — แอปเขียนคำสั่งใบเสร็จแทรกระหว่างอ่าน/เขียน = ไม่ทับ
+    ok_("#16 v50 สัญญาณชีพเขียนแบบมีเงื่อนไข (description ต้องเท่าที่อ่านมา) ไม่ใช่เขียนทับทั้งก้อน",
+      !!h1.patched && h1.patched.cas === JSON.stringify({ rcpt: 1, failed: [{ id: "F" }], agentSeen: 1, agentVer: 46 }));
+    const runHb2 = async (sbImpl, times) => {
+      const writes = [];
+      const fn = new Function("getPrinters", "BRANCH", "isBluetooth", "sb", "patchPrinter", "patchPrinterIf", "AGENT_VERSION", "AGENT_DEV", "console", "let hbBusy = false;\nconst HB_CAS_MAX = 6000;\nlet hbSkips = 0;\nasync " + grab(AGENT, "heartbeat") + "\nreturn heartbeat;")(
+        async () => [{ id: 10, branch_id: 8, ip: "y", active: true, description: JSON.stringify({ stale: 1 }) }], "8", () => false, sbImpl,
+        async () => { writes.push("plain"); }, async () => { writes.push("cas"); }, 50, "a1b2c3d4e5f6", { log() {} });
+      for (let i = 0; i < (times || 1); i++) await fn();
+      return writes;
+    };
+    ck("#16 v50 อ่านแถวสดไม่ได้ = ข้ามรอบ (ไม่เขียนจากแคช) · แถวมีรูปใบค้าง (ยาว) = ข้าม 2 รอบแล้วเขียนแบบเดิม (ไม่ขึ้นตัวพิมพ์ไม่ตอบหลอก)",
+      [await runHb2(async () => { throw new Error("504"); }), await runHb2(async () => [{ description: JSON.stringify({ pj: { at: 1, b64: "Q".repeat(7000) } }) }], 3)],
+      [[], ["plain"]]);
   }
 
   // ── #27 เจอเวอร์ชันใหม่: ตั้งธงไว้ ออกหลังรอบพิมพ์จบ + บันทึกความจำแล้ว ──
@@ -5039,7 +5054,7 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
       await once();
       T += 25 * 60000;
       await once();
-      const oat = +((safe(() => JSON.parse(row.description).orphan) || {}).at || 0);
+      const oat = +((safe(() => { const o = JSON.parse(row.description).orphan; return Array.isArray(o) ? o[o.length - 1] : o; }) || {}).at || 0);
       ok_("เมนูเดิมไม่มีเครื่องรับซ้ำอีก 25 นาทีให้หลัง = ตัวพิมพ์จดเวลาใหม่ (แถบ 20 นาทียังขึ้นแดง)", oat > 0 && T - oat < 20 * 60000);
     }
   } else {
@@ -9235,6 +9250,12 @@ section("ตรวจคืนแรกสาขา 5: แก้บั๊กท�
       { id: 610, table_number: "B9", items: [{ line_uid: "L9", name: "ในวันเบาๆ", category: "หมูกระทะ", sent_at: iso(T - 60000) }] }];
     ck("แถบใบครัวไม่ออก: สองโต๊ะสั่งเมนูเดียวกันที่ยังไม่มีเครื่องรับ (ในช่วงเดียวกัน) = ขึ้นทั้งสองโต๊ะ (เดิมขึ้นแค่โต๊ะเดียว)",
       OT(PR, 5, ORD, T + 60000, 20 * 60000).map((o) => o.table).sort(), ["A3", "B9"]);
+    // ตัวพิมพ์ v50: ก้อนมี uids/โต๊ะ/บิล → ผูกบรรทัดตรงตัว (D4 สั่ง 4 นาทีหลังก็เจอ) · บิลปิดแล้ว = ใช้โต๊ะที่ตัวพิมพ์จด
+    const PR50 = [{ id: 13, branch_id: 5, ip: "1", active: true, categories: ["น้ำ"], description: JSON.stringify({ rcpt: 1, orphan: [
+      { at: T, names: ["ในวันเบาๆ"], uids: ["L1"], table: "A3", bill: 608 }, { at: T + 250000, names: ["ในวันเบาๆ"], uids: ["L4"], table: "D4", bill: 607 }, { at: T + 260000, names: ["ชาบูเล็ก"], uids: ["Lx"], table: "C2", bill: 700 }] }) }];
+    const ORD50 = [ORD[0], { id: 607, table_number: "D4", items: [{ line_uid: "L4", name: "ในวันเบาๆ", category: "หมูกระทะ", sent_at: iso(T + 246000) }] }];
+    ck("แถบใบครัวไม่ออก (ตัวพิมพ์ v50): ผูกบรรทัดด้วย uid ตรงตัว ทุกโต๊ะ · บิลที่ปิดไปแล้วยังบอกโต๊ะที่ตัวพิมพ์จด",
+      OT(PR50, 5, ORD50, T + 300000, 20 * 60000).map((o) => [o.table, o.key, !!o.line]), [["A3", "u:L1", true], ["D4", "u:L4", true], ["C2", "u:Lx", false]]);
   } catch (e) { ok_("ดึง orphanTicketsOf มารันได้: " + e.message, false); }
 }
 
