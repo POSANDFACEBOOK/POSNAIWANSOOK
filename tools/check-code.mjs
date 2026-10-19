@@ -979,7 +979,7 @@ const guards = [
   ["ปล่อยนิ้วแล้วล้าง transform ทิ้งทั้งหมด", APP.includes('d.chips.forEach(el=>{el.style.transform="";')],
   // แถบหมวดเรียงตามที่ลากแล้ว แต่ถ้าตัวเมนูใน "ทั้งหมด" ไม่เรียงตาม การลากก็ไม่ได้ผลตามที่ตั้งใจ
   ["เมนูใน ทั้งหมด จัดกลุ่มตามลำดับหมวด (ทั้งสองฝั่ง)",
-    APP.split(").sort(ms);").length - 1 === 2],
+    APP.split(").sort(ms);").length - 1 + APP.split(").sort(ms),pkgScope);").length - 1 === 2],   // จอขายห่อด้วย pkgPriced (ราคาในแพ็คเกจ)
   ["ทั้งสองฝั่งอ่านลำดับจากที่เก็บเดียวกัน",
     APP.includes("menuSorter(catOrderOf(posCfg),menuOrderOf(posCfg))")
     && APP.includes("menuSorter(catOrderOf(posSettings),menuOrderOf(posSettings))")],
@@ -7437,8 +7437,10 @@ section("แพ็คเกจบุฟเฟต์: คลังแพ็คเ
   // ── ⑧ จอแพ็คเกจ: สิทธิ์ (ดึงตัวจัดการปุ่มจริงมารันกับ api จำลอง) ──
   const compOf = (name) => { const s = APP.indexOf(`function ${name}(`); if (s < 0) return ""; const b = APP.indexOf("){", s) + 1; let d = 0; for (let j = b; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(s, j + 1); } } return ""; };
   const BP = compOf("POSBuffetPackages");
-  ok_("จอแพ็คเกจคิดสิทธิ์จาก posAccess(ผู้ใช้, โหมด PIN): ราคา = สิทธิ์ตั้งค่า · เลือกเมนู = ตั้งค่า/จัดการ POS",
-    BP.includes("const acc=posAccess(currentUser,saleOnly);") && BP.includes("const canMoney=acc.settings;") && BP.includes("const canMenus=acc.admin;"));
+  // เจ้าของสั่ง 19 ต.ค. 69: พนักงานขาย (PIN) แก้แพ็คเกจได้ครบเหมือนหลังบ้าน — เฉพาะจอนี้
+  ok_("จอแพ็คเกจคิดสิทธิ์จาก posAccess(ผู้ใช้, โหมด PIN): ราคา = สิทธิ์ตั้งค่า · เลือกเมนู = ตั้งค่า/จัดการ POS · พนักงานขาย PIN = ได้ครบ",
+    BP.includes("const acc=posAccess(currentUser,saleOnly);") && BP.includes("const canMoney=acc.settings||saleOnly;") && BP.includes("const canMenus=acc.admin||saleOnly;") &&
+    APP.includes("function posAccess(user,saleOnly){\n  const settings=!saleOnly&&hasPerm(user,\"settings\");"));
   let H = null;
   const mkUI = (o = {}) => {
     const out = { saves: [], notes: [], toasts: [], hist: [], form: "same", pick: "same" };
@@ -7448,11 +7450,12 @@ section("แพ็คเกจบุฟเฟต์: คลังแพ็คเ
       addActionHist: async (d) => { out.hist.push(d.action); return [d]; },
     };
     const names = ["api", "bid", "raw", "setPkgs", "setRaw", "notifyDlg", "buffetPkgOp", "buffetAuditText", "who", "currentBranch", "menus", "nowStr", "setBusy", "setNoCol", "BP_NO_COL", "friendlyError",
-      "canMoney", "canMenus", "LOCK_MONEY", "LOCK_MENUS", "form", "busy", "buffetFormToLines", "bpNewId", "posToast", "shiftOpen", "setForm", "bpFormOf", "confirmDlg", "pick", "pickable", "setPick", "console"];
+      "canMoney", "canMenus", "LOCK_MONEY", "LOCK_MENUS", "form", "busy", "buffetFormToLines", "bpNewId", "posToast", "shiftOpen", "setForm", "bpFormOf", "confirmDlg", "pick", "pickable", "setPick", "console", "bpPriceDiff"];
     const libB = LIB ? LIB(async () => []) : {};
     const vals = [fakeApi, 5, clone(LL), () => {}, () => {}, (m) => out.notes.push(String(m)), libB.buffetPkgOp, libB.buffetAuditText, "max", { id: 5, name: "กาญจนบุรี" }, [{ id: 1, name: "หมูหมัก" }, { id: 3, name: "น้ำแข็ง" }], () => "t9", () => {}, () => {}, "SQL", (e) => String(e),
       !!o.money, !!o.menus, "LOCKM", "LOCKN", o.form || null, false, libB.buffetFormToLines, libB.bpNewId, (m, t) => out.toasts.push([m, t || "ok"]), !!o.shift, (v) => { out.form = v; }, (p) => ({ id: p.id, fresh: true }), async () => true,
-      o.pick || null, [{ id: 1, name: "หมูหมัก" }, { id: 3, name: "น้ำแข็ง" }], (v) => { out.pick = v; }, { warn: () => {} }];
+      o.pick || null, [{ id: 1, name: "หมูหมัก" }, { id: 3, name: "น้ำแข็ง" }], (v) => { out.pick = v; }, { warn: () => {} },
+      new Function([APP.split(String.fromCharCode(10)).find((l) => l.startsWith("const BP_PRICE_RE=")), grab(APP, "bpPriceDiff"), "return bpPriceDiff;"].join(String.fromCharCode(10)))()];
     const f = new Function(...names, "async " + grab(BP, "persist") + "\nasync " + grab(BP, "saveForm") + "\nasync " + grab(BP, "del") + "\nasync " + grab(BP, "savePick") + "\nreturn {saveForm,del,savePick};")(...vals);
     return { ...f, out };
   };
@@ -7464,7 +7467,15 @@ section("แพ็คเกจบุฟเฟต์: คลังแพ็คเ
     u = mkUI({ money: false, menus: true }); await u.del({ id: "pk_a", name: "หมู 299" });
     ok_("ไม่มีสิทธิ์ตั้งค่า กดลบแพ็คเกจ = ไม่ลบ", u.out.saves.length === 0 && u.out.notes.includes("LOCKM"));
     u = mkUI({ money: false, menus: false, pick: { id: "pk_a", sel: { 1: true, 3: true }, opened: [1] } }); await u.savePick();
-    ok_("คนเข้าด้วย PIN (ดูอย่างเดียว) กดบันทึกเมนู = ไม่บันทึก", u.out.saves.length === 0 && u.out.notes.includes("LOCKN"));
+    ok_("ไม่มีสิทธิ์เลือกเมนู (ดูอย่างเดียว) กดบันทึกเมนู = ไม่บันทึก", u.out.saves.length === 0 && u.out.notes.includes("LOCKN"));
+    // ราคาในแพ็คเกจ = เรื่องเงิน: ต้องมีสิทธิ์ราคา (ตั้งค่า หรือพนักงานขาย PIN) · เลือกเมนูได้อย่างเดียวแก้ราคาไม่ได้
+    u = mkUI({ money: false, menus: true, pick: { id: "pk_a", sel: { 1: true }, opened: [1], prices: { 1: "99" }, openedPrices: {} } }); await u.savePick();
+    ok_("ราคาในแพ็คเกจ: เลือกเมนูได้แต่ไม่มีสิทธิ์ราคา = ไม่บันทึก แจ้งว่าต้องมีสิทธิ์", u.out.saves.length === 0 && u.out.notes.includes("LOCKM"));
+    u = mkUI({ money: true, menus: true, pick: { id: "pk_a", sel: { 1: true }, opened: [1], prices: { 1: "99" }, openedPrices: {} } }); await u.savePick();
+    ok_("ราคาในแพ็คเกจ: มีสิทธิ์ = บันทึกราคา + จดประวัติ (ราคาเมนู → ฿99)",
+      u.out.saves.length === 1 && same(u.out.saves[0].next[0].menu_prices, { 1: 99 }) && u.out.hist.length === 1 && u.out.hist[0].includes("หมูหมัก ราคาเมนู → ฿99") && u.out.pick === null);
+    u = mkUI({ money: true, menus: true, pick: { id: "pk_a", sel: { 1: true }, opened: [1], prices: { 1: "9.999" }, openedPrices: {} } }); await u.savePick();
+    ok_("ราคาในแพ็คเกจผิดรูปแบบ = ไม่บันทึก บอกชื่อเมนู", u.out.saves.length === 0 && u.out.notes.some((m) => m.includes("หมูหมัก")));
     u = mkUI({ money: false, menus: true, pick: { id: "pk_a", sel: { 1: true, 3: true }, opened: [1] } }); await u.savePick();
     ok_("ผู้จัดการ pos_admin เลือกเมนูในแพ็คเกจได้ + จดประวัติชื่อเมนู",
       u.out.saves.length === 1 && same(u.out.saves[0].next[0].menu_ids, [1, 3]) && u.out.hist.length === 1 && u.out.hist[0].includes("น้ำแข็ง") && u.out.pick === null);
@@ -7752,7 +7763,8 @@ section("แพ็คเกจบุฟเฟต์: เปิดโต๊ะแ
       [["212", "213"], false, ["212", "213"], false, true, ["212", "300"], true, null]);
     const CP = (() => { const st = APP.indexOf("function CustomerPage("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
     ok_("หน้าลูกค้า: โต๊ะแพ็คเกจแสดงเฉพาะเมนูแพ็คเกจ (กรองสาขา+ซ่อน) · เมนู ฿0 ขึ้น รวมในแพ็คเกจ · หัวบิลไม่ปนเป็นจาน",
-      CP.includes("const shownMenus=pkgScope?(pkgIdsKey?(pkgMenus||[]):[]):menus;") &&
+      CP.includes("const pricedPkgMenus=useMemo(()=>pkgPriced(pkgMenus||[],pkgScope),[pkgMenus,pkgScope]);") &&
+      CP.includes("const shownMenus=pkgScope?(pkgIdsKey?pricedPkgMenus:[]):menus;") &&
       CP.includes('const list=(rows||[]).filter(m=>menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden");') &&
       CP.includes("return shownMenus.filter(m=>{") && CP.includes(">รวมในแพ็คเกจ</span>") &&
       CP.includes("(myOrder.items||[]).filter(it=>!isPkgLine(it)).map(") && CP.includes("reduce((s,i)=>s+(isPkgLine(i)?0:i.qty),0)"));
@@ -8747,6 +8759,88 @@ section("หน้าลูกค้า: ข้อความแจ้งตอ
   const F = APP.slice(APP.indexOf("function POSSettingsFields("), APP.indexOf("\nfunction ", APP.indexOf("function POSSettingsFields(") + 10));
   ok_("ฟอร์มตั้งค่า POS: ช่องหัวข้อ + ข้อความ อยู่ต่อจากข้อความใบเสร็จ",
     F.indexOf("set('customer_notice_title'") > F.indexOf("set('receipt_footer'") && F.indexOf("set('customer_notice_text'") > F.indexOf("set('receipt_footer'") && F.indexOf("set('receipt_footer'") > 0);
+}
+
+// ── แพ็คเกจบุฟเฟต์: ราคาเมนูในแพ็คเกจ (เจ้าของสั่ง 19 ต.ค. 69 — โปรเบียร์ ฯลฯ คิดราคาบุฟเฟต์ได้) ──
+// ทุกข้อดึงฟังก์ชันจริงมารัน · เรื่องเงิน: ราคาที่ตั้ง = ราคาที่ลงบิล ทั้งจอขาย หน้าลูกค้า และจอแก้บิล
+section("แพ็คเกจบุฟเฟต์: ราคาเมนูในแพ็คเกจ");
+{
+  const L = APP.split("\n");
+  const blk = (from, to) => { const a = APP.indexOf(from), b = APP.indexOf(to, a + 1); if (a < 0 || b < 0) throw new Error("ไม่เจอ " + from); return APP.slice(a, b); };
+  const line = (p) => { const l = L.find((x) => x.startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; };
+  const fnOf = (sig) => { const st = APP.indexOf(sig); if (st < 0) throw new Error("ไม่เจอ " + sig); let d = 0; for (let i = APP.indexOf("{", st + sig.length - 1); i < APP.length; i++) { if (APP[i] === "{") d++; else if (APP[i] === "}") { d--; if (d === 0) return APP.slice(st, i + 1); } } throw new Error("อ่านไม่จบ " + sig); };
+  let P = null;
+  try {
+    P = new Function([
+      blk("const bpPrice=(v)=>{", "const bpMissingCol="),
+      line("const BP_PRICE_RE="),
+      blk("const bpNameKey=", "// ฟอร์มแพ็คเกจ → บรรทัดราคา"),
+      blk("function buffetAuditText(", "// เมนูที่เลือกใส่แพ็คเกจได้"),
+      line("const isPkgLine="), line("const pkgOfBill="),
+      blk("function pkgMenuScopeOf(", "// ใบเสร็จบิลแพ็คเกจ"),
+      fnOf("function bpPriceDiff("),
+      "return {normalizeBuffetPackages,buffetPkgOp,buffetAuditText,pkgMenuScopeOf,pkgPriced,bpPriceDiff};",
+    ].join("\n"))();
+  } catch (e) { console.log("       ดึงฟังก์ชันแพ็คเกจไม่ได้: " + e.message); }
+  ok_("ดึงตัวจัดการราคาในแพ็คเกจตัวจริงมารันได้", !!P);
+  if (P) {
+    const LN = [{ key: "adult", label: "ผู้ใหญ่", price: 199 }, { key: "child", label: "เด็ก", price: 139 }];
+    const base = { id: "pk1", name: "Buffet", lines: LN, menu_ids: [301, 302, 303] };
+    const n1 = P.normalizeBuffetPackages([{ ...base, menu_prices: { 301: "199", 302: 0, 303: "abc", 999: 50, 304: -5 } }])[0];
+    const n0 = P.normalizeBuffetPackages([base])[0];
+    ck("อ่านราคาในแพ็คเกจ: \"199\"→199 · 0 ใช้ได้ (รวมในแพ็คเกจ) · ตัวหนังสือ/ติดลบ/เมนูนอกแพ็คเกจ ทิ้ง · แพ็คเกจที่ไม่ได้ตั้ง = หน้าตาเดิม (ไม่มีช่องนี้)",
+      [n1.menu_prices, "menu_prices" in n0], [{ 301: 199, 302: 0 }, false]);
+    // การแก้จากจอเลือกเมนู: ส่วนต่างเท่านั้น
+    const lib = P.normalizeBuffetPackages([{ ...base, updated_at: "t0", menu_prices: { 301: 199, 302: 50 } }]);
+    const r1 = P.buffetPkgOp(lib, { type: "menus", id: "pk1", add: [], remove: [303], prices: { 301: 150, 302: null }, at: "t1", by: "x" });
+    const out1 = P.normalizeBuffetPackages(r1)[0];
+    ck("แก้ราคา: ตั้งใหม่ · ล้าง (null) = กลับไปใช้ราคาเมนู · เอาเมนูออก = ราคาหายไปด้วย",
+      [out1.menu_ids, out1.menu_prices], [[301, 302], { 301: 150 }]);
+    const other = P.normalizeBuffetPackages([{ ...base, updated_at: "t9", menu_prices: { 301: 199, 303: 77 } }]);   // อีกเครื่องเพิ่งตั้ง 303
+    const r2 = P.normalizeBuffetPackages(P.buffetPkgOp(other, { type: "menus", id: "pk1", add: [], remove: [], prices: { 301: 120 }, at: "t2", by: "y" }))[0];
+    ck("สองเครื่องแก้พร้อมกัน: แก้แค่เมนูที่ตัวเองแก้ — ราคาที่อีกเครื่องเพิ่งตั้งให้เมนูอื่นไม่หาย", r2.menu_prices, { 301: 120, 303: 77 });
+    const r3 = P.normalizeBuffetPackages(P.buffetPkgOp(lib, { type: "menus", id: "pk1", add: [304], remove: [], prices: { 304: 99 }, at: "t3", by: "z" }))[0];
+    ck("ติ๊กเมนูใหม่พร้อมใส่ราคาในครั้งเดียว", [r3.menu_ids.includes(304), r3.menu_prices[304]], [true, 99]);
+    // ส่วนต่างจากช่องพิมพ์
+    const nm = (id) => "เมนู" + id;
+    ck("ช่องราคา → ส่วนต่าง: ไม่แก้ = ไม่ส่ง · แก้ = ราคาใหม่ · ลบจนว่าง = null · \"12.\" = 12 · เมนูที่ไม่ได้ติ๊กไม่สน",
+      P.bpPriceDiff(new Set([1, 2, 3, 4]), { 1: "199", 2: "150", 3: "", 4: "12.", 5: "9" }, { 1: "199", 2: "199", 3: "50" }, nm), { 2: 150, 3: null, 4: 12 });
+    const bad = P.bpPriceDiff(new Set([7]), { 7: "1.234" }, {}, nm);
+    ok_("ราคาผิดรูปแบบ = ไม่บันทึก บอกชื่อเมนู", typeof bad === "string" && bad.includes("เมนู7"));
+    // ราคาที่ลงบิล
+    const bill = [{ kind: "pkg", pkg: { id: "pk1", key: "adult", guest: true }, qty: 2, price: 199 }];
+    const sc = P.pkgMenuScopeOf(bill, P.normalizeBuffetPackages([{ ...base, menu_prices: { 301: 199, 302: 0 } }]));
+    const menus = [{ id: 301, name: "โปรลีโอ", price: 259 }, { id: 302, name: "น้ำแข็ง", price: 20 }, { id: 303, name: "ตำ", price: 0 }];
+    const pr = P.pkgPriced(menus, sc);
+    ck("โต๊ะแพ็คเกจ: เมนูที่ตั้งราคา = ราคาในแพ็คเกจ (เก็บราคาปกติไว้เทียบ) · ตั้ง 0 = รวมในแพ็คเกจ · ไม่ได้ตั้ง = ก้อนเดิม",
+      [pr[0].price, pr[0].menu_price, pr[1].price, pr[2] === menus[2]], [199, 259, 0, true]);
+    const noPkg = P.pkgMenuScopeOf([{ menu_id: 1, qty: 1, price: 50 }], []);
+    const lost = P.pkgMenuScopeOf(bill, []);
+    ck("บิลไม่มีแพ็คเกจ / หาแพ็คเกจไม่เจอ = ราคาเมนูปกติ (ก้อนเดิม ไม่ลดราคามั่ว)",
+      [P.pkgPriced(menus, noPkg) === menus, P.pkgPriced(menus, lost) === menus], [true, true]);
+    const retired = P.pkgMenuScopeOf(bill, P.normalizeBuffetPackages([{ ...base, active: false, menu_prices: { 301: 199 } }]));
+    ck("แพ็คเกจที่ลบหลังเปิดโต๊ะ = โต๊ะนั้นยังได้ราคาในแพ็คเกจจนปิดบิล", P.pkgPriced(menus, retired)[0].price, 199);
+    // ประวัติ
+    const a0 = P.normalizeBuffetPackages([{ ...base, menu_prices: { 301: 259 } }])[0];
+    const a1 = P.normalizeBuffetPackages([{ ...base, menu_prices: { 301: 199, 302: 0 } }])[0];
+    const tx = P.buffetAuditText(a0, a1, "ผู้จัดการ", { id: 5, name: "กาญจนบุรี" }, (id) => ({ 301: "โปรลีโอ", 302: "น้ำแข็ง" })[id]);
+    ok_("ประวัติจดราคาในแพ็คเกจ: ใคร เมนูไหน จากเท่าไรเป็นเท่าไร (ราคาเมนู → ฿0 ก็จด)",
+      tx.includes("ผู้จัดการ") && tx.includes("ราคาในแพ็คเกจ 2") && tx.includes("โปรลีโอ ฿259 → ฿199") && tx.includes("น้ำแข็ง ราคาเมนู → ฿0"));
+    ok_("ไม่ได้แก้ราคา = ประวัติไม่มีเรื่องราคา", !P.buffetAuditText(a1, a1, "x", { id: 5, name: "ก" }, () => "") );
+  }
+  // ทุกจอที่ใส่เมนูลงบิลแพ็คเกจ แปลงราคาจากรายการที่จอโชว์ (ไม่มีทางไหนหลุดไปใช้ราคาเมนูตรงๆ)
+  ok_("จอขาย: รายการเมนูของโต๊ะแพ็คเกจผ่าน pkgPriced · กดการ์ด/ตัวเลือกเสริมใช้ m.price ของรายการนั้น",
+    APP.includes("return pkgPriced(menus.filter(m=>{") && APP.includes("}).sort(ms),pkgScope);") &&
+    APP.includes("return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,") && APP.includes("price:(+m.price||0)+addPrice,qty:qty||1,note:\"\",options:chosen||[],printer_id:m.printer_id||null,category:menuCatOf(m),_new:true}"));
+  ok_("หน้าลูกค้า: เมนูของโต๊ะแพ็คเกจผ่าน pkgPriced ก่อนโชว์ (ตะกร้า/ตัวเลือกเสริมใช้ราคาเดียวกัน)",
+    APP.includes("const pricedPkgMenus=useMemo(()=>pkgPriced(pkgMenus||[],pkgScope),[pkgMenus,pkgScope]);") && APP.includes("const shownMenus=pkgScope?(pkgIdsKey?pricedPkgMenus:[]):menus;"));
+  ok_("จอแก้บิล: เพิ่มเมนูในบิลแพ็คเกจ = ราคาในแพ็คเกจเหมือนตอนขาย",
+    APP.includes("const editPkgScope=useMemo(()=>pkgMenuScopeOf(order&&order.items,pkgLibOf(posSettings)),[order,posSettings]);") && APP.includes(".slice(0,60),editPkgScope);"));
+  const BPU = APP.slice(APP.indexOf("function POSBuffetPackages("), APP.indexOf("function POSShiftHistory("));
+  ok_("จอเลือกเมนูในแพ็คเกจ: ช่องราคาเฉพาะเมนูที่ติ๊ก · ตัวเลขเท่านั้น (type=text + inputMode) · คนไม่มีสิทธิ์เงิน = ดูอย่างเดียว · บันทึกส่งส่วนต่างราคา",
+    BPU.includes("priceCell={(m,v)=>{") && BPU.includes("if(!v)return null;") && BPU.includes('<input type="text" inputMode="decimal" value={val} placeholder={String(base)}') &&
+    BPU.includes("const s=bpPriceInput(e.target.value);") && BPU.includes("if(Object.keys(prices).length&&!canMoney){notifyDlg(LOCK_MONEY);return;}") &&
+    BPU.includes("const res=await persist({type:\"menus\",id:pick.id,add,remove,prices,at:nowStr(),by:who});"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

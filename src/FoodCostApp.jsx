@@ -502,7 +502,8 @@ async function writeMenuBranchKey(menuId,field,branchId,val){
 }
 
 // ── แพ็คเกจบุฟเฟต์: คลังแพ็คเกจรายสาขา (pos_settings.buffet_packages) ─────────────
-// [{id:'pk_…',name,active,lines:[{key:'adult'|'child'|'x_…',label,price,guest}],menu_ids:[เลขเมนู],updated_at,updated_by}]
+// [{id:'pk_…',name,active,lines:[{key:'adult'|'child'|'x_…',label,price,guest}],menu_ids:[เลขเมนู],menu_prices?:{"เลขเมนู":ราคา},updated_at,updated_by}]
+// menu_prices = ราคาของเมนูเมื่อสั่งในโต๊ะแพ็คเกจนี้ (เช่น โปรเบียร์ราคาบุฟเฟต์) · ไม่มี = ราคาเมนูปกติ · 0 = รวมในแพ็คเกจ
 // ลำดับใน array = ลำดับที่โชว์ · ลบ = active:false (โต๊ะที่เปิดด้วยแพ็คเกจนั้นยังหาเมนูเจอ)
 // ราคาถูกจดลงบิลตอนเปิดโต๊ะ — แก้ราคาที่นี่ไม่ย้อนไปเปลี่ยนโต๊ะที่เปิดอยู่
 // ยังไม่ได้รัน sql/buffet-packages.sql (42703/PGRST204) = ถือว่ายังไม่มีแพ็คเกจ ไม่ใช่ error
@@ -535,8 +536,14 @@ function normalizeBuffetPackages(raw){
     if(!lines.some(l=>l.guest))continue;   // ไม่มีบรรทัดนับคน = เปิดโต๊ะด้วยแพ็คเกจนี้ไม่ได้
     const menu_ids=[],ms=new Set();
     for(const v of (Array.isArray(p.menu_ids)?p.menu_ids:[])){const n=Number(v);if(Number.isInteger(n)&&n>0&&!ms.has(n)){ms.add(n);menu_ids.push(n);}}
+    // ราคาในแพ็คเกจ: เก็บเฉพาะเมนูที่ยังอยู่ในแพ็คเกจ และราคาเป็นตัวเลข 0 ขึ้นไป · ไม่มีสักตัว = ไม่มีช่องนี้ (แพ็คเกจเดิมหน้าตาเหมือนเดิม)
+    const mpRaw=p.menu_prices&&typeof p.menu_prices==="object"&&!Array.isArray(p.menu_prices)?p.menu_prices:{};
+    const menu_prices={};
+    for(const n of menu_ids){const v=bpPrice(mpRaw[String(n)]);if(v!=null)menu_prices[String(n)]=v;}
     seen.add(id);
-    out.push({...p,id,name,active:p.active!==false,lines,menu_ids,updated_at:p.updated_at||null,updated_by:p.updated_by||null});
+    const o={...p,id,name,active:p.active!==false,lines,menu_ids,updated_at:p.updated_at||null,updated_by:p.updated_by||null};
+    if(Object.keys(menu_prices).length)o.menu_prices=menu_prices;else delete o.menu_prices;
+    out.push(o);
   }
   return out;
 }
@@ -620,8 +627,13 @@ function buffetPkgOp(list,op){
   if(op.type==="menus"){
     // เมนูในแพ็คเกจ: ทำเฉพาะส่วนต่าง (เพิ่ม/เอาออก) — เมนูที่อีกเครื่องเพิ่งติ๊กเพิ่มไม่หาย
     const rm=new Set((op.remove||[]).map(Number)),have=new Set(cur.menu_ids.map(Number));
-    const ids=[...cur.menu_ids.filter(id=>!rm.has(+id)),...(op.add||[]).map(Number).filter(id=>!have.has(id)&&!rm.has(id))];
-    return L.map(p=>p.id===cur.id?{...p,menu_ids:[...new Set(ids)],...stamp}:p);
+    const ids=[...new Set([...cur.menu_ids.filter(id=>!rm.has(+id)),...(op.add||[]).map(Number).filter(id=>!have.has(id)&&!rm.has(id))])];
+    // ราคาในแพ็คเกจ: แก้เฉพาะเมนูที่ผู้ใช้แก้ (op.prices {เลขเมนู: ราคา | null=กลับไปใช้ราคาเมนู})
+    // ราคาที่อีกเครื่องเพิ่งตั้งให้เมนูอื่นไม่หาย · เมนูที่ออกจากแพ็คเกจ ราคาของมันหายไปด้วย
+    const mp={...(cur.menu_prices||{})};
+    for(const [k,v] of Object.entries(op.prices||{})){const pv=bpPrice(v);if(pv==null)delete mp[String(k)];else mp[String(k)]=pv;}
+    const keep=new Set(ids.map(String));for(const k of Object.keys(mp))if(!keep.has(k))delete mp[k];
+    return L.map(p=>p.id===cur.id?{...p,menu_ids:ids,menu_prices:mp,...stamp}:p);
   }
   if(op.type==="delete"){
     if(!cur.active)return L;   // อีกเครื่องลบไปแล้ว = ผลเหมือนกัน ไม่ต้องเขียน
@@ -680,6 +692,11 @@ function buffetAuditText(before,after,who,branch,nameOf){
   const lst=(ids)=>ids.slice(0,8).map(mn).join(", ")+(ids.length>8?` และอีก ${ids.length-8}`:"");
   if(add.length)ch.push(`เพิ่มเมนู ${add.length}: ${lst(add)}`);
   if(rem.length)ch.push(`เอาเมนูออก ${rem.length}: ${lst(rem)}`);
+  // ราคาในแพ็คเกจ (เรื่องเงิน — ต้องรู้ว่าใครแก้ จากเท่าไรเป็นเท่าไร) · เมนูที่เอาออกบอกไว้ข้างบนแล้ว
+  const bp=before.menu_prices||{},ap=after.menu_prices||{};
+  const pch=after.menu_ids.filter(id=>(bp[String(id)]??null)!==(ap[String(id)]??null))
+    .map(id=>{const o=bp[String(id)],n=ap[String(id)];return `${mn(id)} ${o==null?"ราคาเมนู":fm(o)} → ${n==null?"ราคาเมนู":fm(n)}`;});
+  if(pch.length)ch.push(`ราคาในแพ็คเกจ ${pch.length}: `+pch.slice(0,8).join(", ")+(pch.length>8?` และอีก ${pch.length-8}`:""));
   if(!ch.length)return "";
   return head+`แก้ "${after.name}": `+ch.join(" · ");
 }
@@ -19911,9 +19928,18 @@ const isPkgOnlyBill=(o)=>{const its=(o&&o.items)||[];return its.length>0&&its.ev
 function pkgMenuScopeOf(items,lib){
   const p=pkgOfBill(items);if(!p)return null;
   const def=(lib||[]).find(x=>x&&String(x.id)===String(p.id))||null;
-  if(def)return {ids:new Set((Array.isArray(def.menu_ids)?def.menu_ids:[]).map(String)),missing:false,def,retired:def.active===false};
-  return {ids:new Set((items||[]).filter(it=>!isPkgLine(it)&&it&&it.menu_id!=null).map(it=>String(it.menu_id))),missing:true,def:null};
+  if(def)return {ids:new Set((Array.isArray(def.menu_ids)?def.menu_ids:[]).map(String)),missing:false,def,retired:def.active===false,
+    prices:new Map(Object.entries(def.menu_prices||{}).map(([k,v])=>[String(k),+v]))};
+  return {ids:new Set((items||[]).filter(it=>!isPkgLine(it)&&it&&it.menu_id!=null).map(it=>String(it.menu_id))),missing:true,def:null,prices:new Map()};
 }
+// ราคาที่ใช้เมื่อสั่งเมนูในบิลแพ็คเกจ = ราคาในแพ็คเกจ (ตั้งตอนเลือกเมนู) ชนะราคาเมนู · ไม่ได้ตั้ง = ราคาเมนูเดิม
+// แปลงที่ "รายการเมนูที่จอโชว์" จุดเดียว ⟹ ทุกทางที่หยิบเมนูจากรายการนั้นใส่บิล (กดการ์ด/ตัวเลือกเสริม/ตะกร้าลูกค้า/แก้บิล)
+// ได้ราคาเดียวกันเอง · รายการที่สั่งไปแล้วในบิลไม่เปลี่ยนราคาย้อนหลัง · menu_price = ราคาเมนูปกติ (ไว้โชว์เทียบ)
+const pkgPriced=(menus,scope)=>{
+  const mp=scope&&scope.prices;
+  if(!mp||!mp.size||!Array.isArray(menus))return menus;
+  return menus.map(m=>{const v=m?mp.get(String(m.id)):undefined;return v==null||!Number.isFinite(v)||v===(+m.price||0)?m:{...m,price:v,menu_price:+m.price||0};});
+};
 // ใบเสร็จบิลแพ็คเกจ: อาหาร ฿0 รวมเป็นบรรทัดเดียว (บุฟเฟต์มื้อยาวๆ ใบจะยาวหลายสิบบรรทัด)
 // บรรทัดแพ็คเกจกับของที่มีราคาอยู่ครบ — ยอดบนใบบวกได้เท่าเดิม · บิลไม่มีแพ็คเกจ = เหมือนเดิมทุกบรรทัด
 function receiptRowsOf(items){
@@ -20720,7 +20746,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   },[menus,bidSale,posSettings,pkgScope]);
   const filtered=useMemo(()=>{
     const ms=menuSorter(catOrderOf(posSettings),menuOrderOf(posSettings));
-    return menus.filter(m=>{
+    return pkgPriced(menus.filter(m=>{
       if(!menuVisibleAt(m,bidSale))return false;            // สาขานี้ไม่ได้เปิดขายเมนูนี้
       if(pkgScope&&!pkgScope.ids.has(String(m.id)))return false;   // ไม่อยู่ในแพ็คเกจของโต๊ะนี้
       // "ซ่อน" = ซ่อนจากลูกค้าที่สแกน QR เท่านั้น — จอพนักงานต้องยังเห็นและสั่งให้ลูกค้าได้
@@ -20729,7 +20755,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       if(!c)return false;                                  // ครัวกลางยังไม่ได้จัดหมวด → ไม่ขึ้นในหน้าขาย
       if(selCat!=="ทั้งหมด"&&c!==selCat)return false;
       return m.name.toLowerCase().includes(search.toLowerCase());
-    }).sort(ms);
+    }).sort(ms),pkgScope);   // โต๊ะแพ็คเกจ: ราคาในแพ็คเกจ (ที่การ์ดและตอนกดใส่บิล)
   },[menus,selCat,search,bidSale,posSettings,pkgScope]);
   const subtotal=useMemo(()=>items.reduce((s,i)=>s+i.price*i.qty,0),[items]);
   // มีรายการใหม่ที่ยังไม่ได้ส่งพิมพ์ไหม (เทียบกับที่ส่งไปแล้วใน existingOrder) → ใช้เปิด/ปิดปุ่ม "ส่งรายการ"
@@ -22252,7 +22278,9 @@ function CustomerPage({branchId,tableId,token}){
     pkgMenusRef.current=null;setPkgMenus(null);setPkgLoadErr(false);
     if(pkgIdsRef.current.length)loadPkgMenus();
   },[pkgIdsKey,loadPkgMenus]);
-  const shownMenus=pkgScope?(pkgIdsKey?(pkgMenus||[]):[]):menus;
+  // ราคาในแพ็คเกจแปลงครั้งเดียวต่อการโหลด (ไม่สร้างก้อนใหม่ทุกครั้งที่จอวาด)
+  const pricedPkgMenus=useMemo(()=>pkgPriced(pkgMenus||[],pkgScope),[pkgMenus,pkgScope]);
+  const shownMenus=pkgScope?(pkgIdsKey?pricedPkgMenus:[]):menus;
   const pkgLoading=!!pkgScope&&!!pkgIdsKey&&pkgMenus===null;
   const cats=useMemo(()=>["ทั้งหมด",...[...new Set(shownMenus.map(menuCatOf).filter(Boolean))].sort(catSorter(catOrderOf(posCfg)))],[shownMenus,posCfg]);
   const filtered=useMemo(()=>{
@@ -24795,7 +24823,8 @@ const menuPickFilter=(menus,cat,q)=>{
     return !t||String((m&&m.name)||"").toLowerCase().includes(t);
   });
 };
-function MenuPickList({menus,branchId,sel,onChange,readOnly=false,extra,initialCat="",initialQ="",accent=C.teal,accentLight=C.tealLight,maxHeight="40vh"}){
+// priceCell(m,ติ๊กอยู่) = ช่องราคาแทนป้ายราคาเดิม (คืน null = ป้ายเดิม) — ช่องพิมพ์อยู่ใน <label> ได้: แตะช่องพิมพ์ไม่สลับติ๊ก
+function MenuPickList({menus,branchId,sel,onChange,readOnly=false,extra,priceCell,initialCat="",initialQ="",accent=C.teal,accentLight=C.tealLight,maxHeight="40vh"}){
   const[q,setQ]=useState(initialQ||"");const[cat,setCat]=useState(initialCat||"");
   const list=Array.isArray(menus)?menus:[];
   const on=(m)=>!!(sel&&sel[m.id]);
@@ -24827,7 +24856,7 @@ function MenuPickList({menus,branchId,sel,onChange,readOnly=false,extra,initialC
       <button onClick={()=>onChange&&onChange({})} style={sb2}>ล้าง</button>
     </div>}
     <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight,overflowY:"auto"}}>
-      {shown.map(m=>{const v=on(m);const av=menuAvailAt(m,branchId);const x=extra?extra(m):null;return <label key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",borderRadius:9,cursor:readOnly?"default":"pointer",background:v?accentLight:C.white,border:`1.5px solid ${v?accent:C.line}`}}>
+      {shown.map(m=>{const v=on(m);const av=menuAvailAt(m,branchId);const x=extra?extra(m):null;const pc=priceCell?priceCell(m,v):null;return <label key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",borderRadius:9,cursor:readOnly?"default":"pointer",background:v?accentLight:C.white,border:`1.5px solid ${v?accent:C.line}`}}>
         <input type="checkbox" checked={v} disabled={readOnly} onChange={()=>setMany([m],!v)} style={{accentColor:accent,width:17,height:17,flexShrink:0}}/>
         <span style={{flex:1,minWidth:0}}>
           <span style={{display:"block",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:v?800:600,color:v?accent:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.name}</span>
@@ -24837,7 +24866,7 @@ function MenuPickList({menus,branchId,sel,onChange,readOnly=false,extra,initialC
           {av==="sold_out"&&tag("วันนี้หมด","#92400E","#FEF3C7")}
           {av==="hidden"&&tag("ซ่อน",C.white,C.red,"ลูกค้าที่สแกน QR ไม่เห็น")}
           {!menuCatOf(m)&&tag("ไม่มีหมวด",C.red,C.redLight,"จอขายไม่แสดงเมนูที่ไม่มีหมวด")}
-          {(+m.price||0)===0?tag("฿0","#92400E","#FEF9C3"):<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>฿{(+m.price||0).toLocaleString()}</span>}
+          {pc!=null?pc:(+m.price||0)===0?tag("฿0","#92400E","#FEF9C3"):<span style={{fontSize:11,color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>฿{(+m.price||0).toLocaleString()}</span>}
         </span>
       </label>;})}
       {shown.length===0&&<div style={{padding:20,textAlign:"center",color:C.ink4,fontSize:12.5,fontFamily:"'Sarabun',sans-serif"}}>ไม่พบเมนู</div>}
@@ -25357,7 +25386,8 @@ function POSOptionLibrary({currentBranch,onClose}){
 // ══════════════════════════════════════════════════════
 // "แพ็คเกจบุฟเฟต์" — คลังแพ็คเกจของสาขา: ราคา/คน (ผู้ใหญ่ เด็ก + รายการนับเพิ่ม) + เมนูที่โต๊ะแพ็คเกจนั้นเห็น
 // จอเดียวกันทั้งหลังบ้าน และ "จัดการเมนูและหมวดหมู่" บนจอขาย (มาทาง POSMenuTools ทั้งคู่)
-// สิทธิ์: สร้าง/ลบ/แก้ชื่อ-ราคา = สิทธิ์ตั้งค่า (เรื่องเงิน) · เลือกเมนู = ตั้งค่า หรือ pos_admin · PIN = ดูอย่างเดียว
+// สิทธิ์: สร้าง/ลบ/แก้ชื่อ-ราคา/ราคาในแพ็คเกจ = สิทธิ์ตั้งค่า (เรื่องเงิน) · เลือกเมนู = ตั้งค่า หรือ pos_admin
+// พนักงานขายที่เข้าด้วย PIN = ทำได้ครบเหมือนหลังบ้าน (เจ้าของสั่ง 19 ต.ค. 69 — ร้านจัดแพ็คเกจหน้างาน) · ประวัติจดชื่อคนแก้
 // ทุกการแก้จดประวัติ · เขียนเฉพาะคอลัมน์ buffet_packages แบบมีเงื่อนไข (buffetPkgSave) ไม่ทับของอีกเครื่อง
 // ราคาถูกจดลงบิลตอนเปิดโต๊ะ — แก้ระหว่างกะได้ โต๊ะที่เปิดอยู่ยังคิดราคาเดิม
 // ══════════════════════════════════════════════════════
@@ -25368,11 +25398,24 @@ const bpFormOf=(p)=>{
     extras:p.lines.filter(l=>l.key!=="adult"&&l.key!=="child").map(l=>({key:l.key,label:l.label,price:String(l.price)}))}
     :{id:null,name:"",adult:"",child:"",base:null,extras:[]};
 };
+// ส่วนต่างราคาในแพ็คเกจจากจอเลือกเมนู → {เลขเมนู: ราคา | null} หรือข้อความ (= ไม่บันทึก บอกเมนูที่ผิด)
+// chosen = เมนูที่ติ๊ก · now/was = ข้อความในช่องตอนนี้/ตอนเปิดจอ · ว่าง = ราคาเมนูปกติ · "12." นับเป็น 12
+function bpPriceDiff(chosen,now,was,nameOf){
+  const out={};
+  for(const id of chosen){
+    const s=String((now||{})[id]??"").trim().replace(/\.$/,""),o=String((was||{})[id]??"").trim();
+    if(s!==""&&!BP_PRICE_RE.test(s))return `ราคาในแพ็คเกจของ "${nameOf?nameOf(id):id}" ต้องเป็นตัวเลข 0 ขึ้นไป ทศนิยมไม่เกิน 2 ตำแหน่ง`;
+    const nv=s===""?null:Math.round(Number(s)*100)/100,ov=o===""?null:Math.round(Number(o)*100)/100;
+    if(nv!==ov)out[id]=nv;
+  }
+  return out;
+}
 function POSBuffetPackages({currentBranch,currentUser,saleOnly=false,menus:menusProp,onClose}){
   const bid=currentBranch.id;
   const acc=posAccess(currentUser,saleOnly);
-  const canMoney=acc.settings;   // สร้าง/ลบ/แก้ชื่อ-ราคา
-  const canMenus=acc.admin;      // เลือกเมนูในแพ็คเกจ
+  // พนักงานขาย (PIN) แก้แพ็คเกจได้ครบ — เฉพาะจอนี้ สิทธิ์อื่นของจอขายยังคุมด้วย posAccess เหมือนเดิม
+  const canMoney=acc.settings||saleOnly;   // สร้าง/ลบ/แก้ชื่อ-ราคา/ราคาในแพ็คเกจ
+  const canMenus=acc.admin||saleOnly;      // เลือกเมนูในแพ็คเกจ
   const who=(currentUser&&(currentUser.name||currentUser.username))||"";
   const LOCK_MONEY="สร้าง/ลบ/แก้ราคาแพ็คเกจ ต้องมีสิทธิ์ตั้งค่า";
   const LOCK_MENUS="เลือกเมนูในแพ็คเกจ ต้องมีสิทธิ์ตั้งค่า หรือจัดการ POS";
@@ -25383,7 +25426,7 @@ function POSBuffetPackages({currentBranch,currentUser,saleOnly=false,menus:menus
   const[order,setOrder]=useState({cat:[],menu:[]});
   const[shiftOpen,setShiftOpen]=useState(false);
   const[form,setForm]=useState(null);   // ฟอร์มสร้าง/แก้ {id|null,name,adult,child,extras,base}
-  const[pick,setPick]=useState(null);   // เลือกเมนู {id,sel:{id:true},opened:[ids]}
+  const[pick,setPick]=useState(null);   // เลือกเมนู {id,sel:{id:true},opened:[ids],prices:{id:"ข้อความในช่อง"},openedPrices}
   async function load(){
     setLoading(true);
     try{
@@ -25451,7 +25494,8 @@ function POSBuffetPackages({currentBranch,currentUser,saleOnly=false,menus:menus
   }
   function openPick(p){
     const sel={};p.menu_ids.forEach(id=>{if(pickIds.has(+id))sel[id]=true;});
-    setPick({id:p.id,sel,opened:p.menu_ids.slice()});
+    const prices={};for(const [k,v] of Object.entries(p.menu_prices||{}))prices[k]=String(v);
+    setPick({id:p.id,sel,opened:p.menu_ids.slice(),prices,openedPrices:{...prices}});
   }
   async function savePick(){
     if(!canMenus){notifyDlg(LOCK_MENUS);return;}
@@ -25461,9 +25505,17 @@ function POSBuffetPackages({currentBranch,currentUser,saleOnly=false,menus:menus
     // ส่งเฉพาะส่วนต่าง เรียงตามลำดับที่โชว์ · เมนูที่สาขามองไม่เห็นแล้วหลุดออกตอนบันทึก (ติ๊กไม่ได้อยู่แล้ว)
     const add=pickable.filter(m=>chosen.has(+m.id)&&!opened.has(+m.id)).map(m=>+m.id);
     const remove=[...opened].filter(id=>!chosen.has(id));
-    if(!add.length&&!remove.length){setPick(null);return;}
-    const res=await persist({type:"menus",id:pick.id,add,remove,at:nowStr(),by:who});
-    if(res.ok){setPick(null);posToast(`✅ บันทึกเมนูในแพ็คเกจแล้ว (${chosen.size} เมนู)`);}
+    // ราคาในแพ็คเกจ: ส่งเฉพาะเมนูที่ติ๊กอยู่และราคาเปลี่ยนจากตอนเปิดจอ (ว่าง = กลับไปใช้ราคาเมนู)
+    const prices=bpPriceDiff(chosen,pick.prices,pick.openedPrices,(id)=>{const m=pickable.find(x=>+x.id===+id);return m?m.name:"#"+id;});
+    if(typeof prices==="string"){notifyDlg(prices);return;}
+    if(Object.keys(prices).length&&!canMoney){notifyDlg(LOCK_MONEY);return;}
+    if(!add.length&&!remove.length&&!Object.keys(prices).length){setPick(null);return;}
+    const res=await persist({type:"menus",id:pick.id,add,remove,prices,at:nowStr(),by:who});
+    if(res.ok){
+      setPick(null);
+      const np=Object.keys(((res.packages||[]).find(p=>p.id===pick.id)||{}).menu_prices||{}).length;
+      posToast(`✅ บันทึกเมนูในแพ็คเกจแล้ว (${chosen.size} เมนู${np?` · ราคาในแพ็คเกจ ${np} เมนู`:""})`);
+    }
     else if(res.packages&&!res.packages.some(p=>p.id===pick.id&&p.active))setPick(null);
   }
   const setF=(k,v)=>setForm(f=>({...f,[k]:v}));
@@ -25487,7 +25539,7 @@ function POSBuffetPackages({currentBranch,currentUser,saleOnly=false,menus:menus
           <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
             {p.lines.map(l=><span key={l.key} style={{fontSize:12,fontWeight:700,fontFamily:"'Sarabun',sans-serif",borderRadius:8,padding:"2px 8px",background:l.guest?C.brandLight:C.bg,color:l.guest?C.brand:C.ink2,border:`1px solid ${l.guest?C.brandBorder:C.line}`}}>{l.label} {bpFm(l.price)}</span>)}
           </div>
-          <div style={{fontSize:12,color:n?C.ink3:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{n} เมนู{n===0?" — ยังไม่ได้เลือกเมนู":""}</div>
+          <div style={{fontSize:12,color:n?C.ink3:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:600}}>{n} เมนู{n===0?" — ยังไม่ได้เลือกเมนู":""}{(()=>{const k=Object.keys(p.menu_prices||{}).filter(id=>pickIds.has(+id)).length;return k?<span style={{color:C.brand}}> · ราคาในแพ็คเกจ {k} เมนู</span>:null;})()}</div>
           <div style={{display:"flex",gap:6,marginTop:"auto"}}>
             <button onClick={()=>openPick(p)} style={{...btn(C.teal,C.tealLight),flex:1}}>🍽 {canMenus?"เลือกเมนู":"ดูเมนู"}</button>
             {canMoney&&<button onClick={()=>setForm(bpFormOf(p))} style={btn(C.blue,C.blueLight)}>แก้ไข</button>}
@@ -25523,13 +25575,26 @@ function POSBuffetPackages({currentBranch,currentUser,saleOnly=false,menus:menus
     </Modal>}
     {pick&&pk&&<Modal title={`🍽 เมนูในแพ็คเกจ — ${pk.name}`} onClose={()=>setPick(null)} wide>
       <div style={{fontSize:12,color:C.ink3,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:10}}>
-        โต๊ะที่เปิดด้วยแพ็คเกจนี้เห็น<b>เฉพาะเมนูที่ติ๊ก</b> (ทั้งหน้าลูกค้าและจอพนักงาน) · คิดเงินตามราคาเมนู (฿0 = รวมในแพ็คเกจ) · เครื่องดื่ม/เบียร์ ติ๊กใส่ถ้าจะให้สั่งได้
+        โต๊ะที่เปิดด้วยแพ็คเกจนี้เห็น<b>เฉพาะเมนูที่ติ๊ก</b> (ทั้งหน้าลูกค้าและจอพนักงาน) · เครื่องดื่ม/เบียร์ ติ๊กใส่ถ้าจะให้สั่งได้
+        <br/>💰 <b>ราคาในแพ็คเกจ</b>: เมนูที่ติ๊กแล้วมีช่องราคาด้านขวา — ใส่ราคาที่จะคิดเมื่อสั่งในแพ็คเกจนี้ · <b>เว้นว่าง = ราคาเมนูปกติ</b> · ใส่ 0 = รวมในแพ็คเกจ
+        <br/>มีผลกับรายการที่สั่งหลังบันทึก (รวมโต๊ะที่เปิดอยู่) · รายการที่สั่งไปแล้วไม่เปลี่ยนราคา
       </div>
       {!canMenus&&note(C.bg,C.line,C.ink3,<>🔒 ดูได้อย่างเดียว — {LOCK_MENUS}</>)}
       {stale>0&&note("#FFFBEB","#FCD34D","#92400E",<>มี {stale} เมนูในแพ็คเกจที่สาขานี้มองไม่เห็นแล้ว (ถูกปิดติ๊กหรือถูกลบ){canMenus?" — กดบันทึกแล้วจะเอาออก":""}</>)}
       <MenuPickList menus={pickable} branchId={bid} sel={pick.sel} onChange={sel=>setPick(s=>s&&({...s,sel}))} readOnly={!canMenus}
         accent={C.brand} accentLight={C.brandLight} maxHeight="46vh"
-        extra={m=>{const o=(inPkgs.get(+m.id)||[]).filter(p=>p.id!==pk.id).map(p=>p.name);return o.length?`อยู่ในแพ็คเกจอื่น: ${o.join(", ")}`:null;}}/>
+        extra={m=>{const o=(inPkgs.get(+m.id)||[]).filter(p=>p.id!==pk.id).map(p=>p.name);return o.length?`อยู่ในแพ็คเกจอื่น: ${o.join(", ")}`:null;}}
+        priceCell={(m,v)=>{
+          if(!v)return null;   // ยังไม่ติ๊ก = ป้ายราคาเมนูเดิม
+          const base=+m.price||0,val=String((pick.prices||{})[m.id]??"");
+          if(!canMoney)return val===""?null:<span style={{fontSize:12,fontWeight:800,color:C.brand,fontFamily:"'Sarabun',sans-serif"}}>{bpFm(val)} <s style={{fontWeight:500,color:C.ink4}}>{bpFm(base)}</s></span>;
+          return <span style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:1}}>
+            <input type="text" inputMode="decimal" value={val} placeholder={String(base)} aria-label={`ราคาในแพ็คเกจ ${m.name}`}
+              onChange={e=>{const s=bpPriceInput(e.target.value);setPick(p=>p&&({...p,prices:{...(p.prices||{}),[m.id]:s}}));}}
+              style={{width:90,padding:"6px 9px",borderRadius:8,border:`1.5px solid ${val!==""?C.brand:C.line}`,background:C.white,textAlign:"right",fontSize:15,fontWeight:800,color:val!==""?C.brand:C.ink,fontFamily:"'Sarabun',sans-serif",boxSizing:"border-box"}}/>
+            <span style={{fontSize:10,color:C.ink4,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{val===""?"ราคาเมนูปกติ":`ปกติ ${bpFm(base)}`}</span>
+          </span>;
+        }}/>
       <div style={{display:"flex",justifyContent:"flex-end",gap:10,paddingTop:12,marginTop:12,borderTop:`1px solid ${C.line}`}}>
         <Btn v="ghost" onClick={()=>setPick(null)}>{canMenus?"ยกเลิก":"ปิด"}</Btn>
         {canMenus&&<Btn onClick={savePick} loading={busy} icon={I.check}>บันทึก</Btn>}
@@ -27382,10 +27447,11 @@ function EditPaidBillModal({order,branch,posSettings,menus=[],printers=[],curren
   // ยังไม่ได้ส่ง ยอดที่แก้จะไปกับใบตอนปิดกะเอง · เดิมบอกให้แจ้งบัญชีแก้วันเก่า = ส่วนต่างลงสองรอบ
   const shiftClosed=billShiftClosed(order,shift);
   const changed=added.length>0||removed.length>0||delta!==0;
+  const editPkgScope=useMemo(()=>pkgMenuScopeOf(order&&order.items,pkgLibOf(posSettings)),[order,posSettings]);
   const menuList=useMemo(()=>{
     const s=q.trim().toLowerCase();
-    return menus.filter(m=>menuVisibleAt(m,branch?.id)&&(!s||String(m.name||"").toLowerCase().includes(s))).slice(0,60);
-  },[menus,branch,q]);
+    return pkgPriced(menus.filter(m=>menuVisibleAt(m,branch?.id)&&(!s||String(m.name||"").toLowerCase().includes(s))).slice(0,60),editPkgScope);
+  },[menus,branch,q,editPkgScope]);
   function addMenu(m,chosen,qty){
     const opts=chosen||[];
     const add=(opts).reduce((s,o)=>s+(+o.price||0),0);
