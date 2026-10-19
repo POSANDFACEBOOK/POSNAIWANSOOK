@@ -1254,8 +1254,10 @@ const api = {
         // ราคา/ชื่อตามที่จดไว้ในบิลตอนเปิดโต๊ะ (pkg.snap) — ผู้จัดการแก้ราคาคลังกลางมื้อไม่กระทบโต๊ะที่เปิดอยู่
         // บิลที่เปิดก่อนมีการจด (ไม่มี snap) = ราคาจากคลังของสาขา ณ ตอนนี้
         let src=null;
-        if(Array.isArray(pk.snap)&&pk.snap.length)src={id:pk.id,name:pk.name,lines:pk.snap};
-        else{const def=(await buffetPkgRead(cur.branch_id)).packages.find(p=>String(p.id)===String(pk.id));if(def)src={...def,name:pk.name||def.name};}
+        // เวลาสั่งอาหารที่จดในบิลตอนเปิด (pkg.mins) ติดไปกับบรรทัดใหม่ — ไม่งั้นบรรทัดใหม่จด 120 แล้วเวลาโต๊ะเปลี่ยนเมื่อบรรทัดแรกถูกลบ
+        const keepMins=bpMinutes(pk.mins)!=null?{order_minutes:pk.mins}:{};
+        if(Array.isArray(pk.snap)&&pk.snap.length)src={id:pk.id,name:pk.name,lines:pk.snap,...keepMins};
+        else{const def=(await buffetPkgRead(cur.branch_id)).packages.find(p=>String(p.id)===String(pk.id));if(def)src={...def,name:pk.name||def.name,...keepMins};}
         const made=src?pkgLinesOf(src,{[key]:want},new Date().toISOString()):[];
         if(!made.length)throw new Error("แพ็คเกจนี้ไม่มีรายการนี้แล้ว — แจ้งผู้จัดการ");
         const last=items.reduce((m,it,i)=>isPkgLine(it)?i:m,-1);
@@ -2711,17 +2713,21 @@ function orphanTicketsOf(printers,branchId,orders,now,winMs){
   }
   const out=[],seen=new Set();
   for(const r of recs.sort((a,b)=>a.at-b.at)){
-    let best=null,bd=Infinity;
+    // ทุกบรรทัดชื่อนี้ที่ส่งครัวในช่วง (หลายโต๊ะสั่งเมนูเดียวกันที่ยังไม่มีเครื่องรับ = ไม่ออกทุกใบ) — เดิมเอาแค่ใบที่ใกล้สุด
+    const hits=[];
     for(const o of (orders||[]))for(const it of ((o&&o.items)||[])){
       if(!isKitchenLine(it)||String((it&&it.name)||"").trim()!==r.name)continue;
       const s=Date.parse((it&&it.sent_at)||"");if(!Number.isFinite(s))continue;
       const dt=r.at-s;if(dt<-5000||dt>120000)continue;
-      if(Math.abs(dt)<bd){bd=Math.abs(dt);best={order:o,line:it};}
+      hits.push({order:o,line:it,d:Math.abs(dt)});
     }
-    const key=best&&best.line.line_uid?"u:"+best.line.line_uid:"n:"+r.name+"|"+r.at;
-    if(seen.has(key))continue;seen.add(key);
-    out.push({key,at:r.at,name:r.name,table:best?String(best.order.table_number??""):null,orderId:best?best.order.id:null,line:best?best.line:null,
-      category:best?String(best.line.category||""):"",fixed:!!best&&itemsWithoutPrinter([best.line],printers,branchId).length===0});
+    hits.sort((a,b)=>a.d-b.d);
+    for(const best of (hits.length?hits:[null])){
+      const key=best&&best.line.line_uid?"u:"+best.line.line_uid:"n:"+r.name+"|"+r.at;
+      if(seen.has(key))continue;seen.add(key);
+      out.push({key,at:r.at,name:r.name,table:best?String(best.order.table_number??""):null,orderId:best?best.order.id:null,line:best?best.line:null,
+        category:best?String(best.line.category||""):"",fixed:!!best&&itemsWithoutPrinter([best.line],printers,branchId).length===0});
+    }
   }
   return out;
 }
@@ -19344,7 +19350,8 @@ function printReceipt(order, tableNum, branchName, posSettings=null, opts={}){
   // ชนิดเอกสาร: จ่ายแล้ว = ใบกำกับภาษีอย่างย่อ (ถ้าเปิด VAT) · ยังไม่จ่าย = ใบแจ้งยอด
   const taxLabel=!paid?`<div style="text-align:center;font-weight:800;font-size:14px;margin:3px 0">ใบแจ้งยอด (ยังไม่ชำระเงิน)</div>`:(posSettings?.vat_enabled?`<div style="text-align:center;font-weight:800;font-size:13px;margin:3px 0">ใบกำกับภาษีอย่างย่อ</div>`:"");
   const rcptNo=order.id!=null?` · เลขที่ ${esc(order.id)}`:"";
-  const vatIncNote=(posSettings?.vat_enabled&&order.vat_included!==false)?`<div style="text-align:center;font-size:10px;color:#555;margin-top:3px">* ราคานี้รวมภาษีมูลค่าเพิ่ม (VAT) แล้ว</div>`:"";
+  // VAT ในราคา = "ราคานี้รวม VAT แล้ว" · VAT บวกเพิ่ม = "ยอดรวมทั้งสิ้นรวม VAT แล้ว" (ใบกำกับภาษีอย่างย่อต้องบอกเสมอ — ตรวจทาน 19 ต.ค. 69)
+  const vatIncNote=posSettings?.vat_enabled?`<div style="text-align:center;font-size:10px;color:#555;margin-top:3px">* ${order.vat_included!==false?"ราคานี้รวมภาษีมูลค่าเพิ่ม (VAT) แล้ว":"ยอดรวมทั้งสิ้นรวมภาษีมูลค่าเพิ่ม (VAT) แล้ว"}</div>`:"";
   // พรีวิว: ขยายใบเสร็จให้เต็มจอ (responsive ~94% ความกว้าง) อ่านชัด · ตอนพิมพ์จริงรีเซ็ตกลับ 72mm
   const autoPrint=opts.preview
     ?`<script>(function(){var r=document.getElementById('rcpt');if(!r)return;function fit(){r.style.zoom=Math.max(1.5,Math.min(3.4,(window.innerWidth*0.94)/272));}fit();window.addEventListener('resize',fit);window.onbeforeprint=function(){r.style.zoom=1;};window.onafterprint=fit;})();<\/script>`
@@ -19727,7 +19734,7 @@ function buildReceiptLines(order,tableNum,branchName,posSettings,paid){
   // ปัดเศษต้องเห็นบนใบ ไม่งั้นลูกค้าบวกเลขตามแล้วไม่ตรง และร้านตรวจย้อนหลังไม่ได้ว่าหายไปไหน
   if(order.round_adj)L.push({l:"ปัดเศษ",r:((+order.round_adj>0)?"+":"")+bahtR(order.round_adj),size:22});
   L.push({l:(paid?"รวมทั้งสิ้น":"ยอดที่ต้องชำระ"),r:bahtR(order.total||0),size:38,bold:true,mb:6});   // เน้นยอดตัวใหญ่
-  if(posSettings&&posSettings.vat_enabled&&order.vat_included!==false)L.push({t:"* ราคานี้รวมภาษีมูลค่าเพิ่ม (VAT) แล้ว",size:16,align:"center"});
+  if(posSettings&&posSettings.vat_enabled)L.push({t:order.vat_included!==false?"* ราคานี้รวมภาษีมูลค่าเพิ่ม (VAT) แล้ว":"* ยอดรวมทั้งสิ้นรวมภาษีมูลค่าเพิ่ม (VAT) แล้ว",size:16,align:"center"});
   if(paid){
     const cashPaid=cashPartOf(order);
     if(cashPaid>0&&order.cash_received){
@@ -20320,11 +20327,18 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
   const overlapPos=(a,b)=>Math.abs(a.x-b.x)<TW-8&&Math.abs(a.y-b.y)<TH-8;
   function freeSlot(taken){for(let i=0;i<5000;i++){const s=slotFor(i);if(!taken.some(p=>overlapPos(p,s)))return s;}return slotFor(taken.length);}
   // list เรียงตามเลขโต๊ะแล้ว → {placed:[ตำแหน่ง], pos: Map(id → ตำแหน่ง)} · ตัวที่ทับตัวก่อนหน้าย้ายไปช่องว่าง
+  // สองรอบ: ① โต๊ะที่มีตำแหน่งจดไว้ — ชนกันให้ตัวที่สร้างก่อน (id น้อย) ได้ที่เดิม ② ตัวที่แพ้/ไม่มีตำแหน่ง ไปช่องว่าง
+  // เดิมให้ตัวที่ "เลขโต๊ะเรียงก่อน" ได้ที่ — เครื่องภาษาไทยเรียงอักษรไทยก่อนอังกฤษ ⟹ โต๊ะขยะ "ไม่ต้องทำ" แย่งที่ D5
+  // แล้ว D5 ตัวจริงไปโผล่ที่อื่น (ตรวจทาน 19 ต.ค. 69) · ชนกันจุดเดียวไม่ทำให้ทั้งโซนเลื่อน
   function layoutOf(list){
-    const placed=[],pos=new Map();
-    (list||[]).forEach((t,idx)=>{
-      let p=(typeof t.x==="number"&&typeof t.y==="number"&&(t.x||t.y))?{x:Math.max(0,Math.min(t.x,Math.max(0,canvasW-TW-PAD))),y:Math.max(0,t.y)}:slotFor(idx);
-      if(placed.some(q=>overlapPos(q,p)))p=freeSlot(placed);
+    const arr=list||[],placed=[],pos=new Map();
+    const hasXY=(t)=>typeof t.x==="number"&&typeof t.y==="number"&&(t.x||t.y);
+    const clampP=(t)=>({x:Math.max(0,Math.min(t.x,Math.max(0,canvasW-TW-PAD))),y:Math.max(0,t.y)});
+    [...arr].filter(hasXY).sort((a,b)=>(+a.id||0)-(+b.id||0)).forEach(t=>{const p=clampP(t);if(!placed.some(q=>overlapPos(q,p))){placed.push(p);pos.set(t.id,p);}});
+    arr.forEach((t,idx)=>{
+      if(pos.has(t.id))return;
+      let p=hasXY(t)?null:slotFor(idx);
+      if(!p||placed.some(q=>overlapPos(q,p)))p=freeSlot(placed);
       placed.push(p);pos.set(t.id,p);
     });
     return {placed,pos};
@@ -20847,10 +20861,13 @@ const MC_ICON={height:40,display:"flex",alignItems:"center",justifyContent:"cent
 const MC_NAME={fontSize:11,fontWeight:700,color:C.ink,fontFamily:"'Sarabun',sans-serif",lineHeight:1.3,marginBottom:3};
 // เมนูที่อยู่ในแพ็คเกจของโต๊ะนี้ (โต๊ะแพ็คเกจ) — มุมซ้ายบน ไม่ชนป้าย "+ ตัวเลือก" มุมขวา
 const MC_PKG={...MC_BADGE,left:4,right:"auto",color:"#065F46",background:"#D1FAE5",border:"1px solid #6EE7B7"};
-const MenuCard=memo(function MenuCard({m,soldOut,hiddenFromCustomer,hasOpts,inPkg,onPick}){
+// เมนู ฿0 ที่ไม่อยู่ในแพ็คเกจของโต๊ะ (เนื้อ/รีฟิลของแพ็คเกจที่แพงกว่า) — กดแล้วถามก่อน เพราะใส่ = ให้ฟรี (ตรวจทาน 19 ต.ค. 69)
+const MC_OUTPKG={...MC_BADGE,left:4,right:"auto",color:"#9A3412",background:"#FFEDD5",border:"1px solid #FDBA74"};
+const MenuCard=memo(function MenuCard({m,soldOut,hiddenFromCustomer,hasOpts,inPkg,outPkgFree,onPick}){
   return <div className={soldOut?undefined:"mcard"} onClick={()=>{if(!soldOut)onPick(m);}} style={{background:C.white,border:`1px solid ${C.line}`,borderRadius:10,padding:"8px 6px",cursor:soldOut?"not-allowed":"pointer",textAlign:"center",position:"relative"}}>
     {!soldOut&&hasOpts&&<span style={MC_OPT}>+ ตัวเลือก</span>}
     {inPkg&&<span style={MC_PKG}>ในแพ็คเกจ</span>}
+    {outPkgFree&&<span style={MC_OUTPKG}>นอกแพ็คเกจ</span>}
     <div style={{position:"relative"}}>
     {m.image
       ?<img src={driveImgSrc(m.image,96)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:50,objectFit:"cover",borderRadius:7,marginBottom:4,filter:soldOut?"grayscale(80%)":"none"}}/>
@@ -21026,7 +21043,12 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
   const addItem=useCallback(function addItem(m){setItems(p=>{const ex=p.find(i=>i._new&&i.menu_id===m.id&&i.price===m.price&&!i.note&&!(i.options&&i.options.length));if(ex)return p.map(i=>i===ex?{...i,qty:i.qty+1}:i);return[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:m.price,qty:1,note:"",printer_id:m.printer_id||null,category:menuCatOf(m),_new:true}];});},[]);
   // Tap a menu: if it has add-on options for this branch, open the picker; else add directly.
   const[optPick,setOptPick]=useState(null);  // menu awaiting option selection
-  const pickOrAdd=useCallback((m)=>{if(optsSet.has(m.id))setOptPick(m);else addItem(m);},[optsSet,addItem]);
+  // โต๊ะแพ็คเกจ: เมนู ฿0 ที่ไม่อยู่ในแพ็คเกจของโต๊ะ = ใส่แล้วลูกค้าได้ฟรี (เช่น เนื้อของแพ็คเกจ ฿258 ให้โต๊ะ ฿199) → ถามก่อน
+  const pkgFreeOutside=(m)=>!!pkgScope&&!pkgScope.missing&&!!m&&!pkgScope.ids.has(String(m.id))&&!((+m.price||0)>0);
+  const pickOrAdd=useCallback(async(m)=>{
+    if(pkgFreeOutside(m)&&!await confirmDlg({title:"เมนูนี้ไม่อยู่ในแพ็คเกจของโต๊ะ",message:`${m.name} ราคา ฿0 — โต๊ะนี้ไม่ได้ซื้อแพ็คเกจที่มีเมนูนี้\nใส่แล้วลูกค้าได้ฟรี — ใส่จริงไหม?`,confirmLabel:"ใส่ให้ฟรี",cancelLabel:"ไม่ใส่"}))return;
+    if(optsSet.has(m.id))setOptPick(m);else addItem(m);
+  },[optsSet,addItem,pkgScope]);// eslint-disable-line react-hooks/exhaustive-deps
   function addItemWithOptions(m,chosen,qty){
     const addPrice=(chosen||[]).reduce((s,o)=>s+(+o.price||0),0);
     setItems(p=>[...p,{line_uid:uuidv4(),menu_id:m.id,name:m.name,price:(+m.price||0)+addPrice,qty:qty||1,note:"",options:chosen||[],printer_id:m.printer_id||null,category:menuCatOf(m),_new:true}]);
@@ -21350,6 +21372,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       confirmLabel:"ปิดบิลเลย (ครัวไม่ได้ใบ)",
       cancelLabel:"กลับไปส่งรายการ",
     }))return;
+    // ส่วนลดที่พนักงานใส่เอง (ทั้งบิล/รายเมนู) ต้องมีเหตุผล — บิล #605 สาขา 5 ลด ฿187 เต็มจำนวนโดยไม่มีใครรู้ว่าทำไม (19 ต.ค. 69)
+    // เหตุผลจดลงประวัติ (action_history) พร้อมโต๊ะ บิล ยอด และชื่อผู้ปิดบิล · กดยกเลิก = ไม่ปิดบิล
+    let discReason=null;
+    if((+manualDiscount||0)>0.004){
+      discReason=await reasonDlg({title:`ส่วนลด ฿${round2(manualDiscount).toLocaleString("en-US",{maximumFractionDigits:2})} — โต๊ะ ${table.table_number}`,
+        message:`ยอด ฿${round2(subtotal).toLocaleString("en-US",{maximumFractionDigits:2})} · ใส่เหตุผลของส่วนลดนี้ (ระบบจดชื่อผู้ปิดบิลไว้)`,
+        presets:["เจ้าของอนุญาต","แขกรีสอร์ท","ชดเชยลูกค้า","ส่วนลดพนักงาน","สมาชิก/ลูกค้าประจำ"],confirmLabel:"ยืนยันส่วนลด",cancelLabel:"กลับไปแก้"});
+      if(discReason==null)return;
+    }
     setSavingGuard(true);
     try{
       // แบ่งจ่าย: ยอดเงินสดคือเฉพาะขั้นที่เป็นเงินสด ไม่ใช่ทั้งบิล — ลิ้นชักกับเงินทอนต้องอิงตัวนี้
@@ -21410,6 +21441,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         else{notifyDlg("⚠️ มีการเพิ่ม/แก้รายการของโต๊ะนี้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — ยังไม่ได้ตัดเงิน\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อตรวจสอบยอดล่าสุดก่อนชำระเงิน");setSavingGuard(false);onDone();onClose();return;}
       }
       verRef.current=row.updated_at;
+      if(discReason!=null){try{await api.addActionHist({action:`ส่วนลดบิล · ${branch.name||"-"} (#${branch.id}) · โต๊ะ ${table.table_number} · บิล #${existingOrder.id} · ฿${round2(manualDiscount).toLocaleString("en-US",{maximumFractionDigits:2})} จากยอด ฿${round2(subtotal).toLocaleString("en-US",{maximumFractionDigits:2})} · เหตุผล: ${discReason} · โดย ${currentUser?.username||currentUser?.name||"ไม่ทราบชื่อ"}`,time:nowStr()});}catch(e){console.warn("discAudit",e);}}
       // เงินสด = ต้องเปิดลิ้นชักให้ทอนเงิน — ส่งไปพร้อมใบเสร็จในการเขียนครั้งเดียว (cashPart>0 = kick)
       // เดิมยิงลิ้นชักกับใบเสร็จแยกกันพร้อมกัน ต่างคนต่างเขียนทับแถวเครื่องแคชเชียร์ → ลิ้นชักไม่เด้ง/ใบเสร็จหายเงียบ
       // เริ่มตรงนี้ (ก่อนลงบันทึกเงินสด) · ลิ้นชักรอเรนเดอร์+ส่งรูปใบเสร็จก่อน จึงเด้งช้ากว่าเดิมราว 1-2 วิ (แลกกับไม่ทับกันเอง)
@@ -21472,7 +21504,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ค้นหาเมนู..." style={{...iS,padding:"7px 12px",fontSize:13}}/>
       </div>
       <div style={{flex:1,minHeight:0,overflowY:"auto",padding:8,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:6,alignContent:"start"}}>
-        {filtered.map(m=><MenuCard key={m.id} m={m} soldOut={menuSoldOutAt(m,bidSale)} hiddenFromCustomer={menuHiddenAt(m,bidSale)} hasOpts={optsSet.has(m.id)} inPkg={!!pkgScope&&!pkgScope.missing&&pkgScope.ids.has(String(m.id))} onPick={pickOrAdd}/>)}
+        {filtered.map(m=><MenuCard key={m.id} m={m} soldOut={menuSoldOutAt(m,bidSale)} hiddenFromCustomer={menuHiddenAt(m,bidSale)} hasOpts={optsSet.has(m.id)} inPkg={!!pkgScope&&!pkgScope.missing&&pkgScope.ids.has(String(m.id))} outPkgFree={pkgFreeOutside(m)} onPick={pickOrAdd}/>)}
         {filtered.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"40px 16px",color:C.ink4,fontFamily:"'Sarabun',sans-serif"}}>
           <Ic d={I.food} s={42} c={C.line}/>
           <p style={{marginTop:10,fontSize:13.5,fontWeight:800,color:C.ink3}}>{search?"ไม่พบเมนูที่ค้นหา":"ยังไม่มีเมนูที่จัดหมวดหมู่ไว้"}</p>
@@ -22521,6 +22553,10 @@ function CustomerPage({branchId,tableId,token}){
       return;
     }
     setSending(true);
+    // รายการชุดที่ส่งรอบนี้ — ประกาศนอก try ให้ catch ใช้ตัวเดียวกัน
+    // (เดิมประกาศ const sending=cart ใน try ⟹ ใน catch ชื่อ sending คือ state boolean ของปุ่ม
+    //  ของหมด/นอกแพ็คเกจ = ของทั้งตะกร้าหายเงียบ · รอชำระ/หมดเวลา = จอลูกค้าล้ม "ระบบขัดข้อง" — ตรวจทาน 19 ต.ค. 69)
+    const batch=cart;
     try{
       // Re-validate the QR token right before submitting (token may have been rotated mid-session)
       const matches=await api.scanTable(branchId,tableId,token);
@@ -22534,13 +22570,12 @@ function CustomerPage({branchId,tableId,token}){
       // Handing the lines to the outbox also REMOVES them from the cart, so the cart only ever
       // holds not-yet-sent lines. That is what makes it impossible to bump the qty of a line that
       // is already in flight (its uid is spoken for, so the increment would be deduped away).
-      const sending=cart;
-      const sendingUids=new Set(sending.map(l=>l&&l.line_uid).filter(Boolean));
-      writeOutbox({lines:sending,at:Date.now()});
+      const sendingUids=new Set(batch.map(l=>l&&l.line_uid).filter(Boolean));
+      writeOutbox({lines:batch,at:Date.now()});
       setCart(p=>p.filter(l=>!(l&&l.line_uid&&sendingUids.has(l.line_uid))));
       // Atomic append (compare-and-set + retry) — สั่งพร้อมกันหลายคนโต๊ะเดียวไม่ทับกัน, ไม่มีรายการหาย
-      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:sending,ordered_by:"customer",blockIfAwaiting:true});
-      markSent(sending);
+      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:batch,ordered_by:"customer",blockIfAwaiting:true});
+      markSent(batch);
       writeOutbox(null);
       setDone(true);
       loadMyOrder();
@@ -22550,16 +22585,16 @@ function CustomerPage({branchId,tableId,token}){
       // ไม่งั้นคิวออฟไลน์จะวนส่งไม่จบ และลูกค้าเสียของที่เลือกไว้ทั้งหมด
       if(e&&e.awaitingPayment){
         writeOutbox(null);setOutbox(null);
-        setCart(p=>[...sending,...p]);
+        setCart(p=>[...batch,...p]);
         setPayWaitMsg(true);
         setSending(false);
         loadMyOrder();
         return;
       }
       // หมดเวลาสั่งของโต๊ะบุฟเฟต์ = ปฏิเสธถาวร (ไม่ใช่เน็ตสะดุด) — คืนของเข้าตะกร้า ไม่วนส่งซ้ำ บอกลูกค้าตรงๆ
-      if(e&&e.orderTimeUp){writeOutbox(null);setOutbox(null);setCart(p=>[...sending,...p]);setTimeUpNow(true);setTimeUpMsg(true);setSending(false);loadMyOrder();return;}
-      if(e&&e.unavailable){handleUnavailable(e,sending);setSending(false);loadMyOrder();return;}
-      if(e&&(e.notInPackage||e.badLine)){handleRejected(e,sending);setSending(false);loadMyOrder();return;}
+      if(e&&e.orderTimeUp){writeOutbox(null);setOutbox(null);setCart(p=>[...batch,...p]);setTimeUpNow(true);setTimeUpMsg(true);setSending(false);loadMyOrder();return;}
+      if(e&&e.unavailable){handleUnavailable(e,batch);setSending(false);loadMyOrder();return;}
+      if(e&&(e.notInPackage||e.badLine)){handleRejected(e,batch);setSending(false);loadMyOrder();return;}
       // Do NOT clear the cart and do NOT drop the outbox — it retries on reconnect. Re-sending is
       // safe: the append ignores any line_uid the order already carries.
       setOutbox(readOutbox());
@@ -26608,12 +26643,16 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
   };
   // แถบเขียวหลังเปิดโต๊ะ: พิมพ์ QR + ใบเปิดโต๊ะซ้ำ (กระดาษหมด/ใบหาย) — ใบสร้างจากบิลจริง (ราคาที่จดตอนเปิด · จำนวนคนล่าสุด)
   // บิลไม่มีแพ็คเกจ (ไม่น่าเกิดในแถบนี้) = พิมพ์ QR อย่างเดียว
-  const reprintOpenSet=()=>{
-    const t=selTable,o=selOrder;if(!t)return;
+  const reprintOpenSet=async()=>{
+    const t=selTable;let o=selOrder;if(!t)return;
+    // บิลบนจออาจเก่า (เพิ่ม/ลดคนในจอโต๊ะไปแล้ว) — อ่านล่าสุดก่อน · อ่านไม่ได้ = ใช้ที่มี
+    try{if(o&&o.id){const r=await api.getPOSOrderById(o.id);if(Array.isArray(r)&&r[0])o=r[0];}}catch{}
     const bp=pkgOfBill(o&&o.items);
     if(!bp){printSelQR();return;}
     const def=pkgLibOf(posSettings).find(p=>String(p.id)===String(bp.id))||null;
-    printPkgOpenSet({table:t,branch:currentBranch,printers,posSettings,items:o.items,at:o.created_at,pkg:def,by:currentUser?.username||currentUser?.name||null,onPrinted:()=>loadAll({silent:true})});
+    // เวลาสั่งตามที่จดในบิล (ตรงกับนับถอยหลังของลูกค้าและตัวกันฝั่งส่ง) ไม่ใช่คลังที่อาจแก้ไปแล้ว
+    const pkg=bpMinutes(bp.mins)!=null?{...(def||{}),order_minutes:bp.mins}:def;
+    printPkgOpenSet({table:t,branch:currentBranch,printers,posSettings,items:o.items,at:o.created_at,pkg,by:o.ordered_by||currentUser?.username||currentUser?.name||null,onPrinted:()=>loadAll({silent:true})});
   };
   const[showPrinters,setShowPrinters]=useState(false);
   const[showReceipt,setShowReceipt]=useState(false);
@@ -27085,7 +27124,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     :{c:C.red,bg:C.redLight,t:"🔴 ออฟไลน์"};
   // งานล่าสุดที่เครื่องนี้ทำจริง — ตอบคำถาม "กดสั่งพิมพ์แล้วถึงเครื่องหรือยัง" ได้ทันที
   // ตัวพิมพ์จดไว้ตอนล้างคำสั่งที่ทำเสร็จ (เขียนอยู่แล้ว ไม่มีการเขียนเพิ่ม)
-  const JOB_LABEL={rp:"ใบครัว/พิมพ์ซ้ำ",qr:"QR โต๊ะ",pj:"ใบเสร็จ",dk:"เปิดลิ้นชัก",tp:"ทดสอบพิมพ์"};
+  // ใบครัวอัตโนมัติไม่จดที่นี่ (ไม่เพิ่มการเขียน) — ข้อความต้องบอกว่าเป็น "คำสั่งจากแอป" ไม่งั้นเครื่องครัวที่พิมพ์ทั้งคืนดูเหมือนไม่ได้ทำอะไร
+  const JOB_LABEL={rp:"พิมพ์ซ้ำ/ใบยกเลิก/ย้ายโต๊ะ",qr:"QR โต๊ะ",pj:"ใบเสร็จ",dk:"เปิดลิ้นชัก",tp:"ทดสอบพิมพ์"};
   const lastJobText=(p)=>{
     let d={};try{d=JSON.parse(p.description||"{}");}catch{}
     const j=d.lastJob;if(!j||!j.at)return "";
@@ -27093,7 +27133,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     // ตัวพิมพ์ v46+ บอกผลจริง (ok:false + เหตุ) · ok:true ของตัวพิมพ์รุ่นเก่าเป็นจริงเสมอแม้ส่งไม่ผ่าน
     // จึงขึ้นเฉพาะตอนไม่ออก — ไม่ขึ้น ✅ ที่อาจหลอกตา
     const res=j.ok===false?" — ❌ ไม่ออก: "+printErrText(j.err||{}):"";
-    return "🖨 งานล่าสุด: "+((j.kind==="pj"&&j.what)?j.what:(JOB_LABEL[j.kind]||j.kind||""))+" "+tm+res;
+    return "🖨 คำสั่งล่าสุดจากแอป (ไม่นับใบครัวอัตโนมัติ): "+((j.kind==="pj"&&j.what)?j.what:(JOB_LABEL[j.kind]||j.kind||""))+" "+tm+res;
   };
   const activePrinters=printers.filter(p=>p.active!==false);
   const isIgnored=(p)=>{try{return JSON.parse(p.description||"{}").ig===1;}catch{return false;}};

@@ -1749,7 +1749,7 @@ try {
   ok_("หน้าลูกค้ายังซ่อนเมนูที่ตั้งซ่อน", APP.includes('setMenus(ms.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));'));
   // ถูกปฏิเสธเพราะของหมด = ปฏิเสธถาวร ห้ามเข้าคิวออฟไลน์วนส่งซ้ำไม่จบ
   ok_("หน้าลูกค้า: ของหมดไม่วนส่งซ้ำ ทั้งทางส่งปกติและทางคิวออฟไลน์",
-    APP.includes("if(e&&e.unavailable){handleUnavailable(e,sending);setSending(false);loadMyOrder();return;}") &&
+    APP.includes("if(e&&e.unavailable){handleUnavailable(e,batch);setSending(false);loadMyOrder();return;}") &&
     APP.includes("else if(e&&e.unavailable){handleUnavailable(e,o&&o.lines);loadMyOrder();}") &&
     APP.includes("writeOutbox(null);setOutbox(null);\n    const back=(Array.isArray(lines)?lines:[]).filter(l=>!gone.has(+(l&&l.menu_id)));"));
 
@@ -1791,7 +1791,7 @@ ok_("ด่านชุดรอชำระเงินรันจนจบ", 
     APP.includes("ordered_by:currentUser.username})") && !APP.includes("ordered_by:currentUser.username,blockIfAwaiting"));
   // ถูกปฏิเสธเพราะรอชำระ ≠ เน็ตสะดุด ห้ามวนส่งใหม่ และห้ามทำของในตะกร้าหาย
   ok_("โดนปฏิเสธแล้วเลิกวนส่ง และคืนของกลับตะกร้า",
-    APP.includes("if(e&&e.awaitingPayment){") && APP.includes("setCart(p=>[...sending,...p]);")
+    APP.includes("if(e&&e.awaitingPayment){") && APP.includes("setCart(p=>[...batch,...p]);")
     && APP.includes("if(back.length)setCart(p=>[...back,...p]);"));
   // คิวออฟไลน์คือรายการที่เซิร์ฟเวอร์ยังไม่เคยได้รับ — ทิ้งไปคือออเดอร์ลูกค้าหายเงียบ
   ok_("คิวออฟไลน์โดนปฏิเสธก็ต้องคืนของ ไม่ใช่ลบทิ้ง",
@@ -7724,7 +7724,7 @@ section("แพ็คเกจบุฟเฟต์: เปิดโต๊ะแ
     ck("ถูกปฏิเสธเพราะนอกแพ็คเกจ บอกชื่อและรหัสบรรทัดที่ต้องเอาออก", e1 ? [e1.rejectUids, e1.rejectNames] : null, [["u999_1"], ["เมนู999"]]);
     // หน้าลูกค้า: ปฏิเสธถาวร ห้ามเข้าคิววนส่ง — ทั้งทางกดสั่งและทางคิวออฟไลน์
     ok_("หน้าลูกค้า: นอกแพ็คเกจ/รายการผิด ไม่วนส่งซ้ำ ทั้งทางส่งปกติและทางคิวออฟไลน์",
-      APP.includes("if(e&&(e.notInPackage||e.badLine)){handleRejected(e,sending);setSending(false);loadMyOrder();return;}") &&
+      APP.includes("if(e&&(e.notInPackage||e.badLine)){handleRejected(e,batch);setSending(false);loadMyOrder();return;}") &&
       APP.includes("else if(e&&(e.notInPackage||e.badLine)){handleRejected(e,o&&o.lines);loadMyOrder();}"));
     let hr = null;
     try {
@@ -9125,7 +9125,7 @@ section("โต๊ะบุฟเฟต์: นับถอยหลังเว
     CP.includes("if(payWaiting){setPayWaitMsg(true);return;}if(timeUp){setTimeUpMsg(true);return;}placeOrder();") &&
     CP.includes("!payWaiting&&!timeUp&&<Btn onClick={()=>setStep(\"menu\")}") && CP.includes("นั่งต่อได้ตามสบายจนร้านปิด") && !/timeUp[^\n]{0,80}setCallAsk/.test(CP));
   ok_("หน้าลูกค้า: ตัวส่งตอบหมดเวลา (ทั้งกดสั่งและคิวส่งลองใหม่) = คืนของเข้าตะกร้า ล้างคิว ไม่วนส่งซ้ำ บอกลูกค้า",
-    CP.includes("if(e&&e.orderTimeUp){writeOutbox(null);setOutbox(null);setCart(p=>[...sending,...p]);setTimeUpNow(true);setTimeUpMsg(true);") &&
+    CP.includes("if(e&&e.orderTimeUp){writeOutbox(null);setOutbox(null);setCart(p=>[...batch,...p]);setTimeUpNow(true);setTimeUpMsg(true);") &&
     CP.includes("else if(e&&e.orderTimeUp){const back=(o&&Array.isArray(o.lines))?o.lines:[];writeOutbox(null);setOutbox(null);if(back.length)setCart(p=>[...back,...p]);setTimeUpNow(true);setTimeUpMsg(true);"));
   ok_("นับถอยหลังเป็นคอมโพเนนต์แยก (วาดใหม่ทุกวินาทีเฉพาะตัวเอง) · หน้าลูกค้าโชว์ในแถบแพ็คเกจ · จอพนักงานโชว์ในแถบแพ็คเกจของโต๊ะ",
     APP.includes("const OrderCountdown=memo(function OrderCountdown({end,staff}){") && APP.includes("useEffect(()=>{const t=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(t);},[]);") &&
@@ -9165,6 +9165,77 @@ section("ผังโต๊ะ: โต๊ะใหม่ไม่ซ้อนโ
   ok_("ฟอร์มเพิ่มโต๊ะใช้ช่องว่างจริงของโซนที่เลือก · ผังและความสูงผังใช้ตำแหน่งชุดเดียวกัน (ไม่มีโต๊ะซ้อน)",
     MAP.includes("else{const s=freeSlot(layoutOf(tables.filter(t=>(t.zone||\"\")===(d.zone||\"\")).sort(tableNumCmp)).placed);") &&
     MAP.includes("const tableLayout=layoutOf(sortedTables);") && MAP.includes("const p=tableLayout&&tableLayout.pos.get(t.id);") && !MAP.includes("slotFor(sortedTables.length)"));
+}
+
+// ── ผลตรวจคืนแรกสาขา 5 (19 ต.ค. 69): ตะกร้าลูกค้าที่ถูกปฏิเสธ · ผังโต๊ะไม่ขึ้นกับภาษาเครื่อง · เมนู ฿0 นอกแพ็คเกจ · เหตุผลส่วนลด ฯลฯ ──
+section("ตรวจคืนแรกสาขา 5: แก้บั๊กที่เจอจากการขายจริง");
+{
+  const fnOf = (src, sig) => { const st = src.indexOf(sig); if (st < 0) throw new Error("ไม่เจอ " + sig); let d = 0; for (let i = src.indexOf("{", st + sig.length - 1); i < src.length; i++) { if (src[i] === "{") d++; else if (src[i] === "}") { d--; if (d === 0) return src.slice(st, i + 1); } } throw new Error("อ่านไม่จบ"); };
+  const safe = async (f) => { try { return await f(); } catch (e) { return "โยน: " + (e && e.message); } };
+  const CP = (() => { const st = APP.indexOf("function CustomerPage("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
+  // ① ส่งแล้วถูกปฏิเสธ: ของในตะกร้าต้องกลับมาครบ (รันตัวจริง โดยมี state boolean ชื่อ sending อยู่ในขอบเขต เหมือนในหน้าจริง)
+  const runPlace = async (errKind) => {
+    const lines = [{ line_uid: "a1", menu_id: 1, name: "กุ้ง", price: 0, qty: 2 }, { line_uid: "b2", menu_id: 2, name: "ปลาหมึก", price: 0, qty: 3 }];
+    let cart = lines.slice(), outbox = "x"; const got = {};
+    const names = ["cart", "sending", "readOutbox", "flushOutbox", "setSending", "api", "branchId", "tableId", "token", "table", "setGateError", "writeOutbox", "setCart", "setOutbox", "markSent", "setDone", "loadMyOrder", "setPayWaitMsg", "handleUnavailable", "handleRejected", "setTimeUpNow", "setTimeUpMsg", "console"];
+    const err = Object.assign(new Error("x"), { [errKind]: true });
+    const vals = [cart, false, () => null, () => {}, () => {}, { scanTable: async () => [{ id: 9 }], posAppendItems: async () => { throw err; } }, 5, 9, "tk", { table_number: "A1" }, () => {},
+      (o) => { outbox = o; }, (u) => { cart = typeof u === "function" ? u(cart) : u; }, (o) => { outbox = o; }, () => {}, () => {}, () => {}, () => {},
+      (e, l) => { got.unavailable = l; }, (e, l) => { got.rejected = l; }, () => {}, () => {}, { error: () => {} }];
+    const f = new Function(...names, "return async " + fnOf(CP, "function placeOrder(){") + ";")(...vals);
+    await f();
+    return [cart.map((l) => l.line_uid).join(","), Array.isArray(got.unavailable) ? got.unavailable.length : got.unavailable, Array.isArray(got.rejected) ? got.rejected.length : got.rejected];
+  };
+  ck("หน้าลูกค้า: ส่งแล้วโดนปฏิเสธ (รอชำระ/หมดเวลา) = ของกลับเข้าตะกร้าครบ · ของหมด/นอกแพ็คเกจ = ตัวจัดการได้รายการที่ส่งจริง (เดิมได้ false → ตะกร้าหาย/จอล้ม)",
+    [await safe(() => runPlace("awaitingPayment")), await safe(() => runPlace("orderTimeUp")), await safe(() => runPlace("unavailable")), await safe(() => runPlace("notInPackage"))],
+    [["a1,b2", undefined, undefined], ["a1,b2", undefined, undefined], ["", 2, undefined], ["", undefined, 2]]);
+  ok_("หน้าลูกค้า: placeOrder ไม่มีตัวแปรชื่อ sending นอกจาก setSending (กันชื่อชนกับ state ของปุ่มอีก)",
+    (() => { const b = fnOf(CP, "function placeOrder(){"); return !/(^|[^A-Za-z_])sending([^A-Za-z_]|$)/.test(b.replace(/setSending/g, "").replace(/\/\/[^\n]*/g, "")); })());
+  // ② ผังโต๊ะ: ตำแหน่งที่จดไว้ — โต๊ะที่สร้างก่อนได้ที่เดิม ไม่ว่าเครื่องเรียงชื่อภาษาไหน
+  const MAP = (() => { const st = APP.indexOf("function POSTableMap("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
+  const ln = (p) => { const l = MAP.split("\n").find((x) => x.trim().startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; };
+  let LY = null;
+  try { LY = new Function("canvasW", [ln("const TW=116,TH=96,GAP=14,PAD=16;"), ln("const cols=Math.max(1,"), ln("function slotFor(idx){"), ln("const overlapPos="), ln("function freeSlot(taken){"), fnOf(MAP, "function layoutOf(list){"), "return {layoutOf};"].join("\n"))(820); } catch (e) { console.log("       ดึง layoutOf ไม่ได้: " + e.message); }
+  if (LY) {
+    const D = [[136, "D1", 16, 16], [137, "D2", 146, 16], [138, "D3", 276, 16], [139, "D4", 406, 16], [140, "D5", 16, 126], [141, "D6", 146, 126], [144, "ไม่ต้องทำ", 16, 126]].map(([id, n, x, y]) => ({ id, table_number: n, x, y }));
+    const th = [...D].sort((a, b) => String(a.table_number).localeCompare(String(b.table_number), "th-TH", { numeric: true }));
+    const en = [...D].sort((a, b) => String(a.table_number).localeCompare(String(b.table_number), "en-US", { numeric: true }));
+    const at = (L, id) => { const p = L.pos.get(id); return [p.x, p.y]; };
+    const Lth = LY.layoutOf(th), Len = LY.layoutOf(en);
+    ck("ผังโต๊ะ: เครื่องภาษาไทย (ไทยเรียงก่อนอังกฤษ) และอังกฤษ ได้ผังเดียวกัน · D5 ตัวจริงอยู่ที่เดิม · โต๊ะขยะ 'ไม่ต้องทำ' ที่ทับอยู่ย้ายไปที่ว่าง",
+      [at(Lth, 140), at(Len, 140), th[0].table_number === "ไม่ต้องทำ", JSON.stringify(at(Lth, 144)) === JSON.stringify(at(Len, 144)), at(Lth, 144)[0] === 16 && at(Lth, 144)[1] === 126],
+      [[16, 126], [16, 126], true, true, false]);
+  } else ok_("ดึง layoutOf มารันได้", false);
+  // ③ จอขาย: เมนู ฿0 นอกแพ็คเกจ = ป้าย + ถามก่อนใส่ให้ฟรี · เมนูมีราคา/ในแพ็คเกจ = ไม่ถาม
+  ok_("จอขาย: เมนู ฿0 นอกแพ็คเกจของโต๊ะ ขึ้นป้าย 'นอกแพ็คเกจ' และถามก่อนใส่ให้ฟรี (เมนูมีราคา/ในแพ็คเกจไม่ถาม)",
+    APP.includes("const pkgFreeOutside=(m)=>!!pkgScope&&!pkgScope.missing&&!!m&&!pkgScope.ids.has(String(m.id))&&!((+m.price||0)>0);") &&
+    APP.includes("if(pkgFreeOutside(m)&&!await confirmDlg({title:\"เมนูนี้ไม่อยู่ในแพ็คเกจของโต๊ะ\"") && APP.includes("outPkgFree={pkgFreeOutside(m)}") &&
+    APP.includes("{outPkgFree&&<span style={MC_OUTPKG}>นอกแพ็คเกจ</span>}"));
+  // ④ ส่วนลดต้องมีเหตุผล + จดประวัติ · ⑤ ใบกำกับภาษี VAT บวกเพิ่มบอกว่ารวม VAT แล้ว
+  const SALE = (() => { const st = APP.indexOf("function POSOrderPanel("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
+  const CO = (() => { try { return fnOf(SALE, "async function checkOut(methodArg,opts){"); } catch { return ""; } })();
+  ok_("ปิดบิลที่มีส่วนลดพนักงาน: ต้องใส่เหตุผลก่อน (ยกเลิก = ไม่ปิดบิล) · จดประวัติ โต๊ะ/บิล/ยอด/เหตุผล/ผู้ปิดบิล หลังตัดเงินสำเร็จ",
+    CO.indexOf("discReason=await reasonDlg(") > 0 && CO.includes("if(discReason==null)return;") && CO.indexOf("if(discReason==null)return;") < CO.indexOf("setSavingGuard(true);") &&
+    CO.indexOf("if(discReason!=null){try{await api.addActionHist(") > CO.indexOf("verRef.current=row.updated_at;") && CO.includes("· เหตุผล: ${discReason} · โดย "));
+  ok_("ใบกำกับภาษีอย่างย่อ: VAT บวกเพิ่มก็บอก 'ยอดรวมทั้งสิ้นรวม VAT แล้ว' (ทั้งใบรูปและใบเว็บ)",
+    APP.includes("if(posSettings&&posSettings.vat_enabled)L.push({t:order.vat_included!==false?\"* ราคานี้รวมภาษีมูลค่าเพิ่ม (VAT) แล้ว\":\"* ยอดรวมทั้งสิ้นรวมภาษีมูลค่าเพิ่ม (VAT) แล้ว\"") &&
+    APP.includes("const vatIncNote=posSettings?.vat_enabled?"));
+  // ⑥⑦ เวลาสั่งอาหารไม่เปลี่ยนเมื่อเพิ่ม/ลดคน · พิมพ์ซ้ำใช้บิลล่าสุด + เวลาที่จดในบิล
+  ok_("เพิ่มบรรทัดคน/รายการเพิ่มทีหลัง = เวลาสั่งอาหารตามที่จดในบิล · พิมพ์ QR + ใบเปิดโต๊ะซ้ำ = อ่านบิลล่าสุด ใช้เวลาที่จด และชื่อคนเปิดโต๊ะ",
+    APP.includes("const keepMins=bpMinutes(pk.mins)!=null?{order_minutes:pk.mins}:{};") && APP.includes("src={id:pk.id,name:pk.name,lines:pk.snap,...keepMins};") &&
+    APP.includes("try{if(o&&o.id){const r=await api.getPOSOrderById(o.id);if(Array.isArray(r)&&r[0])o=r[0];}}catch{}") &&
+    APP.includes("const pkg=bpMinutes(bp.mins)!=null?{...(def||{}),order_minutes:bp.mins}:def;") && APP.includes("by:o.ordered_by||currentUser?.username"));
+  // ⑨ แถบใบครัวไม่ออก: หลายโต๊ะสั่งเมนูเดียวกันในช่วงเดียวกัน = ขึ้นทุกโต๊ะ
+  try {
+    const L = APP.split("\n"); const line = (p) => L.find((x) => x.startsWith(p));
+    const OT = new Function([line("const printersAt="), line("function getPConn(p){"), APP_KITCHEN, grab(APP, "printerHandles"), grab(APP, "itemsWithoutPrinter"), grab(APP, "orphanTicketsOf"), "return orphanTicketsOf;"].join("\n"))();
+    const T = Date.parse("2026-10-19T11:36:29Z"), iso = (ms) => new Date(ms).toISOString();
+    const PR = [{ id: 13, branch_id: 5, ip: "1", active: true, categories: ["น้ำ"], description: JSON.stringify({ rcpt: 1, orphan: { at: T, names: ["ในวันเบาๆ"] } }) }];
+    const ORD = [{ id: 608, table_number: "A3", items: [{ line_uid: "L1", name: "ในวันเบาๆ", category: "หมูกระทะ", sent_at: iso(T - 3000) }] },
+      { id: 610, table_number: "B9", items: [{ line_uid: "L9", name: "ในวันเบาๆ", category: "หมูกระทะ", sent_at: iso(T - 60000) }] }];
+    ck("แถบใบครัวไม่ออก: สองโต๊ะสั่งเมนูเดียวกันที่ยังไม่มีเครื่องรับ (ในช่วงเดียวกัน) = ขึ้นทั้งสองโต๊ะ (เดิมขึ้นแค่โต๊ะเดียว)",
+      OT(PR, 5, ORD, T + 60000, 20 * 60000).map((o) => o.table).sort(), ["A3", "B9"]);
+  } catch (e) { ok_("ดึง orphanTicketsOf มารันได้: " + e.message, false); }
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
