@@ -9469,30 +9469,45 @@ section("หน้าลูกค้าสแกนเลื่อนได้�
 {
   // สคริปต์หัว index.html ตัวจริง กับ location/navigator ปลอม
   const st = HTML.indexOf("// ── หน้าลูกค้าสแกน QR (?scan=1)"), b0 = HTML.indexOf("(function () {", st), b1 = HTML.indexOf("})();", b0);
-  const runHead = (search, ua) => {
-    const out = { replaced: null, cls: "", vp: "width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" };
+  const runHead = (search, ua, store = {}) => {
+    const out = { replaced: null, cls: "", vp: "width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover", early: null, load: [] };
     const loc = { search, pathname: "/", hash: "", replace: (u) => { out.replaced = u; } };
     const doc = { documentElement: { get className() { return out.cls; }, set className(v) { out.cls = v; } },
       querySelector: () => ({ setAttribute: (k, v) => { out.vp = v; } }) };
-    new Function("location", "navigator", "document", "URLSearchParams", HTML.slice(b0, b1 + 5))(loc, { userAgent: ua }, doc, URLSearchParams);
+    const ss = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
+    const win = { addEventListener: (t, fn) => { if (t === "load") out.load.push(fn); } };
+    new Function("location", "navigator", "document", "URLSearchParams", "sessionStorage", "window", "setTimeout", HTML.slice(b0, b1 + 5))(loc, { userAgent: ua }, doc, URLSearchParams, ss, win, (f) => f());
+    out.early = out.replaced;            // ระหว่างแปลง <head> ต้องยังไม่ส่งต่อ
+    out.load.forEach((f) => f());        // หน้าโหลดเสร็จ
     return out;
   };
   const LINE_A = "Mozilla/5.0 (Linux; Android 13; SM-A145F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Mobile Safari/537.36 Line/14.16.1/IAB";
   const CHROME_A = "Mozilla/5.0 (Linux; Android 13; SM-A145F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Mobile Safari/537.36";
   const LINE_I = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Safari Line/14.16.1";
   const q = "?scan=1&branch=5&table=104&t=abc";
-  const a = runHead(q, LINE_A), a2 = runHead(q + "&openExternalBrowser=1", LINE_A), c = runHead(q, CHROME_A), i = runHead(q, LINE_I), staff = runHead("?pos=1&branch=5", LINE_A);
-  ck("LINE บน Android: ส่งไปเปิดในเบราว์เซอร์จริงครั้งเดียว (มีพารามิเตอร์แล้วไม่วน) · คงพารามิเตอร์โต๊ะ/รหัสเดิมครบ",
-    [a.replaced, a2.replaced, /scan=1/.test(a.replaced || "") && /table=104/.test(a.replaced || "") && /t=abc/.test(a.replaced || "")],
-    ["/?scan=1&branch=5&table=104&t=abc&openExternalBrowser=1", null, true]);
+  const tab = {};
+  const a = runHead(q, LINE_A, tab), aAgain = runHead(q, LINE_A, tab), a2 = runHead(q + "&openExternalBrowser=1", LINE_A), c = runHead(q, CHROME_A), i = runHead(q, LINE_I), staff = runHead("?pos=1&branch=5", LINE_A);
+  // ส่งต่อระหว่างแปลง <head> แล้ว LINE ตัดการนำทาง = หน้าขาวในแอป (ผลตรวจ 20 ต.ค.) ⟹ ต้องรอหน้าโหลดเสร็จ และลองครั้งเดียวต่อแท็บ
+  ck("LINE บน Android: ส่งไปเปิดในเบราว์เซอร์จริง 'หลังหน้าโหลดเสร็จ' ครั้งเดียวต่อแท็บ (โหลดใหม่ไม่ส่งซ้ำ · มีพารามิเตอร์แล้วไม่วน) · คงพารามิเตอร์โต๊ะ/รหัสเดิม · หน้าก็ปลดล็อกแล้วเผื่อ LINE ไม่ส่งต่อ",
+    [a.early, a.replaced, aAgain.replaced, a2.replaced, /scan=1/.test(a.replaced || "") && /table=104/.test(a.replaced || "") && /t=abc/.test(a.replaced || ""), /cust-scan/.test(a.cls)],
+    [null, "/?scan=1&branch=5&table=104&t=abc&openExternalBrowser=1", null, null, true, true]);
   ck("Chrome / LINE บน iPhone / หน้าพนักงาน: ไม่ถูกส่งต่อ", [c.replaced, i.replaced, staff.replaced], [null, null, null]);
   ck("หน้าลูกค้า: ติดป้าย cust-scan + ปลดล็อกซูม · หน้าพนักงานไม่โดน",
     [/cust-scan/.test(c.cls), c.vp, /cust-scan/.test(staff.cls), /user-scalable=no/.test(staff.vp)],
     [true, "width=device-width, initial-scale=1.0, viewport-fit=cover", false, true]);
-  ok_("หน้าลูกค้า: คืนค่าปกติของเบราว์เซอร์ (overflow-x ของ html · touch-action ของ body · overscroll ของ div) · กันล้นแนวนอนด้วย clip ที่กรอบ",
-    HTML.includes("html.cust-scan { overflow-x: visible !important; max-width: none !important; }") && HTML.includes("html.cust-scan body { touch-action: auto !important; }") &&
+  ok_("หน้าลูกค้า: คืนค่าปกติของเบราว์เซอร์ (overflow-x ของ html · overscroll ของ div) · กันล้นแนวนอนด้วย clip ที่กรอบ + Safari เก่าใช้ body แทน",
+    HTML.includes("html.cust-scan { overflow-x: visible !important; max-width: none !important; }") &&
     HTML.includes("html.cust-scan div { overscroll-behavior: auto; }") && HTML.includes("html.cust-scan .cust-shell { overflow-x: clip; }") &&
+    HTML.includes("@supports not (overflow-x: clip) { html.cust-scan body { overflow-x: hidden; } }") &&
     HTML.indexOf("// ── หน้าลูกค้าสแกน QR (?scan=1)") < HTML.indexOf("// ── Lock zoom"));
+  ok_("แอปไม่ขึ้น (เบราว์เซอร์เก่า/ไฟล์โหลดพลาด) = มีข้อความแนะนำ ไม่ใช่จอขาว · ไม่ลบ/ไม่โหลดซ้ำเอง",
+    HTML.includes('<div id="root"><div id="boot">กำลังโหลด…</div></div>') && HTML.includes("setTimeout(hint, 15000);") && HTML.includes('if (t && t.tagName === "SCRIPT") hint();') &&
+    HTML.includes("เปิดลิงก์นี้ด้วย <b>Chrome / Safari</b>"));
+  {
+    const VC = fs.readFileSync(new URL("../vite.config.js", import.meta.url), "utf8");
+    ok_("build ลดไวยากรณ์ให้เบราว์เซอร์มือถือรุ่นเก่าอ่านได้ (?. / ?? ไม่หลุดไปถึงเครื่องลูกค้า)", VC.includes('target: ["es2019", "safari12", "chrome64", "firefox68"],'));
+  }
+  ck("ไม่มีแผ่นทับที่ใช้ inset (เบราว์เซอร์เก่าไม่รู้จัก = แผ่นทับ/หน้าเลือกตัวเลือกไปอยู่นอกจอ)", (APP.match(/inset:0/g) || []).length, 0);
   ck("หน้าลูกค้า: ไม่ผูกตัวดักนิ้ว/ล้อเมาส์ใดๆ ตอนโหลด (หน้าพนักงานยังล็อกซูมเหมือนเดิม)",
     [zoomLock.scan.reg.length, zoomLock.reg.length > 0], [0, true]);
   // ตัวเฝ้าการเลื่อน
@@ -9502,12 +9517,15 @@ section("หน้าลูกค้าสแกนเลื่อนได้�
     CPx.includes('document.addEventListener("touchstart",ts,{passive:true});') && CPx.includes('document.addEventListener("touchmove",tm,{passive:true});') &&
     CPx.includes('document.addEventListener("touchend",te,{passive:true});') && CPx.includes('document.removeEventListener("touchend",te);'));
   ok_("ตัวเฝ้าการเลื่อน: นับเฉพาะปัดแนวตั้งชัดๆ ที่ยังเลื่อนต่อได้ · ไม่นับป็อปอัพ/ของลอย/สุดขอบ/หน้าสั้น · 2 ครั้งถึงสลับ",
-    CPx.includes("if(!s0||Math.abs(s0.dy)<90||Math.abs(s0.dy)<2*Math.abs(s0.dx))return;") && CPx.includes('if(document.body.style.position==="fixed")return;') &&
+    CPx.includes('const need=(e&&e.type==="touchcancel")?40:90;') && CPx.includes("if(!s0||Math.abs(s0.dy)<need||Math.abs(s0.dy)<2*Math.abs(s0.dx))return;") && CPx.includes('if(document.body.style.position==="fixed")return;') &&
+    CPx.includes('document.addEventListener("touchcancel",te,{passive:true});') && CPx.includes("if(window.visualViewport&&window.visualViewport.scale>1.05)return;") &&
+    CPx.includes("return t.clientX<r.left||t.clientX>r.right;") &&
     CPx.includes('if(getComputedStyle(n).position==="fixed")return true;') && CPx.includes("if(s0.dy<0?s0.p>=max-4:s0.p<=4)return;") && CPx.includes("const max=room();if(max<120)return;") &&
     CPx.includes("if(++strikes<2)return;"));
   ok_("ตัวเฝ้าการเลื่อน: เลื่อนทั้งหน้าไม่ได้ → กรอบเลื่อนเอง (จำทั้งแท็บ) · ยังไม่ได้อีก → แถบบอกวิธีเปิดในเบราว์เซอร์ + เรียกพนักงาน · แจ้งเซิร์ฟเวอร์ทั้งสองครั้ง",
     CPx.includes('reportCustDiag(scrollFix?"scroll_stuck_fallback":"scroll_stuck",{branch:branchId,table:tableId});') &&
-    CPx.includes('if(!scrollFix){try{sessionStorage.setItem(SCROLL_FIX_KEY,"1");}catch{}setScrollFix(true);}') && CPx.includes("else setScrollHelp(true);") &&
+    CPx.includes('if(!scrollFix){try{sessionStorage.setItem(SCROLL_FIX_KEY,"1");}catch{}fixFromRef.current=s0.p;setScrollFix(true);}') && CPx.includes("else setScrollHelp(true);") &&
+    CPx.includes("useEffect(()=>{if(scrollFix&&shellRef.current&&fixFromRef.current>0){shellRef.current.scrollTop=fixFromRef.current;fixFromRef.current=0;}},[scrollFix]);") &&
     CPx.includes("{scrollHelp&&<div role=\"alert\"") && CPx.includes("onClick={()=>{setScrollHelp(false);setCallAsk(true);}}"));
   // client_diag ตัวจริง: จด log แล้วตอบ 204 · ไม่แตะบัญชี · ไม่ต้องมีคีย์บัญชี
   {

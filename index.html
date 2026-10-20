@@ -50,15 +50,20 @@
         try {
           var p = new URLSearchParams(location.search);
           if (p.get("scan") !== "1") return;
-          var ua = navigator.userAgent || "";
-          if (/\bLine\//i.test(ua) && /Android/i.test(ua) && !p.has("openExternalBrowser")) {
-            p.set("openExternalBrowser", "1");
-            location.replace(location.pathname + "?" + p.toString() + location.hash);
-            return;
-          }
           document.documentElement.className += " cust-scan";
           var v = document.querySelector('meta[name="viewport"]');
           if (v) v.setAttribute("content", "width=device-width, initial-scale=1.0, viewport-fit=cover");
+          var ua = navigator.userAgent || "";
+          if (/\bLine\//i.test(ua) && /Android/i.test(ua) && !p.has("openExternalBrowser")) {
+            var tried = false;
+            try { tried = sessionStorage.getItem("fc_line_ext") === "1"; sessionStorage.setItem("fc_line_ext", "1"); } catch (e) {}
+            if (!tried) window.addEventListener("load", function () {
+              setTimeout(function () {
+                p.set("openExternalBrowser", "1");
+                location.replace(location.pathname + "?" + p.toString() + location.hash);
+              }, 300);
+            });
+          }
         } catch (e) { /* อ่าน URL ไม่ได้ = ใช้ค่าเดิม */ }
       })();
     </script>
@@ -119,9 +124,12 @@
          ค่าพวกนี้ปลอดภัยบน Chrome/Safari แต่เบราว์เซอร์ในแอป (LINE/Facebook/Samsung) บางรุ่นเลื่อนหน้าไม่ได้
          กันหน้าล้นแนวนอนด้วย overflow-x:clip ที่กรอบแทน (clip ไม่ทำให้กรอบกลายเป็นกล่องเลื่อนซ้อน) */
       html.cust-scan { overflow-x: visible !important; max-width: none !important; }
-      html.cust-scan body { touch-action: auto !important; }
       html.cust-scan div { overscroll-behavior: auto; }
       html.cust-scan .cust-shell { overflow-x: clip; }
+      /* iOS 15 / Safari เก่าไม่รู้จัก clip: ให้ body ตัดแนวนอนแทน (html ไม่ได้ตั้ง overflow ⟹ ส่งต่อไปที่จอ ไม่เกิดกล่องเลื่อนซ้อน) */
+      @supports not (overflow-x: clip) { html.cust-scan body { overflow-x: hidden; } }
+      /* ระหว่างรอโหลดแอป (และเบราว์เซอร์ที่เปิดแอปไม่ได้เลย) — ข้อความนี้ถูก React แทนที่ทันทีที่แอปขึ้น */
+      #boot { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; font-family: 'Sarabun', sans-serif; color: #475569; font-size: 15px; line-height: 1.7; }
       /* กดค้างที่ปุ่มบนไอแพด = iOS เลือกข้อความบนปุ่มแล้วขึ้นแถบ "คัดลอก · ค้นดู · แปลภาษา"
          บังปุ่มข้างใต้ และพนักงานต้องแตะที่อื่นก่อนถึงจะกดต่อได้ ปุ่มไม่มีอะไรให้คัดลอกอยู่แล้ว
          ช่องกรอกข้อความ (input/textarea) ไม่โดนกฎนี้ ยังเลือก/วางข้อความได้ตามปกติ */
@@ -129,7 +137,27 @@
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div id="boot">กำลังโหลด…</div></div>
+    <script>
+      // ── แอปไม่ขึ้น (เบราว์เซอร์เก่ามากรันโค้ดไม่ได้ / เน็ตหลุดตอนโหลดไฟล์) ต้องไม่ใช่จอขาวเงียบๆ ──
+      // React ขึ้นเมื่อไร #boot หายเอง · ตัวนี้แค่ "เติมคำแนะนำ" ไม่ลบอะไร ไม่โหลดซ้ำเอง
+      (function () {
+        var scan = /\bcust-scan\b/.test(document.documentElement.className);
+        var hint = function () {
+          var b = document.getElementById("boot");
+          if (!b || b.getAttribute("data-hint")) return;
+          b.setAttribute("data-hint", "1");
+          b.innerHTML = scan
+            ? "ยังโหลดเมนูไม่ขึ้น<br>ลองกดโหลดหน้านี้ใหม่ หรือเปิดลิงก์นี้ด้วย <b>Chrome / Safari</b><br>(ในแอป LINE: กด ⋮ มุมขวาบน → เปิดในเบราว์เซอร์)<br><br>ถ้ายังไม่ได้ กรุณาเรียกพนักงานให้ช่วยสั่ง 🙏"
+            : "ยังโหลดไม่ขึ้น — ลองโหลดหน้านี้ใหม่ หรือเปิดด้วย Chrome / Safari เวอร์ชันล่าสุด";
+        };
+        setTimeout(hint, 15000);
+        window.addEventListener("error", function (e) {
+          var t = e && e.target;
+          if (t && t.tagName === "SCRIPT") hint();   // ไฟล์แอปโหลดไม่ได้
+        }, true);
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

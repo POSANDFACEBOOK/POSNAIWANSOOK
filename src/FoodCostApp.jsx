@@ -3263,7 +3263,7 @@ function NumPad({value,onChange,onClose,integer,title}){
     else if(e.key==="Escape")onClose();
   };window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);},[press,integer,onChange,onClose]);
   const keys=["7","8","9","4","5","6","1","2","3",integer?"C":".","0","⌫"];
-  return <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.45)",zIndex:10000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+  return <div onClick={onClose} style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,0.45)",zIndex:10000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
     <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:"20px 20px 0 0",padding:"16px 16px 22px",width:"100%",maxWidth:440,boxShadow:"0 -6px 30px rgba(0,0,0,0.25)"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
         <span style={{fontSize:13,fontWeight:800,color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>🔢 {title||"ใส่ตัวเลข"}</span>
@@ -3359,7 +3359,7 @@ function Modal({title,onClose,children,wide,extraWide,noScroll,disableEsc}){
   const bodyStyle=noScroll
     ?{padding:mob?"14px 16px 18px":"20px 24px 24px",overflow:"hidden",flex:1,minHeight:0,display:"flex",flexDirection:"column"}
     :{padding:mob?"14px 16px 18px":"20px 24px 24px",overflowY:"auto",flex:1,WebkitOverflowScrolling:"touch"};
-  return <div className="mdl-ovl" onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",inset:0,display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",zIndex:1000,padding:mob?0:16}}>
+  return <div className="mdl-ovl" onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",top:0,right:0,bottom:0,left:0,display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",zIndex:1000,padding:mob?0:16}}>
     <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:mob?"18px 18px 0 0":20,width:"100%",maxWidth:`min(96vw, ${cap}px)`,height:noScroll?(mob?"96vh":"94vh"):undefined,maxHeight:mob?"96vh":"94vh",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(15,23,42,.22)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:mob?"14px 16px 12px":"18px 24px 14px",borderBottom:`1px solid ${C.line}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,background:C.bg,gap:10}}>
         <span style={{fontFamily:"'Sarabun',sans-serif",fontSize:mob?16:18,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{title}</span>
@@ -3379,7 +3379,7 @@ function ImgViewerHost(){
   useEffect(()=>{_imgViewer=s=>setSrc(s);return()=>{_imgViewer=null;};},[]);
   useEffect(()=>{if(!src)return;const h=e=>{if(e.key==="Escape")setSrc(null);};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[src]);
   if(!src)return null;
-  return <div onClick={()=>setSrc(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",zIndex:99999,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+  return <div onClick={()=>setSrc(null)} style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(0,0,0,0.9)",zIndex:99999,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
     <button onClick={()=>setSrc(null)} aria-label="ปิด" style={{position:"absolute",top:14,right:14,width:46,height:46,borderRadius:"50%",background:"rgba(255,255,255,0.16)",border:"2px solid rgba(255,255,255,0.75)",color:"#fff",fontSize:24,fontWeight:800,lineHeight:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1,WebkitTapHighlightColor:"transparent"}}>✕</button>
     <img src={src} alt="" onClick={e=>e.stopPropagation()} style={{maxWidth:"94vw",maxHeight:"88vh",objectFit:"contain",borderRadius:10,boxShadow:"0 12px 50px rgba(0,0,0,0.6)"}}/>
   </div>;
@@ -3393,7 +3393,7 @@ function PhotoGalleryHost(){
   useEffect(()=>{_galleryOpener=v=>setSt(v);return()=>{_galleryOpener=null;};},[]);
   useEffect(()=>{if(!st)return;const h=e=>{if(e.key==="Escape")setSt(null);};document.addEventListener("keydown",h);return()=>document.removeEventListener("keydown",h);},[st]);
   if(!st)return null;
-  return <div onClick={()=>setSt(null)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.7)",backdropFilter:"blur(6px)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"'Sarabun',sans-serif"}}>
+  return <div onClick={()=>setSt(null)} style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,0.7)",backdropFilter:"blur(6px)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"'Sarabun',sans-serif"}}>
     <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,maxWidth:"min(94vw,640px)",width:"100%",maxHeight:"88vh",overflowY:"auto",boxShadow:"0 30px 80px rgba(0,0,0,0.4)"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"14px 18px",borderBottom:`1px solid ${C.line}`,position:"sticky",top:0,background:C.white,zIndex:1}}>
         <span style={{fontSize:15,fontWeight:900,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{st.title||"รูปภาพ"} ({st.images.length})</span>
@@ -3444,7 +3444,7 @@ function ConfirmBox(){
   const accent=danger?C.red:C.brand;
   const accentLight=danger?C.redLight:C.brandLight;
   const swallow=e=>{if(e.target===e.currentTarget){e.preventDefault();e.stopPropagation();}};
-  return <div onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}}>
+  return <div onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}}>
     <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden"}}>
       <div style={{padding:"26px 22px 18px",textAlign:"center"}}>
         <div style={{width:64,height:64,margin:"0 auto 14px",borderRadius:"50%",background:accentLight,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 8px 24px ${accent}33`,border:`1px solid ${accent}22`}}>
@@ -3491,7 +3491,7 @@ function ReasonBox(){
   const val=txt.trim();
   const presets=Array.isArray(o.presets)?o.presets:[];
   const swallow=e=>{if(e.target===e.currentTarget){e.preventDefault();e.stopPropagation();}};
-  return <div onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}}>
+  return <div onClick={swallow} onMouseDown={swallow} onTouchStart={swallow} onPointerDown={swallow} style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:6000,padding:16}}>
     <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,440px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",overflow:"hidden",maxHeight:"92vh",display:"flex",flexDirection:"column"}}>
       <div style={{padding:"22px 22px 12px",textAlign:"center",flexShrink:0}}>
         <div style={{width:56,height:56,margin:"0 auto 12px",borderRadius:"50%",background:C.redLight,display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${C.red}22`}}><Ic d={I.trash} s={25} c={C.red} sw={2}/></div>
@@ -7321,7 +7321,7 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
         return <Card key={menu.id} hover style={{overflow:"hidden"}}>
         <div style={{height:5,background:`linear-gradient(90deg,${mc},${mc}66)`}}/>
         {/* หัวการ์ดสูงเท่ากันทุกใบ (มี/ไม่มีรูป) ตัวเลขในแถวเดียวกันจะเรียงตรงกัน · รูปโหลดไม่ได้ → เห็นไอคอนแทน */}
-        <div style={{height:110,position:"relative",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/>{menu.image&&<img src={driveImgSrc(menu.image,160)} alt="" loading="lazy" decoding="async" onError={e=>{e.currentTarget.style.display="none";}} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>}</div>
+        <div style={{height:110,position:"relative",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.fire} s={36} c={C.brand}/>{menu.image&&<img src={driveImgSrc(menu.image,160)} alt="" loading="lazy" decoding="async" onError={e=>{e.currentTarget.style.display="none";}} style={{position:"absolute",top:0,right:0,bottom:0,left:0,width:"100%",height:"100%",objectFit:"cover"}}/>}</div>
         <div style={{padding:"12px 16px 14px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
             <div><div style={{fontWeight:800,fontSize:16,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{menu.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>{canE?<select value={menu.category||""} onClick={e=>e.stopPropagation()} onChange={async e=>{try{await api.updateMenu(menu.id,{category:e.target.value});await reload();}catch{alert("บันทึกไม่สำเร็จ");}}} title="เปลี่ยนหมวดหมู่ของเมนูนี้" style={{fontSize:11,fontWeight:800,color:C.blue,background:C.blueLight,border:`1px solid ${C.blue}40`,borderRadius:20,padding:"3px 9px",fontFamily:"'Sarabun',sans-serif",cursor:"pointer",maxWidth:160}}><option value="">— ไม่มีหมวด —</option>{localCats.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}{menu.category&&!localCats.some(c=>c.name===menu.category)&&<option value={menu.category}>{menu.category}</option>}</select>:<Chip color={menuCatOf(menu)?"blue":"gray"}>{menuCatOf(menu)||"ยังไม่กำหนดหมวด"}</Chip>}{menu.code&&<span style={{fontSize:10,fontWeight:800,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"1px 7px",borderRadius:8,fontFamily:"monospace",whiteSpace:"nowrap"}}>🔖 {menu.code}</span>}</div></div>
@@ -8011,7 +8011,7 @@ function IngredientSOPView({ings,reload,reloadIngs,currentUser,currentBranch,onS
     </div>}
 
     {/* Ingredient amount popup (same look as MenuSOPView) */}
-    {ingPopup&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1500,padding:16}}>
+    {ingPopup&&<div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1500,padding:16}}>
       <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"}}>
         <div style={{padding:"20px 24px 0",borderBottom:`1px solid ${C.lineLight}`,paddingBottom:16,background:C.bg,display:"flex",alignItems:"center",gap:10}}>
           <div style={{width:40,height:40,borderRadius:"50%",background:C.greenLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,border:`1px solid ${C.green}33`}}>
@@ -8281,7 +8281,7 @@ function MenuSOPView({menus,reload,ings,currentUser,currentBranch,onSwitch}){
       </>:<div style={{textAlign:"center",padding:"100px 0",color:C.ink4}}><Ic d={I.sop} s={52} c={C.line}/><p style={{marginTop:16,fontFamily:"'Sarabun',sans-serif",fontSize:16}}>เลือกเมนูเพื่อดู SOP</p></div>}
     </Card>
   </div>
-  {ingPopup&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1500,padding:16}}>
+  {ingPopup&&<div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.65)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1500,padding:16}}>
     <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(95vw,420px)",boxShadow:"0 40px 100px rgba(15,23,42,.28)",animation:"mIn .22s cubic-bezier(.34,1.56,.64,1)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"}}>
       <div style={{padding:"20px 24px 0",borderBottom:`1px solid ${C.lineLight}`,paddingBottom:16,background:C.bg,display:"flex",alignItems:"center",gap:10}}>
         <div style={{width:40,height:40,borderRadius:"50%",background:C.brandLight,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,border:`1px solid ${C.brandBorder}`}}>
@@ -12726,7 +12726,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const dispSub=round2((po.items||[]).reduce((s,it,i)=>s+round2(dispRecv(i)*(+it.price_per_unit||0)),0));
   const dispTotal=round2(dispSub+round2(dispSub*((+po.subtotal||0)>0?(+po.vat||0)/(+po.subtotal):0)));
 
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",zIndex:5000,display:"flex",flexDirection:"column"}}>
+  return <div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.7)",zIndex:5000,display:"flex",flexDirection:"column"}}>
     {/* Header */}
     <div style={{background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white,padding:"14px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0,boxShadow:"0 4px 16px rgba(0,0,0,.18)"}}>
       <div style={{display:"flex",alignItems:"center",gap:14}}>
@@ -12929,7 +12929,7 @@ function POPaymentModal({po,fromBranch,toBranch,onClose,onSubmit}){
       await onSubmit(slipPath,note,payDate,cashSource);
     }catch(e){showErr("อัพโหลดสลิปไม่สำเร็จ",e);setSaving(false);}
   }
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",zIndex:6000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+  return <div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.75)",zIndex:6000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,520px)",boxShadow:"0 30px 80px rgba(0,0,0,.4)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"}}>
       <div style={{padding:"16px 22px",background:`linear-gradient(135deg,${C.blue},#2563EB)`,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
@@ -18701,13 +18701,13 @@ function Kitchen3DView({currentBranch,currentUser,branches,reloadBranches}){
     <div style={{display:"grid",gridTemplateColumns:selected?"1fr 320px":"1fr",gap:14,alignItems:"start"}}>
       <Card style={{padding:0,overflow:"hidden",position:"relative"}}>
         <div ref={mountRef} style={{width:"100%",height:560,background:"#F1F5F9",position:"relative",cursor:canEdit?"crosshair":"grab"}}>
-          {!loaded&&!loadErr&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Sarabun',sans-serif",color:C.ink3,fontSize:13}}>
+          {!loaded&&!loadErr&&<div style={{position:"absolute",top:0,right:0,bottom:0,left:0,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Sarabun',sans-serif",color:C.ink3,fontSize:13}}>
             <div style={{textAlign:"center"}}>
               <div style={{width:36,height:36,border:`3px solid ${C.brandLight}`,borderTop:`3px solid ${C.brand}`,borderRadius:"50%",margin:"0 auto 8px",animation:"spin .8s linear infinite"}}/>
               กำลังโหลด 3D engine...
             </div>
           </div>}
-          {loadErr&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'Sarabun',sans-serif",color:C.red,fontSize:13,textAlign:"center"}}>❌ โหลด 3D engine ไม่สำเร็จ: {loadErr}</div>}
+          {loadErr&&<div style={{position:"absolute",top:0,right:0,bottom:0,left:0,display:"flex",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'Sarabun',sans-serif",color:C.red,fontSize:13,textAlign:"center"}}>❌ โหลด 3D engine ไม่สำเร็จ: {loadErr}</div>}
         </div>
       </Card>
 
@@ -19191,7 +19191,7 @@ export default function App(){
     <div style={{display:"flex",minHeight:"100vh",background:"#F1F5F9"}}>
 
       {/* ── MOBILE DRAWER OVERLAY ── */}
-      {isMobile&&mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",backdropFilter:"blur(3px)",zIndex:199,animation:"mIn .2s ease"}}/>}
+      {isMobile&&mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,0.55)",backdropFilter:"blur(3px)",zIndex:199,animation:"mIn .2s ease"}}/>}
 
       {/* ── SIDEBAR ── */}
       <aside style={{width:sidebarW,background:"#F2EBE3",display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:200,overflowY:"auto",fontFamily:"'Sarabun',sans-serif",transform:isMobile?(mobileNavOpen?"translateX(0)":"translateX(-100%)"):"translateX(0)",transition:"transform .25s cubic-bezier(.4,.0,.2,1)",boxShadow:isMobile&&mobileNavOpen?"0 0 40px rgba(0,0,0,0.4)":"none"}}>
@@ -21682,7 +21682,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     </div>
 
     {/* Note modal */}
-    {noteIdx!==null&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
+    {noteIdx!==null&&<div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}}>
       <div style={{background:C.white,borderRadius:14,padding:20,width:"100%",maxWidth:"min(94vw,360px)"}}>
         <div style={{fontWeight:700,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:10}}>หมายเหตุ: {items[noteIdx]?.name}</div>
         <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="เช่น ไม่เผ็ด, ไม่ใส่ผัก..." style={{...iS,height:70,resize:"none"}}/>
@@ -21716,7 +21716,7 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const tabBtn=(k,label)=><button key={k} onClick={()=>setSplitMode(k)} style={{flex:1,padding:"8px 4px",borderRadius:9,cursor:"pointer",
         fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,
         border:`1.5px solid ${splitMode===k?C.brand:C.line}`,background:splitMode===k?C.brandLight:C.white,color:splitMode===k?C.brand:C.ink3}}>{label}</button>;
-      return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4500,padding:16}}>
+      return <div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(0,0,0,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4500,padding:16}}>
         <div style={{background:C.white,borderRadius:16,width:"100%",maxWidth:"min(96vw,440px)",maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
           <div style={{padding:"18px 20px 12px",flexShrink:0}}>
             <div style={{fontWeight:800,fontSize:17,color:C.ink,fontFamily:"'Sarabun',sans-serif"}}>แบ่งจ่าย — โต๊ะ {table.table_number}</div>
@@ -21859,7 +21859,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
   // จอรับเงินสดใช้ร่วมกันสองทาง: จ่ายสดทั้งบิล กับ ขั้นสุดท้ายของการแบ่งจ่าย
   const dueNow=askPay==="split-cash"?remain:total;
   const enoughCash=(+cashRcv||0)>=dueNow;
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}}>
+  return <div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:4000,padding:12}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,680px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 90px rgba(0,0,0,.4)"}}>
       <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.line}`,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,borderRadius:"18px 18px 0 0",color:C.white}}>
         <button onClick={onCancelOrder} title="ยกเลิกบิลทั้งโต๊ะ"
@@ -21959,7 +21959,7 @@ function PayModal({items,subtotal,discMode,setDiscMode,discType,setDiscType,disc
             พร้อมเพย์/ไทยช่วยไทย = กดแล้วจบเลย (พิมพ์ใบเสร็จ + ปิดโต๊ะ)
             เงินสด = ต้องกรอกว่ารับเงินมาเท่าไหร่ก่อน แล้วค่อยยืนยัน จะได้รู้เงินทอน
             ส่งวิธีจ่ายเข้าไปเป็นค่าโดยตรง ไม่อ่านจาก state — กันบันทึกวิธีจ่ายผิดจังหวะ */}
-        {askPay&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.78)",zIndex:7000,display:"flex",alignItems:"center",justifyContent:"center",padding:"3vh 16px"}}>
+        {askPay&&<div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.78)",zIndex:7000,display:"flex",alignItems:"center",justifyContent:"center",padding:"3vh 16px"}}>
           <div style={{background:C.white,borderRadius:20,width:"100%",maxWidth:`min(94vw,${askPay==="split"?860:520}px)`,maxHeight:"94vh",display:"flex",flexDirection:"column",overflow:"hidden",fontFamily:"'Sarabun',sans-serif",boxShadow:"0 30px 80px rgba(0,0,0,.45)"}}>
             <div style={{padding:"18px 24px",background:C.greenLight,borderBottom:`1px solid ${C.green}33`,flexShrink:0}}>
               <div style={{fontSize:13.5,fontWeight:800,color:C.green}}>โต๊ะ {(table&&table.table_number)||""} · ยอดที่ต้องเก็บ</div>
@@ -22279,8 +22279,8 @@ function reportCustDiag(event,extra){
     const d=document.documentElement;
     const body=JSON.stringify({kind:"client_diag",event,ua:String(navigator.userAgent||"").slice(0,300),w:window.innerWidth,h:window.innerHeight,docH:d.scrollHeight,
       cls:String(d.className||"").slice(0,60),...(extra||{})});
-    if(navigator.sendBeacon&&navigator.sendBeacon("/api/sliptrack-push",new Blob([body],{type:"application/json"})))return;
-    fetch("/api/sliptrack-push",{method:"POST",headers:{"Content-Type":"application/json"},body,keepalive:true}).catch(()=>{});
+    try{if(navigator.sendBeacon&&navigator.sendBeacon("/api/sliptrack-push",body))return;}catch{}
+    fetch("/api/sliptrack-push",{method:"POST",headers:{"Content-Type":"text/plain"},body,keepalive:true}).catch(()=>{});
   }catch{}
 }
 function CustomerPage({branchId,tableId,token}){
@@ -22751,7 +22751,9 @@ function CustomerPage({branchId,tableId,token}){
   const[scrollFix,setScrollFix]=useState(()=>{try{return sessionStorage.getItem(SCROLL_FIX_KEY)==="1";}catch{return false;}});
   const[scrollHelp,setScrollHelp]=useState(false);
   const shellRef=useRef(null);
+  const fixFromRef=useRef(0);   // ตำแหน่งที่ลูกค้าอยู่ตอนสลับไปโหมดสำรอง — กรอบเลื่อนไปที่เดิม ไม่เด้งกลับบนสุด
   const[shellH,setShellH]=useState(()=>typeof window!=="undefined"?window.innerHeight:0);
+  useEffect(()=>{if(scrollFix&&shellRef.current&&fixFromRef.current>0){shellRef.current.scrollTop=fixFromRef.current;fixFromRef.current=0;}},[scrollFix]);
   useEffect(()=>{
     if(!scrollFix)return;
     const upd=()=>setShellH(window.innerHeight);
@@ -22764,12 +22766,18 @@ function CustomerPage({branchId,tableId,token}){
     const pos=()=>scrollFix?((shellRef.current&&shellRef.current.scrollTop)||0):(window.scrollY||window.pageYOffset||0);
     const room=()=>scrollFix?(shellRef.current?shellRef.current.scrollHeight-shellRef.current.clientHeight:0):((document.documentElement.scrollHeight||0)-window.innerHeight);
     const floating=(el)=>{try{for(let n=el;n&&n!==document.body;n=n.parentElement){if(getComputedStyle(n).position==="fixed")return true;}}catch{}return false;};
-    const ts=(e)=>{const t=e.touches&&e.touches[0];g=(!t||e.touches.length>1||floating(e.target))?null:{x:t.clientX,y:t.clientY,p:pos(),dx:0,dy:0};};
+    // โหมดสำรอง: ขอบซ้ายขวานอกกรอบ 480px ไม่ได้เลื่อนอะไร (จอกว้าง/แนวนอน) — นิ้วตรงนั้นไม่นับ
+    const outside=(t)=>{if(!scrollFix||!shellRef.current)return false;const r=shellRef.current.getBoundingClientRect();return t.clientX<r.left||t.clientX>r.right;};
+    const ts=(e)=>{const t=e.touches&&e.touches[0];g=(!t||e.touches.length>1||floating(e.target)||outside(t))?null:{x:t.clientX,y:t.clientY,p:pos(),dx:0,dy:0};};
     const tm=(e)=>{const t=e.touches&&e.touches[0];if(g&&t){g.dx=t.clientX-g.x;g.dy=t.clientY-g.y;}};
-    const te=()=>{
+    // touchcancel = แอปแม่ (LINE/Facebook) แย่งนิ้วไปกลางทาง มักหลังลากไปไม่กี่สิบ px — เกณฑ์ระยะต่ำกว่า แต่ยังต้อง "หน้าไม่ขยับ"
+    const te=(e)=>{
       const s0=g;g=null;
-      if(!s0||Math.abs(s0.dy)<90||Math.abs(s0.dy)<2*Math.abs(s0.dx))return;
+      const need=(e&&e.type==="touchcancel")?40:90;
+      if(!s0||Math.abs(s0.dy)<need||Math.abs(s0.dy)<2*Math.abs(s0.dx))return;
       if(document.body.style.position==="fixed")return;
+      // ลูกค้าซูมหน้าจออยู่ (หน้านี้ปลดล็อกซูมแล้ว) = นิ้วเลื่อน "ภาพที่ซูม" ไม่ใช่หน้า ⟹ ไม่นับ
+      try{if(window.visualViewport&&window.visualViewport.scale>1.05)return;}catch{}
       const max=room();if(max<120)return;
       if(s0.dy<0?s0.p>=max-4:s0.p<=4)return;
       setTimeout(()=>{
@@ -22777,14 +22785,15 @@ function CustomerPage({branchId,tableId,token}){
         if(++strikes<2)return;
         strikes=0;
         reportCustDiag(scrollFix?"scroll_stuck_fallback":"scroll_stuck",{branch:branchId,table:tableId});
-        if(!scrollFix){try{sessionStorage.setItem(SCROLL_FIX_KEY,"1");}catch{}setScrollFix(true);}
+        if(!scrollFix){try{sessionStorage.setItem(SCROLL_FIX_KEY,"1");}catch{}fixFromRef.current=s0.p;setScrollFix(true);}
         else setScrollHelp(true);
       },350);
     };
     document.addEventListener("touchstart",ts,{passive:true});
     document.addEventListener("touchmove",tm,{passive:true});
     document.addEventListener("touchend",te,{passive:true});
-    return()=>{alive=false;document.removeEventListener("touchstart",ts);document.removeEventListener("touchmove",tm);document.removeEventListener("touchend",te);};
+    document.addEventListener("touchcancel",te,{passive:true});
+    return()=>{alive=false;document.removeEventListener("touchstart",ts);document.removeEventListener("touchmove",tm);document.removeEventListener("touchend",te);document.removeEventListener("touchcancel",te);};
   },[scrollFix,scrollHelp]);
   if(gateLoading)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{textAlign:"center"}}><div style={{width:40,height:40,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 12px"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กำลังตรวจสอบ QR...</p></div></div>;
   if(gateError){
@@ -22897,7 +22906,7 @@ function CustomerPage({branchId,tableId,token}){
         {filtered.map(m=>{const inC=cart.find(i=>i.menu_id===m.id);const soldOut=menuSoldOutAt(m,branchId);const hasOpts=menuHasOptions(m,branchId,optionLib);return <div key={m.id} style={{background:C.white,borderRadius:14,overflow:"hidden",border:`1px solid ${inC?C.brand:C.line}`,display:"flex",flexDirection:"column",opacity:soldOut?0.6:1,boxShadow:"0 2px 8px rgba(15,23,42,.06)"}}>
           <div style={{position:"relative",width:"100%",height:130,flexShrink:0}}>
             {m.image?<img src={driveImgSrc(m.image,160)} alt={m.name} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",filter:soldOut?"grayscale(80%)":""}}/>:<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${C.brandLight},#FEF9C3)`,display:"flex",alignItems:"center",justifyContent:"center"}}><Ic d={I.food} s={36} c={soldOut?C.ink4:C.brand}/></div>}
-            {soldOut&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(255,255,255,.35)",pointerEvents:"none"}}>
+            {soldOut&&<div style={{position:"absolute",top:0,right:0,bottom:0,left:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(255,255,255,.35)",pointerEvents:"none"}}>
               <span style={{background:"rgba(17,24,39,.86)",color:"#fff",fontSize:17,fontWeight:900,borderRadius:999,padding:"6px 18px",fontFamily:"'Sarabun',sans-serif",letterSpacing:.3}}>ของหมด</span>
             </div>}
             {hasOpts&&!soldOut&&<span style={{position:"absolute",top:6,right:6,fontSize:9.5,fontWeight:800,color:C.teal,background:C.tealLight,borderRadius:10,padding:"2px 8px",fontFamily:"'Sarabun',sans-serif"}}>+ ตัวเลือก</span>}
@@ -23577,7 +23586,7 @@ function OpenShiftModal({currentBranch,currentUser,onDone,onCancel}){
     }catch(e){alert("เปิดกะไม่สำเร็จ: "+e.message);}
     setSaving(false);
   }
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:16}}>
+  return <div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:16}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,460px)",boxShadow:"0 30px 80px rgba(0,0,0,.4)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"}}>
       <div style={{padding:"18px 22px",background:`linear-gradient(135deg,${C.brand},${C.brandDark})`,color:C.white}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
@@ -23663,7 +23672,7 @@ function CashDrawerModal({shift,currentBranch,currentUser,printers=[],onClose}){
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
     setSaving(false);
   }
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:12}}>
+  return <div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:12}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,780px)",maxHeight:"94vh",display:"flex",flexDirection:"column",boxShadow:"0 30px 80px rgba(0,0,0,.4)",overflow:"hidden"}}>
       <div style={{padding:"14px 22px",background:`linear-gradient(135deg,${C.green},#059669)`,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -24336,14 +24345,14 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     }catch(e){showErr("ปิดกะไม่สำเร็จ",e);}
     setSaving(false);
   }
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:12}}>
+  return <div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5000,padding:12}}>
     {/* ── โต๊ะยังค้าง ── ปิดกะทั้งที่บิลยังเปิดอยู่ = เงินก้อนนั้นไม่เข้ากะนี้
         Z-Report ขาดยอด และรอบหน้าไปโผล่ในกะถัดไปทั้งที่ลูกค้ากินในกะนี้ ยอดเพี้ยนสองกะ
         เตือนแบบต้องกดยืนยันอีกชั้น ไม่ใช่ปล่อยผ่านเงียบๆ */}
     {/* ── ผลการส่งยอดเข้าระบบบัญชี ──────────────────────────────────────
         ต้องขึ้นเป็นจอให้กดรับทราบ ไม่ใช่ toast ที่หายไปเอง
         ถ้ายอดไม่เข้าบัญชีแล้วไม่มีใครรู้ จะไปรู้อีกทีตอนปิดงบแล้วตัวเลขไม่ตรง */}
-    {acct&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5300,padding:14}}>
+    {acct&&<div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5300,padding:14}}>
       {acct.notEnabled?<div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(94vw,460px)",maxHeight:"88vh",overflowY:"auto",fontFamily:"'Sarabun',sans-serif"}}>
         {/* สาขาที่ยังไม่เปิดท่อบัญชี — กะปิดแล้วจริง แต่ยอดไม่ได้ไปไหน ต้องมีคนส่งยอดทางเดิม */}
         <div style={{padding:"18px 20px 14px",background:C.yellowLight,borderBottom:`2px solid ${C.yellow}`}}>
@@ -24433,7 +24442,7 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         </div>;
       })()}
     </div>}
-    {blockList&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5200,padding:14}}>
+    {blockList&&<div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:5200,padding:14}}>
       <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(94vw,430px)",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{padding:"18px 20px 12px",background:C.redLight,borderBottom:`1px solid ${C.red}33`}}>
           <div style={{fontSize:34,marginBottom:4}}>🪑</div>
@@ -24688,7 +24697,7 @@ function POSSettingsFields({s:settings,set}){
         </div>
         <label style={{position:"relative",display:"inline-block",width:48,height:26}}>
           <input type="checkbox" checked={!!settings.vat_enabled} onChange={e=>set('vat_enabled',e.target.checked)} style={{opacity:0,width:0,height:0}}/>
-          <span style={{position:"absolute",cursor:"pointer",inset:0,background:settings.vat_enabled?C.brand:"#cbd5e1",borderRadius:26,transition:".2s"}}/>
+          <span style={{position:"absolute",cursor:"pointer",top:0,right:0,bottom:0,left:0,background:settings.vat_enabled?C.brand:"#cbd5e1",borderRadius:26,transition:".2s"}}/>
           <span style={{position:"absolute",content:"",height:20,width:20,left:settings.vat_enabled?25:3,top:3,background:C.white,borderRadius:"50%",transition:".2s",boxShadow:"0 2px 4px rgba(0,0,0,.2)"}}/>
         </label>
       </div>
@@ -24737,7 +24746,7 @@ function POSSettingsFields({s:settings,set}){
         </div>
         <label style={{position:"relative",display:"inline-block",width:48,height:26}}>
           <input type="checkbox" checked={!!settings.service_charge_enabled} onChange={e=>set('service_charge_enabled',e.target.checked)} style={{opacity:0,width:0,height:0}}/>
-          <span style={{position:"absolute",cursor:"pointer",inset:0,background:settings.service_charge_enabled?C.brand:"#cbd5e1",borderRadius:26,transition:".2s"}}/>
+          <span style={{position:"absolute",cursor:"pointer",top:0,right:0,bottom:0,left:0,background:settings.service_charge_enabled?C.brand:"#cbd5e1",borderRadius:26,transition:".2s"}}/>
           <span style={{position:"absolute",content:"",height:20,width:20,left:settings.service_charge_enabled?25:3,top:3,background:C.white,borderRadius:"50%",transition:".2s",boxShadow:"0 2px 4px rgba(0,0,0,.2)"}}/>
         </label>
       </div>
@@ -24756,7 +24765,7 @@ function POSSettingsFields({s:settings,set}){
         </div>
         <label style={{position:"relative",display:"inline-block",width:48,height:26}}>
           <input type="checkbox" checked={!!settings.show_qr_promptpay} onChange={e=>set('show_qr_promptpay',e.target.checked)} style={{opacity:0,width:0,height:0}}/>
-          <span style={{position:"absolute",cursor:"pointer",inset:0,background:settings.show_qr_promptpay?C.brand:"#cbd5e1",borderRadius:26,transition:".2s"}}/>
+          <span style={{position:"absolute",cursor:"pointer",top:0,right:0,bottom:0,left:0,background:settings.show_qr_promptpay?C.brand:"#cbd5e1",borderRadius:26,transition:".2s"}}/>
           <span style={{position:"absolute",content:"",height:20,width:20,left:settings.show_qr_promptpay?25:3,top:3,background:C.white,borderRadius:"50%",transition:".2s",boxShadow:"0 2px 4px rgba(0,0,0,.2)"}}/>
         </label>
       </div>
@@ -25196,7 +25205,7 @@ function POSMenuTools({currentBranch,currentUser,saleOnly=false,menus,variant="d
     {variant==="dropdown"
       ?<div style={{position:"relative"}}>
         <button onClick={()=>setOpen(o=>!o)} style={{display:"flex",alignItems:"center",gap:6,padding:"0 12px",height:46,border:"none",background:open?C.brandLight:"none",cursor:"pointer",fontSize:12,fontWeight:700,color:C.brand,fontFamily:"'Sarabun',sans-serif",borderBottom:"2.5px solid transparent"}}>🍔 จัดการเมนูและหมวดหมู่ <span style={{fontSize:9}}>▾</span></button>
-        {open&&<><div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:60}}/>
+        {open&&<><div onClick={()=>setOpen(false)} style={{position:"fixed",top:0,right:0,bottom:0,left:0,zIndex:60}}/>
           <div style={{position:"absolute",top:"100%",left:0,zIndex:61,background:C.white,border:`1px solid ${C.line}`,borderRadius:12,boxShadow:"0 14px 40px rgba(15,23,42,.16)",minWidth:240,overflow:"hidden",marginTop:2}}>
             {items.map(it=><button key={it.id} onClick={()=>{setActive(it.id);setOpen(false);}} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"11px 14px",border:"none",borderBottom:`1px solid ${C.lineLight}`,background:C.white,cursor:"pointer",textAlign:"left",fontFamily:"'Sarabun',sans-serif"}} onMouseEnter={e=>e.currentTarget.style.background=C.brandLight} onMouseLeave={e=>e.currentTarget.style.background=C.white}>
               <span style={{fontSize:18}}>{it.icon}</span>
@@ -27098,7 +27107,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
         ตัวเลขใหญ่ที่สุดบนจอคือยอดที่ต้องทอน เพราะนั่นคือสิ่งเดียวที่ต้องทำต่อ */}
     {/* ── ป็อปอัพ QR โต๊ะ ── ลิงก์เดียวกับที่พิมพ์ลงกระดาษ (tableScanUrl ตัวเดียว)
         ขึ้นทันทีที่กด ไม่ผูกกับผลการพิมพ์ — พิมพ์ไม่ออกก็ยังเช็คหน้าลูกค้าได้ */}
-    {qrPeek&&<div onClick={e=>{if(e.target===e.currentTarget)setQrPeek(null);}} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.78)",zIndex:7300,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+    {qrPeek&&<div onClick={e=>{if(e.target===e.currentTarget)setQrPeek(null);}} style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.78)",zIndex:7300,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
       <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,380px)",overflow:"hidden",fontFamily:"'Sarabun',sans-serif",boxShadow:"0 30px 80px rgba(0,0,0,.5)",textAlign:"center"}}>
         <div style={{padding:"18px 20px 6px"}}>
           <div style={{fontSize:13,fontWeight:800,color:C.ink3}}>มุมมองลูกค้า</div>
@@ -27126,7 +27135,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
         </div>
       </div>
     </div>}
-    {changeDlg&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.8)",zIndex:7200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+    {changeDlg&&<div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.8)",zIndex:7200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
       <div style={{background:C.white,borderRadius:22,width:"100%",maxWidth:"min(94vw,400px)",overflow:"hidden",fontFamily:"'Sarabun',sans-serif",boxShadow:"0 30px 80px rgba(0,0,0,.5)",textAlign:"center"}}>
         <div style={{padding:"22px 20px 8px"}}>
           <div style={{fontSize:38,lineHeight:1}}>{changeDlg.change>0?"💵":"✅"}</div>
@@ -27747,7 +27756,7 @@ function PayChannelFixModal({order,branch,currentUser,shift,onDone,onClose}){
   }
   const chip={padding:"10px 14px",borderRadius:10,border:"1px solid "+C.line,background:C.white,cursor:"pointer",
     fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:700,color:C.ink2,minHeight:44};
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.78)",zIndex:6200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+  return <div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.78)",zIndex:6200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,540px)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",boxShadow:"0 30px 80px rgba(0,0,0,.45)"}}>
       <div style={{padding:"16px 20px",background:C.brand,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:900,fontSize:18}}>💳 แก้ช่องทางชำระ · บิล #{o.id}</div>
@@ -27878,7 +27887,7 @@ function VoidBillModal({order,branch,currentUser,shift,printers=[],onDone,onClos
   }
   const pill=(on)=>({padding:"10px 14px",borderRadius:10,border:"2px solid "+(on?C.red:C.line),background:on?C.redLight:C.white,
     color:on?C.red:C.ink2,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13.5,fontWeight:on?900:700,minHeight:44});
-  return <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.78)",zIndex:6200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+  return <div style={{position:"fixed",top:0,right:0,bottom:0,left:0,background:"rgba(15,23,42,.78)",zIndex:6200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
     <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(95vw,520px)",maxHeight:"calc(100vh - 32px)",overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain",boxShadow:"0 30px 80px rgba(0,0,0,.45)"}}>
       <div style={{padding:"16px 20px",background:C.red,color:C.white,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontFamily:"'Sarabun',sans-serif",fontWeight:900,fontSize:18}}>🚫 ยกเลิกบิล #{o.id}</div>

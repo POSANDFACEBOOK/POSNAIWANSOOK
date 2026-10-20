@@ -9,6 +9,9 @@ export default defineConfig({
     pure: ['console.log', 'console.info', 'console.debug'],
   },
   build: {
+    // ลูกค้าสแกน QR ด้วยมือถือรุ่นไหนก็ได้ (iOS 12–13 / Android WebView เก่าในแอป LINE ฯลฯ) — ค่าเริ่มต้นของ Vite (es2020)
+    // ปล่อย ?. กับ ?? ไว้ตรงๆ เบราว์เซอร์ที่ไม่รู้จักจะอ่านไฟล์ทั้งก้อนไม่ได้ = จอขาว · ลดไวยากรณ์ลงให้ทุกเครื่องอ่านได้ (ผลการทำงานเท่าเดิม)
+    target: ["es2019", "safari12", "chrome64", "firefox68"],
     chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
