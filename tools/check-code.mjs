@@ -4266,8 +4266,10 @@ section("ท่อบัญชี: กติกา leaf + คีย์ราย�
   // เปิดใช้จริง 23 ก.ย. 69 23:45 น. หลังฝั่งบัญชีเปลี่ยนคีย์ตัวรับ (วัน+สาขา+กะ) และเติมรหัสกะย้อนหลังครบ 15 ใบ
   // รายชื่อนี้ต้องมีเฉพาะสาขาที่ฝั่งบัญชีเปิดคีย์ให้จริงเท่านั้น — เติมสาขาอื่นก่อนเขาพร้อม
   // = ใบปิดยอดของทั้งวันกลายเป็นใบที่ตัวรับไม่รู้จัก แย่กว่าอาการเดิมที่แก้กันอยู่
-  ok_("คีย์รายกะเปิดเฉพาะ The River ตามที่นัด cutover กันไว้",
-    SLIPPUSH.includes("const SHIFT_KEYED_BRANCHES = [8];"));
+  // 20 ต.ค. 69: เปิดกาญจนบุรี (5) หลังฝั่งบัญชีแจ้งพร้อม — INV- 0 ใบ บุคคลธรรมดา ไม่ออก CA-
+  const arrOf = (name) => { const m = SLIPPUSH.match(new RegExp("const " + name + " = \\[([^\\]]*)\\];")); return m ? m[1].split(",").map((x) => +x.trim()).filter((x) => x > 0) : null; };
+  ok_("คีย์รายกะเปิดเฉพาะ The River + กาญจนบุรี ตามที่นัดกับฝั่งบัญชี",
+    JSON.stringify(arrOf("SHIFT_KEYED_BRANCHES")) === "[8,5]");
   ok_("มีเหตุผลติดไว้ว่าทำไมห้ามเปิดสาขาที่มีใบกำกับเต็มรูป", SLIPPUSH.includes("INV-") && SLIPPUSH.includes("ยื่นภาษีขายขาด"));
   ok_("เลขอ้างอิงใบมีสองรูปแบบ ตามว่าสาขานั้นเปิดคีย์รายกะหรือยัง",
     SLIPPUSH.includes("external_id: shiftKeyed") && SLIPPUSH.includes("-s${shiftId}`"));
@@ -5870,15 +5872,20 @@ section("POS สาขาที่ 2: เงินและบัญชี");
         ck("วันขาย 150 บิลที่ปัดทุกใบ ผ่านด่านภาษีของท่อบัญชีตัวจริง", { blocked: !!day.blocked, sent: r.sent.length }, { blocked: false, sent: 1 });
       }
       // ③ สาขาที่ยังไม่เปิดท่อ ต้องบอกให้ชัดว่า "ยังไม่เปิด" ไม่ใช่แค่ "ข้าม"
-      const ne = await run({ ...SH, branch_id: 5 }, [ob({ id: 3, subtotal: 300, discount: 0, total: 300 })]);
+      const ne = await run({ ...SH, branch_id: 6 }, [ob({ id: 3, subtotal: 300, discount: 0, total: 300 })]);
       ck("สาขาที่ยังไม่เปิดท่อ: ไม่ยิง และติดธง not_enabled", { sent: ne.sent.length, skipped: !!(ne.out && ne.out.skipped), ne: ne.out && ne.out.not_enabled }, { sent: 0, skipped: true, ne: true });
       // นับบิลสดตอนปิด (บิลติดเลขกะ + บิลเก่าไม่มีเลขกะในช่วงเวลา · ใบเดียวกันไม่นับซ้ำ) — จอใช้ตัดสินกล่องเหลือง
-      const ne2 = await run({ ...SH, branch_id: 5 }, [ob({ id: 3, total: 700 }), ob({ id: 4, total: 500 })], [ob({ id: 4, total: 500 }), ob({ id: 5, total: 99.5 })]);
+      const ne2 = await run({ ...SH, branch_id: 6 }, [ob({ id: 3, total: 700 }), ob({ id: 4, total: 500 })], [ob({ id: 4, total: 500 }), ob({ id: 5, total: 99.5 })]);
       ck("สาขาที่ยังไม่เปิดท่อ: เซิร์ฟเวอร์นับบิลที่เก็บเงินแล้วสดๆ ตอนปิดกะ", { n: ne2.out && ne2.out.paid_bills, t: ne2.out && ne2.out.paid_total, sent: ne2.sent.length }, { n: 3, t: 1299.5, sent: 0 });
-      const neDown = await run({ ...SH, branch_id: 5 }, [], [], true);
+      const neDown = await run({ ...SH, branch_id: 6 }, [], [], true);
       ck("นับบิลไม่ได้ (ฐานข้อมูลสะดุด) = ยังตอบ not_enabled ปกติ ไม่กลายเป็นส่งไม่ผ่าน",
         { skipped: !!(neDown.out && neDown.out.skipped), ne: neDown.out && neDown.out.not_enabled, n: neDown.out && neDown.out.paid_bills, err: !!(neDown.out && neDown.out.error) },
         { skipped: true, ne: true, n: undefined, err: false });
+      // สาขา 5 เปิดท่อแล้ว: ยิงจริงหนึ่งใบ และใช้เลขอ้างอิงรายกะ (…-s<เลขกะ>)
+      const b5 = await run({ ...SH, branch_id: 5 }, [ob({ id: 7, subtotal: 300, discount: 0, total: 300 })]);
+      ck("กาญจนบุรี (5) เปิดท่อแล้ว: ยิงหนึ่งใบ ไม่ติดธง not_enabled · เลขอ้างอิงรายกะ",
+        { sent: b5.sent.length, ne: !!(b5.out && b5.out.not_enabled), ext: /-s41$/.test(String((b5.sent[0] || {}).external_id || "")), sid: (b5.sent[0] || {}).shift_id },
+        { sent: 1, ne: false, ext: true, sid: 41 });
       const empty = await run(SH, []);
       ck("กะไม่มีบิล (สาขาเปิดท่อแล้ว): ข้ามโดยไม่ติดธง not_enabled", { skipped: !!(empty.out && empty.out.skipped), ne: !!(empty.out && empty.out.not_enabled) }, { skipped: true, ne: false });
       okRun = true;
@@ -5890,7 +5897,14 @@ section("POS สาขาที่ 2: เงินและบัญชี");
     // ห้ามใช้ upsert กับใบปิดยอด — ฝั่งบัญชีกันลงซ้ำด้วยการตีกลับ ถ้า upsert จะเขียนทับใบที่ออกใบกำกับไปแล้ว
     const pc = (() => { const a = SLIPPUSH.indexOf('if (String(body.kind || "") === "pos_closing") {'), b = SLIPPUSH.indexOf("// ── Void path", a); return a > 0 && b > a ? SLIPPUSH.slice(a, b) : ""; })();
     ok_("ใบปิดยอดไม่ใช้ upsert", !!pc && !pc.includes("upsert"));
-    ok_("ยังไม่เปิดท่อให้สาขา 5 (รอเจ้าของ + ฝ่ายบัญชี)", SLIPPUSH.includes("const POS_CLOSING_BRANCHES = [8];") && SLIPPUSH.includes("const SHIFT_KEYED_BRANCHES = [8];"));
+    // เปิดท่อสาขา 5 แล้ว (เจ้าของสั่ง 20 ต.ค. 69 + ฝั่งบัญชีแจ้งพร้อมรับ) — ต้องเติมทั้งสอง array พร้อมกันเสมอ
+    // เติมแค่ POS_CLOSING = สองกะในวันเดียวได้ external_id ซ้ำ กะที่สองถูกตีกลับเป็น duplicate ยอดหายเงียบ
+    {
+      const arr = (name) => { const m = SLIPPUSH.match(new RegExp("const " + name + " = \\[([^\\]]*)\\];")); return m ? m[1].split(",").map((x) => +x.trim()).filter((x) => x > 0) : []; };
+      const pc5 = arr("POS_CLOSING_BRANCHES"), sk5 = arr("SHIFT_KEYED_BRANCHES");
+      ck("ท่อบัญชีเปิดเฉพาะ The River + กาญจนบุรี (สาขาอื่นยังสแกนรูป)", pc5, [8, 5]);
+      ok_("ทุกสาขาที่เข้าท่อใช้คีย์รายกะด้วย (วันละหลายกะไม่ชนกันเอง)", pc5.length > 0 && pc5.every((b) => sk5.includes(b)));
+    }
   }
 }
 
