@@ -22268,6 +22268,21 @@ const noticeMarkOf=(token,notice)=>notice?`${token||""}|${notice.sig}`:"";
 // ข้อความบอก "ยังไม่รวม VAT" แต่ตั้งค่าไม่ได้บวก VAT เพิ่ม (ปิด VAT หรือ VAT รวมในราคา) = ลูกค้าอ่านอย่าง บิลคิดอีกอย่าง
 // เตือนในฟอร์มเท่านั้น ไม่ห้ามบันทึก — ร้านอาจตั้งใจ (เช่น กำลังจะเปิด VAT)
 const noticeVatWarn=(text,cfg)=>{const t=String(text||"");if(!/ไม่รวม/.test(t)||!/vat|ภาษี/i.test(t))return "";if(cfg&&cfg.vat_enabled&&cfg.vat_included===false)return "";return cfg&&cfg.vat_enabled?"ข้อความบอกว่าราคายังไม่รวม VAT แต่ตั้งค่า VAT ด้านบนเป็น \"รวมในราคา\" — บิลจะไม่บวก VAT เพิ่ม ตรวจให้ตรงกัน":"ข้อความบอกว่าราคายังไม่รวม VAT แต่ VAT ปิดอยู่ — บิลจะไม่บวก VAT เพิ่ม ตรวจให้ตรงกัน";};
+// แผ่นทับเต็มจอของหน้าลูกค้า — ขอบสี่ด้านตรงๆ (ไม่ใช้ inset ที่เบราว์เซอร์เก่าไม่รู้จัก) · เลื่อนในตัวได้ถ้ายาวเกินจอ
+const CUST_OVL={position:"fixed",top:0,right:0,bottom:0,left:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",overflowY:"auto",WebkitOverflowScrolling:"touch",boxSizing:"border-box"};
+// แจ้งเซิร์ฟเวอร์ว่ามือถือลูกค้าเจอปัญหาอะไร (ชนิดเครื่อง/เบราว์เซอร์) — ไม่มีข้อมูลส่วนตัว ไม่ลงฐานข้อมูล · ส่งไม่ได้ก็ช่างมัน
+// แจ้งซ้ำชนิดเดิมในแท็บเดียวกันไม่ได้ (กันท่วม)
+function reportCustDiag(event,extra){
+  try{
+    const k="fc_diag_"+event;
+    try{if(sessionStorage.getItem(k))return;sessionStorage.setItem(k,"1");}catch{}
+    const d=document.documentElement;
+    const body=JSON.stringify({kind:"client_diag",event,ua:String(navigator.userAgent||"").slice(0,300),w:window.innerWidth,h:window.innerHeight,docH:d.scrollHeight,
+      cls:String(d.className||"").slice(0,60),...(extra||{})});
+    if(navigator.sendBeacon&&navigator.sendBeacon("/api/sliptrack-push",new Blob([body],{type:"application/json"})))return;
+    fetch("/api/sliptrack-push",{method:"POST",headers:{"Content-Type":"application/json"},body,keepalive:true}).catch(()=>{});
+  }catch{}
+}
 function CustomerPage({branchId,tableId,token}){
   // ⚠️ ต้องอยู่บนสุดก่อน return ทุกทาง — hook ที่อยู่หลัง early return ทำให้จอลูกค้าพังทั้งจอ (เจอจริง 20 ก.ย. 69)
   // หัวจอสูงเท่าไร (ชื่อสาขายาวขึ้นบรรทัดที่สองได้) — แถบหมวดต้องติดใต้หัวพอดี ไม่ทับกัน
@@ -22329,7 +22344,7 @@ function CustomerPage({branchId,tableId,token}){
   const notice=useMemo(()=>customerNoticeOf(posCfg),[posCfg]);
   const noticeMark=noticeMarkOf(token,notice);
   const showNotice=!!notice&&noticeAck!==noticeMark;
-  const ackNotice=()=>{try{localStorage.setItem(NOTICE_KEY,noticeMark);}catch{}setNoticeAck(noticeMark);};
+  const ackNotice=()=>{try{localStorage.setItem(NOTICE_KEY,noticeMark);}catch{}setNoticeAck(noticeMark);try{window.scrollTo(0,0);}catch{}};
   // ── ปุ่มเรียกพนักงาน ── กด → ยืนยัน → เพิ่มแถว staff_calls → ถามผลทุก 2 วิ → บอกตามจริง ("แจ้งแล้ว" เฉพาะเมื่อใบออกจริง)
   // ใบออกที่เครื่องพิมพ์ใบเสร็จเท่านั้น (ตัวพิมพ์ v49) · ใบออกแล้วพักปุ่ม 1 นาทีต่อมือถือ (จำใน localStorage รีเฟรชแล้วนับต่อ)
   // ส่งไม่ได้ / ใบไม่ออก = ปลดรอ กดใหม่ได้ทันที — ไม่ขังลูกค้าไว้กับปุ่มที่ใช้ไม่ได้
@@ -22727,6 +22742,50 @@ function CustomerPage({branchId,tableId,token}){
     const t=setInterval(()=>{if(navigator.onLine!==false)flushOutbox();},15000);   // also self-heal on a flaky link
     return()=>{window.removeEventListener("online",onOnline);clearInterval(t);};
   },[tableId]);// eslint-disable-line react-hooks/exhaustive-deps
+  // ── ตัวเฝ้าการเลื่อน (20 ต.ค. 69 ลูกค้า Android สแกนแล้วเลื่อนเมนูไม่ได้ — จำลองบน Chrome ไม่เกิด) ──
+  // ปัดนิ้วแนวตั้งชัดๆ บนหน้าเมนูที่ยังเลื่อนต่อได้ แต่หน้าไม่ขยับเลย 2 ครั้ง = เบราว์เซอร์นี้เลื่อน "ทั้งหน้า" ไม่ได้
+  // ⟹ สลับไปให้กรอบหน้าเป็นตัวเลื่อนเอง (อีกวิธีที่เบราว์เซอร์ส่วนใหญ่รองรับ) จำไว้ทั้งแท็บ และแจ้งเซิร์ฟเวอร์ (ชนิดเครื่อง) ไว้ตามแก้
+  // วิธีสำรองก็ยังไม่ขยับอีก 2 ครั้ง = ขึ้นแถบบอกวิธีเปิดในเบราว์เซอร์จริง + เรียกพนักงาน — ลูกค้าต้องไม่ติดอยู่เงียบๆ
+  // ไม่นับ: ป็อปอัพเปิดอยู่ (ล็อกจอเอง) · นิ้วเริ่มบนของที่ลอยอยู่ (position:fixed) · อยู่สุดขอบแล้ว · หน้าสั้นไม่มีอะไรให้เลื่อน
+  const SCROLL_FIX_KEY="fc_cust_scrollfix";
+  const[scrollFix,setScrollFix]=useState(()=>{try{return sessionStorage.getItem(SCROLL_FIX_KEY)==="1";}catch{return false;}});
+  const[scrollHelp,setScrollHelp]=useState(false);
+  const shellRef=useRef(null);
+  const[shellH,setShellH]=useState(()=>typeof window!=="undefined"?window.innerHeight:0);
+  useEffect(()=>{
+    if(!scrollFix)return;
+    const upd=()=>setShellH(window.innerHeight);
+    upd();window.addEventListener("resize",upd);window.addEventListener("orientationchange",upd);
+    return()=>{window.removeEventListener("resize",upd);window.removeEventListener("orientationchange",upd);};
+  },[scrollFix]);
+  useEffect(()=>{
+    if(scrollHelp)return;
+    let g=null,strikes=0,alive=true;
+    const pos=()=>scrollFix?((shellRef.current&&shellRef.current.scrollTop)||0):(window.scrollY||window.pageYOffset||0);
+    const room=()=>scrollFix?(shellRef.current?shellRef.current.scrollHeight-shellRef.current.clientHeight:0):((document.documentElement.scrollHeight||0)-window.innerHeight);
+    const floating=(el)=>{try{for(let n=el;n&&n!==document.body;n=n.parentElement){if(getComputedStyle(n).position==="fixed")return true;}}catch{}return false;};
+    const ts=(e)=>{const t=e.touches&&e.touches[0];g=(!t||e.touches.length>1||floating(e.target))?null:{x:t.clientX,y:t.clientY,p:pos(),dx:0,dy:0};};
+    const tm=(e)=>{const t=e.touches&&e.touches[0];if(g&&t){g.dx=t.clientX-g.x;g.dy=t.clientY-g.y;}};
+    const te=()=>{
+      const s0=g;g=null;
+      if(!s0||Math.abs(s0.dy)<90||Math.abs(s0.dy)<2*Math.abs(s0.dx))return;
+      if(document.body.style.position==="fixed")return;
+      const max=room();if(max<120)return;
+      if(s0.dy<0?s0.p>=max-4:s0.p<=4)return;
+      setTimeout(()=>{
+        if(!alive||Math.abs(pos()-s0.p)>=3){if(alive)strikes=0;return;}
+        if(++strikes<2)return;
+        strikes=0;
+        reportCustDiag(scrollFix?"scroll_stuck_fallback":"scroll_stuck",{branch:branchId,table:tableId});
+        if(!scrollFix){try{sessionStorage.setItem(SCROLL_FIX_KEY,"1");}catch{}setScrollFix(true);}
+        else setScrollHelp(true);
+      },350);
+    };
+    document.addEventListener("touchstart",ts,{passive:true});
+    document.addEventListener("touchmove",tm,{passive:true});
+    document.addEventListener("touchend",te,{passive:true});
+    return()=>{alive=false;document.removeEventListener("touchstart",ts);document.removeEventListener("touchmove",tm);document.removeEventListener("touchend",te);};
+  },[scrollFix,scrollHelp]);
   if(gateLoading)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg}}><div style={{textAlign:"center"}}><div style={{width:40,height:40,border:`4px solid ${C.brandLight}`,borderTop:`4px solid ${C.brand}`,borderRadius:"50%",animation:"spin .8s linear infinite",margin:"0 auto 12px"}}/><p style={{color:C.ink3,fontFamily:"'Sarabun',sans-serif"}}>กำลังตรวจสอบ QR...</p></div></div>;
   if(gateError){
     const messages={
@@ -22748,29 +22807,47 @@ function CustomerPage({branchId,tableId,token}){
   // ข้อความแจ้งลูกค้าตอนสแกนครั้งแรก — ทั้งจอแทนหน้าเมนู ไม่ใช่กล่องลอย: ข้อความยาวก็เลื่อนทั้งหน้าได้
   // (เบราว์เซอร์ในแอป LINE/FB เลื่อนกล่องซ้อนไม่ได้) · ไม่มีทางปิดอื่น ต้องกด "เข้าใจแล้ว"
   // ตะกร้า/คิวส่งออเดอร์/ปุ่มเรียกพนักงาน อยู่ใน hook ข้างบน — แก้ข้อความกลางมื้อแล้วจอนี้ขึ้นแทรก ของในตะกร้าไม่หาย
-  if(showNotice)return <div style={{minHeight:"100vh",background:C.ink,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"24px 18px",boxSizing:"border-box",fontFamily:"'Sarabun',sans-serif"}}>
-    <div style={{color:"rgba(255,255,255,.85)",fontSize:13.5,fontWeight:700,marginBottom:12,textAlign:"center"}}>{branch.name} · โต๊ะ {table.table_number}</div>
-    <div role="dialog" aria-modal="true" aria-labelledby="cust-notice-t" style={{background:C.white,borderRadius:18,padding:"22px 20px 18px",width:"100%",maxWidth:360,boxSizing:"border-box"}}>
-      <div id="cust-notice-t" style={{fontSize:18,fontWeight:900,color:C.ink,textAlign:"center",marginBottom:10}}>{notice.title}</div>
-      <div style={{fontSize:15,color:C.ink2,lineHeight:1.7,whiteSpace:"pre-line",overflowWrap:"anywhere",marginBottom:18}}>{notice.text}</div>
-      <Btn onClick={ackNotice} full s={{padding:"13px",fontSize:16,fontWeight:900}}>เข้าใจแล้ว</Btn>
+  // ── ประกาศตอนสแกน / สั่งสำเร็จ = แผ่นทับเต็มจอ ไม่ใช่สลับทั้งหน้า (20 ต.ค. 69) ──
+  // เดิม return หน้าสั้นแทนหน้าเมนู แล้วกดปุ่มค่อยสลับกลับเป็นหน้ายาว — เบราว์เซอร์ในแอปบน Android บางตัว
+  // (LINE ฯลฯ) ไม่ยอมเลื่อนหน้าที่ "เพิ่งยาวขึ้นหลังกดปุ่ม" ⟹ หน้าเมนูต้องอยู่ตลอด แผ่นทับแค่บังไว้
+  // ระบุ top/right/bottom/left ตรงๆ ไม่ใช้ inset (เบราว์เซอร์เก่าไม่รู้จัก inset = แผ่นทับไม่คลุมจอ)
+  const custOverlay=showNotice?<div role="dialog" aria-modal="true" aria-labelledby="cust-notice-t" style={{...CUST_OVL,justifyContent:"flex-start",zIndex:5000,background:C.ink,padding:"24px 18px",fontFamily:"'Sarabun',sans-serif"}}>
+    <div style={{margin:"auto 0",width:"100%",display:"flex",flexDirection:"column",alignItems:"center"}}>
+      <div style={{color:"rgba(255,255,255,.85)",fontSize:13.5,fontWeight:700,marginBottom:12,textAlign:"center"}}>{branch.name} · โต๊ะ {table.table_number}</div>
+      <div style={{background:C.white,borderRadius:18,padding:"22px 20px 18px",width:"100%",maxWidth:360,boxSizing:"border-box"}}>
+        <div id="cust-notice-t" style={{fontSize:18,fontWeight:900,color:C.ink,textAlign:"center",marginBottom:10}}>{notice.title}</div>
+        <div style={{fontSize:15,color:C.ink2,lineHeight:1.7,whiteSpace:"pre-line",overflowWrap:"anywhere",marginBottom:18}}>{notice.text}</div>
+        <Btn onClick={ackNotice} full s={{padding:"13px",fontSize:16,fontWeight:900}}>เข้าใจแล้ว</Btn>
+      </div>
     </div>
-  </div>;
-  if(done)return <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.greenLight,padding:24,textAlign:"center"}}>
-    <div style={{fontSize:72}}>✅</div>
-    <h2 style={{fontSize:22,fontWeight:900,color:C.green,fontFamily:"'Sarabun',sans-serif",marginBottom:6,marginTop:12}}>สั่งอาหารสำเร็จ!</h2>
-    <p style={{fontSize:15,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>โต๊ะ {table.table_number}</p>
-    <p style={{fontSize:14,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:24}}>อาหารกำลังเตรียมครับ 🍳</p>
-    <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center"}}>
-      <Btn v="ghost" onClick={()=>{setDone(false);setStep("myorder");}}>📋 ดูสรุปยอด</Btn>
-      <Btn onClick={()=>{setDone(false);setCart([]);setStep("menu");}}>สั่งเพิ่ม</Btn>
+  </div>
+  :done?<div role="dialog" aria-modal="true" style={{...CUST_OVL,justifyContent:"flex-start",zIndex:5000,background:C.greenLight,padding:24,textAlign:"center"}}>
+    <div style={{margin:"auto 0",display:"flex",flexDirection:"column",alignItems:"center"}}>
+      <div style={{fontSize:72}}>✅</div>
+      <h2 style={{fontSize:22,fontWeight:900,color:C.green,fontFamily:"'Sarabun',sans-serif",marginBottom:6,marginTop:12}}>สั่งอาหารสำเร็จ!</h2>
+      <p style={{fontSize:15,color:C.ink2,fontFamily:"'Sarabun',sans-serif",marginBottom:4}}>โต๊ะ {table.table_number}</p>
+      <p style={{fontSize:14,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:24}}>อาหารกำลังเตรียมครับ 🍳</p>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center"}}>
+        <Btn v="ghost" onClick={()=>{setDone(false);setStep("myorder");}}>📋 ดูสรุปยอด</Btn>
+        <Btn onClick={()=>{setDone(false);setCart([]);setStep("menu");}}>สั่งเพิ่ม</Btn>
+      </div>
     </div>
-  </div>;
+  </div>:null;
   const myOrderItemCount=myOrder?(myOrder.items||[]).reduce((s,i)=>s+(isPkgLine(i)?0:i.qty),0):0;   // จานอาหาร (หัวลูกค้าไม่ใช่จาน)
   const inPkgFree=(m)=>!!pkgScope&&!(+(m&&m.price)>0);   // เมนู ฿0 ของแพ็คเกจ = "รวมในแพ็คเกจ"
   // .cust-shell สูงอย่างน้อยเท่าจอ แล้วปล่อยให้ "ทั้งหน้า" เลื่อน (ดู index.html)
   // ไม่งั้นกล่องรายการเมนูข้างในจะยืดตามเนื้อหาแทนที่จะเลื่อน แล้วลูกค้าเลื่อนดูเมนูไม่ได้
-  return <div className="cust-shell" style={{background:C.bg,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column"}}>
+  return <div className="cust-shell" ref={shellRef} style={{background:C.bg,maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column",
+    ...(scrollFix?{height:shellH||"100vh",minHeight:0,overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"}:{})}}>
+    {custOverlay}
+    {scrollHelp&&<div role="alert" style={{position:"fixed",zIndex:4000,left:0,right:0,bottom:0,background:C.ink,color:C.white,padding:"12px 14px calc(12px + env(safe-area-inset-bottom, 0px))",fontFamily:"'Sarabun',sans-serif",boxShadow:"0 -6px 18px rgba(15,23,42,.3)"}}>
+      <div style={{fontSize:14.5,fontWeight:900,marginBottom:4}}>เลื่อนเมนูไม่ได้ใช่ไหม?</div>
+      <div style={{fontSize:13,lineHeight:1.6,opacity:.92}}>กดปุ่ม ⋮ หรือ ••• มุมขวาบน แล้วเลือก "เปิดในเบราว์เซอร์" (Chrome / Safari) — หรือกด 🔔 เรียกพนักงานให้ช่วยสั่ง</div>
+      <div style={{display:"flex",gap:8,marginTop:10}}>
+        <button type="button" onClick={()=>{setScrollHelp(false);setCallAsk(true);}} style={{flex:1,minHeight:42,borderRadius:10,border:"none",background:C.brand,color:C.white,fontWeight:900,fontSize:14,fontFamily:"'Sarabun',sans-serif"}}>🔔 เรียกพนักงาน</button>
+        <button type="button" onClick={()=>setScrollHelp(false)} style={{minHeight:42,padding:"0 16px",borderRadius:10,border:"1px solid rgba(255,255,255,.4)",background:"transparent",color:C.white,fontWeight:700,fontSize:14,fontFamily:"'Sarabun',sans-serif"}}>ปิด</button>
+      </div>
+    </div>}
     {/* Order stuck in the outbox — the diner must know it is NOT lost and that we keep retrying. */}
     {outbox&&<div style={{background:"#FEF3C7",borderBottom:"2px solid #F59E0B",padding:"10px 14px",fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
       <div style={{fontSize:13.5,fontWeight:800,color:"#92400E",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
@@ -22941,7 +23018,7 @@ function CustomerPage({branchId,tableId,token}){
       </div>
     </>}
     {/* รอชำระเงิน — ต้องเป็นป็อปอัพ ไม่ใช่แถบเล็กๆ ลูกค้าจะได้ไม่กดสั่งซ้ำแล้วงงว่าทำไมไม่เข้า */}
-    {soldOutMsg&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
+    {soldOutMsg&&<div style={{...CUST_OVL,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
       <div style={{background:C.white,borderRadius:18,padding:"26px 22px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:46,marginBottom:8}}>🙏</div>
         <div style={{fontSize:18,fontWeight:900,color:C.ink,marginBottom:7}}>ขออภัย เมนูนี้หมดแล้ว</div>
@@ -22950,7 +23027,7 @@ function CustomerPage({branchId,tableId,token}){
         <Btn onClick={()=>setSoldOutMsg(null)} full s={{padding:"12px",fontSize:15,fontWeight:900}}>รับทราบ</Btn>
       </div>
     </div>}
-    {rejectMsg&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
+    {rejectMsg&&<div style={{...CUST_OVL,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
       <div style={{background:C.white,borderRadius:18,padding:"26px 22px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:46,marginBottom:8}}>🙏</div>
         <div style={{fontSize:18,fontWeight:900,color:C.ink,marginBottom:7}}>{rejectMsg.pkg?"เมนูนี้ไม่อยู่ในแพ็คเกจของโต๊ะ":"รายการนี้ส่งไม่ได้"}</div>
@@ -22959,7 +23036,7 @@ function CustomerPage({branchId,tableId,token}){
         <Btn onClick={()=>setRejectMsg(null)} full s={{padding:"12px",fontSize:15,fontWeight:900}}>รับทราบ</Btn>
       </div>
     </div>}
-    {timeUpMsg&&<div role="dialog" aria-modal="true" onClick={()=>setTimeUpMsg(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
+    {timeUpMsg&&<div role="dialog" aria-modal="true" onClick={()=>setTimeUpMsg(false)} style={{...CUST_OVL,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,padding:"24px 20px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:44,marginBottom:6}}>⏱</div>
         <div style={{fontSize:18,fontWeight:900,color:C.ink,marginBottom:6}}>หมดเวลาสั่งอาหารแล้ว</div>
@@ -22967,7 +23044,7 @@ function CustomerPage({branchId,tableId,token}){
         <Btn onClick={()=>setTimeUpMsg(false)} full s={{padding:"12px",fontSize:15,fontWeight:900}}>เข้าใจแล้ว</Btn>
       </div>
     </div>}
-    {payWaitMsg&&payWaiting&&<div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
+    {payWaitMsg&&payWaiting&&<div style={{...CUST_OVL,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
       <div style={{background:C.white,borderRadius:18,padding:"26px 22px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:46,marginBottom:8}}>🧾</div>
         <div style={{fontSize:18,fontWeight:900,color:C.ink,marginBottom:7}}>กำลังรอการชำระเงิน</div>
@@ -22979,7 +23056,7 @@ function CustomerPage({branchId,tableId,token}){
         <Btn onClick={()=>setPayWaitMsg(false)} full s={{padding:"12px",fontSize:15,fontWeight:900}}>รับทราบ</Btn>
       </div>
     </div>}
-    {noteIdx!==null&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}}>
+    {noteIdx!==null&&<div style={{...CUST_OVL,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}}>
       <div style={{background:C.white,borderRadius:14,padding:18,width:300}}>
         <div style={{fontWeight:700,fontSize:14,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:8}}>หมายเหตุ: {cart[noteIdx]?.name}</div>
         <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="เช่น ไม่เผ็ด, ไม่ใส่ผัก..." style={{...iS,height:60,resize:"none"}}/>
@@ -22997,7 +23074,7 @@ function CustomerPage({branchId,tableId,token}){
         background:callUntil?"#047857":C.ink,color:C.white,fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:900,boxShadow:"0 6px 18px rgba(15,23,42,.32)"}}>
       {callBusy?"⏳ กำลังแจ้ง…":callUntil?"✓ เรียกพนักงานแล้ว":"🔔 เรียกพนักงาน"}
     </button>}
-    {callAsk&&<div role="dialog" aria-modal="true" onClick={()=>setCallAsk(false)} style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
+    {callAsk&&<div role="dialog" aria-modal="true" onClick={()=>setCallAsk(false)} style={{...CUST_OVL,background:"rgba(15,23,42,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3200,padding:18}}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.white,borderRadius:18,padding:"24px 20px",width:"100%",maxWidth:340,textAlign:"center",fontFamily:"'Sarabun',sans-serif"}}>
         <div style={{fontSize:44,marginBottom:6}}>🔔</div>
         <div style={{fontSize:18,fontWeight:900,color:C.ink,marginBottom:6}}>เรียกพนักงาน</div>

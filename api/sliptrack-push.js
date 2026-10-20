@@ -105,6 +105,23 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // ── อาการจากมือถือลูกค้าหน้าสแกน (client_diag · 20 ต.ค. 69) ─────────────────────
+  // เช่น ปัดนิ้วแล้วหน้าเมนูไม่เลื่อน — จำลองบนเครื่องเราไม่เกิด ต้องรู้ว่า "เครื่อง/แอปไหน" ถึงจะแก้ตรงจุด
+  // จดลง log ของ Vercel อย่างเดียว (ไม่ลงฐานข้อมูล ไม่คุยกับระบบบัญชี ไม่มีข้อมูลส่วนตัว) · ตัดความยาวทุกช่อง
+  // ไม่ต้องใช้คีย์บัญชี ⟹ อยู่ก่อนเช็ก SLIPTRACK_API_KEY · ไฟล์ฟังก์ชันใหม่ไม่ได้ (เพดาน 12 ฟังก์ชันของ Vercel)
+  {
+    let b = req.body;
+    if (typeof b === "string") { try { b = JSON.parse(b); } catch { b = null; } }
+    if (b && b.kind === "client_diag") {
+      const cut = (v, n) => String(v == null ? "" : v).slice(0, n);
+      console.warn("[client_diag] " + JSON.stringify({
+        event: cut(b.event, 40), ua: cut(b.ua, 300), w: Number(b.w) || 0, h: Number(b.h) || 0, docH: Number(b.docH) || 0,
+        cls: cut(b.cls, 60), branch: cut(b.branch, 8), table: cut(b.table, 12),
+      }));
+      return res.status(204).end();
+    }
+  }
+
   const apiKey = process.env.SLIPTRACK_API_KEY;
   if (!apiKey) {
     return res

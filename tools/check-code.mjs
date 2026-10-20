@@ -170,14 +170,19 @@ const zoomLock = (() => {
   if (st < 0) throw new Error("ไม่เจอสคริปต์ล็อกซูมใน index.html");
   const b0 = HTML.indexOf("(function () {", st), b1 = HTML.indexOf("})();", b0);
   if (b0 < 0 || b1 < 0) throw new Error("ตัดสคริปต์ล็อกซูมไม่ได้");
-  const reg = [];
-  const doc = {
-    addEventListener: (t, fn, o) => reg.push({ t, fn, o: o || {}, phase: "boot" }),
-    removeEventListener: (t, fn) => reg.push({ t, fn, removed: true }),
+  const run = (cls) => {
+    const reg = [];
+    const doc = {
+      documentElement: { className: cls },
+      addEventListener: (t, fn, o) => reg.push({ t, fn, o: o || {}, phase: "boot" }),
+      removeEventListener: (t, fn) => reg.push({ t, fn, removed: true }),
+    };
+    const win = { addEventListener: (t, fn, o) => reg.push({ t, fn, o: o || {}, phase: "boot" }) };
+    new Function("document", "window", HTML.slice(b0, b1 + 5))(doc, win);
+    return { reg, doc };
   };
-  const win = { addEventListener: (t, fn, o) => reg.push({ t, fn, o: o || {}, phase: "boot" }) };
-  new Function("document", "window", HTML.slice(b0, b1 + 5))(doc, win);
-  return { reg, doc };
+  // หน้าลูกค้าสแกน (ป้าย cust-scan ที่สคริปต์หัวหน้าติดให้) ต้องไม่ผูกตัวดักนิ้วใดๆ เลย (20 ต.ค. 69)
+  return { ...run(""), scan: run(" cust-scan") };
 })();
 const bootListeners = (t) => zoomLock.reg.filter(r => r.t === t && r.phase === "boot" && !r.removed);
 
@@ -1119,8 +1124,9 @@ section("หน้าลูกค้าสแกน: เลื่อนดูเ
   ok_("หน้าลูกค้าเลื่อนทั้งหน้า ไม่ใช่เลื่อนในกล่อง", CUST.includes('return <div className="cust-shell"'));
   ok_("กรอบสูงอย่างน้อยเท่าจอ และเผื่อเบราว์เซอร์ที่ไม่รู้จัก dvh",
     HTML.includes(".cust-shell { min-height: 100vh; min-height: 100dvh; }"));
-  ck("ไม่มีกล่องเลื่อนซ้อนในหน้าลูกค้าอีก (ตัวที่เบราว์เซอร์ในแอปเอาไม่อยู่)",
-    CUST.split('overflowY:"auto"').length - 1, 0);
+  // 20 ต.ค. 69: มีกล่องเลื่อนได้ที่เดียว = "โหมดสำรอง" ที่ตัวเฝ้าการเลื่อนเปิดเองเมื่อเลื่อนทั้งหน้าไม่ได้จริง (ค่าปกติยังเลื่อนทั้งหน้า)
+  ck("ไม่มีกล่องเลื่อนซ้อนในหน้าลูกค้า (ยกเว้นโหมดสำรองที่เปิดเมื่อเลื่อนทั้งหน้าไม่ได้)",
+    [CUST.split('overflowY:"auto"').length - 1, CUST.includes('...(scrollFix?{height:shellH||"100vh",minHeight:0,overflowY:"auto",WebkitOverflowScrolling:"touch",overscrollBehavior:"contain"}:{})')], [1, true]);
   ok_("หัวจอ (ชื่อโต๊ะ + ปุ่มตะกร้า) ติดอยู่บนสุดตลอด", CUST.includes('position:"sticky",top:0,zIndex:14'));
   ok_("แถบหมวดกับช่องค้นหาติดใต้หัวจอพอดี ไม่ทับกัน",
     CUST.includes('position:"sticky",top:headH,zIndex:12') && CUST.includes("const headRef=useCallback((el)=>{"));
@@ -1864,7 +1870,7 @@ ok_("ด่านชุดรอชำระเงินรันจนจบ", 
     APP.includes("const {pay_lock, ...rest} = body;") && APP.includes("_noLockCol:true"));
 
   // ── หน้าลูกค้า ──
-  ok_("หน้าลูกค้าขึ้นป็อปอัพว่ากำลังรอชำระเงิน", APP.includes("{payWaitMsg&&payWaiting&&<div style={{position:\"fixed\"") && APP.includes("ตอนนี้สั่งอาหารเพิ่มไม่ได้"));
+  ok_("หน้าลูกค้าขึ้นป็อปอัพว่ากำลังรอชำระเงิน", APP.includes("{payWaitMsg&&payWaiting&&<div style={{...CUST_OVL,") && APP.includes("ตอนนี้สั่งอาหารเพิ่มไม่ได้"));
   ok_("หน้าลูกค้ามีแถบค้างบนหัวจอด้วย ไม่ใช่เห็นแค่ตอนเด้ง", APP.includes("🔒 กำลังรอการชำระเงิน"));
   ok_("ปุ่มยืนยันสั่งอาหารกดไม่ได้ตอนรอชำระ (และตอนโต๊ะบุฟเฟต์หมดเวลาสั่ง)", APP.includes('disabled={payWaiting||timeUp} full s={{padding:"10px"}}'));
   ok_("กดการ์ดเมนูตอนรอชำระ = เด้งบอก ไม่ใช่เงียบ", APP.includes("if(payWaiting){setPayWaitMsg(true);return;}   // รอชำระเงินอยู่ ห้ามสั่งเพิ่ม"));
@@ -2265,7 +2271,8 @@ section("วันที่โอนจริง + แหล่งเงิน�
   // (ท่อปิดกะคือท่อที่สำคัญที่สุด ยอดขายรายวันไปออกเอกสารภาษี)
   const slipCalls = APP.split("\n").filter((l) => l.includes('fetch("/api/sliptrack-push"')).length;
   // ทางที่ 5–6 (20 ต.ค. 69) = แนบรูปใบปิดกะอย่างเดียว (pos_closing_slip: หลังปิดกะ + ปุ่มในประวัติกะ) — ไม่มียอดเงิน อ่านสถานะแนบรูปรายวันแทนคำเตือน
-  ck("ยังมีทางคุยกับบัญชีครบทุกทาง", slipCalls, 6);
+  // ทางที่ 7 (20 ต.ค. 69) = แจ้งอาการจากมือถือลูกค้า (client_diag) — ไม่คุยกับบัญชี เซิร์ฟเวอร์จด log แล้วตอบ 204
+  ck("ยังมีทางคุยกับบัญชีครบทุกทาง", slipCalls, 7);
   ck("ทุกทางอ่านคำเตือนจากตัวตอบ",
     ["slipWarnings(done)", "slipWarnings(vd)", "slipWarnings(d)", "closingWarnings(r.reply)", "...slipWarnings(reply),"].filter((x) => !APP.includes(x)), []);
   // จอปิดกะเคยขึ้นเขียวล้วนแม้บัญชีจะทิ้งค่าไปบางส่วน = คนปิดกะเชื่อว่าเรียบร้อย
@@ -8832,13 +8839,17 @@ section("หน้าลูกค้า: ข้อความแจ้งตอ
 
   // หน้าลูกค้า: hook อยู่เหนือ early return · กล่องอยู่บนสุด · กดนอกกล่องไม่ปิด · ฟอร์มมีสองช่องต่อจากข้อความใบเสร็จ
   const CP = (() => { const st = APP.indexOf("function CustomerPage("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
-  const nSt = CP.indexOf("if(showNotice)return"), dlg = nSt < 0 ? "" : CP.slice(nSt, CP.indexOf("\n  if(", nSt + 5));
+  const nSt = CP.indexOf("const custOverlay=showNotice?"), dlg = nSt < 0 ? "" : CP.slice(nSt, CP.indexOf("\n  :done?", nSt));
   ok_("หน้าลูกค้า: hook ข้อความแจ้งอยู่เหนือ return แรก (hook หลัง early return = จอลูกค้าพังทั้งจอ)",
     CP.indexOf("const NOTICE_KEY=") > 0 && CP.indexOf("const NOTICE_KEY=") < CP.indexOf("if(gateLoading)return") && CP.includes("customerNoticeOf(posCfg)"));
-  ok_("หน้าลูกค้า: ข้อความแจ้งขึ้นทั้งจอแทนหน้าเมนู (หลังโหลดโต๊ะ ก่อนจอสั่งสำเร็จ) · ไม่มีทางปิดนอกจากกด \"เข้าใจแล้ว\" · ไม่มีกล่องเลื่อนซ้อน · กดแล้วจำใน localStorage (มี try)",
-    nSt > CP.indexOf("if(!table||!branch)return") && nSt < CP.indexOf("if(done)return") && dlg.length > 0 &&
-    (dlg.match(/onClick=/g) || []).length === 1 && dlg.includes("onClick={ackNotice}") && dlg.includes(">เข้าใจแล้ว</Btn>") && !/overflowY|position:"fixed"/.test(dlg) &&
-    CP.includes("const ackNotice=()=>{try{localStorage.setItem(NOTICE_KEY,noticeMark);}catch{}setNoticeAck(noticeMark);};"));
+  // 20 ต.ค. 69: ลูกค้า Android เลื่อนเมนูไม่ได้หลังกด "เข้าใจแล้ว" — ห้ามสลับทั้งหน้า (หน้าสั้น → หน้ายาวหลังกดปุ่ม)
+  ok_("หน้าลูกค้า: ข้อความแจ้ง/สั่งสำเร็จเป็นแผ่นทับบนหน้าเมนู ไม่ใช่ return หน้าใหม่ · ปิดได้ทางเดียวคือ 'เข้าใจแล้ว' · กดแล้วจำ (มี try) และกลับบนสุด",
+    !CP.includes("if(showNotice)return") && !CP.includes("if(done)return") && dlg.length > 0 && dlg.includes("...CUST_OVL,") &&
+    (dlg.match(/onClick=/g) || []).length === 1 && dlg.includes("onClick={ackNotice}") && dlg.includes(">เข้าใจแล้ว</Btn>") &&
+    CP.includes("return <div className=\"cust-shell\" ref={shellRef}") && CP.indexOf("{custOverlay}") > CP.indexOf("return <div className=\"cust-shell\"") &&
+    CP.includes("const ackNotice=()=>{try{localStorage.setItem(NOTICE_KEY,noticeMark);}catch{}setNoticeAck(noticeMark);try{window.scrollTo(0,0);}catch{}};"));
+  ok_("หน้าลูกค้า: แผ่นทับระบุขอบสี่ด้านตรงๆ (ไม่ใช้ inset ที่เบราว์เซอร์เก่าไม่รู้จัก)",
+    APP.includes('const CUST_OVL={position:"fixed",top:0,right:0,bottom:0,left:0,') && !/position:"fixed",inset:0/.test(CP));
   const F = APP.slice(APP.indexOf("function POSSettingsFields("), APP.indexOf("\nfunction ", APP.indexOf("function POSSettingsFields(") + 10));
   ok_("ฟอร์มตั้งค่า POS: ช่องหัวข้อ + ข้อความ อยู่ต่อจากข้อความใบเสร็จ",
     F.indexOf("set('customer_notice_title'") > F.indexOf("set('receipt_footer'") && F.indexOf("set('customer_notice_text'") > F.indexOf("set('receipt_footer'") && F.indexOf("set('receipt_footer'") > 0);
@@ -9452,6 +9463,68 @@ section("รูปใบปิดกะแนบเข้าบัญชี (เ
   ok_("วันที่ของใบในโหมดเติมรูปใช้กติกาเดียวกับใบปิดยอด (วันที่ปิดบิล เวลาไทย)",
     SLIPPUSH.split('const bizDate = (o) => new Date(o.updated_at || o.created_at)').length === 3 &&
     SLIPPUSH.split('.toLocaleDateString("sv-SE", { timeZone: "Asia/Bangkok" });').length >= 3);
+}
+
+section("หน้าลูกค้าสแกนเลื่อนได้ทุกเบราว์เซอร์ (20 ต.ค. 69)");
+{
+  // สคริปต์หัว index.html ตัวจริง กับ location/navigator ปลอม
+  const st = HTML.indexOf("// ── หน้าลูกค้าสแกน QR (?scan=1)"), b0 = HTML.indexOf("(function () {", st), b1 = HTML.indexOf("})();", b0);
+  const runHead = (search, ua) => {
+    const out = { replaced: null, cls: "", vp: "width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" };
+    const loc = { search, pathname: "/", hash: "", replace: (u) => { out.replaced = u; } };
+    const doc = { documentElement: { get className() { return out.cls; }, set className(v) { out.cls = v; } },
+      querySelector: () => ({ setAttribute: (k, v) => { out.vp = v; } }) };
+    new Function("location", "navigator", "document", "URLSearchParams", HTML.slice(b0, b1 + 5))(loc, { userAgent: ua }, doc, URLSearchParams);
+    return out;
+  };
+  const LINE_A = "Mozilla/5.0 (Linux; Android 13; SM-A145F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Mobile Safari/537.36 Line/14.16.1/IAB";
+  const CHROME_A = "Mozilla/5.0 (Linux; Android 13; SM-A145F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Mobile Safari/537.36";
+  const LINE_I = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Safari Line/14.16.1";
+  const q = "?scan=1&branch=5&table=104&t=abc";
+  const a = runHead(q, LINE_A), a2 = runHead(q + "&openExternalBrowser=1", LINE_A), c = runHead(q, CHROME_A), i = runHead(q, LINE_I), staff = runHead("?pos=1&branch=5", LINE_A);
+  ck("LINE บน Android: ส่งไปเปิดในเบราว์เซอร์จริงครั้งเดียว (มีพารามิเตอร์แล้วไม่วน) · คงพารามิเตอร์โต๊ะ/รหัสเดิมครบ",
+    [a.replaced, a2.replaced, /scan=1/.test(a.replaced || "") && /table=104/.test(a.replaced || "") && /t=abc/.test(a.replaced || "")],
+    ["/?scan=1&branch=5&table=104&t=abc&openExternalBrowser=1", null, true]);
+  ck("Chrome / LINE บน iPhone / หน้าพนักงาน: ไม่ถูกส่งต่อ", [c.replaced, i.replaced, staff.replaced], [null, null, null]);
+  ck("หน้าลูกค้า: ติดป้าย cust-scan + ปลดล็อกซูม · หน้าพนักงานไม่โดน",
+    [/cust-scan/.test(c.cls), c.vp, /cust-scan/.test(staff.cls), /user-scalable=no/.test(staff.vp)],
+    [true, "width=device-width, initial-scale=1.0, viewport-fit=cover", false, true]);
+  ok_("หน้าลูกค้า: คืนค่าปกติของเบราว์เซอร์ (overflow-x ของ html · touch-action ของ body · overscroll ของ div) · กันล้นแนวนอนด้วย clip ที่กรอบ",
+    HTML.includes("html.cust-scan { overflow-x: visible !important; max-width: none !important; }") && HTML.includes("html.cust-scan body { touch-action: auto !important; }") &&
+    HTML.includes("html.cust-scan div { overscroll-behavior: auto; }") && HTML.includes("html.cust-scan .cust-shell { overflow-x: clip; }") &&
+    HTML.indexOf("// ── หน้าลูกค้าสแกน QR (?scan=1)") < HTML.indexOf("// ── Lock zoom"));
+  ck("หน้าลูกค้า: ไม่ผูกตัวดักนิ้ว/ล้อเมาส์ใดๆ ตอนโหลด (หน้าพนักงานยังล็อกซูมเหมือนเดิม)",
+    [zoomLock.scan.reg.length, zoomLock.reg.length > 0], [0, true]);
+  // ตัวเฝ้าการเลื่อน
+  const CPx = APP.slice(APP.indexOf("function CustomerPage({branchId,tableId,token}){"), APP.indexOf("// ── POS QR PAGE"));
+  ok_("ตัวเฝ้าการเลื่อน: hook อยู่เหนือ return แรก · ฟังนิ้วแบบ passive (ไม่หน่วงการเลื่อน) · ถอดตอนเลิกใช้",
+    CPx.indexOf("const[scrollFix,setScrollFix]=useState(") > 0 && CPx.indexOf("const[scrollFix,setScrollFix]=useState(") < CPx.indexOf("if(gateLoading)return") &&
+    CPx.includes('document.addEventListener("touchstart",ts,{passive:true});') && CPx.includes('document.addEventListener("touchmove",tm,{passive:true});') &&
+    CPx.includes('document.addEventListener("touchend",te,{passive:true});') && CPx.includes('document.removeEventListener("touchend",te);'));
+  ok_("ตัวเฝ้าการเลื่อน: นับเฉพาะปัดแนวตั้งชัดๆ ที่ยังเลื่อนต่อได้ · ไม่นับป็อปอัพ/ของลอย/สุดขอบ/หน้าสั้น · 2 ครั้งถึงสลับ",
+    CPx.includes("if(!s0||Math.abs(s0.dy)<90||Math.abs(s0.dy)<2*Math.abs(s0.dx))return;") && CPx.includes('if(document.body.style.position==="fixed")return;') &&
+    CPx.includes('if(getComputedStyle(n).position==="fixed")return true;') && CPx.includes("if(s0.dy<0?s0.p>=max-4:s0.p<=4)return;") && CPx.includes("const max=room();if(max<120)return;") &&
+    CPx.includes("if(++strikes<2)return;"));
+  ok_("ตัวเฝ้าการเลื่อน: เลื่อนทั้งหน้าไม่ได้ → กรอบเลื่อนเอง (จำทั้งแท็บ) · ยังไม่ได้อีก → แถบบอกวิธีเปิดในเบราว์เซอร์ + เรียกพนักงาน · แจ้งเซิร์ฟเวอร์ทั้งสองครั้ง",
+    CPx.includes('reportCustDiag(scrollFix?"scroll_stuck_fallback":"scroll_stuck",{branch:branchId,table:tableId});') &&
+    CPx.includes('if(!scrollFix){try{sessionStorage.setItem(SCROLL_FIX_KEY,"1");}catch{}setScrollFix(true);}') && CPx.includes("else setScrollHelp(true);") &&
+    CPx.includes("{scrollHelp&&<div role=\"alert\"") && CPx.includes("onClick={()=>{setScrollHelp(false);setCallAsk(true);}}"));
+  // client_diag ตัวจริง: จด log แล้วตอบ 204 · ไม่แตะบัญชี · ไม่ต้องมีคีย์บัญชี
+  {
+    const realFetch = globalThis.fetch, realWarn = console.warn, keep = process.env.SLIPTRACK_API_KEY;
+    let calls = 0, warned = "", code = 0, ended = false;
+    globalThis.fetch = async () => { calls++; return { ok: true, json: async () => ({}) }; };
+    console.warn = (m) => { warned += String(m); };
+    delete process.env.SLIPTRACK_API_KEY;
+    try {
+      const mod = await import(new URL("../api/sliptrack-push.js", import.meta.url).href + "?diag=" + Math.random());
+      const res = { setHeader() {}, status(c) { code = c; return this; }, json() { return this; }, end() { ended = true; return this; } };
+      await mod.default({ method: "POST", body: JSON.stringify({ kind: "client_diag", event: "scroll_stuck", ua: "X".repeat(900), w: 360, h: 740, docH: 4600, branch: "5", table: "104", secret: "no" }) }, res);
+    } finally { globalThis.fetch = realFetch; console.warn = realWarn; if (keep != null) process.env.SLIPTRACK_API_KEY = keep; }
+    ck("client_diag: ตอบ 204 · ไม่ยิงไปไหน · ไม่ต้องมีคีย์บัญชี · จด log แบบตัดความยาว ไม่จดช่องแปลก",
+      { code, ended, calls, logged: warned.startsWith("[client_diag] "), uaCut: (warned.match(/X+/) || [""])[0].length, secret: warned.includes("secret") },
+      { code: 204, ended: true, calls: 0, logged: true, uaCut: 300, secret: false });
+  }
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

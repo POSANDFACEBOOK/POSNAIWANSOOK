@@ -41,11 +41,35 @@
     </script>
     <meta name="theme-color" content="#F2EBE3" />
     <script>
+      // ── หน้าลูกค้าสแกน QR (?scan=1): ทำให้ "หน้าเว็บธรรมดาที่สุด" ทุกเบราว์เซอร์/ทุกแอปที่ใช้สแกนเลื่อนได้เหมือนกัน ──
+      // (20 ต.ค. 69 ลูกค้า Android สแกนแล้วเลื่อนเมนูไม่ได้ / สั่งไม่ได้ — เคยเกิดกับเบราว์เซอร์ในแอป LINE เมื่อ ก.ย. ด้วย)
+      // · LINE บน Android: ส่งต่อไปเปิดในเบราว์เซอร์จริงด้วย openExternalBrowser=1 (คุณสมบัติของ LINE เอง)
+      //   มีพารามิเตอร์แล้วไม่ส่งซ้ำ (กันวน) · LINE ไม่รับก็แค่โหลดหน้าเดิมต่อตามปกติ
+      // · ปิดการล็อกซูม/ล็อกสองนิ้วของหน้าพนักงาน และติดป้าย cust-scan ให้ CSS ด้านล่างคืนค่าปกติของเบราว์เซอร์
+      (function () {
+        try {
+          var p = new URLSearchParams(location.search);
+          if (p.get("scan") !== "1") return;
+          var ua = navigator.userAgent || "";
+          if (/\bLine\//i.test(ua) && /Android/i.test(ua) && !p.has("openExternalBrowser")) {
+            p.set("openExternalBrowser", "1");
+            location.replace(location.pathname + "?" + p.toString() + location.hash);
+            return;
+          }
+          document.documentElement.className += " cust-scan";
+          var v = document.querySelector('meta[name="viewport"]');
+          if (v) v.setAttribute("content", "width=device-width, initial-scale=1.0, viewport-fit=cover");
+        } catch (e) { /* อ่าน URL ไม่ได้ = ใช้ค่าเดิม */ }
+      })();
+    </script>
+    <script>
       // ── Lock zoom ───────────────────────────────────────────────────────────
       // The viewport meta (user-scalable=no) blocks pinch on Android/PWA, but iOS
       // Safari ignores it — so we also cancel the pinch gesture + multi-touch +
       // ctrl/⌘-wheel + ctrl/⌘ +/- zoom. Single-finger scrolling is untouched.
       (function () {
+        // หน้าลูกค้าสแกน: ไม่ผูกตัวดักนิ้วใดๆ เลย ปล่อยให้เบราว์เซอร์เลื่อน/ซูมเอง (ลูกค้าซูมดูรูปเมนูได้)
+        if (/\bcust-scan\b/.test(document.documentElement.className)) return;
         ["gesturestart", "gesturechange", "gestureend"].forEach(function (ev) {
           document.addEventListener(ev, function (e) { e.preventDefault(); }, { passive: false });
         });
@@ -90,6 +114,14 @@
          100dvh คือความสูงที่มองเห็นจริงตอนแถบที่อยู่ของ Safari ยุบ/กางอยู่
          เขียน 100vh ไว้ก่อนเผื่อเบราว์เซอร์เก่าที่ยังไม่รู้จัก dvh (บรรทัดที่ไม่รู้จักจะถูกทิ้งไปเอง) */
       .cust-shell { min-height: 100vh; min-height: 100dvh; }
+      /* หน้าลูกค้าสแกน: คืนค่าปกติของเบราว์เซอร์ทุกอย่างที่หน้าพนักงานปรับไว้ (globalStyle ในแอป)
+         html{overflow-x:hidden} · body{touch-action:manipulation} · div{overscroll-behavior:contain}
+         ค่าพวกนี้ปลอดภัยบน Chrome/Safari แต่เบราว์เซอร์ในแอป (LINE/Facebook/Samsung) บางรุ่นเลื่อนหน้าไม่ได้
+         กันหน้าล้นแนวนอนด้วย overflow-x:clip ที่กรอบแทน (clip ไม่ทำให้กรอบกลายเป็นกล่องเลื่อนซ้อน) */
+      html.cust-scan { overflow-x: visible !important; max-width: none !important; }
+      html.cust-scan body { touch-action: auto !important; }
+      html.cust-scan div { overscroll-behavior: auto; }
+      html.cust-scan .cust-shell { overflow-x: clip; }
       /* กดค้างที่ปุ่มบนไอแพด = iOS เลือกข้อความบนปุ่มแล้วขึ้นแถบ "คัดลอก · ค้นดู · แปลภาษา"
          บังปุ่มข้างใต้ และพนักงานต้องแตะที่อื่นก่อนถึงจะกดต่อได้ ปุ่มไม่มีอะไรให้คัดลอกอยู่แล้ว
          ช่องกรอกข้อความ (input/textarea) ไม่โดนกฎนี้ ยังเลือก/วางข้อความได้ตามปกติ */
