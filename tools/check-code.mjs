@@ -5833,7 +5833,8 @@ section("POS สาขาที่ 2: เงินและบัญชี");
           const u = String(url);
           if (u.includes("sliptrack-pro.vercel.app")) { sent.push(JSON.parse(opt.body)); return { ok: true, status: 200, json: async () => ({ success: true, income: { status: "posted" } }) }; }
           if (u.includes("pos_shifts")) return { ok: true, json: async () => [shift] };
-          if (u.includes("/branches?")) return { ok: true, json: async () => [{ name: "กาญจนบุรี The River" }] };
+          // ชื่อตามเลขสาขาจริง — "กาญจนบุรี" เป็นคำนำหน้าของ "กาญจนบุรี The River" ห้ามให้ยอดสาขา 5 ไปลงชื่อ River
+          if (u.includes("/branches?")) return { ok: true, json: async () => [{ name: /id=eq.5(&|$)/.test(u) ? "กาญจนบุรี" : "กาญจนบุรี The River" }] };
           if (u.includes("/orders?") && ordersDown) return { ok: false, status: 500, text: async () => "db down" };
           if (u.includes("/orders?")) return { ok: true, json: async () => (u.includes("shift_id=eq.") ? orders : u.includes("shift_id=is.null") ? untagged : []) };
           if (u.includes("cash_movements")) return { ok: true, json: async () => [] };
@@ -5884,8 +5885,8 @@ section("POS สาขาที่ 2: เงินและบัญชี");
       // สาขา 5 เปิดท่อแล้ว: ยิงจริงหนึ่งใบ และใช้เลขอ้างอิงรายกะ (…-s<เลขกะ>)
       const b5 = await run({ ...SH, branch_id: 5 }, [ob({ id: 7, subtotal: 300, discount: 0, total: 300 })]);
       ck("กาญจนบุรี (5) เปิดท่อแล้ว: ยิงหนึ่งใบ ไม่ติดธง not_enabled · เลขอ้างอิงรายกะ",
-        { sent: b5.sent.length, ne: !!(b5.out && b5.out.not_enabled), ext: /-s41$/.test(String((b5.sent[0] || {}).external_id || "")), sid: (b5.sent[0] || {}).shift_id },
-        { sent: 1, ne: false, ext: true, sid: 41 });
+        { sent: b5.sent.length, ne: !!(b5.out && b5.out.not_enabled), ext: (b5.sent[0] || {}).external_id, br: (b5.sent[0] || {}).branch, sid: (b5.sent[0] || {}).shift_id },
+        { sent: 1, ne: false, ext: "pos-2026-10-12-กาญจนบุรี-s41", br: "กาญจนบุรี", sid: 41 });
       const empty = await run(SH, []);
       ck("กะไม่มีบิล (สาขาเปิดท่อแล้ว): ข้ามโดยไม่ติดธง not_enabled", { skipped: !!(empty.out && empty.out.skipped), ne: !!(empty.out && empty.out.not_enabled) }, { skipped: true, ne: false });
       okRun = true;
