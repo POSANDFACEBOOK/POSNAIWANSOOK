@@ -1438,6 +1438,7 @@ try {
 ok_("ด่านชุดลงบัญชีรันจนจบ", _acctOk);
 {
   // เซิร์ฟเวอร์ต้องคำนวณเอง ห้ามเชื่อตัวเลขจากเบราว์เซอร์ — นี่คือยอดที่จะลงสมุดบัญชี
+  // 20 ต.ค. 69: รูปใบปิดกะไปอีกคำขอหลังยอดผ่าน (pos_closing_slip) — คำขอยอดยังเล็กและไม่มีตัวเลขเงินจากเบราว์เซอร์
   ok_("หน้าเว็บส่งแค่เลขกะ ไม่ได้ส่งตัวเลขเงินมาเอง",
     APP.includes('body:JSON.stringify({kind:"pos_closing",shift_id:shift.id})'));
   ok_("เซิร์ฟเวอร์อ่านบิลจริงจากฐานข้อมูลมาคำนวณ", SLIPPUSH.includes("status=eq.paid") && SLIPPUSH.includes("const sum = (list, k) =>"));
@@ -2263,13 +2264,14 @@ section("วันที่โอนจริง + แหล่งเงิน�
   // ทุกทางที่คุยกับบัญชีต้องอ่านตัวตอบ ไม่ใช่แค่ทาง PO — ไล่จากจุด fetch จริง
   // (ท่อปิดกะคือท่อที่สำคัญที่สุด ยอดขายรายวันไปออกเอกสารภาษี)
   const slipCalls = APP.split("\n").filter((l) => l.includes('fetch("/api/sliptrack-push"')).length;
-  ck("ยังมีทางคุยกับบัญชีครบทุกทาง", slipCalls, 4);
+  // ทางที่ 5–6 (20 ต.ค. 69) = แนบรูปใบปิดกะอย่างเดียว (pos_closing_slip: หลังปิดกะ + ปุ่มในประวัติกะ) — ไม่มียอดเงิน อ่านสถานะแนบรูปรายวันแทนคำเตือน
+  ck("ยังมีทางคุยกับบัญชีครบทุกทาง", slipCalls, 6);
   ck("ทุกทางอ่านคำเตือนจากตัวตอบ",
     ["slipWarnings(done)", "slipWarnings(vd)", "slipWarnings(d)", "closingWarnings(r.reply)", "...slipWarnings(reply),"].filter((x) => !APP.includes(x)), []);
   // จอปิดกะเคยขึ้นเขียวล้วนแม้บัญชีจะทิ้งค่าไปบางส่วน = คนปิดกะเชื่อว่าเรียบร้อย
   ok_("จอปิดกะแยกสถานะ \"ส่งแล้วแต่ไม่ครบ\" ออกจากเขียวล้วน",
     APP.includes("const warnRows=rows.filter(r=>r.ok&&(closingWarnings(r.reply).length||closingStatusWarnings(r.reply).length));") &&
-    APP.includes("const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0&&openRows.length===0;") &&
+    APP.includes("const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0&&openRows.length===0&&slipRows.length===0;") &&
     APP.includes("ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก"));
   // ── "ข้าม" มีสองแบบ ห้ามเหมารวม ────────────────────────────────────────
   // ไม่มีอะไรต้องลงบัญชี (ย้ายในหน่วยเดียวกัน/ยอดศูนย์) = จบ
@@ -2509,7 +2511,7 @@ section("ใบปิดกะออกเครื่องพิมพ์ใ�
   };
   const bahtLn = APP.split("\n").find((l) => l.startsWith("function bahtR(n){"));
   const emojiLn = APP.split("\n").find((l) => l.startsWith("function stripEmoji(s){"));
-  const body = grabFn2("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[]}){");
+  const body = grabFn2("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[],daySplit=null}){");
   ok_("ยังมีตัวสร้างใบปิดกะแบบบรรทัด", !!(body && bahtLn && emojiLn));
   if (body && bahtLn && emojiLn) {
     const build = new Function(
@@ -2577,7 +2579,7 @@ section("พิมพ์ใบปิดกะซ้ำ");
   const lsr = grabF("async function loadShiftTotalsForReprint(shift,branchId){");
   ok_("ยังมีตัวประกอบยอดของกะที่ปิดแล้ว", !!(r2Ln && cst && lsr && blk));
   if (r2Ln && cst && lsr && blk) {
-    const mk = (orders, moves) => new Function("api", [mainLn, takeLn, emo, payLn, PKG_SRC, blk, r2Ln, cst, lsr, "return loadShiftTotalsForReprint;"].filter(Boolean).join("\n"))({
+    const mk = (orders, moves) => new Function("api", [mainLn, takeLn, emo, payLn, PKG_SRC, blk, r2Ln, cst, grabF("function shiftDaySplit(orders){"), lsr, "return loadShiftTotalsForReprint;"].filter(Boolean).join("\n"))({
       getCashMovements: async () => moves,
       getPOSOrdersSince: async () => orders,
       // ตัวจริงรวมสองทาง (ใบที่ติดเลขกะ + ใบที่ดึงด้วยเวลา) แล้วค่อยกรองในตัวประกอบยอด
@@ -2627,7 +2629,7 @@ section("พิมพ์ใบปิดกะซ้ำ");
     ck("ส่วนต่างบนใบพิมพ์ซ้ำ = ค่าที่บันทึกตอนปิดกะ", [ok2.totals.actual, ok2.totals.expected, ok2.totals.diff], [500, 700, -200]);
   }
   // ตัวใบ: ต้องตีตราว่าเป็นใบพิมพ์ซ้ำ และบอกเวลาปิดกะจริง ไม่ใช่เวลาที่กดพิมพ์
-  const bz = grabF("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[]}){");
+  const bz = grabF("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[],daySplit=null}){");
   const bLn = APP.split("\n").find((l) => l.startsWith("function bahtR(n){"));
   const eLn = APP.split("\n").find((l) => l.startsWith("function stripEmoji(s){"));
   if (bz && bLn && eLn) {
@@ -5661,7 +5663,7 @@ section("POS สาขาที่ 2: เงินและบัญชี");
   // ใบปิดกะแบบตัวพิมพ์ต้องพิมพ์ "- ส่วนลด" เป็นยอดที่ไม่รวมโปรฯ (โปรฯ มีบรรทัดของตัวเอง)
   {
     const bahtLn = lineOf("function bahtR(n){"), emojiLn = lineOf("function stripEmoji(s){");
-    const body = grabSig("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[]}){");
+    const body = grabSig("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[],daySplit=null}){");
     let ZL = null;
     try { ZL = new Function(bahtLn + "\n" + emojiLn + "\nconst fmtDT=()=>\"DT\";\n" + body + "\nreturn buildZReportLines;")(); } catch { ZL = null; }
     ok_("ดึงตัวสร้างใบปิดกะ (ตัวพิมพ์) มารันได้", !!ZL);
@@ -5827,7 +5829,7 @@ section("POS สาขาที่ 2: เงินและบัญชี");
     const realFetch = globalThis.fetch;
     let okRun = false;
     try {
-      const run = async (shift, orders, untagged = [], ordersDown = false) => {
+      const run = async (shift, orders, untagged = [], ordersDown = false, extraBody = null) => {
         const sent = [];
         globalThis.fetch = async (url, opt) => {
           const u = String(url);
@@ -5844,7 +5846,7 @@ section("POS สาขาที่ 2: เงินและบัญชี");
         const mod = await import(new URL("../api/sliptrack-push.js", import.meta.url).href + "?b2=" + Math.random());
         let out = null;
         const res = { setHeader() {}, status() { return this; }, json(j) { out = j; return this; } };
-        await mod.default({ method: "POST", body: { kind: "pos_closing", shift_id: shift.id } }, res);
+        await mod.default({ method: "POST", body: { kind: "pos_closing", shift_id: shift.id, ...(extraBody || {}) } }, res);
         globalThis.fetch = realFetch;
         return { out, sent };
       };
@@ -5887,6 +5889,30 @@ section("POS สาขาที่ 2: เงินและบัญชี");
       ck("กาญจนบุรี (5) เปิดท่อแล้ว: ยิงหนึ่งใบ ไม่ติดธง not_enabled · เลขอ้างอิงรายกะ",
         { sent: b5.sent.length, ne: !!(b5.out && b5.out.not_enabled), ext: (b5.sent[0] || {}).external_id, br: (b5.sent[0] || {}).branch, sid: (b5.sent[0] || {}).shift_id },
         { sent: 1, ne: false, ext: "pos-2026-10-12-กาญจนบุรี-s41", br: "กาญจนบุรี", sid: 41 });
+      // รูปใบปิดกะ (20 ต.ค. 69): ส่งต่อให้ฝั่งบัญชีในใบเดิม · ตรวจชนิด/base64/ขนาดก่อน · ไม่สะท้อนรูปทั้งก้อนกลับหน้าเว็บ
+      {
+        const PNG = Buffer.from("iVBORw0KGgo=".repeat(40), "utf8").toString("base64");
+        const bill = [ob({ id: 8, subtotal: 500, discount: 0, total: 500 })];
+        const okR = await run(SH, bill, [], false, { slip_base64: "data:image/png;base64," + PNG, slip_content_type: "image/png" });
+        const p0 = okR.sent[0] || {}, row0 = (okR.out && okR.out.results && okR.out.results[0]) || {};
+        ck("รูปใบปิดกะ: ส่งต่อไปกับใบปิดยอด (ตัด data: นำหน้า) และยอดยังส่งตามปกติ",
+          { sent: okR.sent.length, b64: p0.slip_base64 === PNG, type: p0.slip_content_type, total: p0.total_sales },
+          { sent: 1, b64: true, type: "image/png", total: 500 });
+        ck("รูปใบปิดกะ: ตอบหน้าเว็บด้วยขนาด ไม่ใช่รูปทั้งก้อน (กันคำตอบบวม/จดลงเครื่อง)",
+          { echoB64: "slip_base64" in (row0.sent || {}), echoBytes: (row0.sent || {}).slip_bytes > 0, top: okR.out && okR.out.slip_bytes > 0 },
+          { echoB64: false, echoBytes: true, top: true });
+        const bad = [
+          await run(SH, bill, [], false, { slip_base64: PNG, slip_content_type: "image/gif" }),
+          await run(SH, bill, [], false, { slip_base64: "<html>not-base64</html>", slip_content_type: "image/png" }),
+          await run(SH, bill, [], false, { slip_base64: "A".repeat(4100000), slip_content_type: "image/png" }),
+        ];
+        ck("รูปผิดชนิด / ไม่ใช่ base64 / ใหญ่เกิน 3MB = ไม่แนบ แต่ยอดยังส่ง และบอกเหตุ",
+          bad.map((x) => ({ sent: x.sent.length, slip: !!(x.sent[0] && x.sent[0].slip_base64), why: !!(x.out && x.out.slip_problem) })),
+          [{ sent: 1, slip: false, why: true }, { sent: 1, slip: false, why: true }, { sent: 1, slip: false, why: true }]);
+        const none = await run(SH, bill);
+        ck("ไม่ส่งรูปมา = ใบปิดยอดเหมือนเดิมทุกช่อง (ไม่มีช่องรูป ไม่มี slip_problem)",
+          { slip: "slip_base64" in (none.sent[0] || {}), type: "slip_content_type" in (none.sent[0] || {}), why: !!(none.out && none.out.slip_problem) }, { slip: false, type: false, why: false });
+      }
       const empty = await run(SH, []);
       ck("กะไม่มีบิล (สาขาเปิดท่อแล้ว): ข้ามโดยไม่ติดธง not_enabled", { skipped: !!(empty.out && empty.out.skipped), ne: !!(empty.out && empty.out.not_enabled) }, { skipped: true, ne: false });
       okRun = true;
@@ -6341,7 +6367,7 @@ section("POS สาขาที่ 2: หน้าลูกค้าและข
           totals: { expected: 0, actual: 0, diff: 0, totalSales: 100, totalCash: 100, totalTransfer: 0, totalCard: 0, totalOther: 0, payIn: 0, payOut: 0, drops: 0, orderCount: 1 },
           // ขั้นตอนลงบัญชี (กลุ่มเงิน) อยู่ใน doCloseShift ด้วย — ใช้ตัวจัดผลจริง และกะมีบิล 1 ใบ ให้ไปถึงจอผลบัญชี
           acctOutcomeOf: new Function(grab(APP, "acctOutcomeOf") + "\nreturn acctOutcomeOf;")(), rememberAcctUnsent: () => false, acctUnsentEntry: () => ({}),
-          setSaving: () => {}, note: "", printZReport: () => log.push("z"), shift: { id: 41 }, currentBranch: { id: 8 }, currentUser: { id: 1, username: "t" },
+          setSaving: () => {}, note: "", printZReport: () => log.push("z"), zReportSlipImage: async () => null, shiftDaySplit: () => [], orders: [], shift: { id: 41 }, currentBranch: { id: 8 }, currentUser: { id: 1, username: "t" },
           api: {
             addCashMovement: async () => { log.push("cash"); },
             closeShift: async () => { if (closeThrows) throw new Error("boom"); log.push("close"); },
@@ -7833,7 +7859,7 @@ section("แพ็คเกจบุฟเฟต์: เปิดโต๊ะแ
       const paid = [{ ...BILL, status: "paid", payment_method: "cash", total: 738 }, { id: 78, table_number: "B2", status: "paid", payment_method: "cash", subtotal: 100, total: 100, items: [{ name: "ข้าวผัด", price: 50, qty: 2, category: "อาหาร" }] }];
       T = new Function(deps + "\nreturn computeShiftTotals;")()({ movements: [], orders: paid, actualCash: 0, cancelled: [], openBills: [] });
       Z = new Function("const bahtR=(n)=>'B'+(+n||0).toFixed(2);const fmtDT=()=>'DT';" + lineOf("function stripEmoji(s){") + "\nconst payMethodLabel=(m)=>m;\n" +
-        grabFn("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[]}){") + "\nreturn buildZReportLines;")()({ shift: { id: 1, opened_at: "x" }, totals: T, branch: { name: "กจ" }, user: { name: "ผึ้ง" } });
+        grabFn("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[],daySplit=null}){") + "\nreturn buildZReportLines;")()({ shift: { id: 1, opened_at: "x" }, totals: T, branch: { name: "กจ" }, user: { name: "ผึ้ง" } });
       const ia = L.findIndex((l) => l.startsWith("const TH_OFF=")), ifn = L.findIndex((l, i) => i > ia && l.startsWith("function posSalesSeries(")), ib = L.findIndex((l, i) => i > ifn && l === "}");
       S = new Function(PKG_SRC + "\n" + L.slice(ia, ib + 1).join("\n") + "\nreturn posSalesSeries;")()(paid.map((o) => ({ ...o, updated_at: "2026-10-18T05:00:00Z" })));
     } catch (e) { T = T || String(e && e.message); }
@@ -8655,6 +8681,21 @@ section("ปิดกะ: ตอบ 200 แต่รายรับ/ตู้เ
       [0, 1, 1, 1]);
     ck("ใบสาขา 5 ตามผล dry-run ของฝั่งบัญชี (รายรับลง · ตู้เซฟข้ามใบแรก · ไม่ออก CA-) = เขียว · ตอบไม่มีช่องเหล่านี้ = ไม่เตือนมั่ว",
       [n({ income: { status: "posted" }, safe_cash: { status: "skipped" }, cash_doc: { status: "skipped" } }), n({}), n(null)], [0, 0, 0]);
+    // รูปใบปิดยอด (20 ต.ค. 69) ไม่อยู่ในตัวนี้ — ขาดรูป ≠ ยอดไม่ลง (หัวจอ "ยังลงไม่ครบ" จะพาคนไปลงยอดเอง/ส่งซ้ำ)
+    ck("ขาดรูปใบปิดยอดอย่างเดียว ไม่ทำให้สถานะยอดเตือน", [n({ income: { status: "posted" }, attachment: { status: "missing" } }), n({ attachment: { status: "error" } })], [0, 0]);
+    let SM = null;
+    try { SM = new Function(grab(APP, "closingSlipMissing") + "\nreturn closingSlipMissing;")(); } catch { SM = null; }
+    ok_("ดึงตัวอ่านสถานะรูปใบปิดยอดตัวจริงมารันได้", !!SM);
+    if (SM) ck("รูปใบปิดยอด: attached/exists = มีแล้ว · missing/error/not_found = ขาด · ตัวรับรุ่นเก่าไม่มีช่อง = ไม่เตือน",
+      [SM({ attachment: { status: "attached" } }), SM({ attachment: { status: "exists" } }), SM({ attachment: { status: "missing" } }), SM({ attachment: { status: "error", message: "x" } }), SM({ attachment: { status: "not_found" } }), SM({ income: { status: "posted" } }), SM(null)],
+      [false, false, true, true, true, false, false]);
+    ok_("ขาดรูป: บอกเหตุด้วยข้อความของเราเอง ไม่ยกข้อความฝั่งบัญชีมาแสดง (เคยแนะนำ 'ส่งซ้ำ external_id เดิม' = ส่งยอดซ้ำ) · ย้ำห้ามส่งยอดซ้ำ",
+      !APP.includes("reply.attachment.message") && APP.includes('const SLIP_WHY={render:"เครื่องนี้วาดรูปไม่สำเร็จ",timeout:"ส่งรูปไม่ทันเวลา",network:"เน็ตสะดุดตอนส่งรูป"};') &&
+      APP.includes("— ยอดลงแล้ว ห้ามส่งยอดซ้ำ · ส่งรูปได้ที่ ประวัติกะ → 📎"));
+    ok_("จอผลปิดกะ: ขาดเฉพาะรูป = เหลืองแบบ 'ยอดลงครบแล้ว' ไม่ใช่ 'ยังลงไม่ครบ'",
+      APP.includes("const slipRows=rows.filter(r=>r.ok&&closingSlipMissing(r.reply));") &&
+      APP.includes('warnRows.length?"ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก":"ส่งยอดขายเข้าบัญชีแล้ว — ขาดเฉพาะรูปใบปิดยอด"') &&
+      APP.includes("ยอดลงสมุดบัญชีครบแล้ว ไม่ต้องส่งยอดซ้ำ — รูปใบปิดยอดส่งตามได้ที่ ประวัติกะ → 📎 ส่งรูปใบปิดกะเข้าบัญชี"));
   }
   ok_("จอปิดกะ: สถานะยังไม่ลง = เหลือง \"ส่งถึงระบบบัญชีแล้ว แต่ยังลงไม่ครบ\" ไม่ใช่เขียว และบอกให้แจ้งฝ่ายบัญชี",
     APP.includes("const warnRows=rows.filter(r=>r.ok&&(closingWarnings(r.reply).length||closingStatusWarnings(r.reply).length));") &&
@@ -9272,6 +9313,145 @@ section("ตรวจคืนแรกสาขา 5: แก้บั๊กท�
     ck("แถบใบครัวไม่ออก (ตัวพิมพ์ v50): ผูกบรรทัดด้วย uid ตรงตัว ทุกโต๊ะ · บิลที่ปิดไปแล้วยังบอกโต๊ะที่ตัวพิมพ์จด",
       OT(PR50, 5, ORD50, T + 300000, 20 * 60000).map((o) => [o.table, o.key, !!o.line]), [["A3", "u:L1", true], ["D4", "u:L4", true], ["C2", "u:Lx", false]]);
   } catch (e) { ok_("ดึง orphanTicketsOf มารันได้: " + e.message, false); }
+}
+
+section("รูปใบปิดกะแนบเข้าบัญชี (เจ้าของสั่ง 20 ต.ค. 69)");
+{
+  ok_("วาดรูปจากบรรทัดชุดเดียวกับใบปิดกะที่พิมพ์ (buildZReportLines) ผ่านผ้าใบเดียวกัน · ลอง PNG → JPEG ลดคุณภาพจากผ้าใบเดิม · เพดาน 2.5MB",
+    APP.includes('const url=await escposSlipRaster(buildZReportLines(args),576,{asImage:[["image/png"],["image/jpeg",0.85],["image/jpeg",0.6]],maxBytes:ZSLIP_MAX_BYTES});') &&
+    APP.includes("const ZSLIP_MAX_BYTES=2500000;"));
+  {
+    const iA = APP.indexOf("  if(opts&&opts.asImage){\n    let out=null;"), iR = APP.indexOf("const data=ctx.getImageData(0,0,width,h).data;");
+    ok_("รูปคืนก่อนแปลงเป็นไบต์เครื่องพิมพ์ (ใบที่พิมพ์ไม่เปลี่ยน) · ปล่อยผ้าใบทุกทาง · เพดานพิกเซลก่อนสร้างผ้าใบ",
+      iA > 0 && iA < iR && APP.includes("}finally{cv.width=0;cv.height=0;}") &&
+      APP.includes("if((u.length-m[0].length)*3/4<=(+opts.maxBytes||Infinity)){out=u;break;}") &&
+      APP.indexOf("if(opts&&opts.asImage&&width*h>16000000)return null;") > 0 && APP.indexOf("if(opts&&opts.asImage&&width*h>16000000)return null;") < APP.indexOf('const cv=document.createElement("canvas");cv.width=width;cv.height=h;'));
+  }
+  ok_("ปิดกะ: ยอดไปก่อนแบบเดิม (ไม่วาด/ไม่แบกรูป) · ยอดผ่านแล้วค่อยแนบรูป · แนบล้มไม่กระทบผลยอด",
+    APP.includes("const zArgs={shift,totals,branch:currentBranch,user:currentUser,note:noteFull,daySplit:shiftDaySplit(orders)};\n      printZReport(zArgs);") &&
+    !APP.includes("const slipP=zReportSlipImage(zArgs)") &&
+    APP.includes('if(outcome==="ok"){try{acctRes=await attachClosingSlip(acctRes,zArgs);}catch{}}') &&
+    APP.indexOf('if(outcome==="ok"){try{acctRes=await attachClosingSlip') > APP.indexOf("const outcome=acctOutcomeOf(acctRes,totals.orderCount);"));
+  // attachClosingSlip ตัวจริงกับของปลอม
+  {
+    let AT = null;
+    const mkAT = (zImpl, fetchImpl) => new Function("zReportSlipImage", "fetch", "round2", "setTimeout", "async " + grab(APP, "attachClosingSlip") + "\nreturn attachClosingSlip;")(zImpl, fetchImpl, (n) => Math.round(n * 100) / 100, (f) => 0);
+    try { AT = mkAT(async () => null, async () => null); } catch { AT = null; }
+    ok_("ดึงตัวแนบรูปหลังปิดกะตัวจริงมารันได้", !!AT);
+    if (AT) {
+      const RES = { shift_id: 44, results: [{ business_date: "2026-10-14", ok: true, total_sales: 110, bills: 1, reply: { income: { status: "posted" } } }, { business_date: "2026-10-15", ok: true, total_sales: 300, bills: 2, reply: { income: { status: "posted" }, attachment: { status: "missing" } } }] };
+      const Z = { shift: { id: 44 }, totals: {}, daySplit: [] };
+      let got = null, calls = 0;
+      const okRun = await mkAT(async (a) => { got = a; return { slip_base64: "QQ==", slip_content_type: "image/png", bytes: 1 }; },
+        async (u, o) => { calls++; const b = JSON.parse(o.body); return { json: async () => ({ results: [{ business_date: "2026-10-14", ok: true, attach: "attached" }, { business_date: "2026-10-15", ok: false, attach: "not_found" }], kind: b.kind }) }; })(RES, Z);
+      ck("แนบรูปหลังปิดกะ: วาดด้วยส่วนแบ่งตามวันจากใบที่ฝั่งบัญชีได้จริง · ผลรายวันเขียนลง attachment · ยอด/สถานะยอดไม่เปลี่ยน",
+        { split: got && got.daySplit, calls, att: okRun.results.map((r) => r.reply.attachment.status), ok: okRun.results.map((r) => r.ok), inc: okRun.results.map((r) => r.reply.income.status) },
+        { split: [{ date: "2026-10-14", total: 110, n: 1 }, { date: "2026-10-15", total: 300, n: 2 }], calls: 1, att: ["attached", "not_found"], ok: [true, true], inc: ["posted", "posted"] });
+      let c2 = 0;
+      const none = await mkAT(async () => { c2++; return null; }, async () => { c2++; return null; })({ results: [{ business_date: "2026-10-14", ok: false, error: "x" }] }, Z);
+      const noImg = await mkAT(async () => null, async () => { throw new Error("must not call"); })(RES, Z);
+      let net = { results: [{ reply: { attachment: { why: "โยนออกมา" } } }, { reply: { attachment: { why: "โยนออกมา" } } }] };
+      try { net = await mkAT(async () => ({ slip_base64: "QQ==", slip_content_type: "image/png" }), async () => { throw new Error("offline"); })(RES, Z); } catch { /* ต้องไม่โยน — ค่าตั้งต้นทำให้ด่านแดง */ }
+      ck("ยอดไม่ผ่าน = ไม่วาด/ไม่ส่งรูป · วาดไม่ได้ = ขาดรูป (render) ไม่ยิง · เน็ตหลุด = ขาดรูป (network) — ไม่โยน",
+        [c2, none.results[0].reply, noImg.results.map((r) => r.reply.attachment.why), net.results.map((r) => r.reply.attachment.why)],
+        [0, undefined, ["render", "render"], ["network", "network"]]);
+    }
+  }
+  ok_("เซิร์ฟเวอร์รับชนิดตามที่ฝั่งบัญชีกำหนดเท่านั้น", SLIPPUSH.includes('const SLIP_TYPES = ["image/png", "image/jpeg", "image/webp", "application/pdf"];'));
+  // ── ตัวจริงรันได้: แบ่งยอดตามวันที่ปิดบิล + บรรทัดบนใบ ──
+  const braceGrab = (head) => {
+    const st = APP.indexOf(head); if (st < 0) return "";
+    let d = 0, started = false;
+    for (let i = st + head.length - 1; i < APP.length; i++) { if (APP[i] === "{") { d++; started = true; } else if (APP[i] === "}") { d--; if (started && d === 0) return APP.slice(st, i + 1); } }
+    return "";
+  };
+  const lineOf = (p) => APP.split("\n").find((l) => l.startsWith(p)) || "";
+  let SPLIT = null, BZ = null;
+  try { SPLIT = new Function(braceGrab("function shiftDaySplit(orders){") + "\nreturn shiftDaySplit;")(); } catch { SPLIT = null; }
+  try {
+    BZ = new Function([lineOf("function bahtR(n){"), lineOf("const PAY_LABEL="), lineOf("const payMethodLabel="), lineOf("function stripEmoji(s){"),
+      braceGrab("function parseAnyDate(v){"), lineOf("const _b2="), lineOf("const fmtD="), lineOf("const fmtDT="),
+      braceGrab("function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[],daySplit=null}){"), "return buildZReportLines;"].join("\n"))();
+  } catch { BZ = null; }
+  ok_("ดึงตัวแบ่งยอดตามวัน + ตัวสร้างใบปิดกะตัวจริงมารันได้", !!SPLIT && !!BZ);
+  if (SPLIT) {
+    // เส้นแบ่งวัน = เที่ยงคืนเวลาไทย (17:00Z) — กติกาเดียวกับท่อบัญชี
+    const sp = SPLIT([
+      { status: "paid", total: 100, updated_at: "2026-10-14T16:59:00Z" }, { status: "paid", total: 250.5, updated_at: "2026-10-14T17:00:00Z" },
+      { status: "paid", total: 49.5, updated_at: "2026-10-15T03:00:00Z" }, { status: "cancelled", total: 999, updated_at: "2026-10-15T03:00:00Z" },
+      { status: "paid", total: 0, updated_at: "2026-10-16T03:00:00Z" }, { total: 10, created_at: "2026-10-14T10:00:00Z" },
+    ]);
+    ck("แบ่งยอดตามวันที่ปิดบิล (เวลาไทย): 23:59 = วันเดิม · 00:00 = วันใหม่ · บิลยกเลิกไม่นับ · วัน ฿0 ไม่มีใบ",
+      sp, [{ date: "2026-10-14", total: 110, n: 2 }, { date: "2026-10-15", total: 300, n: 2 }]);
+  }
+  if (BZ) {
+    const T = { orderCount: 3, totalSales: 410, payment: [], openingCash: 0, expected: 0, actual: 0, diff: 0 };
+    const txt = (o) => BZ({ shift: { id: 44, opened_at: "2026-10-14T14:06:00Z", closed_at: "2026-10-15T13:54:00Z" }, totals: T, branch: { name: "กจ" }, user: { name: "ผึ้ง" }, ...o })
+      .map((l) => [l.t, l.l, l.r].filter((x) => x != null).join(" | ")).join("\n");
+    const two = txt({ daySplit: [{ date: "2026-10-14", total: 110, n: 1 }, { date: "2026-10-15", total: 300, n: 2 }] });
+    ok_("กะคร่อมวัน: ใบบอก 'ทั้งกะ' + ส่วนของแต่ละวัน (ฝั่งบัญชีขอ — ยอดบนรูปไม่เท่าใบใดใบหนึ่ง)",
+      two.includes("ลงบัญชีแยกตามวันที่ปิดบิล") && two.includes("กะ #44 ทั้งกะ | ฿410.00") && two.includes("ส่วนของวันที่ 14/10/2569  ×1 บิล | ฿110.00") && two.includes("ส่วนของวันที่ 15/10/2569  ×2 บิล | ฿300.00"));
+    ok_("วันเดียว / ไม่ส่งการแบ่งมา = ไม่มีส่วนแบ่งตามวัน (ใบเหมือนเดิม)",
+      !txt({ daySplit: [{ date: "2026-10-15", total: 410, n: 3 }] }).includes("ลงบัญชีแยกตามวัน") && !txt({}).includes("ลงบัญชีแยกตามวัน"));
+    const rp = txt({ reprint: true });
+    ok_("ใบพิมพ์ซ้ำ (รูปย้อนหลัง): เขียนชัดว่า 'พิมพ์ซ้ำ — สร้างจากข้อมูล POS เมื่อ' (ฝั่งบัญชีขอ — กันเข้าใจว่าเป็นกระดาษต้นฉบับ)",
+      rp.includes("*** ใบพิมพ์ซ้ำ ***") && /พิมพ์ซ้ำ — สร้างจากข้อมูล POS เมื่อ \d\d\/\d\d\/25\d\d \d\d:\d\d/.test(rp) && !txt({}).includes("สร้างจากข้อมูล POS"));
+  }
+  ok_("ปิดกะ/พิมพ์ซ้ำ/เติมรูป ส่งการแบ่งตามวันไปกับใบทุกทาง",
+    APP.includes("daySplit:shiftDaySplit(orders)};") && APP.includes("return{totals,mismatches,daySplit:shiftDaySplit(orders)};") &&
+    APP.includes('printZReport({shift:s,totals,branch,user:user||{},note:s.notes||"",reprint:true,mismatches,win,daySplit});') &&
+    APP.includes('const img=await zReportSlipImage({shift:s,totals,branch,user:user||{},note:s.notes||"",reprint:true,mismatches,daySplit});'));
+  // ── เติมรูปย้อนหลังจากประวัติกะ: ใช้โหมดแนบรูปอย่างเดียว ห้ามส่งยอดซ้ำ ──
+  {
+    const sz = braceGrab("  async function sendSlipZ(s){");
+    ok_("ปุ่มเติมรูปในประวัติกะส่ง kind pos_closing_slip เท่านั้น (ไม่ใช่ pos_closing ที่คำนวณยอดใหม่)",
+      !!sz && sz.includes('kind:"pos_closing_slip"') && !sz.includes('kind:"pos_closing"'));
+  }
+  // ── เซิร์ฟเวอร์ pos_closing_slip ตัวจริงกับ fetch ปลอม ──
+  {
+    const realFetch = globalThis.fetch;
+    const SHIFT = { id: 44, branch_id: 8, status: "closed", opened_at: "2026-10-14T14:06:00Z", closed_at: "2026-10-15T13:54:00Z" };
+    const ORD = [{ id: 1, total: 110, created_at: "2026-10-14T15:00:00Z", updated_at: "2026-10-14T16:30:00Z" },
+      { id: 2, total: 300, created_at: "2026-10-15T02:00:00Z", updated_at: "2026-10-15T03:00:00Z" }, { id: 3, total: 0, created_at: "2026-10-15T05:00:00Z", updated_at: "2026-10-15T17:30:00Z" }];   // วันที่ 16 มีแต่บิล ฿0 = ไม่มีใบ
+    const runSlip = async (body, { shift = SHIFT, reply = () => ({ ok: true, status: 200, body: { status: "attached" } }) } = {}) => {
+      const sent = [];
+      globalThis.fetch = async (url, opt) => {
+        const u = String(url);
+        if (u.includes("sliptrack-pro.vercel.app")) { const b = JSON.parse(opt.body); sent.push(b); const rp = reply(b); return { ok: rp.ok, status: rp.status, json: async () => rp.body }; }
+        if (u.includes("pos_shifts")) return { ok: true, json: async () => [shift] };
+        if (u.includes("/branches?")) return { ok: true, json: async () => [{ name: "กาญจนบุรี The River" }] };
+        if (u.includes("/orders?")) return { ok: true, json: async () => (u.includes("shift_id=eq.") ? ORD : []) };
+        return { ok: false, status: 404, text: async () => "unexpected " + u };
+      };
+      process.env.SLIPTRACK_API_KEY = "TEST";
+      let out = null, code = 0;
+      try {
+        const mod = await import(new URL("../api/sliptrack-push.js", import.meta.url).href + "?slip=" + Math.random());
+        const res = { setHeader() {}, status(c) { code = c; return this; }, json(j) { out = j; return this; }, end() { return this; } };
+        await mod.default({ method: "POST", body }, res);
+      } finally { globalThis.fetch = realFetch; }
+      return { out, code, sent };
+    };
+    const IMG = Buffer.from("png-bytes-".repeat(30)).toString("base64");
+    const ok1 = await runSlip({ kind: "pos_closing_slip", shift_id: 44, slip_base64: IMG, slip_content_type: "image/png" });
+    ck("เติมรูป: ยิงใบละวัน (กะคร่อมวัน = 2 วัน · วัน ฿0 ไม่ยิง) ด้วย kind pos_closing_slip + คีย์หาใบ (วัน, สาขา, กะ) · ไม่มียอดเงินในคำขอ",
+      ok1.sent.map((b) => ({ k: b.kind, d: b.business_date, br: b.branch, key: b.shift_key, img: b.slip_base64 === IMG, money: "total_sales" in b || "payment" in b })),
+      [{ k: "pos_closing_slip", d: "2026-10-14", br: "กาญจนบุรี The River", key: "44", img: true, money: false },
+        { k: "pos_closing_slip", d: "2026-10-15", br: "กาญจนบุรี The River", key: "44", img: true, money: false }]);
+    ok_("เติมรูป: attached ทุกวัน = สำเร็จ (200) · ตอบกลับไม่มีรูปทั้งก้อน", ok1.code === 200 && ok1.out && ok1.out.results.every((r) => r.ok) && !JSON.stringify(ok1.out).includes(IMG));
+    const mixed = await runSlip({ kind: "pos_closing_slip", shift_id: 44, slip_base64: IMG, slip_content_type: "image/png" },
+      { reply: (b) => b.business_date === "2026-10-14" ? { ok: true, status: 200, body: { status: "exists" } } : { ok: false, status: 404, body: { error: "not_found" } } });
+    ck("เติมรูป: exists = สำเร็จ (ไม่ทับ) · not_found = ไม่สำเร็จ และบอกเหตุ (ไม่มีใบ = ไม่สร้าง)",
+      [mixed.code, mixed.out.results.map((r) => [r.ok, r.attach])], [207, [[true, "exists"], [false, "not_found"]]]);
+    const noImg = await runSlip({ kind: "pos_closing_slip", shift_id: 44 });
+    const openS = await runSlip({ kind: "pos_closing_slip", shift_id: 44, slip_base64: IMG, slip_content_type: "image/png" }, { shift: { ...SHIFT, status: "open", closed_at: null } });
+    const notEn = await runSlip({ kind: "pos_closing_slip", shift_id: 44, slip_base64: IMG, slip_content_type: "image/png" }, { shift: { ...SHIFT, branch_id: 6 } });
+    ck("เติมรูป: ไม่มีรูป = 400 · กะยังเปิด = 409 · สาขาไม่เข้าท่อ = ข้าม — ทั้งหมดไม่ยิงไปบัญชีเลย",
+      [noImg.code, noImg.sent.length, openS.code, openS.sent.length, !!(notEn.out && notEn.out.not_enabled), notEn.sent.length], [400, 0, 409, 0, true, 0]);
+  }
+  ok_("วันที่ของใบในโหมดเติมรูปใช้กติกาเดียวกับใบปิดยอด (วันที่ปิดบิล เวลาไทย)",
+    SLIPPUSH.split('const bizDate = (o) => new Date(o.updated_at || o.created_at)').length === 3 &&
+    SLIPPUSH.split('.toLocaleDateString("sv-SE", { timeZone: "Asia/Bangkok" });').length >= 3);
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

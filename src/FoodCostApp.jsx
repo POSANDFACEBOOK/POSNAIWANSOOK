@@ -2447,6 +2447,16 @@ function closingStatusWarnings(reply){
   if(doc==="blocked"||doc==="error"||doc==="mismatch")out.push("ใบขายเงินสด CA- ออกไม่ได้ ("+doc+")");
   return out;
 }
+// รูปใบปิดยอด (ฝั่งบัญชีเพิ่ม 20 ต.ค. 69) — แยกจากสถานะยอด: ขาดรูป ≠ ยอดไม่ลง ห้ามพาคนไปส่งยอดซ้ำ
+// attached / exists = มีรูปแล้ว · ตัวรับรุ่นที่ไม่มีช่องนี้ = ไม่เตือน · อื่นๆ (missing / error / not_found / หมดเวลา) = ขาดรูป
+// ไม่แสดงข้อความของฝั่งบัญชีตรงๆ — เขาเคยแนะนำ "ส่งซ้ำ external_id เดิม" ซึ่งสำหรับพนักงานคือการส่งยอดซ้ำ
+function closingSlipMissing(reply){
+  const a=reply&&reply.attachment;
+  if(!a||typeof a!=="object")return false;
+  const st=String(a.status||"");
+  return st!=="attached"&&st!=="exists";
+}
+const SLIP_WHY={render:"เครื่องนี้วาดรูปไม่สำเร็จ",timeout:"ส่งรูปไม่ทันเวลา",network:"เน็ตสะดุดตอนส่งรูป"};
 // ข้อความจากฝั่งบัญชีในใบปิดกะ แยกสองระดับ (ฝั่งบัญชีแยกให้ 18 ต.ค. 69 · ช่องอยู่ใน reply.income)
 // warnings = ต้องมีคนดู → เหลือง · notices = ให้ข้อมูล ลงถูกตามออกแบบ (เช่น สาขาบุคคลธรรมดา Bartercard ลงบัญชีบุคคล) → เทา
 // ถ้าข้อความให้ข้อมูลขึ้นเหลืองทุกกะ พนักงานจะชินแล้วมองข้ามเหลืองตัวจริง
@@ -19556,6 +19566,8 @@ async function escposSlipRaster(lines,width=576,opts={}){
   const boxH=(l)=>BXP*2+Math.round(bls(l)*1.45)+Math.round(bvs(l)*1.25);
   const lineH=l=>l.rule?16:l.box?(boxH(l)+(l.mb||8)):l.img?((l.h||300)+(l.mb||8)):Math.round((l.size||28)*1.45)+(l.mb||4);
   let h=pad*2; lines.forEach(l=>{h+=lineH(l);});
+  // รูปแนบบัญชีที่สูงเกินเพดานผ้าใบของ iPad (~16.7 ล้านพิกเซล) = วาดไม่ได้อยู่แล้ว ยอมไม่มีรูปดีกว่าให้หน้าค้าง
+  if(opts&&opts.asImage&&width*h>16000000)return null;
   const cv=document.createElement("canvas");cv.width=width;cv.height=h;
   const ctx=cv.getContext("2d");
   ctx.fillStyle="#fff";ctx.fillRect(0,0,width,h);
@@ -19595,6 +19607,21 @@ async function escposSlipRaster(lines,width=576,opts={}){
     if(l.align==="center"){const w=ctx.measureText(txt).width;x=Math.max(pad,Math.round((width-w)/2));}
     ctx.fillText(txt,x,y);
     y+=lineH(l);
+  }
+  // ขอเป็นไฟล์รูปแทนไบต์เครื่องพิมพ์ (รูปใบปิดกะแนบเข้าบัญชี) — ผ้าใบเดียวกับที่พิมพ์ หน้าตาตรงกระดาษ
+  // ลองทีละแบบ (PNG → JPEG ลดคุณภาพ) จากผ้าใบเดียวกัน เอาแบบแรกที่ไม่เกินเพดาน · แบบไหนพังก็ข้ามไปแบบถัดไป
+  // ปล่อยผ้าใบทันทีหลังได้รูป — iPad เก่ามีเพดานหน่วยความจำผ้าใบรวม ใบปิดกะยาวๆ กินหลายสิบ MB
+  if(opts&&opts.asImage){
+    let out=null;
+    try{
+      for(const[type,q]of opts.asImage){
+        let u="";try{u=cv.toDataURL(type,q);}catch{u="";}
+        const m=/^data:([^;,]+);base64,/.exec(u);
+        if(!m||m[1]!==type)continue;   // เบราว์เซอร์ทำชนิดนี้ไม่ได้ (คืนชนิดอื่น/ว่าง) → แบบถัดไป
+        if((u.length-m[0].length)*3/4<=(+opts.maxBytes||Infinity)){out=u;break;}
+      }
+    }finally{cv.width=0;cv.height=0;}
+    return out;
   }
   const data=ctx.getImageData(0,0,width,h).data;
   const bpr=Math.ceil(width/8);const ras=new Uint8Array(bpr*h);
@@ -23662,7 +23689,20 @@ function CashDrawerModal({shift,currentBranch,currentUser,printers=[],onClose}){
 // ── ใบปิดกะ (Z-Report) แบบบรรทัด สำหรับเครื่องพิมพ์ใบเสร็จ ────────────
 // เนื้อหาเดียวกับหน้าต่างพิมพ์ทุกบรรทัด แต่ไม่มีอีโมจิ — ฟอนต์ที่ใช้ทำภาพใบ
 // ไม่มีรูปอีโมจิ พิมพ์ออกมาจะเป็นกล่องสี่เหลี่ยมแทน
-function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[]}){
+// ยอดของกะแยกตาม "วันที่ปิดบิล" (เวลาไทย) — กติกาเดียวกับท่อบัญชี (api/sliptrack-push.js bizDate)
+// กะคร่อมเที่ยงคืนถูกฝั่งบัญชีแตกเป็นใบละวัน ⟹ ยอดบนใบปิดกะ (ทั้งกะ) ไม่เท่าใบใดใบหนึ่ง ต้องบอกการแบ่งไว้บนใบ
+// วันที่ยอด ฿0 ไม่มีใบในบัญชี จึงไม่นับ · ไทยไม่มีเวลาออมแสง ⟹ +7 ชม. ตรงๆ ไม่ขึ้นกับภาษาเครื่อง
+function shiftDaySplit(orders){
+  const m=new Map();
+  for(const o of (Array.isArray(orders)?orders:[])){
+    if(!o||(o.status&&o.status!=="paid"))continue;
+    const t=Date.parse(o.updated_at||o.created_at||"");if(!Number.isFinite(t))continue;
+    const d=new Date(t+7*3600e3).toISOString().slice(0,10);
+    const x=m.get(d)||{date:d,total:0,n:0};x.total=Math.round((x.total+(+o.total||0))*100)/100;x.n++;m.set(d,x);
+  }
+  return [...m.values()].filter(x=>x.total>0).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+}
+function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatches=[],daySplit=null}){
   const t=totals||{};const L=[];const b=(n)=>bahtR(n);
   const who=(user&&(user.name||user.username))||"";
   // ใบพิมพ์ซ้ำ: หัวใบบอกคนที่เปิดกะ ไม่ใช่คนที่กดพิมพ์ซ้ำวันนี้
@@ -23673,7 +23713,11 @@ function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatch
   L.push({t:(branch&&branch.name)||"",size:36,bold:true,align:"center",mb:2});
   L.push({t:"ใบปิดกะ · END DRAWER REPORT",size:24,bold:true,align:"center"});
   L.push({t:"กะ #"+shift.id+(head?" · "+head:""),size:20,align:"center",mb:2});
-  if(reprint)L.push({t:"*** ใบพิมพ์ซ้ำ ***",size:26,bold:true,align:"center",mb:2});
+  if(reprint){
+    L.push({t:"*** ใบพิมพ์ซ้ำ ***",size:26,bold:true,align:"center",mb:2});
+    // รูปที่แนบเข้าบัญชีย้อนหลังวาดใหม่จากฐานข้อมูล ไม่ใช่รูปถ่ายกระดาษจริง — ต้องเขียนไว้บนใบ (ฝั่งบัญชีขอ 20 ต.ค. 69)
+    L.push({t:"พิมพ์ซ้ำ — สร้างจากข้อมูล POS เมื่อ "+fmtDT(),size:18,align:"center",mb:2});
+  }
   L.push({rule:true});
   row("เปิดกะ",fmtDT(shift.opened_at),{size:20});
   if(shift.username)row("   โดย",stripEmoji(shift.username),{size:18});
@@ -23709,6 +23753,12 @@ function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatch
   if(t.vat)row("VAT"+(t.vatIncluded?" (รวมในราคาแล้ว)":""),(t.vatIncluded?"":"+")+b(t.vat));
   if(t.roundAdj)row("ปัดเศษ",(t.roundAdj>0?"+":"-")+b(Math.abs(t.roundAdj)));
   row("= ยอดขายสุทธิ",b(t.totalSales),{size:26,bold:true});
+  // กะคร่อมวัน: ฝั่งบัญชีมีใบละวัน — บอกว่าแต่ละวันเป็นเท่าไร คนตรวจจะไม่คิดว่ายอดไม่ตรง (ฝั่งบัญชีขอ 20 ต.ค. 69)
+  if(Array.isArray(daySplit)&&daySplit.length>1){
+    sec("ลงบัญชีแยกตามวันที่ปิดบิล");
+    row("กะ #"+shift.id+" ทั้งกะ",b(daySplit.reduce((a,d)=>a+(+d.total||0),0)),{bold:true});
+    for(const d of daySplit){const[y,mo,dd]=String(d.date).split("-");row("  ส่วนของวันที่ "+dd+"/"+mo+"/"+((+y||0)+543)+"  ×"+n0(d.n)+" บิล",b(d.total),{size:21});}
+  }
 
   // ── ช่องทางขาย ──
   if(t.channel){
@@ -23793,6 +23843,39 @@ function buildZReportLines({shift,totals,branch,user,note,reprint=false,mismatch
   L.push({t:"ผู้ตรวจ ..............................",size:20,mb:6});
   L.push({t:(reprint?"พิมพ์ซ้ำเมื่อ ":"พิมพ์เมื่อ ")+fmtDT()+(who?" · "+who:""),size:16,align:"center"});
   return L;
+}
+// ── รูปใบปิดกะแนบเข้าบัญชี (เจ้าของสั่ง 20 ต.ค. 69: ทุกกะต้องมีรูปใบปิดยอด) ──
+// วาดจากบรรทัดชุดเดียวกับที่พิมพ์ (buildZReportLines) ⟹ ฝ่ายบัญชีเห็นตรงกับกระดาษ
+// ฝั่งบัญชีรับไม่เกิน 3MB · Vercel รับคำขอไม่เกิน 4.5MB (base64 โต 4/3 เท่า) ⟹ เพดานเรา 2.5MB
+// วาดไม่ได้/ใหญ่เกิน = คืน null แล้วส่งยอดตามปกติ (ฝั่งบัญชีตอบ attachment missing → เหลือง) — ห้ามขวางการปิดกะ
+const ZSLIP_MAX_BYTES=2500000;
+async function zReportSlipImage(args){
+  const url=await escposSlipRaster(buildZReportLines(args),576,{asImage:[["image/png"],["image/jpeg",0.85],["image/jpeg",0.6]],maxBytes:ZSLIP_MAX_BYTES});
+  const m=/^data:([^;,]+);base64,(.+)$/.exec(String(url||""));
+  if(!m)return null;
+  return{slip_base64:m[2],slip_content_type:m[1],bytes:Math.floor(m[2].length*3/4)};
+}
+// ── แนบรูปใบปิดกะ "หลัง" ยอดลงบัญชีแล้ว (pos_closing_slip) ──
+// ยอดเงินไม่รอรูป และไม่แบกรูปหลาย MB ไปในคำขอเดียวกัน (เน็ตร้านสะดุดตอนอัปโหลด = ยอดไม่เข้าเพราะรูป)
+// สาขาที่ไม่เข้าท่อ/ยอดไม่ผ่าน = ไม่ต้องวาด/อัปโหลดเลย · ส่วนแบ่งตามวันบนรูปใช้ใบที่ฝั่งบัญชีได้จริง (ตรงทุกบาท)
+// ผลรูปเขียนลง reply.attachment ของแต่ละวัน — จอปิดกะอ่านช่องเดียวกับที่ฝั่งบัญชีตอบ
+async function attachClosingSlip(res,zArgs){
+  const rows=Array.isArray(res&&res.results)?res.results:[];
+  if(!rows.some(r=>r&&r.ok))return res;
+  const mark=(f)=>({...res,results:rows.map(r=>r&&r.ok?{...r,reply:{...(r.reply||{}),attachment:f(r)}}:r)});
+  const split=rows.filter(r=>r&&r.business_date&&(+r.total_sales||0)>0).map(r=>({date:r.business_date,total:round2(+r.total_sales),n:+r.bills||0}));
+  let img=null;
+  try{img=await Promise.race([zReportSlipImage({...zArgs,daySplit:split.length?split:zArgs.daySplit}),new Promise(r=>setTimeout(()=>r(null),15000))]);}catch{img=null;}
+  if(!img)return mark(()=>({status:"error",why:"render"}));
+  try{
+    const rr=await Promise.race([fetch("/api/sliptrack-push",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({kind:"pos_closing_slip",shift_id:zArgs.shift.id,slip_base64:img.slip_base64,slip_content_type:img.slip_content_type})}),
+      new Promise(r=>setTimeout(()=>r(null),30000))]);
+    if(!rr)return mark(()=>({status:"error",why:"timeout"}));
+    const j=await rr.json().catch(()=>({}));
+    const by=new Map((Array.isArray(j.results)?j.results:[]).map(x=>[x.business_date,x]));
+    return mark(r=>{const x=by.get(r.business_date);return x&&x.ok?{status:x.attach}:{status:(x&&x.attach)||"error",why:"reply"};});
+  }catch{return mark(()=>({status:"error",why:"network"}));}
 }
 // ── ส่งใบปิดกะเข้าเครื่องพิมพ์ ─────────────────────────────────────────
 // เดิมเปิดหน้าต่างพิมพ์ของเบราว์เซอร์อย่างเดียว บนไอแพด (https) ส่งเข้าเครื่องพิมพ์
@@ -24068,7 +24151,7 @@ async function loadShiftTotalsForReprint(shift,branchId){
     totals[k]=stored[k];   // ตัวเลขที่เซ็นรับไปแล้วชนะเสมอ
   }
   totals.avgBill=totals.orderCount?round2((+totals.totalSales||0)/totals.orderCount):0;
-  return{totals,mismatches};
+  return{totals,mismatches,daySplit:shiftDaySplit(orders)};
 }
 function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
   const[movements,setMovements]=useState([]);const[orders,setOrders]=useState([]);const[edits,setEdits]=useState([]);
@@ -24130,7 +24213,8 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         ?`⚠️ ปิดกะทั้งที่ยังมีโต๊ะค้าง ${forced.length} โต๊ะ: ${forced.map(o=>o.table_number||("บิล #"+o.id)).join(", ")}`
         :"";
       const noteFull=[note,stuckNote].filter(Boolean).join("\n");
-      printZReport({shift,totals,branch:currentBranch,user:currentUser,note:noteFull});
+      const zArgs={shift,totals,branch:currentBranch,user:currentUser,note:noteFull,daySplit:shiftDaySplit(orders)};
+      printZReport(zArgs);
       await api.addCashMovement({shift_id:shift.id,branch_id:currentBranch.id,type:"closing",amount:round2(totals.actual),reason:"ปิดกะ - นับเงินจริง",note:totals.diff!==0?`ส่วนต่าง ${totals.diff>=0?'+':''}${round2(totals.diff)}`:null,user_id:currentUser.id,username:currentUser.username});
       await api.closeShift(shift.id,{status:"closed",closed_at:new Date().toISOString(),closing_cash:round2(totals.actual),expected_cash:round2(totals.expected),cash_diff:round2(totals.diff),total_sales:round2(totals.totalSales),total_cash:round2(totals.totalCash),total_transfer:round2(totals.totalTransfer),total_card:round2(totals.totalCard),total_other:round2(totals.totalOther),total_pay_in:round2(totals.payIn),total_pay_out:round2(totals.payOut),total_drop:round2(totals.drops),order_count:totals.orderCount,notes:noteFull||null});
       // Clear auto-print dedup so next shift starts fresh
@@ -24150,6 +24234,8 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         if(!rr.ok&&!acctRes)acctRes={error:"ระบบบัญชีตอบ "+rr.status};
       }catch(e){acctRes={error:String((e&&e.message)||e)};}
       const outcome=acctOutcomeOf(acctRes,totals.orderCount);
+      // ยอดเข้าแล้ว → แนบรูปใบปิดกะตามไป (ล้ม/ช้า = ขาดแค่รูป ยอดไม่กระทบ · ส่งรูปเองได้ที่ประวัติกะ)
+      if(outcome==="ok"){try{acctRes=await attachClosingSlip(acctRes,zArgs);}catch{}}
       // ส่งไม่ผ่าน = จำเลขกะไว้ในเครื่องนี้ (แยกต่อสาขา) ขึ้นเตือนค้างที่หลังบ้าน/จอเปิดกะ จนผู้จัดการกดว่าจัดการแล้ว
       // เดิมขึ้นแดงครั้งเดียวแล้วหายไปกับจอ ยอดวันนั้นไม่เคยเข้าบัญชีและไม่มีใครตามได้
       const kept=outcome==="failed"&&rememberAcctUnsent(currentBranch.id,acctUnsentEntry(shift,acctRes,totals));
@@ -24211,18 +24297,20 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         const stRows=rows.filter(r=>r.ok&&closingStatusWarnings(r.reply).length);
         // วันนั้นมีใบปิดยอดอยู่แล้ว (เปิดวันละ 2 กะ) — ยอดกะนี้ถูกทิ้ง และส่งซ้ำก็ไม่ช่วย
         const dropRows=rows.filter(r=>r.dropped);
-        const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0&&openRows.length===0;
-        const partial=!fatal&&bad.length===0&&rows.length>0&&(warnRows.length>0||openRows.length>0);
+        // ยอดลงแล้วแต่ยังไม่มีรูปใบปิดยอด — เหลือง (ฝั่งบัญชีขอ) แต่ห้ามบอกว่ายอดไม่ครบ
+        const slipRows=rows.filter(r=>r.ok&&closingSlipMissing(r.reply));
+        const okAll=!fatal&&bad.length===0&&rows.length>0&&warnRows.length===0&&openRows.length===0&&slipRows.length===0;
+        const partial=!fatal&&bad.length===0&&rows.length>0&&(warnRows.length>0||openRows.length>0||slipRows.length>0);
         return <div style={{background:C.white,borderRadius:18,width:"100%",maxWidth:"min(94vw,460px)",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden",fontFamily:"'Sarabun',sans-serif"}}>
           <div style={{padding:"18px 20px 12px",background:okAll?C.greenLight:partial?C.yellowLight:C.redLight,borderBottom:`1px solid ${okAll?C.green:partial?C.yellow:C.red}33`}}>
             <div style={{fontSize:32,marginBottom:4}}>{okAll?"📗":partial?"📙":"⚠️"}</div>
             <div style={{fontSize:17,fontWeight:900,color:okAll?"#0F6E4C":partial?"#92400E":C.red}}>
-              {noneToSend?"ปิดกะเรียบร้อย — ไม่มียอดขายให้ลงบัญชี":okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":partial?(stRows.length?"ส่งถึงระบบบัญชีแล้ว แต่ยังลงไม่ครบ":openRows.length?"ส่งยอดขายแล้วบางวัน":"ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก"):"ยอดขายยังไม่เข้าระบบบัญชี"}
+              {noneToSend?"ปิดกะเรียบร้อย — ไม่มียอดขายให้ลงบัญชี":okAll?"ส่งยอดขายเข้าระบบบัญชีแล้ว":partial?(stRows.length?"ส่งถึงระบบบัญชีแล้ว แต่ยังลงไม่ครบ":openRows.length?"ส่งยอดขายแล้วบางวัน":warnRows.length?"ส่งยอดขายแล้ว แต่บางค่าไม่ถูกบันทึก":"ส่งยอดขายเข้าบัญชีแล้ว — ขาดเฉพาะรูปใบปิดยอด"):"ยอดขายยังไม่เข้าระบบบัญชี"}
             </div>
             <div style={{fontSize:12,color:okAll?"#0F6E4C":partial?"#92400E":C.red,marginTop:4,lineHeight:1.6,opacity:.95}}>
               {noneToSend?"กะนี้ไม่มีบิลที่เก็บเงินได้ จึงไม่มียอดต้องส่งเข้าบัญชี — ไม่ใช่ความผิดพลาด"
                 :okAll?"กะปิดเรียบร้อยและยอดลงสมุดบัญชีแล้ว"
-                :partial?(stRows.length?"ระบบบัญชีรับใบแล้ว แต่บางส่วนยังไม่ลงสมุด — ดูรายละเอียดข้างล่าง แล้วแจ้งฝ่ายบัญชี (ไม่ต้องส่งซ้ำ)":openRows.length?"วันที่ระบบบัญชียังไม่เปิดรับจาก POS ต้องส่งยอดทางเดิม (ใบปิดยอด/สแกน) — ห้ามส่งซ้ำจาก POS":"ยอดเงินลงสมุดบัญชีแล้ว แต่ระบบบัญชีไม่รับข้อมูลบางอย่าง — ดูรายละเอียดข้างล่าง แล้วแจ้งผู้ดูแลระบบ")
+                :partial?(stRows.length?"ระบบบัญชีรับใบแล้ว แต่บางส่วนยังไม่ลงสมุด — ดูรายละเอียดข้างล่าง แล้วแจ้งฝ่ายบัญชี (ไม่ต้องส่งซ้ำ)":openRows.length?"วันที่ระบบบัญชียังไม่เปิดรับจาก POS ต้องส่งยอดทางเดิม (ใบปิดยอด/สแกน) — ห้ามส่งซ้ำจาก POS":warnRows.length?"ยอดเงินลงสมุดบัญชีแล้ว แต่ระบบบัญชีไม่รับข้อมูลบางอย่าง — ดูรายละเอียดข้างล่าง แล้วแจ้งผู้ดูแลระบบ":"ยอดลงสมุดบัญชีครบแล้ว ไม่ต้องส่งยอดซ้ำ — รูปใบปิดยอดส่งตามได้ที่ ประวัติกะ → 📎 ส่งรูปใบปิดกะเข้าบัญชี")
                 :dropRows.length?"กะปิดเรียบร้อยแล้ว แต่วันนี้มีใบปิดยอดของสาขานี้ลงไปแล้ว ระบบบัญชีจึงไม่รับยอดกะนี้ — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ"
                 :"กะปิดเรียบร้อยแล้ว แต่ยอดยังไม่ลงบัญชี — แจ้งผู้ดูแลระบบให้ส่งซ้ำ"}
             </div>
@@ -24238,6 +24326,9 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
               </div>}
               {r.ok&&closingStatusWarnings(r.reply).length>0&&<div style={{fontSize:11.5,color:"#92400E",marginTop:4,padding:"6px 8px",background:C.yellowLight,borderRadius:8,lineHeight:1.55,fontWeight:700}}>
                 ⚠️ {closingStatusWarnings(r.reply).join(" · ")} — แจ้งฝ่ายบัญชี
+              </div>}
+              {r.ok&&closingSlipMissing(r.reply)&&<div style={{fontSize:11.5,color:"#92400E",marginTop:4,padding:"6px 8px",background:C.yellowLight,borderRadius:8,lineHeight:1.55}}>
+                📎 ยังไม่มีรูปใบปิดยอดในบัญชี{SLIP_WHY[r.reply.attachment.why]?" ("+SLIP_WHY[r.reply.attachment.why]+")":""} — ยอดลงแล้ว ห้ามส่งยอดซ้ำ · ส่งรูปได้ที่ ประวัติกะ → 📎
               </div>}
               {r.ok&&closingNotices(r.reply).length>0&&<div style={{fontSize:11.5,color:C.ink4,marginTop:4,lineHeight:1.55}}>
                 ℹ️ {closingNotices(r.reply).join(" · ")}
@@ -25906,13 +25997,35 @@ function POSShiftHistory({shifts,loading,reload,branch,user}){
     const win=isHttps?null:openPrintWindow(420,720);
     setBusyId(s.id);
     try{
-      const{totals,mismatches}=await loadShiftTotalsForReprint(s,branch.id);
-      printZReport({shift:s,totals,branch,user:user||{},note:s.notes||"",reprint:true,mismatches,win});
+      const{totals,mismatches,daySplit}=await loadShiftTotalsForReprint(s,branch.id);
+      printZReport({shift:s,totals,branch,user:user||{},note:s.notes||"",reprint:true,mismatches,win,daySplit});
       if(mismatches.length)notifyDlg("⚠️ ยอดที่คำนวณวันนี้ไม่ตรงกับตอนปิดกะ "+mismatches.length+" รายการ\n\nใบที่พิมพ์ใช้ตัวเลขตอนปิดกะ และพิมพ์ส่วนที่ไม่ตรงไว้ท้ายใบแล้ว\n\n"+mismatches.join("\n"));
     }catch(e){
       if(win){try{win.close();}catch{}}
       notifyDlg("โหลดข้อมูลกะไม่สำเร็จ: "+friendlyError(e));
     }
+    setBusyId(null);
+  }
+  // ── ส่งรูปใบปิดกะเข้าบัญชีย้อนหลัง (ฝั่งบัญชีเปิดโหมด "แนบรูปอย่างเดียว" 20 ต.ค. 69) ──
+  // ใช้กับกะที่ปิดไปแล้วแต่ใบในบัญชียังไม่มีรูป (เช่น ปิดกะจากเครื่องที่ยังเปิดหน้าเว็บรุ่นเก่า / จอขึ้นเหลืองว่าไม่มีรูป)
+  // ไม่ส่งยอดซ้ำ — เซิร์ฟเวอร์ขอแค่ผูกรูปกับใบที่มีอยู่ ไม่มีใบ = ไม่สร้าง · มีรูปแล้ว = ไม่ทับ
+  async function sendSlipZ(s){
+    if(busyId||!branch)return;
+    setBusyId("slip"+s.id);
+    try{
+      const{totals,mismatches,daySplit}=await loadShiftTotalsForReprint(s,branch.id);
+      const img=await zReportSlipImage({shift:s,totals,branch,user:user||{},note:s.notes||"",reprint:true,mismatches,daySplit});
+      if(!img){notifyDlg("วาดรูปใบปิดกะไม่สำเร็จ (เครื่องนี้ทำรูปไม่ได้หรือรูปใหญ่เกิน) — ลองจากเครื่องอื่น");setBusyId(null);return;}
+      const rr=await fetch("/api/sliptrack-push",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({kind:"pos_closing_slip",shift_id:s.id,slip_base64:img.slip_base64,slip_content_type:img.slip_content_type})});
+      const j=await rr.json().catch(()=>({}));
+      const rows=Array.isArray(j.results)?j.results:[];
+      const lbl=(r)=>r.attach==="attached"?"แนบแล้ว":r.attach==="exists"?"มีรูปอยู่แล้ว (ไม่ทับ)":r.attach==="not_found"?"ไม่พบใบในบัญชี":("ไม่สำเร็จ"+(r.message||r.error?": "+(r.message||r.error):""));
+      notifyDlg(j.not_enabled?"สาขานี้ยังไม่เปิดท่อบัญชี — ไม่มีใบให้แนบรูป"
+        :j.nothing?"กะนี้ไม่มียอด จึงไม่มีใบในบัญชีให้แนบรูป"
+        :rows.length?("📎 รูปใบปิดกะ #"+s.id+"\n"+rows.map(r=>(r.ok?"✅ ":"⚠️ ")+fmtD(r.business_date)+" — "+lbl(r)).join("\n"))
+        :("ส่งรูปไม่สำเร็จ: "+(j.error||("ระบบตอบ "+rr.status))));
+    }catch(e){notifyDlg("ส่งรูปใบปิดกะไม่สำเร็จ: "+friendlyError(e));}
     setBusyId(null);
   }
   if(loading)return <Loading text="โหลดประวัติกะ..."/>;
@@ -25948,6 +26061,10 @@ function POSShiftHistory({shifts,loading,reload,branch,user}){
             {!isOpen&&<button onClick={()=>reprintZ(s)} disabled={!!busyId}
               style={{marginTop:10,width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${C.blue}`,background:busyId===s.id?C.blueLight:C.white,color:C.blue,cursor:busyId?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:13,fontWeight:800,opacity:busyId&&busyId!==s.id?.5:1}}>
               {busyId===s.id?"กำลังเตรียมใบปิดกะ...":"🖨 พิมพ์ใบปิดกะ (ใบพิมพ์ซ้ำ)"}
+            </button>}
+            {!isOpen&&(+s.total_sales||0)>0&&<button onClick={()=>sendSlipZ(s)} disabled={!!busyId}
+              style={{marginTop:6,width:"100%",padding:"8px 12px",borderRadius:10,border:`1px solid ${C.line}`,background:busyId==="slip"+s.id?C.bg:C.white,color:C.ink3,cursor:busyId?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:12}}>
+              {busyId==="slip"+s.id?"กำลังส่งรูป...":"📎 ส่งรูปใบปิดกะเข้าบัญชี (กรณีบัญชียังไม่มีรูป)"}
             </button>}
           </div>
         </Card>;

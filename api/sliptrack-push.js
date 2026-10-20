@@ -173,6 +173,124 @@ export default async function handler(req, res) {
   }
 
 
+  // ── ท่อใบปิดกะ: ค่าที่ใช้ร่วมกันระหว่าง pos_closing (ส่งยอด) กับ pos_closing_slip (เติมรูป) ──
+  // ── สาขา 5 "กาญจนบุรี" (18 ต.ค. 69): เจ้าของอนุมัติลงบัญชีอัตโนมัติแล้ว แต่ **ห้ามเติมจนกว่าฝั่งบัญชีแจ้งว่าพร้อม**
+  //    (เขาต้องใส่วัน X ใน POS_AUTO_POST_START ก่อน · ระหว่างนั้นตัวรับตอบ 409 not_open)
+  //    วันเปิด: เติม 5 ใน **ทั้งสอง array พร้อมกัน** (POS_CLOSING + SHIFT_KEYED) — เติมแค่ตัวนี้ = สองกะในวันเดียวได้ external_id ซ้ำ
+  //    กะที่สองถูกตีกลับเป็น duplicate · สาขา 5 มี INV- 0 ใบ และเป็นบุคคลธรรมดา (ไม่ออก CA-) ฝั่งบัญชียืนยันว่ารายกะได้
+  //    ต้องแก้ด่านใน tools/check-code.mjs ที่ล็อก [8] ไว้ด้วย (ตั้งใจให้แดง จะได้ไม่มีใครเติมโดยไม่รู้ตัว)
+  // ── เปิดสาขา 5 แล้ว (20 ต.ค. 69): เจ้าของสั่งให้ยอดกาญจนบุรีเข้าบัญชีอัตโนมัติตอนปิดกะ เลิกสแกนใบปิดยอด
+  //    ฝั่งบัญชีเปิดตัวรับ (POS_AUTO_POST_BRANCHES + START 2026-10-19) และปิด /pos-scan ของสาขานี้ตั้งแต่ 19 ต.ค. ก่อนเราเติม
+  //    สาขาอื่นยังใช้สแกนรูป — เติมเพิ่มต้องผ่านเจ้าของ + ฝั่งบัญชีแบบเดียวกัน
+  const POS_CLOSING_BRANCHES = [8, 5];   // 8 The River · 5 กาญจนบุรี
+  // ── สาขาที่ฝั่งบัญชี "เปิดคีย์รายกะ" ให้แล้ว = ลงได้หลายใบต่อวัน ──────────
+  // ว่าง = ยังใช้รูปแบบเดิม (วันละใบ) · เติมเลขสาขาได้เฉพาะ "วัน cutover ที่นัดกับฝั่งบัญชี"
+  // ⚠️ ห้ามเติมสาขาที่มีใบกำกับภาษีเต็มรูป (INV-) จนกว่าฝั่งบัญชีจะแก้ตัวหักใบ INV-
+  //    ที่ยังคีย์ด้วย (สาขา, วัน) — วันละ 2 ใบจะถูกหักซ้ำสองรอบ = ยื่นภาษีขายขาด
+  //    ซึ่งมองด้วยตาไม่เห็น และแก้ยากกว่า "ยอดไม่ลง" มาก
+  // ฝั่งบัญชีนับใบ INV- ตั้งแต่ 1 ก.ย. 69 ให้แล้ว: The River 0 ใบ · อยุธยา 9 · บางใหญ่ 14
+  //    · สำนักงานใหญ่ 7 · คลองสาม 3 ⟹ The River จึงเป็นสาขาเดียวที่ปลอดภัยจะเปิดก่อน
+  //    กาญจนบุรี (5): INV- 0 ใบ + บุคคลธรรมดา ไม่ออก CA- — ฝั่งบัญชียืนยันว่าคีย์รายกะได้ (18 ต.ค. 69)
+  const SHIFT_KEYED_BRANCHES = [8, 5];   // The River เปิด 23 ก.ย. 69 · กาญจนบุรีเปิดพร้อมท่อ 20 ต.ค. 69
+  // ── รูปใบปิดกะ (เจ้าของสั่ง 20 ต.ค. 69 · ฝั่งบัญชีเปิดรับ commit 777b3e2) ──────────
+  // ส่งต่อเป็น slip_base64 + slip_content_type ในคำขอเดิม · ฝั่งบัญชีเก็บลง Drive แล้วตอบ attachment.status
+  // ตรวจก่อนส่ง: ชนิดที่เขารับ · base64 ล้วน · ไม่เกิน 3MB — ไม่ผ่าน = ส่งยอดโดยไม่มีรูป (ยอดสำคัญกว่ารูป
+  // ฝั่งบัญชีจะตอบ missing → จอขึ้นเหลือง) ห้ามให้รูปทำให้ยอดไม่เข้า
+  const SLIP_TYPES = ["image/png", "image/jpeg", "image/webp", "application/pdf"];
+  const parseSlip = (b) => {
+    if (b.slip_base64 == null || b.slip_base64 === "") return { slip: null, slipProblem: null };
+    const b64 = String(b.slip_base64).replace(/^data:[^;,]+;base64,/, "");
+    const type = String(b.slip_content_type || "");
+    const slipBytes = Math.floor(b64.length * 3 / 4);
+    if (!SLIP_TYPES.includes(type)) return { slip: null, slipProblem: "ชนิดไฟล์รูปใบปิดยอดไม่รองรับ: " + type.slice(0, 40) };
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) return { slip: null, slipProblem: "รูปใบปิดยอดไม่ใช่ base64" };
+    if (!(slipBytes > 0) || slipBytes > 3000000) return { slip: null, slipProblem: "รูปใบปิดยอดใหญ่เกิน 3MB" };
+    return { slip: { slip_base64: b64, slip_content_type: type, bytes: slipBytes }, slipProblem: null };
+  };
+  // ตอบกลับหน้าเว็บโดยไม่สะท้อนรูปทั้งก้อน (หลายร้อย KB ต่อวัน) — บอกแค่ขนาด
+  const echo = (p) => {
+    if (!p || !p.slip_base64) return p;
+    const { slip_base64, ...rest } = p;
+    return { ...rest, slip_bytes: Math.floor(String(slip_base64).length * 3 / 4) };
+  };
+  const sbGet = async (path) => {
+    const r = await fetch(`${SUPA_URL}/rest/v1/${path}`, {
+      headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` },
+    });
+    if (!r.ok) throw new Error(`supabase ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    return r.json();
+  };
+
+  // ── เติมรูปใบปิดกะให้ใบปิดยอดที่ลงบัญชีไปแล้ว (pos_closing_slip) ───────────────────
+  // ฝั่งบัญชีเปิดโหมดนี้ 20 ต.ค. 69 (af076f5): หาใบด้วย (business_date, branch, shift_key) · ไม่มีใบ = 404 not_found
+  //   ไม่สร้างใบใหม่เด็ดขาด · ไม่แตะยอด/รายรับ/ตู้เซฟ/ใบกำกับ · ใบมีรูปแล้ว = exists (ไม่ทับ)
+  // ห้ามเติมรูปด้วยการส่ง pos_closing ซ้ำทั้งก้อน: เซิร์ฟเวอร์คำนวณใบใหม่จาก updated_at ทุกครั้ง
+  //   บิลที่ถูกแก้หลังปิดกะ = วันที่เด้งเป็นวันแก้ → ได้ (วัน, สาขา, กะ) ใหม่ → ตัวรับสร้างใบใหม่ + ลงรายรับซ้ำ
+  //   และตัวรับหาซ้ำด้วย external_id เท่านั้น — กะก่อน cutover (external_id แบบเก่า) ส่งแบบใหม่ไปชน UNIQUE ได้ 500
+  if (String(body.kind || "") === "pos_closing_slip") {
+    const shiftId = Number(body.shift_id);
+    if (!Number.isFinite(shiftId) || shiftId <= 0) return res.status(400).json({ error: "Missing or invalid shift_id" });
+    const { slip, slipProblem } = parseSlip(body);
+    if (!slip) return res.status(400).json({ error: slipProblem || "ไม่มีรูปใบปิดกะ" });
+    try {
+      const shift = ((await sbGet(`pos_shifts?id=eq.${shiftId}&select=id,branch_id,status,opened_at,closed_at`)) || [])[0];
+      if (!shift) return res.status(404).json({ error: `ไม่พบกะ #${shiftId}` });
+      // กะที่ยังเปิด: รูปไปพร้อมยอดตอนปิดกะ — เติมก่อนปิดไม่ได้ (ยังไม่มีใบให้ผูก)
+      if (String(shift.status || "") !== "closed" || !shift.closed_at) return res.status(409).json({ error: "กะนี้ยังไม่ปิด — รูปใบปิดกะจะส่งไปพร้อมยอดตอนปิดกะ" });
+      if (!POS_CLOSING_BRANCHES.includes(Number(shift.branch_id))) {
+        return res.status(200).json({ skipped: true, not_enabled: true, reason: "สาขานี้ยังไม่เปิดใช้ท่อลงบัญชีอัตโนมัติ", branch_id: shift.branch_id });
+      }
+      const shiftKeyed = SHIFT_KEYED_BRANCHES.includes(Number(shift.branch_id));
+      const brRows = await sbGet(`branches?id=eq.${Number(shift.branch_id)}&select=name`);
+      const branchName = (Array.isArray(brRows) && brRows[0] && brRows[0].name) || "";
+      if (!branchName) return res.status(500).json({ error: "ไม่พบชื่อสาขา" });
+      // วันที่ของใบ = วันที่ปิดบิล (เวลาไทย) — กติกาเดียวกับ pos_closing · วันที่ยอด ฿0 ไม่มีใบ
+      // ใช้แค่ "หาใบ" — วันที่ผิด = ตัวรับตอบ not_found ไม่สร้างอะไร
+      const bid = Number(shift.branch_id);
+      const from = encodeURIComponent(shift.opened_at), to = encodeURIComponent(shift.closed_at);
+      const SELS = "&select=id,total,created_at,updated_at&limit=2000";
+      const [tagged, timed] = await Promise.all([
+        sbGet(`orders?branch_id=eq.${bid}&status=eq.paid&shift_id=eq.${shiftId}${SELS}`),
+        sbGet(`orders?branch_id=eq.${bid}&status=eq.paid&shift_id=is.null&created_at=gte.${from}&created_at=lt.${to}${SELS}`),
+      ]);
+      const bizDate = (o) => new Date(o.updated_at || o.created_at)
+        .toLocaleDateString("sv-SE", { timeZone: "Asia/Bangkok" });
+      const seen = new Set(), byDay = new Map();
+      for (const o of [...(tagged || []), ...(timed || [])]) {
+        if (!o || seen.has(o.id)) continue; seen.add(o.id);
+        const d = bizDate(o); byDay.set(d, (byDay.get(d) || 0) + (Number(o.total) || 0));
+      }
+      const days = [...byDay.entries()].filter(([, t]) => t > 0).map(([d]) => d).sort();
+      if (!days.length) return res.status(200).json({ shift_id: shiftId, branch: branchName, nothing: true, results: [] });
+      const results = [];
+      for (const business_date of days) {
+        try {
+          const r = await fetch(SLIPTRACK_URL, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              source: "pos", kind: "pos_closing_slip",
+              external_id: shiftKeyed ? `pos-${business_date}-${branchName}-s${shiftId}` : `pos-${business_date}-${branchName}`,
+              business_date, branch: branchName, shift_key: String(shiftId), shift_id: shiftId,
+              slip_base64: slip.slip_base64, slip_content_type: slip.slip_content_type,
+            }),
+          });
+          const data = await r.json().catch(() => ({}));
+          const st = String((data && (data.status || data.error)) || "");
+          // attached = แนบแล้ว · exists = มีรูปอยู่แล้ว (ไม่ทับ) = สำเร็จทั้งคู่
+          results.push({ business_date, ok: r.ok && (st === "attached" || st === "exists"), status: r.status, attach: st,
+            ...(data && data.message ? { message: String(data.message).slice(0, 200) } : {}) });
+        } catch (err) {
+          results.push({ business_date, ok: false, error: String((err && err.message) || err) });
+        }
+      }
+      const allOk = results.every((x) => x.ok);
+      return res.status(allOk ? 200 : 207).json({ shift_id: shiftId, branch: branchName, slip_bytes: slip.bytes, results });
+    } catch (err) {
+      return res.status(502).json({ error: "pos_closing_slip failed", message: String((err && err.message) || err) });
+    }
+  }
+
   // ── ปิดกะ → ใบปิดยอดขาย (pos_closing) ────────────────────────────────────
   // หน้าเว็บส่งมาแค่ { kind:'pos_closing', shift_id } — เซิร์ฟเวอร์อ่านบิลจริงจาก DB
   // แล้วคำนวณเอง ไม่เชื่อตัวเลขที่ส่งมาจากเบราว์เซอร์ เพราะนี่คือยอดที่จะลงสมุดบัญชี
@@ -186,35 +304,11 @@ export default async function handler(req, res) {
   //     พร้อมเพย์เป็นชั้นย่อยของบัตรเครดิต ห้ามบวกซ้ำเข้าผลรวม
   //   · ฝั่งเขากันลงซ้ำให้แล้วสองชั้น (409 day_already_closed / income.status exists)
   if (String(body.kind || "") === "pos_closing") {
-    // ── สาขา 5 "กาญจนบุรี" (18 ต.ค. 69): เจ้าของอนุมัติลงบัญชีอัตโนมัติแล้ว แต่ **ห้ามเติมจนกว่าฝั่งบัญชีแจ้งว่าพร้อม**
-    //    (เขาต้องใส่วัน X ใน POS_AUTO_POST_START ก่อน · ระหว่างนั้นตัวรับตอบ 409 not_open)
-    //    วันเปิด: เติม 5 ใน **ทั้งสอง array พร้อมกัน** (POS_CLOSING + SHIFT_KEYED) — เติมแค่ตัวนี้ = สองกะในวันเดียวได้ external_id ซ้ำ
-    //    กะที่สองถูกตีกลับเป็น duplicate · สาขา 5 มี INV- 0 ใบ และเป็นบุคคลธรรมดา (ไม่ออก CA-) ฝั่งบัญชียืนยันว่ารายกะได้
-    //    ต้องแก้ด่านใน tools/check-code.mjs ที่ล็อก [8] ไว้ด้วย (ตั้งใจให้แดง จะได้ไม่มีใครเติมโดยไม่รู้ตัว)
-    // ── เปิดสาขา 5 แล้ว (20 ต.ค. 69): เจ้าของสั่งให้ยอดกาญจนบุรีเข้าบัญชีอัตโนมัติตอนปิดกะ เลิกสแกนใบปิดยอด
-    //    ฝั่งบัญชีเปิดตัวรับ (POS_AUTO_POST_BRANCHES + START 2026-10-19) และปิด /pos-scan ของสาขานี้ตั้งแต่ 19 ต.ค. ก่อนเราเติม
-    //    สาขาอื่นยังใช้สแกนรูป — เติมเพิ่มต้องผ่านเจ้าของ + ฝั่งบัญชีแบบเดียวกัน
-    const POS_CLOSING_BRANCHES = [8, 5];   // 8 The River · 5 กาญจนบุรี
-    // ── สาขาที่ฝั่งบัญชี "เปิดคีย์รายกะ" ให้แล้ว = ลงได้หลายใบต่อวัน ──────────
-    // ว่าง = ยังใช้รูปแบบเดิม (วันละใบ) · เติมเลขสาขาได้เฉพาะ "วัน cutover ที่นัดกับฝั่งบัญชี"
-    // ⚠️ ห้ามเติมสาขาที่มีใบกำกับภาษีเต็มรูป (INV-) จนกว่าฝั่งบัญชีจะแก้ตัวหักใบ INV-
-    //    ที่ยังคีย์ด้วย (สาขา, วัน) — วันละ 2 ใบจะถูกหักซ้ำสองรอบ = ยื่นภาษีขายขาด
-    //    ซึ่งมองด้วยตาไม่เห็น และแก้ยากกว่า "ยอดไม่ลง" มาก
-    // ฝั่งบัญชีนับใบ INV- ตั้งแต่ 1 ก.ย. 69 ให้แล้ว: The River 0 ใบ · อยุธยา 9 · บางใหญ่ 14
-    //    · สำนักงานใหญ่ 7 · คลองสาม 3 ⟹ The River จึงเป็นสาขาเดียวที่ปลอดภัยจะเปิดก่อน
-    //    กาญจนบุรี (5): INV- 0 ใบ + บุคคลธรรมดา ไม่ออก CA- — ฝั่งบัญชียืนยันว่าคีย์รายกะได้ (18 ต.ค. 69)
-    const SHIFT_KEYED_BRANCHES = [8, 5];   // The River เปิด 23 ก.ย. 69 · กาญจนบุรีเปิดพร้อมท่อ 20 ต.ค. 69
     const shiftId = Number(body.shift_id);
     if (!Number.isFinite(shiftId) || shiftId <= 0) {
       return res.status(400).json({ error: "Missing or invalid shift_id" });
     }
-    const sbGet = async (path) => {
-      const r = await fetch(`${SUPA_URL}/rest/v1/${path}`, {
-        headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` },
-      });
-      if (!r.ok) throw new Error(`supabase ${r.status}: ${(await r.text()).slice(0, 200)}`);
-      return r.json();
-    };
+    const { slip, slipProblem } = parseSlip(body);
     try {
       const shiftRows = await sbGet(`pos_shifts?id=eq.${shiftId}&select=id,branch_id,opened_at,closed_at`);
       const shift = Array.isArray(shiftRows) && shiftRows[0];
@@ -429,6 +523,8 @@ export default async function handler(req, res) {
             return warnings.length ? { drawer, warnings } : { drawer };
           })() : {}),
           payment,
+          // รูปใบปิดกะทั้งกะ — กะคร่อมวันแนบรูปเดียวกันทุกวัน (ฝั่งบัญชีไม่ทับรูปที่มีแล้ว)
+          ...(slip ? { slip_base64: slip.slip_base64, slip_content_type: slip.slip_content_type } : {}),
         };
         try {
           const r = await fetch(SLIPTRACK_URL, {
@@ -455,7 +551,7 @@ export default async function handler(req, res) {
           results.push({
             business_date, ok: r.ok && !dropped, dropped, status: r.status,
             ...(notOpen ? { notOpen: true } : {}),
-            bills: list.length, total_sales, sent: payload, reply: data,
+            bills: list.length, total_sales, sent: echo(payload), reply: data,
             ...(dropped ? { error: `วันที่ ${business_date} มีใบปิดยอดของสาขานี้อยู่แล้ว ระบบบัญชีจึงไม่รับยอดกะนี้ (฿${total_sales.toLocaleString()}) — ส่งซ้ำไม่ช่วย ต้องแจ้งฝ่ายบัญชีให้ตามเก็บ` }
               : notOpen ? { error: `ระบบบัญชียังไม่เปิดรับยอดจาก POS ของสาขานี้สำหรับวันที่ ${business_date} — ยอดวันนั้นส่งทางเดิม (ใบปิดยอด/สแกน) ห้ามส่งซ้ำ` } : {}),
           });
@@ -464,7 +560,8 @@ export default async function handler(req, res) {
         }
       }
       const allOk = results.every((x) => x.ok);
-      return res.status(allOk ? 200 : 207).json({ shift_id: shiftId, branch: branchName, days: results.length, results });
+      return res.status(allOk ? 200 : 207).json({ shift_id: shiftId, branch: branchName, days: results.length, results,
+        ...(slip ? { slip_bytes: slip.bytes } : {}), ...(slipProblem ? { slip_problem: slipProblem } : {}) });
     } catch (err) {
       return res.status(502).json({ error: "pos_closing failed", message: String((err && err.message) || err) });
     }
