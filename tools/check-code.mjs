@@ -9545,6 +9545,41 @@ section("หน้าลูกค้าสแกนเลื่อนได้�
   }
 }
 
+section("ผังโต๊ะ: เปิดโต๊ะแล้วเมนูไม่เด้งเข้าตะกร้าเอง (ghost click · The River 22 ต.ค. 69)");
+{
+  // ตัวกลืนแตะผีตัวจริง กับ document/เวลา ปลอม
+  let G = null;
+  const mkDoc = () => { const L = []; return { L, addEventListener: (t, f, c) => L.push({ t, f, c }), removeEventListener: (t, f) => { const i = L.findIndex((x) => x.t === t && x.f === f); if (i >= 0) L.splice(i, 1); } }; };
+  try { G = (doc, now, timers) => new Function("document", "Date", "setTimeout", grab(APP, "swallowGhostClick") + "\nreturn swallowGhostClick;")(doc, { now: () => now.t }, (f, ms) => timers.push({ f, ms })); } catch { G = null; }
+  ok_("ดึงตัวกลืนแตะผีตัวจริงมารันได้", !!G);
+  if (G) {
+    const ev = (x, y) => { const e = { clientX: x, clientY: y, dp: false, sp: false, preventDefault() { this.dp = true; }, stopPropagation() { this.sp = true; } }; return e; };
+    const fire = (doc, e) => { for (const l of [...doc.L]) if (l.t === "click") l.f(e); return e; };
+    // ① แตะผีตรงจุดเดิมทันที = กลืน (ไม่ถึงการ์ดเมนู) · ฟังแบบ capture
+    let doc = mkDoc(), now = { t: 1000 }, timers = [];
+    G(doc, now, timers)(160, 345);
+    const cap = doc.L.length === 1 && doc.L[0].c === true;
+    const g1 = fire(doc, ev(162, 347));
+    // ② แตะถัดไป (พนักงานกดเมนูจริง) ต้องผ่าน — กลืนครั้งเดียว
+    const g2 = fire(doc, ev(162, 347));
+    // ③ แตะที่อื่นไกลออกไป = ไม่ใช่แตะผี ผ่าน
+    doc = mkDoc(); now = { t: 1000 }; timers = [];
+    G(doc, now, timers)(160, 345);
+    const far = fire(doc, ev(400, 700));
+    // ④ เกินเวลา = ผ่าน และถอดตัวฟังทิ้ง
+    doc = mkDoc(); now = { t: 1000 }; timers = [];
+    G(doc, now, timers)(160, 345); now.t = 1800;
+    const late = fire(doc, ev(160, 345));
+    ck("แตะผีจุดเดิมถูกกลืน (capture) · แตะครั้งถัดไป/ที่อื่น/หลังหมดเวลาผ่านปกติ · ไม่ค้างตัวฟัง",
+      { cap, ghost: g1.dp && g1.sp, next: g2.dp || g2.sp, far: far.dp || far.sp, late: late.dp || late.sp, leftover: doc.L.length },
+      { cap: true, ghost: true, next: false, far: false, late: false, leftover: 0 });
+  }
+  const MAP = APP.slice(APP.indexOf("function POSTableMap("), APP.indexOf("\nfunction ", APP.indexOf("function POSTableMap(") + 20));
+  ok_("ผังโต๊ะ: กลืนแตะผีก่อนเปิดจอสั่งอาหารทุกครั้ง · pointercancel (เบราว์เซอร์ยึดนิ้วไปเลื่อนจอ) ไม่เปิดโต๊ะ",
+    MAP.includes("if(pr.moved||cancelled)return;") && MAP.includes("onPointerUp={e=>endPress(e,false)} onPointerCancel={e=>endPress(e,true)}") &&
+    MAP.indexOf("swallowGhostClick(e.clientX,e.clientY);") > 0 && MAP.indexOf("swallowGhostClick(e.clientX,e.clientY);") < MAP.indexOf("onSelectTable(t,getTableOrder(t.id));"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

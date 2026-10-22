@@ -20316,6 +20316,24 @@ function MoveTableModal({from,order,tables,activeOrders,branch,currentUser,onClo
       </div>}
   </Modal>;
 }
+// ── ทิ้ง "แตะผี" (ghost click) ที่ตามหลังการยกนิ้ว ── (พนักงาน The River แจ้ง 22 ต.ค. 69: เมนูเด้งเข้าตะกร้าเองทุกวัน หลายโต๊ะ)
+// ผังโต๊ะเปิดจอสั่งอาหารตอน pointerup แล้วแท็บเล็ตยิง click ตามมาที่จุดเดิม — ตอนนั้นจอสั่งอาหารขึ้นทับแล้ว
+// click จึงไปโดนการ์ดเมนูที่อยู่ตรงตำแหน่งโต๊ะ = เมนูเด้งเป็นรายการ "ใหม่" เอง (จำลองบน Chrome แบบจอสัมผัสได้ 1 แตะ = 1 รายการ)
+// กลืนเฉพาะ click ที่ตามมา "ใกล้จุดเดิม" ภายในไม่ถึงวินาที ครั้งเดียว — พนักงานแตะเมนูจริงหลังจากนั้น/ตรงอื่นได้ปกติ
+function swallowGhostClick(x,y,ms=700){
+  try{
+    const until=Date.now()+ms;
+    const h=(ev)=>{
+      if(Date.now()>until){document.removeEventListener("click",h,true);return;}
+      if(Math.abs((+ev.clientX||0)-x)<=40&&Math.abs((+ev.clientY||0)-y)<=40){
+        ev.preventDefault();ev.stopPropagation();
+        document.removeEventListener("click",h,true);
+      }
+    };
+    document.addEventListener("click",h,true);
+    setTimeout(()=>document.removeEventListener("click",h,true),ms+50);
+  }catch{}
+}
 function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null,onSelectTable,onAddZone,onAddTable,onUpdateTable,onDeleteTable,onMoveTable,onRenameZone,onDeleteZone}){
   const failMap=printFailsOf(failPrinters||printers);   // รายการสดจากรอบถามเร็ว (ถ้ามี) — ป้ายจะหายทันทีที่พิมพ์ออก
   // Free-position floor plan: TAP a table = open its order · LONG-PRESS a table to
@@ -20400,13 +20418,18 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
     pr.curY=Math.max(0,pr.oy+dy);
     setDragPos({id:pr.id,x:pr.curX,y:pr.curY});
   }
-  function endPress(){
+  function endPress(e,cancelled){
     const pr=pressRef.current;pressRef.current=null;setDragging(false);if(!pr)return;clearTimeout(pr.timer);
     if(pr.dragging){if(pr.curX!=null&&onMoveTable)onMoveTable(pr.id,Math.round(pr.curX),Math.round(pr.curY));setDragPos(null);return;}
-    if(pr.moved)return;
+    if(pr.moved||cancelled)return;   // เบราว์เซอร์ยึดนิ้วไปเลื่อนจอ (pointercancel) = ไม่ใช่การแตะเปิดโต๊ะ
     if(editId&&editId!==pr.id){setEditId(null);return;}
     if(editId===pr.id)return;
-    const t=tables.find(x=>x.id===pr.id);if(t&&onSelectTable)onSelectTable(t,getTableOrder(t.id));
+    const t=tables.find(x=>x.id===pr.id);
+    if(t&&onSelectTable){
+      // เปิดโต๊ะตอนยกนิ้ว แล้วจอสั่งอาหารขึ้นทับทันที — "แตะ" ที่เบราว์เซอร์ส่งตามมาจะไปโดนการ์ดเมนูใต้นิ้ว ต้องทิ้ง
+      if(e&&Number.isFinite(e.clientX))swallowGhostClick(e.clientX,e.clientY);
+      onSelectTable(t,getTableOrder(t.id));
+    }
   }
   async function saveTableForm(){
     const f=tableForm;if(!f||!String(f.table_number).trim())return;setTableSaving(true);
@@ -20485,7 +20508,7 @@ function POSTableMap({tables,activeOrders,zones=[],printers=[],failPrinters=null
         {onAddTable&&<button onClick={()=>setTableForm({table_number:"",label:"",seats:4,shape:"square",zone:(zoneFilter!=="all"&&zoneFilter!=="none")?zoneFilter:""})} style={{display:"inline-flex",alignItems:"center",gap:5,padding:"6px 14px",minHeight:34,borderRadius:9,border:`1.5px dashed ${C.brand}`,background:C.white,color:C.brand,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,whiteSpace:"nowrap"}}>➕ เพิ่มโต๊ะ</button>}
       </div>}
     </div>
-    <div ref={canvasRef} onPointerMove={movePress} onPointerUp={endPress} onPointerCancel={endPress} onPointerDown={()=>{if(editId)setEditId(null);}}
+    <div ref={canvasRef} onPointerMove={movePress} onPointerUp={e=>endPress(e,false)} onPointerCancel={e=>endPress(e,true)} onPointerDown={()=>{if(editId)setEditId(null);}}
       style={{flex:1,overflowY:dragging?"hidden":"auto",overflowX:"hidden",position:"relative",background:"#f0f4f8",backgroundImage:"radial-gradient(circle,#c8d0da 1px,transparent 1px)",backgroundSize:"20px 20px",WebkitOverflowScrolling:"touch",touchAction:dragging?"none":"pan-y",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none"}}>
       {sortedTables.length===0?<div style={{display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:14,padding:"60px 16px"}}>
         <Ic d={I.table} s={56} c={C.line}/><p style={{color:C.ink4,fontFamily:"'Sarabun',sans-serif",fontSize:15,textAlign:"center"}}>{zoneFilter==="all"?"ยังไม่มีโต๊ะ":`ไม่มีโต๊ะใน "${zoneFilter==="none"?"ไม่มีโซน":zoneFilter}"`}</p>
