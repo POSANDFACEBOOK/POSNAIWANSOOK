@@ -9580,6 +9580,57 @@ section("ผังโต๊ะ: เปิดโต๊ะแล้วเมนู
     MAP.indexOf("swallowGhostClick(e.clientX,e.clientY);") > 0 && MAP.indexOf("swallowGhostClick(e.clientX,e.clientY);") < MAP.indexOf("onSelectTable(t,getTableOrder(t.id));"));
 }
 
+section("ฐานข้อมูลหาย / ค่าบริการใกล้ครบกำหนด — แจ้งบอสแม็ก (23 ต.ค. 69)");
+{
+  // ── ตัวตัดสิน "ฐานข้อมูลหาย" ตัวจริง กับ fetch ปลอม ──
+  let mkG = null;
+  try {
+    const src = APP.slice(APP.indexOf("const DBG={down:false"), APP.indexOf("// แถบแดง — เขียนลง DOM ตรงๆ"));
+    mkG = (fetchImpl) => new Function("fetch", "SUPA_URL", "SUPA_KEY", "setInterval", "clearInterval", src + "\nreturn {DBG,dbgCheck,dbgSet};")(fetchImpl, "https://x.supabase.co", "k", () => 1, () => {});
+  } catch { mkG = null; }
+  ok_("ดึงตัวตัดสินฐานข้อมูลหายตัวจริงมารันได้", !!mkG);
+  if (mkG) {
+    const run = async (web, db) => { const G = mkG(async (u) => { if (String(u).startsWith("/favicon")) { if (web === "fail") throw new TypeError("x"); return { ok: web === 200, status: web }; } if (db === "fail") throw new TypeError("Failed to fetch"); return { ok: db < 400, status: db }; }); const r = await G.dbgCheck(true); return [r, G.DBG.down]; };
+    ck("ฐานข้อมูลหาย = เว็บเราโหลดได้แต่ต่อฐานไม่ได้ / 402 / 540 · เน็ตร้านหลุด = ไม่ใช่ · ฐานตอบปกติหรือ 5xx = ไม่ใช่",
+      [await run(200, "fail"), await run(200, 402), await run(200, 540), await run("fail", "fail"), await run(200, 200), await run(200, 503)],
+      [[true, true], [true, true], [true, true], [false, false], [false, false], [false, false]]);
+    const G2 = mkG(async () => { throw new TypeError("x"); });
+    let n = 0; const G3 = mkG(async (u) => { n++; return { ok: true, status: 200 }; });
+    await G3.dbgCheck(true); const n1 = n; await G3.dbgCheck(false);
+    ok_("เช็กไม่ถี่: ภายใน 20 วิไม่ถามซ้ำ (เว้นแต่สั่ง force)", n1 === 2 && n === 2);
+  }
+  ok_("sb(): ยิงไม่ออก (TypeError) → เช็กฐานหาย · ตอบได้ → ล้างแถบ",
+    APP.includes('if (e && e.name === "TypeError") dbgCheck(false);') && APP.includes("if (DBG.down) dbgSet(false);   // ตอบได้แล้ว = ฐานข้อมูลกลับมา"));
+  ok_("แถบแดงฐานข้อมูลหาย: ขึ้นทุกหน้า (DOM ตรง) · พนักงาน = แจ้งบอสแม็ก · หน้าลูกค้าสแกน = เรียกพนักงาน · เปิดเว็บแล้วเช็กทันที · หน้าล็อกอินบอกตรงๆ",
+    APP.includes('bar.textContent="⛔ ฐานข้อมูลหมดอายุ / ใช้งานไม่ได้ — แจ้งบอสแม็กด่วน!";') && APP.includes('bar.textContent="⚠️ ระบบสั่งอาหารขัดข้องชั่วคราว — กรุณาเรียกพนักงานเพื่อสั่งอาหาร";') &&
+    APP.includes('window.addEventListener("load",()=>setTimeout(()=>dbgCheck(true),800));') &&
+    APP.includes('setErr(gone?"⛔ ฐานข้อมูลหมดอายุ / ใช้งานไม่ได้ — แจ้งบอสแม็กด่วน!":'));
+  // ── เตือนค่าบริการ: ตัวจริงรันได้ ──
+  let BL = null;
+  try { BL = new Function(APP.split("\n").find((l) => l.startsWith("const BILL_WARN_DAYS=")) + "\n" + grab(APP, "billDaysLeft") + "\n" + grab(APP, "billWarnings") + "\n" + grab(APP, "billLine") + "\nreturn {billDaysLeft,billWarnings,billLine};")(); } catch { BL = null; }
+  ok_("ดึงตัวนับวันค่าบริการตัวจริงมารันได้", !!BL);
+  if (BL) {
+    const at = (iso) => Date.parse(iso);   // เวลา UTC — วันไทย = +7
+    ck("นับวันตามเวลาไทย: 22 ต.ค. 23:30 ไทย ยังเป็นวันที่ 22 · 00:30 วันที่ 23 = วันใหม่",
+      [BL.billDaysLeft("2026-11-11", at("2026-10-22T16:30:00Z")), BL.billDaysLeft("2026-11-11", at("2026-10-22T17:30:00Z")), BL.billDaysLeft("bad", 0)], [20, 19, null]);
+    const cfg = { services: [{ name: "เว็บไซต์ (Vercel)", due: "2026-11-11" }, { name: "ฐานข้อมูล (Supabase)", due: "2026-11-23" }] };
+    ck("เตือนเฉพาะที่เหลือ ≤ 10 วัน (รวมเลยกำหนด) เรียงด่วนสุดก่อน · ยังไกล = ไม่เตือน",
+      [BL.billWarnings(cfg, at("2026-10-31T05:00:00Z")).length, BL.billWarnings(cfg, at("2026-11-01T05:00:00Z")).map((w) => w.days), BL.billWarnings(cfg, at("2026-11-14T05:00:00Z")).map((w) => [w.name, w.days])],
+      [0, [10], [["เว็บไซต์ (Vercel)", -3], ["ฐานข้อมูล (Supabase)", 9]]]);
+    ck("ข้อความ: เหลือ N วัน / ครบวันนี้ / เลยมาแล้ว N วัน — ทุกแบบบอกแจ้งบอสแม็ก + วันที่แบบไทย",
+      [BL.billLine({ name: "เว็บไซต์ (Vercel)", due: "2026-11-11", days: 4 }), BL.billLine({ name: "ฐานข้อมูล (Supabase)", due: "2026-10-23", days: 0 }), BL.billLine({ name: "ฐานข้อมูล (Supabase)", due: "2026-10-23", days: -2 })],
+      ["⏳ เว็บไซต์ (Vercel) จะหมดอายุในอีก 4 วัน (ครบกำหนดจ่าย 11/11/2569) — แจ้งบอสแม็กด่วน!", "⛔ ฐานข้อมูล (Supabase) ครบกำหนดจ่ายวันนี้ (23/10/2569) — แจ้งบอสแม็กด่วน!", "⛔ ฐานข้อมูล (Supabase) เลยกำหนดจ่ายมาแล้ว 2 วัน (23/10/2569) — แจ้งบอสแม็กด่วน!"]);
+  }
+  {
+    const BJ = JSON.parse(fs.readFileSync(new URL("../public/billing.json", import.meta.url), "utf8"));
+    const keys = (BJ.services || []).map((x) => x.key).sort().join(",");
+    ok_("public/billing.json มีวันครบกำหนดของ Supabase และ Vercel (รูปแบบ YYYY-MM-DD)", keys === "supabase,vercel" && BJ.services.every((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.due) && x.name));
+  }
+  ok_("แถบค่าบริการ: อ่านไฟล์บนเว็บเราเอง (ไม่พึ่งฐานข้อมูล) · ไม่ขึ้นหน้าลูกค้าสแกน · ปิดได้ถึงพรุ่งนี้ · เช็กซ้ำทุก 3 ชม.",
+    APP.includes('const r=await fetch("/billing.json?ts="+Date.now(),{cache:"no-store"});') && APP.includes("/\\bcust-scan\\b/.test(document.documentElement.className||\"\")||document.getElementById(\"fc-dbgone-bar\")") &&
+    APP.includes("x.onclick=()=>{try{localStorage.setItem(HIDE_KEY,todayTH());}catch{}bar.remove();};") && APP.includes("setInterval(check,3*3600e3);"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

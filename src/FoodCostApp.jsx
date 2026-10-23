@@ -193,6 +193,121 @@ if(typeof document!=="undefined"){
   });
 }
 
+// ── ฐานข้อมูล "หาย" (หมดอายุ / ถูกพัก / ถูกระงับ) ≠ ช้า ── (23 ต.ค. 69 15:45 โปรเจกต์ Supabase หายจาก DNS ทั้งตัว
+// ทุกสาขาล็อกอินไม่ได้ จอขึ้นแค่ "ช้ากว่าปกติ" กับ "เซิร์ฟเวอร์อาจกำลังตื่นจากพัก" — ไม่มีใครรู้ว่าต้องตามเจ้าของ)
+// ตัดสินว่าหาย = เว็บของเราเอง (Vercel) โหลดได้ = เน็ตร้านปกติ แต่ต่อฐานข้อมูลไม่ได้เลย หรือตอบ 402/540 (ถูกระงับ/ถูกพัก)
+// ⟹ แถบแดงทุกหน้า (รวมหน้าล็อกอิน) "แจ้งบอสแม็กด่วน" · หน้าลูกค้าสแกนบอกให้เรียกพนักงานแทน · กลับมาเมื่อไรแถบหายเอง
+const DBG={down:false,checking:false,last:0,timer:null,listeners:new Set()};
+function dbgSet(v){
+  if(v===DBG.down)return;
+  DBG.down=v;
+  DBG.listeners.forEach(fn=>{try{fn(v);}catch{}});
+  try{
+    if(v&&!DBG.timer)DBG.timer=setInterval(()=>dbgCheck(true),30000);   // ระหว่างหาย ถามซ้ำทุก 30 วิ กลับมาแล้วแถบหายเอง
+    if(!v&&DBG.timer){clearInterval(DBG.timer);DBG.timer=null;}
+  }catch{}
+}
+async function dbgCheck(force){
+  try{
+    if(typeof fetch!=="function"||DBG.checking)return DBG.down;
+    if(!force&&Date.now()-DBG.last<20000)return DBG.down;
+    DBG.checking=true;DBG.last=Date.now();
+    const web=await fetch("/favicon-16.png?ping="+Date.now(),{cache:"no-store"}).then(r=>r.ok).catch(()=>false);
+    if(!web){dbgSet(false);return false;}   // เน็ตร้านหลุดเอง ไม่ใช่ฐานข้อมูล — ไม่ตามเจ้าของ
+    const st=await fetch(`${SUPA_URL}/auth/v1/health`,{headers:{apikey:SUPA_KEY},cache:"no-store"}).then(r=>r.status).catch(()=>0);
+    const gone=st===0||st===402||st===540;
+    dbgSet(gone);
+    return gone;
+  }catch{return DBG.down;}
+  finally{DBG.checking=false;}
+}
+// แถบแดง — เขียนลง DOM ตรงๆ เหมือนแถบ "ช้า" (ต้องขึ้นได้แม้หน้าล็อกอิน) · ปิดไม่ได้ (เรื่องใหญ่ ต้องเห็นจนกว่าจะกลับมา)
+if(typeof document!=="undefined"){
+  DBG.listeners.add((down)=>{
+    try{
+      const ID="fc-dbgone-bar",old=document.getElementById(ID);
+      if(!down){if(old)old.remove();return;}
+      if(old)return;
+      const slow=document.getElementById("fc-dbh-bar");if(slow)slow.remove();
+      const cust=/\bcust-scan\b/.test(document.documentElement.className||"");
+      const bar=document.createElement("div");
+      bar.id=ID;bar.setAttribute("role","alert");
+      bar.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b91c1c;color:#fff;font:800 16px/1.45 system-ui,sans-serif;padding:10px 14px;text-align:center;box-shadow:0 3px 12px rgba(0,0,0,.35)";
+      if(cust){bar.textContent="⚠️ ระบบสั่งอาหารขัดข้องชั่วคราว — กรุณาเรียกพนักงานเพื่อสั่งอาหาร";}
+      else{
+        bar.textContent="⛔ ฐานข้อมูลหมดอายุ / ใช้งานไม่ได้ — แจ้งบอสแม็กด่วน!";
+        const sub=document.createElement("div");
+        sub.style.cssText="font:600 13px/1.45 system-ui,sans-serif;opacity:.95;margin-top:2px";
+        sub.textContent="ตอนนี้ระบบบันทึกข้อมูลไม่ได้ · จดออเดอร์และรับเงินด้วยกระดาษไว้ก่อน · กลับมาใช้ได้เมื่อไร แถบนี้จะหายเอง";
+        bar.appendChild(sub);
+      }
+      document.body.appendChild(bar);
+    }catch{}
+  });
+  // เปิดหน้าเว็บเมื่อไรเช็กทันที — หน้าล็อกอินยังไม่ยิงคำขอฐานข้อมูลจนกว่าจะกดเข้าสู่ระบบ
+  try{window.addEventListener("load",()=>setTimeout(()=>dbgCheck(true),800));}catch{}
+}
+// ── เตือนค่าบริการรายเดือนใกล้ครบกำหนด (ฐานข้อมูล Supabase · เว็บไซต์ Vercel) ── (เจ้าของสั่ง 23 ต.ค. 69 หลังฐานข้อมูลหมดอายุ)
+// ไม่จ่ายตามรอบ = บริการถูกพัก ทุกสาขาใช้ระบบไม่ได้ทั้งร้าน ⟹ เตือนล่วงหน้า 10 วัน นับถอยหลังทุกวันจนกว่าจะจ่าย
+// วันครบกำหนดอยู่ที่ public/billing.json (ไฟล์บนเว็บเราเอง — อ่านได้แม้ฐานข้อมูลล่ม) · จ่ายแล้วเลื่อน due ไปรอบถัดไป
+// พนักงานเห็นแล้วไปบอกเจ้าของ ("แจ้งบอสแม็กด่วน") · ปิดแถบได้ถึงพรุ่งนี้ (เครื่องละครั้งต่อวัน) · หน้าลูกค้าสแกนไม่แสดง
+const BILL_WARN_DAYS=10;
+// จำนวนวันจากวันนี้ (เวลาไทย) ถึงวันครบกำหนด · บวก = ยังเหลือ · 0 = วันนี้ · ลบ = เลยมาแล้ว
+function billDaysLeft(due,nowMs){
+  const d=String(due||"").slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(d))return null;
+  const today=new Date((nowMs==null?Date.now():nowMs)+7*3600e3).toISOString().slice(0,10);
+  return Math.round((Date.parse(d+"T00:00:00Z")-Date.parse(today+"T00:00:00Z"))/86400000);
+}
+function billWarnings(cfg,nowMs){
+  const list=cfg&&Array.isArray(cfg.services)?cfg.services:[];
+  return list.map(s=>({name:String((s&&s.name)||"").slice(0,60),due:String((s&&s.due)||"").slice(0,10),days:billDaysLeft(s&&s.due,nowMs)}))
+    .filter(w=>w.name&&w.days!=null&&w.days<=BILL_WARN_DAYS)
+    .sort((a,b)=>a.days-b.days);
+}
+function billLine(w){
+  const[y,m,d]=w.due.split("-");const dt=`${d}/${m}/${(+y||0)+543}`;
+  if(w.days>0)return `⏳ ${w.name} จะหมดอายุในอีก ${w.days} วัน (ครบกำหนดจ่าย ${dt}) — แจ้งบอสแม็กด่วน!`;
+  if(w.days===0)return `⛔ ${w.name} ครบกำหนดจ่ายวันนี้ (${dt}) — แจ้งบอสแม็กด่วน!`;
+  return `⛔ ${w.name} เลยกำหนดจ่ายมาแล้ว ${-w.days} วัน (${dt}) — แจ้งบอสแม็กด่วน!`;
+}
+if(typeof document!=="undefined"){
+  const ID="fc-bill-bar",HIDE_KEY="fc_bill_hide";
+  const todayTH=()=>new Date(Date.now()+7*3600e3).toISOString().slice(0,10);
+  const render=(ws)=>{
+    try{
+      const old=document.getElementById(ID);
+      let hidden=false;try{hidden=localStorage.getItem(HIDE_KEY)===todayTH();}catch{}
+      // หน้าลูกค้าสแกน / ปิดไว้วันนี้แล้ว / ไม่มีอะไรต้องเตือน / แถบฐานข้อมูลหาย (เรื่องใหญ่กว่า) กำลังขึ้น
+      if(!ws.length||hidden||/\bcust-scan\b/.test(document.documentElement.className||"")||document.getElementById("fc-dbgone-bar")){if(old)old.remove();return;}
+      const urgent=ws[0].days<=3;
+      const bar=old||document.createElement("div");
+      bar.id=ID;bar.setAttribute("role","alert");
+      bar.style.cssText=`position:fixed;top:0;left:0;right:0;z-index:2147483646;background:${urgent?"#b91c1c":"#c2410c"};color:#fff;font:800 15px/1.5 system-ui,sans-serif;padding:9px 44px 9px 14px;text-align:center;box-shadow:0 3px 12px rgba(0,0,0,.3)`;
+      bar.textContent="";
+      ws.forEach(w=>{const ln=document.createElement("div");ln.textContent=billLine(w);bar.appendChild(ln);});
+      const x=document.createElement("button");
+      x.textContent="✕";x.setAttribute("aria-label","ซ่อนถึงพรุ่งนี้");x.title="ซ่อนถึงพรุ่งนี้ (พรุ่งนี้ขึ้นใหม่ พร้อมจำนวนวันที่เหลือ)";
+      x.style.cssText="position:absolute;top:6px;right:8px;background:none;border:none;color:#fff;font-size:18px;font-weight:800;cursor:pointer;padding:4px 8px;line-height:1";
+      x.onclick=()=>{try{localStorage.setItem(HIDE_KEY,todayTH());}catch{}bar.remove();};
+      bar.appendChild(x);
+      if(!old)document.body.appendChild(bar);
+    }catch{}
+  };
+  const check=async()=>{
+    try{
+      const r=await fetch("/billing.json?ts="+Date.now(),{cache:"no-store"});
+      if(!r.ok)return;
+      render(billWarnings(await r.json()));
+    }catch{}
+  };
+  try{
+    window.addEventListener("load",()=>setTimeout(check,1500));
+    setInterval(check,3*3600e3);   // เปิดค้างทั้งวัน: เลขวันลดเองข้ามเที่ยงคืน
+    DBG.listeners.add(()=>setTimeout(check,50));   // แถบฐานข้อมูลหายขึ้น/หาย → จัดแถบนี้ใหม่
+  }catch{}
+}
+
 async function sb(path, opts = {}) {
   const {headers:extraH, prefer, ...fetchOpts} = opts;
   const t0 = nowMs();
@@ -229,10 +344,13 @@ alter table public.${t} disable row level security;`);
       throw new Error(body);
     }
     const text = await res.text();
+    if (DBG.down) dbgSet(false);   // ตอบได้แล้ว = ฐานข้อมูลกลับมา
     return text ? JSON.parse(text) : [];
   }catch(e){
     clearTimeout(hang);
     mark("err", nowMs() - t0);   // ยิงไม่ออก/เน็ตขาด — ถ้าเป็น 4xx จะถูกนับไปแล้วข้างบน
+    // ยิงไม่ออกเลย (ไม่ใช่ฐานตอบ error) = เช็กว่าฐานข้อมูล "หาย" ไหม (เว้นระยะ 20 วิ ไม่ถี่)
+    if (e && e.name === "TypeError") dbgCheck(false);
     throw e;
   }
 }
@@ -4250,7 +4368,11 @@ function LoginPage({onLogin}){
         else setErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
         setLoading(false);return;
       }catch(e){
-        if(attempt>=3){setErr("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — เซิร์ฟเวอร์อาจกำลังตื่นจากพัก กรุณากดเข้าสู่ระบบอีกครั้ง");setLoading(false);return;}
+        if(attempt>=3){
+          const gone=await dbgCheck(true);
+          setErr(gone?"⛔ ฐานข้อมูลหมดอายุ / ใช้งานไม่ได้ — แจ้งบอสแม็กด่วน!":"เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — เซิร์ฟเวอร์อาจกำลังตื่นจากพัก กรุณากดเข้าสู่ระบบอีกครั้ง");
+          setLoading(false);return;
+        }
         await new Promise(r=>setTimeout(r,1200));
       }
     }
