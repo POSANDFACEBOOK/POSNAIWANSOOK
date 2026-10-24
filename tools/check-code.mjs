@@ -9586,14 +9586,14 @@ section("ฐานข้อมูลหาย / ค่าบริการใ�
   let mkG = null;
   try {
     const src = APP.slice(APP.indexOf("const DBG={down:false"), APP.indexOf("// แถบแดง — เขียนลง DOM ตรงๆ"));
-    mkG = (fetchImpl) => new Function("fetch", "SUPA_URL", "SUPA_KEY", "setInterval", "clearInterval", src + "\nreturn {DBG,dbgCheck,dbgSet};")(fetchImpl, "https://x.supabase.co", "k", () => 1, () => {});
+    mkG = (fetchImpl) => new Function("fetch", "SUPA_URL", "SUPA_KEY", "setInterval", "clearInterval", "setTimeout", src + "\nreturn {DBG,dbgCheck,dbgSet};")(fetchImpl, "https://x.supabase.co", "k", () => 1, () => {}, (f, ms) => setTimeout(f, ms >= 8000 ? 20 : ms));
   } catch { mkG = null; }
   ok_("ดึงตัวตัดสินฐานข้อมูลหายตัวจริงมารันได้", !!mkG);
   if (mkG) {
-    const run = async (web, db) => { const G = mkG(async (u) => { if (String(u).startsWith("/favicon")) { if (web === "fail") throw new TypeError("x"); return { ok: web === 200, status: web }; } if (db === "fail") throw new TypeError("Failed to fetch"); return { ok: db < 400, status: db }; }); const r = await G.dbgCheck(true); return [r, G.DBG.down]; };
-    ck("ฐานข้อมูลหาย = เว็บเราโหลดได้แต่ต่อฐานไม่ได้ / 402 / 540 · เน็ตร้านหลุด = ไม่ใช่ · ฐานตอบปกติหรือ 5xx = ไม่ใช่",
-      [await run(200, "fail"), await run(200, 402), await run(200, 540), await run("fail", "fail"), await run(200, 200), await run(200, 503)],
-      [[true, true], [true, true], [true, true], [false, false], [false, false], [false, false]]);
+    const run = async (web, db) => { const G = mkG(async (u) => { if (String(u).startsWith("/favicon")) { if (web === "fail") throw new TypeError("x"); return { ok: web === 200, status: web }; } if (db === "fail") throw new TypeError("Failed to fetch"); if (db === "hang") return new Promise(() => {}); return { ok: db < 400, status: db }; }); const r = await G.dbgCheck(true); return [r, G.DBG.down]; };
+    ck("ฐานข้อมูลหาย = เว็บเราโหลดได้แต่ต่อฐานไม่ได้ / 402 / 540 · เน็ตร้านหลุด = ไม่ใช่ · 5xx หรือค้างเกิน 8 วิ = ใช้ไม่ได้ (24 ต.ค. ฐานค้างไม่ตอบ) · ฐานตอบปกติ = ไม่ใช่",
+      [await run(200, "fail"), await run(200, 402), await run(200, 540), await run("fail", "fail"), await run(200, 200), await run(200, 503), await run(200, "hang")],
+      [[true, true], [true, true], [true, true], [false, false], [false, false], [true, true], [true, true]]);
     const G2 = mkG(async () => { throw new TypeError("x"); });
     let n = 0; const G3 = mkG(async (u) => { n++; return { ok: true, status: 200 }; });
     await G3.dbgCheck(true); const n1 = n; await G3.dbgCheck(false);

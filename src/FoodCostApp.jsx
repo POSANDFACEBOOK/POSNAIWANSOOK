@@ -214,8 +214,13 @@ async function dbgCheck(force){
     DBG.checking=true;DBG.last=Date.now();
     const web=await fetch("/favicon-16.png?ping="+Date.now(),{cache:"no-store"}).then(r=>r.ok).catch(()=>false);
     if(!web){dbgSet(false);return false;}   // เน็ตร้านหลุดเอง ไม่ใช่ฐานข้อมูล — ไม่ตามเจ้าของ
-    const st=await fetch(`${SUPA_URL}/auth/v1/health`,{headers:{apikey:SUPA_KEY},cache:"no-store"}).then(r=>r.status).catch(()=>0);
-    const gone=st===0||st===402||st===540;
+    // ค้างไม่ตอบเกิน 8 วิ = ใช้งานไม่ได้เหมือนกัน (24 ต.ค. 69: DNS กลับมาแล้วแต่ฐานข้อมูลค้าง ทุกคำขอรอจนหมดเวลา
+    // ตัวเช็กเดิมไม่มีเพดานเวลา → รอตลอด แถบแดงไม่ขึ้น หน้าล็อกอินยังบอกแค่ "กำลังตื่นจากพัก")
+    const st=await Promise.race([
+      fetch(`${SUPA_URL}/auth/v1/health`,{headers:{apikey:SUPA_KEY},cache:"no-store"}).then(r=>r.status).catch(()=>0),
+      new Promise(r=>setTimeout(()=>r(-1),8000)),
+    ]);
+    const gone=st<=0||st===402||st===540||st>=500;
     dbgSet(gone);
     return gone;
   }catch{return DBG.down;}
