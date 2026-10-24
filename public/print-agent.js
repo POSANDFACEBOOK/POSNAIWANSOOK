@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 50;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 51;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 2000;
@@ -25,10 +25,11 @@ const POLL_MS = 2000;
 // ปกติจึงได้ "แถวว่าง" (ไม่กี่ไบต์) ไม่ใช่การดึงตารางเครื่องพิมพ์ทั้งใบทุกวินาที
 // (บทเรียน 30 ก.ค. 69: Disk IO หมดเพราะ polling ที่ดึงของหนักถี่ๆ — ตัวนี้ตั้งใจให้เบาที่สุด)
 const DRAWER_POLL_MS = 800;
-// ทุกกี่รอบจึงจะดึงบิล "เต็ม" หนึ่งครั้ง (60 รอบ x 5 วิ = 5 นาที)
+// ทุกกี่รอบจึงจะดึงบิล "เต็ม" หนึ่งครั้ง (150 รอบ x 2 วิ = 5 นาที)
 // เป็นตาข่ายนิรภัย เผื่อวันหลังมีทางเขียนไหนแก้รายการในบิลโดยไม่ขยับ updated_at
 // ถ้าไม่มีตาข่ายนี้ ใบครัวที่พลาดจะพลาดถาวร — ครัวไม่มีทางรู้เลย
-const FULL_EVERY = 60;
+// 24 ต.ค. 69: เดิม 60 ตั้งไว้ตอนรอบละ 5 วิ (= 5 นาที) พอรอบเร็วขึ้นเป็น 2 วิ กลายเป็นดึงบิลทั้งร้านทุก 2 นาที — คืนเป็น 5 นาทีตามที่ตั้งใจ
+const FULL_EVERY = 150;
 const STATE_FILE = path.join(process.env.HOME || ".", ".foodcost-printed.json");
 // รหัสประจำเครื่องที่รันตัวพิมพ์ — สุ่มครั้งแรกแล้วเก็บไว้ข้างไฟล์ความจำ (คนละไฟล์ ลบความจำตอนสลับเครื่องแล้วรหัสยังอยู่)
 // ส่งไปกับ heartbeat (agentDev) — ถ้ามีมือถือสองเครื่องรันสาขาเดียวกัน (เครื่องสำรองถูกเปิดค้าง / ตั้งเลขสาขาผิด)
@@ -90,6 +91,9 @@ async function sbCols(path, cols, tail) {
 }
 // ดึงเฉพาะเครื่องพิมพ์ของสาขานี้ (+ที่ใช้ร่วมทุกสาขา branch_id=null) — ไม่ดึงข้ามสาขา (ทุก caller กรองแบบนี้อยู่แล้ว)
 const getPrinters = () => sb(`printers?or=(branch_id.is.null,branch_id.eq.${BRANCH})&order=id.asc`);
+// สแกนหาเครื่องใหม่ใช้แค่ "IP ไหนมีแถวแล้ว" — ยังดึงสดทุกครั้ง (แคชเก่าไม่กี่วิก็พอให้เพิ่มแถว "รอเพิ่ม" ซ้ำ IP เดิมได้)
+// แต่ขอแค่สองคอลัมน์ · เดิมลากทุกคอลัมน์ (description พกรายการไม่ออกเป็นสิบ KB) ทุก 2 นาที (24 ต.ค. 69)
+const getPrinterIps = () => sb(`printers?select=ip,branch_id&or=(branch_id.is.null,branch_id.eq.${BRANCH})`);
 // รอบเร็ว (0.8 วิ) ถามเฉพาะแถวที่มีคำสั่งค้าง "ของสาขานี้" (+เครื่องที่ใช้ร่วมทุกสาขา) — กรองที่ฐานข้อมูล ไม่ใช่ในเครื่อง
 // เดิมดึงแถวทุกสาขามาแล้วค่อยทิ้ง: ตัวพิมพ์สาขาอื่นดับตอนมีใบเสร็จรูป (~24KB) ค้าง = ตัวพิมพ์เราดาวน์โหลดรูปนั้น
 // ทุก 0.8 วิ (~108,000 ครั้ง/วัน) — กลไกเดียวกับเหตุ Disk IO หมด 9 ก.ย. 69
@@ -97,12 +101,27 @@ const getPrinters = () => sb(`printers?or=(branch_id.is.null,branch_id.eq.${BRAN
 const getCmdRows = () => sb(`printers?select=id,name,ip,port,branch_id,description&or=(description.like.*%22dk%22:%7B*,description.like.*%22pj%22:%7B*,description.like.*%22rp%22:%7B*,description.like.*%22qr%22:%7B*)&or=(branch_id.is.null,branch_id.eq.${BRANCH})`);
 // รายชื่อเครื่องพิมพ์เปลี่ยนไม่บ่อย แต่เป็นก้อนใหญ่ (description พกคำสั่ง/สถานะ) — ใช้ซ้ำได้ 6 วิ
 // ทำให้ถามบิลถี่ขึ้นได้โดยไม่เพิ่มภาระฐานข้อมูล (บทเรียน Disk IO 30 ก.ค. 69: ตัวการคือ polling ของหนัก)
+// 24 ต.ค. 69: ทักเครื่องใหม่ / เช็คออนไลน์ / สัญญาณชีพ ใช้แคชนี้ร่วมด้วย — เดิมต่างคนต่างดึงสดทั้งก้อน ~8,400 ครั้ง/วัน/สาขา
+// ก่อนเขียนลงแถวยังอ่านสดทีละแถวเหมือนเดิม (กันเขียนทับคำสั่งจากแอป)
+// ── โหมดพัก (24 ต.ค. 69 — ฐานข้อมูลแผนฟรีล่ม) ── ไม่มีบิลเปิด / คำสั่งจากแอป / ใบเรียกพนักงานเลย 30 นาที = ร้านปิดหรือว่าง
+// รอบเร็ว (ลิ้นชัก/ใบเสร็จ) ถามทุก 3.2 วิแทน 0.8 · ใบเรียกพนักงานทุก 10 วิแทน 2 · แคชรายชื่อเครื่อง 30 วิแทน 6
+// รอบใบครัว (หัวบิล) ยังถามทุก 2 วิเสมอ — บิลแรกที่เปิดปลุกออกจากโหมดพักภายใน 2 วิ ใบครัวไม่ช้าลง
+// ตั้ง BUSINESS_HOURS (ค่าอะไรก็ได้) ตอนรันตัวพิมพ์ = ไม่เข้าโหมดพักเลย
+const IDLE_AFTER_MS = 30 * 60 * 1000;
+let lastBusyAt = Date.now();   // นับจากตอนเปิดโปรแกรม — เพิ่งรีสตาร์ท/อัปเดต = เต็มสปีด 30 นาทีแรกเสมอ
+const markBusy = () => { lastBusyAt = Date.now(); };
+const shopIdle = () => !process.env.BUSINESS_HOURS && Date.now() - lastBusyAt > IDLE_AFTER_MS;
 let _prCache = null, _prAt = 0;
 const PRINTERS_TTL = 6000;
-async function getPrintersCached() {
-  if (_prCache && Date.now() - _prAt < PRINTERS_TTL) return _prCache;
+const PRINTERS_IDLE_TTL = 30000;
+// peek=true (ทักเครื่องใหม่ / เช็คออนไลน์ / สัญญาณชีพ / ใบเรียกพนักงาน) = ใช้แคชได้ แต่ถ้าต้องดึงเอง "ห้ามเขียนกลับ" (ตรวจทาน 24 ต.ค. 69)
+// ให้ทุกตัวเขียนแคช = ตอนฐานช้า คำขอที่ยิงก่อนแต่ตอบทีหลังเอารายชื่อ "เก่ากว่า" ทับของใหม่ที่ tick เพิ่งเห็น
+// → tick รอบถัดไปเห็นติ๊ก "รีปริ้น" ที่เพิ่งพิมพ์+ล้างไปแล้วกลับมาอีก (ตัวจำ state.retried ถูกลบตอนรอบก่อนไม่เห็นติ๊ก) = พิมพ์ใบครัวซ้ำเอง
+// ผู้เขียนแคชจึงมีแค่ tick (ห้ามซ้อนรอบ ⟹ รายชื่อที่ tick เห็นไม่มีทางย้อนเวลา) · ตัวอื่นแทบทุกครั้งยังได้จากแคชที่ tick เติมไว้ ไม่เสียการประหยัด
+async function getPrintersCached(peek) {
+  if (_prCache && Date.now() - _prAt < (shopIdle() ? PRINTERS_IDLE_TTL : PRINTERS_TTL)) return _prCache;
   const r = await getPrinters();
-  _prCache = r; _prAt = Date.now();
+  if (!peek) { _prCache = r; _prAt = Date.now(); }
   return r;
 }
 const addPrinter = (d) => fetch(`${SUPA_URL}/rest/v1/printers`, { method: "POST", headers: { apikey: SUPA_KEY, Authorization: "Bearer " + SUPA_KEY, "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify(d) });
@@ -813,6 +832,7 @@ async function handleStaffCalls() {
       return;   // เน็ตสะดุดรอบเดียว — รอบหน้าอีก 2 วิ
     }
     if (!rows || !rows.length) return;
+    markBusy();   // ลูกค้ากดเรียก = ร้านมีคน → ออกจากโหมดพัก (24 ต.ค. 69)
     const nowS = Date.now() + callSkew;
     // ค้างเกินอายุ (ตัวพิมพ์ดับไป) — ปิดทีเดียวทั้งก้อน ไม่พิมพ์ย้อนหลัง ไม่อ่านโต๊ะทีละแถว (ใบใหม่ไม่ต้องต่อคิวหลังใบเก่า)
     const stale = rows.filter(r => callStale(r, nowS)), fresh = rows.filter(r => !callStale(r, nowS));
@@ -830,7 +850,7 @@ async function handleStaffCalls() {
     mine = (mine || []).slice().sort((a, b) => a.id - b.id);
     if (!mine.length) return;
     let printers = [];
-    try { printers = ((await getPrintersCached()) || []).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false); } catch {}
+    try { printers = ((await getPrintersCached(true)) || []).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false); } catch {}
     const rcps = printers.filter(p => p.ip && !isBluetooth(p) && isRcptPrinter(p));
     for (const row of mine) await printOneCall(row, printers, rcps);
   } finally { callBusy = false; }
@@ -853,7 +873,7 @@ async function handleScanRequests(printers) {
   if (maxReq && maxReq > (state.lastScanReq || 0)) {
     state.lastScanReq = maxReq; saveState();
     console.log("🔍 รับคำสั่งค้นหาเครื่องพิมพ์จากแอป — สแกนทันที");
-    try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {}
+    try { const ps = (await getPrinterIps()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {}
   }
 }
 
@@ -875,6 +895,11 @@ function failItem(it, k) {
 // เดิมอ่านพลาดแล้วถือว่าแถวว่าง {} แล้วเขียนทับทั้งแถว = เครื่องใบเสร็จหาย ลิ้นชักไม่เปิด รายการไม่ออกเดิมหายหมด
 // เสียบันทึกไม่ออกหนึ่งรายการ ถูกกว่าล้างค่าตั้งเครื่องทั้งแถวมาก
 const PJ_FAIL_KEEP_MS = 24 * 60 * 60 * 1000;   // ใบเสร็จ/QR ที่ไม่ออกเกินวัน ไม่มีใครพิมพ์ย้อนแล้ว — ไม่ให้เบียดใบครัวที่ยังรีปริ้นได้ออกจากโควตา
+// 24 ต.ค. 69: ใบครัวที่ไม่ออกก็เก็บแค่ 24 ชม. — เกิน 12 ชม. แอปไม่ให้รีปริ้นแล้ว (ขึ้นเทา) · เดิมไม่เคยทิ้ง River ค้าง 42 รายการ ~23 KB
+// ถูกอ่านทั้งก้อนทุกไม่กี่วิทั้งจากตัวพิมพ์และจอขาย · รายการไม่มีเวลา (รุ่นเก่า) เก็บไว้ ไม่เดา
+// นับอายุด้วยนาฬิกาที่ "ช้ากว่า" ระหว่างมือถือกับเซิร์ฟเวอร์ (callSkew) — นาฬิกามือถือเพี้ยนไปทางไหนก็ไม่ลบรายการที่ยังสด
+const KITCHEN_FAIL_KEEP_MS = 24 * 60 * 60 * 1000;
+const failKept = (f, now) => { if (!f) return true; const t = Math.min(now, now + (typeof callSkew === "number" ? callSkew : 0)); return f.kind === "pj" ? t - (+f.at || 0) <= PJ_FAIL_KEEP_MS : !(+f.at > 0) || t - +f.at <= KITCHEN_FAIL_KEEP_MS; };
 async function pushFail(printers, entry) {
   const target = (printers || []).find(p => p.ip) || (printers || [])[0];
   if (!target) return false;
@@ -886,7 +911,7 @@ async function pushFail(printers, entry) {
     if (!d || typeof d !== "object" || Array.isArray(d)) return false;
   } catch { console.log("  ⚠️ อ่านแถวเครื่องพิมพ์ไม่ได้ — ไม่บันทึกรายการไม่ออกรอบนี้ (กันเขียนทับค่าตั้งเครื่อง)"); return false; }
   const now = Date.now();
-  const kept = (Array.isArray(d.failed) ? d.failed : []).filter(f => !(f && f.kind === "pj" && now - (+f.at || 0) > PJ_FAIL_KEEP_MS));
+  const kept = (Array.isArray(d.failed) ? d.failed : []).filter(f => failKept(f, now));
   kept.push(entry);
   if (kept.length > FAIL_CAP) console.log(`  ⚠️ รายการพิมพ์ไม่ออกเกิน ${FAIL_CAP} — ตัดของเก่าสุดออก ${kept.length - FAIL_CAP} รายการ`);
   d.failed = kept.slice(-FAIL_CAP);   // เก็บล่าสุดพอ ไม่ให้ description บวม
@@ -1007,8 +1032,14 @@ async function settleFail(holderId, failId, want, okKs, errs) {
 let fullTick = 0;   // นับรอบไปหาตาข่ายนิรภัย
 async function tick() {
   let heads, printers;
+  // จับ "พักอยู่ไหม" ก่อนยิงคำขอ (ตรวจทาน 24 ต.ค. 69): ระหว่างรอ รอบเร็ว (QR เปิดโต๊ะ/ลิ้นชัก) หรือใบเรียกพนักงานอาจปลุกไปก่อน
+  // ถ้าเช็คหลังรอ จะได้ "ไม่พัก" ทั้งที่รายชื่อเครื่องที่เพิ่งได้มาคิดอายุแบบพัก (เก่าได้ 30 วิ) → ใบแรกของวันเลือกเครื่องจากแคชเก่า
+  const woke = shopIdle();
   try { [heads, printers] = await Promise.all([getActiveOrderHeads(), getPrintersCached()]); }
   catch (e) { console.log("⚠️  ดึงข้อมูลไม่ได้ (เช็คเน็ต):", e.message); return; }
+  // มีบิลเปิด = ร้านมีคน → ออกจากโหมดพัก · เพิ่งตื่นจากพัก = รายชื่อเครื่องในแคชอาจเก่าถึง 30 วิ (เพิ่งตั้งหมวด/เปิดเครื่องตอนเปิดร้าน)
+  // ขอใหม่ (อายุไม่เกิน 6 วิ) ก่อนเลือกเครื่องให้ใบแรก ครั้งเดียวต่อการตื่น (24 ต.ค. 69)
+  if (heads && heads.length) { markBusy(); if (woke) { try { printers = await getPrintersCached(); } catch (e) { console.log("⚠️  ดึงข้อมูลไม่ได้ (เช็คเน็ต):", e.message); return; } } }
   printers = (printers || []).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false);
   heads = heads || [];
   const uatOf = new Map(heads.map(h => [String(h.id), h.updated_at || null]));
@@ -1017,7 +1048,8 @@ async function tick() {
   // (ไม่มี updated_at = เทียบไม่ได้ ต้องถือว่าเปลี่ยน ห้ามเดาว่าเหมือนเดิม)
   const changed = heads.filter(h => !state.init[h.id] || !h.updated_at || state.uat[h.id] !== h.updated_at);
   fullTick++;
-  const wantFull = !primed || fullTick >= FULL_EVERY || changed.length > 30;
+  // ไม่มีบิลเปิดเลย = ดึงเต็มก็ได้ [] (ตัวกรองเดียวกัน) ข้ามได้ไม่เสียอะไร · ตัวนับเดินต่อ บิลแรกที่เปิดจึงได้ตาข่ายนิรภัยทันที (24 ต.ค. 69)
+  const wantFull = !primed || changed.length > 30 || (heads.length > 0 && fullTick >= FULL_EVERY);
   let orders;
   try {
     if (wantFull) { orders = await getActiveOrders(); fullTick = 0; }
@@ -1130,7 +1162,7 @@ async function tick() {
 // จำว่าเครื่องไหนทดสอบไปแล้ว (state.greeted) เพื่อไม่พิมพ์ซ้ำทุกครั้งที่รีสตาร์ท · เครื่องที่ถูกนำออกแล้วเพิ่มกลับ จะทดสอบใหม่
 async function greetNewPrinters() {
   try {
-    const all = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH);
+    const all = (await getPrintersCached(true)).filter(p => p.branch_id == null || +p.branch_id === +BRANCH);
     if (!state.greeted) state.greeted = {};
     const activeIds = new Set(all.filter(p => p.active !== false).map(p => String(p.id)));
     for (const k of Object.keys(state.greeted)) if (!activeIds.has(String(k))) delete state.greeted[k];
@@ -1153,7 +1185,7 @@ let pinging = false;
 async function pingPrinters(force) {
   if (pinging) return; pinging = true;
   try {
-    const ps = (await getPrinters()).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false && !isBluetooth(p) && p.ip);
+    const ps = (await getPrintersCached(true)).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false && !isBluetooth(p) && p.ip);
     const res = await Promise.all(ps.map(async p => ({ p, open: await probePort(p.ip, p.port || 9100, 2500) })));
     for (const { p, open } of res) {
       const v = open ? 1 : 0;
@@ -1177,7 +1209,7 @@ let hbSkips = 0;          // ข้ามรอบติดกันเพรา
 async function heartbeat() {
   if (hbBusy) return; hbBusy = true;
   try {
-    const ps = (await getPrinters()).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false);
+    const ps = (await getPrintersCached(true)).filter(p => (p.branch_id == null || +p.branch_id === +BRANCH) && p.active !== false);
     if (!ps.length) return;                       // no printer configured → nowhere to beat (and nothing to print)
     const target = ps.slice().sort((a, b) => +a.id - +b.id)[0];
     const online = ps.filter(p => !isBluetooth(p) && p.ip).length;
@@ -1192,10 +1224,25 @@ async function heartbeat() {
     if (long && hbSkips < 2) { hbSkips++; return; }
     // อีกเครื่องเพิ่งเต้นลงแถวเดียวกันด้วยรหัสอื่น = มีตัวพิมพ์สองเครื่องรันสาขานี้ (บิลอาจพิมพ์ซ้ำ) — บอกบนจอ Termux ด้วย
     if (d.agentDev && d.agentDev !== AGENT_DEV && Date.now() - (+d.agentSeen || 0) < 120 * 1000) console.log(`⚠️  พบตัวพิมพ์อีกเครื่อง (รหัส ${d.agentDev}) รันสาขา ${BRANCH} อยู่ด้วย — ปิดให้เหลือเครื่องเดียว กันใบพิมพ์ซ้ำ`);
+    // 24 ต.ค. 69: รายการพิมพ์ไม่ออกที่เก่าเกินวัน ทิ้งทุกรอบสัญญาณชีพ (เดิมทิ้งเฉพาะตอนมีรายการใหม่เข้า — วันที่ไม่มีใบไม่ออก แถวไม่เคยเล็กลง)
+    // แถวสั้นลงเหลือใต้ HB_CAS_MAX = กลับมาเขียนแบบมีเงื่อนไขทุก 45 วิ (แถวยาวเขียนแค่ทุก 135 วิ แบบทับ → "ตัวพิมพ์ไม่ตอบ" หลอก เกณฑ์ 120 วิ)
+    // long ยังคิดจาก raw (ค่าเงื่อนไขของการเขียน) — รอบแรกหลังอัปเดตเขียนแบบเดิมหนึ่งครั้ง แล้วแถวจะสั้นเอง
+    const now = Date.now();
+    if (Array.isArray(d.failed)) d.failed = d.failed.filter(f => failKept(f, now));
     d.agentSeen = Date.now(); d.agentVer = AGENT_VERSION; d.agentPrinters = online; d.agentDev = AGENT_DEV;
     hbSkips = 0;
     // มีคนเขียนแทรก (คำสั่งใหม่จากแอป) = ไม่เขียน รอบหน้า (45 วิ) อ่านใหม่แล้วค่อยเต้น — คำสั่งของแอปไม่หาย
     try { if (long) await patchPrinter(target.id, { description: JSON.stringify(d) }); else await patchPrinterIf(target.id, raw, { description: JSON.stringify(d) }); } catch {}
+    // แถวอื่นของสาขา (ใบเสร็จ/ใบเรียกที่ไม่ออกไปอยู่แถวเครื่องนั้น) — ทิ้งของเก่าเกินวันด้วย เขียนเฉพาะแถวที่มีของต้องทิ้งจริง
+    // เขียนแบบมีเงื่อนไขจาก description ที่อ่านมา: แอป/รอบเร็วเขียนแทรก = ไม่เขียน รอบหน้าค่อยลองใหม่ (ไม่มีทางทับคำสั่ง) · แถวยาว (มีรูปใบค้าง) ข้าม
+    for (const p of ps) {
+      if (+p.id === +target.id || !p.description || p.description.length > HB_CAS_MAX) continue;
+      let o; try { o = JSON.parse(p.description); } catch { continue; }
+      if (!o || typeof o !== "object" || Array.isArray(o) || !Array.isArray(o.failed)) continue;
+      const kept = o.failed.filter(f => failKept(f, now));
+      if (kept.length === o.failed.length) continue;
+      try { await patchPrinterIf(p.id, p.description, { description: JSON.stringify({ ...o, failed: kept }) }); } catch {}
+    }
   } catch {} finally { hbBusy = false; }
 }
 
@@ -1212,6 +1259,8 @@ let tickBusy = false;
 let kickBusy = false;
 // รอบปุ่มเรียกพนักงาน (handleStaffCalls) — กำลังพิมพ์อยู่ห้ามรีสตาร์ทอัปเดต ไม่งั้นแถวค้าง printing ใบไม่ออก ลูกค้ารอเก้อ
 let callBusy = false;
+// ตัวนับรอบที่ข้ามในโหมดพัก (shopIdle) — รอบเร็วทำ 1 ใน 4 (3.2 วิ) · ใบเรียกพนักงานทำ 1 ใน 5 (10 วิ)
+let kickN = 0, callN = 0;
 function exitIfIdle() {
   if (!updatePending || tickBusy || kickBusy || callBusy) return false;
   saveState();
@@ -1259,6 +1308,7 @@ const tickSafe = async () => {
   setInterval(async () => {
     if (kickBusy) return;
     if (updatePending) { exitIfIdle(); return; }   // รออัปเดต — ไม่เริ่มรอบใหม่
+    if (shopIdle() && (++kickN % 4)) return;   // โหมดพัก (ไม่มีบิลเปิด 30 นาที): ถามทุก 3.2 วิ — ตอนจ่ายเงินมีบิลเปิดเสมอ ลิ้นชัก/ใบเสร็จจึงเร็วเท่าเดิม
     kickBusy = true;
     try {
       // งานที่ "คนยืนรออยู่หน้าเครื่อง": เปิดลิ้นชัก · ใบเสร็จ/รูป (pj) · พิมพ์ซ้ำ/ใบยกเลิก/ย้ายโต๊ะ (rp) · QR โต๊ะ
@@ -1267,6 +1317,7 @@ const tickSafe = async () => {
       const rows = (await getCmdRows())
         .filter((p) => p.branch_id == null || +p.branch_id === +BRANCH);
       if (rows.length) {
+        markBusy();   // มีคำสั่งจากแอป = มีคนใช้งานอยู่ → ออกจากโหมดพัก
         await handleDrawerRequests(rows);
         await handlePJRequests(rows);
         await handleQRRequests(rows);
@@ -1278,6 +1329,7 @@ const tickSafe = async () => {
   // ปุ่มเรียกพนักงานในหน้าลูกค้า — รอบของตัวเอง (ไม่รอรอบใบครัวที่อาจช้าเพราะเรนเดอร์หลายใบ) · มีตัวกันซ้อนรอบในตัว
   setInterval(() => {
     if (updatePending) { exitIfIdle(); return; }   // รออัปเดต — ไม่เริ่มรอบใหม่
+    if (shopIdle() && (++callN % 5)) return;   // โหมดพัก: ถามทุก 10 วิ (ยังอยู่ในเวลารอ 30 วิของหน้าลูกค้า และอายุใบ 90 วิ)
     handleStaffCalls().catch(() => {}).finally(() => exitIfIdle());
   }, CALL_POLL_MS);
   // พิมพ์หน้าทดสอบให้เครื่องที่ "เพิ่งกดเพิ่มใช้งาน" อัตโนมัติ ทุก 30 วินาที
@@ -1292,7 +1344,7 @@ const tickSafe = async () => {
   await heartbeat();                           // บอกแอปว่า agent ยังมีชีวิต (ครั้งแรกทันที)
   setInterval(heartbeat, 45 * 1000);          // แล้วเต้นทุก 45 วิ → แอปเตือนถ้า agent/PC ดับ
   // สแกนหาเครื่องพิมพ์ใหม่ในวง LAN ทุก 2 นาที (เครื่องที่เสียบเพิ่มทีหลังจะถูกเพิ่มเองอัตโนมัติ — เร็วพอให้ปุ่ม "ค้นหาเครื่องพิมพ์" ในแอปเห็นผลไว)
-  setInterval(async () => { try { const ps = (await getPrinters()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {} }, 2 * 60 * 1000);
+  setInterval(async () => { try { const ps = (await getPrinterIps()).filter(p => p.branch_id == null || +p.branch_id === +BRANCH); await discoverPrinters(ps); } catch {} }, 2 * 60 * 1000);
   // เช็คเวอร์ชันใหม่ทุก 5 นาที → อัปเดตเองโดยไม่ต้องแตะ Termux (เช็คตอนเริ่มด้วย)
   checkUpdate();
   setInterval(checkUpdate, 5 * 60 * 1000);

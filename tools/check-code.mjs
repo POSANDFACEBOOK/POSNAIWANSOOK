@@ -288,6 +288,13 @@ const ck = (label, got, want) => {
   if (!ok) console.log(`       ได้ ${JSON.stringify(got)} · ต้องได้ ${JSON.stringify(want)}`);
 };
 const ok_ = (label, cond) => ck(label, !!cond, true);
+// 24 ต.ค. 69 (ลด egress): แอปอ่านเครื่องพิมพ์ผ่าน getBranchPrinters (ฐานกรองสาขาให้) / getPrintersByIds (เฉพาะแถวที่จะเขียน)
+// ฐานปลอมของด่านเดิมมีแค่ getAllPrinters (คืนทุกสาขา) — เติมสองตัวนี้ให้อ่านจากแหล่งเดียวกัน (นับรอบอ่าน/โยน error ตามเดิม)
+// getBranchPrinters ปลอมยังคืน "ทุกสาขา" โดยตั้งใจ: ด่านเดิมจึงยังพิสูจน์ว่าจอกรองสาขาซ้ำเองด้วย · ด่าน URL จริงของฐานอยู่ในหมวด "ลด egress จอขาย"
+const withPrinterReads = (api) => Object.assign(api, {
+  getBranchPrinters: api.getBranchPrinters || (() => api.getAllPrinters()),
+  getPrintersByIds: api.getPrintersByIds || ((ids) => Promise.resolve(api.getAllPrinters()).then((l) => Array.isArray(l) ? l.filter((p) => (ids || []).map(Number).includes(+(p && p.id))) : l)),
+});
 
 // ดึงฟังก์ชันจริงออกจากไฟล์ (นับวงเล็บปีกกา)
 const grab = (src, name) => {
@@ -554,10 +561,14 @@ const guards = [
   ["โหมดระบุยอดกันใส่เกินยอดบิล", APP.includes("Math.max(0,Math.min(total,+String(splitAmt)")],
   ["แบ่งจ่ายไม่ปิดบิล (ปิดบิลยังทำที่เช็คบิลที่เดียว)", APP.includes('payment_method:"split"') && !APP.includes('setSplitDone(p=>({...p,[key]:true}));await saveOrder')],
   // ── หน้าขายกับหลังบ้านต้องเห็นข้อมูลชุดเดียวกัน ──
+  // 24 ต.ค. 69 ลด egress: ตั้งค่าถามเวลาแก้ก่อน (refreshPosSettings) · เมนูใช้นาฬิกาจริง ≥5 นาที (heavyIfStale) · ปลุกจอ = รอบเดียวกัน
+  //   ด่านรันตัวจริงของจังหวะนี้อยู่ในหมวด "ลด egress จอขาย" ท้ายไฟล์
   ["หน้าขายดึงตั้งค่าใหม่เป็นระยะ (ไม่ใช่โหลดครั้งเดียว)",
-    APP.includes("const light=()=>{loadPosSettings();loadPromotions();loadZones();")],
-  ["หน้าขายดึงเมนูใหม่ด้วย (ราคาต้องตรงกับหลังบ้าน)", APP.includes("if(++n%5===0)heavy();")],
-  ["สลับแท็บกลับมาแล้วดึงทันที", APP.includes('const onVis=()=>{if(!document.hidden){light();heavy();}};')],
+    APP.includes("const light=()=>{if(sale){refreshPosSettings();loadPromotions();")],
+  ["หน้าขายดึงเมนูใหม่ด้วย (ราคาต้องตรงกับหลังบ้าน)",
+    APP.includes("const heavyIfStale=()=>{if(Date.now()-posMenusAt<POS_MENUS_MS)return;posMenusAt=Date.now();try{reloadMenus&&reloadMenus();}catch{}};") && APP.includes("const tick=()=>{light();heavyIfStale();};")],
+  ["สลับแท็บกลับมาแล้วดึงทันที",
+    APP.includes("    const tick=()=>{light();heavyIfStale();};\n    tick();\n    const t=setInterval(()=>{if(!document.hidden)tick();},60000);\n    const onVis=()=>{if(!document.hidden)tick();};\n    document.addEventListener(\"visibilitychange\",onVis);")],
   ["ตัวจับเวลาถูกเคลียร์ตอนออกจากหน้า", APP.includes("return()=>{clearInterval(t);document.removeEventListener(\"visibilitychange\",onVis);};")],
   ["ปุ่มรีเฟรชดึงตั้งค่า+เมนูด้วย ไม่ใช่แค่ออเดอร์",
     APP.includes("if(refreshTick){loadAll();try{reloadMenus&&reloadMenus();}catch{}try{reloadPosSettings&&reloadPosSettings();}catch{}}")],
@@ -939,7 +950,7 @@ const guards = [
   ["จอเมนูทั้งหมดเรียงตามลำดับที่จัดไว้", APP.includes("catSorter(catOrder)(a[0],b[0])")],
   // เขียนทั้งแถวจะทับ VAT/ค่าบริการ/QR ที่เครื่องอื่นเพิ่งแก้ — เงินผิดเงียบ
   ["บันทึกลำดับแตะเฉพาะคอลัมน์ลำดับ ไม่ทับค่าอื่น",
-    APP.includes('{method:"PATCH", body:JSON.stringify({category_order:order})}')],
+    APP.includes('{method:"PATCH", body:JSON.stringify({category_order:order,updated_at:new Date().toISOString()})}')],   // 24 ต.ค. 69: + updated_at (จอขายเครื่องอื่นถามเวลาแก้ก่อนดึงทั้งแถว) — ยังไม่มี VAT/QR ติดไป
   // ปัดเลื่อนแถบหมวดต้องยังทำได้ ไม่งั้นหมวดที่อยู่ท้ายๆ เข้าไม่ถึง
   ["ต้องกดค้างก่อนถึงจะลาก ไม่ใช่แตะแล้วลากทันที", APP.includes("const HOLD_MS=350;") && APP.includes("holdRef.current=setTimeout(")],
   ["ขยับก่อนครบเวลา = ตั้งใจปัดเลื่อน ต้องยกเลิกการลาก", APP.includes("if(Math.abs(ev.clientX-sx)>8||Math.abs(ev.clientY-sy)>8)clear();")],
@@ -1045,7 +1056,7 @@ section("ลำดับเมนูที่ร้านจัดเอง");
     sortWith({ menu_order: [999, 3] }, M), ["หมูกระทะ", "เซตหมู", "ข้าวไข่เจียว", "ข้าวผัด"]);
 
   ok_("บันทึกลำดับเมนูแตะเฉพาะคอลัมน์ลำดับ ไม่ทับ VAT/QR",
-    APP.includes('{method:"PATCH", body:JSON.stringify({menu_order:order})}'));
+    APP.includes('{method:"PATCH", body:JSON.stringify({menu_order:order,updated_at:new Date().toISOString()})}'));   // 24 ต.ค. 69: + updated_at เท่านั้น
   ok_("ทั้งสามจออ่านตัวเรียงตัวเดียวกัน", APP.split("menuSorter(").length - 1 >= 4);
 }
 
@@ -2890,8 +2901,9 @@ section("ปิดโต๊ะ = QR ใหม่");
     ok_("พิมพ์ QR อ่านรหัสล่าสุดจากฐานก่อนประกอบลิงก์", ps > 0 && fresh > ps && build > fresh);
   }
   // หน้าลูกค้า: QR หมดอายุแล้วต้องหยุดทุกทาง
+  // 24 ต.ค. 69: เช็ค QR ระหว่างมื้อใช้ scanTableOk (ตัวกรองเดียวกัน ขอแค่ id) · ล้างบิลผ่าน putMyOrder (ตั้ง ref ของบิลบนจอพร้อมกัน) — ตัวรันจริงอยู่หมวด "ลด egress หน้าลูกค้าสแกน"
   ok_("หน้าลูกค้าที่ QR หมดอายุ ห้ามเห็นบิลของลูกค้าคนใหม่",
-    APP.includes('if(token){const ok=await api.scanTable(branchId,tableId,token);if(Array.isArray(ok)&&ok.length===0){setMyOrder(null);setGateError("bad_token");return;}}'));
+    APP.includes('if(token){const ok=await api.scanTableOk(branchId,tableId,token);if(Array.isArray(ok)&&ok.length===0){putMyOrder(null);setGateError("bad_token");return;}}'));
   ok_("คิวออฟไลน์เช็ค QR ก่อนส่ง และทิ้งของค้างถ้าหมดอายุ",
     APP.includes('if(Array.isArray(ok)&&ok.length===0){writeOutbox(null);setOutbox(null);setGateError("bad_token");flushingRef.current=false;setOutboxBusy(false);return;}}'));
   ok_("QR หมดอายุบนมือถือลูกค้าไม่ใช้กล่องเตือนที่บล็อกเธรด", !APP.includes('alert("QR ของโต๊ะนี้ถูกอัพเดทใหม่'));
@@ -3168,7 +3180,7 @@ section("ปุ่มพิมพ์ไม่สำเร็จ");
   ok_("ปุ่มขึ้นข้างปุ่มรายงาน เฉพาะตอนมีรายการค้าง",
     APP.includes("{failCount>0&&<Btn v=\"danger\" onClick={()=>setShowPrintFails(true)} icon={I.print} s={TB}>พิมพ์ไม่สำเร็จ ({failCount})</Btn>}\n        {failCount===0&&failSplit.old>0&&<Btn v=\"ghost\" onClick={()=>setShowPrintFails(true)} icon={I.print} s={TB}>ใบค้างเก่า ({failSplit.old})</Btn>}\n        <Btn v=\"ghost\" onClick={()=>setShowOrders(true)}"));
   ok_("ถามเฉพาะเครื่องที่มีรายการค้าง (ปกติได้แถวว่าง ไม่เปลืองเน็ต)", APP.includes("description=like.*%22failed%22:%5B%7B*"));
-  ok_("รีปริ้นอ่านของล่าสุดก่อนเขียน", APP.includes("async function editPrintFail(holderId,fn){\n  const all=await api.getAllPrinters();"));
+  ok_("รีปริ้นอ่านของล่าสุดก่อนเขียน", APP.includes("async function editPrintFail(holderId,fn){\n  const all=await api.getPrintersByIds([holderId]);"));   // 24 ต.ค. 69: อ่านเฉพาะแถวที่จะเขียน — ยังอ่านสดก่อนเขียนทุกครั้ง
   ok_("ในจอมีรีปริ้นท้ายชื่อเมนู + ปุ่มเอาออกเมื่อไม่ต้องพิมพ์แล้ว", APP.includes("onClick={()=>retry(f,[it.k])}") && APP.includes("onClick={()=>dismiss(f)}"));
 }
 
@@ -3419,7 +3431,7 @@ section("เปิดลิ้นชักเก็บเงิน");
   // ── รอบหลัก: ถามบิลถี่ขึ้น แต่ของหนักต้องไม่ถูกดึงถี่ตาม ──
   ok_("รอบหลักไม่เกิน 2 วินาที", /const POLL_MS = (\d+);/.test(AGENT) && +AGENT.match(/const POLL_MS = (\d+);/)[1] <= 2000);
   ok_("รายชื่อเครื่องพิมพ์ (ก้อนใหญ่) ถูกใช้ซ้ำ ไม่ดึงใหม่ทุกรอบ",
-    AGENT.includes("async function getPrintersCached() {") && AGENT.includes("getActiveOrderHeads(), getPrintersCached()"));
+    AGENT.includes("async function getPrintersCached(peek) {") && AGENT.includes("getActiveOrderHeads(), getPrintersCached()"));   // 24 ต.ค. 69: peek = ผู้อ่านที่ไม่ใช่ tick ห้ามเขียนแคช (ด่านรันจริงอยู่ใน check-agent-poll)
   ok_("ตัวเรนเดอร์ใบครัวถูกอุ่นไว้ และเซิร์ฟเวอร์รับคำขออุ่นแบบเบา",
     AGENT.includes("setInterval(warmSlip, 4 * 60 * 1000);") && SLIP.includes('if (req.method === "GET") {') && SLIP.includes("warm: true"));
   ok_("ออเดอร์ใบใหญ่เรนเดอร์พร้อมกันได้มากขึ้น", AGENT.includes("return mapLimit(items || [], 10, async it => {"));
@@ -4848,7 +4860,7 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
     const writes = [];
     const appPConn = new Function(grab(APP, "getPConn") + "\nreturn getPConn;")();   // ของจริง — แยกเครื่องบลูทูธออกจากเครื่องที่ส่งผ่านแลนได้
     const fn = new Function("api", "getPConn", "cmdDesc", "printerHandles", APP_KITCHEN + "\nasync " + grab(APP, "agentPrintItems") + "\nreturn agentPrintItems;")(
-      { getAllPrinters: async () => ALLP, updatePrinter: async (id, body) => { writes.push({ id, body }); } },
+      withPrinterReads({ getAllPrinters: async () => ALLP, updatePrinter: async (id, body) => { writes.push({ id, body }); } }),
       appPConn, (p, k, v) => JSON.stringify({ [k]: v }), appHandles);
     const run = async (pin) => { writes.length = 0; const r = await fn([{ qty: 1, name: "ชาบูเล็ก", printer_id: pin, category: "ชาบู" }], "A1", 8, { kind: "reprint" }, false); return { to: writes.map(w => w.id), noPrinter: r.noPrinter }; };
     ck("#2 แอปสั่งพิมพ์ซ้ำที่ River: ชาบูที่ปักหมุดสาขาอื่น ไปเครื่องเซตหมู (ไม่หายเงียบ)", await run(8), { to: [11], noPrinter: 0 });
@@ -4916,12 +4928,15 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
       f.id === "a1b2c3d4e5f6" && f.io.file === "a1b2c3d4e5f6 4242" && g.id === "a1b2c3d4e5f6" && g.io.wrote.length === 0);
     ok_("#16 ไฟล์รหัสแยกจากไฟล์ความจำ (ลบความจำตอนสลับเครื่องแล้วรหัสไม่หาย) อยู่โฟลเดอร์เดียวกัน",
       AGENT.includes('const DEV_FILE = path.join(process.env.HOME || ".", ".foodcost-agent-id");') && AGENT.includes('const STATE_FILE = path.join(process.env.HOME || ".", ".foodcost-printed.json");'));
+    // v51: สัญญาณชีพอ่านรายชื่อเครื่องจากแคชร่วม (getPrintersCached) + ทิ้งรายการไม่ออกเก่าเกินวันด้วยตัวตัดสินตัวจริง (failKept)
+    const fkSrc = AGENT.indexOf("const PJ_FAIL_KEEP_MS") < 0 ? "" : AGENT.slice(AGENT.indexOf("const PJ_FAIL_KEEP_MS"), AGENT.indexOf("async function pushFail("));
+    const failKeptOf = (skew) => { try { return new Function("callSkew", fkSrc + "\nreturn failKept;")(skew); } catch { return null; } };
     const runHb = async (stored) => {
       const out = { patched: null, logs: [] };
-      const fn = new Function("getPrinters", "BRANCH", "isBluetooth", "sb", "patchPrinter", "patchPrinterIf", "AGENT_VERSION", "AGENT_DEV", "console", "let hbBusy = false;\nconst HB_CAS_MAX = 6000;\nlet hbSkips = 0;\nasync " + grab(AGENT, "heartbeat") + "\nreturn heartbeat;")(
+      const fn = new Function("getPrintersCached", "BRANCH", "isBluetooth", "sb", "patchPrinter", "patchPrinterIf", "AGENT_VERSION", "AGENT_DEV", "console", "failKept", "let hbBusy = false;\nconst HB_CAS_MAX = 6000;\nlet hbSkips = 0;\nasync " + grab(AGENT, "heartbeat") + "\nreturn heartbeat;")(
         async () => [{ id: 11, branch_id: 8, ip: "x", active: true, description: "{}" }, { id: 10, branch_id: 8, ip: "y", active: true, description: "{}" }], "8", () => false,
         async () => [{ description: JSON.stringify(stored) }], async (id, body) => { out.patched = { id, d: JSON.parse(body.description), cas: null }; },
-        async (id, raw, body) => { out.patched = { id, d: JSON.parse(body.description), cas: raw }; }, 47, "a1b2c3d4e5f6", { log: (...x) => out.logs.push(x.join(" ")) });
+        async (id, raw, body) => { out.patched = { id, d: JSON.parse(body.description), cas: raw }; }, 47, "a1b2c3d4e5f6", { log: (...x) => out.logs.push(x.join(" ")) }, failKeptOf());
       await fn();
       return out;
     };
@@ -4938,15 +4953,69 @@ section("POS สาขาที่ 2: ตัวพิมพ์");
       !!h1.patched && h1.patched.cas === JSON.stringify({ rcpt: 1, failed: [{ id: "F" }], agentSeen: 1, agentVer: 46 }));
     const runHb2 = async (sbImpl, times) => {
       const writes = [];
-      const fn = new Function("getPrinters", "BRANCH", "isBluetooth", "sb", "patchPrinter", "patchPrinterIf", "AGENT_VERSION", "AGENT_DEV", "console", "let hbBusy = false;\nconst HB_CAS_MAX = 6000;\nlet hbSkips = 0;\nasync " + grab(AGENT, "heartbeat") + "\nreturn heartbeat;")(
+      const fn = new Function("getPrintersCached", "BRANCH", "isBluetooth", "sb", "patchPrinter", "patchPrinterIf", "AGENT_VERSION", "AGENT_DEV", "console", "failKept", "let hbBusy = false;\nconst HB_CAS_MAX = 6000;\nlet hbSkips = 0;\nasync " + grab(AGENT, "heartbeat") + "\nreturn heartbeat;")(
         async () => [{ id: 10, branch_id: 8, ip: "y", active: true, description: JSON.stringify({ stale: 1 }) }], "8", () => false, sbImpl,
-        async () => { writes.push("plain"); }, async () => { writes.push("cas"); }, 50, "a1b2c3d4e5f6", { log() {} });
+        async () => { writes.push("plain"); }, async () => { writes.push("cas"); }, 50, "a1b2c3d4e5f6", { log() {} }, failKeptOf());
       for (let i = 0; i < (times || 1); i++) await fn();
       return writes;
     };
     ck("#16 v50 อ่านแถวสดไม่ได้ = ข้ามรอบ (ไม่เขียนจากแคช) · แถวมีรูปใบค้าง (ยาว) = ข้าม 2 รอบแล้วเขียนแบบเดิม (ไม่ขึ้นตัวพิมพ์ไม่ตอบหลอก)",
       [await runHb2(async () => { throw new Error("504"); }), await runHb2(async () => [{ description: JSON.stringify({ pj: { at: 1, b64: "Q".repeat(7000) } }) }], 3)],
       [[], ["plain"]]);
+
+    // ── v51 (24 ต.ค. 69 · ฐานข้อมูลแผนฟรีล่ม): สัญญาณชีพทิ้งรายการพิมพ์ไม่ออกที่เก่าเกินวัน — แถว River ค้าง 42 รายการ ~23 KB ถูกอ่านทั้งก้อนทุกไม่กี่วิ ──
+    ok_("#16 v51 สัญญาณชีพใช้แคชรายชื่อเครื่องร่วม (ไม่ดึงทั้งก้อนเองทุก 45 วิ) แต่ยังอ่านแถวเป้าหมายสดก่อนเขียน",
+      grab(AGENT, "heartbeat").includes("await getPrintersCached(true)") && !grab(AGENT, "heartbeat").includes("getPrinters()") && grab(AGENT, "heartbeat").includes("sb(`printers?id=eq.${target.id}&select=description`)"));
+    const fk0 = failKeptOf(), H = 3600e3, NOW = Date.now();
+    ok_("#16 v51 มีตัวตัดสิน failKept ตัวจริง", typeof fk0 === "function");
+    if (typeof fk0 === "function") {
+      // ร้านจำลอง: แถวเป้าหมาย (#10 เลขน้อยสุด) + แถวเครื่องใบเสร็จ (#12) — ฐานปลอมเก็บ description จริง เขียนแบบมีเงื่อนไขทำงานเหมือน PostgREST
+      const runHbDb = async (db, list, beats, appWrite) => {
+        const io = { writes: [] };
+        const fn = new Function("getPrintersCached", "BRANCH", "isBluetooth", "sb", "patchPrinter", "patchPrinterIf", "AGENT_VERSION", "AGENT_DEV", "console", "failKept", "let hbBusy = false;\nconst HB_CAS_MAX = 6000;\nlet hbSkips = 0;\nasync " + grab(AGENT, "heartbeat") + "\nreturn heartbeat;")(
+          async () => list(), "8", () => false,
+          async (q) => { const id = +(/id=eq\.(\d+)/.exec(q) || [])[1]; return db[id] == null ? [] : [{ description: db[id] }]; },
+          async (id, body) => { io.writes.push({ id, kind: "plain" }); db[id] = body.description; return { ok: true }; },
+          async (id, raw, body) => { if (appWrite) appWrite(db); const hit = db[id] === raw; io.writes.push({ id, kind: "cas", hit }); if (hit) db[id] = body.description; return { ok: true }; },
+          51, "a1b2c3d4e5f6", { log() {} }, fk0);
+        for (let i = 0; i < (beats || 1); i++) await fn();
+        return io;
+      };
+      const K = (id, ageH, extra) => ({ id, at: NOW - ageH * H, orderId: 600, table: "A1", kind: "", names: ["ข้าวผัด"], items: [{ k: 0, name: "ข้าวผัด", qty: 1 }], ...(extra || {}) });
+      const row10 = { rcpt: 0, on: 1, dw: 1, failed: [K("k25", 25), K("k23", 23), K("k11", 11), K("pj25", 25, { kind: "pj" }), K("pj1", 1, { kind: "pj" }), { id: "legacy" }] };
+      const row12 = { rcpt: 1, on: 1, failed: [K("r30", 30, { kind: "pj" }), K("r2", 2, { kind: "pj" })] };
+      const db = { 10: JSON.stringify(row10), 12: JSON.stringify(row12) };
+      const listOf = () => [{ id: 12, branch_id: 8, ip: "a", active: true, description: db[12] }, { id: 10, branch_id: 8, ip: "b", active: true, description: db[10] }];
+      const io = await runHbDb(db, listOf);
+      const d10 = JSON.parse(db[10]), d12 = JSON.parse(db[12]);
+      ck("#16 v51 แถวเป้าหมาย: ใบครัวเก่า 25 ชม. ทิ้ง · 23 ชม./11 ชม. เก็บ · ใบเสร็จ (pj) ตามกติกาเดิม 24 ชม. · รายการไม่มีเวลา (รุ่นเก่า) เก็บ · ค่าตั้งเครื่องอยู่ครบ",
+        { ids: d10.failed.map(f => f.id).join(), rcpt: d10.rcpt, dw: d10.dw, on: d10.on, seen: d10.agentSeen > 0, first: io.writes[0] && io.writes[0].kind + ":" + io.writes[0].id },
+        { ids: "k23,k11,pj1,legacy", rcpt: 0, dw: 1, on: 1, seen: true, first: "cas:10" });
+      ck("#16 v51 แถวอื่นของสาขา (ใบเสร็จไม่ออก) ทิ้งของเก่าเกินวันด้วย แบบมีเงื่อนไขจาก description ที่อ่านมา · ค่าอื่นอยู่ครบ",
+        { ids: d12.failed.map(f => f.id).join(), rcpt: d12.rcpt, w: io.writes.filter(w => w.id === 12).map(w => w.kind + (w.hit ? "+" : "-")).join() },
+        { ids: "r2", rcpt: 1, w: "cas+" });
+      const io2 = await runHbDb(db, listOf);
+      ck("#16 v51 ไม่มีอะไรต้องทิ้งแล้ว → แถวอื่นไม่ถูกเขียนเลย (เขียนแค่สัญญาณชีพของแถวเป้าหมาย)", io2.writes.map(w => w.kind + ":" + w.id).join(), "cas:10");
+      // แอปเขียนคำสั่งใบเสร็จลงแถว #12 แทรกระหว่างที่ตัวพิมพ์อ่านแคชกับตอนเขียน → เงื่อนไขไม่ตรง ไม่เขียน คำสั่งไม่หาย
+      const db3 = { 10: "{}", 12: JSON.stringify(row12) };
+      const stale12 = db3[12];
+      const io3 = await runHbDb(db3, () => [{ id: 10, branch_id: 8, ip: "b", active: true, description: "{}" }, { id: 12, branch_id: 8, ip: "a", active: true, description: stale12 }], 1,
+        (d) => { if (d[12] === stale12) d[12] = JSON.stringify({ ...JSON.parse(stale12), pj: { at: 7, b64: "QQ==", what: "ใบเสร็จ" } }); });
+      const d3 = JSON.parse(db3[12]);
+      ok_("#16 v51 แอปเขียนคำสั่งแทรก → ตัดของเก่าแถวอื่นไม่เขียนทับ (คำสั่งใบเสร็จอยู่ครบ รอบหน้าค่อยตัด)",
+        io3.writes.some(w => w.id === 12 && w.kind === "cas" && !w.hit) && d3.pj && d3.pj.at === 7 && d3.failed.length === 2);
+      // แถวยาวเพราะรายการไม่ออกค้าง (River จริง): ข้าม 2 รอบ เขียนแบบเดิมหนึ่งครั้ง (ตัดแล้ว) → แถวสั้น → กลับมาเขียนแบบมีเงื่อนไขทุกรอบ
+      const big = { on: 1, failed: Array.from({ length: 40 }, (_, i) => K("old" + i, 30 + i, { names: ["ข้าวผัดกระเพราหมูสับไข่ดาว".repeat(3)] })).concat([K("fresh", 1)]) };
+      const db4 = { 10: JSON.stringify(big) };
+      const io4 = await runHbDb(db4, () => [{ id: 10, branch_id: 8, ip: "b", active: true, description: db4[10] }], 5);
+      ck("#16 v51 แถวยาวเพราะรายการค้าง → รอบที่ 3 เขียน (ตัดแล้ว) แถวสั้นลง → รอบถัดไปเขียนแบบมีเงื่อนไขทุกรอบ ไม่ขาดสัญญาณชีพ",
+        { long0: JSON.stringify(big).length > 6000, w: io4.writes.map(w => w.kind).join(), left: JSON.parse(db4[10]).failed.map(f => f.id).join(), short: db4[10].length < 6000 },
+        { long0: true, w: "plain,cas,cas", left: "fresh", short: true });
+      // นาฬิกา: นับอายุด้วยเวลาที่ "ช้ากว่า" ระหว่างมือถือกับเซิร์ฟเวอร์ — นาฬิกามือถือกระโดดไปข้างหน้า 13 ชม. ต้องไม่ลบรายการที่จริงๆ เพิ่ง 12 ชม.
+      const e25 = { id: "x", at: NOW - 25 * H, kind: "" }, e12 = { id: "y", at: NOW - 12 * H, kind: "" };
+      ck("#16 v51 นาฬิกามือถือเร็วไป 13 ชม. (callSkew −13 ชม.) → รายการอายุจริง 12 ชม. ไม่ถูกลบ · มือถือช้า 13 ชม. → นับตามมือถือ (ตัวที่ประทับเวลา) ใบ 12 ชม. ไม่ถูกลบ ใบ 25 ชม. ลบ · ไม่มี callSkew = ตามมือถือ",
+        [failKeptOf(-13 * H)(e25, NOW), failKeptOf(13 * H)(e25, NOW), failKeptOf(13 * H)(e12, NOW), fk0(e25, NOW), fk0(null, NOW)], [true, false, true, false, true]);
+    }
   }
 
   // ── #27 เจอเวอร์ชันใหม่: ตั้งธงไว้ ออกหลังรอบพิมพ์จบ + บันทึกความจำแล้ว ──
@@ -5105,6 +5174,7 @@ section("POS สาขาที่ 2: จอเครื่องพิมพ์
       getAllPrinters: async () => (reads++ === 0 || !later ? printers : later),
       updatePrinter: async (id, d) => { const w = { id, d: JSON.parse(d.description) }; tries.push(w); if (fails[id] > 0) { fails[id]--; throw new Error("network"); } writes.push(w); },
     };
+    withPrinterReads(api);
     return { api, writes, tries, toasts, toast: (m, t) => toasts.push([m, t]) };
   };
   if (prbF) {
@@ -5284,12 +5354,18 @@ section("POS สาขาที่ 2: สิทธิ์และตั้งค
   if (patchFn) {
     sbRows = [{ branch_id: 5, sales_staff: [] }];
     await patchFn(5, { sales_staff: [{ name: "ก", pin: "1111" }], id: 9, branch_id: 77 });
-    ok_("แก้ PIN = PATCH แถวของสาขานั้น ส่งเฉพาะ sales_staff (ไม่มี VAT/พร้อมเพย์/id ติดไป)",
-      sbCalls.length === 1 && sbCalls[0].method === "PATCH" && sbCalls[0].path === "pos_settings?branch_id=eq.5" && JSON.stringify(Object.keys(sbCalls[0].body)) === '["sales_staff"]');
+    // 24 ต.ค. 69: ประทับ updated_at ด้วยทุกครั้ง (จอขายถามเวลาแก้ก่อนดึงทั้งแถว) — นอกนั้นต้องมีแค่คอลัมน์ของจอตัวเอง
+    ok_("แก้ PIN = PATCH แถวของสาขานั้น ส่งเฉพาะ sales_staff (+ เวลาแก้) (ไม่มี VAT/พร้อมเพย์/id ติดไป)",
+      sbCalls.length === 1 && sbCalls[0].method === "PATCH" && sbCalls[0].path === "pos_settings?branch_id=eq.5" && JSON.stringify(Object.keys(sbCalls[0].body)) === '["sales_staff","updated_at"]'
+      && !Number.isNaN(Date.parse(sbCalls[0].body.updated_at)));
     sbCalls.length = 0; sbRows = [];
     const ins = await patchFn(6, { option_library: [] });
     ok_("สาขาที่ยังไม่มีแถวตั้งค่า: สร้างใหม่ด้วยคอลัมน์ชุดเดียวกัน + branch_id",
-      sbCalls.length === 2 && sbCalls[1].method === "POST" && sbCalls[1].body.branch_id === 6 && JSON.stringify(Object.keys(sbCalls[1].body).sort()) === '["branch_id","option_library"]' && !!ins);
+      sbCalls.length === 2 && sbCalls[1].method === "POST" && sbCalls[1].body.branch_id === 6 && JSON.stringify(Object.keys(sbCalls[1].body).sort()) === '["branch_id","option_library","updated_at"]' && !!ins);
+    sbCalls.length = 0; sbRows = [{ branch_id: 5 }];
+    await patchFn(5, { vat_enabled: true, updated_at: "2026-10-24T01:02:03.000Z" });
+    ok_("ฟอร์ม VAT ส่งเวลาแก้มาเอง = ใช้ของผู้เรียก (ไม่ประทับทับ) · คอลัมน์เดิมทุกตัว",
+      sbCalls.length === 1 && JSON.stringify(sbCalls[0].body) === '{"vat_enabled":true,"updated_at":"2026-10-24T01:02:03.000Z"}');
   } else ok_("ดึง patchPOSSettings มารันได้", false);
   ok_("พนักงานขาย (PIN) และคลังตัวเลือก ส่งเฉพาะคอลัมน์ของตัวเอง",
     APP.includes("await api.patchPOSSettings(currentBranch.id,{sales_staff:next});") && APP.includes("await api.patchPOSSettings(currentBranch.id,{option_library:next});"));
@@ -7171,7 +7247,7 @@ section("แพ็คเกจบุฟเฟต์: ใบครัวไม่
   const mkSend = (prs) => {
     const writes = [];
     const fn = safe(() => new Function("api", "getPConn", "cmdDesc", "printerHandles", appKRun + "\nasync " + grab(APP, "agentPrintItems") + "\nreturn agentPrintItems;")(
-      { getAllPrinters: async () => prs, updatePrinter: async (id, body) => { writes.push({ id, rp: JSON.parse(body.description).rp }); } },
+      withPrinterReads({ getAllPrinters: async () => prs, updatePrinter: async (id, body) => { writes.push({ id, rp: JSON.parse(body.description).rp }); } }),
       getPConnApp, (p, k, v) => JSON.stringify({ [k]: v }), handlesApp));
     return { fn, writes };
   };
@@ -7429,8 +7505,8 @@ section("แพ็คเกจบุฟเฟต์: คลังแพ็คเ
     // ก. บันทึกปกติ
     let db = mkDB([P("pk_a", "หมู 299")]);
     let res = await trySave(db, (L) => OP(L, { type: "edit", id: "pk_a", name: "หมู 349", lines: NL, base: "t0", at: "t1", by: "m" }));
-    ok_("แก้ราคา = PATCH แถวของสาขานั้น ส่งเฉพาะ buffet_packages (VAT/PIN/คลังตัวเลือกไม่ถูกแตะ)",
-      res.ok === true && patches(db).length === 1 && same(Object.keys(patches(db)[0].body), ["buffet_packages"]) && /branch_id=eq\.5/.test(patches(db)[0].path)
+    ok_("แก้ราคา = PATCH แถวของสาขานั้น ส่งเฉพาะ buffet_packages + เวลาแก้ (VAT/PIN/คลังตัวเลือกไม่ถูกแตะ)",
+      res.ok === true && patches(db).length === 1 && same(Object.keys(patches(db)[0].body), ["buffet_packages", "updated_at"]) && !isNaN(Date.parse(patches(db)[0].body.updated_at)) && /branch_id=eq\.5/.test(patches(db)[0].path)
       && db.rows[0].vat_enabled === true && same(db.rows[0].sales_staff, [{ name: "เอ", pin: "1111" }]) && same(db.rows[0].option_library, [{ id: "g1" }]) && pk(db)[0].lines[0].price === 349);
     ok_("PATCH มีเงื่อนไข: ค่าในฐานต้องยังเท่ากับที่อ่านมา (buffet_packages=eq.<ทั้งก้อน>)", /&buffet_packages=eq\./.test(patches(db)[0].path));
     ok_("ผลบันทึกคืนคลังก่อน/หลัง (ใช้จดประวัติจากค่าจริงในฐาน)", !!res.before && res.before[0].lines[0].price === 299 && res.packages[0].lines[0].price === 349);
@@ -7913,7 +7989,7 @@ section("แพ็คเกจบุฟเฟต์: เปิดโต๊ะแ
     const runSlip = async (printers) => {
       const ups = [];
       const f = new Function("api", "escposSlipRaster", "cmdDesc", [grab(APP, "getPConn"), grab(APP, "isReceiptPrinter"), grab(APP, "getReceiptPrinters"), lineOf("let cashierSlipQ="), grabFn("async function printCashierSlip(lines,{branchId,printers=[],what,table}){"), grabFn("async function sendCashierSlip(lines,{branchId,printers=[],what,table}){"), "return printCashierSlip;"].join("\n"))(
-        { getAllPrinters: async () => printers, updatePrinter: async (id, d) => { ups.push([id, JSON.parse(d.description)]); return [{}]; } },
+        withPrinterReads({ getAllPrinters: async () => printers, updatePrinter: async (id, d) => { ups.push([id, JSON.parse(d.description)]); return [{}]; } }),
         async () => "B64", (p, k, v) => JSON.stringify({ [k]: v }));
       const r = await f([{ t: "x" }], { branchId: 5, printers: [], what: "เปิดโต๊ะ", table: "A1" });
       return [r.none, r.sent, ups.map((u) => [u[0], u[1].pj && u[1].pj.what, u[1].pj && u[1].pj.table])];
@@ -8057,7 +8133,7 @@ section("แพ็คเกจบุฟเฟต์: ต่อกันครบ
       },
       oldMsg: new Function(lineOf("const PKG_AGENT_OLD_MSG=") + "\nreturn PKG_AGENT_OLD_MSG;")(),
       appSend: (prs, writes) => new Function("api", "getPConn", "cmdDesc", "printerHandles", APP_KITCHEN + "\nasync " + grab(APP, "agentPrintItems") + "\nreturn agentPrintItems;")(
-        { getAllPrinters: async () => prs, updatePrinter: async (id, b) => { writes.push({ id, d: JSON.parse(b.description) }); } },
+        withPrinterReads({ getAllPrinters: async () => prs, updatePrinter: async (id, b) => { writes.push({ id, d: JSON.parse(b.description) }); } }),
         new Function(grab(APP, "getPConn") + "\nreturn getPConn;")(), (p, k, v) => JSON.stringify({ [k]: v }), new Function(grab(APP, "printerHandles") + "\nreturn printerHandles;")()),
       noPrinter: new Function([PA, APP_KITCHEN, grab(APP, "getPConn"), grab(APP, "printerHandles"), grab(APP, "itemsWithoutPrinter"), "return itemsWithoutPrinter;"].join("\n"))(),
     };
@@ -8106,6 +8182,7 @@ section("แพ็คเกจบุฟเฟต์: ต่อกันครบ
         getBuffetPackages: (bid) => K.read(W.sb)(bid),
         updatePrinter: async (id, b) => { const d = JSON.parse(b.description); out.cmds.push([id, Object.keys(d).filter((k) => ["tp", "rp", "qr", "pj", "dk"].includes(k))]); if (d.pj) out.pj.push([id, d.pj]); return [{}]; },
       };
+      withPrinterReads(fakeApi);
       const busyRef = { current: false };
       const open = K.openOf({
         api: fakeApi, printers: props, branch: { id: 5, name: "กาญจนบุรี" }, table: { id: 9, table_number: "A1" }, pkg, counts, guests: 3,
@@ -8364,6 +8441,7 @@ section("แพ็คเกจบุฟเฟต์: จอค้าง · ร�
         getBuffetPackages: async () => { if (readErr) throw new Error("network"); return { packages: fresh }; },
         posOpenTable: async (a) => { out.calls.push(a.pkg); return { row: { id: 900, items: [] } }; },
       };
+      withPrinterReads(api);
       const deps = {
         api, printers: [], branch: { id: 5 }, table: { id: 9, table_number: "A1" }, pkg: PKG, counts: { adult: 2 }, guests: 2,
         currentUser: { username: "ผึ้ง" }, busyRef, setBusy: () => {}, setAgentOld: () => {}, notifyDlg: (m) => out.notes.push(String(m)),
@@ -8401,6 +8479,7 @@ section("แพ็คเกจบุฟเฟต์: จอค้าง · ร�
         getAllPrinters: async () => { if (readFails) throw new Error("network"); return JSON.parse(JSON.stringify(PRS)); },
         updatePrinter: async (id, d) => { ups.push({ id, at: clock, pj: JSON.parse(d.description).pj }); PRS.find((p) => p.id === id).description = d.description; return [{}]; },
       };
+      withPrinterReads(api);
       const fakeDate = { now: () => clock };
       const fakeTimeout = (fn, ms) => { clock += Math.max(0, +ms || 0); Promise.resolve().then(fn); return 0; };
       const f = new Function("api", "escposSlipRaster", "cmdDesc", "Date", "setTimeout", [lineOf("function getPConn(p){"), lineOf("function isReceiptPrinter(p){"), grab(APP, "getReceiptPrinters"),
@@ -9011,7 +9090,7 @@ section("ใบเปิดโต๊ะ (QR + เวลาสั่งอาห�
     const f = new Function("api", "tableScanUrl", "btPrint", "buildTableQRB64", "posToast", "openPrintWindow", "addPrintClose", "location", "alert",
       [line("function getPConn(p){"), line("function isReceiptPrinter(p){"), fnOf("function getReceiptPrinters(printers){"), line("const CMD_KEYS="), line("const CMD_FRESH_MS="), fnOf("function cmdDesc(printer,key,val){"),
         line("const b64Bytes="), line("const catB64="), "async " + fnOf("function printTableQR(table,branch,printers=[],onPrinted,onUrl,opts={}){"), "return printTableQR;"].join("\n"))(
-      { getTableFresh: async () => [{ qr_token: "t" }], getAllPrinters: async () => prs, updatePrinter: async (id, d) => { ups.push([id, JSON.parse(d.description).pj]); return [{}]; }, markTableQRPrinted: async () => {} },
+      withPrinterReads({ getTableFresh: async () => [{ qr_token: "t" }], getAllPrinters: async () => prs, updatePrinter: async (id, d) => { ups.push([id, JSON.parse(d.description).pj]); return [{}]; }, markTableQRPrinted: async () => {} }),
       () => "https://x/scan", async () => { throw new Error("no bt"); }, async () => btoa("QR"), (m) => toasts.push(String(m)), () => null, () => {}, { protocol: "https:" }, (m) => toasts.push("ALERT " + m));
     const r = await f({ id: 9, table_number: "A1" }, { id: 5, name: "ก" }, [], null, null, opts);
     return [ups.map(([id, pj]) => [id, pj && atob(pj.b64), pj && pj.what, pj && pj.table]), !!(r && ups[0] && r.at === ups[0][1].at)];
@@ -9027,7 +9106,7 @@ section("ใบเปิดโต๊ะ (QR + เวลาสั่งอาห�
   const runQ = async () => {
     let clock = 1000000; const ups = [];
     const PRS = [{ id: 1, branch_id: 5, ip: "10.0.0.1", description: '{"rcpt":1}' }];
-    const api = { getAllPrinters: async () => JSON.parse(JSON.stringify(PRS)), updatePrinter: async (id, d) => { ups.push({ at: clock, what: JSON.parse(d.description).pj.what }); PRS[0].description = d.description; return [{}]; } };
+    const api = withPrinterReads({ getAllPrinters: async () => JSON.parse(JSON.stringify(PRS)), updatePrinter: async (id, d) => { ups.push({ at: clock, what: JSON.parse(d.description).pj.what }); PRS[0].description = d.description; return [{}]; } });
     const f = new Function("api", "escposSlipRaster", "cmdDesc", "Date", "setTimeout", [line("function getPConn(p){"), line("function isReceiptPrinter(p){"), fnOf("function getReceiptPrinters(printers){"),
       line("let cashierSlipQ="), "async " + fnOf("function printCashierSlip(lines,{branchId,printers=[],what,table}){"), "async " + fnOf("function sendCashierSlip(lines,{branchId,printers=[],what,table}){"),
       "async " + fnOf("function cashierSlotRun(fn){"), "return {printCashierSlip,cashierSlotRun};"].join("\n"))(
@@ -9261,7 +9340,7 @@ section("ตรวจคืนแรกสาขา 5: แก้บั๊กท�
     let cart = lines.slice(), outbox = "x"; const got = {};
     const names = ["cart", "sending", "readOutbox", "flushOutbox", "setSending", "api", "branchId", "tableId", "token", "table", "setGateError", "writeOutbox", "setCart", "setOutbox", "markSent", "setDone", "loadMyOrder", "setPayWaitMsg", "handleUnavailable", "handleRejected", "setTimeUpNow", "setTimeUpMsg", "console"];
     const err = Object.assign(new Error("x"), { [errKind]: true });
-    const vals = [cart, false, () => null, () => {}, () => {}, { scanTable: async () => [{ id: 9 }], posAppendItems: async () => { throw err; } }, 5, 9, "tk", { table_number: "A1" }, () => {},
+    const vals = [cart, false, () => null, () => {}, () => {}, { scanTableOk: async () => [{ id: 9 }], posAppendItems: async () => { throw err; } }, 5, 9, "tk", { table_number: "A1" }, () => {},
       (o) => { outbox = o; }, (u) => { cart = typeof u === "function" ? u(cart) : u; }, (o) => { outbox = o; }, () => {}, () => {}, () => {}, () => {},
       (e, l) => { got.unavailable = l; }, (e, l) => { got.rejected = l; }, () => {}, () => {}, { error: () => {} }];
     const f = new Function(...names, "return async " + fnOf(CP, "function placeOrder(){") + ";")(...vals);
@@ -9629,6 +9708,870 @@ section("ฐานข้อมูลหาย / ค่าบริการใ�
   ok_("แถบค่าบริการ: อ่านไฟล์บนเว็บเราเอง (ไม่พึ่งฐานข้อมูล) · ไม่ขึ้นหน้าลูกค้าสแกน · ปิดได้ถึงพรุ่งนี้ · เช็กซ้ำทุก 3 ชม.",
     APP.includes('const r=await fetch("/billing.json?ts="+Date.now(),{cache:"no-store"});') && APP.includes("/\\bcust-scan\\b/.test(document.documentElement.className||\"\")||document.getElementById(\"fc-dbgone-bar\")") &&
     APP.includes("x.onclick=()=>{try{localStorage.setItem(HIDE_KEY,todayTH());}catch{}bar.remove();};") && APP.includes("setInterval(check,3*3600e3);"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ลด egress จอขาย 24 ต.ค. 69 — Supabase ย้ายลงแผนฟรี (Nano) แล้วป่วย · เดิม egress ~10.1 GB/เดือน
+// ทุกข้อรันโค้ดจริงจากแอปกับฐานปลอม:
+//   ① จอ PIN ขอเมนูชุดเล็กเฉพาะสาขา (ไม่มีสูตร) · ล้ม = ถอยไปทั้งตาราง
+//   ② เครื่องพิมพ์: ฐานกรองสาขาให้ (แถวชุดเดียวกับ printersAt) · อ่านก่อนเขียนเฉพาะแถวที่จะเขียน · เลขเพี้ยน = ดึงทั้งหมดแบบเดิม
+//   ③ updatePrinter ไม่ขอแถวกลับ (รูปใบเสร็จ ~100-170 KB) และไม่มีจุดไหนเอาผลไปใช้
+//   ④ บิลเปิด / ตั้งค่า POS: ถามเวลาแก้ก่อน ดึงทั้งแถวเฉพาะเมื่อเปลี่ยน + รอบเต็มบังคับ (5 / 10 นาที)
+//   ⑤ จังหวะดึงของจอขาย: เฉพาะหน้าขายที่เปิดกะ/หลังบ้าน · เมนูนาฬิกาจริง 5 นาที (ปลุกจอถี่ไม่ดึงก้อนใหญ่ซ้ำ)
+// ══════════════════════════════════════════════════════════════════════════
+section("ลด egress จอขาย (24 ต.ค. 69)");
+{
+  const L = APP.split("\n");
+  const line = (head) => L.find((l) => l.startsWith(head)) || "";
+  const apiLine = (name) => { const l = L.find((x) => x.startsWith(`  ${name}: `)); return l ? l.trim().slice(name.length + 1).trim().replace(/,\s*$/, "") : null; };
+  const safe = (f) => { try { return f(); } catch (e) { return "ERR " + e.message; } };
+  const aSafe = async (f) => { try { return await f(); } catch (e) { return "ERR " + e.message; } };
+  const comp = (name) => { const s0 = APP.indexOf(`function ${name}(`); if (s0 < 0) return ""; const b0 = APP.indexOf("){", s0) + 1; let d = 0; for (let j = b0; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(s0, j + 1); } } return ""; };
+  const constOf = (name) => safe(() => new Function(line(`const ${name}=`) + `\nreturn ${name};`)());
+
+  // ── ① เมนูชุดเล็กของจอ PIN ──
+  const menuUrls = [];
+  const mPOS = safe(() => new Function("sbAll", line("const menuVisibleQS=") + "\nreturn (" + apiLine("getMenusPOS") + ");")(async (u) => { menuUrls.push(u); return []; }));
+  ok_("อ่าน api.getMenusPOS ตัวจริงได้", typeof mPOS === "function");
+  if (typeof mPOS === "function") {
+    await mPOS(5); await mPOS(undefined);
+    const sel = (u) => ((/select=([^&]*)/.exec(u || "") || [])[1] || "").split(",");
+    const pubSel = sel(apiLine("getMenusPublic"));
+    ck("จอ PIN ขอเมนู 9 คอลัมน์ที่จอขายอ่าน · ไม่มีสูตร (sop/ingredients) · เฉพาะเมนูที่สาขานี้เห็น · ไม่กรองราคา (แพ็คเกจบุฟเฟต์มีเมนู ฿0)",
+      [sel(menuUrls[0]).join(","), /sop|ingredients/.test(menuUrls[0]), menuUrls[0].includes("price="), menuUrls[0].includes("visible_branches.is.null") && menuUrls[0].includes("visible_branches.cs.%5B5%5D"), menuUrls[0].includes("order=id.asc")],
+      ["id,name,category,price,image,availability,printer_id,visible_branches,options_by_branch", false, false, true, true]);
+    ok_("ทุกคอลัมน์ของ getMenusPOS อยู่ใน getMenusPublic ที่รันจริงทุกวันอยู่แล้ว (ไม่มีทางได้ 400 เพราะคอลัมน์ไม่มี → จอ PIN ไม่ขึ้น)",
+      pubSel.length > 5 && sel(menuUrls[0]).every((c) => pubSel.includes(c)));
+    ok_("ไม่มีเลขสาขา = ไม่กรองสาขา (เหมือน getMenus เดิม)", !menuUrls[1].includes("or=("));
+  }
+  const runKm = async (fail) => {
+    const calls = []; let warns = 0;
+    const f = new Function("api", "console", line("const posKioskMenus=") + "\nreturn posKioskMenus;")(
+      { getMenusPOS: async (b) => { calls.push(["pos", b]); if (fail) throw new Error("400 column"); return [{ id: 1 }]; }, getMenus: async () => { calls.push(["all"]); return [{ id: 1, sop: [] }, { id: 2 }]; } },
+      { warn: () => { warns++; } });
+    const r = await f(5);
+    return { calls, warns, n: r.length };
+  };
+  ck("จอ PIN: ชุดเล็กได้ = ไม่ถามทั้งตาราง · ชุดเล็กล้ม = ถอยไป getMenus แบบเดิม (ไม่ขึ้น 'เปิดหน้าขายไม่ได้') และจดใน console",
+    [await aSafe(() => runKm(false)), await aSafe(() => runKm(true))],
+    [{ calls: [["pos", 5]], warns: 0, n: 1 }, { calls: [["pos", 5], ["all"]], warns: 1, n: 2 }]);
+  const GATE = comp("POSPinGate");
+  ok_("จอ PIN: โหลดแรก + ปุ่มรีเฟรช/เครื่องมือเมนู ใช้เมนูชุดเล็ก · เครื่องพิมพ์ฐานกรองสาขา · ไม่เหลือ getMenus/getAllPrinters ตรงๆ ในจอ",
+    GATE.includes("posKioskMenus(branchId),api.getBranchPrinters(branchId)]);") && GATE.includes("setMenus(ms||[]);posMenusAt=Date.now();")
+    && GATE.includes("reloadMenus={async()=>{try{setMenus(await posKioskMenus(branchId));posMenusAt=Date.now();}catch{}}}")
+    && GATE.includes("reloadPrinters={async()=>{try{setPrinters(printersAt(await api.getBranchPrinters(branchId),branchId));}catch{}}}")
+    && !GATE.includes("api.getMenus(") && !GATE.includes("api.getAllPrinters("));
+  ok_("แอปหลัก: แท็บ POS ยังใช้เมนูชุดเต็มของแอป (จอเมนู/SOP/สรุปต้นทุนต้องมีสูตร) — เปลี่ยนเฉพาะจอ PIN",
+    APP.includes("{tab===\"pos\"&&<POSTab menus={menus} reloadMenus={reload.menus} ") && APP.includes("menus:async()=>{const d=await api.getMenus();setMenus(d);},"));
+
+  // ── ② เครื่องพิมพ์กรองสาขาที่ฐาน ──
+  const runBP = async (bid) => {
+    const out = { sb: [], all: 0 };
+    const f = new Function("sb", "api", "return (" + apiLine("getBranchPrinters") + ");")(async (u) => { out.sb.push(u); return []; }, { getAllPrinters: async () => { out.all++; return []; } });
+    await f(bid);
+    return out;
+  };
+  const BP5 = { sb: ["printers?or=(branch_id.is.null,branch_id.eq.5)&order=id.asc"], all: 0 }, BPALL = { sb: [], all: 1 };
+  ck("getBranchPrinters: สาขา 5 / \"5\" = ฐานกรอง (เครื่องสาขานั้น + เครื่องทุกสาขา) · ไม่มีเลข/เลขเพี้ยน = ดึงทั้งหมดแบบเดิม (ไม่ส่ง NaN ให้ฐานจน 400 → ใบรีปริ้น/ยกเลิก/ย้ายโต๊ะไม่ออกเงียบ)",
+    [await aSafe(() => runBP(5)), await aSafe(() => runBP("5")), await aSafe(() => runBP(undefined)), await aSafe(() => runBP(null)), await aSafe(() => runBP("")), await aSafe(() => runBP(NaN)), await aSafe(() => runBP("abc"))],
+    [BP5, BP5, BPALL, BPALL, BPALL, BPALL, BPALL]);
+  {
+    const pa = constOf("printersAt");
+    const rows = [{ id: 1, branch_id: null }, { id: 2, branch_id: 5 }, { id: 3, branch_id: "5" }, { id: 4, branch_id: 8 }, { id: 5 }, { id: 6, branch_id: 55 }];
+    const u = ((await aSafe(() => runBP(5))).sb || [])[0] || "";
+    const m = /or=\(branch_id\.is\.null,branch_id\.eq\.(\d+)\)/.exec(u);
+    const server = m ? rows.filter((p) => p.branch_id == null || String(p.branch_id) === m[1]).map((p) => p.id) : null;
+    ck("แถวที่ฐานกรองให้ = แถวที่ printersAt กรองเอง (ชุดเดียวกันเป๊ะ — เส้นทางใบครัว/เช็กรุ่นตัวพิมพ์/แถบสุขภาพ ได้คำตอบเดิม)",
+      server, typeof pa === "function" ? pa(rows, 5).map((p) => p.id) : "ดึง printersAt ไม่ได้");
+  }
+  const runBI = async (ids) => {
+    const out = { sb: [], all: 0 };
+    const f = new Function("sb", "api", "return (" + apiLine("getPrintersByIds") + ");")(async (u) => { out.sb.push(u); return []; }, { getAllPrinters: async () => { out.all++; return []; } });
+    await f(ids);
+    return out;
+  };
+  ck("getPrintersByIds: เฉพาะเลขที่ใช้ได้ (ไม่ซ้ำ) · ไม่มีเลขที่ใช้ได้ = ดึงทั้งหมดแบบเดิม (ผู้เรียกหาไม่เจอเองเหมือนเดิม)",
+    [await aSafe(() => runBI([3, "4", 3, null, "x", 0])), await aSafe(() => runBI([])), await aSafe(() => runBI([NaN])), await aSafe(() => runBI(undefined))],
+    [{ sb: ["printers?id=in.(3,4)&order=id.asc"], all: 0 }, BPALL, BPALL, BPALL]);
+  ok_("ไม่เหลือจุดไหนดึงเครื่องพิมพ์ทั้งตารางตรงๆ — เหลือแค่ทางถอยใน getBranchPrinters / getPrintersByIds",
+    APP.split("api.getAllPrinters()").length - 1 === 2 && /\n {2}getBranchPrinters: [^\n]*: api\.getAllPrinters\(\),\n/.test(APP) && /\n {2}getPrintersByIds: [^\n]*:api\.getAllPrinters\(\); \},\n/.test(APP));
+  ok_("อ่านก่อนเขียนเครื่องที่รู้เลข (ลิ้นชักซ้ำ · แก้รายการไม่ออก · บันทึกตั้งค่าเครื่อง) อ่านเฉพาะแถวนั้น",
+    APP.includes("let fresh=[];try{const all=await api.getPrintersByIds(list.map(p=>p.id));if(Array.isArray(all))fresh=all;}catch{}")
+    && APP.includes("const all=await api.getPrintersByIds([holderId]);")
+    && APP.includes("let fresh=p;try{const all=await api.getPrintersByIds([p.id]);const f=(all||[]).find(x=>+x.id===+p.id);if(f)fresh=f;}catch{}"));
+  {
+    // ทุกจุดที่เคยกรองสาขาเอง ยังกรองซ้ำเองด้วย (ฐานปลอมในด่านเดิมคืนทุกสาขา — พิสูจน์ว่าจอไม่พึ่งฐานกรองอย่างเดียว)
+    const keep = (APP.match(/await api\.getBranchPrinters\([^)]*\);if\(Array\.isArray\(all\)\)prs=all\.filter\(p=>p\.branch_id==null\|\|\+p\.branch_id===/g) || []).length;
+    ok_(`จุดส่งพิมพ์ที่ใช้ getBranchPrinters ยังกรองสาขาซ้ำเองครบ (${keep} จุด: ลิ้นชัก · ใบครัวซ้ำ · ใบสั้น · QR · ปิดกะ · ใบเสร็จ · ใบยกเลิก)`, keep === 7);
+  }
+
+  // ── ③ updatePrinter ไม่ขอแถวกลับ ──
+  {
+    const calls = [];
+    const up = safe(() => new Function("sb", "return (" + apiLine("updatePrinter") + ");")((u, o) => { calls.push([u, o]); return Promise.resolve([]); }));
+    if (typeof up === "function") await up(7, { description: '{"pj":1}' });
+    ck("updatePrinter: PATCH เหมือนเดิมทุกไบต์ แต่ไม่ขอแถวกลับ (return=minimal) — เดิมฐานส่งรูปใบเสร็จ ~100-170 KB กลับมาทุกใบ",
+      calls.map(([u, o]) => [u, o.method, o.body, o.headers && o.headers.Prefer]), [["printers?id=eq.7", "PATCH", '{"description":"{\\"pj\\":1}"}', "return=minimal"]]);
+    // return=minimal ได้ [] กลับมา — จุดเรียกใหม่ที่เอาผลไปใช้ต้องไม่เกิด (ถ้าต้องใช้ ให้อ่านแถวเองแยก)
+    const sites = []; let i = -1;
+    while ((i = APP.indexOf("api.updatePrinter(", i + 1)) >= 0) {
+      const head = APP.slice(Math.max(0, i - 200), i);
+      const st = Math.max(head.lastIndexOf(";"), head.lastIndexOf("{"), head.lastIndexOf("}"), head.lastIndexOf("\n"));
+      const stmt = head.slice(st + 1);
+      const semi = APP.indexOf(";", i);
+      sites.push({ stmt, tail: APP.slice(i, semi < 0 ? i + 200 : semi) });
+    }
+    const bad = sites.filter((s) => /^\s*(?:const|let|var)\b|^\s*[\w.$[\]]+\s*=(?![=>])/.test(s.stmt) || /\.then\(/.test(s.tail));
+    ok_(`updatePrinter ทุกจุดเรียก (${sites.length}) ไม่เอาผลไปใช้ — ไม่มี x=(await) api.updatePrinter(…) · ไม่มี .then(ผล)`,
+      sites.length >= 20 && bad.length === 0 && !/=\s*await\s+Promise\.all\(ups\)/.test(APP));
+  }
+
+  // ── ④ บิลเปิด: ถามลายเซ็นก่อนดึงทั้งแถว ──
+  {
+    const u = (n) => safe(() => new Function("sb", "return (" + apiLine(n) + ");")((x) => x)(5));
+    const full = u("getActiveOrders"), stamps = u("getActiveOrderStamps");
+    ck("ลายเซ็นบิลเปิดถามชุดเดียวกับตัวดึงเต็ม (ตัวกรอง/เรียง/เพดาน 200 เดียวกัน) ต่างแค่ขอ id,updated_at",
+      [typeof stamps === "string" && stamps.replace("select=id,updated_at&", ""), typeof stamps === "string" && stamps.includes("select=id,updated_at&")], [full, true]);
+  }
+  const SIG = constOf("openBillsSig");
+  if (typeof SIG === "function") {
+    const A = [{ id: 2, updated_at: "t2", items: [1] }, { id: 1, updated_at: "t1" }];
+    ck("ลายเซ็นบิลเปิด: ลำดับไม่สำคัญ · แก้บิล (updated_at เลื่อน) / บิลใหม่ / ปิดบิล = เปลี่ยน · ไม่ใช่รายการ = null (ดึงเต็ม)",
+      [SIG(A) === SIG([A[1], A[0]]), SIG(A) === SIG([{ id: 1, updated_at: "t1" }, { id: 2, updated_at: "t2b" }]), SIG(A) === SIG([...A, { id: 3, updated_at: "t3" }]), SIG(A) === SIG([A[0]]), SIG(null), SIG([]) === ""],
+      [true, false, false, false, null, true]);
+  } else ok_("ดึง openBillsSig มารันได้", false);
+  const BFM = constOf("POS_BILLS_FULL_MS");
+  const mkLO = (db, station) => {
+    const W = { clock: 1e6, db, probe: 0, full: 0, sets: 0, prints: 0, probeFail: false, fullFail: false };
+    const api = {
+      getActiveOrderStamps: async () => { W.probe++; if (W.probeFail) throw new Error("net"); return W.db.map((r) => ({ id: r.id, updated_at: r.updated_at })); },
+      getActiveOrders: async () => { W.full++; if (W.fullFail) throw new Error("net"); return W.db.map((r) => ({ ...r })); },
+    };
+    const f = new Function("api", "currentBranch", "isPrintStation", "openBillsSig", "POS_BILLS_FULL_MS", "ordersSigRef", "ordersFullAt", "setActiveOrders", "autoPrintNew", "Date",
+      "return async " + grab(APP, "loadOrders") + ";")(api, { id: 5 }, () => !!station, SIG, BFM, { current: null }, { current: 0 }, () => { W.sets++; }, () => { W.prints++; }, { now: () => W.clock });
+    return { W, f };
+  };
+  if (typeof SIG === "function" && BFM === 300000) {
+    const R = await aSafe(async () => {
+      const { W, f } = mkLO([{ id: 1, updated_at: "a", items: [] }]);
+      const s = () => [W.probe, W.full, W.sets, W.prints];
+      const out = [];
+      await f(); out.push(s());                                                             // ครั้งแรก = ดึงเต็ม
+      W.clock += 30e3; await f(); out.push(s());                                            // ไม่มีอะไรเปลี่ยน = ถามอย่างเดียว
+      W.db[0].updated_at = "b"; W.clock += 30e3; await f(); out.push(s());                  // แก้บิล (เพิ่มรายการ/ลูกค้าสั่ง) = ดึงเต็ม + ส่งให้ตัวพิมพ์สถานี
+      W.db.push({ id: 2, updated_at: "c" }); W.clock += 30e3; await f(); out.push(s());     // บิลใหม่
+      W.db.shift(); W.clock += 30e3; await f(); out.push(s());                              // ปิด/ยกเลิกบิล
+      W.probeFail = true; W.clock += 30e3; await f(); out.push(s());                        // ถามไม่ผ่าน = ดึงเต็มแบบเดิม
+      W.probeFail = false; W.clock += 30e3; await f(); out.push(s());
+      await f(true); out.push(s());                                                         // เครื่องนี้เพิ่งทำเอง (loadAll) = ดึงเต็มไม่ถาม
+      await f({ type: "click" }); out.push(s());                                            // อย่างอื่นที่ไม่ใช่ true = ถามก่อน
+      W.clock += 5 * 60e3; await f(); out.push(s());                                        // ครบ 5 นาที = ดึงเต็มไม่ถาม
+      W.db[0].updated_at = "d"; W.fullFail = true; W.clock += 30e3; let threw = false; try { await f(); } catch { threw = true; } out.push([...s(), threw]);
+      W.fullFail = false; W.clock += 30e3; await f(); out.push(s());                        // ดึงเต็มล้ม → ลายเซ็นเดิมไม่ขยับ → รอบถัดไปดึงใหม่
+      return out;
+    });
+    ck("บิลเปิด (loadOrders ตัวจริง): ไม่เปลี่ยน = ถามอย่างเดียว · แก้บิล/บิลใหม่/ปิดบิล/ถามไม่ผ่าน/ครบ 5 นาที/เครื่องนี้ทำเอง = ดึงเต็ม · ดึงเต็มล้ม = รอบหน้าลองใหม่",
+      R, [[0, 1, 1, 1], [1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4], [5, 5, 5, 5], [6, 5, 5, 5], [6, 6, 6, 6], [7, 6, 6, 6], [7, 7, 7, 7], [8, 8, 7, 7, true], [9, 9, 8, 8]]);
+    const S = await aSafe(async () => { const { W, f } = mkLO([{ id: 1, updated_at: "a" }], true); for (let k = 0; k < 3; k++) { W.clock += 10e3; await f(); } return [W.probe, W.full, W.prints]; });
+    ck("เครื่องสถานีพิมพ์ (พิมพ์ใบครัวจากรายการนี้เอง) ดึงเต็มทุกรอบตามเดิม ไม่ถามลายเซ็น — ใบครัวห้ามช้า/หาย", S, [0, 3, 3]);
+  } else ok_("ดึง openBillsSig / POS_BILLS_FULL_MS (5 นาที) มารันได้", false);
+  ok_("ทุกการกระทำของเครื่องนี้ (loadAll) ดึงบิลเต็มทันที · รอบ 30 วิ/สลับแท็บกลับมา ถามลายเซ็นก่อน",
+    APP.includes("try{await Promise.all([loadTables(),loadOrders(true)]);}catch(e){console.error(e);}")
+    && APP.includes("timerRef.current=setInterval(()=>{if(!document.hidden)loadOrders();},period);") && APP.includes("const onVis=()=>{if(!document.hidden)loadOrders();};"));
+
+  // ── ④ ตั้งค่า POS: ถามเวลาแก้ก่อนดึงทั้งแถว ──
+  ck("ตัวถามเวลาแก้ของตั้งค่า POS ขอแค่ updated_at ของสาขานั้น",
+    safe(() => new Function("sb", "return (" + apiLine("getPOSSettingsStamp") + ");")((x) => x)(5)), "pos_settings?branch_id=eq.5&select=updated_at&limit=1");
+  const SFM = constOf("POS_SET_FULL_MS");
+  const mkPS = (row) => {
+    const W = { clock: 1e6, row, probe: 0, full: 0, sets: [], probeMode: "ok", fullFail: false, bid: 5 };
+    const api = {
+      getPOSSettingsStamp: async () => { W.probe++; if (W.probeMode === "throw") throw new Error("net"); if (W.probeMode === "empty") return []; return [{ updated_at: W.row && W.row.updated_at }]; },
+      getPOSSettings: async () => { W.full++; if (W.fullFail) throw new Error("net"); return W.row ? [{ ...W.row }] : []; },
+    };
+    const mark = { current: { at: 0, stamp: null, bid: null } };
+    const fns = new Function("api", "setPosSettings", "currentBranch", "posSetMark", "POS_SET_FULL_MS", "Date",
+      line("  async function loadPosSettings(){").trim() + "\nasync " + grab(APP, "refreshPosSettings") + "\nreturn refreshPosSettings;")(
+      api, (v) => W.sets.push(typeof v === "function" ? "fn" : (v.updated_at || "dflt")), { get id() { return W.bid; } }, mark, SFM, { now: () => W.clock });
+    return { W, f: fns, mark };
+  };
+  if (SFM === 600000) {
+    const R = await aSafe(async () => {
+      const { W, f, mark } = mkPS({ branch_id: 5, vat_enabled: true, updated_at: "s1" });
+      const s = () => [W.probe, W.full];
+      const out = [];
+      await f(); out.push(s());                                                         // ยังไม่เคยโหลดเต็ม = เต็มไม่ถาม
+      W.clock += 60e3; await f(); out.push(s());                                        // เวลาแก้เท่าเดิม = ถามอย่างเดียว
+      W.row.updated_at = "s2"; W.clock += 60e3; await f(); out.push(s());              // อีกเครื่องแก้ VAT/พร้อมเพย์ = เต็มภายในรอบเดียว
+      W.probeMode = "throw"; W.clock += 60e3; await f(); out.push(s());                // ถามไม่ผ่าน = เต็มแบบเดิม
+      W.probeMode = "empty"; W.clock += 60e3; await f(); out.push(s());                // ไม่เจอแถว = เต็ม
+      W.probeMode = "ok"; W.clock += 60e3; await f(); out.push(s());
+      W.clock += 10 * 60e3; await f(); out.push(s());                                   // ครบ 10 นาที = เต็มไม่ถาม (ตาข่ายทางเขียนที่ไม่ประทับเวลา)
+      W.row.updated_at = "s3"; W.fullFail = true; W.clock += 60e3; await f(); out.push([...s(), W.sets[W.sets.length - 1], mark.current.stamp]);   // ดึงเต็มล้ม = ใช้ค่าเดิม · ไม่ขยับเครื่องหมาย
+      W.fullFail = false; W.clock += 60e3; await f(); out.push([...s(), mark.current.stamp]);   // รอบถัดไปลองใหม่ได้ค่าใหม่
+      W.bid = 8; W.clock += 60e3; await f(); out.push(s());                             // เปลี่ยนสาขา = เต็มไม่ถาม
+      return out;
+    });
+    ck("ตั้งค่า POS (refreshPosSettings ตัวจริง): เวลาแก้เท่าเดิม = ไม่ดึงทั้งแถว · เปลี่ยน/ถามไม่ผ่าน/ไม่เจอแถว/ครบ 10 นาที/เปลี่ยนสาขา = ดึงเต็ม · ดึงเต็มล้ม = ค่าเดิมคงอยู่และรอบหน้าลองใหม่",
+      R, [[0, 1], [1, 1], [2, 2], [3, 3], [4, 4], [5, 4], [5, 5], [6, 6, "fn", "s2"], [7, 7, "s3"], [7, 8]]);
+    const N = await aSafe(async () => {
+      const a = mkPS({ branch_id: 5 }); await a.f(); a.W.clock += 60e3; await a.f();
+      const b = mkPS(null); await b.f(); b.W.clock += 60e3; await b.f();
+      return [[a.W.probe, a.W.full], [b.W.probe, b.W.full, b.W.sets.join(",")]];
+    });
+    ck("แถวไม่มีเวลาแก้ / สาขายังไม่มีแถวตั้งค่า = ดึงเต็มทุกรอบแบบเดิม (ไม่เดาว่าไม่เปลี่ยน)", N, [[0, 2], [0, 2, "dflt,dflt"]]);
+  } else ok_("POS_SET_FULL_MS = 10 นาที", false);
+
+  // ── ⑤ จังหวะดึงของจอขาย (useEffect ตัวจริงของ POSTab) ──
+  const effSrc = (() => { const a = APP.indexOf("useEffect(()=>{\n    const sale=mode==='sale'&&!!shift;"); const b = a < 0 ? -1 : APP.indexOf("\n  },[currentBranch.id,mode,!!shift]);", a); return a < 0 || b < 0 ? null : APP.slice(a + "useEffect(".length, b + 4); })();
+  ok_("อ่านตัวจับจังหวะดึงของจอขาย (POSTab) ได้ · ทำงานใหม่เมื่อเปลี่ยนสาขา/โหมด/มี-ไม่มีกะ", !!effSrc && APP.includes("},[currentBranch.id,mode,!!shift]);   // eslint-disable-line react-hooks/exhaustive-deps"));
+  const mkEff = (mode, shift, menusAgo, zonesAgo) => {
+    const W = { clock: 10e6, hidden: false, set: 0, promo: 0, zones: 0, printers: 0, menus: 0, intervals: [], listeners: [], cleared: 0 };
+    const zr = { current: zonesAgo == null ? 0 : W.clock - zonesAgo };
+    const doc = { get hidden() { return W.hidden; }, addEventListener: (t, fn) => { if (t === "visibilitychange") W.listeners.push(fn); }, removeEventListener: (t, fn) => { W.listeners = W.listeners.filter((x) => x !== fn); } };
+    const E = new Function("mode", "shift", "refreshPosSettings", "loadPromotions", "loadZones", "zonesAt", "reloadPrinters", "reloadMenus", "document", "setInterval", "clearInterval", "Date", "menusAt0",
+      line("const POS_MENUS_MS=") + "\nlet posMenusAt=menusAt0;\nconst eff=" + effSrc + ";\nreturn eff;")(
+      mode, shift, () => { W.set++; }, () => { W.promo++; }, () => { W.zones++; zr.current = W.clock; }, zr, () => { W.printers++; }, () => { W.menus++; }, doc,
+      (fn, ms) => { W.intervals.push({ fn, ms }); return W.intervals.length; }, () => { W.cleared++; W.intervals = []; }, { now: () => W.clock }, menusAgo == null ? 0 : W.clock - menusAgo);
+    const cleanup = E();
+    const cnt = () => [W.set, W.promo, W.zones, W.printers, W.menus];
+    const tick = (n = 1) => { for (let k = 0; k < n; k++) { W.clock += 60e3; W.intervals.forEach((x) => x.fn()); } };
+    const wake = (n = 1) => { for (let k = 0; k < n; k++) W.listeners.forEach((fn) => fn()); };
+    return { W, cleanup, cnt, tick, wake };
+  };
+  if (effSrc) {
+    const idle = await aSafe(async () => [[null, null], ["sale", null], ["report", null], ["report", { id: 1 }]].map(([m, sh]) => { const e = mkEff(m, sh, 60e3, 10e3); e.tick(10); e.wake(3); return [...e.cnt(), e.W.intervals.length, e.W.listeners.length, typeof e.cleanup]; }));
+    ck("ตัวเลือกโหมด / หน้าเปิดกะ (ยังไม่มีกะ) / รายงาน = ไม่ดึงอะไรเลย ไม่ตั้งรอบ (เดิม iPad ค้างหน้าเปิดกะดึงทุก 60 วิ ทั้งคืน)",
+      idle, Array(4).fill([0, 0, 0, 0, 0, 0, 0, "undefined"]));
+    const R = await aSafe(async () => {
+      const e = mkEff("sale", { id: 1 }, 60e3, 10e3);   // จอ PIN: เพิ่งโหลดเมนู 1 นาทีก่อน · โซน 10 วิก่อน
+      const out = [[...e.cnt(), e.W.intervals.length && e.W.intervals[0].ms]];             // เข้าจอ = ดึงรอบแรกทันที (เมนู/โซนยังใหม่ = ไม่ดึง)
+      e.tick(12); out.push(e.cnt());                                                         // จอเปิด 12 นาที
+      e.W.hidden = true; e.tick(5); out.push(e.cnt());                                       // สลับแท็บออก/จอดับ = หยุด
+      e.W.hidden = false; e.wake(10); out.push(e.cnt());                                     // ปลุกจอ 10 ครั้งติดกัน
+      e.cleanup(); out.push([e.W.cleared, e.W.listeners.length]);
+      return out;
+    });
+    ck("หน้าขายมีกะ: เข้าจอดึงทันที · ตั้งค่า/โปรฯ/เครื่องพิมพ์ทุก 60 วิ · เมนูและโซนเมื่อเก่าเกิน 5 นาที (นาฬิกาจริง) · ซ่อนจอ = หยุด · ปลุกจอ 10 ครั้ง = ถามตั้งค่า 10 ครั้งแต่เมนูก้อนใหญ่ครั้งเดียว · ออกจากจอ = เลิกรอบ",
+      R, [[1, 1, 0, 1, 0, 60000], [13, 13, 2, 13, 2], [13, 13, 2, 13, 2], [23, 23, 3, 23, 3], [1, 0]]);
+    const F = await aSafe(async () => { const e = mkEff("sale", { id: 1 }, null, null); return e.cnt(); });
+    ck("เข้าหน้าขายครั้งแรกของหน้า (ยังไม่เคยดึงเมนูของจอขาย) = ดึงเมนูทันที", F, [1, 1, 1, 1, 1]);
+    const M = await aSafe(async () => { const e = mkEff("manage", null, 60e3, 10e3); const a = e.cnt(); e.tick(5); return [a, e.cnt()]; });
+    ck("หลังบ้าน: เครื่องพิมพ์ + โซน ทุก 60 วิ · ไม่ดึงตั้งค่า/โปรฯ (หลังบ้านโหลดเอง และกดออกโหลดให้) · เมนูตามนาฬิกา 5 นาที",
+      M, [[0, 0, 1, 1, 0], [0, 0, 6, 6, 1]]);
+  }
+  ok_("ทางรีเฟรชตรง (ปุ่มรีเฟรช/เครื่องมือเมนู/ส่งแล้วเจอเมนูหมด/บันทึกเครื่องพิมพ์) ไม่ผ่านตัวจับเวลา — ยังเรียก reloadMenus/loadPosSettings ตรงๆ",
+    APP.includes("if(refreshTick){loadAll();try{reloadMenus&&reloadMenus();}catch{}try{reloadPosSettings&&reloadPosSettings();}catch{}}")
+    && APP.includes("reloadPosSettings={loadPosSettings}") && APP.includes("onExit={()=>{setMode(null);loadZones();loadPosSettings();loadPromotions();}}"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ลด egress หลังบ้าน 24 ต.ค. 69 — ต่อจากหมวดจอขาย · ทุกข้อรันโค้ดจริงจากแอปกับฐานปลอม:
+//   ① ตัวกรอง PO ชุดเดียว (poFilterQuery): URL ของผู้เรียกเดิมไม่เปลี่ยนสักตัวอักษร · statusIn ให้ฐานกรองสถานะ (สรุปต้องซื้อ)
+//   ② ลายนิ้วมือ PO + load() ตัวจริงของ POSection: ฐานเทียบมาจากแถวดิบก่อนตัวซ่อม ขึ้นพร้อม setPOs · โหลดล้ม = ล้างฐาน
+//   ③ รอบ 90 วิของหน้าเอกสาร PO (useEffect ตัวจริง): ถามลายนิ้วมือ · ต่าง = โหลดเต็ม · 30 นาที = เต็ม · ฐานล่ม = เงียบ
+//   ④ แท็บสรุปต้องซื้อไม่โหลด/ไม่ตั้งรอบ · สลับกลับมาเอกสาร PO โหลดทันที
+//   ⑤ heartbeat แอปหลัก: ซ่อนแท็บ = ไม่ถาม · กลับมาครบรอบ = ถามทันที · แถวสาขาแถวเดียว · ทั้งตารางเฉพาะสิทธิ์สาขาเปลี่ยน
+//   ⑥ ใบสั่งของครัวกลางยิงครั้งเดียว (fetchOrdersFor) · ⑦ สินทรัพย์โหลดเมื่อเปิดแท็บ
+//   ⑧ ใบค้าง / ของเสีย / อีเวนต์ CRM ให้ฐานกรอง = ผลที่จอใช้เท่าเดิม (รันตัวคำนวณจริงเทียบสองแบบ)
+// ══════════════════════════════════════════════════════════════════════════
+section("ลด egress หลังบ้าน (24 ต.ค. 69)");
+{
+  const L = APP.split("\n");
+  const line = (head) => L.find((l) => l.startsWith(head)) || "";
+  const apiLine = (name) => { const l = L.find((x) => x.startsWith(`  ${name}: `)); return l ? l.trim().slice(name.length + 1).trim().replace(/,\s*$/, "") : null; };
+  const safe = (f) => { try { return f(); } catch (e) { return "ERR " + e.message; } };
+  const aSafe = async (f) => { try { return await f(); } catch (e) { return "ERR " + e.message; } };
+  const comp = (name) => { const s0 = APP.indexOf(`function ${name}(`); if (s0 < 0) return ""; const b0 = APP.indexOf("){", s0) + 1; let d = 0; for (let j = b0; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(s0, j + 1); } } return ""; };
+  const constOf = (name) => safe(() => new Function(line(`const ${name}=`) + `\nreturn ${name};`)());
+  const flush = async (n = 4) => { for (let k = 0; k < n; k++) await new Promise((r) => setImmediate(r)); };
+  // ตัวช่วยรัน api.xxx ตัวจริง (บรรทัดเดียว) กับ sb/sbAll ปลอมที่จด URL
+  const urlOf = (name, ...args) => safe(() => {
+    const urls = [];
+    const rec = async (u) => { urls.push(u); return []; };
+    const PFQ = new Function(comp("poFilterQuery") + "\nreturn poFilterQuery;")();   // comp ไม่ใช่ grab: ค่าเริ่มต้น filters={} ในวงเล็บทำให้ grab ตัดจบผิดที่
+    const src = apiLine(name).replace(/,\s*\/\/[^"'`]*$/, "");   // ตัดคอมเมนต์ท้ายบรรทัด (เช่น getAssets "// แบ่งหน้า …") พร้อมจุลภาค
+    new Function("sb", "sbAll", "poFilterQuery", "return (" + src + ");")(rec, rec, PFQ)(...args);
+    return urls[0];
+  });
+
+  // ── ① ตัวกรอง PO ชุดเดียว ──
+  // ต้นฉบับ getPOs ก่อน 24 ต.ค. 69 (คัดมาตรงตัว) — ผู้เรียกเดิมทุกจุดต้องได้ URL เดิมเป๊ะ
+  const oldPOs = (filters = {}) => { const q = ["order=po_date.desc,id.desc", "limit=1000"]; if (filters.viewerBranchId != null) q.push(`or=(from_branch_id.eq.${filters.viewerBranchId},branch_id.eq.${filters.viewerBranchId})`); if (filters.fromBranchId != null) q.push(`from_branch_id=eq.${filters.fromBranchId}`); if (filters.toBranchId != null) q.push(`branch_id=eq.${filters.toBranchId}`); if (filters.dateFrom) q.push(`po_date=gte.${filters.dateFrom}`); if (filters.dateTo) q.push(`po_date=lte.${filters.dateTo}`); return `purchase_orders?${q.join("&")}`; };
+  const combos = [{}, { viewerBranchId: 1 }, { viewerBranchId: 0 }, { fromBranchId: 5, dateFrom: "2026-09-24", dateTo: "2026-10-24" }, { toBranchId: "8", dateFrom: "2026-09-24" }, { viewerBranchId: 1, dateTo: "2026-10-24" }];
+  ck("getPOs (ผ่าน poFilterQuery ตัวจริง): URL ของผู้เรียกเดิมทุกแบบตรงต้นฉบับก่อนแก้ทุกตัวอักษร (หน้าเอกสาร PO / รายงาน / ตัวตรวจอื่น)",
+    combos.map((f) => urlOf("getPOs", f)), combos.map((f) => oldPOs(f)));
+  ck("statusIn = ฐานกรองสถานะ (ต่อท้าย ไม่แตะตัวกรองเดิม) · ว่าง/ไม่ใช่รายการ = ไม่กรองแบบเดิม",
+    [urlOf("getPOs", { viewerBranchId: 1, statusIn: ["requested", "open"] }), urlOf("getPOs", { viewerBranchId: 1, statusIn: [] }), urlOf("getPOs", { viewerBranchId: 1, statusIn: "open" })],
+    [oldPOs({ viewerBranchId: 1 }) + "&status=in.(requested,open)", oldPOs({ viewerBranchId: 1 }), oldPOs({ viewerBranchId: 1 })]);
+  ck("getPOMarks = แถวชุดเดียวกับ getPOs (ลำดับ/limit/ตัวกรองเดียวกัน) แต่ขอแค่ 5 คอลัมน์เล็ก ไม่มี items",
+    combos.map((f) => urlOf("getPOMarks", f)), combos.map((f) => oldPOs(f).replace("purchase_orders?", "purchase_orders?select=id,status,updated_at,sliptrack_sync,stock_pending&")));
+  const PSM = comp("PurchaseSummaryModal");
+  ok_("สรุปต้องซื้อ: ฐานกรองด้วยชุด PENDING ตัวเดียวกับตัวกรองฝั่งจอ (requested/open) · ตัวกรองฝั่งจอยังอยู่ = แถวชุดเดิม (เดิมขนทุกใบ ~443 KB gzip แล้วทิ้ง)",
+    PSM.includes('const PENDING=new Set(["requested","open"]);') && PSM.includes("const data=await api.getPOs({viewerBranchId:currentBranch.id,statusIn:[...PENDING]});")
+    && PSM.includes("setPos((data||[]).filter(p=>PENDING.has(p.status)));"));
+
+  // ── ② ลายนิ้วมือ + load() ตัวจริง ──
+  const FP = safe(() => new Function(grab(APP, "poMarksFingerprint") + "\nreturn poMarksFingerprint;")());
+  ok_("อ่าน poMarksFingerprint ตัวจริงได้", typeof FP === "function");
+  const full = [
+    { id: 2, status: "open", updated_at: "2026-10-24T03:00:00+00:00", sliptrack_sync: null, stock_pending: null, items: [{ ingredient_id: 1, qty: 3 }], total: 100, branch_id: 5, from_branch_id: 1 },
+    { id: 1, status: "shipped", updated_at: "2026-10-24T02:00:00+00:00", sliptrack_sync: "ok", stock_pending: [{ ingredient_id: 4, qty: 1 }], items: [], total: 0, branch_id: 1, from_branch_id: 5 },
+  ];
+  const narrow = (rows) => rows.map(({ id, status, updated_at, sliptrack_sync, stock_pending }) => ({ id, status, updated_at, sliptrack_sync, stock_pending }));
+  if (typeof FP === "function") {
+    const base = FP(full);
+    const mut = (i, patch) => FP(full.map((r, k) => (k === i ? { ...r, ...patch } : r)));
+    ck("ลายนิ้วมือ: แถวเต็ม = แถวของ getPOMarks · ลำดับไม่มีผล · เปลี่ยนสถานะ / updated_at (แม้ย้อนหลัง = นาฬิกาเครื่องช้า) / ธงบัญชี / ของค้าง / ใบใหม่ / ใบหาย = ต่าง",
+      [FP(narrow(full)) === base, FP([...full].reverse()) === base, mut(0, { status: "shipped" }) !== base, mut(0, { updated_at: "2026-10-01T00:00:00+00:00" }) !== base,
+        mut(1, { sliptrack_sync: "failed" }) !== base, mut(1, { stock_pending: null }) !== base, FP([...full, { id: 3, status: "open", updated_at: "x" }]) !== base, FP(full.slice(0, 1)) !== base, FP(null) === FP([])],
+      [true, true, true, true, true, true, true, true, true]);
+  }
+  const POS_S = APP.indexOf("function POSection(");
+  const POS_END = APP.indexOf("if(summaryOnly)return <PurchaseSummaryModal", POS_S);
+  const loadSrc = (() => { const a = APP.indexOf("  async function load(){", POS_S); if (POS_S < 0 || a < 0 || a > POS_END) return null; let d = 0; for (let j = APP.indexOf("{", a); j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(a, j + 1); } } return null; })();
+  ok_("อ่าน load() ตัวจริงของ POSection ได้", !!loadSrc);
+  class FakeDate extends Date { static now() { return 777; } }
+  const runLoad = async (rows, fail) => {
+    const W = { setPOs: [], alerts: 0, markAtSet: [], patches: 0 };
+    const poMarkRef = { current: { fp: "OLD", q: {}, at: 1 } };
+    const api = { getPOs: async (f) => { W.q = f; if (fail) throw new Error("timeout"); return rows.map((r) => ({ ...r })); }, patchPOIfStatus: async () => { W.patches++; return [{}]; } };
+    const f = new Function("api", "poMarksFingerprint", "branchById", "staleTransferHealPatch", "poNeedsSlipSync", "resyncPOToSlipTrack", "isTransferPO", "slipHealRef", "slipHealedRef", "poMarkRef",
+      "setLoading", "setPOs", "alert", "console", "direction", "partnerFilter", "filterStatus", "dateFrom", "dateTo", "currentBranch", "Date", loadSrc + "\nreturn load;")(
+      api, FP, { 1: { type: "central" }, 5: { type: "branch" } }, () => null, () => false, async () => {}, () => false, { current: false }, { current: new Set() }, poMarkRef,
+      () => {}, (d) => { W.setPOs.push(d.map((p) => [p.id, p.status])); W.markAtSet.push(poMarkRef.current); }, () => { W.alerts++; }, { error: () => {} },
+      "all", "", "", "2026-09-24", "2026-10-24", { id: 1 }, FakeDate);
+    await f();
+    return { W, mark: poMarkRef.current };
+  };
+  if (loadSrc && typeof FP === "function") {
+    const A = await aSafe(async () => { const r = await runLoad(full, false); return [r.mark.fp === FP(full), JSON.stringify(r.mark.q), r.mark.at, r.W.markAtSet[0] === r.mark, r.W.setPOs.length, r.W.alerts]; });
+    ck("load() สำเร็จ: ฐานเทียบ = ลายนิ้วมือแถวดิบ + ตัวกรองที่ส่งฐานจริง + เวลาโหลด · ขึ้นก่อน setPOs ในจังหวะเดียวกัน (จอกับฐานเทียบเป็นชุดเดียวกันเสมอ)",
+      A, [true, JSON.stringify({ dateFrom: "2026-09-24", dateTo: "2026-10-24", viewerBranchId: 1 }), 777, true, 1, 0]);
+    const stranded = [...full, { id: 9, status: "open", updated_at: "2026-10-24T01:00:00+00:00", sliptrack_sync: null, stock_pending: null, branch_id: 1, from_branch_id: 5 }];
+    const B = await aSafe(async () => { const r = await runLoad(stranded, false); const healedServer = stranded.map((p) => (p.id === 9 ? { ...p, status: "requested", updated_at: "2026-10-24T05:00:00+00:00" } : p)); return [r.W.patches, r.W.setPOs[0].find((x) => x[0] === 9)[1], r.mark.fp === FP(stranded), FP(narrow(healedServer)) !== r.mark.fp]; });
+    ck("ตัวซ่อมใบค้างเขียนฐาน: จอเห็น requested แต่ฐานเทียบมาจากแถวดิบก่อนซ่อม ⟹ รอบถามถัดไปเห็นต่างแล้วโหลดใหม่ครั้งเดียว (ไม่พลาดและไม่วน)",
+      B, [1, "requested", true, true]);
+    const C = await aSafe(async () => { const r = await runLoad(full, true); return [r.mark, r.W.alerts, r.W.setPOs.length]; });
+    ck("load() ล้ม: ล้างฐาน (รอบหน้าโหลดเต็มใหม่เหมือนเดิม ไม่ค้างจอเก่า 30 นาที) · alert แบบเดิม · ไม่แตะจอ", C, [null, 1, 0]);
+  }
+
+  // ── ③ รอบ 90 วิ (useEffect ตัวจริง) ──
+  const pollSrc = (() => { const a = APP.indexOf("useEffect(()=>{\n    if(summaryOnly)return;\n    const tick=async()=>{", POS_S); const b = a < 0 ? -1 : APP.indexOf("\n  },[summaryOnly,currentBranch?.id]);", a); return a < 0 || b < 0 || b > POS_END ? null : APP.slice(a + "useEffect(".length, b + 4); })();
+  ok_("อ่านรอบ 90 วิของหน้าเอกสาร PO ได้ · deps คงที่ [summaryOnly,สาขา] (เดิมไม่มี deps = ตั้งรอบใหม่ทุก render) · อยู่ก่อน return ของแท็บสรุป (ลำดับ hooks)", !!pollSrc);
+  const FULL_MS = constOf("PO_FULL_REFRESH_MS");
+  ck("PO_FULL_REFRESH_MS = 30 นาที", FULL_MS, 1800000);
+  const mkPoll = (summaryOnly, mark, probe) => {
+    const W = { clock: 50e6, hidden: false, probes: [], loads: 0, intervals: [], listeners: [], cleared: 0 };
+    const poMarkRef = { current: mark };
+    const poTickBusyRef = { current: false };
+    const loadRef = { current: async () => { W.loads++; } };
+    const doc = { get hidden() { return W.hidden; }, addEventListener: (t, fn) => { if (t === "visibilitychange") W.listeners.push(fn); }, removeEventListener: (t, fn) => { W.listeners = W.listeners.filter((x) => x !== fn); } };
+    const api = { getPOMarks: async (q) => { W.probes.push(q); return probe(W, poMarkRef); } };
+    const E = new Function("summaryOnly", "currentBranch", "api", "poMarkRef", "poTickBusyRef", "loadRef", "poMarksFingerprint", "PO_FULL_REFRESH_MS", "document", "setInterval", "clearInterval", "Date", "return (" + pollSrc + ");")(
+      summaryOnly, { id: 1 }, api, poMarkRef, poTickBusyRef, loadRef, FP, FULL_MS, doc, (fn, ms) => { W.intervals.push({ fn, ms }); return W.intervals.length; }, () => { W.cleared++; W.intervals = []; }, { now: () => W.clock });
+    const cleanup = E();
+    const tick = async (n = 1) => { for (let k = 0; k < n; k++) { W.clock += 90e3; for (const x of W.intervals) await x.fn(); } };
+    const wake = async () => { for (const fn of [...W.listeners]) await fn(); };
+    return { W, poMarkRef, poTickBusyRef, cleanup, tick, wake, cnt: () => [W.probes.length, W.loads] };
+  };
+  if (pollSrc && typeof FP === "function") {
+    const q0 = { dateFrom: "2026-09-24", dateTo: "2026-10-24", viewerBranchId: 1 };
+    const same = () => narrow(full);
+    const S = await aSafe(async () => { const p = mkPoll(true, null, same); await p.tick(5); await p.wake(); return [p.W.intervals.length, p.W.listeners.length, typeof p.cleanup, ...p.cnt()]; });
+    ck("แท็บสรุปต้องซื้อ (summaryOnly): ไม่ตั้งรอบ ไม่ฟังสลับแท็บ ไม่ถาม ไม่โหลด (เดิมโหลดเต็มทุก 90 วิแล้วทิ้ง)", S, [0, 0, "undefined", 0, 0]);
+    const R = await aSafe(async () => {
+      const p = mkPoll(false, { fp: FP(full), q: q0, at: 50e6 }, same);
+      const out = [[p.W.intervals[0] && p.W.intervals[0].ms, p.W.listeners.length]];
+      await p.tick(5); out.push(p.cnt());                                         // 7.5 นาที ไม่มีอะไรเปลี่ยน
+      out.push(p.W.probes.every((x) => x === q0));                                 // ถามด้วยตัวกรองชุดเดียวกับที่โหลด
+      p.W.hidden = true; await p.tick(3); await p.wake(); out.push(p.cnt());      // ซ่อนแท็บ = หยุด
+      p.W.hidden = false; await p.wake(); out.push(p.cnt());                       // กลับมาเห็นจอ = ถาม (ไม่ใช่โหลดเต็ม)
+      p.cleanup(); out.push([p.W.cleared, p.W.listeners.length]);
+      return out;
+    });
+    ck("ไม่มีอะไรเปลี่ยน: ทุก 90 วิถามลายนิ้วมืออย่างเดียว ไม่โหลดเต็ม · ถามด้วยตัวกรองของการโหลด · ซ่อนแท็บหยุด · กลับมาเห็นจอถามทันที · ออกจากหน้าเลิกรอบ",
+      R, [[90000, 1], [5, 0], true, [5, 0], [6, 0], [1, 0]]);
+    const D = await aSafe(async () => {
+      let rows = same();
+      const p = mkPoll(false, { fp: FP(full), q: q0, at: 50e6 }, () => rows);
+      await p.tick(); const a = p.cnt();
+      rows = narrow(full.map((r) => (r.id === 1 ? { ...r, status: "awaiting_payment", updated_at: "2026-10-24T01:59:00+00:00" } : r)));   // อีกฝั่งกดรับของ · นาฬิกาเครื่องนั้นช้า
+      await p.tick(); const b = p.cnt();
+      rows = narrow([...full, { id: 3, status: "requested", updated_at: "2026-10-24T04:00:00+00:00" }]);   // ใบใหม่
+      await p.tick(); const c = p.cnt();
+      rows = narrow(full.slice(1));                                                // ใบถูกลบ
+      await p.tick(); const d = p.cnt();
+      return [a, b, c, d];
+    });
+    ck("อีกฝั่งกดรับ (updated_at ย้อนหลังเพราะนาฬิกาช้า) / ใบใหม่ / ใบถูกลบ = โหลดเต็มในรอบนั้นเลย (ภายใน 90 วิแบบเดิม)",
+      D, [[1, 0], [2, 1], [3, 2], [4, 3]]);
+    const T = await aSafe(async () => { const p = mkPoll(false, { fp: FP(full), q: q0, at: 50e6 - FULL_MS + 90e3 }, same); await p.tick(); const a = p.cnt(); const p2 = mkPoll(false, null, same); await p2.tick(); return [a, p2.cnt()]; });
+    ck("ครบ 30 นาทีนับจากโหลดเต็มล่าสุด = โหลดเต็มโดยไม่ถาม (รูปรับของที่แก้ทีหลัง) · ยังไม่มีฐาน/โหลดล้ม = โหลดเต็ม", T, [[0, 1], [0, 1]]);
+    const errOf = (msg) => async () => { const p = mkPoll(false, { fp: FP(full), q: q0, at: 50e6 }, () => { throw new Error(msg); }); await p.tick(3); return p.cnt(); };
+    const X = await aSafe(async () => [await errOf("TypeError: Failed to fetch")(), await errOf('{"code":"PGRST003","message":"Timed out acquiring connection from connection pool."}')(), await errOf("<html>503 Service Unavailable</html>")(),
+      await errOf('{"code":"42703","details":null,"hint":null,"message":"column purchase_orders.sliptrack_sync does not exist"}')()]);
+    ck("ถามไม่ผ่านเพราะเน็ต/ฐานช้า/ฐานล่ม = เงียบ ไม่โหลดเต็มซ้ำเติม ไม่เด้ง alert · ไม่มีคอลัมน์ (42703) = ถอยไปโหลดเต็มทุกรอบแบบเดิม",
+      X, [[3, 0], [3, 0], [3, 0], [3, 3]]);
+    const BZ = await aSafe(async () => {
+      let release; const gate = new Promise((r) => { release = r; });
+      const p = mkPoll(false, { fp: FP(full), q: q0, at: 50e6 }, async () => { await gate; return narrow(full.slice(1)); });
+      const first = p.W.intervals[0].fn(); await flush();
+      // รอบที่สอง + สลับแท็บกลับมา ระหว่างรอบแรกยังค้าง — ไม่ await รอบที่สอง: ถ้าตัวกันซ้อนหาย มันจะรอประตูเดียวกันจนด่านค้างเงียบแทนที่จะแดง
+      const second = p.W.intervals[0].fn(); await p.wake(); await flush();
+      const mid = p.cnt(); release(); await first; await second; await flush();
+      return [mid, p.cnt(), p.poTickBusyRef.current];
+    });
+    ck("รอบก่อนยังไม่จบ (ฐานช้า) = รอบถัดไปและสลับแท็บข้าม ไม่ซ้อนคำขอ · จบแล้วปลดล็อก", BZ, [[1, 0], [1, 1], false]);
+    const RC = await aSafe(async () => { const p = mkPoll(false, { fp: FP(full), q: q0, at: 50e6 }, (W, ref) => { ref.current = { fp: "NEW", q: q0, at: W.clock }; return narrow(full.slice(1)); }); await p.tick(); return p.cnt(); });
+    ck("ระหว่างรอคำตอบมีการโหลดเต็มขึ้นจอแล้ว (ฐานใหม่กว่า) = ไม่โหลดซ้ำ", RC, [1, 0]);
+  }
+
+  // ── ④ แท็บสรุป ↔ เอกสาร PO ──
+  const LE = "useEffect(()=>{if(summaryOnly)return;load();},[direction,partnerFilter,filterStatus,dateFrom,dateTo,currentBranch?.id,summaryOnly]);";
+  const leAt = APP.indexOf(LE, POS_S);
+  ok_("โหลดครั้งแรกของ POSection: summaryOnly อยู่ใน deps (สองแท็บย่อยใช้ตัวเดียวกันไม่มี key — สลับจากสรุปมาเอกสาร PO ต้องโหลด ไม่งั้นจอว่าง 'ไม่มีเอกสาร') · อยู่ก่อน return ของแท็บสรุป",
+    leAt > POS_S && leAt < POS_END && (() => { const lr = APP.indexOf("const loadRef=useRef(load);loadRef.current=load;", POS_S); return lr > POS_S && lr < POS_END; })());
+  {
+    const run = (so) => { let n = 0; new Function("summaryOnly", "load", "return (" + LE.slice("useEffect(".length, LE.indexOf(",[direction")) + ");")(so, () => { n++; })(); return n; };
+    ck("ตัว effect จริง: แท็บสรุป = ไม่โหลด · เอกสาร PO = โหลด", [safe(() => run(true)), safe(() => run(false))], [0, 1]);
+  }
+  ok_("แท็บย่อยสรุป/เอกสาร PO ยังเป็น POSection ไม่มี key (ถ้าวันหน้าใส่ key ให้ต่างกัน effect ข้างบนก็ยังถูก — ด่านนี้แค่ยืนยันเหตุผลของ deps)",
+    APP.includes("?<POSection summaryOnly branches={branches}") && APP.includes(":<POSection branches={branches} ings={ings} suppliers={suppliers} currentBranch={currentBranch} currentUser={currentUser} reloadIngs={reload.ings} onOpenOrders="));
+
+  // ── ⑤ heartbeat แอปหลัก ──
+  ck("getBranchStatus: แถวเดียว 3 คอลัมน์ (เดิม branches ทั้งตารางทุก 3 นาทีทุกแท็บ)", [urlOf("getBranchStatus", 5), urlOf("getBranchStatus", "5")],
+    ["branches?id=eq.5&select=id,active,allowed_perms", "branches?id=eq.5&select=id,active,allowed_perms"]);
+  const hbSrc = (() => { const a = APP.indexOf("useEffect(()=>{\n    if(!currentUser?.id)return;\n    const tick=async()=>{"); const b = a < 0 ? -1 : APP.indexOf("\n  },[currentUser?.id]);", a); return a < 0 || b < 0 ? null : APP.slice(a + "useEffect(".length, b + 4); })();
+  ok_("อ่าน heartbeat ตัวจริงของแอปหลักได้", !!hbSrc);
+  ok_("heartbeat อ่านจากแถวสาขาแค่ active/allowed_perms (ครบในคอลัมน์ที่ getBranchStatus ขอ)", !!hbSrc && [...hbSrc.matchAll(/\bupdated\.(\w+)/g)].every((m) => ["active", "allowed_perms"].includes(m[1])));
+  const mkHB = (o = {}) => {
+    const W = { clock: 9e6, hidden: false, intervals: [], listeners: [], cleared: 0, me: 0, st: 0, all: 0, alerts: [], cu: [], cb: [], bs: 0,
+      user: { id: 7, active: true, role: "staff", perms: ["po"], name: "ก้อย", username: "koi", allowed_branches: [1, 5] },
+      row: { id: 5, active: true, allowed_perms: ["pos"] }, fullRow: { id: 5, name: "บางใหญ่", type: "branch", active: true, allowed_perms: ["pos"], phone: "02" }, ...o };
+    const userRef = { current: { id: 7, role: "staff", perms: ["po"], allowed_branches: [1, 5] } };
+    const branchRef = { current: { id: 5, name: "บางใหญ่", type: "branch", active: true, allowed_perms: ["pos"] } };
+    const doc = { get hidden() { return W.hidden; }, addEventListener: (t, fn) => { if (t === "visibilitychange") W.listeners.push(fn); }, removeEventListener: (t, fn) => { W.listeners = W.listeners.filter((x) => x !== fn); } };
+    const api = {
+      getMyUserStatus: async () => { W.me++; return [W.user]; },
+      getBranchStatus: async (id) => { W.st++; W.stId = id; return W.row ? [W.row] : []; },
+      getBranches: async () => { W.all++; return [{ id: 1, name: "ครัวกลาง", type: "central" }, W.fullRow]; },
+    };
+    const E = new Function("currentUser", "userRef", "branchRef", "api", "alert", "setCurrentUser", "setCurrentBranch", "setBranches", "normalizePerms", "normalizeBranchIds", "console", "document", "setInterval", "clearInterval", "Date", "return (" + hbSrc + ");")(
+      { id: 7 }, userRef, branchRef, api, (m) => W.alerts.push(m), (v) => W.cu.push(typeof v === "function" ? "fn" : v), (v) => W.cb.push(v), () => { W.bs++; },
+      (p) => (Array.isArray(p) ? p : []), (a) => (a == null ? null : a.map(Number)), { warn: () => {} }, doc,
+      (fn, ms) => { W.intervals.push({ fn, ms }); return 1; }, () => { W.cleared++; W.intervals = []; }, { now: () => W.clock });
+    const cleanup = E();
+    const tick = async (n = 1) => { for (let k = 0; k < n; k++) { W.clock += 180e3; W.intervals.forEach((x) => x.fn()); await flush(); } };
+    const wake = async () => { W.listeners.forEach((fn) => fn()); await flush(); };
+    return { W, cleanup, tick, wake, cnt: () => [W.me, W.st, W.all] };
+  };
+  if (hbSrc) {
+    const R = await aSafe(async () => {
+      const h = mkHB(); const out = [[h.W.intervals[0] && h.W.intervals[0].ms, h.W.listeners.length]];
+      await h.tick(2); out.push([...h.cnt(), h.W.stId, h.W.alerts.length, h.W.cb.length, h.W.bs]);   // ปกติ: ถามตัวเอง + แถวสาขา ไม่ดึงทั้งตาราง
+      h.W.hidden = true; await h.tick(5); out.push(h.cnt());                                            // ซ่อนแท็บ 15 นาที = ไม่ถาม
+      h.W.hidden = false; await h.wake(); out.push(h.cnt());                                            // กลับมา (ครบรอบแล้ว) = ถามทันที
+      for (let k = 0; k < 10; k++) { h.W.hidden = true; await h.wake(); h.W.hidden = false; h.W.clock += 5e3; await h.wake(); } out.push(h.cnt());   // สลับแท็บถี่ๆ 10 ครั้ง = ไม่ยิงเพิ่ม
+      h.cleanup(); out.push([h.W.cleared, h.W.listeners.length]);
+      return out;
+    });
+    ck("heartbeat: ทุก 3 นาทีเฉพาะตอนเห็นจอ · ถามแถวสาขาแถวเดียว ไม่ดึงทั้งตาราง · ซ่อนแท็บ = หยุด · กลับมาครบรอบแล้วถามทันที · สลับแท็บถี่ไม่ยิงเพิ่ม · ออกแล้วเลิกรอบ",
+      R, [[180000, 1], [2, 2, 0, 5, 0, 0, 0], [2, 2, 0], [3, 3, 0], [3, 3, 0], [1, 0]]);
+    const K = await aSafe(async () => {
+      const off = mkHB({ row: { id: 5, active: false, allowed_perms: ["pos"] } }); await off.tick();
+      const gone = mkHB({ row: null }); await gone.tick();
+      const perm = mkHB({ row: { id: 5, active: true, allowed_perms: ["pos", "po"] }, fullRow: { id: 5, name: "บางใหญ่", type: "branch", active: true, allowed_perms: ["pos", "po"], phone: "02" } }); await perm.tick();
+      const permOff = mkHB({ row: { id: 5, active: true, allowed_perms: ["pos", "po"] }, fullRow: { id: 5, name: "บางใหญ่", type: "branch", active: false, allowed_perms: ["pos", "po"] } }); await permOff.tick();
+      const userOff = mkHB({ user: { id: 7, active: false } }); await userOff.tick();
+      return [
+        [off.W.alerts.length, off.W.cb, off.W.all],
+        [gone.W.alerts.length, gone.W.cb.length, gone.W.all],
+        [perm.W.all, perm.W.cb.map((b) => b && b.phone), perm.W.bs],
+        [permOff.W.alerts.length, permOff.W.cb, permOff.W.bs],
+        [userOff.W.alerts.length, userOff.W.cu, userOff.W.cb, userOff.W.st],
+      ];
+    });
+    ck("กติกาเตะออกเดิมครบ: สาขาถูกปิด = เตะ (ไม่ดึงทั้งตาราง) · ไม่เจอแถว = เฉย · สิทธิ์สาขาเปลี่ยน = ดึงทั้งตารางครั้งเดียวแล้วใช้ 'แถวเต็ม' เป็น currentBranch · ระหว่างนั้นถูกปิด = เตะ · ผู้ใช้ถูกปิด = ออกจากระบบ",
+      K, [[1, [null], 0], [0, 0, 0], [1, ["02"], 1], [1, [null], 0], [1, [null], [null], 0]]);
+  }
+
+  // ── ⑥ ใบสั่งของครัวกลางยิงครั้งเดียว ──
+  const FOF = safe(() => new Function("api", "async " + grab(APP, "fetchOrdersFor") + "\nreturn fetchOrdersFor;"));
+  {
+    const ordersUrl = urlOf("getOrders", null), allUrl = urlOf("getAllOrders");
+    const lim = (u) => +((/limit=(\d+)/.exec(u || "") || [])[1] || 0);
+    const sliceN = +((/\.slice\(0,(\d+)\)/.exec(safe(() => grab(APP, "fetchOrdersFor")) || "") || [])[1] || -1);
+    ok_("getOrders(null) กับ getAllOrders เป็น query เดียวกันเป๊ะต่างแค่ limit · fetchOrdersFor ตัด 400 = limit ของ getOrders · getAllOrders ≥ นั้น",
+      typeof ordersUrl === "string" && ordersUrl.replace(/limit=\d+/, "L") === String(allUrl).replace(/limit=\d+/, "L") && sliceN === lim(ordersUrl) && lim(allUrl) >= sliceN && !/branch_id/.test(ordersUrl));
+    const table = Array.from({ length: 900 }, (_, k) => ({ id: k + 1, branch_id: (k % 6) + 1, items: [] }));
+    const server = (u) => { const m = /branch_id=eq\.(\d+)/.exec(u); return table.filter((r) => !m || r.branch_id === +m[1]).sort((a, b) => b.id - a.id).slice(0, lim(u)); };
+    const run = async (isCentral, bid) => {
+      const calls = [];
+      const api = { getOrders: async (b) => { const u = urlOf("getOrders", b); calls.push(u); return server(u); }, getAllOrders: async () => { calls.push(allUrl); return server(allUrl); } };
+      const r = await FOF(api)(isCentral, bid);
+      return { calls: calls.length, orders: (r.orders || []).map((x) => x.id), all: r.all == null ? null : r.all.map((x) => x.id) };
+    };
+    const C = await aSafe(() => run(true, 1));
+    const oldC = { calls: 2, orders: server(ordersUrl).map((x) => x.id), all: server(allUrl).map((x) => x.id) };
+    ck("ครัวกลาง: ยิงครั้งเดียว (เดิม 2) · orders/allOrders ได้แถวชุดเดิมเป๊ะทุกใบ", typeof C === "object" ? [C.calls, JSON.stringify(C.orders) === JSON.stringify(oldC.orders), JSON.stringify(C.all) === JSON.stringify(oldC.all), C.orders.length, C.all.length] : C, [1, true, true, 400, 600]);
+    const B = await aSafe(() => run(false, 5));
+    ck("สาขา: getOrders(สาขา) แบบเดิม (ไม่มี allOrders)", typeof B === "object" ? [B.calls, B.all, JSON.stringify(B.orders) === JSON.stringify(server(urlOf("getOrders", 5)).map((x) => x.id))] : B, [1, null, true]);
+    const APPC = comp("App");
+    ok_("แอปหลัก: ล็อกอิน + reload.orders ใช้ fetchOrdersFor · ไม่เหลือ getOrders/getAllOrders ตรงๆ ในแอปหลัก",
+      APPC.includes("fetchOrdersFor(isCentral,currentBranch.id),") && APPC.includes("setOrders(o.orders);") && APPC.includes("if(isCentral)setAllOrders(o.all);")
+      && APPC.includes("orders:async()=>{const isCentral=currentBranch?.type===\"central\";const r=await fetchOrdersFor(isCentral,currentBranch?.id);setOrders(r.orders);if(isCentral)setAllOrders(r.all);},")
+      && !APPC.includes("api.getAllOrders(") && !APPC.includes("api.getOrders("));
+
+    // ── ⑦ สินทรัพย์โหลดเมื่อเปิดแท็บ ──
+    ok_("แอปหลัก: ไม่โหลดทะเบียนสินทรัพย์ตอนล็อกอิน (null = ยังไม่โหลด) · เปิดแท็บแล้วเท่านั้นที่รีเฟรช/สลับสาขาโหลดซ้ำ · reload.assets จำว่าเคยเปิด",
+      APPC.includes("const[assets,setAssets]=useState(null);const assetsWantedRef=useRef(false);") && APPC.includes("if(assetsWantedRef.current){try{const as=await api.getAssets();setAssets(as);}catch{}}")
+      && APPC.includes("assets:async()=>{assetsWantedRef.current=true;const d=await api.getAssets();setAssets(d);},") && (APPC.match(/api\.getAssets\(/g) || []).length === 2);
+  }
+  {
+    const AT = comp("AssetsTab");
+    ok_("AssetsTab: assets=null → สั่งโหลดเองตอนเปิด · ระหว่างโหลดขึ้น 'โหลดทะเบียนสินทรัพย์...' ไม่ใช่ 'ยังไม่มีสินทรัพย์' · ล้มขึ้นกล่องแดงพร้อมปุ่มลองใหม่",
+      AT.includes("useEffect(()=>{if(assets==null)loadAssetsNow();},[]);") && AT.includes("const myList=useMemo(()=>(assets||[]).filter(a=>+a.branch_id===+currentBranch?.id),[assets,currentBranch]);")
+      && AT.includes("{assets==null?(assetsErr?<ErrBox msg={\"โหลดทะเบียนสินทรัพย์ไม่สำเร็จ: \"+assetsErr} onRetry={loadAssetsNow}/>:<Loading text=\"โหลดทะเบียนสินทรัพย์...\"/>):filtered.length===0?")
+      && !/\bassets\.(filter|map|find|length)/.test(AT));
+    const runLA = async (fail) => {
+      const W = { reload: 0, errs: [] };
+      const fn = new Function("setAssetsErr", "reloadAssets", "Promise", line("  const loadAssetsNow=").trim() + "\nreturn loadAssetsNow;")((v) => W.errs.push(v), async () => { W.reload++; if (fail) throw new Error("503"); }, Promise);
+      fn(); await flush(); return [W.reload, W.errs];
+    };
+    ck("loadAssetsNow ตัวจริง: สำเร็จ = ล้างข้อความผิด · ล้ม = เก็บข้อความไว้โชว์ (ไม่เงียบเป็นรายการว่าง)", [await aSafe(() => runLA(false)), await aSafe(() => runLA(true))], [[1, [""]], [1, ["", "503"]]]);
+    ck("getAssetsByBranch: ฐานกรองสาขา + ยังแบ่งหน้า (sbAll) · getAssets ทั้งตารางเดิมไม่เปลี่ยน", [urlOf("getAssetsByBranch", 5), urlOf("getAssetsByBranch", "5"), urlOf("getAssets")],
+      ["assets?branch_id=eq.5&order=id.desc", "assets?branch_id=eq.5&order=id.desc", "assets?order=id.desc"]);
+    ok_("หน้าต่างสั่งซื้อสินทรัพย์ใช้ getAssetsByBranch + ยังกรองสาขาฝั่งจอ · ไม่มีสาขา = รายการว่างแบบเดิม",
+      comp("AssetOrderModal").includes("const a=currentBranch?.id==null?[]:await api.getAssetsByBranch(currentBranch.id);if(ok)setAssets((Array.isArray(a)?a:[]).filter(x=>+x.branch_id===+currentBranch?.id));"));
+  }
+
+  // ── ⑧ ใบค้าง / ของเสีย / อีเวนต์ CRM ──
+  const OLD_OO = "order_requests?status=in.(pending_approval,pending,approved)&select=id,branch_id,supplier_id,supplier_name,status,requested_at,items&order=id.desc&limit=1000";
+  ck("getOpenOrders: ไม่ส่งสาขา = URL เดิมเป๊ะ (หน้าอนุมัติตรวจใบซ้ำทุกสาขา) · สาขา 5/\"5\" = ฐานกรอง · เลขเพี้ยน/ว่าง = ไม่กรอง (ไม่ส่ง NaN ให้ฐาน)",
+    [urlOf("getOpenOrders"), urlOf("getOpenOrders", 5), urlOf("getOpenOrders", "5"), urlOf("getOpenOrders", null), urlOf("getOpenOrders", ""), urlOf("getOpenOrders", NaN), urlOf("getOpenOrders", "abc")],
+    [OLD_OO, OLD_OO + "&branch_id=eq.5", OLD_OO + "&branch_id=eq.5", OLD_OO, OLD_OO, OLD_OO, OLD_OO]);
+  {
+    const OQ = safe(() => new Function(line("const round2 =") + "\n" + line("const ON_ORDER_MAX_AGE_DAYS=") + "\n" + grab(APP, "onOrderQtyByIng") + "\nreturn onOrderQtyByIng;")());
+    const now = Date.now(), iso = (d) => new Date(now - d * 864e5).toISOString();
+    const oo = [
+      { id: 10, branch_id: 5, requested_at: iso(1), items: [{ ingId: 1, qtyNeeded: 3, unit: "กก." }, { ingredient_id: 2, qtyNeeded: 2, receivedQty: 1, unit: "ขวด" }] },
+      { id: 11, branch_id: 1, requested_at: iso(2), items: [{ ingId: 1, qtyNeeded: 9, unit: "กก." }] },
+      { id: 12, branch_id: "5", requested_at: iso(20), items: [{ ingId: 1, qtyNeeded: 4, unit: "กก." }] },
+      { id: 13, branch_id: 8, requested_at: iso(3), items: [{ ingId: 2, qtyNeeded: 6, unit: "ลัง" }] },
+      { id: 14, branch_id: 5, requested_at: iso(2), items: [{ ingId: 2, qtyNeeded: 5, unit: "ลัง" }] },
+    ];
+    const ib = new Map([[1, { buy_unit: "กก." }], [2, { buy_unit: "ขวด" }]]);
+    const sum = (r) => JSON.stringify([[...r.qtyByIng.entries()].sort((a, b) => a[0] - b[0]), r.stale]);
+    const eq = typeof OQ === "function" ? [5, 1, 8].map((b) => sum(OQ(oo, b, ib)) === sum(OQ(oo.filter((o) => +o.branch_id === b), b, ib))) : OQ;
+    ck("ยอดของที่สั่งค้าง (onOrderQtyByIng ตัวจริง): ใบเฉพาะสาขาจากฐาน = ใบทุกสาขาแล้วกรองเอง (ยอด/ใบเก่าเกิน 14 วัน/ธงหน่วยไม่ตรง ชุดเดิม)", eq, [true, true, true]);
+    ok_("จอนับสต็อกสั่งของ + สรุปต้องซื้อ ส่งสาขาของตัวเองให้ฐานกรอง (ตัวคำนวณใช้สาขาเดียวกัน) · หน้าอนุมัติยังขอทุกสาขา",
+      comp("StockCheckView").includes("try{const oo=await api.getOpenOrders(currentBranch.id);") && comp("StockCheckView").includes("onOrderQtyByIng(openOrders||[],currentBranch?.id,ingByIdSC)")
+      && PSM.includes("const oo=await api.getOpenOrders(currentBranch.id);") && PSM.includes("onOrderQtyByIng(openOrders||[],currentBranch?.id,ingById)")
+      && APP.includes("await api.getOpenOrders().catch(()=>[]):[];") && (APP.match(/api\.getOpenOrders\(/g) || []).length === 3);
+  }
+  {
+    const OLD_W = "waste_logs?order=log_date.desc,id.desc&limit=2000";
+    ck("getWasteLogs: รายการสาขา = branch_id=in.(…) · เลขเดียว/ไม่ส่ง = แบบเดิมเป๊ะ", [urlOf("getWasteLogs", [1, 5]), urlOf("getWasteLogs", ["1", 5]), urlOf("getWasteLogs", 5), urlOf("getWasteLogs")],
+      [OLD_W + "&branch_id=in.(1,5)", OLD_W + "&branch_id=in.(1,5)", OLD_W + "&branch_id=eq.5", OLD_W]);
+    const runWL = async (allowed) => {
+      const W = { calls: [], logs: null };
+      const inScope = (bid) => !allowed || allowed.map((x) => +x).includes(+bid);
+      const fn = new Function("api", "allowed", "inScope", "setLoadingLogs", "setLogs", line("  async function loadLogs(){setLoadingLogs(true);try{const d=allowed").trim() + "\nreturn loadLogs;")(
+        { getWasteLogs: async (b) => { W.calls.push(b === undefined ? "ไม่ส่ง" : b); return [{ id: 1, branch_id: 1 }, { id: 2, branch_id: 5 }, { id: 3, branch_id: 8 }]; } }, allowed, inScope, () => {}, (v) => { W.logs = v.map((x) => x.id); });
+      await fn(); return [W.calls, W.logs];
+    };
+    ck("ประวัติของเสีย (loadLogs ตัวจริง): admin/ไม่จำกัด = ทุกสาขาแบบเดิม · จำกัด = ฐานกรองสาขาที่มีสิทธิ์ + ยังกรองฝั่งจอ · ไม่มีสิทธิ์สาขาไหน = ไม่ถามฐาน",
+      [await aSafe(() => runWL(null)), await aSafe(() => runWL([1, 5])), await aSafe(() => runWL([]))], [[["ไม่ส่ง"], [1, 2, 3]], [[[1, 5]], [1, 2]], [[], []]]);
+  }
+  {
+    const OLD_E = "crm_events?order=id.desc&limit=5000&branch_id=eq.5";
+    const since = "2026-10-16T00:00:00.000Z";
+    ck("getCRMEvents: ไม่ส่ง since = แบบเดิมเป๊ะ · ส่ง since = 3 คอลัมน์ + created_at ≥ since", [urlOf("getCRMEvents", 5), urlOf("getCRMEvents", 5, since)],
+      [OLD_E, OLD_E + "&select=id,type,created_at&created_at=gte." + encodeURIComponent(since)]);
+    ok_("CRM โหลดอีเวนต์ย้อนหลัง 8 วัน (stat ตัดที่ 7 วันเอง)", APP.includes("api.getCRMEvents(currentBranch.id,new Date(Date.now()-8*864e5).toISOString()).catch(()=>[]),"));
+    const CP = comp("CRMPoints");
+    const calls = [...CP.matchAll(/\bstat\(([^)]*)\)/g)].map((m) => m[1]).filter((a) => !/^type,days$/.test(a));
+    ok_("ทุกจุดที่ใช้อีเวนต์ในแท็บแต้มนับไม่เกิน 7 วัน (ถ้าวันหน้าเพิ่มสถิติช่วงยาวกว่านี้ ต้องขยายช่วงที่โหลดด้วย) · อีเวนต์ส่งให้ CRMPoints ที่เดียว",
+      calls.length >= 4 && calls.every((a) => { const m = /^"\w+",(\d+)$/.exec(a.trim()); return m && +m[1] <= 7; }) && (APP.match(/events=\{events\}/g) || []).length === 1);
+    const statLine = line("  const stat=(type,days)=>").trim();
+    const nowMs = Date.now(), ev = [];
+    ["visit", "line_click", "booking", "point_claim"].forEach((t, k) => { for (let d = 0; d < 40; d++) ev.push({ id: ev.length + 1, type: t, created_at: new Date(nowMs - (d * 0.37 + k * 0.11) * 864e5).toISOString(), meta: { ua: "x".repeat(50) } }); });
+    const statOf = (events) => safe(() => new Function("events", statLine + "\nreturn stat;")(events));
+    const cut = new Date(nowMs - 8 * 864e5).toISOString();
+    const srv = ev.filter((e) => e.created_at >= cut).map(({ id, type, created_at }) => ({ id, type, created_at }));
+    const sA = statOf(ev), sB = statOf(srv);
+    ck("stat ตัวจริงของแท็บแต้ม: อีเวนต์ 8 วันจากฐาน (3 คอลัมน์) นับ 7 วันได้เท่ากับขนทั้งหมดทุกชนิด",
+      typeof sA === "function" && typeof sB === "function" ? ["visit", "line_click", "booking", "point_claim"].map((t) => [sA(t, 7), sB(t, 7)]) : [sA, sB],
+      typeof sA === "function" ? ["visit", "line_click", "booking", "point_claim"].map((t) => [sA(t, 7), sA(t, 7)]) : "ดึง stat ไม่ได้");
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ลด egress หน้าลูกค้าสแกน (24 ต.ค. 69 · ฐานแผนฟรีป่วย) — รันตัวจริงทุกข้อ ไม่แตะ SQL
+// ① ตัวถามใหม่ (scanTableOk / getOrderSigByTable / getBranchPublic) ตัวกรองเดียวกับของเดิมเป๊ะ · ประตูยังได้แถวโต๊ะเต็ม (เลขโต๊ะบนหัวจอ)
+// ② loadMyOrder ตัวจริง: บิลบนจอ = ต้นฉบับก่อนแก้ทุกขั้น · ไม่เปลี่ยน = ไม่ขนบิลซ้ำ · ล้างจอแล้วดึงเต็มเสมอ · ตาข่าย 10 นาที
+// ③ refreshMenus / refreshAvail / onVis ตัวจริง: โต๊ะแพ็คเกจข้ามชุดตามสั่ง · จดเวลาเฉพาะสำเร็จ · เปิดจอซ้ำถามเท่าที่จำเป็น
+// ④ ออกจากโหมดแพ็คเกจ = ดึงเมนูเต็มครั้งเดียว
+// ══════════════════════════════════════════════════════════════════════════
+section("ลด egress หน้าลูกค้าสแกน (24 ต.ค. 69)");
+{
+  const L = APP.split("\n");
+  const apiLine = (name) => { const l = L.find((x) => x.startsWith(`  ${name}: `)); return l ? l.trim().slice(name.length + 1).trim().replace(/,\s*$/, "") : null; };
+  const safe = (f) => { try { return f(); } catch (e) { return "ERR " + e.message; } };
+  const aSafe = async (f) => { try { return await f(); } catch (e) { return "ERR " + e.message; } };
+  const CP = (() => { const st = APP.indexOf("function CustomerPage("); return st < 0 ? "" : APP.slice(st, APP.indexOf("\nfunction ", st + 10)); })();
+  // บล็อก {...} ที่ขึ้นต้นด้วยหัวที่ให้ (หัวต้องจบด้วย "{")
+  const block = (src, head) => { const st = src.indexOf(head); if (st < 0) throw new Error("ไม่เจอ " + head); let d = 0; for (let i = st + head.length - 1; i < src.length; i++) { if (src[i] === "{") d++; else if (src[i] === "}") { d--; if (d === 0) return src.slice(st, i + 1); } } throw new Error("อ่านไม่จบ " + head); };
+  // รัน api.xxx ตัวจริง (บรรทัดเดียว) กับ sb ปลอมที่จด URL → [urls, ค่าที่คืน]
+  const callApi = async (name, ...args) => { const urls = []; const rec = async (u) => { urls.push(u); return []; }; const r = await new Function("sb", "sbAll", "return (" + apiLine(name) + ");")(rec, rec)(...args); return [urls, r]; };
+  const qp = (u) => { const [path, q] = String(u || "").split("?"); const ps = (q || "").split("&").filter(Boolean); return { path, sel: (ps.find((p) => p.startsWith("select=")) || "select=").slice(7), rest: ps.filter((p) => !p.startsWith("select=")).sort().join("&") }; };
+  const visApp = safe(() => new Function(grabConst(APP, "menuVisibleAt") + "\nreturn menuVisibleAt;")());
+
+  // ── ① ตัวถามใหม่ ──
+  {
+    const r = await aSafe(async () => {
+      const out = [];
+      for (const tok of ["Ab9_x-Q", "a b&c=ด/?", "", undefined]) {
+        const [[full]] = await callApi("scanTable", "5", "9", tok), [[ok]] = await callApi("scanTableOk", "5", "9", tok);
+        out.push([qp(ok).path, qp(ok).rest === qp(full).rest && qp(full).rest.includes("active=eq.true") && qp(full).rest.includes("qr_token=eq."), qp(ok).sel, qp(full).sel]);
+      }
+      return out;
+    });
+    ck("scanTableOk ตัวกรองเดียวกับ scanTable เป๊ะ (โต๊ะ/สาขา/รหัส QR/เปิดอยู่ · รหัสแปลกๆ ก็ตรงกัน) ขอแค่ id · scanTable ยังได้แถวเต็ม",
+      r, Array(4).fill(["tables", true, "id", ""]));
+    const s = await aSafe(async () => {
+      const [[full]] = await callApi("getOrderByTable", 63), [[sig]] = await callApi("getOrderSigByTable", 63);
+      return [qp(sig).path, qp(sig).rest === qp(full).rest, qp(sig).sel, qp(full).sel.split(",").includes("updated_at"), /table_id=eq\.63/.test(sig) && sig.includes("status=neq.paid") && sig.includes("status=neq.cancelled") && sig.includes("limit=1") && sig.includes("order=created_at.desc")];
+    });
+    ck("ลายเซ็นบิล (getOrderSigByTable): ตัวกรอง/เรียง/เพดานเดียวกับ getOrderByTable · ขอแค่ id,updated_at · ตัวดึงเต็มขอ updated_at มาด้วย (ไว้เทียบ)",
+      s, ["orders", true, "id,updated_at", true, true]);
+    const b = await aSafe(async () => {
+      const out = [];
+      for (const bid of ["5", 8, "abc", "5.5", "1e400", "5abc"]) { const [urls, ret] = await callApi("getBranchPublic", bid); out.push([urls, Array.isArray(ret) ? ret.length : ret]); }
+      return out;
+    });
+    ck("ประตูหน้าลูกค้า (getBranchPublic): แถวเดียว 3 คอลัมน์ · เลขสาขาไม่ใช่จำนวนเต็ม = ไม่ถามฐาน คืน [] (ประตูขึ้น QR ใช้ไม่ได้ เหมือนเดิมที่หาไม่เจอ)",
+      b, [[["branches?id=eq.5&select=id,name,active"], 0], [["branches?id=eq.8&select=id,name,active"], 0], [[], 0], [[], 0], [[], 0], [[], 0]]);
+    // ทุกช่องที่หน้านั้นอ่านจากแถวสาขา ต้องอยู่ใน select (ขาด = ชื่อสาขาบนหัวจอว่าง / ปิดสาขาแล้วยังสั่งได้)
+    const need = new Set(["id", "active"]);
+    for (const m of CP.matchAll(/\bbranch(?:&&branch)?\??\.(\w+)/g)) need.add(m[1]);
+    const g0 = CP.indexOf("const bs=await api.getBranchPublic(branchId);"), gate = g0 < 0 ? "" : CP.slice(g0, CP.indexOf("const matches=await api.scanTable(", g0));
+    for (const m of gate.matchAll(/\bb\.(\w+)/g)) need.add(m[1]);
+    const sel = await aSafe(async () => { const [[bu]] = await callApi("getBranchPublic", 5); return qp(bu).sel.split(","); });
+    ck("แถวสาขาของหน้าลูกค้า: ขอครบทุกช่องที่หน้านั้นอ่าน (ชื่อ/เปิดอยู่ไหม/id)", [need.has("name"), Array.isArray(sel) ? [...need].filter((k) => !sel.includes(k)) : sel], [true, []]);
+    ok_("ประตูหน้าลูกค้า: ใช้ getBranchPublic ที่เดียว (ไม่ขน branches ทั้งตาราง) · ตัดสินด้วยเงื่อนไขเดิม (หาไม่เจอ = QR ใช้ไม่ได้ · ปิด = ร้านปิด)",
+      gate.length > 0 && !CP.includes("api.getBranches(") && (CP.match(/api\.getBranchPublic\(/g) || []).length === 1 &&
+      gate.includes("const b=bs.find(x=>x.id===+branchId);") && gate.includes('if(!b){setGateError("bad_token");') && gate.includes('if(b.active===false){setGateError("branch_closed");'));
+    // ประตูต้องได้แถวโต๊ะเต็ม (หัวจอ "โต๊ะ {table_number} — {label}" · ข้อความยืนยันเรียกพนักงาน · เลขโต๊ะที่ส่งเข้าบิล)
+    ok_("ประตูยังใช้ scanTable แถวเต็มที่เดียว (setTable) · จุดที่ดูแค่ความยาวผล 3 จุด (บิลรายรอบ/กดสั่ง/คิวออฟไลน์) ใช้ scanTableOk",
+      (CP.match(/api\.scanTable\(/g) || []).length === 1 && CP.includes("const matches=await api.scanTable(branchId,tableId,token);\n        if(!Array.isArray(matches)||matches.length===0){setGateError(\"bad_token\");setBranch(b);setGateLoading(false);return;}\n        const t=matches[0];") &&
+      (CP.match(/api\.scanTableOk\(/g) || []).length === 3 && !/(?:ok|matches)\[0\]/.test(CP.replace("const t=matches[0];", "")));
+    ok_("บิลบนจอเปลี่ยนผ่าน putMyOrder ที่เดียว (ตั้ง ref ของบิลบนจอพร้อมกันทุกครั้ง — ตัวเทียบลายเซ็นไม่มีทางเทียบกับของเก่า)",
+      (CP.match(/setMyOrder\(/g) || []).length === 1 && CP.includes("const putMyOrder=(o)=>{myOrderRef.current=o;setMyOrder(o);};"));
+  }
+
+  // ── ② loadMyOrder ตัวจริง เทียบต้นฉบับก่อน 24 ต.ค. 69 ──
+  {
+    // ต้นฉบับ (คัดมาตรงตัว ตัดคอมเมนต์) — ทุกขั้นของเรื่องจริงด้านล่าง บิล/ชำระแล้ว/QR หมดอายุ บนจอต้องเท่ากันเป๊ะ
+    const OLD_LM = `async function loadMyOrder(){try{
+    if(token){const ok=await api.scanTable(branchId,tableId,token);if(Array.isArray(ok)&&ok.length===0){setMyOrder(null);setGateError("bad_token");return;}}
+    const ex=await api.getOrderByTable(+tableId);
+    if(ex&&ex.length>0){setMyOrder(ex[0]);hadOrderRef.current=true;}
+    else{if(hadOrderRef.current)setJustPaid(true);setMyOrder(null);}
+    }catch(e){console.error("loadMyOrder",e);}}`;
+    const NEW_LM = safe(() => block(CP, "async function loadMyOrder(){"));
+    // หน้าลูกค้าจำลอง 1 เครื่อง + ฐานปลอม (srv) ที่ทั้งสองรุ่นอ่านร่วมกัน
+    const mkPage = (src, srv, clock) => {
+      const P = { myOrder: null, justPaid: false, gateError: null, calls: [] };
+      const myOrderRef = { current: null }, orderFullAtRef = { current: 0 }, hadOrderRef = { current: false };
+      const setMyOrder = (o) => { P.myOrder = o; };
+      // putMyOrder ตัวจริงของหน้า (บรรทัดเดียว) — ต้องตั้ง ref ของบิลบนจอทุกครั้ง ไม่งั้นเรื่องจริงด้านล่างแดง
+      const putMyOrder = new Function("myOrderRef", "setMyOrder", ((CP.split("\n").find((l) => l.trim().startsWith("const putMyOrder=")) || "").trim()) + "\nreturn putMyOrder;")(myOrderRef, setMyOrder);
+      const net = (k) => { P.calls.push(k); if (srv.fail && srv.fail[k] > 0) { srv.fail[k]--; throw new Error(srv.failMsg || "Failed to fetch"); } };
+      const api = {
+        scanTable: async () => { net("scan"); return srv.tokenOk ? [{ id: 9, table_number: "A1", label: "" }] : []; },
+        scanTableOk: async () => { net("scan"); return srv.tokenOk ? [{ id: 9 }] : []; },
+        getOrderSigByTable: async () => { net("sig"); return srv.bill ? [{ id: srv.bill.id, updated_at: srv.bill.updated_at }] : []; },
+        getOrderByTable: async () => { net("full"); return srv.bill ? [JSON.parse(JSON.stringify(srv.showBill || srv.bill))] : []; },
+      };
+      const f = new Function("token", "api", "branchId", "tableId", "setMyOrder", "putMyOrder", "setGateError", "setJustPaid", "hadOrderRef", "myOrderRef", "orderFullAtRef", "console", "Date", "return " + src + ";")(
+        "tk", api, "5", "9", setMyOrder, putMyOrder, (g) => { P.gateError = g; }, (v) => { P.justPaid = v; }, hadOrderRef, myOrderRef, orderFullAtRef, { error: () => {} }, { now: () => clock.t });
+      return { P, run: f };
+    };
+    const bill = (id, at, extra = {}) => ({ id, updated_at: at, status: "pending", created_at: "2026-10-24T11:00:00+00:00", items: [{ line_uid: "u1", menu_id: 1, qty: 1, price: 100 }], subtotal: 100, discount: 0, total: 100, pay_lock: null, ...extra });
+    // เรื่องจริงหนึ่งมื้อ (รอบละ 45 วิ เหมือนตัวจับเวลาจริง) — [ชื่อ, แก้ฐาน, เวลาที่เดิน(ms)]
+    const story = [
+      ["เปิดหน้า ยังไม่มีบิล", () => {}],
+      ["พนักงานเปิดโต๊ะ", (s) => { s.bill = bill(101, "2026-10-24T12:00:00.000001+00:00"); }],
+      ["ไม่มีอะไรเปลี่ยน", () => {}],
+      ["ไม่มีอะไรเปลี่ยน", () => {}],
+      ["อีกเครื่องในโต๊ะสั่งเพิ่ม", (s) => { s.bill = { ...s.bill, items: [...s.bill.items, { line_uid: "u2", menu_id: 2, qty: 2, price: 80 }], subtotal: 260, total: 260, updated_at: "2026-10-24T12:03:10.123456+00:00" }; }],
+      ["ไม่มีอะไรเปลี่ยน", () => {}],
+      ["พิมพ์ QR จ่ายเงิน (ล็อกยอดหลังส่วนลด)", (s) => { s.bill = { ...s.bill, status: "awaiting_payment", pay_lock: { total: 240, discount: 20 }, updated_at: "2026-10-24T12:40:00.5+00:00" }; }],
+      ["ไม่มีอะไรเปลี่ยน", () => {}],
+      ["ชำระแล้ว (บิลหายจากผลค้นหา)", (s) => { s.bill = null; }],
+      ["ไม่มีบิล", () => {}],
+      ["ลูกค้าใหม่ QR เดิม: บิลใหม่", (s) => { s.bill = bill(102, "2026-10-24T13:00:00+00:00", { total: 50, subtotal: 50 }); }],
+      ["ไม่มีอะไรเปลี่ยน", () => {}],
+      ["ปิดโต๊ะ QR หมุน", (s) => { s.tokenOk = false; }],
+      ["QR ยังหมดอายุ", () => {}],
+      ["QR ใช้ได้อีก (บิลเดิม ลายเซ็นเดิม — จอถูกล้างไปแล้ว)", (s) => { s.tokenOk = true; }],
+      ["ไม่มีอะไรเปลี่ยน", () => {}],
+      ["ไม่มีอะไรเปลี่ยน 10 นาทีต่อมา (ตาข่าย)", () => {}, 600000],
+      ["ไม่มีอะไรเปลี่ยน", () => {}],
+    ];
+    const r = await aSafe(async () => {
+      const srvO = { tokenOk: true, bill: null }, srvN = { tokenOk: true, bill: null }, ck0 = { t: 1_000_000 };
+      const O = mkPage(OLD_LM, srvO, ck0), N = mkPage(NEW_LM, srvN, ck0);
+      const diff = [], fulls = [];
+      for (const [name, mut, dt] of story) {
+        mut(srvO); mut(srvN); ck0.t += dt || 45000;
+        const n0 = N.P.calls.length;
+        await O.run(); await N.run();
+        const view = (P) => JSON.stringify([P.myOrder, P.justPaid, P.gateError]);
+        if (view(O.P) !== view(N.P)) diff.push(name + ": เดิม " + view(O.P) + " · ใหม่ " + view(N.P));
+        fulls.push(N.P.calls.slice(n0).includes("full") ? 1 : 0);
+      }
+      return [diff, fulls, O.P.calls.filter((c) => c === "full").length, N.P.calls.filter((c) => c === "full").length, N.P.calls.length - O.P.calls.length];
+    });
+    ck("loadMyOrder ตัวจริง: ทั้งมื้อ (เปิดโต๊ะ/สั่งเพิ่ม/ล็อกยอด/ชำระ/ลูกค้าใหม่/QR หมุน/ตาข่าย 10 นาที) บิล·ชำระแล้ว·QR หมดอายุ บนจอเท่าต้นฉบับทุกขั้น · ดึงบิลเต็มเฉพาะเมื่อเปลี่ยน/จอถูกล้าง/ครบ 10 นาที",
+      r, [[], [0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0], 16, 6, 6]);
+
+    // ข้อยกเว้นที่ต้องไม่ทำให้จอค้าง
+    const one = async (setup, steps) => {
+      const srv = { tokenOk: true, bill: bill(201, "2026-10-24T14:00:00+00:00"), fail: {} }, clock = { t: 5_000_000 };
+      const N = mkPage(NEW_LM, srv, clock);
+      await N.run();
+      setup(srv);
+      const out = [];
+      for (const st of steps) { if (st.mut) st.mut(srv); clock.t += st.dt || 45000; const n0 = N.P.calls.length; await N.run(); out.push([N.P.myOrder && N.P.myOrder.total, N.P.calls.slice(n0).join(">")]); }
+      return out;
+    };
+    ck("ถามลายเซ็นไม่ได้ (ฐานตอบ error / เน็ตสะดุดเฉพาะคำขอนั้น) = ดึงเต็มแบบเดิม จอได้บิลล่าสุด",
+      await aSafe(() => one((s) => { s.bill = { ...s.bill, total: 333, updated_at: "2026-10-24T14:01:00+00:00" }; s.fail.sig = 1; s.failMsg = '{"code":"PGRST100","message":"bad"}'; }, [{}])),
+      [[333, "scan>sig>full"]]);
+    ck("ลายเซ็นเปลี่ยนแต่ดึงเต็มไม่ผ่าน = จอเดิมไว้ก่อน · รอบหน้าลายเซ็นเดิม (ใหม่) ยังดึงเต็มอีก ไม่ค้างของเก่า",
+      await aSafe(() => one((s) => { s.bill = { ...s.bill, total: 444, updated_at: "2026-10-24T14:02:00+00:00" }; s.fail.full = 1; }, [{}, {}, {}])),
+      [[100, "scan>sig>full"], [444, "scan>sig>full"], [444, "scan>sig"]]);
+    ck("บิลใหม่ id ใหม่ แต่ updated_at บังเอิญเท่าเดิม = ดึงเต็ม (เทียบ id ด้วย)",
+      await aSafe(() => one((s) => { s.bill = { ...s.bill, id: 202, total: 55 }; }, [{}])), [[55, "scan>sig>full"]]);
+    ck("บิลบนจอไม่มี updated_at (ค่าว่าง) = ดึงเต็มทุกรอบแบบเดิม ไม่ข้าม",
+      await aSafe(() => one((s) => { s.bill = { ...s.bill, updated_at: null }; }, [{}, {}])), [[100, "scan>sig>full"], [100, "scan>sig>full"]]);
+    // แก้บิลแบบปิด trigger (SQL session_replication_role) — updated_at ไม่ขยับ: ตาข่าย 10 นาทีเก็บให้
+    ck("แก้บิลโดยไม่ผ่าน trigger (updated_at ไม่ขยับ) = เห็นภายใน 10 นาทีจากการดึงเต็มครั้งล่าสุด (ตาข่าย)",
+      await aSafe(() => one((s) => { s.showBill = { ...s.bill, total: 777 }; }, [{}, { dt: 500000 }, { dt: 60000 }])), [[100, "scan>sig"], [100, "scan>sig"], [777, "scan>sig>full"]]);
+    ck("QR หมดอายุ = ไม่ถามบิลต่อเลย (เหมือนเดิม) · ลายเซ็นว่าง = ชำระแล้ว ไม่ดึงเต็ม",
+      await aSafe(() => one(() => {}, [{ mut: (s) => { s.tokenOk = false; } }, { mut: (s) => { s.tokenOk = true; s.bill = null; } }])), [[null, "scan"], [null, "scan>sig"]]);
+  }
+
+  // ── ③ refreshMenus / refreshAvail / onVis ตัวจริง ──
+  {
+    const rmSrc = safe(() => block(CP, "const refreshMenus=async()=>{") + ";");
+    const raSrc = safe(() => block(CP, "const refreshAvail=async()=>{") + ";");
+    const ovLine = (CP.split("\n").find((l) => l.trim().startsWith("onVis=()=>{")) || "").trim();
+    const lpSrc = safe(() => block(CP, "const loadPkgMenus=useCallback(async()=>{").replace(/^const loadPkgMenus=useCallback\(/, ""));
+    const mk = (o = {}) => {
+      const W = { calls: [], menus: [{ id: 1, name: "ข้าว", price: 50, availability: {} }, { id: 2, name: "ต้ม", price: 60, availability: {} }], pkgMenus: o.pkgMenus === undefined ? null : o.pkgMenus, posCfg: null, pkgErr: null, rm: 0, ra: 0, lmo: 0 };
+      const clock = { t: 50_000_000 };
+      const fail = o.fail || {};
+      const pkgIdsRef = { current: o.pkgIds || [] }, pkgMenusRef = { current: o.pkgMenus === undefined ? null : o.pkgMenus }, menuOkRef = { current: { full: 1, avail: 1 } };
+      const hit = async (k, v) => { W.calls.push(k); if (o.during && o.during[k]) o.during[k](pkgIdsRef); if (fail[k]) throw new Error("Failed to fetch"); return v; };
+      const api = {
+        getMenusPublic: () => hit("menus", [{ id: 1, name: "ข้าว", price: 55, availability: {}, visible_branches: null }, { id: 3, name: "ใหม่", price: 70, availability: {}, visible_branches: null }]),
+        getMenuAvail: () => hit("avail", [{ id: 1, availability: { 5: "soldout" } }, { id: 2, availability: {} }]),
+        getPOSSettingsPublic: () => hit("cfg", [{ buffet_packages: [] }]),
+        getMenuAvailByIds: (b, ids) => hit("availIds:" + ids.join(","), ids.map((id) => ({ id: +id, availability: {} }))),
+        getMenusByIdsPublic: (b, ids) => hit("pkgMenus:" + ids.join(","), ids.map((id) => ({ id: +id, name: "pkg" + id, price: 0, availability: {}, visible_branches: null }))),
+      };
+      const set = (k) => (u) => { W[k] = typeof u === "function" ? u(W[k]) : u; };
+      const Dt = { now: () => clock.t };
+      const loadPkgMenus = new Function("api", "branchId", "pkgIdsRef", "pkgMenusRef", "setPkgMenus", "setPkgLoadErr", "menuVisibleAt", "return (" + lpSrc + ");")(api, "5", pkgIdsRef, pkgMenusRef, set("pkgMenus"), set("pkgErr"), visApp);
+      const loadPkgMenusRef = { current: loadPkgMenus };
+      const env = { api, branchId: "5", setMenus: set("menus"), menuVisibleAt: visApp, pkgIdsRef, setPosCfg: set("posCfg"), loadPkgMenusRef, menuOkRef, Date: Dt, pkgMenusRef, setPkgMenus: set("pkgMenus") };
+      const ks = Object.keys(env);
+      const fns = new Function(...ks, rmSrc + "\n" + raSrc + "\nreturn {refreshMenus,refreshAvail};")(...ks.map((k) => env[k]));
+      const doc = { hidden: false };
+      const onVis = new Function("refreshMenus", "refreshAvail", "loadMyOrder", "document", "menuOkRef", "Date", "let onVis=null;\n" + ovLine + "\nreturn onVis;")(() => { W.rm++; }, () => { W.ra++; }, () => { W.lmo++; }, doc, menuOkRef, Dt);
+      return { W, clock, menuOkRef, pkgIdsRef, pkgMenusRef, doc, onVis, ...fns };
+    };
+    const ok0 = (M) => [M.menuOkRef.current.full === M.clock.t, M.menuOkRef.current.avail === M.clock.t];
+    const r = await aSafe(async () => {
+      const out = {};
+      { const M = mk(); await M.refreshMenus(); out.a = [M.W.calls, M.W.menus.map((m) => m.id + ":" + m.price), ok0(M)]; }
+      { const M = mk({ fail: { menus: 1 } }); await M.refreshMenus(); out.b = [M.W.calls, M.W.menus.length, ok0(M)]; }
+      { const M = mk(); await M.refreshAvail(); out.c = [M.W.calls, M.W.menus.map((m) => m.id + ":" + (m.availability[5] || "-")), ok0(M)]; }
+      { const M = mk({ fail: { avail: 1 } }); await M.refreshAvail(); out.d = [M.W.calls, ok0(M)]; }
+      return out;
+    });
+    ck("โต๊ะตามสั่ง: refreshMenus/refreshAvail ตัวจริงถามชุดเดิมเป๊ะ (เมนูเต็ม / สถานะของหมด) · สำเร็จ = จดเวลา (เมนูเต็มจดทั้งคู่) · ไม่ผ่าน = ไม่จด ใช้ของเดิมไปก่อน",
+      r, { a: [["menus"], ["1:55", "3:70"], [true, true]], b: [["menus"], 2, [false, false]], c: [["avail"], ["1:soldout", "2:-"], [false, true]], d: [["avail"], [false, false]] });
+    const p = await aSafe(async () => {
+      const out = {};
+      const PM = [{ id: 212, name: "pkg212", price: 0, availability: {} }];
+      { const M = mk({ pkgIds: ["212"], pkgMenus: PM }); await M.refreshMenus(); out.a = [M.W.calls, M.W.menus.length, M.W.menus[0].price, ok0(M)]; }
+      { const M = mk({ pkgIds: ["212"], pkgMenus: PM }); await M.refreshAvail(); out.b = [M.W.calls, M.W.menus[0].availability, ok0(M)]; }
+      { const M = mk({ pkgIds: ["212"] }); await M.refreshAvail(); out.c = [M.W.calls, (M.W.pkgMenus || []).map((m) => m.id), ok0(M)]; }
+      { const M = mk({ pkgIds: ["212"], fail: { "pkgMenus:212": 1 } }); await M.refreshAvail(); out.d = [M.W.calls, M.W.pkgErr, ok0(M)]; }
+      { const M = mk({ pkgIds: ["212"], pkgMenus: PM, fail: { cfg: 1 } }); await M.refreshMenus(); out.e = [M.W.calls, ok0(M)]; }
+      { const M = mk({ pkgIds: ["212"], pkgMenus: PM, fail: { "pkgMenus:212": 1 } }); await M.refreshMenus(); out.f = [M.W.calls, ok0(M)]; }
+      { const M = mk({ pkgIds: ["212"], pkgMenus: PM, fail: { "availIds:212": 1 } }); await M.refreshAvail(); out.g = [M.W.calls, ok0(M)]; }
+      return out;
+    });
+    ck("โต๊ะแพ็คเกจ: ไม่ถามเมนูตามสั่ง/สถานะชุดนั้นเลย (จอไม่ได้แสดง) · ยังอ่านคลังแพ็คเกจ+เมนูแพ็คเกจ · ของหมดของเมนูแพ็คเกจยังถามทุกนาที · โหลดครั้งแรกไม่ผ่าน = ลองใหม่ในรอบนาที · ส่วนไหนไม่ผ่าน = ไม่จดเวลา",
+      p, {
+        a: [["cfg", "pkgMenus:212"], 2, 50, [true, true]], b: [["availIds:212"], {}, [false, true]], c: [["pkgMenus:212"], [212], [false, true]], d: [["pkgMenus:212"], true, [false, false]],
+        e: [["cfg", "pkgMenus:212"], [false, false]], f: [["cfg", "pkgMenus:212"], [false, false]], g: [["availIds:212"], [false, false]],
+      });
+    const m = await aSafe(async () => {
+      const out = {};
+      // แพ็คเกจจบระหว่างรอบ (บิลปิด) — รอบนั้นไม่จดเวลา (ตัวออกจากโหมดแพ็คเกจดึงเต็มให้เอง)
+      { const M = mk({ pkgIds: ["212"], pkgMenus: [], during: { cfg: (ref) => { ref.current = []; } } }); await M.refreshMenus(); out.a = [M.W.calls, ok0(M)]; }
+      // เพิ่งรู้ว่าเป็นโต๊ะแพ็คเกจระหว่างรอบ — ยังอ่านคลังแพ็คเกจในรอบเดียวกันแบบเดิม แต่ไม่จดเวลา
+      { const M = mk({ during: { menus: (ref) => { ref.current = ["212"]; } } }); await M.refreshMenus(); out.b = [M.W.calls, ok0(M)]; }
+      { const M = mk({ pkgMenus: [], during: { avail: (ref) => { ref.current = ["212"]; } } }); await M.refreshAvail(); out.c = [M.W.calls, ok0(M)]; }
+      return out;
+    });
+    ck("โหมดแพ็คเกจเปลี่ยนกลางรอบ = รอบนั้นไม่จดเวลา (ครั้งหน้าดึงใหม่ ไม่ข้ามด้วยเวลาของอีกโหมด)",
+      m, { a: [["cfg"], [false, false]], b: [["menus", "cfg", "pkgMenus:212"], [false, false]], c: [["avail", "availIds:212"], [false, false]] });
+    // onVis: บิลถามทุกครั้ง · เมนูเต็มเมื่อสำเร็จล่าสุดเกิน 10 นาที · ไม่งั้นสถานะของหมดเมื่อเกิน 1 นาที · จอซ่อน = ไม่ทำอะไร
+    const v = await aSafe(async () => {
+      const cases = [[null, null, true], [660000, 30000, false], [600000, 5000, false], [599999, 60000, false], [300000, 120000, false], [300000, 59999, false], [30000, 30000, false], [Infinity, Infinity, false]];
+      return cases.map(([agoFull, agoAvail, hidden]) => {
+        const M = mk(); M.doc.hidden = hidden;
+        M.menuOkRef.current = agoFull === Infinity ? { full: 0, avail: 0 } : { full: M.clock.t - (agoFull || 0), avail: M.clock.t - (agoAvail || 0) };
+        M.onVis();
+        return [M.W.rm, M.W.ra, M.W.lmo];
+      });
+    });
+    ck("กลับมาเปิดจอ (onVis ตัวจริง): ซ่อนอยู่ = ไม่ทำ · ≥10 นาที = เมนูเต็ม · <10 นาที แต่สถานะ ≥1 นาที = สถานะของหมด · ไม่ถึงทั้งคู่ = ไม่ถามเมนู · ไม่เคยสำเร็จ = เต็ม · บิลถามทุกครั้งที่เปิดจอ",
+      v, [[0, 0, 0], [1, 0, 1], [1, 0, 1], [0, 1, 1], [0, 1, 1], [0, 0, 1], [0, 0, 1], [1, 0, 1]]);
+    ok_("ตัวจับเวลาสามตัวคงเดิม (บิล 45 วิ · ของหมด 1 นาที · เมนูเต็ม 10 นาที · ทำเฉพาะจอเปิดอยู่) · ประตูจดเวลาหลังโหลดเมนูรอบแรก · ตัวเรียกจากภายนอกถูกล้างตอนเลิกใช้",
+      CP.includes("pollId=setInterval(()=>{if(!document.hidden)loadMyOrder();},45000);") && CP.includes("menuPollId=setInterval(()=>{if(!document.hidden)refreshAvail();},60000);") &&
+      CP.includes("fullPollId=setInterval(()=>{if(!document.hidden)refreshMenus();},600000);") && CP.includes("refreshMenusRef.current=refreshMenus;") && CP.includes("refreshMenusRef.current=null;") &&
+      CP.indexOf("menuOkRef.current={full:Date.now(),avail:Date.now()};") > CP.indexOf("setMenus(ms.filter(m=>m.price>0") && CP.indexOf("menuOkRef.current={full:Date.now(),avail:Date.now()};") < CP.indexOf("await loadMyOrder();"));
+  }
+
+  // ── ④ ออกจากโหมดแพ็คเกจ = ดึงเมนูตามสั่งเต็มทันทีครั้งเดียว (ระหว่างนั้นข้ามไป) ──
+  {
+    const r = await aSafe(async () => {
+      const k0 = CP.indexOf("const was=prevPkgKeyRef.current;");
+      const u0 = CP.lastIndexOf("useEffect(()=>{", k0);
+      if (k0 < 0 || u0 < 0) throw new Error("ไม่เจอ effect ของ pkgIdsKey");
+      const eff = block(CP.slice(u0), "useEffect(()=>{").replace(/^useEffect\(/, "");
+      const W = { load: 0, refresh: 0, resets: 0 };
+      const prevPkgKeyRef = { current: "" }, pkgIdsRef = { current: [] }, pkgMenusRef = { current: null };
+      const menuOkRef = { current: { full: 9, avail: 9 } }, refreshMenusRef = { current: () => { W.refresh++; W.resets += menuOkRef.current.full === 0 && menuOkRef.current.avail === 0 ? 1 : 0; } };
+      const run = (key) => new Function("pkgIdsKey", "prevPkgKeyRef", "pkgIdsRef", "pkgMenusRef", "setPkgMenus", "setPkgLoadErr", "loadPkgMenus", "menuOkRef", "refreshMenusRef", "return (" + eff + ");")(
+        key, prevPkgKeyRef, pkgIdsRef, pkgMenusRef, () => {}, () => {}, () => { W.load++; }, menuOkRef, refreshMenusRef)();
+      const out = [];
+      for (const key of ["", "212,213", "212,213", "", "", "300", ""]) { run(key); out.push([W.load, W.refresh, pkgIdsRef.current.join(",")]); }
+      refreshMenusRef.current = null; run("212"); run("");   // ประตูยังไม่ผ่าน/เลิกใช้แล้ว = ไม่ล้ม
+      return [out, W.resets, menuOkRef.current];
+    });
+    ck("effect ของ pkgIdsKey ตัวจริง: เข้าโหมดแพ็คเกจ = โหลดเมนูแพ็คเกจ (แบบเดิม) · ออกจากโหมด = ล้างเวลา + ดึงเมนูเต็มครั้งเดียว · ว่าง→ว่าง ไม่ดึง · ยังไม่มีตัวดึง = ไม่ล้ม",
+      r, [[[0, 0, ""], [1, 0, "212,213"], [2, 0, "212,213"], [2, 1, ""], [2, 1, ""], [3, 1, "300"], [3, 2, ""]], 2, { full: 0, avail: 0 }]);
+  }
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

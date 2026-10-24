@@ -35,7 +35,8 @@ const wantFullSrc = grabLine("const wantFull =");
 const pruneSrc = grabBetween("const live = new Set(", "saveState();");
 
 const changedOf = new Function("heads", "state", changedSrc + " return changed;");
-const wantFullOf = new Function("primed", "fullTick", "changed", "FULL_EVERY",
+// v51: ตาข่ายนิรภัยข้ามรอบที่ไม่มีบิลเปิดเลย (ดึงเต็มก็ได้ []) — นิพจน์จริงจึงอ้าง heads ด้วย
+const wantFullOf = new Function("primed", "fullTick", "changed", "FULL_EVERY", "heads",
   wantFullSrc.replace("const wantFull =", "return"));
 // รันบล็อก prune ตัวจริง — รวมทั้งการรวม orders และตัวกันคำตอบว่างชั่วคราว
 const pruneWith = new Function("heads", "orders", "state", pruneSrc + " return live;");
@@ -58,12 +59,17 @@ ok_("หัวบิลไม่ลาก items มาด้วย",
   SRC.includes("getActiveOrderHeads") && SRC.includes("select=id,updated_at"));
 
 // ── ตัวจำลอง tick — โครงเดียวกับของจริง ใช้บล็อกที่ดึงมา ──────────────────
-const FULL_EVERY = 60;
+// ใช้ค่าจริงจากไฟล์ (v51: 150 รอบ x 2 วิ = 5 นาที — เดิม 60 รอบที่ตั้งไว้ตอนรอบละ 5 วิ กลายเป็นทุก 2 นาที)
+const FULL_EVERY = +((SRC.match(/^const FULL_EVERY = (\d+);/m) || [])[1] || 0);
+const POLL_MS_REAL = +((SRC.match(/^const POLL_MS = (\d+);/m) || [])[1] || 0);
+ok_("ตาข่ายนิรภัยดึงเต็มอย่างน้อยทุก 5 นาที (ตามที่ตั้งใจไว้) และไม่ถี่กว่า 4 นาที (ไม่กลับไปดึงบิลทั้งร้านทุก 2 นาที)",
+  FULL_EVERY > 0 && POLL_MS_REAL > 0 && FULL_EVERY * POLL_MS_REAL <= 5 * 60 * 1000 && FULL_EVERY * POLL_MS_REAL >= 4 * 60 * 1000);
 function makeWorld() {
   return {
     state: { sig: {}, init: {}, uat: {}, done: {}, tries: {} },
     primed: true,
     fullTick: 0,
+    fulls: 0,               // จำนวนครั้งที่ดึงเต็ม (ตาข่ายนิรภัย)
     printed: [],            // ทุกใบที่สั่งพิมพ์ [โต๊ะ, จำนวนรายการ]
     fetchedItemsFor: [],    // บิลที่ต้องเปิดดูรายการในรอบนั้น
   };
@@ -93,14 +99,14 @@ function tick(w, db, opts) {
 
   const changed = changedOf(heads, w.state);
   w.fullTick++;
-  const wantFull = wantFullOf(w.primed, w.fullTick, changed, FULL_EVERY);
+  const wantFull = wantFullOf(w.primed, w.fullTick, changed, FULL_EVERY, heads);
 
   // ── ช่องว่างระหว่างสองคำขอ: บิลใหม่เกิดขึ้นตรงนี้
   if (o_.insertBetween) db.push(o_.insertBetween);
 
   // ── คำขอที่ 2: รายการในบิล (ณ เวลา T0+Δ)
   let orders;
-  if (wantFull) { orders = openOf(db); w.fullTick = 0; }
+  if (wantFull) { orders = openOf(db); w.fullTick = 0; w.fulls++; }
   else if (changed.length) orders = openOf(db).filter(o => changed.some(h => h.id === o.id));
   else orders = [];
   // คำขอรายการล้ม = ของจริง return ออกไปเลย ยังไม่ถึงขั้นล้างสถานะ
@@ -167,21 +173,35 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
 { // 5) ตาข่ายนิรภัยครบรอบ ต้องไม่ทำให้พิมพ์ซ้ำ
   const w = makeWorld();
   const db = [billOf(1, "A1", "T1", [{ menu_id: 10, qty: 2 }])];
-  for (let i = 0; i < 200; i++) tick(w, db);
-  ok_("ผ่าน 200 รอบ (มีตาข่ายนิรภัยคั่น) ยังพิมพ์ใบเดียว", w.printed.length === 1);
+  const N = FULL_EVERY * 3 + 20;
+  for (let i = 0; i < N; i++) tick(w, db);
+  ok_("ผ่าน " + N + " รอบ (มีตาข่ายนิรภัยคั่น) ยังพิมพ์ใบเดียว", w.printed.length === 1);
   const fulls = w.fetchedItemsFor.filter(a => a.length === 1).length;
-  ok_("ตาข่ายนิรภัยทำงานจริง (ดึงเต็มเป็นระยะ)", fulls >= 3 && fulls <= 6);
+  ok_("ตาข่ายนิรภัยทำงานจริง (ดึงเต็มเป็นระยะ)", fulls >= 3 && fulls <= 6 && w.fulls === 3);
 }
 { // 6) ตาข่ายนิรภัยจับของที่หลุด — แก้ items โดยไม่ขยับ updated_at
   const w = makeWorld();
   const db = [billOf(1, "A1", "T1", [{ menu_id: 10, qty: 2 }])];
   tick(w, db);
   db[0].items = [{ menu_id: 10, qty: 2 }, { menu_id: 99, qty: 1 }];   // ไม่ขยับ updated_at โดยตั้งใจ
-  for (let i = 0; i < 58; i++) tick(w, db);
+  for (let i = 0; i < FULL_EVERY - 2; i++) tick(w, db);
   const beforeNet = w.printed.length;
   tick(w, db); tick(w, db);
-  ok_("ถ้ามีทางเขียนไหนลืมขยับ updated_at ตาข่ายนิรภัยยังจับได้ภายใน 5 นาที",
+  ok_("ถ้ามีทางเขียนไหนลืมขยับ updated_at ตาข่ายนิรภัยยังจับได้ภายใน 5 นาที (" + FULL_EVERY + " รอบ)",
     beforeNet === 1 && w.printed.length === 2);
+}
+{ // 6b) v51: ร้านปิด (ไม่มีบิลเปิด) ทั้งคืน — ไม่ดึงเต็มเลย · บิลแรกตอนเช้าได้ตาข่ายนิรภัยทันที พิมพ์ใบเดียว
+  const w = makeWorld();
+  const db = [];
+  for (let i = 0; i < FULL_EVERY * 10; i++) tick(w, db);
+  ok_("v51 ร้านปิดทั้งคืน (ไม่มีบิลเปิด) → ไม่ดึงบิลเต็มเลย (ได้ [] อยู่แล้ว)", w.fulls === 0);
+  db.push(billOf(1, "A1", "T1", [{ menu_id: 10, qty: 2 }]));
+  tick(w, db);
+  ok_("v51 บิลแรกหลังร้านเงียบนาน → รอบนั้นดึงเต็ม (ตาข่ายนิรภัยไม่ขาด) และพิมพ์ใบเดียว", w.fulls === 1 && w.printed.length === 1);
+  for (let i = 0; i < 5; i++) tick(w, db);
+  ok_("v51 รอบถัดมาไม่ดึงเต็มซ้ำ ไม่พิมพ์ซ้ำ", w.fulls === 1 && w.printed.length === 1);
+  ok_("v51 ยังไม่ prime = ดึงเต็มเสมอแม้ไม่มีบิลเปิด", wantFullOf(false, 0, [], FULL_EVERY, []) === true);
+  ok_("v51 มีบิลเปิดและครบรอบ = ดึงเต็ม · ไม่มีบิลเปิด = ไม่ดึง", wantFullOf(true, FULL_EVERY, [], FULL_EVERY, [{ id: 1 }]) === true && wantFullOf(true, FULL_EVERY * 9, [], FULL_EVERY, []) === false);
 }
 { // 7) บิลถูกปิดขณะที่โต๊ะอื่นยังเปิดอยู่ — ต้องล้างเฉพาะใบที่ปิด
   const w = makeWorld();
@@ -228,13 +248,13 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   const db = Array.from({ length: 40 }, (_, i) => billOf(i + 1, "T" + i, "T1", [{ menu_id: 10, qty: 1 }]));
   tick(w, db);
   ok_("บิลเปลี่ยนพร้อมกัน 40 ใบ พิมพ์ครบ 40 ใบ", w.printed.length === 40);
-  ok_("changed เกิน 30 ตกไปทางดึงเต็ม (กัน URL ยาวเกิน)", wantFullOf(true, 1, new Array(31), FULL_EVERY) === true);
-  ok_("changed 5 ใบ ไม่ต้องดึงเต็ม", wantFullOf(true, 1, new Array(5), FULL_EVERY) === false);
+  ok_("changed เกิน 30 ตกไปทางดึงเต็ม (กัน URL ยาวเกิน)", wantFullOf(true, 1, new Array(31), FULL_EVERY, new Array(31)) === true);
+  ok_("changed 5 ใบ ไม่ต้องดึงเต็ม", wantFullOf(true, 1, new Array(5), FULL_EVERY, new Array(5)) === false);
 }
 { // 12) ⚠️ บั๊กที่รีวิวเจอ: บิลเกิดคาบเกี่ยวสองคำขอในรอบตาข่ายนิรภัย
   const w = makeWorld();
   const db = [billOf(1, "A1", "T1", [{ menu_id: 10, qty: 1 }])];
-  for (let i = 0; i < 59; i++) tick(w, db);           // เดินไปจ่อรอบตาข่ายนิรภัย
+  for (let i = 0; i < FULL_EVERY - 1; i++) tick(w, db);           // เดินไปจ่อรอบตาข่ายนิรภัย
   const before = w.printed.length;
   // รอบถัดไปเป็นรอบดึงเต็ม — โต๊ะ 7 กดส่งคั่นระหว่างคำขอหัวบิลกับคำขอรายการ
   tick(w, db, { insertBetween: billOf(7, "B7", "T5", [{ menu_id: 20, qty: 3 }]) });
@@ -405,6 +425,18 @@ const billOf = (id, table, uat, items) => ({ id, table_number: table, status: "o
   const d = await run(async () => [{ description: keep }]);
   const dd = d.wrote && JSON.parse(d.wrote.description);
   ok_("อ่านได้ → ต่อท้ายโดยค่าตั้งเครื่องอยู่ครบ", d.r === true && dd && dd.rcpt === 1 && dd.dw === 1 && dd.failed.length === 2);
+  // v51 (24 ต.ค. 69): ใบครัวไม่ออกที่เก่าเกิน 24 ชม. ก็ทิ้งด้วย (เดิมทิ้งแค่ใบเสร็จ pj) — แถว River ค้าง 42 รายการ ~23 KB
+  const H = 3600e3, now = Date.now();
+  const K = (id, ageH, kind) => ({ id, at: now - ageH * H, kind: kind || "", items: [{ k: 0, name: "ก", qty: 1 }] });
+  const e = await run(async () => [{ description: JSON.stringify({ rcpt: 1, failed: [K("k25", 25), K("k23", 23), K("k11", 11), K("v30", 30, "void"), K("pj25", 25, "pj"), K("pj23", 23, "pj"), { id: "legacy" }, null] }) }]);
+  const ee = e.wrote && JSON.parse(e.wrote.description);
+  ok_("v51 ใบครัวเก่า 25 ชม./ใบยกเลิก 30 ชม. ทิ้ง · 23/11 ชม. เก็บ · ใบเสร็จตามกติกาเดิม · รายการไม่มีเวลา (รุ่นเก่า) เก็บ · ต่อท้ายใบใหม่",
+    e.r === true && ee && ee.rcpt === 1 && ee.failed.map(f => f && f.id).join() === "k23,k11,pj23,legacy,,x");
+  // ใบเสร็จ (pj) ต้องตัดสินเหมือนเดิมทุกกรณี — เทียบกับกติกาก่อน v51 ตรงๆ
+  const fk = new Function(src + " return failKept;")();
+  const oldPj = (f) => !(f && f.kind === "pj" && now - (+f.at || 0) > 24 * H);
+  const pjCases = [K("a", 0, "pj"), K("b", 23.9, "pj"), K("c", 24.1, "pj"), K("d", 500, "pj"), { id: "e", kind: "pj" }, { id: "f", kind: "pj", at: "x" }, null];
+  ok_("v51 ใบเสร็จ (pj) ตัดสินเหมือนก่อน v51 ทุกกรณี (รวมไม่มีเวลา/เวลาพัง)", pjCases.every(f => fk(f, now) === oldPj(f)));
 }
 
 // ── รอบหลัก + รอบเร็วเรียกงานรูป (pj) เดียวกันพร้อมกัน ต้องไม่ล้างงานทิ้งระหว่างอีกรอบรอเครื่อง (รีวิว 10 ต.ค. 69) ──
@@ -682,15 +714,16 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
   const mk = (remoteVer, opts) => {
     const o = opts || {};
     const log = [];
-    const env = { tickGate: null, kickGate: null, ticks: 0, cmdPolls: 0 };
+    const env = { tickGate: null, kickGate: null, ticks: 0, cmdPolls: 0, idle: !!o.idle, busy: 0, rows: o.rows || [{ id: 10, branch_id: 8, description: "{}" }] };
     const api = new Function("saveState", "process", "console", "fetch", "AGENT_URL", "AGENT_VERSION", "tick", "getCmdRows", "BRANCH",
-      "handleDrawerRequests", "handlePJRequests", "handleQRRequests", "handleReprintRequests",
+      "handleDrawerRequests", "handlePJRequests", "handleQRRequests", "handleReprintRequests", "shopIdle", "markBusy",
       block + "\nconst kickRound = async () => {\n" + kickBody + "\n};\nreturn { checkUpdate, exitIfIdle, tickSafe, kickRound, st: () => ({ updatePending, tickBusy, kickBusy }) };")(
       () => log.push("save"), { exit: (c) => log.push("exit:" + c) }, { log() {} },
       async () => { if (o.netFail) throw new Error("offline"); return { text: async () => `const AGENT_VERSION = ${remoteVer};` }; }, "http://x", 47,
       async () => { env.ticks++; log.push("tick"); if (env.tickGate) await env.tickGate.p; },
-      async () => { env.cmdPolls++; return [{ id: 10, branch_id: 8, description: "{}" }]; }, "8",
-      async () => { log.push("kick"); if (env.kickGate) await env.kickGate.p; }, async () => {}, async () => {}, async () => {});
+      async () => { env.cmdPolls++; return env.rows; }, "8",
+      async () => { log.push("kick"); if (env.kickGate) await env.kickGate.p; }, async () => {}, async () => {}, async () => {},
+      () => env.idle, () => { env.busy++; env.idle = false; });
     return { api, log, env };
   };
   { const { api, log } = mk(48);
@@ -722,6 +755,93 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
   { const { api, log } = mk(48, { netFail: true }); await api.checkUpdate();
     ok_("#27 เช็คเวอร์ชันไม่ได้ (เน็ตสะดุด) → ทำงานต่อตามปกติ", log.length === 0); }
   ok_("#27 ไม่เหลือการออกทันทีตอนเจอเวอร์ชันใหม่", (S.match(/process\.exit\(0\)/g) || []).length === 1 && grabTopBlock("function exitIfIdle(").includes("process.exit(0)"));
+
+  // ── v51 โหมดพัก: รอบเร็ว (ลิ้นชัก/ใบเสร็จ) ถาม 1 ใน 4 รอบ (3.2 วิ) · ไม่พัก = ถามทุกรอบเท่าเดิม · มีคำสั่ง = ปลุก ──
+  { const { api, env } = mk(47, { rows: [] });
+    for (let i = 0; i < 12; i++) await api.kickRound();
+    ok_("#27 v51 ไม่พัก (มีบิลเปิด) → รอบเร็วถามทุกรอบ 0.8 วิ เท่าเดิม", env.cmdPolls === 12 && env.busy === 0); }
+  { const { api, env } = mk(47, { idle: true, rows: [] });
+    for (let i = 0; i < 12; i++) await api.kickRound();
+    ok_("#27 v51 พัก (ไม่มีบิลเปิด 30 นาที) → รอบเร็วถาม 3 ใน 12 รอบ (ทุก 3.2 วิ) · ไม่มีคำสั่ง = ยังพัก", env.cmdPolls === 3 && env.idle === true && env.busy === 0); }
+  { const { api, env } = mk(47, { idle: true });
+    for (let i = 0; i < 8; i++) await api.kickRound();
+    ok_("#27 v51 พักอยู่แล้วเจอคำสั่ง (ลิ้นชัก/ใบเสร็จ) → ทำคำสั่ง + ปลุก → รอบถัดไปถามทุก 0.8 วิ", env.busy >= 1 && env.idle === false && env.cmdPolls === 5); }
+  { const { api, log, env } = mk(48, { idle: true, rows: [] });
+    await api.checkUpdate();
+    for (let i = 0; i < 3; i++) await api.kickRound();
+    ok_("#27 v51 พักอยู่ + มีเวอร์ชันใหม่ → ยังออกอัปเดตได้ตามปกติ (ตัวข้ามรอบอยู่หลังเช็คอัปเดต)", log.includes("exit:0") && env.cmdPolls === 0); }
+  ok_("#27 v51 ตัวข้ามรอบโหมดพักอยู่หลังเช็คกันซ้อน/รออัปเดต และก่อนจองรอบ",
+    !!kickBody && /if \(kickBusy\) return;\n\s+if \(updatePending\) \{ exitIfIdle\(\); return; \}[^\n]*\n\s+if \(shopIdle\(\) && \(\+\+kickN % 4\)\) return;[^\n]*\n\s+kickBusy = true;/.test(kickBody));
+}
+
+// ── v51 โหมดพัก: ตัวตัดสิน + แคชรายชื่อเครื่อง (ตัวจริงจากไฟล์ · นาฬิกาปลอม) ──
+{
+  const a = S.indexOf("const IDLE_AFTER_MS"), b = S.indexOf("const addPrinter =", a);
+  ok_("v51 อ่านก้อนโหมดพัก + แคชรายชื่อเครื่องตัวจริงได้", a > 0 && b > a);
+  const blk = S.slice(a, b);
+  const mkC = (env) => {
+    const c = { t: 1e12, reads: 0 };
+    const api = new Function("getPrinters", "process", "Date", blk + "\nreturn { getPrintersCached, markBusy, shopIdle };")(
+      async () => { c.reads++; return [{ id: c.reads }]; }, { env: env || {} }, { now: () => c.t });
+    return { c, api };
+  };
+  const { c, api } = mkC();
+  const at = async (dt) => { c.t += dt; return api.getPrintersCached(); };
+  await at(0); await at(3000); await at(4000);
+  ok_("v51 เพิ่งเปิดโปรแกรม = ไม่พัก · แคช 6 วิเท่าเดิม", !api.shopIdle() && c.reads === 2);
+  c.t += 31 * 60 * 1000;
+  ok_("v51 ไม่มีบิล/คำสั่ง/ใบเรียก 31 นาที = พัก", api.shopIdle());
+  await at(0); await at(20000); const r29 = c.reads; await at(11000);
+  ok_("v51 พัก → แคชรายชื่อเครื่อง 30 วิ (เดิม 6 วิ)", r29 === 3 && c.reads === 4);
+  api.markBusy();
+  await at(7000);
+  ok_("v51 ปลุกแล้ว → แคชกลับเป็น 6 วิทันที", !api.shopIdle() && c.reads === 5);
+  const B = mkC({ BUSINESS_HOURS: "1" });
+  B.c.t += 5 * 60 * 60 * 1000;
+  ok_("v51 ตั้ง BUSINESS_HOURS = ไม่พักเลย", !B.api.shopIdle());
+  // ตรวจทาน 24 ต.ค. 69: ผู้อ่านที่ไม่ใช่ tick (peek) ห้ามเขียนแคช — ฐานช้า คำขอที่ยิงก่อนแต่ตอบทีหลังต้องไม่ทับรายชื่อใหม่ที่ tick เห็นแล้ว
+  // (ทับได้ = tick รอบหน้าเห็นติ๊ก "รีปริ้น" ที่เพิ่งพิมพ์+ล้างไปแล้วกลับมา ทั้งที่ state.retried ถูกลบไปแล้ว = ใบครัวออกซ้ำเอง)
+  {
+    const c = { t: 1e12 }, pend = [];
+    const R = new Function("getPrinters", "process", "Date", blk + "\nreturn { getPrintersCached };")(
+      () => new Promise((res) => pend.push(res)), { env: {} }, { now: () => c.t });
+    const p0 = R.getPrintersCached(); pend.shift()([{ id: 10, v: "flag" }]); await p0;   // tick เติมแคช: แถวยังมีติ๊กรีปริ้น
+    c.t += 7000;                                       // แคชหมดอายุ
+    const hb = R.getPrintersCached(true);              // สัญญาณชีพยิงก่อน (ฐานช้า) — ภาพ "ก่อน" พิมพ์
+    const tk = R.getPrintersCached();                  // tick ยิงทีหลังแต่ตอบก่อน — ภาพ "หลัง" พิมพ์+ล้างติ๊ก
+    pend[1]([{ id: 10, v: "cleared" }]); const seenTick = await tk;
+    pend[0]([{ id: 10, v: "flag" }]); const seenHb = await hb;
+    c.t += 1000;
+    const next = await R.getPrintersCached();          // tick รอบถัดไป — แคชยังไม่หมดอายุ
+    ok_("ตรวจทาน: คำขอของสัญญาณชีพที่ตอบทีหลัง (ภาพเก่า) ไม่ทับแคชที่ tick เพิ่งเห็น — ติ๊กรีปริ้นที่ล้างแล้วไม่กลับมา",
+      seenTick[0].v === "cleared" && seenHb[0].v === "flag" && next[0].v === "cleared" && pend.length === 2);
+    const pk = await R.getPrintersCached(true);
+    ok_("ตรวจทาน: peek ยังใช้แคชที่ tick เติมไว้ (ไม่ดึงเพิ่ม — การประหยัดยังอยู่)", pk[0].v === "cleared" && pend.length === 2);
+    const tickSrc = grabTopBlock("async function tick(");
+    ok_("ตรวจทาน: ผู้เขียนแคชรายชื่อเครื่องมีแค่ tick — ทักเครื่องใหม่/เช็คออนไลน์/สัญญาณชีพ/ใบเรียกพนักงาน อ่านแบบ peek ทั้งหมด",
+      (S.match(/getPrintersCached\(\)/g) || []).length === 2 && (tickSrc.match(/getPrintersCached\(\)/g) || []).length === 2
+      && (S.match(/getPrintersCached\(true\)/g) || []).length === 4 && grabTopBlock("async function heartbeat(").includes("await getPrintersCached(true)")
+      && grabTopBlock("async function handleStaffCalls(").includes("await getPrintersCached(true)"));
+  }
+  ok_("v51 ทักเครื่องใหม่/เช็คออนไลน์/สัญญาณชีพ ใช้แคชร่วม — ดึงรายชื่อเครื่องทั้งก้อนสดเหลือแค่ตอนเปิดโปรแกรมกับในตัวแคช",
+    grabTopBlock("async function greetNewPrinters(").includes("await getPrintersCached(true)") && grabTopBlock("async function pingPrinters(").includes("await getPrintersCached(true)")
+    && (S.match(/getPrinters\(\)/g) || []).length === 3 && (S.match(/\(await getPrinters\(\)\)/g) || []).length === 2 && grabTopBlock("async function getPrintersCached(").includes("await getPrinters()"));
+  // เช็คออนไลน์ยังอ่านแถวสดก่อนเขียนเสมอ: แอปเพิ่งเขียนคำสั่งใบเสร็จลงแถวหลังแคช → จุดแดงเขียนลงโดยคำสั่งอยู่ครบ
+  const ping = grabTopBlock("async function pingPrinters(");
+  const io = { writes: [] };
+  const pp = new Function("getPrintersCached", "BRANCH", "isBluetooth", "probePort", "sb", "patchPrinter", "console", "let pinging = false;\n" + ping + "\nreturn pingPrinters;")(
+    async () => [{ id: 12, branch_id: 8, ip: "10.8.0.147", port: 9100, active: true, description: JSON.stringify({ rcpt: 1, on: 1 }) }], "8", () => false, async () => false,
+    async () => [{ description: JSON.stringify({ rcpt: 1, on: 1, pj: { at: 9, b64: "QQ==", what: "ใบเสร็จ" } }) }],
+    async (id, body) => { io.writes.push({ id, d: JSON.parse(body.description) }); }, { log() {} });
+  await pp();
+  const w = io.writes[0] && io.writes[0].d;
+  ok_("v51 เช็คออนไลน์ใช้แคช แต่อ่านแถวสดก่อนเขียน → เขียนจุดแดงโดยคำสั่งใบเสร็จที่เพิ่งเข้ามาไม่หาย", io.writes.length === 1 && !!w && w.on === 0 && w.pj && w.pj.at === 9 && w.rcpt === 1);
+  // สแกนหาเครื่องใหม่: ยังดึงสด (กันเพิ่มแถวซ้ำ IP เดิม) แต่ขอแค่ ip/branch_id ของสาขานี้ (+ใช้ร่วม)
+  let q = null;
+  new Function("sb", "BRANCH", grabLine("const getPrinterIps = ") + "\nreturn getPrinterIps;")(async (x) => { q = x; return []; }, "8")();
+  ok_("v51 สแกนหาเครื่องใหม่ดึงสดเฉพาะ ip,branch_id ของสาขานี้ (+เครื่องใช้ร่วม) ไม่ลาก description",
+    q === "printers?select=ip,branch_id&or=(branch_id.is.null,branch_id.eq.8)" && !/getPrintersCached\(\)[^\n]*discoverPrinters/.test(S)
+    && (S.match(/\(await getPrinterIps\(\)\)\.filter\(p => p\.branch_id == null \|\| \+p\.branch_id === \+BRANCH\); await discoverPrinters\(ps\);/g) || []).length === 2);
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -757,19 +877,20 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
     "let primed = true, fullTick = 0;", grabTopBlock("async function tick() {")].join("\n");
   const isOpen = (o) => o.status !== "paid" && o.status !== "cancelled";
   // opts.sendFail = IP ที่ส่งไม่ผ่าน · opts.failThrows = จำนวนครั้งที่การจดรายการไม่ออกล้มกลางรอบ (จำลองรอบพังหลังพิมพ์ ก่อนจดลายเซ็น)
+  // opts.idle = เริ่มในโหมดพัก (v51) · opts.printersSeq = รายชื่อเครื่องที่แคชคืนทีละครั้ง (จำลองแคชเก่า → ของใหม่)
   const mkShop = (printers, opts) => {
     const o_ = opts || {};
     let throwsLeft = o_.failThrows || 0;
-    const db = [], io = { sent: [], orphans: [], fails: [], remembered: [], fetched: [], crashed: 0 };
+    const db = [], io = { sent: [], orphans: [], fails: [], remembered: [], fetched: [], crashed: 0, prReads: 0, busy: 0 };
     const state = { sig: {}, init: {}, uat: {}, done: {} };
-    let clock = 100;
+    let clock = 100, idle = !!o_.idle;
     const bump = (o) => { o.updated_at = "T" + (++clock); };   // trigger บนตาราง orders: ทุก UPDATE ได้เวลาใหม่
     const tick = new Function("getActiveOrderHeads", "getPrintersCached", "getActiveOrders", "getOrdersByIds", "BRANCH", "state", "saveState", "FULL_EVERY",
       "tpOf", "rpOf", "qrOf", "pjOf", "handleTestRequests", "handleReprintRequests", "handleFailRetries", "handleQRRequests", "handlePJRequests", "handleDrawerRequests", "handlePingRequests", "handleScanRequests",
-      "isBluetooth", "renderItemBufs", "bufsMode", "sendToPrinter", "errOf", "noteOrphan", "recordPrintFail", "rememberPrinted", "_noPrintedSig", "console",
+      "isBluetooth", "renderItemBufs", "bufsMode", "sendToPrinter", "errOf", "noteOrphan", "recordPrintFail", "rememberPrinted", "_noPrintedSig", "console", "shopIdle", "markBusy",
       tickSrc + "\nreturn tick;")(
-      async () => db.filter(isOpen).map(o => ({ id: o.id, updated_at: o.updated_at })),
-      async () => printers,
+      async () => { if (o_.wakeDuringHeads) idle = false; return db.filter(isOpen).map(o => ({ id: o.id, updated_at: o.updated_at })); },   // wakeDuringHeads = รอบเร็วปลุกระหว่างที่ tick รอหัวบิล
+      async () => { const seq = o_.printersSeq; const r = seq ? seq[Math.min(io.prReads, seq.length - 1)] : printers; io.prReads++; return r; },
       async () => { io.fetched.push("all"); return JSON.parse(JSON.stringify(db.filter(isOpen))); },
       async (ids) => { io.fetched.push(ids.join()); return JSON.parse(JSON.stringify(db.filter(o => isOpen(o) && ids.map(String).includes(String(o.id))))); },
       "5", state, () => {}, 60,
@@ -779,10 +900,11 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
       errOfFake,
       async (target, orphan) => { io.orphans.push(orphan.map(i => i.name)); return true; },
       async (prs, o, items) => { if (throwsLeft > 0) { throwsLeft--; throw new Error("รอบพังกลางทาง"); } io.fails.push(items.map(i => i.name)); },
-      (id, sig) => { io.remembered.push({ id, sig }); const o = db.find(x => x.id === id); if (o) { o.printed_sig = sig; bump(o); } }, false, { log() {} });
+      (id, sig) => { io.remembered.push({ id, sig }); const o = db.find(x => x.id === id); if (o) { o.printed_sig = sig; bump(o); } }, false, { log() {} },
+      () => idle, () => { io.busy++; idle = false; });
     // ตัวจริงห่อ tick ด้วย tickSafe (จับ error แล้วรอรอบหน้า) — จำลองแบบเดียวกัน
     const run = async (n) => { for (let i = 0; i < (n || 1); i++) { try { await tick(); } catch { io.crashed++; } } };
-    return { db, io, state, run, bump };
+    return { db, io, state, run, bump, isIdle: () => idle };
   };
 
   { // ① เปิดโต๊ะด้วยแพ็คเกจล้วน (ยังไม่สั่งอาหาร)
@@ -853,6 +975,26 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
     await S.run(3);
     ok_("รอบพังกลางทาง → รอบถัดไปครัวไม่ได้ส้มตำซ้ำ · โค้กเข้ารายการพิมพ์ไม่ออก (ไม่มีรายการแพ็คเกจ)",
       S.io.crashed === 1 && S.io.sent.filter(s => s.ip === "10.5.0.11").length === 1 && S.io.fails.length === 1 && S.io.fails[0].join() === "โค้ก");
+  }
+  { // ⑦ v51 โหมดพัก (24 ต.ค. 69): ร้านไม่มีบิลเปิด 30 นาที → แคชรายชื่อเครื่อง 30 วิ · บิลแรกต้องปลุก + ขอรายชื่อเครื่องใหม่ก่อนเลือกเครื่อง
+    const Q = mkShop([KIT], { idle: true });
+    await Q.run(3);
+    ok_("v51 โหมดพัก ไม่มีบิลเปิด → ยังพัก ไม่ขอรายชื่อเครื่องเพิ่ม ไม่มีใบ", Q.isIdle() && Q.io.busy === 0 && Q.io.prReads === 3 && Q.io.sent.length === 0);
+    const KIT_OLD = { ...KIT, categories: ["เมนูสั่งเพิ่มบุฟเฟต์"] };   // แคชเก่า: ก่อนพนักงานเพิ่มหมวดยำให้เครื่องครัวตอนเปิดร้าน
+    const W = mkShop(null, { idle: true, printersSeq: [[KIT_OLD], [KIT]] });
+    W.db.push({ id: 907, table_number: "A7", status: "pending", updated_at: "T1", items: [food(201, "ส้มตำไทย", "ยำบุฟเฟต์", 1)] });
+    await W.run(1);
+    ok_("v51 บิลแรกหลังพัก → ออกจากโหมดพัก + ขอรายชื่อเครื่องใหม่ก่อนเลือกเครื่อง → ส้มตำออกครัวในรอบเดียวกัน (ไม่ตกเป็น 'ไม่มีเครื่องรับ' จากแคชเก่า)",
+      !W.isIdle() && W.io.busy === 1 && W.io.prReads === 2 && W.io.sent.map(s => s.ip + ":" + s.names.join()).join() === "10.5.0.11:ส้มตำไทย×1" && W.io.orphans.length === 0);
+    await W.run(2);
+    ok_("v51 รอบถัดไป (ไม่พักแล้ว) อ่านแคชตามปกติรอบละครั้ง ไม่พิมพ์ซ้ำ", W.io.prReads === 4 && W.io.sent.length === 1);
+    // ตรวจทาน 24 ต.ค. 69: QR เปิดโต๊ะออกพร้อมบิลแรก — รอบเร็วปลุกไปก่อน "ระหว่าง" ที่ tick รอหัวบิล (แคชที่ tick เพิ่งได้คิดอายุแบบพัก 30 วิ)
+    // tick ต้องยังนับว่าเพิ่งตื่น แล้วขอรายชื่อเครื่องใหม่ก่อนเลือกเครื่อง (เดิมเช็คหลังรอ = ได้ "ไม่พัก" แล้วใช้แคชเก่า)
+    const R = mkShop(null, { idle: true, printersSeq: [[KIT_OLD], [KIT]], wakeDuringHeads: true });
+    R.db.push({ id: 908, table_number: "A8", status: "pending", updated_at: "T1", items: [food(202, "ส้มตำปู", "ยำบุฟเฟต์", 1)] });
+    await R.run(1);
+    ok_("ตรวจทาน: รอบเร็วปลุกคั่นระหว่างรอหัวบิล → tick ยังขอรายชื่อเครื่องใหม่ → ใบแรกออกครัวถูกเครื่อง (ไม่ตก 'ไม่มีเครื่องรับ' จากแคชเก่า)",
+      R.io.prReads === 2 && R.io.sent.map(s => s.ip + ":" + s.names.join()).join() === "10.5.0.11:ส้มตำปู×1" && R.io.orphans.length === 0);
   }
 
   // ── printItems ตัวจริง เรียกตรง (เส้นทางรีปริ้นรายการไม่ออกก็เรียกตัวนี้) ──
@@ -965,7 +1107,8 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
       if (o.tableReadFails) throw new Error("net");
       return db.tables.filter(t => +t.id === +m[1] && String(t.branch_id) === m[2]);
     };
-    const api = new Function("fetch", "sb", "SUPA_URL", "SUPA_KEY", "BRANCH", "AGENT_DEV", "getPrintersCached", "isBluetooth", "fetchSlipRaster", "sendToPrinter", "errOf", "pushFail", "console", "Buffer",
+    io.busy = 0;
+    const api = new Function("fetch", "sb", "SUPA_URL", "SUPA_KEY", "BRANCH", "AGENT_DEV", "getPrintersCached", "isBluetooth", "fetchSlipRaster", "sendToPrinter", "errOf", "pushFail", "console", "Buffer", "markBusy",
       THAI_SRC + "\nlet callBusy = false;\n" + CALL_SRC + "\nreturn { handleStaffCalls, callDecision, buildCallESC, st: () => ({ callBusy, callsOffUntil, callSkew }) };")(
       fakeFetch, sbStub, "https://x", "k", o.branch || "5", o.dev || "dev1",
       async () => o.printers || [], (p) => { try { return JSON.parse(p.description || "{}").c === "bt"; } catch { return false; } },
@@ -973,7 +1116,7 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
       async (ip, port, buf) => { if ((o.down || []).includes(ip)) { const e = new Error("down"); e.code = "CONNECT_TIMEOUT"; throw e; } io.sent.push(ip); io.bufs.push(buf); },
       (p, e) => ({ pid: p && p.id, name: (p && p.name) || "", code: (e && e.code) || "ERR" }),
       async (printers, entry) => { io.fails.push(entry); return true; },
-      { log() {} }, Buffer);
+      { log() {} }, Buffer, () => { io.busy++; });
     return { api, io, db };
   };
   const RC = (id, ip, extra) => ({ id, name: "แคชเชียร์" + id, ip, port: 9100, branch_id: 5, active: true, description: JSON.stringify({ rcpt: 1, ...(extra || {}) }) });
@@ -987,7 +1130,10 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
     ok_("#30 ใบเรียกออกเฉพาะเครื่องใบเสร็จ (ครบทุกเครื่องที่ใช้งาน) — ไม่ออกเครื่องครัว/บลูทูธ/ที่ปิดใช้", X.io.sent.slice().sort().join() === "10.0.0.2,10.0.0.3");
     ok_("#30 จองก่อนพิมพ์: new→printing ด้วยเงื่อนไข status=eq.new", !!claim && claim.body.status === "printing" && /status=eq\.new/.test(claim.q));
     ok_("#30 ออกแล้วจด printed + จำนวนเครื่อง · ชื่อโต๊ะบนใบมาจากตารางโต๊ะ · ขอรูปชนิด call เท่านั้น",
-      X.db.rows[0].status === "printed" && X.db.rows[0].printers === 2 && X.io.renders[0].table === "A2" && X.io.renders[0].meta.kind === "call" && X.io.renders[0].meta.needKind === "call" && X.io.fails.length === 0); }
+      X.db.rows[0].status === "printed" && X.db.rows[0].printers === 2 && X.io.renders[0].table === "A2" && X.io.renders[0].meta.kind === "call" && X.io.renders[0].meta.needKind === "call" && X.io.fails.length === 0);
+    const E = mkCalls({ printers: [RC(2, "10.0.0.2")] });
+    await E.api.handleStaffCalls();
+    ok_("#30 v51 มีใบเรียกพนักงาน = ปลุกจากโหมดพัก · ไม่มีใบ = ไม่ปลุก", X.io.busy === 1 && E.io.busy === 0); }
 
   { const db = { rows: [], tables: [] };
     const A = mkCalls({ db, rows: [R(1, 51, "tokA")], tables: [T(51, "A2", "tokA")], printers: [RC(2, "10.0.0.2")], dev: "a" });
@@ -1071,8 +1217,23 @@ const SHABU = { name: "ชาบูเล็ก", qty: 1, menu_id: 95, printer_i
   const ex = grabTopBlock("function exitIfIdle(");
   const run = (busy) => { const log = []; new Function("updatePending", "tickBusy", "kickBusy", "callBusy", "saveState", "process", "console", ex + "\nreturn exitIfIdle();")(49, false, false, busy, () => log.push("save"), { exit: (c) => log.push("exit:" + c) }, { log() {} }); return log.join(); };
   ok_("#31 มีเวอร์ชันใหม่ระหว่างพิมพ์ใบเรียก → ยังไม่ออก · รอบจบ → บันทึกความจำแล้วออก", run(true) === "" && run(false) === "save,exit:0");
+  // v51: มีบรรทัดข้ามรอบของโหมดพักคั่นได้หนึ่งบรรทัด (หลังเช็ครออัปเดตเท่านั้น)
   ok_("#31 รอบเรียกพนักงานเรียก exitIfIdle ตอนจบทุกครั้ง และไม่เริ่มรอบใหม่ระหว่างรออัปเดต",
-    S.includes("handleStaffCalls().catch(() => {}).finally(() => exitIfIdle());") && /setInterval\(\(\) => \{\n\s+if \(updatePending\) \{ exitIfIdle\(\); return; \}[^\n]*\n\s+handleStaffCalls\(\)/.test(S));
+    S.includes("handleStaffCalls().catch(() => {}).finally(() => exitIfIdle());") && /setInterval\(\(\) => \{\n\s+if \(updatePending\) \{ exitIfIdle\(\); return; \}[^\n]*\n(\s+if \(shopIdle\(\) && \(\+\+callN % 5\)\) return;[^\n]*\n)?\s+handleStaffCalls\(\)/.test(S));
+  // รันตัวรอบจริง: ไม่พัก = ถามทุก 2 วิ · พัก = 1 ใน 5 (10 วิ) · รออัปเดต = ไม่ถามเลยและเรียก exitIfIdle
+  const ia = SL.findIndex((l, i) => l === "  setInterval(() => {" && SL[i + 1].startsWith("    if (updatePending) { exitIfIdle(); return; }") && SL.slice(i, i + 5).some(x => x.includes("handleStaffCalls()")));
+  const ib = SL.findIndex((l, i) => i > ia && l === "  }, CALL_POLL_MS);");
+  ok_("#31 v51 อ่านรอบเรียกพนักงานตัวจริงได้", ia > 0 && ib > ia);
+  const roundOf = (idle, pending) => {
+    const io = { calls: 0, exits: 0 };
+    const fn = new Function("updatePending", "exitIfIdle", "shopIdle", "handleStaffCalls", "let callN = 0;\nreturn () => {\n" + SL.slice(ia + 1, ib).join("\n") + "\n};")(
+      pending, () => { io.exits++; }, () => idle, async () => { io.calls++; });
+    for (let i = 0; i < 10; i++) fn();
+    return io;
+  };
+  const r1 = roundOf(false, 0), r2 = roundOf(true, 0), r3 = roundOf(true, 49);
+  ok_("#31 v51 ไม่พัก = ถามใบเรียกทุกรอบ 2 วิ เท่าเดิม · พัก = 2 ใน 10 รอบ (ทุก 10 วิ) · รออัปเดต = ไม่ถาม เรียก exitIfIdle ทุกรอบ",
+    r1.calls === 10 && r2.calls === 2 && r3.calls === 0 && r3.exits === 10);
 }
 // ── #32 ใบชนิดใหม่ต้องได้รูปของชนิดนั้นจริง — เว็บถอยเวอร์ชันแล้วคืนใบสั่งอาหารเปล่า ห้ามพิมพ์ ──
 {

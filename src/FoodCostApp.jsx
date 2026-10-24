@@ -726,7 +726,7 @@ async function buffetPkgSave(bid,change,prev){
     let r;
     try{
       r=hasRow
-        ?await sb(`pos_settings?branch_id=eq.${+bid}&${bpCasFilter(raw)}&select=buffet_packages`,{method:"PATCH",body:JSON.stringify({buffet_packages:body})})
+        ?await sb(`pos_settings?branch_id=eq.${+bid}&${bpCasFilter(raw)}&select=buffet_packages`,{method:"PATCH",body:JSON.stringify({buffet_packages:body,updated_at:new Date().toISOString()})})   // updated_at (24 ต.ค. 69): จอขายเครื่องอื่นถามเวลาแก้ก่อนดึงทั้งแถว — ไม่ประทับ = แพ็คเกจใหม่ถึงจอขายช้าสุด 10 นาที (เดิม 60 วิ)
         :await sb("pos_settings?select=buffet_packages",{method:"POST",body:JSON.stringify({branch_id:+bid,buffet_packages:body}),headers:{"Prefer":"resolution=ignore-duplicates,return=representation"}});
     }catch(e){if(bpMissingCol(e)){const e2=new Error(BP_NO_COL);e2.missingColumn=true;throw e2;}throw e;}
     if(Array.isArray(r)&&r.length){const w=r[0].buffet_packages??null;return {ok:true,packages:normalizeBuffetPackages(w),raw:w,before};}
@@ -835,12 +835,46 @@ function buffetAuditText(before,after,who,branch,nameOf){
 // เมนูที่เลือกใส่แพ็คเกจได้ = เมนูที่สาขานี้เห็นตามปุ่มติ๊กเท่านั้น (menuVisibleAt ห้ามผ่อนปรน) เรียงแบบเดียวกับที่ลูกค้าเห็น
 const bpPickableMenus=(menus,bid,catOrder,menuOrder)=>(Array.isArray(menus)?menus:[]).filter(m=>menuVisibleAt(m,bid)).sort(menuSorter(catOrder,menuOrder));
 
+// ── ตัวกรอง PO ชุดเดียว ใช้ทั้ง getPOs (โหลดเต็ม) และ getPOMarks (ถามว่าเปลี่ยนไหม) — 24 ต.ค. 69 ──
+// ตัวถามต้องถามแถว "ชุดเดียวกันเป๊ะ" กับที่โหลดจริง (ลำดับ/limit/ตัวกรองเดียวกัน) ไม่งั้นเทียบกันไม่ได้
+// statusIn = ให้ฐานกรองสถานะเอง (สรุปต้องซื้อใช้แค่ requested/open — เดิมดึงทุกใบ ~600 ใบพร้อม items แล้วทิ้ง)
+function poFilterQuery(filters={}){
+  const q=["order=po_date.desc,id.desc","limit=1000"];
+  // viewerBranchId = branch sees POs where it is sender OR receiver
+  if(filters.viewerBranchId!=null)q.push(`or=(from_branch_id.eq.${filters.viewerBranchId},branch_id.eq.${filters.viewerBranchId})`);
+  if(filters.fromBranchId!=null)q.push(`from_branch_id=eq.${filters.fromBranchId}`);
+  if(filters.toBranchId!=null)q.push(`branch_id=eq.${filters.toBranchId}`);
+  if(filters.dateFrom)q.push(`po_date=gte.${filters.dateFrom}`);
+  if(filters.dateTo)q.push(`po_date=lte.${filters.dateTo}`);
+  if(Array.isArray(filters.statusIn)&&filters.statusIn.length)q.push(`status=in.(${filters.statusIn.map(s=>encodeURIComponent(String(s))).join(",")})`);
+  return q.join("&");
+}
+// ลายนิ้วมือของรายการ PO (จากแถวเต็มหรือแถวของ getPOMarks ก็ได้ค่าเดียวกัน) — 24 ต.ค. 69
+// เทียบ "ค่าตรงๆ ทุกใบ" ไม่ใช่ updated_at ที่มากสุด ⟹ จับได้ทั้งใบใหม่ ใบถูกลบ สถานะเปลี่ยน ธงบัญชี และของค้างเติมสต๊อก
+// ไม่ว่านาฬิกาของเครื่องที่เขียนจะเดินช้าแค่ไหน (updated_at เป็นเวลาของเครื่องลูก ไม่ใช่ของฐาน)
+function poMarksFingerprint(rows){
+  return (Array.isArray(rows)?rows:[]).map(r=>[+(r&&r.id),r&&r.status,r&&r.updated_at,JSON.stringify((r&&r.sliptrack_sync)??null),JSON.stringify((r&&r.stock_pending)??null)].join(":")).sort().join("|");
+}
+// ใบสั่งของของแอปหลัก — ครัวกลาง: orders = 400 ใบแรกของ allOrders (24 ต.ค. 69)
+// getOrders(null) กับ getAllOrders เป็น query เดียวกันเป๊ะ (order=id.desc ไม่กรองสาขา) ต่างแค่ limit 400/600
+// เดิมยิงทั้งสองทุกครั้งที่ล็อกอิน/โหลดใบสั่งใหม่ = ขนแถวชุดเดียวกัน (พร้อม items ก้อนใหญ่) ซ้ำ 400 ใบ · สาขา = getOrders(สาขา) แบบเดิม
+async function fetchOrdersFor(isCentral,bid){
+  if(!isCentral)return{orders:await api.getOrders(bid),all:null};
+  const all=await api.getAllOrders();
+  return{orders:Array.isArray(all)?all.slice(0,400):all,all};
+}
+const PO_FULL_REFRESH_MS=30*60*1000;   // หน้าเอกสาร PO: ลายนิ้วมือไม่เปลี่ยนก็ยังโหลดเต็มทุก 30 นาที (รูปรับของที่แก้ทีหลังไม่อยู่ในลายนิ้วมือ)
+
 const api = {
   getIngs: () => sbAll("ingredients?order=id.asc"),   // แบ่งหน้า — 931/1000 แล้ว อีก 69 รายการจะหายเงียบ
   addIng: (d) => sb("ingredients", { method: "POST", body: JSON.stringify(d) }),
   updateIng: (id, d) => sb(`ingredients?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteIng: (id) => sb(`ingredients?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   getMenus: () => sbAll("menus?order=id.asc"),   // แบ่งหน้าไว้ก่อน — โตทางเดียว เพดานเดียวกับวัตถุดิบ
+  // จอขายโหมด PIN (iPad ร้าน · 24 ต.ค. 69 ลด egress): เฉพาะเมนูที่สาขานี้เห็น + 9 คอลัมน์ที่จอขายอ่านจริง
+  // ไม่มีสูตร (sop/ingredients ~43% ของก้อน) · River ~46 → ~10 KB ต่อครั้ง · คอลัมน์ชุดเดียวกับ getMenusPublic ที่รันจริงอยู่แล้ว (ไม่มีทางได้ 400 เพราะคอลัมน์ไม่มี)
+  // ห้ามกรอง price>0 — แพ็คเกจบุฟเฟต์มีเมนู ฿0 (สาขา 5 มี 39 รายการ) · จอเรียกตัวนี้ล้ม = ถอยไป getMenus แบบเดิม
+  getMenusPOS: (bid) => sbAll(`menus?select=id,name,category,price,image,availability,printer_id,visible_branches,options_by_branch&order=id.asc${menuVisibleQS(bid)}`),
   // หน้าลูกค้าเป็นหน้าสาธารณะ — ห้ามส่ง ingredients/sop (สูตรอาหาร) ออกไป
   // และเอาเฉพาะฟิลด์ที่หน้านั้นใช้จริง: 315 KB -> 78 KB ต่อครั้ง
   getMenusPublic: (bid) => sbAll(`menus?select=id,name,category,price,description,image,availability,printer_id,visible_branches,options_by_branch&price=gt.0&order=id.asc${menuVisibleQS(bid)}`),
@@ -875,6 +909,11 @@ const api = {
   // Re-check that the logged-in user is still active (lets admins force logout)
   getMyUserStatus: (id) => sb(`app_users?id=eq.${+id}&select=id,active,role,perms,name,username,allowed_branches`),
   getBranches: () => sb("branches?order=id.asc"),
+  // แถวเดียว 3 คอลัมน์ที่ heartbeat ใช้ตัดสิน (ปิดสาขา / เปลี่ยนสิทธิ์สาขา) — เดิมดึง branches ทั้งตารางทุก 3 นาทีทุกแท็บ (24 ต.ค. 69)
+  getBranchStatus: (id) => sb(`branches?id=eq.${+id}&select=id,active,allowed_perms`),
+  // ประตูหน้าลูกค้าสแกน (24 ต.ค. 69 ลด egress): แถวเดียว 3 คอลัมน์ที่หน้านั้นอ่านจริง (id/ชื่อ/เปิดอยู่ไหม) — เดิมขน branches ทั้งตารางทุกคอลัมน์ทุกครั้งที่สแกน
+  // เลขสาขาในลิงก์ไม่ใช่จำนวนเต็ม = ไม่ถามฐาน คืน [] ⟹ ประตูขึ้น "QR ใช้ไม่ได้" เหมือนเดิม (เดิมหาไม่เจอในรายการทั้งหมด)
+  getBranchPublic: (bid) => Number.isSafeInteger(+bid) ? sb(`branches?id=eq.${+bid}&select=id,name,active`) : Promise.resolve([]),
   addBranch: (d) => sb("branches", { method: "POST", body: JSON.stringify(d) }),
   updateBranch: (id, d) => sb(`branches?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
   deleteBranch: (id) => sb(`branches?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
@@ -884,11 +923,14 @@ const api = {
   deleteSupplier: (id) => sb(`suppliers?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
   // Fixed assets (ทะเบียนสินทรัพย์) — per branch
   getAssets: () => sbAll("assets?order=id.desc"),   // แบ่งหน้า — เคยตัดที่ 1000 ทำให้สินทรัพย์เก่าหายจากสาขา
+  // เฉพาะสาขาเดียว (ฐานกรองให้ · ยังแบ่งหน้า) — จอที่กรอง branch_id ฝั่งจออยู่แล้วใช้ตัวนี้แทนการขนทั้งตาราง (24 ต.ค. 69)
+  getAssetsByBranch: (bid) => sbAll(`assets?branch_id=eq.${+bid}&order=id.desc`),
   addWasteLog: (d) => sb("waste_logs", { method: "POST", body: JSON.stringify(d) }),
   // Flags that this waste row's stock deduct actually landed, so deleting it later knows whether
   // it may credit the stock back. Best-effort: silently no-ops until the column exists.
   markWasteStockApplied: async (id) => { try{ await sb(`waste_logs?id=eq.${id}`, {method:"PATCH", headers:{Prefer:"return=minimal"}, body:JSON.stringify({stock_applied:true})}); }catch{} },
-  getWasteLogs: (bid) => sb(`waste_logs?order=log_date.desc,id.desc&limit=2000${bid ? `&branch_id=eq.${bid}` : ""}`),
+  // bid เป็นรายการเลขสาขาได้ (24 ต.ค. 69) = ให้ฐานกรองเฉพาะสาขาที่ผู้ใช้มีสิทธิ์ — เดิมขน 2,000 แถวทุกสาขามาแล้วทิ้งฝั่งจอ
+  getWasteLogs: (bid) => sb(`waste_logs?order=log_date.desc,id.desc&limit=2000${Array.isArray(bid) ? `&branch_id=in.(${bid.map(Number).filter(Number.isFinite).join(",")})` : bid ? `&branch_id=eq.${bid}` : ""}`),
   // Returns the rows it actually deleted (default Prefer: return=representation) — delLog uses
   // that as a CLAIM: only the caller that really removed the row may credit the stock back, so a
   // second device / double-confirm can't restore the same waste twice.
@@ -960,7 +1002,10 @@ const api = {
   // ⚠️ ห้ามเปลี่ยนไปใช้ getOrders/getAllOrders ที่เอา 400/600 ใบล่าสุด — ใบค้างเก่า
   //    จะหลุดออกไปเงียบๆ (มีใบค้างจริงถึง 127 วัน) แล้วหักไม่ครบ = ยังสั่งซ้ำอยู่ดี
   //    กรองด้วยสถานะเบากว่าด้วย: เปิดอยู่ ~183 ใบ จากทั้งตาราง 2,062 ใบ
-  getOpenOrders: () => sb(`order_requests?status=in.(pending_approval,pending,approved)&select=id,branch_id,supplier_id,supplier_name,status,requested_at,items&order=id.desc&limit=1000`),
+  //
+  // bid (24 ต.ค. 69) = ให้ฐานกรองสาขาเอง — ใช้กับจอที่ส่งผลเข้า onOrderQtyByIng(…,สาขาเดียวกัน) ซึ่งทิ้งสาขาอื่นอยู่แล้ว
+  //    ได้ยอดค้างชุดเดิม (และ limit 1000 นับเฉพาะของสาขานี้) · ตัวตรวจใบซ้ำในหน้าอนุมัติยังเรียกแบบไม่ส่ง bid (ต้องเห็นทุกสาขา)
+  getOpenOrders: (bid) => sb(`order_requests?status=in.(pending_approval,pending,approved)&select=id,branch_id,supplier_id,supplier_name,status,requested_at,items&order=id.desc&limit=1000${bid!=null&&bid!==""&&Number.isFinite(+bid)?`&branch_id=eq.${+bid}`:""}`),
   getPendingApprovalPOs: () => sb(`purchase_orders?status=eq.pending_approval&order=id.desc`),
   // Approval history log (one row per approve/reject decision)
   addApprovalLog: (d) => sb("approval_log", { method:"POST", body:JSON.stringify(d), headers:{ "Prefer":"return=minimal" } }),
@@ -1044,6 +1089,9 @@ const api = {
   },
   // Public scan — verify QR token + branch active before returning anything
   scanTable: (branchId,tableId,token) => sb(`tables?id=eq.${+tableId}&branch_id=eq.${+branchId}&qr_token=eq.${encodeURIComponent(token||"")}&active=eq.true`),
+  // ตัวกรองเดียวกับ scanTable เป๊ะ แต่ขอแค่ id — สำหรับจุดที่ถามแค่ "QR ยังใช้ได้ไหม" (ดูความยาวผลอย่างเดียว · 24 ต.ค. 69)
+  // ประตูหน้าลูกค้ายังใช้ scanTable ทั้งแถว (หัวจอต้องมีเลขโต๊ะ/ชื่อโต๊ะ — ขอแค่ id แล้วหัวจอขึ้น "โต๊ะ " เปล่า)
+  scanTableOk: (branchId,tableId,token) => sb(`tables?id=eq.${+tableId}&branch_id=eq.${+branchId}&qr_token=eq.${encodeURIComponent(token||"")}&active=eq.true&select=id`),
   // ── ปุ่มเรียกพนักงาน (หน้าลูกค้า) — ตาราง staff_calls (sql/staff-calls.sql) ──
   // เพิ่มแถวอย่างเดียว ไม่แตะแถวเครื่องพิมพ์ (ช่อง pj ของใบเสร็จมีที่เดียว เขียนคั่นแล้วใบเสร็จหาย)
   // ตัวพิมพ์ v49 ของสาขาพิมพ์ที่เครื่องใบเสร็จ แล้วจดผลกลับ — คืนเลขแถวไว้ให้หน้าลูกค้าถามผล
@@ -1102,17 +1150,32 @@ const api = {
   // Printers
   getPrinters: (bid) => sb(`printers?order=id.asc${bid?`&branch_id=eq.${bid}`:"&branch_id=is.null"}`),
   getAllPrinters: () => sb(`printers?order=id.asc`),
+  // ลด egress 24 ต.ค. 69 (ฐานแผนฟรีป่วย): ทุกจุดที่ดึงทั้งตารางแล้วกรองสาขาเอง (printersAt / branch_id==null||ตรงสาขา)
+  // ให้ฐานกรองให้แทน — กติกาเดียวกับ printersAt แถวชุดเดียวกันเป๊ะ จุดเรียกยังกรองซ้ำเองเหมือนเดิม
+  // (สาขา 5 เลิกลากก้อนรายการพิมพ์ไม่ออกของ River ~20 KB ทุก 60 วิ) · ไม่มีเลขสาขา/เลขเพี้ยน = ดึงทั้งหมดแบบเดิม
+  // ห้ามส่งเลขเพี้ยนไปให้ฐาน: ได้ 400 → รายชื่อว่าง → ใบรีปริ้น/ยกเลิก/ย้ายโต๊ะไม่ออกเงียบ
+  getBranchPrinters: (bid) => (bid!=null&&bid!==""&&Number.isFinite(+bid)) ? sb(`printers?or=(branch_id.is.null,branch_id.eq.${+bid})&order=id.asc`) : api.getAllPrinters(),
+  // อ่านก่อนเขียนเครื่องที่รู้เลขอยู่แล้ว (ลิ้นชักซ้ำ · แก้รายการไม่ออก · บันทึกตั้งค่าเครื่อง) — แถวเดียวกัน ไม่ลากทั้งตาราง
+  // ไม่มีเลขที่ใช้ได้เลย = ดึงทั้งหมดแบบเดิม (ผู้เรียกหาเลขไม่เจอเอง เหมือนเดิม)
+  getPrintersByIds: (ids) => { const q=[...new Set((ids||[]).map(Number).filter(n=>Number.isFinite(n)&&n>0))]; return q.length?sb(`printers?id=in.(${q.join(",")})&order=id.asc`):api.getAllPrinters(); },
   // เฉพาะเครื่องที่มีรายการพิมพ์ไม่ออกค้าง (ปกติไม่มี = ได้แถวว่าง ประหยัดเน็ต) — ปุ่ม "พิมพ์ไม่สำเร็จ" ถามถี่ได้
   // bid = เฉพาะเครื่องของสาขานั้น + เครื่อง "ทุกสาขา" (กติกาเดียวกับ printersAt) — จอขายถามทุก 6 วิ
   // เดิมไม่กรอง เครื่องขายสาขาอื่นดาวน์โหลดรายการค้างของ River (~15 KB) ทุกรอบไปทิ้ง
   getPrintersWithFails: (bid) => sb(`printers?select=id,branch_id,description&description=like.*%22failed%22:%5B%7B*${bid!=null&&bid!==""?`&or=(branch_id.is.null,branch_id.eq.${+bid})`:""}&order=id.asc`),
   // งานรูป (pj) ที่ฝากไว้ ยังค้างอยู่ในแถวไหม — ได้แค่เลข id (ไม่ดึงรูป) · ว่าง = ตัวพิมพ์รับไปแล้ว
   addPrinter: (d) => sb("printers", {method:"POST", body:JSON.stringify(d)}),
-  updatePrinter: (id,d) => sb(`printers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  // return=minimal (24 ต.ค. 69): เดิมฐานส่งแถวทั้งแถวกลับมา รวมรูปใบเสร็จ ~100-170 KB ที่เพิ่งส่งไป — ไม่มีจุดเรียกไหนอ่านผล
+  // (ตรวจครบทุกจุดแล้ว · ด่านใน check-code กันจุดใหม่ที่เอาผลไปใช้) · ส่งเหมือนเดิมทุกไบต์ ตัวพิมพ์อ่านช่องเดิม
+  updatePrinter: (id,d) => sb(`printers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d), headers:{"Prefer":"return=minimal"}}),
   deletePrinter: (id) => sb(`printers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   getActiveOrders: (bid) => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${bid}&limit=200`),
+  // ถามแค่ id+updated_at ของบิลเปิดชุดเดียวกัน (ตัวกรอง/เรียง/เพดานเดียวกับ getActiveOrders) — จอขายเทียบลายเซ็นก่อนดึงทั้งแถว
+  getActiveOrderStamps: (bid) => sb(`orders?select=id,updated_at&status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${bid}&limit=200`),
   // หน้าลูกค้าใช้ — pay_lock ต้องมาด้วย: พิมพ์ QR จ่ายเงินแล้ว (อาจมีส่วนลด) มือถือต้องโชว์ยอดบน QR ใบนั้น
-  getOrderByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&select=id,items,status,created_at,subtotal,discount,total,pay_lock&order=created_at.desc&limit=1`),
+  // updated_at (24 ต.ค. 69): หน้าลูกค้าเทียบกับ getOrderSigByTable — บิลบนจอยังเป็นฉบับล่าสุดไหม
+  getOrderByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&select=id,items,status,created_at,subtotal,discount,total,pay_lock,updated_at&order=created_at.desc&limit=1`),
+  // ลายเซ็นบิลของโต๊ะ (ตัวกรอง/เรียง/เพดานเดียวกับข้างบน) ~60 ไบต์ แทนบิลทั้งใบพร้อม items — ตาราง orders มี trigger ประทับ updated_at=now() ทุก UPDATE
+  getOrderSigByTable: (tid) => sb(`orders?table_id=eq.${tid}&status=neq.paid&status=neq.cancelled&select=id,updated_at&order=created_at.desc&limit=1`),
   createPOSOrder: (d) => sb("orders", { method:"POST", body:JSON.stringify(d) }),
   updatePOSOrder: (id, d) => sb(`orders?id=eq.${id}`, { method:"PATCH", body:JSON.stringify(d) }),
   getPOSOrderById: (id) => sb(`orders?id=eq.${id}&limit=1`),
@@ -1443,7 +1506,9 @@ const api = {
   updateCRMReservation: (id,d) => sb(`crm_reservations?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   deleteCRMReservation: (id) => sb(`crm_reservations?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   // CRM — scan/visit events for per-branch statistics
-  getCRMEvents: (bid) => sb(`crm_events?order=id.desc&limit=5000${bid?`&branch_id=eq.${bid}`:""}`),
+  // since (ISO) + คอลัมน์เท่าที่ใช้ (24 ต.ค. 69) — แท็บแต้มนับแค่ "7 วันล่าสุด" ต่อชนิด (stat ใน CRMPoints) เดิมขน 5,000 แถวพร้อม meta ทุกครั้งที่ CRM โหลด
+  //   created_at เขียนเป็น ISO เสมอ (crmLogEvent) จึงเทียบ gte ได้ตรงทั้งแบบ timestamptz และข้อความ · ไม่ส่ง since = แบบเดิมทุกอย่าง
+  getCRMEvents: (bid,since) => sb(`crm_events?order=id.desc&limit=5000${bid?`&branch_id=eq.${bid}`:""}${since?`&select=id,type,created_at&created_at=gte.${encodeURIComponent(since)}`:""}`),
   addCRMEvent: (d) => sb("crm_events", {method:"POST", headers:{"Prefer":"return=minimal"}, body:JSON.stringify(d)}),
   // CRM — customer-submitted point claims (bill + receipt), approved by admin
   getCRMPointClaims: (bid,status) => sb(`crm_point_claims?order=id.desc&limit=1000${bid?`&branch_id=eq.${bid}`:""}${status?`&status=eq.${status}`:""}`),
@@ -1487,12 +1552,17 @@ const api = {
   deleteZone: (id) => sb(`table_zones?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   // POS Settings (per-branch VAT, Service Charge, PromptPay, Receipt)
   getPOSSettings: (bid) => sb(`pos_settings?branch_id=eq.${bid}&limit=1`),
+  // จอขายถามแค่เวลาแก้ล่าสุดของแถว (~50 ไบต์) ทุก 60 วิ — ดึงทั้งแถว (~6 KB · มี PIN/คลังตัวเลือก/แพ็คเกจ) เฉพาะเมื่อเปลี่ยน
+  getPOSSettingsStamp: (bid) => sb(`pos_settings?branch_id=eq.${bid}&select=updated_at&limit=1`),
   // แก้เฉพาะคอลัมน์ที่ส่งมา — ทุกจอตั้งค่า POS ใช้ตัวนี้ (แบบเดียวกับลำดับหมวดด้านล่าง)
   // เดิมแต่ละจอ upsert ทั้งแถวจากค่าที่โหลดไว้ตอนเปิดจอ: เครื่องหนึ่งเปิด VAT อีกเครื่องเพิ่ม PIN
   // → VAT กลับเป็นปิดเงียบๆ หรือ PIN/คลังตัวเลือกหาย · ยังไม่มีแถว = สร้างใหม่ด้วยคอลัมน์ชุดเดียวกัน
   // (เลิกใช้ upsertPOSSettings ที่ส่งทั้งแถวแล้ว — อย่าเอากลับมา)
   patchPOSSettings: async (bid, patch) => {
     const p = {...(patch||{})}; delete p.id; delete p.branch_id;
+    // ประทับเวลาแก้ทุกครั้ง (24 ต.ค. 69): จอขายเครื่องอื่นถามแค่ updated_at แล้วดึงทั้งแถวเมื่อเปลี่ยน
+    // ทางที่เดิมไม่ประทับ (PIN พนักงาน · คลังตัวเลือก/ราคาตัวเลือก) จะไม่ถึงจอขายจนกว่าจะครบรอบดึงเต็ม 10 นาที · ฟอร์ม VAT ส่งมาเองแล้ว = ใช้ของผู้เรียก
+    if (p.updated_at == null) p.updated_at = new Date().toISOString();
     const r = await sb(`pos_settings?branch_id=eq.${bid}`, {method:"PATCH", body:JSON.stringify(p)});
     if(Array.isArray(r)&&r.length)return r[0];
     const ins = await sb("pos_settings", {method:"POST", body:JSON.stringify({...p,branch_id:bid}), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}});
@@ -1524,13 +1594,13 @@ const api = {
   },
   // แก้เฉพาะลำดับหมวด — ห้าม upsert ทั้งแถว ไม่งั้นทับ VAT/ค่าบริการ/QR ที่เครื่องอื่นเพิ่งแก้
   setCategoryOrder: async (bid, order) => {
-    const r = await sb(`pos_settings?branch_id=eq.${bid}`, {method:"PATCH", body:JSON.stringify({category_order:order})});
+    const r = await sb(`pos_settings?branch_id=eq.${bid}`, {method:"PATCH", body:JSON.stringify({category_order:order,updated_at:new Date().toISOString()})});   // updated_at: เหตุผลเดียวกับแพ็คเกจ (24 ต.ค. 69)
     if(Array.isArray(r)&&r.length)return r[0];
     return await sb("pos_settings", {method:"POST", body:JSON.stringify({branch_id:bid,category_order:order}), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}});
   },
   // แก้เฉพาะลำดับเมนู — เหตุผลเดียวกับลำดับหมวด ห้าม upsert ทั้งแถวทับค่าอื่น
   setMenuOrder: async (bid, order) => {
-    const r = await sb(`pos_settings?branch_id=eq.${bid}`, {method:"PATCH", body:JSON.stringify({menu_order:order})});
+    const r = await sb(`pos_settings?branch_id=eq.${bid}`, {method:"PATCH", body:JSON.stringify({menu_order:order,updated_at:new Date().toISOString()})});   // updated_at: เหตุผลเดียวกับแพ็คเกจ (24 ต.ค. 69)
     if(Array.isArray(r)&&r.length)return r[0];
     return await sb("pos_settings", {method:"POST", body:JSON.stringify({branch_id:bid,menu_order:order}), headers:{"Prefer":"resolution=merge-duplicates,return=representation"}});
   },
@@ -1570,16 +1640,10 @@ const api = {
   addExternalSalesBatch: (rows) => sb("external_sales", {method:"POST", body:JSON.stringify(rows), headers:{"Prefer":"return=minimal"}}),
   deleteExternalSalesBy: (branchId,date) => sb(`external_sales?branch_id=eq.${+branchId}&sale_date=eq.${date}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   // Purchase Orders
-  getPOs: (filters={}) => {
-    const q=["order=po_date.desc,id.desc","limit=1000"];
-    // viewerBranchId = branch sees POs where it is sender OR receiver
-    if(filters.viewerBranchId!=null)q.push(`or=(from_branch_id.eq.${filters.viewerBranchId},branch_id.eq.${filters.viewerBranchId})`);
-    if(filters.fromBranchId!=null)q.push(`from_branch_id=eq.${filters.fromBranchId}`);
-    if(filters.toBranchId!=null)q.push(`branch_id=eq.${filters.toBranchId}`);
-    if(filters.dateFrom)q.push(`po_date=gte.${filters.dateFrom}`);
-    if(filters.dateTo)q.push(`po_date=lte.${filters.dateTo}`);
-    return sb(`purchase_orders?${q.join("&")}`);
-  },
+  getPOs: (filters={}) => sb(`purchase_orders?${poFilterQuery(filters)}`),
+  // คอลัมน์เล็กๆ ของแถวชุดเดียวกับ getPOs — หน้าเอกสาร PO ถามตัวนี้ทุก 90 วิ แทนการโหลดทั้งใบพร้อม items (~470 KB ของครัวกลาง)
+  // ถ้าลายนิ้วมือ (poMarksFingerprint) เปลี่ยนค่อยโหลดเต็ม — 24 ต.ค. 69
+  getPOMarks: (filters={}) => sb(`purchase_orders?select=id,status,updated_at,sliptrack_sync,stock_pending&${poFilterQuery(filters)}`),
   getPO: (id) => sb(`purchase_orders?id=eq.${id}&limit=1`),
   // PO ที่สาขานี้ "รับของเข้าแล้ว" และมีวัตถุดิบตัวนี้ — ใช้ในประวัติราคาซื้อ (รับจากครัวกลาง / โอนจากสาขาอื่น)
   // กรองวัตถุดิบในฐานด้วย items=cs.[{"ingredient_id":N}] · ingredient_id ใน items เป็นตัวเลขทุกแถว (ตรวจ 27 ก.ย. 69: 21,662 แถว ไม่มีแบบข้อความ)
@@ -5384,7 +5448,9 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[],reloa
   const allowed=useMemo(()=>currentUser?.role==="admin"?null:normalizeBranchIds(currentUser?.allowed_branches),[currentUser]);
   const inScope=bid=>!allowed||allowed.map(x=>+x).includes(+bid);
   const[logs,setLogs]=useState([]);const[loadingLogs,setLoadingLogs]=useState(false);const[fBranch,setFBranch]=useState("");
-  async function loadLogs(){setLoadingLogs(true);try{const d=await api.getWasteLogs();setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{setLogs([]);}setLoadingLogs(false);}
+  // 24 ต.ค. 69: ให้ฐานกรองสาขาที่มีสิทธิ์เอง (admin/ไม่จำกัดสาขา = ทุกสาขาแบบเดิม) · inScope ฝั่งจอยังกรองซ้ำ · ไม่มีสิทธิ์สาขาไหนเลย = ไม่ต้องถามฐาน
+  // ได้แถวของสาขาตัวเองครบขึ้น ไม่น้อยลง: เดิม 2,000 แถวล่าสุดของ "ทุกสาขา" แล้วทิ้ง ตอนนี้ 2,000 แถวล่าสุดของสาขาที่เห็นได้
+  async function loadLogs(){setLoadingLogs(true);try{const d=allowed&&!allowed.length?[]:await api.getWasteLogs(allowed||undefined);setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{setLogs([]);}setLoadingLogs(false);}
   useEffect(()=>{loadLogs();},[]);// eslint-disable-line react-hooks/exhaustive-deps
   function closeRecord(){setShowRecord(false);loadLogs();}   // close popup → land on the (refreshed) history page
   const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false&&inScope(b.id)),[branches,allowed]);// eslint-disable-line react-hooks/exhaustive-deps
@@ -9590,7 +9656,8 @@ function AssetOrderModal({currentBranch,currentUser,onClose,onSubmitted}){
   // แนบได้ทั้งรูปและไฟล์ ไม่จำกัดจำนวน (เดิมแนบรูปได้ใบเดียวเฉพาะแถบอุปกรณ์อื่น)
   const[aFiles,setAFiles]=useState([]);const[oFiles,setOFiles]=useState([]);
   const[saving,setSaving]=useState(false);const savingRef=useRef(false);
-  useEffect(()=>{let ok=true;(async()=>{try{const a=await api.getAssets();if(ok)setAssets((Array.isArray(a)?a:[]).filter(x=>+x.branch_id===+currentBranch?.id));}catch{if(ok)setAssets([]);}})();return()=>{ok=false;};},[currentBranch?.id]);
+  // 24 ต.ค. 69: ฐานกรองสาขาให้ (getAssetsByBranch) แทนขนทะเบียนทุกสาขามาทิ้ง · ตัวกรองฝั่งจอยังอยู่ · ไม่มีสาขา = รายการว่างแบบเดิม
+  useEffect(()=>{let ok=true;(async()=>{try{const a=currentBranch?.id==null?[]:await api.getAssetsByBranch(currentBranch.id);if(ok)setAssets((Array.isArray(a)?a:[]).filter(x=>+x.branch_id===+currentBranch?.id));}catch{if(ok)setAssets([]);}})();return()=>{ok=false;};},[currentBranch?.id]);
   const matches=useMemo(()=>{const ql=q.trim().toLowerCase();if(!ql||!Array.isArray(assets))return[];return assets.filter(a=>(a.name||"").toLowerCase().includes(ql)).slice(0,15);},[assets,q]);
   const inputSt={width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${C.line}`,fontFamily:"'Sarabun',sans-serif",fontSize:14,boxSizing:"border-box"};
   // เก็บ image (รูปแรก) ไว้ด้วยเสมอ เพื่อให้จอเดิมที่อ่าน it.image ยังแสดงรูปได้เหมือนเดิม
@@ -10528,6 +10595,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   const[copyBusy,setCopyBusy]=useState(false);     // true while addPO for a copy is in-flight
   const slipHealRef=useRef(false);                 // guards load()'s SlipTrack self-heal from overlapping
   const slipHealedRef=useRef(new Set());           // PO ids already auto-retried this mount (≤1 each — no spam)
+  const poMarkRef=useRef(null);                    // {fp,q,at} ของการโหลดเต็มครั้งล่าสุดที่ขึ้นจอ · null = ยังไม่มี/โหลดล้ม → รอบหน้าโหลดเต็ม (24 ต.ค. 69)
+  const poTickBusyRef=useRef(false);               // รอบถามลายนิ้วมือยังไม่จบ = รอบถัดไปข้าม (ฐานช้าไม่ทำให้คำขอซ้อนกัน)
   const isCentralBranch=currentBranch?.type==="central";
   const hasPO=hasPerm(currentUser,"po")||hasPerm(currentUser,"summary")||hasPerm(currentUser,"orders");
   // Per-PO permissions
@@ -10552,6 +10621,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       else if(direction==="received")filters.toBranchId=currentBranch.id;
       else filters.viewerBranchId=currentBranch.id;
       let data=await api.getPOs(filters);
+      // ลายนิ้วมือจากแถวดิบ "ก่อน" ตัวซ่อมและตัวกรองฝั่งจอ — ตัวซ่อมเขียนฐานแล้ว รอบถามถัดไปจะเห็นต่างแล้วโหลดใหม่ครั้งเดียว (ไม่วน)
+      const rawMark={fp:poMarksFingerprint(data),q:filters,at:Date.now()};
       // ── Self-heal stranded "requests" ────────────────────────────────────
       // A PO addressed TO a central kitchen while in "open" is invalid: central
       // is the receiver (no "🚚 จัดส่ง" button) and it's not "requested" (no
@@ -10614,19 +10685,41 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       // "ใบโอนทั้งหมด" ดูจากเลขใบ ไม่ใช่สถานะ — ใบโอนคิดเงินที่รับแล้วอยู่ รอชำระเงิน/จ่ายแล้ว ไม่ใช่ transfer_*
       if(filterStatus==="transfer")data=data.filter(isTransferPO);
       else if(filterStatus){const ST_GROUP={open:["open","transfer_pending"],shipped:["shipped","transfer_shipped"],paid:["paid","received"]};const want=ST_GROUP[filterStatus]||[filterStatus];data=data.filter(p=>want.includes(p.status));}
+      poMarkRef.current=rawMark;   // จดคู่กับ setPOs — ฐานที่ใช้เทียบ = ชุดที่จอแสดงอยู่จริงเสมอ (โหลดสองรอบสวนกัน ใครเขียนจอทีหลังคนนั้นเป็นฐาน)
       setPOs(data);
-    }catch(e){console.error("loadPOs",e);alert("โหลด PO ไม่สำเร็จ: "+e.message);}
+    }catch(e){poMarkRef.current=null;console.error("loadPOs",e);alert("โหลด PO ไม่สำเร็จ: "+e.message);}   // โหลดล้ม = ไม่มีฐาน ⟹ รอบหน้าโหลดเต็มใหม่เหมือนเดิม (ไม่ค้างจอเก่าไว้ 30 นาที)
     setLoading(false);
   }
-  useEffect(()=>{load();},[direction,partnerFilter,filterStatus,dateFrom,dateTo,currentBranch?.id]);
+  // รอบเบื้องหลังเรียกผ่าน ref เสมอ — ได้ load ตัวล่าสุดที่เห็นตัวกรองปัจจุบัน (ไม่ใช่ตัวที่ค้างตอนตั้งรอบ) — 24 ต.ค. 69
+  const loadRef=useRef(load);loadRef.current=load;
+  // แท็บ "สรุปต้องซื้อวันนี้" (summaryOnly) ไม่ได้แสดงรายการนี้เลย (PurchaseSummaryModal ดึงเอง) — เดิมโหลดเต็มแล้วทิ้งทุก 90 วิ
+  // summaryOnly ต้องอยู่ใน deps: สองแท็บย่อยใช้ POSection ตัวเดียวกัน (ไม่มี key) สลับจากสรุปมาเอกสาร PO แล้วต้องโหลดทันที ไม่งั้นจอว่าง "ไม่มีเอกสาร"
+  useEffect(()=>{if(summaryOnly)return;load();},[direction,partnerFilter,filterStatus,dateFrom,dateTo,currentBranch?.id,summaryOnly]);
   // พนักงานเปิดหน้านี้ค้างไว้ทั้งวันรอของ — ถ้าไม่รีเฟรชเอง จะไม่เห็นว่าอีกฝั่ง
   // กดจัดส่ง/รับของไปแล้ว · หยุดตอนแท็บถูกซ่อนไว้ เพื่อไม่ให้ยิงฐานข้อมูลฟรีๆ
+  // 24 ต.ค. 69: ทุก 90 วิ "ถามลายนิ้วมือ" (getPOMarks ~2 KB) แทนโหลดเต็ม (~76 KB gzip ของครัวกลาง) — ต่างเมื่อไหร่ค่อยโหลดเต็ม
+  //   ครบ 30 นาทีโหลดเต็มเสมอ · ถามไม่ผ่านเพราะฐานล่ม = เงียบไว้รอบหน้า (ไม่เด้ง alert ทุก 90 วิ) · คอลัมน์ไม่มี = ถอยไปโหลดเต็มแบบเดิม
+  //   สลับแท็บกลับมา = รอบเดียวกัน (ไม่ใช่โหลดเต็มทุกครั้ง) · รอบก่อนยังไม่จบ = ข้าม
   useEffect(()=>{
-    const t=setInterval(()=>{if(!document.hidden)load();},90000);
-    const onVis=()=>{if(!document.hidden)load();};
+    if(summaryOnly)return;
+    const tick=async()=>{
+      if(document.hidden||poTickBusyRef.current)return;
+      poTickBusyRef.current=true;
+      try{
+        const m=poMarkRef.current;
+        if(!m||Date.now()-m.at>=PO_FULL_REFRESH_MS){await loadRef.current();return;}
+        let rows;
+        try{rows=await api.getPOMarks(m.q);}
+        catch(e){if(/42703|PGRST204|does not exist/i.test(String((e&&e.message)||e)))await loadRef.current();return;}   // เฉพาะ "ไม่มีคอลัมน์" ถอยไปโหลดเต็ม · ฐานช้า/ล่ม (PGRST003, 5xx, เน็ต) = เงียบ ไม่ซ้ำเติม
+        if(poMarkRef.current!==m)return;   // ระหว่างรอมีการโหลดเต็มขึ้นจอแล้ว — ฐานใหม่กว่า ไม่ต้องเทียบ
+        if(poMarksFingerprint(rows)!==m.fp)await loadRef.current();
+      }finally{poTickBusyRef.current=false;}
+    };
+    const t=setInterval(tick,90000);
+    const onVis=()=>{if(!document.hidden)tick();};
     document.addEventListener("visibilitychange",onVis);
     return()=>{clearInterval(t);document.removeEventListener("visibilitychange",onVis);};
-  });// eslint-disable-line react-hooks/exhaustive-deps
+  },[summaryOnly,currentBranch?.id]);
 
   // Push received qty into the receiver's stock AND deduct from the sender,
   // auto-ticking the receiver on each ingredient's visible_branches list.
@@ -12356,8 +12449,10 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
       setLoading(true);setLoadErr("");
       try{
         // viewerBranchId picks up POs where central is sender OR receiver.
-        // No date/status/partner filters → cover EVERY pending PO.
-        const data=await api.getPOs({viewerBranchId:currentBranch.id});
+        // No date/partner filters → cover EVERY pending PO.
+        // 24 ต.ค. 69: ให้ฐานกรองสถานะ PENDING เอง — เดิมดึงทุกใบ (~600 ใบ ~443 KB gzip พร้อม items) แล้วเหลือไม่กี่ใบ
+        // ได้แถวชุดเดิมเป๊ะ (ตัวกรองฝั่งจอข้างล่างยังอยู่) และ limit 1000 จะไม่ตัดใบค้างเก่าทิ้งเงียบๆ เมื่อ PO ทั้งหมดเกินพัน
+        const data=await api.getPOs({viewerBranchId:currentBranch.id,statusIn:[...PENDING]});
         if(!alive)return;
         // Pre-filter to PENDING here so downstream code only sees relevant rows.
         setPos((data||[]).filter(p=>PENDING.has(p.status)));
@@ -12372,8 +12467,9 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
         // ต้องหักออกจากยอดที่ต้องซื้อ ไม่งั้นความต้องการเดิม (ที่ค้างอยู่จนของถึงสาขา)
         // จะถูกเสนอให้ซื้อซ้ำทุกวัน — ต้นตอของใบแฝด #2199/#2255 ฿2,656
         // อ่านไม่ได้ = หักไม่ได้ = กลับไปเสนอซ้ำเหมือนเดิม จึงต้องเตือนคน ไม่ใช่เงียบ
+        // 24 ต.ค. 69: ฐานกรองเฉพาะใบของครัวกลางเอง — ข้างล่างหักด้วย onOrderQtyByIng(…,currentBranch.id) ซึ่งทิ้งสาขาอื่นอยู่แล้ว (ยอดเท่าเดิม)
         try{
-          const oo=await api.getOpenOrders();
+          const oo=await api.getOpenOrders(currentBranch.id);
           if(alive)setOpenOrders(Array.isArray(oo)?oo:[]);
         }catch{ if(alive)setOpenOrders(null); }   // null = อ่านไม่สำเร็จ (ต่างจาก [] = ไม่มีใบเปิด)
       }catch(e){
@@ -14362,7 +14458,8 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     if(currentBranch?.id==null)return;
     let alive=true;
     (async()=>{
-      try{const oo=await api.getOpenOrders();if(alive)setOpenOrders(Array.isArray(oo)?oo:[]);}
+      // 24 ต.ค. 69: ฐานกรองสาขาเอง — onOrderQtyByIng ข้างล่างนับเฉพาะ currentBranch.id อยู่แล้ว (ยอดค้างเท่าเดิม ไม่ต้องขนใบทุกสาขามาทิ้ง)
+      try{const oo=await api.getOpenOrders(currentBranch.id);if(alive)setOpenOrders(Array.isArray(oo)?oo:[]);}
       catch{if(alive)setOpenOrders(null);}
     })();
     return()=>{alive=false;};
@@ -15460,7 +15557,11 @@ function AssetsTab({assets,reloadAssets,currentUser,currentBranch,branches=[],al
   const[q,setQ]=useState("");
   const[fStatus,setFStatus]=useState("all");
   const canE=hasPerm(currentUser,"assets");
-  const myList=useMemo(()=>assets.filter(a=>+a.branch_id===+currentBranch?.id),[assets,currentBranch]);
+  // assets=null = แอปยังไม่ได้โหลดทะเบียน (24 ต.ค. 69 เลิกโหลดตอนล็อกอิน) — แท็บนี้สั่งโหลดเองตอนเปิด · ล้ม = บอกพร้อมปุ่มลองใหม่ ไม่ใช่ "ยังไม่มีสินทรัพย์"
+  const[assetsErr,setAssetsErr]=useState("");
+  const loadAssetsNow=()=>{setAssetsErr("");Promise.resolve().then(()=>reloadAssets()).catch(e=>setAssetsErr((e&&e.message)||String(e)));};
+  useEffect(()=>{if(assets==null)loadAssetsNow();},[]);// eslint-disable-line react-hooks/exhaustive-deps
+  const myList=useMemo(()=>(assets||[]).filter(a=>+a.branch_id===+currentBranch?.id),[assets,currentBranch]);
   // ── asset transfer to another branch (splits qty + value proportionally) ──
   const[xfer,setXfer]=useState(null);const[xferBranch,setXferBranch]=useState("");const[xferQty,setXferQty]=useState("1");const[xferBusy,setXferBusy]=useState(false);
   // โอนหลายรายการพร้อมกัน — ปลายทางเดียว เลือกได้หลายชิ้น ระบุจำนวนต่อชิ้น ออกใบโอนใบเดียว
@@ -15714,7 +15815,7 @@ ${currentBranch?.name} → ${destName}
         {[{v:"all",l:"ทั้งหมด"},...ASSET_STATUS].map(s=>{const on=fStatus===s.v;return <button key={s.v} onClick={()=>setFStatus(s.v)} style={{padding:"6px 12px",borderRadius:20,border:`1px solid ${on?C.brand:C.line}`,background:on?C.brand:C.white,color:on?C.white:C.ink2,cursor:"pointer",fontSize:12,fontWeight:on?800:600,fontFamily:"'Sarabun',sans-serif"}}>{s.l}</button>;})}
       </div>
     </div>
-    {filtered.length===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.box} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีสินทรัพย์{myList.length>0?"ที่ตรงกับตัวกรอง":""}</p>{canE&&myList.length===0&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.ink}}>"+ เพิ่มสินทรัพย์"</b> เพื่อเริ่ม</p>}</div>
+    {assets==null?(assetsErr?<ErrBox msg={"โหลดทะเบียนสินทรัพย์ไม่สำเร็จ: "+assetsErr} onRetry={loadAssetsNow}/>:<Loading text="โหลดทะเบียนสินทรัพย์..."/>):filtered.length===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.box} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>ยังไม่มีสินทรัพย์{myList.length>0?"ที่ตรงกับตัวกรอง":""}</p>{canE&&myList.length===0&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.ink}}>"+ เพิ่มสินทรัพย์"</b> เพื่อเริ่ม</p>}</div>
     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(300px,100%),1fr))",gap:14}}>
       {filtered.map(a=>{const d=assetDeprec(a);const st=stOf(a.status||"active");return <Card key={a.id} style={{overflow:"hidden"}}>
         <div style={{display:"flex",gap:12,padding:"12px 14px"}}>
@@ -17355,7 +17456,7 @@ function CRMTab({currentBranch,currentUser,menus}){
         api.getCRMFeedback(currentBranch.id),
         api.getCRMReservations(currentBranch.id),
         api.getCRMPointClaims(currentBranch.id).catch(()=>[]),
-        api.getCRMEvents(currentBranch.id).catch(()=>[]),
+        api.getCRMEvents(currentBranch.id,new Date(Date.now()-8*864e5).toISOString()).catch(()=>[]),   // เผื่อ 1 วัน — stat ตัดที่ 7 วันพอดีเองตอนแสดง
         api.getCRMPromotions().catch(()=>[]),
         api.getCRMBookingRequests().catch(()=>[]),
       ]);
@@ -19064,7 +19165,8 @@ export default function App(){
   const[branches,setBranches]=useState([]);const[suppliers,setSuppliers]=useState([]);
   const[costHistory,setCostHistory]=useState([]);const[actionHistory,setActionHistory]=useState([]);
   const[orders,setOrders]=useState([]);const[allOrders,setAllOrders]=useState([]);
-  const[printers,setPrinters]=useState([]);const[assets,setAssets]=useState([]);
+  // assets: null = ยังไม่ได้โหลด — โหลดตอนเปิดแท็บทะเบียนสินทรัพย์ครั้งแรก ไม่ใช่ทุกครั้งที่ล็อกอิน (ทั้งตาราง แบ่งหน้า · 24 ต.ค. 69)
+  const[printers,setPrinters]=useState([]);const[assets,setAssets]=useState(null);const assetsWantedRef=useRef(false);
   const[loading,setLoading]=useState(false);const[initErr,setInitErr]=useState("");
   // ลิงก์ ?approve=1 (จากแจ้งเตือนเก่า) พาไปแท็บอนุมัติได้เฉพาะตอนเปิดระบบอนุมัติ
   const[tab,setTab]=useState(()=>{try{return (APPROVAL_ON&&new URLSearchParams(window.location.search).get("approve")==="1")?"approve":"pos";}catch{return "pos";}});
@@ -19094,13 +19196,14 @@ export default function App(){
         api.getCats(),api.getUsers(),api.getBranches(),api.getSuppliers(),
         api.getCostHist(isCentral?null:currentBranch.id),
         api.getActionHist(),
-        api.getOrders(isCentral?null:currentBranch.id),
-        api.getAllPrinters(),
+        fetchOrdersFor(isCentral,currentBranch.id),   // ครัวกลาง = getAllOrders ครั้งเดียวแล้วตัด 400 ใบแรกเป็น orders (24 ต.ค. 69)
+        api.getBranchPrinters(currentBranch.id),   // ฐานกรองสาขาให้ (แถวชุดเดียวกับ printersAt) — 24 ต.ค. 69
       ]);
       setIngs(i);setMenus(m);setAllCats(c);setUsers(u);setBranches(b);setSuppliers(s);
-      setCostHistory(ch);setActionHistory(ah);setOrders(o);setPrinters(printersAt(pr,currentBranch.id));
-      try{const as=await api.getAssets();setAssets(as);}catch{}
-      if(isCentral){const ao=await api.getAllOrders();setAllOrders(ao);}
+      setCostHistory(ch);setActionHistory(ah);setOrders(o.orders);setPrinters(printersAt(pr,currentBranch.id));
+      // สินทรัพย์: โหลดซ้ำเฉพาะเมื่อเคยเปิดแท็บทะเบียนแล้ว (ปุ่มรีเฟรช/สลับสาขาได้ข้อมูลใหม่เหมือนเดิม) · ยังไม่เคยเปิด = แท็บโหลดเองตอนเปิด
+      if(assetsWantedRef.current){try{const as=await api.getAssets();setAssets(as);}catch{}}
+      if(isCentral)setAllOrders(o.all);
     }catch(e){setInitErr("เชื่อมต่อ Supabase ไม่ได้: "+e.message);}
     if(!silent)setLoading(false);
   }
@@ -19148,22 +19251,32 @@ export default function App(){
           setCurrentUser(prev=>prev?{...prev,role:u.role,perms:newPerms,name:u.name,allowed_branches:newAllowed}:prev);
         }
         // Refresh branches too — admin may have flipped allowed_perms / active on the current branch
+        // 24 ต.ค. 69: ถามแถวเดียว 3 คอลัมน์ (getBranchStatus) · ดึงทั้งตารางเฉพาะตอนสิทธิ์สาขาเปลี่ยนจริง (นานๆ ครั้ง)
+        //   เพราะ setCurrentBranch ต้องได้แถวเต็ม (ชื่อ/ชนิด/ตั้งค่า) ไม่ใช่ 3 คอลัมน์ · กติกาเตะออก/อัปเดตเหมือนเดิมทุกข้อ
         if(cb){
           try{
-            const fresh=await api.getBranches();
-            const updated=fresh.find(x=>+x.id===+cb.id);
+            const st=await api.getBranchStatus(cb.id);
+            const updated=Array.isArray(st)?st.find(x=>+x.id===+cb.id):null;
             if(!updated||updated.active===false){
               if(updated&&updated.active===false){alert(`สาขา "${cb.name}" ถูกปิดการใช้งาน — กลับไปเลือกสาขาใหม่`);setCurrentBranch(null);}
             }else if(JSON.stringify(updated.allowed_perms)!==JSON.stringify(cb.allowed_perms)){
-              setCurrentBranch(updated);
-              setBranches(fresh);
+              const fresh=await api.getBranches();
+              const full=fresh.find(x=>+x.id===+cb.id);
+              if(full&&full.active===false){alert(`สาขา "${cb.name}" ถูกปิดการใช้งาน — กลับไปเลือกสาขาใหม่`);setCurrentBranch(null);}
+              else if(full){setCurrentBranch(full);setBranches(fresh);}
             }
           }catch{}
         }
       }catch{/* ignore transient network */}
     };
-    const id=setInterval(tick,180000);   // heartbeat ไม่ต้องถี่ — แค่กันเซสชันค้าง
-    return()=>clearInterval(id);
+    // 24 ต.ค. 69: แท็บที่ถูกซ่อน (หลังบ้านเปิดทิ้งไว้) ไม่ต้องถาม — ทำอะไรไม่ได้อยู่แล้ว · กลับมาเห็นจอเมื่อไหร่ ถ้าครบรอบแล้วถามทันที
+    //   ⟹ ผู้ใช้ที่ถูกปิด/สาขาที่ถูกถอนยังโดนเตะภายใน 3 นาทีนับจากจอกลับมาให้เห็น (สลับแท็บถี่ๆ ไม่ยิงเพิ่ม)
+    let last=Date.now();
+    const run=()=>{if(document.hidden)return;last=Date.now();tick();};
+    const id=setInterval(run,180000);   // heartbeat ไม่ต้องถี่ — แค่กันเซสชันค้าง
+    const onVis=()=>{if(!document.hidden&&Date.now()-last>=180000)run();};
+    document.addEventListener("visibilitychange",onVis);
+    return()=>{clearInterval(id);document.removeEventListener("visibilitychange",onVis);};
   },[currentUser?.id]);
 
   const reload={
@@ -19175,9 +19288,9 @@ export default function App(){
     suppliers:async()=>{const d=await api.getSuppliers();setSuppliers(d);},
     history:async()=>{const isCentral=currentBranch?.type==="central";const d=await api.getCostHist(isCentral?null:currentBranch?.id);setCostHistory(d);},
     action:async()=>{const d=await api.getActionHist();setActionHistory(d);},
-    orders:async()=>{const isCentral=currentBranch?.type==="central";const d=await api.getOrders(isCentral?null:currentBranch?.id);setOrders(d);if(isCentral){const ao=await api.getAllOrders();setAllOrders(ao);}},
-    printers:async()=>{const d=await api.getAllPrinters();setPrinters(printersAt(d,currentBranch.id));},
-    assets:async()=>{const d=await api.getAssets();setAssets(d);},
+    orders:async()=>{const isCentral=currentBranch?.type==="central";const r=await fetchOrdersFor(isCentral,currentBranch?.id);setOrders(r.orders);if(isCentral)setAllOrders(r.all);},
+    printers:async()=>{const d=await api.getBranchPrinters(currentBranch.id);setPrinters(printersAt(d,currentBranch.id));},
+    assets:async()=>{assetsWantedRef.current=true;const d=await api.getAssets();setAssets(d);},
   };
   const ings=useMemo(()=>{
     const isCentral=currentBranch?.type==="central";
@@ -19851,13 +19964,13 @@ const withKick=(desc,dk)=>dk?cmdDesc({description:desc},"dk",dk):desc;
 // ยังส่งไม่ได้อีก = บอกแคชเชียร์ (เดิมเห็นแค่ "พิมพ์ไม่สำเร็จ" ลิ้นชักไม่เปิดไม่มีใครรู้)
 async function kickAfterFail(list,dk){
   if(!dk||!list||!list.length)return true;
-  let fresh=[];try{const all=await api.getAllPrinters();if(Array.isArray(all))fresh=all;}catch{}
+  let fresh=[];try{const all=await api.getPrintersByIds(list.map(p=>p.id));if(Array.isArray(all))fresh=all;}catch{}   // อ่านสดเฉพาะเครื่องที่จะเขียน (24 ต.ค. 69)
   try{await Promise.all(list.map(p=>api.updatePrinter(p.id,{description:cmdDesc(fresh.find(x=>x&&+x.id===+p.id)||p,"dk",dk)})));return true;}
   catch{posToast("⚠️ ลิ้นชักยังไม่เปิด (เน็ตร้านสะดุด) — กด 💰 เงินในลิ้นชัก เพื่อเปิด","err",9000);return false;}
 }
 async function kickCashDrawer(printers,branchId){
   let prs=printers;
-  try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
+  try{const all=await api.getBranchPrinters(branchId);if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
   const targets=drawerPrinters(prs);
   if(!targets.length)return 0;
   const at=Date.now();
@@ -19997,7 +20110,7 @@ function printerHandles(p,item,list){
 //   (ใช้กับใบแจ้งย้ายโต๊ะ ซึ่งเงียบไม่ได้ — ครัวจะเสิร์ฟไปโต๊ะเดิมที่มีลูกค้าใหม่นั่งอยู่)
 async function agentPrintItems(items,tableLabel,branchId,meta,fallbackAll){
   let prs=[];
-  try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
+  try{const all=await api.getBranchPrinters(branchId);if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}
   const act=prs.filter(p=>p.active!==false);   // ลิสต์ตัดสินหมุด — ชุดเดียวกับที่ตัวพิมพ์ใช้ (เปิดใช้ + สาขานี้)
   const usable=act.filter(p=>p.ip&&getPConn(p).type!=="bluetooth");
   const list=(items||[]).filter(isKitchenLine);   // ใบครัวเฉพาะอาหาร — รายการแพ็คเกจไม่ส่ง (แม้เครื่องรับทุกหมวด)
@@ -20268,7 +20381,7 @@ async function printCashierSlip(lines,{branchId,printers=[],what,table}){
 // รอใบในคิวของเครื่องนี้เขียนเสร็จ → เวลาที่เขียนใบล่าสุด (QR โต๊ะใช้ช่องเดียวกัน ต้องเว้นจังหวะจากเวลานี้)
 const cashierSlipIdle=()=>cashierSlipQ.then(()=>cashierSlipLastAt,()=>cashierSlipLastAt);
 async function sendCashierSlip(lines,{branchId,printers=[],what,table}){
-  const load=async()=>{let prs=printers;try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}return getReceiptPrinters(prs).filter(p=>p.branch_id==null||+p.branch_id===+branchId);};
+  const load=async()=>{let prs=printers;try{const all=await api.getBranchPrinters(branchId);if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branchId);}catch{}return getReceiptPrinters(prs).filter(p=>p.branch_id==null||+p.branch_id===+branchId);};
   const busy=(p)=>{try{const d=JSON.parse(p.description||"{}");return !!(d.pj&&Date.now()-(+d.pj.at||0)<4000);}catch{return false;}};
   let rcps=await load();
   if(!rcps.length)return {sent:0,none:true};
@@ -22483,6 +22596,10 @@ function CustomerPage({branchId,tableId,token}){
   const hadOrderRef=useRef(false);               // เคยเห็นบิลของโต๊ะนี้แล้วหรือยัง
   const[justPaid,setJustPaid]=useState(false);   // บิลถูกปิดระหว่างที่เปิดหน้าค้างอยู่
   const[myOrder,setMyOrder]=useState(null);
+  // บิลที่อยู่บนจอตอนนี้ (ตั้งพร้อม setMyOrder ทุกครั้ง ผ่าน putMyOrder ที่เดียว) — loadMyOrder เทียบลายเซ็นกับตัวนี้ ไม่เก็บลายเซ็นแยก
+  // ทางที่ล้างบิลออกจากจอ (QR หมดอายุ / ชำระแล้ว) = ตัวนี้เป็น null ⟹ รอบถัดไปดึงเต็มเสมอ ไม่มีทางค้างว่าง (24 ต.ค. 69)
+  const myOrderRef=useRef(null);const orderFullAtRef=useRef(0);
+  const putMyOrder=(o)=>{myOrderRef.current=o;setMyOrder(o);};
   const[optionLib,setOptionLib]=useState([]);   // branch option-group library (to resolve bound refs)
   const[gateError,setGateError]=useState(null);  // null | "no_token" | "bad_token" | "branch_closed" | "net"
   const[gateTry,setGateTry]=useState(0);         // กดลองใหม่ = รันประตูซ้ำ (ใช้เป็น dep ของ effect)
@@ -22560,6 +22677,8 @@ function CustomerPage({branchId,tableId,token}){
   const[rejectMsg,setRejectMsg]=useState(null);  // {pkg,names} ส่งไม่ได้เพราะไม่อยู่ในแพ็คเกจ/รายการผิด
   const pkgIdsRef=useRef([]);const pkgMenusRef=useRef(null);const loadPkgMenusRef=useRef(null);
   const pkgCfgRetryRef=useRef("");
+  // เวลาที่ดึงเมนูสำเร็จล่าสุด (เต็ม / สถานะของหมด) — ตอนกลับมาเปิดจอใช้ตัดสินว่าต้องดึงอะไร (24 ต.ค. 69) · จดเฉพาะเมื่อสำเร็จครบ
+  const menuOkRef=useRef({full:0,avail:0});const refreshMenusRef=useRef(null);const prevPkgKeyRef=useRef("");
   // ยอดที่ต้องจ่ายจริง — สูตรเดียวกับที่แคชเชียร์ใช้ตอนปิดบิล (ดู POSOrderPanel)
   // บิลปิดแล้วใช้ total ที่บันทึกไว้จริง ไม่คำนวณซ้ำ
   const custBill=useMemo(()=>{
@@ -22586,19 +22705,25 @@ function CustomerPage({branchId,tableId,token}){
   async function loadMyOrder(){try{
     // QR นี้ยังใช้ได้อยู่ไหม — ปิดโต๊ะแล้วรหัสเปลี่ยน หน้าที่เปิดค้างของลูกค้าคนก่อน
     // จะยังดึงบิลของโต๊ะนี้ต่อไปเรื่อยๆ = เห็นรายการของลูกค้าคนใหม่ที่มานั่งแทน
-    if(token){const ok=await api.scanTable(branchId,tableId,token);if(Array.isArray(ok)&&ok.length===0){setMyOrder(null);setGateError("bad_token");return;}}
+    if(token){const ok=await api.scanTableOk(branchId,tableId,token);if(Array.isArray(ok)&&ok.length===0){putMyOrder(null);setGateError("bad_token");return;}}
+    // ถามลายเซ็นบิลก่อน (id+updated_at ~60 ไบต์ · 24 ต.ค. 69 ลด egress) — ตรงกับบิลบนจอ + ดึงเต็มครั้งล่าสุดยังไม่ถึง 10 นาที = ไม่ขนบิลทั้งใบ (items) ซ้ำ
+    // ถามลายเซ็นไม่ได้ = ดึงเต็มแบบเดิม · 10 นาที = ตาข่ายกันการแก้บิลที่ไม่ผ่าน trigger (SQL ปิด trigger) · ผลว่าง = ทางเดิมเป๊ะ (บิลถูกปิด)
+    let sig=null;try{sig=await api.getOrderSigByTable(+tableId);}catch{sig=null;}
+    if(sig&&!(sig.length>0)){if(hadOrderRef.current)setJustPaid(true);putMyOrder(null);return;}
+    const cur=myOrderRef.current,s=sig&&sig[0];
+    if(s&&cur&&String(cur.id)===String(s.id)&&cur.updated_at&&cur.updated_at===s.updated_at&&Date.now()-orderFullAtRef.current<600000)return;
     const ex=await api.getOrderByTable(+tableId);
-    if(ex&&ex.length>0){setMyOrder(ex[0]);hadOrderRef.current=true;}
+    if(ex&&ex.length>0){putMyOrder(ex[0]);orderFullAtRef.current=Date.now();hadOrderRef.current=true;}
     // บิลหายจากผลค้นหา = ถูกปิด (ตัวค้นกรอง paid/cancelled ออก) — ถ้าเคยมีบิลอยู่
     // ต้องบอกว่า "ชำระแล้ว" ไม่ใช่ทำเหมือนไม่เคยสั่งอะไร ลูกค้าเพิ่งจ่ายเงินไป
-    else{if(hadOrderRef.current)setJustPaid(true);setMyOrder(null);}
+    else{if(hadOrderRef.current)setJustPaid(true);putMyOrder(null);}
     }catch(e){console.error("loadMyOrder",e);}}
   useEffect(()=>{
     setGateLoading(true);
     let pollId=null,menuPollId=null,fullPollId=null,onVis=null;
     (async()=>{
       try{
-        const bs=await api.getBranches();
+        const bs=await api.getBranchPublic(branchId);   // แถวเดียว id/ชื่อ/เปิดอยู่ไหม (เดิม branches ทั้งตาราง) · ตัดสินด้วยเงื่อนไขเดิมด้านล่าง
         const b=bs.find(x=>x.id===+branchId);
         if(!b){setGateError("bad_token");setGateLoading(false);return;}
         if(b.active===false){setGateError("branch_closed");setBranch(b);setGateLoading(false);return;}
@@ -22611,6 +22736,7 @@ function CustomerPage({branchId,tableId,token}){
         setBranch(b);setTable(t);
         // กรองที่ตอนโหลด ลูกค้าจะได้ไม่เห็นเมนูของสาขาอื่นแม้แต่ในข้อมูลที่ส่งไป
         setMenus(ms.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
+        menuOkRef.current={full:Date.now(),avail:Date.now()};
         {const s=ps&&ps[0]?ps[0]:null;
           setOptionLib(Array.isArray(s&&s.option_library)?s.option_library:[]);
           setPosCfg(s||null);}   // เก็บ VAT/service charge ไว้คิดยอดให้ตรงกับบิลจริง
@@ -22621,44 +22747,57 @@ function CustomerPage({branchId,tableId,token}){
         pollId=setInterval(()=>{if(!document.hidden)loadMyOrder();},45000);
         // ดึงเมนูใหม่ระหว่างมื้อ — ของหมด/ราคาเปลี่ยนต้องถึงมือถือลูกค้า
         // ไม่งั้นลูกค้าสั่งของที่ครัวเพิ่งกด "วันนี้หมด" แล้วครัวได้ใบสั่งที่ทำไม่ได้
+        // โต๊ะแพ็คเกจ (pkgIdsRef มี id) ไม่ได้แสดงเมนูตามสั่งเลย (shownMenus ใช้ชุดแพ็คเกจ) — ไม่ต้องดึงเมนู/สถานะชุดนั้น (24 ต.ค. 69 ลด egress)
+        // ออกจากโหมดแพ็คเกจเมื่อไร ดึงเมนูเต็มใหม่ทันทีครั้งเดียว (ดู effect ของ pkgIdsKey) · ระหว่างรอบโหมดเปลี่ยน = ไม่จดเวลา (รอบหน้าดึงใหม่)
         const refreshMenus=async()=>{
-          try{
-            const fresh=await api.getMenusPublic(branchId);
-            setMenus(fresh.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
-          }catch{}   // เน็ตสะดุดชั่วคราว — ใช้ก้อนเดิมไปก่อน ไม่ต้องรบกวนลูกค้า
+          const pk=pkgIdsRef.current.length>0;let ok=true;
+          if(!pk){
+            try{
+              const fresh=await api.getMenusPublic(branchId);
+              setMenus(fresh.filter(m=>m.price>0&&menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden"));
+            }catch{ok=false;}   // เน็ตสะดุดชั่วคราว — ใช้ก้อนเดิมไปก่อน ไม่ต้องรบกวนลูกค้า
+          }
           // โต๊ะบุฟเฟต์: ผู้จัดการเพิ่ม/เอาเมนูออกจากแพ็คเกจระหว่างมื้อ — อ่านคลังใหม่ในรอบเดียวกัน (ไม่เพิ่มรอบใหม่ · โต๊ะไม่มีแพ็คเกจไม่ถาม)
           if(pkgIdsRef.current.length){
-            try{const ps2=await api.getPOSSettingsPublic(branchId);const row=Array.isArray(ps2)?ps2[0]:null;if(row)setPosCfg(row);}catch{}
-            if(loadPkgMenusRef.current)loadPkgMenusRef.current();
+            try{const ps2=await api.getPOSSettingsPublic(branchId);const row=Array.isArray(ps2)?ps2[0]:null;if(row)setPosCfg(row);}catch{ok=false;}
+            if(loadPkgMenusRef.current){if(!(await loadPkgMenusRef.current()))ok=false;}
           }
+          if(ok&&(pkgIdsRef.current.length>0)===pk)menuOkRef.current={full:Date.now(),avail:Date.now()};
         };
+        refreshMenusRef.current=refreshMenus;
         // ของหมด/ซ่อน/เมนูถูกลบ = ต้องถึงมือถือลูกค้าเร็ว → เช็คทุกนาทีเหมือนเดิม
         // แต่ดึงแค่สถานะของเมนูสาขานี้ (~2 KB) ไม่ใช่เมนูทั้งก้อน — คนละเรื่องกันเรื่องปริมาณ
         // หมายเหตุ: การ "เอากลับมาขาย" (un-hide) จะเห็นในรอบเมนูเต็มถัดไป
         // ตั้งใจเช่นนี้ — ทิศที่พลาดไม่ได้คือ "หมดแล้วยังสั่งได้" ไม่ใช่ทางกลับกัน
         const refreshAvail=async()=>{
-          try{
-            const rows=await api.getMenuAvail(branchId);
-            const by=new Map((rows||[]).map(r=>[r.id,r.availability||{}]));
-            setMenus(ms=>ms.filter(m=>by.has(m.id)&&by.get(m.id)[branchId]!=="hidden")
-                           .map(m=>({...m,availability:by.get(m.id)})));
-          }catch{}   // เน็ตสะดุด — ใช้สถานะเดิมไปก่อน
+          const pk=pkgIdsRef.current.length>0;let ok=true;
+          if(!pk){   // โต๊ะแพ็คเกจไม่ได้แสดงชุดนี้ — ข้าม (ดู refreshMenus)
+            try{
+              const rows=await api.getMenuAvail(branchId);
+              const by=new Map((rows||[]).map(r=>[r.id,r.availability||{}]));
+              setMenus(ms=>ms.filter(m=>by.has(m.id)&&by.get(m.id)[branchId]!=="hidden")
+                             .map(m=>({...m,availability:by.get(m.id)})));
+            }catch{ok=false;}   // เน็ตสะดุด — ใช้สถานะเดิมไปก่อน
+          }
           // เมนูแพ็คเกจ (รวม ฿0 ที่ตัวบนไม่ได้ถาม) — ถามสถานะเฉพาะ id ในแพ็คเกจ ในรอบเดียวกันนี้
           // ไม่ถามแยก = ของ ฿0 ที่ครัวกด "วันนี้หมด" จะยังสั่งได้บนมือถือลูกค้า
           const pids=pkgIdsRef.current;
           if(pids.length){
-            if(pkgMenusRef.current===null){if(loadPkgMenusRef.current)loadPkgMenusRef.current();}   // โหลดครั้งแรกไม่ผ่าน — ลองใหม่ในรอบนี้
+            if(pkgMenusRef.current===null){if(loadPkgMenusRef.current&&!(await loadPkgMenusRef.current()))ok=false;}   // โหลดครั้งแรกไม่ผ่าน — ลองใหม่ในรอบนี้
             else try{
               const rows=await api.getMenuAvailByIds(branchId,pids);
               const by=new Map((rows||[]).map(r=>[r.id,r.availability||{}]));
               setPkgMenus(ms=>Array.isArray(ms)?ms.filter(m=>by.has(m.id)&&by.get(m.id)[branchId]!=="hidden").map(m=>({...m,availability:by.get(m.id)})):ms);
-            }catch{}
+            }catch{ok=false;}
           }
+          if(ok&&(pkgIdsRef.current.length>0)===pk)menuOkRef.current.avail=Date.now();
         };
         menuPollId=setInterval(()=>{if(!document.hidden)refreshAvail();},60000);
         // เมนูใหม่/ราคาเปลี่ยน ไม่ได้เกิดกลางมื้อ — 10 นาทีครั้งพอ
         fullPollId=setInterval(()=>{if(!document.hidden)refreshMenus();},600000);
-        onVis=()=>{if(!document.hidden){refreshMenus();loadMyOrder();}};
+        // กลับมาเปิดจอ (สลับไปแอปธนาคาร/LINE แล้วกลับมา): บิลถามทุกครั้ง · เมนูเต็มเฉพาะเมื่อดึงสำเร็จครั้งล่าสุดเกิน 10 นาที
+        // ไม่ถึง = ถามแค่สถานะของหมดถ้าเกิน 1 นาที — ของหมดบนจอไม่เก่าเกิน 1 นาทีเท่าเดิม (ตัวส่งเข้าบิลปฏิเสธของหมดซ้ำอีกชั้นเสมอ) · 24 ต.ค. 69
+        onVis=()=>{if(!document.hidden){const t=Date.now(),mk=menuOkRef.current;if(t-mk.full>=600000)refreshMenus();else if(t-mk.avail>=60000)refreshAvail();loadMyOrder();}};
         document.addEventListener("visibilitychange",onVis);
       }catch(e){
         console.error("scan gate",e);
@@ -22674,6 +22813,7 @@ function CustomerPage({branchId,tableId,token}){
       if(menuPollId)clearInterval(menuPollId);
       if(fullPollId)clearInterval(fullPollId);
       if(onVis)document.removeEventListener("visibilitychange",onVis);
+      refreshMenusRef.current=null;
     };
   },[branchId,tableId,token,gateTry]);
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
@@ -22690,20 +22830,24 @@ function CustomerPage({branchId,tableId,token}){
     pkgCfgRetryRef.current=billPkgId;
     api.getPOSSettingsPublic(branchId).then(ps=>{const row=Array.isArray(ps)?ps[0]:null;if(row)setPosCfg(row);}).catch(()=>{});
   },[billPkgId,pkgScope,branchId]);
+  // คืน true = ชุดแพ็คเกจตรงกับฐานแล้ว (ไม่มี id ก็ไม่มีอะไรต้องโหลด) · false = โหลดไม่ผ่าน — รอบเมนูใช้ตัดสินว่าจดเวลาได้ไหม
   const loadPkgMenus=useCallback(async()=>{
     const ids=pkgIdsRef.current;
-    if(!ids.length)return;
+    if(!ids.length)return true;
     try{
       const rows=await api.getMenusByIdsPublic(branchId,ids);
       const list=(rows||[]).filter(m=>menuVisibleAt(m,branchId)&&(m.availability||{})[branchId]!=="hidden");
-      pkgMenusRef.current=list;setPkgMenus(list);setPkgLoadErr(false);
-    }catch{setPkgLoadErr(true);}   // เน็ตสะดุด — รอบเช็คของหมดรายนาทีลองใหม่ให้เอง
+      pkgMenusRef.current=list;setPkgMenus(list);setPkgLoadErr(false);return true;
+    }catch{setPkgLoadErr(true);return false;}   // เน็ตสะดุด — รอบเช็คของหมดรายนาทีลองใหม่ให้เอง
   },[branchId]);
   loadPkgMenusRef.current=loadPkgMenus;
   useEffect(()=>{
+    const was=prevPkgKeyRef.current;prevPkgKeyRef.current=pkgIdsKey;
     pkgIdsRef.current=pkgIdsKey?pkgIdsKey.split(","):[];
     pkgMenusRef.current=null;setPkgMenus(null);setPkgLoadErr(false);
     if(pkgIdsRef.current.length)loadPkgMenus();
+    // เพิ่งออกจากโหมดแพ็คเกจ — ระหว่างนั้นไม่ได้ดึงเมนูตามสั่ง ⟹ ดึงเต็มทันทีครั้งเดียว · ล้างเวลาไว้ก่อน (ดึงไม่ผ่าน = เปิดจอครั้งหน้าดึงเต็มอีก)
+    else if(was){menuOkRef.current={full:0,avail:0};if(refreshMenusRef.current)refreshMenusRef.current();}
   },[pkgIdsKey,loadPkgMenus]);
   // ราคาในแพ็คเกจแปลงครั้งเดียวต่อการโหลด (ไม่สร้างก้อนใหม่ทุกครั้งที่จอวาด)
   const pricedPkgMenus=useMemo(()=>pkgPriced(pkgMenus||[],pkgScope),[pkgMenus,pkgScope]);
@@ -22761,7 +22905,8 @@ function CustomerPage({branchId,tableId,token}){
     const batch=cart;
     try{
       // Re-validate the QR token right before submitting (token may have been rotated mid-session)
-      const matches=await api.scanTable(branchId,tableId,token);
+      // ดูแค่ว่ามีแถวไหม — ขอแค่ id (scanTableOk ตัวกรองเดียวกัน · เลขโต๊ะที่ส่งไปใช้ table บนจอเหมือนเดิม)
+      const matches=await api.scanTableOk(branchId,tableId,token);
       if(!Array.isArray(matches)||matches.length===0){
         setSending(false);
         setGateError("bad_token");
@@ -22864,7 +23009,7 @@ function CustomerPage({branchId,tableId,token}){
     try{
       // เช็ค QR ก่อนส่งของค้างในคิว — ทางส่งปกติเช็คอยู่แล้ว แต่ทางคิวออฟไลน์ไม่เคยเช็ค
       // ลูกค้าคนก่อนกดสั่งตอนเน็ตหลุด แล้วเน็ตกลับมาหลังปิดโต๊ะไปแล้ว = ของเข้าบิลลูกค้าคนใหม่
-      if(token){const ok=await api.scanTable(branchId,tableId,token);
+      if(token){const ok=await api.scanTableOk(branchId,tableId,token);
         if(Array.isArray(ok)&&ok.length===0){writeOutbox(null);setOutbox(null);setGateError("bad_token");flushingRef.current=false;setOutboxBusy(false);return;}}
       await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:o.lines,ordered_by:"customer",blockIfAwaiting:true});
       markSent(o.lines);
@@ -23291,7 +23436,7 @@ async function printTableQR(table,branch,printers=[],onPrinted,onUrl,opts={}){
   // ส่งลิงก์ที่ใช้พิมพ์จริงออกไปให้ป็อปอัพ — ป็อปอัพกับกระดาษเป็นลิงก์เดียวกันแน่นอน
   if(typeof onUrl==="function"){try{onUrl(url);}catch{}}
   let prs=printers;   // ดึงเครื่องพิมพ์ล่าสุดจาก DB — กันค่าค้าง (เพิ่งติ๊ก "เครื่องพิมพ์ใบเสร็จ" ในหน้าต่างตั้งค่า)
-  try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
+  try{const all=await api.getBranchPrinters(branch.id);if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
   // 1) If a Bluetooth printer is configured for this branch, print the QR slip
   //    DIRECTLY via ESC/POS — no browser dialog, straight out the connected printer.
   const btP=(prs||[]).find(p=>p&&p.active!==false&&(p.branch_id==null||+p.branch_id===+branch.id)&&getPConn(p).type==="bluetooth");
@@ -24127,7 +24272,7 @@ function printZReport(args){
   if(args.win){try{args.win.close();}catch{}}   // ไอแพดไม่ใช้หน้าต่าง — ปิดหน้าต่างเปล่าที่เปิดรอไว้
   (async()=>{
     let prs=[];
-    try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+(args.branch&&args.branch.id));}catch{}
+    try{const all=await api.getBranchPrinters(args.branch&&args.branch.id);if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+(args.branch&&args.branch.id));}catch{}
     const rcps=getReceiptPrinters(prs);
     if(!rcps.length){
       posToast("⚠️ ใบปิดกะไม่ได้พิมพ์ — ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ\nไปที่ ⚙️ เครื่องพิมพ์ → กำหนดการพิมพ์ → ติ๊ก \"🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ\"","warn",9000);
@@ -26656,7 +26801,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
 const PRINT_RETRY_TTL=10*60*1000;   // ต้องเท่ากับ RETRY_TTL ใน print-agent.js — ติ๊กเก่ากว่านี้ตัวพิมพ์ไม่พิมพ์ย้อนหลัง
 // อ่านของล่าสุดก่อนเขียนเสมอ — ตัวพิมพ์เขียนช่องเดียวกันอยู่ตลอด (สถานะเครื่อง/รายการไม่ออก)
 async function editPrintFail(holderId,fn){
-  const all=await api.getAllPrinters();
+  const all=await api.getPrintersByIds([holderId]);   // แถวเดียวที่จะเขียน ไม่ลากทั้งตาราง (24 ต.ค. 69) — ยังอ่านสดก่อนเขียนทุกครั้ง
   const p=(all||[]).find(x=>+x.id===+holderId);if(!p)return false;
   let d={};try{d=JSON.parse(p.description||"{}");}catch{}
   const next=fn(Array.isArray(d.failed)?d.failed:[]);if(!next)return false;
@@ -26883,7 +27028,7 @@ function POSOpenTableStep({table,branch,posSettings,currentUser,printers=[],onCa
   useEffect(()=>{let off=false;api.getBuffetPackages(branch.id).then(r=>{if(!off&&r&&Array.isArray(r.packages))setLib(r.packages.filter(p=>p.active!==false));}).catch(()=>{});return()=>{off=true;};},[branch.id]);
   // ตัวพิมพ์รุ่นเก่า (<48) พิมพ์หัวลูกค้าเข้าครัว — เปิดแบบแพ็คเกจไม่ได้จนกว่าจะอัปเดต ("ไม่ใช้แพ็คเกจ" ยังใช้ได้)
   // รายชื่อเครื่องบนจออาจยังไม่โหลด (ว่าง = ผ่าน) หรือค้าง 60 วิ ⟹ ถามสดครั้งเดียวตอนเปิดจอนี้ และอีกครั้งตอนกดเปิดโต๊ะ
-  const freshPrinters=async()=>{try{const all=await api.getAllPrinters();if(Array.isArray(all))return all;}catch{}return printers;};
+  const freshPrinters=async()=>{try{const all=await api.getBranchPrinters(branch.id);if(Array.isArray(all))return all;}catch{}return printers;};
   const[agentOld,setAgentOld]=useState(()=>!canOpenPackageTables(printers,branch.id));
   useEffect(()=>{let off=false;freshPrinters().then(prs=>{if(!off)setAgentOld(!canOpenPackageTables(prs,branch.id));});return()=>{off=true;};},[branch.id]);// eslint-disable-line react-hooks/exhaustive-deps
   const pkg=lib.find(p=>String(p.id)===String(pick))||null;
@@ -26963,6 +27108,9 @@ function POSOpenTableStep({table,branch,posSettings,currentUser,printers=[],onCa
     </div>
   </Modal>;
 }
+// ลายเซ็นบิลเปิด (24 ต.ค. 69): id:updated_at ทุกใบ เรียงแล้ว (ลำดับจากฐานไม่สำคัญ) · ไม่ใช่รายการ = null = ไม่รู้ → ดึงเต็ม
+const openBillsSig=(rows)=>Array.isArray(rows)?rows.map(r=>`${r&&r.id}:${(r&&r.updated_at)||""}`).sort().join(","):null;
+const POS_BILLS_FULL_MS=5*60*1000;   // บิลเปิดดึงทั้งแถวอย่างน้อยทุก 5 นาที แม้ลายเซ็นไม่เปลี่ยน
 function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser,printers=[],shift,zones=[],posSettings,promotions=[],onUpdateShift,onCashDrawer,onCloseShift,onExitMode,saleOnly=false,reloadPosSettings,refreshTick=0,reloadZones}){
   const[posTab,setPosTab]=useState("tables");
   const[tables,setTables]=useState([]);const[activeOrders,setActiveOrders]=useState([]);
@@ -27141,11 +27289,26 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
     if(id)await api.deleteZone(id);
     if(reloadZones)await reloadZones();
   }
-  async function loadOrders(){const o=await api.getActiveOrders(currentBranch.id);setActiveOrders(o);autoPrintNew(o);}
+  // ── บิลเปิด: ถามลายเซ็นก่อนดึงทั้งแถว (24 ต.ค. 69 ลด egress — ฐานแผนฟรีป่วย) ──
+  // รอบ 30 วิ / สลับแท็บกลับมา ถามแค่ id+updated_at ของบิลเปิดชุดเดียวกัน (ไม่กี่ร้อยไบต์ แทนรายการอาหารทั้งร้านหลายสิบ KB)
+  // ลายเซ็นตรงกับรอบเต็มล่าสุด = ไม่มีอะไรเปลี่ยน ไม่ต้องดึง · บิลใหม่ = id ใหม่ · ปิด/ยกเลิก = id หาย
+  // แก้บิลทุกทาง (จอขาย/หน้าลูกค้า/RPC) ทริกเกอร์ฐานเลื่อน updated_at ทุกครั้ง (ตัวพิมพ์ก็พึ่งตัวนี้อยู่)
+  // ดึงเต็มเสมอเมื่อ: ลายเซ็นเปลี่ยน · ถามไม่ผ่าน · ครบ 5 นาทีจากรอบเต็มล่าสุด · เครื่องนี้เพิ่งทำอะไรเอง (loadAll: ปิดจอโต๊ะ/ย้ายโต๊ะ/QR/รีเฟรช)
+  // เครื่องสถานีพิมพ์ (พิมพ์ใบครัวจากรายการนี้เอง) ดึงเต็มทุกรอบตามเดิม — ใบครัวห้ามช้า/หาย
+  const ordersSigRef=useRef(null);const ordersFullAt=useRef(0);
+  async function loadOrders(force){
+    if(force!==true&&!isPrintStation(currentBranch.id)&&ordersSigRef.current!=null&&Date.now()-ordersFullAt.current<POS_BILLS_FULL_MS){
+      let sig=null;try{sig=openBillsSig(await api.getActiveOrderStamps(currentBranch.id));}catch{}
+      if(sig!=null&&sig===ordersSigRef.current)return;
+    }
+    const o=await api.getActiveOrders(currentBranch.id);
+    ordersSigRef.current=openBillsSig(o);ordersFullAt.current=Date.now();
+    setActiveOrders(o);autoPrintNew(o);
+  }
   async function loadAll(o){
     const silent=!!(o&&o.silent===true);   // ปุ่ม "รีเฟรช" ส่ง event มา → ไม่ silent → เห็นสปินเนอร์ตามเดิม
     if(!silent)setLoading(true);
-    try{await Promise.all([loadTables(),loadOrders()]);}catch(e){console.error(e);}
+    try{await Promise.all([loadTables(),loadOrders(true)]);}catch(e){console.error(e);}
     if(!silent)setLoading(false);
   }
 
@@ -27345,8 +27508,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
   useEffect(()=>()=>{aliveRef.current=false;},[]);
   const[station,setStation]=useState(printStation||isPrintStation(currentBranch.id));
   function toggleStation(){const v=!station;setStation(v);setPrintStation(currentBranch.id,v);onTogglePrintStation&&onTogglePrintStation(v);}
-  async function load(){setLoading(true);try{const all=await api.getAllPrinters();if(aliveRef.current)setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}if(aliveRef.current)setLoading(false);}
-  async function loadSilent(){try{const all=await api.getAllPrinters();if(aliveRef.current)setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}}
+  async function load(){setLoading(true);try{const all=await api.getBranchPrinters(currentBranch.id);if(aliveRef.current)setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}if(aliveRef.current)setLoading(false);}
+  async function loadSilent(){try{const all=await api.getBranchPrinters(currentBranch.id);if(aliveRef.current)setPrinters((all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id));}catch(e){console.error("loadPrinters",e);}}
   async function findPrinters(){
     // คำสั่งสแกนฝากไว้ในแถวเครื่องพิมพ์ของสาขา ตัวพิมพ์อ่านจากตรงนั้น
     // ไม่มีแถวสักแถว = ไม่มีที่ให้ฝาก และแปลว่ายังไม่เคยมีตัวพิมพ์รายงานตัวที่สาขานี้
@@ -27364,7 +27527,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     // ดึงซ้ำทุก 2 วิ จนกว่าจะเจอเครื่องใหม่ หรือครบ ~28 วิ (agent สแกน ~10 วิ) — หยุดทันทีถ้าปิด modal
     for(let i=0;i<14&&aliveRef.current;i++){
       await new Promise(r=>setTimeout(r,2000));
-      let all=null;try{all=await api.getAllPrinters();}catch{}
+      let all=null;try{all=await api.getBranchPrinters(currentBranch.id);}catch{}
       if(all&&aliveRef.current){
         const mine=all.filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id);
         setPrinters(mine);
@@ -27423,7 +27586,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     // หยุดหมุน "ทันที" ที่ตัวพิมพ์ตอบกลับ (onAt ใหม่กว่าเดิม) — ไม่รอครบเวลา · เช็คทุก 0.8 วิ สูงสุด ~10 วิ
     for(let i=0;i<12&&aliveRef.current;i++){
       await new Promise(r=>setTimeout(r,800));
-      let mine=null;try{const all=await api.getAllPrinters();mine=(all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id);}catch{}
+      let mine=null;try{const all=await api.getBranchPrinters(currentBranch.id);mine=(all||[]).filter(p=>p.branch_id==null||+p.branch_id===+currentBranch.id);}catch{}
       if(mine&&aliveRef.current){
         setPrinters(mine);   // useEffect[printers] จะ re-derive จุดเขียว/แดง
         if(mine.some(p=>{try{return (JSON.parse(p.description||"{}").onAt||0)>(before[p.id]||0);}catch{return false;}}))break;
@@ -27543,7 +27706,7 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     setSSaving(true);
     try{
       // อ่าน description ล่าสุดก่อนรวม flag ใบเสร็จ (กันทับคำสั่งพิมพ์ tp/rp/qr/pj ที่อาจถูกเขียนมาระหว่างเปิดหน้าตั้งค่า)
-      let fresh=p;try{const all=await api.getAllPrinters();const f=(all||[]).find(x=>+x.id===+p.id);if(f)fresh=f;}catch{}
+      let fresh=p;try{const all=await api.getPrintersByIds([p.id]);const f=(all||[]).find(x=>+x.id===+p.id);if(f)fresh=f;}catch{}
       let dd={};try{dd=JSON.parse(fresh.description||"{}");}catch{}
       // ไม่มีสิทธิ์ = ไม่แตะธงใบเสร็จ/ลิ้นชักเลย ใช้ค่าล่าสุดในฐานข้อมูลตามเดิม (ย้ายหมวดอย่างเดียว)
       if(canAdmin){
@@ -27811,7 +27974,7 @@ function BillDetailCard({order,branch=null,cfg=null,onBack,onEdit=null,onVoid=nu
 async function printBillReceipt(order,tableNum,{branch,posSettings,printers=[],paid=true,kick=false}){
   const isHttps=typeof location!=="undefined"&&location.protocol==="https:";
   let prs=printers;   // ดึงเครื่องพิมพ์ล่าสุดจาก DB — กันค่าค้างหลังเพิ่งติ๊ก "เครื่องพิมพ์ใบเสร็จ"
-  try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
+  try{const all=await api.getBranchPrinters(branch.id);if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
   const rcps=isHttps?getReceiptPrinters(prs):[];
   // kick = บิลเงินสด ต้องเปิดลิ้นชักด้วย · เครื่องเดียวกับใบเสร็จ = ไปในการเขียนครั้งเดียวกับใบเสร็จ
   // (เดิมยิงสองงานพร้อมกัน ต่างคนต่างอ่าน-แก้-เขียนแถวเดียวกัน → ลิ้นชักไม่เด้งหรือใบเสร็จหายเงียบ)
@@ -27970,7 +28133,7 @@ async function printVoidBillSlip({order,branch,reason,refundText,by,at,printers=
   L.push({rule:true});
   L.push({t:"ผู้อนุมัติ .............................",size:20,mb:12});
   let prs=printers;
-  try{const all=await api.getAllPrinters();if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
+  try{const all=await api.getBranchPrinters(branch.id);if(Array.isArray(all))prs=all.filter(p=>p.branch_id==null||+p.branch_id===+branch.id);}catch{}
   const rcps=getReceiptPrinters(prs);
   // kick = คืนเงินสด ต้องเปิดลิ้นชัก — เครื่องเดียวกับใบยกเลิก เขียนรวมครั้งเดียว (เหตุผลเดียวกับใบเสร็จบิลเงินสด)
   const kp=receiptKickPlan(rcps,kick?drawerPrinters(prs):[]);
@@ -28566,6 +28729,15 @@ function SalesReportModal({currentBranch,onClose,menus=[],printers=[],posSetting
   </Modal>;
 }
 
+// ── จังหวะดึงข้อมูลของจอขาย (24 ต.ค. 69 ลด egress — ฐานแผนฟรี/Nano ป่วย) ──
+const POS_MENUS_MS=5*60*1000;      // เมนู (และโซน) เก่าได้ไม่เกินนี้ขณะจอเปิด — เท่ากับรอบเดิม "ทุก 5 นาที"
+const POS_SET_FULL_MS=10*60*1000;  // ตั้งค่า POS ดึงทั้งแถวอย่างน้อยทุก 10 นาที แม้เวลาแก้ไม่เปลี่ยน (ตาข่าย)
+// เวลาที่ดึงเมนูของจอขายล่าสุด — ทั้งหน้า (ไม่ใช่ต่อจอ) เปลี่ยนพนักงาน/เปิดกะใหม่ ไม่ต้องดึงก้อนเดิมซ้ำทันที
+let posMenusAt=0;
+// เมนูของจอขายโหมด PIN — ชุดเล็กเฉพาะสาขา (getMenusPOS) · ล้ม = ถอยไปทั้งตารางแบบเดิม
+// (จอไม่ขึ้น "เปิดหน้าขายไม่ได้" ตอนใส่ PIN) และจดไว้ใน console ให้รู้ว่าถอย
+const posKioskMenus=(bid)=>api.getMenusPOS(bid).catch(e=>{console.warn("[pos] getMenusPOS ล้ม — ถอยไปใช้ getMenus แบบเดิม",e);return api.getMenus();});
+
 // ══════════════════════════════════════════════════════
 // ── POS TAB (top-level wrapper: mode + shift) ────────
 // ══════════════════════════════════════════════════════
@@ -28580,10 +28752,25 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   const[zones,setZones]=useState([]);
   const[posSettings,setPosSettings]=useState(null);
   const[promotions,setPromotions]=useState([]);
-  async function loadZones(){try{const z=await api.getZones(currentBranch.id);setZones(z);}catch(e){console.error("loadZones",e);}}
+  const zonesAt=useRef(0);   // โหลดโซนสำเร็จล่าสุดเมื่อไร — หน้าขายดึงซ้ำเมื่อเก่าเกิน 5 นาที
+  // แถวตั้งค่าเต็มที่โหลดสำเร็จล่าสุด: เวลา + updated_at "ของแถวนั้นเอง" + สาขา (ใช้ตัดสินว่ารอบ 60 วิ ต้องดึงเต็มไหม)
+  const posSetMark=useRef({at:0,stamp:null,bid:null});
+  async function loadZones(){try{const z=await api.getZones(currentBranch.id);setZones(z);zonesAt.current=Date.now();}catch(e){console.error("loadZones",e);}}
   // ดึงไม่ผ่าน (เน็ตสะดุดรอบเดียวในรอบ 60 วิ) = ใช้ค่าที่มีอยู่ต่อ — เดิมรีเซ็ตเป็นค่าเริ่มต้น ⟹ VAT ปิด แพ็คเกจ/ราคาในแพ็คเกจหาย
   // บิลที่ปิดในจังหวะนั้นคิดยอดผิด (ตรวจทาน 19 ต.ค. 69) · ยังไม่เคยโหลดได้เลยค่อยใช้ค่าเริ่มต้น
-  async function loadPosSettings(){const dflt={branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10};try{const s=await api.getPOSSettings(currentBranch.id);setPosSettings(s&&s[0]?s[0]:dflt);}catch{setPosSettings(prev=>(prev&&+prev.branch_id===+currentBranch.id)?prev:dflt);}}
+  async function loadPosSettings(){const dflt={branch_id:currentBranch.id,vat_enabled:false,vat_rate:7,vat_included:true,service_charge_enabled:false,service_charge_rate:10};try{const s=await api.getPOSSettings(currentBranch.id);const row=s&&s[0]?s[0]:null;setPosSettings(row||dflt);posSetMark.current={at:Date.now(),stamp:(row&&row.updated_at)||null,bid:+currentBranch.id};}catch{setPosSettings(prev=>(prev&&+prev.branch_id===+currentBranch.id)?prev:dflt);}}
+  // ลด egress 24 ต.ค. 69 (ฐานแผนฟรีป่วย): รอบ 60 วิ ถามแค่ updated_at ของแถว (~50 ไบต์) — ตรงกับแถวที่ถืออยู่ = ไม่ต้องดึงทั้งแถว (~6 KB)
+  // ดึงเต็มเมื่อ: เวลาเปลี่ยน · ถามไม่ผ่าน · แถวที่ถืออยู่ไม่มีเวลา/เป็นของสาขาอื่น · ครบ 10 นาทีจากรอบเต็มล่าสุด
+  // (10 นาที = ตาข่ายของทางเขียนที่ไม่ประทับเวลา: แก้ในฐานตรงๆ / แถวที่ยังไม่มีเวลา — VAT/ค่าบริการ/พร้อมเพย์/PIN/ตัวเลือก/แพ็คเกจ/ลำดับหมวด-เมนู ประทับครบแล้ว ถึงภายใน 60 วิ)
+  // ปุ่มรีเฟรช · ออกจากหลังบ้าน · แพ็คเกจหายจากคลัง ยังเรียก loadPosSettings ตรงๆ (เต็มทุกครั้ง)
+  async function refreshPosSettings(){
+    const m=posSetMark.current;
+    if(m.stamp&&m.bid===+currentBranch.id&&Date.now()-m.at<POS_SET_FULL_MS){
+      let st=null;try{const r=await api.getPOSSettingsStamp(currentBranch.id);st=Array.isArray(r)&&r[0]?(r[0].updated_at||null):null;}catch{}
+      if(st&&st===m.stamp)return;
+    }
+    await loadPosSettings();
+  }
   async function loadPromotions(){try{const p=await api.getPromotions(currentBranch.id);setPromotions(p);}catch{setPromotions([]);}}
   useEffect(()=>{loadZones();loadPosSettings();loadPromotions();},[currentBranch.id]);
 
@@ -28592,22 +28779,29 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   // แก้ VAT / ค่าบริการ / QR จ่ายเงิน / ราคาเมนู ที่หลังบ้าน เครื่องขายจะยังใช้ค่าเก่า
   // จนกว่าพนักงานจะรีโหลดหน้าเอง — ซึ่งไม่มีใครรู้ว่าต้องทำ = คิดเงินผิดเงียบๆ
   //
-  // ตั้งค่า/โปรโมชั่น/โซน/เครื่องพิมพ์ = แถวเล็ก ดึงถี่ได้ (60 วิ)
-  // เมนูเป็นก้อนใหญ่ (~300 KB) ดึงห่างกว่า (5 นาที) — ราคาไม่ได้เปลี่ยนกลางมื้อ
+  // ตั้งค่า (ถามเวลาแก้ก่อน)/โปรโมชั่น/เครื่องพิมพ์ = แถวเล็ก ดึงถี่ได้ (60 วิ) · โปรฯ คงไว้ 60 วิ เพราะเลือกให้เองตอนคิดเงิน
+  // เมนูเป็นก้อนใหญ่ ดึงเมื่อเก่าเกิน 5 นาที (นาฬิกาจริง) — ราคาไม่ได้เปลี่ยนกลางมื้อ · โซนก็ 5 นาที
   // ทุกตัวหยุดเมื่อสลับแท็บออก และดึงทันทีเมื่อกลับมาที่หน้าจอ
+  //
+  // 24 ต.ค. 69 ลด egress: ดึงเฉพาะจอที่ใช้ข้อมูลชุดนี้จริง = หน้าขายที่เปิดกะแล้ว หรือหลังบ้าน
+  // ตัวเลือกโหมด / หน้าเปิดกะ / รายงาน ไม่ใช้เลย — เดิมดึงทุก 60 วิ แม้ iPad ค้างหน้าเปิดกะทั้งคืน
+  // เข้าจอ = ดึงรอบแรกทันที (ค้างหน้าเปิดกะมานาน ค่าที่ถืออยู่อาจเก่าแล้ว)
+  // เมนู: เดิมนับรอบ (n%5) — จอดับ-ติดบ่อยดึงก้อนใหญ่ทุกครั้งที่ปลุก แต่นับเฉพาะนาทีที่จอเปิด จึงเก่าได้ 15-20 นาที
+  //   ตอนนี้ใช้เวลาจริงของทั้งหน้า (posMenusAt): เก่าได้ไม่เกิน ~6 นาทีขณะจอเปิด ปลุกจอแล้วเก่าเกิน 5 นาที = ดึงทันที
+  //   ปุ่มรีเฟรช / เครื่องมือเมนู / ส่งแล้วเจอเมนูหมด / บันทึกเครื่องพิมพ์ ยังเรียก reloadMenus ตรงๆ ไม่ผ่านตัวจับเวลา
+  // หลังบ้าน: เครื่องพิมพ์ + โซน (ตั้งค่า/โปรฯ หลังบ้านโหลดเอง และกดออกจากหลังบ้านโหลดใหม่ให้อยู่แล้ว)
   useEffect(()=>{
-    let n=0;
-    const light=()=>{loadPosSettings();loadPromotions();loadZones();try{reloadPrinters&&reloadPrinters();}catch{}};
-    const heavy=()=>{try{reloadMenus&&reloadMenus();}catch{}};
-    const t=setInterval(()=>{
-      if(document.hidden)return;
-      light();
-      if(++n%5===0)heavy();   // ทุก 5 รอบ = 5 นาที
-    },60000);
-    const onVis=()=>{if(!document.hidden){light();heavy();}};
+    const sale=mode==='sale'&&!!shift;
+    if(!sale&&mode!=='manage')return;
+    const light=()=>{if(sale){refreshPosSettings();loadPromotions();if(Date.now()-zonesAt.current>=POS_MENUS_MS)loadZones();}else loadZones();try{reloadPrinters&&reloadPrinters();}catch{}};
+    const heavyIfStale=()=>{if(Date.now()-posMenusAt<POS_MENUS_MS)return;posMenusAt=Date.now();try{reloadMenus&&reloadMenus();}catch{}};
+    const tick=()=>{light();heavyIfStale();};
+    tick();
+    const t=setInterval(()=>{if(!document.hidden)tick();},60000);
+    const onVis=()=>{if(!document.hidden)tick();};
     document.addEventListener("visibilitychange",onVis);
     return()=>{clearInterval(t);document.removeEventListener("visibilitychange",onVis);};
-  },[currentBranch.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  },[currentBranch.id,mode,!!shift]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(()=>{
     if(mode!=='sale'){setShift(null);return;}
@@ -28674,7 +28868,8 @@ function POSPinGate({branchId}){
     let alive=true;setLoading(true);setErr("");
     (async()=>{
       try{
-        const[bs,ps,ms,prs]=await Promise.all([api.getBranches(),api.getPOSSettings(branchId),api.getMenus(),api.getAllPrinters()]);
+        // เมนูชุดเล็กเฉพาะสาขา + เครื่องพิมพ์ที่ฐานกรองสาขาให้ (24 ต.ค. 69 ลด egress) — จอขายอ่านแค่นี้
+        const[bs,ps,ms,prs]=await Promise.all([api.getBranches(),api.getPOSSettings(branchId),posKioskMenus(branchId),api.getBranchPrinters(branchId)]);
         if(!alive)return;
         const b=(bs||[]).find(x=>+x.id===+branchId);
         if(!b){setErr("ไม่พบสาขานี้ — ลิงก์อาจไม่ถูกต้อง");setLoading(false);return;}
@@ -28682,7 +28877,7 @@ function POSPinGate({branchId}){
         if(b.type==="central"){setErr("ครัวกลางไม่ได้เปิดขายหน้าร้าน");setLoading(false);return;}
         const settings=ps&&ps[0]?ps[0]:null;
         setBranch(b);setStaff(Array.isArray(settings?.sales_staff)?settings.sales_staff:[]);
-        setMenus(ms||[]);setPrinters(printersAt(prs,branchId));
+        setMenus(ms||[]);posMenusAt=Date.now();setPrinters(printersAt(prs,branchId));
       }catch(e){if(alive)setErr(e&&e.message||String(e));}
       if(alive)setLoading(false);
     })();
@@ -28734,7 +28929,7 @@ function POSPinGate({branchId}){
           {shiftOpen&&<button onClick={()=>setCloseShiftReq(n=>n+1)} title="ปิดกะการขาย & พิมพ์สรุปยอด" style={{background:"linear-gradient(135deg,#EF4444,#DC2626)",border:"none",borderRadius:11,padding:isMobile?"10px 18px":"12px 26px",cursor:"pointer",color:"#fff",fontFamily:"'Sarabun',sans-serif",fontSize:isMobile?14.5:16,fontWeight:900,flexShrink:0,display:"inline-flex",alignItems:"center",gap:7,boxShadow:"0 3px 12px rgba(239,68,68,.4)",whiteSpace:"nowrap"}}>🔚 ปิดกะ</button>}
         </div>
         <div style={{flex:1,padding:isMobile?"14px 12px":"20px 24px",minWidth:0,minHeight:0}}>
-          <POSTab menus={menus} reloadMenus={async()=>{try{setMenus(await api.getMenus());}catch{}}} currentBranch={branch} currentUser={synthUser} printers={printers} branches={[]} reloadPrinters={async()=>{try{setPrinters(printersAt(await api.getAllPrinters(),branchId));}catch{}}} saleOnly onExit={()=>{setSeller(null);setPin("");}} refreshTick={posRefreshTick} closeShiftSignal={closeShiftReq} onShiftState={setShiftOpen}/>
+          <POSTab menus={menus} reloadMenus={async()=>{try{setMenus(await posKioskMenus(branchId));posMenusAt=Date.now();}catch{}}} currentBranch={branch} currentUser={synthUser} printers={printers} branches={[]} reloadPrinters={async()=>{try{setPrinters(printersAt(await api.getBranchPrinters(branchId),branchId));}catch{}}} saleOnly onExit={()=>{setSeller(null);setPin("");}} refreshTick={posRefreshTick} closeShiftSignal={closeShiftReq} onShiftState={setShiftOpen}/>
         </div>
       </div>
     </>;
