@@ -91,12 +91,13 @@ function render(createCanvas, lines, W) {
     meas.font = `${bold ? "bold " : ""}${size}px Sarabun, sans-serif`;
     const s = String(text); if (meas.measureText(s).width <= maxW) return [s];
     const out = []; let cur = "";
-    const push = () => { const t = cur.replace(/s+$/, ""); if (t) out.push(t); cur = ""; };
+    // \s = ช่องว่าง — เดิมเขียน /s+$/ (ตัวอักษร s ไม่มีแบ็กสแลช) ตัด s ท้ายบรรทัดทิ้ง "Fries"→"Frie" และไม่ตัดช่องว่างจริง (ตรวจทาน 28 ต.ค. 69)
+    const push = () => { const t = cur.replace(/\s+$/, ""); if (t) out.push(t); cur = ""; };
     for (const u of units(s)) {
-      if (cur === "" && /^s+$/.test(u)) continue;            // บรรทัดใหม่ไม่ขึ้นต้นด้วยช่องว่าง
+      if (cur === "" && /^\s+$/.test(u)) continue;            // บรรทัดใหม่ไม่ขึ้นต้นด้วยช่องว่าง
       if (meas.measureText(cur + u).width <= maxW) { cur += u; continue; }
       if (cur !== "") push();
-      if (/^s+$/.test(u)) continue;
+      if (/^\s+$/.test(u)) continue;
       if (meas.measureText(u).width <= maxW) { cur = u; continue; }
       for (const c of clusters(u)) { if (cur === "" || meas.measureText(cur + c).width <= maxW) cur += c; else { push(); cur = c; } }
     }

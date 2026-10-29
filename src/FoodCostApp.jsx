@@ -7,14 +7,15 @@ import ErrorBoundary from "./ErrorBoundary.jsx";
 // (เกิดจริง 22 ก.ย. 69 กะ #24 ขายเงินสด ฿272 แต่ใบปิดกะขึ้น ฿0)
 // คืนค่า {id, note} — note ไม่ว่าง = มีอะไรผิดปกติที่ต้องบอกพนักงาน ห้ามเงียบ
 async function liveShift(branchId,stateShift){
-  let live=null;
-  try{const r=await api.getActiveShift(branchId);live=Array.isArray(r)?r[0]:r;}catch{}
+  let live=null,asked=false;
+  try{const r=await api.getActiveShift(branchId);live=Array.isArray(r)?r[0]:r;asked=true;}catch{}
   if(live&&live.id){
     if(stateShift&&+stateShift.id===+live.id)return{id:live.id,note:""};
     return{id:live.id,note:`บันทึกเข้ากะ #${live.id} ที่เปิดอยู่จริง (จอนี้ค้างกะ #${stateShift?stateShift.id:"-"} ไว้ — รีเฟรชหน้าจอด้วย)`};
   }
   // ไม่มีกะเปิดอยู่เลย: ยังต้องบันทึกเงินไว้กับกะที่จอถืออยู่ ดีกว่าเงินหาย แต่ต้องเตือนดังๆ
-  return{id:stateShift&&stateShift.id?stateShift.id:null,
+  // none = ถามฐานได้และ "ไม่มีกะเปิดจริง" (อ่านไม่ได้ไม่นับ) — ปิดบิลรับเงินใช้ตัวนี้หยุดก่อนเขียน (28 ต.ค. 69)
+  return{id:stateShift&&stateShift.id?stateShift.id:null,none:asked,
     note:"⚠️ ตอนนี้ไม่มีกะเปิดอยู่ — เงินสดถูกบันทึกไว้กับกะล่าสุดของจอนี้ กรุณาเปิดกะแล้วแจ้งผู้จัดการให้ตรวจ"};
 }
 // ── ระบบอนุมัติของ Area: ปิดอยู่ (เจ้าของสั่ง 22 ก.ย. 69) ────────────────
@@ -339,21 +340,42 @@ async function sb(path, opts = {}) {
       // Supabase เปิด RLS ให้อัตโนมัติตอนสร้างตารางใหม่ — เจอซ้ำมาหลายรอบแล้ว
       // แปลเป็นข้อความที่บอกได้ว่าต้องทำอะไร แทนที่จะโยน JSON ดิบใส่หน้าผู้ใช้
       if (/42501|row-level security/i.test(body)) {
+        // 28 ต.ค. 69: 42501 มีสองเหตุที่แก้คนละแบบ — "permission denied for table x" = สิทธิ์ GRANT หลุด (เคส crm_* 24–28 ต.ค.) ไม่ใช่ RLS
+        // เดิมเหมาเป็น RLS หมด และหาชื่อได้เฉพาะแบบมีเครื่องหมายคำพูด (ข้อความ GRANT ไม่มี) ⟹ ได้คำสั่ง "alter table public.ตารางนี้ …"
+        // ที่รันไม่ได้และแก้ผิดเรื่อง · ตอนนี้ GRANT บอกคำสั่ง grant · RLS บอกคำสั่งเดิม · หาชื่อไม่เจอ = แนบข้อความดิบ ไม่เดาชื่อ
+        const pd = body.match(/permission denied for (table|sequence|function|schema)\s+\\?"?([A-Za-z0-9_]+)/i);
+        if (pd) {
+          const k = pd[1].toLowerCase(), n = pd[2];
+          const fix = k==="sequence" ? "grant all on all sequences in schema public to anon, authenticated, service_role;"
+            : k==="function" ? `grant execute on function public.${n} to anon, authenticated, service_role;`
+            : k==="schema" ? `grant usage on schema ${n} to anon, authenticated, service_role;`
+            : `grant all on table public.${n} to anon, authenticated, service_role;`;
+          throw new Error(`บันทึกไม่ได้เพราะสิทธิ์ใช้${{table:"ตาราง",sequence:"ตัวนับเลขลำดับ (sequence)",function:"ฟังก์ชัน",schema:" schema"}[k]} "${n}" หลุด (permission denied — ไม่ใช่เรื่อง RLS)
+
+ผู้ดูแลระบบต้องรันใน Supabase → SQL Editor:
+${fix}`);
+        }
         // ตัว body เป็น JSON ชื่อตารางจึงถูกครอบด้วย \" (แบ็กสแลชนำหน้า) — ต้องเผื่อทั้งมีและไม่มี
-        const t = (body.match(/table\s+\\?"([a-z_]+)\\?"/i) || [])[1] || "ตารางนี้";
+        const t = (body.match(/table\s+\\?"?([a-z0-9_]+)\\?"?/i) || [])[1];
+        if (!t) throw new Error(`บันทึกไม่ได้เพราะฐานข้อมูลปฏิเสธสิทธิ์ (42501) — หาชื่อตารางในข้อความไม่เจอ ส่งข้อความนี้ให้ผู้ดูแลระบบ
+
+${body.slice(0, 300)}`);
         throw new Error(`บันทึกไม่ได้เพราะตาราง "${t}" ยังเปิดระบบล็อกแถว (RLS) อยู่
 
 ผู้ดูแลระบบต้องรันใน Supabase → SQL Editor:
 alter table public.${t} disable row level security;`);
       }
-      throw new Error(body);
+      // 28 ต.ค. 69: แนบรหัสคำตอบไว้ด้วย — งานสต๊อกต้องแยก "ฐานปฏิเสธ (4xx)" ออกจาก "ไม่รู้ผล (5xx)" (ดู _stockOutcomeUnknown) ข้อความเหมือนเดิม
+      throw Object.assign(new Error(body),{status:res.status});
     }
     const text = await res.text();
     if (DBG.down) dbgSet(false);   // ตอบได้แล้ว = ฐานข้อมูลกลับมา
     return text ? JSON.parse(text) : [];
   }catch(e){
     clearTimeout(hang);
-    mark("err", nowMs() - t0);   // ยิงไม่ออก/เน็ตขาด — ถ้าเป็น 4xx จะถูกนับไปแล้วข้างบน
+    // 29 ต.ค. 69: AbortError = เรายกเลิกเอง (หน้าลูกค้าส่งเกิน 15 วิ · custSendTimed) ไม่ใช่ฐานป่วย — ที่ค้างจริงถูกนับ "slow" ไปแล้วที่ 8 วิ
+    // คำขอที่เหลือในชุดที่ถูกยกเลิกพังทันที (0 ms) ถ้านับเป็น "err" แถบ "ระบบตอบช้า" ขึ้นผิดได้ · ไม่มีจุดอื่นส่ง signal เข้า sb
+    if (!(e && e.name === "AbortError")) mark("err", nowMs() - t0);   // ยิงไม่ออก/เน็ตขาด — ถ้าเป็น 4xx จะถูกนับไปแล้วข้างบน
     // ยิงไม่ออกเลย (ไม่ใช่ฐานตอบ error) = เช็กว่าฐานข้อมูล "หาย" ไหม (เว้นระยะ 20 วิ ไม่ถี่)
     if (e && e.name === "TypeError") dbgCheck(false);
     throw e;
@@ -367,6 +389,25 @@ const round2 = (n) => Math.round((+n||0)*100)/100;
 // otherwise the ordered qty. Keeps printed/exported "จำนวน × ราคา" reconciled with the
 // received-based line_total after a short-receive/dispute. Handles PO items (qty/
 // received_qty) and external-order items (qtyNeeded/receivedQty).
+// ── หน่วยในใบ ≠ หน่วยซื้อ (buy_unit) ของวัตถุดิบ (28 ต.ค. 69) ──────────────────────
+// สต๊อกเก็บเป็นหน่วยซื้อ · รับ/ส่งของเอาเลขในใบไปบวก/ลบตรงๆ ไม่แปลงหน่วย
+// เคสจริง: บราวนี่ #320 เปลี่ยนหน่วยซื้อ กล่อง→ชิ้น 30/09 ระหว่างมีใบค้าง 2 กล่อง × 2 สาขา ⟹ สต๊อกขึ้น 2 ชิ้น แทน 24 ชิ้น
+// เตือนในหน้ายืนยันเท่านั้น ไม่แตะตัวเลข · บรรทัดไม่มีหน่วย/หาวัตถุดิบไม่เจอ/จำนวน 0 = ไม่เตือน · คืน "" = ไม่มีอะไรต้องเตือน
+function unitMismatchWarn(items,ings,qtyOf){
+  const byId=new Map((ings||[]).map(i=>[+i.id,i]));
+  const bad=[];
+  for(const it of (Array.isArray(items)?items:[])){
+    if(!it)continue;
+    const ing=byId.get(+(it.ingredient_id||it.ingId||0));
+    const u=String(it.unit||"").trim(),bu=String((ing&&ing.buy_unit)||"").trim();
+    if(!ing||!u||!bu||u===bu)continue;
+    const q=qtyOf?(+qtyOf(it)||0):(+it.qty||0);
+    if(!(q>0))continue;
+    bad.push(`   • ${ing.name||it.name}: ใบเป็น "${u}" แต่สต๊อกนับเป็น "${bu}" → สต๊อกจะขยับ ${q} ${bu}`);
+  }
+  if(!bad.length)return "";
+  return `⚠️ หน่วยในใบไม่ตรงกับหน่วยซื้อของวัตถุดิบ ${bad.length} รายการ (ระบบไม่แปลงหน่วยให้):\n${bad.slice(0,6).join("\n")}${bad.length>6?`\n   • ... และอีก ${bad.length-6} รายการ`:""}\nถ้าเลขนี้ไม่ใช่ของจริง กดยกเลิกแล้วแก้ใบก่อน — หรือทำต่อแล้วไปนับสต็อกใหม่\n\n`;
+}
 function billedQty(it){
   if(!it)return 0;
   const rec=it.received_qty!=null?it.received_qty:(it.receivedQty!=null?it.receivedQty:null);
@@ -798,6 +839,9 @@ function buffetFormToLines(form){
   }
   return lines;
 }
+// 28 ต.ค. 69: ปุ่ม "ลบ" ในแท็บประวัติเคยลบ action_history ทั้งตาราง (ทุกสาขา) — รวมบันทึกแก้ VAT/พร้อมเพย์ ส่วนลด Voucher แพ็คเกจ
+// ได้ทุกคนที่มีสิทธิ์แท็บประวัติ (ผู้ใช้ใหม่ได้สิทธิ์นี้ตั้งต้น) · ตอนนี้: เฉพาะแอดมิน · ไม่ลบแถวที่ขึ้นต้นด้วยหัวพวกนี้ · จดแถว "ใครลบ" ก่อนลบทุกครั้ง
+const AUDIT_KEEP_PREFIX=["ตั้งค่า POS ·","ส่วนลดบิล ·","Voucher บิล ·","แพ็คเกจบุฟเฟต์ ·","ลบประวัติการใช้งาน ·"];
 // ประวัติการแก้ (action_history) — ใคร สาขาไหน แพ็คเกจไหน จากอะไรเป็นอะไร · ไม่มีอะไรเปลี่ยน = ""
 // nameOf(id) = ชื่อเมนู (ไม่รู้ชื่อ = #id)
 function buffetAuditText(before,after,who,branch,nameOf){
@@ -930,7 +974,9 @@ const api = {
   // it may credit the stock back. Best-effort: silently no-ops until the column exists.
   markWasteStockApplied: async (id) => { try{ await sb(`waste_logs?id=eq.${id}`, {method:"PATCH", headers:{Prefer:"return=minimal"}, body:JSON.stringify({stock_applied:true})}); }catch{} },
   // bid เป็นรายการเลขสาขาได้ (24 ต.ค. 69) = ให้ฐานกรองเฉพาะสาขาที่ผู้ใช้มีสิทธิ์ — เดิมขน 2,000 แถวทุกสาขามาแล้วทิ้งฝั่งจอ
-  getWasteLogs: (bid) => sb(`waste_logs?order=log_date.desc,id.desc&limit=2000${Array.isArray(bid) ? `&branch_id=in.(${bid.map(Number).filter(Number.isFinite).join(",")})` : bid ? `&branch_id=eq.${bid}` : ""}`),
+  // 28 ต.ค. 69: ฐานคืนสูงสุด 1,000 แถวต่อคำขอ (limit=2000 ได้จริง 1,000) → รายงาน "ทั้งปี/ทั้งหมด" ขาด 430 แถวเก่า ฿28,415 โดยไม่มีอะไรเตือน
+  // แบ่งหน้าด้วย sbAll · since (YYYY-MM-DD) = เฉพาะ log_date ตั้งแต่วันนั้น (จอโหลดแค่ช่วงที่ใช้ ลด egress) · ไม่ส่ง since = ทั้งหมด
+  getWasteLogs: (bid, since) => sbAll(`waste_logs?order=log_date.desc,id.desc${Array.isArray(bid) ? `&branch_id=in.(${bid.map(Number).filter(Number.isFinite).join(",")})` : bid ? `&branch_id=eq.${bid}` : ""}${since ? `&log_date=gte.${encodeURIComponent(since)}` : ""}`),
   // Returns the rows it actually deleted (default Prefer: return=representation) — delLog uses
   // that as a CLAIM: only the caller that really removed the row may credit the stock back, so a
   // second device / double-confirm can't restore the same waste twice.
@@ -941,7 +987,7 @@ const api = {
   // never throws (a failed log must never break a stock move) and no-ops until the table exists.
   // ประวัติการผลิต — อ่านจากความเคลื่อนไหวสต๊อกที่ ref_type=production
   // ใช้ข้อมูลจริงที่ทำให้สต๊อกขยับ ตัวเลขในประวัติจึงตรงกับสต๊อกเสมอ ไม่มีทางหลุดจากกัน
-  getProductionMoves: (bid) => sb(`stock_movements?select=id,ingredient_id,ingredient_name,unit,delta,reason,ref_id,by_user,created_at&ref_type=eq.production${bid?`&branch_id=eq.${bid}`:""}&order=created_at.desc&limit=1500`),
+  getProductionMoves: (bid) => sb(`stock_movements?select=id,ingredient_id,ingredient_name,unit,delta,reason,ref_id,by_user,created_at&ref_type=eq.production${bid?`&branch_id=eq.${bid}`:""}&order=created_at.desc&limit=1000`),   // 28 ต.ค. 69: ฐานคืนได้สูงสุด 1,000 (เดิมขอ 1,500) — หน้าเต็มแล้วจอตัดรอบที่ถูกตัดกลางทิ้ง (dropCutTailBatch)
   addStockMovements: async (rows) => { if(!Array.isArray(rows)||!rows.length)return; try{ await sb("stock_movements", {method:"POST", headers:{Prefer:"return=minimal"}, body:JSON.stringify(rows)}); }catch{} },
   getStockMovements: (ingId, bid) => sb(`stock_movements?ingredient_id=eq.${ingId}&branch_id=eq.${bid}&order=created_at.desc&limit=100`).catch(()=>[]),
   addStockSession: (d) => sb("stock_count_sessions", { method: "POST", body: JSON.stringify(d) }),
@@ -986,7 +1032,7 @@ const api = {
   updateCostHistItem: (id,d) => sb(`cost_history?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
   getActionHist: () => sb("action_history?order=id.desc&limit=100"),
   addActionHist: (d) => sb("action_history", { method: "POST", body: JSON.stringify(d) }),
-  clearActionHist: () => sb("action_history?id=gt.0", { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
+  clearActionHist: () => sb(`action_history?id=gt.0${AUDIT_KEEP_PREFIX.map(p=>`&action=not.like.${encodeURIComponent(p+"*")}`).join("")}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),   // 28 ต.ค. 69: เก็บบันทึกเงิน/ตั้งค่าไว้ (AUDIT_KEEP_PREFIX)
   getOrders: (bid) => sb(`order_requests?order=id.desc&limit=400${bid ? `&branch_id=eq.${bid}` : ""}`),
   // "มีอะไรเปลี่ยนไปหรือยัง" แบบถูกที่สุด — ดึงแค่แถวที่ถูกแก้ล่าสุด 1 แถว (~60 ไบต์)
   // แทนการดึงทั้งก้อน 1,158 KB ทุก 20 วินาที ซึ่งเป็นตัวกินเครดิต Disk IO ตัวจริง
@@ -1031,6 +1077,12 @@ const api = {
     return res[0];
   },
   getAllOrders: () => sb("order_requests?order=id.desc&limit=600"),
+  // 28 ต.ค. 69: ครัวกลางถือใบสั่งในเครื่องแค่ 600 ใบล่าสุด (ย้อนได้ราว 3 สัปดาห์) → ประวัติราคาซื้อ "ทั้งหมด" / สถิติซัพ "เดือนที่แล้ว" ขาดหรือขึ้น ฿0
+  // ถามฐานตรงเฉพาะตอนเปิดหน้าต่าง · เฉพาะคอลัมน์ที่จอใช้ · แบ่งหน้า (sbAll) · จอรวมกับใบในเครื่องแล้วกรองแบบเดิมอีกชั้น
+  // ใบที่รับแล้วที่มีวัตถุดิบตัวนี้ (items เก็บ ingId เป็นตัวเลข — ตรวจ 28 ต.ค. 69: #95 ได้ 71 ใบ ตรงกับนับจากทุกใบ)
+  getDeliveredOrdersForIng: (ingId) => sbAll(`order_requests?order=id.desc&select=id,status,requested_at,supplier_name,branch_name,items&status=eq.delivered&items=cs.${encodeURIComponent(JSON.stringify([{ingId:Number(ingId)}]))}`),
+  // ใบที่รับแล้วของซัพนี้ในช่วง [fromIso, toIso) — จับ supplier_id หรือชื่อซัพ (ใบเก่าไม่มี supplier_id) แบบเดียวกับจอ
+  getDeliveredOrdersForSupplier: (sup, fromIso, toIso) => { const q = (v) => `"${String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`; const ors = [sup && sup.id != null && Number.isFinite(+sup.id) ? `supplier_id.eq.${Number(sup.id)}` : null, sup && sup.name ? `supplier_name.eq.${q(sup.name)}` : null].filter(Boolean); if (!ors.length) return Promise.resolve([]); return sbAll(`order_requests?order=id.desc&select=id,status,supplier_id,supplier_name,branch_name,requested_at,items,receive_images,reject_reason&status=eq.delivered&or=${encodeURIComponent("(" + ors.join(",") + ")")}${fromIso ? `&requested_at=gte.${encodeURIComponent(fromIso)}` : ""}${toIso ? `&requested_at=lt.${encodeURIComponent(toIso)}` : ""}`); },
   // ประวัติการกด "สร้างรายการ" จากแท็บสรุปต้องซื้อ — ค้นจาก note ที่ติดคำนำหน้าไว้
   // ใช้ใบสั่งซื้อจริงเป็นประวัติ ไม่เก็บภาพนิ่งแยก จึงเห็นสถานะล่าสุดด้วยว่าอนุมัติ/รับของหรือยัง
   getSummaryBatches: (bid) => sb(`order_requests?select=id,supplier_name,items,status,note,created_at,requested_by&note=like.${encodeURIComponent(SUMMARY_BATCH_PREFIX+"*")}${bid?`&branch_id=eq.${bid}`:""}&order=created_at.desc&limit=600`),
@@ -1091,7 +1143,7 @@ const api = {
   scanTable: (branchId,tableId,token) => sb(`tables?id=eq.${+tableId}&branch_id=eq.${+branchId}&qr_token=eq.${encodeURIComponent(token||"")}&active=eq.true`),
   // ตัวกรองเดียวกับ scanTable เป๊ะ แต่ขอแค่ id — สำหรับจุดที่ถามแค่ "QR ยังใช้ได้ไหม" (ดูความยาวผลอย่างเดียว · 24 ต.ค. 69)
   // ประตูหน้าลูกค้ายังใช้ scanTable ทั้งแถว (หัวจอต้องมีเลขโต๊ะ/ชื่อโต๊ะ — ขอแค่ id แล้วหัวจอขึ้น "โต๊ะ " เปล่า)
-  scanTableOk: (branchId,tableId,token) => sb(`tables?id=eq.${+tableId}&branch_id=eq.${+branchId}&qr_token=eq.${encodeURIComponent(token||"")}&active=eq.true&select=id`),
+  scanTableOk: (branchId,tableId,token,signal) => sb(`tables?id=eq.${+tableId}&branch_id=eq.${+branchId}&qr_token=eq.${encodeURIComponent(token||"")}&active=eq.true&select=id`,signal?{signal}:undefined),
   // ── ปุ่มเรียกพนักงาน (หน้าลูกค้า) — ตาราง staff_calls (sql/staff-calls.sql) ──
   // เพิ่มแถวอย่างเดียว ไม่แตะแถวเครื่องพิมพ์ (ช่อง pj ของใบเสร็จมีที่เดียว เขียนคั่นแล้วใบเสร็จหาย)
   // ตัวพิมพ์ v49 ของสาขาพิมพ์ที่เครื่องใบเสร็จ แล้วจดผลกลับ — คืนเลขแถวไว้ให้หน้าลูกค้าถามผล
@@ -1167,6 +1219,10 @@ const api = {
   // return=minimal (24 ต.ค. 69): เดิมฐานส่งแถวทั้งแถวกลับมา รวมรูปใบเสร็จ ~100-170 KB ที่เพิ่งส่งไป — ไม่มีจุดเรียกไหนอ่านผล
   // (ตรวจครบทุกจุดแล้ว · ด่านใน check-code กันจุดใหม่ที่เอาผลไปใช้) · ส่งเหมือนเดิมทุกไบต์ ตัวพิมพ์อ่านช่องเดิม
   updatePrinter: (id,d) => sb(`printers?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d), headers:{"Prefer":"return=minimal"}}),
+  // เขียนแบบมีเงื่อนไข (writePrinterDesc · 28 ต.ค. 69): description ในฐานต้องยังเท่าที่อ่านมา — ได้ [] = มีคนเขียนแทรก ไม่ได้เขียน · ขอกลับแค่ id ไม่ลากแถว
+  updatePrinterIf: (id,raw,d) => sb(`printers?id=eq.${id}&${raw==null?"description=is.null":"description=eq."+encodeURIComponent(raw)}&select=id`, {method:"PATCH", body:JSON.stringify(d)}),
+  // เครื่องไหนยังมีคำสั่งชนิดนี้ค้าง (ตัวพิมพ์ยังไม่หยิบ) — ได้แค่ id (ไม่ลากรูป/รายการ) · ว่าง = หยิบไปแล้วทุกเครื่อง (waitCmdSlot)
+  getPrintersWithCmd: (ids,key) => sb(`printers?select=id&id=in.(${(ids||[]).map(Number).filter(n=>n>0).join(",")})&description=like.*%22${key}%22:%7B*`),
   deletePrinter: (id) => sb(`printers?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   getActiveOrders: (bid) => sb(`orders?status=neq.paid&status=neq.cancelled&order=created_at.desc&branch_id=eq.${bid}&limit=200`),
   // ถามแค่ id+updated_at ของบิลเปิดชุดเดียวกัน (ตัวกรอง/เรียง/เพดานเดียวกับ getActiveOrders) — จอขายเทียบลายเซ็นก่อนดึงทั้งแถว
@@ -1183,11 +1239,13 @@ const api = {
   // matches what the caller last saw. Returns the new row, or null if another device
   // changed it first — so destructive writes (void/checkout/cancel) abort+reload instead
   // of silently clobbering a concurrent customer add. timestamptz eq compares by value.
-  updatePOSOrderIfUnchanged: async (id, seen, d) => {
+  // openOnly (28 ต.ค. 69) = เขียนเฉพาะบิลที่ยังไม่ปิด (ไม่ใช่ paid/cancelled) — จอโต๊ะที่ถือภาพเก่าต้องไม่มีทางเขียนทับบิลที่อีกเครื่องเก็บเงินไปแล้ว
+  // (ตัวกรองเดียวกับ setPayWaiting) · จอแก้บิล/ยกเลิกบิลที่จ่ายแล้วไม่ส่งตัวนี้ (ตั้งใจเขียนบิลที่ปิดแล้ว)
+  updatePOSOrderIfUnchanged: async (id, seen, d, openOnly) => {
     const guard = seen==null ? "is.null" : `eq.${encodeURIComponent(seen)}`;
     // กันธงหน้าจอหลุดลงฐานที่ปากทาง ไม่ใช่ไล่กันทีละที่เรียก — ที่เรียกใหม่ในอนาคตจะปลอดภัยเอง
     const body = (d && Array.isArray(d.items)) ? {...d, items:stripNewFlags(d.items)} : d;
-    const res = await sb(`orders?id=eq.${id}&updated_at=${guard}`, { method:"PATCH", body:JSON.stringify(body) });
+    const res = await sb(`orders?id=eq.${id}&updated_at=${guard}${openOnly?"&status=neq.paid&status=neq.cancelled":""}`, { method:"PATCH", body:JSON.stringify(body) });
     return (Array.isArray(res)&&res.length>0)?res[0]:null;
   },
   // ── รอลูกค้าโอน (พิมพ์ QR จ่ายเงินไปแล้ว) ────────────────────────────────
@@ -1236,12 +1294,13 @@ const api = {
   // ขยับมัน การกดจ่ายเงินหลังติ๊กจะโดนปฏิเสธว่า "บิลถูกแก้จากอุปกรณ์อื่น" ทุกครั้ง
   // กันชนสองเครื่องติ๊กพร้อมกันด้วยการเทียบค่าคอลัมน์นี้เอง (jsonb เทียบตามความหมาย)
   // ⟹ อ่านค่าเดิม → แก้ → เขียนเฉพาะถ้าค่ายังเป็นค่าเดิม ไม่งั้นอ่านใหม่แล้วลองอีกรอบ
-  setItemServed: async (orderId, lineUid, served, by) => {
+  // onRow(ก่อนเขียน, หลังเขียน) — 28 ต.ค. 69: trigger ของ orders ประทับ updated_at ใหม่ทุก UPDATE (ติ๊กเสิร์ฟด้วย) จอโต๊ะต้องได้เวลาใหม่ไปตัดสินเองว่ารับได้ไหม
+  setItemServed: async (orderId, lineUid, served, by, onRow) => {
     const colErr = (e) => /served_items|42703|PGRST204|column .* does not exist|schema cache/i.test(String((e&&e.message)||e));
     const k = String(lineUid);
     for (let attempt = 0; attempt < 6; attempt++) {
       let cur;
-      try { const rows = await sb(`orders?id=eq.${+orderId}&select=id,status,served_items,items`); cur = Array.isArray(rows) && rows[0]; }
+      try { const rows = await sb(`orders?id=eq.${+orderId}&select=id,status,served_items,items,updated_at`); cur = Array.isArray(rows) && rows[0]; }
       catch (e) { if (colErr(e)) throw new Error("ระบบยังไม่พร้อมบันทึกการเสิร์ฟ — ผู้ดูแลต้องเพิ่มคอลัมน์ served_items ก่อน"); throw e; }
       if (!cur) throw new Error("ไม่พบบิลนี้แล้ว");
       if (cur.status === "paid" || cur.status === "cancelled") throw new Error("บิลนี้ปิดไปแล้ว");
@@ -1251,12 +1310,14 @@ const api = {
       if (served) next[k] = { at: new Date().toISOString(), by: by || null }; else delete next[k];
       const guard = old == null ? "served_items=is.null" : `served_items=eq.${encodeURIComponent(JSON.stringify(old))}`;
       const res = await sb(`orders?id=eq.${+orderId}&${guard}`, { method: "PATCH", body: JSON.stringify({ served_items: next }) });
-      if (Array.isArray(res) && res.length) return (res[0] && res[0].served_items) || next;
+      if (Array.isArray(res) && res.length) { if (onRow) { try { onRow(cur, res[0]); } catch {} } return (res[0] && res[0].served_items) || next; }
       await new Promise((r) => setTimeout(r, 60 * (attempt + 1) + Math.floor(Math.random() * 60)));
     }
     throw new Error("มีคนติ๊กบิลนี้พร้อมกัน — ลองกดอีกครั้ง");
   },
-  posAppendItems: async ({branch_id, table_id, table_number, newItems, ordered_by, blockIfAwaiting}) => {
+  posAppendItems: async ({branch_id, table_id, table_number, newItems, ordered_by, blockIfAwaiting, signal}) => {
+    // 29 ต.ค. 69: signal = หน้าลูกค้าส่งเกินเวลา (custSendTimed) ยกเลิกแล้ว ⟹ คำขอที่เหลือของรอบนี้ไม่ยิงต่อ (ไม่มีเขียนบิลตามหลังเงียบๆ) · พนักงานไม่ส่ง = เหมือนเดิมทุกอย่าง
+    const so = signal ? { signal } : undefined;
     // ต้นตอของบั๊กส่งซ้ำ: ตอน "สร้างบิลใบแรก" ฝั่งจอส่ง items ดิบมาทั้งก้อนโดยไม่ได้ถอดธง
     // ทำให้ทุกแถวของบิลใบแรกถูกบันทึกพร้อมธง _new แล้วขึ้นส้มค้างตลอด
     newItems = stripNewFlags(newItems);
@@ -1285,7 +1346,7 @@ const api = {
       const ids = [...new Set(newItems.map((i) => +i.menu_id).filter((n) => n > 0))];
       if (ids.length) {
         let rows = null;
-        try { rows = await sb(`menus?select=id,name,availability&id=in.(${ids.join(",")})`); } catch {}
+        try { rows = await sb(`menus?select=id,name,availability&id=in.(${ids.join(",")})`, so); } catch {}
         if (Array.isArray(rows)) {
           const bad = rows.filter((m) => menuSoldOutAt(m, branch_id) || (fromCustomer && menuHiddenAt(m, branch_id)));
           if (bad.length) {
@@ -1302,7 +1363,7 @@ const api = {
     // ปิดที่นี่จุดเดียว เพราะทุกทางที่สร้างบิลผ่านฟังก์ชันนี้หมด แก้ที่ผู้เรียกทีละที่จะหลุดอีก
     if((table_number==null||String(table_number).trim()==="")&&table_id!=null){
       try{
-        const r=await sb(`tables?id=eq.${+table_id}&select=table_number&limit=1`);
+        const r=await sb(`tables?id=eq.${+table_id}&select=table_number&limit=1`, so);
         if(Array.isArray(r)&&r[0]&&r[0].table_number)table_number=r[0].table_number;
       }catch{}
     }
@@ -1310,15 +1371,17 @@ const api = {
     // Every cart line carries a globally-unique line_uid minted when the diner tapped it. Re-sending
     // the same cart (lost response, offline retry, double-tap) must therefore be a NO-OP, not a
     // duplicate dish: drop any incoming line whose uid is already on the order before merging.
+    // 28 ต.ค. 69: กันซ้ำ "ในชุดที่ส่งมาเอง" ด้วย (uid เดียวกันสองแถวในชุดเดียว = ครัวทำสองจาน เก็บเงินสองครั้ง)
+    // เดิมเทียบแค่กับของที่อยู่ในบิลแล้ว — ตะกร้าลูกค้าเคยได้ uid ซ้ำสองแถวตอนคิวออฟไลน์กับปุ่มสั่งคืนของพร้อมกัน
     const dedupe = (existing, incoming) => {
       const seen = new Set((existing||[]).map(i=>i&&i.line_uid).filter(Boolean));
-      return (incoming||[]).filter(i=>!(i&&i.line_uid&&seen.has(i.line_uid)));
+      return (incoming||[]).filter(i=>{ if(!(i&&i.line_uid))return true; if(seen.has(i.line_uid))return false; seen.add(i.line_uid); return true; });
     };
     let sawOpenBill=false;   // เคยเห็นบิลเปิดของโต๊ะนี้ในรอบนี้ไหม
     let pkgAllowed;          // บิลแพ็คเกจ: เมนูที่ลูกค้าสั่งได้ (อ่านครั้งเดียว — แพ็คเกจเปลี่ยนหลังเปิดโต๊ะไม่ได้)
     let pkgSrv;              // บิลแพ็คเกจ: ขอบเขต+ราคาในแพ็คเกจจากคลังล่าสุด (อ่านครั้งเดียวต่อการส่ง)
     for(let attempt=0; attempt<10; attempt++){
-      const ex = await sb(`orders?table_id=eq.${table_id}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`);
+      const ex = await sb(`orders?table_id=eq.${table_id}&status=neq.paid&status=neq.cancelled&order=created_at.desc&limit=1`, so);
       if(Array.isArray(ex)&&ex.length>0){
         const cur=ex[0];sawOpenBill=true;
         // พิมพ์ QR ให้ลูกค้าจ่ายไปแล้ว = ยอดถูกล็อก ห้ามลูกค้าสั่งเพิ่มจนกว่าพนักงานจะปลดล็อก
@@ -1357,7 +1420,7 @@ const api = {
         const merged=[...(cur.items||[]),...fresh]; const s=sum(merged);
         const guard = cur.updated_at==null ? "is.null" : `eq.${encodeURIComponent(cur.updated_at)}`;
         // ล็อกสถานะด้วย — ห้ามเขียนทับบิลที่เพิ่งถูกปิดไประหว่างที่เรากำลังคำนวณ
-        const res=await sb(`orders?id=eq.${cur.id}&updated_at=${guard}&status=neq.paid&status=neq.cancelled`, { method:"PATCH", body:JSON.stringify({items:merged,subtotal:s,total:s,updated_at:new Date().toISOString()}) });
+        const res=await sb(`orders?id=eq.${cur.id}&updated_at=${guard}&status=neq.paid&status=neq.cancelled`, { method:"PATCH", body:JSON.stringify({items:merged,subtotal:s,total:s,updated_at:new Date().toISOString()}), ...so });
         if(Array.isArray(res)&&res.length>0)return res[0];
         // lost the compare-and-set race → back off a random beat so contending diners don't
         // re-collide in lockstep, then re-read fresh and retry
@@ -1367,8 +1430,8 @@ const api = {
         // ถ้าสร้างบิลใหม่เงียบๆ อาหารจะไปอยู่บิลที่ไม่มีใครรู้ และโต๊ะกลับมาขึ้นว่ามีลูกค้า
         if(sawOpenBill)throw new Error("บิลของโต๊ะนี้เพิ่งถูกปิด — กรุณาแจ้งพนักงานก่อนสั่งเพิ่ม");
         try{
-          const s=sum(newItems);
-          const res=await sb("orders", { method:"POST", body:JSON.stringify({branch_id,table_id,table_number,items:newItems,subtotal:s,discount:0,total:s,status:"pending",ordered_by,updated_at:new Date().toISOString()}) });
+          const first=dedupe([],newItems);const s=sum(first);   // บิลใบแรกก็กัน uid ซ้ำในชุดเดียวกัน (28 ต.ค. 69)
+          const res=await sb("orders", { method:"POST", body:JSON.stringify({branch_id,table_id,table_number,items:first,subtotal:s,discount:0,total:s,status:"pending",ordered_by,updated_at:new Date().toISOString()}), ...so });
           return (Array.isArray(res)&&res.length>0)?res[0]:res;
         }catch(e){ if(/duplicate key/i.test((e&&e.message)||""))continue; throw e; }
       }
@@ -1519,6 +1582,10 @@ const api = {
   getCRMPromotions: () => sb(`crm_promotions?order=id.desc&limit=500`),
   addCRMPromotion: (d) => sb("crm_promotions", {method:"POST", body:JSON.stringify(d)}),
   updateCRMPromotion: (id,d) => sb(`crm_promotions?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  // 28 ต.ค. 69: ใช้โค้ดโปร = อ่านแถวสดก่อน แล้วนับแบบ compare-and-set (used_count ต้องยังเท่าที่อ่านมา) — คืน false = มีเครื่องอื่นนับไปก่อน
+  // เดิมเขียน used_count จากสำเนาที่โหลดตอนเปิดแท็บ: สองเครื่องเปิดค้าง ตัวนับถอยหลัง (7→4) และใช้เกินโควตาได้
+  getCRMPromotion: async (id) => { const r=await sb(`crm_promotions?id=eq.${+id}&limit=1`); return Array.isArray(r)&&r[0]?r[0]:null; },
+  bumpCRMPromotionUsed: async (id,seen) => { const r=await sb(`crm_promotions?id=eq.${+id}&used_count=${seen==null?"is.null":`eq.${+seen}`}`, {method:"PATCH", headers:{"Prefer":"return=representation"}, body:JSON.stringify({used_count:(+seen||0)+1})}); return Array.isArray(r)&&r.length>0; },
   deleteCRMPromotion: (id) => sb(`crm_promotions?id=eq.${id}`, {method:"DELETE", headers:{"Prefer":"return=minimal"}}),
   getCRMVouchersAll: () => sb(`crm_vouchers?order=id.desc&limit=2000`),
   updateCRMVoucherIfStatus: async (id,expected,d) => { const r=await sb(`crm_vouchers?id=eq.${id}&status=eq.${expected}`, {method:"PATCH", headers:{"Prefer":"return=representation"}, body:JSON.stringify(d)}); if(!Array.isArray(r)||r.length===0)throw new Error("คูปองนี้ถูกใช้ไปแล้ว"); return r; },
@@ -1532,11 +1599,18 @@ const api = {
   backupRestore: async ({key,driveId,apply,confirm}) => { const r=await fetch("/api/backup-restore",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,driveId,apply:apply?"1":"0",confirm:confirm||""})}); const j=await r.json().catch(()=>({})); if(!r.ok)throw new Error(j.error||("HTTP "+r.status)); return j; },
   // POS Shifts & Cash Drawer
   getActiveShift: (bid) => sb(`pos_shifts?branch_id=eq.${bid}&status=eq.open&order=opened_at.desc&limit=1`),
+  // ถามแค่เลขกะที่เปิดอยู่ (~20 ไบต์) — จอขายเทียบกับกะที่ถืออยู่ทุกรอบ 60 วิ ตรงกัน = ไม่ดึงทั้งแถว (28 ต.ค. 69)
+  getActiveShiftId: (bid) => sb(`pos_shifts?branch_id=eq.${bid}&status=eq.open&select=id&order=opened_at.desc&limit=1`),
+  // สถานะของกะเดียว — ปิดกะต้องถามฐานก่อนทุกครั้ง (จอค้างกะที่ถูกปิดจากอีกเครื่องเคยปิดซ้ำได้ 28 ต.ค. 69)
+  getShiftStatus: (id) => sb(`pos_shifts?id=eq.${+id}&select=id,status,closed_at`),
   getShifts: (bid,limit=50) => sb(`pos_shifts?branch_id=eq.${bid}&order=opened_at.desc&limit=${limit}`),
   openShift: (d) => sb("pos_shifts", {method:"POST", body:JSON.stringify(d)}),
-  closeShift: (id,d) => sb(`pos_shifts?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
+  // เขียนได้เฉพาะกะที่ยังเปิด (status=eq.open) · ได้ [] กลับมา = กะถูกปิดไปแล้ว ไม่เขียนทับตัวเลขที่ปิดไว้ (28 ต.ค. 69)
+  closeShift: (id,d) => sb(`pos_shifts?id=eq.${id}&status=eq.open`, {method:"PATCH", body:JSON.stringify(d)}),
   getCashMovements: (sid) => sb(`cash_movements?shift_id=eq.${sid}&order=created_at.desc`),
   addCashMovement: (d) => sb("cash_movements", {method:"POST", body:JSON.stringify(d)}),
+  // แก้ยอดนับในแถว "ปิดกะ" แถวเดิม — กดปิดกะซ้ำหลังบันทึกไม่สำเร็จเคยได้แถวที่สอง แล้วบัญชีรวมยอดนับเป็นสองเท่า (28 ต.ค. 69)
+  updateCashMovement: (id,d) => sb(`cash_movements?id=eq.${+id}`, {method:"PATCH", body:JSON.stringify(d)}),
   // ร่องรอยการแก้บิลที่ปิดแล้ว — เหตุผลบังคับที่ระดับฐานข้อมูล (NOT NULL) ห้ามแก้เงียบ
   addOrderEdit: (d) => sb("order_edits", {method:"POST", body:JSON.stringify(d)}),
   // ประวัติการแก้บิลของกะ — ใบปิดกะต้องรายงานว่าแก้ไปกี่ครั้ง กี่บิล ใครแก้ เพราะอะไร
@@ -2789,6 +2863,8 @@ const PRINT_ERR_TH={
   ENETUNREACH:"เครื่องที่รันตัวพิมพ์ไม่ได้ต่อวงแลนร้าน — เช็ค Wi-Fi ของเครื่องนั้น",
   ECONNRESET:"เครื่องพิมพ์ตัดการเชื่อมต่อกลางทาง — ลองปิดเปิดเครื่องพิมพ์",
   DRAIN_TIMEOUT:"ต่อติดแต่เครื่องไม่รับงานจนจบ — กระดาษหมด/ฝาเปิด/เครื่องค้าง",
+  // ตัวพิมพ์ v52 (28 ต.ค. 69): คำสั่งที่ค้างมาตั้งแต่ตอนตัวพิมพ์หลุด — ลิ้นชักไม่เปิดเอง/ใบรูปไม่พิมพ์เองย้อนหลัง
+  STALE:"คำสั่งค้างนานตอนตัวพิมพ์หลุด — ไม่ทำย้อนหลัง (ลิ้นชักไม่เปิด/ใบไม่พิมพ์เอง) ถ้ายังต้องใช้ให้สั่งใหม่",
 };
 // ต่อติดแล้วส่งไม่จบ = ข้อมูลอาจถึงเครื่องไปแล้วบางส่วน/ทั้งหมด → ใบครัวอาจออกแล้ว กดรีปริ้นทันทีเสี่ยงครัวทำซ้ำ
 const printErrText=(e)=>!e?"":(PRINT_ERR_TH[e.code]||("ส่งไม่ผ่าน ("+(e.code||"ไม่ทราบสาเหตุ")+")"));
@@ -3028,6 +3104,14 @@ const _rpcOff=k=>{_rpcOffUntil[k]=Date.now()+_RPC_RETRY_MS;};
 // transient 5xx) must THROW so the caller reports it — silently losing atomicity
 // for the rest of the session is worse than a visible failure.
 const _rpcMissing=e=>/PGRST202|find the function/i.test(String((e&&e.message)||e));
+// 28 ต.ค. 69: การเขียนสต๊อกที่ "ไม่รู้ผล" — ไม่มีคำตอบเลย (fetch โยน TypeError: Load failed / Failed to fetch)
+// หรือฐาน/เกตเวย์ตอบ 5xx (502/503/504/524 = ฐานอาจทำเสร็จไปแล้วแต่คำตอบหาย) · 4xx = ฐานปฏิเสธชัด ไม่ได้บันทึก
+// sb() แนบ status ไว้กับ error (ไม่มี status = ไม่ได้มาจากคำตอบของฐาน) · ข้อความ error = ตัวคำตอบดิบ
+// 29 ต.ค. 69: 5xx ที่ตัวคำตอบเป็น JSON ของ PostgREST/Postgres มีรหัส (PGRST… หรือ SQLSTATE 5 ตัว เช่น 57014 statement timeout · PGRST003 รอคิวต่อฐานเกินเวลา · PGRST000 ต่อฐานไม่ได้)
+// = ฐานยกเลิกทั้งธุรกรรมแล้ว ไม่ได้บันทึกแน่นอน → เข้าคิว 🔁 ตามเดิม (ฐานป่วยแบบ Disk IO 30 ก.ค. 69 ตอบแบบนี้ทุกบรรทัด เหมาว่าไม่รู้ผล = เสียปุ่ม 🔁 ทั้งเหตุการณ์ ต้องนับใหม่ทุกรายการ)
+// ยกเว้นรหัสที่แปลว่า "สายต่อฐานขาดกลางคัน" PGRST001 · 08xxx · 40003 · 57P01/57P02 = ฐานอาจ commit ก่อนสายขาด → ยังถือว่าไม่รู้ผล
+// ไม่ใช่ JSON (หน้า HTML 52x ของ Cloudflare, "upstream connect error … reset before headers") / ไม่มีรหัส = ไม่รู้ผลเหมือนเดิม
+const _stockOutcomeUnknown=e=>{if(!e)return false;if(e.name==="TypeError")return true;if(!(+e.status>=500))return false;let c="";try{const j=JSON.parse(String(e.message||""));c=j&&typeof j.code==="string"?j.code:"";}catch{}return !/^(PGRST\d{3}|[0-9A-Z]{5})$/.test(c)||/^(PGRST001|08[0-9A-Z]{3}|40003|57P0[12])$/.test(c);};
 async function rpcStockDelta(ingId,branchId,delta){
   if(!_rpcReady("delta"))return false;
   try{await sb("rpc/apply_branch_stock_delta",{method:"POST",body:JSON.stringify({p_id:+ingId,p_branch:String(branchId),p_delta:Math.round((+delta||0)*1000)/1000})});return true;}
@@ -3090,6 +3174,38 @@ function orderFingerprint(o){
     .sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
   return `${+o.branch_id||0}|${+o.supplier_id||0}|${JSON.stringify(items)}`;
 }
+// ── สรุปต้องซื้อ: แตกสูตร SOP จาก "ส่วนที่ขาดจริง" (28 ต.ค. 69) ───────────────────
+// เดิมแตกสูตรจากยอดที่ขอทั้งก้อน ⟹ ของที่ครัวกลางผลิตไว้พอแล้ว (ผงน้ำซุปหมูกระทะ ขอ 5 มีอยู่ 14) ยังลากส่วนผสมขึ้นมาให้ซื้อ
+// และแม่ที่ขาดบางส่วนก็แตกลูกตามยอดเต็ม (วันจริง: น้ำเชื่อม ฿39.71 แคปสะโพกหมู ฿78 ที่ไม่ต้องซื้อ · มะนาว 13.4 แทน 11 กก.)
+// ตอนนี้: need = ยอดขอตรงที่รวมครบแล้ว · แตกเฉพาะส่วนที่ขาด = max(0, ต้องการรวม − availOf(แม่)) ทีละชั้น ไม่เกิน 3 ชั้น (กันสูตรวน)
+// แม่ที่ได้ยอดเพิ่มจากชั้นบน แตกเพิ่มเฉพาะส่วนต่าง (done) ไม่แตกซ้ำ · ยอดลูกแบ่งเจ้าของ (byBranch) ตามสัดส่วนที่แต่ละสาขาขอของแม่
+// addNeed(ingId,qty,depth,srcBid) = ตัวรวมยอดของจอ (ไม่แตกสูตรเอง) · ไม่แตะสต๊อก ไม่เขียนอะไร เป็นแค่ตัวเลขแนะนำซื้อ
+function sopNetCascade(need,ingById,availOf,addNeed,maxDepth=3){
+  const done=new Map();
+  for(let d=0;d<maxDepth;d++){
+    let moved=false;
+    for(const[id,info]of [...need.entries()]){
+      const p=ingById.get(+id);
+      if(!p||!p.has_sop||!(info&&info.qty>0))continue;
+      const short=Math.max(0,info.qty-(+availOf(p)||0));
+      const delta=short-(done.get(+id)||0);
+      if(!(delta>1e-9))continue;
+      done.set(+id,short);moved=true;
+      const owners=Object.entries(info.byBranch||{}).filter(([,q])=>+q>0);
+      const owned=owners.reduce((s2,[,q])=>s2+(+q||0),0);
+      for(const sub of (p.ingredients||[])){
+        const subIng=ingById.get(+sub.ingredientId);
+        if(!subIng)continue;
+        const subQty=delta*(+sub.amountGram||0)/(+subIng.convert_to_gram||1000);
+        if(!(subQty>0))continue;
+        if(owned>0)for(const[b,q]of owners)addNeed(+sub.ingredientId,subQty*(+q)/owned,d+1,+b);
+        else addNeed(+sub.ingredientId,subQty,d+1,null);
+      }
+    }
+    if(!moved)break;
+  }
+  return need;
+}
 // ── ของที่ "สั่งไปแล้วแต่ยังไม่เข้า" ต่อวัตถุดิบ ────────────────────────────────
 // นับจากใบสั่งซัพนอกที่ยังเปิดอยู่ ของสาขาที่ระบุเท่านั้น (branchId=null = ทุกสาขา)
 // คืน Map: ingId → {qty, orders:[id], unitMismatch}
@@ -3118,8 +3234,10 @@ function onOrderQtyByIng(openOrders,branchId,ingById,maxAgeDays=ON_ORDER_MAX_AGE
   for(const o of openOrders||[]){
     if(branchId!=null&&+o.branch_id!==+branchId)continue;
     if(cutoff&&o.requested_at){
-      const t=new Date(o.requested_at).getTime();   // requested_at เป็น ISO เสมอ (nowStr)
-      if(isFinite(t)&&t<cutoff){stale.push(o.id);continue;}
+      // 28 ต.ค. 69: ใบเก่า (ก่อน ก.ค. 69) เก็บ requested_at เป็น "DD/MM/YYYY" — new Date() อ่านวันที่เกิน 12 เป็น NaN (ไม่เคยถูกนับว่าเก่า)
+      // และ "11/06/2026" เป็น 6 พ.ย. (อนาคต) → ใบผีเดือน พ.ค.–มิ.ย. ยังหักเลขแนะนำของอยุธยา · อ่านด้วย parseAnyDate · อ่านไม่ออก = ถือว่าเก่า (ไม่แน่ใจ = ไม่หัก)
+      const d=parseAnyDate(o.requested_at);const t=d?d.getTime():NaN;
+      if(!isFinite(t)||t<cutoff){stale.push(o.id);continue;}
     }
     for(const it of (Array.isArray(o.items)?o.items:[])){
       const id=+(it.ingId??it.ingredient_id);
@@ -3136,6 +3254,97 @@ function onOrderQtyByIng(openOrders,branchId,ingById,maxAgeDays=ON_ORDER_MAX_AGE
     }
   }
   return{qtyByIng:m,stale};
+}
+// ── ของจากครัวกลางที่สาขาขอไปแล้วแต่ยังไม่เข้าสต๊อก (28 ต.ค. 69) ─────────────────
+// เดิมจอสร้างคำสั่งซื้อหักแค่ใบสั่งซัพนอก (order_requests) ไม่หักใบขอซื้อ/ใบส่งของครัวกลาง
+// สาขาติ๊กครัวกลางซ้ำ = เลขแนะนำเดิมกลับมา = ได้ใบขอซื้อใบที่สอง แล้วครัวกลางรวมยอดสองใบเป็นใบส่งเดียว
+// (ของจริง ต.ค. 69: 6 คู่ ส่งเกินและเก็บเงินไปแล้วราว ฿10,500 · เกือบหลุดอีก ฿66,000 ที่ K1O6G)
+// แปลงเป็นรูปเดียวกับใบสั่งซัพนอก แล้วส่งเข้า onOrderQtyByIng ตัวเดิม = กติกาหน่วยไม่ตรง/ใบเก่าเกิน 14 วัน ชุดเดียวกัน
+//   · ใบขอซื้อ รออนุมัติ/อนุมัติแล้ว = ทั้งจำนวน (converted ไม่นับ — กลายเป็นใบส่งของแล้ว ไปนับที่ใบส่ง)
+//   · ใบส่งของจากครัวกลาง requested/open/shipped = ทั้งจำนวน (สาขายังไม่ได้กดรับเข้าสต๊อก)
+//   · disputed = เฉพาะจำนวนที่สาขาแจ้งว่าได้รับ (เข้าสต๊อกตอนครัวกลางยอมรับ) ส่วนที่ขาดไม่มาแล้ว ต้องสั่งใหม่ได้
+//   · ใบโอนระหว่างสาขา ไม่ใช่ของที่สาขาขอ → ไม่นับ · บรรทัดสินทรัพย์ไม่มี ingredient_id → onOrderQtyByIng ข้ามเอง
+const CENTRAL_ON_ORDER_PR=["pending_approval","approved"];
+const CENTRAL_ON_ORDER_PO=["requested","open","shipped","disputed"];
+// 29 ต.ค. 69: ใบ "จัดส่งแล้ว" ที่สาขายังไม่กดรับ — สาขามักกดรับทีหลังหลายชั่วโมง หลังนับสต๊อกและขอซื้อรอบใหม่ไปแล้ว
+// (ของจริง สาขา 8 PO-202610-B1-PFD3M: ส่ง 19/10 11:21 · นับ 17:10, 19:06 · ขอซื้อใหม่ 20/10 12:19 · กดรับ 20/10 17:50 — 3 ใน 28 ใบส่งช่วง 14 วัน)
+// นับหลังเวลาส่ง = ตัวเลขในระบบรวมของที่ถึงแล้ว หักค้างส่งซ้ำอีก = เลขแนะนำต่ำไป (ถุงร้อนใส ค้างส่ง 7 → แนะนำ 0)
+// counts = แถว stock_logs {ingredient_id,counted_at} ของสาขานี้ · วัตถุดิบที่นับหลัง updated_at ของใบ (= ตอนกดจัดส่ง) → ไม่หักบรรทัดนั้น
+// ไม่มีข้อมูลนับ/เวลาส่งอ่านไม่ออก = หักเต็มแบบเดิม · updated_at ถูกขยับทีหลัง (🔁/แก้ทั้งชุด) = เวลาส่งช้ากว่าจริง = เอียงไปทางหักแบบเดิม
+// ไม่ใช้กติกา "ส่งเกิน 12 ชม. = เลิกหัก": นับแล้วสั่งภายใน 12 ชม. ยังหักซ้ำ · รถถึงช้ากว่า 12 ชม. กลับไปสั่งซ้ำ (ต้นเหตุใบขอซื้อซ้ำ)
+// นับก่อนของถึงจริง (ไม่หัก แต่ของยังไม่เข้าชั้น) → ป้ายในจอสร้างคำสั่งซื้อบอกชื่อใบที่ยังไม่กดรับ (ดู shippedCentralPending)
+const centralShipT=po=>{const d=po&&po.status==="shipped"?parseAnyDate(po.updated_at):null;return d?d.getTime():NaN;};
+// ใบจัดส่งแล้วในช่วงที่ยังหักยอด (เกณฑ์อายุเดียวกับ onOrderQtyByIng) ที่ต้องถามประวัตินับ → {ids,since} · ไม่มี = null (ไม่ถามฐาน)
+function centralShippedCountAsk(pos,centralIds,maxAgeDays=ON_ORDER_MAX_AGE_DAYS){
+  const cids=new Set([...(centralIds||[])].map(Number));
+  const cutoff=maxAgeDays>0?Date.now()-maxAgeDays*864e5:null;
+  const ids=new Set();let since=Infinity;
+  for(const po of (Array.isArray(pos)?pos:[])){
+    if(!po||po.status!=="shipped"||!cids.has(+po.from_branch_id)||isTransferPO(po))continue;
+    const t=centralShipT(po);if(!isFinite(t))continue;
+    const rq=po.created_at||po.po_date;if(cutoff&&rq){const r=parseAnyDate(rq);if(!(r&&r.getTime()>=cutoff))continue;}
+    let any=false;
+    for(const it of (Array.isArray(po.items)?po.items:[])){const id=+(it&&(it.ingredient_id||it.ingId))||0;if(id){ids.add(id);any=true;}}
+    if(any&&t<since)since=t;
+  }
+  return ids.size&&isFinite(since)?{ids:[...ids].sort((a,b)=>a-b),since:new Date(since).toISOString()}:null;
+}
+// ป้าย "จัดส่งแล้วยังไม่กดรับ": ใบที่มีวัตถุดิบ + ยังไม่เก่าเกินเกณฑ์ (ใบเก่าอยู่ใน stale ไม่หักแล้ว — ไม่ขึ้นป้ายถาวร) → [เลขใบ]
+function shippedCentralPending(orders,stale){
+  const old=new Set(Array.isArray(stale)?stale:[]);
+  return (Array.isArray(orders)?orders:[]).filter(o=>o&&o.shipped&&!old.has(o.id)).map(o=>o.id);
+}
+function centralOnOrderAsOrders(prs,pos,centralIds,counts){
+  const cids=new Set([...(centralIds||[])].map(Number));
+  const out=[];
+  const lastCnt=new Map();   // ingId → เวลานับล่าสุด (ms)
+  for(const c of (Array.isArray(counts)?counts:[])){const id=+(c&&c.ingredient_id)||0;const d=id?parseAnyDate(c.counted_at):null;const t=d?d.getTime():NaN;if(isFinite(t)&&t>(lastCnt.get(id)||0))lastCnt.set(id,t);}
+  for(const p of (Array.isArray(prs)?prs:[])){
+    if(!p||!CENTRAL_ON_ORDER_PR.includes(p.status)||(p.type&&p.type!=="ingredient"))continue;
+    out.push({id:p.pr_number||`PR#${p.id}`,branch_id:p.branch_id,requested_at:p.created_at||null,
+      items:(Array.isArray(p.items)?p.items:[]).map(it=>({ingId:+it.ingredient_id||0,qtyNeeded:+it.qty||0,receivedQty:0,unit:it.unit}))});
+  }
+  for(const po of (Array.isArray(pos)?pos:[])){
+    if(!po||!CENTRAL_ON_ORDER_PO.includes(po.status)||!cids.has(+po.from_branch_id)||isTransferPO(po))continue;
+    const disp=po.status==="disputed",shipT=centralShipT(po);
+    const items=(Array.isArray(po.items)?po.items:[]).map(it=>{const q=+it.qty||0;const r=it.received_qty!=null?Math.max(0,Math.min(q,+it.received_qty||0)):null;
+        return{ingId:+(it.ingredient_id||it.ingId)||0,qtyNeeded:disp&&r!=null?r:q,receivedQty:0,unit:it.unit};});
+    // 29 ต.ค. 69: shipped = ป้าย "จัดส่งแล้วยังไม่กดรับ" (เฉพาะใบที่มีวัตถุดิบ) · บรรทัดที่สาขานับหลังเวลาส่ง = ไม่หัก (ดูหัวข้อ centralShipT)
+    out.push({id:po.po_number||`PO#${po.id}`,branch_id:po.branch_id,requested_at:po.created_at||po.po_date||null,shipped:po.status==="shipped"&&items.some(it=>it.ingId>0),
+      items:items.filter(it=>!(isFinite(shipT)&&it.ingId&&(lastCnt.get(it.ingId)||0)>shipT))});
+  }
+  return out;
+}
+// ── ใบขอซื้อครัวกลางที่ "รายการเหมือนกัน" (28 ต.ค. 69) ──────────────────────────
+// รายการเหมือน = วัตถุดิบเดียวกัน + จำนวนเท่ากัน · ซ้ำ = เหมือนกันอย่างน้อยครึ่งหนึ่งของใบใหม่
+// ใบซ้ำจริงทุกคู่ใน ต.ค. 69 มาจากคนเดิม ห่างกัน 4–98 นาที และเหมือนกันเกือบทั้งใบ
+// คืนใบที่เหมือนมากที่สุด {pr,same,total} · ไม่ซ้ำ = null · ใช้เตือน (ไม่บล็อค) — สั่งเพิ่มจริงยังกดต่อได้
+const PR_DUP_WINDOW_H=12;
+function prDupMatch(lines,recent){
+  const key=it=>`${+(it.ingredient_id??it.ingId)||0}|${round2(+it.qty||0)}`;
+  const mine=(Array.isArray(lines)?lines:[]).filter(it=>it&&+(it.ingredient_id??it.ingId)>0&&+it.qty>0).map(key);
+  if(!mine.length)return null;
+  let best=null;
+  for(const p of (Array.isArray(recent)?recent:[])){
+    const theirs=new Map();
+    for(const it of (p&&Array.isArray(p.items)?p.items:[])){if(!it)continue;const k=key(it);theirs.set(k,(theirs.get(k)||0)+1);}
+    let same=0;
+    for(const k of mine){const n=theirs.get(k)||0;if(n>0){same++;theirs.set(k,n-1);}}
+    if(same*2>=mine.length&&(!best||same>best.same))best={pr:p,same,total:mine.length};
+  }
+  return best;
+}
+// คู่ใบขอซื้อของสาขาเดียวกันที่รายการเหมือนกัน (ในชุดที่ครัวกลางกำลังจะรวมเป็นใบส่ง) — เทียบด้วยใบที่สั้นกว่า
+function prDupPairs(prs){
+  const byB=new Map(),out=[];
+  for(const p of (Array.isArray(prs)?prs:[])){if(!p)continue;const b=+p.branch_id;if(!byB.has(b))byB.set(b,[]);byB.get(b).push(p);}
+  for(const list of byB.values())for(let i=0;i<list.length;i++)for(let j=i+1;j<list.length;j++){
+    const a=list[i],b=list[j];
+    const[small,big]=(a.items||[]).length<=(b.items||[]).length?[a,b]:[b,a];
+    const m=prDupMatch(small.items,[big]);
+    if(m)out.push({a,b,same:m.same,total:m.total});
+  }
+  return out;
 }
 // สาขาที่ยังเปิดใช้งาน — ใช้กับทุกที่ที่ "ให้เลือกสาขา" หรือ "โชว์สต๊อกรายสาขา"
 // สาขาที่ปิดแล้ว (active=false) ต้องไม่โผล่ให้เลือกและไม่โชว์บนการ์ดวัตถุดิบ
@@ -3163,6 +3372,13 @@ function branchSafety(ing,branchId){
 function setBranchSafetyInJson(existing,branchId,value){
   return {...(existing||{}),[String(branchId)]:+value||0};
 }
+// 28 ต.ค. 69: safety_by_branch เป็นก้อนเดียวของทุกสาขา — สร้างก้อนใหม่จากก้อนในจอ (เก่าได้หลายนาที) แล้วเขียนทั้งก้อน
+// = ทับช่องที่สาขาอื่นเพิ่งตั้ง (สาขา 5 ตั้ง 20 → ครัวกลางแก้ราคา → ช่องสาขา 5 กลับเป็น 0 เงียบๆ)
+// อ่านก้อนสดจากฐานก่อนเขียนเสมอ แล้วผู้เรียกแก้แค่ช่องของสาขาตัวเอง · อ่านไม่ได้/ไม่เจอแถว = ใช้ก้อนในจอ (แบบเดิม)
+async function freshSafetyMap(ingId,fallback){
+  try{const r=await sb(`ingredients?id=eq.${+ingId}&select=safety_by_branch`);if(Array.isArray(r)&&r[0])return r[0].safety_by_branch||{};}catch{}
+  return fallback;
+}
 // Atomic stock mutation per ingredient.
 // Pass any combination of from/to:
 //   { fromBranchId: X, toBranchId: Y } → transfer X→Y (debit X, credit Y)
@@ -3189,8 +3405,11 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
   }
   // ตัวเก็บความล้มเหลว — รายการที่เขียนสต๊อกไม่ผ่านต้องโผล่ในเตือนรวมครั้งเดียว
   // (บรรทัดที่ข้ามไปเงียบๆ = ตัวเลขสต๊อกผิด)
-  const acc={notFound:[],zeroQty:[],failedUpdates:[],moves:[]};
+  const acc={notFound:[],zeroQty:[],failedUpdates:[],moves:[],uncertain:[]};
   const{notFound,zeroQty,failedUpdates}=acc;
+  // 28 ต.ค. 69: จำว่าการขยับนี้มาจากเอกสารไหน — pendingFromAcc เก็บไว้ในรายการค้าง ปุ่ม 🔁 จะลงประวัติสต๊อกอ้างใบเดิมได้
+  // (เดิม 🔁 ลง ref_type "transfer"/ref_id ว่าง → ตรวจย้อนรายใบแล้วเหมือนไม่เคยเพิ่มสต๊อก เช่น PO-202609-B1-U26CO)
+  if(refType||refId)acc.ref={reason:reason||null,ref_type:refType||null,ref_id:refId||null};
   const agg=new Map();
   for(const it of (items||[])){
     const ingId=+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id));
@@ -3240,7 +3459,12 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
     }
     catch(err){
       console.error("transferStock failed",ingId,err);
-      failedUpdates.push({ingId,name:row.name||"#"+ingId,reason:err&&err.message||String(err),qty:add});
+      // 28 ต.ค. 69: ไม่ได้คำตอบจากฐาน (เน็ตหลุด/iPad ล็อกจอกลางคัน = TypeError "Load failed") หรือ 5xx/524 จากเกตเวย์
+      // = ไม่รู้ว่าฐานบันทึกไปแล้วหรือยัง — ห้ามเข้าคิว 🔁: ยอดเป็นแบบบวกเพิ่ม (delta) ไม่มีกุญแจกันซ้ำ
+      // ฐานบันทึกไปแล้ว + กด 🔁 = สต๊อกขยับสองเท่า (พิสูจน์ด้วยโค้ดจริง: รับ 5 → สต๊อก 20 แทน 15)
+      // ให้คนดูตัวเลขในหน้านับสต็อกแทน (นับของจริงได้) · 4xx = ฐานปฏิเสธชัดเจน ไม่ได้บันทึก → เข้าคิว 🔁 ตามเดิม
+      if(_stockOutcomeUnknown(err))acc.uncertain.push({ingId,name:row.name||"#"+ingId,reason:err&&err.message||String(err),qty:add,dir:fromId&&toId?"โอน":toId?"เพิ่ม":"ตัด"});
+      else failedUpdates.push({ingId,name:row.name||"#"+ingId,reason:err&&err.message||String(err),qty:add});
       continue;   // stock write failed → skip the visibility tick too
     }
     // Write succeeded → record the movement(s) for the trace log. A transfer touches BOTH slots
@@ -3294,7 +3518,7 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
 
   // Top-level callers only: surface anything that silently fell through AT ANY
   // DEPTH so the user doesn't end up with a PO marked "จัดส่งแล้ว" but no stock move.
-  if(notFound.length>0||failedUpdates.length>0||zeroQty.length>0){
+  if(notFound.length>0||failedUpdates.length>0||zeroQty.length>0||acc.uncertain.length>0){
     const lines=[];
     if(zeroQty.length>0){
       lines.push(`⚠️ ข้าม ${zeroQty.length} รายการที่จำนวน = 0 (ไม่ตัดสต๊อก):`);
@@ -3310,6 +3534,12 @@ async function transferStockBetweenBranches({fromBranchId,toBranchId,items,ings,
       lines.push(`❌ บันทึกสต๊อก ${failedUpdates.length} รายการล้มเหลว:`);
       failedUpdates.slice(0,5).forEach(x=>lines.push(`   • ${x.name}: ${x.reason}`));
       if(failedUpdates.length>5)lines.push(`   • ... และอีก ${failedUpdates.length-5} รายการ`);
+    }
+    if(acc.uncertain.length>0){
+      lines.push(`❓ ไม่แน่ใจว่าบันทึกสต๊อกสำเร็จ ${acc.uncertain.length} รายการ (เน็ตหลุดระหว่างรอคำตอบ — ฐานอาจบันทึกไปแล้ว):`);
+      acc.uncertain.slice(0,5).forEach(x=>lines.push(`   • ${x.name}: ${x.dir} ${x.qty}`));
+      if(acc.uncertain.length>5)lines.push(`   • ... และอีก ${acc.uncertain.length-5} รายการ`);
+      lines.push("   → ไม่ใส่ในปุ่ม 🔁 ให้ (กดซ้ำอาจขยับสต๊อกสองครั้ง) — เปิดหน้า \"นับสต็อก\" ดูตัวเลขก่อน ถ้ายังไม่ขยับค่อยแก้ที่นั่น");
     }
     lines.push("");
     lines.push("⚠️ อย่ากดทำรายการเดิมซ้ำทั้งใบ — รายการที่สำเร็จไปแล้วจะถูกตัด/เพิ่มซ้ำ");
@@ -3327,19 +3557,25 @@ function pendingFromAcc(acc,from,to){
   if(!acc)return null;
   const fails=[...(acc.notFound||[]).filter(x=>x.ingId),...(acc.failedUpdates||[])];
   const items=fails.map(x=>({ingredient_id:+x.ingId,name:x.name||("#"+x.ingId),qty:+x.qty||0})).filter(i=>i.ingredient_id&&i.qty>0);
-  return items.length?{from:from!=null?+from:null,to:to!=null?+to:null,items}:null;
+  // 28 ต.ค. 69: เอกสารต้นทาง (ถ้ามี) ติดไปกับกลุ่มค้าง — กลุ่มเก่าที่ไม่มีก็ใช้ได้เหมือนเดิม
+  return items.length?{from:from!=null?+from:null,to:to!=null?+to:null,items,...(acc.ref||{})}:null;
 }
 // Re-run the stock credit for ONLY the pending lines. Idempotent: succeeded lines are
 // never in `pending`, so nothing double-applies. Returns the groups that STILL failed.
+// 28 ต.ค. 69: remain.uncertain = จำนวนรายการที่ "ไม่รู้ผล" (เน็ตหลุด) — ไม่อยู่ใน remain (ห้าม 🔁 ซ้ำ) ผู้เรียกต้องไม่บอกว่าเข้าครบ
 async function retryStockPending(pending,ings){
   const groups=Array.isArray(pending)?pending:(pending?[pending]:[]);
   const remain=[];
+  let unsure=0;
   for(const g of groups){
     if(!g||!Array.isArray(g.items)||!g.items.length)continue;
-    const acc=await transferStockBetweenBranches({fromBranchId:g.from,toBranchId:g.to,items:g.items.map(i=>({ingredient_id:i.ingredient_id,received_qty:i.qty})),ings,autoVisible:true});
+    const acc=await transferStockBetweenBranches({fromBranchId:g.from,toBranchId:g.to,items:g.items.map(i=>({ingredient_id:i.ingredient_id,received_qty:i.qty})),ings,autoVisible:true,
+      reason:g.reason?`🔁 ${g.reason}`:null,refType:g.ref_type||null,refId:g.ref_id||null});
+    unsure+=((acc&&acc.uncertain)||[]).length;
     const still=pendingFromAcc(acc,g.from,g.to);
     if(still)remain.push(still);
   }
+  remain.uncertain=unsure;
   return remain;   // [] = everything cleared
 }
 // Persist newly-failed stock moves onto the PO for the 🔁 retry button. MERGES with the
@@ -3783,7 +4019,9 @@ async function uploadImageToDrive(file){
 }
 // อัปไฟล์อะไรก็ได้ขึ้น Drive แบบไม่บีบอัด (PDF ใบเสนอราคา สเปคสินค้า ฯลฯ)
 // ต่างจาก uploadImageToDrive ที่บีบผ่าน canvas — เอกสารต้องได้ไฟล์เดิมเป๊ะ ห้ามแปลงเป็น jpg
-// ฝั่ง api/drive-upload กับ drive-view รองรับทุก content-type อยู่แล้ว ไม่ต้องแก้เซิร์ฟเวอร์
+// 28 ต.ค. 69: คอมเมนต์เดิมบอกว่าเซิร์ฟเวอร์ "รับทุก content-type" ซึ่งไม่จริง — api/drive-upload รับแค่รูป แนบ PDF จึงตก 415 ทุกครั้ง
+// ตอนนี้รับรูปแบบพิกเซล + PDF + Word/Excel/PowerPoint (รายการใน api/drive-upload.js) · SVG/HTML/อื่นๆ ถูกปฏิเสธโดยตั้งใจ (รันสคริปต์ได้)
+// drive-view ส่ง PDF ให้เปิดดูในเบราว์เซอร์ ไฟล์ Office เป็นดาวน์โหลด
 const MAX_UPLOAD_MB=4;   // เพดาน body ของ serverless — เกินนี้ต้องบอกผู้ใช้ ไม่ใช่ปล่อยให้ล้มเงียบ
 async function uploadFileToDrive(file){
   if(file.size>MAX_UPLOAD_MB*1024*1024)
@@ -4508,12 +4746,32 @@ function BranchSelector({branches,onSelect,user,onLogout}){
 // ══════════════════════════════════════════════════════
 // ── IMPORT INGREDIENTS MODAL ──────────────────────────
 // ══════════════════════════════════════════════════════
+// 28 ต.ค. 69: ไฟล์ Export วัตถุดิบตอนนี้มีชีตเดียวชื่อ "วัตถุดิบ" (รหัส/ชื่อ/สต๊อกของสาขาที่ Export/ซัพ/ช่วงราคา) แต่ Import ยังอ่านแบบไฟล์เก่า
+//   ชื่อชีต → หมวดของทุกแถว (ทุกตัวกลายเป็นหมวด "วัตถุดิบ") · คอลัมน์สต๊อก → ทับสต๊อกสาขาที่เปิดอยู่ด้วยเลขเก่าของอีกสาขา (ไม่มีประวัติ)
+//   ซัพจับแบบ "ชื่อมีคำนี้" → "ร้านทะเล ตลาดไท" กลายเป็น "ตลาดไท"
+// ชื่อชีตเป็นหมวดได้เฉพาะเมื่อตรงกับหมวดวัตถุดิบที่มีอยู่จริง · ไม่ตรง = ไม่แตะหมวด
+const ingSheetCat=(sheetName,catNames)=>{const s=String(sheetName==null?"":sheetName).trim();return s&&(catNames||[]).includes(s)?s:undefined;};
+// ชื่อสาขาในชื่อไฟล์ Export (ตัดแบบเดียวกับตอน Export) — ใช้เทียบว่าเลขสต๊อกในไฟล์เป็นของสาขาไหน
+const ingExportBranchTag=n=>String(n||"สาขา").replace(/[\/?*[]:]/g,"_").slice(0,20);
+// สต๊อกในไฟล์มาจากสาขาไหน/วันไหน: ชื่อไฟล์ "วัตถุดิบ_<สาขา>_<YYYY-MM-DD>" หรือหัวคอลัมน์แบบเก่า "📦 สต๊อก (<สาขา>)"
+// other=true = ระบุได้ว่าเป็นของสาขาอื่น → ห้ามนำเข้าสต๊อก · branch=null = ไม่รู้ว่าของสาขาไหน (ต้องติ๊กยืนยันเอง)
+function ingImportStockSrc(fileName,headerKeys,branchName){
+  const fm=/^วัตถุดิบ_(.+)_(\d{4}-\d{2}-\d{2})/.exec(String(fileName||""));
+  let hb=null;for(const k of (headerKeys||[])){const m=/(?:สต๊อก|stock)[^(]*\(([^)]+)\)/i.exec(String(k));if(m){hb=m[1].trim();break;}}
+  const fileBr=fm?fm[1]:null;
+  const other=(fileBr!=null&&fileBr!==ingExportBranchTag(branchName))||(hb!=null&&hb!==String(branchName||"").trim());
+  return{branch:fileBr||hb,date:fm?fm[2]:null,other};
+}
 function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ings=[],onDone}){
   const[step,setStep]=useState(1); // 1=upload, 2=preview, 3=done
   const[rows,setRows]=useState([]);
   const[saving,setSaving]=useState(false);
   const[progress,setProgress]=useState(0);
   const[result,setResult]=useState({added:0,updated:0,failed:0});
+  // 28 ต.ค. 69: สต๊อกจากไฟล์ไม่นำเข้าเว้นแต่ติ๊กเอง (applyStock) · stockSrc = ไฟล์บอกว่าเป็นสต๊อกของสาขาไหน (ของสาขาอื่น = ติ๊กไม่ได้)
+  const[applyStock,setApplyStock]=useState(false);
+  const[stockSrc,setStockSrc]=useState(null);
+  const catNames=useMemo(()=>(ingCats||[]).map(c=>String((c&&c.name)||"").trim()).filter(Boolean),[ingCats]);
   const fileRef=useRef();
   const xlsxRef=useRef();
   // Code → existing ingredient row (primary upsert match)
@@ -4532,18 +4790,21 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
         // Read EVERY sheet — export splits by หมวดหมู่ into one sheet per category.
         // Concatenate row arrays and, if a row's category cell is blank, use the
         // sheet name as the category (since the sheet itself is named for the cat).
+        // 28 ต.ค. 69: เฉพาะชื่อชีตที่ตรงกับหมวดวัตถุดิบที่มีอยู่จริง (ชีต "วัตถุดิบ" ของไฟล์ Export ปัจจุบันไม่ใช่หมวด)
         const json=[];
         for(const sheetName of (wb.SheetNames||[])){
           const ws=wb.Sheets[sheetName];if(!ws)continue;
           const sheetJson=XLSX.utils.sheet_to_json(ws,{defval:""});
+          const sc=ingSheetCat(sheetName,catNames);
           for(const r of sheetJson){
-            if(!r["หมวดหมู่"]&&!r["หมวด"]&&!r["category"]){
-              r["หมวดหมู่"]=sheetName;
+            if(sc!==undefined&&!r["หมวดหมู่"]&&!r["หมวด"]&&!r["category"]){
+              r["หมวดหมู่"]=sc;
             }
             json.push(r);
           }
         }
         if(json.length===0){alert("ไฟล์ว่างเปล่า");return;}
+        setStockSrc(ingImportStockSrc(f.name,[...new Set(json.flatMap(r=>Object.keys(r)))],currentBranch?.name));setApplyStock(false);
         // Tolerant column resolution — match by Thai header but accept variants
         const pickKey=(row,...keys)=>{for(const k of keys){if(row[k]!==undefined&&row[k]!=="")return row[k];}return undefined;};
         // Stock column header carries the branch name in parens (e.g.
@@ -4619,7 +4880,10 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
       const brand=parts[2]||"";
       const supName=parts[3]||"";
       const note=parts[5]||"";
-      parsed.push({_kid:randId(),name,buy_price:price,category:currentCat,supplier_name:supName.trim(),brand:brand.trim(),note:note.trim(),buy_unit:"กิโลกรัม",buy_amount:1,convert_to_gram:1000,price_per_gram:price>0?price/1000:0,stock:0,selected:true});
+      // 28 ต.ค. 69: ทางนี้ "เพิ่มอย่างเดียว" จริง — ชื่อที่มีอยู่แล้วเคยถูกเขียนทับเป็น กิโลกรัม/1000 g หมวด "อื่นๆ" ซัพ/หมายเหตุว่าง
+      // แถวที่ชื่อตรงกับวัตถุดิบเดิม = ติดป้าย "มีอยู่แล้ว" ไม่ติ๊ก และ doImport ข้ามเสมอ (_txt)
+      const ex=nameIdx.get(String(name).trim().toLowerCase());
+      parsed.push({_kid:randId(),_txt:true,_exists:!!ex,name,buy_price:price,category:currentCat,supplier_name:supName.trim(),brand:brand.trim(),note:note.trim(),buy_unit:"กิโลกรัม",buy_amount:1,convert_to_gram:1000,price_per_gram:price>0?price/1000:0,stock:0,selected:!ex});
     });
     return parsed.filter(r=>r.name&&r.name.length>=2);
   }
@@ -4648,6 +4912,9 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
     setSaving(true);setProgress(0);
     let done=0,added=0,updated=0,failed=0;
     const skippedCtg=[];   // rows whose "รวมทั้งหมด (กรัม)" cell was 0/blank — ignored, not written
+    const skippedExist=[],supNoMatch=[];   // 28 ต.ค. 69: แถวข้อความที่มีอยู่แล้ว (ข้าม) · ซัพที่ชื่อไม่ตรงเป๊ะ (คงซัพเดิม)
+    // 28 ต.ค. 69: สต๊อกจากไฟล์เขียนเฉพาะเมื่อติ๊กเอง และไฟล์ไม่ได้บอกว่าเป็นของสาขาอื่น
+    const useStock=!!applyStock&&!(stockSrc&&stockSrc.other);
     // Running per-category code counter for NEW rows that arrive without a code but land in a
     // coded category ("...(M01)"). Seeded from the loaded list's current max, then bumped in-batch
     // so several new rows in the same category get consecutive codes (no within-batch collision).
@@ -4655,12 +4922,15 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
     const nextBatchCode=(pf)=>{const cur=codeCounter.has(pf)?codeCounter.get(pf):maxIngCodeNum(pf,ings);const n=cur+1;codeCounter.set(pf,n);return fmtIngCode(pf,n);};
     for(const row of selected){
       try{
-        const sup=row.supplier_name?suppliers.find(s=>s.name===row.supplier_name||(row.supplier_name&&s.name.includes(row.supplier_name))||(row.supplier_name&&row.supplier_name.includes(s.name))):null;
+        // 28 ต.ค. 69: ซัพต้องชื่อตรงเป๊ะ (ตัดช่องว่างหัวท้าย) — เดิม "ชื่อมีคำนี้" จับซัพตัวแรกตามเลข id ผิดเจ้า
+        const supKey=String(row.supplier_name==null?"":row.supplier_name).trim();
+        const sup=supKey?suppliers.find(s=>String((s&&s.name)||"").trim()===supKey)||null:null;
         const codeKey=row.code?String(row.code).trim().toLowerCase():"";
         const nameKey=row.name?String(row.name).trim().toLowerCase():"";
         // Match by code first, fall back to name (case-insensitive, trimmed) so
         // re-imports without a code column don't create duplicate ingredients.
         const existing=(codeKey&&codeIdx.get(codeKey))||(nameKey&&nameIdx.get(nameKey))||null;
+        if(row._txt&&existing){skippedExist.push(row.name||row.code||"(ไม่มีชื่อ)");done++;setProgress(Math.round(done/selected.length*100));continue;}
         // Partial update — only PATCH fields that the import actually carries.
         // Blank cell in the file = "leave existing value untouched".
         const item={
@@ -4691,22 +4961,35 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
           item.price_per_gram=(bp>0&&ctg>0)?+(bp/ctg).toFixed(4):0;
         }
         if(row.supplier_name!==undefined){
-          item.supplier_id=sup?.id||null;
-          item.supplier_name=sup?.name||row.supplier_name;
+          if(!existing){
+            item.supplier_id=sup?.id||null;
+            item.supplier_name=sup?.name||row.supplier_name;
+          }else if(!sup){
+            // 28 ต.ค. 69: ชื่อไม่ตรงซัพตัวไหนเป๊ะ = คงซัพเดิม (ไม่เดา) แล้วแจ้งท้าย Import
+            if(supKey)supNoMatch.push(`${row.name||row.code}: ${supKey}`);
+          }else if(+sup.id!==+(branchSupplierId(existing,currentBranch?.id)||0)){
+            item.supplier_id=sup.id;
+            item.supplier_name=sup.name;
+          }   // ซัพเดียวกับที่สาขานี้ใช้อยู่ (ไฟล์ Export เขียนซัพของสาขา) = ไม่แตะ
         }
         // Stock column: for EXISTING rows never PATCH the whole stock_by_branch map —
         // the base here comes from the page-load cache, so it would silently revert
         // every move other branches made since. Set ONLY this branch's slot via the
         // atomic RPC instead. (New rows below still embed the map — fresh row, no race.)
-        if(row.stockProvided&&currentBranch?.id&&!existing){
+        if(useStock&&row.stockProvided&&currentBranch?.id&&!existing){
           item.stock_by_branch=setBranchStockInJson(null,currentBranch.id,+row.stock||0);
         }
         if(existing){
           await api.updateIng(existing.id,item);
-          if(row.stockProvided&&currentBranch?.id){
-            if(!await rpcStockSet(existing.id,currentBranch.id,+row.stock||0)){
-              await api.updateIng(existing.id,{stock_by_branch:setBranchStockInJson(existing.stock_by_branch,currentBranch.id,+row.stock||0)});
+          if(useStock&&row.stockProvided&&currentBranch?.id){
+            // 28 ต.ค. 69: ตั้งสต๊อกแบบเดียวกับนับสต๊อก — RPC ช่องเดียว · สำรองรวมจากแถวสด · ลงประวัติก่อน→หลัง (stock_logs)
+            const nv=+row.stock||0,prev=branchStock(existing,currentBranch.id);
+            if(!await rpcStockSet(existing.id,currentBranch.id,nv)){
+              const fresh=await sb(`ingredients?id=eq.${existing.id}&select=stock_by_branch`);
+              const base=(Array.isArray(fresh)&&fresh[0])?fresh[0].stock_by_branch:existing.stock_by_branch;
+              await api.updateIng(existing.id,{stock_by_branch:setBranchStockInJson(base,currentBranch.id,nv)});
             }
+            api.addStockLog({ingredient_id:existing.id,ingredient_name:existing.name,unit:existing.buy_unit||null,branch_id:currentBranch.id,prev_qty:prev,new_qty:nv,counted_by:`Import Excel · ${currentUser?.username||currentUser?.name||""}`,counter_photo:null,session_id:null}).catch(()=>{});
           }
           updated++;
         }else{
@@ -4735,18 +5018,26 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
     setResult({added,updated,failed});
     setStep(3);
     if(skippedCtg.length)setTimeout(()=>alert(`⚠️ ข้าม "รวมทั้งหมด (กรัม)" ของ ${skippedCtg.length} รายการ เพราะกรอกเป็น 0 หรือว่าง:\n\n${skippedCtg.slice(0,10).join(", ")}${skippedCtg.length>10?` ...และอีก ${skippedCtg.length-10}`:""}\n\nค่าเดิมในระบบถูกเก็บไว้ — ถ้าเขียนทับด้วย 0 ต้นทุนของวัตถุดิบเหล่านี้จะกลายเป็น 0`),0);
+    const lst=a=>`${a.slice(0,10).join(", ")}${a.length>10?` ...และอีก ${a.length-10}`:""}`;
+    if(skippedExist.length||supNoMatch.length)setTimeout(()=>alert([
+      skippedExist.length?`⏭ ข้าม ${skippedExist.length} รายการที่มีอยู่แล้ว (นำเข้าแบบข้อความ = เพิ่มอย่างเดียว ไม่แก้ของเดิม):\n${lst(skippedExist)}`:"",
+      supNoMatch.length?`⚠️ ซัพพลาย ${supNoMatch.length} รายการไม่ตรงกับชื่อซัพในระบบ — คงซัพเดิมไว้:\n${lst(supNoMatch)}`:"",
+    ].filter(Boolean).join("\n\n")),0);
     onDone();
   }
 
   const catColors={"เนื้อสัตว์":"orange","ผักและผลไม้":"green","เครื่องปรุง":"blue","แป้ง/ธัญพืช":"purple","นม/ไข่":"yellow","อื่นๆ":"gray"};
-  const allCatList=["เนื้อสัตว์","ผักและผลไม้","เครื่องปรุง","แป้ง/ธัญพืช","นม/ไข่","อื่นๆ"];
+  // 28 ต.ค. 69: ตัวเลือกหมวดในตารางตัวอย่าง = หมวดวัตถุดิบจริงของระบบ (+ ค่าที่แถวนั้นจะเขียนจริง ถ้าไม่อยู่ในรายการ — จอต้องตรงกับที่บันทึก)
+  const catOptsOf=v=>[...catNames,...(v&&!catNames.includes(v)?[v]:[])];
+  const hasStockCol=rows.some(r=>r.stockProvided);
 
   return <Modal title="📥 Import วัตถุดิบ" onClose={onClose} extraWide>
     {step===1&&<div>
       <div style={{background:C.greenLight,borderRadius:12,padding:"14px 16px",marginBottom:14,border:`1px solid ${C.green}33`}}>
         <div style={{fontSize:13,fontWeight:700,color:C.green,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>📊 Excel (.xlsx) — แนะนำ</div>
         <div style={{fontSize:12,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.7}}>
-          ใช้ไฟล์ที่ Export ออกมา → แก้ไขราคา/หมวด/ฯลฯ → Import กลับ<br/>
+          ใช้ไฟล์ที่มีหัวคอลัมน์ รหัส / ชื่อวัตถุดิบ / หมวดหมู่ / หน่วยที่ซื้อ / ราคาที่ซื้อ / ซัพพลายเออร์ · ช่องว่าง = ไม่แก้ค่าเดิม<br/>
+          📦 ไฟล์ Export (ตรวจของ) มีสต๊อกของสาขาที่ Export — <b style={{color:C.red}}>ไม่นำเข้าสต๊อก</b> เว้นแต่ติ๊กเองในหน้าถัดไป<br/>
           🔖 ถ้ามีคอลัมน์ <b>"รหัส"</b> ตรงกับวัตถุดิบในระบบ → ระบบจะ <b style={{color:C.green}}>อัพเดท</b> รายการเดิม<br/>
           ถ้ายังไม่มีรหัส → จะ <b style={{color:C.brand}}>เพิ่มเป็นรายการใหม่</b>
         </div>
@@ -4782,6 +5073,13 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
           <Btn v="ghost" onClick={()=>setRows(r=>r.map(x=>({...x,selected:false})))} s={{padding:"6px 12px",fontSize:12}}>ยกเลิกทั้งหมด</Btn>
         </div>
       </div>
+      {hasStockCol&&<div style={{marginBottom:12,padding:"10px 14px",borderRadius:10,background:stockSrc&&stockSrc.other?C.redLight:"#FFFBEB",border:`1px solid ${stockSrc&&stockSrc.other?C.red+"55":"#FDE68A"}`,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,lineHeight:1.6,color:C.ink2}}>
+        {stockSrc&&stockSrc.other
+          ?<div>🚫 สต๊อกในไฟล์นี้เป็นของสาขา <b>{stockSrc.branch}</b>{stockSrc.date?` (Export ${fmtD(stockSrc.date)})`:""} — <b>ไม่นำเข้าที่สาขา {currentBranch?.name}</b> (นำเข้าอย่างอื่นได้ตามปกติ)</div>
+          :<label style={{display:"flex",gap:8,alignItems:"flex-start",cursor:"pointer"}}><input type="checkbox" checked={applyStock} onChange={e=>setApplyStock(e.target.checked)} style={{accentColor:C.red,width:16,height:16,marginTop:2}}/>
+            <span>ตั้งสต๊อกของสาขา <b>{currentBranch?.name}</b> ตามคอลัมน์สต๊อกในไฟล์ (ทับจำนวนปัจจุบัน · ลงประวัตินับสต๊อก)<br/>
+              <span style={{color:C.ink4}}>{stockSrc&&stockSrc.branch?`สต๊อกในไฟล์เป็นของสาขา ${stockSrc.branch}${stockSrc.date?` ณ วันที่ ${fmtD(stockSrc.date)} — ตัวเลขอาจเก่าแล้ว`:""}`:"ไม่รู้ว่าสต๊อกในไฟล์เป็นของสาขาไหน/วันไหน — ตรวจให้แน่ใจก่อนติ๊ก"} · ไม่ติ๊ก = ไม่แตะสต๊อก</span></span></label>}
+      </div>}
       <div style={{maxHeight:420,overflowY:"auto",border:`1px solid ${C.line}`,borderRadius:12,overflow:"hidden"}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif",fontSize:13}}>
           <thead><tr style={{background:C.bg,position:"sticky",top:0}}>
@@ -4793,17 +5091,18 @@ function ImportIngModal({onClose,ingCats,suppliers,currentUser,currentBranch,ing
               <td style={{padding:"8px 12px",textAlign:"center"}}><input type="checkbox" checked={!!row.selected} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,selected:e.target.checked}:x))} style={{accentColor:C.brand,width:15,height:15}}/></td>
               <td style={{padding:"8px 12px"}}>
                 <input value={row.name??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,name:e.target.value===""?undefined:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13}}/>
+                {row._txt&&row._exists&&<div style={{fontSize:10.5,color:C.ink4,marginTop:2}}>มีอยู่แล้ว · ข้าม (เพิ่มอย่างเดียว ไม่แก้ของเดิม)</div>}
               </td>
               <td style={{padding:"8px 12px"}}>
                 <input type="text" inputMode="decimal" value={row.buy_price??""} onChange={e=>{const t=e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1");setRows(r=>r.map((x,i)=>i===idx?{...x,buy_price:t===""?undefined:(t.endsWith(".")?t:+t)}:x));}} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตราคา" style={{...iS,padding:"4px 8px",fontSize:13,width:80,color:row.buy_price!==undefined?C.ink:C.ink4}}/>
               </td>
-              <td style={{padding:"8px 12px"}}>
-                <input type="text" inputMode="decimal" value={row.stock??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,stock:e.target.value===""?undefined:+e.target.value,stockProvided:e.target.value!==""}:x))} placeholder="—" title="ปล่อยว่าง = ไม่อัปเดตสต๊อก" style={{...iS,padding:"4px 8px",fontSize:13,width:90,fontWeight:700,color:row.stockProvided?C.green:C.ink4}}/>
+              <td style={{padding:"8px 12px",opacity:applyStock&&!(stockSrc&&stockSrc.other)?1:.45}}>
+                <input type="text" inputMode="decimal" value={row.stock??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,stock:e.target.value===""?undefined:+e.target.value,stockProvided:e.target.value!==""}:x))} placeholder="—" title={applyStock&&!(stockSrc&&stockSrc.other)?"ปล่อยว่าง = ไม่อัปเดตสต๊อก":"ไม่นำเข้าสต๊อก (ยังไม่ได้ติ๊กตั้งสต๊อกจากไฟล์)"} style={{...iS,padding:"4px 8px",fontSize:13,width:90,fontWeight:700,color:row.stockProvided?C.green:C.ink4}}/>
               </td>
               <td style={{padding:"8px 12px"}}>
                 <select value={row.category??""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,category:e.target.value===""?undefined:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:12,appearance:"none",color:row.category?C.ink:C.ink4}}>
                   <option value="">— ใช้ค่าเดิม —</option>
-                  {allCatList.map(c=><option key={c} value={c}>{c}</option>)}
+                  {catOptsOf(row.category).map(c=><option key={c} value={c}>{c}</option>)}
                 </select>
               </td>
               <td style={{padding:"8px 12px"}}>
@@ -4874,7 +5173,8 @@ function planMenuImport(rows,menus,target,branches){
   const norm=s=>String(s==null?"":s).trim().toLowerCase();
   const isOwn=m=>vbSetKey(m.visible_branches,known)===tk;
   const seenAt=m=>tids.some(b=>menuVisibleAt(m,b));
-  const hit=(m,r)=>({kind:+m.price!==+r.price?"price":"update",menu:m});
+  // 28 ต.ค. 69: ราคาว่าง ("" = ไฟล์ไม่ได้ให้ราคา/อ่านไม่ออก) = คงราคาเดิม ไม่ใช่เปลี่ยนเป็น ฿0
+  const hit=(m,r)=>({kind:(r.price!==""&&r.price!=null&&+m.price!==+r.price)?"price":"update",menu:m});
   const plan=(rows||[]).map(r=>{
     if(!r||!r.selected)return{kind:"off"};
     if(tk==null)return{kind:"pick"};
@@ -4905,6 +5205,9 @@ function planMenuImport(rows,menus,target,branches){
   const n=new Map();plan.forEach((p,i)=>keys(p,rows[i]).forEach(k=>n.set(k,(n.get(k)||0)+1)));
   return plan.map((p,i)=>keys(p,rows[i]).some(k=>n.get(k)>1)?{kind:"dupfile"}:p);
 }
+// ราคาจากไฟล์ Excel (28 ต.ค. 69): เดิม +ค่า||0 → ช่องที่เป็นตัวหนังสือ ("1,290" "฿20") หรือว่าง กลายเป็น ฿0 แล้วเขียนทับราคาจริง
+// (เมนู ฿0 หายจากหน้าลูกค้าสแกน และจอขายคิด 0 บาท) · ตัดทุกอย่างยกเว้นตัวเลข/จุด แบบทางวางข้อความ · อ่านไม่ออก/ว่าง = "" (ไม่ให้ราคา)
+const menuImportPrice=v=>{if(typeof v==="number")return Number.isFinite(v)?v:"";const t=String(v==null?"":v).replace(/[^0-9.]/g,"");if(t==="")return "";const n=parseFloat(t);return Number.isFinite(n)?n:"";};
 // หมวดจากไฟล์: ตรงกับหมวดที่มีอยู่ = ใช้เลย · ไม่ตรง/ว่าง = เว้นว่าง + จำค่าดิบไว้ติดธง (ไม่เดาให้)
 const importCatOf=(raw,list)=>{const s=String(raw==null?"":raw).trim();return{category:(s&&(list||[]).includes(s))?s:"",catRaw:s};};
 function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],branches=[],onDone}){
@@ -4920,7 +5223,8 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],br
   // ติดธงหมวด: เมนูใหม่ที่ไม่มีหมวด · หรือไฟล์ระบุหมวดที่ไม่รู้จัก (เมนูเดิมจะคงหมวดเดิม ไม่ย้ายไปหมวดแรก)
   const catFlag=(row,p)=>!!row&&!!row.selected&&!row.category&&(p.kind==="new"||((p.kind==="update"||p.kind==="price")&&!!row.catRaw));
   // newNoCat: เมนูใหม่ไม่มีหมวด = ไม่ออกเครื่องพิมพ์ครัวที่ตั้งรับเป็นหมวด (เครื่องของ River ตั้งหมวดทุกเครื่อง) → ต้องเลือกหมวดหรือเอาติ๊กออกก่อนบันทึก
-  const cnt=useMemo(()=>{const c={new:0,price:0,update:0,shared:0,dup:0,dupfile:0,other:0,gone:0,cat:0,newNoCat:0};plan.forEach((p,i)=>{if(c[p.kind]!=null)c[p.kind]++;if(catFlag(rows[i],p))c.cat++;if(p.kind==="new"&&!(rows[i]&&rows[i].category))c.newNoCat++;});return c;},[plan,rows]);
+  // newNoPrice (28 ต.ค. 69): เมนูใหม่ที่ช่องราคาว่าง/อ่านไม่ออก → ต้องใส่ราคา (0 ก็ได้ ถ้าตั้งใจ) ก่อนบันทึก ไม่สร้างเป็น ฿0 เงียบๆ
+  const cnt=useMemo(()=>{const c={new:0,price:0,update:0,shared:0,dup:0,dupfile:0,other:0,gone:0,cat:0,newNoCat:0,newNoPrice:0};plan.forEach((p,i)=>{if(c[p.kind]!=null)c[p.kind]++;if(catFlag(rows[i],p))c.cat++;if(p.kind==="new"&&!(rows[i]&&rows[i].category))c.newNoCat++;if(p.kind==="new"&&rows[i]&&(rows[i].price===""||rows[i].price==null))c.newNoPrice++;});return c;},[plan,rows]);
   const nAct=cnt.new+cnt.price+cnt.update;
   // mkNew = ผู้ใช้กดเลือกเองว่าให้สร้างแยกที่สาขานี้ (แถวที่ชื่อมีอยู่แต่ที่สาขาอื่น)
   const setMkNew=(pred,on)=>setRows(r=>r.map((x,i)=>pred(i)?{...x,mkNew:on}:x));
@@ -4942,7 +5246,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],br
         const parsed=json.map(row=>{
           const code=String(pickKey(row,"🔖 รหัส","รหัส","code","Code","SKU")||"").trim();
           const name=String(pickKey(row,"ชื่อเมนู","ชื่อ","name","Name")||"").trim();
-          const price=+pickKey(row,"ราคาขาย","ราคา","price")||0;
+          const price=menuImportPrice(pickKey(row,"ราคาขาย","ราคา","price"));   // "" = ไม่ให้ราคา (เมนูเดิมคงราคา · เมนูใหม่ต้องใส่ก่อนบันทึก)
           const description=String(pickKey(row,"รายละเอียด","description","desc")||"").trim();
           // เลขเมนูจากไฟล์ Export ของระบบเท่านั้น — ไม่อ่านคอลัมน์ "ID" ทั่วไป (ไฟล์ FoodStory มีเลขของเขาเอง ชนเลขเมนูเราได้)
           const mid=String(pickKey(row,MENU_ID_COL)??"").trim()||null;
@@ -4976,7 +5280,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],br
   function handlePaste(e){const parsed=parseMenuText(e.target.value);if(parsed.length>0){setRows(parsed);setStep(2);}}
 
   async function doImport(){
-    if(!Array.isArray(target)||cnt.newNoCat>0)return;
+    if(!Array.isArray(target)||cnt.newNoCat>0||cnt.newNoPrice>0)return;
     const known=knownBranchIds(branches);
     const tk=vbSetKey(target,known);
     const todo=rows.map((r,i)=>({row:r,p:plan[i]})).filter(x=>x.p.kind==="new"||x.p.kind==="update"||x.p.kind==="price");
@@ -4988,10 +5292,12 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],br
       try{
         const code=String(row.code||"").trim();
         const desc=String(row.description||"").trim();
-        const base={name:row.name,price:+row.price||0,edit_by:currentUser.username,edit_at:nowStr()};
+        // 28 ต.ค. 69: ราคาว่าง = ไม่แตะราคาเดิม (ไม่ใส่ price ใน PATCH) · เมนูใหม่ถูกบังคับให้มีราคาแล้ว (newNoPrice)
+        const hasPrice=row.price!==""&&row.price!=null;
+        const base={name:row.name,...(hasPrice?{price:+row.price||0}:{}),edit_by:currentUser.username,edit_at:nowStr()};
         if(p.kind==="new"){
           // เมนูใหม่เปิดเฉพาะชุดสาขาที่เลือก · หมวดไม่รู้จัก = เว้นว่าง (ติดธงไว้ในตารางแล้ว)
-          await api.addMenu({...base,code:code||null,category:row.category||"",description:desc,branch_id:currentBranch.id,image:null,ingredients:[],sop:[],visible_branches:vbNew});added++;
+          await api.addMenu({...base,price:+row.price||0,code:code||null,category:row.category||"",description:desc,branch_id:currentBranch.id,image:null,ingredients:[],sop:[],visible_branches:vbNew});added++;
         }else{
           // อ่าน visible_branches ล่าสุดก่อนเขียน — ระหว่างดูตัวอย่างอาจมีคนเพิ่งเปิดเมนูนี้ให้สาขาอื่น (กลายเป็นเมนูร่วม) → ข้าม
           const live=await freshVisibleBranches("menus",p.menu.id);
@@ -5096,7 +5402,7 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],br
               :p.kind==="noname"?<Chip color="gray">ไม่มีชื่อ · ข้าม</Chip>:null}</td>
             <td style={{padding:"8px 12px"}}><input value={row.name} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,name:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:13}}/>
               {p.menu&&String(p.menu.name||"").trim()!==String(row.name||"").trim()&&<div style={{fontSize:10,color:C.brand,marginTop:2}}>เปลี่ยนชื่อจาก: {p.menu.name}</div>}</td>
-            <td style={{padding:"8px 12px"}}><input type="text" inputMode="decimal" value={row.price} onChange={e=>{const t=e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1");setRows(r=>r.map((x,i)=>i===idx?{...x,price:t===""?"":(t.endsWith(".")?t:+t)}:x));}} style={{...iS,padding:"4px 8px",fontSize:13,width:90}}/></td>
+            <td style={{padding:"8px 12px"}}><input type="text" inputMode="decimal" value={row.price} onChange={e=>{const t=e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1");setRows(r=>r.map((x,i)=>i===idx?{...x,price:t===""?"":(t.endsWith(".")?t:+t)}:x));}} style={{...iS,padding:"4px 8px",fontSize:13,width:90,borderColor:row.price===""&&p.kind==="new"?C.red:undefined}}/>{row.price===""&&(p.kind==="update"||p.kind==="price")&&p.menu&&<div style={{fontSize:10,color:C.ink3,marginTop:2}}>ราคาว่าง = คงราคาเดิม ฿{+p.menu.price||0}</div>}</td>
             <td style={{padding:"8px 12px"}}><select value={row.category||""} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,category:e.target.value}:x))} style={{...iS,padding:"4px 8px",fontSize:12,appearance:"none",...(cf?{border:`1.5px solid ${C.red}`,color:C.red}:{})}}><option value="">{row.catRaw?`⚠ ไม่รู้จัก: ${row.catRaw}`:"— ไม่มีหมวด —"}</option>{allMenuCatList.map(c=><option key={c} value={c}>{c}</option>)}</select>
               {!row.category&&(p.kind==="update"||p.kind==="price")&&<div style={{fontSize:10,color:C.ink3,marginTop:2}}>คงหมวดเดิม: {p.menu.category||"-"}</div>}</td>
             <td style={{padding:"8px 12px"}}><input value={row.description} onChange={e=>setRows(r=>r.map((x,i)=>i===idx?{...x,description:e.target.value}:x))} placeholder="รายละเอียด..." style={{...iS,padding:"4px 8px",fontSize:12}}/></td>
@@ -5109,9 +5415,10 @@ function ImportMenuModal({onClose,menuCats,currentUser,currentBranch,menus=[],br
         <div style={{background:C.brandBorder,borderRadius:999,height:6}}><div style={{width:`${progress}%`,background:C.brand,height:"100%",borderRadius:999,transition:"width .3s"}}/></div>
       </div>}
       {cnt.newNoCat>0&&<div style={{marginTop:12,fontSize:12,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>เมนูใหม่ {cnt.newNoCat} รายการยังไม่มีหมวด — เลือกหมวดในตาราง หรือเอาติ๊กออก (ไม่มีหมวด = ไม่ออกเครื่องพิมพ์ครัว)</div>}
+      {cnt.newNoPrice>0&&<div style={{marginTop:12,fontSize:12,fontWeight:700,color:C.red,fontFamily:"'Sarabun',sans-serif"}}>เมนูใหม่ {cnt.newNoPrice} รายการยังไม่มีราคา (ช่องในไฟล์ว่างหรืออ่านไม่ออก) — ใส่ราคาในตาราง (0 ได้ถ้าตั้งใจ) หรือเอาติ๊กออก</div>}
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:14}}>
         <Btn v="ghost" onClick={()=>setStep(1)}>← กลับ</Btn>
-        <Btn onClick={doImport} icon={I.check} disabled={!Array.isArray(target)||!nAct||cnt.newNoCat>0||saving} loading={saving}>{Array.isArray(target)?`บันทึก ${nAct} เมนู`:"เลือกสาขาก่อน"}</Btn>
+        <Btn onClick={doImport} icon={I.check} disabled={!Array.isArray(target)||!nAct||cnt.newNoCat>0||cnt.newNoPrice>0||saving} loading={saving}>{Array.isArray(target)?`บันทึก ${nAct} เมนู`:"เลือกสาขาก่อน"}</Btn>
       </div>
     </div>}
 
@@ -5191,6 +5498,8 @@ function priceHistSummary(all,buyUnit,win){
     undatedN:(f||t)?all.filter(r=>!r.day).length:0,
     bySource:[...src.values()].map(e=>({...e,avg:e.qty>0?e.total/e.qty:0})).sort((a,b)=>b.total-a.total||b.n-a.n)};
 }
+// รวมใบสั่งในเครื่องกับใบที่เพิ่งถามฐาน (28 ต.ค. 69) — ตัดซ้ำด้วยเลขใบ (ของจากฐานสดกว่า ชนะ) · extra ไม่ใช่รายการ = ใช้ในเครื่องอย่างเดียว (แบบเดิม)
+const mergeOrdersById=(local,extra)=>{if(!Array.isArray(extra))return local||[];const m=new Map();for(const o of (local||[]))if(o)m.set(String(o.id),o);for(const o of extra)if(o)m.set(String(o.id),o);return [...m.values()];};
 function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,branches=[],onClose}){
   // ── ประวัติราคาซื้อ = ทุกครั้งที่ของ "เข้าสต็อก" พร้อมราคา ไม่ว่าจะมาจากไหน ──────────
   // เดิมอ่านเฉพาะใบสั่งของจากซัพพลายภายนอก (order_requests ที่ส่งแล้ว)
@@ -5230,9 +5539,19 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
     })();
     return()=>{alive=false;};
   },[currentBranch&&currentBranch.id,ing&&ing.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // 28 ต.ค. 69: ครัวกลางใช้ใบสั่งในเครื่อง (600 ใบล่าสุด ย้อนได้ถึง ~9 ต.ค.) เป็นประวัติทั้งหมด → "ทั้งหมด/3 เดือน/ปีนี้" เห็นแค่ใบหลัง 9 ต.ค.
+  // ครัวกลาง = ถามฐานตรงเฉพาะวัตถุดิบนี้ แล้วรวมกับใบในเครื่อง (ตัดซ้ำด้วยเลขใบ) · null = กำลังโหลด · false = โหลดไม่ได้ (ใช้ในเครื่อง + แจ้ง)
+  const[srvOrders,setSrvOrders]=useState(null);
+  useEffect(()=>{
+    if(!isCentral||!ing||!ing.id)return;
+    let alive=true;setSrvOrders(null);
+    api.getDeliveredOrdersForIng(ing.id).then(r=>{if(alive)setSrvOrders(Array.isArray(r)?r:[]);}).catch(()=>{if(alive)setSrvOrders(false);});
+    return()=>{alive=false;};
+  },[isCentral,ing&&ing.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const cacheOldest=isCentral&&allOrders&&allOrders.length?allOrders.reduce((mn,o)=>{const d=parseAnyDate(o.requested_at);return d&&(!mn||d<mn)?d:mn;},null):null;
   // Build chronological history rows from delivered external-supplier orders + received POs.
   const allRows=(()=>{
-    const src=isCentral&&allOrders&&allOrders.length?allOrders:(orders||[]);
+    const src=mergeOrdersById(isCentral&&allOrders&&allOrders.length?allOrders:(orders||[]),isCentral&&Array.isArray(srvOrders)?srvOrders:null);
     const out=[];
     for(const o of src){
       if(o.status!=="delivered")continue;
@@ -5285,6 +5604,8 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
         <input type="date" value={toD} min={fromD||undefined} onChange={e=>setToD(e.target.value)} style={{...iS,width:"auto",padding:"6px 10px",fontSize:13,minHeight:34}}/>
       </div>}
     </div>
+    {isCentral&&srvOrders===null&&<div style={{fontSize:11.5,color:C.ink4,marginTop:-6,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>⏳ กำลังโหลดประวัติใบสั่งซัพทั้งหมดของวัตถุดิบนี้…</div>}
+    {isCentral&&srvOrders===false&&<div style={{fontSize:11.5,color:C.red,fontWeight:700,marginTop:-6,marginBottom:10,fontFamily:"'Sarabun',sans-serif"}}>⚠️ โหลดประวัติใบสั่งซัพจากฐานไม่ได้ — แสดงเฉพาะใบสั่งที่โหลดไว้{cacheOldest?` (ตั้งแต่ ${fmtD(cacheOldest)})`:""}</div>}
     {range!=="all"&&<div style={{fontSize:11.5,color:C.ink4,marginTop:-6,marginBottom:12,fontFamily:"'Sarabun',sans-serif"}}>
       ช่วงที่ดู {win[0]?fmtD(win[0]):"แรกสุด"} – {win[1]?fmtD(win[1]):"ล่าสุด"} · {rows.length} จาก {allRows.length} ครั้ง{S.undatedN?` · ไม่มีวันที่ ${S.undatedN} ครั้ง (ดูได้ใน "ทั้งหมด")`:""}
     </div>}
@@ -5373,6 +5694,8 @@ function PriceHistoryModal({ing,orders,allOrders,isCentral,currentBranch=null,br
   </Modal>;
 }
 
+// วันแรกที่จอของเสียต้องโหลด (28 ต.ค. 69) = ต้นปีนี้ หรือ 31 วันก่อน แล้วแต่อันไหนเก่ากว่า (เขตเวลาไทย) — ครอบช่วง เดือนนี้/30 วัน/ปีนี้ ครบ
+const wasteLogFloor=(now=Date.now())=>{const bkk=now+7*36e5;const y0=new Date(bkk).toISOString().slice(0,4)+"-01-01";const d31=new Date(bkk-31*864e5).toISOString().slice(0,10);return d31<y0?d31:y0;};
 // 🗑️ ของเสีย — record + history of wasted ingredients. Photos go to Google Drive.
 function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[],reloadIngs}){
   const[showRecord,setShowRecord]=useState(true);            // auto-open the record popup on entering the tab
@@ -5450,14 +5773,18 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[],reloa
   const[logs,setLogs]=useState([]);const[loadingLogs,setLoadingLogs]=useState(false);const[fBranch,setFBranch]=useState("");
   // 24 ต.ค. 69: ให้ฐานกรองสาขาที่มีสิทธิ์เอง (admin/ไม่จำกัดสาขา = ทุกสาขาแบบเดิม) · inScope ฝั่งจอยังกรองซ้ำ · ไม่มีสิทธิ์สาขาไหนเลย = ไม่ต้องถามฐาน
   // ได้แถวของสาขาตัวเองครบขึ้น ไม่น้อยลง: เดิม 2,000 แถวล่าสุดของ "ทุกสาขา" แล้วทิ้ง ตอนนี้ 2,000 แถวล่าสุดของสาขาที่เห็นได้
-  async function loadLogs(){setLoadingLogs(true);try{const d=allowed&&!allowed.length?[]:await api.getWasteLogs(allowed||undefined);setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{setLogs([]);}setLoadingLogs(false);}
-  useEffect(()=>{loadLogs();},[]);// eslint-disable-line react-hooks/exhaustive-deps
+  // 28 ต.ค. 69: โหลดแบบแบ่งหน้าครบทุกแถว ตั้งแต่ wasteLogFloor() (ต้นปีนี้ หรือ 31 วันก่อน ถ้าเก่ากว่า = ครบทุกช่วง เดือนนี้/30 วัน/ปีนี้)
+  // เลือกช่วง "ทั้งหมด" หรือกดโหลดรายการเก่า = logsAll → โหลดทั้งหมด
+  const[logsAll,setLogsAll]=useState(false);
+  async function loadLogs(){setLoadingLogs(true);try{const d=allowed&&!allowed.length?[]:await api.getWasteLogs(allowed||undefined,logsAll?undefined:wasteLogFloor());setLogs((Array.isArray(d)?d:[]).filter(l=>inScope(l.branch_id)));}catch{setLogs([]);}setLoadingLogs(false);}
+  useEffect(()=>{loadLogs();},[logsAll]);// eslint-disable-line react-hooks/exhaustive-deps
   function closeRecord(){setShowRecord(false);loadLogs();}   // close popup → land on the (refreshed) history page
   const scopeBranches=useMemo(()=>branches.filter(b=>b.active!==false&&inScope(b.id)),[branches,allowed]);// eslint-disable-line react-hooks/exhaustive-deps
   const shownLogs=useMemo(()=>logs.filter(l=>!fBranch||+l.branch_id===+fBranch),[logs,fBranch]);
   // ── report dashboard ──
   const[wasteTab,setWasteTab]=useState("history");   // history | report
   const[range,setRange]=useState("month");           // month | 30d | year | all
+  useEffect(()=>{if(range==="all")setLogsAll(true);},[range]);   // 28 ต.ค. 69: "ทั้งหมด" ต้องมีแถวเก่ากว่าต้นปีด้วย
   const report=useMemo(()=>{
     const ingById=new Map(ings.map(i=>[+i.id,i]));const menuById=new Map(menus.map(m=>[+m.id,m]));
     const catOf=l=>{const m=l.item_type==="menu"?menuById.get(+l.ingredient_id):ingById.get(+l.ingredient_id);return (m&&(m.category||"").trim())||"ไม่ระบุหมวด";};
@@ -5582,6 +5909,7 @@ function WasteView({ings=[],menus=[],currentBranch,currentUser,branches=[],reloa
           </div>
         </div>;})}
       </div>}
+      {wasteTab!=="report"&&!loadingLogs&&!logsAll&&<div style={{textAlign:"center",marginTop:12}}><Btn v="ghost" onClick={()=>setLogsAll(true)} s={{padding:"7px 14px",fontSize:12}}>โหลดรายการก่อน {fmtD(wasteLogFloor())}</Btn></div>}
     </div>
   </div>;
 }
@@ -6161,7 +6489,9 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
   const[viewMode,setViewMode]=useState(()=>{try{return localStorage.getItem("nw_ing_view")||"card";}catch{return "card";}});
   const setView=(m)=>{setViewMode(m);try{localStorage.setItem("nw_ing_view",m);}catch{}};
   // Load an ingredient into the edit form (shared by the card and the table view).
-  function openEdit(item){setForm({name:item.name,code:item.code||"",category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,safety_stock:branchSafety(item,currentBranch?.id)||"",image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}
+  // 28 ต.ค. 69: ต้องพาหน่วยย่อย (sub_unit/sub_per_buy) มาด้วย — เดิมฟอร์มว่าง กดบันทึกแล้ว save() เขียน null ทับ (1 ลัง = 12 ขวด หายทุกครั้งที่แก้)
+  // ปุ่มแก้ไขทุกจุดเรียกตัวนี้ตัวเดียว ห้ามก๊อป setForm ไปไว้ที่ปุ่มอีก (เคยมีสองชุดแล้วหลุดกัน)
+  function openEdit(item){setForm({name:item.name,code:item.code||"",category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,safety_stock:branchSafety(item,currentBranch?.id)||"",image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[],sub_unit:item.sub_unit||"",sub_per_buy:item.sub_per_buy??""});setEditId(item.id);setOpen(true);}
   const ef={name:"",code:"",category:ingCats[0]?.name||"",buy_unit:"กิโลกรัม",buy_amount:1,buy_price:"",convert_to_gram:1000,price_per_gram:0,stock:"",safety_stock:"",image:null,note:"",supplier_id:"",supplier_name:"",has_sop:false,sop:[],ingredients:[]};
   const[form,setForm]=useState(ef);
   const isCentral=currentBranch?.type==="central";
@@ -6367,6 +6697,32 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       if(!editId||storedCtg>0){alert(msg);return;}
       if(!await confirmDlg({title:"ยังไม่ได้ใส่จำนวนกรัม",message:msg+"\n\nบันทึกต่อโดยที่ต้นทุนของวัตถุดิบนี้จะยังเป็น 0?",danger:true,confirmLabel:"บันทึกต่อ"}))return;
     }
+    // 28 ต.ค. 69: เปลี่ยนหน่วยซื้อของวัตถุดิบที่ยังมีของ/มีใบค้าง — ระบบไม่แปลงตัวเลขให้ (สต๊อกเก่าถูกอ่านเป็นหน่วยใหม่ทันที
+    // ใบที่สั่งไว้เป็นหน่วยเดิม ตอนรับจะบวกเลขในใบตรงๆ — บราวนี่ #320 กล่อง→ชิ้น 30/09: รับ 2 กล่อง สต๊อกขึ้น 2 ชิ้น สองสาขา)
+    // ถามยืนยันพร้อมรายชื่อ (ไม่บล็อค — เปลี่ยนหน่วยจริงก็ต้องทำได้) · ตรวจใบไม่สำเร็จ = บอกว่าไม่รู้ ไม่ใช่เงียบ
+    const prevIng=editId?ings.find(x=>+x.id===+editId):null;
+    const ouB=String((prevIng&&prevIng.buy_unit)||"").trim(),nuB=String(form.buy_unit||"").trim();
+    if(prevIng&&ouB&&nuB!==ouB){
+      const left=(branches||[]).filter(b=>b&&b.active!==false).map(b=>({name:b.name,qty:branchStock(prevIng,b.id)})).filter(x=>Math.abs(x.qty)>1e-9);
+      let docs=null;
+      try{
+        const _cs=(v)=>encodeURIComponent(JSON.stringify(v));
+        const[o,po,pr]=await Promise.all([
+          sb(`order_requests?select=id&status=in.(pending_approval,pending,approved)&items=cs.${_cs([{ingId:+editId}])}`),
+          sb(`purchase_orders?select=id,po_number&status=in.(requested,open,shipped,disputed,transfer_pending,transfer_shipped)&items=cs.${_cs([{ingredient_id:+editId}])}`),
+          sb(`purchase_requisitions?select=id,pr_number&status=in.(pending_approval,approved)&items=cs.${_cs([{ingredient_id:+editId}])}`),
+        ]);
+        docs=[...(o||[]).map(x=>`ORD-${x.id}`),...(po||[]).map(x=>x.po_number||`PO #${x.id}`),...(pr||[]).map(x=>x.pr_number||`ใบขอซื้อ #${x.id}`)];
+      }catch{docs=null;}
+      if(left.length||docs===null||docs.length){
+        if(!await confirmDlg({title:"เปลี่ยนหน่วยซื้อ",danger:true,confirmLabel:"เปลี่ยนหน่วยต่อ",
+          message:`เปลี่ยนหน่วยซื้อ "${form.name}" จาก "${ouB}" เป็น "${nuB||"(ว่าง)"}" — ระบบไม่แปลงตัวเลขให้`
+            +(left.length?`\n\n• สต๊อกที่มีอยู่จะถูกอ่านเป็น "${nuB}" ทันที:\n${left.map(x=>`   – ${x.name}: ${x.qty} ${ouB} → ${x.qty} ${nuB}`).join("\n")}\n  → ไปนับสต็อกใหม่ทุกสาขาหลังเปลี่ยน`:"")
+            +(docs===null?`\n\n• ตรวจใบที่ค้างไม่สำเร็จ (เครือข่าย) — ถ้ามีใบที่สั่งเป็น "${ouB}" ค้างอยู่ ตอนรับของสต๊อกจะขยับผิดหน่วย`
+              :docs.length?`\n\n• ใบที่ยังค้าง (สั่งเป็น "${ouB}") ${docs.length} ใบ: ${docs.slice(0,6).join(", ")}${docs.length>6?" …":""}\n  → ตอนรับของ สต๊อกจะเพิ่มตามเลขในใบตรงๆ (2 ${ouB} = 2 ${nuB}) — ปิด/แก้ใบพวกนี้ก่อน หรือนับสต็อกใหม่หลังรับ`:""),
+        }))return;
+      }
+    }
     setSaving(true);try{
     // Auto-assign a sequential category code for a NEW ingredient whose category is coded
     // ("...(M01)") and where the user didn't type one manually — continue from the current max.
@@ -6382,9 +6738,13 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     // Pull existing safety_by_branch from the row being edited (if any) so we
     // only mutate the current branch's slot — safety is per-branch.
     const existingIng=editId?ings.find(x=>+x.id===+editId):null;
-    const nextSafety=setBranchSafetyInJson(existingIng?.safety_by_branch,currentBranch.id,+form.safety_stock||0);
+    // 28 ต.ค. 69: เขียน safety เฉพาะเมื่อช่องของสาขานี้เปลี่ยนจริง และรวมกับก้อนสดจากฐาน (freshSafetyMap)
+    // แก้ราคา/ชื่อเฉยๆ ต้องไม่แตะ safety ของสาขาอื่นเลย
+    const safetyChanged=!editId||!existingIng||(+form.safety_stock||0)!==branchSafety(existingIng,currentBranch.id);
+    const nextSafety=safetyChanged?setBranchSafetyInJson(editId?await freshSafetyMap(editId,existingIng?.safety_by_branch):undefined,currentBranch.id,+form.safety_stock||0):undefined;
     const item={...form,code:codeToSave||null,buy_price:+form.buy_price,buy_amount:+form.buy_amount,convert_to_gram:+form.convert_to_gram,price_per_gram:ppg(+form.buy_price,+form.convert_to_gram),stock:+form.stock,safety_by_branch:nextSafety,has_sop:!!form.has_sop,sop:Array.isArray(form.sop)?form.sop:[],ingredients:Array.isArray(form.ingredients)?form.ingredients:[],edit_by:currentUser.username,edit_at:nowStr(),branch_id:currentBranch.id,supplier_id:form.supplier_id?+form.supplier_id:null};
     delete item.safety_stock; // legacy column — no longer touched from the form
+    if(!safetyChanged)delete item.safety_by_branch;
     // stock ก็เหมือนกัน: เป็นคอลัมน์รวมยุคก่อนแยกรายสาขา ฟอร์มไม่แตะแล้ว
     // สต๊อกเปลี่ยนได้ทางเดียวคือ นับสต็อก / รับของ / ของเสีย ซึ่งเขียนผ่าน RPC ที่ล็อกแถว
     // (apply_branch_stock_delta / set_branch_stock) การเขียนตรงจากฟอร์มจะข้ามการล็อก
@@ -6430,14 +6790,17 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     const _cs=(v)=>encodeURIComponent(JSON.stringify(v));
     let docRefs=null;   // null = ตรวจไม่สำเร็จ (ต่างจาก [] = ตรวจแล้วไม่มี)
     try{
-      const [oOpen,oPend,pOpen,pPend]=await Promise.all([
+      // 28 ต.ค. 69: + disputed (ต้นทางถูกตัดแล้ว ปลายทางยังไม่ได้เพิ่ม — ลบแล้วกดยอมรับไม่ได้ 🔁 ค้างถาวร)
+      //   + ใบขอซื้อที่ยังไม่ออกใบส่ง (ลบแล้วกลายเป็นบรรทัด ฿0 ในใบส่งที่จัดส่ง/รับไม่ได้)
+      const [oOpen,oPend,pOpen,pPend,prOpen]=await Promise.all([
         sb(`order_requests?select=id,status&status=in.(pending_approval,pending,approved)&items=cs.${_cs([{ingId:+id}])}`),
         sb(`order_requests?select=id,status&stock_pending=cs.${_cs([{items:[{ingredient_id:+id}]}])}`),
-        sb(`purchase_orders?select=id,po_number,status&status=in.(requested,open,shipped,transfer_pending,transfer_shipped)&items=cs.${_cs([{ingredient_id:+id}])}`),
+        sb(`purchase_orders?select=id,po_number,status&status=in.(requested,open,shipped,disputed,transfer_pending,transfer_shipped)&items=cs.${_cs([{ingredient_id:+id}])}`),
         sb(`purchase_orders?select=id,po_number,status&stock_pending=cs.${_cs([{items:[{ingredient_id:+id}]}])}`),
+        sb(`purchase_requisitions?select=id,pr_number,status&status=in.(pending_approval,approved)&items=cs.${_cs([{ingredient_id:+id}])}`),
       ]);
       const DST={pending_approval:"รออนุมัติ",pending:"อนุมัติแล้ว รอส่งซัพ",approved:"ส่งซัพแล้ว รอของเข้า",
-        requested:"รอครัวกลางรับ",open:"รอจัดส่ง",shipped:"จัดส่งแล้ว รอผู้รับกดรับ",
+        requested:"รอครัวกลางรับ",open:"รอจัดส่ง",shipped:"จัดส่งแล้ว รอผู้รับกดรับ",disputed:"ปลายทางแจ้งของไม่ครบ รอยอมรับ",
         transfer_pending:"รอจัดส่ง (โอนย้าย)",transfer_shipped:"จัดส่งแล้ว (โอนย้าย)",awaiting_payment:"รอชำระเงิน"};
       const mk=(ref,status,stuck)=>({ref,status:DST[status]||status,stuck,
         todo:stuck?"กดปุ่ม 🔁 ลองเพิ่มสต๊อกใหม่ที่ใบนี้ให้สำเร็จก่อน":"ปิดงานใบนี้ก่อน — กดรับของ / ตีกลับ / ยกเลิก"});
@@ -6447,6 +6810,8 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
       (oPend||[]).forEach(o=>push(mk(`ใบสั่งซัพนอก ORD-${o.id}`,o.status,true)));
       (pOpen||[]).forEach(p=>push(mk(p.po_number||`PO #${p.id}`,p.status,false)));
       (pPend||[]).forEach(p=>push(mk(p.po_number||`PO #${p.id}`,p.status,true)));
+      // ใบขอซื้อ: "approved" ของใบขอซื้อ = รอครัวกลางออกใบส่ง (คนละความหมายกับ approved ของใบสั่งซัพนอกใน DST)
+      (prOpen||[]).forEach(r=>push({...mk(r.pr_number||`ใบขอซื้อ #${r.id}`,r.status,false),status:r.status==="approved"?"รอครัวกลางออกใบส่ง":DST[r.status]||r.status}));
       docRefs=out;
     }catch{ docRefs=null; }
 
@@ -6511,7 +6876,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
     ws["!cols"]=[{wch:13},{wch:34},{wch:12},{wch:24},{wch:16}];
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,"วัตถุดิบ");
-    const safe=String(currentBranch?.name||"สาขา").replace(/[\/?*[]:]/g,"_").slice(0,20);
+    const safe=ingExportBranchTag(currentBranch?.name);   // ตัวเดียวกับที่ Import ใช้เทียบว่าสต๊อกในไฟล์เป็นของสาขาไหน
     XLSX.writeFile(wb,`วัตถุดิบ_${safe}_${todayStr()}.xlsx`);
   }
   async function toggleVBIng(item,branchId){
@@ -6778,7 +7143,7 @@ function IngTab({ings,reload,ingCats,suppliers,currentUser,currentBranch,addH,br
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
                 <div><div style={{fontWeight:800,fontSize:15,color:C.ink,fontFamily:"'Sarabun',sans-serif",marginBottom:3}}>{item.name}</div><div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}><Chip color="orange">{item.category}</Chip>{item.code&&<span style={{fontSize:10,fontWeight:800,color:C.ink3,background:C.bg,border:`1px solid ${C.line}`,padding:"1px 7px",borderRadius:8,fontFamily:"monospace",whiteSpace:"nowrap"}}>🔖 {item.code}</span>}{item.has_sop&&<span style={{fontSize:10,fontWeight:800,color:Array.isArray(item.sop)&&item.sop.length>0?C.green:"#92400E",background:Array.isArray(item.sop)&&item.sop.length>0?C.greenLight:"#FEF3C7",border:`1px solid ${Array.isArray(item.sop)&&item.sop.length>0?C.green+"55":"#FDE68A"}`,padding:"1px 7px",borderRadius:8,fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{Array.isArray(item.sop)&&item.sop.length>0?`📋 SOP ${item.sop.length}`:"📋 รอ SOP"}</span>}</div></div>
                 <div style={{display:"flex",gap:4}}>
-                  {canE&&<button aria-label="แก้ไข" onClick={()=>{setForm({name:item.name,code:item.code||"",category:item.category,buy_unit:item.buy_unit,buy_amount:item.buy_amount,buy_price:item.buy_price,convert_to_gram:item.convert_to_gram,price_per_gram:item.price_per_gram,stock:item.stock,safety_stock:branchSafety(item,currentBranch?.id)||"",image:item.image,note:item.note||"",supplier_id:String(item.supplier_id||""),supplier_name:item.supplier_name||"",has_sop:!!item.has_sop,sop:Array.isArray(item.sop)?item.sop:[],ingredients:Array.isArray(item.ingredients)?item.ingredients:[]});setEditId(item.id);setOpen(true);}} style={{background:C.blueLight,border:"none",borderRadius:8,padding:0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",minWidth:38,minHeight:38}}><Ic d={I.pencil} s={15} c={C.blue}/></button>}
+                  {canE&&<button aria-label="แก้ไข" onClick={()=>openEdit(item)} style={{background:C.blueLight,border:"none",borderRadius:8,padding:0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",minWidth:38,minHeight:38}}><Ic d={I.pencil} s={15} c={C.blue}/></button>}
                   {canD&&<button aria-label="ลบ" onClick={()=>del(item.id,item.name)} style={{background:C.redLight,border:"none",borderRadius:8,padding:0,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",minWidth:38,minHeight:38}}><Ic d={I.trash} s={15} c={C.red}/></button>}
                 </div>
               </div>
@@ -7404,6 +7769,14 @@ function MenuTab({menus,reload,ings,menuCats,currentUser,currentBranch,addH,prin
     try{await api.addCat({type:"menu",name:newCatName.trim(),branch_id:null});await reloadCats();setNewCatName("");setAddingCat(false);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function saveCatRename(){if(!editingCatName.trim()||!editingCatId)return;
     if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาแก้ชื่อหมวดไม่ได้");setEditingCatId(null);return;}
+    // 28 ต.ค. 69: แก้ชื่อแถวหมวดไม่ย้ายเมนูตาม (menus.category คือตัวจริง และเครื่องพิมพ์รับตามชื่อหมวดเป๊ะ)
+    // → ชิปชื่อใหม่ว่าง ชื่อเดิมกลายเป็นชิปผี และเมนูที่เพิ่มในชื่อใหม่ไม่ออกใบครัว · ห้ามแก้ชื่อหมวดที่ยังมีเมนูใช้อยู่ (นับจากฐานสดด้วย)
+    const oldName=String((allCats.find(c=>String(c.id)===String(editingCatId))||{}).name||"").trim();
+    if(oldName&&oldName!==editingCatName.trim()){
+      let used=menus.filter(m=>menuCatOf(m)===oldName).length;
+      try{const r=await sb(`menus?category=eq.${encodeURIComponent(oldName)}&select=id`);if(Array.isArray(r))used=Math.max(used,r.length);}catch{}
+      if(used>0){alert(`แก้ชื่อหมวด "${oldName}" ไม่ได้ — ยังมีเมนู ${used} รายการใช้หมวดนี้อยู่\n\nการแก้ชื่อหมวดไม่ย้ายเมนูและเครื่องพิมพ์ตาม (เมนูในชื่อใหม่จะไม่ออกใบครัว)\nถ้าจะเปลี่ยนชื่อ: สร้างหมวดใหม่ → ย้ายเมนูไปหมวดใหม่ → ติ๊กหมวดใหม่ที่เครื่องพิมพ์ แล้วค่อยลบหมวดเดิม`);return;}
+    }
     try{await api.updateCat(editingCatId,{name:editingCatName.trim()});await reloadCats();setEditingCatId(null);}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}}
   async function delCat(cat){
     if(!isCentral){alert("หมวดหมู่ควบคุมจากครัวกลางที่เดียว — สาขาลบหมวดไม่ได้");return;}
@@ -7876,6 +8249,8 @@ function ProductionTab({ings,currentBranch,currentUser,reloadIngs}){
   </div>;
 }
 
+// 28 ต.ค. 69: หน้าเต็ม (rows.length ≥ cap) = แถวท้ายสุด (เก่าสุด) อาจเป็นรอบที่ถูกตัดกลางรอบ (เช่น เห็น 2 จาก 4 บรรทัด) → ตัดรอบนั้นทิ้งทั้งรอบ ไม่แสดงรอบไม่ครบ
+const dropCutTailBatch=(rows,cap)=>{if(!Array.isArray(rows))return [];if(rows.length<cap)return rows;const last=rows[rows.length-1]||{};return last.ref_id?rows.filter(r=>r.ref_id!==last.ref_id):rows.filter(r=>r.ref_id||r.created_at!==last.created_at);};
 // ประวัติการผลิต — อ่านจาก stock_movements ที่ ref_type=production จับกลุ่มด้วย ref_id
 // (1 ref_id = 1 ครั้งที่กดผลิต) ไม่ได้เก็บตารางแยก ตัวเลขจึงตรงกับสต๊อกที่ขยับจริงเสมอ
 function ProductionHistory({currentBranch}){
@@ -7883,7 +8258,7 @@ function ProductionHistory({currentBranch}){
   const[err,setErr]=useState("");
   const aliveRef=useRef(true);
   useEffect(()=>{aliveRef.current=true;(async()=>{
-    try{const d=await api.getProductionMoves(currentBranch?.id);if(aliveRef.current)setRows(Array.isArray(d)?d:[]);}
+    try{const d=await api.getProductionMoves(currentBranch?.id);if(aliveRef.current)setRows(dropCutTailBatch(d,1000));}
     catch(e){if(aliveRef.current){setErr((e&&e.message)||String(e));setRows([]);}}
   })();return()=>{aliveRef.current=false;};},[currentBranch?.id]);
 
@@ -9870,7 +10245,10 @@ function RequisitionView({branches=[],ings=[],suppliers=[],currentBranch,current
     if(candidates.length===0){alert("ยังไม่มีใบขอซื้อที่อนุมัติแล้วให้จัดส่ง");return;}
     consolidatingRef.current=true;
     const branchCount=new Set(candidates.map(p=>+p.branch_id)).size;
-    if(!await confirmDlg({title:"จัดส่งให้สาขา",message:`ออกใบส่งของ (PO ครัวกลาง→สาขา) จาก ${candidates.length} ใบขอซื้อที่อนุมัติแล้ว?\n\n• แยกใบต่อสาขา (${branchCount} สาขา)\n• ใบส่งจะอยู่สถานะ "รอจัดส่ง" — ครัวกลางไปกด "🚚 จัดส่ง" ที่แท็บ PO เพื่อส่ง (ตัดสต๊อกตอนส่ง)\n• ใบขอซื้อจะปิดเป็น "จัดส่งแล้ว"`,confirmLabel:"ออกใบส่งของ"})){consolidatingRef.current=false;return;}
+    // 28 ต.ค. 69: ใบของสาขาเดียวกันที่รายการเหมือนกัน = น่าจะกดซ้ำ — ข้างล่างรวมยอดต่อสาขา จึงต้องบอกก่อนออกใบ (เตือน ไม่บล็อค)
+    const dupPairs=prDupPairs(candidates);
+    const dupMsg=dupPairs.length?`\n\n⚠️ ใบขอซื้อที่อาจซ้ำกัน ${dupPairs.length} คู่ — ยอดจะถูกรวมเป็นสองเท่าในใบส่งเดียว:\n${dupPairs.slice(0,6).map(d=>`   • ${d.a.branch_name||branchName(d.a.branch_id)}: ${d.a.pr_number||"#"+d.a.id} กับ ${d.b.pr_number||"#"+d.b.id} — เหมือนกัน ${d.same}/${d.total} รายการ`).join("\n")}${dupPairs.length>6?`\n   • ... และอีก ${dupPairs.length-6} คู่`:""}\nออกใบแล้วตรวจ/แก้จำนวนในใบส่งก่อนกด "🚚 จัดส่ง"`:"";
+    if(!await confirmDlg({title:"จัดส่งให้สาขา",message:`ออกใบส่งของ (PO ครัวกลาง→สาขา) จาก ${candidates.length} ใบขอซื้อที่อนุมัติแล้ว?\n\n• แยกใบต่อสาขา (${branchCount} สาขา)\n• ใบส่งจะอยู่สถานะ "รอจัดส่ง" — ครัวกลางไปกด "🚚 จัดส่ง" ที่แท็บ PO เพื่อส่ง (ตัดสต๊อกตอนส่ง)\n• ใบขอซื้อจะปิดเป็น "จัดส่งแล้ว"${dupMsg}`,confirmLabel:"ออกใบส่งของ"})){consolidatingRef.current=false;return;}
     setConsolidating(true);
     const ref=`ใบส่งของ · ${fmtD(todayStr())}`;
     const claimed=[],claimSkipped=[];
@@ -10416,7 +10794,10 @@ function IngPOReportModal({branches,ings,defaultFrom,defaultTo,onClose}){
 function buildPriceHistoryMap(orders){
   const m=new Map();   // `${ingId}|${unit}` → {last,lastAt,min,max,n}
   const src=(orders||[]).filter(o=>o&&o.status==="delivered");
-  const sorted=src.slice().sort((a,b)=>new Date(a.requested_at||a.created_at||0)-new Date(b.requested_at||b.created_at||0));
+  // 28 ต.ค. 69: ใบเก่าเก็บวันที่เป็น "DD/MM/YYYY" — new Date() อ่าน "12/06/2026" เป็น 6 ธ.ค. (เรียงเป็นใบล่าสุด) วันเกิน 12 = NaN
+  // → "ครั้งก่อน"/ราคาที่เติมให้ตอนเพิ่มรายการเป็นราคาเดือน มิ.ย. · เรียงด้วย parseAnyDate ตัวเดียวกับรายการประวัติซัพ
+  const tOf=o=>{const d=parseAnyDate(o.requested_at||o.created_at);return d?d.getTime():0;};
+  const sorted=src.slice().sort((a,b)=>tOf(a)-tOf(b));
   for(const o of sorted){
     for(const it of (o.items||[])){
       const id=+(it.ingId||it.ingredient_id);
@@ -10578,7 +10959,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       if(remain.length)await persistPending(po.id,...remain);   // merge-safe re-persist of still-failed lines
       if(reloadIngs)await reloadIngs();
       await load();
-      alert(remain.length?"⚠️ ยังมีบางรายการเพิ่มสต๊อกไม่สำเร็จ — ลองอีกครั้ง หรือปรับในหน้านับสต็อก":"✅ เพิ่มสต๊อกที่ค้างเข้าครบแล้ว");
+      alert(remain.length?"⚠️ ยังมีบางรายการเพิ่มสต๊อกไม่สำเร็จ — ลองอีกครั้ง หรือปรับในหน้านับสต็อก":remain.uncertain?"❓ บางรายการไม่แน่ใจว่าเข้าแล้ว (เน็ตหลุดระหว่างรอคำตอบ) — เช็คตัวเลขในหน้านับสต็อก อย่ากดซ้ำ":"✅ เพิ่มสต๊อกที่ค้างเข้าครบแล้ว");   // 28 ต.ค. 69: ไม่รู้ผล ≠ เข้าครบ
     }catch(e){alert("ไม่สำเร็จ: "+((e&&e.message)||e));}
     setRetryingPOId(null);
   }
@@ -10792,14 +11173,15 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     const notRecv2=itemsWithReceived.filter(it=>+it.receivedQty===0);
     const warn2=notRecv2.length?`⚠️ มีสินค้า ${notRecv2.length} รายการที่ระบุว่า "ไม่ได้รับ" (จำนวน 0):\n${notRecv2.map(it=>`   • ${it.name}`).join("\n")}\n\nรายการเหล่านี้จะไม่ถูกเพิ่มเข้าสต๊อก — ยืนยันว่าไม่ได้รับจริงใช่ไหม?\n\n`:"";
     const noPrice2=itemsWithReceived.filter(it=>+it.receivedQty>0&&!(+it.pricePerUnit>0));
+    const unitW2=unitMismatchWarn(itemsWithReceived,ings,it=>it.receivedQty);   // 28 ต.ค. 69: หน่วยในใบ ≠ หน่วยสต๊อก
     const warnP2=noPrice2.length?`⚠️ มี ${noPrice2.length} รายการที่รับของแต่ราคา 0:\n${noPrice2.map(it=>`   • ${it.name}`).join("\n")}\n\nถ้าเป็นของแถม กดยืนยันได้ — ถ้าลืมกรอก ให้กดยกเลิกแล้วใส่ราคาตามบิล\n\n`:"";
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
-      message:`${warn2}${warnP2}ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?${extDisc>0?`
+      message:`${warn2}${warnP2}${unitW2}ยืนยันรับสินค้าจาก "${receivingExtOrder.supplierName}" และเพิ่มสต๊อกครัวกลางตามจำนวนที่รับจริง?${extDisc>0?`
 
 🏷️ ส่วนลดทั้งบิล ฿${extDisc.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — กระจายลงราคาต่อหน่วยทุกแถว (ยอดค่าสินค้าหลังลด ฿${(extGross-extDisc).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})})`:""}`,
       confirmLabel:"✅ ยืนยัน + เพิ่มสต๊อก",
-      danger:notRecv2.length>0||noPrice2.length>0,
+      danger:notRecv2.length>0||noPrice2.length>0||!!unitW2,
     }))return;
       // ฐานข้อมูลที่ป่วยจะ "ค้าง" ไม่ใช่ตอบ error — ปุ่มที่ยังกดได้ระหว่างรอทำให้
       // พนักงานกดซ้ำ รอบสองไปชนตัวกันสถานะ แล้วเด้ง error ว่า "ผู้ใช้อื่นแก้ไขแล้ว"
@@ -10870,11 +11252,13 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     }
     const idOf=it=>+(it.ingredient_id||it.ingId||(it.ingredient&&it.ingredient.id)||0);
     const pend=[];
+    // 28 ต.ค. 69: ประวัติสต๊อกของการคืนตอนยกเลิกต้องอ้างเลขใบ — เดิมลงเป็น "transfer" ไม่มีเลขใบ
+    const rb={reason:`ยกเลิก ${po.po_number||"PO"} (คืนสต๊อก)`,refType:isTransferPO(po)?"transfer":"po",refId:po.po_number||String(po.id),by:currentUser?.username||null};
     const IN_TRANSIT=new Set(["shipped","disputed","transfer_shipped"]);
     if(IN_TRANSIT.has(po.status)){
       // Only the sender was deducted (by ordered qty). Credit back = deducted − notDeducted.
       const items=(po.items||[]).map(it=>{const{received_qty,...rest}=it||{};const id=idOf(it);const q=Math.max(0,round2((+rest.qty||+rest.qtyNeeded||0)-(notDeducted[id]||0)));return{...rest,qty:q};}).filter(it=>(+it.qty||0)>0);
-      if(items.length){const acc=await transferStockBetweenBranches({fromBranchId:null,toBranchId:po.from_branch_id,items,ings,autoVisible:false});const p=pendingFromAcc(acc,null,po.from_branch_id);if(p)pend.push(p);}
+      if(items.length){const acc=await transferStockBetweenBranches({fromBranchId:null,toBranchId:po.from_branch_id,items,ings,autoVisible:false,...rb});const p=pendingFromAcc(acc,null,po.from_branch_id);if(p)pend.push(p);}
     }else{
       // Both sides moved. Reverse each side independently by what ACTUALLY moved:
       //   debit receiver  = recorded − notCredited   ·   credit sender = recorded − notDeducted
@@ -10888,9 +11272,9 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       const sendDelta=[...baseById].map(([id,b])=>({ingredient_id:id,d:round2(b-(notDeducted[id]||0)+(notCreditedSend[id]||0))}));
       const sendItems=sendDelta.filter(x=>x.d>0).map(x=>({ingredient_id:x.ingredient_id,received_qty:x.d}));
       const sendTakeBack=sendDelta.filter(x=>x.d<0).map(x=>({ingredient_id:x.ingredient_id,received_qty:-x.d}));
-      if(recvItems.length){const acc=await transferStockBetweenBranches({fromBranchId:po.branch_id,toBranchId:null,items:recvItems,ings,autoVisible:false});const p=pendingFromAcc(acc,po.branch_id,null);if(p)pend.push(p);}
-      if(sendItems.length){const acc=await transferStockBetweenBranches({fromBranchId:null,toBranchId:po.from_branch_id,items:sendItems,ings,autoVisible:false});const p=pendingFromAcc(acc,null,po.from_branch_id);if(p)pend.push(p);}
-      if(sendTakeBack.length){const acc=await transferStockBetweenBranches({fromBranchId:po.from_branch_id,toBranchId:null,items:sendTakeBack,ings,autoVisible:false});const p=pendingFromAcc(acc,po.from_branch_id,null);if(p)pend.push(p);}
+      if(recvItems.length){const acc=await transferStockBetweenBranches({fromBranchId:po.branch_id,toBranchId:null,items:recvItems,ings,autoVisible:false,...rb});const p=pendingFromAcc(acc,po.branch_id,null);if(p)pend.push(p);}
+      if(sendItems.length){const acc=await transferStockBetweenBranches({fromBranchId:null,toBranchId:po.from_branch_id,items:sendItems,ings,autoVisible:false,...rb});const p=pendingFromAcc(acc,null,po.from_branch_id);if(p)pend.push(p);}
+      if(sendTakeBack.length){const acc=await transferStockBetweenBranches({fromBranchId:po.from_branch_id,toBranchId:null,items:sendTakeBack,ings,autoVisible:false,...rb});const p=pendingFromAcc(acc,po.from_branch_id,null);if(p)pend.push(p);}
     }
     if(reloadIngs)await reloadIngs();
     return pend;
@@ -10979,21 +11363,26 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       }))return;
     }
     const recipient=(branchById[po.branch_id]||{}).name||"ปลายทาง";
+    const unitWS=unitMismatchWarn(po.items,ings,it=>it.qty);   // 28 ต.ค. 69: หน่วยในใบ ≠ หน่วยสต๊อก (ตัดต้นทางตามเลขในใบตรงๆ)
     if(!await confirmDlg({
       title:"ยืนยันจัดส่ง + ตัดสต๊อก",
-      message:`จัดส่ง ${po.po_number||"PO นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 🚛 ของจะอยู่ในสถานะ "ลอยอยู่ระหว่างทาง" — ยังไม่เข้าสต๊อก ${recipient}\n• สต๊อก ${recipient} จะเพิ่มเข้าตอนปลายทางกด "✅ ยืนยันรับ"\n• สถานะเปลี่ยนเป็น "🚚 จัดส่งแล้ว"`,
+      message:`${unitWS}จัดส่ง ${po.po_number||"PO นี้"} ไปยัง "${recipient}"?\n\n• 💸 สต๊อกของ ${currentBranch.name} จะถูกหักทันที\n• 🚛 ของจะอยู่ในสถานะ "ลอยอยู่ระหว่างทาง" — ยังไม่เข้าสต๊อก ${recipient}\n• สต๊อก ${recipient} จะเพิ่มเข้าตอนปลายทางกด "✅ ยืนยันรับ"\n• สถานะเปลี่ยนเป็น "🚚 จัดส่งแล้ว"`,
       confirmLabel:"🚚 จัดส่ง + ตัดสต๊อก",
-      danger:false,   // จัดส่งไม่ใช่การลบ — ไอคอนถังขยะทำให้พนักงานกลัวกด (คู่มือถ่ายไปเจอ)
+      danger:false,   // จัดส่งไม่ใช่การลบ — ไอคอนถังขยะทำให้พนักงานกลัวกด (คู่มือถ่ายไปเจอ) · หน่วยไม่ตรง = แค่ข้อความเตือนบนสุด
     }))return;
     setConfirming(po.id);
     try{
       const shippedAt=new Date().toISOString();
-      await api.patchPOIfStatus(po.id,"open",{status:"shipped",updated_at:shippedAt});
+      const shipRows=await api.patchPOIfStatus(po.id,"open",{status:"shipped",updated_at:shippedAt});
+      // 28 ต.ค. 69: ตัดสต๊อกตาม "แถวที่เพิ่งล็อกได้" ไม่ใช่สำเนาบนจอ — อีกเครื่องแก้จำนวนใบ open ได้
+      // ระหว่างที่จอนี้เปิดค้าง (viewPO ไม่ถูกโหลดใหม่) ⟹ ต้นทางถูกตัดเลขเก่า ปลายทางรับเลขใหม่ = ของหาย/งอก
+      // ฐานคืนแถวเต็ม (return=representation) · ได้แถวว่าง/ไม่มี items = ใช้สำเนาเดิมแบบก่อน
+      const fresh=(Array.isArray(shipRows)&&shipRows[0]&&Array.isArray(shipRows[0].items))?shipRows[0]:po;
       // In-transit: deduct from sender only. Receiver is credited at confirmReceive.
       const acc=await transferStockBetweenBranches({
-        fromBranchId:po.from_branch_id,
+        fromBranchId:fresh.from_branch_id,
         toBranchId:null,
-        items:po.items||[],
+        items:fresh.items||[],
         ings,
         autoVisible:false,
         reason:`จัดส่ง ${po.po_number||"PO"}`,refType:"po",refId:po.po_number||String(po.id),by:currentUser?.username||null,
@@ -11001,9 +11390,10 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       // A line that failed to deduct here (transient write / missing ingredient) is recorded
       // so the 🔁 retry button re-runs it — else the sender stays un-debited while
       // confirmReceive credits the receiver → minted stock with no in-app recovery.
-      await persistPending(po.id,pendingFromAcc(acc,po.from_branch_id,null));
+      await persistPending(po.id,pendingFromAcc(acc,fresh.from_branch_id,null));
       if(reloadIngs)await reloadIngs();
       await load();
+      setViewPO(null);   // 28 ต.ค. 69: ปิดใบที่เปิดค้าง — สำเนาบนจอเป็นของก่อนจัดส่งแล้ว
     }catch(e){showErr("จัดส่งไม่สำเร็จ",e);}
     setConfirming(null);
   }
@@ -11135,7 +11525,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     if(!isReceiver(po)){alert("เฉพาะสาขาผู้รับเท่านั้นที่ยืนยันรับสินค้าได้");return;}
     // Asset delivery → create/increment assets, never ingredient stock.
     if(isAssetPO(po)){ await receiveAssetPO(po); return; }
-    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• 📦 สต๊อก ${currentBranch.name} จะถูกเพิ่มทันทีตามจำนวนในใบสั่ง\n• ของที่ "ลอยอยู่ระหว่างทาง" จะเข้าสต๊อกปลายทางอย่างถาวร\n• ถ้ารับไม่ครบ ให้กด "สินค้าไม่ครบ" แทน เพื่อปรับจำนวนก่อน\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
+    const unitWR=unitMismatchWarn(po.items,ings,it=>it.received_qty!=null?it.received_qty:it.qty);   // 28 ต.ค. 69: หน่วยในใบ ≠ หน่วยสต๊อก
+    if(!await confirmDlg({title:"ยืนยันรับสินค้า",message:`${unitWR}ยืนยันว่าได้รับสินค้าครบตามใบ ${po.po_number||"PO นี้"}?\n\n• 📦 สต๊อก ${currentBranch.name} จะถูกเพิ่มทันทีตามจำนวนในใบสั่ง\n• ของที่ "ลอยอยู่ระหว่างทาง" จะเข้าสต๊อกปลายทางอย่างถาวร\n• ถ้ารับไม่ครบ ให้กด "สินค้าไม่ครบ" แทน เพื่อปรับจำนวนก่อน\n• เอกสารจะรอต้นทางชำระเงิน`,confirmLabel:"✅ ยืนยันรับครบ",cancelLabel:"ยกเลิก"}))return;
     setConfirming(po.id);
     try{
       const receivedAt=new Date().toISOString();
@@ -11245,6 +11636,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
           items:itemsToCredit,
           ings,
           autoVisible:true,
+          // 28 ต.ค. 69: ติดเลขใบ — เดิมลงประวัติเป็น "transfer"/ไม่มีเลขใบ ตรวจย้อนรายใบไม่เจอ
+          reason:`รับเข้า (ยอมรับยอดที่แจ้ง) ${po.po_number||"PO"}`,refType:"po",refId:po.po_number||String(po.id),by:currentUser?.username||null,
         });
         const p1=pendingFromAcc(acc1,null,po.branch_id);if(p1)pendGroups.push(p1);
       }
@@ -11259,6 +11652,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
           items:variance,
           ings,
           autoVisible:false,
+          reason:`คืนส่วนที่ขาด ${po.po_number||"PO"}`,refType:"po",refId:po.po_number||String(po.id),by:currentUser?.username||null,
         });
         const p2=pendingFromAcc(acc2,null,po.from_branch_id);if(p2)pendGroups.push(p2);
       }
@@ -12484,6 +12878,7 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
   const summary=useMemo(()=>{
     // Aggregate "needed" qty per ingredient across all pending POs +
     // recurse into SOP sub-ingredients (depth ≤ 3 to defend against cycles).
+    // 28 ต.ค. 69: addNeed ไม่แตกสูตรเองแล้ว — รวมยอดขอตรงให้ครบก่อน แล้ว sopNetCascade แตกเฉพาะส่วนที่ขาดจริง (ข้างล่าง)
     const need=new Map();
     // srcBid = สาขาที่ "ต้องการของ" ชิ้นนี้ — ต้องส่งต่อลงไปทุกชั้นของ SOP ด้วย
     function addNeed(ingId,qty,depth,srcBid){
@@ -12497,14 +12892,6 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
       // ต้องเก็บที่ชั้น cascade ด้วย ไม่งั้นของที่มาจากสูตร SOP จะไม่มีเจ้าของ
       if(srcBid!=null)cur.byBranch[String(srcBid)]=round2((cur.byBranch[String(srcBid)]||0)+qty);
       need.set(+ingId,cur);
-      const parent=ingById.get(+ingId);
-      if(!parent||!parent.has_sop)return;
-      for(const sub of (parent.ingredients||[])){
-        const subIng=ingById.get(+sub.ingredientId);
-        if(!subIng)continue;
-        const subQty=qty*(+sub.amountGram||0)/(+subIng.convert_to_gram||1000);
-        addNeed(+sub.ingredientId,subQty,depth+1,srcBid);
-      }
     }
     const pendingOrders=[];
     (pos||[]).forEach(po=>{
@@ -12532,6 +12919,8 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
     const oor=onOrderQtyByIng(openOrders||[],currentBranch?.id,ingById);
     const onOrder=oor.qtyByIng;
     const staleOrders=oor.stale;   // ใบเก่าเกิน 14 วัน ไม่เอามาหัก — ต้องบอกให้ไปเคลียร์
+    // 28 ต.ค. 69: แตกสูตร SOP จาก "ส่วนที่ขาด" = ต้องการ − มีอยู่ (ติดลบคิด 0) − สั่งแล้วรอเข้า (สูตรเดียวกับแถวซื้อข้างล่าง)
+    sopNetCascade(need,ingById,ing=>{const o=onOrder.get(+ing.id);return Math.max(0,branchStock(ing,currentBranch?.id))+(o&&!o.unitMismatch?(+o.qty||0):0);},addNeed);
     // Build rows: only ingredients short of stock
     const rows=[];
     const covered=[];       // ไม่ต้องซื้อเพราะสั่งไปแล้วรอของ — ต้องบอก ไม่ใช่หายเงียบ
@@ -14103,14 +14492,15 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
     const warn1=notRecv1.length?`⚠️ มีสินค้า ${notRecv1.length} รายการที่ระบุว่า "ไม่ได้รับ" (จำนวน 0):\n${notRecv1.map(it=>`   • ${it.name}`).join("\n")}\n\nรายการเหล่านี้จะไม่ถูกเพิ่มเข้าสต๊อก — ยืนยันว่าไม่ได้รับจริงใช่ไหม?\n\n`:"";
     // รับของแต่ราคา 0 — ของแถมใส่ 0 ได้ (ดูหมายเหตุที่ billDiscountInvalid) แต่ลืมกรอกต้องเห็นก่อนกดยืนยัน
     const noPrice1=itemsWithReceived.filter(it=>+it.receivedQty>0&&!(+it.pricePerUnit>0));
+    const unitW1=unitMismatchWarn(itemsWithReceived,ings,it=>it.receivedQty);   // 28 ต.ค. 69: หน่วยในใบ ≠ หน่วยสต๊อก
     const warnP1=noPrice1.length?`⚠️ มี ${noPrice1.length} รายการที่รับของแต่ราคา 0:\n${noPrice1.map(it=>`   • ${it.name}`).join("\n")}\n\nถ้าเป็นของแถม กดยืนยันได้ — ถ้าลืมกรอก ให้กดยกเลิกแล้วใส่ราคาตามบิล\n\n`:"";
     if(!await confirmDlg({
       title:"ยืนยันรับสินค้า",
-      message:`${warn1}${warnP1}ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต๊อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?${recvDisc>0?`
+      message:`${warn1}${warnP1}${unitW1}ยืนยันรับสินค้าจาก "${receivingOrder.supplierName}" และเพิ่มสต๊อกสาขา "${receivingOrder.branchName}" ตามจำนวนที่รับจริง?${recvDisc>0?`
 
 🏷️ ส่วนลดทั้งบิล ฿${recvDisc.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} — กระจายลงราคาต่อหน่วยทุกแถว (ยอดค่าสินค้าหลังลด ฿${(recvGross-recvDisc).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})})`:""}`,
       confirmLabel:"✅ ยืนยัน + เพิ่มสต๊อก",
-      danger:notRecv1.length>0||noPrice1.length>0,
+      danger:notRecv1.length>0||noPrice1.length>0||!!unitW1,
     }))return;
     recvBusyRef.current=true;setRecvBusy(true);
     try{
@@ -14124,6 +14514,9 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
         items:payloadItems.map(it=>({...it,ingredient_id:it.ingId,received_qty:it.receivedQty})),
         ings,
         autoVisible:true,
+        // 28 ต.ค. 69: ป้ายเดียวกับรับของซัพนอกฝั่งครัวกลาง (confirmReceiveExt) — เดิมลงเป็น "โอนย้าย" ไม่มีเลขใบ
+        reason:`รับจากซัพพลายนอก${receivingOrder.supplierName?` — ${receivingOrder.supplierName}`:""}`,
+        refType:"recv_ext",refId:String(receivingOrder.orderId||""),by:currentUser?.username||null,
       });
       // Record any line that didn't credit (row missing / write failed) so it can be
       // re-added with one click instead of being silently lost on this delivered order.
@@ -14151,7 +14544,7 @@ function OrderTab({orders,allOrders,reload,ings,suppliers,branches=[],currentBra
       try{await api.updateOrder(order.id,{stock_pending:remain.length?remain:null});}catch{}
       if(reloadIngs)await reloadIngs();
       await reload();
-      alert(remain.length?"⚠️ ยังมีบางรายการเพิ่มสต๊อกไม่สำเร็จ — ลองอีกครั้ง หรือปรับในหน้านับสต็อก":"✅ เพิ่มสต๊อกที่ค้างเข้าครบแล้ว");
+      alert(remain.length?"⚠️ ยังมีบางรายการเพิ่มสต๊อกไม่สำเร็จ — ลองอีกครั้ง หรือปรับในหน้านับสต็อก":remain.uncertain?"❓ บางรายการไม่แน่ใจว่าเข้าแล้ว (เน็ตหลุดระหว่างรอคำตอบ) — เช็คตัวเลขในหน้านับสต็อก อย่ากดซ้ำ":"✅ เพิ่มสต๊อกที่ค้างเข้าครบแล้ว");   // 28 ต.ค. 69: ไม่รู้ผล ≠ เข้าครบ
     }catch(e){alert("ไม่สำเร็จ: "+((e&&e.message)||e));}
     setRetryingId(null);
   }
@@ -14454,6 +14847,9 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
   // null = อ่านไม่สำเร็จ (ต่างจาก [] = ไม่มีใบค้าง) เพื่อเตือนคนได้ว่ายังไม่ได้หัก
   const[openOrders,setOpenOrders]=useState([]);
   const[openOrdersTick,setOpenOrdersTick]=useState(0);   // บวกหนึ่งหลังส่งใบ = โหลดยอดที่สั่งค้างใหม่
+  // 28 ต.ค. 69: ใบขอซื้อ + ใบส่งของครัวกลางของสาขานี้ที่ยังไม่เข้าสต๊อก (แปลงเป็นรูปเดียวกับ openOrders แล้ว) — ดู centralOnOrderAsOrders
+  const[centralOpen,setCentralOpen]=useState([]);
+  const centralIdsKey=(branches||[]).filter(b=>b&&b.type==="central").map(b=>+b.id).filter(Boolean).join(",");
   useEffect(()=>{
     if(currentBranch?.id==null)return;
     let alive=true;
@@ -14461,12 +14857,29 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
       // 24 ต.ค. 69: ฐานกรองสาขาเอง — onOrderQtyByIng ข้างล่างนับเฉพาะ currentBranch.id อยู่แล้ว (ยอดค้างเท่าเดิม ไม่ต้องขนใบทุกสาขามาทิ้ง)
       try{const oo=await api.getOpenOrders(currentBranch.id);if(alive)setOpenOrders(Array.isArray(oo)?oo:[]);}
       catch{if(alive)setOpenOrders(null);}
+      // 28 ต.ค. 69: ของที่ขอครัวกลางไปแล้วต้องนับเป็น "สั่งแล้วรอเข้า" ด้วย ไม่งั้นติ๊กครัวกลางซ้ำ = ใบขอซื้อซ้ำ = ครัวกลางส่งสองเท่า
+      // อ่านไม่ได้ = ไม่หัก (แบบเดิม) · ตอนกดส่งยังมีตัวเตือนใบซ้ำอีกชั้น
+      try{
+        const bid=+currentBranch.id;
+        const[prRows,poRows]=await Promise.all([
+          sb(`purchase_requisitions?select=id,pr_number,branch_id,status,type,created_at,items&branch_id=eq.${bid}&status=in.(${CENTRAL_ON_ORDER_PR.join(",")})&order=id.desc&limit=200`),
+          centralIdsKey?sb(`purchase_orders?select=id,po_number,branch_id,from_branch_id,status,po_date,created_at,updated_at,items&branch_id=eq.${bid}&from_branch_id=in.(${centralIdsKey})&status=in.(${CENTRAL_ON_ORDER_PO.join(",")})&order=id.desc&limit=200`):Promise.resolve([]),
+        ]);
+        const cids=centralIdsKey.split(",").filter(Boolean);
+        // 29 ต.ค. 69: ใบจัดส่งแล้วที่ยังไม่กดรับ — ถามว่าสาขานับวัตถุดิบในใบหลังเวลาส่งไหม (นับแล้ว = ไม่หักซ้ำ ดู centralShipT)
+        // ถามเฉพาะเมื่อมีใบแบบนี้ · 2 คอลัมน์ · ดัชนี (ingredient_id, counted_at) · ถามไม่ได้ = หักเต็มแบบเดิม
+        const ask=centralShippedCountAsk(poRows,cids);
+        let counts=null;
+        if(ask){try{counts=await sb(`stock_logs?select=ingredient_id,counted_at&branch_id=eq.${bid}&ingredient_id=in.(${ask.ids.join(",")})&counted_at=gt.${ask.since}&order=counted_at.desc&limit=1000`);}catch{counts=null;}}
+        if(alive)setCentralOpen(centralOnOrderAsOrders(prRows,poRows,cids,counts));
+      }catch{if(alive)setCentralOpen([]);}
     })();
     return()=>{alive=false;};
-  },[currentBranch?.id,openOrdersTick]);
+  },[currentBranch?.id,openOrdersTick,centralIdsKey]);
   const ingByIdSC=useMemo(()=>{const m=new Map();(ings||[]).forEach(i=>m.set(+i.id,i));return m;},[ings]);
-  const onOrderRes=useMemo(()=>onOrderQtyByIng(openOrders||[],currentBranch?.id,ingByIdSC),[openOrders,currentBranch,ingByIdSC]);
+  const onOrderRes=useMemo(()=>onOrderQtyByIng([...(openOrders||[]),...(centralOpen||[])],currentBranch?.id,ingByIdSC),[openOrders,centralOpen,currentBranch,ingByIdSC]);
   const onOrderMap=onOrderRes.qtyByIng;
+  const shippedNotRecv=useMemo(()=>shippedCentralPending(centralOpen,onOrderRes.stale),[centralOpen,onOrderRes]);   // 29 ต.ค. 69: ป้ายใบครัวกลางที่ส่งแล้วยังไม่กดรับ
   // ซัพพลายที่ติ๊กว่า "จะสั่งวันนี้" — เริ่มจากว่างเปล่าโดยตั้งใจ เจ้าของเคยสั่งไว้ว่า
   // อย่าติ๊กรอไว้ให้ ให้ติ๊กเลือกเอง (กันสั่งเจ้าที่ไม่ได้ตั้งใจสั่งไปทั้งชุด)
   const[pickedSups,setPickedSups]=useState(()=>new Set());
@@ -14479,7 +14892,7 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
     if(isNaN(v)||v<0)return;
     if(branchSafety(ing,currentBranch?.id)===v){setSafetyEdit(s=>{const n={...s};delete n[ing.id];return n;});return;}
     try{
-      const next=setBranchSafetyInJson(ing.safety_by_branch,currentBranch.id,v);
+      const next=setBranchSafetyInJson(await freshSafetyMap(ing.id,ing.safety_by_branch),currentBranch.id,v);   // 28 ต.ค. 69: ก้อนสด ไม่ทับช่องสาขาอื่น
       await api.updateIng(ing.id,{safety_by_branch:next});
       if(reloadIngs)await reloadIngs();
     }catch(e){alert("บันทึก safety ไม่สำเร็จ: "+e.message);}
@@ -14692,6 +15105,20 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         })||null;
       };
 
+      // 28 ต.ค. 69: ใบขอซื้อครัวกลางซ้ำ — ถามฐานสดตอนกดส่ง ว่าสาขานี้เพิ่งส่งใบที่รายการเหมือนกันไปใน 12 ชม.ไหม
+      // (เคสจริง ต.ค. 69: 6 คู่ คนเดิม ห่างกัน 4–98 นาที ครัวกลางรวมยอดสองใบส่งเป็นสองเท่า ไม่มีใครเห็น)
+      // ครอบเคสเน็ตหลุดหลังฐานบันทึกแล้วด้วย (กดใหม่ได้เลขใบใหม่ writtenRef จับไม่ได้) · เตือนไม่บล็อค · ถามไม่ได้ = ส่งตามเดิม
+      // ทำก่อนเขียนอะไรทั้งนั้น — กดยกเลิกแล้วไม่มีใบไหนถูกสร้างครึ่งๆ กลางๆ
+      const preCentral=Object.values(supMap).filter(s=>{const c=matchCentralSupplier(s.supplierName);return c&&+c.id!==+currentBranch.id;}).flatMap(s=>s.items);
+      if(preCentral.length&&!writtenRef.current.has(`pr|${currentBranch.id}|`+JSON.stringify(preCentral.map(it=>[it.ingId,it.qtyNeeded])))){
+        let recent=null;
+        try{recent=await sb(`purchase_requisitions?select=id,pr_number,status,created_at,items&branch_id=eq.${+currentBranch.id}&status=in.(pending_approval,approved,converted)&created_at=gte.${encodeURIComponent(new Date(Date.now()-PR_DUP_WINDOW_H*3600e3).toISOString())}&order=id.desc&limit=20`);}catch{recent=null;}
+        const dup=prDupMatch(preCentral.map(it=>({ingredient_id:it.ingId,qty:it.qtyNeeded})),recent);
+        if(dup&&!await confirmDlg({title:"⚠️ อาจสั่งของครัวกลางซ้ำ",
+          message:`สาขานี้เพิ่งส่งใบขอซื้อ ${dup.pr.pr_number||"#"+dup.pr.id} เมื่อ ${fmtDT(dup.pr.created_at)}\nรายการเหมือนกัน (วัตถุดิบ+จำนวน) ${dup.same} จาก ${dup.total} รายการของใบนี้\n\nถ้าส่งอีกใบ ครัวกลางจะรวมยอดสองใบเป็นใบส่งเดียว = ได้ของสองเท่า\n\nตั้งใจสั่งเพิ่มจริงไหม? (ถ้าไม่แน่ใจ กดยกเลิก — ยังไม่มีใบไหนถูกส่ง)`,
+          confirmLabel:"ส่งเพิ่มจริง",danger:true})){setSaving(false);return;}
+      }
+
       const poList=[],extList=[],skippedList=[];
       const centralItems=[];const centralNames=new Set();
       for(const sup of Object.values(supMap)){
@@ -14796,6 +15223,9 @@ function StockCheckView({ings,suppliers,branches=[],currentBranch,currentUser,re
         </div>
       </div>
     </Card>
+
+    {/* 29 ต.ค. 69: ของจากครัวกลางที่จัดส่งแล้วแต่สาขายังไม่กดรับ — ของถึงแล้วไม่กดรับ = สต๊อกในระบบยังไม่รวมของนั้น (บรรทัดที่นับหลังส่งไม่ถูกหักแล้ว ดู centralShipT) */}
+    {shippedNotRecv.length>0&&<div style={{background:"#FFFBEB",border:`1px solid #FDE68A`,borderRadius:12,padding:"11px 14px",marginBottom:14,fontFamily:"'Sarabun',sans-serif",fontSize:12.5,fontWeight:800,color:"#92400E",lineHeight:1.6}}>🚚 ของจากครัวกลางจัดส่งแล้วยังไม่กดรับ: {shippedNotRecv.slice(0,6).join(" · ")}{shippedNotRecv.length>6?` … อีก ${shippedNotRecv.length-6} ใบ`:""} — ถ้าของถึงแล้วกดรับก่อนสั่ง</div>}
 
     {unorderable.length>0&&<Card style={{padding:"11px 14px",marginBottom:14,background:C.brandLight,border:`1px solid ${C.brand}55`}}>
       <div style={{display:"flex",alignItems:"flex-start",gap:9,flexWrap:"wrap"}}>
@@ -15047,6 +15477,15 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
   const[editSnap,setEditSnap]=useState(null); // {id, date_from, date_to, items:[...]}
   const[editSaving,setEditSaving]=useState(false);
   const canOrder=hasPerm(currentUser,"orders");const canE=hasPerm(currentUser,"history");
+  // 28 ต.ค. 69: ลบประวัติการใช้งานได้เฉพาะแอดมิน (สิทธิ์แท็บประวัติไม่พอ) · จดแถว "ใครลบ" ก่อน — จดไม่ได้ = ไม่ลบ · บันทึกเงิน/ตั้งค่าไม่ถูกลบ (api.clearActionHist)
+  const canClearHist=currentUser?.role==="admin";
+  async function clearActionHistory(){
+    if(!canClearHist)return;
+    if(!await confirmDlg({title:"ลบประวัติการใช้งาน",message:"ต้องการลบประวัติการใช้งานทั้งหมดใช่หรือไม่?\n\nบันทึกการแก้ตั้งค่า POS (VAT/พร้อมเพย์) · ส่วนลดบิล · Voucher · แพ็คเกจบุฟเฟต์ จะถูกเก็บไว้ ไม่ลบ"}))return;
+    try{await api.addActionHist({action:`ลบประวัติการใช้งาน · สั่งลบโดย ${currentUser?.username||currentUser?.name||"ไม่ทราบชื่อ"} (เก็บบันทึกตั้งค่า POS/ส่วนลด/Voucher/แพ็คเกจไว้)`,time:nowStr()});}
+    catch(e){alert("ลบไม่สำเร็จ — บันทึกผู้ลบไม่ได้ จึงยังไม่ลบ");return;}
+    try{await api.clearActionHist();await reloadAction();}catch(e){alert("ลบไม่สำเร็จ");}
+  }
 
   function startEdit(snap){setEditSnap({id:snap.id,date_from:snap.date_from,date_to:snap.date_to,items:(snap.items||[]).map(i=>({...i}))});setSelSnap(null);}
   async function saveEdit(){if(!editSnap)return;setEditSaving(true);try{await api.updateCostHistItem(editSnap.id,{date_from:editSnap.date_from,date_to:editSnap.date_to,items:editSnap.items});await reloadHistory();setEditSnap(null);alert("✅ แก้ไขสำเร็จ");}catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}setEditSaving(false);}
@@ -15196,7 +15635,7 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
     {view==="action"&&<div>
       <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:12}}>
         <Btn v="ghost" onClick={reloadAction} icon={I.refresh} s={{padding:"7px 14px",fontSize:12}}>รีเฟรช</Btn>
-        {actionHistory.length>0&&<Btn v="danger" onClick={async()=>{if(!await confirmDlg({title:"ลบประวัติการใช้งาน",message:"ต้องการลบประวัติการใช้งานทั้งหมดใช่หรือไม่?"}))return;try{await api.clearActionHist();await reloadAction();}catch(e){alert("ลบไม่สำเร็จ");}}} s={{padding:"7px 14px",fontSize:12}} icon={I.trash}>ลบ</Btn>}
+        {canClearHist&&actionHistory.length>0&&<Btn v="danger" onClick={clearActionHistory} s={{padding:"7px 14px",fontSize:12}} icon={I.trash}>ลบ</Btn>}
       </div>
       <Card>{actionHistory.length===0?<div style={{textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.clock} s={40} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif"}}>ยังไม่มีประวัติ</p></div>
       :actionHistory.map((item,idx)=><div key={idx} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 18px",borderBottom:`1px solid ${C.lineLight}`}}>
@@ -15217,7 +15656,7 @@ function HisTab({costHistory,actionHistory,reloadHistory,reloadAction,ings,curre
 // parseAnyDate handles both without the American M/D swap.
 function parseSupplierOrderDate(str){return parseAnyDate(str);}
 
-function SupplierStatsModal({supplier,orders,onClose}){
+function SupplierStatsModal({supplier,orders,onClose,serverFetch=false}){
   const todayBkkLocal=todayBkk();
   // Filter chip: "this" | "last" | "custom"
   const [range,setRange]=useState("this");
@@ -15241,11 +15680,23 @@ function SupplierStatsModal({supplier,orders,onClose}){
     return{start:s,end:e,label:`${from} → ${to}`};
   },[range,from,to]);
 
+  // 28 ต.ค. 69: ครัวกลางส่งใบในเครื่อง (600 ใบล่าสุด ย้อนได้ถึง ~9 ต.ค.) มา → "เดือนที่แล้ว" ขึ้น 0 ใบ ฿0 · "เดือนนี้" ขาด 1–8 ต.ค.
+  // serverFetch (ครัวกลาง) = ถามฐานเฉพาะใบที่รับแล้วของซัพนี้ในช่วงที่เลือก แล้วรวมกับในเครื่อง · null = กำลังโหลด · false = โหลดไม่ได้ (ใช้ในเครื่อง + แจ้ง)
+  const[srv,setSrv]=useState(null);
+  const pS=period.start.getTime(),pE=period.end.getTime();
+  useEffect(()=>{
+    if(!serverFetch||!isFinite(pS)||!isFinite(pE))return;
+    let alive=true;setSrv(null);
+    api.getDeliveredOrdersForSupplier(supplier,new Date(pS).toISOString(),new Date(pE).toISOString()).then(r=>{if(alive)setSrv(Array.isArray(r)?r:[]);}).catch(()=>{if(alive)setSrv(false);});
+    return()=>{alive=false;};
+  },[serverFetch,supplier&&supplier.id,supplier&&supplier.name,pS,pE]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const srcOrders=useMemo(()=>mergeOrdersById(orders||[],serverFetch&&Array.isArray(srv)?srv:null),[orders,srv,serverFetch]);
+  const cacheOldest=useMemo(()=>(orders||[]).reduce((mn,o)=>{const d=parseSupplierOrderDate(o.requested_at);return d&&(!mn||d<mn)?d:mn;},null),[orders]);
   // Match by supplier_id first; if the order has no supplier_id (legacy),
   // fall back to a case-insensitive name match against this supplier.
   const supName=(supplier.name||"").toLowerCase().trim();
   const filtered=useMemo(()=>{
-    return (orders||[]).filter(o=>{
+    return srcOrders.filter(o=>{
       // Only consider orders that have been received — prices come from the
       // "ใส่ราคาตอนรับสินค้า" step, so anything before that is just an estimate.
       if(o.status!=="delivered")return false;
@@ -15256,7 +15707,7 @@ function SupplierStatsModal({supplier,orders,onClose}){
       if(!d)return true; // keep undated rows visible
       return d>=period.start&&d<period.end;
     });
-  },[orders,supplier,supName,period]);
+  },[srcOrders,supplier,supName,period]);
 
   // Aggregate totals
   const totals=useMemo(()=>{
@@ -15308,6 +15759,8 @@ function SupplierStatsModal({supplier,orders,onClose}){
       <Inp label="ถึง" type="date" value={to} onChange={e=>setTo(e.target.value)}/>
     </div>}
     <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:8}}>📌 ช่วงที่กำลังดู: <b style={{color:C.ink2}}>{period.label}</b></div>
+    {serverFetch&&srv===null&&<div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4,marginBottom:8}}>⏳ กำลังโหลดใบสั่งของช่วงนี้จากฐานข้อมูล…</div>}
+    {serverFetch&&srv===false&&<div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.red,fontWeight:700,marginBottom:8}}>⚠️ โหลดจากฐานข้อมูลไม่ได้ — แสดงเฉพาะใบสั่งที่โหลดไว้{cacheOldest?` (มีข้อมูลตั้งแต่ ${fmtD(cacheOldest)})`:""}</div>}
     <div style={{fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink2,background:C.tealLight,border:`1px solid ${C.teal}33`,borderRadius:8,padding:"8px 12px",marginBottom:14,lineHeight:1.5}}>ℹ️ แสดงเฉพาะรายการที่ <b>รับสินค้าแล้ว</b> (กรอกราคาจริงผ่านปุ่ม ✅ ยืนยันรับ) เพราะรายการที่ยังไม่ได้รับสินค้ายังไม่มีราคาที่จ่ายจริง</div>
 
     {/* Top stats cards */}
@@ -15495,7 +15948,7 @@ function SupplierTab({suppliers,reloadSuppliers,currentUser,currentBranch,orders
       </Card>)}
       {shown.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",padding:"60px 0",color:C.ink4}}><Ic d={I.truck} s={44} c={C.line}/><p style={{marginTop:12,fontFamily:"'Sarabun',sans-serif",fontSize:15}}>{q?"ไม่พบซัพพลายที่ค้นหา":(isCentral?"ยังไม่มีซัพพลาย":"ยังไม่มีซัพพลายที่เปิดให้สาขานี้")}</p>{canE&&isCentral&&<p style={{marginTop:6,fontFamily:"'Sarabun',sans-serif",fontSize:12,color:C.ink4}}>กดปุ่ม <b style={{color:C.brand}}>"+ เพิ่มซัพพลาย"</b> ด้านบนเพื่อเริ่ม</p>}</div>}
     </div>
-    {statsFor&&<SupplierStatsModal supplier={statsFor} orders={ordersScope} onClose={()=>setStatsFor(null)}/>}
+    {statsFor&&<SupplierStatsModal supplier={statsFor} orders={ordersScope} serverFetch={isCentral} onClose={()=>setStatsFor(null)}/>}
     {showForm&&<Modal title={editSID?"✏️ แก้ไขซัพพลาย":"➕ เพิ่มซัพพลายใหม่"} onClose={closeForm}>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
         <Inp label="ชื่อซัพพลาย *" value={supForm.name} onChange={e=>setSupForm(f=>({...f,name:e.target.value}))} placeholder="เช่น ตลาดสด ก." autoFocus/>
@@ -16506,7 +16959,8 @@ function BackupPanel(){
                 <div style={{fontSize:12.5,color:C.ink,fontWeight:600}}>{fmtDT(h.started_at)} {h.trigger==="manual"&&<span style={{fontSize:10,color:C.ink4}}>• กดเอง</span>}</div>
                 <div style={{fontSize:11,color:C.ink4}}>{h.total_rows!=null?`${h.total_rows.toLocaleString()} แถว`:"-"} • {fmtBytesTH(h.gz_size_bytes)}{bad.length?` • ${bad.length} ตารางไม่ครบ`:""}</div>
               </div>
-              {h.drive_id&&<a href={`/api/drive-view?id=${encodeURIComponent(h.drive_id)}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{fontSize:11,fontWeight:700,color:C.brand,textDecoration:"none",padding:"5px 10px",border:`1px solid ${C.brandBorder||C.line}`,borderRadius:7,whiteSpace:"nowrap"}}>⬇ ดาวน์โหลด</a>}
+              {/* 29 ต.ค. 69: ส่งชื่อไฟล์จริงไปด้วย — drive-view ตั้งชื่อดาวน์โหลดเป็น foodcost-backup-<วันที่>.json.gz (เดิมได้ไฟล์ "drive-view" ไม่มีนามสกุล) */}
+              {h.drive_id&&<a href={`/api/drive-view?id=${encodeURIComponent(h.drive_id)}${h.file_name?`&fn=${encodeURIComponent(h.file_name)}`:""}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{fontSize:11,fontWeight:700,color:C.brand,textDecoration:"none",padding:"5px 10px",border:`1px solid ${C.brandBorder||C.line}`,borderRadius:7,whiteSpace:"nowrap"}}>⬇ ดาวน์โหลด</a>}
               {tabs.length>0&&<Ic d={I.chevD} s={13} c={C.ink4}/>}
             </div>
             {openId===h.id&&tabs.length>0&&<div style={{borderTop:`1px solid ${C.line}`,padding:"8px 12px",background:C.bg,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:"3px 12px",maxHeight:260,overflowY:"auto"}}>
@@ -16702,7 +17156,11 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     if(!editPID&&!bid){notifyDlg("ยังไม่รู้ว่าเครื่องนี้เป็นของสาขาไหน — เปิดสาขาที่จะใช้เครื่องนี้ก่อน แล้วค่อยเพิ่มเครื่องพิมพ์");return;}
     setPSaving(true);
     try{
-      const d={name:pForm.name,ip:isBT?"bluetooth":pForm.ip,port:isBT?0:+pForm.port||9100,type:pForm.type,branch_id:bid,active:true,description:isBT?JSON.stringify({c:"bt",n:pForm.btName}):pForm.description};
+      // เครื่องแลน: ช่อง "หมายเหตุ" คือ description ทั้งก้อน (ติ๊กใบเสร็จ/ลิ้นชัก · สถานะ · คำสั่งพิมพ์ · รายการใบครัวไม่ออก) ที่จำไว้ตอนกด "แก้ไข"
+      // ไม่ได้แก้ช่องนี้ = ไม่ส่ง description เลย — เดิมเขียนก้อนตอนกดแก้ไขทับ รายการไม่ออก/คำสั่งที่ตัวพิมพ์เขียนระหว่างนั้นหายเงียบ (ตรวจทาน 28 ต.ค. 69)
+      // บลูทูธ · เพิ่มใหม่ · เปลี่ยนจากบลูทูธเป็นแลน · แก้ช่องหมายเหตุเอง = เขียนตามเดิม
+      const keepDesc=!!editPID&&!isBT&&!pForm.wasBT&&pForm.desc0!=null&&pForm.description===pForm.desc0;
+      const d={name:pForm.name,ip:isBT?"bluetooth":pForm.ip,port:isBT?0:+pForm.port||9100,type:pForm.type,branch_id:bid,active:true,...(keepDesc?{}:{description:isBT?JSON.stringify({c:"bt",n:pForm.btName}):pForm.description})};
       if(editPID)await api.updatePrinter(editPID,d);else await api.addPrinter(d);
       await reloadPrinters();setPForm(pF0);setEditPID(null);
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -16907,7 +17365,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
                 </div>
               </div>
               <div style={{display:"flex",gap:6,flexShrink:0}}>
-                <button onClick={()=>{const pc=getPConn(p);setPForm({name:p.name,ip:pc.type==="bluetooth"?"":p.ip,port:p.port||9100,description:pc.type==="bluetooth"?"":p.description||"",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active,conn:pc.type,btName:pc.btName||""});setEditPID(p.id);}} title="แก้ไข" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                <button onClick={()=>{const pc=getPConn(p);setPForm({name:p.name,ip:pc.type==="bluetooth"?"":p.ip,port:p.port||9100,description:pc.type==="bluetooth"?"":p.description||"",desc0:pc.type==="bluetooth"?"":p.description||"",wasBT:pc.type==="bluetooth",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active,conn:pc.type,btName:pc.btName||""});setEditPID(p.id);}} title="แก้ไข" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
                   <Ic d={I.pencil} s={13} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>แก้ไข</span>
                 </button>
                 <button onClick={async()=>{if(!await confirmDlg({title:"ลบเครื่องปริ้น",message:`ต้องการลบ "${p.name}" ใช่หรือไม่?`}))return;try{await api.deletePrinter(p.id);await reloadPrinters();}catch{alert("ลบไม่สำเร็จ");}}} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:9,padding:"6px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
@@ -17234,8 +17692,10 @@ function CRMPromotions({promotions,currentBranch,canEdit,reload}){
           await api.updateCRMVoucherIfStatus(v.id,"active",{status:"used",used_at:new Date().toISOString()});alert(`✅ ใช้คูปอง ${code} แล้ว — มูลค่า ${v.value}${v.type==="percent"?"%":" บาท"}\nแคชเชียร์กดส่วนลดนี้ใน FoodStory ได้เลย`);}
         setRedeem("");setRBusy(false);await reload();return;
       }
-      const p=(promotions||[]).find(x=>(x.code||"").toUpperCase()===code);
-      if(!p){alert("❌ ไม่พบโค้ดนี้");setRBusy(false);return;}
+      const p0=(promotions||[]).find(x=>(x.code||"").toUpperCase()===code);
+      // 28 ต.ค. 69: ตรวจทุกข้อกับแถวสดจากฐาน ไม่ใช่สำเนาที่โหลดตอนเปิดแท็บ (อีกเครื่องอาจนับ/ปิด/แก้โปรไปแล้ว)
+      const p=p0?await api.getCRMPromotion(p0.id):null;
+      if(!p||(p.code||"").toUpperCase()!==code){alert("❌ ไม่พบโค้ดนี้");setRBusy(false);return;}
       const today=todayBkk();
       if(p.active===false){alert("โปรโมชั่นนี้ปิดอยู่");setRBusy(false);return;}
       // จำกัดสาขาไว้ (การ์ดโชว์ชื่อสาขา) — ว่าง/ไม่มี = ทุกสาขา ตรงกับการ์ดและบอท LINE
@@ -17244,7 +17704,15 @@ function CRMPromotions({promotions,currentBranch,canEdit,reload}){
       if(p.end_date&&today>p.end_date){alert("โปรโมชั่นหมดอายุแล้ว");setRBusy(false);return;}
       if(p.quota!=null&&(+p.used_count||0)>=+p.quota){alert("โปรโมชั่นเต็มโควตาแล้ว");setRBusy(false);return;}
       if(!await confirmDlg({title:"ใช้โปรโมชั่น",message:`${p.name} — ${promoDesc(p)}${+p.min_spend>0?`\nขั้นต่ำ ฿${(+p.min_spend).toLocaleString()} — เช็กยอดบิลก่อนกด`:""}\n\nกดใช้แล้วนับการใช้โปรนี้ 1 ครั้ง`,confirmLabel:"✅ ใช้โปร",danger:false})){setRBusy(false);return;}
-      await api.updateCRMPromotion(p.id,{used_count:(+p.used_count||0)+1});
+      // นับแบบ compare-and-set: ชน (อีกเครื่องนับไปก่อน) = อ่านใหม่ เช็กปิด/โควตาอีกรอบ แล้วลองใหม่ — ไม่เขียนทับตัวนับของเครื่องอื่น
+      let cur=p,okUse=false;
+      for(let t=0;t<5&&!okUse;t++){
+        if(t>0){cur=await api.getCRMPromotion(p.id);
+          if(!cur||cur.active===false){alert("โปรโมชั่นนี้ปิดอยู่");setRBusy(false);await reload();return;}
+          if(cur.quota!=null&&(+cur.used_count||0)>=+cur.quota){alert("โปรโมชั่นเต็มโควตาแล้ว");setRBusy(false);await reload();return;}}
+        okUse=await api.bumpCRMPromotionUsed(p.id,cur.used_count);
+      }
+      if(!okUse){alert("มีเครื่องอื่นกำลังใช้โปรนี้พร้อมกัน — ยังไม่ได้นับ กรุณากดใช้โค้ดอีกครั้ง");setRBusy(false);await reload();return;}
       alert(`✅ ใช้โปรฯ "${p.name}" — ${promoDesc(p)}\nแคชเชียร์กดส่วนลดนี้ใน FoodStory ได้เลย`);
       setRedeem("");await reload();
     }catch(e){alert("ไม่สำเร็จ: "+((e&&e.message)||e));}
@@ -17402,7 +17870,8 @@ function CRMBroadcast({currentUser}){
       {hist.slice(0,15).map(h=>{const okN=Array.isArray(h.results)?h.results.filter(x=>x.ok).length:0;const tot=Array.isArray(h.results)?h.results.length:(Array.isArray(h.branch_ids)?h.branch_ids.length:0);const sched=h.status==="scheduled";return <div key={h.id} style={{padding:"8px 0",borderBottom:`1px dashed ${C.lineLight}`,display:"flex",gap:10}}>
         {h.image_url&&<img src={h.image_url} alt="" loading="lazy" decoding="async" style={{width:44,height:44,objectFit:"cover",borderRadius:8,border:`1px solid ${C.line}`,flexShrink:0}}/>}
         <div style={{minWidth:0,flex:1}}>
-          <div style={{fontSize:12,color:sched?C.purple:C.ink4,fontWeight:sched?800:400}}>{sched?`⏰ รอส่ง ${fmtDT(h.scheduled_at)}`:`${fmtDT(h.created_at)} · ส่งสำเร็จ ${okN}/${tot} สาขา`}{h.sent_by?` · ${h.sent_by}`:""}</div>
+          {/* 28 ต.ค. 69: rejected = ไม่ส่งเพราะลายเซ็นไม่ผ่าน (แถวที่เพิ่ม/แก้ตรงในตาราง หรือลงชื่อตอนตั้งเวลาไม่สำเร็จ) — อย่าให้ดูเหมือนส่งพลาดธรรมดา */}
+          <div style={{fontSize:12,color:sched?C.purple:h.status==="rejected"?C.red:C.ink4,fontWeight:sched||h.status==="rejected"?800:400}}>{sched?`⏰ รอส่ง ${fmtDT(h.scheduled_at)}`:h.status==="rejected"?`⛔ ไม่ส่ง — ลายเซ็นไม่ผ่าน · ${fmtDT(h.created_at)}`:`${fmtDT(h.created_at)} · ส่งสำเร็จ ${okN}/${tot} สาขา`}{h.sent_by?` · ${h.sent_by}`:""}</div>
           <div style={{fontSize:13,color:C.ink2,marginTop:2,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{(h.message||(h.image_url?"[รูปภาพ]":"")).slice(0,140)}{(h.message||"").length>140?"…":""}</div>
         </div>
       </div>;})}
@@ -19188,6 +19657,10 @@ export default function App(){
     if(!currentBranch)return;
     if(!silent)setLoading(true);
     setInitErr("");
+    // 28 ต.ค. 69: กดสลับสาขาระหว่างที่ครัวกลางยังโหลดไม่เสร็จ → ผลของครัวกลางมาถึงทีหลังแล้วทับใบสั่ง/เครื่องพิมพ์ของสาขาใหม่
+    // จำสาขาที่ขอไว้ · ตอนผลกลับมา สาขาบนจอ (branchRef) ไม่ใช่สาขานั้นแล้ว = ทิ้งผลทั้งก้อน (รอบโหลดของสาขาใหม่จัดการจอ/สถานะโหลดเอง)
+    const reqBid=currentBranch.id;
+    const stale=()=>String(branchRef.current?.id??"")!==String(reqBid);
     try{
       const isCentral=currentBranch.type==="central";
       const[i,m,c,u,b,s,ch,ah,o,pr]=await Promise.all([
@@ -19199,12 +19672,13 @@ export default function App(){
         fetchOrdersFor(isCentral,currentBranch.id),   // ครัวกลาง = getAllOrders ครั้งเดียวแล้วตัด 400 ใบแรกเป็น orders (24 ต.ค. 69)
         api.getBranchPrinters(currentBranch.id),   // ฐานกรองสาขาให้ (แถวชุดเดียวกับ printersAt) — 24 ต.ค. 69
       ]);
+      if(stale())return;
       setIngs(i);setMenus(m);setAllCats(c);setUsers(u);setBranches(b);setSuppliers(s);
       setCostHistory(ch);setActionHistory(ah);setOrders(o.orders);setPrinters(printersAt(pr,currentBranch.id));
       // สินทรัพย์: โหลดซ้ำเฉพาะเมื่อเคยเปิดแท็บทะเบียนแล้ว (ปุ่มรีเฟรช/สลับสาขาได้ข้อมูลใหม่เหมือนเดิม) · ยังไม่เคยเปิด = แท็บโหลดเองตอนเปิด
       if(assetsWantedRef.current){try{const as=await api.getAssets();setAssets(as);}catch{}}
       if(isCentral)setAllOrders(o.all);
-    }catch(e){setInitErr("เชื่อมต่อ Supabase ไม่ได้: "+e.message);}
+    }catch(e){if(stale())return;setInitErr("เชื่อมต่อ Supabase ไม่ได้: "+e.message);}
     if(!silent)setLoading(false);
   }
   // ปุ่มรีเฟรชบนแถบหัว — เดิมมีเฉพาะบางแท็บที่ใส่เอง หน้าอย่าง "ตั้งค่า" จึงไม่มีเลย
@@ -19296,13 +19770,20 @@ export default function App(){
     const isCentral=currentBranch?.type==="central";
     const scope=isCentral&&(allOrders||[]).length?allOrders:orders;
     const stats=new Map();
+    const rawById=new Map((rawIngs||[]).map(i=>[+i.id,i]));
     (scope||[]).forEach(o=>{
       if(o.status!=="delivered")return;
       (o.items||[]).forEach(it=>{
         const id=+(it.ingId||it.ingredient_id);
         const price=+it.pricePerUnit||+it.buyPrice||0;
-        const qty=+it.receivedQty||+it.qtyNeeded||+it.qty||0;   // qty actually received at this price
+        // 28 ต.ค. 69: สูตรเดียวกับฝั่งบัญชี (lib/sliptrack-daily.js buildAvgCostMap) — "รับ 0" = ของไม่มา ห้ามตกไปใช้จำนวนที่สั่ง
+        // (เดิม || ทำให้ 0 กลายเป็นจำนวนที่สั่ง: ถุงหูหิ้วเฉลี่ย ฿63.50 แทน ฿37) และนับเฉพาะบรรทัดที่หน่วยตรง buy_unit
+        // (ซื้อเป็นกล่องปนกับชิ้น แล้วหารด้วยกรัมของหน่วยเดียว = ต้นทุนต่อกรัมไร้ความหมาย) ไม่มีบรรทัดหน่วยตรง = ใช้ราคาแคตตาล็อก
+        const rq=it.receivedQty!=null?it.receivedQty:(it.received_qty!=null?it.received_qty:null);
+        const qty=rq!=null?(+rq||0):(+it.qtyNeeded||+it.qty||0);   // qty actually received at this price
         if(!id||price<=0||qty<=0)return;
+        const ing=rawById.get(id);
+        if(!ing||String(it.unit||"").trim()!==String(ing.buy_unit||"").trim())return;
         const s=stats.get(id)||{wsum:0,qty:0,count:0};
         s.wsum+=price*qty;s.qty+=qty;s.count+=1;                // quantity-weighted
         stats.set(id,s);
@@ -19752,12 +20233,15 @@ function slipClusters(s){const PRE=/[เแโใไ]/,COMB=/[ัำิ-ฺ็-�
 function slipUnits(s){try{if(typeof Intl!=="undefined"&&Intl.Segmenter)return Array.from(new Intl.Segmenter("th",{granularity:"word"}).segment(String(s)),x=>x.segment);}catch{}return slipClusters(s);}
 function slipWrap(measure,text,maxW){
   const s=String(text);if(measure(s)<=maxW)return [s];
-  const out=[];let cur="";const push=()=>{const t=cur.replace(/s+$/,"");if(t)out.push(t);cur="";};
+  // \s = ช่องว่าง — เดิม /s+$/ (ตัวอักษร s) ตัด s ท้ายบรรทัดทิ้ง "Fries"→"Frie" และไม่ตัดช่องว่างจริง (ตรวจทาน 28 ต.ค. 69)
+  const out=[];let cur="";const push=()=>{const t=cur.replace(/\s+$/,"");if(t)out.push(t);cur="";};
+  // ช่องว่างหน้าบรรทัดแรก = ย่อหน้าที่ตั้งใจ (ตัวเลือก "   + …" / หมายเหตุ "   * …" ใต้รายการในใบเสร็จ · รายการยกเลิก/แก้ในใบปิดกะ) เก็บไว้ ความกว้างนับรวมย่อหน้าแล้ว
+  // ข้ามช่องว่างเฉพาะต้นบรรทัดต่อ (out มีของแล้ว) — แก้ regex แล้วย่อหน้าหาย บรรทัดแรกชิดซ้ายใต้รายการ (ตรวจทาน 29 ต.ค. 69) · ใบครัวย่อหน้าด้วย indent ไม่ใช่ช่องว่าง ไม่โดน
   for(const u of slipUnits(s)){
-    if(cur===""&&/^s+$/.test(u))continue;
+    if(cur===""&&out.length&&/^\s+$/.test(u))continue;
     if(measure(cur+u)<=maxW){cur+=u;continue;}
     if(cur!=="")push();
-    if(/^s+$/.test(u))continue;
+    if(/^\s+$/.test(u))continue;
     if(measure(u)<=maxW){cur=u;continue;}
     for(const c of slipClusters(u)){if(cur===""||measure(cur+c)<=maxW)cur+=c;else{push();cur=c;}}
   }
@@ -19934,6 +20418,41 @@ function cmdDesc(printer,key,val){
   }
   d[key]=val;
   return JSON.stringify(d);
+}
+// ── เขียน description ของเครื่องพิมพ์ "จากแถวสด" (ตรวจทาน 28 ต.ค. 69) ──
+// เหตุ: ปุ่ม "เช็คสถานะใหม่" / "ค้นหาเครื่องพิมพ์" / "ทดสอบพิมพ์" เขียนจากรายชื่อเครื่องในจอ ซึ่งรีเฟรชทุก 60 วิและหยุดตอนจอดับ (เก่าได้หลายนาที)
+//   เขียนก้อนนั้นทับ = รายการ "ใบครัวไม่ออก" ที่ตัวพิมพ์เพิ่งจดหายเงียบ (ตัวพิมพ์ไม่จดซ้ำ — กติกาเจ้าของ) โต๊ะนั้นไม่ได้อาหาร
+//   · รายการที่จัดการไปแล้วโผล่กลับมาให้กดรีปริ้นซ้ำ (ครัวทำสองรอบ) · ใบเสร็จ/ลิ้นชักที่ทำไปแล้วกลับมาค้างให้ทำซ้ำ
+// next(แถวสด) คืน description ใหม่ (สตริง) · คืน null = ไม่ต้องเขียน · อ่านแถวไม่ได้ = ไม่เขียน (โยน error ให้ผู้เรียก ห้ามถอยไปใช้ของในจอ)
+// เขียนแบบมีเงื่อนไข description=eq.<ที่อ่าน> (แบบ patchPrinterIf ของตัวพิมพ์) — มีใครเขียนแทรกระหว่างอ่านกับเขียน = ฐานไม่เขียนให้ → อ่านใหม่ลองอีก
+// แถวยาวเกินใส่ใน URL (มีรูปใบเสร็จค้าง) และรอบสุดท้าย = อ่านสดแล้วเขียนตรง (ช่องว่างเหลือหนึ่งรอบเน็ต ไม่ใช่หลายนาทีแบบเดิม)
+const PR_CAS_MAX=6000;   // เท่ากับ HB_CAS_MAX ของตัวพิมพ์ (เงื่อนไขทั้งก้อนใน URL — ทดสอบกับฐานจริงแล้ว)
+async function writePrinterDesc(id,next){
+  let plain=false;   // เขียนแบบมีเงื่อนไขไม่ได้ (URL ยาวเกิน/ฐานปฏิเสธ) = รอบถัดไปอ่านสดแล้วเขียนตรง ไม่ทิ้งคำสั่ง
+  for(let i=0;i<3;i++){
+    const all=await api.getPrintersByIds([id]);
+    const f=(all||[]).find(x=>x&&+x.id===+id);
+    if(!f)throw new Error("ไม่พบเครื่องพิมพ์ #"+id);
+    const desc=next(f);if(desc==null)return false;
+    const raw=f.description;
+    if(plain||i===2||(raw!=null&&String(raw).length>PR_CAS_MAX)){await api.updatePrinter(id,{description:desc});return true;}
+    let r=null;try{r=await api.updatePrinterIf(id,raw,{description:desc});}catch{plain=true;continue;}
+    if(Array.isArray(r)&&r.length)return true;   // [] = มีคนเขียนแทรก ไม่ได้เขียน → รอบหน้าอ่านใหม่
+  }
+  return false;
+}
+// ช่องคำสั่ง (rp/pj) มีช่องเดียวต่อเครื่อง — คำสั่งเดิมที่ตัวพิมพ์ยังไม่หยิบ (สั่งไม่เกิน 3 นาที) ถูกเขียนทับ = หายเงียบ ไม่มีรายการ "พิมพ์ไม่สำเร็จ"
+// เหตุ: แก้บิลสลับเมนูเขียนใบเมนูใหม่ แล้วเขียนใบยกเลิกทับห่างกัน ~0.4 วิ → ครัวได้แต่ใบยกเลิก ลูกค้าจ่ายแล้วไม่ได้ของ (ตรวจทาน 28 ต.ค. 69)
+const cmdPending=(p,key)=>{try{const v=JSON.parse((p&&p.description)||"{}")[key];const at=(v&&typeof v==="object")?+v.at:+v;return at>0&&Date.now()-at<=CMD_FRESH_MS;}catch{return false;}};
+// รอให้ตัวพิมพ์หยิบคำสั่งเดิมไปก่อน (รอบเร็วทุก 0.8 วิ) — ถามทุก 0.4 วิ 15 ครั้ง (~6 วิ + เวลาเน็ต) · ถามแค่ "ยังค้างไหม" ได้กลับแค่ id (ไม่ลากรูป/รายการ)
+// คืน id ที่ครบเวลาแล้วยังค้าง (ตัวพิมพ์ดับ/ช้า) — ผู้เรียกเขียนทับตามเดิมแล้วเตือนพนักงาน · ถามไม่ได้ = ถือว่ายังค้าง (รอจนครบ ไม่เขียนทับเร็ว)
+async function waitCmdSlot(ids,key){
+  let pend=[...new Set((ids||[]).map(Number))];
+  for(let i=0;i<15&&pend.length;i++){
+    await new Promise(r=>setTimeout(r,400));
+    try{const a=await api.getPrintersWithCmd(pend,key);if(Array.isArray(a)){const s=new Set(a.map(x=>+x.id));pend=pend.filter(id=>s.has(id));}}catch{}
+  }
+  return pend;
 }
 function getReceiptPrinters(printers){
   // เฉพาะเครื่องที่ติ๊ก "🧾 ใช้เป็นเครื่องพิมพ์ใบเสร็จ" (rcpt=1) เท่านั้น — ใบเสร็จ/เช็คบิล/QR โต๊ะ ออกเฉพาะเครื่องเหล่านี้ (ไม่มี fallback ไปเครื่องครัว)
@@ -20117,6 +20636,26 @@ async function agentPrintItems(items,tableLabel,branchId,meta,fallbackAll){
   // ใบย้ายโต๊ะ: เลือกเครื่องตามรายการในบิล (ครัวที่ทำของโต๊ะนี้) แต่ส่งไปแค่ "ใบเดียว" ต่อเครื่อง
   // ไม่แนบรายการอาหาร — ใบบอกแค่จากโต๊ะไหนไปโต๊ะไหน (ตัวพิมพ์ทุกรุ่นพิมพ์หนึ่งใบต่อหนึ่งรายการ)
   const slipBody=(its)=>(meta&&meta.kind==="move")?[{qty:1,name:"ย้ายโต๊ะ",options:[],note:""}]:its;
+  // ช่อง rp มีช่องเดียวต่อเครื่อง — เครื่องที่จะเขียนยังมีใบก่อนหน้าที่ตัวพิมพ์ยังไม่หยิบ = รอให้หยิบก่อน (สูงสุด ~6 วิ) แล้วอ่านแถวสดก่อนเขียน
+  // เดิมเขียนทับทันที: แก้บิลสลับเมนูในหมวดเดียวกัน ใบยกเลิกทับใบเมนูใหม่ ~2 ใน 3 ครั้ง ครัวไม่ได้ทำของที่ลูกค้าจ่ายแล้ว ไม่มีแดง (ตรวจทาน 28 ต.ค. 69)
+  // ครบเวลายังค้าง (ตัวพิมพ์ดับ/ช้า) = เขียนทับตามเดิม แล้วเตือนพนักงานให้ตรวจที่ครัว
+  {
+    const tgt=usable.filter(p=>list.some(it=>printerHandles(p,it,act)));
+    const busyP=(tgt.length?tgt:(fallbackAll?usable:[])).filter(p=>cmdPending(p,"rp"));
+    const busy=busyP.map(p=>+p.id);
+    if(busy.length){
+      // ตัวพิมพ์ไม่เต้นสัญญาณชีพเกิน 2 นาที หรือไม่มีสัญญาณที่อ่านได้เลย (agentHealth · agentSeen เป็นเลข ms) = ไม่มีใครมาหยิบใบเดิม รอไปก็เปล่า → ไม่รอ
+      // เดิมรอครบ ~8-11 วิทุกครั้ง หน้าย้ายโต๊ะ/ยกเลิก/พิมพ์ซ้ำค้างทั้งที่ตัวพิมพ์ดับ · ตัวพิมพ์ยังหายใจ = รอเหมือนเดิม (ตรวจทาน 29 ต.ค. 69)
+      // ต้องค้างเกิน 30 วิด้วย (นาฬิกาแท็บเล็ตเทียบ at ที่แท็บเล็ตเขียน) — agentSeen เป็นนาฬิกามือถือตัวพิมพ์ ช้ากว่าแท็บเล็ตเกิน ~75 วิ = ดูเหมือนดับทั้งที่ยังหายใจ
+      // ใบที่เพิ่งเขียน (กดยกเลิก/สลับเมนูติดกัน) ตัวพิมพ์ที่ยังหายใจหยิบภายในไม่กี่วิ — ไม่รอแล้วเขียนทับ = ใบนั้นหาย · ไม่แน่ใจ = รอเหมือนเดิม (29 ต.ค. 69)
+      const rpAt=p=>{try{const v=JSON.parse((p&&p.description)||"{}").rp;return +((v&&typeof v==="object")?v.at:v)||0;}catch{return 0;}};
+      const dead=agentHealth(prs,branchId).state!=="ok"&&busyP.every(p=>Date.now()-rpAt(p)>30000);
+      const left=dead?busy:await waitCmdSlot(busy,"rp");
+      try{const a=await api.getPrintersByIds(usable.map(p=>p.id));if(Array.isArray(a))usable.forEach((p,i)=>{const f=a.find(y=>y&&+y.id===+p.id);if(f)usable[i]=f;});}catch{}
+      // ค้าง ≠ ไม่ออก: ตัวพิมพ์อาจหยิบไปแล้วแต่ยังเรนเดอร์/ส่งเครื่องไม่เสร็จ (ล้างช่องหลังพิมพ์) — บอกว่า "ยังไม่ยืนยัน" ไม่ใช่ "อาจไม่ออก" (พนักงานสั่งซ้ำเอง = ใบครัวซ้ำ)
+      if(left.length)try{posToast("⚠️ ใบครัวใบก่อนหน้ายังไม่ยืนยันว่าตัวพิมพ์รับไปแล้ว — ใบใหม่ส่งไปแล้ว กรุณาตรวจที่ครัวว่าใบก่อนหน้าออกครบ","warn",9000);}catch{}
+    }
+  }
   const ups=[];const sentItems=new Set();
   for(const p of usable){
     const mine=list.filter(it=>printerHandles(p,it,act));
@@ -20387,8 +20926,12 @@ async function sendCashierSlip(lines,{branchId,printers=[],what,table}){
   if(!rcps.length)return {sent:0,none:true};
   if(rcps.some(busy)){await new Promise(r=>setTimeout(r,1500));const again=await load();if(again.length)rcps=again;}
   const b64=await escposSlipRaster(lines,576);
+  // อ่านแถวสดหลังเรนเดอร์ (0.3 วิ–หลายวิ) ก่อนเขียน — เดิมเขียนจากแถวที่อ่านก่อนเรนเดอร์ รายการ "ใบครัวไม่ออก" ที่ตัวพิมพ์จดระหว่างนั้นหายเงียบ
+  // (สาขา 5 เครื่องใบเสร็จคือแถวที่เก็บรายการไม่ออก) · อ่านไม่ได้ = ใช้แถวเดิมแบบที่เคยทำ (ตรวจทาน 28 ต.ค. 69)
+  let fr=[];try{const a=await api.getPrintersByIds(rcps.map(p=>p.id));if(Array.isArray(a))fr=a;}catch{}
+  const cur=(p)=>fr.find(x=>x&&+x.id===+p.id)||p;
   const at=Date.now();
-  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64,what:what||"ใบสั้น",table:String(table??"")})})));
+  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(cur(p),"pj",{at,b64,what:what||"ใบสั้น",table:String(table??"")})})));
   return {sent:rcps.length,none:false,at};
 }
 // หน้าตาใบสั้น: หัว · โต๊ะตัวใหญ่ · บรรทัดรายละเอียด
@@ -21179,7 +21722,21 @@ const MenuCard=memo(function MenuCard({m,soldOut,hiddenFromCustomer,hasOpts,inPk
     <div style={{fontSize:13,fontWeight:900,color:soldOut?C.ink4:C.brand,fontFamily:"'Sarabun',sans-serif"}}>฿{m.price}{m.menu_price!=null&&<s style={{fontSize:10,fontWeight:600,color:C.ink4,marginLeft:4}}>฿{m.menu_price}</s>}</div>
   </div>;
 });
-function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser,onClose,onDone,printers=[],shift=null,posSettings=null,promotions=[],onCashChange}){
+// ── บิลที่ "จ่ายแล้ว" ตอนคำตอบการรับเงินหาย เป็นการจ่ายรอบนี้ของจอนี้จริงไหม (28 ต.ค. 69) ──
+// เดิมดูแค่ "จ่ายแล้ว + ยอดเท่ากัน" — สองเครื่องกดรับเงินโต๊ะเดียวกันห่างกันไม่กี่วินาที ยอดเท่ากันเป๊ะ
+// เครื่องที่สองเลยพิมพ์ใบเสร็จซ้ำ เปิดลิ้นชัก และลงเงินสดซ้ำทั้งที่บิลจ่ายด้วยช่องทางอื่น
+// เทียบเฉพาะค่าที่รอบนี้ส่งไปจริง (sent) และคอลัมน์ที่ฐานมี — เขียนสำเร็จแล้วต้องตรงทุกตัว (ไม่งั้นเงินที่รับจริงจะไม่ถูกลงลิ้นชัก)
+// แบ่งจ่าย: ทุกขั้นใน payments ประทับเวลา payAt ของรอบนี้ = ตัวยืนยันที่แน่นที่สุด
+function paidByThisTry(fresh,sent,payAt,total){
+  if(!fresh||fresh.status!=="paid"||!sent)return false;
+  if(Math.abs((+fresh.total||0)-(+total||0))>=0.01)return false;
+  if(String(fresh.payment_method||"")!==String(sent.payment_method||""))return false;
+  if("paid_by" in sent&&"paid_by" in fresh&&(fresh.paid_by||null)!==(sent.paid_by||null))return false;
+  if("cash_received" in sent&&"cash_received" in fresh&&Math.abs((+fresh.cash_received||0)-(+sent.cash_received||0))>=0.01)return false;
+  if(Array.isArray(sent.payments)&&"payments" in fresh&&!(Array.isArray(fresh.payments)&&fresh.payments.some(p=>p&&p.at===payAt)))return false;
+  return true;
+}
+function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser,onClose,onDone,printers=[],shift=null,posSettings=null,promotions=[],onCashChange,onNoShift}){
   const isMobile=useIsMobile();
   const[mobileView,setMobileView]=useState("menu"); // "menu" | "order"
   const[items,setItems]=useState(()=>stripNewFlags(existingOrder&&existingOrder.items));
@@ -21396,6 +21953,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         let fresh=null;
         try{const r=await api.getPOSOrderById(existingOrder.id);fresh=Array.isArray(r)?r[0]:r;}catch{}
         if(!fresh){notifyDlg("อ่านบิลล่าสุดไม่ได้ (เน็ตสะดุด) — ยังไม่ได้ยกเลิกรายการนี้ กรุณาลองใหม่");return;}
+        // 28 ต.ค. 69: จอโต๊ะไม่ได้ดึงบิลสด — อีกเครื่องเก็บเงิน/ยกเลิกบิลไปแล้วก็ยังปัดยกเลิกได้ แล้วบิลที่จ่ายแล้วถูกเขียนยอดใหม่ (VAT/ส่วนลดหาย ยอดทั้งวันส่งบัญชีไม่ได้)
+        if(fresh.status==="paid"||fresh.status==="cancelled"){notifyDlg(`บิลนี้${fresh.status==="paid"?"ชำระเงิน":"ถูกยกเลิก"}ไปแล้วจากอีกเครื่อง — ไม่ได้ยกเลิกรายการ\nหากต้องคืนเงิน/แก้บิล ใช้ปุ่ม 📊 รายงาน`);onDone&&onDone();onClose&&onClose();return;}
         const dbItems=stripNewFlags(fresh.items);
         const at=findSentIndex(dbItems,target,sentKey);
         if(at<0){
@@ -21481,7 +22040,11 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
     const prev=served[k];const want=!prev;
     setServed(p=>{const n={...p};if(want)n[k]={at:new Date().toISOString(),by:currentUser?.username||currentUser?.name||null};else delete n[k];return n;});
     try{
-      const next=await api.setItemServed(existingOrder.id,k,want,currentUser?.username||currentUser?.name||null);
+      // 28 ต.ค. 69: ติ๊กเสิร์ฟทำ updated_at ขยับ (trigger) ⟹ ตัวกันชนของจอนี้เก่าทันที กดเช็คบิล/พิมพ์ QR ต่อในจอเดิมโดนปฏิเสธว่า "แก้จากอุปกรณ์อื่น"
+      // รับเวลาใหม่เฉพาะเมื่อการติ๊กนี้เป็นการแก้ครั้งเดียว: ก่อนเขียนฐานยังเป็นฉบับที่จอรู้ (เวลาเท่า verRef) และรายการ/สถานะหลังเขียนเหมือนก่อนเขียน
+      // มีเครื่องอื่นแทรก (สั่งเพิ่ม/ล็อก QR/จ่าย) = ไม่รับ ด่านกันชนทำงานเหมือนเดิม
+      const next=await api.setItemServed(existingOrder.id,k,want,currentUser?.username||currentUser?.name||null,(before,row)=>{
+        if(before&&row&&before.updated_at===verRef.current&&row.status===before.status&&JSON.stringify(row.items)===JSON.stringify(before.items))verRef.current=row.updated_at;});
       setServed(next&&typeof next==="object"?next:{});
     }catch(e){
       setServed(p=>{const n={...p};if(prev)n[k]=prev;else delete n[k];return n;});
@@ -21557,14 +22120,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       const base={status:"cancelled",updated_at:at};
       const full={...base,cancelled_by:who,cancelled_at:at,cancel_reason:reason};
       let row;
-      try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,full);}
+      // true = ยกเลิกได้เฉพาะบิลที่ยังไม่ปิด — บิลที่อีกเครื่องเก็บเงินไปแล้วต้องไม่กลายเป็น "ยกเลิก" จากจอที่ค้าง (28 ต.ค. 69)
+      try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,full,true);}
       catch(err){
         // คอลัมน์บันทึกยังไม่ได้สร้าง (ยังไม่ได้รันคำสั่ง SQL) — PostgREST ปฏิเสธก่อนเขียน
         // ยอมให้ยกเลิกได้ก่อน ร้านต้องเดินต่อ แต่ต้องบอกดังๆ ว่าครั้งนี้ไม่มีร่องรอย
         // เงียบไปเฉยๆ = คิดว่ามีบันทึกทั้งที่ไม่มี ซึ่งแย่กว่ารู้ว่าไม่มี
         const schemaErr=/column .* does not exist|PGRST204|schema cache/i.test(String((err&&err.message)||err));
         if(!schemaErr)throw err;
-        row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,base);
+        row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,base,true);
         posToast("⚠️ ยกเลิกบิลแล้ว แต่ยังบันทึกผู้ยกเลิก/เหตุผลไม่ได้ — ต้องเพิ่มคอลัมน์ในฐานข้อมูลก่อน","warn");
       }
       if(!row){notifyDlg("⚠️ ออเดอร์โต๊ะนี้เพิ่งถูกแก้จากอุปกรณ์อื่น — กรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ แล้วลองยกเลิกอีกครั้ง");onDone();onClose();return;}
@@ -21681,6 +22245,15 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         presets:["เจ้าของอนุญาต","แขกรีสอร์ท","ชดเชยลูกค้า","ส่วนลดพนักงาน","สมาชิก/ลูกค้าประจำ"],confirmLabel:"ยืนยันส่วนลด",cancelLabel:"กลับไปแก้"});
       if(discReason==null)return;
     }
+    // Voucher ลดบิลได้ถึง 100% — เดิมไม่ถามอะไรและไม่จดประวัติ เป็นทางลัดของด่านเหตุผลส่วนลดข้างบน (28 ต.ค. 69)
+    // มีรหัสคูปอง = รหัสคือร่องรอยแล้ว ไม่ถามเพิ่ม (คูปองจริงไม่ช้า) · ไม่มีรหัส = ต้องใส่เหตุผล · ทุกใบจดประวัติหลังตัดเงิน
+    let vReason=null;
+    if(voucherCol&&!(voucherCol.ref||"").trim()){
+      vReason=await reasonDlg({title:`Voucher ฿${round2(voucherDiscount).toLocaleString("en-US",{maximumFractionDigits:2})} ไม่มีรหัส — โต๊ะ ${table.table_number}`,
+        message:`ยอด ฿${round2(subtotal).toLocaleString("en-US",{maximumFractionDigits:2})} · ใส่เหตุผลของ Voucher นี้ (ระบบจดชื่อผู้ปิดบิลไว้)`,
+        presets:["คูปองไม่มีรหัส","เจ้าของอนุญาต","บัตรกำนัลกระดาษ"],confirmLabel:"ยืนยัน Voucher",cancelLabel:"กลับไปแก้"});
+      if(vReason==null)return;
+    }
     setSavingGuard(true);
     try{
       // แบ่งจ่าย: ยอดเงินสดคือเฉพาะขั้นที่เป็นเงินสด ไม่ใช่ทั้งบิล — ลิ้นชักกับเงินทอนต้องอิงตัวนี้
@@ -21710,12 +22283,24 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // เกิดจริง 23 ก.ย. 69: บิล #397 ฿1,567 เปิดโต๊ะในช่องว่าง 30 วินาที แล้วไม่เคยถึงบัญชีเลย
       // ถามฐานว่ากะไหนเปิดอยู่จริง ไม่เชื่อ state ของจอ (จอค้างกะเก่าได้) — ตัวเดียวกับที่เงินสดใช้
       const _pls=await liveShift(branch.id,shift);
+      // 28 ต.ค. 69: ไม่มีกะเปิดเลย (ปิดกะไปแล้ว ยังไม่เปิดกะใหม่) = ห้ามรับเงิน — เดิมบิลติดเลขกะที่ปิดและส่งบัญชีไปแล้ว
+      // ยอดบิลนั้นไม่ขึ้นใบปิดกะใด ไม่เข้าบัญชี และเงินสดโผล่เป็นเงินเกินในกะถัดไป · ยังไม่ได้เขียนอะไรเลย → พาไปเปิดกะ แล้วแตะโต๊ะรับเงินใหม่
+      // 29 ต.ค. 69: ถามก่อนปิดจอบิล — เดิมปิดจอแล้วพาไปหน้าเปิดกะทันที รายการที่ยังไม่ส่ง/ส่วนลด/Voucher ที่ใส่ไว้หายหมด
+      // เปลี่ยนกะ 2 เครื่อง อีกเครื่องมักกำลังเปิดกะใหม่ → "อยู่ที่บิลนี้" แล้วกดรับเงินอีกครั้ง = เข้ากะที่เปิดจริง ไม่ต้องคีย์ใหม่ · กล่องหลุด/ถูกแทน = อยู่ที่บิล (ไม่ทิ้งอะไร)
+      if(_pls.none){
+        setSavingGuard(false);
+        const goOpen=await confirmDlg({title:"ยังไม่มีกะเปิด — เปิดกะก่อนรับเงิน",danger:false,confirmLabel:"ไปเปิดกะ",cancelLabel:"อยู่ที่บิลนี้",
+          message:`กะ #${shift?shift.id:"-"} ของจอนี้ปิดไปแล้ว · ยังไม่ได้ตัดเงินโต๊ะ ${table.table_number}\n\nอีกเครื่องกำลังเปิดกะใหม่ → กด "อยู่ที่บิลนี้" รอเปิดกะเสร็จ แล้วกดรับเงินอีกครั้ง (รายการ ส่วนลด Voucher ในจอนี้ยังอยู่ครบ)\nยังไม่มีใครเปิดกะ → กด "ไปเปิดกะ" (นับเงินทอน) แล้วแตะโต๊ะนี้รับเงินใหม่${hasNewItems?"\n\n⚠️ มีรายการที่ยังไม่ได้ส่งครัว — ไปเปิดกะแล้วรายการนี้จะหาย ถ้าต้องเก็บไว้ ให้กด \"ส่งรายการ\" ก่อน":""}`});
+        if(goOpen){onClose();if(onNoShift)onNoShift();}
+        return;
+      }
       if(_pls.note)posToast(_pls.note,"warn",9000);
       const basePayload={status:"paid",items:itemsWithDisc,subtotal,discount:totalDiscount,total,round_adj:roundAdj,payment_method:pmCol,shift_id:_pls.id||null,updated_at:new Date().toISOString()};
       // paid_by = ใครกดปิดบิลใบนี้ · เดิมไม่มีเลย บิลทุกใบไร้เจ้าของ ตรวจย้อนหลังไม่ได้
       const fullPayload={...basePayload,service_charge:round2(sc),service_charge_rate:scRate,vat:round2(vat),vat_rate:vatRate,vat_included:vatIncluded,promo_amount:round2(promoDiscount),promo_name:selectedPromo?.name||null,cash_received:cashReceived,payments:paymentsCol,voucher:voucherCol,paid_by:currentUser?.username||currentUser?.name||null};
-      let row;
-      try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,fullPayload);}
+      let row,sentPayload=fullPayload;
+      // true = เขียนเฉพาะบิลที่ยังไม่ปิด — ตัวกันชนหลุดเมื่อไหร่ก็ยังเขียนทับบิลที่อีกเครื่องเก็บเงินไปแล้วไม่ได้ (28 ต.ค. 69)
+      try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,fullPayload,true);}
       catch(err){
         // ONLY retry with the reduced payload when the breakdown columns are missing. Retrying a
         // network/timeout failure with the SAME stale token matches 0 rows and would report a
@@ -21725,7 +22310,8 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
           console.error("save full order failed — retrying base fields (run the breakdown migration to persist VAT/SC/promo)",err);
           // The retry itself can also lose its response — fall through to the same reconcile
           // rather than reporting a possibly-committed payment as "not charged".
-          try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,basePayload);}
+          sentPayload=basePayload;
+          try{row=await api.updatePOSOrderIfUnchanged(existingOrder.id,verRef.current,basePayload,true);}
           catch(err2){console.error("base-payload retry failed — will reconcile",err2);row=null;}
         }
         else {console.error("checkout PATCH failed — will reconcile",err);row=null;}
@@ -21736,12 +22322,14 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
         // drawer, the receipt and the Z-report all disagree.
         let fresh=null;
         try{const r=await api.getPOSOrderById(existingOrder.id);fresh=Array.isArray(r)?r[0]:r;}catch{}
-        const committed=fresh&&fresh.status==="paid"&&Math.abs((+fresh.total||0)-round2(total))<0.01;
+        const paidNow=!!fresh&&fresh.status==="paid";
+        const committed=paidNow&&paidByThisTry(fresh,sentPayload,payAt,round2(total));
         if(committed){row=fresh;}
+        // 28 ต.ค. 69: จ่ายแล้วแต่ไม่ใช่รอบนี้ของจอนี้ (อีกเครื่องเพิ่งรับเงินโต๊ะเดียวกัน) — เดิมนับเป็นของตัวเอง แล้วพิมพ์ใบเสร็จซ้ำ เปิดลิ้นชัก ลงเงินสดซ้ำ
+        else if(paidNow){notifyDlg(`⚠️ บิลโต๊ะ ${table.table_number} ถูกรับเงินจากอีกเครื่องไปแล้ว — เครื่องนี้ไม่ได้ตัดเงินซ้ำ\nไม่ต้องเก็บเงินลูกค้าอีก (ถ้ารับเงินมาแล้ว ให้คืนลูกค้าหรือแจ้งผู้จัดการ)`);setSavingGuard(false);onDone();onClose();return;}
         else{notifyDlg("⚠️ มีการเพิ่ม/แก้รายการของโต๊ะนี้จากอุปกรณ์อื่น (อาจมีลูกค้าสั่งเพิ่ม) — ยังไม่ได้ตัดเงิน\nกรุณาปิดแล้วเปิดโต๊ะนี้ใหม่ เพื่อตรวจสอบยอดล่าสุดก่อนชำระเงิน");setSavingGuard(false);onDone();onClose();return;}
       }
       verRef.current=row.updated_at;
-      if(discReason!=null){try{await api.addActionHist({action:`ส่วนลดบิล · ${branch.name||"-"} (#${branch.id}) · โต๊ะ ${table.table_number} · บิล #${existingOrder.id} · ฿${round2(manualDiscount).toLocaleString("en-US",{maximumFractionDigits:2})} จากยอด ฿${round2(subtotal).toLocaleString("en-US",{maximumFractionDigits:2})} · เหตุผล: ${discReason} · โดย ${currentUser?.username||currentUser?.name||"ไม่ทราบชื่อ"}`,time:nowStr()});}catch(e){console.warn("discAudit",e);}}
       // เงินสด = ต้องเปิดลิ้นชักให้ทอนเงิน — ส่งไปพร้อมใบเสร็จในการเขียนครั้งเดียว (cashPart>0 = kick)
       // เดิมยิงลิ้นชักกับใบเสร็จแยกกันพร้อมกัน ต่างคนต่างเขียนทับแถวเครื่องแคชเชียร์ → ลิ้นชักไม่เด้ง/ใบเสร็จหายเงียบ
       // เริ่มตรงนี้ (ก่อนลงบันทึกเงินสด) · ลิ้นชักรอเรนเดอร์+ส่งรูปใบเสร็จก่อน จึงเด้งช้ากว่าเดิมราว 1-2 วิ (แลกกับไม่ทับกันเอง)
@@ -21749,21 +22337,35 @@ function POSOrderPanel({table,existingOrder,menus,reloadMenus,branch,currentUser
       // discount = ส่วนลดทั้งหมด ค่าเดียวกับที่เพิ่งเก็บลงบิล + โปรฯ + คูปอง ⟹ ใบตอนปิดบิลกับใบพิมพ์ซ้ำจากฐานเป็นใบเดียวกัน
       // ตัวพิมพ์แตกส่วนลดเป็น ลดเอง/โปรฯ/คูปอง เอง (billDiscParts) — เดิมส่งแค่ลดเอง แล้วใบไม่มีบรรทัดคูปอง ยอดบวกลบไม่ลง
       const _rcpt=smartPrintReceipt({...existingOrder,items:itemsWithDisc,subtotal,discount:round2(totalDiscount),total,round_adj:roundAdj,payment_method:pmCol,payments:paymentsCol,cash_received:cashReceived,...promoMeta,promo_amount:round2(promoDiscount),voucher:voucherCol,subtotal_after_disc:subAfterDisc,service_charge:sc,vat,vat_rate:vatRate,vat_included:vatIncluded},table.table_number,true,cashPart>0);
+      // ประวัติส่วนลด/Voucher จดหลังเริ่มใบเสร็จ แบบไม่รอ (29 ต.ค. 69) — เดิมรอ POST ก่อนเริ่มใบเสร็จ ฐานช้า/ค้าง = ลิ้นชัก ใบเสร็จ ป็อปอัพทอนเงินค้างตาม ทั้งที่ตัดเงินแล้ว
+      // ยังจดทุกใบ (ค่าที่ใช้อยู่ในมือหมดแล้ว) · สองใบแยกกัน ใบหนึ่งค้างไม่ขวางอีกใบ · ล้ม = เตือนในคอนโซลเหมือนเดิม ไม่ขวางการปิดบิล
+      if(discReason!=null)(async()=>{try{await api.addActionHist({action:`ส่วนลดบิล · ${branch.name||"-"} (#${branch.id}) · โต๊ะ ${table.table_number} · บิล #${existingOrder.id} · ฿${round2(manualDiscount).toLocaleString("en-US",{maximumFractionDigits:2})} จากยอด ฿${round2(subtotal).toLocaleString("en-US",{maximumFractionDigits:2})} · เหตุผล: ${discReason} · โดย ${currentUser?.username||currentUser?.name||"ไม่ทราบชื่อ"}`,time:nowStr()});}catch(e){console.warn("discAudit",e);}})();
+      if(voucherCol)(async()=>{try{await api.addActionHist({action:`Voucher บิล · ${branch.name||"-"} (#${branch.id}) · โต๊ะ ${table.table_number} · บิล #${existingOrder.id} · ฿${round2(voucherCol.amount).toLocaleString("en-US",{maximumFractionDigits:2})} (${voucherCol.mode==="percent"?voucherCol.value+"%":"฿"+voucherCol.value}) จากยอด ฿${round2(subtotal).toLocaleString("en-US",{maximumFractionDigits:2})} · รหัส: ${voucherCol.ref||"-"}${vReason!=null?" · เหตุผล: "+vReason:""} · โดย ${currentUser?.username||currentUser?.name||"ไม่ทราบชื่อ"}`,time:nowStr()});}catch(e){console.warn("voucherAudit",e);}})();
       // record cash movement if cash payment — skip if one already exists for this order (the
       // reconcile path above can re-enter after a lost response; a duplicate would inflate the
       // shift's expected cash).
+      // 28 ต.ค. 69: เช็คซ้ำในกะเดียวกับที่จะเขียน (_pls.id — เดิมเช็ค shift.id ของจอ ซึ่งจอค้างกะเก่าคือคนละกะ)
+      // ล้ม = ลองอีก 2 รอบ เช็คก่อนเขียนทุกรอบ (คำตอบหายแต่เขียนไปแล้ว ต้องไม่ได้แถวซ้ำ) · ยังไม่ได้ = บอกพนักงานให้ลงเงินเข้าเอง (เดิมกลืนเงียบ ลิ้นชักขาดเท่าบิล)
+      let cashMvLost=false;
       if(cashPart>0&&shift){
-        try{
-          const existingMoves=await api.getCashMovements(shift.id).catch(()=>[]);
-          const already=Array.isArray(existingMoves)&&existingMoves.some(m=>m&&m.type==="sale"&&+m.order_id===+existingOrder.id);
-          if(!already)await api.addCashMovement({shift_id:_pls.id,branch_id:branch.id,type:"sale",amount:cashPart,reason:`ขายโต๊ะ ${table.table_number}`+(payParts?" (แบ่งจ่าย)":""),order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
-        }catch(err){console.error("บันทึก cash movement ไม่สำเร็จ:",err);}
+        let mvOk=false;
+        for(let t=0;t<3&&!mvOk;t++){
+          try{
+            if(t)await new Promise(r=>setTimeout(r,700*t));
+            const existingMoves=await api.getCashMovements(_pls.id);
+            const already=Array.isArray(existingMoves)&&existingMoves.some(m=>m&&m.type==="sale"&&+m.order_id===+existingOrder.id);
+            if(!already)await api.addCashMovement({shift_id:_pls.id,branch_id:branch.id,type:"sale",amount:cashPart,reason:`ขายโต๊ะ ${table.table_number}`+(payParts?" (แบ่งจ่าย)":""),order_id:existingOrder.id,user_id:currentUser.id,username:currentUser.username});
+            mvOk=true;
+          }catch(err){console.error("บันทึก cash movement ไม่สำเร็จ:",err);}
+        }
+        cashMvLost=!mvOk;
       }
       // บอกเงินทอนก่อนงานอื่นทั้งหมด — ลิ้นชักเพิ่งเปิด เงินอยู่ในมือ ต้องรู้ตอนนี้ว่าทอนเท่าไร
       // (ใบเสร็จส่งไปตัวพิมพ์แล้ว รอผลทีหลัง — พลาดก็ยังขึ้นเตือนเหมือนเดิม ไม่กลืนเงียบ)
       if(cashPart>0&&typeof onCashChange==="function"){
         onCashChange({change:round2(Math.max(0,(+cashReceived||0)-cashPart)),received:+cashReceived||0,total:cashPart,table:table.table_number});
       }
+      if(cashMvLost)notifyDlg(`⚠️ รับเงินบิล #${existingOrder.id} (โต๊ะ ${table.table_number}) แล้ว แต่บันทึกเงินสด ฿${round2(cashPart).toLocaleString("en-US",{maximumFractionDigits:2})} เข้าลิ้นชักไม่สำเร็จ (เน็ตสะดุด)\nกด 💰 เงินในลิ้นชัก → รับเงินเข้า ใส่ยอดนี้พร้อมเลขบิล ไม่งั้นตอนปิดกะเงินจะเกินเท่ายอดนี้`);
       await _rcpt;   // รอผลใบเสร็จ (พลาดก็ยังขึ้นเตือนเหมือนเดิม ไม่กลืนเงียบ)
       await releaseThisTable();
       onDone();onClose();
@@ -22546,6 +23148,22 @@ function reportCustDiag(event,extra){
     fetch("/api/sliptrack-push",{method:"POST",headers:{"Content-Type":"text/plain"},body,keepalive:true}).catch(()=>{});
   }catch{}
 }
+// ── ส่งออเดอร์หน้าลูกค้าต้องมีเวลาหมด (29 ต.ค. 69) ──
+// fetch ไม่มีเวลาหมดในตัว: wifi ร้านสะดุดแบบ socket ตาย (ไม่มี error กลับมา) ค้างได้เป็นนาทีบน Android Chrome
+// ระหว่างนั้น placeOrder/flushOutbox ถือกุญแจ flushingRef ⟹ คิวรอบ 15 วิ · เน็ตกลับมา · ปุ่ม "ลองอีกครั้ง" ส่งแทนไม่ได้ = ใบครัวช้าเป็นนาที
+// ⟹ ครอบทีละขั้น (เช็ค QR / ส่งรายการ) ขั้นละ 15 วิ: หมดเวลา = ยกเลิกคำขอ (signal — คำขอที่เหลือของขั้นนั้นไม่ยิงต่อ) แล้วโยน error ธรรมดา (ไม่มีธงปฏิเสธถาวร)
+// = ทางเดิมของ "เน็ตสะดุด": ของยังอยู่ในคิว · ไม่นับว่าส่งแล้ว · ไม่คืนตะกร้า — คิวส่งใหม่เอง
+// ส่งใหม่ปลอดภัย: คำขอที่ถูกยกเลิกอาจถึงฐานไปแล้ว แต่ posAppendItems ตัด line_uid ที่อยู่ในบิลแล้ว + เขียนแบบ CAS updated_at ⟹ ไม่ลงซ้ำ
+const CUST_SEND_MS=15000;
+// กดสั่งรอกุญแจได้นานกว่าที่คิวถือได้มากสุด (เช็ค QR + ส่ง) ⟹ คิวที่ค้างหมดเวลาแล้ว ปุ่มสั่งส่งต่อได้เลย ไม่ถอยเงียบทั้งที่ของยังอยู่ในตะกร้า
+const CUST_LOCK_WAIT_MS=2*CUST_SEND_MS+2000;
+async function custSendTimed(run,ms=CUST_SEND_MS){
+  const ac=typeof AbortController!=="undefined"?new AbortController():null;
+  let tid=null;
+  const late=new Promise((_,rej)=>{tid=setTimeout(()=>{rej(Object.assign(new Error(`ส่งออเดอร์ไม่ตอบเกิน ${Math.round(ms/1000)} วิ — ยกเลิกแล้ว รอส่งใหม่`),{sendTimeout:true}));try{if(ac)ac.abort();}catch{}},ms);});
+  try{return await Promise.race([run(ac?ac.signal:undefined),late]);}
+  finally{clearTimeout(tid);}
+}
 function CustomerPage({branchId,tableId,token}){
   // ⚠️ ต้องอยู่บนสุดก่อน return ทุกทาง — hook ที่อยู่หลัง early return ทำให้จอลูกค้าพังทั้งจอ (เจอจริง 20 ก.ย. 69)
   // หัวจอสูงเท่าไร (ชื่อสาขายาวขึ้นบรรทัดที่สองได้) — แถบหมวดต้องติดใต้หัวพอดี ไม่ทับกัน
@@ -22899,14 +23517,25 @@ function CustomerPage({branchId,tableId,token}){
       return;
     }
     setSending(true);
+    // 28 ต.ค. 69: ถือกุญแจเดียวกับ flushOutbox — คิวที่กำลังส่งอยู่ต้องจบก่อน (สำเร็จ = ล้างคิว · ปฏิเสธถาวร = คืนของเข้าตะกร้า)
+    // เดิมวิ่งพร้อมกันได้: คิวส่งสำเร็จแล้ว writeOutbox(null) ลบคิวชุดใหม่ที่ทางนี้เพิ่งเขียน → ชุดใหม่ส่งไม่ผ่าน = หายเงียบ
+    // และถ้าทั้งสองทางโดนปฏิเสธถาวร ของชุดเดียวกันถูกคืนเข้าตะกร้าสองแถว (uid ซ้ำ) → ส่งรอบหน้าครัวทำสองจาน
+    // รอไม่เกิน CUST_LOCK_WAIT_MS (32 วิ — นานกว่าที่คิวถือกุญแจได้มากสุดตั้งแต่มีเวลาหมด 29 ต.ค. 69 · เดิม 20 วิ) · ยังไม่จบ = ไม่ส่ง ไม่แตะอะไร (ของยังอยู่ในตะกร้าครบ แถบบนขึ้น "กำลังส่งออเดอร์...") กดใหม่ได้
+    for(let w=0;flushingRef.current&&w<Math.ceil(CUST_LOCK_WAIT_MS/200);w++)await new Promise(r=>setTimeout(r,200));
+    if(flushingRef.current){setSending(false);return;}
+    flushingRef.current=true;
     // รายการชุดที่ส่งรอบนี้ — ประกาศนอก try ให้ catch ใช้ตัวเดียวกัน
     // (เดิมประกาศ const sending=cart ใน try ⟹ ใน catch ชื่อ sending คือ state boolean ของปุ่ม
     //  ของหมด/นอกแพ็คเกจ = ของทั้งตะกร้าหายเงียบ · รอชำระ/หมดเวลา = จอลูกค้าล้ม "ระบบขัดข้อง" — ตรวจทาน 19 ต.ค. 69)
-    const batch=cart;
+    // 28 ต.ค. 69: รวมของที่ค้างในคิว (รอบก่อนส่งไม่ผ่าน) เข้าชุดนี้ด้วย ตัดซ้ำด้วย line_uid — เดิม writeOutbox ชุดใหม่ทับคิวเดิม
+    // = เมนูชุดแรกหายเงียบ ทั้งที่จอขึ้น "สั่งอาหารสำเร็จ" · ของในคิวที่จริงๆ ถึงครัวแล้ว (คำตอบหาย) ปลายทางตัดทิ้งด้วย uid เหมือนเดิม
+    const pend=readOutbox();const seenUid=new Set();
+    const batch=[...((pend&&pend.lines)||[]),...cart].filter(l=>{const u=l&&l.line_uid;if(!u)return true;if(seenUid.has(u))return false;seenUid.add(u);return true;});
     try{
       // Re-validate the QR token right before submitting (token may have been rotated mid-session)
       // ดูแค่ว่ามีแถวไหม — ขอแค่ id (scanTableOk ตัวกรองเดียวกัน · เลขโต๊ะที่ส่งไปใช้ table บนจอเหมือนเดิม)
-      const matches=await api.scanTableOk(branchId,tableId,token);
+      // 29 ต.ค. 69: ทุกขั้นที่ยิงเน็ตมีเวลาหมด 15 วิ (custSendTimed) — ค้างแล้วต้องปล่อยกุญแจให้คิว/ปุ่มลองอีกครั้งส่งแทนได้ · หมดเวลา = ทาง "เน็ตสะดุด" ข้างล่าง (ไม่นับว่าส่งแล้ว)
+      const matches=await custSendTimed(sig=>api.scanTableOk(branchId,tableId,token,sig));
       if(!Array.isArray(matches)||matches.length===0){
         setSending(false);
         setGateError("bad_token");
@@ -22921,7 +23550,7 @@ function CustomerPage({branchId,tableId,token}){
       writeOutbox({lines:batch,at:Date.now()});
       setCart(p=>p.filter(l=>!(l&&l.line_uid&&sendingUids.has(l.line_uid))));
       // Atomic append (compare-and-set + retry) — สั่งพร้อมกันหลายคนโต๊ะเดียวไม่ทับกัน, ไม่มีรายการหาย
-      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:batch,ordered_by:"customer",blockIfAwaiting:true});
+      await custSendTimed(sig=>api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:batch,ordered_by:"customer",blockIfAwaiting:true,signal:sig}));
       markSent(batch);
       writeOutbox(null);
       setDone(true);
@@ -22945,7 +23574,7 @@ function CustomerPage({branchId,tableId,token}){
       // Do NOT clear the cart and do NOT drop the outbox — it retries on reconnect. Re-sending is
       // safe: the append ignores any line_uid the order already carries.
       setOutbox(readOutbox());
-    }
+    }finally{flushingRef.current=false;}   // ปล่อยกุญแจทุกทางออก (28 ต.ค. 69)
     setSending(false);
   }
   // Once the server has a line, drop it from the on-screen cart and remember its uid — but keep
@@ -23009,9 +23638,10 @@ function CustomerPage({branchId,tableId,token}){
     try{
       // เช็ค QR ก่อนส่งของค้างในคิว — ทางส่งปกติเช็คอยู่แล้ว แต่ทางคิวออฟไลน์ไม่เคยเช็ค
       // ลูกค้าคนก่อนกดสั่งตอนเน็ตหลุด แล้วเน็ตกลับมาหลังปิดโต๊ะไปแล้ว = ของเข้าบิลลูกค้าคนใหม่
-      if(token){const ok=await api.scanTableOk(branchId,tableId,token);
+      // 29 ต.ค. 69: ขั้นละ 15 วิ (custSendTimed) — ค้างแล้วปล่อยกุญแจให้ปุ่มสั่ง/รอบถัดไปส่งแทน · หมดเวลา = เข้า catch แบบเน็ตสะดุด คิวอยู่ครบ
+      if(token){const ok=await custSendTimed(sig=>api.scanTableOk(branchId,tableId,token,sig));
         if(Array.isArray(ok)&&ok.length===0){writeOutbox(null);setOutbox(null);setGateError("bad_token");flushingRef.current=false;setOutboxBusy(false);return;}}
-      await api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:o.lines,ordered_by:"customer",blockIfAwaiting:true});
+      await custSendTimed(sig=>api.posAppendItems({branch_id:+branchId,table_id:+tableId,table_number:table?.table_number,newItems:o.lines,ordered_by:"customer",blockIfAwaiting:true,signal:sig}));
       markSent(o.lines);
       writeOutbox(null);setDone(true);loadMyOrder();
     }catch(e){
@@ -23026,9 +23656,10 @@ function CustomerPage({branchId,tableId,token}){
       else if(e&&e.orderTimeUp){const back=(o&&Array.isArray(o.lines))?o.lines:[];writeOutbox(null);setOutbox(null);if(back.length)setCart(p=>[...back,...p]);setTimeUpNow(true);setTimeUpMsg(true);loadMyOrder();}
       else if(e&&e.unavailable){handleUnavailable(e,o&&o.lines);loadMyOrder();}
       else if(e&&(e.notInPackage||e.badLine)){handleRejected(e,o&&o.lines);loadMyOrder();}
-    }
+    }finally{
+    // 28 ต.ค. 69: ปล่อยกุญแจใน finally — placeOrder รอกุญแจนี้แล้ว ถ้าค้าง true ปุ่มยืนยันสั่งจะส่งไม่ได้เลย
     flushingRef.current=false;
-    setOutboxBusy(false);
+    setOutboxBusy(false);}
   }
   useEffect(()=>{
     setOutbox(readOutbox());
@@ -23133,7 +23764,8 @@ function CustomerPage({branchId,tableId,token}){
       <p style={{fontSize:14,color:C.ink3,fontFamily:"'Sarabun',sans-serif",marginBottom:24}}>อาหารกำลังเตรียมครับ 🍳</p>
       <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center"}}>
         <Btn v="ghost" onClick={()=>{setDone(false);setStep("myorder");}}>📋 ดูสรุปยอด</Btn>
-        <Btn onClick={()=>{setDone(false);setCart([]);setStep("menu");}}>สั่งเพิ่ม</Btn>
+        {/* 28 ต.ค. 69: ไม่ล้างตะกร้า — ของที่ส่งแล้ว markSent เอาออกให้แล้ว ที่เหลือคือของที่ลูกค้าใส่ไว้แต่ยังไม่ได้กดสั่ง (เดิม setCart([]) ลบทิ้งเงียบ) */}
+        <Btn onClick={()=>{setDone(false);setStep("menu");}}>สั่งเพิ่ม</Btn>
       </div>
     </div>
   </div>:null;
@@ -23155,8 +23787,9 @@ function CustomerPage({branchId,tableId,token}){
     {/* Order stuck in the outbox — the diner must know it is NOT lost and that we keep retrying. */}
     {outbox&&<div style={{background:"#FEF3C7",borderBottom:"2px solid #F59E0B",padding:"10px 14px",fontFamily:"'Sarabun',sans-serif",flexShrink:0}}>
       <div style={{fontSize:13.5,fontWeight:800,color:"#92400E",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-        <span>{outboxBusy?"⏳ กำลังส่งออเดอร์...":"📶 ออเดอร์ยังไม่ถึงครัว — ระบบกำลังลองส่งให้เอง"}</span>
-        <button onClick={flushOutbox} disabled={outboxBusy} style={{marginLeft:"auto",background:"#F59E0B",border:"none",borderRadius:8,padding:"5px 12px",color:"#fff",fontWeight:800,fontSize:12,cursor:outboxBusy?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",opacity:outboxBusy?.6:1}}>ลองอีกครั้ง</button>
+        {/* 29 ต.ค. 69: กุญแจส่งถูกถือได้สองทาง — คิว (outboxBusy) หรือปุ่มยืนยันสั่ง (sending) · เดิมดูแค่คิว ⟹ ระหว่างกดสั่งค้าง ปุ่มนี้ดูกดได้แต่กดแล้วไม่มีอะไรเกิด */}
+        <span>{(outboxBusy||sending)?"⏳ กำลังส่งออเดอร์...":"📶 ออเดอร์ยังไม่ถึงครัว — ระบบกำลังลองส่งให้เอง"}</span>
+        <button onClick={flushOutbox} disabled={outboxBusy||sending} style={{marginLeft:"auto",background:"#F59E0B",border:"none",borderRadius:8,padding:"5px 12px",color:"#fff",fontWeight:800,fontSize:12,cursor:(outboxBusy||sending)?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",opacity:(outboxBusy||sending)?.6:1}}>{(outboxBusy||sending)?"กำลังส่ง...":"ลองอีกครั้ง"}</button>
       </div>
       <div style={{fontSize:11.5,color:"#92400E",marginTop:4,lineHeight:1.5}}>
         {Date.now()-(outbox.at||0)>60000
@@ -23462,7 +24095,11 @@ async function printTableQR(table,branch,printers=[],onPrinted,onUrl,opts={}){
       // (คำสั่ง "qr" แบบข้อความยังอยู่ในตัวพิมพ์ เผื่อแท็บเก่าที่ยังไม่รีเฟรช)
       const qrB64=await buildTableQRB64(table,branch,url);
       const b64=appendB64?catB64(qrB64,appendB64):qrB64;   // ใบเปิดโต๊ะต่อท้าย QR = งานเดียว ออกเรียงกันเสมอ
-      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64,what:jobWhat,table:String(table.table_number||"")})})));
+      // อ่านแถวสดหลังเรนเดอร์ (0.3 วิ–หลายวิ) ก่อนเขียน — เดิมเขียนจากแถวที่อ่านก่อนเรนเดอร์ รายการ "ใบครัวไม่ออก" ที่ตัวพิมพ์จดระหว่างนั้นหายเงียบ
+      // (สาขา 5 เครื่องใบเสร็จคือแถวที่เก็บรายการไม่ออก) · อ่านไม่ได้ = ใช้แถวเดิมแบบที่เคยทำ (ตรวจทาน 28 ต.ค. 69)
+      let fr=[];try{const a=await api.getPrintersByIds(rcps.map(p=>p.id));if(Array.isArray(a))fr=a;}catch{}
+      const cur=(p)=>fr.find(x=>x&&+x.id===+p.id)||p;
+      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(cur(p),"pj",{at,b64,what:jobWhat,table:String(table.table_number||"")})})));
       posToast("🔳 ส่งคำสั่งพิมพ์ "+(appendB64?jobWhat+" โต๊ะ ":"QR โต๊ะ ")+table.table_number+" ไปเครื่องพิมพ์ใบเสร็จแล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ","ok");
       await stamp();
       return {ids:rcps.map(p=>+p.id),at};
@@ -23865,9 +24502,12 @@ function OpenShiftModal({currentBranch,currentUser,onDone,onCancel}){
     try{
       const r=await api.getActiveShift(currentBranch.id);
       const live=Array.isArray(r)?r[0]:r;
+      // 29 ต.ค. 69: ใช้กะนั้นต่อเลย (onDone) — เดิมบอกให้รีเฟรชแล้วจบ เครื่องแคชเชียร์ (kiosk) รีเฟรช = กลับไปหน้า PIN ก่อนรับเงินโต๊ะที่ค้างได้
+      // ไม่เปิดกะใหม่ ไม่ลงเงินทอนที่ใส่ไว้ (ลิ้นชักนับไปแล้วตอนเปิดกะนั้น) · เป็นกะเดียวกับที่จอขายรับมาเองทุกนาที (syncShift)
       if(live&&live.id){
-        await confirmDlg({title:"มีกะเปิดอยู่แล้ว",confirmLabel:"เข้าใจแล้ว",cancelLabel:null,
-          message:`สาขานี้มีกะ #${live.id} เปิดอยู่ (เปิดโดย ${live.username||"-"} เมื่อ ${fmtDT(live.opened_at)})\n\nต้องปิดกะนั้นก่อนถึงจะเปิดกะใหม่ได้\nถ้าหน้าจอนี้ไม่เห็นกะดังกล่าว ให้รีเฟรชหน้าจอหนึ่งครั้ง`});
+        await confirmDlg({title:"มีกะเปิดอยู่แล้ว",confirmLabel:`ใช้กะ #${live.id}`,cancelLabel:null,danger:false,
+          message:`สาขานี้มีกะ #${live.id} เปิดอยู่ (เปิดโดย ${live.username||"-"} เมื่อ ${fmtDT(live.opened_at)})\n\nเครื่องนี้จะขายต่อในกะนั้น — ไม่ได้เปิดกะใหม่ และไม่ได้บันทึกเงินทอนที่ใส่ไว้`});
+        onDone(live);
         return;
       }
     }catch(e){console.warn("เช็คกะที่เปิดอยู่ไม่ได้",e);}
@@ -24280,8 +24920,12 @@ function printZReport(args){
     }
     try{
       const b64=await escposSlipRaster(buildZReportLines(args),576);
+      // อ่านแถวสดหลังเรนเดอร์ (0.3 วิ–หลายวิ) ก่อนเขียน — เดิมเขียนจากแถวที่อ่านก่อนเรนเดอร์ รายการ "ใบครัวไม่ออก" ที่ตัวพิมพ์จดระหว่างนั้นหายเงียบ
+      // (สาขา 5 เครื่องใบเสร็จคือแถวที่เก็บรายการไม่ออก) · อ่านไม่ได้ = ใช้แถวเดิมแบบที่เคยทำ (ตรวจทาน 28 ต.ค. 69)
+      let fr=[];try{const a=await api.getPrintersByIds(rcps.map(p=>p.id));if(Array.isArray(a))fr=a;}catch{}
+      const cur=(p)=>fr.find(x=>x&&+x.id===+p.id)||p;
       const at=Date.now();
-      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at,b64,what:"ใบปิดกะ"})})));
+      await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:cmdDesc(cur(p),"pj",{at,b64,what:"ใบปิดกะ"})})));
       posToast(`🧾 ส่งใบปิดกะไป ${rcps.length} เครื่องแล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ`,"ok",6000);
     }catch(e){
       posToast("⚠️ ส่งใบปิดกะเข้าเครื่องพิมพ์ไม่สำเร็จ: "+((e&&e.message)||e),"warn",9000);
@@ -24534,7 +25178,13 @@ async function loadShiftTotalsForReprint(shift,branchId){
   totals.avgBill=totals.orderCount?round2((+totals.totalSales||0)/totals.orderCount):0;
   return{totals,mismatches,daySplit:shiftDaySplit(orders)};
 }
-function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
+// กะที่เครื่องนี้ "ส่งคำสั่งปิด" ไปแล้ว (ในหน้าที่เปิดอยู่นี้) — คำตอบหายแต่ปิดไปแล้วจริง กดซ้ำต้องไปต่อที่ส่งบัญชี ไม่ใช่ปิดซ้ำ/ทิ้งการส่งบัญชี (28 ต.ค. 69)
+// เก็บ เลขกะ → closed_at ที่เครื่องนี้ส่งไป · ไปต่อได้เฉพาะเมื่อ closed_at ในฐานคือค่าของเครื่องนี้ (ตรวจทาน 28 ต.ค. 69)
+// คำขอของเครื่องนี้ไม่ถึงฐาน แต่อีกเครื่องปิดกะไปพร้อมกัน = closed_at ไม่ตรง → ถือว่าถูกปิดจากที่อื่น ไม่ส่งบัญชีซ้ำ
+// 29 ต.ค. 69: เก็บ "ทุกค่า" ที่ส่งไป (Set ต่อเลขกะ) — เดิมเก็บค่าเดียว: ฐานช้า กดซ้ำตอนรอบแรกยังไม่ลง = รอบสองเขียนทับค่ารอบแรก
+// แล้วรอบแรกเพิ่งลง (PATCH รอบสองได้ []) → เครื่องนี้นึกว่าอีกเครื่องปิด บอกพนักงานผิด และไม่มีเครื่องไหนส่งบัญชีกะนี้เลย
+const shiftCloseSent=new Map();
+function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed,onStale}){
   const[movements,setMovements]=useState([]);const[orders,setOrders]=useState([]);const[edits,setEdits]=useState([]);
   const[loading,setLoading]=useState(true);const[actualCash,setActualCash]=useState("");
   const[note,setNote]=useState("");const[saving,setSaving]=useState(false);
@@ -24547,31 +25197,32 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
   // เงินที่ไม่เข้าสมุดบัญชีคือเงินที่ไม่มีใครรู้ว่าหาย จนกว่าจะปิดงบแล้วไม่ตรง
   const[acct,setAcct]=useState(null);
   const[blockList,setBlockList]=useState(null);   // ไม่ null = กำลังเตือนว่ามีโต๊ะค้าง
+  // อ่านข้อมูลกะชุดเดียว ใช้ทั้งตอนเปิดจอและตอนกดปิดกะ (28 ต.ค. 69) — ปิดกะต้องใช้ยอด ณ ตอนกด ไม่ใช่ตอนเปิดจอ
+  // (ระหว่างนับเงิน อีกเครื่องเก็บเงินโต๊ะเข้ากะนี้ได้ · โหลดตอนเปิดจอล้ม = ยอด 0 ทั้งใบ)
+  async function fetchShiftData(){
+    // ดึงบิลตั้งแต่เวลาเปิดกะ ครบทุกใบ (เดิมตัดที่ 200 ใบล่าสุด ทำให้ยอดกะขาด)
+    // ดึงบิลที่ยังเปิดอยู่แยกต่างหาก — บิลที่เปิดมาก่อนเวลาเปิดกะก็ต้องนับ ไม่งั้นมองไม่เห็น
+    // ประวัติการแก้บิลอ่านแยก — ล้มก็ไม่ควรขวางการปิดกะ (ใบจะแค่ไม่มีบล็อกแก้บิล)
+    const[m,o,openNow,ed]=await Promise.all([api.getCashMovements(shift.id),api.getShiftOrders(currentBranch.id,shift.id,shift.opened_at),api.getActiveOrders(currentBranch.id),api.getOrderEdits(shift.id).catch(()=>[])]);
+    // บิลที่ติดเลขกะไว้แล้วตัดสินจากเลขกะอย่างเดียว · บิลเก่าที่ยังไม่มีเลขกะใช้กติกาเวลาเหมือนเดิม
+    const mine=(x)=>x&&x.shift_id!=null?+x.shift_id===+shift.id:null;
+    const since=new Date(shift.opened_at).getTime();
+    // Source of truth: orders linked via cash_movements (sale rows) PLUS any paid orders updated in shift window
+    const linkedIds=new Set(m.filter(x=>x.type==='sale'&&x.order_id).map(x=>x.order_id));
+    const inShift=(o||[]).filter(x=>{
+      if(x.status!=='paid')return false;
+      if(mine(x)!==null)return mine(x);
+      if(linkedIds.has(x.id))return true;
+      const u=new Date(x.updated_at||x.created_at).getTime();
+      return u>=since;
+    });
+    return{movements:m,orders:inShift,openBills:Array.isArray(openNow)?openNow:[],
+      cancelled:(o||[]).filter(x=>x.status==="cancelled"&&mine(x)!==false),edits:Array.isArray(ed)?ed:[]};
+  }
+  function applyShiftData(d){setEdits(d.edits);setMovements(d.movements);setOpenBills(d.openBills);setCancelled(d.cancelled);setOrders(d.orders);}
   async function load(){
     setLoading(true);
-    try{
-      // ดึงบิลตั้งแต่เวลาเปิดกะ ครบทุกใบ (เดิมตัดที่ 200 ใบล่าสุด ทำให้ยอดกะขาด)
-      // ดึงบิลที่ยังเปิดอยู่แยกต่างหาก — บิลที่เปิดมาก่อนเวลาเปิดกะก็ต้องนับ ไม่งั้นมองไม่เห็น
-      // ประวัติการแก้บิลอ่านแยก — ล้มก็ไม่ควรขวางการปิดกะ (ใบจะแค่ไม่มีบล็อกแก้บิล)
-      const[m,o,openNow,ed]=await Promise.all([api.getCashMovements(shift.id),api.getShiftOrders(currentBranch.id,shift.id,shift.opened_at),api.getActiveOrders(currentBranch.id),api.getOrderEdits(shift.id).catch(()=>[])]);
-      setEdits(Array.isArray(ed)?ed:[]);
-      setMovements(m);
-      setOpenBills(Array.isArray(openNow)?openNow:[]);
-      // บิลที่ติดเลขกะไว้แล้วตัดสินจากเลขกะอย่างเดียว · บิลเก่าที่ยังไม่มีเลขกะใช้กติกาเวลาเหมือนเดิม
-      const mine=(x)=>x&&x.shift_id!=null?+x.shift_id===+shift.id:null;
-      setCancelled((o||[]).filter(x=>x.status==="cancelled"&&mine(x)!==false));
-      const since=new Date(shift.opened_at).getTime();
-      // Source of truth: orders linked via cash_movements (sale rows) PLUS any paid orders updated in shift window
-      const linkedIds=new Set(m.filter(x=>x.type==='sale'&&x.order_id).map(x=>x.order_id));
-      const inShift=(o||[]).filter(x=>{
-        if(x.status!=='paid')return false;
-        if(mine(x)!==null)return mine(x);
-        if(linkedIds.has(x.id))return true;
-        const u=new Date(x.updated_at||x.created_at).getTime();
-        return u>=since;
-      });
-      setOrders(inShift);
-    }catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}
+    try{applyShiftData(await fetchShiftData());}catch(e){alert("โหลดไม่สำเร็จ: "+e.message);}
     setLoading(false);
   }
   useEffect(()=>{load();},[shift.id]);
@@ -24585,8 +25236,29 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
     await doCloseShift(null);
   }
   async function doCloseShift(forced){
-    if(!await confirmDlg({title:"ยืนยันปิดกะ",message:`ยอดที่ควรมี ฿${totals.expected.toLocaleString()}\nนับจริง ฿${totals.actual.toLocaleString()}\n${totals.diff===0?'ตรงเป๊ะ':totals.diff>0?`เกิน ฿${totals.diff.toLocaleString()}`:`ขาด ฿${Math.abs(totals.diff).toLocaleString()}`}\n\nโต๊ะว่างจะได้ QR ใหม่ (ใบ QR ที่วางค้างไว้จะใช้สั่งไม่ได้)\nยกเว้นโต๊ะที่เพิ่งพิมพ์ QR ไม่ถึง 1 ชม. (ลูกค้าเพิ่งนั่ง ยังไม่สั่ง)\nต้องการปิดกะใช่หรือไม่?`,confirmLabel:"ปิดกะ",danger:true}))return;
+    // ── 28 ต.ค. 69: ถามฐานก่อนทำอะไรทั้งหมด ─────────────────────────────────
+    // ① กะยังเปิดอยู่จริงไหม — iPad ที่ค้างกะซึ่งถูกปิดจากอีกเครื่องไปแล้ว เคยปิดกะเก่าซ้ำได้: เขียนทับตัวเลขที่ปิดไว้
+    //    เงินนับเป็นสองแถว ยิงบัญชีซ้ำ (ขึ้นแดง "ยังไม่เข้าบัญชี" หลอก) ส่วนกะจริงของคืนนั้นไม่ถูกปิด
+    // ② ยอดกะ ณ ตอนกด — ระหว่างนับเงิน อีกเครื่องเก็บเงินโต๊ะเข้ากะนี้ได้ · ใช้ยอดตอนเปิดจอ = ใบ Z/แถวกะขาดบิลนั้น + เงินเกินหลอก
+    //    (โหลดตอนเปิดจอล้ม = ปิดกะด้วยยอด 0 ได้) · อ่านไม่ได้ = ยังไม่ปิด ให้กดใหม่ ห้ามปิดด้วยตัวเลขเก่า
     setSaving(true);
+    let st=null,fr=null;
+    try{const[r,d]=await Promise.all([api.getShiftStatus(shift.id),fetchShiftData()]);st=Array.isArray(r)&&r[0]?r[0]:null;fr=d;}
+    catch(e){setSaving(false);showErr("อ่านยอดล่าสุดของกะไม่สำเร็จ — ยังไม่ได้ปิดกะ กรุณากดปิดกะอีกครั้ง",e);return;}
+    // เครื่องนี้ส่งคำสั่งปิดไปแล้วแต่คำตอบหาย (ฐานปิดแล้วจริง) = ไปต่อที่ส่งบัญชี/ปล่อยโต๊ะ โดยไม่พิมพ์ซ้ำ ไม่นับเงินซ้ำ ไม่เขียนทับ
+    const sentByUs=(at)=>{const s=shiftCloseSent.get(+shift.id),t=Date.parse(at||"");return!!s&&!isNaN(t)&&[...s].some(x=>Date.parse(x)===t);};
+    const resume=!!st&&st.status==="closed"&&sentByUs(st.closed_at);
+    if(!st||(st.status!=="open"&&!resume)){
+      setSaving(false);
+      await confirmDlg({title:"กะนี้ถูกปิดไปแล้ว",confirmLabel:"เข้าใจแล้ว",cancelLabel:null,
+        message:`กะ #${shift.id} ปิดไปแล้ว${st&&st.closed_at?" เมื่อ "+fmtDT(st.closed_at):""} (จากเครื่องอื่น หรือจอนี้ค้างไว้ไม่ได้รีเฟรช)\n\nเครื่องนี้ไม่ได้ปิดซ้ำ ไม่ได้เขียนทับยอด และไม่ได้ส่งบัญชีซ้ำ\nจอจะโหลดกะที่เปิดอยู่ตอนนี้ให้ — ถ้าจะปิดกะ ให้นับเงินแล้วกดปิดกะใหม่อีกครั้ง\nถ้าไม่แน่ใจว่ายอดกะ #${shift.id} เข้าบัญชีแล้ว ให้แจ้งผู้จัดการ`});
+      (onStale||onClosed)();
+      return;
+    }
+    applyShiftData(fr);   // จอแสดงชุดเดียวกับที่จะปิด
+    const orders=fr.orders;
+    const totals=computeShiftTotals({movements:fr.movements,orders,actualCash,cancelled:fr.cancelled,openBills:fr.openBills,edits:fr.edits});
+    if(!resume&&!await confirmDlg({title:"ยืนยันปิดกะ",message:`ยอดที่ควรมี ฿${totals.expected.toLocaleString()}\nนับจริง ฿${totals.actual.toLocaleString()}\n${totals.diff===0?'ตรงเป๊ะ':totals.diff>0?`เกิน ฿${totals.diff.toLocaleString()}`:`ขาด ฿${Math.abs(totals.diff).toLocaleString()}`}\n\nโต๊ะว่างจะได้ QR ใหม่ (ใบ QR ที่วางค้างไว้จะใช้สั่งไม่ได้)\nยกเว้นโต๊ะที่เพิ่งพิมพ์ QR ไม่ถึง 1 ชม. (ลูกค้าเพิ่งนั่ง ยังไม่สั่ง)\nต้องการปิดกะใช่หรือไม่?`,confirmLabel:"ปิดกะ",danger:true})){setSaving(false);return;}
     try{
       // Print Z-report FIRST so a popup-blocker / printer issue doesn't strand the audit trail.
       // ปิดทั้งที่ยังมีโต๊ะค้าง ต้องเขียนไว้ทั้งบน Z-Report และในกะ ตรวจย้อนหลังได้ว่าใครปิดทั้งที่ค้าง
@@ -24595,9 +25267,26 @@ function CloseShiftModal({shift,currentBranch,currentUser,onClose,onClosed}){
         :"";
       const noteFull=[note,stuckNote].filter(Boolean).join("\n");
       const zArgs={shift,totals,branch:currentBranch,user:currentUser,note:noteFull,daySplit:shiftDaySplit(orders)};
-      printZReport(zArgs);
-      await api.addCashMovement({shift_id:shift.id,branch_id:currentBranch.id,type:"closing",amount:round2(totals.actual),reason:"ปิดกะ - นับเงินจริง",note:totals.diff!==0?`ส่วนต่าง ${totals.diff>=0?'+':''}${round2(totals.diff)}`:null,user_id:currentUser.id,username:currentUser.username});
-      await api.closeShift(shift.id,{status:"closed",closed_at:new Date().toISOString(),closing_cash:round2(totals.actual),expected_cash:round2(totals.expected),cash_diff:round2(totals.diff),total_sales:round2(totals.totalSales),total_cash:round2(totals.totalCash),total_transfer:round2(totals.totalTransfer),total_card:round2(totals.totalCard),total_other:round2(totals.totalOther),total_pay_in:round2(totals.payIn),total_pay_out:round2(totals.payOut),total_drop:round2(totals.drops),order_count:totals.orderCount,notes:noteFull||null});
+      if(!resume){
+        printZReport(zArgs);
+        // เงินนับจริงมีได้แถวเดียวต่อกะ — กดซ้ำหลังรอบก่อนบันทึกไม่สำเร็จ = แก้ยอดในแถวเดิม (เดิมเพิ่มแถวใหม่ ฝั่งบัญชีรวมยอดนับเป็นสองเท่า)
+        const prevClosing=(fr.movements||[]).find(m=>m&&m.type==="closing");
+        const closingNote=totals.diff!==0?`ส่วนต่าง ${totals.diff>=0?'+':''}${round2(totals.diff)}`:null;
+        if(prevClosing&&prevClosing.id!=null)await api.updateCashMovement(prevClosing.id,{amount:round2(totals.actual),note:closingNote,user_id:currentUser.id,username:currentUser.username});
+        else await api.addCashMovement({shift_id:shift.id,branch_id:currentBranch.id,type:"closing",amount:round2(totals.actual),reason:"ปิดกะ - นับเงินจริง",note:closingNote,user_id:currentUser.id,username:currentUser.username});
+        const closedAt=new Date().toISOString();
+        shiftCloseSent.set(+shift.id,new Set([...(shiftCloseSent.get(+shift.id)||[]),closedAt]));
+        const done=await api.closeShift(shift.id,{status:"closed",closed_at:closedAt,closing_cash:round2(totals.actual),expected_cash:round2(totals.expected),cash_diff:round2(totals.diff),total_sales:round2(totals.totalSales),total_cash:round2(totals.totalCash),total_transfer:round2(totals.totalTransfer),total_card:round2(totals.totalCard),total_other:round2(totals.totalOther),total_pay_in:round2(totals.payIn),total_pay_out:round2(totals.payOut),total_drop:round2(totals.drops),order_count:totals.orderCount,notes:noteFull||null});
+        // ได้ [] = ตอนเขียน กะไม่ได้เปิดแล้ว — ถามฐานซ้ำว่าใครปิด (29 ต.ค. 69)
+        // closed_at เป็นค่าที่เครื่องนี้ส่ง (กดซ้ำตอนฐานช้า รอบก่อนเพิ่งลง) = ของเรา → ไปต่อปล่อยโต๊ะ+ส่งบัญชีครั้งเดียว ไม่พิมพ์/ไม่นับเงินเพิ่ม
+        // อ่านไม่ได้ = ยังไม่รู้ ให้กดใหม่ (รอบหน้าถามสถานะก่อนเสมอ) · ไม่ใช่ค่าของเรา = อีกเครื่องปิดตัดหน้า — ไม่เขียนทับ ไม่ส่งบัญชีซ้ำ
+        if(Array.isArray(done)&&done.length===0){
+          let st2=null;
+          try{const r2=await api.getShiftStatus(shift.id);st2=Array.isArray(r2)&&r2[0]?r2[0]:null;}
+          catch(e){setSaving(false);showErr("ยืนยันสถานะกะไม่สำเร็จ — กรุณากดปิดกะอีกครั้ง (ถ้ากะปิดแล้ว จะไม่พิมพ์ใบปิดกะ/ไม่นับเงินซ้ำ)",e);return;}
+          if(!(st2&&st2.status==="closed"&&sentByUs(st2.closed_at))){shiftCloseSent.delete(+shift.id);setSaving(false);notifyDlg(`กะ #${shift.id} เพิ่งถูกปิดจากอีกเครื่อง — เครื่องนี้ไม่ได้เขียนทับยอดและไม่ได้ส่งบัญชีซ้ำ\nแจ้งผู้จัดการตรวจยอดนับเงินของกะนี้`);(onStale||onClosed)();return;}
+        }
+      }
       // Clear auto-print dedup so next shift starts fresh
       try{sessionStorage.removeItem("fc_printed_orders");}catch{}
       // ── ปล่อยโต๊ะว่างทั้งสาขา (QR ใหม่ + ล้างธงพิมพ์ QR) ── ทำหลังกะปิดสำเร็จแล้วเท่านั้น
@@ -26597,7 +27286,11 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
     if(!editPID&&!bid){notifyDlg("ยังไม่รู้ว่าเครื่องนี้เป็นของสาขาไหน — เปิดสาขาที่จะใช้เครื่องนี้ก่อน แล้วค่อยเพิ่มเครื่องพิมพ์");return;}
     setPSaving(true);
     try{
-      const d={name:pForm.name,ip:isBT?"bluetooth":pForm.ip,port:isBT?0:+pForm.port||9100,type:pForm.type,branch_id:bid,active:true,description:isBT?JSON.stringify({c:"bt",n:pForm.btName}):pForm.description};
+      // เครื่องแลน: ช่อง "หมายเหตุ" คือ description ทั้งก้อน (ติ๊กใบเสร็จ/ลิ้นชัก · สถานะ · คำสั่งพิมพ์ · รายการใบครัวไม่ออก) ที่จำไว้ตอนกด "แก้ไข"
+      // ไม่ได้แก้ช่องนี้ = ไม่ส่ง description เลย — เดิมเขียนก้อนตอนกดแก้ไขทับ รายการไม่ออก/คำสั่งที่ตัวพิมพ์เขียนระหว่างนั้นหายเงียบ (ตรวจทาน 28 ต.ค. 69)
+      // บลูทูธ · เพิ่มใหม่ · เปลี่ยนจากบลูทูธเป็นแลน · แก้ช่องหมายเหตุเอง = เขียนตามเดิม
+      const keepDesc=!!editPID&&!isBT&&!pForm.wasBT&&pForm.desc0!=null&&pForm.description===pForm.desc0;
+      const d={name:pForm.name,ip:isBT?"bluetooth":pForm.ip,port:isBT?0:+pForm.port||9100,type:pForm.type,branch_id:bid,active:true,...(keepDesc?{}:{description:isBT?JSON.stringify({c:"bt",n:pForm.btName}):pForm.description})};
       if(editPID)await api.updatePrinter(editPID,d);else await api.addPrinter(d);
       await reloadPrinters();setPForm(pF0);setEditPID(null);
     }catch(e){alert("บันทึกไม่สำเร็จ: "+e.message);}
@@ -26680,7 +27373,7 @@ function POSPrinterPanel({printers,reloadPrinters,branches,currentUser,menus=[],
             </div>
             {isAdmin&&<div style={{display:"flex",gap:5,flexShrink:0}}>
               <button onClick={()=>openCatEdit(p)} title="หมวดหมู่ที่รับผิดชอบ" style={{background:"#FEF3C7",border:`1px solid #FDE68A`,borderRadius:8,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><span style={{fontSize:13}}>🍳</span><span style={{fontSize:11,color:"#92400E",fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>หมวด</span></button>
-              <button onClick={()=>{const pc=getPConn(p);setPForm({name:p.name,ip:pc.type==="bluetooth"?"":p.ip,port:p.port||9100,description:pc.type==="bluetooth"?"":p.description||"",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active,conn:pc.type,btName:pc.btName||""});setEditPID(p.id);}} title="แก้ไข" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:8,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.pencil} s={12} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>แก้</span></button>
+              <button onClick={()=>{const pc=getPConn(p);setPForm({name:p.name,ip:pc.type==="bluetooth"?"":p.ip,port:p.port||9100,description:pc.type==="bluetooth"?"":p.description||"",desc0:pc.type==="bluetooth"?"":p.description||"",wasBT:pc.type==="bluetooth",type:p.type||"kitchen",branch_id:p.branch_id,active:p.active,conn:pc.type,btName:pc.btName||""});setEditPID(p.id);}} title="แก้ไข" style={{background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:8,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.pencil} s={12} c={C.blue}/><span style={{fontSize:11,color:C.blue,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>แก้</span></button>
               <button onClick={async()=>{if(!await confirmDlg({title:"ลบเครื่องปริ้น",message:`ต้องการลบ "${p.name}" ใช่หรือไม่?`}))return;try{await api.deletePrinter(p.id);await reloadPrinters();}catch{alert("ลบไม่สำเร็จ");}}} title="ลบ" style={{background:C.redLight,border:`1px solid #FECACA`,borderRadius:8,padding:"5px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}><Ic d={I.trash} s={12} c={C.red}/><span style={{fontSize:11,color:C.red,fontFamily:"'Sarabun',sans-serif",fontWeight:700}}>ลบ</span></button>
             </div>}
           </div>
@@ -27414,7 +28107,7 @@ function POSSaleMode({menus,reloadMenus,reloadPrinters,currentBranch,currentUser
         {!(justOpened&&justOpened.id===selTable.id)&&<button onClick={printSelQR} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px solid ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink2}}>🖨 พิมพ์ QR โต๊ะนี้</button>}
         {!selOrder?.id&&<button onClick={()=>reissueTableQR(selTable)} title="เปลี่ยนรหัส QR ของโต๊ะว่างนี้ — QR เดิมทุกใบใช้ไม่ได้ทันที" style={{display:"flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:9,border:`1px dashed ${C.line}`,background:C.white,cursor:"pointer",fontSize:12,fontFamily:"'Sarabun',sans-serif",fontWeight:600,color:C.ink3}}>🔄 ออก QR ใหม่</button>}
       </div>
-      <POSOrderPanel table={selTable} key={selOrder&&selOrder.id!=null?"o"+selOrder.id:"t"+selTable.id} existingOrder={selOrder}menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onCashChange={setChangeDlg} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})}/>
+      <POSOrderPanel table={selTable} key={selOrder&&selOrder.id!=null?"o"+selOrder.id:"t"+selTable.id} existingOrder={selOrder}menus={menus} reloadMenus={reloadMenus} branch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} posSettings={posSettings} promotions={promotions} onCashChange={setChangeDlg} onClose={()=>{setSelTable(null);setSelOrder(null);}} onDone={()=>loadAll({silent:true})} onNoShift={()=>{if(onUpdateShift)onUpdateShift(null);}}/>
     </Modal>}
     {/* ── เงินทอน ── ปิดบิลเงินสดเสร็จแล้ว โต๊ะว่างแล้ว เหลืออย่างเดียวคือทอนเงิน
         ตัวเลขใหญ่ที่สุดบนจอคือยอดที่ต้องทอน เพราะนั่นคือสิ่งเดียวที่ต้องทำต่อ */}
@@ -27521,7 +28214,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     setSearched(true);setSearching(true);
     // สั่งให้ตัวพิมพ์ (agent) สแกนหาเครื่องใหม่ในวง LAN "ทันที" (ไม่รอรอบสแกนอัตโนมัติ 2 นาที)
     const at=Date.now();
-    try{await Promise.all((printers||[]).map(p=>{let d={};try{d=JSON.parse(p.description||"{}");}catch{}return api.updatePrinter(p.id,{description:JSON.stringify({...d,scanReq:at})});}));}catch{}
+    // เขียนจากแถวสด (writePrinterDesc) ไม่ใช่รายชื่อในจอ — ของในจอเก่าได้หลายนาที เขียนทับ = รายการใบครัวไม่ออก/คำสั่งที่เพิ่งเข้ามาหาย (28 ต.ค. 69)
+    try{await Promise.all((printers||[]).map(p=>writePrinterDesc(p.id,f=>{let d={};try{d=JSON.parse(f.description||"{}");}catch{}return JSON.stringify({...d,scanReq:at});}).catch(()=>{})));}catch{}
     const beforeIds=new Set((printers||[]).map(p=>p.id));
     let foundNew=false;
     // ดึงซ้ำทุก 2 วิ จนกว่าจะเจอเครื่องใหม่ หรือครบ ~28 วิ (agent สแกน ~10 วิ) — หยุดทันทีถ้าปิด modal
@@ -27581,7 +28275,8 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
     const before={};(printers||[]).forEach(p=>{try{before[p.id]=JSON.parse(p.description||"{}").onAt||0;}catch{}});   // จำเวลาเดิม เพื่อรู้ว่า agent อัปเดตแล้ว
     const at=Date.now();
     try{
-      await Promise.all((printers||[]).filter(p=>p.ip&&getPConn(p).type!=="bluetooth").map(p=>{let d={};try{d=JSON.parse(p.description||"{}");}catch{}return api.updatePrinter(p.id,{description:JSON.stringify({...d,pingReq:at})});}));
+      // เขียนจากแถวสด (writePrinterDesc) — เดิมเขียนก้อนในจอ (เก่าได้หลายนาที) ทับทุกเครื่อง: ใบครัวไม่ออกที่เพิ่งจดหาย · ที่ล้างไปแล้วกลับมา (28 ต.ค. 69)
+      await Promise.all((printers||[]).filter(p=>p.ip&&getPConn(p).type!=="bluetooth").map(p=>writePrinterDesc(p.id,f=>{let d={};try{d=JSON.parse(f.description||"{}");}catch{}return JSON.stringify({...d,pingReq:at});}).catch(()=>{})));
     }catch(e){}
     // หยุดหมุน "ทันที" ที่ตัวพิมพ์ตอบกลับ (onAt ใหม่กว่าเดิม) — ไม่รอครบเวลา · เช็คทุก 0.8 วิ สูงสุด ~10 วิ
     for(let i=0;i<12&&aliveRef.current;i++){
@@ -27613,7 +28308,10 @@ function PrinterStatusModal({currentBranch,menus=[],reloadMenus,onClose,printSta
           {rule:true},
           {t:fmtDT(),size:20,align:"center"},
         ],576);
-        await api.updatePrinter(p.id,{description:cmdDesc(p,"pj",{at:Date.now(),b64,what:"ทดสอบพิมพ์"})});
+        // ใบเสร็จ/QR ที่ตัวพิมพ์ยังไม่หยิบอยู่ในช่องเดียวกัน — เขียนทับ = ใบนั้นหายเงียบ · รอให้หยิบก่อน (สูงสุด ~6 วิ) แล้วเขียนจากแถวสด (28 ต.ค. 69)
+        let left=[];try{const fr=((await api.getPrintersByIds([p.id]))||[]).find(x=>x&&+x.id===+p.id);if(fr&&cmdPending(fr,"pj"))left=await waitCmdSlot([p.id],"pj");}catch{}
+        await writePrinterDesc(p.id,f=>cmdDesc(f,"pj",{at:Date.now(),b64,what:"ทดสอบพิมพ์"}));
+        if(left.length)posToast("⚠️ งานพิมพ์ก่อนหน้า (ใบเสร็จ/QR) ยังไม่ออกจากตัวพิมพ์ — ถูกหน้าทดสอบแทนที่แล้ว ถ้าต้องใช้ให้สั่งพิมพ์ใหม่จากบิล","warn",9000);
         posToast("🧾 ส่งทดสอบพิมพ์ (แบบรูปภาพ ไทยคมชัด) ไปตัวพิมพ์แล้ว — กระดาษจะออกใน ~5 วินาที (ผลดูที่ งานล่าสุด ของเครื่อง)","ok");
       }catch(e){alert("ส่งคำสั่งทดสอบไม่สำเร็จ: "+(e&&e.message||e));}
       return;
@@ -27990,10 +28688,14 @@ async function printBillReceipt(order,tableNum,{branch,posSettings,printers=[],p
     // เรนเดอร์ใบไม่ได้ (ยังไม่ได้เขียนอะไร) — ลิ้นชักยังต้องเปิด สั่งแยกได้เพราะไม่มีใบเสร็จไปแข่ง
     if(!b64){kickAlone(rcps.filter(p=>kp.withRcpt.has(+p.id)));try{printReceipt(order,tableNum,branch.name,posSettings,{paid});}catch{}return false;}
     try{
+      // อ่านแถวสดหลังเรนเดอร์ (0.3 วิ–หลายวิ) ก่อนเขียน — เดิมเขียนจากแถวที่อ่านก่อนเรนเดอร์ รายการ "ใบครัวไม่ออก" ที่ตัวพิมพ์จดระหว่างนั้นหายเงียบ
+      // (สาขา 5 เครื่องใบเสร็จคือแถวที่เก็บรายการไม่ออก) · อ่านไม่ได้ = ใช้แถวเดิมแบบที่เคยทำ (ตรวจทาน 28 ต.ค. 69)
+      let fr=[];try{const a=await api.getPrintersByIds(rcps.map(p=>p.id));if(Array.isArray(a))fr=a;}catch{}
+      const cur=(p)=>fr.find(x=>x&&+x.id===+p.id)||p;
       const at=Date.now();
       // ให้ทุกเครื่องเขียนจนจบ แล้วดูว่าเครื่องไหนไม่ถึง — ลิ้นชักที่ฝากไปกับใบนั้นต้องสั่งแยก (kickAfterFail)
       const bad=[];
-      await Promise.all(rcps.map(rcp=>api.updatePrinter(rcp.id,{description:withKick(cmdDesc(rcp,"pj",{at,b64,what:paid?"ใบเสร็จ":"ใบแจ้งยอด",bill:order&&order.id!=null?order.id:null,table:String(tableNum??"")}),kp.withRcpt.has(+rcp.id)?dk:null)}).catch(e=>{bad.push({p:rcp,e});})));
+      await Promise.all(rcps.map(rcp=>api.updatePrinter(rcp.id,{description:withKick(cmdDesc(cur(rcp),"pj",{at,b64,what:paid?"ใบเสร็จ":"ใบแจ้งยอด",bill:order&&order.id!=null?order.id:null,table:String(tableNum??"")}),kp.withRcpt.has(+rcp.id)?dk:null)}).catch(e=>{bad.push({p:rcp,e});})));
       if(bad.length){kickAfterFail(bad.map(x=>x.p).filter(p=>kp.withRcpt.has(+p.id)),dk);throw bad[0].e;}
       posToast(`🧾 ส่ง${paid?"ใบเสร็จ":"ใบแจ้งยอด"}ไป ${rcps.length} เครื่องแล้ว — ไม่ออกใน 10 วิ ดูปุ่ม พิมพ์ไม่สำเร็จ`,"ok");
       return true;   // ส่งเข้าตัวพิมพ์แล้วจริง (ผู้เรียกบางที่ใช้ตัดสินว่าเอารายการ "ไม่ออก" เดิมออกได้)
@@ -28143,10 +28845,14 @@ async function printVoidBillSlip({order,branch,reason,refundText,by,at,printers=
   if(!rcps.length){posToast("⚠️ ยกเลิกบิลแล้ว แต่ยังไม่ได้ติ๊กเครื่องพิมพ์ใบเสร็จ — ใบยกเลิกไม่ได้พิมพ์","warn",7000);return;}
   let b64;
   try{b64=await escposSlipRaster(L,576);}catch(e){kickAlone(rcps.filter(p=>kp.withRcpt.has(+p.id)));throw e;}
+  // อ่านแถวสดหลังเรนเดอร์ (0.3 วิ–หลายวิ) ก่อนเขียน — เดิมเขียนจากแถวที่อ่านก่อนเรนเดอร์ รายการ "ใบครัวไม่ออก" ที่ตัวพิมพ์จดระหว่างนั้นหายเงียบ
+  // (สาขา 5 เครื่องใบเสร็จคือแถวที่เก็บรายการไม่ออก) · อ่านไม่ได้ = ใช้แถวเดิมแบบที่เคยทำ (ตรวจทาน 28 ต.ค. 69)
+  let fr=[];try{const a=await api.getPrintersByIds(rcps.map(p=>p.id));if(Array.isArray(a))fr=a;}catch{}
+  const cur=(p)=>fr.find(x=>x&&+x.id===+p.id)||p;
   const stamp=Date.now();
   // เขียนไม่ถึงบางเครื่อง = ลิ้นชักที่ฝากไปด้วยไม่ถึง → สั่งแยกเฉพาะเครื่องนั้น (เหตุผลเดียวกับใบเสร็จบิลเงินสด)
   const bad=[];
-  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:withKick(cmdDesc(p,"pj",{at:stamp,b64,what:"ใบยกเลิกบิล",bill:order.id,table:String(order.table_number||"")}),kp.withRcpt.has(+p.id)?dk:null)}).catch(e=>{bad.push({p,e});})));
+  await Promise.all(rcps.map(p=>api.updatePrinter(p.id,{description:withKick(cmdDesc(cur(p),"pj",{at:stamp,b64,what:"ใบยกเลิกบิล",bill:order.id,table:String(order.table_number||"")}),kp.withRcpt.has(+p.id)?dk:null)}).catch(e=>{bad.push({p,e});})));
   if(bad.length){kickAfterFail(bad.map(x=>x.p).filter(p=>kp.withRcpt.has(+p.id)),dk);throw bad[0].e;}
   posToast("🧾 ส่งใบยกเลิกบิลไปเครื่องพิมพ์แล้ว","ok");
 }
@@ -28773,6 +29479,26 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   }
   async function loadPromotions(){try{const p=await api.getPromotions(currentBranch.id);setPromotions(p);}catch{setPromotions([]);}}
   useEffect(()=>{loadZones();loadPosSettings();loadPromotions();},[currentBranch.id]);
+  // ── กะบนจอต้องเป็นกะที่เปิดอยู่จริง (28 ต.ค. 69) ───────────────────────────
+  // เดิมอ่านกะครั้งเดียวตอนเข้าจอขาย — iPad ที่ค้างไว้ยังถือกะที่ถูกปิดจากอีกเครื่องแล้ว กดปิดกะ = ปิดกะเก่าซ้ำ ส่วนกะจริงไม่ถูกปิด
+  // ถามแค่เลขกะ (~20 ไบต์ ทุกรอบ 60 วิ + ตอนกลับมาที่จอ) · คนละเลข = รับกะที่เปิดจริงมาแทน
+  // ไม่มีกะเปิด / อ่านไม่ได้ / หน้าปิดกะ-ลิ้นชักเปิดอยู่ = ไม่แตะ (ห้ามดีดจอขายทิ้งกลางงาน — ปิดบิลกับปิดกะเช็คกะเองก่อนเขียนอยู่แล้ว)
+  // force = หลังปิดกะแล้วเจอว่ากะถูกปิดไปก่อน: ไม่มีกะเปิด → ไปหน้าเปิดกะ
+  const shiftRef=useRef(null);shiftRef.current=shift;
+  const shiftModalRef=useRef(false);shiftModalRef.current=showCloseShift||showCashDrawer;
+  async function syncShift(force){
+    try{
+      const r=await api.getActiveShiftId(currentBranch.id);
+      const id=Array.isArray(r)&&r[0]?+r[0].id:null;
+      if(!id){if(force)setShift(null);return;}
+      const cur=shiftRef.current;
+      if(cur&&+cur.id===id)return;
+      if(!force&&shiftModalRef.current)return;
+      const s=await api.getActiveShift(currentBranch.id);
+      const live=Array.isArray(s)&&s[0]?s[0]:null;
+      if(live)setShift(live);else if(force)setShift(null);
+    }catch{}
+  }
 
   // ── หน้าขายกับหลังบ้านต้องเห็นข้อมูลชุดเดียวกัน ─────────────────────────
   // เดิมหน้าขายโหลดตั้งค่า/เมนูครั้งเดียวตอนเปิดหน้า แล้วไม่โหลดอีกเลย
@@ -28793,7 +29519,7 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   useEffect(()=>{
     const sale=mode==='sale'&&!!shift;
     if(!sale&&mode!=='manage')return;
-    const light=()=>{if(sale){refreshPosSettings();loadPromotions();if(Date.now()-zonesAt.current>=POS_MENUS_MS)loadZones();}else loadZones();try{reloadPrinters&&reloadPrinters();}catch{}};
+    const light=()=>{if(sale){refreshPosSettings();loadPromotions();syncShift(false);if(Date.now()-zonesAt.current>=POS_MENUS_MS)loadZones();}else loadZones();try{reloadPrinters&&reloadPrinters();}catch{}};
     const heavyIfStale=()=>{if(Date.now()-posMenusAt<POS_MENUS_MS)return;posMenusAt=Date.now();try{reloadMenus&&reloadMenus();}catch{}};
     const tick=()=>{light();heavyIfStale();};
     tick();
@@ -28840,7 +29566,7 @@ function POSTab({menus,currentBranch,currentUser,printers=[],branches=[],reloadP
   return <>
     <POSSaleMode menus={menus} reloadMenus={reloadMenus} reloadPrinters={reloadPrinters} currentBranch={currentBranch} currentUser={currentUser} printers={printers} shift={shift} zones={zones} posSettings={posSettings} promotions={promotions} onUpdateShift={setShift} onCashDrawer={()=>setShowCashDrawer(true)} onCloseShift={()=>setShowCloseShift(true)} onExitMode={exitSale} saleOnly={saleOnly} reloadPosSettings={loadPosSettings} refreshTick={refreshTick} reloadZones={loadZones}/>
     {showCashDrawer&&<CashDrawerModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} printers={printers} onClose={()=>setShowCashDrawer(false)}/>}
-    {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShowCashDrawer(false);setShift(null);if(!saleOnly)setMode(null);}}/>}
+    {showCloseShift&&<CloseShiftModal shift={shift} currentBranch={currentBranch} currentUser={currentUser} onClose={()=>setShowCloseShift(false)} onClosed={()=>{setShowCloseShift(false);setShowCashDrawer(false);setShift(null);if(!saleOnly)setMode(null);}} onStale={()=>{setShowCloseShift(false);setShowCashDrawer(false);syncShift(true);}}/>}
   </>;
 }
 

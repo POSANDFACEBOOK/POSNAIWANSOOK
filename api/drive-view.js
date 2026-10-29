@@ -35,9 +35,45 @@ async function accessToken() {
   return token;
 }
 
+// 28 ต.ค. 69: ส่งไฟล์กลับแบบที่เบราว์เซอร์รันโค้ดในไฟล์ไม่ได้ — ไฟล์นี้เสิร์ฟจากโดเมนแอปเอง
+// เดิมส่งทุกไฟล์ inline ด้วยชนิดที่ Drive เก็บไว้ ⟹ SVG/HTML ที่อัปขึ้นมา (ปลายทางอัปไม่มีรหัส) เปิดแล้วสคริปต์รัน
+// ในโดเมนแอป อ่านรหัสใน localStorage ได้ (nw_broadcast_key ฯลฯ)
+//  · รูปแบบพิกเซล = inline ตามเดิม (แสดงใน <img> ได้เหมือนเดิมทุกอย่าง) + sandbox
+//  · PDF = inline (เปิดดูในเบราว์เซอร์ได้) — ไม่ใส่ sandbox เพราะ Chrome ไม่ยอมเปิด PDF ในหน้าที่ถูก sandbox
+//  · อย่างอื่นทั้งหมด = ดาวน์โหลด (attachment) ไม่เปิดในหน้า · ชนิดนอกรายการ Office = application/octet-stream
+//  · ทุกแบบ nosniff = ห้ามเบราว์เซอร์เดาชนิดเองจากเนื้อไฟล์
+// รายการชนิดต้องตรงกับ api/drive-upload.js (มีด่านตรวจใน tools/check-code.mjs)
+const RASTER_TYPES = ["image/jpeg", "image/jpg", "image/pjpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif", "image/avif", "image/bmp", "image/tiff"];
+const DOC_TYPES = [
+  "application/pdf",
+  "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+];
+const SANDBOX_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+// 29 ต.ค. 69: ไฟล์สำรองข้อมูล (api/backup.js อัปขึ้น Drive เป็น application/gzip — ปลายทางอัปของแอปรับ gzip ไม่ได้)
+// เดิมตกไปเป็น octet-stream ไม่มีชื่อไฟล์ ⟹ เบราว์เซอร์เซฟเป็น "drive-view" ไม่มีนามสกุล เจ้าของจำไม่ได้ว่าเป็นไฟล์สำรอง
+// ยังเป็นดาวน์โหลด + nosniff + sandbox เหมือนชนิดอื่น · ชื่อไฟล์จากแอป (?fn=) ใช้ได้เฉพาะตัวอักษรปลอดภัยที่ลงท้าย .json.gz
+// นอกนั้นใช้ backup-<id>.json.gz (ใส่ชื่ออะไรมาก็ไม่ได้ชื่อ .html/.exe จากโดเมนแอป)
+const GZIP_TYPES = ["application/gzip", "application/x-gzip"];
+export function gzipName(id, fn) {
+  const f = String(fn || "");
+  if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,150}\.json\.gz$/.test(f)) return f;
+  return `backup-${String(id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 80) || "file"}.json.gz`;
+}
+export function viewHeaders(stored, id, fn) {
+  const t = String(stored || "").split(";")[0].trim().toLowerCase();
+  if (RASTER_TYPES.includes(t)) return { "Content-Type": t, "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": SANDBOX_CSP };
+  if (t === "application/pdf") return { "Content-Type": t, "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff" };
+  if (GZIP_TYPES.includes(t)) return { "Content-Type": t, "Content-Disposition": `attachment; filename="${gzipName(id, fn)}"`, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": SANDBOX_CSP };
+  return { "Content-Type": DOC_TYPES.includes(t) ? t : "application/octet-stream", "Content-Disposition": "attachment", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": SANDBOX_CSP };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "GET") { res.setHeader("Allow", "GET"); return res.status(405).end(); }
   if (!SA_B64) return res.status(501).end("drive not configured");
+  res.setHeader("X-Content-Type-Options", "nosniff");
   const id = String(req.query.id || "");
   if (!/^[A-Za-z0-9_-]{10,}$/.test(id)) return res.status(400).end("bad id");
   if (VIEW_TOKEN && req.query.t !== VIEW_TOKEN) return res.status(403).end("forbidden");
@@ -61,8 +97,7 @@ export default async function handler(req, res) {
             const sized = link.replace(/=s\d+(-c)?$/, `=s${W}`);
             const t = await fetch(sized);
             if (t.ok) {
-              res.setHeader("Content-Type", t.headers.get("content-type") || "image/jpeg");
-              res.setHeader("Content-Disposition", "inline");
+              for (const [k, v] of Object.entries(viewHeaders(t.headers.get("content-type") || "image/jpeg"))) res.setHeader(k, v);
               res.setHeader("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable");
               return res.status(200).end(Buffer.from(await t.arrayBuffer()));
             }
@@ -74,8 +109,7 @@ export default async function handler(req, res) {
       headers: { Authorization: `Bearer ${tok}` },
     });
     if (!r.ok) return res.status(r.status).end(await r.text());
-    res.setHeader("Content-Type", r.headers.get("content-type") || "application/octet-stream");
-    res.setHeader("Content-Disposition", "inline");
+    for (const [k, v] of Object.entries(viewHeaders(r.headers.get("content-type"), id, req.query.fn))) res.setHeader(k, v);
     // ⚠️ เคยเป็น "private, max-age=300" ซึ่งสั่งไม่ให้ CDN แคชเลย แคชแค่ในเบราว์เซอร์ 5 นาที
     // ผลคือรูปทุกใบในระบบ (846 รูป) วิ่งผ่านฟังก์ชันนี้ใหม่แทบทุกครั้งที่มีคนเปิดหน้า
     // ฟังก์ชันต้องไปดึงจาก Drive → โหลดทั้งไฟล์เข้าหน่วยความจำ → ส่งออก

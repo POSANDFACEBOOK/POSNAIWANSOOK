@@ -33,13 +33,32 @@ async function accessToken() {
   return token;
 }
 
+// 28 ต.ค. 69: รับเฉพาะชนิดที่เบราว์เซอร์ไม่รันโค้ดในตัว — รูปแบบพิกเซล + PDF + ไฟล์ Office
+// เดิมรับทุก image/* รวม image/svg+xml (ใส่สคริปต์ได้) ⟹ เปิดผ่าน /api/drive-view = สคริปต์รันในโดเมนแอป
+// อ่านรหัสบรอดแคสต์/กู้คืน/สำรองที่เก็บใน localStorage ได้ · และปฏิเสธ PDF ทั้งที่กล่องแนบไฟล์ใบขอทรัพย์สิน
+// (AttachBox) ตั้งใจให้แนบใบเสนอราคา/สเปค = แนบ PDF ไม่เคยสำเร็จเลยตั้งแต่ 7 ส.ค.
+// ⚠️ ห้ามเพิ่ม text/html, xml, svg, javascript ใดๆ เด็ดขาด · รายการนี้ต้องตรงกับ api/drive-view.js (มีด่านตรวจ)
+const RASTER_TYPES = ["image/jpeg", "image/jpg", "image/pjpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif", "image/avif", "image/bmp", "image/tiff"];
+const DOC_TYPES = [
+  "application/pdf",
+  "application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+];
+// ชนิดที่รับ (ตัด ; charset=… ทิ้ง ตัวเล็กหมด) หรือ null = ไม่รับ
+export function uploadMime(h) {
+  const t = String(h || "").split(";")[0].trim().toLowerCase();
+  return RASTER_TYPES.includes(t) || DOC_TYPES.includes(t) ? t : null;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.setHeader("Allow", "POST"); return res.status(405).json({ error: "POST only" }); }
   if (!SA_B64 || !FOLDER_ID) return res.status(501).json({ error: "drive not configured" });
   try {
     const name = String(req.query.name || "upload.bin").replace(/[\r\n"\\]/g, "").slice(0, 200);
-    const mime = req.headers["content-type"] || "application/octet-stream";
-    if (!/^image\//.test(mime)) return res.status(415).json({ error: "image uploads only" });
+    const mime = uploadMime(req.headers["content-type"]);
+    if (!mime) return res.status(415).json({ error: "รับเฉพาะรูป (jpg/png/webp/heic) PDF และไฟล์ Word/Excel/PowerPoint" });
 
     const chunks = []; let size = 0;
     for await (const c of req) { size += c.length; if (size > 10 * 1024 * 1024) return res.status(413).json({ error: "file too large (10MB max)" }); chunks.push(c); }

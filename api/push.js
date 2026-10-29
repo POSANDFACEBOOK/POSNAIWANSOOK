@@ -35,18 +35,46 @@ async function sbFetch(path, opts = {}) {
 let SUBS_CACHE = { at: 0, rows: null };
 const SUBS_CACHE_TTL = 30 * 60 * 1000;
 
+// 28 ต.ค. 69: ปลายทางนี้ไม่มีรหัสผ่านโดยจำเป็น — แอปในเบราว์เซอร์ยิงเข้ามาเองตอนฐานข้อมูลช้า/ล่ม (dbhAlert)
+// เบราว์เซอร์เก็บความลับไม่ได้ ใส่รหัสเมื่อไหร่ = รหัสหลุด หรือแจ้งเตือนระบบล่มเงียบหาย
+// จึงจำกัด "สิ่งที่ส่งได้" แทน · เดิมรับ url อะไรก็ได้ → ใครก็ยิงแจ้งเตือนหน้าตาเหมือนของจริงเข้ามือถือเจ้าของ
+// แล้วกดแล้วพาไปเว็บหลอก หรือไปไฟล์ที่อัปขึ้นเองผ่าน /api/drive-view ในโดเมนแอปได้
+//  · url ตอนกดแจ้งเตือน = หน้าของแอปเองในรายการนี้เท่านั้น อย่างอื่นกลายเป็น "/" (ผู้เรียกจริงทุกตัวส่ง "/")
+//  · ตัดความยาวหัวข้อ/ข้อความ (ของจริงยาวสุด ~150 ตัว)
+//  · scope รับแค่ "admin" หรือไม่ส่ง · ข้อความเขียนเอง (มี title) ส่งได้เฉพาะ scope admin = ถึงเจ้าของเท่านั้น
+//    (ผู้เรียกที่ส่ง title ทุกตัว — แอป dbhAlert, api/backup.js, ตัวเฝ้า GitHub — ส่ง scope admin อยู่แล้ว)
+// ข้อความยังปลอมได้ (ช่องเดียวกับการเขียนฐานข้อมูลด้วย anon key) แต่พาไปที่อื่นนอกแอปไม่ได้อีก
+const PUSH_URLS = ["/", "/?approve=1"];
+export function pushFields(body) {
+  const b = body && typeof body === "object" ? body : {};
+  if (b.scope != null && b.scope !== "admin") return { error: "scope ไม่ถูกต้อง" };
+  const txt = (v, n) => (v == null ? "" : String(v)).slice(0, n);
+  const title = txt(b.title, 120);
+  if (title && b.scope !== "admin") return { error: "ข้อความกำหนดเองส่งได้เฉพาะ scope admin" };
+  return {
+    branchId: +b.branch_id || null,
+    branchName: txt(b.branchName, 60) || "สาขา",
+    adminOnly: b.scope === "admin",
+    title,
+    body: txt(b.body, 300),
+    url: b.url == null || b.url === "" ? "/?approve=1" : PUSH_URLS.includes(b.url) ? b.url : "/",
+  };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.setHeader("Allow", "POST"); return res.status(405).json({ error: "POST only" }); }
   if (!VAPID_PRIVATE) return res.status(500).json({ error: "VAPID_PRIVATE not configured — set it in Vercel → Settings → Environment Variables" });
   try {
     let body = req.body || {};
     if (typeof body === "string") { try { body = JSON.parse(body); } catch { body = {}; } }
-    const branchId = +body.branch_id || null;
-    const branchName = body.branchName || "สาขา";
+    const f = pushFields(body);
+    if (f.error) return res.status(400).json({ error: f.error });
+    const branchId = f.branchId;
+    const branchName = f.branchName;
     // scope 'admin' → only subscribers who cover EVERY branch (allowed_branches null).
     // Used by the database health alert: an infrastructure problem is the owner's to act
     // on, so it must not spam the area managers who only watch one branch.
-    const adminOnly = body.scope === "admin";
+    const adminOnly = f.adminOnly;
 
     webpush.setVapidDetails("mailto:naiwansook@gmail.com", VAPID_PUBLIC, VAPID_PRIVATE);
 
@@ -81,13 +109,13 @@ export default async function handler(req, res) {
     // ค่าที่ไม่ได้ส่ง title มาเอง = ตัวแจ้งเตือน "คำสั่งซื้อรออนุมัติ" ของเดิมเท่านั้น (ตัวอื่นส่ง title มาครบ)
     // เปิดระบบอนุมัติกลับมาเมื่อไหร่ ให้เปลี่ยนบรรทัดล่างเป็น true พร้อมกับธงในแอป
     const APPROVAL_PUSH_ON = false;
-    if (!APPROVAL_PUSH_ON && !body.title) {
+    if (!APPROVAL_PUSH_ON && !f.title) {
       return res.status(200).json({ skipped: true, reason: "ปิดระบบอนุมัติแล้ว — ไม่ส่งแจ้งเตือนรออนุมัติ" });
     }
     const payload = JSON.stringify({
-      title: body.title || "🔔 คำสั่งซื้อรออนุมัติ",
-      body:  body.body  || `${branchName} ส่งคำสั่งซื้อมารออนุมัติ`,
-      url:   body.url   || "/?approve=1",
+      title: f.title || "🔔 คำสั่งซื้อรออนุมัติ",
+      body:  f.body  || `${branchName} ส่งคำสั่งซื้อมารออนุมัติ`,
+      url:   f.url,
     });
     let sent = 0, removed = 0;
     await Promise.allSettled(targets.map(async s => {

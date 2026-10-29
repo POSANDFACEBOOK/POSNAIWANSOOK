@@ -16,7 +16,7 @@ const os = require("os");
 
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
-const AGENT_VERSION = 51;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
+const AGENT_VERSION = 52;   // ⬆️ เลขเวอร์ชัน — เพิ่มทุกครั้งที่แก้ไฟล์นี้ (ใช้เช็คอัปเดตอัตโนมัติ)
 const AGENT_URL = "https://foodcost-eta.vercel.app/print-agent.js";
 const BRANCH = process.argv[2];
 const POLL_MS = 2000;
@@ -68,6 +68,7 @@ _lock.listen(48191, "127.0.0.1");
 async function sb(query) {
   const res = await fetch(`${SUPA_URL}/rest/v1/${query}`, { headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` } });
   if (!res.ok) throw new Error(await res.text());
+  noteSrvClock(res);   // วัดเวลาเซิร์ฟเวอร์จากทุกคำตอบ — รอบแรกหลังเปิดโปรแกรมก็รู้แล้ว ก่อนตัดสินลิ้นชัก/ใบรูปที่ค้าง (cmdTooOld · 29 ต.ค. 69)
   const txt = await res.text();
   return txt ? JSON.parse(txt) : [];
 }
@@ -295,7 +296,7 @@ let state = { sig: {}, init: {}, greeted: {} };
 // อ่านสำเร็จจริงไหม ไม่ใช่แค่ "ไฟล์มีอยู่" — ไฟดับกลางเขียนทำให้ไฟล์พังได้
 let stateLoaded = false;
 try { if (fs.existsSync(STATE_FILE)) { state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")); stateLoaded = true; } } catch { console.log("⚠️  ไฟล์ความจำเสียหาย (ไฟดับกลางเขียน?) — เริ่มจำใหม่ ไม่พิมพ์ย้อนหลัง"); }
-if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.done) state.done = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (!state.retried) state.retried = {}; if (!state.kicked) state.kicked = {}; if (state.lastScanReq == null) state.lastScanReq = 0;
+if (!state.sig) state.sig = {}; if (!state.init) state.init = {}; if (!state.uat) state.uat = {}; if (!state.done) state.done = {}; if (!state.greeted) state.greeted = {}; if (!state.tested) state.tested = {}; if (!state.reprinted) state.reprinted = {}; if (!state.qrPrinted) state.qrPrinted = {}; if (!state.printed) state.printed = {}; if (!state.pinged) state.pinged = {}; if (!state.retried) state.retried = {}; if (!state.kicked) state.kicked = {}; if (state.lastScanReq == null) state.lastScanReq = 0; if (!state.recent || typeof state.recent !== "object") state.recent = {};
 // ⚠️ ต้องดู "อ่านความจำได้ไหม" ไม่ใช่ "ไฟล์มีอยู่ไหม"
 // ไฟล์พังแต่ยังอยู่ = ความจำว่างเปล่าแต่คิดว่าจำได้ → ทุกบิลที่เปิดอยู่กลายเป็น
 // บิลใหม่หมด แล้วพิมพ์ซ้ำทั้งร้าน (เกิดได้จริงตอนแบตหมดกลางจังหวะเขียนไฟล์)
@@ -546,28 +547,39 @@ async function handleReprintRequests(printers) {
   for (const p of printers) {
     if (isBluetooth(p) || !p.ip) continue;
     const rp = rpOf(p);
-    if (rp && String(state.reprinted[p.id]) !== String(rp.at)) {
-      state.reprinted[p.id] = rp.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำจาก tick ซ้อน
-      // ใบครัวเฉพาะอาหาร (รายการแพ็คเกจไม่ออก) · ไม่เหลืออะไรให้พิมพ์ = ล้างคำสั่งทิ้ง
-      // ปล่อยค้างไว้ = รอบเร็วดึงแถวนี้ทุก 0.8 วิ ไปจนกว่าจะมีคำสั่งใหม่มาทับ
-      const its = (Array.isArray(rp.items) ? rp.items : []).filter(isKitchenLine);
-      if (!its.length) { await clearCmdKey(p.id, "rp", rp.at); continue; }
-      // การเรนเดอร์ต้องอยู่ในกันชนเดียวกับการส่ง — เดิมอยู่นอกกันชน พอมันโยน
-      // คำสั่งก็ถูกกินไปแล้วจากบรรทัดบน (มาร์คก่อนส่ง) และ tick ทั้งรอบตายกลางทาง
-      // = กดปุ่มพิมพ์ซ้ำแล้วเงียบสนิท ไม่มีอะไรเกิดขึ้น และออเดอร์ปกติในรอบนั้นก็ไม่ได้พิมพ์ด้วย
-      let ok = true, err = null;
-      try {
-        const { buf, mode } = await itemsToBuffer(its, rp.table || "-", { bill: rp.bill, by: rp.by, kind: rp.kind, from: rp.from });
-        await sendToPrinter(p.ip, p.port, buf);
-        console.log(`  🔁 พิมพ์ซ้ำ ${its.length} รายการ [${mode}] → ${p.name} (${p.ip})`);
-      } catch (e) {
-        ok = false; err = errOf(p, e);
-        console.log(`  ❌ พิมพ์ซ้ำ → ${p.name} (${p.ip}): ${e.message}`);
-        // ใบยกเลิก/ย้ายโต๊ะ/พิมพ์ซ้ำที่ไม่ออกก็ต้องขึ้นปุ่ม "พิมพ์ไม่สำเร็จ" — ใบยกเลิกหายเงียบ = ครัวทำต่อ
-        await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id, pname: p.name, errs: [err] });
+    if (!rp) continue;
+    // อีกรอบ (รอบหลัก/รอบเร็ว) กำลังพิมพ์หรือล้างคำสั่งนี้อยู่ — ปล่อยให้รอบนั้นล้างพร้อมจดผลเอง (เหมือนลิ้นชัก/ใบเสร็จ · 29 ต.ค. 69)
+    const fk = p.id + "|" + rp.at;
+    if (rpInflight.has(fk)) continue;
+    rpInflight.add(fk);
+    try {
+      if (String(state.reprinted[p.id]) !== String(rp.at) && !cmdSeen("rp", p.id, rp.at)) {   // cmdSeen: เคยทำ at นี้แล้ว (ไม่ใช่แค่ตัวล่าสุด) — ดู CMD_RECENT_MAX
+        cmdMark("rp", p.id, rp.at); state.reprinted[p.id] = rp.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำจาก tick ซ้อน
+        // ใบครัวเฉพาะอาหาร (รายการแพ็คเกจไม่ออก) · ไม่เหลืออะไรให้พิมพ์ = ล้างคำสั่งทิ้ง
+        // ปล่อยค้างไว้ = รอบเร็วดึงแถวนี้ทุก 0.8 วิ ไปจนกว่าจะมีคำสั่งใหม่มาทับ
+        const its = (Array.isArray(rp.items) ? rp.items : []).filter(isKitchenLine);
+        if (!its.length) { await clearCmdKey(p.id, "rp", rp.at); continue; }
+        // การเรนเดอร์ต้องอยู่ในกันชนเดียวกับการส่ง — เดิมอยู่นอกกันชน พอมันโยน
+        // คำสั่งก็ถูกกินไปแล้วจากบรรทัดบน (มาร์คก่อนส่ง) และ tick ทั้งรอบตายกลางทาง
+        // = กดปุ่มพิมพ์ซ้ำแล้วเงียบสนิท ไม่มีอะไรเกิดขึ้น และออเดอร์ปกติในรอบนั้นก็ไม่ได้พิมพ์ด้วย
+        let ok = true, err = null;
+        try {
+          const { buf, mode } = await itemsToBuffer(its, rp.table || "-", { bill: rp.bill, by: rp.by, kind: rp.kind, from: rp.from });
+          await sendToPrinter(p.ip, p.port, buf);
+          console.log(`  🔁 พิมพ์ซ้ำ ${its.length} รายการ [${mode}] → ${p.name} (${p.ip})`);
+        } catch (e) {
+          ok = false; err = errOf(p, e);
+          console.log(`  ❌ พิมพ์ซ้ำ → ${p.name} (${p.ip}): ${e.message}`);
+          // ใบยกเลิก/ย้ายโต๊ะ/พิมพ์ซ้ำที่ไม่ออกก็ต้องขึ้นปุ่ม "พิมพ์ไม่สำเร็จ" — ใบยกเลิกหายเงียบ = ครัวทำต่อ
+          await recordPrintFail(printers, { id: rp.bill, table_number: rp.table, ordered_by: rp.by }, its, { kind: rp.kind, from: rp.from, pid: p.id, pname: p.name, errs: [err] });
+        }
+        await clearCmdKey(p.id, "rp", rp.at, ok, err);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที (ล้มเหลวไปอยู่ในรายการ "พิมพ์ไม่สำเร็จ" แล้ว)
       }
-      await clearCmdKey(p.id, "rp", rp.at, ok, err);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที (ล้มเหลวไปอยู่ในรายการ "พิมพ์ไม่สำเร็จ" แล้ว)
-    }
+      // ทำ at นี้ไปแล้ว (ล้างครั้งก่อนไม่สำเร็จ / ตัวพิมพ์ดับก่อนล้าง / แคชรอบหลัก) = ไม่พิมพ์ซ้ำ แต่ต้องล้างทิ้ง (29 ต.ค. 69)
+      // เดิมปล่อยค้าง → แอปรอช่องว่าง ~10 วิ ทุกครั้งที่ย้ายโต๊ะ/ยกเลิก แล้วขึ้นเตือนว่าใบก่อนอาจไม่ออก
+      // clearCmdKey เทียบ at กับของสดก่อนลบ — มีคำสั่งใหม่กว่ามาแล้วไม่แตะ · ไม่ใส่ ok = ไม่รู้ผล (ห้ามเดาว่าสำเร็จ)
+      else await clearCmdKey(p.id, "rp", rp.at);
+    } finally { rpInflight.delete(fk); }
   }
 }
 
@@ -577,13 +589,20 @@ async function handleQRRequests(printers) {
   for (const p of printers) {
     if (isBluetooth(p) || !p.ip) continue;
     const q = qrOf(p);
-    if (q && String(state.qrPrinted[p.id]) !== String(q.at)) {
-      state.qrPrinted[p.id] = q.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
-      let ok = true, err = null;
-      try { await sendToPrinter(p.ip, p.port, buildQRESC(q)); console.log(`  🔳 พิมพ์ QR โต๊ะ ${q.table} → ${p.name} (${p.ip})`); }
-      catch (e) { ok = false; err = errOf(p, e); console.log(`  ❌ พิมพ์ QR → ${p.name} (${p.ip}): ${e.message}`); }
-      await clearCmdKey(p.id, "qr", q.at, ok, err);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที
-    }
+    if (!q) continue;
+    const fk = p.id + "|" + q.at;
+    if (qrInflight.has(fk)) continue;   // อีกรอบกำลังพิมพ์/ล้างคำสั่งนี้อยู่ (เหตุผลเดียวกับใบครัวซ้ำ)
+    qrInflight.add(fk);
+    try {
+      if (String(state.qrPrinted[p.id]) !== String(q.at) && !cmdSeen("qr", p.id, q.at)) {
+        cmdMark("qr", p.id, q.at); state.qrPrinted[p.id] = q.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
+        let ok = true, err = null;
+        try { await sendToPrinter(p.ip, p.port, buildQRESC(q)); console.log(`  🔳 พิมพ์ QR โต๊ะ ${q.table} → ${p.name} (${p.ip})`); }
+        catch (e) { ok = false; err = errOf(p, e); console.log(`  ❌ พิมพ์ QR → ${p.name} (${p.ip}): ${e.message}`); }
+        await clearCmdKey(p.id, "qr", q.at, ok, err);   // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที
+      }
+      else await clearCmdKey(p.id, "qr", q.at);   // ทำไปแล้ว = ไม่พิมพ์ซ้ำ แต่ล้างทิ้ง (เทียบ at ก่อนลบ · ไม่รู้ผล) — เหมือนใบครัวซ้ำ (29 ต.ค. 69)
+    } finally { qrInflight.delete(fk); }
   }
 }
 
@@ -602,10 +621,14 @@ async function handleDrawerRequests(printers) {
     let ok, err = null;   // ok ว่าง = รอบก่อนส่งไปแล้ว แต่ล้างคำสั่งไม่ทัน (ไม่รู้ผล ห้ามเดาว่าสำเร็จ)
     dkInflight.add(fk);
     try {
-      if (String(state.kicked[p.id]) !== String(k.at)) {
-        state.kicked[p.id] = k.at; saveState();   // มาร์คก่อนส่ง กันเปิดซ้ำจาก tick ซ้อน
-        try { await sendToPrinter(p.ip, p.port, DRAWER_KICK); ok = true; console.log(`  💵 เปิดลิ้นชัก → ${p.name} (${p.ip})`); }
-        catch (e) { ok = false; err = errOf(p, e); console.log(`  ❌ เปิดลิ้นชัก → ${p.name} (${p.ip}): ${e.message}`); }
+      if (String(state.kicked[p.id]) !== String(k.at) && !cmdSeen("dk", p.id, k.at)) {
+        cmdMark("dk", p.id, k.at); state.kicked[p.id] = k.at; saveState();   // มาร์คก่อนส่ง กันเปิดซ้ำจาก tick ซ้อน
+        // ค้างมาตั้งแต่ตอนตัวพิมพ์หลุด (เกิน 2 นาที) = ไม่เปิด — ลิ้นชักเด้งเองตอนไม่มีใครอยู่หน้าเคาน์เตอร์ (ดู cmdTooOld)
+        if (cmdTooOld(k.at, DK_MAX_AGE_MS)) { ok = false; err = errOf(p, { code: "STALE" }); console.log(`  ⏭️ ไม่เปิดลิ้นชัก → ${p.name} — คำสั่งค้างตั้งแต่ตอนตัวพิมพ์หลุด (เกิน ${DK_MAX_AGE_MS / 60000} นาที)`); }
+        else {
+          try { await sendToPrinter(p.ip, p.port, DRAWER_KICK); ok = true; console.log(`  💵 เปิดลิ้นชัก → ${p.name} (${p.ip})`); }
+          catch (e) { ok = false; err = errOf(p, e); console.log(`  ❌ เปิดลิ้นชัก → ${p.name} (${p.ip}): ${e.message}`); }
+        }
       }
       // คำสั่งครั้งเดียวจบ — ล้างทิ้งทันที ไม่งั้นค้างอยู่ในแถวแล้วถูกอ่านซ้ำทุก 5 วินาที
       await clearCmdKey(p.id, "dk", k.at, ok, err);
@@ -613,7 +636,35 @@ async function handleDrawerRequests(printers) {
   }
 }
 // งานที่กำลังส่งอยู่ (ไม่ต้องเก็บข้ามรีสตาร์ท — แค่กันสองรอบในโปรเซสเดียวกันชนกัน)
-const pjInflight = new Set(), dkInflight = new Set();
+const pjInflight = new Set(), dkInflight = new Set(), rpInflight = new Set(), qrInflight = new Set();
+// ── คำสั่งที่ทำไปแล้ว: จำ 20 ตัวล่าสุดต่อเครื่องต่อชนิด ไม่ใช่ตัวล่าสุดตัวเดียว (ตรวจทาน 28 ต.ค. 69) ──
+// รอบหลัก (2 วิ) ใช้รายชื่อเครื่องจากแคชอายุถึง 6 วิ ขณะรอบเร็ว (0.8 วิ) พิมพ์งาน A แล้วตามด้วยงาน B ไปแล้ว
+// ตัวจำเดิมเหลือแค่ B → รอบหลักเห็น A ในแคช (≠ B) พิมพ์ A ซ้ำ: ใบเปิดโต๊ะ/ใบเพิ่ม-ลดคน/ใบยกเลิกออกสองใบ ลิ้นชักเด้งเกิน (~1 ใน 4 ตอนสั่งติดกัน)
+// เทียบแค่ "เคยทำ at นี้ไหม" — ห้ามเทียบ at มาก/น้อย (นาฬิกาแท็บเล็ตแต่ละเครื่องไม่ตรงกัน) · เก็บในไฟล์ความจำ (รีสตาร์ทแล้วยังจำ)
+const CMD_RECENT_MAX = 20;
+function cmdSeen(kind, id, at) { const l = state.recent[kind + "|" + id]; return Array.isArray(l) && l.some(x => String(x) === String(at)); }
+function cmdMark(kind, id, at) { const k = kind + "|" + id; state.recent[k] = [...(Array.isArray(state.recent[k]) ? state.recent[k] : []).filter(x => String(x) !== String(at)), at].slice(-CMD_RECENT_MAX); }
+// ── คำสั่งที่ค้างมาตั้งแต่ตอนตัวพิมพ์หลุด (ตรวจทาน 28 ต.ค. 69) ──
+// เน็ตร้านล่ม/มือถือตัวพิมพ์หลับ/ปิดเปิดโปรแกรม — คำสั่งลิ้นชัก (dk) หรือใบรูป (pj ใบเสร็จ/QR/ใบปิดกะ) ที่แอปเขียนไว้ระหว่างนั้นค้างในแถว
+// เดิมกลับมาแล้วทำทันทีไม่ว่าเก่าแค่ไหน = ลิ้นชักเด้งเปิดเองตอนไม่มีใครอยู่หน้าเคาน์เตอร์ · ใบเสร็จเก่าออกมาเงียบๆ (หลายชั่วโมงก็ออก)
+// ลิ้นชักเกิน 2 นาที = ไม่เปิด (งานล่าสุดขึ้นว่าไม่ทำ) · ใบรูปเกิน 3 นาที = ไม่พิมพ์ ขึ้นปุ่ม "พิมพ์ไม่สำเร็จ" ให้พนักงานสั่งใหม่เอง (ไม่พิมพ์ตอนไม่มีคนสั่ง)
+// ใบครัว (ออเดอร์/rp) ไม่ใช้กติกานี้ — ใบที่ไม่เคยส่งพิมพ์ตอนกลับมาตามที่เจ้าของตัดสินไว้
+// นาฬิกา: at มาจากแท็บเล็ต · ตัวพิมพ์ถามฐานได้ต่อเนื่องเกิน 1 นาทีแล้ว = คำสั่งที่เพิ่งเห็นเพิ่งถูกเขียนแน่นอน ไม่เทียบนาฬิกาเลย
+//   (แท็บเล็ตตั้งเวลาเพี้ยนก็ไม่ทิ้งลิ้นชักของบิลจริง) · เทียบอายุเฉพาะช่วงแรกหลังต่อกลับ/เปิดโปรแกรม
+//   ค้าง = เกินทั้งตามนาฬิกามือถือ "และ" ตามเวลาเซิร์ฟเวอร์ (callSkew) · ยังไม่เคยวัดเวลาเซิร์ฟเวอร์ = ไม่ตัดสินว่าค้าง (29 ต.ค. 69)
+//   ไม่แน่ใจ = เปิด/พิมพ์ไว้ก่อน — มือถือตัวพิมพ์เดินเร็ว 2 นาทีเคยเจอจริง ห้ามทิ้งลิ้นชัก/ใบเสร็จของบิลที่เพิ่งจ่าย
+const DK_MAX_AGE_MS = 2 * 60 * 1000;
+const PJ_MAX_AGE_MS = 3 * 60 * 1000;
+const POLL_GAP_MS = 60 * 1000;   // ถามฐานสำเร็จห่างกันเกินนี้ = หลุดไป (เน็ตล่ม/มือถือหลับ/เพิ่งเปิดโปรแกรม)
+let pollOkAt = 0, onlineSince = 0;
+function notePollOk() { const now = Date.now(); if (!pollOkAt || now - pollOkAt > POLL_GAP_MS) onlineSince = now; pollOkAt = now; }
+function cmdTooOld(at, maxMs) {
+  const now = Date.now();
+  if (onlineSince && now - onlineSince > POLL_GAP_MS && now - pollOkAt <= POLL_GAP_MS) return false;   // ต่อเนื่อง = เพิ่งเขียน
+  if (!(typeof srvClockAt === "number" && srvClockAt > 0) || typeof callSkew !== "number") return false;   // ยังไม่รู้เวลาเซิร์ฟเวอร์ = ไม่ตัดสินว่าค้าง
+  const t = +at || 0;
+  return t > 0 && now - t > maxMs && now + callSkew - t > maxMs;   // ต้องเกินทั้งสองนาฬิกา — นาฬิกาไหนเดินเร็วก็ไม่ทิ้งงานสด
+}
 // งานล่าสุดของเครื่องนี้ — แอปเอาไปโชว์ว่า "พิมพ์ล่าสุดเมื่อไหร่ ออกไหม เพราะอะไร"
 // เดิม ok เป็นจริงเสมอ (ไม่มีใครส่งผลมา) จอจึงบอกว่าเครื่องเพิ่งทำงานทั้งที่ส่งไม่ผ่าน
 // ok ว่าง = ไม่รู้ผล → ไม่ใส่ ok เลย (ห้ามเดาว่าสำเร็จ)
@@ -666,9 +717,15 @@ async function handlePJRequests(printers) {
     let ok, err = null;   // ok ว่าง = รอบก่อนส่งไปแล้ว แต่ล้างงานไม่ทัน (ไม่รู้ผล)
     pjInflight.add(fk);
     try {
-      if (String(state.printed[p.id]) !== String(j.at)) {
-        state.printed[p.id] = j.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
-        try { await sendToPrinter(p.ip, p.port, Buffer.from(j.b64, "base64")); ok = true; console.log(`  🖼️ พิมพ์รูปภาพ (ไทยคมชัด) → ${p.name} (${p.ip})`); }
+      if (String(state.printed[p.id]) !== String(j.at) && !cmdSeen("pj", p.id, j.at)) {
+        cmdMark("pj", p.id, j.at); state.printed[p.id] = j.at; saveState();   // มาร์คก่อนส่ง กันยิงซ้ำ
+        // ค้างมาตั้งแต่ตอนตัวพิมพ์หลุด (เกิน 3 นาที) = ไม่พิมพ์เงียบๆ และไม่ทิ้งเงียบๆ — ขึ้นปุ่ม "พิมพ์ไม่สำเร็จ" ให้พนักงานสั่งใหม่เอง (ดู cmdTooOld)
+        if (cmdTooOld(j.at, PJ_MAX_AGE_MS)) {
+          ok = false; err = errOf(p, { code: "STALE" });
+          console.log(`  ⏭️ ไม่พิมพ์${j.what ? " " + j.what : "รูปภาพ"} → ${p.name} — ค้างตั้งแต่ตอนตัวพิมพ์หลุด (เกิน ${PJ_MAX_AGE_MS / 60000} นาที) ขึ้นในปุ่ม "พิมพ์ไม่สำเร็จ" แทน`);
+          if (j.what !== "ทดสอบพิมพ์") await recordJobFail(printers, p, j, err);
+        }
+        else try { await sendToPrinter(p.ip, p.port, Buffer.from(j.b64, "base64")); ok = true; console.log(`  🖼️ พิมพ์รูปภาพ (ไทยคมชัด) → ${p.name} (${p.ip})`); }
         catch (e) {
           ok = false; err = errOf(p, e);
           console.log(`  ❌ พิมพ์รูปภาพ → ${p.name} (${p.ip}): ${e.message}`);
@@ -707,17 +764,22 @@ const CALL_MISSING_BACKOFF_MS = 10 * 60 * 1000;  // ยังไม่ได้�
 // อายุของแถวต้องวัดด้วยนาฬิกาเดียวกับ created_at (เวลาฐานข้อมูล) — มือถือตัวพิมพ์ที่ปิดตั้งเวลาอัตโนมัติแล้วเดินเร็ว 2 นาที
 // จะเห็นทุกใบ "หมดอายุ" เงียบๆ · เอาเวลาจากหัว Date ของคำตอบฐานข้อมูล (ละเอียด 1 วิ พอสำหรับหน้าต่าง 90 วิ)
 let callSkew = 0;   // เวลาเซิร์ฟเวอร์ − เวลามือถือ (ms)
+// วัดจากคำตอบของ sb() ทุกครั้งด้วย (29 ต.ค. 69) — เดิมวัดแค่ที่ staff_calls: หลังรีสตาร์ท 2-3 วิแรก (หรือตลอดถ้ายังไม่ได้รัน sql/staff-calls.sql)
+// callSkew ยังเป็น 0 → cmdTooOld เทียบด้วยนาฬิกามือถือที่เดินเร็ว → ลิ้นชักของบิลที่เพิ่งจ่ายถูกตัดสินว่า "ค้าง" ไม่เปิด
+let srvClockAt = 0;   // วัดเวลาเซิร์ฟเวอร์ได้ล่าสุดเมื่อไหร่ (0 = ยังไม่เคย → cmdTooOld ไม่ตัดสินว่าค้าง)
+function noteSrvClock(res) {
+  const d = Date.parse((res && res.headers && res.headers.get && res.headers.get("date")) || "");
+  if (!(d > 0)) return;
+  const sk = d - Date.now();
+  if (Math.abs(sk) > 30000 && Math.abs(sk - callSkew) > 30000) console.log(`⚠️  นาฬิกามือถือตัวพิมพ์ต่างจากเซิร์ฟเวอร์ ${Math.round(-sk / 1000)} วิ — เปิด "ตั้งเวลาอัตโนมัติ" ในมือถือ (ปุ่มเรียกพนักงานใช้เวลาเซิร์ฟเวอร์แทนแล้ว)`);
+  callSkew = sk; srvClockAt = Date.now();
+}
 // ถามเฉพาะแถว 'new' ของสาขานี้ (ดัชนีบางส่วน ปกติว่าง = คำตอบ [] ไม่กี่ไบต์)
 async function getNewCalls() {
   const res = await fetch(`${SUPA_URL}/rest/v1/staff_calls?branch_id=eq.${BRANCH}&status=eq.new&select=id,table_id,token,created_at&order=id.asc&limit=40`,
     { headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` } });
   if (!res.ok) throw new Error(await res.text());
-  const d = Date.parse((res.headers && res.headers.get && res.headers.get("date")) || "");
-  if (d > 0) {
-    const sk = d - Date.now();
-    if (Math.abs(sk) > 30000 && Math.abs(sk - callSkew) > 30000) console.log(`⚠️  นาฬิกามือถือตัวพิมพ์ต่างจากเซิร์ฟเวอร์ ${Math.round(-sk / 1000)} วิ — เปิด "ตั้งเวลาอัตโนมัติ" ในมือถือ (ปุ่มเรียกพนักงานใช้เวลาเซิร์ฟเวอร์แทนแล้ว)`);
-    callSkew = sk;
-  }
+  noteSrvClock(res);
   const txt = await res.text();
   return txt ? JSON.parse(txt) : [];
 }
@@ -1037,6 +1099,7 @@ async function tick() {
   const woke = shopIdle();
   try { [heads, printers] = await Promise.all([getActiveOrderHeads(), getPrintersCached()]); }
   catch (e) { console.log("⚠️  ดึงข้อมูลไม่ได้ (เช็คเน็ต):", e.message); return; }
+  notePollOk();   // ถามฐานได้ — นับความต่อเนื่อง (คำสั่งลิ้นชัก/ใบรูปที่ค้างตอนหลุด · cmdTooOld)
   // มีบิลเปิด = ร้านมีคน → ออกจากโหมดพัก · เพิ่งตื่นจากพัก = รายชื่อเครื่องในแคชอาจเก่าถึง 30 วิ (เพิ่งตั้งหมวด/เปิดเครื่องตอนเปิดร้าน)
   // ขอใหม่ (อายุไม่เกิน 6 วิ) ก่อนเลือกเครื่องให้ใบแรก ครั้งเดียวต่อการตื่น (24 ต.ค. 69)
   if (heads && heads.length) { markBusy(); if (woke) { try { printers = await getPrintersCached(); } catch (e) { console.log("⚠️  ดึงข้อมูลไม่ได้ (เช็คเน็ต):", e.message); return; } } }
@@ -1064,7 +1127,7 @@ async function tick() {
 
   if (!primed) {
     for (const o of orders) if (o && o.items) { state.sig[o.id] = sigOf(o); state.init[o.id] = 1; state.uat[o.id] = uatOf.get(String(o.id)) || null; }
-    for (const p of printers) { const tp = tpOf(p); if (tp) state.tested[p.id] = tp; const rp = rpOf(p); if (rp) state.reprinted[p.id] = rp.at; const q = qrOf(p); if (q) state.qrPrinted[p.id] = q.at; const j = pjOf(p); if (j) state.printed[p.id] = j.at; }   // กันพิมพ์ย้อนหลังตอน prime ครั้งแรก
+    for (const p of printers) { const tp = tpOf(p); if (tp) state.tested[p.id] = tp; const rp = rpOf(p); if (rp) state.reprinted[p.id] = rp.at; const q = qrOf(p); if (q) state.qrPrinted[p.id] = q.at; const j = pjOf(p); if (j) state.printed[p.id] = j.at; const k = dkOf(p); if (k) state.kicked[p.id] = k.at; }   // กันพิมพ์ย้อนหลัง/เปิดลิ้นชักย้อนหลังตอน prime ครั้งแรก (dk เพิ่ม 28 ต.ค. 69 — เดิมเว้นไว้ ความจำหายแล้วเปิดลิ้นชักเก่าซ้ำ)
     primed = true; saveState();
     console.log(`🔰 บันทึกออเดอร์ค้าง ${orders.length} รายการ (ไม่พิมพ์ซ้ำ) — พร้อมพิมพ์ออเดอร์ใหม่`);
     return;
@@ -1316,6 +1379,7 @@ const tickSafe = async () => {
       // ทุกคำสั่งถูกล้างทิ้งหลังทำ รายการจึงว่างจริงเมื่อไม่มีงาน · กรองสาขาที่ฐานข้อมูลแล้ว (getCmdRows) กรองซ้ำในเครื่องกันพลาด
       const rows = (await getCmdRows())
         .filter((p) => p.branch_id == null || +p.branch_id === +BRANCH);
+      notePollOk();
       if (rows.length) {
         markBusy();   // มีคำสั่งจากแอป = มีคนใช้งานอยู่ → ออกจากโหมดพัก
         await handleDrawerRequests(rows);

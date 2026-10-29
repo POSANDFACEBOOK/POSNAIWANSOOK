@@ -8,6 +8,8 @@
 //
 // Supports scheduling: if scheduled_at is in the future, the message is stored in
 // crm_broadcasts with status 'scheduled' and sent later by /api/broadcast-cron.
+import crypto from "crypto";
+
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
 
@@ -21,6 +23,19 @@ async function sbFetch(path, opts = {}) {
   return t ? JSON.parse(t) : [];
 }
 function tokenMap() { try { return JSON.parse(process.env.LINE_TOKENS || "{}"); } catch { return {}; } }
+
+// 28 ต.ค. 69: ลายเซ็นของแถวที่ตั้งเวลาส่ง — /api/broadcast-cron ส่งเฉพาะแถวที่ลายเซ็นตรง
+// เดิม cron ส่งทุกแถว status=scheduled ⟹ ใครก็เพิ่มแถวตรงเข้า crm_broadcasts ด้วย anon key (ฐานเปิดให้เขียน)
+// แล้วให้ระบบยิงข้อความหลอกถึงเพื่อนไลน์ทุกคนของสาขาได้ โดยไม่ต้องรู้ BROADCAST_KEY
+// ลงชื่อรวม id ของแถว ⟹ ก๊อปลายเซ็นไปแปะแถวใหม่ไม่ได้ · แก้ข้อความ/รูป/สาขา/เวลาหลังตั้ง = ลายเซ็นไม่ตรง ไม่ส่ง
+// ⚠️ สำเนาเดียวกันอยู่ใน api/broadcast-cron.js (ไม่ import ข้ามไฟล์ function) — แก้ต้องแก้คู่ มีด่านตรวจว่าลงชื่อ/ตรวจตรงกัน
+export function broadcastSig(key, row) {
+  const r = row || {};
+  const ms = r.scheduled_at ? new Date(r.scheduled_at).getTime() : NaN;
+  const ids = (Array.isArray(r.branch_ids) ? r.branch_ids : []).map(Number).join(",");
+  const msg = [r.id, r.message || "", r.image_url || "", ids, Number.isFinite(ms) ? new Date(ms).toISOString() : ""].join("|");
+  return crypto.createHmac("sha256", String(key)).update(msg, "utf8").digest("hex");
+}
 
 // Build the LINE message array from text + optional image URL.
 export function buildMessages(text, imageUrl) {
@@ -74,7 +89,24 @@ export default async function handler(req, res) {
         method: "POST", headers: { Prefer: "return=representation" },
         body: JSON.stringify({ branch_ids: branches, message: text, image_url: imageUrl, status: "scheduled", scheduled_at: new Date(schedMs).toISOString(), sent_by: sentBy, created_at: new Date().toISOString() }),
       });
-      return res.status(200).json({ ok: true, scheduled: true, id: Array.isArray(row) ? row[0] && row[0].id : null });
+      // ลงลายเซ็นจากแถวที่ฐานคืนมา (id + ค่าตามที่เก็บจริง) — cron ตรวจกับค่าชุดเดียวกัน
+      // ยังไม่ถึงเวลาส่งอย่างน้อย 30 วิ (เงื่อนไขด้านบน) cron จึงไม่หยิบแถวนี้ก่อนลงชื่อเสร็จ
+      // ลงชื่อไม่ผ่าน (ยังไม่ได้รัน sql/broadcast-sig.sql = ไม่มีคอลัมน์ sig) → ปิดแถวเป็น rejected แล้วบอกตรงๆ
+      // ไม่ปล่อยให้ผู้ใช้เข้าใจว่าตั้งเวลาแล้ว ทั้งที่ cron จะไม่ส่งแถวที่ไม่มีลายเซ็น
+      const r0 = Array.isArray(row) ? row[0] : null;
+      if (!r0 || r0.id == null) return res.status(500).json({ error: "ตั้งเวลาไม่สำเร็จ — ฐานข้อมูลไม่คืนแถวที่บันทึก" });
+      try {
+        await sbFetch(`crm_broadcasts?id=eq.${encodeURIComponent(r0.id)}&status=eq.scheduled`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ sig: broadcastSig(KEY, r0) }) });
+      } catch (e) {
+        // 29 ต.ค. 69: ปิดเป็น rejected ไม่ได้ (เช่น CHECK ของ status ยังไม่รับ 'rejected') → ลบแถวที่เพิ่งเพิ่มทิ้ง
+        // เดิมกลืนเงียบ แถวค้าง scheduled ไม่มีลายเซ็น ⟹ ประวัติขึ้น "⏰ รอส่ง" ทั้งที่ไม่มีวันส่ง + cron หยิบซ้ำทุกรอบ
+        // ลบเฉพาะที่ยัง scheduled (ตัวกรองเดียวกัน) — แถวนี้เพิ่งสร้างเมื่อครู่ ยังไม่ถึงเวลา cron ไม่เคยแตะ
+        const mine = `crm_broadcasts?id=eq.${encodeURIComponent(r0.id)}&status=eq.scheduled`;
+        try { await sbFetch(mine, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "rejected" }) }); }
+        catch { try { await sbFetch(mine, { method: "DELETE", headers: { Prefer: "return=minimal" } }); } catch {} }
+        return res.status(500).json({ error: "ตั้งเวลาไม่สำเร็จ — ลงลายเซ็นไม่ได้ (ผู้ดูแลต้องรัน sql/broadcast-sig.sql ก่อน) ข้อความนี้จะไม่ถูกส่ง", detail: String((e && e.message) || e).slice(0, 300) });
+      }
+      return res.status(200).json({ ok: true, scheduled: true, id: r0.id });
     }
 
     // Send now.

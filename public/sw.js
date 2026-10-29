@@ -18,9 +18,14 @@ self.addEventListener("push", (e) => {
   }));
 });
 
+// 28 ต.ค. 69: กดแจ้งเตือนแล้วไปได้แค่หน้าของแอปเองที่รู้จัก ไม่ตรงรายการ = ไปหน้าแรก
+// เดิมเปิด url อะไรก็ได้ที่มากับแจ้งเตือน (รวมเว็บนอก) — /api/push ไม่มีรหัส ใครก็ยิงได้
+// ⟹ แจ้งเตือนปลอมพาเจ้าของไปเว็บหลอกได้ · กันซ้ำที่ฝั่งเครื่องด้วย เผื่อแจ้งเตือนที่ค้างอยู่ก่อนแก้ปลายทาง
+const SAFE_URLS = ["/", "/?approve=1"];
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || "/?approve=1";
+  const raw = (e.notification.data && e.notification.data.url) || "/?approve=1";
+  const url = SAFE_URLS.includes(raw) ? raw : "/";
   e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((cls) => {
     for (const c of cls) {
       if ("focus" in c) { try { c.navigate && c.navigate(url); } catch {} return c.focus(); }

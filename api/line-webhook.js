@@ -49,7 +49,7 @@ async function branchNameOf(bid) {
 }
 
 // Best-effort: remember this follower's userId so we can push cards to them later.
-// Silently no-ops if the crm_line_users table doesn't exist yet.
+// Never throws (the reply must still go out); a failure other than a duplicate is logged.
 async function storeUser(bid, userId) {
   if (!userId) return;
   try {
@@ -58,7 +58,13 @@ async function storeUser(bid, userId) {
       headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
       body: JSON.stringify({ branch_id: bid ? Number(bid) : null, line_user_id: userId, created_at: new Date().toISOString() }),
     });
-  } catch { /* table missing / duplicate — ignore */ }
+  } catch (e) {
+    // 28 ต.ค. 69: เดิมกลืนทุก error เงียบ — ช่วงสิทธิ์/RLS ของ crm_line_users หลุด (24–28 ต.ค.) คนแอดไลน์ใหม่
+    // ไม่ถูกบันทึกเลยโดยไม่มีใครรู้ · ซ้ำ (23505) ยังข้ามเงียบได้ตามเดิม · อย่างอื่นให้ขึ้นใน Vercel logs
+    // ไม่โยนต่อ — บอทยังต้องตอบลูกค้าได้แม้บันทึกไม่ผ่าน
+    const m = String((e && e.message) || e);
+    if (!/23505|duplicate key/i.test(m)) console.error("storeUser failed (crm_line_users)", m.slice(0, 300));
+  }
 }
 
 // Fetch the customer's LINE display name (for the booking request + confirmation card).
@@ -145,7 +151,9 @@ function promoDeal(p) {
 // Only show promos that are active, in-date and not quota-exhausted — never advertise
 // something the customer will be refused at the counter.
 function promosCarousel(promos, branchNameById) {
-  const today = new Date().toISOString().slice(0, 10);
+  // 28 ต.ค. 69: วันที่ตามเวลาไทย (Vercel รันเป็น UTC) — เดิมช่วงเที่ยงคืนถึงตี 7 ยังโชว์โปรที่หมดเมื่อวาน
+  // และซ่อนโปรที่เริ่มวันนี้ ไม่ตรงกับเคาน์เตอร์ (todayBkk) ที่ปฏิเสธโปรหมดอายุ · ไทยไม่มีเวลาออมแสง บวก 7 ชม. ตรงตัว
+  const today = new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
   const live = (promos || []).filter((p) => {
     if (!p || p.active === false) return false;
     if (p.start_date && String(p.start_date).slice(0, 10) > today) return false;

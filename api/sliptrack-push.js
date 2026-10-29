@@ -378,7 +378,8 @@ export default async function handler(req, res) {
       for (const o of [...(tagged || []), ...(timed || [])]) if (o && !seenIds.has(o.id)) { seenIds.add(o.id); orders.push(o); }
 
       // เงินในลิ้นชักของกะนี้ — ฝั่งบัญชีดึงเงินเข้าตู้เซฟจากบล็อกนี้ ไม่ใช่จาก payment
-      const moves = await sbGet(`cash_movements?shift_id=eq.${shiftId}&select=type,amount,order_id&limit=2000`);
+      // order=id.asc — แถว "ปิดกะ" แถวสุดท้ายคือยอดนับล่าสุด (ดู counted ข้างล่าง)
+      const moves = await sbGet(`cash_movements?shift_id=eq.${shiftId}&order=id.asc&select=type,amount,order_id&limit=2000`);
       const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
       // วันที่ทำการ = วันที่ "ปิดบิล" ตามเวลาไทย (โต๊ะเปิด 4 ทุ่มจ่ายตีหนึ่ง = รายได้ของวันที่จ่าย)
       const bizDate = (o) => new Date(o.updated_at || o.created_at)
@@ -405,7 +406,10 @@ export default async function handler(req, res) {
         // เงินเข้า/ออกลิ้นชักรวมเป็นตัวเดียวตามสเปกเขา (บวก = เข้า) — ฝากเซฟไม่นับตัวนี้
         const paidInOut = r2(payIn - payOut - drop);
         const expected = r2(opening + salesCash + paidInOut - refund);
-        const counted = mv("closing");
+        // ยอดนับจริง = แถว "ปิดกะ" ล่าสุดแถวเดียว ไม่ใช่ผลรวม (28 ต.ค. 69) — กดปิดกะซ้ำหลังรอบแรกบันทึกไม่สำเร็จ (จอรุ่นเก่า)
+        // เคยได้สองแถว ⟹ actual_in_drawer เป็นสองเท่า ส่วนต่างเกินหลอกเท่ายอดนับ · กะปกติมีแถวเดียว ค่าเท่าเดิมทุกหลัก
+        const closings = (moves || []).filter((m) => m.type === "closing");
+        const counted = closings.length ? r2(closings[closings.length - 1].amount) : 0;
         return {
           start_drawer: opening,               // 0 = "ยังไม่ได้กรอก" ในระบบเขา ไม่ใช่ "ไม่มีเงินทอน"
           cash_sales: salesCash,
@@ -440,7 +444,10 @@ export default async function handler(req, res) {
         .reduce((a, m) => a + (Number(m.amount) || 0), 0));
       const results = [];
       const days = [...byDay.entries()].sort();
-      const lastDay = days.length ? days[days.length - 1][0] : null;
+      // แนบเงินลิ้นชักกับ "วันสุดท้ายที่มียอด" (28 ต.ค. 69) — กะข้ามเที่ยงคืนที่วันสุดท้ายมีแต่บิล ฿0 (คูปองเต็ม/แพ็คเกจ 0)
+      // วันนั้นถูกข้ามไม่ส่ง (noSale) เงินลิ้นชักที่ผูกไว้เลยไม่ไปไหนเลย ทั้งที่จอปิดกะขึ้นเขียว · ยังแนบวันเดียวเหมือนเดิม (กันตู้เซฟได้เงินซ้ำ)
+      const saleDays = days.filter(([, list]) => sum(list, "total") > 0);
+      const lastDay = saleDays.length ? saleDays[saleDays.length - 1][0] : (days.length ? days[days.length - 1][0] : null);
       for (const [business_date, list] of days) {
         const total_sales = sum(list, "total");
         // ส่วนลดที่ให้ไปจริง (รวมโปรโมชั่นและคูปอง) — ตัวเลขนี้ต้องตรงกับความจริงเสมอ
