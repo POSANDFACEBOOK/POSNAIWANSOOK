@@ -257,7 +257,17 @@ if(typeof document!=="undefined"){
 // ไม่จ่ายตามรอบ = บริการถูกพัก ทุกสาขาใช้ระบบไม่ได้ทั้งร้าน ⟹ เตือนล่วงหน้า 10 วัน นับถอยหลังทุกวันจนกว่าจะจ่าย
 // วันครบกำหนดอยู่ที่ public/billing.json (ไฟล์บนเว็บเราเอง — อ่านได้แม้ฐานข้อมูลล่ม) · จ่ายแล้วเลื่อน due ไปรอบถัดไป
 // พนักงานเห็นแล้วไปบอกเจ้าของ ("แจ้งบอสแม็กด่วน") · ปิดแถบได้ถึงพรุ่งนี้ (เครื่องละครั้งต่อวัน) · หน้าลูกค้าสแกนไม่แสดง
+// 31 ต.ค. 69 เจ้าของสั่ง: ขึ้นเฉพาะหน้าล็อกอิน + หน้าเลือกสาขา (เดิมขึ้นทุกจอ บังงานพนักงาน) — สองหน้านั้นเรียก useBillBarHere() ติด class fc-bill-here
+// แถบ "ฐานข้อมูลหาย" (fc-dbgone-bar) ยังขึ้นทุกจอเหมือนเดิม เพราะตอนนั้นระบบใช้ไม่ได้อยู่แล้ว
 const BILL_WARN_DAYS=10;
+let billBarRefresh=()=>{};
+function useBillBarHere(){
+  useEffect(()=>{
+    const el=document.documentElement;
+    el.classList.add("fc-bill-here");billBarRefresh();
+    return()=>{el.classList.remove("fc-bill-here");billBarRefresh();};
+  },[]);
+}
 // จำนวนวันจากวันนี้ (เวลาไทย) ถึงวันครบกำหนด · บวก = ยังเหลือ · 0 = วันนี้ · ลบ = เลยมาแล้ว
 function billDaysLeft(due,nowMs){
   const d=String(due||"").slice(0,10);
@@ -280,12 +290,15 @@ function billLine(w){
 if(typeof document!=="undefined"){
   const ID="fc-bill-bar",HIDE_KEY="fc_bill_hide";
   const todayTH=()=>new Date(Date.now()+7*3600e3).toISOString().slice(0,10);
+  let lastWs=null;
   const render=(ws)=>{
+    lastWs=ws;
     try{
       const old=document.getElementById(ID);
       let hidden=false;try{hidden=localStorage.getItem(HIDE_KEY)===todayTH();}catch{}
-      // หน้าลูกค้าสแกน / ปิดไว้วันนี้แล้ว / ไม่มีอะไรต้องเตือน / แถบฐานข้อมูลหาย (เรื่องใหญ่กว่า) กำลังขึ้น
-      if(!ws.length||hidden||/\bcust-scan\b/.test(document.documentElement.className||"")||document.getElementById("fc-dbgone-bar")){if(old)old.remove();return;}
+      // ไม่ใช่หน้าล็อกอิน/เลือกสาขา / หน้าลูกค้าสแกน / ปิดไว้วันนี้แล้ว / ไม่มีอะไรต้องเตือน / แถบฐานข้อมูลหาย (เรื่องใหญ่กว่า) กำลังขึ้น
+      const cls=document.documentElement.className||"";
+      if(!ws.length||hidden||!/\bfc-bill-here\b/.test(cls)||/\bcust-scan\b/.test(cls)||document.getElementById("fc-dbgone-bar")){if(old)old.remove();return;}
       const urgent=ws[0].days<=3;
       const bar=old||document.createElement("div");
       bar.id=ID;bar.setAttribute("role","alert");
@@ -307,6 +320,8 @@ if(typeof document!=="undefined"){
       render(billWarnings(await r.json()));
     }catch{}
   };
+  // เข้า/ออกหน้าล็อกอิน-เลือกสาขา → จัดแถบใหม่ทันที (มีผลแล้วใช้ซ้ำ ไม่ต้องโหลดไฟล์ใหม่)
+  billBarRefresh=()=>{if(lastWs)render(lastWs);else if(/\bfc-bill-here\b/.test(document.documentElement.className||""))check();};
   try{
     window.addEventListener("load",()=>setTimeout(check,1500));
     setInterval(check,3*3600e3);   // เปิดค้างทั้งวัน: เลขวันลดเองข้ามเที่ยงคืน
@@ -4653,6 +4668,7 @@ function ImgUp({value,onChange,label,compact}){
 // ── LOGIN ─────────────────────────────────────────────
 // ══════════════════════════════════════════════════════
 function LoginPage({onLogin}){
+  useBillBarHere();
   const[u,setU]=useState("");const[p,setP]=useState("");const[err,setErr]=useState("");const[show,setShow]=useState(false);const[loading,setLoading]=useState(false);
   // เบราว์เซอร์เติมชื่อ/รหัสให้เอง (autofill) แต่ยังไม่ส่ง onChange มา → state ว่างทั้งที่ช่องมีค่า อ่านจากช่องจริงสำรอง
   const uRef=useRef(null),pRef=useRef(null);
@@ -29690,10 +29706,15 @@ function POSPinGate({branchId}){
 
 // BranchSelector with auto-load branches
 function BranchSelectorWithLoad({user,onSelect,onLogout}){
+  useBillBarHere();
   const[branches,setBranches]=useState([]);const[loading,setLoading]=useState(true);
   useEffect(()=>{api.getBranches().then(b=>setBranches(b)).finally(()=>setLoading(false));},[]);
   if(loading)return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><Loading text="กำลังโหลดรายการสาขา..."/></div></>;
   return <BranchSelector branches={branches} onSelect={onSelect} user={user} onLogout={onLogout}/>;
 }
 
-const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html{max-width:100vw;overflow-x:hidden}body{max-width:100vw}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;touch-action:manipulation}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}@keyframes shakeX{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-9px)}40%,80%{transform:translateX(9px)}}@keyframes navSheen{0%{transform:translateX(-140%)}100%{transform:translateX(140%)}}.navitem{position:relative;overflow:hidden;transition:transform .16s cubic-bezier(.2,.7,.3,1),box-shadow .16s ease,background .14s ease}.navitem::after{content:"";position:absolute;top:0;bottom:0;left:0;width:55%;pointer-events:none;opacity:0;z-index:0;background:linear-gradient(100deg,transparent 0%,rgba(255,168,110,.55) 45%,rgba(255,214,170,.30) 60%,transparent 100%);transform:translateX(-140%)}.navitem>*{position:relative;z-index:1}.navitem:hover{transform:translateY(-6px) scale(1.035);box-shadow:0 16px 28px rgba(74,59,51,.26),0 6px 10px rgba(74,59,51,.16);z-index:2}.navitem:hover::after{opacity:1;animation:navSheen 1.9s ease-in-out infinite}.navitem:active{transform:translateY(-1px) scale(.99);box-shadow:0 2px 6px rgba(74,59,51,.18)}@media(prefers-reduced-motion:reduce){.navitem:hover{transform:none}.navitem:hover::after{animation:none;opacity:0}}*{scrollbar-color:${C.ink4} ${C.lineLight};scrollbar-width:auto}::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:${C.lineLight};border-radius:999px}::-webkit-scrollbar-thumb{background:${C.ink4};border-radius:999px;border:2px solid ${C.lineLight};min-height:40px}::-webkit-scrollbar-thumb:hover{background:${C.brand};border-color:${C.brandLight}}::-webkit-scrollbar-thumb:active{background:${C.brandDark}}::-webkit-scrollbar-corner{background:transparent}div{overscroll-behavior:contain}body.modal-open{overflow:hidden}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input,select,textarea{min-height:40px;font-size:16px!important}input[type=checkbox],input[type=radio]{min-height:auto}table{font-size:12px}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{border-width:1px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}.mdl-ovl{background:rgba(15,23,42,.72)}@media(hover:hover){.mdl-ovl{background:rgba(15,23,42,.65);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}}.mcard{transition:border-color .15s ease,background .15s ease}@media(hover:hover){.mcard:hover{border-color:${C.brand};background:${C.brandLight}}}.mcard:active{background:${C.brandLight};border-color:${C.brand}}`;
+// 31 ต.ค. 69: เดิม div{overscroll-behavior:contain} ทุกกล่อง — Chrome 155 เริ่มบังคับใช้กับกล่องที่ "ไม่มีอะไรให้เลื่อน" ด้วย
+// (การ์ด overflow:hidden มุมโค้ง · กรอบตาราง overflow-x:auto) ⟹ ล้อเมาส์/นิ้วปัดบนการ์ดเลื่อนหน้าไม่ได้ทั้งระบบ (ทดสอบ Chrome 155 จริง ทั้งเมาส์และ touch)
+// ⟹ กันเลื่อนทะลุเฉพาะกล่องเลื่อนแนวตั้ง "ในป็อปอัพ position:fixed" (เป้าหมายเดิม: เลื่อนในหน้าต่างแล้วหน้าข้างหลังไม่ไหล) · หน้าปกติเลื่อนตามธรรมชาติ
+// ตัวเลือกจับข้อความ style ที่เบราว์เซอร์เขียนจาก React (เช่น overflowX:"hidden"+overflowY:"auto" กลายเป็น "overflow: hidden auto") · ไม่ใช้ :is() เพื่อ iPad รุ่นเก่า
+const globalStyle=`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800;900&display=swap');*{margin:0;padding:0;box-sizing:border-box}html{max-width:100vw;overflow-x:hidden}body{max-width:100vw}body{background:${C.bg};font-family:'Sarabun',sans-serif;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;touch-action:manipulation}@keyframes mIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@keyframes slideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}@keyframes shakeX{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-9px)}40%,80%{transform:translateX(9px)}}@keyframes navSheen{0%{transform:translateX(-140%)}100%{transform:translateX(140%)}}.navitem{position:relative;overflow:hidden;transition:transform .16s cubic-bezier(.2,.7,.3,1),box-shadow .16s ease,background .14s ease}.navitem::after{content:"";position:absolute;top:0;bottom:0;left:0;width:55%;pointer-events:none;opacity:0;z-index:0;background:linear-gradient(100deg,transparent 0%,rgba(255,168,110,.55) 45%,rgba(255,214,170,.30) 60%,transparent 100%);transform:translateX(-140%)}.navitem>*{position:relative;z-index:1}.navitem:hover{transform:translateY(-6px) scale(1.035);box-shadow:0 16px 28px rgba(74,59,51,.26),0 6px 10px rgba(74,59,51,.16);z-index:2}.navitem:hover::after{opacity:1;animation:navSheen 1.9s ease-in-out infinite}.navitem:active{transform:translateY(-1px) scale(.99);box-shadow:0 2px 6px rgba(74,59,51,.18)}@media(prefers-reduced-motion:reduce){.navitem:hover{transform:none}.navitem:hover::after{animation:none;opacity:0}}*{scrollbar-color:${C.ink4} ${C.lineLight};scrollbar-width:auto}::-webkit-scrollbar{width:12px;height:12px}::-webkit-scrollbar-track{background:${C.lineLight};border-radius:999px}::-webkit-scrollbar-thumb{background:${C.ink4};border-radius:999px;border:2px solid ${C.lineLight};min-height:40px}::-webkit-scrollbar-thumb:hover{background:${C.brand};border-color:${C.brandLight}}::-webkit-scrollbar-thumb:active{background:${C.brandDark}}::-webkit-scrollbar-corner{background:transparent}[style*="position: fixed"][style*="overflow-y: auto"],[style*="position: fixed"][style*="overflow-y: scroll"],[style*="position: fixed"][style*="overflow: auto"],[style*="position: fixed"][style*="overflow: scroll"],[style*="position: fixed"][style*="overflow: hidden auto"],[style*="position: fixed"][style*="overflow: hidden scroll"],[style*="position: fixed"][style*="overflow: clip auto"],[style*="position: fixed"] [style*="overflow-y: auto"],[style*="position: fixed"] [style*="overflow-y: scroll"],[style*="position: fixed"] [style*="overflow: auto"],[style*="position: fixed"] [style*="overflow: scroll"],[style*="position: fixed"] [style*="overflow: hidden auto"],[style*="position: fixed"] [style*="overflow: hidden scroll"],[style*="position: fixed"] [style*="overflow: clip auto"]{overscroll-behavior:contain}body.modal-open{overflow:hidden}input,select,textarea{font-size:16px}input:focus,select:focus,textarea:focus{border-color:${C.brand}!important;box-shadow:0 0 0 3px ${C.brandLight}!important;outline:none}button{touch-action:manipulation}@media(max-width:768px){button{min-height:36px}input,select,textarea{min-height:40px;font-size:16px!important}input[type=checkbox],input[type=radio]{min-height:auto}table{font-size:12px}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{border-width:1px}}@media(max-width:480px){h1,h2,h3{letter-spacing:-.2px!important}}.mdl-ovl{background:rgba(15,23,42,.72)}@media(hover:hover){.mdl-ovl{background:rgba(15,23,42,.65);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}}.mcard{transition:border-color .15s ease,background .15s ease}@media(hover:hover){.mcard:hover{border-color:${C.brand};background:${C.brandLight}}}.mcard:active{background:${C.brandLight};border-color:${C.brand}}`;

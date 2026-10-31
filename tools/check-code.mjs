@@ -619,7 +619,9 @@ const guards = [
   ["ใบ QR จ่ายเงินใช้ยอดสด ไม่ใช่ยอดจากแถวบิลที่ยังไม่ปิด",
     APP.includes("function printPayQR(){") && APP.includes("subtotal,discount:round2(totalDiscount),total,")],
   // ── ป็อปอัพเลื่อนแล้วพื้นหลังต้องอยู่นิ่ง ──
-  ["กันเลื่อนทะลุไปพื้นหลัง", APP.includes("div{overscroll-behavior:contain}")],
+  // 31 ต.ค. 69: ห้ามกลับไปใช้ div{...contain} ทุกกล่อง — Chrome 155 ทำให้ล้อเมาส์/นิ้วปัดบนการ์ดเลื่อนหน้าไม่ได้ทั้งระบบ · กันเฉพาะกล่องเลื่อนในป็อปอัพ fixed
+  ["กันเลื่อนทะลุไปพื้นหลัง (เฉพาะกล่องเลื่อนในป็อปอัพ position:fixed)", (() => { const g = (APP.match(/^const globalStyle=`.*$/m) || [""])[0];
+    return !/(^|[}`])div\{overscroll-behavior:contain\}/.test(g) && g.includes('[style*="position: fixed"] [style*="overflow-y: auto"]') && g.includes('[style*="position: fixed"][style*="overflow-y: auto"]') && g.includes('[style*="position: fixed"] [style*="overflow: hidden auto"]') && /\[style\*="position: fixed"\] \[style\*="overflow: auto"\][^{]*\{overscroll-behavior:contain\}/.test(g); })()],
   // เปิดจากไอคอนหน้าจอโฮม เนื้อหากินขึ้นไปใต้แถบสถานะ iOS — หัวจอต้องเผื่อไว้
   ["หัวจอขายไม่ทับเวลา/แบตของ iOS", APP.includes("calc(10px + env(safe-area-inset-top,0px))") && APP.includes("calc(12px + env(safe-area-inset-top,0px))")],
   ["ล็อกหน้าแบบที่ iOS ยอมรับ (ตรึง body ไม่ใช่ overflow:hidden)", APP.includes('b.position="fixed";b.top=') && APP.includes("window.scrollTo(0,_savedScrollY)")],
@@ -9857,8 +9859,49 @@ section("ฐานข้อมูลหาย / ค่าบริการใ�
     ok_("public/billing.json มีวันครบกำหนดของ Supabase และ Vercel (รูปแบบ YYYY-MM-DD)", keys === "supabase,vercel" && BJ.services.every((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.due) && x.name));
   }
   ok_("แถบค่าบริการ: อ่านไฟล์บนเว็บเราเอง (ไม่พึ่งฐานข้อมูล) · ไม่ขึ้นหน้าลูกค้าสแกน · ปิดได้ถึงพรุ่งนี้ · เช็กซ้ำทุก 3 ชม.",
-    APP.includes('const r=await fetch("/billing.json?ts="+Date.now(),{cache:"no-store"});') && APP.includes("/\\bcust-scan\\b/.test(document.documentElement.className||\"\")||document.getElementById(\"fc-dbgone-bar\")") &&
+    APP.includes('const r=await fetch("/billing.json?ts="+Date.now(),{cache:"no-store"});') && APP.includes("/\\bcust-scan\\b/.test(cls)||document.getElementById(\"fc-dbgone-bar\")") &&
     APP.includes("x.onclick=()=>{try{localStorage.setItem(HIDE_KEY,todayTH());}catch{}bar.remove();};") && APP.includes("setInterval(check,3*3600e3);"));
+  // ── 31 ต.ค. 69: แถบค่าบริการขึ้นเฉพาะหน้าล็อกอิน + หน้าเลือกสาขา (เจ้าของสั่ง: ไม่ให้บังจอทำงานพนักงาน) — รันบล็อกแถบตัวจริงกับ DOM ปลอม ──
+  {
+    const s0 = APP.indexOf('if(typeof document!=="undefined"){\n  const ID="fc-bill-bar"'), s1 = APP.indexOf("\nasync function sb(", s0);
+    const hookSrc = grab(APP, "useBillBarHere");
+    let BB = null;
+    try {
+      BB = new Function("document", "window", "localStorage", "fetch", "DBG", "setInterval", "setTimeout", "useEffect",
+        APP.split("\n").find((l) => l.startsWith("const BILL_WARN_DAYS=")) + "\nlet billBarRefresh=()=>{};\n" + grab(APP, "billDaysLeft") + "\n" + grab(APP, "billWarnings") + "\n" + grab(APP, "billLine") + "\n" + hookSrc + "\n" +
+        APP.slice(s0, s1) + "\nreturn {useBillBarHere,refresh:()=>billBarRefresh()};");
+    } catch { BB = null; }
+    ok_("ดึงบล็อกแถบค่าบริการตัวจริงมารันได้", s0 > 0 && s1 > s0 && !!BB && /^function useBillBarHere/.test(hookSrc || ""));
+    if (BB) {
+      const els = new Map();
+      const mkEl = () => { const e = { id: "", style: {}, children: [], textContent: "", setAttribute() {}, appendChild(c) { this.children.push(c); }, remove() { els.delete(this.id); } }; return e; };
+      const de = { className: "", classList: { add(c) { if (!de.className.split(" ").includes(c)) de.className = (de.className + " " + c).trim(); }, remove(c) { de.className = de.className.split(" ").filter((x) => x && x !== c).join(" "); } } };
+      const doc = { documentElement: de, getElementById: (id) => els.get(id) || null, createElement: mkEl, body: { appendChild(e) { els.set(e.id, e); } } };
+      let onLoad = null, nFetch = 0;
+      const win = { addEventListener: (ev, f) => { if (ev === "load") onLoad = f; } };
+      const ls = { getItem: () => null, setItem() {} };
+      const due = new Date(Date.now() + 7 * 3600e3 + 5 * 86400e3).toISOString().slice(0, 10);   // อีก 5 วัน (เวลาไทย)
+      const fakeFetch = async () => { nFetch++; return { ok: true, json: async () => ({ services: [{ key: "supabase", name: "ฐานข้อมูล (Supabase)", due }] }) }; };
+      const timers = []; const cleanups = [];
+      const api0 = BB(doc, win, ls, fakeFetch, { listeners: new Set() }, () => 0, (f) => { timers.push(f); return 0; }, (f) => { const c = f(); if (c) cleanups.push(c); });
+      const flush = async () => { while (timers.length) timers.shift()(); for (let i = 0; i < 5; i++) await Promise.resolve(); await new Promise((r) => setTimeout(r, 0)); };
+      const bar = () => !!els.get("fc-bill-bar");
+      onLoad && onLoad(); await flush();
+      const inWork = bar();   // ล็อกอินค้างไว้แล้ว เปิดเว็บมาเข้าจอทำงานเลย = ไม่มีแถบ
+      api0.useBillBarHere(); await flush();
+      const onLogin = bar(), fetchAfterMount = nFetch;   // หน้าล็อกอิน/เลือกสาขา = มีแถบ (ใช้ผลเดิม ไม่โหลดไฟล์ซ้ำ)
+      cleanups.splice(0).forEach((c) => c()); await flush();
+      const afterLeave = bar();   // เลือกสาขาแล้วเข้าจอทำงาน = แถบหายทันที
+      de.classList.add("cust-scan"); api0.useBillBarHere(); await flush();
+      const custScan = bar(); cleanups.splice(0).forEach((c) => c()); de.classList.remove("cust-scan");
+      ck("แถบค่าบริการ: จอทำงานไม่ขึ้น · หน้าล็อกอิน/เลือกสาขาขึ้น (ไม่โหลดไฟล์ซ้ำ) · ออกจากหน้านั้นหายทันที · หน้าลูกค้าสแกนไม่ขึ้น",
+        [inWork, onLogin, fetchAfterMount, afterLeave, custScan], [false, true, 1, false, false]);
+    }
+    const body = (n) => { const i = APP.indexOf(`function ${n}(`); return i < 0 ? "" : APP.slice(i).split("\n").slice(0, 3).join("\n"); };   // grab() ตัดที่ปีกกาของ ({props}) จึงอ่านเองสามบรรทัดแรก
+    ok_("หน้าล็อกอิน (LoginPage) และหน้าเลือกสาขา (BranchSelectorWithLoad) เรียก useBillBarHere() ก่อน return แรก",
+      /\n  useBillBarHere\(\);\n/.test(body("LoginPage")) && /\n  useBillBarHere\(\);\n/.test(body("BranchSelectorWithLoad")));
+    ok_("จออื่นไม่เรียก useBillBarHere (มีแค่ 2 หน้านี้)", (APP.match(/^\s*useBillBarHere\(\);$/gm) || []).length === 2);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
