@@ -13666,6 +13666,23 @@ section("ใบส่งอุปกรณ์ลงบัญชีเป็น�
   // ── โครงสร้าง: พร็อกซีส่งต่อ po_kind (ด่าน "ฟิลด์ที่หน้าเว็บส่งต้องรอดผ่านพร็อกซี" ครอบอยู่แล้ว) · ทุกทางสร้างบิลใช้ isAssetPO ตัวเดียวกัน ──
   ok_("ทรัพย์สินสร้าง payload ที่เดียว (lib/sliptrack-assets.js) — po_external_id มาจาก _poExternalId ที่ attachPOLinks/relinkPOAssets คิดให้เท่านั้น",
     !/po_external_id\s*:/.test(APP) && SLIPPUSH.includes("await attachPOLinks([row], sbGetA);") && !/body\.po_external_id/.test(SLIPPUSH));
+  // ── 31 ต.ค. 69 กติกาห้องบัญชี: ผูก po_external_id ได้เฉพาะชิ้นที่ราคารวมอยู่ในบิล (บรรทัดในใบชื่อตรงกันมีราคา > 0) ──
+  try {
+    const LA = await import(new URL("../lib/sliptrack-assets.js", import.meta.url).href + "?link0=" + Math.random());
+    const po = { id: 9, po_number: "PO-202610-B1-MIX", status: "awaiting_payment", received_at: "2026-10-31T05:00:00Z", from_branch_id: 1, branch_id: 4, vat: 0, subtotal: 200, total: 200, notes: "", items: [{ kind: "asset", asset_id: 1, name: "เตา", qty: 2, unit: "ชิ้น", price_per_unit: 100, line_total: 200 }, { kind: "other", name: "เอี๊ยม", qty: 1, unit: "ชิ้น", price_per_unit: 0, line_total: 0 }] };
+    ck("poLinePriced: บรรทัดราคา > 0 = ผูก · บรรทัด ฿0 (ทุนใส่ทีหลัง) = ไม่ผูก · ชื่อไม่ตรงใบ / ไม่มีใบ = ไม่ผูก",
+      [LA.poLinePriced(po, { name: " เตา " }), LA.poLinePriced(po, { name: "เอี๊ยม" }), LA.poLinePriced(po, { name: "อื่น" }), LA.poLinePriced(null, { name: "เตา" })], [true, false, false, false]);
+    const brs = { 1: { id: 1, name: "ครัวกลาง", type: "central" }, 4: { id: 4, name: "บางใหญ่", type: "branch" } };
+    const assets = [{ id: 51, name: "เตา", cost: 100, quantity: 2, acquired_date: "2026-10-31", branch_id: 4, status: "active", note: "รับตาม PO-202610-B1-MIX" }, { id: 52, name: "เอี๊ยม", cost: 80, quantity: 1, acquired_date: "2026-10-31", branch_id: 4, status: "active", note: "หักเงินพนักงาน · รับตาม PO-202610-B1-MIX" }];
+    const sbGet = async (path) => path.startsWith("purchase_orders") ? [po] : path.startsWith("branches") ? Object.values(brs) : path.startsWith("assets") ? assets.map((a) => ({ ...a })) : [];
+    const rows = assets.map((a) => ({ ...a }));
+    await LA.attachPOLinks(rows, sbGet, brs);
+    const pushed = [];
+    const r = await LA.relinkPOAssets(po, { sbGet, push: async (p) => { pushed.push(p); return { ok: true }; }, branchById: brs });
+    ck("attachPOLinks / relinkPOAssets: เตา (ราคาอยู่ในบิล) ผูก · เอี๊ยม (มากับใบ ฿0 ใส่ทุนทีหลัง) ไม่ผูก และ relink ไม่ส่ง",
+      [rows[0]._poExternalId, rows[1]._poExternalId, pushed.map((p) => [p.external_id, p.po_external_id]), r.sent, r.skipped],
+      ["PO-PO-202610-B1-MIX", undefined, [["ASSET-51", "PO-PO-202610-B1-MIX"]], 1, 1]);
+  } catch (e) { ok_("กติกาผูกเฉพาะชิ้นที่มีราคาในบิล รันจบ — " + String((e && e.message) || e).slice(0, 160), false); }
 }
 
 console.log(`\n════════════════════════════════════════════════════`);
