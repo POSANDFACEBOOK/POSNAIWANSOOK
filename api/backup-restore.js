@@ -63,8 +63,30 @@ async function driveDownload(id) {
   if (!r.ok) throw new Error(`drive download failed: ${r.status}`);
   return Buffer.from(await r.arrayBuffer());
 }
+// ── app_users: ห้าม select=* (31 ต.ค. 69) ──
+// หลังเจ้าของรัน sql/app-users-password-hash.sql คีย์สาธารณะอ่านคอลัมน์ password ไม่ได้ ⟹ select=* โดนปฏิเสธ (42501) แม้แค่นับแถว
+// ใช้ชุดคอลัมน์เดียวกับแอป/ตัวสำรอง (APP_USER_COLS · มีด่านตรวจว่าตรงกัน) ตารางอื่นเหมือนเดิม
+const APP_USER_COLS = "id,username,name,role,active,perms,created_at,allowed_branches";
+const probeSelect = (t) => (t === "app_users" ? APP_USER_COLS : "*");
+// ไฟล์สำรองตั้งแต่ 31 ต.ค. 69 ไม่มีรหัสผ่าน (ไฟล์อยู่ใน Google Drive) ⟹ กู้ app_users แล้วทุกคนเข้าระบบไม่ได้จนกว่าจะตั้งรหัสใหม่
+// ต้องบอกทันทีพร้อมคำสั่ง SQL ตั้งรหัสแอดมิน 1 บรรทัด (trigger ในฐานเข้ารหัส bcrypt ให้) · ไฟล์เก่าที่ยังมีรหัส = กู้แล้วใช้รหัสเดิมได้ ไม่เตือน
+// "" = ไม่ต้องเตือน · ข้อความเดียวกับ scripts/restore.mjs (มีด่านตรวจ)
+function usersPasswordNotice(rows) {
+  const noPw = (Array.isArray(rows) ? rows : []).filter((r) => r && !r.password);
+  if (!noPw.length) return "";
+  const admin = noPw.find((r) => r.role === "admin" && r.active !== false) || noPw.find((r) => r.role === "admin") || noPw[0];
+  const uname = String((admin && admin.username) || "admin");
+  return [
+    `⚠️ ผู้ใช้ ${noPw.length} คนที่กู้คืนจากไฟล์นี้ยังไม่มีรหัสผ่าน — ทุกคนเข้าระบบไม่ได้จนกว่าจะตั้งรหัสใหม่`,
+    "(ไฟล์สำรองตั้งแต่ 31 ต.ค. 69 ไม่เก็บรหัสผ่านโดยตั้งใจ เพราะไฟล์อยู่ใน Google Drive)",
+    "1) เจ้าของเปิด Supabase → SQL Editor แล้วรันบรรทัดนี้ (เปลี่ยน รหัสชั่วคราว เป็นรหัสใช้ครั้งเดียว — ห้ามใช้รหัสจริง SQL Editor จำข้อความที่รันไว้):",
+    `update public.app_users set password = 'รหัสชั่วคราว' where username = '${uname.replace(/'/g, "''")}';`,
+    "   ฐานเข้ารหัส (bcrypt) ให้เองตอนบันทึก · ฐานใหม่ที่ยังไม่เคยรัน sql/app-users-password-hash.sql ให้รันไฟล์นั้นก่อน (รันซ้ำได้)",
+    `2) เข้าระบบด้วย ${uname} แล้วเปลี่ยนรหัสตัวเองทันทีที่ ตั้งค่า → ผู้ใช้ → ✏️ จากนั้นตั้งรหัสใหม่ให้คนอื่นทีละคน`,
+  ].join("\n");
+}
 async function liveCount(t) {
-  const r = await fetch(`${SUPA}/rest/v1/${t}?select=*&limit=1`, { headers: { ...H, Prefer: "count=exact", Range: "0-0" } });
+  const r = await fetch(`${SUPA}/rest/v1/${t}?select=${probeSelect(t)}&limit=1`, { headers: { ...H, Prefer: "count=exact", Range: "0-0" } });
   if (!r.ok) throw new Error(`count ${t}: HTTP ${r.status}`);
   const total = (r.headers.get("content-range") || "").split("/")[1]; // "0-0/<total>" or "*/0"
   return total === "*" || total == null ? 0 : Number(total);
@@ -121,24 +143,31 @@ export default async function handler(req, res) {
       partialNeedsRepair: partials.map((p) => `${p.table} (มี ${p.liveRows}/${p.backupRows})`),
       tooLargeUseLocalScript: tooLarge.map((p) => `${p.table} (${p.backupRows})`),
     };
+    // 31 ต.ค. 69: จะเติม app_users จากไฟล์ที่ไม่มีรหัสผ่าน = บอกตั้งแต่ขั้นดูก่อน (ไม่ใช่รู้ตอนเข้าระบบไม่ได้)
+    if (willInsert.some((p) => p.table === "app_users")) { const n = usersPasswordNotice(tablesInBackup.app_users); if (n) summary.passwordNotice = n; }
 
     if (!apply) return res.status(200).json({ mode: "dry-run", file: fileName, confirmToken: `RESTORE ${fileName}`, summary, plan });
 
     if (confirm !== `RESTORE ${fileName}`) return res.status(400).json({ error: `confirm token mismatch — must type exactly: RESTORE ${fileName}` });
 
     const written = {}, applySkipped = [];
+    // app_users ถูกเขียนจริง (ตัวเลข > 0) และไฟล์ไม่มีรหัสผ่าน → ข้อความบอกวิธีตั้งรหัสใหม่ · หยุดกลางคันก็ต้องบอก (app_users อยู่ลำดับ 2 เขียนไปก่อนแล้ว)
+    const pwNotice = () => (typeof written.app_users === "number" && written.app_users > 0 ? usersPasswordNotice(tablesInBackup.app_users) : "");
     for (const p of willInsert) {
       try {
         const r = await restoreRpc(p.table, tablesInBackup[p.table], "insert");
         if (r.skipped) { written[p.table] = `skipped (${r.reason || "nonempty"} — live ${r.live})`; applySkipped.push(`${p.table} (${r.reason || "nonempty"}, live ${r.live})`); }
         else { const ins = r.inserted ?? 0; written[p.table] = ins; if (ins < p.backupRows) applySkipped.push(`${p.table} (เขียน ${ins}/${p.backupRows})`); }
       } catch (e) {
-        return res.status(500).json({ status: "aborted", file: fileName, written, failedTable: p.table, error: String((e && e.message) || e) });
+        const pn = pwNotice();
+        // หน้าจอโชว์เฉพาะ error ของคำตอบที่ไม่ใช่ 200 ⟹ ต่อข้อความรหัสผ่านไว้ท้าย error ด้วย
+        return res.status(500).json({ status: "aborted", file: fileName, written, failedTable: p.table, error: String((e && e.message) || e) + (pn ? "\n\n" + pn : ""), ...(pn ? { passwordNotice: pn } : {}) });
       }
     }
     // Not "done" if any table still needs manual attention — never let a partial recovery look complete.
     const incomplete = partials.length > 0 || tooLarge.length > 0 || applySkipped.length > 0;
-    return res.status(200).json({ status: incomplete ? "incomplete" : "done", file: fileName, written, needsAttention: { partial: summary.partialNeedsRepair, tooLarge: summary.tooLargeUseLocalScript, appliedSkipped: applySkipped } });
+    const pn = pwNotice();
+    return res.status(200).json({ status: incomplete ? "incomplete" : "done", file: fileName, written, needsAttention: { partial: summary.partialNeedsRepair, tooLarge: summary.tooLargeUseLocalScript, appliedSkipped: applySkipped }, ...(pn ? { passwordNotice: pn } : {}) });
   } catch (e) {
     return res.status(500).json({ error: String((e && e.message) || e) });
   }

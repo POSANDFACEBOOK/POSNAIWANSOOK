@@ -6630,7 +6630,10 @@ section("POS สาขาที่ 2: หน้าลูกค้าและข
   // ── ⑤ หมอตรวจข้อมูล: อ่านอย่างเดียวเสมอ + มีข้อตรวจ POS ──
   {
     const DATA = rd("tools/check-data.mjs");
-    ok_("หมอตรวจข้อมูลยังอ่านอย่างเดียว (ไม่มี POST/PATCH/PUT/DELETE/rpc)", !/method\s*:\s*["'`](POST|PATCH|PUT|DELETE)/i.test(DATA) && !/\/rpc\//.test(DATA));
+    // 31 ต.ค. 69: ยกเว้นตัวเดียว — ข้อ 22 GET rpc/app_login ด้วยชื่อปลอม (ฟังก์ชัน STABLE · GET = ธุรกรรมอ่านอย่างเดียว) เพื่อดูว่ารัน SQL แล้วหรือยัง
+    //   ตัวจับ rpc เดิมดูแค่ "/rpc/" ซึ่ง "rpc/…" ต้นข้อความหลุดได้ — ตอนนี้จับทั้งสองแบบ
+    ok_("หมอตรวจข้อมูลยังอ่านอย่างเดียว (ไม่มี POST/PATCH/PUT/DELETE/rpc · ยกเว้น GET rpc/app_login ชื่อปลอมของข้อ 22)",
+      !/method\s*:\s*["'`](POST|PATCH|PUT|DELETE)/i.test(DATA) && !/(^|["'`/])rpc\//m.test(DATA.split('st("rpc/app_login?p_username=__doctor__&p_password=x")').join("")));
     const want = ["กะที่เปิดค้างเกิน 24 ชม.", "บิลที่ยังไม่ปิดเกิน 24 ชม.", "โต๊ะที่มีบิลเปิดพร้อมกันมากกว่า 1 ใบ", "เครื่องพิมพ์ที่ไม่ได้ผูกสาขา",
       "คำสั่งพิมพ์/เปิดลิ้นชัก ที่ค้างเกิน 3 นาที", "เมนูปักหมุดเครื่องพิมพ์", "ชื่อเมนูซ้ำกันแต่ราคาไม่เท่ากัน"];
     ck("หมอตรวจข้อมูลมีข้อตรวจ POS ครบ 7 ข้อ", want.filter((t) => !DATA.includes(t)), []);
@@ -12256,37 +12259,118 @@ section("API/ข้อมูล 28 ต.ค. 69: แจ้งเตือนป�
       (DV.match(/Object\.entries\(viewHeaders\(/g) || []).length === 2 && !DV.includes('res.setHeader("Content-Disposition", "inline")'));
     ok_("#26 คอมเมนต์ผิดในแอป ('รองรับทุก content-type อยู่แล้ว') ถูกแก้แล้ว", !APP.includes("ฝั่ง api/drive-upload กับ drive-view รองรับทุก content-type อยู่แล้ว"));
 
-    // ── minors[10] 29 ต.ค. 69: ไฟล์สำรอง .json.gz ดาวน์โหลดได้ชื่อจริง (เดิมได้ไฟล์ "drive-view" ไม่มีนามสกุล) ──
+    // ── minors[10] 29 ต.ค. 69 → 31 ต.ค. 69: ไฟล์สำรองห้ามออกทาง drive-view ──
+    //    drive-view ไม่ต้องใช้รหัส + drive_id ของไฟล์สำรองอ่านได้จากตาราง backups ด้วยคีย์สาธารณะ = ใครก็โหลดทั้งฐานได้
+    //    (รหัสผ่านตัวหนังสือในไฟล์ก่อน 31 ต.ค. 69 · PIN · ข้อมูลลูกค้า) ⟹ drive-view ปฏิเสธ gzip · ดาวน์โหลดย้ายไป POST /api/backup?download=1 + BACKUP_ADMIN_KEY
+    //    ชื่อไฟล์ดาวน์โหลดยังเป็นชื่อจริง (เรื่องเดิมของ minors[10])
     const ID = "1AbCdEfGhIjKlMnOp";
-    const gzH = (t, fn) => { const x = ssafe(() => vw.viewHeaders(t, ID, fn)); return typeof x === "object" ? [x["Content-Type"], x["Content-Disposition"], x["X-Content-Type-Options"], /sandbox/.test(x["Content-Security-Policy"] || "")] : x; };
     // ชื่อไฟล์จริงจาก api/backup.js ตัวจริง (ตัดบรรทัด stamp/name มารัน) ทั้งรายวัน / กดเอง / ไม่ครบ
     const bkName = (dataComplete, isManual) => ssafe(() => { const L = BACKUP.split("\n"); const i = L.findIndex((l) => l.trim().startsWith("const stamp = started.slice(0, 19)")); if (i < 0) throw new Error("ไม่เจอ const stamp"); return new Function("started", "isManual", "dataComplete", L.slice(i, i + 4).join("\n") + "\nreturn name;")("2026-10-29T19:00:00.123Z", isManual, dataComplete); });
     const names = [bkName(true, false), bkName(true, true), bkName(false, false)];
-    ck("minors[10] ชื่อไฟล์สำรองตัวจริง (รายวัน / กดเอง / ไม่ครบ) ผ่านตัวตรวจชื่อ → ได้ชื่อนั้นเป็นชื่อดาวน์โหลด",
-      names.map((n) => gzH("application/gzip", n)[1]), names.map((n) => `attachment; filename="${n}"`));
-    ck("minors[10] gzip = ดาวน์โหลดด้วยชนิดจริง + nosniff + sandbox (ไม่ใช่ octet-stream ไม่มีชื่อ)",
-      [gzH("application/gzip", "foodcost-backup-2026-10-29.json.gz"), gzH("application/x-gzip")],
-      [["application/gzip", 'attachment; filename="foodcost-backup-2026-10-29.json.gz"', "nosniff", true], ["application/x-gzip", `attachment; filename="backup-${ID}.json.gz"`, "nosniff", true]]);
-    ck("minors[10] ?fn= แปลก (.html / path / เครื่องหมายคำพูด / ขึ้นบรรทัด / จุดนำ / เว้นวรรค / array) → ใช้ backup-<id>.json.gz",
-      ["evil.html", "../../x.json.gz", 'a".json.gz', "x.json.gz\r\nSet-Cookie: a=b", ".hidden.json.gz", "a b.json.gz", ["a.json.gz", "b.json.gz"], "x.json.gz.exe"].map((f) => gzH("application/gzip", f)[1]),
-      Array(8).fill(`attachment; filename="backup-${ID}.json.gz"`));
-    ck("minors[10] ?fn= ไม่มีผลกับชนิดอื่น (รูป inline เดิม · SVG ยัง octet-stream ไม่มีชื่อ)",
-      [gzH("image/webp", "foodcost-backup-2026-10-29.json.gz")[1], gzH("image/svg+xml", "foodcost-backup-2026-10-29.json.gz").slice(0, 2)], ["inline", ["application/octet-stream", "attachment"]]);
-    // ลิงก์ในหน้าสำรองข้อมูลตัวจริง (ตัด href ของปุ่ม ⬇ ดาวน์โหลด มารัน) → handler ตัวจริงของ drive-view (JWT/Drive ปลอม)
-    const link = (h) => ssafe(() => { const ln = APP.split("\n").find((l) => l.includes("⬇ ดาวน์โหลด</a>")); const m = ln && ln.match(/href=\{(`\/api\/drive-view.*?`)\} target="_blank"/); if (!m) throw new Error("ไม่เจอ href ปุ่มดาวน์โหลด"); return new Function("h", "return " + m[1])(h); });
-    const dvGet = async (url) => {
-      const hdr = {}; const out = { code: 0, status(c) { out.code = c; return out; }, end() { return out; }, setHeader(k, v) { hdr[k] = v; } };
-      const fetch = async () => ({ ok: true, status: 200, headers: { get: (k) => (k === "content-type" ? "application/gzip" : null) }, arrayBuffer: async () => new ArrayBuffer(4), text: async () => "" });
-      class JWT { async getAccessToken() { return { token: "t" }; } }
-      const { handler } = new Function("JWT", "fetch", "process", DV.replace(/^import \{ JWT \} from "google-auth-library";$/m, "").replace(/^export default async function handler/m, "async function handler").replace(/^export /gm, "") + "\nreturn { handler };")(JWT, fetch, { env: { GOOGLE_SA_KEY_B64: '{"client_email":"x","private_key":"y"}' } });
-      const q = Object.fromEntries(new URL(url, "https://app.example").searchParams);
-      await handler({ method: "GET", query: q }, out);
-      return [out.code, hdr["Content-Disposition"]];
+    class JWT { async getAccessToken() { return { token: "t" }; } }
+    const SA_ENV = '{"client_email":"x","private_key":"y"}';
+    let dvLast = null;   // คำตอบล่าสุดของ drive-view (ข้อความ + header) ให้ด่านข้อความไทยดูต่อ
+    const dvRun = async (ct, bytes, w) => {
+      const hdr = {}; let sent = null; const out = { code: 0, status(c) { out.code = c; return out; }, end(b) { sent = b; dvLast = { sent: b, hdr }; return out; }, setHeader(k, v) { hdr[k] = v; } };
+      const fetch = async (url) => {
+        if (String(url).includes("fields=thumbnailLink")) return { ok: true, status: 200, json: async () => ({}) };   // gzip ไม่มีรูปย่อ → ตกไปไฟล์เต็ม
+        return { ok: true, status: 200, headers: { get: (k) => (k === "content-type" ? ct : null) }, body: { cancel: async () => {} }, arrayBuffer: async () => Uint8Array.from(bytes).buffer, text: async () => "" };
+      };
+      const { handler } = new Function("JWT", "fetch", "process", DV.replace(/^import \{ JWT \} from "google-auth-library";$/m, "").replace(/^export default async function handler/m, "async function handler").replace(/^export /gm, "") + "\nreturn { handler };")(JWT, fetch, { env: { GOOGLE_SA_KEY_B64: SA_ENV } });
+      await handler({ method: "GET", query: { id: ID, fn: names[0], ...(w ? { w } : {}) } }, out);
+      return [out.code, hdr["Cache-Control"] || null, hdr["Content-Disposition"] || null, Buffer.isBuffer(sent) ? sent.length : typeof sent];
     };
-    const L1 = link({ drive_id: ID, file_name: names[0] }), L0 = link({ drive_id: ID });
-    ck("minors[10] ปุ่ม ⬇ ดาวน์โหลด ตัวจริงส่งชื่อไฟล์ไปด้วย · แถวไม่มีชื่อไฟล์ = ลิงก์เดิม", [L1, L0], [`/api/drive-view?id=${ID}&fn=${encodeURIComponent(names[0])}`, `/api/drive-view?id=${ID}`]);
-    ck("minors[10] กดปุ่มจริง → drive-view handler ตัวจริงตอบ 200 + ชื่อไฟล์จริง · ไม่มีชื่อ → backup-<id>.json.gz",
-      [await safe(() => dvGet(L1)), await safe(() => dvGet(L0))], [[200, `attachment; filename="${names[0]}"`], [200, `attachment; filename="backup-${ID}.json.gz"`]]);
+    const GZ = [0x1f, 0x8b, 8, 0], PNG = [0x89, 0x50, 0x4e, 0x47], PDF = [0x25, 0x50, 0x44, 0x46], IMM = "public, max-age=31536000, s-maxage=31536000, immutable";
+    ck("drive-view handler ตัวจริง: ไฟล์สำรอง (ชนิด gzip / x-gzip;charset / octet-stream แต่ไบต์ขึ้นต้น 1f 8b / ชนิด gzip แต่ไบต์อื่น / ขอรูปย่อ ?w=64) = 403 no-store ไม่ส่งไบต์ไฟล์ · รูป/PDF ยัง 200 inline แคชได้ตามเดิม",
+      [await safe(() => dvRun("application/gzip", GZ)), await safe(() => dvRun("application/x-gzip; charset=binary", GZ)), await safe(() => dvRun("application/octet-stream", GZ)), await safe(() => dvRun("application/gzip", PNG)), await safe(() => dvRun("application/gzip", GZ, "64")),
+        await safe(() => dvRun("image/png", PNG)), await safe(() => dvRun("application/pdf", PDF))],
+      [[403, "no-store", null, "string"], [403, "no-store", null, "string"], [403, "no-store", null, "string"], [403, "no-store", null, "string"], [403, "no-store", null, "string"], [200, IMM, "inline", 4], [200, IMM, "inline", 4]]);
+    ok_("drive-view ไม่มีทางส่ง gzip เป็นดาวน์โหลดอีก (ไม่มี gzipName / ?fn= · viewHeaders ไม่มีกิ่ง gzip)",
+      !/gzipName|req\.query\.fn/.test(DV) && ssafe(() => vw.viewHeaders("application/gzip")["Content-Type"]) === "application/octet-stream");
+    // รอบ 3 (31 ต.ค. 69): แท็บโค้ดเก่ากดลิงก์ ⬇ เดิมแล้วเจอหน้านี้ — ข้อความต้องเป็นไทย บอกทางไปที่ถูก และระบุ charset (ไม่งั้นไทยเพี้ยน)
+    dvLast = null; await safe(() => dvRun("application/gzip", GZ));
+    ck("drive-view ปฏิเสธไฟล์สำรองเป็นข้อความไทย (text/plain; charset=utf-8) บอกให้ไปหน้า ตั้งค่า → สำรองข้อมูล + รีเฟรช",
+      dvLast ? [dvLast.hdr["Content-Type"], /^ไฟล์สำรองข้อมูลต้องดาวน์โหลดจากหน้า ตั้งค่า → สำรองข้อมูล \(รีเฟรชหน้าก่อน/.test(String(dvLast.sent))] : null, ["text/plain; charset=utf-8", true]);
+    // ── ดาวน์โหลดไฟล์สำรองทางใหม่: handler ตัวจริงของ api/backup.js (?download=1) กับ Drive ปลอม ──
+    // รอบ 3: ส่งต่อเป็นสาย (pipeline) ไม่โหลดทั้งก้อน (เพดาน 4.5 MB ของ Vercel · ไฟล์ ~5.8 MB แล้ว) ⟹ คำตอบปลอมเป็น Writable จริง
+    const { Writable } = await import("node:stream");
+    const BK_DEPS = { ...(await import("node:zlib")), ...(await import("node:crypto")), Readable: (await import("node:stream")).Readable, pipeline: (await import("node:stream/promises")).pipeline };
+    const bkLoad = (fetch, env) => {
+      const src = BACKUP.replace(/^import [^\n]*;$/gm, "").replace(/^export default async function handler/m, "async function handler").replace(/^export /gm, "");
+      const ks = ["gzipSync", "gunzipSync", "createHash", "timingSafeEqual", "Readable", "pipeline"];
+      class JWT { async getAccessToken() { return { token: "t" }; } }
+      return new Function("JWT", "fetch", "process", ...ks, src + "\nreturn { handler, keyOk };")(JWT, fetch, { env }, ...ks.map((k) => BK_DEPS[k]));
+    };
+    const mkStream = (mode) => mode === "break" ? (() => { let n = 0; return new ReadableStream({ pull(c) { if (n++ === 0) c.enqueue(Uint8Array.from(GZ)); else c.error(new Error("สายขาด")); } }); })() : new Response(Uint8Array.from(GZ)).body;
+    let bkLastErr = null;
+    const bkDl = async ({ method = "POST", body = { key: "bk", driveId: ID }, query = {}, meta = { name: names[0], mimeType: "application/gzip" }, env = { BACKUP_ADMIN_KEY: "bk", GOOGLE_SA_KEY_B64: SA_ENV }, media = "ok", metaStatus = 200 } = {}) => {
+      const hdr = {}; let sent = null; const calls = []; const chunks = [];
+      const out = new Writable({ write(c, _e, cb) { out.headersSent = true; chunks.push(Buffer.from(c)); cb(); } });
+      Object.assign(out, { code: 0, headersSent: false, status(c) { out.code = c; return out; }, json(o) { sent = o; return out; }, setHeader(k, v) { hdr[k] = v; }, removeHeader(k) { delete hdr[k]; } });
+      const fetch = async (url) => {
+        calls.push(String(url).includes("alt=media") ? "ไฟล์" : String(url).includes("fields=name,mimeType") ? "ชื่อ" : String(url));
+        if (String(url).includes("fields=name,mimeType")) return { ok: metaStatus === 200, status: metaStatus, json: async () => meta };
+        if (String(url).includes("alt=media")) return media === "500" ? { ok: false, status: 500, body: null } : { ok: true, status: 200, body: mkStream(media) };
+        throw new Error("ไม่คาดว่าจะเรียก " + url);
+      };
+      const { handler } = bkLoad(fetch, env);
+      await handler({ method, headers: {}, query: { download: "1", ...query }, body }, out);
+      bkLastErr = sent && sent.error;
+      const kind = out.destroyed && !out.writableFinished ? "ตัดสาย" : chunks.length ? (Buffer.concat(chunks).equals(Buffer.from(GZ)) ? "ไฟล์" : "ไฟล์เพี้ยน") : sent && sent.error ? "error" : sent;
+      return [out.code, hdr["Cache-Control"] || null, hdr["Content-Disposition"] || null, kind, calls];
+    };
+    const NS = "private, no-store";
+    ck("api/backup.js ?download=1 ตัวจริง: รหัสถูก (ใน body) + ไฟล์สำรองจริง = 200 ชื่อไฟล์จริง ห้ามแคช ไบต์ครบตรง · รหัสผิด/ไม่ส่ง/ส่งใน URL = 401 ไม่แตะ Drive · ยังไม่ตั้ง BACKUP_ADMIN_KEY = 501 · GET = 405 · id แปลก = 400 · ไฟล์อื่นที่ไม่ใช่ไฟล์สำรอง (ชื่อ/ชนิด) = 403 ไม่โหลดเนื้อไฟล์ · Drive ส่งไฟล์ไม่ได้ = 502 · สายขาดกลางทาง = ตัดการเชื่อมต่อ (ไม่ได้ไฟล์ครึ่งๆ)",
+      [await safe(() => bkDl()), await safe(() => bkDl({ body: { key: "bad", driveId: ID } })), await safe(() => bkDl({ body: { driveId: ID }, query: { key: "bk" } })),
+        await safe(() => bkDl({ body: { key: "", driveId: ID }, env: { GOOGLE_SA_KEY_B64: SA_ENV } })), await safe(() => bkDl({ method: "GET" })), await safe(() => bkDl({ body: { key: "bk", driveId: "../x" } })),
+        await safe(() => bkDl({ meta: { name: "slip-2026.jpg", mimeType: "image/jpeg" } })), await safe(() => bkDl({ meta: { name: names[0], mimeType: "application/octet-stream" } })), await safe(() => bkDl({ meta: { name: "evil.html.json.gz", mimeType: "application/gzip" } })),
+        await safe(() => bkDl({ media: "500" })), await safe(() => bkDl({ media: "break" })), await safe(() => bkDl({ body: { key: "bk ", driveId: ID } }))],
+      [[200, NS, `attachment; filename="${names[0]}"`, "ไฟล์", ["ชื่อ", "ไฟล์"]], [401, NS, null, "error", []], [401, NS, null, "error", []],
+        [501, NS, null, "error", []], [405, NS, null, "error", []], [400, NS, null, "error", []],
+        [403, NS, null, "error", ["ชื่อ"]], [403, NS, null, "error", ["ชื่อ"]], [403, NS, null, "error", ["ชื่อ"]],
+        [502, NS, null, "error", ["ชื่อ", "ไฟล์"]], [200, NS, `attachment; filename="${names[0]}"`, "ตัดสาย", ["ชื่อ", "ไฟล์"]], [401, NS, null, "error", []]]);
+    // ข้อความผิดพลาด: ไทยทุกข้อ · มีคำว่า "รหัส" เฉพาะรหัสผิดจริง (หน้าจอเห็น รหัส/401/unauthor แล้วล้างรหัสที่จำไว้ — ยังไม่ตั้ง env ต้องไม่ล้าง)
+    const errOf = async (o) => { bkLastErr = null; await safe(() => bkDl(o)); return bkLastErr; };
+    const wipes = (m) => /401|unauthor|รหัส/i.test(String(m));
+    const nonAuth = [await errOf({ body: { key: "", driveId: ID }, env: { GOOGLE_SA_KEY_B64: SA_ENV } }), await errOf({ method: "GET" }), await errOf({ body: { key: "bk", driveId: "../x" } }),
+      await errOf({ meta: { name: "slip.jpg", mimeType: "image/jpeg" } }), await errOf({ media: "500" }), await errOf({ env: { BACKUP_ADMIN_KEY: "bk" } }), await errOf({ metaStatus: 401 }), await errOf({ metaStatus: 404 })];
+    ck("api/backup.js ?download=1 ข้อความผิดพลาดเป็นไทย · รหัสผิด = มีคำว่า \"รหัส\" (หน้าจอล้างรหัสที่จำไว้) · ยังไม่ตั้ง env / GET / id แปลก / ไม่ใช่ไฟล์สำรอง / Drive ล่ม / ยังไม่ตั้ง Google Drive / Drive ตอบ 401 / ไม่พบไฟล์ = ไม่ล้างรหัสที่จำไว้",
+      [wipes(await errOf({ body: { key: "bad", driveId: ID } })), ...nonAuth.map((m) => [/[฀-๿]/.test(String(m)), wipes(m)])],
+      [true, ...nonAuth.map(() => [true, false])]);
+    const KO = ssafe(() => bkLoad(async () => { throw new Error("x"); }, {}).keyOk);
+    ck("keyOk ตัวจริง (เทียบรหัสเวลาคงที่ sha256 + timingSafeEqual): ตรง = ผ่าน · เว้นวรรคเกิน/ว่าง/ไม่ใช่ข้อความ/ฝั่งเซิร์ฟเวอร์ไม่ได้ตั้ง = ไม่ผ่าน",
+      typeof KO === "function" ? [KO("bk", "bk"), KO("bk ", "bk"), KO("", ""), KO(undefined, "bk"), KO(["bk"], "bk"), KO("bk", ""), KO("Bearer c", "Bearer c")] : KO,
+      [true, false, false, false, false, false, true]);
+    ok_("api/backup.js เทียบ CRON_SECRET / BACKUP_ADMIN_KEY ผ่าน keyOk เท่านั้น (ไม่มี === / !== กับรหัสตรงๆ) · ไม่รับรหัสกดสำรองทาง ?key= · ดาวน์โหลดไม่โหลดทั้งก้อน (ไม่มี driveDownload ใน downloadBackup)",
+      BACKUP.includes("timingSafeEqual(d(given), d(want))") && !/[!=]==\s*`?(\$\{)?(BKEY|CRON)\b|\b(BKEY|CRON)\}?`?\s*[!=]==/.test(BACKUP) && !BACKUP.includes("=== `Bearer ${CRON}`")
+      && BACKUP.includes("const isCron = !!CRON && keyOk(auth, `Bearer ${CRON}`);") && BACKUP.includes("const isManual = !isCron && keyOk(bkey, BKEY);")
+      && !/req\.query\.key\s*\)?\s*\|\|/.test(BACKUP) && BACKUP.includes("if (!isCron && req.query && req.query.key) return res.status(400)")
+      && ((s) => s.includes("await pipeline(Readable.fromWeb(r.body), res);") && !s.includes("driveDownload("))(BACKUP.slice(BACKUP.indexOf("async function downloadBackup("), BACKUP.indexOf("// ── ตัวเฝ้ารหัสผ่านผู้ใช้"))));
+    ck("ชื่อไฟล์สำรองตัวจริงทุกแบบ (รายวัน / กดเอง / ไม่ครบ) ผ่านตัวตรวจชื่อของทางดาวน์โหลดใหม่",
+      await Promise.all(names.map((n) => safe(async () => (await bkDl({ meta: { name: n, mimeType: "application/gzip" } }))[2]))), names.map((n) => `attachment; filename="${n}"`));
+    // ฝั่งแอป: api.downloadBackup ตัวจริง + ปุ่มในหน้าสำรองข้อมูล
+    const DLL = APP.split("\n").find((l) => l.startsWith("  downloadBackup: "));
+    const apiDl = (f) => new Function("fetch", "return (" + DLL.trim().slice("downloadBackup:".length).trim().replace(/,\s*$/, "") + ");")(f);
+    const runApiDl = async (resp) => { const calls = []; const f = apiDl((u, o) => { calls.push([u, o.method, JSON.parse(o.body), o.headers["Content-Type"]]); return Promise.resolve(resp); }); let r; try { r = await f("bk", ID); } catch (e) { r = "โยน " + e.message; } return [r, calls]; };
+    const DLC = [["/api/backup?download=1", "POST", { key: "bk", driveId: ID }, "application/json"]];
+    const VER = "โยน เซิร์ฟเวอร์ตอบ HTTP 500 — ลองใหม่อีกครั้ง หรือเปิดไฟล์จากโฟลเดอร์สำรองใน Google Drive โดยตรง";
+    ck("แอป api.downloadBackup ตัวจริง: POST /api/backup?download=1 · รหัสอยู่ใน body ไม่อยู่ใน URL · สำเร็จ = blob · 401 = โยนข้อความจากเซิร์ฟเวอร์ (หน้าจอล้างรหัสที่จำไว้) · คำตอบไม่ใช่ JSON (500/413 ของ Vercel) = ข้อความไทย + ทางสำรอง ไม่ล้างรหัส",
+      [await safe(() => runApiDl({ ok: true, blob: async () => "BLOB" })), await safe(() => runApiDl({ ok: false, status: 401, json: async () => ({ error: "รหัสไม่ถูกต้อง" }) })),
+        await safe(() => runApiDl({ ok: false, status: 500, json: async () => { throw new SyntaxError("Unexpected token"); } }))],
+      [["BLOB", DLC], ["โยน รหัสไม่ถูกต้อง", DLC], [VER, DLC]]);
+    ok_("ข้อความ 500/413 ของแอปไม่ทำให้หน้าจอล้างรหัสที่จำไว้", !wipes(VER.replace(/^โยน /, "")));
+    // แอป api.runBackupNow ตัวจริง: รหัสอยู่ใน body (เดิม ?key= ติด log ของ Vercel)
+    const RBL = APP.split("\n").find((l) => l.startsWith("  runBackupNow: "));
+    const runApiRb = async (resp) => { const calls = []; const f = new Function("fetch", "return (" + RBL.trim().slice("runBackupNow:".length).trim().replace(/,\s*$/, "") + ");")((u, o) => { calls.push([u, o.method, JSON.parse(o.body), o.headers["Content-Type"]]); return Promise.resolve(resp); }); let r; try { r = await f("bk"); } catch (e) { r = "โยน " + e.message; } return [r, calls]; };
+    const RBC = [["/api/backup", "POST", { key: "bk" }, "application/json"]];
+    ck("แอป api.runBackupNow ตัวจริง: POST /api/backup รหัสอยู่ใน body ไม่มี ?key= · สำเร็จ = ผล JSON · 401 = โยนข้อความจากเซิร์ฟเวอร์",
+      [await safe(() => runApiRb({ ok: true, json: async () => ({ status: "success" }) })), await safe(() => runApiRb({ ok: false, status: 401, json: async () => ({ error: "รหัสไม่ถูกต้อง" }) }))],
+      [[{ status: "success" }, RBC], ["โยน รหัสไม่ถูกต้อง", RBC]]);
+    ok_("แอปไม่ส่งรหัสสำรองทาง URL ที่ไหนเลย", !/\/api\/backup\?key=/.test(APP) && !/api\/backup\?[^"'`]*key=/.test(APP));
+    ok_("หน้าสำรองข้อมูล: ปุ่ม ⬇ ดาวน์โหลด เรียก downloadBackup(h) ใช้ BACKUP_ADMIN_KEY · ไม่มีลิงก์ /api/drive-view ของไฟล์สำรองเหลือ · ชื่อไฟล์ใช้ได้เฉพาะรูปแบบไฟล์สำรอง",
+      APP.includes("onClick={e=>{e.stopPropagation();downloadBackup(h);}}") && APP.includes("const blob=await api.downloadBackup(k,h.drive_id);")
+      && APP.includes('const fn=/^foodcost-backup-[A-Za-z0-9._-]{1,150}\\.json\\.gz$/.test(h.file_name||"")?h.file_name:')
+      && !/drive-view\?id=\$\{encodeURIComponent\(h\.drive_id\)/.test(APP) && !APP.includes("&fn=${encodeURIComponent(h.file_name)}"));
   }
 
   // ── #52 บรอดแคสต์ตั้งเวลา: cron ส่งเฉพาะแถวที่ลงลายเซ็นด้วย BROADCAST_KEY (รันทั้งสองไฟล์จริง) ──
@@ -12776,6 +12860,464 @@ section("แก้ไขใบส่งสินทรัพย์/อุปก�
       got, [[true, true, true, true, 4999.95, 0], [true, true, true, true, 42065, 0], [true, true, true, true, 370.5, 0], [true, true, true, true, 6825, 477.75]]);
   }
   ok_("หน้าแก้ถูกวางใน POSection และบันทึกผ่าน saveAssetEdit", APP.includes("{assetEditPO&&<AssetPOEditModal po={assetEditPO}") && APP.includes("onSave={edits=>saveAssetEdit(assetEditPO,edits)}"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ซ่อนรหัสผ่านผู้ใช้ (31 ต.ค. 69)
+// app_users อ่านได้ด้วยคีย์สาธารณะในไฟล์เว็บ + รหัสผ่านตัวหนังสือล้วน · getUsers ดึงทั้งแถวตอนเปิดแอปทุกเครื่อง ⟹ ทุกเครื่องได้รหัสทุกคน
+// แก้: อ่านเฉพาะ APP_USER_COLS ทุกจุด · เข้าระบบผ่าน rpc/app_login (ไม่มีฟังก์ชัน = ทางเก่าแต่ไม่ขอ password กลับ · รหัสผิดห้ามถอยไปทางเก่า)
+//      ฟอร์มผู้ใช้ไม่เติมรหัสเดิม · ตัวสำรอง/ตัวกู้คืนไม่ select=* บน app_users · SQL: bcrypt + ถอดสิทธิ์อ่าน password
+// ด่านรันโค้ดจริง: loginUserCall / sb (ข้อความ 42501) / api ผู้ใช้ / saveUser / pageUrl+fetchAll ของตัวสำรอง / liveCount + handler ของตัวกู้คืน
+// ฐานปลอมในด่านทำตัวเหมือนฐาน "หลังรัน SQL": ขอ select=* หรือ password บน app_users = 401/42501
+// ══════════════════════════════════════════════════════════════════════════
+section("ซ่อนรหัสผ่านผู้ใช้ (31 ต.ค. 69)");
+{
+  const L = APP.split("\n");
+  const line1 = (p) => L.find((x) => x.startsWith(p)) || "";
+  const apiLine = (name) => { const l = L.find((x) => x.startsWith(`  ${name}: `)); return l ? l.trim().slice(name.length + 1).trim().replace(/,\s*\/\/[^"'`]*$/, "").replace(/,\s*$/, "") : null; };
+  const fnSrc = (head) => { const s0 = APP.indexOf(head); if (s0 < 0) return null; const b0 = head.endsWith("{") ? s0 + head.length - 1 : APP.indexOf("){", s0) + 1; let d = 0; for (let j = b0; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(s0, j + 1).trim(); } } return null; };
+  const ssafe = (f) => { try { return f(); } catch (e) { return "ERR " + ((e && e.message) || e); } };
+  const colsOf = (src) => (src.match(/^const APP_USER_COLS\s*=\s*"([^"]*)";/m) || [])[1] || null;
+  const RESTORE_API = rd(new URL("../api/backup-restore.js", import.meta.url));
+  const RESTORE_CLI = rd(new URL("../scripts/restore.mjs", import.meta.url));
+  const SQLH = rd(new URL("../sql/app-users-password-hash.sql", import.meta.url));
+  const SQLR = rd(new URL("../sql/app-users-password-hash-rollback.sql", import.meta.url));
+  const COLS_LINE = line1("const APP_USER_COLS=");
+  const COLS = colsOf(APP);
+  const COLS_A = (COLS || "").split(",");
+  ok_("แอปมี APP_USER_COLS ชุดเดียว: 8 คอลัมน์ที่ไม่ใช่รหัสผ่าน (ไม่มี password / *)",
+    COLS === "id,username,name,role,active,perms,created_at,allowed_branches" && (APP.match(/^const APP_USER_COLS\s*=/gm) || []).length === 1 && !COLS_A.includes("password"));
+
+  // ── SQL ที่เจ้าของรัน: grant ตรงกับแอป · ถอด select · ตัวกัน · definer+search_path · เข้ารหัสแถวเดิม · execute · ตรวจก่อน · ทดลองจริง ──
+  const norm = (s) => s.replace(/--[^\n]*/g, "").replace(/\s+/g, " ").toLowerCase();   // ตัดคอมเมนต์ — ข้อความในคอมเมนต์ไม่ได้รันจริง
+  const C = norm(SQLH);
+  const CNS = C.replace(/'(?:[^']|'')*'/g, "''");   // ตัดเนื้อข้อความในเครื่องหมายคำพูด — คำสั่งที่อยู่ในข้อความแจ้งเตือนไม่ได้รันจริง
+  const grantCols = ((C.match(/grant select \(([^)]*)\) on table public\.app_users to anon, authenticated;/) || [])[1] || "").split(",").map((s) => s.trim()).filter(Boolean).join(",");
+  ck("ชุดคอลัมน์เดียวกันทุกที่: grant ใน SQL = แอป = api/backup.js = api/backup-restore.js = scripts/restore.mjs",
+    [grantCols, colsOf(BACKUP), colsOf(RESTORE_API), colsOf(RESTORE_CLI)], [COLS, COLS, COLS, COLS]);
+  const at = (s) => C.indexOf(s);
+  const REV = "revoke select on table public.app_users from public, anon, authenticated;";
+  const GRT = "grant select (";
+  // รูปแบบ bcrypt ที่ gen_salt('bf', 10) สร้างเป๊ะ — ตรวจในตัวพิมพ์จริง (norm ทำตัวเล็กหมด A-Z กับ a-z จะดูเหมือนกัน)
+  const BCX = "'^[$]2a[$]10[$][./A-Za-z0-9]{53}$'";
+  const BC = BCX.toLowerCase();
+  const bcAll = SQLH.replace(/--[^\n]*/g, "").match(/'\^\[\$\]2[^']*'/g) || [];
+  ok_("SQL: รูปแบบ \"เป็น bcrypt แล้ว\" ชุดเดียวทั้งไฟล์ = $2a$10$ + 53 ตัวเป๊ะ (ตัวกัน · เข้ารหัสแถวเดิม · app_login · ตรวจผล · ทดลอง · ผลท้ายไฟล์) — $2b$/$2y$/cost อื่น/รูปแบบเพี้ยน = ตัวหนังสือ เข้ารหัสใหม่",
+    bcAll.length === 6 && bcAll.every((x) => x === BCX));
+  const iB2 = C.indexOf("begin;", at("begin;") + 1);
+  const LT = "set local lock_timeout = '5s';";
+  const ALT = "alter table public.app_users alter column password drop not null;";
+  ok_("SQL: ALTER (ล็อกทั้งตาราง) อยู่ธุรกรรมสั้นของตัวเองก่อนธุรกรรมหลัก (begin → lock_timeout → alter → commit) · ธุรกรรมหลักตั้ง lock_timeout เป็นคำสั่งแรก · มี begin/commit 2 คู่ · ไม่มี alter table อื่น / drop trigger (ล็อกทั้งตารางจนจบไฟล์)",
+    C.trim().startsWith("begin; " + LT + " " + ALT + " commit; begin; " + LT + " ")
+    && (C.match(/\bbegin;/g) || []).length === 2 && (C.match(/\bcommit;/g) || []).length === 2
+    && (CNS.match(/alter table/g) || []).length === 1 && !/drop trigger/.test(CNS));
+  ok_("SQL: ธุรกรรมหลัก begin … ถอดสิทธิ์อ่านทั้งตาราง (รวม PUBLIC) ก่อนแล้วค่อย grant 8 คอลัมน์ … ตรวจผล … ทดลอง … commit · ไม่มี grant ทั้งตาราง/grant all",
+    iB2 > 0 && iB2 < at(REV) && at(REV) < at(GRT) && at(GRT) < at("raise exception 'ยังมี %") && at("raise exception 'ยังมี %") < at("do $probe$") && at("do $probe$") < C.lastIndexOf("commit;")
+    && !/grant (select|all)[^;(]* on (table )?public\.app_users to/.test(CNS));
+  ok_("SQL: pgcrypto ใน schema extensions · เรียก extensions.crypt / extensions.gen_salt('bf', 10) แบบระบุ schema · password ว่างได้ (กู้คืนไฟล์ที่ไม่มีรหัส)",
+    C.includes("create extension if not exists pgcrypto with schema extensions;") && C.includes("extensions.crypt(new.password, extensions.gen_salt('bf', 10))")
+    && C.includes(ALT));
+  const between = (s, a, b) => { const i = s.indexOf(a); return i < 0 ? "" : s.slice(i, s.indexOf(b, i + a.length)); };
+  const PRE = between(C, "do $pre$", "$pre$;");
+  const TRG = between(C, "create or replace function public.app_users_hash_password()", "$fn$;");
+  const UPD = "update public.app_users set password = password where password is not null and password !~ " + BC + ";";
+  // รอบ 3: view ทั้งแถว (to_jsonb(u) / row_to_json(u) / select u) ไม่ทิ้ง refobjsubid ของคอลัมน์ password ⟹ เดิมผ่านแล้ว anon อ่าน hash ได้ผ่าน view
+  //        ตอนนี้หยุดทุก view สิทธิ์เจ้าของที่อ้าง app_users (ยกเว้น security_invoker) · ห้ามกลับไปกรอง refobjsubid
+  ok_("SQL ตรวจก่อนแตะรหัส (ไม่ผ่าน = หยุด ยังไม่มีอะไรถูกแก้): trigger ไม่ทำงาน (replication role) · trigger อื่นบน app_users (เห็นรหัสตัวหนังสือตอนเข้ารหัส) · view (สิทธิ์เจ้าของ) ใดๆ ที่อ้าง app_users — ไม่ใช่แค่ที่ระบุคอลัมน์ password · ชนิดคอลัมน์เก็บ 60 ตัวไม่ได้ — ก่อนสร้างตัวกัน/เข้ารหัส",
+    PRE.includes("if current_setting('session_replication_role') <> 'origin' then raise exception")
+    && PRE.includes("and not t.tgisinternal and t.tgname <> 'app_users_hash_password'; if v is not null then raise exception")
+    && PRE.includes("and d.refobjid = 'public.app_users'::regclass and r.ev_class <> 'public.app_users'::regclass and not exists (select 1 from pg_class c, unnest(c.reloptions) o where c.oid = r.ev_class and o ~* '^security_invoker=(true|on|yes|1)$'); if v is not null then raise exception")
+    && !PRE.includes("refobjsubid") && !/raise notice '[^']*view/.test(PRE)
+    && PRE.includes("substring(v from '[0-9]+')::int >= 60)) then raise exception")
+    && at("do $pre$") > at("create extension") && at("do $pre$") < at("create or replace function public.app_users_hash_password()") && at("do $pre$") < at(UPD));
+  ok_("SQL: ตัวกัน before insert or update of password · สร้างเฉพาะตอนยังไม่มี (ไม่ drop) · '' = null · เข้ารหัสเฉพาะที่ยังไม่ใช่ bcrypt · security definer + search_path ว่าง",
+    C.includes("if not exists (select 1 from pg_trigger where tgrelid = 'public.app_users'::regclass and tgname = 'app_users_hash_password' and not tgisinternal) then create trigger app_users_hash_password before insert or update of password on public.app_users for each row execute function public.app_users_hash_password(); end if;")
+    && TRG.includes("security definer") && TRG.includes("set search_path = ''") && TRG.includes("if new.password = '' then new.password := null;")
+    && TRG.includes("new.password !~ " + BC) && TRG.indexOf("new.password !~ " + BC) < TRG.indexOf("extensions.crypt(new.password, extensions.gen_salt('bf', 10))"));
+  ok_("SQL: เข้ารหัสแถวเดิมทีเดียวผ่านตัวกัน (update … set password = password เฉพาะที่ยังไม่ใช่ bcrypt) หลังสร้างตัวกันแล้ว",
+    at(UPD) > at("create trigger app_users_hash_password") && at("create trigger app_users_hash_password") > 0);
+  const LOGIN = between(C, "create function public.app_login(p_username text, p_password text)", "$fn$;");
+  const retCols = between(LOGIN, "returns table (", ") language sql").replace("returns table (", "").split(",").map((s) => s.trim().split(" ")[0]).join(",");
+  const outSel = (LOGIN.match(/\) select ([^;]*?) from cand c/) || [])[1] || "";
+  ok_("SQL: app_login = security definer + search_path ว่าง · คืนเฉพาะ 8 คอลัมน์ (ชุดเดียวกับ grant · ไม่มี password) · ชื่อตรงตัว + active + รูปแบบ bcrypt เป๊ะก่อนส่ง crypt (ค่าแปลกในฐานทำให้ error/กินแรงฐานไม่ได้)",
+    LOGIN.includes("security definer") && LOGIN.includes("set search_path = ''") && retCols === COLS
+    && outSel.split(",").map((s) => s.trim().replace(/^c\./, "")).join(",") === COLS
+    && LOGIN.includes("u.username = p_username") && LOGIN.includes("u.active = true") && LOGIN.includes("coalesce(p_password, '') <> ''")
+    && LOGIN.includes("c.password = extensions.crypt(p_password, c.password)") && LOGIN.includes("u.password ~ " + BC));
+  ok_("SQL: app_login เป็น language sql stable (ตัวเฝ้าทุกคืน/หมอตรวจข้อ 22 เรียกด้วย GET — ไม่ stable = 405 ตัวเฝ้าตัดสินผิด)",
+    LOGIN.includes(") language sql stable security definer set search_path = '' as $fn$"));
+  // รอบ 3: หลัง commit — analyze ล้างรหัสตัวหนังสือที่ค้างใน pg_statistic (แก้ ~15 แถวไม่ถึงเกณฑ์ auto-analyze) · ไม่มี vacuum ในไฟล์ (รันในธุรกรรมไม่ได้ = error ทั้งไฟล์)
+  //        ตารางผลท้ายสุดมี active_no_password + check_manually (หน้า SQL Editor ไม่โชว์ notice) · หัวไฟล์บอกเรื่องหน้าต่างเตือน destructive / rollback; / vacuum แยกแท็บ
+  const TAIL = C.slice(C.lastIndexOf("commit;"));
+  ok_("SQL: หลัง commit หลัก = analyze public.app_users; แล้วตามด้วยตารางผลทันที (ยังเป็นผลสุดท้าย) · ไม่มีคำสั่ง vacuum ในไฟล์",
+    TAIL.startsWith("commit; analyze public.app_users; select count(*) as total_users,") && !/\bvacuum\b/.test(CNS) && (C.match(/\banalyze\b/g) || []).length === 1);
+  ok_("SQL ตารางผลท้ายสุด: active_no_password (ใช้งานอยู่แต่ไม่มีรหัส) + check_manually (publication / security definer ที่ควรดู — notice ไม่โชว์ใน SQL Editor) · ไม่มีค่ารหัส",
+    TAIL.includes("count(*) filter (where password is null and active) as active_no_password,") && /nullif\(concat_ws\(' · ', \(select 'publication: ' \|\| string_agg\(p\.pubname::text, ', '\)[^;]*\), ''\) as check_manually from public\.app_users;\s*$/.test(TAIL)
+    && TAIL.includes("p.prosecdef and p.prosrc ilike '%app_users%'") && TAIL.includes("has_function_privilege('anon', p.oid, 'execute')"));
+  ok_("SQL หัวไฟล์ ③: หน้าต่างเตือน destructive = กด Run ต่อได้ · current transaction is aborted = rollback; ก่อน · notice ไม่โชว์ · ⑤ vacuum แยกแท็บ (ไม่บังคับ)",
+    SQLH.includes("ขึ้นหน้าต่างเตือน destructive operation") && SQLH.includes("current transaction is aborted ให้รัน rollback; ก่อน") && SQLH.includes("ข้อความ notice ระหว่างทางไม่โชว์")
+    && SQLH.includes("รัน vacuum public.app_users; คำสั่งเดียว") && SQLH.indexOf("vacuum public.app_users;") < SQLH.indexOf("\nbegin;"));
+  ok_("SQL: execute app_login ให้ anon/authenticated (ถอดจาก PUBLIC) · notify pgrst ให้โหลดโครงสร้างใหม่",
+    C.includes("revoke all on function public.app_login(text, text) from public;") && C.includes("grant execute on function public.app_login(text, text) to anon, authenticated;")
+    && at("grant execute on function public.app_login") > at("create function public.app_login") && C.includes("notify pgrst, 'reload schema';"));
+  const chkCols = ((C.match(/unnest\(array\[([^\]]*)\]\) as c\(col\)/) || [])[1] || "").split(",").map((s) => s.trim().replace(/'/g, "")).join(",");
+  ok_("SQL ตรวจผลก่อน commit: แถวที่ยังไม่เป็น bcrypt ≠ 0 / anon-authenticated อ่าน password ได้ / 8 คอลัมน์-app_login ไม่ครบ / ตัวกันไม่ได้เปิด = raise exception (ย้อนทั้งไฟล์)",
+    C.includes("if n_plain <> 0 then raise exception") && C.includes("if anon_pw or auth_pw then raise exception") && C.includes("if anon_cols <> 8 or not fn_ok then raise exception")
+    && C.includes("if not trg_ok then raise exception") && C.includes("tgenabled in ('o', 'a') and tgfoid = 'public.app_users_hash_password()'::regprocedure")
+    && C.includes("has_column_privilege('anon', 'public.app_users', 'password', 'select')") && chkCols === COLS);
+  const PRB = between(C, "do $probe$", "$probe$;");
+  ok_("SQL ทดลองเข้าระบบจริงก่อน commit (เดิมตรวจแค่ชื่อที่ไม่มีอยู่): เพิ่มผู้ใช้ทดลองผ่านตัวกัน = bcrypt · รหัสถูก = แถวนั้น · ผิด/ว่าง/null/ตัวพิมพ์/ส่ง hash = ไม่ได้ · แก้รหัส · แก้อย่างอื่น/รันซ้ำไม่เข้ารหัสซ้ำ · ค่าคล้าย bcrypt ถูกเข้ารหัส · ปิดใช้ · ล้างรหัส = null · โยน probe_ok ทิ้งเสมอ · ไม่ผ่าน = ย้อนทั้งไฟล์",
+    at("do $probe$") > at("do $chk$ declare n_total") && at("do $probe$") < C.lastIndexOf("commit;")
+    && PRB.includes("insert into public.app_users (username, password, name, role, active, perms, created_at, allowed_branches) select u, pw,")
+    && PRB.includes("if h is null or h = pw or h !~ " + BC + " then raise exception")
+    && PRB.includes("from public.app_login(u, pw) l; if n <> 1 or got is distinct from pid then raise exception")
+    && ["app_login(u, pw || 'x')", "app_login(u, '')", "app_login(u, null)", "app_login(upper(u), pw)", "app_login(u, h)"].every((s) => PRB.includes("exists (select 1 from public." + s + ")"))
+    && PRB.includes("update public.app_users set password = pw2 where id = pid; if not exists (select 1 from public.app_login(u, pw2)) or exists (select 1 from public.app_login(u, pw)) then raise exception")
+    && PRB.includes("update public.app_users set password = password where id = pid; if (select password from public.app_users where id = pid) is distinct from h2")
+    && PRB.includes("odd text := '$2b$10$' || repeat('a', 53);") && PRB.includes("update public.app_users set password = odd where id = pid; if (select password from public.app_users where id = pid) = odd or not exists (select 1 from public.app_login(u, odd)) then raise exception")
+    && PRB.includes("update public.app_users set active = false where id = pid; if exists (select 1 from public.app_login(u, odd)) then raise exception")
+    && PRB.includes("update public.app_users set active = true, password = '' where id = pid; if (select password from public.app_users where id = pid) is not null")
+    && PRB.includes("raise exception 'probe_ok'; exception when others then if sqlerrm <> 'probe_ok' then raise exception")
+    && PRB.indexOf("raise exception 'probe_ok'") > PRB.lastIndexOf("update public.app_users"));
+  const raiseArgs = [...C.matchAll(/raise (?:notice|exception) '((?:[^']|'')*)'([^;]*);/g)].map((m) => m[2]);
+  const prbPwSel = [...PRB.matchAll(/select password\b[^;]*/g)].map((m) => m[0]);
+  ok_("SQL ไม่พิมพ์/รวมค่ารหัสผ่านที่ไหนเลย: อาร์กิวเมนต์ raise ไม่มีคอลัมน์/ตัวแปรรหัส · ไม่มี *_agg/to_json ของ password · นอกตัวทดลองไม่มี select password · ในตัวทดลองอ่านเฉพาะแถวทดลอง (id = pid) · ผลท้ายไฟล์มีแต่จำนวน/จริง-เท็จ",
+    raiseArgs.length >= 20 && raiseArgs.every((a) => !/\b(password|pw|pw2|h|h2|odd)\b/.test(a))
+    && !/(string_agg|array_agg|json_agg|jsonb_agg|to_jsonb?|row_to_json)\s*\([^)]*password/.test(C)
+    && !/select (u\.|c\.)?password\b/.test(C.replace(PRB, ""))
+    && prbPwSel.length >= 4 && prbPwSel.every((s) => /^select password (into h2? )?from public\.app_users where id = pid\b/.test(s))
+    && /select count\(\*\) as total_users, [^;]*from public\.app_users;\s*$/.test(C));
+  const CR = norm(SQLR);
+  ok_("SQL ถอยกลับ: คืน select ทั้งตารางให้ anon/authenticated + notify · ไม่แตะรหัส/ตัวกัน/app_login · หัวไฟล์บอกก่อนว่าคอลัมน์ใหม่ใช้ grant select (คอลัมน์) และแก้ Instant Rollback ไม่ได้",
+    CR.includes("grant select on table public.app_users to anon, authenticated;") && CR.includes("notify pgrst, 'reload schema';")
+    && !/drop (trigger|function)|update public\.app_users|alter table/.test(CR)
+    && SQLR.includes("grant select (ชื่อคอลัมน์) on table public.app_users to anon, authenticated;") && SQLR.includes("Instant Rollback"));
+  ok_("SQL หลัก: หัวไฟล์เตือนห้าม Instant Rollback/redeploy ก่อน 31 ต.ค. 69 + บังคับเช็กเว็บจริงมี rpc/app_login ก่อนรัน + เช็ก rpc/app_login หลังรัน (ก่อนคำสั่งแรก)",
+    SQLH.includes("ห้าม Instant Rollback / Promote / redeploy Vercel ไปเวอร์ชันก่อน 31 ต.ค. 69") && SQLH.includes("ต้องมีคำว่า rpc/app_login")
+    && SQLH.includes("ได้ 404 PGRST202 = รัน notify pgrst, 'reload schema'; อีกครั้ง") && SQLH.indexOf("ห้าม Instant Rollback") < SQLH.indexOf("\nbegin;"));
+
+  // ── เข้าระบบ: รัน loginUserCall + api.loginUser ตัวจริงกับ sb ปลอม ──
+  const LOGIN_SRC = ssafe(() => [COLS_LINE, line1("const appLoginMissing="), "async " + grab(APP, "loginUserCall")].join("\n"));
+  const pgErr = (status, body) => Object.assign(new Error(body), { status });
+  const E = {
+    missing: pgErr(404, JSON.stringify({ code: "PGRST202", details: "Searched for the function public.app_login with parameters p_password, p_username, but no matches were found in the schema cache.", hint: null, message: "Could not find the function public.app_login(p_password, p_username) in the schema cache" })),
+    missingOld: pgErr(404, '{"message":"Could not find the function public.app_login(p_password, p_username) in the schema cache"}'),
+    denied: pgErr(401, '{"code":"42501","message":"permission denied for function app_login"}'),
+    boom: pgErr(500, '{"code":"XX000","message":"boom"}'),
+    html404: pgErr(404, "<html>404 Not Found</html>"),
+    net: new TypeError("Failed to fetch"),
+  };
+  const SAFE_ROW = { id: 1, username: "somchai", name: "สมชาย", role: "staff", active: true, perms: ["pos"], created_at: "2026-10-31T00:00:00Z", allowed_branches: [5] };
+  const runLogin = async (rpc, u = "somchai", p = "1234") => {
+    const calls = [];
+    const sb = async (path, opts = {}) => {
+      calls.push(path === "rpc/app_login" ? [path, opts.method, JSON.parse(opts.body)] : path);
+      if (path === "rpc/app_login") { if (rpc instanceof Error) throw rpc; return rpc; }
+      if (path.startsWith("app_users?")) return [{ id: 9, via: "fallback" }];
+      throw new Error("ไม่คาดว่าจะเรียก " + path);
+    };
+    const loginUserCall = new Function("sb", LOGIN_SRC + "\nreturn loginUserCall;")(sb);
+    const loginUser = new Function("loginUserCall", "return (" + apiLine("loginUser") + ");")(loginUserCall);
+    let res; try { res = await loginUser(u, p); } catch (e) { res = "โยน " + ((e && e.status) || (e && e.name)); }
+    return [res, calls];
+  };
+  const fb = (u, p) => `app_users?select=${COLS}&username=eq.${encodeURIComponent(u)}&password=eq.${encodeURIComponent(p)}&active=eq.true`;
+  const RPC = (u = "somchai", p = "1234") => ["rpc/app_login", "POST", { p_username: u, p_password: p }];
+  const got = [];
+  for (const c of [[[SAFE_ROW]], [[]], [E.missing], [E.missingOld], [E.denied], [E.boom], [E.html404], [E.net], [E.missing, "a&b=c", "p#1 x/?"]]) got.push(await runLogin(...c).catch((e) => "พัง " + e.message));
+  ck("เข้าระบบตัวจริง: app_login เจอ = แถว 8 คอลัมน์ ไม่ถามตาราง · รหัสผิด ([]) = [] ไม่ถอยทางเก่า · ไม่มีฟังก์ชัน (PGRST202 / 404 รุ่นเก่า) = ทางเก่าแต่ select 8 คอลัมน์ · สิทธิ์/500/404 อื่น/เน็ตล่ม = โยนต่อ ไม่ถอย · อักขระพิเศษถูก encode",
+    got, [
+      [[SAFE_ROW], [RPC()]], [[], [RPC()]],
+      [[{ id: 9, via: "fallback" }], [RPC(), fb("somchai", "1234")]], [[{ id: 9, via: "fallback" }], [RPC(), fb("somchai", "1234")]],
+      ["โยน 401", [RPC()]], ["โยน 500", [RPC()]], ["โยน 404", [RPC()]], ["โยน TypeError", [RPC()]],
+      [[{ id: 9, via: "fallback" }], [RPC("a&b=c", "p#1 x/?"), fb("a&b=c", "p#1 x/?")]],
+    ]);
+  ok_("ทางเก่าเหลือที่เดียว (password=eq. มีบรรทัดเดียว คือใน loginUserCall และขอเฉพาะ APP_USER_COLS)",
+    (APP.match(/password=eq\./g) || []).length === 1 && L.filter((l) => l.includes("password=eq.")).every((l) => l.includes("app_users?select=${APP_USER_COLS}&username=eq.")));
+  const LP = fnSrc("function LoginPage({onLogin}){") || "";
+  ok_("หน้าเข้าสู่ระบบเหมือนเดิม: api.loginUser(uv,pv) แข่งเวลา 12 วิ · ลอง 3 รอบ (ปลุกเซิร์ฟเวอร์) · ข้อความรหัสผิด/เชื่อมต่อไม่ได้เดิม",
+    LP.includes('const found=await Promise.race([api.loginUser(uv,pv),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),12000))]);')
+    && LP.includes("for(let attempt=1;attempt<=3;attempt++)") && LP.includes('else setErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");')
+    && LP.includes("กำลังปลุกเซิร์ฟเวอร์") && LP.includes("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้"));
+
+  // ── sb ตัวจริง: 42501 บน app_users ห้ามแนะนำ grant all (จะเปิดรหัสผ่านอีก) · ตารางอื่นแนะนำเหมือนเดิม ──
+  const SB_SRC = (() => { const st = APP.indexOf("async function sb(path, opts = {}) {"); if (st < 0) return null; const b0 = APP.indexOf(") {", st) + 2; let d = 0; for (let j = b0; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(st, j + 1); } } return null; })();
+  const runSb = async (status, body) => {
+    const fetch = async () => ({ ok: false, status, text: async () => body });
+    const sb = new Function("fetch", "SUPA_URL", "SUPA_KEY", "nowMs", "DBH", "dbhRecord", "DBG", "dbgSet", "dbgCheck", "setTimeout", "clearTimeout", SB_SRC + "\nreturn sb;")(
+      fetch, "https://x.supabase.co", "k", () => 0, { HANG_MS: 8000, SLOW_MS: 3000 }, () => {}, { down: false, listeners: new Set() }, () => {}, async () => false, () => 0, () => {});
+    try { await sb("app_users?select=*"); return "ไม่โยน"; } catch (e) { return String((e && e.message) || e); }
+  };
+  const m1 = await runSb(401, '{"code":"42501","details":null,"hint":null,"message":"permission denied for table app_users"}');
+  const m2 = await runSb(401, '{"code":"42501","details":null,"hint":null,"message":"permission denied for table crm_customers"}');
+  const m3 = await runSb(403, '{"code":"42501","message":"new row violates row-level security policy for table \\"orders\\""}');
+  ck("sb ตัวจริง: permission denied บน app_users = เพิ่งรัน SQL ให้รอ 1 นาที/notify · ไม่ใช่ = คอลัมน์ยังไม่ได้ grant · ห้าม grant all (ไม่มีคำสั่ง grant ทั้งตาราง) · ตารางอื่นยังได้คำสั่ง grant เดิม · RLS ได้คำสั่ง disable เดิม",
+    [m1.includes("ห้ามรัน grant all") && m1.includes("รอ 1 นาที") && m1.includes("notify pgrst, 'reload schema';") && !/grant all on table|grant select on table/.test(m1), m2.includes("grant all on table public.crm_customers"), m3.includes("alter table public.orders disable row level security;")],
+    [true, true, true]);
+
+  // ── api ผู้ใช้ตัวจริง: URL/ส่วนหัวที่ยิงจริง ──
+  const callsOf = (name, ...args) => ssafe(() => { const calls = []; const rec = (u, o) => { calls.push([u, (o && o.method) || "GET", (o && o.headers && o.headers.Prefer) || (o && o.prefer) || null]); return Promise.resolve([]); }; new Function("sb", COLS_LINE + "\nreturn (" + apiLine(name) + ");")(rec)(...args); return calls; });
+  ck("api ผู้ใช้ตัวจริง: getUsers/getMyUserStatus ขอ APP_USER_COLS (ไม่มี password) · addUser/updateUser/deleteUser = return=minimal (ไม่ RETURNING ทั้งแถว)",
+    [callsOf("getUsers"), callsOf("getMyUserStatus", "5"), callsOf("addUser", { username: "x" }), callsOf("updateUser", 5, { name: "y" }), callsOf("deleteUser", 5)],
+    [[[`app_users?select=${COLS}&order=id.asc`, "GET", null]], [[`app_users?id=eq.5&select=${COLS}`, "GET", null]], [["app_users", "POST", "return=minimal"]], [["app_users?id=eq.5", "PATCH", "return=minimal"]], [["app_users?id=eq.5", "DELETE", "return=minimal"]]]);
+  const userCalls = L.filter((l) => /\bsb\(\s*["'`]app_users\b/.test(l));
+  const badCalls = userCalls.filter((l) => !l.includes("select=${APP_USER_COLS}") && !l.includes('"Prefer": "return=minimal"'));
+  ok_("ทุกคำสั่ง sb บน app_users ในแอประบุ APP_USER_COLS หรือ return=minimal (ไม่มี select=* / ไม่ระบุคอลัมน์)" + (badCalls.length ? " · หลุด: " + badCalls.map((l) => l.trim().slice(0, 60)).join(" | ") : ""),
+    userCalls.length >= 6 && badCalls.length === 0);
+  ok_("ผู้เรียก addUser/updateUser ไม่ใช้แถวที่คืนมา (มีที่เดียวใน saveUser และ await ทิ้ง)",
+    (APP.match(/api\.addUser\(/g) || []).length === 1 && (APP.match(/api\.updateUser\(/g) || []).length === 1 && APP.includes("if(editUID)await api.updateUser(editUID,payload);else await api.addUser(payload);"));
+  // ทุก ".password" ในไฟล์ (รวม x?.password / f(…).password / a[0].password) — ตัวหน้าต้องเป็น uF เท่านั้น
+  const pwReads = [...APP.matchAll(/\.password\b/g)].map((m) => APP.slice(Math.max(0, m.index - 16), m.index));
+  const pwBad = pwReads.filter((s) => !/(^|[^\w$])uF$/.test(s));
+  ok_("ไม่มีที่ไหนในแอปอ่าน .password นอกจากช่องรหัสใหม่ของฟอร์มผู้ใช้ (uF.password)" + (pwBad.length ? " · พบ: " + pwBad.map((s) => s.trim() + ".password").join(" | ") : ""),
+    pwReads.length >= 2 && pwBad.length === 0 && !/\[\s*["'`]password["'`]\s*\]/.test(APP));
+
+  // ── ฟอร์มผู้ใช้: รัน saveUser ตัวจริง ──
+  const SU = fnSrc("  async function saveUser(){");
+  const runSU = async (uF, editUID) => {
+    const W = [];
+    const f = new Function("uF", "editUID", "setSaving", "api", "normalizePerms", "normalizeBranchIds", "reloadUsers", "setShowUser", "setEditUID", "setUF", "uF0", "showErr", SU + "\nreturn saveUser;")(
+      uF, editUID, () => {}, { updateUser: async (id, d) => { W.push(["แก้", id, "password" in d ? d.password : "(ไม่ส่ง)", Object.keys(d).sort().join(",")]); }, addUser: async (d) => { W.push(["เพิ่ม", "password" in d ? d.password : "(ไม่ส่ง)", Object.keys(d).sort().join(",")]); } },
+      (x) => x, (x) => x, async () => {}, () => {}, () => {}, () => {}, {}, (t, e) => W.push(["พัง", String(e && e.message)]));
+    await f();
+    return W;
+  };
+  const U = { username: "som", password: "", name: "สม", role: "staff", active: true, perms: ["pos"], allowed_branches: [5] };
+  const K = "active,allowed_branches,name,perms,role,username", KP = "active,allowed_branches,name,password,perms,role,username";
+  ck("saveUser ตัวจริง: แก้ + เว้นว่าง = ไม่ส่ง password (รหัสเดิมอยู่) · แก้ + พิมพ์ใหม่ = ส่งรหัสใหม่ · เพิ่มใหม่ไม่มีรหัส = ไม่บันทึก · เพิ่มใหม่มีรหัส = ส่ง · ไม่มีชื่อผู้ใช้ = ไม่บันทึก · password undefined ตอนแก้ = ไม่ส่ง",
+    [await runSU(U, 7), await runSU({ ...U, password: "n3w" }, 7), await runSU(U, null), await runSU({ ...U, password: "p1" }, null), await runSU({ ...U, username: "" }, 7), await runSU({ ...U, password: undefined }, 7)],
+    [[["แก้", 7, "(ไม่ส่ง)", K]], [["แก้", 7, "n3w", KP]], [], [["เพิ่ม", "p1", KP]], [], [["แก้", 7, "(ไม่ส่ง)", K]]]);
+  ok_("ฟอร์มผู้ใช้: กดแก้ = ช่องรหัสว่าง (ไม่เติมรหัสเดิม) · placeholder \"เว้นว่าง = ไม่เปลี่ยนรหัส\" (ไม่บอกว่ามีรหัสอยู่ — คนที่กู้จากไฟล์ใหม่อาจไม่มี) · autoComplete=new-password (เบราว์เซอร์ไม่เติมรหัสแอดมินเอง) · ปุ่มบันทึกต้องมีรหัสเฉพาะตอนเพิ่มใหม่",
+    APP.includes('setUF({username:u.username,password:"",name:u.name,') && !APP.includes("password:u.password")
+    && APP.includes('placeholder={editUID?"เว้นว่าง = ไม่เปลี่ยนรหัส":"password"} autoComplete="new-password"/>')
+    && APP.includes("disabled={!uF.username||(!editUID&&!uF.password)}"));
+
+  // ── ตัวสำรอง: pageUrl + fetchAll ตัวจริงกับฐานปลอม "หลังรัน SQL" ──
+  const BK_SRC = ssafe(() => { const BL = BACKUP.split("\n"); const one = (p) => { const l = BL.find((x) => x.startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; }; return [one("const SUPA = "), one("const APP_USER_COLS = "), one("const SELECT_OF = "), grab(BACKUP, "pageUrl"), "async " + grab(BACKUP, "fetchAll")].join("\n"); });
+  const postSqlDb = (tables, urls) => async (url) => {
+    urls.push(url);
+    const u = new URL(url), t = u.pathname.split("/").pop(), sel = u.searchParams.get("select") || "*";
+    const deny = { ok: false, status: 401, text: async () => '{"code":"42501","message":"permission denied for table app_users"}', json: async () => ({}), headers: { get: () => null } };
+    if (t === "app_users" && sel.split(",").some((c) => c === "*" || c === "password")) return deny;
+    const pk = (u.searchParams.get("order") || "id.asc").split(".")[0];
+    const gt = u.searchParams.get(pk);
+    const rows = (tables[t] || []).filter((r) => !gt || r[pk] > +gt.slice(3)).slice(0, +(u.searchParams.get("limit") || 1000));
+    const out = sel === "*" ? rows : rows.map((r) => Object.fromEntries(sel.split(",").map((c) => [c, r[c]])));
+    return { ok: true, status: 200, json: async () => out, text: async () => JSON.stringify(out), headers: { get: (h) => (h.toLowerCase() === "content-range" ? `0-0/${(tables[t] || []).length}` : null) } };
+  };
+  const users = Array.from({ length: 1203 }, (_, i) => ({ id: i + 1, username: "u" + (i + 1), password: "$2b$10$xxxxxxxxxxxxxxxxxxxxxx", name: "n", role: "staff", active: true, perms: [], created_at: "x", allowed_branches: null }));
+  const bk = await (async () => {
+    try {
+      const urls = [];
+      const B = new Function("fetch", "H", BK_SRC + "\nreturn {pageUrl, fetchAll};")(postSqlDb({ app_users: users, orders: [{ id: 1 }, { id: 2 }, { id: 3 }] }, urls), {});
+      const a = await B.fetchAll("app_users", "id", 1203), o = await B.fetchAll("orders", "id", 3);
+      return [a.fetched, a.rows.some((r) => "password" in r), o.fetched, urls.map((x) => new URL(x).searchParams.get("select")),
+        B.pageUrl("app_users", "id", null), B.pageUrl("pos_settings", "branch_id", 5)];
+    } catch (e) { return "พัง " + e.message; }
+  })();
+  const SUPA_URL0 = "https://niplvsfxynrufiyvbwme.supabase.co/rest/v1/";
+  ck("ตัวสำรองตัวจริง (ฐานหลังรัน SQL): app_users ดึงครบ 1,203 แถว (ข้ามหน้า 1,000) ไม่มี password · ขอ APP_USER_COLS ทุกหน้า · ตารางอื่น select=* เหมือนเดิม (จำนวนแถวเทียบ manifest ได้เท่าเดิม)",
+    bk, [1203, false, 3, [COLS, COLS, "*"], `${SUPA_URL0}app_users?select=${COLS}&order=id.asc&limit=1000`, `${SUPA_URL0}pos_settings?select=*&order=branch_id.asc&limit=1000&branch_id=gt.5`]);
+  ok_("ตัวสำรอง: fetchAll สร้าง URL ผ่าน pageUrl ที่เดียว (ไม่มี select=* ฝังใน fetchAll)",
+    (grab(BACKUP, "fetchAll").match(/pageUrl\(name, pk, last\)/g) || []).length === 1 && !grab(BACKUP, "fetchAll").includes("select=*"));
+
+  // ── ตัวกู้คืน: liveCount ตัวจริง (ปุ่ม + สคริปต์) · ข้อความตั้งรหัสใหม่ · handler ของปุ่มกู้คืน ──
+  const probeSrc = (S) => ssafe(() => { const SL = S.split("\n"); const one = (p) => { const l = SL.find((x) => x.startsWith(p)); if (!l) throw new Error("ไม่เจอ " + p); return l; }; return [one("const SUPA = "), one("const APP_USER_COLS = "), one("const probeSelect = "), "async " + grab(S, "liveCount"), grab(S, "usersPasswordNotice")].join("\n"); });
+  const runProbe = async (S, t) => {
+    const urls = [];
+    try { const f = new Function("fetch", "H", probeSrc(S) + "\nreturn liveCount;")(postSqlDb({ app_users: users.slice(0, 7), orders: [{ id: 1 }] }, urls), {}); return [await f(t), urls.map((x) => new URL(x).searchParams.get("select"))]; }
+    catch (e) { return "พัง " + e.message; }
+  };
+  ck("นับแถวก่อนกู้คืน (ฐานหลังรัน SQL): app_users ขอ APP_USER_COLS นับได้ 7 · ตารางอื่น select=* เหมือนเดิม — ทั้ง api/backup-restore.js และ scripts/restore.mjs",
+    [await runProbe(RESTORE_API, "app_users"), await runProbe(RESTORE_API, "orders"), await runProbe(RESTORE_CLI, "app_users"), await runProbe(RESTORE_CLI, "orders")],
+    [[7, [COLS]], [1, ["*"]], [7, [COLS]], [1, ["*"]]]);
+  const noticeOf = (S, rows) => ssafe(() => new Function(probeSrc(S) + "\nreturn usersPasswordNotice;")()(rows));
+  const NROWS = [
+    [{ id: 1, username: "boss", role: "admin", active: true }, { id: 2, username: "som", role: "staff", active: true }],
+    [{ id: 1, username: "old", role: "admin", active: false }, { id: 2, username: "o'neil", role: "admin", active: true }, { id: 3, username: "x", role: "staff" }],
+    [{ id: 1, username: "boss", role: "admin", active: true, password: "1234" }],
+    null,
+  ];
+  const nApi = NROWS.map((r) => noticeOf(RESTORE_API, r)), nCli = NROWS.map((r) => noticeOf(RESTORE_CLI, r));
+  ck("ข้อความหลังกู้ผู้ใช้ไม่มีรหัส: บอกจำนวน + บรรทัด SQL ตั้งรหัสแอดมิน (ที่ใช้งานอยู่ · escape ' ) + ให้แอดมินตั้งคนอื่นในหน้าผู้ใช้ · ไฟล์เก่าที่มีรหัส = ไม่เตือน · ปุ่มกับสคริปต์ข้อความเดียวกัน",
+    [nApi[0].includes("ผู้ใช้ 2 คน") && nApi[0].includes("update public.app_users set password = 'รหัสชั่วคราว' where username = 'boss';") && nApi[0].includes("ห้ามใช้รหัสจริง") && nApi[0].includes("เปลี่ยนรหัสตัวเองทันที") && nApi[0].includes("ตั้งค่า → ผู้ใช้"),
+      nApi[1].includes("ผู้ใช้ 3 คน") && nApi[1].includes("where username = 'o''neil';") && nApi[1].includes("เข้าระบบด้วย o'neil"),
+      nApi[2], nApi[3], JSON.stringify(nApi) === JSON.stringify(nCli)],
+    [true, true, "", "", true]);
+  // handler ของปุ่มกู้คืนตัวจริง (ไม่ต้องมี google-auth: ฉีด driveDownload/restoreRpc ปลอม)
+  const runRestore = async (tables, body, failOn) => {
+    const { gzipSync, gunzipSync } = await import("node:zlib");
+    const payload = { status: "success", file_name: "foodcost-backup-2026-11-01.json.gz", tables };
+    const order = new Function("return " + between(RESTORE_API, "const RESTORE_ORDER = [", "];").replace("const RESTORE_ORDER = ", "") + "];")();
+    const nf = new Function(probeSrc(RESTORE_API) + "\nreturn usersPasswordNotice;")();
+    const h = new Function("RKEY", "driveDownload", "gunzipSync", "RESTORE_ORDER", "liveCount", "TOO_LARGE", "restoreRpc", "usersPasswordNotice", "async " + grab(RESTORE_API, "handler") + "\nreturn handler;")(
+      "k", async () => gzipSync(Buffer.from(JSON.stringify(payload))), gunzipSync, order, async () => 0, 50000,
+      async (t, rows) => { if (t === failOn) throw new Error("boom " + t); return { inserted: rows.length }; }, nf);
+    const res = { code: 0, body: null, status(c) { this.code = c; return this; }, json(o) { this.body = o; return this; } };
+    await h({ query: {}, body: { key: "k", driveId: "d", ...body } }, res);
+    return res;
+  };
+  const TB = { branches: [{ id: 1 }], app_users: NROWS[0], suppliers: [{ id: 1 }] };
+  const CONF = { apply: "1", confirm: "RESTORE foodcost-backup-2026-11-01.json.gz" };
+  const SQL1 = "update public.app_users set password = 'รหัสชั่วคราว' where username = 'boss';";
+  const rr = await (async () => {
+    try {
+      const dry = await runRestore(TB, {}), ok = await runRestore(TB, CONF), ab = await runRestore(TB, CONF, "suppliers");
+      const oldDry = await runRestore({ ...TB, app_users: NROWS[2] }, {}), oldOk = await runRestore({ ...TB, app_users: NROWS[2] }, CONF), noUsers = await runRestore({ branches: [{ id: 1 }] }, CONF);
+      return [dry.body.mode, String(dry.body.summary.passwordNotice || "").includes(SQL1), ok.body.status, String(ok.body.passwordNotice || "").includes(SQL1),
+        ab.code, ab.body.status, String(ab.body.error).includes("boom suppliers") && String(ab.body.error).includes(SQL1),
+        "passwordNotice" in oldDry.body.summary, "passwordNotice" in oldOk.body, "passwordNotice" in noUsers.body];
+    } catch (e) { return "พัง " + e.message; }
+  })();
+  ck("ปุ่มกู้คืนตัวจริง: ดูก่อน = มีข้อความตั้งรหัสใหม่ · กู้เสร็จ = มี · ล้มกลางคันหลังเขียน app_users = ต่อท้าย error (จอโชว์ error) · ไฟล์เก่าที่มีรหัส / ไฟล์ไม่มี app_users = ไม่มีข้อความ",
+    rr, ["dry-run", true, "done", true, 500, "aborted", true, false, false, false]);
+  ok_("จอกู้คืนแสดงข้อความตั้งรหัสใหม่: กล่องในแผน (dry-run) + ต่อท้ายทุกผลลัพธ์ (สำเร็จ/ไม่ครบ/หยุดกลางคัน)",
+    APP.includes("{rPlan.summary?.passwordNotice&&<div ") && APP.includes('const pwn=r.passwordNotice?"\\n\\n"+r.passwordNotice:"";')
+    && (APP.match(/\$\{wrote\}\$\{pwn\}/g) || []).length === 2 && APP.includes("ใช้ scripts/restore.mjs ในเครื่องเพื่อซ่อมส่วนที่เหลือ${pwn}`"));
+  // ── scripts/restore.mjs: --merge เตือนเฉพาะคนที่จะถูกเพิ่มจริง (usersToWarn ตัวจริง) ──
+  const UTW = ssafe(() => new Function(grab(RESTORE_CLI, "usersToWarn") + "\nreturn usersToWarn;")());
+  const MR = [{ id: 1, username: "boss", role: "admin", active: true }, { id: 2, username: "som", role: "staff", active: true }, { id: 3, username: "new", role: "staff", active: true }];
+  ck("restore.mjs usersToWarn ตัวจริง: --merge ฐานมี id 1,2 แล้ว = เตือนเฉพาะ id 3 (ผู้ใช้ 1 คน) · ฐานมีครบ = ไม่เตือนใคร · โหมดอื่น (null) = ทุกแถวในไฟล์ · ไฟล์ไม่มีผู้ใช้ = ว่าง",
+    typeof UTW === "function" ? [UTW(MR, new Set(["1", "2"])).map((r) => r.id), UTW(MR, new Set(["1", "2", "3"])).length, UTW(MR, null).length, UTW(null, null).length,
+      String(noticeOf(RESTORE_CLI, UTW(MR, new Set(["1", "2"])))).includes("ผู้ใช้ 1 คน"), noticeOf(RESTORE_CLI, UTW(MR, new Set(["1", "2", "3"])))] : UTW,
+    [[3], 0, 3, 0, true, ""]);
+  ok_("scripts/restore.mjs: บอกวิธีตั้งรหัสใหม่ตั้งแต่ dry-run (ก่อน return) · --merge อ่าน id ในฐานก่อน (GET อย่างเดียว) · ย้ำหลังเขียนเมื่อจำนวนในฐานเพิ่มจริง · ไม่มี select=* ในตัวนับแถว",
+    RESTORE_CLI.includes('const usersLive0 = usersAct && merge ? await liveIds("app_users") : null;')
+    && RESTORE_CLI.includes('const pwNotice = usersAct ? usersPasswordNotice(usersToWarn(payload.tables.app_users, usersLive0)) : "";')
+    && RESTORE_CLI.indexOf('if (pwNotice) console.log("\\n" + pwNotice);') > 0 && RESTORE_CLI.indexOf('if (pwNotice) console.log("\\n" + pwNotice);') < RESTORE_CLI.indexOf("if (!apply) {")
+    && RESTORE_CLI.includes('if (pwNotice && typeof written.app_users === "number" && written.app_users > (usersLive0 ? usersLive0.size : 0)) console.log("\\n" + pwNotice);')
+    && ssafe(() => grab(RESTORE_CLI, "liveIds")).includes("?select=id&order=id.asc") && !/method:/.test(ssafe(() => grab(RESTORE_CLI, "liveIds")))
+    && !/select=\*&limit=1/.test(RESTORE_CLI + RESTORE_API));
+
+  // ── loadAll ตัวจริง: รายชื่อผู้ใช้โหลดไม่ได้ (สิทธิ์อ่านรายคอลัมน์) ต้องไม่ล้มทั้งหลังบ้าน ──
+  const LA = fnSrc("  async function loadAll(silent){");
+  const runLA = async (usersFail) => {
+    const W = [];
+    const deps = { currentBranch: { id: 1, type: "branch" }, branchRef: { current: { id: 1 } }, setLoading: () => {}, setInitErr: (m) => { if (m) W.push("err"); }, assetsWantedRef: { current: false },
+      api: { getIngs: async () => [], getMenus: async () => [], getCats: async () => [], getBranches: async () => [], getSuppliers: async () => [], getCostHist: async () => [], getActionHist: async () => [], getBranchPrinters: async () => [],
+        getUsers: async () => { if (usersFail) throw Object.assign(new Error("permission denied for table app_users"), { status: 401 }); return [{ id: 1 }]; } },
+      fetchOrdersFor: async () => ({ orders: [], all: [] }), printersAt: (l) => l,
+      setIngs: () => W.push("ings"), setMenus: () => {}, setAllCats: () => {}, setUsers: (u) => W.push("users:" + JSON.stringify(u)), setBranches: () => {}, setSuppliers: () => {}, setCostHistory: () => {}, setActionHistory: () => {},
+      setOrders: () => W.push("orders"), setPrinters: () => {}, setAllOrders: () => {}, setAssets: () => {}, console: { warn: () => W.push("warn") } };
+    const ks = Object.keys(deps);
+    await new Function(...ks, LA + "\nreturn loadAll;")(...ks.map((k) => deps[k]))(false);
+    return W;
+  };
+  ck("loadAll ตัวจริง: รายชื่อผู้ใช้โหลดไม่ได้ (42501) = ข้อมูลอื่นขึ้นครบ ไม่ขึ้น error ทั้งหน้า · ไม่ล้างรายชื่อเดิม · โหลดได้ = ตั้งรายชื่อตามเดิม",
+    [await runLA(true).catch((e) => "พัง " + e.message), await runLA(false).catch((e) => "พัง " + e.message)], [["warn", "ings", "orders"], ["ings", 'users:[{"id":1}]', "orders"]]);
+  ok_("หน้า ตั้งค่า → ผู้ใช้: รายชื่อว่าง = บอกว่าโหลดไม่สำเร็จ + ปุ่มโหลดใหม่ที่บอกสาเหตุ (showErr)",
+    APP.includes("{users.length===0&&<div ") && APP.includes('<Btn v="ghost" onClick={async()=>{try{await reloadUsers();}catch(e){showErr("โหลดรายชื่อผู้ใช้ไม่ได้",e);}}}>โหลดใหม่</Btn>'));
+
+  // ── ตัวเฝ้ารหัสผ่าน: pwVerdict ตัวจริง (api/backup.js = tools/check-data.mjs ข้อ 22) · pwCanary · canaryEffect · ต่อสายใน handler ──
+  const DATA = rd("tools/check-data.mjs");
+  const vB = ssafe(() => new Function(grab(BACKUP, "pwVerdict") + "\nreturn pwVerdict;")());
+  const vD = ssafe(() => new Function(grab(DATA, "pwVerdict") + "\nreturn pwVerdict;")());
+  // รอบ 3: app_login ตอบ 401/403 (ถูกถอด execute) หรือ 405 (สร้างใหม่แบบไม่ stable) = "มีฟังก์ชัน" ด้วย — เดิมนับแค่ 200 ⟹ เงียบทั้งที่รหัสเปิด/เข้าระบบไม่ได้
+  const PWS = [200, 206, 401, 403, 0, 500], FNS = [200, 404, 0, 500, 401, 403, 405];
+  const mat = (f) => (typeof f === "function" ? PWS.flatMap((p) => FNS.map((n) => { const v = f(p, n); return v ? (v.bad ? "ร้ายแรง" : "เตือน") : "-"; })) : f);
+  const R = "ร้ายแรง", W = "เตือน", N = "-";
+  ck("pwVerdict ตัวจริง (password × app_login): อ่านได้ + มีฟังก์ชัน (ตอบ 2xx–4xx ที่ไม่ใช่ 404 รวม 401/403/405) = ร้ายแรง · ถอดสิทธิ์แต่ไม่มีฟังก์ชัน = ร้ายแรง · ถอดสิทธิ์ + เรียก app_login ไม่ได้ (401/403) = ร้ายแรง (เข้าระบบไม่ได้) · อ่านได้ + ไม่มีฟังก์ชัน = เตือน (ยังไม่รัน SQL) · ถอดแล้ว + มีฟังก์ชัน = ปกติ · ยิงไม่ออก/5xx = เงียบ",
+    mat(vB), [R, W, N, N, R, R, R, /* 206 */ R, W, N, N, R, R, R, /* 401 */ N, R, N, N, R, R, N, /* 403 */ N, R, N, N, R, R, N, /* 0 */ N, N, N, N, N, N, N, /* 500 */ N, N, N, N, N, N, N]);
+  ok_("ข้อความ \"เรียก app_login ไม่ได้\" บอกเลข HTTP จริง", ssafe(() => vB(401, 403).msg.includes("(HTTP 403)")));
+  ck("ข้อ 22 ของหมอตรวจข้อมูลตัดสินเหมือนตัวเฝ้าทุกคืน ทุกกรณี (42 แบบ) ข้อความเดียวกัน",
+    [JSON.stringify(mat(vD)) === JSON.stringify(mat(vB)), ssafe(() => JSON.stringify(PWS.flatMap((p) => FNS.map((n) => vD(p, n)))) === JSON.stringify(PWS.flatMap((p) => FNS.map((n) => vB(p, n)))))], [true, true]);
+  const runCanary = async (pwS, fnS, boom) => {
+    const urls = [];
+    const fetch = async (u, o) => { urls.push([String(u).replace("https://x.supabase.co/rest/v1/", ""), (o && o.method) || "GET", !!(o && o.signal)]); if (boom) throw new TypeError("fetch failed"); return { status: String(u).includes("rpc/app_login") ? fnS : pwS }; };
+    const f = new Function("fetch", "SUPA", "H", "AbortSignal", grab(BACKUP, "pwVerdict") + "\nasync " + grab(BACKUP, "pwCanary") + "\nreturn pwCanary;")(fetch, "https://x.supabase.co", {}, { timeout: () => "sig" });
+    const v = await f();
+    return [v ? (v.bad ? "ร้ายแรง" : "เตือน") : null, urls];
+  };
+  const CU = [["app_users?select=password&limit=0", "GET", true], ["rpc/app_login?p_username=__canary__&p_password=x", "GET", true]];
+  ck("pwCanary ตัวจริง: ขอ password แบบ limit=0 (ไม่มีค่ากลับมาเลย) + app_login ด้วยชื่อปลอม · GET มีเวลาหมด · ยิงไม่ออก = เงียบ (ไม่รู้ ≠ มีปัญหา)",
+    [await runCanary(200, 200).catch((e) => "พัง " + e.message), await runCanary(401, 200).catch((e) => "พัง " + e.message), await runCanary(0, 0, true).catch((e) => "พัง " + e.message)],
+    [["ร้ายแรง", CU], [null, CU], [null, CU]]);
+  const CE = ssafe(() => new Function(grab(BACKUP, "canaryEffect") + "\nreturn canaryEffect;")());
+  const BAD = { bad: true, msg: "x" }, NOTE = { bad: false, msg: "n" };
+  ck("canaryEffect ตัวจริง: ร้ายแรง = success→degraded + แจ้งแอดมิน (failed คงเดิม) · เตือน = บันทึกข้อความ ไม่เปลี่ยนสถานะ ไม่แจ้ง · ปกติ = ไม่มีอะไร",
+    typeof CE === "function" ? [CE("success", BAD), CE("failed", BAD), CE("degraded", BAD), CE("success", NOTE), CE("success", null)] : CE,
+    [{ status: "degraded", note: "x", alert: true }, { status: "failed", note: "x", alert: true }, { status: "degraded", note: "x", alert: true }, { status: "success", note: "n", alert: false }, { status: "success", note: null, alert: false }]);
+  const HB = BACKUP.slice(BACKUP.indexOf("export default async function handler"));
+  const hb = (s) => HB.indexOf(s);
+  ok_("handler ตัวสำรอง: ยิงตัวเฝ้าคู่ขนานตั้งแต่ต้น · ใช้ผลหลังเก็บกวาด (ไม่บล็อกการลบไฟล์เก่า) ก่อนเขียนประวัติ · ข้อความเข้าช่อง error + คำตอบ warning · ร้ายแรง = แจ้งแอดมินหัวข้อของตัวเอง (ไม่ปน \"สำรองไม่ผ่าน\")",
+    HB.split("canaryEffect(").length === 2 && HB.split("await canaryP").length === 3
+    && hb("const canaryP = pwCanary().catch(() => null);") > 0 && hb("const canaryP = pwCanary().catch(() => null);") < hb("const countMap = await manifest();")
+    && hb("rotation = await rotate(driveId)") > 0 && hb("rotation = await rotate(driveId)") < hb("const cv = canaryEffect(status, await canaryP);")
+    && hb("const cv = canaryEffect(status, await canaryP);") < hb("await auditPatch(auditId, {\n      finished_at")
+    && HB.includes("if (cv.alert) await alertPwExposed(cv.note);") && HB.includes(', cv.note].filter(Boolean).join(" · ") || null,') && HB.includes("warning: cv.note,")
+    && /async function alertPwExposed\(msg\) \{[\s\S]{0,400}scope: "admin", title: "🔴 รหัสผ่านผู้ใช้ไม่ปลอดภัย"[\s\S]{0,140}url: "\/"[\s\S]{0,200}catch \{/.test(BACKUP));
+  // รอบ 3: แจ้งแอดมินหลังเขียนประวัติเสมอ (แจ้งช้า → ฟังก์ชันถูกตัด 60 วิ → แถวค้าง running ไฟล์คืนนั้นไม่มี drive_id) · แจ้งทุกตัวมีเวลาหมด 5 วิ
+  //        สำรองล้มทั้งรอบ (catch) ก็ยังอ่านผลตัวเฝ้า ต่อท้าย error + แจ้ง 🔴
+  ok_("handler ตัวสำรอง: แจ้ง 🔴 หลัง auditPatch ทั้งทางปกติและทาง catch · alertPwExposed / alertBackupProblem มี AbortSignal.timeout(5000)",
+    hb("if (cv.alert) await alertPwExposed(cv.note);") > hb("await auditPatch(auditId, {\n      finished_at")
+    && hb("if (cv.alert) await alertPwExposed(cv.note);") > hb("if (status !== \"success\" && !dataSafe) await alertBackupProblem(")
+    && hb("const v = await canaryP;") > hb("} catch (e) {") && hb("if (pwBad) await alertPwExposed(pwBad);") > hb("await auditPatch(auditId, { finished_at: new Date().toISOString(), status: \"failed\"")
+    && /async function alertPwExposed\(msg\) \{[\s\S]{0,300}signal: AbortSignal\.timeout\(5000\)/.test(BACKUP) && /async function alertBackupProblem\([\s\S]{0,1200}signal: AbortSignal\.timeout\(5000\)/.test(BACKUP));
+  // handler ตัวจริงของตัวสำรอง (รอบ cron) กับฐาน/Drive/แจ้งเตือนปลอม — ตัวเฝ้าต้องไม่ขวางการเก็บกวาด และผลต้องลงประวัติ/แจ้งถูกหัวข้อ
+  // รอบ 3: ตัวโหลดเดียวกัน (ตัด import ทุกบรรทัด ใส่ของจริงให้) · บันทึกลำดับ "เขียนประวัติ → แจ้ง" · แจ้งต้องมีเวลาหมด · ทาง catch · กดสำรองเอง (รหัสใน body)
+  const runBackup = async ({ pwS = 401, fnS = 200, req, env, manifestFail = false } = {}) => {
+    const z = await import("node:zlib"), cr = await import("node:crypto"), st = await import("node:stream"), sp = await import("node:stream/promises");
+    const tb0 = BACKUP.indexOf("const TABLES = ["), tb1 = BACKUP.indexOf("].map((t) =>", tb0);
+    const names = new Function(BACKUP.slice(tb0, tb1) + "]; return TABLES.map((t) => (typeof t === 'string' ? t : t.name));")();
+    let gzUp = null; const seen = { list: 0, patch: [], push: [], order: [], sig: [] };
+    const fetch = async (url, o = {}) => {
+      const u = String(url);
+      if (u.includes("/rest/v1/rpc/backup_manifest")) return manifestFail ? { ok: false, status: 500, text: async () => "boom" } : { ok: true, status: 200, json: async () => names.map((t) => ({ table_name: t, row_count: 0 })) };
+      if (u.includes("app_users?select=password&limit=0")) { if (pwS === "net") throw new TypeError("fetch failed"); return { ok: pwS < 300, status: pwS }; }
+      if (u.includes("/rest/v1/rpc/app_login")) { if (fnS === "net") throw new TypeError("fetch failed"); return { ok: fnS < 300, status: fnS }; }
+      if (u.includes("/rest/v1/backups") && o.method === "POST") return { ok: true, status: 201, json: async () => [{ id: 7 }] };
+      if (u.includes("/rest/v1/backups?id=eq.7") && o.method === "PATCH") { seen.patch.push(JSON.parse(o.body)); seen.order.push("ประวัติ"); return { ok: true, status: 204 }; }
+      if (u.includes("/rest/v1/")) return { ok: true, status: 200, json: async () => [] };
+      if (u.includes("upload/drive/v3/files")) { const b = o.body, a = b.indexOf("Content-Type: application/gzip\r\n\r\n") + "Content-Type: application/gzip\r\n\r\n".length; gzUp = b.slice(a, b.lastIndexOf("\r\n--")); return { ok: true, status: 200, json: async () => ({ id: "DRV1" }) }; }
+      if (u.includes("alt=media")) return { ok: true, status: 200, arrayBuffer: async () => gzUp.buffer.slice(gzUp.byteOffset, gzUp.byteOffset + gzUp.length) };
+      if (u.includes("drive/v3/files?q=")) { seen.list++; return { ok: true, status: 200, json: async () => ({ files: [{ id: "DRV1", name: "foodcost-backup-2026-10-31.json.gz", createdTime: "2026-10-31T19:00:00Z" }] }) }; }
+      if (u.includes("/api/push")) { const t = JSON.parse(o.body).title; seen.push.push(t); seen.order.push(t.slice(0, 2)); seen.sig.push(!!o.signal); return { ok: true, status: 200 }; }
+      throw new Error("ไม่คาดว่าจะเรียก " + u);
+    };
+    const src = BACKUP.replace(/^import [^\n]*;$/gm, "").replace(/^export default async function handler/m, "async function handler").replace(/^export /gm, "");
+    class JWT { async getAccessToken() { return { token: "t" }; } }
+    const { handler } = new Function("JWT", "fetch", "process", "gzipSync", "gunzipSync", "createHash", "timingSafeEqual", "Readable", "pipeline", src + "\nreturn { handler };")(JWT, fetch,
+      { env: env || { CRON_SECRET: "c", GOOGLE_SA_KEY_B64: '{"client_email":"x","private_key":"y"}', DRIVE_FOLDER_ID: "F" } }, z.gzipSync, z.gunzipSync, cr.createHash, cr.timingSafeEqual, st.Readable, sp.pipeline);
+    let body = null; const out = { code: 0, status(c) { out.code = c; return out; }, json(o) { body = o; return out; } };
+    await handler(req || { method: "GET", headers: { authorization: "Bearer c" }, query: {} }, out);
+    const last = seen.patch[seen.patch.length - 1] || {};
+    return { code: out.code, body, seen, last };
+  };
+  const runBackupCron = async (pwS, fnS) => {
+    const { body, seen, last } = await runBackup({ pwS, fnS });
+    return [body && body.status, seen.list, last.status, last.error ? (/‼️ รหัสผ่านผู้ใช้/.test(last.error) ? "ร้ายแรง" : /‼️ เรียกฟังก์ชัน app_login/.test(last.error) ? "เรียกไม่ได้" : /ยังไม่ได้รัน/.test(last.error) ? "เตือน" : "อื่น") : null, seen.push, !!(body && body.warning)];
+  };
+  ck("handler ตัวสำรองตัวจริง (cron): password อ่านได้ทั้งที่มี app_login = เก็บกวาดยังทำ · สถานะ degraded · ประวัติมีข้อความ · แจ้งแอดมินหัวข้อ 🔴 (ไม่ใช่ \"สำรองไม่ผ่าน\") · ยังไม่รัน SQL = success + บันทึกเตือน ไม่แจ้ง · ปกติ / ยิงไม่ออก = success เงียบ · ถอดสิทธิ์ + app_login 403 = degraded + 🔴",
+    [await runBackupCron(200, 200).catch((e) => "พัง " + e.message), await runBackupCron(200, 404).catch((e) => "พัง " + e.message), await runBackupCron(401, 200).catch((e) => "พัง " + e.message), await runBackupCron("net", "net").catch((e) => "พัง " + e.message),
+      await runBackupCron(401, 403).catch((e) => "พัง " + e.message)],
+    [["degraded", 1, "degraded", "ร้ายแรง", ["🔴 รหัสผ่านผู้ใช้ไม่ปลอดภัย"], true], ["success", 1, "success", "เตือน", [], true], ["success", 1, "success", null, [], false], ["success", 1, "success", null, [], false],
+      ["degraded", 1, "degraded", "เรียกไม่ได้", ["🔴 รหัสผ่านผู้ใช้ไม่ปลอดภัย"], true]]);
+  const ordOf = async (o) => { const r = await runBackup(o); return [r.code, r.last.status, /‼️/.test(r.last.error || ""), r.seen.order, r.seen.sig]; };
+  ck("handler ตัวสำรองตัวจริง: แจ้งทุกครั้งหลังเขียนประวัติ + มีเวลาหมด · สำรองล้มทั้งรอบ (manifest พัง) + รหัสเปิด = ประวัติ failed มี ‼️ แล้วแจ้ง 🟠 ตามด้วย 🔴 · สำรองล้มแต่รหัสปิดดี = แจ้ง 🟠 อย่างเดียว",
+    [await ordOf({ pwS: 200, fnS: 200 }).catch((e) => "พัง " + e.message), await ordOf({ pwS: 200, fnS: 200, manifestFail: true }).catch((e) => "พัง " + e.message), await ordOf({ pwS: 401, fnS: 200, manifestFail: true }).catch((e) => "พัง " + e.message)],
+    [[200, "degraded", true, ["ประวัติ", "🔴"], [true]], [500, "failed", true, ["ประวัติ", "🟠", "🔴"], [true, true]], [500, "failed", false, ["ประวัติ", "🟠"], [true]]]);
+  // กดสำรองเอง: รหัสมาทาง body เท่านั้น · ?key= (หน้าจอรุ่นเก่า) = บอกให้รีเฟรช ไม่มีคำว่า "รหัส" (ไม่ล้างรหัสที่จำไว้) · ยังไม่ตั้ง env = 501 · cron เดิมยังใช้ได้
+  const MENV = { BACKUP_ADMIN_KEY: "bk", CRON_SECRET: "c", GOOGLE_SA_KEY_B64: '{"client_email":"x","private_key":"y"}', DRIVE_FOLDER_ID: "F" };
+  const man = async (req, env = MENV) => { const r = await runBackup({ req, env }); return [r.code, (r.body && (r.body.status || r.body.error)) || null, r.seen.list]; };
+  const manRes = [await man({ method: "POST", headers: {}, query: {}, body: { key: "bk" } }).catch((e) => "พัง " + e.message),
+    await man({ method: "POST", headers: {}, query: {}, body: JSON.stringify({ key: "bk" }) }).catch((e) => "พัง " + e.message),
+    await man({ method: "POST", headers: {}, query: { key: "bk" }, body: {} }).catch((e) => "พัง " + e.message),
+    await man({ method: "POST", headers: {}, query: {}, body: { key: "bad" } }).catch((e) => "พัง " + e.message),
+    await man({ method: "POST", headers: {}, query: {}, body: { key: "bk" } }, { ...MENV, BACKUP_ADMIN_KEY: "" }).catch((e) => "พัง " + e.message),
+    await man({ method: "GET", headers: { authorization: "Bearer c" }, query: {} }).catch((e) => "พัง " + e.message),
+    await man({ method: "GET", headers: { authorization: "Bearer x" }, query: {} }).catch((e) => "พัง " + e.message)];
+  ck("handler ตัวสำรองตัวจริง (กดเอง): รหัสใน body (JSON/ข้อความ) = สำรองได้ ไม่เก็บกวาด · ?key= ใน URL = 400 ให้รีเฟรช · รหัสผิด = 401 · ยังไม่ตั้ง BACKUP_ADMIN_KEY = 501 · cron Bearer ถูก = สำรอง+เก็บกวาด · Bearer ผิด = 401",
+    manRes.map((r) => (Array.isArray(r) ? [r[0], r[1] === "success" ? "success" : /รีเฟรช/.test(r[1] || "") ? "รีเฟรช" : r[1] === "รหัสไม่ถูกต้อง" ? "รหัสผิด" : /ยังไม่ได้ตั้งค่า BACKUP_ADMIN_KEY/.test(r[1] || "") ? "ไม่ได้ตั้ง" : r[1], r[2]] : r)),
+    [[200, "success", 0], [200, "success", 0], [400, "รีเฟรช", 0], [401, "รหัสผิด", 0], [501, "ไม่ได้ตั้ง", 0], [200, "success", 1], [401, "รหัสผิด", 0]]);
+  ok_("ข้อความ ?key= (หน้าจอรุ่นเก่า) และยังไม่ตั้ง env ไม่ทำให้หน้าจอล้างรหัสที่จำไว้ (ไม่มี รหัส/401/unauthor)",
+    [manRes[2], manRes[4]].every((r) => Array.isArray(r) && !/401|unauthor|รหัส/i.test(r[1])));
+  const s22 = DATA.indexOf('section("22)');
+  const D22 = s22 < 0 ? "" : DATA.slice(s22, DATA.indexOf("\n  }\n", s22));
+  ok_("หมอตรวจข้อมูลข้อ 22: เช็ก password (limit=0) · app_login · 8 คอลัมน์ ด้วย GET อย่างเดียว · ตัดสินด้วย pwVerdict · 8 คอลัมน์อ่านไม่ได้ = เตือนพร้อม \"ห้าม grant ทั้งตาราง\"",
+    D22.includes('st("app_users?select=password&limit=0")') && D22.includes('st("rpc/app_login?p_username=__doctor__&p_password=x")') && D22.includes(`st("app_users?select=${COLS}&limit=0")`)
+    && D22.includes("const v = pwVerdict(pw, fn);") && !/method\s*:/.test(D22) && D22.includes("ห้ามแก้ด้วย grant ทั้งตาราง"));
+  ok_("หน้าสำรองข้อมูล: แถบสถานะโชว์ error ของรอบล่าสุด (ตัวเฝ้ารหัสผ่าน/ข้ามขั้นตรวจ — เดิมบันทึกแต่ไม่มีจอโชว์) · กดสำรองเองแล้ว degraded โชว์ warning ก่อน",
+    APP.includes("{last.error&&<div style={{fontSize:11.5,color:/‼️/.test(last.error)?C.red:") && APP.includes("${r.warning||((r.missing_tables||[]).length?"));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

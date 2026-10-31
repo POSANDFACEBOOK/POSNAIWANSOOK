@@ -52,21 +52,20 @@ const DOC_TYPES = [
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 ];
 const SANDBOX_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
-// 29 ต.ค. 69: ไฟล์สำรองข้อมูล (api/backup.js อัปขึ้น Drive เป็น application/gzip — ปลายทางอัปของแอปรับ gzip ไม่ได้)
-// เดิมตกไปเป็น octet-stream ไม่มีชื่อไฟล์ ⟹ เบราว์เซอร์เซฟเป็น "drive-view" ไม่มีนามสกุล เจ้าของจำไม่ได้ว่าเป็นไฟล์สำรอง
-// ยังเป็นดาวน์โหลด + nosniff + sandbox เหมือนชนิดอื่น · ชื่อไฟล์จากแอป (?fn=) ใช้ได้เฉพาะตัวอักษรปลอดภัยที่ลงท้าย .json.gz
-// นอกนั้นใช้ backup-<id>.json.gz (ใส่ชื่ออะไรมาก็ไม่ได้ชื่อ .html/.exe จากโดเมนแอป)
+// 31 ต.ค. 69: ไฟล์สำรองข้อมูล (gzip — มีแต่ api/backup.js ที่อัปชนิดนี้ ปลายทางอัปของแอปรับ gzip ไม่ได้) ห้ามส่งจากที่นี่เด็ดขาด
+// ที่นี่ไม่ต้องใช้รหัสอะไรเลย (โมเดล "id เดาไม่ได้") แต่ drive_id ของไฟล์สำรองอ่านได้จากตาราง backups ด้วยคีย์สาธารณะในไฟล์เว็บ
+// ⟹ ใครก็โหลดไฟล์สำรองทั้งฐานได้: รหัสผ่านผู้ใช้ตัวหนังสือ (ไฟล์ก่อน 31 ต.ค. 69 · หมุนเก็บได้ถึง 3 ปี) · PIN พนักงาน · ข้อมูลลูกค้า CRM
+// และคำตอบเดิมเป็น public/immutable 1 ปี = CDN เก็บสำเนาไว้ด้วย · ดาวน์โหลดไฟล์สำรองตอนนี้มีทางเดียว: POST /api/backup?download=1 + BACKUP_ADMIN_KEY
+// ตรวจทั้งชนิดที่ Drive บอก และไบต์แรกของไฟล์ (1f 8b = gzip) — ชนิดผิด/ไม่บอกชนิดก็หลุดไม่ได้ · รูป/PDF/Office ไม่มีทางขึ้นต้นด้วย 1f 8b
+// (เดิม 29 ต.ค. 69 ส่ง gzip เป็นดาวน์โหลดพร้อมชื่อไฟล์ ?fn= — ย้ายไปอยู่ที่ api/backup.js แล้ว)
 const GZIP_TYPES = ["application/gzip", "application/x-gzip"];
-export function gzipName(id, fn) {
-  const f = String(fn || "");
-  if (/^[A-Za-z0-9][A-Za-z0-9._-]{0,150}\.json\.gz$/.test(f)) return f;
-  return `backup-${String(id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 80) || "file"}.json.gz`;
-}
-export function viewHeaders(stored, id, fn) {
+export const isBackupBytes = (ct, buf) => GZIP_TYPES.includes(String(ct || "").split(";")[0].trim().toLowerCase()) || !!(buf && buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b);
+// ข้อความไทย (แท็บที่ยังเป็นโค้ดเก่ากดลิงก์ ⬇ เดิมแล้วมาเจอหน้านี้) — ระบุ charset ไม่งั้นภาษาไทยเพี้ยน
+const refuseBackup = (res) => { res.setHeader("Cache-Control", "no-store"); res.setHeader("Content-Type", "text/plain; charset=utf-8"); return res.status(403).end("ไฟล์สำรองข้อมูลต้องดาวน์โหลดจากหน้า ตั้งค่า → สำรองข้อมูล (รีเฟรชหน้าก่อน แล้วกด ⬇ ดาวน์โหลด ใส่ BACKUP_ADMIN_KEY)"); };
+export function viewHeaders(stored) {
   const t = String(stored || "").split(";")[0].trim().toLowerCase();
   if (RASTER_TYPES.includes(t)) return { "Content-Type": t, "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": SANDBOX_CSP };
   if (t === "application/pdf") return { "Content-Type": t, "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff" };
-  if (GZIP_TYPES.includes(t)) return { "Content-Type": t, "Content-Disposition": `attachment; filename="${gzipName(id, fn)}"`, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": SANDBOX_CSP };
   return { "Content-Type": DOC_TYPES.includes(t) ? t : "application/octet-stream", "Content-Disposition": "attachment", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": SANDBOX_CSP };
 }
 
@@ -109,7 +108,11 @@ export default async function handler(req, res) {
       headers: { Authorization: `Bearer ${tok}` },
     });
     if (!r.ok) return res.status(r.status).end(await r.text());
-    for (const [k, v] of Object.entries(viewHeaders(r.headers.get("content-type"), id, req.query.fn))) res.setHeader(k, v);
+    const ct = r.headers.get("content-type");
+    if (isBackupBytes(ct)) { try { if (r.body && r.body.cancel) await r.body.cancel(); } catch {} return refuseBackup(res); }   // ไม่ต้องโหลดทั้งไฟล์ก่อนปฏิเสธ
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (isBackupBytes(ct, buf)) return refuseBackup(res);
+    for (const [k, v] of Object.entries(viewHeaders(ct))) res.setHeader(k, v);
     // ⚠️ เคยเป็น "private, max-age=300" ซึ่งสั่งไม่ให้ CDN แคชเลย แคชแค่ในเบราว์เซอร์ 5 นาที
     // ผลคือรูปทุกใบในระบบ (846 รูป) วิ่งผ่านฟังก์ชันนี้ใหม่แทบทุกครั้งที่มีคนเปิดหน้า
     // ฟังก์ชันต้องไปดึงจาก Drive → โหลดทั้งไฟล์เข้าหน่วยความจำ → ส่งออก
@@ -121,7 +124,7 @@ export default async function handler(req, res) {
     // (ดูคอมเมนต์หัวไฟล์) ใครมี URL ก็เปิดได้อยู่แล้วตั้งแต่ต้น การแคชไม่ได้เปิดอะไรเพิ่ม
     // immutable ใช้ได้เพราะไฟล์ใน Drive หนึ่ง id = เนื้อหาเดิมเสมอ เปลี่ยนรูป = อัปไฟล์ใหม่ได้ id ใหม่
     res.setHeader("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable");
-    return res.status(200).end(Buffer.from(await r.arrayBuffer()));
+    return res.status(200).end(buf);
   } catch (e) {
     return res.status(500).end(String((e && e.message) || e));
   }

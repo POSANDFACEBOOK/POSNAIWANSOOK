@@ -361,6 +361,15 @@ async function sb(path, opts = {}) {
         const pd = body.match(/permission denied for (table|sequence|function|schema)\s+\\?"?([A-Za-z0-9_]+)/i);
         if (pd) {
           const k = pd[1].toLowerCase(), n = pd[2];
+          // 31 ต.ค. 69: app_users ปิดสิทธิ์อ่านทั้งตารางโดยตั้งใจ (อ่านได้เฉพาะ APP_USER_COLS) — คำแนะนำ grant all ข้างล่าง = เปิดรหัสผ่านให้ทุกเครื่องอ่านอีก
+          // ข้อความนี้มีแต่โค้ดใหม่ที่เห็น (โค้ดเก่าขึ้นข้อความ grant all เดิม) ⟹ เหตุจริงมีสองอย่าง: เพิ่งรัน SQL แล้ว PostgREST ยังไม่โหลดโครงสร้างใหม่
+          // (app_login ยังหาไม่เจอ → ถอยไปทางเดิม → ฐานปฏิเสธคอลัมน์ password · หายเองในไม่กี่วินาที) หรือโค้ดขอคอลัมน์ที่ยังไม่ได้ grant
+          if (k === "table" && n === "app_users") throw new Error(`อ่าน/บันทึกข้อมูลผู้ใช้ไม่ได้ (permission denied — ตาราง app_users เปิดให้อ่านเฉพาะคอลัมน์ที่ไม่ใช่รหัสผ่าน โดยตั้งใจ ตั้งแต่ 31 ต.ค. 69)
+
+ถ้าเพิ่งรัน sql/app-users-password-hash.sql: รอ 1 นาทีแล้วลองใหม่ (ฐานข้อมูลกำลังโหลดโครงสร้างใหม่) · ยังไม่หาย: ผู้ดูแลรัน notify pgrst, 'reload schema';
+ถ้าไม่ได้เพิ่งรัน = โค้ดขอคอลัมน์ของ app_users ที่ยังไม่ได้ให้สิทธิ์อ่าน — แจ้งผู้ดูแลระบบ
+⚠️ ห้ามรัน grant all / grant select ทั้งตาราง app_users — จะเปิดให้ทุกเครื่องอ่านรหัสผ่านได้อีก
+คอลัมน์ใหม่ที่ต้องให้อ่าน: grant select (ชื่อคอลัมน์) on public.app_users to anon, authenticated; แล้วเพิ่มใน APP_USER_COLS + sql/app-users-password-hash.sql`);
           const fix = k==="sequence" ? "grant all on all sequences in schema public to anon, authenticated, service_role;"
             : k==="function" ? `grant execute on function public.${n} to anon, authenticated, service_role;`
             : k==="schema" ? `grant usage on schema ${n} to anon, authenticated, service_role;`
@@ -980,6 +989,23 @@ async function fetchOrdersFor(isCentral,bid){
 }
 const PO_FULL_REFRESH_MS=30*60*1000;   // หน้าเอกสาร PO: ลายนิ้วมือไม่เปลี่ยนก็ยังโหลดเต็มทุก 30 นาที (รูปรับของที่แก้ทีหลังไม่อยู่ในลายนิ้วมือ)
 
+// ── ซ่อนรหัสผ่านผู้ใช้ (31 ต.ค. 69) ─────────────────────────────────────
+// เดิม getUsers ดึง app_users ทั้งแถวตอนเปิดแอปทุกเครื่อง ⟹ ทุกเครื่องได้รหัสผ่านของทุกคน (ตัวหนังสือล้วน) ไปด้วย
+// และใครมีคีย์สาธารณะในไฟล์เว็บก็อ่านได้ · ตอนนี้: อ่านเฉพาะ 8 คอลัมน์นี้ทุกจุด · เข้าระบบผ่านฟังก์ชัน app_login ในฐาน (เทียบ bcrypt ในฐาน ไม่ส่งรหัสกลับ)
+// ⚠️ รายชื่อนี้ต้องตรงกับ grant select (...) ใน sql/app-users-password-hash.sql ทุกตัว (มีด่านตรวจ) — เพิ่มคอลัมน์ใหม่ใน app_users
+//    ต้อง grant select คอลัมน์นั้นให้ anon ด้วย ไม่งั้นโหลดรายชื่อผู้ใช้ไม่ได้ทั้งแอป · ห้ามใส่ password
+const APP_USER_COLS="id,username,name,role,active,perms,created_at,allowed_branches";
+// ฟังก์ชัน app_login "ยังไม่มีในฐาน" เท่านั้น (เจ้าของยังไม่ได้รัน SQL) — PostgREST ตอบ 404 PGRST202 "Could not find the function"
+// รหัสผิด (ได้ []) / เน็ตล่ม / 5xx / สิทธิ์ ห้ามนับว่าไม่มีฟังก์ชัน ⟹ ไม่ถอยไปทางเก่าเด็ดขาด
+const appLoginMissing=(e)=>{const m=String((e&&e.message)||e||"");return /PGRST202/.test(m)||(!!e&&e.status===404&&/Could not find the function/i.test(m));};
+// แอปขึ้นระบบก่อนเจ้าของรัน SQL ⟹ ต้องเข้าได้ทั้งก่อนและหลัง: ถาม app_login ก่อน · ไม่มีฟังก์ชัน = ทางเก่า (เทียบรหัสตรงตัว) แต่ขอแค่ 8 คอลัมน์
+// หลังรัน SQL ทางเก่าจะโดนฐานปฏิเสธ (คอลัมน์ password อ่านไม่ได้แล้ว) — ไม่เป็นไร เพราะตอนนั้นฟังก์ชันมีแล้ว ไม่ถอยมาทางนี้
+async function loginUserCall(u,p){
+  try{return await sb("rpc/app_login",{method:"POST",body:JSON.stringify({p_username:u,p_password:p})});}
+  catch(e){if(!appLoginMissing(e))throw e;}
+  return sb(`app_users?select=${APP_USER_COLS}&username=eq.${encodeURIComponent(u)}&password=eq.${encodeURIComponent(p)}&active=eq.true`);
+}
+
 const api = {
   getIngs: () => sbAll("ingredients?order=id.asc"),   // แบ่งหน้า — 931/1000 แล้ว อีก 69 รายการจะหายเงียบ
   addIng: (d) => sb("ingredients", { method: "POST", body: JSON.stringify(d) }),
@@ -1016,13 +1042,15 @@ const api = {
   },
   deleteCat: (id) => sb(`categories?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" }),
   updateCat: (id,d) => sb(`categories?id=eq.${id}`, {method:"PATCH", body:JSON.stringify(d)}),
-  getUsers: () => sb("app_users?order=id.asc"),
-  addUser: (d) => sb("app_users", { method: "POST", body: JSON.stringify(d) }),
-  updateUser: (id, d) => sb(`app_users?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d) }),
+  // 31 ต.ค. 69: ระบุคอลัมน์เสมอ (APP_USER_COLS — ไม่มี password) · เพิ่ม/แก้ใช้ return=minimal: ไม่มีผู้เรียกใช้แถวที่คืนมา
+  // และ return=representation = RETURNING ทั้งแถว ซึ่งฐานจะปฏิเสธหลังปิดสิทธิ์อ่าน password (บันทึกผู้ใช้ไม่ได้ทั้งที่เขียนได้)
+  getUsers: () => sb(`app_users?select=${APP_USER_COLS}&order=id.asc`),
+  addUser: (d) => sb("app_users", { method: "POST", body: JSON.stringify(d), headers: { "Prefer": "return=minimal" } }),
+  updateUser: (id, d) => sb(`app_users?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d), headers: { "Prefer": "return=minimal" } }),
   deleteUser: (id) => sb(`app_users?id=eq.${id}`, { method: "DELETE", headers: { "Prefer": "return=minimal" } }),
-  loginUser: (u, p) => sb(`app_users?username=eq.${encodeURIComponent(u)}&password=eq.${encodeURIComponent(p)}&active=eq.true`),
+  loginUser: (u, p) => loginUserCall(u, p),
   // Re-check that the logged-in user is still active (lets admins force logout)
-  getMyUserStatus: (id) => sb(`app_users?id=eq.${+id}&select=id,active,role,perms,name,username,allowed_branches`),
+  getMyUserStatus: (id) => sb(`app_users?id=eq.${+id}&select=${APP_USER_COLS}`),
   getBranches: () => sb("branches?order=id.asc"),
   // แถวเดียว 3 คอลัมน์ที่ heartbeat ใช้ตัดสิน (ปิดสาขา / เปลี่ยนสิทธิ์สาขา) — เดิมดึง branches ทั้งตารางทุก 3 นาทีทุกแท็บ (24 ต.ค. 69)
   getBranchStatus: (id) => sb(`branches?id=eq.${+id}&select=id,active,allowed_perms`),
@@ -1666,7 +1694,11 @@ const api = {
   runBroadcastCron: (key) => fetch("/api/broadcast-cron?key="+encodeURIComponent(key||""),{method:"POST"}).then(r=>r.json().catch(()=>({}))).catch(()=>({})),
   // Data backup — audit history + manual "backup now" + safe restore (all via serverless).
   getBackups: () => sb(`backups?order=started_at.desc&limit=30`).catch(()=>[]),
-  runBackupNow: async (key) => { const r=await fetch("/api/backup?key="+encodeURIComponent(key||""),{method:"POST"}); const j=await r.json().catch(()=>({})); if(!r.ok)throw new Error(j.error||("HTTP "+r.status)); return j; },
+  // 31 ต.ค. 69: รหัสอยู่ใน body ไม่ใส่ URL (เดิม ?key= ติด log ของ Vercel — รหัสนี้โหลดไฟล์สำรองทั้งฐานได้แล้ว)
+  runBackupNow: async (key) => { const r=await fetch("/api/backup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:key||""})}); const j=await r.json().catch(()=>({})); if(!r.ok)throw new Error(j.error||("HTTP "+r.status)); return j; },
+  // 31 ต.ค. 69: ดาวน์โหลดไฟล์สำรองต้องใช้ BACKUP_ADMIN_KEY (ส่งใน body ไม่ใส่ URL) — เดิมลิงก์ /api/drive-view เปิดได้ทุกคน (drive_id อ่านได้ด้วยคีย์สาธารณะ)
+  // คำตอบไม่ใช่ JSON (เช่น 413/500 จาก Vercel เอง) = บอกเป็นไทย + ทางสำรอง (ข้อความไม่มีคำว่า "รหัส" — ไม่ล้างรหัสที่จำไว้)
+  downloadBackup: async (key,driveId) => { const r=await fetch("/api/backup?download=1",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,driveId})}); if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||("เซิร์ฟเวอร์ตอบ HTTP "+r.status+" — ลองใหม่อีกครั้ง หรือเปิดไฟล์จากโฟลเดอร์สำรองใน Google Drive โดยตรง"));} return r.blob(); },
   backupRestore: async ({key,driveId,apply,confirm}) => { const r=await fetch("/api/backup-restore",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,driveId,apply:apply?"1":"0",confirm:confirm||""})}); const j=await r.json().catch(()=>({})); if(!r.ok)throw new Error(j.error||("HTTP "+r.status)); return j; },
   // POS Shifts & Cash Drawer
   getActiveShift: (bid) => sb(`pos_shifts?branch_id=eq.${bid}&status=eq.open&order=opened_at.desc&limit=1`),
@@ -17070,6 +17102,7 @@ function BackupPanel(){
   const[rSel,setRSel]=useState("");          // drive_id chosen to restore
   const[rPlan,setRPlan]=useState(null);       // dry-run plan
   const[rBusy,setRBusy]=useState(false);
+  const[dlId,setDlId]=useState(null);         // แถวที่กำลังดาวน์โหลด
   function load(){ api.getBackups().then(h=>setHist(Array.isArray(h)?h:[])).catch(()=>setHist([])); }
   useEffect(()=>{ load(); },[]);
   function backupKey(){ let k="";try{k=localStorage.getItem("nw_backup_key")||"";}catch{} if(!k){const v=prompt("ใส่รหัส BACKUP_ADMIN_KEY (ตั้งไว้ใน Vercel env):");if(!v)return "";k=v.trim();try{localStorage.setItem("nw_backup_key",k);}catch{}} return k; }
@@ -17080,7 +17113,7 @@ function BackupPanel(){
     try{
       const r=await api.runBackupNow(k);
       if(r.status==="success")alert(`✅ สำรองสำเร็จ • ${r.totalRows} แถว • ${r.gzKB} KB • ตรวจอ่านกลับแล้ว`);
-      else if(r.status==="degraded")alert(`⚠️ ข้อมูลครบและตรวจแล้ว แต่มีเตือน:\n${(r.missing_tables||[]).length?("ตารางใหม่ที่ยังไม่อยู่ในลิสต์: "+r.missing_tables.join(", ")):"การลบไฟล์เก่า (rotation) มีปัญหา"}`);
+      else if(r.status==="degraded")alert(`⚠️ ข้อมูลครบและตรวจแล้ว แต่มีเตือน:\n${r.warning||((r.missing_tables||[]).length?("ตารางใหม่ที่ยังไม่อยู่ในลิสต์: "+r.missing_tables.join(", ")):"การลบไฟล์เก่า (rotation) มีปัญหา")}`);
       else alert(`❌ สำรองไม่สำเร็จ — ข้อมูลไม่ครบ ไม่ถูกบันทึกเป็นไฟล์ที่ใช้ได้:\n${(r.failures||[]).map(f=>f.t+": "+f.error).join("\n")||r.error||""}`);
     }catch(e){
       const msg=String(e&&e.message||e);
@@ -17088,6 +17121,23 @@ function BackupPanel(){
       if(/401|unauthor|รหัส/i.test(msg)){try{localStorage.removeItem("nw_backup_key");}catch{}}
     }
     setBusy(false); load();
+  }
+  // 31 ต.ค. 69: ไฟล์สำรอง = ทั้งฐาน (PIN พนักงาน · ข้อมูลลูกค้า · ไฟล์ก่อน 31 ต.ค. มีรหัสผ่านตัวหนังสือ) — โหลดผ่าน api/backup.js พร้อมรหัสเท่านั้น
+  // ได้ไฟล์มาเป็น blob แล้วให้เบราว์เซอร์เซฟเอง (ลิงก์ตรงใส่รหัสใน URL ไม่ได้) · ชื่อไฟล์ใช้ได้เฉพาะรูปแบบชื่อไฟล์สำรองจริง
+  async function downloadBackup(h){
+    const k=backupKey(); if(!k)return;
+    setDlId(h.id);
+    try{
+      const blob=await api.downloadBackup(k,h.drive_id);
+      const fn=/^foodcost-backup-[A-Za-z0-9._-]{1,150}\.json\.gz$/.test(h.file_name||"")?h.file_name:`foodcost-backup-${h.id}.json.gz`;
+      const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=fn;document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+    }catch(e){
+      const msg=String(e&&e.message||e);
+      alert("ดาวน์โหลดไม่สำเร็จ: "+msg);
+      if(/401|unauthor|รหัส/i.test(msg)){try{localStorage.removeItem("nw_backup_key");}catch{}}
+    }
+    setDlId(null);
   }
   async function doDryRun(){
     if(!rSel){alert("เลือกไฟล์สำรองก่อน");return;}
@@ -17107,9 +17157,11 @@ function BackupPanel(){
     setRBusy(true);
     try{ const r=await api.backupRestore({key:k,driveId:rSel,apply:true,confirm:token});
       const wrote=Object.entries(r.written||{}).map(([t,n])=>`${t}: ${n}`).join("\n")||"ไม่มีตารางที่ว่างให้เติม";
-      if(r.status==="done")alert(`✅ กู้คืนสำเร็จ:\n${wrote}`);
-      else if(r.status==="incomplete"){const na=r.needsAttention||{};alert(`⚠️ เพิ่มข้อมูลลงตารางที่ว่างแล้ว:\n${wrote}\n\nแต่ยังมีตารางที่ต้องซ่อมเอง (ยังไม่ครบ):\n${[...(na.partial||[]),...(na.tooLarge||[]),...(na.appliedSkipped||[])].join("\n")||"-"}\nใช้ scripts/restore.mjs ในเครื่องเพื่อซ่อมส่วนที่เหลือ`);}
-      else alert(`⛔ หยุดกลางคัน ที่ตาราง ${r.failedTable||"?"}: ${r.error||""}\nที่เขียนไปแล้ว:\n${wrote}`);
+      // 31 ต.ค. 69: ไฟล์สำรองไม่เก็บรหัสผ่าน — กู้ app_users แล้วต้องบอกทันทีว่าทุกคนต้องตั้งรหัสใหม่ + คำสั่ง SQL ตั้งรหัสแอดมิน (ข้อความมาจาก api/backup-restore.js)
+      const pwn=r.passwordNotice?"\n\n"+r.passwordNotice:"";
+      if(r.status==="done")alert(`✅ กู้คืนสำเร็จ:\n${wrote}${pwn}`);
+      else if(r.status==="incomplete"){const na=r.needsAttention||{};alert(`⚠️ เพิ่มข้อมูลลงตารางที่ว่างแล้ว:\n${wrote}\n\nแต่ยังมีตารางที่ต้องซ่อมเอง (ยังไม่ครบ):\n${[...(na.partial||[]),...(na.tooLarge||[]),...(na.appliedSkipped||[])].join("\n")||"-"}\nใช้ scripts/restore.mjs ในเครื่องเพื่อซ่อมส่วนที่เหลือ${pwn}`);}
+      else alert(`⛔ หยุดกลางคัน ที่ตาราง ${r.failedTable||"?"}: ${r.error||""}\nที่เขียนไปแล้ว:\n${wrote}${pwn}`);
     }catch(e){ alert("กู้คืนไม่สำเร็จ: "+(e.message||e)); }
     setRBusy(false); setRPlan(null); load();
   }
@@ -17143,6 +17195,8 @@ function BackupPanel(){
               {fmtDT(last.started_at)} • {last.total_rows!=null?`${last.total_rows.toLocaleString()} แถว`:"-"} • {fmtBytesTH(last.gz_size_bytes)} • {last.table_count||"-"} ตาราง • {last.trigger==="manual"?"กดเอง":"อัตโนมัติ"} {last.verified?"• ✓ ตรวจอ่านกลับแล้ว":""}
             </div>
             {(last.missing_tables&&last.missing_tables.length>0)&&<div style={{fontSize:11.5,color:C.red,marginTop:3,fontWeight:700}}>‼️ มีตารางใหม่ที่ยังไม่ถูกสำรอง: {last.missing_tables.join(", ")} — แจ้งผู้ดูแลระบบ</div>}
+            {/* 31 ต.ค. 69: คำเตือนของรอบล่าสุด (ข้ามขั้นตรวจ · ตัวเฝ้ารหัสผ่านผู้ใช้) — เดิมบันทึกไว้ในประวัติแต่ไม่มีจอไหนโชว์ */}
+            {last.error&&<div style={{fontSize:11.5,color:/‼️/.test(last.error)?C.red:"#B45309",marginTop:3,fontWeight:700,whiteSpace:"pre-wrap"}}>{last.error}</div>}
           </div>
         </div>}
       </div>
@@ -17162,8 +17216,8 @@ function BackupPanel(){
                 <div style={{fontSize:12.5,color:C.ink,fontWeight:600}}>{fmtDT(h.started_at)} {h.trigger==="manual"&&<span style={{fontSize:10,color:C.ink4}}>• กดเอง</span>}</div>
                 <div style={{fontSize:11,color:C.ink4}}>{h.total_rows!=null?`${h.total_rows.toLocaleString()} แถว`:"-"} • {fmtBytesTH(h.gz_size_bytes)}{bad.length?` • ${bad.length} ตารางไม่ครบ`:""}</div>
               </div>
-              {/* 29 ต.ค. 69: ส่งชื่อไฟล์จริงไปด้วย — drive-view ตั้งชื่อดาวน์โหลดเป็น foodcost-backup-<วันที่>.json.gz (เดิมได้ไฟล์ "drive-view" ไม่มีนามสกุล) */}
-              {h.drive_id&&<a href={`/api/drive-view?id=${encodeURIComponent(h.drive_id)}${h.file_name?`&fn=${encodeURIComponent(h.file_name)}`:""}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{fontSize:11,fontWeight:700,color:C.brand,textDecoration:"none",padding:"5px 10px",border:`1px solid ${C.brandBorder||C.line}`,borderRadius:7,whiteSpace:"nowrap"}}>⬇ ดาวน์โหลด</a>}
+              {/* 31 ต.ค. 69: เดิมเป็นลิงก์ /api/drive-view (ไม่ต้องใช้รหัส ใครรู้ drive_id ก็โหลดทั้งฐานได้) — ตอนนี้ต้องใส่ BACKUP_ADMIN_KEY · ชื่อไฟล์จริงเหมือนเดิม */}
+              {h.drive_id&&<button onClick={e=>{e.stopPropagation();downloadBackup(h);}} disabled={dlId===h.id} style={{fontSize:11,fontWeight:700,color:C.brand,background:"none",cursor:dlId===h.id?"wait":"pointer",fontFamily:"inherit",padding:"5px 10px",border:`1px solid ${C.brandBorder||C.line}`,borderRadius:7,whiteSpace:"nowrap"}}>{dlId===h.id?"กำลังโหลด…":"⬇ ดาวน์โหลด"}</button>}
               {tabs.length>0&&<Ic d={I.chevD} s={13} c={C.ink4}/>}
             </div>
             {openId===h.id&&tabs.length>0&&<div style={{borderTop:`1px solid ${C.line}`,padding:"8px 12px",background:C.bg,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:"3px 12px",maxHeight:260,overflowY:"auto"}}>
@@ -17200,6 +17254,7 @@ function BackupPanel(){
                 <span style={{fontWeight:700}}>{p.action==="insert"?`+${p.backupRows}`:p.action==="skip-nonempty"?`มีอยู่ ${p.liveRows}`:p.action}</span>
               </div>)}
             </div>
+            {rPlan.summary?.passwordNotice&&<div style={{marginTop:10,padding:"10px 12px",background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:8,fontSize:12,color:"#92400E",whiteSpace:"pre-wrap",lineHeight:1.6}}>{rPlan.summary.passwordNotice}</div>}
             {(rPlan.summary?.tablesToInsert>0)&&<div style={{marginTop:10,textAlign:"right"}}><Btn v="danger" onClick={doApply} loading={rBusy}>กู้คืน (เพิ่มลงตารางที่ว่าง)</Btn></div>}
           </div>}
         </div>}
@@ -17323,11 +17378,15 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
   }
 
   async function saveUser(){
-    if(!uF.username||!uF.password)return;
+    // 31 ต.ค. 69: แอปไม่รู้รหัสเดิมแล้ว (ไม่ดึงคอลัมน์ password · ในฐานเป็น bcrypt) — ช่องรหัสตอนแก้เริ่มว่าง
+    // แก้ + เว้นว่าง = ไม่ส่ง password เลย (รหัสเดิมอยู่ครบ) · ส่งค่าว่างไปคือล้างรหัส = คนนั้นเข้าระบบไม่ได้ · เพิ่มผู้ใช้ใหม่ยังต้องมีรหัสเสมอ
+    // ส่งรหัสใหม่เป็นตัวหนังสือผ่าน HTTPS ได้ — ตัวกันในฐาน (trigger) เข้ารหัส bcrypt ให้ก่อนเก็บ
+    const{password:pw0,...uRest}=uF;const pw=pw0||"";
+    if(!uF.username||(!editUID&&!pw))return;
     setSaving(true);
     try{
       // Normalize perms + allowed_branches on every save so DB stays clean
-      const payload={...uF,perms:normalizePerms(uF.perms),allowed_branches:normalizeBranchIds(uF.allowed_branches)};
+      const payload={...uRest,...(pw?{password:pw}:{}),perms:normalizePerms(uF.perms),allowed_branches:normalizeBranchIds(uF.allowed_branches)};
       if(editUID)await api.updateUser(editUID,payload);else await api.addUser(payload);
       await reloadUsers();setShowUser(false);setEditUID(null);setUF(uF0);
     }catch(e){showErr("บันทึกไม่สำเร็จ",e);}
@@ -17435,6 +17494,8 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
         <h3 style={{fontFamily:"'Sarabun',sans-serif",fontSize:15,fontWeight:800,color:C.ink}}>ผู้ใช้งานและสิทธิ์</h3>
         {isAdmin&&<Btn onClick={()=>{setUF(uF0);setEditUID(null);setShowUser(true);}} icon={I.plus}>เพิ่มผู้ใช้</Btn>}
       </div>
+      {/* 31 ต.ค. 69: รายชื่อว่าง = โหลดไม่สำเร็จแน่ๆ (อย่างน้อยต้องมีบัญชีที่เข้าอยู่) — loadAll ไม่ล้มทั้งหน้าเพราะรายชื่อผู้ใช้แล้ว จึงต้องบอกที่นี่ */}
+      {users.length===0&&<div style={{marginBottom:12,padding:"10px 12px",background:C.redLight,border:`1px solid ${C.red}`,borderRadius:8,fontSize:12.5,color:C.red,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",fontFamily:"'Sarabun',sans-serif"}}><span style={{flex:1,minWidth:200}}>โหลดรายชื่อผู้ใช้ไม่สำเร็จ</span><Btn v="ghost" onClick={async()=>{try{await reloadUsers();}catch(e){showErr("โหลดรายชื่อผู้ใช้ไม่ได้",e);}}}>โหลดใหม่</Btn></div>}
       <Card>
         <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Sarabun',sans-serif"}}>
           <thead><tr style={{background:C.bg}}>{["ผู้ใช้","ชื่อ","บทบาท","สิทธิ์","สาขา","สถานะ",""].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",fontSize:11,fontWeight:700,color:C.ink3}}>{h}</th>)}</tr></thead>
@@ -17455,7 +17516,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
             <td style={{padding:"11px 14px"}} title={ab&&ab.length>0?ab.map(id=>branches.find(b=>+b.id===+id)?.name||id).join(", "):""}><span style={{fontSize:12,color:(ab&&ab.length===0)?C.red:C.ink3,fontWeight:(ab&&ab.length===0)?700:400}}>{branchSummary}</span></td>
             <td style={{padding:"11px 14px"}}><Chip color={u.active?"green":"gray"}>{u.active?"ใช้งาน":"ปิด"}</Chip></td>
             <td style={{padding:"11px 14px"}}>{isAdmin&&<div style={{display:"flex",gap:5}}>
-              <button onClick={()=>{setUF({username:u.username,password:u.password,name:u.name,role:u.role,active:u.active,perms:normalizePerms(u.perms),allowed_branches:normalizeBranchIds(u.allowed_branches)});setEditUID(u.id);setShowUser(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
+              <button onClick={()=>{setUF({username:u.username,password:"",name:u.name,role:u.role,active:u.active,perms:normalizePerms(u.perms),allowed_branches:normalizeBranchIds(u.allowed_branches)});setEditUID(u.id);setShowUser(true);}} style={{background:C.blueLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.pencil} s={13} c={C.blue}/></button>
               {u.id!==currentUser.id&&<button onClick={async()=>{if(!await confirmDlg({title:"ลบผู้ใช้",message:`ต้องการลบผู้ใช้ "${u.name||u.username}" ใช่หรือไม่?`}))return;try{await api.deleteUser(u.id);await reloadUsers();}catch(e){alert("ลบไม่สำเร็จ");}}} style={{background:C.redLight,border:"none",borderRadius:7,padding:5,cursor:"pointer",display:"flex"}}><Ic d={I.trash} s={13} c={C.red}/></button>}
             </div>}</td>
           </tr>;})}
@@ -17660,7 +17721,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
     {showUser&&<Modal title={editUID?"✏️ แก้ไขผู้ใช้":"➕ เพิ่มผู้ใช้ใหม่"} onClose={()=>setShowUser(false)} extraWide>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
         <div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Inp label="ชื่อผู้ใช้" value={uF.username} onChange={e=>setUF(f=>({...f,username:e.target.value}))} placeholder="username"/><Inp label="รหัสผ่าน" type="password" value={uF.password} onChange={e=>setUF(f=>({...f,password:e.target.value}))} placeholder="password"/></div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}><Inp label="ชื่อผู้ใช้" value={uF.username} onChange={e=>setUF(f=>({...f,username:e.target.value}))} placeholder="username"/><Inp label="รหัสผ่าน" type="password" value={uF.password} onChange={e=>setUF(f=>({...f,password:e.target.value}))} placeholder={editUID?"เว้นว่าง = ไม่เปลี่ยนรหัส":"password"} autoComplete="new-password"/></div>
           <Inp label="ชื่อ-นามสกุล" value={uF.name} onChange={e=>setUF(f=>({...f,name:e.target.value}))} placeholder="ชื่อจริง"/>
           <div style={{marginBottom:14}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:8,fontFamily:"'Sarabun',sans-serif"}}>บทบาท</label><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{Object.entries(ROLES).map(([k,r])=><button key={k} onClick={()=>setUF(f=>({...f,role:k,perms:ROLE_DEFAULT_PERMS[k]||[]}))} style={{padding:"6px 12px",borderRadius:8,border:`2px solid ${uF.role===k?C.brand:C.line}`,background:uF.role===k?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:uF.role===k?C.brand:C.ink3}}>{r.label}</button>)}</div></div>
           <div style={{display:"flex",gap:8}}>{[{v:true,l:"ใช้งาน"},{v:false,l:"ปิดใช้"}].map(o=><button key={String(o.v)} onClick={()=>setUF(f=>({...f,active:o.v}))} style={{padding:"6px 14px",borderRadius:8,border:`2px solid ${uF.active===o.v?C.brand:C.line}`,background:uF.active===o.v?C.brandLight:C.white,cursor:"pointer",fontFamily:"'Sarabun',sans-serif",fontWeight:700,fontSize:13,color:uF.active===o.v?C.brand:C.ink3}}>{o.l}</button>)}</div>
@@ -17700,7 +17761,7 @@ function SettingsTab({ingCats,menuCats,reloadCats,users,reloadUsers,branches,rel
       </div>
       <div style={{display:"flex",gap:10,justifyContent:"flex-end",paddingTop:14,borderTop:`1px solid ${C.line}`,marginTop:8}}>
         <Btn v="ghost" onClick={()=>setShowUser(false)}>ยกเลิก</Btn>
-        <Btn onClick={saveUser} icon={I.check} disabled={!uF.username||!uF.password} loading={saving}>{editUID?"บันทึก":"เพิ่มผู้ใช้"}</Btn>
+        <Btn onClick={saveUser} icon={I.check} disabled={!uF.username||(!editUID&&!uF.password)} loading={saving}>{editUID?"บันทึก":"เพิ่มผู้ใช้"}</Btn>
       </div>
     </Modal>}
   </div>;
@@ -19866,17 +19927,19 @@ export default function App(){
     const stale=()=>String(branchRef.current?.id??"")!==String(reqBid);
     try{
       const isCentral=currentBranch.type==="central";
+      // 31 ต.ค. 69: app_users เปิดให้อ่านเฉพาะบางคอลัมน์แล้ว (ซ่อนรหัสผ่าน) — รายชื่อผู้ใช้โหลดไม่ได้ต้องไม่ล้มทั้งหลังบ้าน
+      // (ใช้แค่หน้า ตั้งค่า → ผู้ใช้) · ไม่ได้ = คงรายชื่อเดิม แล้วหน้าผู้ใช้มีปุ่มโหลดใหม่ที่บอกสาเหตุ
       const[i,m,c,u,b,s,ch,ah,o,pr]=await Promise.all([
         api.getIngs(),
         api.getMenus(),
-        api.getCats(),api.getUsers(),api.getBranches(),api.getSuppliers(),
+        api.getCats(),api.getUsers().catch(e=>{console.warn("[loadAll] getUsers:",e&&e.message);return null;}),api.getBranches(),api.getSuppliers(),
         api.getCostHist(isCentral?null:currentBranch.id),
         api.getActionHist(),
         fetchOrdersFor(isCentral,currentBranch.id),   // ครัวกลาง = getAllOrders ครั้งเดียวแล้วตัด 400 ใบแรกเป็น orders (24 ต.ค. 69)
         api.getBranchPrinters(currentBranch.id),   // ฐานกรองสาขาให้ (แถวชุดเดียวกับ printersAt) — 24 ต.ค. 69
       ]);
       if(stale())return;
-      setIngs(i);setMenus(m);setAllCats(c);setUsers(u);setBranches(b);setSuppliers(s);
+      setIngs(i);setMenus(m);setAllCats(c);if(u)setUsers(u);setBranches(b);setSuppliers(s);
       setCostHistory(ch);setActionHistory(ah);setOrders(o.orders);setPrinters(printersAt(pr,currentBranch.id));
       // สินทรัพย์: โหลดซ้ำเฉพาะเมื่อเคยเปิดแท็บทะเบียนแล้ว (ปุ่มรีเฟรช/สลับสาขาได้ข้อมูลใหม่เหมือนเดิม) · ยังไม่เคยเปิด = แท็บโหลดเองตอนเปิด
       if(assetsWantedRef.current){try{const as=await api.getAssets();setAssets(as);}catch{}}

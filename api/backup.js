@@ -9,14 +9,22 @@
 //
 // Triggers:
 //   • Vercel Cron (daily, see vercel.json)  → Authorization: Bearer <CRON_SECRET>
-//   • Manual "backup now" from the admin UI  → POST /api/backup?key=<BACKUP_ADMIN_KEY>
+//   • Manual "backup now" from the admin UI  → POST /api/backup  body {key: <BACKUP_ADMIN_KEY>}
+//     (31 ต.ค. 69: เดิม ?key= ใน URL — URL ติด log ของ Vercel · ตอนนี้ ?key= ถูกปฏิเสธ ให้รีเฟรชหน้า)
 // Rotation (deletes) runs on the cron+success path ONLY, so a leaked manual key cannot
 // delete anything. Reuses the slip service account (GOOGLE_SA_KEY_B64 + DRIVE_FOLDER_ID).
+// ⚠️ ตั้งแต่ 31 ต.ค. 69 BACKUP_ADMIN_KEY ยัง "ดาวน์โหลดไฟล์สำรองทั้งฐาน" ได้ด้วย (POST ?download=1)
+//   = เห็นทุกอย่าง: PIN พนักงาน · ข้อมูลลูกค้า CRM · ไฟล์ก่อน 31 ต.ค. 69 มีรหัสผ่านตัวหนังสือ
+//   ⟹ เก็บเป็นความลับระดับเดียวกับ RESTORE_ADMIN_KEY · หลุด = เปลี่ยนค่าใน Vercel env แล้ว redeploy
+//   เทียบรหัสแบบเวลาคงที่ (sha256 + timingSafeEqual) ทั้ง CRON_SECRET และ BACKUP_ADMIN_KEY
 //
 // Requires (Vercel env): CRON_SECRET, BACKUP_ADMIN_KEY, GOOGLE_SA_KEY_B64, DRIVE_FOLDER_ID.
 // Requires (SQL, run once): the `backups` table + `backup_manifest()` RPC.
 import { JWT } from "google-auth-library";
 import { gzipSync, gunzipSync } from "zlib";
+import { createHash, timingSafeEqual } from "crypto";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
 
 export const config = { maxDuration: 60 };
 
@@ -27,6 +35,18 @@ const FOLDER_ID = process.env.DRIVE_FOLDER_ID || "";
 const CRON = process.env.CRON_SECRET || "";
 const BKEY = process.env.BACKUP_ADMIN_KEY || "";
 const H = { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` };
+// เทียบรหัสแบบเวลาคงที่ — ย่อด้วย sha256 ก่อน (ความยาวเท่ากันเสมอ ไม่บอกความยาวรหัสจริง) · ฝั่งเซิร์ฟเวอร์ยังไม่ได้ตั้ง = ไม่ผ่านเสมอ
+export function keyOk(given, want) {
+  if (!want || typeof given !== "string" || !given) return false;
+  const d = (s) => createHash("sha256").update(String(s), "utf8").digest();
+  return timingSafeEqual(d(given), d(want));
+}
+// body ของ POST — Vercel แปลง JSON ให้แล้ว · เผื่อมาเป็นข้อความ
+function bodyOf(req) {
+  const b = req.body;
+  if (b && typeof b === "object" && !Buffer.isBuffer(b)) return b;
+  try { const o = JSON.parse(String(b || "")); return o && typeof o === "object" ? o : {}; } catch { return {}; }
+}
 
 // CANONICAL BACKUP SET — 38 real tables + the `backups` audit table itself (39).
 // Any table that exists in the DB but is NOT here is flagged (missing_tables → run fails),
@@ -87,6 +107,20 @@ async function manifest() {
   return m;
 }
 
+// ── app_users สำรองเฉพาะคอลัมน์ที่ไม่ใช่รหัสผ่าน (31 ต.ค. 69) ──
+// ไฟล์สำรองไปอยู่ใน Google Drive — ห้ามมีรหัสผ่าน (แม้เป็น bcrypt) · และหลังเจ้าของรัน sql/app-users-password-hash.sql
+// คีย์สาธารณะอ่าน password ไม่ได้แล้ว: select=* จะโดนปฏิเสธ (42501) = สำรองล้มทุกคืน ⟹ ระบุคอลัมน์ ใช้ได้ทั้งก่อนและหลังรัน SQL
+// จำนวนแถวไม่เปลี่ยน (ตัดคอลัมน์ ไม่ได้ตัดแถว) ⟹ เทียบกับ backup_manifest / ตรวจอ่านกลับ ผ่านเหมือนเดิม
+// กู้คืน app_users จากไฟล์พวกนี้ = ผู้ใช้ไม่มีรหัสผ่าน ต้องตั้งใหม่ (ปุ่มกู้คืน/สคริปต์บอกวิธีไว้แล้ว)
+// ⚠️ ต้องตรงกับ APP_USER_COLS ในแอป และ grant select (...) ในไฟล์ SQL (มีด่านตรวจ)
+const APP_USER_COLS = "id,username,name,role,active,perms,created_at,allowed_branches";
+const SELECT_OF = { app_users: APP_USER_COLS };
+function pageUrl(name, pk, last) {
+  let url = `${SUPA}/rest/v1/${name}?select=${SELECT_OF[name] || "*"}&order=${pk}.asc&limit=1000`;
+  if (last !== null) url += `&${pk}=gt.${encodeURIComponent(last)}`;
+  return url;
+}
+
 // Fetch ALL rows of a table via keyset pagination (id > lastId). Keyset — not offset — so
 // concurrent inserts during the scan can never make us skip an existing row. Dedupe on pk.
 // Throws (→ table marked incomplete → run fails) on any HTTP error, non-array body, or if
@@ -96,8 +130,7 @@ async function fetchAll(name, pk, count) {
   let last = null, guard = 0;
   for (;;) {
     if (++guard > 5000) throw new Error(`${name}: runaway pagination`);
-    let url = `${SUPA}/rest/v1/${name}?select=*&order=${pk}.asc&limit=1000`;
-    if (last !== null) url += `&${pk}=gt.${encodeURIComponent(last)}`;
+    const url = pageUrl(name, pk, last);
     const r = await fetch(url, { headers: H });
     if (!r.ok) throw new Error(`${name}: HTTP ${r.status} ${(await r.text()).slice(0, 120)}`);
     const page = await r.json();
@@ -168,6 +201,89 @@ async function driveRename(id, name) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ── ดาวน์โหลดไฟล์สำรอง (31 ต.ค. 69) ──
+// เดิมปุ่ม ⬇ ดาวน์โหลด ลิงก์ไป /api/drive-view?id=<drive_id> ซึ่งไม่ต้องใช้รหัสอะไรเลย และ drive_id อ่านได้จากตาราง backups ด้วยคีย์สาธารณะ
+// ⟹ ใครก็โหลดไฟล์สำรองทั้งฐานได้ (รหัสผ่านผู้ใช้ตัวหนังสือในไฟล์ก่อน 31 ต.ค. 69 · PIN พนักงาน · ข้อมูลลูกค้า CRM) · drive-view ปฏิเสธ gzip แล้ว
+// ทางเดียวที่เหลือ: POST /api/backup?download=1 + BACKUP_ADMIN_KEY (รหัสเดียวกับปุ่ม "สำรองข้อมูลตอนนี้" — แอดมินมีอยู่แล้ว)
+//  · รหัสอยู่ใน body ไม่ใส่ใน URL (URL ติด log/ประวัติเบราว์เซอร์) · ห้ามแคชทุกชั้น (private, no-store)
+//  · ส่งเฉพาะไฟล์ชื่อ foodcost-backup-*.json.gz ชนิด gzip — ไม่ใช่ตัวอ่านไฟล์ Drive อะไรก็ได้ของคนถือรหัส
+//  · ไม่สร้างไฟล์ใหม่ใน api/ — Vercel แผนฟรีจำกัด 12 ฟังก์ชัน (ครบแล้ว)
+//  · ส่งต่อจาก Drive เป็นสาย (stream) ไม่โหลดทั้งไฟล์ก่อน — ไฟล์ ~5.8 MB แล้วและโตขึ้นทุกวัน
+//    คำตอบแบบก้อนเดียวของ Vercel มีเพดาน 4.5 MB (เกิน = 500 FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE) แบบสายไม่ติดเพดานนี้
+//    สายขาดกลางทาง = ตัดการเชื่อมต่อ (เบราว์เซอร์ขึ้นดาวน์โหลดไม่สำเร็จ ไม่ได้ไฟล์ครึ่งๆ)
+//  · ข้อความผิดพลาดเป็นไทย และไม่มีคำว่า "รหัส" นอกจากกรณีรหัสผิดจริง (หน้าจอเห็นคำนี้แล้วล้างรหัสที่จำไว้)
+// เลข 401 ในข้อความ = หน้าจอล้างรหัสที่จำไว้ ⟹ Drive ตอบ 401 (บัญชีระบบหมดสิทธิ์) ต้องไม่เขียนเป็นเลข
+const driveSt = (s) => (s === 401 ? "บัญชีระบบยืนยันตัวตนกับ Drive ไม่ผ่าน" : `HTTP ${s}`);
+export const BACKUP_FILE_RE = /^foodcost-backup-[A-Za-z0-9._-]{1,150}\.json\.gz$/;
+async function downloadBackup(req, res) {
+  res.setHeader("Cache-Control", "private, no-store");
+  if (req.method !== "POST") { res.setHeader("Allow", "POST"); return res.status(405).json({ error: "ต้องเรียกด้วย POST" }); }
+  const body = bodyOf(req);
+  if (!BKEY) return res.status(501).json({ error: "ระบบยังไม่ได้ตั้งค่า BACKUP_ADMIN_KEY ใน Vercel env — ตั้งแล้ว redeploy" });
+  if (!keyOk(body.key, BKEY)) return res.status(401).json({ error: "รหัสไม่ถูกต้อง" });
+  if (!SA_B64) return res.status(501).json({ error: "ระบบยังไม่ได้ตั้ง Google Drive (GOOGLE_SA_KEY_B64)" });
+  const id = String(body.driveId || "");
+  if (!/^[A-Za-z0-9_-]{10,}$/.test(id)) return res.status(400).json({ error: "ไฟล์ที่เลือกไม่ถูกต้อง (drive id ผิดรูปแบบ)" });
+  try {
+    const tok = await bearer();
+    const m = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?fields=name,mimeType&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${tok}` } });
+    if (!m.ok) return res.status(m.status === 404 ? 404 : 502).json({ error: m.status === 404 ? "ไม่พบไฟล์นี้ใน Google Drive (อาจถูกเก็บกวาดไปแล้ว)" : `ถาม Google Drive ไม่สำเร็จ (${driveSt(m.status)}) — ลองใหม่อีกครั้ง` });
+    const meta = await m.json().catch(() => ({}));
+    const name = String((meta && meta.name) || "");
+    if (!BACKUP_FILE_RE.test(name) || !/gzip/i.test(String((meta && meta.mimeType) || ""))) return res.status(403).json({ error: "ไม่ใช่ไฟล์สำรองข้อมูล" });
+    const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${tok}` } });
+    if (!r.ok || !r.body) return res.status(502).json({ error: `ดึงไฟล์จาก Google Drive ไม่สำเร็จ (${driveSt(r.status)}) — ลองใหม่อีกครั้ง` });
+    res.setHeader("Content-Type", "application/gzip");
+    res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.status(200);
+    await pipeline(Readable.fromWeb(r.body), res);
+  } catch (e) {
+    if (res.headersSent || res.destroyed) { try { res.destroy(); } catch {} return; }   // สายขาดกลางทาง (pipeline ตัดแล้ว) — ส่ง JSON ต่อไม่ได้
+    for (const k of ["Content-Type", "Content-Disposition"]) { try { res.removeHeader(k); } catch {} }
+    return res.status(500).json({ error: `ดาวน์โหลดจาก Google Drive ไม่สำเร็จ: ${String((e && e.message) || e).slice(0, 160)}` });
+  }
+}
+
+// ── ตัวเฝ้ารหัสผ่านผู้ใช้ (31 ต.ค. 69) ──
+// หลังรัน sql/app-users-password-hash.sql คีย์สาธารณะต้องอ่านคอลัมน์ password ไม่ได้ (ฐานตอบ 401/403 · 42501)
+// แต่ "permission denied" ทุกครั้งที่ผ่านมาแก้ด้วย grant all ทั้งตาราง (เคส crm_* 24–28 ต.ค.) — ทำกับ app_users เมื่อไหร่
+// รหัส (bcrypt) ทุกคนกลับไปถึงทุกเครื่องเงียบๆ ไม่มีจออะไรพังให้เห็น ⟹ เช็กทุกคืนพร้อมการสำรอง
+//  · limit=0 = ไม่มีค่าใดกลับมาเลย แค่ดูรหัสคำตอบ · มี app_login แล้ว (= รัน SQL แล้ว) แต่ยังอ่าน password ได้ = ร้ายแรง
+//  · ถอดสิทธิ์แล้วแต่ไม่มี app_login = เข้าระบบไม่ได้ทั้งร้าน = ร้ายแรง · ยังไม่ได้รัน SQL = แค่บันทึกเตือนไว้
+//  · ร้ายแรง = สถานะ degraded + แจ้งแอดมิน · ไม่ทำให้การสำรองล้ม (ข้อมูลครบดีอยู่) · ยิงไม่ออก/หมดเวลา = เงียบ (ไม่รู้ ≠ มีปัญหา)
+//  · "มี app_login" = ฐานตอบอะไรก็ได้ 2xx–4xx ที่ไม่ใช่ 404 (เดิมนับแค่ 200 — ฟังก์ชันถูกสร้างใหม่แบบไม่ stable แล้ว GET ได้ 405
+//    หรือถูกถอด execute ได้ 401/403 = เงียบทั้งที่รหัสเปิดอยู่/เข้าระบบไม่ได้) · 5xx/0 = ไม่รู้ เงียบ (กันเตือนผิดตอนฐานช้า)
+//  · ถอดสิทธิ์แล้ว + app_login ตอบ 401/403 = ไม่มีใครเรียก app_login ได้ = เข้าระบบไม่ได้ทั้งร้าน = ร้ายแรง
+// ⚠️ ชุดเดียวกับข้อ 22 ใน tools/check-data.mjs (มีด่านตรวจว่าตัดสินเหมือนกัน) · GET rpc ต้องการ app_login แบบ stable (มีด่านใน SQL)
+export function pwVerdict(pw, fn) {
+  const pwOpen = pw >= 200 && pw < 300, pwShut = pw === 401 || pw === 403;
+  const fnHere = fn >= 200 && fn < 500 && fn !== 404, fnDenied = fn === 401 || fn === 403;
+  if (pwOpen && fnHere) return { bad: true, msg: "‼️ รหัสผ่านผู้ใช้ (app_users.password) อ่านได้ด้วยคีย์สาธารณะอีกแล้ว — มีคน grant ทั้งตาราง หรือรันไฟล์ถอยกลับ · รัน sql/app-users-password-hash.sql ใหม่ · ห้าม grant select/all ทั้งตาราง app_users" };
+  if (pwShut && fn === 404) return { bad: true, msg: "‼️ ปิดสิทธิ์อ่าน password แล้วแต่ไม่มีฟังก์ชัน app_login — หลังบ้านเข้าระบบไม่ได้ทั้งร้าน · รัน sql/app-users-password-hash.sql ให้ครบทั้งไฟล์" };
+  if (pwShut && fnDenied) return { bad: true, msg: `‼️ เรียกฟังก์ชัน app_login ด้วยคีย์สาธารณะไม่ได้ (HTTP ${fn}) — หลังบ้านเข้าระบบไม่ได้ทั้งร้าน · รัน sql/app-users-password-hash.sql ใหม่ (มี grant execute ให้ anon, authenticated)` };
+  if (pwOpen && fn === 404) return { bad: false, msg: "ยังไม่ได้รัน sql/app-users-password-hash.sql — รหัสผ่านผู้ใช้ยังอ่านได้ด้วยคีย์สาธารณะ" };
+  return null;
+}
+async function pwCanary() {
+  const st = async (p) => { try { const r = await fetch(`${SUPA}/rest/v1/${p}`, { headers: H, signal: AbortSignal.timeout(5000) }); return r.status; } catch { return 0; } };
+  const [pw, fn] = await Promise.all([st("app_users?select=password&limit=0"), st("rpc/app_login?p_username=__canary__&p_password=x")]);
+  return pwVerdict(pw, fn);
+}
+// ผลตัวเฝ้า → สถานะ: ร้ายแรงลดได้แค่ success → degraded (failed คงเดิม) · ข้อความไปอยู่ในช่อง error ของประวัติสำรอง (หน้าสำรองข้อมูลโชว์)
+export function canaryEffect(status, v) {
+  if (!v) return { status, note: null, alert: false };
+  return { status: v.bad && status === "success" ? "degraded" : status, note: v.msg, alert: !!v.bad };
+}
+async function alertPwExposed(msg) {
+  try {
+    await fetch("https://foodcost-eta.vercel.app/api/push", {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(5000),   // แจ้งช้าต้องไม่กินเวลาปิดงาน
+      body: JSON.stringify({ scope: "admin", title: "🔴 รหัสผ่านผู้ใช้ไม่ปลอดภัย", body: String(msg || "").slice(0, 280), url: "/" }),
+    });
+  } catch { /* แจ้งไม่ได้ก็ต้องไม่ทำให้การสำรองล้มตาม */ }
+}
+
 // GFS rotation — delete OLD backups. Runs ONLY on cron+success+verified. Ultra-defensive:
 // skips entirely on a bad/empty listing, only ever touches files matching the strict backup
 // name pattern (FAILED- files never match), always keeps the newest 14, and refuses a plan
@@ -220,12 +336,18 @@ async function rotate(todayId) {
 }
 
 export default async function handler(req, res) {
+  // 31 ต.ค. 69: ดาวน์โหลดไฟล์สำรอง (ตรวจรหัสเองใน downloadBackup · ไม่สำรองใหม่ ไม่เขียนประวัติ ไม่ติดเพดาน 2 นาที)
+  if (req.query && req.query.download === "1") return downloadBackup(req, res);
   const auth = req.headers.authorization || "";
-  const qkey = (req.query && req.query.key) || "";
-  const isCron = CRON && auth === `Bearer ${CRON}`;
-  const isManual = BKEY && qkey === BKEY;
-  if (!isCron && !isManual) return res.status(401).json({ error: "unauthorized" });
-  if (!SA_B64 || !FOLDER_ID) return res.status(501).json({ error: "drive not configured (GOOGLE_SA_KEY_B64 + DRIVE_FOLDER_ID)" });
+  const isCron = !!CRON && keyOk(auth, `Bearer ${CRON}`);
+  // 31 ต.ค. 69: รหัสกดสำรองเองมาทาง body เท่านั้น — ?key= ใน URL ติด log ของ Vercel (และรหัสนี้โหลดไฟล์สำรองทั้งฐานได้แล้ว)
+  //   หน้าจอรุ่นเก่ายังส่ง ?key= → บอกให้รีเฟรช (ข้อความไม่มีคำว่า "รหัส" — หน้าจอรุ่นเก่าเห็นคำนี้แล้วล้างรหัสที่จำไว้)
+  if (!isCron && req.query && req.query.key) return res.status(400).json({ error: "หน้านี้เป็นระบบเวอร์ชันเก่า — รีเฟรชหน้า (หรือปิดเปิดแอป) แล้วกดสำรองใหม่" });
+  const bkey = bodyOf(req).key;
+  if (!isCron && bkey && !BKEY) return res.status(501).json({ error: "ระบบยังไม่ได้ตั้งค่า BACKUP_ADMIN_KEY ใน Vercel env — ตั้งแล้ว redeploy" });
+  const isManual = !isCron && keyOk(bkey, BKEY);
+  if (!isCron && !isManual) return res.status(401).json({ error: "รหัสไม่ถูกต้อง" });
+  if (!SA_B64 || !FOLDER_ID) return res.status(501).json({ error: "ระบบยังไม่ได้ตั้ง Google Drive (GOOGLE_SA_KEY_B64 + DRIVE_FOLDER_ID)" });
   const trigger = isCron ? "cron" : "manual";
 
   // Manual rate-limit: refuse if a run started < 2 min ago (stops accidental / abusive spam).
@@ -239,6 +361,7 @@ export default async function handler(req, res) {
 
   const started = new Date().toISOString();
   const auditId = await auditInsert({ started_at: started, status: "running", trigger });
+  const canaryP = pwCanary().catch(() => null);   // ยิงคู่ขนานกับงานสำรอง (2 คำขอเล็ก หมดเวลา 5 วิ) ไม่กินงบ 60 วิ
   try {
     const countMap = await manifest();
     const known = new Set(TABLES.map((t) => t.name));
@@ -333,12 +456,16 @@ export default async function handler(req, res) {
       try { rotation = await rotate(driveId); if (rotation && rotation.error) status = "degraded"; }
       catch (e) { rotation = { error: String((e && e.message) || e) }; status = "degraded"; }
     }
+    // ตัวเฝ้ารหัสผ่านผู้ใช้ — หลังเก็บกวาดแล้วเท่านั้น (ลด success → degraded ก่อนหน้านี้ = ไฟล์เก่าไม่ถูกเก็บกวาด)
+    // แจ้งแอดมินหลังเขียนประวัติ (ข้างล่าง) — แจ้งช้า/ฟังก์ชันถูกตัดที่ 60 วิ ต้องไม่ทำให้แถวค้าง running และไฟล์คืนนี้ไม่มี drive_id
+    const cv = canaryEffect(status, await canaryP);
+    status = cv.status;
 
     await auditPatch(auditId, {
       finished_at: new Date().toISOString(), status, file_name: storedName, drive_id: storedDrive,
       gz_size_bytes: gz.length, raw_size_bytes: raw.length, total_rows: totalRows, table_count: TABLES.length,
       complete: dataComplete, verified: verifySkipped ? null : verified,
-      error: verifySkipped ? "ข้ามขั้นตรวจสอบไฟล์เพราะใกล้หมดเวลาทำงาน (60 วิ) — ไฟล์สำรองถูกเก็บไว้ครบและดาวน์โหลดได้ แต่ยังไม่ได้อ่านกลับมายืนยัน ควรกดสำรองใหม่ตอนที่ระบบว่าง" : null,
+      error: [verifySkipped ? "ข้ามขั้นตรวจสอบไฟล์เพราะใกล้หมดเวลาทำงาน (60 วิ) — ไฟล์สำรองถูกเก็บไว้ครบและดาวน์โหลดได้ แต่ยังไม่ได้อ่านกลับมายืนยัน ควรกดสำรองใหม่ตอนที่ระบบว่าง" : null, cv.note].filter(Boolean).join(" · ") || null,
       tables: manifestOut, missing_tables: missing, extra_tables: extra,
       rotation, duration_ms: Date.now() - new Date(started).getTime(),
     });
@@ -348,15 +475,20 @@ export default async function handler(req, res) {
     // (ยังเห็นได้ในหน้าสำรองข้อมูลว่า "สำเร็จ (มีเตือน)" พร้อมสาเหตุ)
     const dataSafe = dataComplete && verified && !verifySkipped && driftClean;
     if (status !== "success" && !dataSafe) await alertBackupProblem(status, name, missing, extra, settled);
+    if (cv.alert) await alertPwExposed(cv.note);
     return res.status(200).json({
       ok: status === "success" || status === "degraded", status, file: storedName, driveId: storedDrive,
-      gzKB: Math.round(gz.length / 1024), totalRows, verified, missing_tables: missing, extra_tables: extra,
+      gzKB: Math.round(gz.length / 1024), totalRows, verified, missing_tables: missing, extra_tables: extra, warning: cv.note,
       failures: settled.filter((s) => !s.complete).map((s) => ({ t: s.t, error: s.error, count: s.count, fetched: s.fetched })),
     });
   } catch (e) {
-    await auditPatch(auditId, { finished_at: new Date().toISOString(), status: "failed", error: String((e && e.message) || e), duration_ms: Date.now() - new Date(started).getTime() });
+    // สำรองล้มทั้งรอบ — ตัวเฝ้ารหัสผ่านยังต้องถูกอ่าน (เหตุสิทธิ์/grant ที่ทำให้สำรองล้ม คือเหตุแบบเดียวกับที่เปิดรหัสกลับมา)
+    const v = await canaryP;
+    const pwBad = v && v.bad ? v.msg : null;
+    await auditPatch(auditId, { finished_at: new Date().toISOString(), status: "failed", error: [String((e && e.message) || e), pwBad].filter(Boolean).join(" · "), duration_ms: Date.now() - new Date(started).getTime() });
     await alertBackupProblem("failed", null, [], [], [], String((e && e.message) || e));
-    return res.status(500).json({ ok: false, status: "failed", error: String((e && e.message) || e) });
+    if (pwBad) await alertPwExposed(pwBad);
+    return res.status(500).json({ ok: false, status: "failed", error: String((e && e.message) || e), warning: pwBad });
   }
 }
 
@@ -374,7 +506,7 @@ async function alertBackupProblem(status, fileName, missing, extra, settled, err
       : status === "degraded" ? "ไฟล์สำรองครบแล้ว แต่ข้ามขั้นอ่านกลับมาตรวจ หรือจำนวนแถวไม่ตรง — เปิดหน้าสำรองข้อมูลดูสาเหตุ"
       : "ไม่ผ่านการตรวจสอบ";
     await fetch("https://foodcost-eta.vercel.app/api/push", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(5000),   // 31 ต.ค. 69: เดิมไม่มีเวลาหมด
       body: JSON.stringify({
         scope: "admin",
         title: "🟠 สำรองข้อมูลไม่ผ่าน",

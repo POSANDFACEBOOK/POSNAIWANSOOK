@@ -31,6 +31,17 @@ const warn = (t, rows = []) => {
   if (rows.length > 8) console.log(`       · … อีก ${rows.length - 8} รายการ`);
 };
 
+// ข้อ 22 — ชุดเดียวกับ pwVerdict ใน api/backup.js (ตัวเฝ้าทุกคืน) · มีด่านใน check-code ว่าตัดสินเหมือนกันทุกกรณี
+function pwVerdict(pw, fn) {
+  const pwOpen = pw >= 200 && pw < 300, pwShut = pw === 401 || pw === 403;
+  const fnHere = fn >= 200 && fn < 500 && fn !== 404, fnDenied = fn === 401 || fn === 403;
+  if (pwOpen && fnHere) return { bad: true, msg: "‼️ รหัสผ่านผู้ใช้ (app_users.password) อ่านได้ด้วยคีย์สาธารณะอีกแล้ว — มีคน grant ทั้งตาราง หรือรันไฟล์ถอยกลับ · รัน sql/app-users-password-hash.sql ใหม่ · ห้าม grant select/all ทั้งตาราง app_users" };
+  if (pwShut && fn === 404) return { bad: true, msg: "‼️ ปิดสิทธิ์อ่าน password แล้วแต่ไม่มีฟังก์ชัน app_login — หลังบ้านเข้าระบบไม่ได้ทั้งร้าน · รัน sql/app-users-password-hash.sql ให้ครบทั้งไฟล์" };
+  if (pwShut && fnDenied) return { bad: true, msg: `‼️ เรียกฟังก์ชัน app_login ด้วยคีย์สาธารณะไม่ได้ (HTTP ${fn}) — หลังบ้านเข้าระบบไม่ได้ทั้งร้าน · รัน sql/app-users-password-hash.sql ใหม่ (มี grant execute ให้ anon, authenticated)` };
+  if (pwOpen && fn === 404) return { bad: false, msg: "ยังไม่ได้รัน sql/app-users-password-hash.sql — รหัสผ่านผู้ใช้ยังอ่านได้ด้วยคีย์สาธารณะ" };
+  return null;
+}
+
 const OPEN_ORD = new Set(["pending_approval", "pending", "approved"]);
 const OPEN_PO = new Set(["requested", "open", "shipped", "transfer_pending", "transfer_shipped"]);
 // ตัวย่อหน่วยที่เคยทำให้หน่วยแตกจนรวมยอดไม่ได้ (แปลงหมดแล้ว 15/08/2569 — เฝ้าไม่ให้กลับมา)
@@ -474,6 +485,22 @@ const main = async () => {
       }
     }
     bad.length ? warn(`${bad.length} จุด — ตรวจบิลแพ็คเกจ/คลังแพ็คเกจ`, bad) : ok(`ไม่มี (ตรวจ ${pkgBills.length} บิล)`);
+  }
+
+  // ── 22) รหัสผ่านผู้ใช้ต้องอ่านไม่ได้ด้วยคีย์สาธารณะ (31 ต.ค. 69) ──
+  // หลังรัน sql/app-users-password-hash.sql: password อ่านไม่ได้ (401/403) · 8 คอลัมน์อ่านได้ · app_login มี
+  // grant ทั้งตารางทีหลัง (วิธีที่เคยใช้แก้ permission denied) = รหัสทุกคนกลับไปถึงทุกเครื่องเงียบๆ — ข้อนี้จับ
+  // limit=0 = ไม่มีค่าใดกลับมาเลย ดูแค่รหัสคำตอบ · ตัดสินชุดเดียวกับ pwVerdict ใน api/backup.js (มีด่านตรวจ)
+  section("22) รหัสผ่านผู้ใช้ (app_users.password) ต้องอ่านไม่ได้ด้วยคีย์สาธารณะ");
+  {
+    const st = async (p) => { try { return (await fetch(`${U}/${p}`, { headers: H })).status; } catch { return 0; } };
+    const [pw, fn, cols] = await Promise.all([st("app_users?select=password&limit=0"), st("rpc/app_login?p_username=__doctor__&p_password=x"),
+      st("app_users?select=id,username,name,role,active,perms,created_at,allowed_branches&limit=0")]);
+    const v = pwVerdict(pw, fn);
+    if (v) warn(v.msg);
+    else if (cols !== 200) warn(`อ่าน 8 คอลัมน์ของ app_users ไม่ได้ (HTTP ${cols}) — แอปโหลดรายชื่อผู้ใช้/สัญญาณชีพไม่ได้ · ห้ามแก้ด้วย grant ทั้งตาราง ให้ grant select (ชื่อคอลัมน์)`);
+    else if ((pw === 401 || pw === 403) && fn === 200) ok("password อ่านไม่ได้ · 8 คอลัมน์อ่านได้ · app_login พร้อม");
+    else warn(`ตรวจไม่ได้ (password HTTP ${pw} · app_login HTTP ${fn})`);
   }
 
   console.log(`\n${"═".repeat(50)}`);

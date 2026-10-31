@@ -55,11 +55,50 @@ const fileName = payload.file_name || `backup-${payload.generated_at || ""}`;
 if (payload.status !== "success" && !has("--allow-nonsuccess")) { console.error(`Refusing: backup status is "${payload.status}", not "success". Pass --allow-nonsuccess to override.`); process.exit(1); }
 if (force && (!has("--yes") || arg("--confirm") !== `RESTORE ${fileName}`)) { console.error(`--force is destructive. Re-run with:  --yes --confirm "RESTORE ${fileName}"`); process.exit(1); }
 
+// ── app_users: ห้าม select=* (31 ต.ค. 69) ──
+// หลังรัน sql/app-users-password-hash.sql คีย์สาธารณะอ่านคอลัมน์ password ไม่ได้ ⟹ select=* โดนปฏิเสธ (42501) แม้แค่นับแถว
+// ชุดคอลัมน์เดียวกับแอป/ตัวสำรอง/ปุ่มกู้คืน (มีด่านตรวจว่าตรงกัน)
+const APP_USER_COLS = "id,username,name,role,active,perms,created_at,allowed_branches";
+const probeSelect = (t) => (t === "app_users" ? APP_USER_COLS : "*");
+// ไฟล์สำรองตั้งแต่ 31 ต.ค. 69 ไม่มีรหัสผ่าน ⟹ ผู้ใช้ที่กู้คืนเข้าระบบไม่ได้จนกว่าจะตั้งรหัสใหม่ — ข้อความเดียวกับ api/backup-restore.js (มีด่านตรวจ)
+function usersPasswordNotice(rows) {
+  const noPw = (Array.isArray(rows) ? rows : []).filter((r) => r && !r.password);
+  if (!noPw.length) return "";
+  const admin = noPw.find((r) => r.role === "admin" && r.active !== false) || noPw.find((r) => r.role === "admin") || noPw[0];
+  const uname = String((admin && admin.username) || "admin");
+  return [
+    `⚠️ ผู้ใช้ ${noPw.length} คนที่กู้คืนจากไฟล์นี้ยังไม่มีรหัสผ่าน — ทุกคนเข้าระบบไม่ได้จนกว่าจะตั้งรหัสใหม่`,
+    "(ไฟล์สำรองตั้งแต่ 31 ต.ค. 69 ไม่เก็บรหัสผ่านโดยตั้งใจ เพราะไฟล์อยู่ใน Google Drive)",
+    "1) เจ้าของเปิด Supabase → SQL Editor แล้วรันบรรทัดนี้ (เปลี่ยน รหัสชั่วคราว เป็นรหัสใช้ครั้งเดียว — ห้ามใช้รหัสจริง SQL Editor จำข้อความที่รันไว้):",
+    `update public.app_users set password = 'รหัสชั่วคราว' where username = '${uname.replace(/'/g, "''")}';`,
+    "   ฐานเข้ารหัส (bcrypt) ให้เองตอนบันทึก · ฐานใหม่ที่ยังไม่เคยรัน sql/app-users-password-hash.sql ให้รันไฟล์นั้นก่อน (รันซ้ำได้)",
+    `2) เข้าระบบด้วย ${uname} แล้วเปลี่ยนรหัสตัวเองทันทีที่ ตั้งค่า → ผู้ใช้ → ✏️ จากนั้นตั้งรหัสใหม่ให้คนอื่นทีละคน`,
+  ].join("\n");
+}
 async function liveCount(t) {
-  const r = await fetch(`${SUPA}/rest/v1/${t}?select=*&limit=1`, { headers: { ...H, Prefer: "count=exact", Range: "0-0" } });
+  const r = await fetch(`${SUPA}/rest/v1/${t}?select=${probeSelect(t)}&limit=1`, { headers: { ...H, Prefer: "count=exact", Range: "0-0" } });
   if (!r.ok) throw new Error(`count ${t}: HTTP ${r.status}`);
   const total = (r.headers.get("content-range") || "").split("/")[1];
   return total === "*" || total == null ? 0 : Number(total);
+}
+// --merge: แถวที่ id มีอยู่แล้วในฐานถูกข้าม (ON CONFLICT DO NOTHING) — คนเดิมยังใช้รหัสเดิมได้ (31 ต.ค. 69)
+// เดิมเตือน "ผู้ใช้ N คนเข้าระบบไม่ได้" โดย N = ทุกแถวในไฟล์ ทั้งที่อาจไม่ได้เพิ่มใครเลย ⟹ เตือนเฉพาะคนที่จะถูกเพิ่มจริง
+// liveIdSet = null (โหมดอื่น) = ทุกแถวในไฟล์ถูกเขียน
+function usersToWarn(rows, liveIdSet) {
+  const a = Array.isArray(rows) ? rows : [];
+  return liveIdSet ? a.filter((r) => r && !liveIdSet.has(String(r.id))) : a;
+}
+// id ทั้งหมดในฐาน (อ่านอย่างเดียว · คอลัมน์ id อ่านได้ทั้งก่อนและหลังรัน SQL)
+async function liveIds(t) {
+  const out = new Set();
+  for (let f = 0; ; f += 1000) {
+    const r = await fetch(`${SUPA}/rest/v1/${t}?select=id&order=id.asc`, { headers: { ...H, Range: `${f}-${f + 999}` } });
+    if (!r.ok) throw new Error(`ids ${t}: HTTP ${r.status}`);
+    const page = await r.json();
+    for (const x of page) out.add(String(x.id));
+    if (page.length < 1000) break;
+  }
+  return out;
 }
 async function rpc(table, rows, m) {
   const r = await fetch(`${SUPA}/rest/v1/rpc/restore_table`, { method: "POST", headers: H, body: JSON.stringify({ p_table: table, p_rows: rows, p_mode: m }) });
@@ -90,6 +129,11 @@ const tables = RESTORE_ORDER.filter((t) => t in (payload.tables || {}) && (!only
   if (partials.length) console.log(`\n⚠️  ${partials.length} table(s) are PARTIALLY filled (0 < live < backup) and were NOT touched: ${partials.map((p) => p[0]).join(", ")}\n   Use --force to rebuild them, or repair manually — they are NOT complete.`);
   const acts = plan.filter((p) => ["insert", "append", "replace"].includes(p[1]));
   console.log(`\n${acts.length} table(s) would be written, ${acts.reduce((a, p) => a + p[2], 0)} rows total.`);
+  // 31 ต.ค. 69: จะเขียน app_users จากไฟล์ที่ไม่มีรหัสผ่าน → บอกตั้งแต่ dry-run · --merge นับเฉพาะคนที่จะถูกเพิ่มจริง (usersToWarn)
+  const usersAct = acts.some((p) => p[0] === "app_users");
+  const usersLive0 = usersAct && merge ? await liveIds("app_users") : null;
+  const pwNotice = usersAct ? usersPasswordNotice(usersToWarn(payload.tables.app_users, usersLive0)) : "";
+  if (pwNotice) console.log("\n" + pwNotice);
   if (!apply) { console.log("\nDRY-RUN only — re-run with --apply to write.\n"); return; }
 
   const written = {}, shortTables = []; let failed = null;
@@ -110,6 +154,9 @@ const tables = RESTORE_ORDER.filter((t) => t in (payload.tables || {}) && (!only
       console.log(short ? `⚠️ ${live}/${want} (SHORT)` : `${live} ✓`);
     }
   } catch (e) { failed = e.message; }
+  // app_users ถูกเขียนแล้ว (สำเร็จ/สั้น/ล้มกลางทางหลังจากนั้น) = ย้ำวิธีตั้งรหัสใหม่อีกครั้งท้ายผลลัพธ์ — ข้อความบนสุดเลื่อนหายไปแล้ว
+  // --merge: ย้ำเฉพาะเมื่อจำนวนในฐานเพิ่มขึ้นจริง (ไม่ได้เพิ่มใคร = ทุกคนยังใช้รหัสเดิมได้)
+  if (pwNotice && typeof written.app_users === "number" && written.app_users > (usersLive0 ? usersLive0.size : 0)) console.log("\n" + pwNotice);
 
   if (failed) {
     console.error(`\n⛔ FAILED: ${failed}\n   The DB may be in a PARTIAL state. Re-run the SAME command to resume (append is idempotent);` +
