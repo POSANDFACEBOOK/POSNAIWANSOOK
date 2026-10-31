@@ -135,10 +135,31 @@ export default async function handler(req, res) {
   // หน้าเว็บส่งมาแค่ { kind:'fixed_asset', asset_id } (หรือ + dispose:true) — เซิร์ฟเวอร์
   // อ่านแถวจริงจาก DB แล้วสร้าง payload เอง เพื่อให้มีโค้ดสร้าง payload "ชุดเดียว"
   // (บทเรียนจาก PO: มี 2 ชุดแล้วต้องคอยไล่ให้ตรงกัน พลาดง่าย)
+  // ── ใบส่งอุปกรณ์ (31 ต.ค. 69): po_external_id = บิลที่ทรัพย์สินตัวนี้ถูกซื้อมา — เซิร์ฟเวอร์คิดเองจากแถวในฐาน
+  //    (หมายเหตุ "รับตาม <เลขใบ>" + ใบนั้นมีบิลจริง ตามตัวสร้างบิลตัวจริง) ไม่รับค่าจากหน้าเว็บ — ทุกทางที่ส่งทรัพย์สิน
+  //    (รับของ/แก้/โอน/cron รายคืน) ได้ตัวผูกเดียวกันเสมอ · กติกาอยู่ที่ lib/sliptrack-assets.js ที่เดียว
+  //    { kind:'fixed_asset', po_number } (ไม่มี asset_id) = ส่งทรัพย์สินทุกแถวของใบนั้นซ้ำ หลังบิลเพิ่งเข้าบัญชีสำเร็จ
   if (String(body.kind || "") === "fixed_asset") {
     const id = +body.asset_id;
+    const { assetPayload, disposePayload, removedPayload, assetPONumber, attachPOLinks, relinkPOAssets, postAsset, PO_LINK_COLS } = await import("../lib/sliptrack-assets.js");
+    const sbGetA = async (path) => {
+      const r = await fetch(`${SUPA_URL}/rest/v1/${path}`, { headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` } });
+      if (!r.ok) throw new Error(`supabase ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      return r.json();
+    };
+    if (!(id > 0) && body.po_number != null && body.po_number !== "") {
+      const no = String(body.po_number);
+      if (!/^PO-[A-Za-z0-9-]+$/.test(no)) return res.status(400).json({ error: "po_number ไม่ถูกต้อง" });
+      try {
+        const po = ((await sbGetA(`purchase_orders?select=${PO_LINK_COLS}&po_number=eq.${encodeURIComponent(no)}&limit=1`)) || [])[0];
+        if (!po) return res.status(404).json({ error: "ไม่พบใบ " + no });
+        const r = await relinkPOAssets(po, { sbGet: sbGetA, push: (p) => postAsset(p, apiKey) });
+        return res.status(r.failed ? 207 : 200).json(r);
+      } catch (err) {
+        return res.status(502).json({ error: "relink failed", message: err && err.message });
+      }
+    }
     if (!(id > 0)) return res.status(400).json({ error: "Missing asset_id" });
-    const { assetPayload, disposePayload, removedPayload } = await import("../lib/sliptrack-assets.js");
     let row;
     try {
       const r = await fetch(`${SUPA_URL}/rest/v1/assets?id=eq.${id}&select=id,name,category,branch_id,acquired_date,cost,quantity,salvage_value,useful_life_years,status,note`, {
@@ -166,6 +187,11 @@ export default async function handler(req, res) {
           const { branchNameForAccounting } = await import("../lib/sliptrack-map.js");
           row._branchName = branchNameForAccounting((Array.isArray(brows) && brows[0] && brows[0].name) || "");
         } catch { /* ไม่มีชื่อสาขาก็ยังส่งได้ (branch เป็น optional) */ }
+        // อ่านใบไม่ได้ = ไม่ส่ง (502) ห้ามส่งแบบไม่มีตัวผูกเพราะฐานสะดุด — cron รายคืนส่งให้ใหม่พร้อมตัวผูก
+        if (assetPONumber(row)) {
+          try { await attachPOLinks([row], sbGetA); }
+          catch (err) { return res.status(502).json({ error: "read PO for asset link failed", message: err && err.message }); }
+        }
         const built = assetPayload(row);
         // ไม่มีราคาทุน/วันที่ได้มา → ส่ง removed:true แทนการเงียบ
         // ถ้าเคยลงทะเบียนไว้แล้วแล้วราคาถูกลบทีหลัง การเงียบจะทำให้บัญชีค้างมูลค่าเดิมและ
@@ -635,6 +661,25 @@ export default async function handler(req, res) {
   if (String(body.from_branch).trim() === String(body.to_branch).trim()) {
     return res.status(400).json({ error: "from_branch must differ from to_branch" });
   }
+  // ── แท็บเก่าส่งบิลใบส่งอุปกรณ์แบบเดิม (31 ต.ค. 69) ──
+  // แอปไม่รีโหลดเอง พนักงานเปิดค้างข้ามวัน ⟹ หลัง deploy แท็บที่โหลดไว้ก่อนยังตั้งบิลใบส่งอุปกรณ์ (ตัวซ่อม/ส่งทั้งหมด/กดจ่าย)
+  // แบบเดิม: ไม่มี po_kind + "ซื้อวัตถุดิบ —" แล้วจดธง ok ⟹ ตัวกวาดไม่กลับมาแก้ บัญชีเห็นเป็นซื้อวัตถุดิบถาวร
+  // บิลที่ไม่มี po_kind จึงดูใบจริงในฐาน: เป็นใบส่งอุปกรณ์ = 409 ไม่ยิงออกไป → แท็บเก่าจดธง failed → ตัวกวาดตั้งบิล
+  // ด้วยตัวสร้างตัวจริง (po_kind asset) แล้วส่งทรัพย์สินตามไปผูก · อ่านฐานไม่ได้ = ปล่อยผ่านแบบเดิม (บิลวัตถุดิบห้ามสะดุดเพราะด่านนี้)
+  // ใบโอน (PO-TR-…) ไม่มีทางเป็นใบส่งอุปกรณ์ — ไม่ถามฐาน
+  if (body.po_kind == null || body.po_kind === "") {
+    const m = /^PO-(PO-[A-Za-z0-9-]+)$/.exec(String(body.external_id));
+    let assetBill = false;
+    if (m) {
+      try {
+        const { isAssetPO } = await import("./sliptrack-sweep.js");
+        const r = await fetch(`${SUPA_URL}/rest/v1/purchase_orders?select=items&po_number=eq.${encodeURIComponent(m[1])}&limit=1`, { headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` } });
+        const rows = r.ok ? await r.json() : null;
+        assetBill = Array.isArray(rows) && isAssetPO(rows[0]);
+      } catch { assetBill = false; }
+    }
+    if (assetBill) return res.status(409).json({ error: "ใบส่งอุปกรณ์ต้องมี po_kind:\"asset\" — หน้าเว็บเป็นเวอร์ชันเก่า กดอัปเดต/รีเฟรช · ระบบตามตั้งบิลให้เองภายในไม่กี่นาที" });
+  }
 
   const isPaid = body.paid === true;
   const payload = {
@@ -647,6 +692,14 @@ export default async function handler(req, res) {
     to_branch: String(body.to_branch).trim(),
     paid: isPaid,
   };
+  // ── ชนิดบิล (31 ต.ค. 69) ── ใบส่งอุปกรณ์ส่ง po_kind:"asset" ทั้งสองขั้น · ใบวัตถุดิบไม่ส่ง (หรือ "material")
+  // ฝั่งบัญชีตอบ 400 กับค่าอื่น — ตีกลับเองตรงนี้เลย ไม่ยิงออกไป · ต้องมีบรรทัดนี้ ไม่งั้นค่าหายเงียบในพร็อกซี (บทเรียน cash_source)
+  // ตำแหน่งหลัง paid ตรงกับตัวกวาด (buildPushPayload) ⟹ บิลจากสองทางเหมือนกันทุกไบต์
+  if (body.po_kind != null && body.po_kind !== "") {
+    const k = String(body.po_kind);
+    if (k !== "asset" && k !== "material") return res.status(400).json({ error: `po_kind ไม่รู้จัก: ${k.slice(0, 20)}` });
+    payload.po_kind = k;
+  }
   if (isPaid) {
     if (body.paid_at) payload.paid_at = String(body.paid_at);
     if (body.slip_url) payload.slip_url = String(body.slip_url);

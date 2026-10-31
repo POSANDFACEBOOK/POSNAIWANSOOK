@@ -19,6 +19,8 @@
 // (branch alias, received-qty amount + proportional VAT, two-stage), so whichever path pushes a
 // given PO, accounting sees the identical row. Keep the two in lock-step.
 
+import { relinkPOAssets, postAsset } from "../lib/sliptrack-assets.js";
+
 const SUPA_URL = "https://niplvsfxynrufiyvbwme.supabase.co";
 const SUPA_KEY = "sb_publishable_jpym6Xg4gOIPWDUDt5IntQ_7Bbh9KcZ";
 const SLIPTRACK_URL = "https://sliptrack-pro.vercel.app/api/ingest";
@@ -73,6 +75,8 @@ const flagForSkip = (reason) => (SLIP_SKIP_DONE.includes(reason) ? "skip" : "fai
 // ใบโอนวัตถุดิบระหว่างสาขา (เลข TR-) — พอรับของแล้วอยู่ awaiting_payment/paid เหมือน PO
 // ต้องดูเลขใบด้วย (port จาก isTransferPO ในหน้าเว็บ) คำอธิบายในบัญชีจะได้บอกว่า "โอน" ไม่ใช่ "ซื้อ"
 const isTransferPO = (po) => !!po && (/^transfer_/.test(String(po.status || "")) || /^TR-/.test(String(po.po_number || "")));
+// ใบส่งสินทรัพย์/อุปกรณ์ (port จาก isAssetPO ในหน้าเว็บ) — ทุกแถวติด kind 'asset'|'other' · แถววัตถุดิบไม่มี kind จึงไม่มีทางหลง
+const isAssetPO = (po) => !!po && Array.isArray(po.items) && po.items.length > 0 && po.items.every((it) => it && (it.kind === "asset" || it.kind === "other"));
 
 function buildPushPayload(po, branchById, paidCtx) {
   const fromB = branchById[+po.from_branch_id];
@@ -96,6 +100,7 @@ function buildPushPayload(po, branchById, paidCtx) {
 
   const externalId = `PO-${po.po_number || po.id}`;
   const isPaid = !!paidCtx;
+  const assetPO = isAssetPO(po);
   const datetime = po.received_at || new Date().toISOString();
   const payload = {
     source: "food_cost",
@@ -107,6 +112,9 @@ function buildPushPayload(po, branchById, paidCtx) {
     to_branch: toName,
     paid: isPaid,
   };
+  // ── ใบส่งอุปกรณ์ลงบัญชีเป็นทรัพย์สิน (31 ต.ค. 69) ── ฝั่งบัญชี (59b2288) แยกบิลชนิดนี้ด้วย po_kind:"asset" ทั้งสองขั้น
+  // ใบวัตถุดิบห้ามมี po_kind (ค่าอื่นที่ไม่ใช่ asset/material เขาตอบ 400) · ตำแหน่งต้องตรงกับที่พร็อกซีประกอบ (หลัง paid)
+  if (assetPO) payload.po_kind = "asset";
   if (isPaid) {
     payload.paid_at = paidCtx.paidAt || new Date().toISOString();
     if (paidCtx.slipUrl) payload.slip_url = paidCtx.slipUrl;
@@ -114,9 +122,12 @@ function buildPushPayload(po, branchById, paidCtx) {
     if (paidCtx.cashSource) payload.cash_source = paidCtx.cashSource;
   } else {
     // ต้องตรงกับ pushPOToSlipTrack ในหน้าเว็บทุกตัวอักษร (ด่าน "โอนวัตถุดิบคิดเงิน" รันเทียบสองฝั่ง)
+    // ใบส่งอุปกรณ์ห้ามขึ้นต้น "ซื้อวัตถุดิบ —" (ฝั่งบัญชีขอ 31 ต.ค. 69) · ต้นทางครัวกลางเรียก "ครัวกลาง" · สาขาอื่นใช้ชื่อจริง
     payload.description = isTransferPO(po)
       ? `โอนวัตถุดิบระหว่างสาขา ${fromName} → ${toName}${po.notes ? ` — ${po.notes}` : ""}`
-      : (po.notes ? `ซื้อวัตถุดิบ — ${po.notes}` : `ซื้อวัตถุดิบ ${externalId}`);
+      : assetPO
+        ? `รับอุปกรณ์จาก${fromB.type === "central" ? "ครัวกลาง" : fromName}${po.notes ? ` — ${po.notes}` : ` ${externalId}`}`
+        : (po.notes ? `ซื้อวัตถุดิบ — ${po.notes}` : `ซื้อวัตถุดิบ ${externalId}`);
     payload.reference_no = po.po_number || externalId;
     const items = recvLines.filter((x) => x.name && x.qty > 0);
     if (items.length) payload.items = items;
@@ -231,9 +242,24 @@ export default async function handler(req, res) {
     }
 
     // ดึงชื่อสาขาเฉพาะตอนมีใบให้ผลักจริง — ใช้ทำ alias ที่ฝั่งบัญชีต้องเห็นตรงกับของเบราว์เซอร์
-    const branches = await sbFetch(`branches?select=id,name`);
+    // type ด้วย (31 ต.ค. 69): คำอธิบายบิลใบส่งอุปกรณ์เรียกต้นทางครัวกลางว่า "ครัวกลาง" เหมือนหน้าเว็บ
+    const branches = await sbFetch(`branches?select=id,name,type`);
     const branchById = {};
     for (const b of branches) branchById[+b.id] = b;
+    // ── ใบส่งอุปกรณ์ (31 ต.ค. 69): บิลเพิ่งเข้าบัญชีสำเร็จ → ส่งทรัพย์สินของใบนี้ซ้ำพร้อม po_external_id ──
+    // ตอนสาขากดรับ บิลล้มแต่ทรัพย์สินออกไปก่อน = ฝั่งบัญชีเก็บแบบไม่ผูก · ตัวกวาดเป็นคนตั้งบิลให้ทีหลัง จึงต้องส่งทรัพย์สินตามไปผูก
+    // ผลของขั้นนี้ไม่แตะธงของใบ (บิลเข้าแล้วจริง) · พลาดก็แค่ช้า — cron รายคืนส่งทรัพย์สินทุกแถวพร้อมตัวผูกอยู่แล้ว
+    const relinkAssets = async (po) => {
+      if (!isAssetPO(po)) return null;
+      try {
+        const r = await relinkPOAssets(po, { sbGet: sbFetch, push: (p) => postAsset(p, apiKey), branchById });
+        if (r.failed || r.warnings.length) console.warn("ส่งทรัพย์สินของใบส่งอุปกรณ์ซ้ำไม่ครบ", po.po_number, r.errors, r.warnings);
+        return { sent: r.sent, failed: r.failed };
+      } catch (e) {
+        console.warn("ส่งทรัพย์สินของใบส่งอุปกรณ์ซ้ำไม่สำเร็จ", po.po_number, (e && e.message) || e);
+        return { sent: 0, failed: -1 };
+      }
+    };
 
     let ok = 0, failed = 0, skipped = 0;
     const results = [];
@@ -279,7 +305,8 @@ export default async function handler(req, res) {
           const flag = s1.ok ? "ok" : "failed";
           await recordFlag(po.id, flag);
           s1.ok ? ok++ : failed++;
-          results.push({ po: po.po_number, flag, amount: built.amount, error: s1.error });
+          const assets = s1.ok ? await relinkAssets(po) : null;   // บิลก่อน แล้วทรัพย์สินค่อยตาม (ฝั่งบัญชีผูกกับบิลที่มีอยู่แล้ว)
+          results.push({ po: po.po_number, flag, amount: built.amount, error: s1.error, ...(assets ? { assets } : {}) });
           continue;
         }
         // Paid PO → Stage 2 (flip to จ่ายแล้ว). Only 'ok' when Stage 2 lands, so a failed Stage 1
@@ -297,7 +324,8 @@ export default async function handler(req, res) {
         const flag = (s1.ok && s2.ok) ? "ok" : "failed";
         await recordFlag(po.id, flag);
         flag === "ok" ? ok++ : failed++;
-        results.push({ po: po.po_number, flag, amount: paidBuilt.amount, error: s1.error || s2.error });
+        const assets = flag === "ok" ? await relinkAssets(po) : null;
+        results.push({ po: po.po_number, flag, amount: paidBuilt.amount, error: s1.error || s2.error, ...(assets ? { assets } : {}) });
       } catch (e) {
         failed++;
         results.push({ po: cand.po_number, flag: "error", error: (e && e.message) || String(e) });
@@ -309,3 +337,8 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: "sweep failed", message: (err && err.message) || String(err) });
   }
 }
+
+// ตัวสร้างบิลตัวเดียวกันนี้ใช้ตัดสินด้วยว่าใบส่งอุปกรณ์ "มีบิลให้ผูกทรัพย์สินไหม" (lib/sliptrack-assets.js poBillRef) — ห้ามคิดสูตรยอดชุดที่สาม
+// export แยกบรรทัดไว้ท้ายไฟล์โดยตั้งใจ: ด่านใน check-code ตัดซอร์สตั้งแต่ round2 ถึงปลาย buildPushPayload ไปรัน (คำว่า export ในช่วงนั้นรันไม่ได้)
+// isAssetPO ด้วย (31 ต.ค. 69): พร็อกซีใช้ตัวนี้ตีกลับบิลใบส่งอุปกรณ์จากแท็บเก่าที่ไม่มี po_kind — ไม่เขียนกติกาชุดที่สี่
+export { buildPushPayload, isAssetPO };

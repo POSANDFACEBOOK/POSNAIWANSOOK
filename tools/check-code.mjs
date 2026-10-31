@@ -2317,7 +2317,8 @@ section("วันที่โอนจริง + แหล่งเงิน�
   const slipCalls = APP.split("\n").filter((l) => l.includes('fetch("/api/sliptrack-push"')).length;
   // ทางที่ 5–6 (20 ต.ค. 69) = แนบรูปใบปิดกะอย่างเดียว (pos_closing_slip: หลังปิดกะ + ปุ่มในประวัติกะ) — ไม่มียอดเงิน อ่านสถานะแนบรูปรายวันแทนคำเตือน
   // ทางที่ 7 (20 ต.ค. 69) = แจ้งอาการจากมือถือลูกค้า (client_diag) — ไม่คุยกับบัญชี เซิร์ฟเวอร์จด log แล้วตอบ 204
-  ck("ยังมีทางคุยกับบัญชีครบทุกทาง", slipCalls, 7);
+  // ทางที่ 8 (31 ต.ค. 69) = ส่งทรัพย์สินของใบส่งอุปกรณ์ซ้ำหลังบิลเข้า (pushPOAssetsToSlipTrack) — อ่านคำเตือนด้วย slipWarnings(d) เหมือนทางทรัพย์สินเดิม
+  ck("ยังมีทางคุยกับบัญชีครบทุกทาง", slipCalls, 8);
   ck("ทุกทางอ่านคำเตือนจากตัวตอบ",
     ["slipWarnings(done)", "slipWarnings(vd)", "slipWarnings(d)", "closingWarnings(r.reply)", "...slipWarnings(reply),"].filter((x) => !APP.includes(x)), []);
   // จอปิดกะเคยขึ้นเขียวล้วนแม้บัญชีจะทิ้งค่าไปบางส่วน = คนปิดกะเชื่อว่าเรียบร้อย
@@ -2393,11 +2394,13 @@ section("วันที่โอนจริง + แหล่งเงิน�
   // ไม่มี error ไม่มี warning (บัญชีเตือนเฉพาะฟิลด์ที่ "ไม่รู้จัก" ไม่ใช่ฟิลด์ที่ไม่เคยได้รับ)
   // ด่านเดิมตรวจ "หน้าเว็บส่ง" ✅ กับ "ตัวกวาดส่ง" ✅ แต่ไม่ตรวจตรงกลาง
   // ⟹ cash_source หายทั้งที่ 565 ข้อเขียวหมด นี่คือด่านที่ควรมีตั้งแต่แรก
+  // 31 ต.ค. 69: เริ่มนับปีกกาที่ปีกกาตัวฟังก์ชัน (หัวลงท้าย "{") — เดิมนับจากต้นหัว แล้ว "opts={}" ในหัว pushPOToSlipTrack
+  // ปิดวงทันที ⟹ รายการฟิลด์หน้าเว็บว่างเปล่าตลอด ด่านนี้ผ่านเองทุกครั้ง (ทดสอบด้วยการลบบรรทัดส่งต่อ po_kind ในพร็อกซีแล้วไม่แดง)
   const payloadKeys = (src, head) => {
     const st = src.indexOf(head);
     if (st < 0) return null;
     let d = 0, started = false, en = -1;
-    for (let i = st; i < src.length; i++) {
+    for (let i = head.endsWith("{") ? st + head.length - 1 : st; i < src.length; i++) {
       if (src[i] === "{") { d++; started = true; }
       else if (src[i] === "}") { d--; if (started && d === 0) { en = i; break; } }
     }
@@ -2405,7 +2408,8 @@ section("วันที่โอนจริง + แหล่งเงิน�
   };
   const cliKeys = payloadKeys(APP, "async function pushPOToSlipTrack(po, branches, opts={}){");
   const proxyKeys = payloadKeys(SLIPPUSH, "export default async function handler(req, res) {");
-  ok_("อ่านรายการฟิลด์ได้ทั้งหน้าเว็บและพร็อกซี", !!cliKeys && !!proxyKeys);
+  ok_("อ่านรายการฟิลด์ได้ทั้งหน้าเว็บและพร็อกซี (หน้าเว็บต้องเจอจริง ไม่ใช่รายการว่าง — แหล่งเงิน + po_kind)",
+    !!cliKeys && !!proxyKeys && ["cash_source", "po_kind", "description", "items"].every((k) => cliKeys.includes(k)));
   if (cliKeys && proxyKeys) {
     ck("ทุกฟิลด์ที่หน้าเว็บใส่ ต้องมีบรรทัดส่งต่อในพร็อกซี",
       cliKeys.filter((k) => !proxyKeys.includes(k)), []);
@@ -7018,7 +7022,8 @@ section("โอนวัตถุดิบคิดเงิน");
     const alias = grabConst(APP, "SLIPTRACK_BRANCH_ALIAS");
     const push = grabSig("async function pushPOToSlipTrack(po, branches, opts={}){");
     if (!push) throw new Error("ไม่เจอ pushPOToSlipTrack");
-    const src = [R2, LINE("const SLIPTRACK_CANON_BRANCHES="), alias, LINE("const slipWarnings="), sg("isTransferPO"), sg("sliptrackBranchName"), push].join("\n");
+    // + isAssetPO (31 ต.ค. 69): ตัวส่งบัญชีแยกใบส่งอุปกรณ์ (po_kind/คำอธิบาย) ด้วยตัวจริงจากแอป
+    const src = [R2, LINE("const SLIPTRACK_CANON_BRANCHES="), alias, LINE("const slipWarnings="), sg("isTransferPO"), sg("isAssetPO"), sg("sliptrackBranchName"), push].join("\n");
     cli = (fetchMock, consoleMock) => new Function("fetch", "console", src + "\nreturn {pushPOToSlipTrack,sliptrackBranchName};")(fetchMock, consoleMock);
   } catch { cli = null; }
   ok_("อ่านตัวส่งบัญชีของหน้าเว็บมารันได้", !!cli);
@@ -12670,7 +12675,9 @@ section("แก้ไขใบส่งสินทรัพย์/อุปก�
     const added = [], claims = [];
     const api = { getAssets: async () => [{ id: 9, category: "ครัว", useful_life_years: 5 }, { id: 1139, category: "ภาชนะ", useful_life_years: 3 }],
       patchPOIfStatus: async (id, st) => { claims.push([id, st]); return [{ id }]; }, addAsset: async (row) => { added.push([row.name, row.quantity, row.cost, row.branch_id]); return [{ id: added.length }]; }, pushAssetToSlipTrack: () => {} };
+    // 31 ต.ค. 69: receiveAssetPO ยิงบิลใบส่งก่อนทรัพย์สินแล้ว — ด่านนี้ดูแค่ทุน/จำนวน ใส่ตัวส่งบัญชีปลอมไว้ (ลำดับ/ตัวผูกพิสูจน์ในหมวด "ใบส่งอุปกรณ์ลงบัญชีเป็นทรัพย์สิน")
     const got = await safeA(() => runW(RA, "receiveAssetPO", { currentBranch: { id: 3, name: "ราชพฤกษ์" }, confirmDlg: async () => true, setConfirming: () => {}, api, round2: R2, currentUser: { username: "b3" },
+      branches: [], pushPOToSlipTrack: async () => ({ ok: true }), recordSlipSync: async () => {},
       todayStr: () => "2026-10-31", load: async () => {}, setViewPO: () => {}, posToast: () => {}, alert: () => {}, showErr: (t, e) => { throw e; }, setTimeout: () => {} })({ id: 823, po_number: "PO-202610-B1-JPKQW", status: "shipped", branch_id: 3, items }));
     return { got: typeof got === "string" ? got : "ok", added, claims, value: R2(added.reduce((s, a) => s + a[1] * a[2], 0)) };
   };
@@ -12782,7 +12789,7 @@ section("แก้ไขใบส่งสินทรัพย์/อุปก�
       try {
         const LN = (pfx) => APP.split("\n").find((l) => l.startsWith(pfx)) || "";
         const push = fnSrc("async function pushPOToSlipTrack(po, branches, opts={}){");
-        const src = [LN("const round2 = "), LN("const SLIPTRACK_CANON_BRANCHES="), grabConst(APP, "SLIPTRACK_BRANCH_ALIAS"), LN("const slipWarnings="), grab(APP, "isTransferPO"), grab(APP, "sliptrackBranchName"), push].join("\n");
+        const src = [LN("const round2 = "), LN("const SLIPTRACK_CANON_BRANCHES="), grabConst(APP, "SLIPTRACK_BRANCH_ALIAS"), LN("const slipWarnings="), grab(APP, "isTransferPO"), grab(APP, "isAssetPO"), grab(APP, "sliptrackBranchName"), push].join("\n");
         cli = (fetchMock) => new Function("fetch", "console", src + "\nreturn pushPOToSlipTrack;")(fetchMock, { warn: () => {}, error: () => {}, log: () => {} });
         const st = SWEEP.indexOf("const round2 ="), fnAt = SWEEP.indexOf("function buildPushPayload(po, branchById, paidCtx) {");
         let d = 0, started = false, en = -1;
@@ -13318,6 +13325,347 @@ section("ซ่อนรหัสผ่านผู้ใช้ (31 ต.ค. 69)
     && D22.includes("const v = pwVerdict(pw, fn);") && !/method\s*:/.test(D22) && D22.includes("ห้ามแก้ด้วย grant ทั้งตาราง"));
   ok_("หน้าสำรองข้อมูล: แถบสถานะโชว์ error ของรอบล่าสุด (ตัวเฝ้ารหัสผ่าน/ข้ามขั้นตรวจ — เดิมบันทึกแต่ไม่มีจอโชว์) · กดสำรองเองแล้ว degraded โชว์ warning ก่อน",
     APP.includes("{last.error&&<div style={{fontSize:11.5,color:/‼️/.test(last.error)?C.red:") && APP.includes("${r.warning||((r.missing_tables||[]).length?"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ใบส่งอุปกรณ์ลงบัญชีเป็นทรัพย์สิน (31 ต.ค. 69)
+// เจ้าของตัดสิน: สาขาจ่ายครัวกลางค่าอุปกรณ์จริงเหมือนวัตถุดิบ · ฝั่งบัญชี (SlipTrack 59b2288) กำหนดสิ่งที่ต้องส่ง:
+//   ① บิลใบส่งอุปกรณ์ = ช่อง/ขั้นเดิมทุกอย่าง + po_kind:"asset" · คำอธิบายห้ามขึ้นต้น "ซื้อวัตถุดิบ —" · ใบวัตถุดิบห้ามมี po_kind
+//   ② ทรัพย์สินที่ได้จากใบนั้น = เดิม + po_external_id (external_id ของบิล) · บิลต้องไปก่อน · ใบ ฿0 ไม่มีบิล = ไม่ใส่
+// ด่านรันของจริงทั้งสาย: pushPOToSlipTrack/receiveAssetPO/resyncPOToSlipTrack/api.push*ToSlipTrack (หน้าเว็บ) → handler พร็อกซีตัวจริง
+//   → fetch ปลอม (ฐาน+บัญชีปลอม ไม่มีอะไรออกเน็ต) · ตัวกวาด handler ตัวจริง · cron รายคืน runDaily ตัวจริง · ใบวัตถุดิบเทียบภาพก่อนแก้ทุกไบต์
+// ══════════════════════════════════════════════════════════════════════════
+section("ใบส่งอุปกรณ์ลงบัญชีเป็นทรัพย์สิน (31 ต.ค. 69)");
+{
+  const realFetch = globalThis.fetch;
+  const envBak = { CRON_SECRET: process.env.CRON_SECRET, SLIPTRACK_API_KEY: process.env.SLIPTRACK_API_KEY };
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  const R2 = (n) => Math.round((+n || 0) * 100) / 100;
+  const quiet = { warn: () => {}, error: () => {}, log: () => {} };
+  const aSafe = async (f) => { try { return await f(); } catch (e) { return "ERR " + ((e && e.message) || e); } };
+  const LN = (pfx) => APP.split("\n").find((l) => l.startsWith(pfx)) || "";
+  const fnSrc = (head) => { const s0 = APP.indexOf(head); if (s0 < 0) return null; const b0 = head.endsWith("{") ? s0 + head.length - 1 : APP.indexOf("){", s0) + 1; let d = 0; for (let j = b0; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(s0, j + 1).trim(); } } return null; };
+  const runW = (src, name, deps) => { const ks = Object.keys(deps); return new Function(...ks, src + "\nreturn " + name + ";")(...ks.map((k) => deps[k])); };
+  // เมธอดใน api ของแอป (api.pushAssetToSlipTrack / api.pushPOAssetsToSlipTrack) ตัดออกมาเป็น const ตัวจริง
+  const apiMethod = (name) => { const s0 = APP.indexOf(`\n  ${name}: async (`); if (s0 < 0) return null; const a0 = APP.indexOf("async (", s0), b0 = APP.indexOf("=> {", s0) + 3; let d = 0; for (let j = b0; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return `const ${name} = ${APP.slice(a0, j + 1)};`; } } return null; };
+  let CLI_SRC = null;
+  try {
+    const parts = [LN("const round2 = "), LN("const SLIPTRACK_CANON_BRANCHES="), grabConst(APP, "SLIPTRACK_BRANCH_ALIAS"), LN("const slipWarnings="), LN("const SLIP_SKIP_DONE="),
+      grab(APP, "isTransferPO"), grab(APP, "isAssetPO"), grab(APP, "sliptrackBranchName"), grab(APP, "slipSyncFlag"), "async " + grab(APP, "recordSlipSync"),
+      fnSrc("async function pushPOToSlipTrack(po, branches, opts={}){"), apiMethod("pushAssetToSlipTrack"), apiMethod("pushPOAssetsToSlipTrack")];
+    if (parts.every(Boolean)) CLI_SRC = parts.join("\n");
+  } catch { CLI_SRC = null; }
+  const mkCli = (fetchFn, api) => new Function("fetch", "console", "api", CLI_SRC + "\nreturn {pushPOToSlipTrack,recordSlipSync,isAssetPO,pushAssetToSlipTrack,pushPOAssetsToSlipTrack};")(fetchFn, quiet, api);
+  let srvBuild = null;
+  try {
+    const st = SWEEP.indexOf("const round2 ="), fnAt = SWEEP.indexOf("function buildPushPayload(po, branchById, paidCtx) {");
+    let d = 0, started = false, en = -1;
+    for (let i = fnAt; i < SWEEP.length; i++) { if (SWEEP[i] === "{") { d++; started = true; } else if (SWEEP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } } }
+    srvBuild = new Function(SWEEP.slice(st, en) + " return buildPushPayload;")();
+  } catch { srvBuild = null; }
+  const PROXY = await import(new URL("../api/sliptrack-push.js", import.meta.url).href + "?asset31=" + Math.random()).catch(() => null);
+  const SWM = await import(new URL("../api/sliptrack-sweep.js", import.meta.url).href + "?asset31=" + Math.random()).catch(() => null);
+  const DLY = await import(new URL("../lib/sliptrack-daily.js", import.meta.url).href + "?asset31=" + Math.random()).catch(() => null);
+  ok_("ดึงตัวส่งบัญชีหน้าเว็บ (pushPOToSlipTrack + api ทรัพย์สิน 2 ทาง + จดธง) · ตัวสร้างบิลของตัวกวาด · handler พร็อกซี/ตัวกวาด · cron รายคืน ตัวจริงมารันได้",
+    !!CLI_SRC && !!srvBuild && !!(PROXY && PROXY.default) && !!(SWM && SWM.default) && !!(DLY && DLY.runDaily));
+
+  // ── โลกปลอม: ฐาน (purchase_orders/assets/branches) + บัญชี · URL ที่ไม่รู้จัก = จดไว้ ตอบ 599 (ไม่มีทางหลุดออกเน็ต) ──
+  const SUPA = "https://niplvsfxynrufiyvbwme.supabase.co/rest/v1/", ST = "https://sliptrack-pro.vercel.app/api/ingest";
+  const resp = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => (body == null ? {} : clone(body)), text: async () => (body == null ? "" : JSON.stringify(body)) });
+  const BRS = [{ id: 1, name: "ครัวกลาง", type: "central" }, { id: 3, name: "บางใหญ่", type: "branch" }, { id: 5, name: "กาญจนบุรี", type: "branch" }];
+  const BR = Object.fromEntries(BRS.map((b) => [b.id, b]));
+  const mkWorld = (seed = {}) => {
+    const W = { pos: clone(seed.pos || []), assets: clone(seed.assets || []), up: [], log: [], reads: [], unexpected: [], failBill: false, failPOread: false, nextId: 1000 };
+    const idF = (rows, v) => (!v ? rows : v.startsWith("eq.") ? rows.filter((r) => +r.id === +v.slice(3)) : v.startsWith("gt.") ? rows.filter((r) => +r.id > +v.slice(3)) : rows);
+    W.fetch = async (url, init = {}) => {
+      const u = String(url);
+      if (u.startsWith(ST)) {
+        const p = JSON.parse(init.body); W.up.push({ url: u, p }); W.log.push(["up", p.kind, p.external_id]);
+        if (W.failBill && p.kind === "food_cost_po" && !p.voided) return resp(500, { error: "ระบบบัญชีล่มชั่วคราว" });
+        return resp(200, { success: true });
+      }
+      if (!u.startsWith(SUPA)) { W.unexpected.push(u); return resp(599, { error: "unexpected" }); }
+      const q = new URL(u), table = q.pathname.split("/").pop(), sp = q.searchParams, method = String(init.method || "GET").toUpperCase();
+      W.reads.push(`${method} ${table}?${decodeURIComponent(q.search.slice(1))}`);
+      let rows;
+      if (table === "purchase_orders") {
+        if (method === "PATCH") { const p = W.pos.find((x) => +x.id === +String(sp.get("id")).slice(3)); const d = JSON.parse(init.body); if (p) Object.assign(p, d); W.log.push(["flag", d.sliptrack_sync, "server"]); return resp(204, null); }
+        if (W.failPOread) return resp(500, { message: "canceling statement due to statement timeout" });
+        rows = idF(W.pos, sp.get("id"));
+        const pn = sp.get("po_number");
+        if (pn && pn.startsWith("eq.")) rows = rows.filter((p) => p.po_number === pn.slice(3));
+        if (pn && pn.startsWith("in.(")) { const list = pn.slice(4, -1).split(",").map((s) => s.replace(/^"|"$/g, "")); rows = rows.filter((p) => list.includes(p.po_number)); }
+        const stIn = sp.get("status"); if (stIn && stIn.startsWith("in.(")) { const list = stIn.slice(4, -1).split(","); rows = rows.filter((p) => list.includes(p.status)); }
+        if (sp.get("or")) rows = rows.filter((p) => p.sliptrack_sync == null || p.sliptrack_sync === "failed");
+      } else if (table === "assets") {
+        rows = idF(W.assets, sp.get("id"));
+        const nl = sp.get("note"); if (nl && nl.startsWith("like.")) { const sub = nl.slice(5).replace(/^\*|\*$/g, ""); rows = rows.filter((a) => String(a.note || "").includes(sub)); }
+      } else if (table === "branches") rows = idF(BRS, sp.get("id"));
+      else { W.unexpected.push(u); return resp(599, { error: "unexpected table" }); }
+      rows = [...rows].sort((a, b) => a.id - b.id);
+      if (sp.get("limit")) rows = rows.slice(0, +sp.get("limit"));
+      return resp(200, rows);
+    };
+    return W;
+  };
+  const callProxy = async (body) => {
+    let code = 0, out = null;
+    const res = { setHeader() {}, status(c) { code = c; return this; }, json(j) { out = j; return this; }, end() { return this; } };
+    await PROXY.default({ method: "POST", body: clone(body) }, res);
+    return { code, out };
+  };
+  // fetch ของหน้าเว็บ: /api/sliptrack-push → handler พร็อกซีตัวจริง (ฐาน/บัญชีของพร็อกซี = globalThis.fetch ปลอมของโลกนั้น)
+  const clientFetch = (W) => {
+    const pend = new Set();
+    const f = (url, init) => {
+      const p = (async () => {
+        if (String(url) !== "/api/sliptrack-push") { W.unexpected.push("client:" + url); return resp(599, {}); }
+        const body = JSON.parse(init.body);
+        W.log.push(["client", body.kind === "fixed_asset" ? (body.asset_id ? "fixed_asset" : "relink") : body.voided ? "void" : "food_cost_po", body]);
+        const r = await callProxy(body);
+        return resp(r.code, r.out);
+      })();
+      pend.add(p); p.then(() => pend.delete(p), () => pend.delete(p));
+      return p;
+    };
+    f.settle = async () => { for (let i = 0; i < 50 && pend.size; i++) await Promise.all([...pend]); };
+    return f;
+  };
+  const inWorld = async (W, fn) => { globalThis.fetch = W.fetch; process.env.SLIPTRACK_API_KEY = "TEST"; process.env.CRON_SECRET = "TESTCRON"; try { return await fn(); } finally { globalThis.fetch = realFetch; } };
+
+  // ── ข้อมูล: ครัวกลาง (1) ส่งอุปกรณ์ให้บางใหญ่ (3) · ใบมีราคา (แก้ราคาได้แล้ว d852cc3) / ใบ ฿0 / ใบวัตถุดิบ ──
+  const NOTE = "ใบส่งสินทรัพย์/อุปกรณ์ (31/10/2569)";
+  const PO_A = { id: 901, po_number: "PO-202610-B1-ASSET", status: "shipped", from_branch_id: 1, branch_id: 3, notes: NOTE, sliptrack_sync: null, received_at: null,
+    items: [{ kind: "asset", asset_id: 9, name: "เตา", unit: "ชิ้น", qty: 2, price_per_unit: 1250.5, line_total: 2501, note: null, image: null },
+      { kind: "other", asset_id: null, name: "ถาดสแตนเลส", unit: "ชิ้น", qty: 4, price_per_unit: 25, line_total: 100, note: "ใส่ของทอด", image: null }],
+    subtotal: 2601, vat: 0, total: 2601 };
+  const PO_Z = { ...clone(PO_A), id: 902, po_number: "PO-202610-B1-ZEROO", items: PO_A.items.map((it) => ({ ...it, price_per_unit: 0, line_total: 0 })), subtotal: 0, vat: 0, total: 0 };
+  const RECV = (po, over = {}) => ({ ...clone(po), status: "awaiting_payment", received_at: "2026-10-31T05:00:00.000Z", ...over });
+  const PAID = { paid: true, paidAt: "2026-11-01T05:00:00.000Z", slipUrl: "https://x/slip", paymentNote: "โอนแล้ว", cashSource: "โอนจากบัญชีบริษัท" };
+  const PAID_SRV = { paidAt: PAID.paidAt, slipUrl: PAID.slipUrl, note: PAID.paymentNote, cashSource: PAID.cashSource };
+  // ใบวัตถุดิบ + ภาพ payload "ก่อนแก้" (จับจากตัวส่งหน้าเว็บ/ตัวกวาดก่อนแตะโค้ด 31 ต.ค. 69) — ต้องเหมือนเดิมทุกไบต์
+  const ING = { id: 41, po_number: "PO-202610-B1-ING01", status: "awaiting_payment", from_branch_id: 1, branch_id: 3, received_at: "2026-10-31T05:00:00.000Z", notes: "รอบเช้า", sliptrack_sync: null,
+    items: [{ ingredient_id: 7, name: "หมูสามชั้น", unit: "กก.", qty: 2.5, received_qty: 2, price_per_unit: 180, line_total: 450 }, { ingredient_id: 9, name: "ผักกาด", unit: "ถุง", qty: 4, price_per_unit: 25, line_total: 100 }],
+    subtotal: 550, vat: 38.5, total: 588.5, payment_at: "2026-11-01T05:00:00.000Z", payment_note: "โอนแล้ว", cash_source: "โอนจากบัญชีบริษัท" };
+  const SNAP = {
+    CLI_PENDING: '{"external_id":"PO-PO-202610-B1-ING01","datetime":"2026-10-31T05:00:00.000Z","amount":492.2,"from_branch":"ครัวกลาง","to_branch":"บางใหญ่","paid":false,"description":"ซื้อวัตถุดิบ — รอบเช้า","reference_no":"PO-202610-B1-ING01","items":[{"name":"หมูสามชั้น","qty":2,"unit":"กก.","unit_price":180},{"name":"ผักกาด","qty":4,"unit":"ถุง","unit_price":25}]}',
+    CLI_PAID: '{"external_id":"PO-PO-202610-B1-ING01","datetime":"2026-10-31T05:00:00.000Z","amount":492.2,"from_branch":"ครัวกลาง","to_branch":"บางใหญ่","paid":true,"paid_at":"2026-11-01T05:00:00.000Z","slip_url":"https://x/slip","payment_note":"โอนแล้ว","cash_source":"โอนจากบัญชีบริษัท"}',
+    SRV_PENDING: '{"source":"food_cost","kind":"food_cost_po","external_id":"PO-PO-202610-B1-ING01","datetime":"2026-10-31T05:00:00.000Z","amount":492.2,"from_branch":"ครัวกลาง","to_branch":"บางใหญ่","paid":false,"description":"ซื้อวัตถุดิบ — รอบเช้า","reference_no":"PO-202610-B1-ING01","items":[{"name":"หมูสามชั้น","qty":2,"unit":"กก.","unit_price":180},{"name":"ผักกาด","qty":4,"unit":"ถุง","unit_price":25}]}',
+    SRV_PAID: '{"source":"food_cost","kind":"food_cost_po","external_id":"PO-PO-202610-B1-ING01","datetime":"2026-10-31T05:00:00.000Z","amount":492.2,"from_branch":"ครัวกลาง","to_branch":"บางใหญ่","paid":true,"paid_at":"2026-11-01T05:00:00.000Z","slip_url":"https://x/slip","payment_note":"โอนแล้ว","cash_source":"โอนจากบัญชีบริษัท"}',
+  };
+  const EXP_A = '{"source":"food_cost","kind":"food_cost_po","external_id":"PO-PO-202610-B1-ASSET","datetime":"2026-10-31T05:00:00.000Z","amount":2601,"from_branch":"ครัวกลาง","to_branch":"บางใหญ่","paid":false,"po_kind":"asset","description":"รับอุปกรณ์จากครัวกลาง — ใบส่งสินทรัพย์/อุปกรณ์ (31/10/2569)","reference_no":"PO-202610-B1-ASSET","items":[{"name":"เตา","qty":2,"unit":"ชิ้น","unit_price":1250.5},{"name":"ถาดสแตนเลส","qty":4,"unit":"ชิ้น","unit_price":25}]}';
+  const EXP_AP = '{"source":"food_cost","kind":"food_cost_po","external_id":"PO-PO-202610-B1-ASSET","datetime":"2026-10-31T05:00:00.000Z","amount":2601,"from_branch":"ครัวกลาง","to_branch":"บางใหญ่","paid":true,"po_kind":"asset","paid_at":"2026-11-01T05:00:00.000Z","slip_url":"https://x/slip","payment_note":"โอนแล้ว","cash_source":"โอนจากบัญชีบริษัท"}';
+
+  try {
+    if (CLI_SRC && srvBuild && PROXY && PROXY.default) {
+      // ── ① บิล: หน้าเว็บ → พร็อกซีตัวจริง → บัญชี ต้องเท่ากับที่ตัวกวาดส่งตรง ทุกไบต์ (ทั้งสองขั้น) ──
+      const cliBody = async (po, opts) => { const bodies = []; const C = mkCli(async (u, init) => { bodies.push(init.body); return resp(200, {}); }, {}); const r = await C.pushPOToSlipTrack(clone(po), BRS, opts); return { r, body: bodies[0] || null, n: bodies.length }; };
+      // seed = ใบในฐานปลอม (ด่านแท็บเก่าของพร็อกซีถามฐานเมื่อบิลไม่มี po_kind) · reads = จำนวนครั้งที่พร็อกซีถามใบ
+      const proxied = async (bodyStr, seed, failPOread) => { const W = mkWorld(seed); W.failPOread = !!failPOread; const o = await inWorld(W, () => callProxy(JSON.parse(bodyStr))); return { code: o.code, up: W.up.map((x) => JSON.stringify(x.p)), urls: W.up.map((x) => x.url), reads: W.reads.filter((r) => r.startsWith("GET purchase_orders")).length, unexpected: W.unexpected }; };
+      const srv = (po, ctx) => { const b = srvBuild(clone(po), BR, ctx || null); return b && b.payload ? JSON.stringify(b.payload) : JSON.stringify(b); };
+      const a1 = await cliBody(RECV(PO_A)), pa1 = a1.body ? await proxied(a1.body) : { code: 0, up: [], urls: [] };
+      ck("ใบส่งอุปกรณ์ขั้นรอชำระ: หน้าเว็บ→พร็อกซีตัวจริง ส่งบัญชี = ตัวกวาดตัวจริง = ที่ฝั่งบัญชีกำหนด ทุกไบต์ (po_kind asset · คำอธิบาย \"รับอุปกรณ์จากครัวกลาง — …\" · ?upsert=1 เดิม)",
+        [pa1.code, pa1.up, srv(RECV(PO_A)), pa1.urls.every((u) => u === ST + "?upsert=1")], [200, [EXP_A], EXP_A, true]);
+      const a2 = await cliBody(RECV(PO_A, { status: "paid" }), PAID), pa2 = a2.body ? await proxied(a2.body) : { code: 0, up: [] };
+      ck("ใบส่งอุปกรณ์ขั้นจ่ายแล้ว: po_kind asset ติดไปด้วย · ช่องจ่ายเงินเดิมครบ (แหล่งเงิน/สลิป) · หน้าเว็บ→พร็อกซี = ตัวกวาด ทุกไบต์",
+        [pa2.code, pa2.up, srv(RECV(PO_A, { status: "paid" }), PAID_SRV)], [200, [EXP_AP], EXP_AP]);
+      const descOf = async (po) => { const c = await cliBody(po); return [c.body && JSON.parse(c.body).description, JSON.parse(srv(po)).description]; };
+      ck("คำอธิบายใบส่งอุปกรณ์: ไม่มีหมายเหตุ = ต่อท้ายเลขบิล (กติกาเดิม) · ต้นทางไม่ใช่ครัวกลาง = ชื่อสาขาจริง · หน้าเว็บ = ตัวกวาด · ไม่มีอันไหนขึ้นต้น \"ซื้อวัตถุดิบ\"",
+        [await descOf(RECV(PO_A, { notes: null })), await descOf(RECV(PO_A, { from_branch_id: 5 }))],
+        [["รับอุปกรณ์จากครัวกลาง PO-PO-202610-B1-ASSET", "รับอุปกรณ์จากครัวกลาง PO-PO-202610-B1-ASSET"], ["รับอุปกรณ์จากกาญจนบุรี — " + NOTE, "รับอุปกรณ์จากกาญจนบุรี — " + NOTE]]);
+      const i1 = await cliBody(ING), i2 = await cliBody({ ...ING, status: "paid" }, PAID);
+      const pi1 = i1.body ? await proxied(i1.body) : { up: [] }, pi2 = i2.body ? await proxied(i2.body) : { up: [] };
+      ck("ใบวัตถุดิบ: หน้าเว็บส่ง (รอชำระ/จ่ายแล้ว) เหมือนก่อนแก้ทุกไบต์ — ไม่มี po_kind", [i1.body, i2.body], [SNAP.CLI_PENDING, SNAP.CLI_PAID]);
+      ck("ใบวัตถุดิบ: ตัวกวาด + พร็อกซีตัวจริงส่งบัญชีเหมือนก่อนแก้ทุกไบต์ (ทั้งสองขั้น)",
+        [srv(ING), srv({ ...ING, status: "paid" }, PAID_SRV), pi1.up, pi2.up], [SNAP.SRV_PENDING, SNAP.SRV_PAID, [SNAP.SRV_PENDING], [SNAP.SRV_PAID]]);
+      const z1 = await cliBody(RECV(PO_Z));
+      ck("ใบส่งอุปกรณ์ ฿0: ไม่ส่งบิล (บัญชีบังคับยอด > 0) — ข้ามแบบยอดศูนย์ทั้งหน้าเว็บและตัวกวาด", [z1.n, z1.r && z1.r.skipped, srvBuild(RECV(PO_Z), BR, null).skip], [0, "zero-amount", "zero-amount"]);
+      const bad = await proxied(JSON.stringify({ ...JSON.parse(SNAP.CLI_PENDING), po_kind: "assets" })), mat = await proxied(JSON.stringify({ ...JSON.parse(SNAP.CLI_PENDING), po_kind: "material" }));
+      ck("พร็อกซี: po_kind ค่าที่บัญชีไม่รู้จัก = 400 ไม่ยิงออกไป · \"material\" ส่งต่อได้ (ฝั่งบัญชียอมรับ)",
+        [bad.code, bad.up.length, mat.code, mat.up.map((s) => JSON.parse(s).po_kind)], [400, 0, 200, ["material"]]);
+      const v1 = await cliBody(RECV(PO_A, { status: "cancelled" }), { voided: true }), pv = v1.body ? await proxied(v1.body) : { up: [] };
+      ck("ยกเลิกใบส่งอุปกรณ์: ทาง void เดิมทุกไบต์ (ไม่มี po_kind/ยอด/สาขา)",
+        [v1.body, pv.up], ['{"external_id":"PO-PO-202610-B1-ASSET","voided":true}', ['{"source":"food_cost","kind":"food_cost_po","external_id":"PO-PO-202610-B1-ASSET","voided":true}']]);
+      // ── แท็บเก่า (โหลดก่อน deploy นี้ · แอปไม่รีโหลดเอง) ส่งบิลใบส่งอุปกรณ์แบบเดิม: ไม่มี po_kind + "ซื้อวัตถุดิบ —" แล้วจดธง ok ──
+      // ปล่อยผ่าน = บัญชีเห็นเป็นซื้อวัตถุดิบถาวร (ตัวกวาดไม่แตะใบธง ok) ⟹ พร็อกซีต้องตีกลับ ให้ตัวกวาดตั้งบิลใหม่ด้วยตัวสร้างตัวจริง
+      if (a1.body && a2.body && i1.body && i2.body) {
+        const dropKind = (s, over) => { const { po_kind, ...r } = JSON.parse(s); return JSON.stringify({ ...r, ...(over || {}) }); };
+        const DB = { pos: [RECV(PO_A), clone(ING)] };
+        const o1 = await proxied(dropKind(a1.body, { description: "ซื้อวัตถุดิบ — " + NOTE }), DB), o2 = await proxied(dropKind(a2.body), { pos: [RECV(PO_A, { status: "paid" })] });
+        const n1 = await proxied(a1.body, DB), n2 = await proxied(a2.body, DB);
+        ck("พร็อกซี: แท็บเก่าส่งบิลใบส่งอุปกรณ์ไม่มี po_kind (ขั้นรอชำระ + ขั้นจ่าย) = 409 ไม่ยิงออกไป (ธง failed → ตัวกวาดตั้งบิลใหม่ให้ถูก) · หน้าเว็บใหม่มี po_kind = ไม่ถามฐาน ส่งตามที่บัญชีกำหนด",
+          [o1.code, o1.up.length, o2.code, o2.up.length, n1.code, n1.up, n2.up, n1.reads + n2.reads], [409, 0, 409, 0, 200, [EXP_A], [EXP_AP], 0]);
+        const g1 = await proxied(i1.body, DB), g2 = await proxied(i2.body, DB), gf = await proxied(i1.body, DB, true);
+        const tr = await proxied(JSON.stringify({ ...JSON.parse(i1.body), external_id: "PO-TR-202610-B3-XFER1", reference_no: "TR-202610-B3-XFER1" }), DB);
+        ck("…ใบวัตถุดิบที่อยู่ในฐานจริง: ถามฐาน 1 ครั้งแล้วส่งเหมือนก่อนแก้ทุกไบต์ (ทั้งสองขั้น) · อ่านฐานไม่ได้ = ปล่อยผ่านแบบเดิม (บิลวัตถุดิบห้ามสะดุด) · ใบโอน TR- ไม่ถามฐาน",
+          [g1.code, g1.up, g1.reads, g2.up, gf.code, gf.up, tr.code, tr.reads, [g1, g2, gf, tr, o1, o2].flatMap((x) => x.unexpected)],
+          [200, [SNAP.SRV_PENDING], 1, [SNAP.SRV_PAID], 200, [SNAP.SRV_PENDING], 200, 0, []]);
+      }
+    }
+
+    // ── ② สาขากดรับ: receiveAssetPO ตัวจริง → บิลก่อน → ทรัพย์สินพร้อม po_external_id (พร็อกซีคิดให้จากฐาน) ──
+    const RA = fnSrc("  async function receiveAssetPO(po){");
+    ok_("ดึง receiveAssetPO ตัวจริงมารันกับตัวส่งบัญชีจริงได้", !!RA && !!CLI_SRC);
+    const EXIST9 = { id: 9, name: "เตา", category: "ครัว", useful_life_years: 5, branch_id: 3, cost: 1000, quantity: 1, status: "active", acquired_date: "2026-01-01", note: null };
+    const mkApp = (W, extra = {}) => {
+      const cf = clientFetch(W);
+      const api = {
+        getAssets: async () => clone(W.assets),
+        patchPOIfStatus: async (id, st, d) => { const p = W.pos.find((x) => +x.id === +id && x.status === st); if (!p) throw new Error("เอกสารถูกแก้ไขโดยผู้ใช้อื่นแล้ว"); Object.assign(p, clone(d)); W.log.push(["claim", d.status]); return [clone(p)]; },
+        addAsset: async (row) => { const id = W.nextId++; W.assets.push({ id, ...clone(row) }); W.log.push(["addAsset", id]); return [{ id }]; },
+        updatePO: async (id, d) => { const p = W.pos.find((x) => +x.id === +id); if (p) Object.assign(p, clone(d)); W.log.push(["flag", d.sliptrack_sync, "client"]); return []; },
+        getPO: async (id) => clone(W.pos.filter((p) => +p.id === +id)),
+        getSlipSignedUrl: async () => "https://x/slip",
+        ...extra,
+      };
+      const C = mkCli(cf, api);
+      api.pushAssetToSlipTrack = C.pushAssetToSlipTrack; api.pushPOAssetsToSlipTrack = C.pushPOAssetsToSlipTrack;
+      return { cf, api, C };
+    };
+    const runReceive = async (po, { failBill = false } = {}) => {
+      const W = mkWorld({ pos: [po], assets: [EXIST9] });
+      W.failBill = failBill;
+      const { cf, api, C } = mkApp(W);
+      const got = await inWorld(W, async () => {
+        const g = await aSafe(() => runW(RA, "receiveAssetPO", { currentBranch: { id: 3, name: "บางใหญ่" }, confirmDlg: async () => true, setConfirming: () => {}, api, round2: R2, currentUser: { username: "b3" },
+          branches: BRS, pushPOToSlipTrack: C.pushPOToSlipTrack, recordSlipSync: C.recordSlipSync,
+          todayStr: () => "2026-10-31", load: async () => { W.log.push(["load"]); }, setViewPO: () => {}, posToast: () => {}, alert: (m) => W.log.push(["alert", String(m)]), showErr: (t, e) => { throw e; }, setTimeout: () => {} })(clone(po)));
+        await cf.settle();
+        return g;
+      });
+      return { got: typeof got === "string" ? got : "ok", W };
+    };
+    const at = (W, pred) => W.log.findIndex(pred);
+    const assetsUp = (W) => W.up.filter((x) => x.p.kind === "fixed_asset");
+    if (RA && CLI_SRC && PROXY) {
+      const A = await runReceive(PO_A);
+      const iBill = at(A.W, (x) => x[0] === "client" && x[1] === "food_cost_po"), iFlag = at(A.W, (x) => x[0] === "flag"), iAsset = at(A.W, (x) => x[0] === "client" && x[1] === "fixed_asset");
+      const iClaim = at(A.W, (x) => x[0] === "claim"), iLastAdd = A.W.log.map((x) => x[0]).lastIndexOf("addAsset");
+      ck("รับใบส่งอุปกรณ์ที่มีราคา (receiveAssetPO → ตัวส่งจริง → พร็อกซีจริง): ล็อกรับ → สร้างทรัพย์สิน → บิล (ครั้งเดียว) → จดธง ok → แล้วทรัพย์สินถึงตามไป · บัญชีเห็นบิลก่อนทุกตัว",
+        [A.got, A.W.up.map((x) => x.p.kind), A.W.up.filter((x) => x.p.kind === "food_cost_po").length, iClaim < iLastAdd && iLastAdd < iBill, iBill < iFlag && iFlag < iAsset, A.W.pos[0].sliptrack_sync, A.W.unexpected],
+        ["ok", ["food_cost_po", "fixed_asset", "fixed_asset"], 1, true, true, "ok", []]);
+      ck("…บิล = po_kind asset ฿2,601 (ยอดใบ) · ทรัพย์สินทุกตัว po_external_id = external_id ของบิลใบนี้ · ทุนรวมทะเบียน = ยอดบิล",
+        [A.W.up[0] && A.W.up[0].p.po_kind, A.W.up[0] && A.W.up[0].p.amount, assetsUp(A.W).map((x) => [x.p.external_id, x.p.cost, x.p.po_external_id]), R2(assetsUp(A.W).reduce((s, x) => s + x.p.cost, 0))],
+        ["asset", 2601, [["ASSET-1000", 2501, "PO-PO-202610-B1-ASSET"], ["ASSET-1001", 100, "PO-PO-202610-B1-ASSET"]], 2601]);
+      ck("…หน้าเว็บส่งแค่ asset_id (ไม่ส่ง po_external_id เอง — เซิร์ฟเวอร์คิดจากฐานชุดเดียว)",
+        A.W.log.filter((x) => x[0] === "client" && x[1] === "fixed_asset").map((x) => Object.keys(x[2]).sort().join(",")), ["asset_id,kind", "asset_id,kind"]);
+      const Z = await runReceive(PO_Z);
+      ck("รับใบส่งอุปกรณ์ ฿0: ไม่ตั้งบิล (ธง skip — ตะแกรงไม่ตามต่อ) · ทรัพย์สินที่ส่งไม่มี po_external_id สักตัว",
+        [Z.got, Z.W.up.filter((x) => x.p.kind === "food_cost_po").length, Z.W.pos[0].sliptrack_sync, assetsUp(Z.W).length, assetsUp(Z.W).filter((x) => "po_external_id" in x.p).length],
+        ["ok", 0, "skip", 2, 0]);
+      const F = await runReceive(PO_A, { failBill: true });
+      ck("บิลล้มตอนรับ: ธง failed (ตัวซ่อม/ตัวกวาดตามต่อ) · ทรัพย์สินยังส่งตามหลังบิลพร้อม po_external_id (บัญชีเก็บแบบยังไม่ผูก) · ไม่ยิงบิลซ้ำเอง",
+        [F.got, F.W.pos[0].sliptrack_sync, F.W.up.map((x) => x.p.kind), assetsUp(F.W).map((x) => x.p.po_external_id)],
+        ["ok", "failed", ["food_cost_po", "fixed_asset", "fixed_asset"], ["PO-PO-202610-B1-ASSET", "PO-PO-202610-B1-ASSET"]]);
+
+      // ── ③ ส่งซ้ำให้ผูก: ตัวซ่อมบนหน้าเว็บ (resyncPOToSlipTrack ตัวจริง) หลังบิลเข้าสำเร็จ ──
+      const RS = fnSrc("  async function resyncPOToSlipTrack(po){");
+      ok_("ดึง resyncPOToSlipTrack ตัวจริงมารันได้", !!RS);
+      const runResync = async (W, poId) => {
+        const { cf, api, C } = mkApp(W);
+        const u0 = W.up.length, l0 = W.log.length;
+        await inWorld(W, async () => { await aSafe(() => runW(RS, "resyncPOToSlipTrack", { api, pushPOToSlipTrack: C.pushPOToSlipTrack, recordSlipSync: C.recordSlipSync, branches: BRS, isAssetPO: C.isAssetPO, location: { origin: "https://x" } })(clone(W.pos.find((p) => +p.id === poId)))); await cf.settle(); });
+        return { up: W.up.slice(u0), log: W.log.slice(l0) };
+      };
+      if (RS) {
+        F.W.failBill = true;
+        const R0 = await runResync(F.W, 901);
+        ck("ตัวซ่อมรอบที่บิลยังล้ม: ไม่ส่งทรัพย์สินซ้ำ (ยังไม่มีบิลให้ผูก) · ธงยัง failed", [R0.up.map((x) => x.p.kind), F.W.pos[0].sliptrack_sync], [["food_cost_po"], "failed"]);
+        F.W.failBill = false;
+        const R1 = await runResync(F.W, 901);
+        ck("ตัวซ่อมรอบที่บิลเข้า: บิล (ครั้งเดียว) → ธง ok → ส่งทรัพย์สินของใบนี้ซ้ำทุกตัวพร้อม po_external_id (ฝั่งบัญชีผูกให้ตอนส่งซ้ำ)",
+          [R1.up.map((x) => x.p.kind), R1.up.filter((x) => x.p.kind === "fixed_asset").map((x) => [x.p.external_id, x.p.po_external_id]), F.W.pos[0].sliptrack_sync,
+            R1.log.findIndex((x) => x[0] === "flag") < R1.log.findIndex((x) => x[0] === "client" && x[1] === "relink")],
+          [["food_cost_po", "fixed_asset", "fixed_asset"], [["ASSET-1000", "PO-PO-202610-B1-ASSET"], ["ASSET-1001", "PO-PO-202610-B1-ASSET"]], "ok", true]);
+        const WI = mkWorld({ pos: [{ ...clone(ING), sliptrack_sync: "failed" }], assets: [EXIST9] });
+        const RI = await runResync(WI, 41);
+        const WC = mkWorld({ pos: [RECV(PO_A, { status: "cancelled", sliptrack_sync: "failed" })], assets: clone(F.W.assets) });
+        const RC = await runResync(WC, 901);
+        ck("ตัวซ่อม: ใบวัตถุดิบไม่แตะทรัพย์สิน · ใบส่งอุปกรณ์ที่ยกเลิก = void อย่างเดียว ไม่ส่งทรัพย์สินซ้ำ",
+          [RI.up.map((x) => x.p.kind), RI.log.filter((x) => x[1] === "relink").length, RC.up.map((x) => [x.p.kind, !!x.p.voided]), RC.log.filter((x) => x[1] === "relink").length],
+          [["food_cost_po"], 0, [["food_cost_po", true]], 0]);
+      }
+
+      // ── ③ ส่งซ้ำให้ผูก: ตัวกวาดบนเซิร์ฟเวอร์ (handler ตัวจริง) — บิลก่อน แล้วทรัพย์สินของใบนั้น ──
+      if (SWM && SWM.default) {
+        const PO_P = RECV(PO_A, { id: 903, po_number: "PO-202610-B1-PAIDD", status: "paid", payment_at: PAID.paidAt, payment_slip_url: "https://x/slip", payment_note: "โอนแล้ว", cash_source: "โอนจากบัญชีบริษัท", sliptrack_sync: null });
+        const aOf = (id, po, it, cost) => ({ id, name: it.name, category: null, branch_id: 3, cost, quantity: it.qty, salvage_value: 0, useful_life_years: 0, status: "active", acquired_date: "2026-10-31", note: `รับตาม ${po}` });
+        const WS = mkWorld({
+          pos: [RECV(PO_A, { sliptrack_sync: "failed" }), { ...clone(ING), sliptrack_sync: "failed" }, PO_P],
+          assets: [EXIST9, aOf(1000, "PO-202610-B1-ASSET", PO_A.items[0], 1250.5), aOf(1001, "PO-202610-B1-ASSET", PO_A.items[1], 25), aOf(1002, "PO-202610-B1-PAIDD", PO_A.items[0], 1250.5), aOf(1003, "PO-202610-B1-ASSETX", PO_A.items[1], 25)],
+        });
+        let code = 0, out = null;
+        await inWorld(WS, () => SWM.default({ method: "GET", headers: { authorization: "Bearer TESTCRON" }, query: {} }, { setHeader() {}, status(c) { code = c; return this; }, json(j) { out = j; return this; } }));
+        const seq = WS.up.map((x) => [x.p.kind === "fixed_asset" ? x.p.external_id : x.p.external_id + (x.p.paid ? ":paid" : ""), x.p.po_kind || x.p.po_external_id || null]);
+        ck("ตัวกวาด (handler ตัวจริง): บิลใบส่งอุปกรณ์ → ทรัพย์สินของใบนั้นพร้อม po_external_id · ใบจ่ายแล้ว: ขั้นรับ+ขั้นจ่าย ก่อนทรัพย์สิน · ใบวัตถุดิบไม่แตะทรัพย์สิน · เลขใบขึ้นต้นเหมือนกัน (…ASSETX) ไม่ถูกลากมา",
+          [code, seq],
+          [200, [["PO-PO-202610-B1-ING01", null],
+            ["PO-PO-202610-B1-ASSET", "asset"], ["ASSET-1000", "PO-PO-202610-B1-ASSET"], ["ASSET-1001", "PO-PO-202610-B1-ASSET"],
+            ["PO-PO-202610-B1-PAIDD", "asset"], ["PO-PO-202610-B1-PAIDD:paid", "asset"], ["ASSET-1002", "PO-PO-202610-B1-PAIDD"]]]);
+        ck("…ธงทุกใบ ok · บิลไป ?upsert=1 เดิม · ทรัพย์สินไปทางเดิม (ไม่ต่อ upsert) · ถามฐานหาทรัพย์สินเฉพาะใบส่งอุปกรณ์ (2 ครั้ง) · ผลรายใบบอกจำนวนที่ส่ง",
+          [WS.pos.map((p) => p.sliptrack_sync), WS.up.every((x) => x.url === (x.p.kind === "fixed_asset" ? ST : ST + "?upsert=1")), WS.reads.filter((r) => r.startsWith("GET assets?")).length,
+            out && out.results && out.results.map((r) => r.assets || null), WS.unexpected],
+          [["ok", "ok", "ok"], true, 2, [null, { sent: 2, failed: 0 }, { sent: 1, failed: 0 }], []]);
+      }
+    }
+
+    // ── ④ ทุกทางที่ส่งทรัพย์สิน (แก้/โอน/รับ) ผ่านพร็อกซีทีละตัว: ตัวผูกคิดจากฐาน · ใบ ฿0/ซื้อใช้เอง/ยกเลิก = ไม่ใส่ ──
+    const PO_C = RECV(PO_A, { id: 904, po_number: "PO-202610-B1-CANCL", status: "cancelled" });
+    const PO_S = RECV(PO_A, { id: 905, po_number: "PO-202610-B1-SELFF", from_branch_id: 3 });   // ซื้อใช้เอง: ต้นทาง = ปลายทาง
+    const NIGHT = {
+      pos: [RECV(PO_A), RECV(PO_Z), PO_C, PO_S],
+      assets: [
+        { id: 2001, name: "เตา", category: "ครัว", branch_id: 3, cost: 1250.5, quantity: 2, salvage_value: 0, useful_life_years: 5, status: "active", acquired_date: "2026-10-31", note: "รับตาม PO-202610-B1-ASSET" },
+        { id: 2002, name: "ตู้", category: null, branch_id: 3, cost: 300, quantity: 1, salvage_value: 0, useful_life_years: 0, status: "active", acquired_date: "2026-10-31", note: "รับตาม PO-202610-B1-ZEROO" },
+        { id: 2003, name: "พัดลม", category: null, branch_id: 3, cost: 900, quantity: 1, salvage_value: 0, useful_life_years: 0, status: "active", acquired_date: "2026-09-01", note: null },
+        { id: 2004, name: "ถาดสแตนเลส", category: null, branch_id: 5, cost: 25, quantity: 2, salvage_value: 0, useful_life_years: 0, status: "active", acquired_date: "2026-10-31", note: "ใส่ของทอด · รับตาม PO-202610-B1-ASSET · โอนมาจาก บางใหญ่ 01/11/2569" },
+        { id: 2005, name: "หม้อ", category: null, branch_id: 3, cost: 500, quantity: 1, salvage_value: 0, useful_life_years: 0, status: "active", acquired_date: "2026-10-31", note: "รับตาม PO-202610-B1-CANCL" },
+        { id: 2006, name: "เขียง", category: null, branch_id: 3, cost: 120, quantity: 1, salvage_value: 0, useful_life_years: 0, status: "active", acquired_date: "2026-10-31", note: "รับตาม PO-202610-B1-SELFF" },
+        { id: 2007, name: "เตาเก่า", category: null, branch_id: 3, cost: 800, quantity: 1, salvage_value: 0, useful_life_years: 0, status: "disposed", acquired_date: "2026-10-31", note: "รับตาม PO-202610-B1-ASSET" },
+        { id: 2008, name: "แก้ว", category: null, branch_id: 3, cost: 0, quantity: 10, salvage_value: 0, useful_life_years: 0, status: "active", acquired_date: "2026-10-31", note: "รับตาม PO-202610-B1-ASSET" },
+      ],
+    };
+    const EXP_LINK = { "ASSET-2001": "PO-PO-202610-B1-ASSET", "ASSET-2002": null, "ASSET-2003": null, "ASSET-2004": "PO-PO-202610-B1-ASSET", "ASSET-2005": null, "ASSET-2006": null };
+    if (PROXY && PROXY.default) {
+      const W = mkWorld(NIGHT);
+      const one = async (id) => { const u0 = W.up.length; const r = await inWorld(W, () => callProxy({ kind: "fixed_asset", asset_id: id })); const p = W.up.slice(u0)[0]; return [r.code, p ? (p.p.po_external_id || null) : "ไม่ส่ง"]; };
+      const got = [];
+      for (const id of [2001, 2002, 2003, 2004, 2005, 2006]) got.push(await one(id));
+      ck("พร็อกซีส่งทรัพย์สินทีละตัว (ทางแก้/โอน/รับ): มาจากใบมีบิล = po_external_id (แถวที่โอนไปสาขาอื่นยังผูกบิลเดิม) · ใบ ฿0 (กรอกทุนทีหลัง) / ไม่ได้มาจากใบ / ใบยกเลิก / ซื้อใช้เอง = ไม่ใส่",
+        got, Object.values(EXP_LINK).map((v) => [200, v]));
+      W.failPOread = true;
+      ck("อ่านใบจากฐานไม่ได้ → ทรัพย์สินจากใบส่งอุปกรณ์ไม่ถูกส่งแบบไม่มีตัวผูก (502) · ทรัพย์สินทั่วไปยังส่งได้ปกติ", [await one(2001), await one(2003)], [[502, "ไม่ส่ง"], [200, null]]);
+      W.failPOread = false;
+      const u0 = W.up.length;
+      const rz = await inWorld(W, () => callProxy({ kind: "fixed_asset", po_number: "PO-202610-B1-ZEROO" }));
+      const rbad = await inWorld(W, () => callProxy({ kind: "fixed_asset", po_number: "PO-x' or 1=1" }));
+      ck("ส่งซ้ำทั้งใบ (po_number): ใบ ฿0 = ไม่มีบิล ไม่ส่งอะไรเลย · เลขใบแปลก = 400", [rz.code, rz.out && rz.out.link, W.up.length - u0, rbad.code], [200, null, 0, 400]);
+    }
+
+    // ── ⑤ cron รายคืน (runDaily ตัวจริง): ส่งทุกแถวพร้อมตัวผูก = ตัวตามเก็บตัวสุดท้าย · อ่านใบไม่ได้ = ไม่ส่งแถวที่ต้องผูก (ดัง) ──
+    if (DLY && DLY.runDaily) {
+      const night = async (failPOread) => {
+        const W = mkWorld(NIGHT); W.failPOread = failPOread;
+        let code = 0, out = null;
+        await inWorld(W, () => DLY.runDaily({ query: { only: "assets" } }, { status(c) { code = c; return this; }, json(j) { out = j; return this; } }, "TEST"));
+        return { code, out, sent: Object.fromEntries(W.up.map((x) => [x.p.external_id, x.p.po_external_id || null])), unexpected: W.unexpected };
+      };
+      const N1 = await night(false);
+      ck("cron รายคืน: ทุกแถวที่ส่งได้ไปพร้อมตัวผูกที่ถูก (เหมือนพร็อกซีทุกตัว) · จำหน่ายแล้ว/ไม่มีทุน ไม่ส่งเหมือนเดิม",
+        [N1.code, N1.sent, N1.out && N1.out.assets && [N1.out.assets.sent, N1.out.assets.failed], N1.unexpected], [200, EXP_LINK, [6, 0], []]);
+      const N2 = await night(true);
+      ck("cron รายคืน อ่านใบไม่ได้: แถวที่มาจากใบส่งอุปกรณ์ไม่ส่ง (นับล้ม 5 · ตอบ 502 ให้ดัง) · แถวทั่วไปส่งตามปกติ",
+        [N2.code, Object.keys(N2.sent), N2.out && N2.out.assets && N2.out.assets.failed], [502, ["ASSET-2003"], 5]);
+    }
+  } catch (e) {
+    ok_("หมวดใบส่งอุปกรณ์ลงบัญชีรันจบ — " + String((e && e.stack) || e).slice(0, 160), false);
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [k, v] of Object.entries(envBak)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+  // ── โครงสร้าง: พร็อกซีส่งต่อ po_kind (ด่าน "ฟิลด์ที่หน้าเว็บส่งต้องรอดผ่านพร็อกซี" ครอบอยู่แล้ว) · ทุกทางสร้างบิลใช้ isAssetPO ตัวเดียวกัน ──
+  ok_("ทรัพย์สินสร้าง payload ที่เดียว (lib/sliptrack-assets.js) — po_external_id มาจาก _poExternalId ที่ attachPOLinks/relinkPOAssets คิดให้เท่านั้น",
+    !/po_external_id\s*:/.test(APP) && SLIPPUSH.includes("await attachPOLinks([row], sbGetA);") && !/body\.po_external_id/.test(SLIPPUSH));
 }
 
 console.log(`\n════════════════════════════════════════════════════`);

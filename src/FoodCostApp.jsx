@@ -1125,6 +1125,21 @@ const api = {
       return { ok: true, data: d, ...(aw.length ? { warnings: aw } : {}) };
     } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
   },
+  // ใบส่งอุปกรณ์ (31 ต.ค. 69): บิลของใบนี้เพิ่งเข้าบัญชีสำเร็จ → ให้เซิร์ฟเวอร์ส่งทรัพย์สินทุกแถวของใบซ้ำพร้อม po_external_id
+  // ส่งแค่เลขใบ — เซิร์ฟเวอร์หาแถว ("รับตาม <เลขใบ>") + คิดตัวผูกเอง ไม่ต้องดึงทะเบียนทั้งก้อนมาที่หน้าเว็บ · ไม่รอผล คืน {ok:false} แทน throw
+  pushPOAssetsToSlipTrack: async (poNumber) => {
+    try {
+      const r = await fetch("/api/sliptrack-push", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "fixed_asset", po_number: String(poNumber || "") }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, status: r.status, error: (d && (d.error || d.message)) || `HTTP ${r.status}` };
+      const aw = slipWarnings(d);   // 207 = ส่งได้บางแถว (พร็อกซีรวมคำเตือนรายแถวไว้ใน warnings)
+      if (aw.length || r.status === 207) console.warn("SlipTrack ส่งทรัพย์สินของใบส่งอุปกรณ์ซ้ำไม่ครบ", poNumber, aw, d && d.errors);
+      return { ok: r.status !== 207, data: d, ...(aw.length ? { warnings: aw } : {}) };
+    } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+  },
   getCostHist: (bid) => sb(`cost_history?order=id.desc&limit=50${bid ? `&branch_id=eq.${bid}` : ""}`),
   addCostHist: (d) => sb("cost_history", { method: "POST", body: JSON.stringify(d) }),
   deleteCostHistItem: (id) => sb(`cost_history?id=eq.${id}`, {method:"DELETE", prefer:"return=minimal"}),
@@ -2072,6 +2087,7 @@ async function pushPOToSlipTrack(po, branches, opts={}){
     if(!(amount>0))return{ok:false,skipped:"zero-amount"};
     const externalId=`PO-${po.po_number||po.id}`;
     const isPaid=opts.paid===true;
+    const assetPO=isAssetPO(po);
     // datetime is identical in both stages — use received_at so server can match
     const datetime=po.received_at||new Date().toISOString();
     const payload={
@@ -2082,6 +2098,11 @@ async function pushPOToSlipTrack(po, branches, opts={}){
       to_branch:toName,
       paid:isPaid,
     };
+    // ── ใบส่งอุปกรณ์ลงบัญชีเป็นทรัพย์สิน (31 ต.ค. 69) ─────────────────────────
+    // เจ้าของตัดสิน: สาขาจ่ายเงินครัวกลางค่าอุปกรณ์จริงเหมือนวัตถุดิบ — ฝั่งบัญชี (59b2288) รู้ชนิดบิลนี้จาก po_kind:"asset"
+    // ส่งทั้งขั้นรับของและขั้นจ่ายเงิน (ช่อง/ขั้นอื่นเหมือนเดิมทุกอย่าง) · ใบวัตถุดิบห้ามมี po_kind — payload ต้องเหมือนเดิมทุกไบต์
+    // ต้องตรงกับตัวกวาด api/sliptrack-sweep.js ทุกตัวอักษร (ด่าน "ใบส่งอุปกรณ์ลงบัญชีเป็นทรัพย์สิน" รันเทียบสองฝั่ง+พร็อกซี)
+    if(assetPO)payload.po_kind="asset";
     if(isPaid){
       // Stage 2: send the minimum needed to flip pending → confirmed
       payload.paid_at=opts.paidAt||new Date().toISOString();
@@ -2092,9 +2113,12 @@ async function pushPOToSlipTrack(po, branches, opts={}){
       // Stage 1: include description + items so the new rows are descriptive.
       // ใบโอนระหว่างสาขาต้องบอกบัญชีว่าเป็น "โอน" ไม่ใช่ "ซื้อ" — ข้อความนี้ต้องตรงกับตัวกวาด
       // api/sliptrack-sweep.js ทุกตัวอักษร (ใครส่งก่อนก็ได้แถวเดียวกัน ?upsert=1 เขียนทับ)
+      // ใบส่งอุปกรณ์ห้ามขึ้นต้น "ซื้อวัตถุดิบ —" (ฝั่งบัญชีขอ 31 ต.ค. 69) · ต้นทางครัวกลางเรียก "ครัวกลาง" · สาขาอื่นใช้ชื่อจริง
       payload.description=isTransferPO(po)
         ?`โอนวัตถุดิบระหว่างสาขา ${fromName} → ${toName}${po.notes?` — ${po.notes}`:""}`
-        :(po.notes?`ซื้อวัตถุดิบ — ${po.notes}`:`ซื้อวัตถุดิบ ${externalId}`);
+        :assetPO
+          ?`รับอุปกรณ์จาก${fromB.type==="central"?"ครัวกลาง":fromName}${po.notes?` — ${po.notes}`:` ${externalId}`}`
+          :(po.notes?`ซื้อวัตถุดิบ — ${po.notes}`:`ซื้อวัตถุดิบ ${externalId}`);
       payload.reference_no=po.po_number||externalId;
       // Same received-qty lines the header `amount` was derived from (0-qty lines dropped
       // — they aren't billed), so the SlipTrack lines always reconcile with the header.
@@ -11618,6 +11642,14 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
           status:"active",acquired_date:todayStr(),
           note:[o.note,`รับตาม ${po.po_number||"PO"}`].filter(Boolean).join(" · ")},o.name);
       }
+      // ── ใบส่งอุปกรณ์ลงบัญชีเป็นทรัพย์สิน (31 ต.ค. 69) ── เจ้าของตัดสิน: สาขาจ่ายครัวกลางค่าอุปกรณ์จริงเหมือนวัตถุดิบ
+      // บิลใบส่งต้องเข้าบัญชี "ก่อน" ทรัพย์สิน — ฝั่งบัญชีผูกทรัพย์สินเข้ากับบิลของสาขาด้วย po_external_id (ไม่นับเป็นซื้อแยกอีกก้อน)
+      // เดิมใบนี้ไม่ยิงบิลเลย รอตัวซ่อม/ตัวกวาดมาตั้งทีหลัง ⟹ ทรัพย์สินถึงบัญชีก่อนบิลทุกครั้ง = ค้างแบบไม่ผูก
+      // ยิงบิลครั้งเดียวด้วยใบที่เพิ่งรับ + จดธงแบบเดียวกับ confirmReceive (ตัวซ่อม/ตัวกวาดเห็น ok แล้วไม่ตั้งซ้ำ · ล้ม = failed ให้ตามต่อ)
+      // ทรัพย์สินส่งตามหลังบิลเสมอแม้บิลล้ม — po_external_id เซิร์ฟเวอร์ใส่ให้เอง (ใบ ฿0/ซื้อใช้เอง = ไม่มีบิล ไม่ใส่)
+      //   บิลล้มแล้วมาสำเร็จทีหลัง: ตัวซ่อม/ตัวกวาดส่งทรัพย์สินของใบนี้ซ้ำให้ผูก · cron รายคืนส่งพร้อมตัวผูกทุกคืนอยู่แล้ว
+      const bill=await pushPOToSlipTrack({...po,status:"awaiting_payment",received_at:receivedAt},branches);
+      await recordSlipSync(po.id,bill);
       // แจ้งทะเบียนบัญชีทันที (ไม่รอผล — cron รายวันตามเก็บให้ถ้าพลาด)
       createdIds.forEach(id=>api.pushAssetToSlipTrack(id));
       await load();setViewPO(null);
@@ -11851,6 +11883,9 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       return;
     }
     await recordSlipSync(cur.id,res);
+    // ใบส่งอุปกรณ์ (31 ต.ค. 69): บิลเพิ่งเข้าบัญชีสำเร็จ (ตอนรับล้ม) → ส่งทรัพย์สินของใบนี้ซ้ำ ฝั่งบัญชีจะผูกเข้ากับบิล
+    // ต้องหลังบิลเสมอ · ใบยกเลิก = ยกเลิกบิล ไม่มีอะไรให้ผูก · ใบ ฿0 (ข้าม) ไม่เข้าเงื่อนไข res.ok
+    if(res&&res.ok&&cur.status!=="cancelled"&&isAssetPO(cur))api.pushPOAssetsToSlipTrack(cur.po_number);
   }
   async function cancelPO(po){
     if(!isCreator(po)&&!isCentralBranch){alert("เฉพาะผู้ออกเอกสารหรือครัวกลางเท่านั้นที่ยกเลิกได้");return;}
