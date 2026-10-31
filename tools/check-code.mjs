@@ -12458,6 +12458,182 @@ section("API/ข้อมูล 28 ต.ค. 69: แจ้งเตือนป�
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// แก้ไขใบส่งสินทรัพย์/อุปกรณ์ (31 ต.ค. 69) — พนักงานแจ้ง: ใบส่งวัตถุดิบที่รอจัดส่งกด ⋮ → แก้ไข ได้
+// แต่ใบส่งสินทรัพย์/อุปกรณ์ (ออกจากใบขอสินทรัพย์ที่อนุมัติแล้ว) ไม่มีเมนูแก้ไข → ครัวกลางปรับจำนวนก่อนส่งไม่ได้
+// เมนูเดิมตัวเดียวพาใบสินทรัพย์ไปหน้าแก้ของมันเอง (ฟอร์มวัตถุดิบห้าม: เพิ่มแถววัตถุดิบแล้วใบหลุดเป็นใบวัตถุดิบ → ตัดสต๊อกจริง)
+// รัน applyAssetPOEdits / isAssetPO / saveAssetEdit / receiveAssetPO ตัวจริงจากแอปกับของปลอม · ที่เหลือตรวจโครงสร้าง
+// ══════════════════════════════════════════════════════════════════════════
+section("แก้ไขใบส่งสินทรัพย์/อุปกรณ์ (31 ต.ค. 69)");
+{
+  const fnSrc = (head) => { const s0 = APP.indexOf(head); if (s0 < 0) return null; const b0 = head.endsWith("{") ? s0 + head.length - 1 : APP.indexOf("){", s0) + 1; let d = 0; for (let j = b0; j < APP.length; j++) { if (APP[j] === "{") d++; else if (APP[j] === "}") { d--; if (d === 0) return APP.slice(s0, j + 1).trim(); } } return null; };
+  const runW = (src, name, deps) => { const ks = Object.keys(deps); return new Function(...ks, src + "\nreturn " + name + ";")(...ks.map((k) => deps[k])); };
+  const safe = (f) => { try { return f(); } catch (e) { return "ERR " + ((e && e.message) || e); } };
+  const safeA = async (f) => { try { return await f(); } catch (e) { return "ERR " + ((e && e.message) || e); } };
+  const R2 = (n) => Math.round((+n || 0) * 100) / 100;
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  let F = null;
+  try { F = new Function(grab(APP, "isAssetPO") + "\n" + grab(APP, "applyAssetPOEdits") + "\nreturn {isAssetPO,applyAssetPOEdits};")(); } catch { F = null; }
+  ok_("ดึง applyAssetPOEdits + isAssetPO ตัวจริงจากแอปมารันได้", !!F);
+  // แถวจริงของ PO-202610-B1-JPKQW (#823) ย่อเหลือ 3 แถว · แถวแก้วใส่ราคาไว้พิสูจน์ line_total
+  const ITEMS = [
+    { qty: 2, kind: "other", name: "เอี๊ยมขัดกระทะ", note: "ชำรุด", unit: "ชิ้น", files: [{ ref: "drive:a", name: "a.jpg", type: "image/jpeg" }], image: "drive:a", asset_id: null, line_total: 0, current_qty: null, price_per_unit: 0 },
+    { qty: 30, kind: "asset", name: "เตา", note: "ชำรุด ศ-อา", unit: "ชิ้น", files: [{ ref: "drive:b", name: "b.jpg", type: "image/jpeg" }], image: "drive:b", asset_id: 9, line_total: 0, current_qty: 32, price_per_unit: 0 },
+    { qty: 150, kind: "asset", name: "แก้วสแตนเลสสีทอง", note: "ช่วงเทศกาลไม่พอใช้", unit: "ชิ้น", files: null, image: "drive:c", asset_id: 1139, line_total: 7500, current_qty: 200, price_per_unit: 50 },
+  ];
+  const SNAP = JSON.stringify(ITEMS);
+  // edits แบบเดียวกับที่หน้าแก้ส่งมา (ครบทุกแถว + ตัวตนของแถว + จำนวนเดิมที่เห็นบนจอ) · withNote=false = ไม่ได้แตะหมายเหตุ
+  const E = (over = {}, withNote = true) => Object.fromEntries(ITEMS.map((it, i) => [i, { kind: it.kind, asset_id: it.asset_id, name: it.name, orig_qty: it.qty, qty: String(it.qty), ...(withNote ? { note: it.note || "" } : {}), removed: false, ...(over[i] || {}) }]));
+  const AT = "2026-10-31T03:00:00.000Z";
+  const STALE = "ERR ใบถูกแก้จากที่อื่นแล้ว — รีเฟรชแล้วลองใหม่";
+  let r1 = "ERR ไม่ได้รัน";
+  if (F) {
+    const { isAssetPO, applyAssetPOEdits } = F;
+    r1 = safe(() => applyAssetPOEdits(ITEMS, E({ 2: { qty: "100" } }), "central", AT));
+    ck("แก้จำนวนแก้ว 150→100 → แถวนั้นเปลี่ยนแค่ qty (+ line_total = ราคาเดิม × จำนวนใหม่) · ช่องอื่น (kind/asset_id/รูป/ไฟล์/มีอยู่เดิม) ครบเหมือนเดิม · แถวอื่นไม่แตะ",
+      typeof r1 === "string" ? r1 : [r1.items.length, r1.items[2], r1.items[0], r1.items[1]],
+      [3, { ...ITEMS[2], qty: 100, line_total: 5000 }, ITEMS[0], ITEMS[1]]);
+    ck("…changes บอกแถว/ช่อง/จาก/เป็น/ใคร/เมื่อไร · ของที่ส่งเข้าไปไม่ถูกแก้ (ฟังก์ชันบริสุทธิ์)",
+      typeof r1 === "string" ? r1 : [r1.changes, JSON.stringify(ITEMS) === SNAP],
+      [[{ i: 2, name: "แก้วสแตนเลสสีทอง", kind: "asset", asset_id: 1139, by: "central", at: AT, field: "qty", from: 150, to: 100 }], true]);
+    ok_("…ผลยังเป็นใบสินทรัพย์ตาม isAssetPO ตัวจริง (ทุกแถว kind/asset_id เดิม) — จัดส่ง/รับจึงไม่ไปตัดสต๊อกวัตถุดิบ",
+      typeof r1 !== "string" && isAssetPO({ items: r1.items }) && r1.items.every((x, i) => x.kind === ITEMS[i].kind && x.asset_id === ITEMS[i].asset_id));
+    const r2 = safe(() => applyAssetPOEdits(ITEMS, E({ 0: { removed: true } }), "central", AT));
+    ck("✕ เอาแถวแรกออก → เหลือ 2 แถวเดิมเป๊ะ · changes จดว่าเอาออก (เดิม 2) · ยังเป็นใบสินทรัพย์",
+      typeof r2 === "string" ? r2 : [r2.items, r2.changes.map((c) => [c.i, c.field, c.from, c.to]), isAssetPO({ items: r2.items })],
+      [[ITEMS[1], ITEMS[2]], [[0, "removed", 2, 0]], true]);
+    const r3 = safe(() => applyAssetPOEdits(ITEMS, E({ 1: { note: "  เปลี่ยนเป็นรุ่นใหม่ " }, 0: { note: "" } }), "c", AT));
+    ck("แก้หมายเหตุ (ตัดช่องว่าง) / ลบหมายเหตุ (ว่าง = null) → เปลี่ยนแค่ note · ไม่แก้อะไรเลย = changes ว่าง แถวเหมือนเดิมทุกตัว · ไม่ส่ง note = ใช้ของในใบ",
+      [typeof r3 === "string" ? r3 : [r3.items[0], r3.items[1], r3.changes.map((c) => [c.i, c.field, c.to])],
+        safe(() => { const r = applyAssetPOEdits(ITEMS, E(), "c", AT); return [r.items, r.changes]; }),
+        safe(() => { const r = applyAssetPOEdits(ITEMS, E({}, false), "c", AT); return [r.items, r.changes]; })],
+      [[{ ...ITEMS[0], note: null }, { ...ITEMS[1], note: "เปลี่ยนเป็นรุ่นใหม่" }, [[0, "note", null], [1, "note", "เปลี่ยนเป็นรุ่นใหม่"]]], [ITEMS, []], [ITEMS, []]]);
+    ck("ใบถูกแก้จากที่อื่น: แถวสลับที่ / ชื่อเปลี่ยน / asset_id เปลี่ยน / ชนิดเปลี่ยน / แถววัตถุดิบ / จำนวนเดิมไม่ตรงของสด / มีแถวเพิ่ม / แถวหาย / ลำดับแปลก → โยน ไม่เขียนทับ",
+      [safe(() => applyAssetPOEdits([ITEMS[1], ITEMS[0], ITEMS[2]], E(), "c", AT)),
+        safe(() => applyAssetPOEdits([ITEMS[0], { ...ITEMS[1], name: "เตาแก๊ส" }, ITEMS[2]], E(), "c", AT)),
+        safe(() => applyAssetPOEdits([ITEMS[0], { ...ITEMS[1], asset_id: 10 }, ITEMS[2]], E(), "c", AT)),
+        safe(() => applyAssetPOEdits([ITEMS[0], { ...ITEMS[1], kind: "other" }, ITEMS[2]], E(), "c", AT)),
+        safe(() => applyAssetPOEdits([ITEMS[0], { ingredient_id: 7, name: "เตา", qty: 30 }, ITEMS[2]], E(), "c", AT)),
+        safe(() => applyAssetPOEdits([ITEMS[0], { ...ITEMS[1], qty: 20 }, ITEMS[2]], E({ 1: { qty: "25" } }), "c", AT)),
+        safe(() => applyAssetPOEdits([...ITEMS, { ...ITEMS[0], name: "ใหม่" }], E(), "c", AT)),
+        safe(() => applyAssetPOEdits(ITEMS.slice(0, 2), E(), "c", AT)),
+        safe(() => applyAssetPOEdits(ITEMS, { "0": E()[0], "01": E()[1], "2": E()[2] }, "c", AT))],
+      Array(9).fill(STALE));
+    const bad = ["0", "-5", "abc", "", "  ", "1e3", "NaN", "0.001", "Infinity"].map((q) => safe(() => applyAssetPOEdits(ITEMS, E({ 1: { qty: q } }), "c", AT)));
+    ck("จำนวน 0 / ติดลบ / ตัวหนังสือ / ว่าง / 1e3 / NaN / ปัดแล้วเป็น 0 / Infinity → ไม่รับ บอกเหตุผลเป็นไทย (ไม่ส่ง = กด ✕)",
+      bad.map((m) => typeof m === "string" && m.startsWith('ERR จำนวนของ "เตา" ไม่ถูกต้อง — ต้องเป็นตัวเลขมากกว่า 0') && m.includes("✕")), Array(9).fill(true));
+    ck("จำนวนทศนิยม / มีจุลภาค → รับ (ปัด 2 ตำแหน่ง) · แถวที่ ✕ ออกไม่ตรวจจำนวน",
+      [safe(() => applyAssetPOEdits(ITEMS, E({ 0: { qty: "2.5" } }), "c", AT).items[0].qty), safe(() => applyAssetPOEdits(ITEMS, E({ 2: { qty: "1,000" } }), "c", AT).items[2].qty),
+        safe(() => applyAssetPOEdits(ITEMS, E({ 0: { removed: true, qty: "abc" } }), "c", AT).items.length)], [2.5, 1000, 2]);
+    // รีวิว 31 ต.ค. 69: เดิมปัด 2 ตำแหน่งทุกแถว → แถวที่ไม่ได้แตะแต่ใบขอมี 1.333 ถูกเปลี่ยนเป็น 1.33 เงียบๆ (สินทรัพย์เข้าทะเบียนผิด + ประวัติบอกว่ามีคนแก้)
+    const ODD = [ITEMS[0], { ...ITEMS[1], qty: 1.333 }, ITEMS[2]];
+    const EO = Object.fromEntries(ODD.map((it, i) => [i, { kind: it.kind, asset_id: it.asset_id, name: it.name, orig_qty: it.qty, qty: String(it.qty), removed: false }]));
+    ck("เลขเดิมที่ไม่ได้แตะ (1.333 จากใบขอ) → คงเดิมเป๊ะ ไม่ถูกปัดเงียบๆ · changes ว่าง · พิมพ์ 1.333 ใหม่ทับเลขอื่น → ปัดเป็น 1.33",
+      [safe(() => { const r = applyAssetPOEdits(ODD, EO, "c", AT); return [r.items[1].qty, r.changes.length]; }), safe(() => applyAssetPOEdits(ITEMS, E({ 1: { qty: "1.333" } }), "c", AT).items[1].qty)],
+      [[1.333, 0], 1.33]);
+    ck("✕ ออกทุกแถว → ไม่ยอม บอกให้ใช้ ⋮ → ลบ แทน (ใบว่าง isAssetPO=false = ใบหลุดชนิด)",
+      safe(() => applyAssetPOEdits(ITEMS, E({ 0: { removed: true }, 1: { removed: true }, 2: { removed: true } }), "c", AT)),
+      "ERR ไม่เหลือรายการในใบแล้ว — ถ้าจะไม่ส่งของทั้งใบ ให้ปิดหน้านี้แล้วใช้ ⋮ → ลบ แทน");
+  }
+
+  // ── ใบที่แก้แล้ว → receiveAssetPO ตัวจริง: สินทรัพย์เข้าทะเบียนตามจำนวนที่แก้ ครั้งเดียวต่อแถว ──
+  const RA = fnSrc("  async function receiveAssetPO(po){");
+  ok_("ดึง receiveAssetPO ตัวจริงมารันได้", !!RA);
+  if (RA && typeof r1 !== "string") {
+    const added = [], claims = [];
+    const api = { getAssets: async () => [{ id: 9, category: "ครัว", useful_life_years: 5 }, { id: 1139, category: "ภาชนะ", useful_life_years: 3 }],
+      patchPOIfStatus: async (id, st) => { claims.push([id, st]); return [{ id }]; }, addAsset: async (row) => { added.push([row.name, row.quantity, row.cost, row.branch_id]); return [{ id: added.length }]; }, pushAssetToSlipTrack: () => {} };
+    const got = await safeA(() => runW(RA, "receiveAssetPO", { currentBranch: { id: 3, name: "ราชพฤกษ์" }, confirmDlg: async () => true, setConfirming: () => {}, api, round2: R2, currentUser: { username: "b3" },
+      todayStr: () => "2026-10-31", load: async () => {}, setViewPO: () => {}, posToast: () => {}, alert: () => {}, showErr: (t, e) => { throw e; }, setTimeout: () => {} })({ id: 823, po_number: "PO-202610-B1-JPKQW", status: "shipped", branch_id: 3, items: r1.items }));
+    ck("ใบที่แก้แล้ว (แก้ว 150→100) เข้า receiveAssetPO ตัวจริง → สร้างสินทรัพย์ตามจำนวนที่แก้ ครั้งเดียวต่อแถว · ล็อกรับ shipped ครั้งเดียว",
+      [typeof got === "string" ? got : "ok", added, claims], ["ok", [["เตา", 30, 0, 3], ["แก้วสแตนเลสสีทอง", 100, 50, 3], ["เอี๊ยมขัดกระทะ", 2, 0, 3]], [[823, "shipped"]]]);
+  }
+
+  // ── saveAssetEdit ตัวจริง: อ่านใบสดก่อน · ต้องยังรอจัดส่ง+เป็นใบสินทรัพย์ · เขียนแบบมีเงื่อนไข status=open ──
+  const SA = fnSrc("  async function saveAssetEdit(po,edits){");
+  ok_("ดึง saveAssetEdit ตัวจริงมารันได้", !!SA);
+  if (SA && F) {
+    const FRESH = { id: 823, po_number: "PO-202610-B1-JPKQW", status: "open", branch_id: 3, from_branch_id: 1, subtotal: 0, vat: 0, total: 0, items: ITEMS };
+    const runSA = async ({ fresh = FRESH, getThrows = false, cas = false, histThrows = false, edits = E({ 2: { qty: "100" } }, false), can = true, twice = false } = {}) => {
+      const W = { gets: 0, patches: [], hist: [], alerts: [], loads: 0, closed: 0, toast: [], errs: [] };
+      const deps = {
+        assetEditBusyRef: { current: false }, currentUser: { username: "central" }, setAssetEditPO: (v) => { if (v === null) W.closed++; }, load: async () => { W.loads++; },
+        alert: (m) => W.alerts.push(String(m)), canEditPO: () => can, showErr: (t) => W.errs.push(t), PO_STATUS: { open: { label: "รอจัดส่ง" }, shipped: { label: "จัดส่งแล้ว" } },
+        isAssetPO: F.isAssetPO, applyAssetPOEdits: F.applyAssetPOEdits, posToast: (m) => W.toast.push(m), branchById: { 3: { name: "ราชพฤกษ์" } }, nowStr: () => AT,
+        console: { warn: () => {}, error: () => {}, log: () => {} },
+        api: {
+          getPO: async () => { W.gets++; await tick(); if (getThrows) throw new Error("net"); return fresh ? [JSON.parse(JSON.stringify(fresh))] : []; },
+          patchPOIfStatus: async (id, st, d) => { W.patches.push([id, st, d]); await tick(); if (cas) throw new Error("เอกสารถูกแก้ไขโดยผู้ใช้อื่นแล้ว — กรุณารีเฟรชและลองใหม่"); return [{ id }]; },
+          addActionHist: (d) => { W.hist.push(d.action); return histThrows ? Promise.reject(new Error("hist down")) : Promise.resolve([]); },
+        },
+      };
+      const fn = runW(SA, "saveAssetEdit", deps);
+      // สำเนาบนจอ (ตอนเปิดหน้าแก้) — ตั้งใจให้ "เก่า" กว่าของในฐานได้
+      const screen = { id: 823, po_number: "PO-202610-B1-JPKQW", status: "open", branch_id: 3, items: ITEMS };
+      const r = twice ? await safeA(() => Promise.all([fn(screen, edits), fn(screen, edits)])) : await safeA(() => fn(screen, edits));
+      await tick();
+      W.threw = typeof r === "string" ? r : null;
+      return W;
+    };
+    const A = await runSA();
+    const p0 = A.patches[0] || [];
+    ck("บันทึกปกติ → อ่านใบสด 1 ครั้ง · เขียน 1 ครั้งแบบ CAS status=open ช่อง items+updated_at เท่านั้น (ยอดรวมหัวใบไม่แตะ = 0 ตามเดิม) · แก้ว 100 · ปิดหน้า+โหลดใหม่ · ไม่โยน",
+      [A.gets, A.patches.length, p0[0], p0[1], p0[2] && Object.keys(p0[2]).sort(), p0[2] && p0[2].items.map((x) => x.qty), p0[2] && typeof p0[2].updated_at, A.closed, A.loads, A.threw, A.alerts],
+      [1, 1, 823, "open", ["items", "updated_at"], [2, 30, 100], "string", 1, 1, null, []]);
+    ok_("…ประวัติการแก้ 1 แถว: เลขใบ + สาขา + จาก→เป็น + ใครแก้", A.hist.length === 1 && ["PO-202610-B1-JPKQW", "ราชพฤกษ์", '"แก้วสแตนเลสสีทอง" 150→100', "โดย central"].every((s) => A.hist[0].includes(s)));
+    const FR2 = { ...FRESH, items: [{ ...ITEMS[0], note: "แก้จากอีกเครื่อง" }, ITEMS[1], ITEMS[2]] };
+    const A2 = await runSA({ fresh: FR2 });
+    ck("ใช้ใบสดจากฐาน ไม่ใช่สำเนาบนจอ: อีกเครื่องแก้หมายเหตุแถวอื่นไว้ → คงของเขา แก้แค่แถวที่เราแก้",
+      A2.patches.length === 1 ? [A2.patches[0][2].items[0].note, A2.patches[0][2].items[2].qty] : A2.patches.length, ["แก้จากอีกเครื่อง", 100]);
+    const B = await runSA({ fresh: { ...FRESH, status: "shipped" } });
+    const C2 = await runSA({ fresh: { ...FRESH, items: [{ ingredient_id: 7, name: "หมู", unit: "กก.", qty: 5 }] } });
+    const D = await runSA({ fresh: null });
+    const G = await runSA({ fresh: { ...FRESH, items: [ITEMS[0], { ...ITEMS[1], name: "เตาแก๊ส" }, ITEMS[2]] } });
+    ck("ใบในฐานจัดส่งแล้ว / ไม่ใช่ใบสินทรัพย์แล้ว / ถูกลบ / แถวถูกแก้จากที่อื่น → ไม่เขียนเลย · ปิดหน้า+โหลดใหม่+บอกเหตุ",
+      [B, C2, D, G].map((w) => [w.patches.length, w.hist.length, w.closed, w.loads, w.alerts.length]), Array(4).fill([0, 0, 1, 1, 1]));
+    ok_("…ข้อความบอกเหตุถูกเรื่อง (จัดส่งแล้ว+ชื่อสถานะ / ไม่ใช่ใบสินทรัพย์ / ไม่พบ / ถูกแก้จากที่อื่น)",
+      (B.alerts[0] || "").includes("ถูกจัดส่งหรือเปลี่ยนสถานะไปแล้ว (จัดส่งแล้ว)") && (C2.alerts[0] || "").includes("ไม่ใช่ใบส่งสินทรัพย์") && (D.alerts[0] || "").includes("ไม่พบใบนี้แล้ว") && G.alerts[0] === STALE.slice(4));
+    const K = await runSA({ cas: true });
+    ck("CAS ได้ 0 แถว (อีกเครื่องกดจัดส่งระหว่างแก้) → ไม่จดประวัติ · ปิดหน้า+โหลดใหม่+บอกว่าไม่ได้บันทึก",
+      [K.patches.length, K.hist.length, K.closed, K.loads, K.toast.length, (K.alerts[0] || "").includes("ไม่ได้บันทึก")], [1, 0, 1, 1, 0, true]);
+    const N = await runSA({ getThrows: true });
+    ck("อ่านใบสดไม่ได้ (เน็ตหลุด) → ไม่เขียน · หน้าแก้ยังเปิดอยู่ให้กดใหม่ (ไม่ปิด ไม่ทิ้งที่พิมพ์ไว้)", [N.patches.length, N.closed, N.errs.length], [0, 0, 1]);
+    const H = await runSA({ histThrows: true });
+    ck("เขียนประวัติล้ม → การแก้ที่บันทึกแล้วยังขึ้นสำเร็จ (ไม่รอผล ไม่โยน)", [H.patches.length, H.closed, H.toast.length, H.threw], [1, 1, 1, null]);
+    const T = await runSA({ twice: true });
+    ck("กดบันทึกรัวสองที → เขียนครั้งเดียว", [T.gets, T.patches.length, T.hist.length], [1, 1, 1]);
+    const Z = await runSA({ edits: E({}, false) });
+    ck("ไม่ได้แก้อะไร → ไม่เขียน ไม่จดประวัติ ปิดหน้า", [Z.patches.length, Z.hist.length, Z.closed], [0, 0, 1]);
+    const X = await runSA({ can: false });
+    ck("ไม่มีสิทธิ์แก้ (canEditPO=false) → ไม่อ่าน ไม่เขียน", [X.gets, X.patches.length], [0, 0]);
+    const Q = await runSA({ edits: E({ 2: { qty: "0" } }, false) });
+    ck("จำนวน 0 → ไม่เขียน หน้าแก้ยังเปิด (แก้ต่อได้) บอกเหตุเป็นไทย", [Q.patches.length, Q.closed, (Q.alerts[0] || "").startsWith('จำนวนของ "แก้วสแตนเลสสีทอง" ไม่ถูกต้อง')], [0, 0, true]);
+  }
+
+  // ── ตรวจโครงสร้าง: ทางเข้าแก้ไขเดิมทุกจุดพาใบสินทรัพย์ไปหน้าใหม่ · ใบวัตถุดิบยังไปฟอร์มเดิม ──
+  ok_("เมนู ⋮ → แก้ไข ตัวเดิม (ตัวเดียว): ใบสินทรัพย์ → startAssetEdit · ใบวัตถุดิบ → startEdit · ไม่มีเงื่อนไขซ่อนเมนูของใบสินทรัพย์แล้ว",
+    APP.includes(`canEditPO(po)&&po.status==="open"&&{label:"แก้ไข",icon:I.pencil,color:"#92400E",onClick:()=>isAssetPO(po)?startAssetEdit(po):startEdit(po)},`)
+    && !APP.includes(`!isAssetPO(po)&&{label:"แก้ไข"`) && (APP.match(/\{label:"แก้ไข",icon:I\.pencil,color:"#92400E"/g) || []).length === 1);
+  ok_("ปุ่ม ✏️ แก้ไข เดิมในหน้าดูใบ: โชว์ใบสินทรัพย์ด้วย และพาไป startAssetEdit · ใบวัตถุดิบยัง startEdit",
+    APP.includes(`const canEditFromView=canManage&&po.status==="open";`) && APP.includes(`onEdit={()=>{setViewPO(null);if(isAssetPO(viewPO))startAssetEdit(viewPO);else startEdit(viewPO);}}`));
+  const SE = fnSrc("  function startEdit(po){") || "";
+  const seGuard = SE.indexOf("if(isAssetPO(po)){alert(");
+  ok_("startEdit (ฟอร์มวัตถุดิบ) ยังปฏิเสธใบสินทรัพย์ก่อนเปิดฟอร์ม — ด่านสำรองถ้ามีทางเข้าไหนหลุด", seGuard > 0 && seGuard < SE.indexOf("setStep('form')"));
+  const SAE = fnSrc("  function startAssetEdit(po){") || "";
+  ok_("startAssetEdit: เช็คสิทธิ์ canEditPO + ต้องเป็นใบสินทรัพย์ + ต้องรอจัดส่ง ก่อนเปิดหน้า",
+    !!SAE && ["if(!canEditPO(po))", "if(!isAssetPO(po))", `if(po.status!=="open")`].every((s) => SAE.includes(s) && SAE.indexOf(s) < SAE.indexOf("setAssetEditPO(po)")));
+  const SAS = SA || "";
+  ok_("saveAssetEdit: อ่านใบสด (api.getPO) ก่อนเขียน · คิดจาก fresh.items · เขียนด้วย patchPOIfStatus(…,\"open\",…) เท่านั้น",
+    SAS.indexOf("api.getPO(po.id)") > 0 && SAS.indexOf("api.getPO(po.id)") < SAS.indexOf("applyAssetPOEdits(fresh.items,edits,who,at)")
+    && SAS.indexOf("applyAssetPOEdits(fresh.items,edits,who,at)") < SAS.indexOf(`api.patchPOIfStatus(fresh.id,"open",{items:res.items,updated_at:at})`)
+    && !/api\.updatePO\(|api\.addPO\(|transferStockBetweenBranches|addAsset|updateAsset/.test(SAS));
+  const MD = fnSrc("function AssetPOEditModal(") || "";
+  ok_("หน้าแก้: ช่องจำนวน type=text + inputMode=decimal (ไม่มี type=number — iOS) · บอกว่าเพิ่มรายการใหม่ให้เปิดใบขอใหม่ · ส่งตัวตนแถวครบ",
+    MD.includes(`<input type="text" inputMode="decimal" value={r.qty}`) && !MD.includes(`type="number"`) && MD.includes("เพิ่มรายการใหม่ให้สาขาเปิดใบขอสินทรัพย์ใหม่")
+    && MD.includes("{kind:r.kind,asset_id:r.asset_id,name:r.name,orig_qty:r.orig_qty,qty:r.qty,note:r.note!==r.orig_note?r.note:undefined,removed:r.removed}"));
+  ok_("หน้าแก้ถูกวางใน POSection และบันทึกผ่าน saveAssetEdit", APP.includes("{assetEditPO&&<AssetPOEditModal po={assetEditPO}") && APP.includes("onSave={edits=>saveAssetEdit(assetEditPO,edits)}"));
+}
+
 console.log(`\n════════════════════════════════════════════════════`);
 console.log(fail === 0 ? `✅ ผ่านทั้งหมด ${pass} ข้อ` : `❌ ล้มเหลว ${fail} ข้อ (ผ่าน ${pass})`);
 process.exitCode = fail ? 1 : 0;

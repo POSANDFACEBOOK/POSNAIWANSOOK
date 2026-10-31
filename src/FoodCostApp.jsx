@@ -438,6 +438,43 @@ function isAssetPO(po){
   const its=po&&po.items;
   return Array.isArray(its)&&its.length>0&&its.every(it=>it&&(it.kind==="asset"||it.kind==="other"));
 }
+// ── แก้ไขใบส่งสินทรัพย์/อุปกรณ์ก่อนจัดส่ง (31 ต.ค. 69) ─────────────────────────────
+// พนักงานแจ้ง: ใบส่ง "วัตถุดิบ" ที่รอจัดส่งกด ⋮ → แก้ไข ได้ แต่ใบส่ง "สินทรัพย์/อุปกรณ์" (ออกจากใบขอสินทรัพย์ที่อนุมัติแล้ว)
+// ไม่มีเมนูแก้ไขเลย ครัวกลางปรับจำนวนก่อนส่งไม่ได้ (เช่น PO-202610-B1-JPKQW สาขาขอแก้ว 150 ใบ)
+// ฟอร์มวัตถุดิบเอามาใช้ไม่ได้: เพิ่มแถววัตถุดิบเข้าไป isAssetPO จะเป็น false → ตอนจัดส่ง/รับ ใบนี้ไปตัดสต๊อกวัตถุดิบจริง
+// จึงให้แก้ได้แค่ "จำนวน" กับ "หมายเหตุ" ต่อแถว และเอาแถวออก — ช่องอื่นของแถว (kind/asset_id/ชื่อ/รูป/ไฟล์/มีอยู่เดิม ฯลฯ)
+// ติดไปครบทุกตัว ใบจึงยังเป็นใบสินทรัพย์ และตอนสาขากดรับ receiveAssetPO สร้างสินทรัพย์ตามจำนวนที่แก้แล้ว
+// edits = {ลำดับแถวเดิม: {kind,asset_id,name,orig_qty,qty,note,removed}} ต้องครบทุกแถวของใบที่อ่านสดจากฐาน
+// ชนิด/รหัส/ชื่อไม่ตรง หรือจำนวนเดิมไม่ตรงของสด = มีคนแก้ใบนี้จากที่อื่นระหว่างเปิดหน้าจอ → โยน ไม่เขียนทับของเขา
+// line_total คิดใหม่จากราคาเดิม × จำนวนใหม่ (จอดู/ใบพิมพ์อ่านช่องนี้) · ยอดรวมหัวใบไม่แตะ (ใบส่งสินทรัพย์ = 0 เสมอ)
+// who/at ติดไปกับรายการ changes (ไว้เขียนประวัติ) — ไม่ใส่ลงแถวในใบ แถวจึงมีช่องเท่าเดิม
+function applyAssetPOEdits(items,edits,who,at){
+  const STALE="ใบถูกแก้จากที่อื่นแล้ว — รีเฟรชแล้วลองใหม่";
+  const src=Array.isArray(items)?items:[];
+  const ed=edits&&typeof edits==="object"?edits:{};
+  const keys=Object.keys(ed);
+  if(!src.length||keys.length!==src.length||keys.some(k=>String(+k)!==k||!(+k>=0&&+k<src.length)))throw new Error(STALE);
+  const idOf=x=>[x&&x.kind,x&&x.asset_id!=null?String(x.asset_id):"",String((x&&x.name)||"").trim()].join("|");
+  const r2=n=>Math.round(n*100)/100;
+  const out=[],changes=[];
+  src.forEach((it,i)=>{
+    const e=ed[i];
+    if(!it||!e||!(it.kind==="asset"||it.kind==="other")||idOf(it)!==idOf(e))throw new Error(STALE);
+    if(e.orig_qty!==undefined&&+e.orig_qty!==+it.qty)throw new Error(STALE);
+    const base={i,name:it.name,kind:it.kind,asset_id:it.asset_id??null,by:who||null,at:at||null};
+    if(e.removed){changes.push({...base,field:"removed",from:+it.qty||0,to:0});return;}
+    const raw=String(e.qty??"").trim().replace(/,/g,"");
+    // เลขเดิมที่ไม่ได้แตะต้องคงเดิมเป๊ะ (ใบขออาจมี 1.333) — ปัด 2 ตำแหน่งเฉพาะเลขที่พิมพ์ใหม่ ไม่งั้นแถวที่ไม่ได้แก้จะถูกปัดเงียบๆ
+    const q=/^(\d+\.?\d*|\.\d+)$/.test(raw)?(+raw===+it.qty?+it.qty:r2(+raw)):NaN;
+    if(!(Number.isFinite(q)&&q>0))throw new Error(`จำนวนของ "${it.name||"(ไม่มีชื่อ)"}" ไม่ถูกต้อง — ต้องเป็นตัวเลขมากกว่า 0\n(ถ้าไม่ส่งรายการนี้ ให้กด ✕ เอารายการออก)`);
+    const next={...it};
+    if(q!==+it.qty){next.qty=q;if("line_total" in it)next.line_total=r2(q*(+it.price_per_unit||0));changes.push({...base,field:"qty",from:+it.qty||0,to:q});}
+    if(e.note!==undefined){const n=String(e.note??"").trim()||null;if(n!==(String(it.note??"").trim()||null)){next.note=n;changes.push({...base,field:"note",from:it.note??null,to:n});}}
+    out.push(next);
+  });
+  if(!out.length)throw new Error("ไม่เหลือรายการในใบแล้ว — ถ้าจะไม่ส่งของทั้งใบ ให้ปิดหน้านี้แล้วใช้ ⋮ → ลบ แทน");
+  return{items:out,changes};
+}
 // Currency formatter (Thai Baht, always 2 decimals)
 const fmtTHB = (n) => `฿${(+n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 // Today in Asia/Bangkok (YYYY-MM-DD) — avoids UTC off-by-one near midnight
@@ -10958,6 +10995,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   const[step,setStep]=useState(null);
   const[pickedBranch,setPickedBranch]=useState(null);
   const[editPO,setEditPO]=useState(null);
+  const[assetEditPO,setAssetEditPO]=useState(null);   // ใบส่งสินทรัพย์ที่เปิดหน้าแก้จำนวนอยู่ (31 ต.ค. 69) — ไม่ใช้ฟอร์มวัตถุดิบ
   const[viewPO,setViewPO]=useState(null);
   const[confirming,setConfirming]=useState(null);
   const[retryingPOId,setRetryingPOId]=useState(null);   // PO whose pending stock is being re-added
@@ -11960,6 +11998,45 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
     const b=branches.find(x=>x.id===po.branch_id);setPickedBranch(b||null);setEditPO(po);setStep('form');
   }
   async function onSaved(){setStep(null);setEditPO(null);await load();}
+  // ── ใบส่งสินทรัพย์/อุปกรณ์: เมนู ⋮ → แก้ไข ตัวเดิม พามาที่หน้านี้แทนฟอร์มวัตถุดิบ (31 ต.ค. 69) ──
+  // ไม่เพิ่มปุ่มใหม่ตามที่เจ้าของสั่ง · startEdit ยังปฏิเสธใบสินทรัพย์ไว้เป็นด่านสำรอง
+  function startAssetEdit(po){
+    if(!canEditPO(po)){alert("เฉพาะผู้ออกเอกสารหรือครัวกลางเท่านั้นที่แก้ไขได้");return;}
+    if(!isAssetPO(po)){alert("ใบนี้ไม่ใช่ใบส่งสินทรัพย์/อุปกรณ์");return;}
+    if(po.status!=="open"){alert("ใบนี้จัดส่ง/ดำเนินการไปแล้ว — แก้ไขไม่ได้");return;}
+    setAssetEditPO(po);
+  }
+  const assetEditBusyRef=useRef(false);
+  // บันทึก: อ่านใบสดจากฐานก่อน (ไม่เชื่อสำเนาบนจอ) → ต้องยัง "รอจัดส่ง" และยังเป็นใบสินทรัพย์
+  // → เขียนแบบมีเงื่อนไข status=open (อีกเครื่องกดจัดส่ง/ลบไปแล้ว = 0 แถว = ไม่เขียน) · ไม่แตะสต๊อก/สินทรัพย์ใดๆ ตรงนี้
+  // สินทรัพย์ของสาขาถูกสร้างตอนสาขากดรับเท่านั้น (receiveAssetPO) จากจำนวนในใบ ณ ตอนนั้น จึงไม่มีทางนับซ้ำ
+  async function saveAssetEdit(po,edits){
+    if(assetEditBusyRef.current)return;
+    assetEditBusyRef.current=true;
+    const who=currentUser?.username||currentUser?.name||"ไม่ทราบชื่อ",at=new Date().toISOString();
+    const gone=async(msg)=>{setAssetEditPO(null);await load();alert(msg);};
+    try{
+      if(!canEditPO(po)){alert("เฉพาะผู้ออกเอกสารหรือครัวกลางเท่านั้นที่แก้ไขได้");return;}
+      let fresh=null;
+      try{const rows=await api.getPO(po.id);fresh=Array.isArray(rows)?rows[0]:null;}
+      catch(e){showErr("อ่านใบล่าสุดไม่สำเร็จ — ยังไม่ได้บันทึก ลองใหม่อีกครั้ง",e);return;}
+      if(!fresh){await gone("ไม่พบใบนี้แล้ว (อาจถูกลบไปแล้ว) — รีเฟรชให้แล้ว");return;}
+      if(fresh.status!=="open"){await gone(`ใบนี้ถูกจัดส่งหรือเปลี่ยนสถานะไปแล้ว (${(PO_STATUS[fresh.status]||{}).label||fresh.status}) — แก้ไขไม่ได้ รีเฟรชให้แล้ว`);return;}
+      if(!isAssetPO(fresh)){await gone("ใบนี้ไม่ใช่ใบส่งสินทรัพย์/อุปกรณ์แล้ว — รีเฟรชให้แล้ว");return;}
+      let res;
+      try{res=applyAssetPOEdits(fresh.items,edits,who,at);}
+      catch(e){const m=String((e&&e.message)||e);if(/ถูกแก้จากที่อื่น/.test(m))await gone(m);else alert(m);return;}
+      if(!res.changes.length){setAssetEditPO(null);posToast("ไม่มีอะไรเปลี่ยน — ไม่ได้บันทึก","ok");return;}
+      try{await api.patchPOIfStatus(fresh.id,"open",{items:res.items,updated_at:at});}
+      catch(e){if(/ถูกแก้ไขโดยผู้ใช้อื่น/.test(String((e&&e.message)||"")))await gone("ใบนี้ถูกจัดส่งหรือเปลี่ยนไปแล้วระหว่างแก้ — ไม่ได้บันทึก รีเฟรชให้แล้ว");else showErr("บันทึกไม่สำเร็จ",e);return;}
+      // ประวัติการแก้ (ไม่รอผล — เขียนประวัติไม่ได้ต้องไม่ทำให้การแก้ที่สำเร็จแล้วดูเหมือนล้ม)
+      const desc=res.changes.map(c=>c.field==="removed"?`เอาออก "${c.name}" (${c.from})`:c.field==="qty"?`"${c.name}" ${c.from}→${c.to}`:`หมายเหตุ "${c.name}"`).join(" · ");
+      api.addActionHist({action:`แก้ไขใบส่งสินทรัพย์ ${fresh.po_number||"#"+fresh.id} → ${(branchById[fresh.branch_id]||{}).name||"สาขา"} · ${desc} · โดย ${who}`,time:nowStr()}).catch(e=>console.warn("assetPOEditAudit",e));
+      setAssetEditPO(null);
+      await load();
+      posToast(`✅ แก้ไขใบส่งสินทรัพย์แล้ว (${res.changes.length} จุด)`,"ok");
+    }finally{assetEditBusyRef.current=false;}
+  }
 
   // ─── Stock transfer between branches (priced since 13 ต.ค. 69) ───────────
   // Source picks destination + items; each line's price = catalog buy_price, FROZEN now.
@@ -12325,7 +12402,8 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
                       !!po.received_at&&{label:"พิมพ์ใบตรวจรับ",icon:I.print,color:C.teal,onClick:()=>printGRN(po,toB?.name,'print',fromB?.name)},
                       !!po.received_at&&poHasShortReceive(po)&&{label:"พิมพ์ใบลดหนี้",icon:I.print,color:C.red,onClick:()=>printCreditNote(po,toB?.name,'print',fromB?.name)},
                       !isTransferPO(po)&&(isCreator(po)||isCentralBranch)&&hasPO&&{label:"คัดลอก",icon:I.copy,color:"#7C3AED",onClick:()=>duplicatePO(po)},
-                      canEditPO(po)&&po.status==="open"&&!isAssetPO(po)&&{label:"แก้ไข",icon:I.pencil,color:"#92400E",onClick:()=>startEdit(po)},
+                      // เมนู "แก้ไข" ตัวเดียวกันทั้งสองชนิด (31 ต.ค. 69): ใบวัตถุดิบ → ฟอร์มวัตถุดิบเดิม · ใบสินทรัพย์/อุปกรณ์ → หน้าแก้จำนวนของมันเอง
+                      canEditPO(po)&&po.status==="open"&&{label:"แก้ไข",icon:I.pencil,color:"#92400E",onClick:()=>isAssetPO(po)?startAssetEdit(po):startEdit(po)},
                       canDeletePO(po)&&{label:"ลบ",icon:I.trash,danger:true,onClick:()=>delPO(po)},
                     ]}/>
                     {Array.isArray(po.stock_pending)&&po.stock_pending.length>0&&<button onClick={()=>retryPendingPO(po)} disabled={retryingPOId===po.id} title="เพิ่มสต๊อกที่ค้าง (บางรายการเพิ่มไม่สำเร็จตอนรับ)" style={{background:retryingPOId===po.id?C.lineLight:`linear-gradient(135deg,#F59E0B,#D97706)`,border:"none",borderRadius:7,padding:"5px 10px",cursor:retryingPOId===po.id?"wait":"pointer",display:"inline-flex",alignItems:"center",gap:4,fontSize:11,color:retryingPOId===po.id?C.ink4:C.white,fontFamily:"'Sarabun',sans-serif",fontWeight:800,whiteSpace:"nowrap"}}>🔁 สต๊อกค้าง {po.stock_pending.reduce((s,g)=>s+((g&&g.items&&g.items.length)||0),0)}</button>}
@@ -12529,6 +12607,9 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       </Modal>;
     })()}
 
+    {/* แก้จำนวน/หมายเหตุใบส่งสินทรัพย์/อุปกรณ์ที่ยังไม่จัดส่ง (31 ต.ค. 69) */}
+    {assetEditPO&&<AssetPOEditModal po={assetEditPO} toName={(branchById[assetEditPO.branch_id]||{}).name||"สาขา"} onClose={()=>setAssetEditPO(null)} onSave={edits=>saveAssetEdit(assetEditPO,edits)}/>}
+
     {/* Full-screen view + actions */}
     {viewPO&&<POViewModal
       po={viewPO}
@@ -12545,7 +12626,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       onSavePhotos={async(imgs)=>{await api.updatePO(viewPO.id,{receive_images:imgs});await load();}}
       onSubmitDispute={(items,note)=>submitDispute(viewPO,items,note)}
       onAcceptDispute={()=>acceptDispute(viewPO)}
-      onEdit={()=>{setViewPO(null);startEdit(viewPO);}}
+      onEdit={()=>{setViewPO(null);if(isAssetPO(viewPO))startAssetEdit(viewPO);else startEdit(viewPO);}}
       onOpenPayment={()=>{setViewPO(null);setPayPO(viewPO);}}
       onCancel={()=>cancelPO(viewPO)}
       onDelete={()=>delPO(viewPO)}
@@ -13307,6 +13388,58 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
   return <Modal title={title} onClose={onClose} extraWide>{body}</Modal>;
 }
 
+// ── หน้าแก้ใบส่งสินทรัพย์/อุปกรณ์ที่ยัง "รอจัดส่ง" (31 ต.ค. 69) ───────────────────────
+// แก้ได้แค่จำนวน/หมายเหตุต่อแถว และ ✕ เอาแถวออก — ไม่มีช่องเพิ่มแถว: ของที่สาขาไม่ได้ขอต้องมาจากใบขอสินทรัพย์ใบใหม่
+// (ผ่านอนุมัติ) ไม่ใช่ครัวกลางใส่เอง · ช่องจำนวน type=text + inputMode (iOS เพิกเฉย inputMode บน type=number)
+// ตัวตัดสินจริงอยู่ที่ applyAssetPOEdits ตอนกดบันทึก (กับใบที่อ่านสดจากฐาน) — หน้านี้แค่เก็บสิ่งที่พนักงานพิมพ์
+// หมายเหตุส่งไปเฉพาะแถวที่พนักงานแก้จริง (ไม่แก้ = ใช้ของสดในฐาน ไม่ทับหมายเหตุที่อีกเครื่องเพิ่งแก้)
+function AssetPOEditModal({po,toName,onClose,onSave}){
+  const[rows,setRows]=useState(()=>(po.items||[]).map((it,i)=>({i,kind:it.kind,asset_id:it.asset_id??null,name:it.name,orig_qty:it.qty,qty:String(it.qty??""),orig_note:it.note||"",note:it.note||"",removed:false,image:it.image||null,unit:it.unit||"ชิ้น",current_qty:it.current_qty})));
+  const[saving,setSaving]=useState(false);
+  const busyRef=useRef(false);
+  const setRow=(i,p)=>setRows(rs=>rs.map(r=>r.i===i?{...r,...p}:r));
+  const left=rows.filter(r=>!r.removed).length;
+  async function save(){
+    if(busyRef.current)return;
+    busyRef.current=true;setSaving(true);
+    try{await onSave(Object.fromEntries(rows.map(r=>[r.i,{kind:r.kind,asset_id:r.asset_id,name:r.name,orig_qty:r.orig_qty,qty:r.qty,note:r.note!==r.orig_note?r.note:undefined,removed:r.removed}])));}
+    finally{busyRef.current=false;setSaving(false);}
+  }
+  return <Modal title={`✏️ แก้ไขใบส่งสินทรัพย์/อุปกรณ์ — ${po.po_number||"#"+po.id} → ${toName}`} onClose={()=>{if(!busyRef.current)onClose();}} wide>
+    <div style={{padding:"10px 12px",background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:10,fontSize:12.5,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:12}}>
+      {/* หัวหน้าต่างบนมือถือตัดท้าย (nowrap) จนไม่เห็นเลขใบ/สาขาปลายทาง — บอกซ้ำในเนื้อ */}
+      <b style={{color:C.ink,overflowWrap:"anywhere"}}>{po.po_number||"#"+po.id} → {toName}</b><br/>
+      แก้ได้เฉพาะจำนวนและหมายเหตุ หรือกด ✕ เอารายการที่ไม่ส่งออก · <b>เพิ่มรายการใหม่ให้สาขาเปิดใบขอสินทรัพย์ใหม่</b><br/>
+      📦 ไม่ตัดสต๊อกวัตถุดิบ — สินทรัพย์เข้าทะเบียนของสาขาตามจำนวนในใบ ตอนสาขากด "✅ ยืนยันรับ"
+    </div>
+    <div style={{border:`1px solid ${C.line}`,borderRadius:12,overflow:"hidden",marginBottom:14}}>
+      {rows.map(r=><div key={r.i} style={{display:"flex",gap:10,padding:"10px 12px",borderTop:r.i?`1px solid ${C.lineLight}`:"none",background:r.removed?C.bg:C.white,fontFamily:"'Sarabun',sans-serif"}}>
+        <Thumb src={r.image} alt={r.name||""} size={48} radius={9} icon={I.box} iconBg={C.bg} iconColor={C.line} iconSize={20} style={{opacity:r.removed?.5:1}} imgStyle={{border:`1px solid ${C.line}`,opacity:r.removed?.5:1}}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{fontWeight:800,fontSize:14,color:r.removed?C.ink4:C.ink,textDecoration:r.removed?"line-through":"none",overflowWrap:"anywhere"}}>{r.name||"(ไม่มีชื่อ)"}</span>
+            <Chip color={r.kind==="asset"?"teal":"purple"}>{r.kind==="asset"?"สินทรัพย์":"อุปกรณ์ใหม่"}</Chip>
+          </div>
+          {r.current_qty!=null&&<div style={{fontSize:11.5,color:C.ink3,marginTop:2}}>สาขามีอยู่ {r.current_qty} {r.unit}</div>}
+          {r.removed?<div style={{fontSize:12,color:C.red,fontWeight:700,marginTop:4}}>จะเอารายการนี้ออกจากใบ (เดิม {r.orig_qty} {r.unit}) — กด "เอาคืน" ถ้าเปลี่ยนใจ</div>
+          :<div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap",alignItems:"center"}}>
+            <span style={{fontSize:12,color:C.ink3,fontWeight:700}}>จำนวน</span>
+            <input type="text" inputMode="decimal" value={r.qty} onChange={e=>setRow(r.i,{qty:e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1")})} aria-label={`จำนวน ${r.name||""}`} style={{...iS,width:88,padding:"7px 8px",fontSize:15,fontWeight:800,textAlign:"center",border:`1.5px solid ${(+r.qty>0)?C.line:C.red}`}}/>
+            <span style={{fontSize:12,color:C.ink3}}>{r.unit}</span>
+            {String(r.qty)!==String(r.orig_qty)&&<span style={{fontSize:11,color:"#92400E",fontWeight:700}}>เดิม {r.orig_qty}</span>}
+            <input value={r.note} onChange={e=>setRow(r.i,{note:e.target.value})} placeholder="หมายเหตุ (ถ้ามี)" style={{...iS,flex:"1 1 180px",minWidth:0,padding:"7px 10px",fontSize:13}}/>
+          </div>}
+        </div>
+        <button type="button" onClick={()=>setRow(r.i,{removed:!r.removed})} disabled={saving} title={r.removed?"เอารายการนี้คืน":"เอารายการนี้ออกจากใบ"} style={{alignSelf:"flex-start",flexShrink:0,minWidth:34,minHeight:34,padding:"0 8px",borderRadius:8,border:`1.5px solid ${r.removed?C.line:"#FECACA"}`,background:r.removed?C.white:C.redLight,color:r.removed?C.ink2:C.red,fontSize:r.removed?12:15,fontWeight:800,cursor:saving?"not-allowed":"pointer",fontFamily:"'Sarabun',sans-serif",whiteSpace:"nowrap"}}>{r.removed?"เอาคืน":"✕"}</button>
+      </div>)}
+    </div>
+    {left===0&&<div style={{padding:"9px 12px",background:C.redLight,borderRadius:10,fontSize:12.5,color:C.red,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>ไม่เหลือรายการแล้ว — ถ้าจะไม่ส่งของทั้งใบ ให้ปิดหน้านี้แล้วใช้ ⋮ → ลบ แทน</div>}
+    <div style={{display:"flex",justifyContent:"flex-end",gap:8,flexWrap:"wrap",paddingTop:12,borderTop:`1px solid ${C.line}`}}>
+      <Btn v="ghost" onClick={onClose} disabled={saving}>ยกเลิก</Btn>
+      <Btn onClick={save} loading={saving} disabled={left===0} icon={I.check}>บันทึกการแก้ไข</Btn>
+    </div>
+  </Modal>;
+}
 // Full-screen PO view with status-aware actions
 function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canDelete,onClose,onAcceptRequest,onShip,onConfirmReceive,onSubmitDispute,onAcceptDispute,onEdit,onOpenPayment,onCancel,onDelete,onSavePhotos}){
   const isMobile=useIsMobile();   // มือถือ: ตารางรายการพอดีจอ ไม่มีเลื่อนแนวนอน (นิ้วบนตารางต้องเลื่อนขึ้นลงได้)
@@ -13337,7 +13470,7 @@ function POViewModal({po,fromBranch,toBranch,currentBranch,currentUser,busy,canD
   const canDispute=isReceiver&&po.status==="shipped";
   const canAcceptDispute=canManage&&po.status==="disputed";
   // Items can only be edited where stock hasn't moved yet (requested, open).
-  const canEditFromView=canManage&&po.status==="open"&&!isAssetPO(po);   // อนุมัติแล้ว (requested ขึ้นไป) ล็อกแก้ไข · ใบสินทรัพย์แก้ที่นี่ไม่ได้ (ฟอร์มเป็นของวัตถุดิบ)
+  const canEditFromView=canManage&&po.status==="open";   // อนุมัติแล้ว (requested ขึ้นไป) ล็อกแก้ไข · ใบสินทรัพย์ปุ่มเดิมพาไปหน้าแก้จำนวนของมันเอง ไม่ใช่ฟอร์มวัตถุดิบ (31 ต.ค. 69)
   // ใบโอน: ปลายทาง (ผู้รับของ) จ่าย หรือครัวกลาง/แอดมินบันทึกแทน — ต้นทางห้ามกด · PO ปกติคงเดิม
   const xfer=isTransferPO(po);
   const canPayNow=(xfer?canPayTransfer(po,currentBranch,currentUser):canManage)&&po.status==="awaiting_payment";
