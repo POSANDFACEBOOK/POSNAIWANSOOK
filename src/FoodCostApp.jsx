@@ -442,12 +442,17 @@ function isAssetPO(po){
 // พนักงานแจ้ง: ใบส่ง "วัตถุดิบ" ที่รอจัดส่งกด ⋮ → แก้ไข ได้ แต่ใบส่ง "สินทรัพย์/อุปกรณ์" (ออกจากใบขอสินทรัพย์ที่อนุมัติแล้ว)
 // ไม่มีเมนูแก้ไขเลย ครัวกลางปรับจำนวนก่อนส่งไม่ได้ (เช่น PO-202610-B1-JPKQW สาขาขอแก้ว 150 ใบ)
 // ฟอร์มวัตถุดิบเอามาใช้ไม่ได้: เพิ่มแถววัตถุดิบเข้าไป isAssetPO จะเป็น false → ตอนจัดส่ง/รับ ใบนี้ไปตัดสต๊อกวัตถุดิบจริง
-// จึงให้แก้ได้แค่ "จำนวน" กับ "หมายเหตุ" ต่อแถว และเอาแถวออก — ช่องอื่นของแถว (kind/asset_id/ชื่อ/รูป/ไฟล์/มีอยู่เดิม ฯลฯ)
+// จึงให้แก้ได้แค่ "จำนวน" "ราคา/หน่วย" กับ "หมายเหตุ" ต่อแถว และเอาแถวออก — ช่องอื่นของแถว (kind/asset_id/ชื่อ/รูป/ไฟล์/มีอยู่เดิม ฯลฯ)
 // ติดไปครบทุกตัว ใบจึงยังเป็นใบสินทรัพย์ และตอนสาขากดรับ receiveAssetPO สร้างสินทรัพย์ตามจำนวนที่แก้แล้ว
-// edits = {ลำดับแถวเดิม: {kind,asset_id,name,orig_qty,qty,note,removed}} ต้องครบทุกแถวของใบที่อ่านสดจากฐาน
-// ชนิด/รหัส/ชื่อไม่ตรง หรือจำนวนเดิมไม่ตรงของสด = มีคนแก้ใบนี้จากที่อื่นระหว่างเปิดหน้าจอ → โยน ไม่เขียนทับของเขา
-// line_total คิดใหม่จากราคาเดิม × จำนวนใหม่ (จอดู/ใบพิมพ์อ่านช่องนี้) · ยอดรวมหัวใบไม่แตะ (ใบส่งสินทรัพย์ = 0 เสมอ)
+// edits = {ลำดับแถวเดิม: {kind,asset_id,name,orig_qty,orig_price,qty,price,note,removed}} ต้องครบทุกแถวของใบที่อ่านสดจากฐาน
+// ชนิด/รหัส/ชื่อไม่ตรง หรือจำนวน/ราคาเดิมไม่ตรงของสด = มีคนแก้ใบนี้จากที่อื่นระหว่างเปิดหน้าจอ → โยน ไม่เขียนทับของเขา
+// line_total คิดใหม่ = จำนวน × ราคา (จอดู/ใบพิมพ์/รายงานอ่านช่องนี้) · subtotal = Σ line_total ไว้ให้ saveAssetEdit เขียนหัวใบ
 // who/at ติดไปกับรายการ changes (ไว้เขียนประวัติ) — ไม่ใส่ลงแถวในใบ แถวจึงมีช่องเท่าเดิม
+// ── แก้ราคาได้ด้วย (เจ้าของสั่ง 31 ต.ค. 69: "แก้ไขรายการขึ้นได้แล้ว เหลือแก้ไขราคา") ──
+// ราคา/หน่วยของแถว = ราคาทุนต่อชิ้นที่ receiveAssetPO ลงทะเบียนสินทรัพย์ของสาขาตอนกดรับ และเป็นยอดเงินของใบ
+// เดิมราคาติดมาจากที่สาขาประเมินในใบขอเท่านั้น (ใบส่งสินทรัพย์ในฐาน 24 ใบ หัวใบ ฿0 ทุกใบ · มีราคาที่แถวแค่ใบเดียว ฿139) ครัวกลางรู้ราคาซื้อจริงแต่ใส่ไม่ได้
+// price ไม่ส่งมา = ไม่ได้แตะ ใช้ของสดในฐานเป๊ะ · ราคา 0 ได้ (ของแถม/ยังไม่รู้ราคา) แต่ติดลบ/ตัวหนังสือไม่ได้
+// orig_price = ราคาที่พนักงานเห็นตอนเปิดหน้า: อีกเครื่องแก้ราคาไปแล้ว ยอดรวมบนจอเราผิด → โยน ไม่เขียนทับราคาเขา
 function applyAssetPOEdits(items,edits,who,at){
   const STALE="ใบถูกแก้จากที่อื่นแล้ว — รีเฟรชแล้วลองใหม่";
   const src=Array.isArray(items)?items:[];
@@ -461,19 +466,33 @@ function applyAssetPOEdits(items,edits,who,at){
     const e=ed[i];
     if(!it||!e||!(it.kind==="asset"||it.kind==="other")||idOf(it)!==idOf(e))throw new Error(STALE);
     if(e.orig_qty!==undefined&&+e.orig_qty!==+it.qty)throw new Error(STALE);
+    const p0=+it.price_per_unit||0;
+    if(e.orig_price!==undefined&&+e.orig_price!==p0)throw new Error(STALE);
     const base={i,name:it.name,kind:it.kind,asset_id:it.asset_id??null,by:who||null,at:at||null};
     if(e.removed){changes.push({...base,field:"removed",from:+it.qty||0,to:0});return;}
+    const NUM=/^(\d+\.?\d*|\.\d+)$/;
     const raw=String(e.qty??"").trim().replace(/,/g,"");
     // เลขเดิมที่ไม่ได้แตะต้องคงเดิมเป๊ะ (ใบขออาจมี 1.333) — ปัด 2 ตำแหน่งเฉพาะเลขที่พิมพ์ใหม่ ไม่งั้นแถวที่ไม่ได้แก้จะถูกปัดเงียบๆ
-    const q=/^(\d+\.?\d*|\.\d+)$/.test(raw)?(+raw===+it.qty?+it.qty:r2(+raw)):NaN;
+    const q=NUM.test(raw)?(+raw===+it.qty?+it.qty:r2(+raw)):NaN;
     if(!(Number.isFinite(q)&&q>0))throw new Error(`จำนวนของ "${it.name||"(ไม่มีชื่อ)"}" ไม่ถูกต้อง — ต้องเป็นตัวเลขมากกว่า 0\n(ถ้าไม่ส่งรายการนี้ ให้กด ✕ เอารายการออก)`);
+    // ราคา: กติกาเดียวกับจำนวน (ไม่รับ 1e3/ติดลบ/ว่าง · เลขเท่าของเดิม = ของเดิมเป๊ะ ไม่ปัด) ต่างกันแค่ 0 ได้
+    let p=p0;
+    if(e.price!==undefined){
+      const rawP=String(e.price??"").trim().replace(/,/g,"");
+      p=NUM.test(rawP)?(+rawP===p0?p0:r2(+rawP)):NaN;
+      if(!(Number.isFinite(p)&&p>=0))throw new Error(`ราคา/หน่วยของ "${it.name||"(ไม่มีชื่อ)"}" ไม่ถูกต้อง — ต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป`);
+    }
     const next={...it};
-    if(q!==+it.qty){next.qty=q;if("line_total" in it)next.line_total=r2(q*(+it.price_per_unit||0));changes.push({...base,field:"qty",from:+it.qty||0,to:q});}
+    if(q!==+it.qty){next.qty=q;changes.push({...base,field:"qty",from:+it.qty||0,to:q});}
+    if(p!==p0){next.price_per_unit=p;changes.push({...base,field:"price",from:p0,to:p});}
+    // จำนวนหรือราคาเปลี่ยน = ยอดแถวเปลี่ยน (ทุกแถวในฐานมี line_total อยู่แล้ว 58/58) · ไม่เปลี่ยน = ยอดแถวเดิมเป๊ะ
+    if(q!==+it.qty||p!==p0)next.line_total=r2(q*p);
     if(e.note!==undefined){const n=String(e.note??"").trim()||null;if(n!==(String(it.note??"").trim()||null)){next.note=n;changes.push({...base,field:"note",from:it.note??null,to:n});}}
     out.push(next);
   });
   if(!out.length)throw new Error("ไม่เหลือรายการในใบแล้ว — ถ้าจะไม่ส่งของทั้งใบ ให้ปิดหน้านี้แล้วใช้ ⋮ → ลบ แทน");
-  return{items:out,changes};
+  // ยอดก่อน VAT ของใบ = Σ ยอดแถว แบบเดียวกับใบส่งวัตถุดิบ (distributeToBranches / ฟอร์ม PO) — เดิมหัวใบสินทรัพย์ ฿0 ทั้งที่แถวมีราคา
+  return{items:out,changes,subtotal:r2(out.reduce((s,x)=>s+(+x.line_total||0),0))};
 }
 // Currency formatter (Thai Baht, always 2 decimals)
 const fmtTHB = (n) => `฿${(+n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
@@ -11531,11 +11550,14 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       // Merge existing-asset lines by asset_id so each asset row is incremented exactly ONCE
       // (a PO can carry the same asset on several lines — from one cart or several PRs).
       // Free-form 'other' lines each become their own new asset row.
+      // 31 ต.ค. 69 (แก้ราคาในใบส่งได้แล้ว): รวมเฉพาะแถวที่ asset_id เดียวกัน "และราคาเท่ากัน" — สองใบขอของสาขาเดียวกัน
+      // ขอของชิ้นเดียวกันคนละราคาได้ เดิมรวมทุกแถวแล้วใช้ราคาแถวท้าย ⟹ ทุนในทะเบียน (จำนวนรวม × ราคาเดียว) ≠ ยอดใบ (Σ จำนวน×ราคา)
+      // แยกล็อตตามราคา = ทุนรวมในทะเบียนเท่ายอดใบทุกสตางค์ (กติกาเดียวกับ "ซื้อเพิ่มแต่ละครั้ง = แถวใหม่" ข้างล่าง)
       const byAsset=new Map(),others=[];
       for(const it of its){
         const qty=+it.qty||0;if(qty<=0)continue;
         const price=+it.price_per_unit||0;
-        if(it.kind==="asset"&&it.asset_id){const k=+it.asset_id;const e=byAsset.get(k)||{asset_id:k,name:it.name,image:it.image||null,note:it.note||null,qty:0,cost:price};e.qty=round2(e.qty+qty);if(price>0)e.cost=price;byAsset.set(k,e);}
+        if(it.kind==="asset"&&it.asset_id){const k=`${+it.asset_id}|${price}`;const e=byAsset.get(k)||{asset_id:+it.asset_id,name:it.name,image:it.image||null,note:it.note||null,qty:0,cost:price};e.qty=round2(e.qty+qty);byAsset.set(k,e);}
         else{others.push({name:it.name,image:it.image||null,note:it.note||null,qty,cost:price});}
       }
       // Claim the receive (0 rows if already received elsewhere) BEFORE mutating assets.
@@ -12010,6 +12032,7 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
   // บันทึก: อ่านใบสดจากฐานก่อน (ไม่เชื่อสำเนาบนจอ) → ต้องยัง "รอจัดส่ง" และยังเป็นใบสินทรัพย์
   // → เขียนแบบมีเงื่อนไข status=open (อีกเครื่องกดจัดส่ง/ลบไปแล้ว = 0 แถว = ไม่เขียน) · ไม่แตะสต๊อก/สินทรัพย์ใดๆ ตรงนี้
   // สินทรัพย์ของสาขาถูกสร้างตอนสาขากดรับเท่านั้น (receiveAssetPO) จากจำนวนในใบ ณ ตอนนั้น จึงไม่มีทางนับซ้ำ
+  // ไม่ส่งบัญชีตรงนี้ด้วย (31 ต.ค. 69): ใบที่ยังไม่รับไม่เคยแตะบัญชี — ตัวซ่อม/ตัวกวาดหยิบเฉพาะใบที่มี received_at แล้วคิดยอดจากแถว ณ ตอนนั้น
   async function saveAssetEdit(po,edits){
     if(assetEditBusyRef.current)return;
     assetEditBusyRef.current=true;
@@ -12027,10 +12050,15 @@ function POSection({branches,ings,suppliers=[],currentBranch,currentUser,reloadI
       try{res=applyAssetPOEdits(fresh.items,edits,who,at);}
       catch(e){const m=String((e&&e.message)||e);if(/ถูกแก้จากที่อื่น/.test(m))await gone(m);else alert(m);return;}
       if(!res.changes.length){setAssetEditPO(null);posToast("ไม่มีอะไรเปลี่ยน — ไม่ได้บันทึก","ok");return;}
-      try{await api.patchPOIfStatus(fresh.id,"open",{items:res.items,updated_at:at});}
+      // 31 ต.ค. 69 (แก้ราคาได้): หัวใบต้องเท่ายอดแถว ไม่งั้นรายการ PO/หน้าดู/ใบพิมพ์/หน้าจ่ายเงินขึ้น ฿0 ทั้งที่แถวมีราคา
+      // เขียนในคำสั่งเดียวกับ items แบบมีเงื่อนไข status=open — หัวใบกับแถวจึงไม่มีทางไม่ตรงกัน และใบที่จัดส่งไปแล้วไม่ถูกแตะ
+      // VAT ตามสัดส่วนเดิมของใบ (กติกาเดียวกับ submitDispute/คัดลอก/ตัวส่งบัญชี) — ใบส่งสินทรัพย์ออกจาก distributeAssets ด้วย vat:0 ⟹ 0 เสมอ
+      const vr=(+fresh.subtotal||0)>0?(+fresh.vat||0)/(+fresh.subtotal):0;
+      const vat=round2(res.subtotal*vr);
+      try{await api.patchPOIfStatus(fresh.id,"open",{items:res.items,subtotal:res.subtotal,vat,total:round2(res.subtotal+vat),updated_at:at});}
       catch(e){if(/ถูกแก้ไขโดยผู้ใช้อื่น/.test(String((e&&e.message)||"")))await gone("ใบนี้ถูกจัดส่งหรือเปลี่ยนไปแล้วระหว่างแก้ — ไม่ได้บันทึก รีเฟรชให้แล้ว");else showErr("บันทึกไม่สำเร็จ",e);return;}
       // ประวัติการแก้ (ไม่รอผล — เขียนประวัติไม่ได้ต้องไม่ทำให้การแก้ที่สำเร็จแล้วดูเหมือนล้ม)
-      const desc=res.changes.map(c=>c.field==="removed"?`เอาออก "${c.name}" (${c.from})`:c.field==="qty"?`"${c.name}" ${c.from}→${c.to}`:`หมายเหตุ "${c.name}"`).join(" · ");
+      const desc=res.changes.map(c=>c.field==="removed"?`เอาออก "${c.name}" (${c.from})`:c.field==="qty"?`"${c.name}" ${c.from}→${c.to}`:c.field==="price"?`ราคา "${c.name}" ${c.from}→${c.to}`:`หมายเหตุ "${c.name}"`).join(" · ");
       api.addActionHist({action:`แก้ไขใบส่งสินทรัพย์ ${fresh.po_number||"#"+fresh.id} → ${(branchById[fresh.branch_id]||{}).name||"สาขา"} · ${desc} · โดย ${who}`,time:nowStr()}).catch(e=>console.warn("assetPOEditAudit",e));
       setAssetEditPO(null);
       await load();
@@ -13389,28 +13417,38 @@ function PurchaseSummaryModal({ings,branchById,branches=[],suppliers=[],currentB
 }
 
 // ── หน้าแก้ใบส่งสินทรัพย์/อุปกรณ์ที่ยัง "รอจัดส่ง" (31 ต.ค. 69) ───────────────────────
-// แก้ได้แค่จำนวน/หมายเหตุต่อแถว และ ✕ เอาแถวออก — ไม่มีช่องเพิ่มแถว: ของที่สาขาไม่ได้ขอต้องมาจากใบขอสินทรัพย์ใบใหม่
-// (ผ่านอนุมัติ) ไม่ใช่ครัวกลางใส่เอง · ช่องจำนวน type=text + inputMode (iOS เพิกเฉย inputMode บน type=number)
+// แก้ได้แค่จำนวน/ราคา/หน่วย/หมายเหตุต่อแถว และ ✕ เอาแถวออก — ไม่มีช่องเพิ่มแถว: ของที่สาขาไม่ได้ขอต้องมาจากใบขอสินทรัพย์ใบใหม่
+// (ผ่านอนุมัติ) ไม่ใช่ครัวกลางใส่เอง · ช่องจำนวน/ราคา type=text + inputMode (iOS เพิกเฉย inputMode บน type=number)
 // ตัวตัดสินจริงอยู่ที่ applyAssetPOEdits ตอนกดบันทึก (กับใบที่อ่านสดจากฐาน) — หน้านี้แค่เก็บสิ่งที่พนักงานพิมพ์
 // หมายเหตุส่งไปเฉพาะแถวที่พนักงานแก้จริง (ไม่แก้ = ใช้ของสดในฐาน ไม่ทับหมายเหตุที่อีกเครื่องเพิ่งแก้)
+// 31 ต.ค. 69: + ช่องราคา/หน่วย ต่อแถว (เจ้าของสั่ง) · ราคาส่งไปเฉพาะแถวที่พิมพ์แก้ (ไม่แตะ = ราคาเดิมในฐานเป๊ะ ไม่ถูกปัด)
+// ส่ง orig_price (ราคาที่เห็นตอนเปิด) ทุกแถว ให้ applyAssetPOEdits จับได้ถ้าอีกเครื่องแก้ราคาไปก่อน
+// ยอดแถว/ยอดใบบนจอคิดด้วยกติกาเดียวกับตอนบันทึก (เลขเดิม = เดิมเป๊ะ · พิมพ์ใหม่ = ปัด 2 ตำแหน่ง) จอจึงตรงกับที่ลงฐาน
 function AssetPOEditModal({po,toName,onClose,onSave}){
-  const[rows,setRows]=useState(()=>(po.items||[]).map((it,i)=>({i,kind:it.kind,asset_id:it.asset_id??null,name:it.name,orig_qty:it.qty,qty:String(it.qty??""),orig_note:it.note||"",note:it.note||"",removed:false,image:it.image||null,unit:it.unit||"ชิ้น",current_qty:it.current_qty})));
+  const[rows,setRows]=useState(()=>(po.items||[]).map((it,i)=>({i,kind:it.kind,asset_id:it.asset_id??null,name:it.name,orig_qty:it.qty,qty:String(it.qty??""),orig_price:+it.price_per_unit||0,price0:String(+it.price_per_unit||0),price:String(+it.price_per_unit||0),orig_note:it.note||"",note:it.note||"",removed:false,image:it.image||null,unit:it.unit||"ชิ้น",current_qty:it.current_qty})));
   const[saving,setSaving]=useState(false);
   const busyRef=useRef(false);
   const setRow=(i,p)=>setRows(rs=>rs.map(r=>r.i===i?{...r,...p}:r));
   const left=rows.filter(r=>!r.removed).length;
+  const numIn=v=>v.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1");
+  const numOf=(s,orig)=>{const t=String(s??"").trim().replace(/,/g,"");if(!/^(\d+\.?\d*|\.\d+)$/.test(t))return NaN;return +t===+orig?+orig:round2(+t);};
+  const lineOf=r=>{const q=numOf(r.qty,r.orig_qty),p=numOf(r.price,r.orig_price);return q>0&&p>=0?round2(q*p):NaN;};
+  const vr=(+po.subtotal||0)>0?(+po.vat||0)/(+po.subtotal):0;
+  const kept=rows.filter(r=>!r.removed),allOk=kept.every(r=>Number.isFinite(lineOf(r)));
+  const sub=round2(kept.reduce((s,r)=>s+(Number.isFinite(lineOf(r))?lineOf(r):0),0)),vatAmt=round2(sub*vr);
   async function save(){
     if(busyRef.current)return;
     busyRef.current=true;setSaving(true);
-    try{await onSave(Object.fromEntries(rows.map(r=>[r.i,{kind:r.kind,asset_id:r.asset_id,name:r.name,orig_qty:r.orig_qty,qty:r.qty,note:r.note!==r.orig_note?r.note:undefined,removed:r.removed}])));}
+    try{await onSave(Object.fromEntries(rows.map(r=>[r.i,{kind:r.kind,asset_id:r.asset_id,name:r.name,orig_qty:r.orig_qty,qty:r.qty,orig_price:r.orig_price,price:r.price!==r.price0?r.price:undefined,note:r.note!==r.orig_note?r.note:undefined,removed:r.removed}])));}
     finally{busyRef.current=false;setSaving(false);}
   }
   return <Modal title={`✏️ แก้ไขใบส่งสินทรัพย์/อุปกรณ์ — ${po.po_number||"#"+po.id} → ${toName}`} onClose={()=>{if(!busyRef.current)onClose();}} wide>
     <div style={{padding:"10px 12px",background:C.blueLight,border:`1px solid #BFDBFE`,borderRadius:10,fontSize:12.5,color:C.ink2,fontFamily:"'Sarabun',sans-serif",lineHeight:1.6,marginBottom:12}}>
       {/* หัวหน้าต่างบนมือถือตัดท้าย (nowrap) จนไม่เห็นเลขใบ/สาขาปลายทาง — บอกซ้ำในเนื้อ */}
       <b style={{color:C.ink,overflowWrap:"anywhere"}}>{po.po_number||"#"+po.id} → {toName}</b><br/>
-      แก้ได้เฉพาะจำนวนและหมายเหตุ หรือกด ✕ เอารายการที่ไม่ส่งออก · <b>เพิ่มรายการใหม่ให้สาขาเปิดใบขอสินทรัพย์ใหม่</b><br/>
-      📦 ไม่ตัดสต๊อกวัตถุดิบ — สินทรัพย์เข้าทะเบียนของสาขาตามจำนวนในใบ ตอนสาขากด "✅ ยืนยันรับ"
+      แก้ได้เฉพาะจำนวน ราคา/หน่วย และหมายเหตุ หรือกด ✕ เอารายการที่ไม่ส่งออก · <b>เพิ่มรายการใหม่ให้สาขาเปิดใบขอสินทรัพย์ใหม่</b><br/>
+      📦 ไม่ตัดสต๊อกวัตถุดิบ — สินทรัพย์เข้าทะเบียนของสาขาตามจำนวนในใบ ตอนสาขากด "✅ ยืนยันรับ"<br/>
+      💰 ราคา/หน่วย = ราคาทุนต่อชิ้นที่ลงทะเบียนสินทรัพย์ของสาขาตอนกดรับ และเป็นยอดเงินของใบนี้
     </div>
     <div style={{border:`1px solid ${C.line}`,borderRadius:12,overflow:"hidden",marginBottom:14}}>
       {rows.map(r=><div key={r.i} style={{display:"flex",gap:10,padding:"10px 12px",borderTop:r.i?`1px solid ${C.lineLight}`:"none",background:r.removed?C.bg:C.white,fontFamily:"'Sarabun',sans-serif"}}>
@@ -13423,10 +13461,19 @@ function AssetPOEditModal({po,toName,onClose,onSave}){
           {r.current_qty!=null&&<div style={{fontSize:11.5,color:C.ink3,marginTop:2}}>สาขามีอยู่ {r.current_qty} {r.unit}</div>}
           {r.removed?<div style={{fontSize:12,color:C.red,fontWeight:700,marginTop:4}}>จะเอารายการนี้ออกจากใบ (เดิม {r.orig_qty} {r.unit}) — กด "เอาคืน" ถ้าเปลี่ยนใจ</div>
           :<div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap",alignItems:"center"}}>
+            {/* "ป้าย+ช่อง" ห่อเป็นก้อน (กว้าง ≤ 175px) ไม่ให้แยกกันตอนขึ้นบรรทัดใหม่บนมือถือ · ป้าย "เดิม" แยกออกมาให้ตกบรรทัดเองได้ ไม่ดันจอให้เลื่อนข้าง */}
+            <span style={{display:"inline-flex",gap:6,alignItems:"center",flexWrap:"nowrap"}}>
             <span style={{fontSize:12,color:C.ink3,fontWeight:700}}>จำนวน</span>
             <input type="text" inputMode="decimal" value={r.qty} onChange={e=>setRow(r.i,{qty:e.target.value.replace(/[^0-9.]/g,"").replace(/(\..*)\./g,"$1")})} aria-label={`จำนวน ${r.name||""}`} style={{...iS,width:88,padding:"7px 8px",fontSize:15,fontWeight:800,textAlign:"center",border:`1.5px solid ${(+r.qty>0)?C.line:C.red}`}}/>
             <span style={{fontSize:12,color:C.ink3}}>{r.unit}</span>
-            {String(r.qty)!==String(r.orig_qty)&&<span style={{fontSize:11,color:"#92400E",fontWeight:700}}>เดิม {r.orig_qty}</span>}
+            </span>
+            {String(r.qty)!==String(r.orig_qty)&&<span style={{fontSize:11,color:"#92400E",fontWeight:700,whiteSpace:"nowrap"}}>เดิม {r.orig_qty}</span>}
+            <span style={{display:"inline-flex",gap:6,alignItems:"center",flexWrap:"nowrap"}}>
+            <span style={{fontSize:12,color:C.ink3,fontWeight:700,whiteSpace:"nowrap"}}>ราคา/หน่วย ฿</span>
+            <input type="text" inputMode="decimal" value={r.price} onChange={e=>setRow(r.i,{price:numIn(e.target.value)})} aria-label={`ราคาต่อหน่วย ${r.name||""}`} style={{...iS,width:96,padding:"7px 8px",fontSize:15,fontWeight:800,textAlign:"right",border:`1.5px solid ${Number.isFinite(numOf(r.price,r.orig_price))?C.line:C.red}`}}/>
+            </span>
+            {r.price!==r.price0&&<span style={{fontSize:11,color:"#92400E",fontWeight:700,whiteSpace:"nowrap"}}>เดิม {fmtTHB(r.orig_price)}</span>}
+            <span style={{fontSize:13,fontWeight:800,color:C.brand,whiteSpace:"nowrap"}}>รวม {Number.isFinite(lineOf(r))?fmtTHB(lineOf(r)):"—"}</span>
             <input value={r.note} onChange={e=>setRow(r.i,{note:e.target.value})} placeholder="หมายเหตุ (ถ้ามี)" style={{...iS,flex:"1 1 180px",minWidth:0,padding:"7px 10px",fontSize:13}}/>
           </div>}
         </div>
@@ -13434,6 +13481,13 @@ function AssetPOEditModal({po,toName,onClose,onSave}){
       </div>)}
     </div>
     {left===0&&<div style={{padding:"9px 12px",background:C.redLight,borderRadius:10,fontSize:12.5,color:C.red,fontWeight:700,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>ไม่เหลือรายการแล้ว — ถ้าจะไม่ส่งของทั้งใบ ให้ปิดหน้านี้แล้วใช้ ⋮ → ลบ แทน</div>}
+    {/* ยอดใบหลังแก้ (ไม่รวมแถวที่ ✕) — สูตรเดียวกับที่ saveAssetEdit เขียนหัวใบ */}
+    {left>0&&<div style={{padding:"10px 14px",background:C.brandLight,border:`1px solid ${C.brandBorder}`,borderRadius:10,fontFamily:"'Sarabun',sans-serif",marginBottom:12}}>
+      {vatAmt>0&&<div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12.5,color:C.ink3}}><span>ยอดรวม</span><span>{fmtTHB(sub)}</span></div>}
+      {vatAmt>0&&<div style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:12.5,color:C.ink3}}><span>VAT</span><span>{fmtTHB(vatAmt)}</span></div>}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}><span style={{fontSize:14,fontWeight:800,color:C.brand}}>ยอดรวมทั้งใบ</span><span style={{fontSize:20,fontWeight:900,color:C.brand,whiteSpace:"nowrap"}}>{allOk?fmtTHB(round2(sub+vatAmt)):"—"}</span></div>
+      {!allOk&&<div style={{fontSize:11.5,color:C.red,fontWeight:700,marginTop:2}}>มีช่องจำนวน/ราคาที่ยังไม่ถูกต้อง (กรอบแดง)</div>}
+    </div>}
     <div style={{display:"flex",justifyContent:"flex-end",gap:8,flexWrap:"wrap",paddingTop:12,borderTop:`1px solid ${C.line}`}}>
       <Btn v="ghost" onClick={onClose} disabled={saving}>ยกเลิก</Btn>
       <Btn onClick={save} loading={saving} disabled={left===0} icon={I.check}>บันทึกการแก้ไข</Btn>

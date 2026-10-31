@@ -12463,6 +12463,8 @@ section("API/ข้อมูล 28 ต.ค. 69: แจ้งเตือนป�
 // แต่ใบส่งสินทรัพย์/อุปกรณ์ (ออกจากใบขอสินทรัพย์ที่อนุมัติแล้ว) ไม่มีเมนูแก้ไข → ครัวกลางปรับจำนวนก่อนส่งไม่ได้
 // เมนูเดิมตัวเดียวพาใบสินทรัพย์ไปหน้าแก้ของมันเอง (ฟอร์มวัตถุดิบห้าม: เพิ่มแถววัตถุดิบแล้วใบหลุดเป็นใบวัตถุดิบ → ตัดสต๊อกจริง)
 // รัน applyAssetPOEdits / isAssetPO / saveAssetEdit / receiveAssetPO ตัวจริงจากแอปกับของปลอม · ที่เหลือตรวจโครงสร้าง
+// + แก้ราคา/หน่วย (เจ้าของสั่ง 31 ต.ค. 69): ราคา = ทุนต่อชิ้นที่ลงทะเบียนสินทรัพย์ตอนรับ + ยอดเงินของใบ ⟹ พิสูจน์ทั้งทางทุน
+//   (receiveAssetPO) ทางหัวใบ (saveAssetEdit) และทางบัญชี (pushPOToSlipTrack + ตัวกวาด ด้วย fetch ปลอม) ว่าได้เลขเดียวกัน
 // ══════════════════════════════════════════════════════════════════════════
 section("แก้ไขใบส่งสินทรัพย์/อุปกรณ์ (31 ต.ค. 69)");
 {
@@ -12484,9 +12486,12 @@ section("แก้ไขใบส่งสินทรัพย์/อุปก�
   const SNAP = JSON.stringify(ITEMS);
   // edits แบบเดียวกับที่หน้าแก้ส่งมา (ครบทุกแถว + ตัวตนของแถว + จำนวนเดิมที่เห็นบนจอ) · withNote=false = ไม่ได้แตะหมายเหตุ
   const E = (over = {}, withNote = true) => Object.fromEntries(ITEMS.map((it, i) => [i, { kind: it.kind, asset_id: it.asset_id, name: it.name, orig_qty: it.qty, qty: String(it.qty), ...(withNote ? { note: it.note || "" } : {}), removed: false, ...(over[i] || {}) }]));
+  // 31 ต.ค. 69 (แก้ราคาได้): edits แบบที่หน้าแก้ส่งตอนนี้ — + orig_price (ราคาที่เห็นตอนเปิด) ทุกแถว · price เฉพาะแถวที่พิมพ์แก้
+  const EPof = (items) => (over = {}) => Object.fromEntries(items.map((it, i) => [i, { kind: it.kind, asset_id: it.asset_id, name: it.name, orig_qty: it.qty, qty: String(it.qty), orig_price: +it.price_per_unit || 0, removed: false, ...(over[i] || {}) }]));
+  const EP = EPof(ITEMS);
   const AT = "2026-10-31T03:00:00.000Z";
   const STALE = "ERR ใบถูกแก้จากที่อื่นแล้ว — รีเฟรชแล้วลองใหม่";
-  let r1 = "ERR ไม่ได้รัน";
+  let r1 = "ERR ไม่ได้รัน", pEd = "ERR ไม่ได้รัน";
   if (F) {
     const { isAssetPO, applyAssetPOEdits } = F;
     r1 = safe(() => applyAssetPOEdits(ITEMS, E({ 2: { qty: "100" } }), "central", AT));
@@ -12534,19 +12539,79 @@ section("แก้ไขใบส่งสินทรัพย์/อุปก�
     ck("✕ ออกทุกแถว → ไม่ยอม บอกให้ใช้ ⋮ → ลบ แทน (ใบว่าง isAssetPO=false = ใบหลุดชนิด)",
       safe(() => applyAssetPOEdits(ITEMS, E({ 0: { removed: true }, 1: { removed: true }, 2: { removed: true } }), "c", AT)),
       "ERR ไม่เหลือรายการในใบแล้ว — ถ้าจะไม่ส่งของทั้งใบ ให้ปิดหน้านี้แล้วใช้ ⋮ → ลบ แทน");
+
+    // ── ราคา/หน่วย (เจ้าของสั่ง 31 ต.ค. 69: "แก้ไขรายการขึ้นได้แล้ว เหลือแก้ไขราคา") ──
+    // ราคาในแถว = ราคาทุนต่อชิ้นที่ลงทะเบียนสินทรัพย์ตอนรับ + ยอดเงินของใบ ⟹ ผิดเมื่อไหร่ = ทุน/ยอดเงินผิดทั้งคู่
+    const p1 = safe(() => applyAssetPOEdits(ITEMS, EP({ 2: { price: "45.5" } }), "central", AT));
+    ck("แก้ราคาแก้ว 50→45.5 → แถวนั้นเปลี่ยนแค่ price_per_unit + line_total (150×45.5 = 6,825) · ช่องอื่นครบ · แถวอื่นไม่แตะ · subtotal = Σ line_total",
+      typeof p1 === "string" ? p1 : [p1.items[2], p1.items[0], p1.items[1], p1.subtotal],
+      [{ ...ITEMS[2], price_per_unit: 45.5, line_total: 6825 }, ITEMS[0], ITEMS[1], 6825]);
+    ck("…changes จดราคา จาก→เป็น+ใคร · ยังเป็นใบสินทรัพย์ตาม isAssetPO ตัวจริง (kind/asset_id เดิมทุกแถว) · ของที่ส่งเข้าไปไม่ถูกแก้",
+      typeof p1 === "string" ? p1 : [p1.changes.map((c) => [c.i, c.field, c.from, c.to, c.by]), isAssetPO({ items: p1.items }), p1.items.every((x, i) => x.kind === ITEMS[i].kind && x.asset_id === ITEMS[i].asset_id), JSON.stringify(ITEMS) === SNAP],
+      [[[2, "price", 50, 45.5, "central"]], true, true, true]);
+    pEd = safe(() => applyAssetPOEdits(ITEMS, EP({ 2: { qty: "100", price: "45" }, 1: { price: "1,250.50" } }), "c", AT));
+    ck("แก้จำนวน+ราคาแถวเดียวกัน → line_total = จำนวนใหม่ × ราคาใหม่ · ราคามีจุลภาครับได้ · subtotal รวมทุกแถวที่เหลือ",
+      typeof pEd === "string" ? pEd : [pEd.items[2].qty, pEd.items[2].price_per_unit, pEd.items[2].line_total, pEd.items[1].price_per_unit, pEd.items[1].line_total, pEd.subtotal, pEd.changes.map((c) => c.field)],
+      [100, 45, 4500, 1250.5, 37515, 42015, ["price", "qty", "price"]]);
+    const p3 = safe(() => applyAssetPOEdits(ITEMS, EP({ 2: { price: "0" } }), "c", AT));
+    ck("ราคา 0 ได้ (ของแถม/ยังไม่รู้ราคา) → price 0 · line_total 0 · subtotal 0 · นับเป็นการแก้ 1 จุด",
+      typeof p3 === "string" ? p3 : [p3.items[2].price_per_unit, p3.items[2].line_total, p3.subtotal, p3.changes.length], [0, 0, 0, 1]);
+    const badP = ["-5", "abc", "", "  ", "1e3", "NaN", "Infinity", "-0.5", "5..0"].map((v) => safe(() => applyAssetPOEdits(ITEMS, EP({ 2: { price: v } }), "c", AT)));
+    ck("ราคา ติดลบ / ตัวหนังสือ / ว่าง / 1e3 / NaN / Infinity / จุดซ้อน → ไม่รับ บอกเหตุเป็นไทย",
+      badP.map((m) => typeof m === "string" && m.startsWith('ERR ราคา/หน่วยของ "แก้วสแตนเลสสีทอง" ไม่ถูกต้อง — ต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป')), Array(9).fill(true));
+    ck("แถวที่ ✕ ออก ไม่ตรวจราคา (ไม่ส่งแล้ว)", safe(() => applyAssetPOEdits(ITEMS, EP({ 2: { removed: true, price: "abc" } }), "c", AT).items.length), 2);
+    const FRp = [ITEMS[0], ITEMS[1], { ...ITEMS[2], price_per_unit: 55, line_total: 8250 }];
+    // + กด ✕ แถวนั้น (ผู้ตรวจ 31 ต.ค. 69): อีกเครื่องเพิ่งใส่ราคาจริง = เขาตั้งใจส่งของชิ้นนี้ — เอาออกเงียบๆ ทับการตัดสินใจเขา ต้องบอกก่อน
+    ck("อีกเครื่องแก้ราคาไปแล้ว (ฐาน 55 · จอเห็น 50) → โยน ไม่เขียนทับ — ทั้งตอนเราแก้ราคาแถวนั้น / แก้แค่จำนวน / ไม่ได้แตะอะไร / กด ✕ แถวนั้น",
+      [safe(() => applyAssetPOEdits(FRp, EP({ 2: { price: "45" } }), "c", AT)), safe(() => applyAssetPOEdits(FRp, EP({ 2: { qty: "100" } }), "c", AT)), safe(() => applyAssetPOEdits(FRp, EP(), "c", AT)), safe(() => applyAssetPOEdits(FRp, EP({ 2: { removed: true } }), "c", AT))],
+      [STALE, STALE, STALE, STALE]);
+    // ผู้ตรวจ 31 ต.ค. 69: ✕ แถวที่มีราคา ยอดใบต้องหายตามแถว — เดิมไม่มีด่านไหนพิสูจน์ (subtotal นับแถวที่เอาออกก็ยังผ่านหมด)
+    const pR = safe(() => applyAssetPOEdits(ITEMS, EP({ 1: { price: "100" }, 2: { removed: true } }), "c", AT));
+    const pR0 = safe(() => applyAssetPOEdits(ITEMS, EP({ 2: { removed: true } }), "c", AT));
+    ck("✕ เอาแถวที่มีราคาออก (แก้ว 150 × ฿50 = ฿7,500) → ยอดใบไม่นับแถวนั้น · เหลือเตา 30 × ฿100 = ฿3,000 · เอาออกอย่างเดียว = ฿0",
+      [typeof pR === "string" ? pR : [pR.items.length, pR.subtotal], typeof pR0 === "string" ? pR0 : [pR0.items.length, pR0.subtotal]], [[2, 3000], [2, 0]]);
+    const ODDP = [ITEMS[0], ITEMS[1], { ...ITEMS[2], price_per_unit: 33.333, line_total: 4999.95 }];
+    const EOP = EPof(ODDP);
+    ck("ราคาเดิมที่ไม่ได้แตะ (33.333) → คงเดิมเป๊ะทั้งราคาและ line_total ไม่ถูกปัดเงียบๆ · พิมพ์เลขเดิมซ้ำ = ไม่นับว่าแก้ · พิมพ์ใหม่ 12.346 → ปัดเป็น 12.35",
+      [safe(() => { const r = applyAssetPOEdits(ODDP, EOP(), "c", AT); return [r.items[2].price_per_unit, r.items[2].line_total, r.changes.length]; }),
+        safe(() => { const r = applyAssetPOEdits(ODDP, EOP({ 2: { price: "33.333" } }), "c", AT); return [r.items[2].price_per_unit, r.items[2].line_total, r.changes.length]; }),
+        safe(() => applyAssetPOEdits(ODDP, EOP({ 2: { price: "12.346" } }), "c", AT).items[2].price_per_unit)],
+      [[33.333, 4999.95, 0], [33.333, 4999.95, 0], 12.35]);
   }
 
   // ── ใบที่แก้แล้ว → receiveAssetPO ตัวจริง: สินทรัพย์เข้าทะเบียนตามจำนวนที่แก้ ครั้งเดียวต่อแถว ──
   const RA = fnSrc("  async function receiveAssetPO(po){");
   ok_("ดึง receiveAssetPO ตัวจริงมารันได้", !!RA);
-  if (RA && typeof r1 !== "string") {
+  const runRA = async (items) => {
     const added = [], claims = [];
     const api = { getAssets: async () => [{ id: 9, category: "ครัว", useful_life_years: 5 }, { id: 1139, category: "ภาชนะ", useful_life_years: 3 }],
       patchPOIfStatus: async (id, st) => { claims.push([id, st]); return [{ id }]; }, addAsset: async (row) => { added.push([row.name, row.quantity, row.cost, row.branch_id]); return [{ id: added.length }]; }, pushAssetToSlipTrack: () => {} };
     const got = await safeA(() => runW(RA, "receiveAssetPO", { currentBranch: { id: 3, name: "ราชพฤกษ์" }, confirmDlg: async () => true, setConfirming: () => {}, api, round2: R2, currentUser: { username: "b3" },
-      todayStr: () => "2026-10-31", load: async () => {}, setViewPO: () => {}, posToast: () => {}, alert: () => {}, showErr: (t, e) => { throw e; }, setTimeout: () => {} })({ id: 823, po_number: "PO-202610-B1-JPKQW", status: "shipped", branch_id: 3, items: r1.items }));
+      todayStr: () => "2026-10-31", load: async () => {}, setViewPO: () => {}, posToast: () => {}, alert: () => {}, showErr: (t, e) => { throw e; }, setTimeout: () => {} })({ id: 823, po_number: "PO-202610-B1-JPKQW", status: "shipped", branch_id: 3, items }));
+    return { got: typeof got === "string" ? got : "ok", added, claims, value: R2(added.reduce((s, a) => s + a[1] * a[2], 0)) };
+  };
+  if (RA && typeof r1 !== "string") {
+    const A0 = await runRA(r1.items);
     ck("ใบที่แก้แล้ว (แก้ว 150→100) เข้า receiveAssetPO ตัวจริง → สร้างสินทรัพย์ตามจำนวนที่แก้ ครั้งเดียวต่อแถว · ล็อกรับ shipped ครั้งเดียว",
-      [typeof got === "string" ? got : "ok", added, claims], ["ok", [["เตา", 30, 0, 3], ["แก้วสแตนเลสสีทอง", 100, 50, 3], ["เอี๊ยมขัดกระทะ", 2, 0, 3]], [[823, "shipped"]]]);
+      [A0.got, A0.added, A0.claims], ["ok", [["เตา", 30, 0, 3], ["แก้วสแตนเลสสีทอง", 100, 50, 3], ["เอี๊ยมขัดกระทะ", 2, 0, 3]], [[823, "shipped"]]]);
+  }
+  if (RA && typeof pEd !== "string") {
+    // 31 ต.ค. 69: ใบที่แก้ราคาแล้ว → ทุนต่อชิ้นในทะเบียน = ราคาที่แก้ · ทุนรวมทั้งทะเบียน = ยอดใบ (ไม่นับซ้ำ ไม่ตกหล่น)
+    const A1 = await runRA(pEd.items);
+    ck("ใบที่แก้ราคาแล้ว (เตา ฿1,250.50 · แก้ว 100 × ฿45) เข้า receiveAssetPO ตัวจริง → ทุนต่อชิ้น = ราคาที่แก้ · ทุนรวมทะเบียน = ยอดใบ ฿42,015 · ล็อกรับครั้งเดียว",
+      [A1.got, A1.added, A1.value, A1.claims], ["ok", [["เตา", 30, 1250.5, 3], ["แก้วสแตนเลสสีทอง", 100, 45, 3], ["เอี๊ยมขัดกระทะ", 2, 0, 3]], pEd.subtotal, [[823, "shipped"]]]);
+  }
+  if (RA) {
+    // ของชิ้นเดียวกันหลายแถวคนละราคา (สองใบขอ หรือแก้ราคาทีละแถว) — เดิมรวมทุกแถวแล้วใช้ราคาแถวท้าย ⟹ ทุน 6 × ฿100 ทั้งที่ใบ ฿660
+    const DUP = [
+      { kind: "asset", asset_id: 9, name: "เตา", unit: "ชิ้น", qty: 2, price_per_unit: 100, line_total: 200 },
+      { kind: "asset", asset_id: 9, name: "เตา", unit: "ชิ้น", qty: 3, price_per_unit: 120, line_total: 360 },
+      { kind: "asset", asset_id: 9, name: "เตา", unit: "ชิ้น", qty: 1, price_per_unit: 100, line_total: 100 },
+      { kind: "other", asset_id: null, name: "ถาดใหม่", unit: "ชิ้น", qty: 4, price_per_unit: 25, line_total: 100 },
+    ];
+    const A2 = await runRA(DUP);
+    ck("ของชิ้นเดียวกันคนละราคา → แยกล็อกตามราคา (ราคาเท่ากันรวมกัน) · ทุนรวมทะเบียน ฿760 = Σ ยอดแถวของใบ",
+      [A2.got, A2.added, A2.value], ["ok", [["เตา", 3, 100, 3], ["เตา", 3, 120, 3], ["ถาดใหม่", 4, 25, 3]], R2(DUP.reduce((s, x) => s + x.line_total, 0))]);
   }
 
   // ── saveAssetEdit ตัวจริง: อ่านใบสดก่อน · ต้องยังรอจัดส่ง+เป็นใบสินทรัพย์ · เขียนแบบมีเงื่อนไข status=open ──
@@ -12559,7 +12624,7 @@ section("แก้ไขใบส่งสินทรัพย์/อุปก�
       const deps = {
         assetEditBusyRef: { current: false }, currentUser: { username: "central" }, setAssetEditPO: (v) => { if (v === null) W.closed++; }, load: async () => { W.loads++; },
         alert: (m) => W.alerts.push(String(m)), canEditPO: () => can, showErr: (t) => W.errs.push(t), PO_STATUS: { open: { label: "รอจัดส่ง" }, shipped: { label: "จัดส่งแล้ว" } },
-        isAssetPO: F.isAssetPO, applyAssetPOEdits: F.applyAssetPOEdits, posToast: (m) => W.toast.push(m), branchById: { 3: { name: "ราชพฤกษ์" } }, nowStr: () => AT,
+        isAssetPO: F.isAssetPO, applyAssetPOEdits: F.applyAssetPOEdits, posToast: (m) => W.toast.push(m), branchById: { 3: { name: "ราชพฤกษ์" } }, nowStr: () => AT, round2: R2,
         console: { warn: () => {}, error: () => {}, log: () => {} },
         api: {
           getPO: async () => { W.gets++; await tick(); if (getThrows) throw new Error("net"); return fresh ? [JSON.parse(JSON.stringify(fresh))] : []; },
@@ -12577,9 +12642,10 @@ section("แก้ไขใบส่งสินทรัพย์/อุปก�
     };
     const A = await runSA();
     const p0 = A.patches[0] || [];
-    ck("บันทึกปกติ → อ่านใบสด 1 ครั้ง · เขียน 1 ครั้งแบบ CAS status=open ช่อง items+updated_at เท่านั้น (ยอดรวมหัวใบไม่แตะ = 0 ตามเดิม) · แก้ว 100 · ปิดหน้า+โหลดใหม่ · ไม่โยน",
-      [A.gets, A.patches.length, p0[0], p0[1], p0[2] && Object.keys(p0[2]).sort(), p0[2] && p0[2].items.map((x) => x.qty), p0[2] && typeof p0[2].updated_at, A.closed, A.loads, A.threw, A.alerts],
-      [1, 1, 823, "open", ["items", "updated_at"], [2, 30, 100], "string", 1, 1, null, []]);
+    // 31 ต.ค. 69: หัวใบเขียนในคำสั่งเดียวกันด้วย (เดิม items+updated_at เท่านั้น หัวใบค้าง ฿0 ทั้งที่แถวมีราคา) — แก้ว 100 × ฿50 = ฿5,000
+    ck("บันทึกปกติ → อ่านใบสด 1 ครั้ง · เขียน 1 ครั้งแบบ CAS status=open: items + หัวใบ (subtotal/vat/total = Σ ยอดแถว ไม่ใช่ ฿0) + updated_at · แก้ว 100 · ปิดหน้า+โหลดใหม่ · ไม่โยน",
+      [A.gets, A.patches.length, p0[0], p0[1], p0[2] && Object.keys(p0[2]).sort(), p0[2] && p0[2].items.map((x) => x.qty), p0[2] && [p0[2].subtotal, p0[2].vat, p0[2].total], p0[2] && typeof p0[2].updated_at, A.closed, A.loads, A.threw, A.alerts],
+      [1, 1, 823, "open", ["items", "subtotal", "total", "updated_at", "vat"], [2, 30, 100], [5000, 0, 5000], "string", 1, 1, null, []]);
     ok_("…ประวัติการแก้ 1 แถว: เลขใบ + สาขา + จาก→เป็น + ใครแก้", A.hist.length === 1 && ["PO-202610-B1-JPKQW", "ราชพฤกษ์", '"แก้วสแตนเลสสีทอง" 150→100', "โดย central"].every((s) => A.hist[0].includes(s)));
     const FR2 = { ...FRESH, items: [{ ...ITEMS[0], note: "แก้จากอีกเครื่อง" }, ITEMS[1], ITEMS[2]] };
     const A2 = await runSA({ fresh: FR2 });
@@ -12608,6 +12674,49 @@ section("แก้ไขใบส่งสินทรัพย์/อุปก�
     ck("ไม่มีสิทธิ์แก้ (canEditPO=false) → ไม่อ่าน ไม่เขียน", [X.gets, X.patches.length], [0, 0]);
     const Q = await runSA({ edits: E({ 2: { qty: "0" } }, false) });
     ck("จำนวน 0 → ไม่เขียน หน้าแก้ยังเปิด (แก้ต่อได้) บอกเหตุเป็นไทย", [Q.patches.length, Q.closed, (Q.alerts[0] || "").startsWith('จำนวนของ "แก้วสแตนเลสสีทอง" ไม่ถูกต้อง')], [0, 0, true]);
+
+    // ── แก้ราคา (31 ต.ค. 69) ──
+    const P = await runSA({ edits: EP({ 2: { price: "45.5" } }) });
+    const pp = P.patches[0] || [];
+    ck("แก้ราคาแก้ว 50→45.5 → เขียนครั้งเดียวแบบ CAS status=open: ราคา/ยอดแถว + subtotal/vat/total ในคำสั่งเดียวกัน (฿6,825 · VAT 0 ตามใบส่งสินทรัพย์)",
+      [P.gets, P.patches.length, pp[1], pp[2] && pp[2].items[2].price_per_unit, pp[2] && pp[2].items[2].line_total, pp[2] && [pp[2].subtotal, pp[2].vat, pp[2].total], P.closed, P.threw],
+      [1, 1, "open", 45.5, 6825, [6825, 0, 6825], 1, null]);
+    ok_("…ประวัติการแก้บอกราคา จาก→เป็น (ราคา \"แก้วสแตนเลสสีทอง\" 50→45.5) + ใครแก้", P.hist.length === 1 && P.hist[0].includes('ราคา "แก้วสแตนเลสสีทอง" 50→45.5') && P.hist[0].includes("โดย central"));
+    const SP = await runSA({ fresh: { ...FRESH, items: [ITEMS[0], ITEMS[1], { ...ITEMS[2], price_per_unit: 55, line_total: 8250 }] }, edits: EP({ 2: { price: "45" } }) });
+    ck("อีกเครื่องแก้ราคาไปก่อน (ฐาน 55 · จอเห็น 50) → ไม่เขียน ไม่จดประวัติ · ปิดหน้า+โหลดใหม่+บอกว่าใบถูกแก้จากที่อื่น",
+      [SP.patches.length, SP.hist.length, SP.closed, SP.loads, SP.alerts[0]], [0, 0, 1, 1, STALE.slice(4)]);
+    const BPr = await runSA({ edits: EP({ 2: { price: "-1" } }) });
+    ck("ราคาไม่ถูกต้อง → ไม่เขียน หน้าแก้ยังเปิด (แก้ต่อได้) บอกเหตุเป็นไทย", [BPr.patches.length, BPr.closed, (BPr.alerts[0] || "").startsWith('ราคา/หน่วยของ "แก้วสแตนเลสสีทอง" ไม่ถูกต้อง')], [0, 0, true]);
+    const V = await runSA({ fresh: { ...FRESH, subtotal: 7500, vat: 525, total: 8025 }, edits: EP({ 2: { price: "45.5" } }) });
+    ck("VAT = สัดส่วนเดิมของใบ (กติกาเดียวกับส่งกลับ/คัดลอก/ตัวส่งบัญชี) — ใบจริง vat 0 จึงได้ 0 · ใบสมมุติ 7% → 7% ของยอดใหม่",
+      V.patches.length ? [V.patches[0][2].subtotal, V.patches[0][2].vat, V.patches[0][2].total] : V.patches.length, [6825, 477.75, 7302.75]);
+
+    // ── ตัวส่งบัญชีตัวจริง (หน้าเว็บ + ตัวกวาดบนเซิร์ฟเวอร์): ใบที่แก้ราคาแล้ว พอสาขารับของ ยอดบิล = ยอดหัวใบที่เพิ่งเขียน ──
+    // ไม่มีการส่งตอนแก้ (ใบยังไม่รับ) · external_id ยังเป็น PO-<เลขใบ> เดิม (ไม่มีรอบไหนเปลี่ยนเลขใบ) · fetch ปลอม ไม่ยิงบัญชีจริง
+    if (pp[2]) {
+      let cli = null, srv = null;
+      try {
+        const LN = (pfx) => APP.split("\n").find((l) => l.startsWith(pfx)) || "";
+        const push = fnSrc("async function pushPOToSlipTrack(po, branches, opts={}){");
+        const src = [LN("const round2 = "), LN("const SLIPTRACK_CANON_BRANCHES="), grabConst(APP, "SLIPTRACK_BRANCH_ALIAS"), LN("const slipWarnings="), grab(APP, "isTransferPO"), grab(APP, "sliptrackBranchName"), push].join("\n");
+        cli = (fetchMock) => new Function("fetch", "console", src + "\nreturn pushPOToSlipTrack;")(fetchMock, { warn: () => {}, error: () => {}, log: () => {} });
+        const st = SWEEP.indexOf("const round2 ="), fnAt = SWEEP.indexOf("function buildPushPayload(po, branchById, paidCtx) {");
+        let d = 0, started = false, en = -1;
+        for (let i = fnAt; i < SWEEP.length; i++) { if (SWEEP[i] === "{") { d++; started = true; } else if (SWEEP[i] === "}") { d--; if (started && d === 0) { en = i + 1; break; } } }
+        srv = new Function(SWEEP.slice(st, en) + " return buildPushPayload;")();
+      } catch { cli = null; srv = null; }
+      ok_("ดึงตัวส่งบัญชีหน้าเว็บ + ตัวกวาดบนเซิร์ฟเวอร์ตัวจริงมารันได้", !!cli && !!srv);
+      if (cli && srv) {
+        const BR = { 1: { id: 1, name: "ครัวกลาง", type: "central" }, 3: { id: 3, name: "ราชพฤกษ์" } };
+        const RECV = { ...FRESH, ...pp[2], status: "awaiting_payment", received_at: "2026-10-31T05:00:00.000Z", notes: "ใบส่งสินทรัพย์/อุปกรณ์ (31/10/2569)" };
+        const bodies = [];
+        const res = await safeA(() => cli(async (u, init) => { bodies.push(JSON.parse(init.body)); return { ok: true, json: async () => ({}) }; })(RECV, Object.values(BR)));
+        const c = bodies[0] || {}, s = (srv(RECV, BR, null) || {}).payload || {};
+        ck("…รับแล้ว: ยอดบิลบัญชี (หน้าเว็บ = ตัวกวาด) = ยอดหัวใบหลังแก้ราคา ฿6,825 · external_id PO-<เลขใบ> เดิม · บรรทัดใช้ราคาที่แก้",
+          [res && res.ok, c.amount, s.amount, pp[2].total, c.external_id, s.external_id, (c.items || []).map((x) => [x.name, x.qty, x.unit_price])],
+          [true, 6825, 6825, 6825, "PO-PO-202610-B1-JPKQW", "PO-PO-202610-B1-JPKQW", [["เอี๊ยมขัดกระทะ", 2, 0], ["เตา", 30, 0], ["แก้วสแตนเลสสีทอง", 150, 45.5]]]);
+      }
+    }
   }
 
   // ── ตรวจโครงสร้าง: ทางเข้าแก้ไขเดิมทุกจุดพาใบสินทรัพย์ไปหน้าใหม่ · ใบวัตถุดิบยังไปฟอร์มเดิม ──
@@ -12623,14 +12732,49 @@ section("แก้ไขใบส่งสินทรัพย์/อุปก�
   ok_("startAssetEdit: เช็คสิทธิ์ canEditPO + ต้องเป็นใบสินทรัพย์ + ต้องรอจัดส่ง ก่อนเปิดหน้า",
     !!SAE && ["if(!canEditPO(po))", "if(!isAssetPO(po))", `if(po.status!=="open")`].every((s) => SAE.includes(s) && SAE.indexOf(s) < SAE.indexOf("setAssetEditPO(po)")));
   const SAS = SA || "";
-  ok_("saveAssetEdit: อ่านใบสด (api.getPO) ก่อนเขียน · คิดจาก fresh.items · เขียนด้วย patchPOIfStatus(…,\"open\",…) เท่านั้น",
+  ok_("saveAssetEdit: อ่านใบสด (api.getPO) ก่อนเขียน · คิดจาก fresh.items · เขียน items+หัวใบ ด้วย patchPOIfStatus(…,\"open\",…) คำสั่งเดียว · ไม่แตะสต๊อก/สินทรัพย์/บัญชี",
     SAS.indexOf("api.getPO(po.id)") > 0 && SAS.indexOf("api.getPO(po.id)") < SAS.indexOf("applyAssetPOEdits(fresh.items,edits,who,at)")
-    && SAS.indexOf("applyAssetPOEdits(fresh.items,edits,who,at)") < SAS.indexOf(`api.patchPOIfStatus(fresh.id,"open",{items:res.items,updated_at:at})`)
-    && !/api\.updatePO\(|api\.addPO\(|transferStockBetweenBranches|addAsset|updateAsset/.test(SAS));
+    && SAS.indexOf("applyAssetPOEdits(fresh.items,edits,who,at)") < SAS.indexOf(`api.patchPOIfStatus(fresh.id,"open",{items:res.items,subtotal:res.subtotal,vat,total:round2(res.subtotal+vat),updated_at:at})`)
+    && (SAS.match(/api\.patchPOIfStatus\(/g) || []).length === 1
+    && !/api\.updatePO\(|api\.addPO\(|transferStockBetweenBranches|addAsset|updateAsset|pushPOToSlipTrack|recordSlipSync|pushAssetToSlipTrack|fetch\(/.test(SAS));
   const MD = fnSrc("function AssetPOEditModal(") || "";
   ok_("หน้าแก้: ช่องจำนวน type=text + inputMode=decimal (ไม่มี type=number — iOS) · บอกว่าเพิ่มรายการใหม่ให้เปิดใบขอใหม่ · ส่งตัวตนแถวครบ",
     MD.includes(`<input type="text" inputMode="decimal" value={r.qty}`) && !MD.includes(`type="number"`) && MD.includes("เพิ่มรายการใหม่ให้สาขาเปิดใบขอสินทรัพย์ใหม่")
-    && MD.includes("{kind:r.kind,asset_id:r.asset_id,name:r.name,orig_qty:r.orig_qty,qty:r.qty,note:r.note!==r.orig_note?r.note:undefined,removed:r.removed}"));
+    && MD.includes("{kind:r.kind,asset_id:r.asset_id,name:r.name,orig_qty:r.orig_qty,qty:r.qty,orig_price:r.orig_price,price:r.price!==r.price0?r.price:undefined,note:r.note!==r.orig_note?r.note:undefined,removed:r.removed}"));
+  ok_("หน้าแก้ (31 ต.ค. 69): ช่องราคา/หน่วย type=text + inputMode=decimal ทุกแถว · ส่งราคาเฉพาะแถวที่พิมพ์แก้ + orig_price ทุกแถว · โชว์ยอดแถว + ยอดรวมทั้งใบ",
+    MD.includes(`<input type="text" inputMode="decimal" value={r.price}`) && (MD.match(/<input type="text" inputMode="decimal"/g) || []).length === 2
+    && MD.includes("orig_price:+it.price_per_unit||0,price0:String(+it.price_per_unit||0),price:String(+it.price_per_unit||0)")
+    && MD.includes("รวม {Number.isFinite(lineOf(r))?fmtTHB(lineOf(r)):\"—\"}") && MD.includes("ยอดรวมทั้งใบ"));
+  // ผู้ตรวจ 31 ต.ค. 69: ยอดบนจอ (ยอดแถว/ยอดรวมทั้งใบ) ต้องเท่าที่บันทึกลงหัวใบทุกสตางค์ — ด่านข้างบนแค่ค้นข้อความ "รวม …"
+  // (จอปัดราคาเดิม 33.333 หรือคิดยอดแถวด้วยราคาเก่า ก็ยังผ่าน) ⟹ รันตัวคิดยอดของหน้าแก้ตัวจริง: ค่าเริ่ม rows / numOf / lineOf /
+  // vr / kept / sub + ชุดที่ส่งตอนกดบันทึก แล้วส่งชุดนั้นเข้า applyAssetPOEdits ตัวจริง เทียบทุกแถว + ยอดใบ + VAT
+  const MDL = MD.split("\n");
+  const mdLine = (pfx) => MDL.find((l) => l.trim().startsWith(pfx)) || "";
+  let SCR = null;
+  try {
+    const init = (mdLine("const[rows,setRows]=useState(()=>").match(/useState\(\(\)=>(.*)\);\s*$/) || [])[1];
+    const pay = (mdLine("try{await onSave(").match(/await onSave\((.*)\);\}\s*$/) || [])[1];
+    if (init && pay) SCR = new Function("round2", "po", "typed",
+      `const rows=(${init}).map(r=>({...r,...((typed||{})[r.i]||{})}));\n${["const numOf=", "const lineOf=", "const vr=", "const kept=", "const sub="].map(mdLine).join("\n")}\nreturn {lines:rows.map(r=>r.removed?null:lineOf(r)),sub,vatAmt,allOk,edits:${pay}};`).bind(null, R2);
+  } catch { SCR = null; }
+  ok_("ดึงตัวคิดยอดบนจอของหน้าแก้ตัวจริงมารันได้", !!SCR && !!F);
+  if (SCR && F) {
+    const ODD = [ITEMS[0], ITEMS[1], { ...ITEMS[2], price_per_unit: 33.333, line_total: 4999.95 }];
+    const cases = [
+      [{ items: ODD, subtotal: 0, vat: 0 }, {}],
+      [{ items: ITEMS, subtotal: 0, vat: 0 }, { 2: { qty: "100", price: "45.5" }, 1: { price: "1250.5" } }],
+      [{ items: ITEMS, subtotal: 0, vat: 0 }, { 2: { removed: true }, 1: { price: "12.346" } }],
+      [{ items: ITEMS, subtotal: 7500, vat: 525 }, { 2: { price: "45.5" } }],
+    ];
+    const got = cases.map(([po, typed]) => safe(() => {
+      const s = SCR(po, typed), a = F.applyAssetPOEdits(po.items, s.edits, "c", AT);
+      let k = 0; const saved = s.lines.map((l) => (l === null ? null : a.items[k++].line_total));
+      const vr = (+po.subtotal || 0) > 0 ? (+po.vat || 0) / (+po.subtotal) : 0;
+      return [s.allOk, JSON.stringify(s.lines) === JSON.stringify(saved), s.sub === a.subtotal, s.vatAmt === R2(a.subtotal * vr), s.sub, s.vatAmt];
+    }));
+    ck("หน้าแก้: ยอดแถว/ยอดใบ/VAT บนจอ = ที่ applyAssetPOEdits คิดจากชุดที่หน้าแก้ส่งจริง — ราคาเดิม 33.333 ไม่ปัด (฿4,999.95) · แก้จำนวน+ราคา (฿42,065) · ✕ แถว + ราคา 12.346→12.35 (฿370.50) · ใบมี VAT 7% (฿6,825 + ฿477.75)",
+      got, [[true, true, true, true, 4999.95, 0], [true, true, true, true, 42065, 0], [true, true, true, true, 370.5, 0], [true, true, true, true, 6825, 477.75]]);
+  }
   ok_("หน้าแก้ถูกวางใน POSection และบันทึกผ่าน saveAssetEdit", APP.includes("{assetEditPO&&<AssetPOEditModal po={assetEditPO}") && APP.includes("onSave={edits=>saveAssetEdit(assetEditPO,edits)}"));
 }
 
