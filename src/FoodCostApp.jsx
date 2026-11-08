@@ -179,7 +179,8 @@ if(typeof document!=="undefined"){
     try{
       const ID="fc-dbh-bar", old=document.getElementById(ID);
       if(!bad){ dismissed=false; if(old)old.remove(); return; }   // หายป่วย → ล้างสถานะปิดแถบ
-      if(dismissed||old)return;
+      // แถบแดงขึ้นอยู่ = ไม่ขึ้นทับ (fixed top:0 z-index เท่ากัน ตัวที่มาทีหลังบังข้อความให้จดกระดาษ)
+      if(dismissed||old||document.getElementById("fc-dbgone-bar"))return;
       const bar=document.createElement("div");
       bar.id=ID; bar.setAttribute("role","status"); bar.setAttribute("aria-live","polite");
       bar.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b45309;color:#fff;font:600 14px/1.45 system-ui,sans-serif;padding:9px 44px 9px 14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.25)";
@@ -194,14 +195,20 @@ if(typeof document!=="undefined"){
   });
 }
 
-// ── ฐานข้อมูล "หาย" (หมดอายุ / ถูกพัก / ถูกระงับ) ≠ ช้า ── (23 ต.ค. 69 15:45 โปรเจกต์ Supabase หายจาก DNS ทั้งตัว
-// ทุกสาขาล็อกอินไม่ได้ จอขึ้นแค่ "ช้ากว่าปกติ" กับ "เซิร์ฟเวอร์อาจกำลังตื่นจากพัก" — ไม่มีใครรู้ว่าต้องตามเจ้าของ)
+// ── ฐานข้อมูล "หาย" (ถูกพัก / ถูกระงับ / ค้างไม่ตอบ) ≠ ช้า ── (23 ต.ค. 69 15:45 โปรเจกต์ Supabase หายจาก DNS ทั้งตัว
+// ทุกสาขาล็อกอินไม่ได้ จอขึ้นแค่ "ช้ากว่าปกติ" กับ "เซิร์ฟเวอร์อาจกำลังตื่นจากพัก" — ไม่มีใครรู้ว่าระบบใช้ไม่ได้)
 // ตัดสินว่าหาย = เว็บของเราเอง (Vercel) โหลดได้ = เน็ตร้านปกติ แต่ต่อฐานข้อมูลไม่ได้เลย หรือตอบ 402/540 (ถูกระงับ/ถูกพัก)
-// ⟹ แถบแดงทุกหน้า (รวมหน้าล็อกอิน) "แจ้งบอสแม็กด่วน" · หน้าลูกค้าสแกนบอกให้เรียกพนักงานแทน · กลับมาเมื่อไรแถบหายเอง
-const DBG={down:false,checking:false,last:0,timer:null,listeners:new Set()};
+// ⟹ แถบแดงทุกหน้า (รวมหน้าล็อกอิน) · หน้าลูกค้าสแกนบอกให้เรียกพนักงานแทน · กลับมาเมื่อไรแถบหายเอง
+// 8 พ.ย. 69 เจ้าของสั่ง: ทันทีที่ต่อไม่ได้ บอกแค่ให้จดกระดาษ · ต่อไม่ได้ติดกันเกิน 2 นาที ค่อยเพิ่มบรรทัดแจ้งผู้ดูแล (ค้าง 8 วิไม่ควรมีคนโทรหาเจ้าของ)
+//   ไม่บอกว่า "หมดอายุ" เพราะตัวเช็กรู้แค่ว่าต่อไม่ได้ ไม่รู้สาเหตุ (ค้างเกิน 8 วิ หรือ 5xx ก็เข้าเงื่อนไขนี้)
+// 8 พ.ย. 69 เจ้าของตัดสิน: เลิกแถบนับถอยหลังค่าบริการ Supabase/Vercel และไฟล์วันครบกำหนดที่พิมพ์มือ — อย่าทำกลับมา
+//   วันที่พิมพ์มือไม่รู้ว่าตัดบัตรผ่านหรือไม่ รู้แค่วันนี้วันที่เท่าไร จึงป้องกันเหตุ 23 ต.ค. ไม่ได้ และเตือนผิดเมื่อรอบบิลย้าย (Supabase ไม่มี API วันครบรอบให้บัญชีทั่วไป)
+//   ตัวจับเหตุจริง = อีเมลทวงจาก Supabase + แถบแดงนี้ตอนต่อไม่ได้
+const DBG={down:false,since:0,checking:false,last:0,timer:null,listeners:new Set()};
 function dbgSet(v){
   if(v===DBG.down)return;
   DBG.down=v;
+  DBG.since=v?Date.now():0;   // นับ "ต่อไม่ได้ติดกัน" จากครั้งแรกที่ล้ม · กลับมาแม้ครั้งเดียว = เริ่มนับใหม่
   DBG.listeners.forEach(fn=>{try{fn(v);}catch{}});
   try{
     if(v&&!DBG.timer)DBG.timer=setInterval(()=>dbgCheck(true),30000);   // ระหว่างหาย ถามซ้ำทุก 30 วิ กลับมาแล้วแถบหายเอง
@@ -227,12 +234,19 @@ async function dbgCheck(force){
   }catch{return DBG.down;}
   finally{DBG.checking=false;}
 }
+const DBG_MSG="⛔ เชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว — จดออเดอร์ลงกระดาษไว้ก่อน";
+const DBG_RETRY="ระบบกำลังลองเชื่อมต่อใหม่";
+const DBG_LONG="ยังเชื่อมต่อไม่ได้เกิน 2 นาที — แจ้งผู้ดูแลระบบ";
+const DBG_LONG_MS=120000;
+const dbgIsLong=(now=Date.now())=>DBG.down&&now-DBG.since>=DBG_LONG_MS;
+const dbgLoginMsg=()=>dbgIsLong()?`${DBG_MSG} · ${DBG_LONG}`:DBG_MSG;
 // แถบแดง — เขียนลง DOM ตรงๆ เหมือนแถบ "ช้า" (ต้องขึ้นได้แม้หน้าล็อกอิน) · ปิดไม่ได้ (เรื่องใหญ่ ต้องเห็นจนกว่าจะกลับมา)
 if(typeof document!=="undefined"){
+  let longT=null;
   DBG.listeners.add((down)=>{
     try{
       const ID="fc-dbgone-bar",old=document.getElementById(ID);
-      if(!down){if(old)old.remove();return;}
+      if(!down){clearTimeout(longT);longT=null;if(old)old.remove();return;}
       if(old)return;
       const slow=document.getElementById("fc-dbh-bar");if(slow)slow.remove();
       const cust=/\bcust-scan\b/.test(document.documentElement.className||"");
@@ -241,92 +255,26 @@ if(typeof document!=="undefined"){
       bar.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b91c1c;color:#fff;font:800 16px/1.45 system-ui,sans-serif;padding:10px 14px;text-align:center;box-shadow:0 3px 12px rgba(0,0,0,.35)";
       if(cust){bar.textContent="⚠️ ระบบสั่งอาหารขัดข้องชั่วคราว — กรุณาเรียกพนักงานเพื่อสั่งอาหาร";}
       else{
-        bar.textContent="⛔ ฐานข้อมูลหมดอายุ / ใช้งานไม่ได้ — แจ้งบอสแม็กด่วน!";
+        bar.textContent=DBG_MSG;
         const sub=document.createElement("div");
         sub.style.cssText="font:600 13px/1.45 system-ui,sans-serif;opacity:.95;margin-top:2px";
-        sub.textContent="ตอนนี้ระบบบันทึกข้อมูลไม่ได้ · จดออเดอร์และรับเงินด้วยกระดาษไว้ก่อน · กลับมาใช้ได้เมื่อไร แถบนี้จะหายเอง";
+        sub.textContent=DBG_RETRY;
         bar.appendChild(sub);
+        longT=setTimeout(()=>{   // กลับมาก่อนครบ = ถูกยกเลิกด้านบน
+          try{
+            if(!DBG.down||document.getElementById(ID)!==bar)return;
+            const long=document.createElement("div");
+            long.style.cssText="font:800 14px/1.45 system-ui,sans-serif;margin-top:2px";
+            long.textContent=DBG_LONG;
+            bar.appendChild(long);
+          }catch{}
+        },DBG_LONG_MS);
       }
       document.body.appendChild(bar);
     }catch{}
   });
   // เปิดหน้าเว็บเมื่อไรเช็กทันที — หน้าล็อกอินยังไม่ยิงคำขอฐานข้อมูลจนกว่าจะกดเข้าสู่ระบบ
   try{window.addEventListener("load",()=>setTimeout(()=>dbgCheck(true),800));}catch{}
-}
-// ── เตือนค่าบริการรายเดือนใกล้ครบกำหนด (ฐานข้อมูล Supabase · เว็บไซต์ Vercel) ── (เจ้าของสั่ง 23 ต.ค. 69 หลังฐานข้อมูลหมดอายุ)
-// ไม่จ่ายตามรอบ = บริการถูกพัก ทุกสาขาใช้ระบบไม่ได้ทั้งร้าน ⟹ เตือนล่วงหน้า 10 วัน นับถอยหลังทุกวันจนกว่าจะจ่าย
-// วันครบกำหนดอยู่ที่ public/billing.json (ไฟล์บนเว็บเราเอง — อ่านได้แม้ฐานข้อมูลล่ม) · จ่ายแล้วเลื่อน due ไปรอบถัดไป
-// พนักงานเห็นแล้วไปบอกเจ้าของ ("แจ้งบอสแม็กด่วน") · ปิดแถบได้ถึงพรุ่งนี้ (เครื่องละครั้งต่อวัน) · หน้าลูกค้าสแกนไม่แสดง
-// 31 ต.ค. 69 เจ้าของสั่ง: ขึ้นเฉพาะหน้าล็อกอิน + หน้าเลือกสาขา (เดิมขึ้นทุกจอ บังงานพนักงาน) — สองหน้านั้นเรียก useBillBarHere() ติด class fc-bill-here
-// แถบ "ฐานข้อมูลหาย" (fc-dbgone-bar) ยังขึ้นทุกจอเหมือนเดิม เพราะตอนนั้นระบบใช้ไม่ได้อยู่แล้ว
-const BILL_WARN_DAYS=10;
-let billBarRefresh=()=>{};
-function useBillBarHere(){
-  useEffect(()=>{
-    const el=document.documentElement;
-    el.classList.add("fc-bill-here");billBarRefresh();
-    return()=>{el.classList.remove("fc-bill-here");billBarRefresh();};
-  },[]);
-}
-// จำนวนวันจากวันนี้ (เวลาไทย) ถึงวันครบกำหนด · บวก = ยังเหลือ · 0 = วันนี้ · ลบ = เลยมาแล้ว
-function billDaysLeft(due,nowMs){
-  const d=String(due||"").slice(0,10);
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(d))return null;
-  const today=new Date((nowMs==null?Date.now():nowMs)+7*3600e3).toISOString().slice(0,10);
-  return Math.round((Date.parse(d+"T00:00:00Z")-Date.parse(today+"T00:00:00Z"))/86400000);
-}
-function billWarnings(cfg,nowMs){
-  const list=cfg&&Array.isArray(cfg.services)?cfg.services:[];
-  return list.map(s=>({name:String((s&&s.name)||"").slice(0,60),due:String((s&&s.due)||"").slice(0,10),days:billDaysLeft(s&&s.due,nowMs)}))
-    .filter(w=>w.name&&w.days!=null&&w.days<=BILL_WARN_DAYS)
-    .sort((a,b)=>a.days-b.days);
-}
-function billLine(w){
-  const[y,m,d]=w.due.split("-");const dt=`${d}/${m}/${(+y||0)+543}`;
-  if(w.days>0)return `⏳ ${w.name} จะหมดอายุในอีก ${w.days} วัน (ครบกำหนดจ่าย ${dt}) — แจ้งบอสแม็กด่วน!`;
-  if(w.days===0)return `⛔ ${w.name} ครบกำหนดจ่ายวันนี้ (${dt}) — แจ้งบอสแม็กด่วน!`;
-  return `⛔ ${w.name} เลยกำหนดจ่ายมาแล้ว ${-w.days} วัน (${dt}) — แจ้งบอสแม็กด่วน!`;
-}
-if(typeof document!=="undefined"){
-  const ID="fc-bill-bar",HIDE_KEY="fc_bill_hide";
-  const todayTH=()=>new Date(Date.now()+7*3600e3).toISOString().slice(0,10);
-  let lastWs=null;
-  const render=(ws)=>{
-    lastWs=ws;
-    try{
-      const old=document.getElementById(ID);
-      let hidden=false;try{hidden=localStorage.getItem(HIDE_KEY)===todayTH();}catch{}
-      // ไม่ใช่หน้าล็อกอิน/เลือกสาขา / หน้าลูกค้าสแกน / ปิดไว้วันนี้แล้ว / ไม่มีอะไรต้องเตือน / แถบฐานข้อมูลหาย (เรื่องใหญ่กว่า) กำลังขึ้น
-      const cls=document.documentElement.className||"";
-      if(!ws.length||hidden||!/\bfc-bill-here\b/.test(cls)||/\bcust-scan\b/.test(cls)||document.getElementById("fc-dbgone-bar")){if(old)old.remove();return;}
-      const urgent=ws[0].days<=3;
-      const bar=old||document.createElement("div");
-      bar.id=ID;bar.setAttribute("role","alert");
-      bar.style.cssText=`position:fixed;top:0;left:0;right:0;z-index:2147483646;background:${urgent?"#b91c1c":"#c2410c"};color:#fff;font:800 15px/1.5 system-ui,sans-serif;padding:9px 44px 9px 14px;text-align:center;box-shadow:0 3px 12px rgba(0,0,0,.3)`;
-      bar.textContent="";
-      ws.forEach(w=>{const ln=document.createElement("div");ln.textContent=billLine(w);bar.appendChild(ln);});
-      const x=document.createElement("button");
-      x.textContent="✕";x.setAttribute("aria-label","ซ่อนถึงพรุ่งนี้");x.title="ซ่อนถึงพรุ่งนี้ (พรุ่งนี้ขึ้นใหม่ พร้อมจำนวนวันที่เหลือ)";
-      x.style.cssText="position:absolute;top:6px;right:8px;background:none;border:none;color:#fff;font-size:18px;font-weight:800;cursor:pointer;padding:4px 8px;line-height:1";
-      x.onclick=()=>{try{localStorage.setItem(HIDE_KEY,todayTH());}catch{}bar.remove();};
-      bar.appendChild(x);
-      if(!old)document.body.appendChild(bar);
-    }catch{}
-  };
-  const check=async()=>{
-    try{
-      const r=await fetch("/billing.json?ts="+Date.now(),{cache:"no-store"});
-      if(!r.ok)return;
-      render(billWarnings(await r.json()));
-    }catch{}
-  };
-  // เข้า/ออกหน้าล็อกอิน-เลือกสาขา → จัดแถบใหม่ทันที (มีผลแล้วใช้ซ้ำ ไม่ต้องโหลดไฟล์ใหม่)
-  billBarRefresh=()=>{if(lastWs)render(lastWs);else if(/\bfc-bill-here\b/.test(document.documentElement.className||""))check();};
-  try{
-    window.addEventListener("load",()=>setTimeout(check,1500));
-    setInterval(check,3*3600e3);   // เปิดค้างทั้งวัน: เลขวันลดเองข้ามเที่ยงคืน
-    DBG.listeners.add(()=>setTimeout(check,50));   // แถบฐานข้อมูลหายขึ้น/หาย → จัดแถบนี้ใหม่
-  }catch{}
 }
 
 async function sb(path, opts = {}) {
@@ -4780,7 +4728,6 @@ function ImgUp({value,onChange,label,compact}){
 // ── LOGIN ─────────────────────────────────────────────
 // ══════════════════════════════════════════════════════
 function LoginPage({onLogin}){
-  useBillBarHere();
   const[u,setU]=useState("");const[p,setP]=useState("");const[err,setErr]=useState("");const[show,setShow]=useState(false);const[loading,setLoading]=useState(false);
   // เบราว์เซอร์เติมชื่อ/รหัสให้เอง (autofill) แต่ยังไม่ส่ง onChange มา → state ว่างทั้งที่ช่องมีค่า อ่านจากช่องจริงสำรอง
   const uRef=useRef(null),pRef=useRef(null);
@@ -4805,7 +4752,7 @@ function LoginPage({onLogin}){
       }catch(e){
         if(attempt>=3){
           const gone=await dbgCheck(true);
-          setErr(gone?"⛔ ฐานข้อมูลหมดอายุ / ใช้งานไม่ได้ — แจ้งบอสแม็กด่วน!":"เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — เซิร์ฟเวอร์อาจกำลังตื่นจากพัก กรุณากดเข้าสู่ระบบอีกครั้ง");
+          setErr(gone?dbgLoginMsg():"เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — เซิร์ฟเวอร์อาจกำลังตื่นจากพัก กรุณากดเข้าสู่ระบบอีกครั้ง");
           setLoading(false);return;
         }
         await new Promise(r=>setTimeout(r,1200));
@@ -29991,7 +29938,6 @@ function POSPinGate({branchId}){
 
 // BranchSelector with auto-load branches
 function BranchSelectorWithLoad({user,onSelect,onLogout}){
-  useBillBarHere();
   const[branches,setBranches]=useState([]);const[loading,setLoading]=useState(true);
   useEffect(()=>{api.getBranches().then(b=>setBranches(b)).finally(()=>setLoading(false));},[]);
   if(loading)return <><style>{globalStyle}</style><div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><Loading text="กำลังโหลดรายการสาขา..."/></div></>;

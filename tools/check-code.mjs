@@ -9820,7 +9820,7 @@ section("ผังโต๊ะ: เปิดโต๊ะแล้วเมนู
     MAP.indexOf("swallowGhostClick(e.clientX,e.clientY);") > 0 && MAP.indexOf("swallowGhostClick(e.clientX,e.clientY);") < MAP.indexOf("onSelectTable(t,getTableOrder(t.id));"));
 }
 
-section("ฐานข้อมูลหาย / ค่าบริการใกล้ครบกำหนด — แจ้งบอสแม็ก (23 ต.ค. 69)");
+section("ฐานข้อมูลเชื่อมต่อไม่ได้ — แถบแดงสองขั้นตามเวลา · เลิกนับถอยหลังค่าบริการ (8 พ.ย. 69)");
 {
   // ── ตัวตัดสิน "ฐานข้อมูลหาย" ตัวจริง กับ fetch ปลอม ──
   let mkG = null;
@@ -9841,75 +9841,80 @@ section("ฐานข้อมูลหาย / ค่าบริการใ�
   }
   ok_("sb(): ยิงไม่ออก (TypeError) → เช็กฐานหาย · ตอบได้ → ล้างแถบ",
     APP.includes('if (e && e.name === "TypeError") dbgCheck(false);') && APP.includes("if (DBG.down) dbgSet(false);   // ตอบได้แล้ว = ฐานข้อมูลกลับมา"));
-  ok_("แถบแดงฐานข้อมูลหาย: ขึ้นทุกหน้า (DOM ตรง) · พนักงาน = แจ้งบอสแม็ก · หน้าลูกค้าสแกน = เรียกพนักงาน · เปิดเว็บแล้วเช็กทันที · หน้าล็อกอินบอกตรงๆ",
-    APP.includes('bar.textContent="⛔ ฐานข้อมูลหมดอายุ / ใช้งานไม่ได้ — แจ้งบอสแม็กด่วน!";') && APP.includes('bar.textContent="⚠️ ระบบสั่งอาหารขัดข้องชั่วคราว — กรุณาเรียกพนักงานเพื่อสั่งอาหาร";') &&
-    APP.includes('window.addEventListener("load",()=>setTimeout(()=>dbgCheck(true),800));') &&
-    APP.includes('setErr(gone?"⛔ ฐานข้อมูลหมดอายุ / ใช้งานไม่ได้ — แจ้งบอสแม็กด่วน!":'));
-  // ── เตือนค่าบริการ: ตัวจริงรันได้ ──
-  let BL = null;
-  try { BL = new Function(APP.split("\n").find((l) => l.startsWith("const BILL_WARN_DAYS=")) + "\n" + grab(APP, "billDaysLeft") + "\n" + grab(APP, "billWarnings") + "\n" + grab(APP, "billLine") + "\nreturn {billDaysLeft,billWarnings,billLine};")(); } catch { BL = null; }
-  ok_("ดึงตัวนับวันค่าบริการตัวจริงมารันได้", !!BL);
-  if (BL) {
-    const at = (iso) => Date.parse(iso);   // เวลา UTC — วันไทย = +7
-    ck("นับวันตามเวลาไทย: 22 ต.ค. 23:30 ไทย ยังเป็นวันที่ 22 · 00:30 วันที่ 23 = วันใหม่",
-      [BL.billDaysLeft("2026-11-11", at("2026-10-22T16:30:00Z")), BL.billDaysLeft("2026-11-11", at("2026-10-22T17:30:00Z")), BL.billDaysLeft("bad", 0)], [20, 19, null]);
-    const cfg = { services: [{ name: "เว็บไซต์ (Vercel)", due: "2026-11-11" }, { name: "ฐานข้อมูล (Supabase)", due: "2026-11-23" }] };
-    ck("เตือนเฉพาะที่เหลือ ≤ 10 วัน (รวมเลยกำหนด) เรียงด่วนสุดก่อน · ยังไกล = ไม่เตือน",
-      [BL.billWarnings(cfg, at("2026-10-31T05:00:00Z")).length, BL.billWarnings(cfg, at("2026-11-01T05:00:00Z")).map((w) => w.days), BL.billWarnings(cfg, at("2026-11-14T05:00:00Z")).map((w) => [w.name, w.days])],
-      [0, [10], [["เว็บไซต์ (Vercel)", -3], ["ฐานข้อมูล (Supabase)", 9]]]);
-    ck("ข้อความ: เหลือ N วัน / ครบวันนี้ / เลยมาแล้ว N วัน — ทุกแบบบอกแจ้งบอสแม็ก + วันที่แบบไทย",
-      [BL.billLine({ name: "เว็บไซต์ (Vercel)", due: "2026-11-11", days: 4 }), BL.billLine({ name: "ฐานข้อมูล (Supabase)", due: "2026-10-23", days: 0 }), BL.billLine({ name: "ฐานข้อมูล (Supabase)", due: "2026-10-23", days: -2 })],
-      ["⏳ เว็บไซต์ (Vercel) จะหมดอายุในอีก 4 วัน (ครบกำหนดจ่าย 11/11/2569) — แจ้งบอสแม็กด่วน!", "⛔ ฐานข้อมูล (Supabase) ครบกำหนดจ่ายวันนี้ (23/10/2569) — แจ้งบอสแม็กด่วน!", "⛔ ฐานข้อมูล (Supabase) เลยกำหนดจ่ายมาแล้ว 2 วัน (23/10/2569) — แจ้งบอสแม็กด่วน!"]);
-  }
-  {
-    const BJ = JSON.parse(fs.readFileSync(new URL("../public/billing.json", import.meta.url), "utf8"));
-    const keys = (BJ.services || []).map((x) => x.key).sort().join(",");
-    ok_("public/billing.json มีวันครบกำหนดของ Supabase และ Vercel (รูปแบบ YYYY-MM-DD)", keys === "supabase,vercel" && BJ.services.every((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.due) && x.name));
-  }
-  ok_("แถบค่าบริการ: อ่านไฟล์บนเว็บเราเอง (ไม่พึ่งฐานข้อมูล) · ไม่ขึ้นหน้าลูกค้าสแกน · ปิดได้ถึงพรุ่งนี้ · เช็กซ้ำทุก 3 ชม.",
-    APP.includes('const r=await fetch("/billing.json?ts="+Date.now(),{cache:"no-store"});') && APP.includes("/\\bcust-scan\\b/.test(cls)||document.getElementById(\"fc-dbgone-bar\")") &&
-    APP.includes("x.onclick=()=>{try{localStorage.setItem(HIDE_KEY,todayTH());}catch{}bar.remove();};") && APP.includes("setInterval(check,3*3600e3);"));
-  // ── 31 ต.ค. 69: แถบค่าบริการขึ้นเฉพาะหน้าล็อกอิน + หน้าเลือกสาขา (เจ้าของสั่ง: ไม่ให้บังจอทำงานพนักงาน) — รันบล็อกแถบตัวจริงกับ DOM ปลอม ──
-  {
-    const s0 = APP.indexOf('if(typeof document!=="undefined"){\n  const ID="fc-bill-bar"'), s1 = APP.indexOf("\nasync function sb(", s0);
-    const hookSrc = grab(APP, "useBillBarHere");
-    let BB = null;
-    try {
-      BB = new Function("document", "window", "localStorage", "fetch", "DBG", "setInterval", "setTimeout", "useEffect",
-        APP.split("\n").find((l) => l.startsWith("const BILL_WARN_DAYS=")) + "\nlet billBarRefresh=()=>{};\n" + grab(APP, "billDaysLeft") + "\n" + grab(APP, "billWarnings") + "\n" + grab(APP, "billLine") + "\n" + hookSrc + "\n" +
-        APP.slice(s0, s1) + "\nreturn {useBillBarHere,refresh:()=>billBarRefresh()};");
-    } catch { BB = null; }
-    ok_("ดึงบล็อกแถบค่าบริการตัวจริงมารันได้", s0 > 0 && s1 > s0 && !!BB && /^function useBillBarHere/.test(hookSrc || ""));
-    if (BB) {
-      const els = new Map();
-      const mkEl = () => { const e = { id: "", style: {}, children: [], textContent: "", setAttribute() {}, appendChild(c) { this.children.push(c); }, remove() { els.delete(this.id); } }; return e; };
-      const de = { className: "", classList: { add(c) { if (!de.className.split(" ").includes(c)) de.className = (de.className + " " + c).trim(); }, remove(c) { de.className = de.className.split(" ").filter((x) => x && x !== c).join(" "); } } };
-      const doc = { documentElement: de, getElementById: (id) => els.get(id) || null, createElement: mkEl, body: { appendChild(e) { els.set(e.id, e); } } };
-      let onLoad = null, nFetch = 0;
-      const win = { addEventListener: (ev, f) => { if (ev === "load") onLoad = f; } };
-      const ls = { getItem: () => null, setItem() {} };
-      const due = new Date(Date.now() + 7 * 3600e3 + 5 * 86400e3).toISOString().slice(0, 10);   // อีก 5 วัน (เวลาไทย)
-      const fakeFetch = async () => { nFetch++; return { ok: true, json: async () => ({ services: [{ key: "supabase", name: "ฐานข้อมูล (Supabase)", due }] }) }; };
-      const timers = []; const cleanups = [];
-      const api0 = BB(doc, win, ls, fakeFetch, { listeners: new Set() }, () => 0, (f) => { timers.push(f); return 0; }, (f) => { const c = f(); if (c) cleanups.push(c); });
-      const flush = async () => { while (timers.length) timers.shift()(); for (let i = 0; i < 5; i++) await Promise.resolve(); await new Promise((r) => setTimeout(r, 0)); };
-      const bar = () => !!els.get("fc-bill-bar");
-      onLoad && onLoad(); await flush();
-      const inWork = bar();   // ล็อกอินค้างไว้แล้ว เปิดเว็บมาเข้าจอทำงานเลย = ไม่มีแถบ
-      api0.useBillBarHere(); await flush();
-      const onLogin = bar(), fetchAfterMount = nFetch;   // หน้าล็อกอิน/เลือกสาขา = มีแถบ (ใช้ผลเดิม ไม่โหลดไฟล์ซ้ำ)
-      cleanups.splice(0).forEach((c) => c()); await flush();
-      const afterLeave = bar();   // เลือกสาขาแล้วเข้าจอทำงาน = แถบหายทันที
-      de.classList.add("cust-scan"); api0.useBillBarHere(); await flush();
-      const custScan = bar(); cleanups.splice(0).forEach((c) => c()); de.classList.remove("cust-scan");
-      ck("แถบค่าบริการ: จอทำงานไม่ขึ้น · หน้าล็อกอิน/เลือกสาขาขึ้น (ไม่โหลดไฟล์ซ้ำ) · ออกจากหน้านั้นหายทันที · หน้าลูกค้าสแกนไม่ขึ้น",
-        [inWork, onLogin, fetchAfterMount, afterLeave, custScan], [false, true, 1, false, false]);
+  ok_("แถบแดง: เปิดเว็บแล้วเช็กทันที · หน้าล็อกอินใช้ข้อความชุดเดียวกับแถบ",
+    APP.includes('window.addEventListener("load",()=>setTimeout(()=>dbgCheck(true),800));') && APP.includes('setErr(gone?dbgLoginMsg():'));
+  // ── แถบแดงตัวจริงกับ DOM + ตัวตั้งเวลาปลอม: ทันที = จดกระดาษ · ต่อไม่ได้ติดกันเกิน 2 นาที = แจ้งผู้ดูแล (ข้อความตรงตามที่เจ้าของกำหนด) ──
+  const barS0 = APP.indexOf("const DBG={down:false"), barS1 = APP.indexOf("\nasync function sb(", barS0);
+  let mkB = null;
+  try {
+    const body = APP.slice(barS0, barS1) + "\nreturn {DBG,dbgSet,dbgIsLong,dbgLoginMsg};";
+    new Function("document", "window", "fetch", "SUPA_URL", "SUPA_KEY", "setInterval", "clearInterval", "setTimeout", "clearTimeout", body);
+    mkB = (doc, C) => new Function("document", "window", "fetch", "SUPA_URL", "SUPA_KEY", "setInterval", "clearInterval", "setTimeout", "clearTimeout", body)(doc, { addEventListener() {} }, async () => ({ ok: true, status: 200 }), "u", "k", () => 1, () => {}, C.st, C.ct);
+  } catch { mkB = null; }
+  ok_("ดึงแถบแดงตัวจริงมารันได้", barS0 > 0 && barS1 > barS0 && !!mkB);
+  if (mkB) {
+    const MSG = "⛔ เชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว — จดออเดอร์ลงกระดาษไว้ก่อน", RETRY = "ระบบกำลังลองเชื่อมต่อใหม่", LONG = "ยังเชื่อมต่อไม่ได้เกิน 2 นาที — แจ้งผู้ดูแลระบบ";
+    const CUST = "⚠️ ระบบสั่งอาหารขัดข้องชั่วคราว — กรุณาเรียกพนักงานเพื่อสั่งอาหาร", ID = "fc-dbgone-bar";
+    const mkDom = (cls = "") => { const els = new Map(); const mkEl = () => ({ id: "", style: {}, children: [], textContent: "", setAttribute() {}, appendChild(c) { this.children.push(c); }, remove() { els.delete(this.id); } }); return { els, doc: { documentElement: { className: cls }, getElementById: (id) => els.get(id) || null, createElement: mkEl, body: { appendChild(e) { els.set(e.id, e); } } } }; };
+    const mkClock = () => { const q = new Map(); let n = 0; return { q, st: (f, ms) => { q.set(++n, { f, ms }); return n; }, ct: (i) => { q.delete(i); } }; };
+    const lines = (b) => b.children.map((c) => c.textContent);
+    { // ล่มนานเกิน 2 นาที
+      const D = mkDom(), C = mkClock(), B = mkB(D.doc, C);
+      B.dbgSet(true);
+      const bar = D.els.get(ID), t = [...C.q.values()];
+      ck("ต่อไม่ได้ทันที: บอกให้จดกระดาษ + กำลังลองใหม่ · ยังไม่บอกให้แจ้งใคร · ตั้งเวลาไว้ 2 นาทีพอดี", [bar.textContent, lines(bar), t.map((x) => x.ms)], [MSG, [RETRY], [120000]]);
+      t[0].f();
+      ck("ต่อไม่ได้ติดกันครบ 2 นาที: เพิ่มบรรทัดแจ้งผู้ดูแล 1 บรรทัด ข้อความหลักคงเดิม", [bar.textContent, lines(bar)], [MSG, [RETRY, LONG]]);
+      const since = B.DBG.since;
+      ck("เกณฑ์เวลา: 1:59.999 ยังไม่นับว่านาน · 2:00 นับ", [B.dbgIsLong(since + 119999), B.dbgIsLong(since + 120000)], [false, true]);
+      B.dbgSet(false);
+      ck("กลับมาแล้ว: แถบหาย · ไม่นับว่านาน · ล้างเวลาเริ่ม", [D.els.has(ID), B.dbgIsLong(since + 999999), B.DBG.since], [false, false, 0]);
     }
-    const body = (n) => { const i = APP.indexOf(`function ${n}(`); return i < 0 ? "" : APP.slice(i).split("\n").slice(0, 3).join("\n"); };   // grab() ตัดที่ปีกกาของ ({props}) จึงอ่านเองสามบรรทัดแรก
-    ok_("หน้าล็อกอิน (LoginPage) และหน้าเลือกสาขา (BranchSelectorWithLoad) เรียก useBillBarHere() ก่อน return แรก",
-      /\n  useBillBarHere\(\);\n/.test(body("LoginPage")) && /\n  useBillBarHere\(\);\n/.test(body("BranchSelectorWithLoad")));
-    ok_("จออื่นไม่เรียก useBillBarHere (มีแค่ 2 หน้านี้)", (APP.match(/^\s*useBillBarHere\(\);$/gm) || []).length === 2);
+    { // ค้างเดี๋ยวเดียว แล้วล่มรอบใหม่
+      const D = mkDom(), C = mkClock(), B = mkB(D.doc, C);
+      B.dbgSet(true);
+      const bar1 = D.els.get(ID);
+      const stale = [...C.q.values()][0];
+      B.dbgSet(false);
+      const cancelled = C.q.size;
+      stale.f();   // เผื่อเบราว์เซอร์ยิงตัวที่ยกเลิกแล้ว
+      B.dbgSet(true);
+      const bar2 = D.els.get(ID), pendingAfter = C.q.size;
+      stale.f();   // ตัวนับของรอบก่อนต้องไม่มาเติมบรรทัดให้รอบใหม่
+      ck("กลับมาก่อนครบ 2 นาที: ยกเลิกตัวนับ · ล่มรอบใหม่เริ่มนับใหม่ · ตัวนับเก่าไม่มีผลกับแถบใหม่", [cancelled, pendingAfter, lines(bar2), lines(bar1)], [0, 1, [RETRY], [RETRY]]);
+    }
+    { // หน้าลูกค้าสแกน
+      const D = mkDom("cust-scan"), C = mkClock(), B = mkB(D.doc, C);
+      B.dbgSet(true);
+      ck("หน้าลูกค้าสแกน: เรียกพนักงาน · ไม่มีบรรทัดแจ้งผู้ดูแล · ไม่ตั้งเวลา", [D.els.get(ID).textContent, lines(D.els.get(ID)), C.q.size], [CUST, [], 0]);
+    }
+    { // แถบเหลือง "ช้า" ต้องไม่ขึ้นทับแถบแดง
+      const a0 = APP.indexOf('if(typeof document!=="undefined"){\n  let dismissed=false;\n  dbhSubscribe((bad)=>{'), a1 = APP.indexOf('// ── ฐานข้อมูล "หาย"', a0);
+      const D = mkDom(); let cb = () => {};
+      new Function("document", "dbhSubscribe", APP.slice(a0, a1))(D.doc, (f) => { cb = f; });
+      D.els.set(ID, { id: ID });
+      cb(true);
+      const withRed = D.els.has("fc-dbh-bar");
+      D.els.delete(ID);
+      cb(true);
+      ck("แถบเหลือง \"ช้า\": แถบแดงขึ้นอยู่ = ไม่ขึ้นทับ · ไม่มีแถบแดง = ขึ้นตามปกติ", [a0 > 0 && a1 > a0, withRed, D.els.has("fc-dbh-bar")], [true, false, true]);
+      const B2 = mkB(D.doc, mkClock());   // ลำดับที่เกิดจริง: ช้าก่อน (แถบเหลืองขึ้นอยู่) แล้วค่อยล่ม
+      B2.dbgSet(true);
+      cb(true);   // ระหว่างล่ม แถบเหลืองถูกแจ้งซ้ำ
+      ck("ช้าก่อนแล้วค่อยล่ม: แถบแดงแทนที่แถบเหลือง · แจ้งซ้ำก็ไม่กลับมาทับ", [D.els.has("fc-dbh-bar"), D.els.get(ID).textContent], [false, MSG]);
+    }
+    { // หน้าล็อกอิน
+      const D = mkDom(), C = mkClock(), B = mkB(D.doc, C);
+      B.dbgSet(true);
+      const fresh = B.dbgLoginMsg();
+      B.DBG.since = Date.now() - 120001;
+      ck("หน้าล็อกอิน: ไม่ถึง 2 นาที = ข้อความแรกอย่างเดียว · เกิน 2 นาที = เพิ่มแจ้งผู้ดูแล", [fresh, B.dbgLoginMsg()], [MSG, MSG + " · " + LONG]);
+    }
   }
+  // ── 8 พ.ย. 69 เจ้าของตัดสิน: เลิกแถบนับถอยหลังค่าบริการ — วันที่พิมพ์มือไม่รู้ว่าตัดบัตรผ่านหรือไม่ และเคยเตือนผิดเมื่อรอบบิลย้าย ──
+  ok_("เลิกนับถอยหลังค่าบริการแล้ว: ไม่มีไฟล์วันครบกำหนด · แอปไม่อ่าน/ไม่แสดงวันครบกำหนดจ่าย",
+    !fs.existsSync(new URL("../public/billing.json", import.meta.url)) && !/billing\.json|fc-bill|useBillBarHere|\bbillDaysLeft\b|\bbillWarnings\b|\bbillLine\b|BILL_WARN_DAYS|ครบกำหนดจ่าย/.test(APP));
+  ok_("ไม่มีข้อความสั่งพนักงานตามเจ้าของ และไม่บอกว่าฐานข้อมูลหมดอายุ", !/แจ้งบอสแม็ก|ฐานข้อมูลหมดอายุ/.test(APP));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
