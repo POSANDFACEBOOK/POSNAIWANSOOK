@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, memo, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo, createContext, useContext, createElement, Fragment } from "react";
 import ErrorBoundary from "./ErrorBoundary.jsx";
 
 // ── กะที่เปิดอยู่จริง ณ วินาทีนี้ (ถามฐาน ไม่เชื่อหน้าจอ) ────────────────
@@ -204,11 +204,20 @@ if(typeof document!=="undefined"){
 // 8 พ.ย. 69 เจ้าของตัดสิน: เลิกแถบนับถอยหลังค่าบริการ Supabase/Vercel และไฟล์วันครบกำหนดที่พิมพ์มือ — อย่าทำกลับมา
 //   วันที่พิมพ์มือไม่รู้ว่าตัดบัตรผ่านหรือไม่ รู้แค่วันนี้วันที่เท่าไร จึงป้องกันเหตุ 23 ต.ค. ไม่ได้ และเตือนผิดเมื่อรอบบิลย้าย (Supabase ไม่มี API วันครบรอบให้บัญชีทั่วไป)
 //   ตัวจับเหตุจริง = อีเมลทวงจาก Supabase + แถบแดงนี้ตอนต่อไม่ได้
-const DBG={down:false,since:0,checking:false,last:0,timer:null,listeners:new Set()};
-function dbgSet(v){
+const DBG={down:false,kept:false,since:0,checking:false,last:0,timer:null,listeners:new Set()};
+// 9 พ.ย. 69: ตัวนับ "ต่อไม่ได้ติดกัน" ไม่เริ่มใหม่เมื่อรีเฟรช — ตอนระบบล่มคนมักกดรีเฟรชซ้ำ ถ้าเริ่มนับใหม่ทุกครั้ง บรรทัดแจ้งผู้ดูแลจะไม่มีวันขึ้น
+// จำ {เริ่มล่ม, ยืนยันว่ายังล่มครั้งล่าสุด} ไว้ในแท็บนี้ · ใช้ต่อเฉพาะเมื่อยืนยันครั้งล่าสุดไม่เกิน 2 นาที (เว้นนานกว่านั้น เช่นเครื่องพัก = บอกไม่ได้ว่าล่มติดกัน)
+const DBG_STORE="fc_dbg_down";
+function dbgStoreRead(){try{const o=JSON.parse(sessionStorage.getItem(DBG_STORE));return o&&Number.isFinite(o.since)&&Number.isFinite(o.seen)?o:null;}catch{return null;}}
+function dbgStoreWrite(o){try{if(o)sessionStorage.setItem(DBG_STORE,JSON.stringify(o));else sessionStorage.removeItem(DBG_STORE);}catch{}}
+function dbgSet(v,keepCount){
+  const now=Date.now();
+  DBG.kept=!!keepCount;   // เน็ตสะดุดแล้วเก็บตัวนับไว้ · ฐานตอบได้จริงเมื่อไร sb() ล้างให้ ("กลับมาแม้ครั้งเดียว = เริ่มนับใหม่")
+  if(v&&!DBG.down){const s=dbgStoreRead();DBG.since=s&&s.since<=now&&now-s.seen<=DBG_LONG_MS?s.since:now;}   // นับ "ต่อไม่ได้ติดกัน" จากครั้งแรกที่ล้ม
+  if(!keepCount)dbgStoreWrite(v?{since:DBG.since,seen:now}:null);   // ก่อนเช็กว่าสถานะเปลี่ยน: ระหว่างล่มต้องต่อเวลายืนยัน · หลังรีเฟรช DBG.down เริ่มจาก false ตรวจแล้วต่อได้ต้องล้างของค้าง
   if(v===DBG.down)return;
   DBG.down=v;
-  DBG.since=v?Date.now():0;   // นับ "ต่อไม่ได้ติดกัน" จากครั้งแรกที่ล้ม · กลับมาแม้ครั้งเดียว = เริ่มนับใหม่
+  if(!v)DBG.since=0;   // กลับมาแม้ครั้งเดียว = เริ่มนับใหม่
   DBG.listeners.forEach(fn=>{try{fn(v);}catch{}});
   try{
     if(v&&!DBG.timer)DBG.timer=setInterval(()=>dbgCheck(true),30000);   // ระหว่างหาย ถามซ้ำทุก 30 วิ กลับมาแล้วแถบหายเอง
@@ -221,7 +230,8 @@ async function dbgCheck(force){
     if(!force&&Date.now()-DBG.last<20000)return DBG.down;
     DBG.checking=true;DBG.last=Date.now();
     const web=await fetch("/favicon-16.png?ping="+Date.now(),{cache:"no-store"}).then(r=>r.ok).catch(()=>false);
-    if(!web){dbgSet(false);return false;}   // เน็ตร้านหลุดเอง ไม่ใช่ฐานข้อมูล — ไม่ตามเจ้าของ
+    // เน็ตร้านหลุดเอง ไม่ใช่ฐานข้อมูล — ไม่ตามเจ้าของ · แต่ไม่รู้ว่าฐานกลับมาหรือยัง จึงไม่ล้างตัวนับ (รีเฟรชตอนคำขอนี้ยิงอยู่ เบราว์เซอร์ก็ตัดคำขอจนตกทางนี้ · เว้นนานเกิน 2 นาที dbgSet เริ่มนับใหม่เอง)
+    if(!web){dbgSet(false,true);return false;}
     // ค้างไม่ตอบเกิน 8 วิ = ใช้งานไม่ได้เหมือนกัน (24 ต.ค. 69: DNS กลับมาแล้วแต่ฐานข้อมูลค้าง ทุกคำขอรอจนหมดเวลา
     // ตัวเช็กเดิมไม่มีเพดานเวลา → รอตลอด แถบแดงไม่ขึ้น หน้าล็อกอินยังบอกแค่ "กำลังตื่นจากพัก")
     const st=await Promise.race([
@@ -234,12 +244,46 @@ async function dbgCheck(force){
   }catch{return DBG.down;}
   finally{DBG.checking=false;}
 }
-const DBG_MSG="⛔ เชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว — จดออเดอร์ลงกระดาษไว้ก่อน";
+// หน้าลูกค้าสแกน: "เน็ตของลูกค้าเองหลุด" หรือเปล่า — กดลองใหม่ช่วยได้เฉพาะกรณีนี้ (9 พ.ย. 69 เจ้าของเลือกให้ข้อความตามสถานะจริง)
+// ตอบ true เฉพาะเมื่อยืนยันได้ชัด: ไฟล์เล็กของเว็บเราเองก็ยิงไม่ออก และแถบแดงไม่ได้ขึ้นอยู่ · อย่างอื่น (ยิงถึง / ค้างไม่รู้ผล) = แยกไม่ได้ ⟹ ใช้ข้อความเรียกพนักงาน ซึ่งได้ผลทั้งสองกรณี
+async function dbgCustOffline(){
+  try{
+    const r=await Promise.race([
+      fetch("/favicon-16.png?ping="+Date.now(),{cache:"no-store"}).then(()=>"reached").catch(()=>"failed"),
+      new Promise(ok=>setTimeout(()=>ok("hang"),8000)),
+    ]);
+    return r==="failed"&&!DBG.down;
+  }catch{return false;}
+}
+const DBG_PHRASE="จดออเดอร์ลงกระดาษ";   // ห้ามถูกตัดกลางคำ — ดู dbgFillMsg / DbgText
+const DBG_MSG=`⛔ เชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว — ${DBG_PHRASE}ไว้ก่อน`;
 const DBG_RETRY="ระบบกำลังลองเชื่อมต่อใหม่";
 const DBG_LONG="ยังเชื่อมต่อไม่ได้เกิน 2 นาที — แจ้งผู้ดูแลระบบ";
 const DBG_LONG_MS=120000;
 const dbgIsLong=(now=Date.now())=>DBG.down&&now-DBG.since>=DBG_LONG_MS;
 const dbgLoginMsg=()=>dbgIsLong()?`${DBG_MSG} · ${DBG_LONG}`:DBG_MSG;
+const dbgClearErr=(e)=>String(e||"").startsWith(DBG_MSG)?"":e;   // ฐานข้อมูลกลับมา: ล้างเฉพาะข้อความฐานข้อมูล ("รหัสผ่านไม่ถูกต้อง" ต้องอยู่จนกว่าจะลองใหม่)
+const DBG_JOIN_MSG="ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง";
+// หน้า ?join=1 ของลูกค้าทั่วไป (ไม่ได้นั่งในร้าน ไม่มีพนักงานให้เรียก) · ลำดับต้องตรงกับ route ใน App: ?pos=1&branch มาก่อน join
+const dbgIsJoinPage=()=>{try{const p=new URLSearchParams(window.location.search);return p.get("join")==="1"&&!(p.get("pos")==="1"&&p.get("branch"));}catch{return false;}};
+// วลีให้จดกระดาษต้องอยู่บรรทัดเดียวทุกความกว้างจอ — ไม่พึ่งการตัดคำไทยของเบราว์เซอร์: ครอบ nowrap แล้วกำหนดจุดตัดบรรทัดหลังวลีเอง
+function dbgFillMsg(el,msg){
+  const i=msg.indexOf(DBG_PHRASE);
+  if(i<0){el.textContent=msg;return;}
+  el.appendChild(document.createTextNode(msg.slice(0,i)));
+  const s=document.createElement("span");
+  s.style.whiteSpace="nowrap";
+  s.textContent=DBG_PHRASE;
+  el.appendChild(s);
+  el.appendChild(document.createElement("wbr"));
+  el.appendChild(document.createTextNode(msg.slice(i+DBG_PHRASE.length)));
+}
+// ข้อความในการ์ดล็อกอิน: วลีเดียวกัน วิธีเดียวกับ dbgFillMsg · ไม่ใช้ JSX เพื่อให้ด่านรันตัวจริงได้
+function DbgText({t}){
+  const i=t.indexOf(DBG_PHRASE);
+  if(i<0)return t;
+  return createElement(Fragment,null,t.slice(0,i),createElement("span",{style:{whiteSpace:"nowrap"}},DBG_PHRASE),createElement("wbr"),t.slice(i+DBG_PHRASE.length));
+}
 // แถบแดง — เขียนลง DOM ตรงๆ เหมือนแถบ "ช้า" (ต้องขึ้นได้แม้หน้าล็อกอิน) · ปิดไม่ได้ (เรื่องใหญ่ ต้องเห็นจนกว่าจะกลับมา)
 if(typeof document!=="undefined"){
   let longT=null;
@@ -254,13 +298,14 @@ if(typeof document!=="undefined"){
       bar.id=ID;bar.setAttribute("role","alert");
       bar.style.cssText="position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b91c1c;color:#fff;font:800 16px/1.45 system-ui,sans-serif;padding:10px 14px;text-align:center;box-shadow:0 3px 12px rgba(0,0,0,.35)";
       if(cust){bar.textContent="⚠️ ระบบสั่งอาหารขัดข้องชั่วคราว — กรุณาเรียกพนักงานเพื่อสั่งอาหาร";}
+      else if(dbgIsJoinPage()){bar.textContent=DBG_JOIN_MSG;}
       else{
-        bar.textContent=DBG_MSG;
+        dbgFillMsg(bar,DBG_MSG);
         const sub=document.createElement("div");
         sub.style.cssText="font:600 13px/1.45 system-ui,sans-serif;opacity:.95;margin-top:2px";
         sub.textContent=DBG_RETRY;
         bar.appendChild(sub);
-        longT=setTimeout(()=>{   // กลับมาก่อนครบ = ถูกยกเลิกด้านบน
+        longT=setTimeout(()=>{   // กลับมาก่อนครบ = ถูกยกเลิกด้านบน · นับจากเวลาเริ่มล่มจริง (รีเฟรชมาแล้วเหลือเวลาน้อยลง)
           try{
             if(!DBG.down||document.getElementById(ID)!==bar)return;
             const long=document.createElement("div");
@@ -268,7 +313,7 @@ if(typeof document!=="undefined"){
             long.textContent=DBG_LONG;
             bar.appendChild(long);
           }catch{}
-        },DBG_LONG_MS);
+        },Math.max(0,DBG_LONG_MS-(Date.now()-DBG.since)));
       }
       document.body.appendChild(bar);
     }catch{}
@@ -303,6 +348,8 @@ async function sb(path, opts = {}) {
       // Supabase เปิด RLS ให้อัตโนมัติตอนสร้างตารางใหม่ — เจอซ้ำมาหลายรอบแล้ว
       // แปลเป็นข้อความที่บอกได้ว่าต้องทำอะไร แทนที่จะโยน JSON ดิบใส่หน้าผู้ใช้
       if (/42501|row-level security/i.test(body)) {
+        // ป้ายบอกว่า "ฐานปฏิเสธสิทธิ์" — ด่าน QR ดูป้ายนี้ ไม่ต้องจับคู่ถ้อยคำไทยข้างล่าง · ไม่ใช้ช่อง status เพราะงานสต๊อกแยกผลจากช่องนั้น
+        const denied = (m) => Object.assign(new Error(m), { denied: true });
         // 28 ต.ค. 69: 42501 มีสองเหตุที่แก้คนละแบบ — "permission denied for table x" = สิทธิ์ GRANT หลุด (เคส crm_* 24–28 ต.ค.) ไม่ใช่ RLS
         // เดิมเหมาเป็น RLS หมด และหาชื่อได้เฉพาะแบบมีเครื่องหมายคำพูด (ข้อความ GRANT ไม่มี) ⟹ ได้คำสั่ง "alter table public.ตารางนี้ …"
         // ที่รันไม่ได้และแก้ผิดเรื่อง · ตอนนี้ GRANT บอกคำสั่ง grant · RLS บอกคำสั่งเดิม · หาชื่อไม่เจอ = แนบข้อความดิบ ไม่เดาชื่อ
@@ -312,7 +359,7 @@ async function sb(path, opts = {}) {
           // 31 ต.ค. 69: app_users ปิดสิทธิ์อ่านทั้งตารางโดยตั้งใจ (อ่านได้เฉพาะ APP_USER_COLS) — คำแนะนำ grant all ข้างล่าง = เปิดรหัสผ่านให้ทุกเครื่องอ่านอีก
           // ข้อความนี้มีแต่โค้ดใหม่ที่เห็น (โค้ดเก่าขึ้นข้อความ grant all เดิม) ⟹ เหตุจริงมีสองอย่าง: เพิ่งรัน SQL แล้ว PostgREST ยังไม่โหลดโครงสร้างใหม่
           // (app_login ยังหาไม่เจอ → ถอยไปทางเดิม → ฐานปฏิเสธคอลัมน์ password · หายเองในไม่กี่วินาที) หรือโค้ดขอคอลัมน์ที่ยังไม่ได้ grant
-          if (k === "table" && n === "app_users") throw new Error(`อ่าน/บันทึกข้อมูลผู้ใช้ไม่ได้ (permission denied — ตาราง app_users เปิดให้อ่านเฉพาะคอลัมน์ที่ไม่ใช่รหัสผ่าน โดยตั้งใจ ตั้งแต่ 31 ต.ค. 69)
+          if (k === "table" && n === "app_users") throw denied(`อ่าน/บันทึกข้อมูลผู้ใช้ไม่ได้ (permission denied — ตาราง app_users เปิดให้อ่านเฉพาะคอลัมน์ที่ไม่ใช่รหัสผ่าน โดยตั้งใจ ตั้งแต่ 31 ต.ค. 69)
 
 ถ้าเพิ่งรัน sql/app-users-password-hash.sql: รอ 1 นาทีแล้วลองใหม่ (ฐานข้อมูลกำลังโหลดโครงสร้างใหม่) · ยังไม่หาย: ผู้ดูแลรัน notify pgrst, 'reload schema';
 ถ้าไม่ได้เพิ่งรัน = โค้ดขอคอลัมน์ของ app_users ที่ยังไม่ได้ให้สิทธิ์อ่าน — แจ้งผู้ดูแลระบบ
@@ -322,17 +369,17 @@ async function sb(path, opts = {}) {
             : k==="function" ? `grant execute on function public.${n} to anon, authenticated, service_role;`
             : k==="schema" ? `grant usage on schema ${n} to anon, authenticated, service_role;`
             : `grant all on table public.${n} to anon, authenticated, service_role;`;
-          throw new Error(`บันทึกไม่ได้เพราะสิทธิ์ใช้${{table:"ตาราง",sequence:"ตัวนับเลขลำดับ (sequence)",function:"ฟังก์ชัน",schema:" schema"}[k]} "${n}" หลุด (permission denied — ไม่ใช่เรื่อง RLS)
+          throw denied(`บันทึกไม่ได้เพราะสิทธิ์ใช้${{table:"ตาราง",sequence:"ตัวนับเลขลำดับ (sequence)",function:"ฟังก์ชัน",schema:" schema"}[k]} "${n}" หลุด (permission denied — ไม่ใช่เรื่อง RLS)
 
 ผู้ดูแลระบบต้องรันใน Supabase → SQL Editor:
 ${fix}`);
         }
         // ตัว body เป็น JSON ชื่อตารางจึงถูกครอบด้วย \" (แบ็กสแลชนำหน้า) — ต้องเผื่อทั้งมีและไม่มี
         const t = (body.match(/table\s+\\?"?([a-z0-9_]+)\\?"?/i) || [])[1];
-        if (!t) throw new Error(`บันทึกไม่ได้เพราะฐานข้อมูลปฏิเสธสิทธิ์ (42501) — หาชื่อตารางในข้อความไม่เจอ ส่งข้อความนี้ให้ผู้ดูแลระบบ
+        if (!t) throw denied(`บันทึกไม่ได้เพราะฐานข้อมูลปฏิเสธสิทธิ์ (42501) — หาชื่อตารางในข้อความไม่เจอ ส่งข้อความนี้ให้ผู้ดูแลระบบ
 
 ${body.slice(0, 300)}`);
-        throw new Error(`บันทึกไม่ได้เพราะตาราง "${t}" ยังเปิดระบบล็อกแถว (RLS) อยู่
+        throw denied(`บันทึกไม่ได้เพราะตาราง "${t}" ยังเปิดระบบล็อกแถว (RLS) อยู่
 
 ผู้ดูแลระบบต้องรันใน Supabase → SQL Editor:
 alter table public.${t} disable row level security;`);
@@ -341,7 +388,7 @@ alter table public.${t} disable row level security;`);
       throw Object.assign(new Error(body),{status:res.status});
     }
     const text = await res.text();
-    if (DBG.down) dbgSet(false);   // ตอบได้แล้ว = ฐานข้อมูลกลับมา
+    if (DBG.down||DBG.kept) dbgSet(false);   // ตอบได้แล้ว = ฐานข้อมูลกลับมา
     return text ? JSON.parse(text) : [];
   }catch(e){
     clearTimeout(hang);
@@ -4731,6 +4778,8 @@ function LoginPage({onLogin}){
   const[u,setU]=useState("");const[p,setP]=useState("");const[err,setErr]=useState("");const[show,setShow]=useState(false);const[loading,setLoading]=useState(false);
   // เบราว์เซอร์เติมชื่อ/รหัสให้เอง (autofill) แต่ยังไม่ส่ง onChange มา → state ว่างทั้งที่ช่องมีค่า อ่านจากช่องจริงสำรอง
   const uRef=useRef(null),pRef=useRef(null);
+  // ฐานข้อมูลกลับมาแล้วต้องไม่เหลือข้อความให้จดกระดาษค้างในการ์ด (แถบแดงหายแล้ว แต่การ์ดยังบอกสถานะเก่า)
+  useEffect(()=>{const f=(down)=>{if(!down)setErr(dbgClearErr);};DBG.listeners.add(f);return()=>{DBG.listeners.delete(f);};},[]);
   // Cold-start resilient: Supabase free tier sleeps after inactivity, so the FIRST query
   // can be slow or time out. Race each attempt against a 12s timeout and retry up to 3×
   // with a "waking server" message, instead of a silent indefinite hang.
@@ -4768,7 +4817,7 @@ function LoginPage({onLogin}){
       </div>
       <div style={{marginBottom:16}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>ชื่อผู้ใช้</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.user} s={16} c={C.ink4}/></span><input ref={uRef} value={u} onChange={e=>setU(e.target.value)} onKeyDown={e=>{if(e.key!=="Enter")return;if(String(u).trim()&&!p){pRef.current?.focus();return;}login();}} placeholder="username" autoCapitalize="none" autoCorrect="off" autoComplete="username" spellCheck={false} style={{...iS,paddingLeft:40}} autoFocus/></div></div>
       <div style={{marginBottom:20}}><label style={{display:"block",fontSize:13,fontWeight:600,color:C.ink2,marginBottom:6,fontFamily:"'Sarabun',sans-serif"}}>รหัสผ่าน</label><div style={{position:"relative"}}><span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}><Ic d={I.lock} s={16} c={C.ink4}/></span><input ref={pRef} value={p} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} type={show?"text":"password"} placeholder="password" autoComplete="current-password" style={{...iS,paddingLeft:40,paddingRight:44}}/><button type="button" onClick={()=>setShow(!show)} aria-label={show?"ซ่อนรหัสผ่าน":"แสดงรหัสผ่าน"} title={show?"ซ่อนรหัสผ่าน":"แสดงรหัสผ่าน"} style={{position:"absolute",right:4,top:"50%",transform:"translateY(-50%)",width:40,height:40,display:"flex",alignItems:"center",justifyContent:"center",background:"none",border:"none",cursor:"pointer",borderRadius:8}}><Ic d={show?[...I.eye,"M3 3l18 18"]:I.eye} s={18} c={show?C.brand:C.ink4}/></button></div></div>
-      {err&&<div style={{background:C.redLight,color:C.red,borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:600,marginBottom:16,display:"flex",alignItems:"center",gap:6}}><Ic d={I.warning} s={14} c={C.red}/>{err}</div>}
+      {err&&<div style={{background:C.redLight,color:C.red,borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:600,marginBottom:16,display:"flex",alignItems:"center",gap:6}}><Ic d={I.warning} s={14} c={C.red}/><span><DbgText t={err}/></span></div>}
       <Btn onClick={login} full loading={loading}>เข้าสู่ระบบ</Btn>
     </div>
   </div>;
@@ -23468,6 +23517,7 @@ function CustomerPage({branchId,tableId,token}){
   const putMyOrder=(o)=>{myOrderRef.current=o;setMyOrder(o);};
   const[optionLib,setOptionLib]=useState([]);   // branch option-group library (to resolve bound refs)
   const[gateError,setGateError]=useState(null);  // null | "no_token" | "bad_token" | "branch_closed" | "net"
+  const[gateOwnNet,setGateOwnNet]=useState(false);  // gateError "net": ยืนยันได้ว่าเน็ตลูกค้าเองหลุด (กดลองใหม่ช่วยได้) · false = แยกไม่ได้/ระบบล่ม ⟹ ให้เรียกพนักงาน
   const[gateTry,setGateTry]=useState(0);         // กดลองใหม่ = รันประตูซ้ำ (ใช้เป็น dep ของ effect)
   const[posCfg,setPosCfg]=useState(null);        // ตั้งค่า POS ของสาขา (VAT/service charge) — ใช้คิดยอดให้ตรงบิล
   // ── ข้อความแจ้งลูกค้าตอนสแกนครั้งแรก (เช่น "ราคายังไม่รวม VAT 7%") — ต้องกด "เข้าใจแล้ว" ก่อนสั่ง ──
@@ -23669,7 +23719,11 @@ function CustomerPage({branchId,tableId,token}){
         console.error("scan gate",e);
         // แยก "QR ใช้ไม่ได้จริง" ออกจาก "เน็ตสะดุด/เซิร์ฟเวอร์ช้า" — คนละเรื่องกันคนละทางแก้
         const msg=String((e&&e.message)||e||"");
-        const isNet=/Failed to fetch|NetworkError|timeout|aborted|ECONN|Load failed|5\d\d/i.test(msg)||msg==="";
+        // ระบบล่มตอบ 402/540/5xx (เกณฑ์เดียวกับ dbgCheck) แต่เนื้อคำตอบอาจไม่มีตัวเลข — ดูจากรหัสด้วย ไม่งั้นลูกค้าเจอ "QR หมดอายุ" ทั้งที่ QR ใช้ได้
+        // 10 พ.ย. 69 เจ้าของอนุมัติ: 401/403/404/429 และฐานปฏิเสธสิทธิ์ (ลืม grant ตารางใหม่) = ฝั่งระบบมีปัญหา QR ไม่ได้ผิด · 400 = ลิงก์เสีย คงเป็น QR หมดอายุ
+        const isNet=/Failed to fetch|NetworkError|timeout|aborted|ECONN|Load failed|5\d\d/i.test(msg)||msg===""||e?.denied===true||[401,402,403,404,429].includes(e?.status)||e?.status>=500;
+        const own=isNet&&await dbgCustOffline();
+        setGateOwnNet(own);
         setGateError(isNet?"net":"bad_token");
       }
       setGateLoading(false);
@@ -23682,6 +23736,9 @@ function CustomerPage({branchId,tableId,token}){
       refreshMenusRef.current=null;
     };
   },[branchId,tableId,token,gateTry]);
+  // ระบบกลับมาแล้ว ข้อความ "ขัดข้อง เรียกพนักงาน" ต้องไม่ค้าง — เข้าด่าน QR ใหม่เอง เหมือนกดปุ่มลองใหม่ · แถบแดงลงหนึ่งครั้ง = ลองครั้งเดียว ไม่วน
+  // ถามฐานข้อมูลก่อนหนึ่งครั้ง: ตัวเช็กแถบแดงดูแค่ health ซึ่งตอบได้ทั้งที่ตารางยังค้าง ถ้าเข้าด่านเลย จอจะเหลือแต่วงหมุน ไม่มีข้อความ ไม่มีปุ่ม · ตอบหรือล้มก็เข้าด่านใหม่ (ล้มต้องแยกเน็ตลูกค้า) · ค้าง = คงจอเดิม
+  useEffect(()=>{if(gateError!=="net")return;let alive=true;const f=(down)=>{if(!down)api.getBranchPublic(branchId).catch(()=>{}).then(()=>{if(alive){setGateError(null);setGateLoading(true);setGateTry(t=>t+1);}});};DBG.listeners.add(f);return()=>{alive=false;DBG.listeners.delete(f);};},[gateError,branchId]);
   // หมวดหมู่คุมจากครัวกลางที่เดียว ทุกสาขาเห็นชุดเดียวกัน (menuCatOf อ่านจาก menus.category)
   // the Menu screen for this branch. No local categories → only "ทั้งหมด".
   // ── โต๊ะบุฟเฟต์: เมนูที่หน้านี้แสดง = เมนูในแพ็คเกจของบิล ∩ สาขาเปิดขาย ∩ ไม่ได้ซ่อน ──
@@ -23974,7 +24031,10 @@ function CustomerPage({branchId,tableId,token}){
     const messages={
       no_token:{icon:"🚫",title:"QR ไม่ถูกต้อง",msg:"QR Code นี้ไม่มีรหัสยืนยัน — กรุณาขอ QR ใหม่จากพนักงาน"},
       bad_token:{icon:"⏰",title:"QR หมดอายุแล้ว",msg:"QR Code นี้ถูกยกเลิกการใช้งานแล้ว — กรุณาขอ QR ใหม่จากพนักงาน"},
-      net:{icon:"📶",title:"เชื่อมต่อไม่ได้",msg:"สัญญาณอินเทอร์เน็ตขัดข้องชั่วคราว — QR ของคุณยังใช้ได้ปกติ กดลองใหม่ได้เลย"},
+      // เน็ตลูกค้าเองหลุดจริง = กดลองใหม่ได้ผล · ระบบล่มหรือแยกไม่ได้ = กดซ้ำไม่ช่วย ต้องมีทางออกที่ทำได้จริง (ปุ่มลองใหม่คงไว้ — ระบบกลับมาแล้วเข้าต่อได้โดยไม่ต้องสแกนใหม่)
+      net:gateOwnNet
+        ?{icon:"📶",title:"เชื่อมต่อไม่ได้",msg:"สัญญาณอินเทอร์เน็ตขัดข้องชั่วคราว — QR ของคุณยังใช้ได้ปกติ กดลองใหม่ได้เลย"}
+        :{icon:"🙋",title:"ระบบสั่งอาหารขัดข้องชั่วคราว",msg:"กรุณาเรียกพนักงานเพื่อสั่งอาหาร — QR ของคุณยังใช้ได้ปกติ"},
       branch_closed:{icon:"🏪",title:`${branch?.name||"สาขานี้"} ปิดอยู่`,msg:"ขออภัย ขณะนี้ร้านปิดให้บริการ — กรุณาลองใหม่ภายหลังครับ"},
     }[gateError]||{icon:"❌",title:"เข้าระบบไม่ได้",msg:"เกิดข้อผิดพลาด — กรุณาขอ QR ใหม่จากพนักงาน"};
     return <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.bg,padding:24,textAlign:"center"}}>

@@ -9820,51 +9820,73 @@ section("ผังโต๊ะ: เปิดโต๊ะแล้วเมนู
     MAP.indexOf("swallowGhostClick(e.clientX,e.clientY);") > 0 && MAP.indexOf("swallowGhostClick(e.clientX,e.clientY);") < MAP.indexOf("onSelectTable(t,getTableOrder(t.id));"));
 }
 
-section("ฐานข้อมูลเชื่อมต่อไม่ได้ — แถบแดงสองขั้นตามเวลา · เลิกนับถอยหลังค่าบริการ (8 พ.ย. 69)");
+section("ฐานข้อมูลเชื่อมต่อไม่ได้ — แถบแดงสองขั้นตามเวลา · เลิกนับถอยหลังค่าบริการ (8 พ.ย. 69) · ข้อความตามหน้า/สถานะจริง (9 พ.ย. 69)");
 {
   // ── ตัวตัดสิน "ฐานข้อมูลหาย" ตัวจริง กับ fetch ปลอม ──
   let mkG = null;
   try {
     const src = APP.slice(APP.indexOf("const DBG={down:false"), APP.indexOf("// แถบแดง — เขียนลง DOM ตรงๆ"));
-    mkG = (fetchImpl) => new Function("fetch", "SUPA_URL", "SUPA_KEY", "setInterval", "clearInterval", "setTimeout", src + "\nreturn {DBG,dbgCheck,dbgSet};")(fetchImpl, "https://x.supabase.co", "k", () => 1, () => {}, (f, ms) => setTimeout(f, ms >= 8000 ? 20 : ms));
+    mkG = (fetchImpl, stSpy) => new Function("fetch", "SUPA_URL", "SUPA_KEY", "setInterval", "clearInterval", "setTimeout", "sessionStorage", src + "\nreturn {DBG,dbgCheck,dbgSet,dbgCustOffline};")(fetchImpl, "https://x.supabase.co", "k", () => 1, () => {}, (f, ms) => { if (stSpy) stSpy(ms); return setTimeout(f, ms >= 8000 ? 20 : ms); }, undefined);
   } catch { mkG = null; }
   ok_("ดึงตัวตัดสินฐานข้อมูลหายตัวจริงมารันได้", !!mkG);
   if (mkG) {
     const run = async (web, db) => { const G = mkG(async (u) => { if (String(u).startsWith("/favicon")) { if (web === "fail") throw new TypeError("x"); return { ok: web === 200, status: web }; } if (db === "fail") throw new TypeError("Failed to fetch"); if (db === "hang") return new Promise(() => {}); return { ok: db < 400, status: db }; }); const r = await G.dbgCheck(true); return [r, G.DBG.down]; };
     ck("ฐานข้อมูลหาย = เว็บเราโหลดได้แต่ต่อฐานไม่ได้ / 402 / 540 · เน็ตร้านหลุด = ไม่ใช่ · 5xx หรือค้างเกิน 8 วิ = ใช้ไม่ได้ (24 ต.ค. ฐานค้างไม่ตอบ) · ฐานตอบปกติ = ไม่ใช่",
-      [await run(200, "fail"), await run(200, 402), await run(200, 540), await run("fail", "fail"), await run(200, 200), await run(200, 503), await run(200, "hang")],
-      [[true, true], [true, true], [true, true], [false, false], [false, false], [true, true], [true, true]]);
+      [await run(200, "fail"), await run(200, 402), await run(200, 540), await run("fail", "fail"), await run(200, 200), await run(200, 503), await run(200, "hang"), await run(200, 500), await run(200, 502), await run(404, 503)],
+      [[true, true], [true, true], [true, true], [false, false], [false, false], [true, true], [true, true], [true, true], [true, true], [false, false]]);
+    {
+      const asked = [], limit = [];
+      const G = mkG(async (u) => { asked.push(String(u).replace(/\d+$/, "N")); return { ok: true, status: 200 }; }, (ms) => limit.push(ms));
+      await G.dbgCheck(true);
+      ck("ตัวเช็กยิงไฟล์เว็บเราที่มีอยู่จริง (ไฟล์หาย = แถบแดงไม่ขึ้นเลย) แล้วค่อยถามฐานข้อมูล · เพดานรอ 8 วิ", [asked, limit, fs.existsSync(new URL("../public/favicon-16.png", import.meta.url))], [["/favicon-16.png?ping=N", "https://x.supabase.co/auth/v1/health"], [8000], true]);
+    }
     const G2 = mkG(async () => { throw new TypeError("x"); });
     let n = 0; const G3 = mkG(async (u) => { n++; return { ok: true, status: 200 }; });
     await G3.dbgCheck(true); const n1 = n; await G3.dbgCheck(false);
     ok_("เช็กไม่ถี่: ภายใน 20 วิไม่ถามซ้ำ (เว้นแต่สั่ง force)", n1 === 2 && n === 2);
+    // ── หน้าลูกค้าสแกน: "เน็ตลูกค้าเองหลุด" ต้องยืนยันได้ชัด ไม่งั้นถือว่าแยกไม่ได้ (false = เรียกพนักงาน) ──
+    const off = async (f, down) => { const G = mkG(f); if (down) G.DBG.down = true; return G.dbgCustOffline(); };
+    ck("เน็ตลูกค้าเองหลุด: ยิงไฟล์เว็บเราไม่ออก = ใช่ · ยิงถึง (ตอบรหัสอะไรก็ตาม) = ไม่ใช่ · ค้างไม่รู้ผล = ไม่ใช่ · แถบแดงขึ้นอยู่ = ไม่ใช่",
+      [await off(async () => { throw new TypeError("x"); }), await off(async () => ({ ok: true, status: 200 })), await off(async () => ({ ok: false, status: 404 })), await off(async () => ({ ok: false, status: 503 })), await off(() => new Promise(() => {})), await off(async () => { throw new TypeError("x"); }, true)],
+      [true, false, false, false, false, false]);
+    {
+      const asked = [], limit = [];
+      const G = mkG(async (u, o) => { asked.push([String(u).replace(/\d+$/, "N"), o && o.cache]); return { ok: true, status: 200 }; }, (ms) => limit.push(ms));
+      await G.dbgCustOffline();
+      ck("ตัวถามเน็ตลูกค้า: ยิงไฟล์เว็บเราเอง (ไม่ใช่ฐานข้อมูล) · ไม่ใช้ของค้างในเครื่อง · เพดาน 8 วิ", [asked, limit], [[["/favicon-16.png?ping=N", "no-store"]], [8000]]);
+      const G2 = mkG(async () => { G2.DBG.down = true; throw new TypeError("x"); });
+      ck("แถบแดงขึ้นระหว่างรอคำตอบ = ไม่ใช่เน็ตลูกค้า · ตัวถามพังเอง = แยกไม่ได้ (เรียกพนักงาน)", [await G2.dbgCustOffline(), await off(() => { throw new Error("sync"); })], [false, false]);
+    }
   }
   ok_("sb(): ยิงไม่ออก (TypeError) → เช็กฐานหาย · ตอบได้ → ล้างแถบ",
-    APP.includes('if (e && e.name === "TypeError") dbgCheck(false);') && APP.includes("if (DBG.down) dbgSet(false);   // ตอบได้แล้ว = ฐานข้อมูลกลับมา"));
+    APP.includes('if (e && e.name === "TypeError") dbgCheck(false);') && APP.includes("if (DBG.down||DBG.kept) dbgSet(false);   // ตอบได้แล้ว = ฐานข้อมูลกลับมา"));
   ok_("แถบแดง: เปิดเว็บแล้วเช็กทันที · หน้าล็อกอินใช้ข้อความชุดเดียวกับแถบ",
-    APP.includes('window.addEventListener("load",()=>setTimeout(()=>dbgCheck(true),800));') && APP.includes('setErr(gone?dbgLoginMsg():'));
+    APP.includes('window.addEventListener("load",()=>setTimeout(()=>dbgCheck(true),800));') && APP.includes('setErr(gone?dbgLoginMsg():') && APP.includes("const gone=await dbgCheck(true);"));
   // ── แถบแดงตัวจริงกับ DOM + ตัวตั้งเวลาปลอม: ทันที = จดกระดาษ · ต่อไม่ได้ติดกันเกิน 2 นาที = แจ้งผู้ดูแล (ข้อความตรงตามที่เจ้าของกำหนด) ──
   const barS0 = APP.indexOf("const DBG={down:false"), barS1 = APP.indexOf("\nasync function sb(", barS0);
   let mkB = null;
   try {
-    const body = APP.slice(barS0, barS1) + "\nreturn {DBG,dbgSet,dbgIsLong,dbgLoginMsg};";
-    new Function("document", "window", "fetch", "SUPA_URL", "SUPA_KEY", "setInterval", "clearInterval", "setTimeout", "clearTimeout", body);
-    mkB = (doc, C) => new Function("document", "window", "fetch", "SUPA_URL", "SUPA_KEY", "setInterval", "clearInterval", "setTimeout", "clearTimeout", body)(doc, { addEventListener() {} }, async () => ({ ok: true, status: 200 }), "u", "k", () => 1, () => {}, C.st, C.ct);
+    const body = APP.slice(barS0, barS1) + "\nreturn {DBG,dbgSet,dbgCheck,dbgIsLong,dbgLoginMsg,dbgClearErr,DbgText};";
+    const PARAMS = ["document", "window", "fetch", "SUPA_URL", "SUPA_KEY", "setInterval", "clearInterval", "setTimeout", "clearTimeout", "Date", "sessionStorage", "createElement", "Fragment"];
+    new Function(...PARAMS, body);
+    mkB = (doc, C, o = {}) => new Function(...PARAMS, body)(doc, { addEventListener(t, f) { (C.ev = C.ev || {})[t] = f; }, location: { search: o.search || "" } }, o.f || (async () => ({ ok: true, status: 200 })), "u", "k", (f, ms) => { (C.iv = C.iv || []).push({ f, ms }); return 1; }, () => { C.cleared = (C.cleared || 0) + 1; }, C.st, C.ct, { now: () => C.t }, o.ss, (type, props, ...kids) => ({ type, props, kids }), "FRAG");
   } catch { mkB = null; }
   ok_("ดึงแถบแดงตัวจริงมารันได้", barS0 > 0 && barS1 > barS0 && !!mkB);
   if (mkB) {
     const MSG = "⛔ เชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว — จดออเดอร์ลงกระดาษไว้ก่อน", RETRY = "ระบบกำลังลองเชื่อมต่อใหม่", LONG = "ยังเชื่อมต่อไม่ได้เกิน 2 นาที — แจ้งผู้ดูแลระบบ";
     const CUST = "⚠️ ระบบสั่งอาหารขัดข้องชั่วคราว — กรุณาเรียกพนักงานเพื่อสั่งอาหาร", ID = "fc-dbgone-bar";
-    const mkDom = (cls = "") => { const els = new Map(); const mkEl = () => ({ id: "", style: {}, children: [], textContent: "", setAttribute() {}, appendChild(c) { this.children.push(c); }, remove() { els.delete(this.id); } }); return { els, doc: { documentElement: { className: cls }, getElementById: (id) => els.get(id) || null, createElement: mkEl, body: { appendChild(e) { els.set(e.id, e); } } } }; };
-    const mkClock = () => { const q = new Map(); let n = 0; return { q, st: (f, ms) => { q.set(++n, { f, ms }); return n; }, ct: (i) => { q.delete(i); } }; };
-    const lines = (b) => b.children.map((c) => c.textContent);
+    // textContent รวมลูกทุกตัวเหมือนเบราว์เซอร์จริง · head = ข้อความหลักของแถบ · lines = บรรทัดย่อย (div)
+    const mkDom = (cls = "") => { const els = new Map(); const mkEl = (tag) => ({ tag, id: "", style: {}, kids: [], text: "", get textContent() { return this.text + this.kids.map((c) => c.textContent).join(""); }, set textContent(v) { this.text = v; this.kids = []; }, setAttribute() {}, appendChild(c) { this.kids.push(c); }, remove() { els.delete(this.id); } }); return { els, doc: { documentElement: { className: cls }, getElementById: (id) => els.get(id) || null, createElement: mkEl, createTextNode: (t) => ({ textContent: t }), body: { appendChild(e) { els.set(e.id, e); } } } }; };
+    const mkClock = () => { const q = new Map(); let n = 0; return { t: 1800000000000, q, st: (f, ms) => { q.set(++n, { f, ms }); return n; }, ct: (i) => { q.delete(i); } }; };
+    const lines = (b) => b.kids.filter((c) => c.tag === "div").map((c) => c.textContent);
+    const head = (b) => b.text + b.kids.filter((c) => c.tag !== "div").map((c) => c.textContent).join("");
     { // ล่มนานเกิน 2 นาที
       const D = mkDom(), C = mkClock(), B = mkB(D.doc, C);
       B.dbgSet(true);
       const bar = D.els.get(ID), t = [...C.q.values()];
-      ck("ต่อไม่ได้ทันที: บอกให้จดกระดาษ + กำลังลองใหม่ · ยังไม่บอกให้แจ้งใคร · ตั้งเวลาไว้ 2 นาทีพอดี", [bar.textContent, lines(bar), t.map((x) => x.ms)], [MSG, [RETRY], [120000]]);
+      ck("ต่อไม่ได้ทันที: บอกให้จดกระดาษ + กำลังลองใหม่ · ยังไม่บอกให้แจ้งใคร · ตั้งเวลาไว้ 2 นาทีพอดี", [head(bar), lines(bar), t.map((x) => x.ms)], [MSG, [RETRY], [120000]]);
       t[0].f();
-      ck("ต่อไม่ได้ติดกันครบ 2 นาที: เพิ่มบรรทัดแจ้งผู้ดูแล 1 บรรทัด ข้อความหลักคงเดิม", [bar.textContent, lines(bar)], [MSG, [RETRY, LONG]]);
+      ck("ต่อไม่ได้ติดกันครบ 2 นาที: เพิ่มบรรทัดแจ้งผู้ดูแล 1 บรรทัด ข้อความหลักคงเดิม", [head(bar), lines(bar)], [MSG, [RETRY, LONG]]);
       const since = B.DBG.since;
       ck("เกณฑ์เวลา: 1:59.999 ยังไม่นับว่านาน · 2:00 นับ", [B.dbgIsLong(since + 119999), B.dbgIsLong(since + 120000)], [false, true]);
       B.dbgSet(false);
@@ -9886,7 +9908,7 @@ section("ฐานข้อมูลเชื่อมต่อไม่ได�
     { // หน้าลูกค้าสแกน
       const D = mkDom("cust-scan"), C = mkClock(), B = mkB(D.doc, C);
       B.dbgSet(true);
-      ck("หน้าลูกค้าสแกน: เรียกพนักงาน · ไม่มีบรรทัดแจ้งผู้ดูแล · ไม่ตั้งเวลา", [D.els.get(ID).textContent, lines(D.els.get(ID)), C.q.size], [CUST, [], 0]);
+      ck("หน้าลูกค้าสแกน: เรียกพนักงาน · ไม่มีบรรทัดแจ้งผู้ดูแล · ไม่ตั้งเวลา", [head(D.els.get(ID)), lines(D.els.get(ID)), C.q.size], [CUST, [], 0]);
     }
     { // แถบเหลือง "ช้า" ต้องไม่ขึ้นทับแถบแดง
       const a0 = APP.indexOf('if(typeof document!=="undefined"){\n  let dismissed=false;\n  dbhSubscribe((bad)=>{'), a1 = APP.indexOf('// ── ฐานข้อมูล "หาย"', a0);
@@ -9901,20 +9923,265 @@ section("ฐานข้อมูลเชื่อมต่อไม่ได�
       const B2 = mkB(D.doc, mkClock());   // ลำดับที่เกิดจริง: ช้าก่อน (แถบเหลืองขึ้นอยู่) แล้วค่อยล่ม
       B2.dbgSet(true);
       cb(true);   // ระหว่างล่ม แถบเหลืองถูกแจ้งซ้ำ
-      ck("ช้าก่อนแล้วค่อยล่ม: แถบแดงแทนที่แถบเหลือง · แจ้งซ้ำก็ไม่กลับมาทับ", [D.els.has("fc-dbh-bar"), D.els.get(ID).textContent], [false, MSG]);
+      ck("ช้าก่อนแล้วค่อยล่ม: แถบแดงแทนที่แถบเหลือง · แจ้งซ้ำก็ไม่กลับมาทับ", [D.els.has("fc-dbh-bar"), head(D.els.get(ID))], [false, MSG]);
     }
     { // หน้าล็อกอิน
       const D = mkDom(), C = mkClock(), B = mkB(D.doc, C);
       B.dbgSet(true);
       const fresh = B.dbgLoginMsg();
-      B.DBG.since = Date.now() - 120001;
+      C.t += 120001;
       ck("หน้าล็อกอิน: ไม่ถึง 2 นาที = ข้อความแรกอย่างเดียว · เกิน 2 นาที = เพิ่มแจ้งผู้ดูแล", [fresh, B.dbgLoginMsg()], [MSG, MSG + " · " + LONG]);
+    }
+    { // ข้อ 1: หน้า ?join=1 ใช้ข้อความกลางๆ — หน้าเดียว ไม่กระทบหน้าอื่น
+      const JOIN = "ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง";
+      const barAt = (search, cls = "") => { const D = mkDom(cls), C = mkClock(), B = mkB(D.doc, C, { search }); B.dbgSet(true); const b = D.els.get(ID); return [head(b), lines(b), C.q.size]; };
+      ck("?join=1: ข้อความกลางๆ ตรงตามเจ้าของ · ไม่มีบรรทัดย่อย · ไม่ตั้งเวลา (ลูกค้าไม่มีผู้ดูแลให้แจ้ง)", barAt("?join=1"), [JOIN, [], 0]);
+      ck("?join=1&branch=5&go=book (ลิงก์จากบอต LINE): ข้อความกลางๆ เหมือนกัน", barAt("?join=1&branch=5&go=book"), [JOIN, [], 0]);
+      ck("ลำดับ route: ?pos=1&branch มาก่อน join = จอพนักงาน · ?join=0 = จอพนักงาน", [barAt("?pos=1&branch=5&join=1"), barAt("?join=0")], [[MSG, [RETRY], 1], [MSG, [RETRY], 1]]);
+      ck("หน้าลูกค้าสแกนไม่ถูกแตะ: ยังบอกให้เรียกพนักงาน แม้ URL มี join", barAt("?scan=1&branch=5&table=9&join=1", "cust-scan"), [CUST, [], 0]);
+      ck("route จริง: ?pos=1 ไม่มี branch และ ?pos=0&branch ไปหน้า join = ข้อความกลางๆ", [barAt("?pos=1&join=1"), barAt("?pos=0&branch=5&join=1")], [[JOIN, [], 0], [JOIN, [], 0]]);
+    }
+    { // ข้อ 2: ล้างข้อความฐานข้อมูลในการ์ดล็อกอินเมื่อกลับมา
+      const D = mkDom(), C = mkClock(), B = mkB(D.doc, C);
+      ck("ล้างเฉพาะข้อความฐานข้อมูล (ทั้งแบบสั้นและแบบเกิน 2 นาที) · รหัสผ่านผิด/ช่องว่าง/กำลังปลุกเซิร์ฟเวอร์ คงเดิม",
+        [B.dbgClearErr(MSG), B.dbgClearErr(MSG + " · " + LONG), B.dbgClearErr("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"), B.dbgClearErr("กรุณากรอกชื่อผู้ใช้และรหัสผ่าน"), B.dbgClearErr("⏳ กำลังปลุกเซิร์ฟเวอร์... (ครั้งที่ 2/3)"), B.dbgClearErr("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — เซิร์ฟเวอร์อาจกำลังตื่นจากพัก กรุณากดเข้าสู่ระบบอีกครั้ง"), B.dbgClearErr("")],
+        ["", "", "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", "กรุณากรอกชื่อผู้ใช้และรหัสผ่าน", "⏳ กำลังปลุกเซิร์ฟเวอร์... (ครั้งที่ 2/3)", "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — เซิร์ฟเวอร์อาจกำลังตื่นจากพัก กรุณากดเข้าสู่ระบบอีกครั้ง", ""]);
+      const hook = APP.slice(APP.indexOf("function LoginPage("), APP.indexOf("function BranchSelector(")).split("\n").find((l) => l.includes("DBG.listeners.add")) || "";
+      const L = new Set(); let cleanup = null; const sets = [];
+      let wired = false;
+      try { new Function("useEffect", "DBG", "setErr", "dbgClearErr", hook)((fn, deps) => { wired = Array.isArray(deps) && deps.length === 0; cleanup = fn(); }, { listeners: L }, (x) => sets.push(x), "CLEAR"); } catch {}
+      const n0 = L.size; let onDown = null; [...L].forEach((f) => { f(true); onDown = sets.length; f(false); });
+      if (cleanup) cleanup();
+      ck("การ์ดล็อกอินฟังแถบแดงตัวเดียวกัน: ต่อได้ = เรียกล้าง · ล่ม = ไม่แตะ · ออกจากหน้า = เลิกฟัง", [n0, wired, onDown, sets, L.size], [1, true, 0, ["CLEAR"], 0]);
+    }
+    { // ข้อ 3: วลีต้องอยู่บรรทัดเดียว — ไม่พึ่งการตัดคำไทยของเบราว์เซอร์
+      const D = mkDom(), C = mkClock(), B = mkB(D.doc, C);
+      B.dbgSet(true);
+      const k = D.els.get(ID).kids;
+      ck("แถบแดง: วลีอยู่ใน span nowrap · มีจุดตัดบรรทัด (wbr) หลังวลีทันที · ข้อความรวมไม่เปลี่ยน",
+        [k[0].textContent, k[1].tag, k[1].style.whiteSpace, k[1].textContent, k[2].tag, k[3].textContent, head(D.els.get(ID))],
+        ["⛔ เชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว — ", "span", "nowrap", "จดออเดอร์ลงกระดาษ", "wbr", "ไว้ก่อน", MSG]);
+      const flat = (n) => (typeof n === "string" ? n : n.kids.map(flat).join(""));
+      const dt = B.DbgText({ t: MSG });
+      ck("การ์ดล็อกอิน (DbgText ตัวจริง): วลีอยู่ใน span nowrap · ตามด้วย wbr · ข้อความรวมไม่เปลี่ยน",
+        [dt.type, dt.kids[0], dt.kids[1].type, dt.kids[1].props.style.whiteSpace, dt.kids[1].kids, dt.kids[2].type, dt.kids[3], flat(dt), flat(B.DbgText({ t: MSG + " · " + LONG }))],
+        ["FRAG", "⛔ เชื่อมต่อฐานข้อมูลไม่ได้ชั่วคราว — ", "span", "nowrap", ["จดออเดอร์ลงกระดาษ"], "wbr", "ไว้ก่อน", MSG, MSG + " · " + LONG]);
+      ck("การ์ดล็อกอิน: ข้อความอื่นแสดงครบเหมือนเดิม (รหัสผ่านผิดต้องไม่หาย)", [B.DbgText({ t: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" }), B.DbgText({ t: "กรุณากรอกชื่อผู้ใช้และรหัสผ่าน" })], ["ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", "กรุณากรอกชื่อผู้ใช้และรหัสผ่าน"]);
+      const LP = APP.slice(APP.indexOf("function LoginPage("), APP.indexOf("function BranchSelector(")).replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+      ok_("การ์ดล็อกอินใช้ตัวครอบจริง ใน span เดียว (การ์ดเป็น flex ไม่งั้นแตกเป็นหลายคอลัมน์)", LP.includes("<Ic d={I.warning} s={14} c={C.red}/><span><DbgText t={err}/></span></div>}"));
+      ok_("วลีและข้อความฐานข้อมูลมีจุดใช้ตามที่รู้จักเท่านั้น (แถบแดง + การ์ดล็อกอิน) — จุดใหม่ต้องผ่านตัวครอบและมาแก้ด่านนี้",
+        APP.split("จดออเดอร์ลงกระดาษ").length === 2 && (APP.match(/\bDBG_MSG\b/g) || []).length === 5 && (APP.match(/\bdbgLoginMsg\b/g) || []).length === 2 && (APP.match(/\bDBG_PHRASE\b/g) || []).length === 8 && APP.includes("dbgFillMsg(bar,DBG_MSG);"));
+    }
+    { // ข้อ 5: ตัวนับ 2 นาทีข้ามการรีเฟรช — รีเฟรช = โหลดโค้ดใหม่ทั้งก้อน แต่ sessionStorage ของแท็บยังอยู่
+      const mkSS = () => { const m = new Map(); return { m, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); } }; };
+      const open = (ss, t, f) => { const D = mkDom(), C = mkClock(); C.t = t; return { D, C, B: mkB(D.doc, C, { ss, f }) }; };
+      const ms = (P) => [...P.C.q.values()].map((x) => x.ms);
+      const T0 = 1800000000000, KEY = "fc_dbg_down";
+      const ss = mkSS();
+      const a = open(ss, T0); a.B.dbgSet(true);
+      const b = open(ss, T0 + 60000); b.B.dbgSet(true);
+      ck("รีเฟรชตอนล่มมา 1 นาที: นับต่อจากเวลาเดิม · เหลือเวลาอีก 1 นาทีพอดี", [b.B.DBG.since, ms(b)], [T0, [60000]]);
+      [...b.C.q.values()][0].f();
+      ck("ครบ 2 นาทีนับจากเริ่มล่มจริง: บรรทัดแจ้งผู้ดูแลขึ้น", lines(b.D.els.get(ID)), [RETRY, LONG]);
+      b.C.t = T0 + 90000; b.B.dbgSet(true);   // รอบถามทุก 30 วิ: ต่อเวลายืนยัน แต่ไม่ขยับเวลาเริ่ม
+      const c = open(ss, T0 + 150000); c.B.dbgSet(true);
+      ck("รีเฟรชหลังเกิน 2 นาที: ขึ้นบรรทัดแจ้งผู้ดูแลทันที · หน้าล็อกอินก็นับว่านาน", [c.B.DBG.since, ms(c), c.B.dbgLoginMsg()], [T0, [0], MSG + " · " + LONG]);
+      const edge = open(ss, T0 + 150000 + 120000); edge.B.dbgSet(true);
+      ck("เว้นยืนยันไม่เกิน 2 นาทีพอดี = ยังนับต่อ", edge.B.DBG.since, T0);
+      const gap = open(ss, T0 + 270000 + 120001); gap.B.dbgSet(true);
+      ck("เว้นยืนยันเกิน 2 นาที (เครื่องพัก) = บอกไม่ได้ว่าล่มติดกัน → เริ่มนับใหม่", [gap.B.DBG.since, ms(gap)], [T0 + 270000 + 120001, [120000]]);
+      const s2 = mkSS();
+      const p = open(s2, T0); p.B.dbgSet(true);
+      const r = open(s2, T0 + 5000); r.B.dbgSet(false);   // รีเฟรชแล้วตรวจว่าต่อได้: DBG.down เริ่มจาก false ไม่มีการเปลี่ยนสถานะ แต่ต้องล้างของค้าง
+      const stale = s2.m.size;
+      const q = open(s2, T0 + 10000); q.B.dbgSet(true);
+      ck("รีเฟรชแล้วต่อได้: ล้างเวลาค้าง · ล่มรอบหน้าเริ่มนับใหม่", [stale, q.B.DBG.since, ms(q)], [0, T0 + 10000, [120000]]);
+      const s3 = mkSS();
+      const u = open(s3, T0); u.B.dbgSet(true); u.B.dbgSet(false);
+      const v = open(s3, T0 + 1000); v.B.dbgSet(true);
+      ck("กลับมาระหว่างทาง (ไม่รีเฟรช): ล้างเวลาค้าง เริ่มนับใหม่", v.B.DBG.since, T0 + 1000);
+      // รอบถามจริงผ่าน dbgCheck (ไม่เรียก dbgSet ตรงๆ) — ด่านรุ่นก่อนเว้นเวลาสั้นเกินจนมองไม่เห็นว่าต่อเวลาจริงไหม
+      const dead = async () => ({ ok: true, status: 503 }), alive = async () => ({ ok: true, status: 200 });
+      const s4 = mkSS(), w = open(s4, T0, dead); await w.B.dbgCheck(true);
+      for (let i = 1; i <= 5; i++) { w.C.t = T0 + i * 30000; await w.B.dbgCheck(true); }
+      const w2 = open(s4, T0 + 151000, dead); await w2.B.dbgCheck(true);
+      ck("ถามทุก 30 วิจริง 2.5 นาทีแล้วรีเฟรช: เวลาเริ่มไม่ขยับ · ขึ้นแจ้งผู้ดูแล", [w2.B.DBG.since, w2.B.dbgLoginMsg()], [T0, MSG + " · " + LONG]);
+      const s5 = mkSS(), h = open(s5, T0, dead); await h.B.dbgCheck(true);
+      const h2 = open(s5, T0 + 5000, alive); await h2.B.dbgCheck(true);
+      ck("รีเฟรชแล้ว dbgCheck ตอบว่าต่อได้: ล้างเวลาค้าง", s5.m.size, 0);
+      // ยิงไฟล์เว็บเราไม่ออก (รวมรีเฟรชตอนคำขอยิงอยู่): ไม่รู้เรื่องฐานข้อมูล ต้องไม่ล้างตัวนับ
+      let net = "up";
+      const flip = async (u) => { if (String(u).startsWith("/favicon") && net === "off") throw new TypeError("x"); return { ok: true, status: 503 }; };
+      const s6 = mkSS(), f1 = open(s6, T0, flip); await f1.B.dbgCheck(true);
+      const kept = s6.m.get(KEY);
+      net = "off"; f1.C.t = T0 + 30000; await f1.B.dbgCheck(true);
+      ck("ยิงไฟล์เว็บเราไม่ออก: แถบหายตามเดิม แต่ตัวนับไม่ถูกล้าง", [f1.D.els.has(ID), f1.B.DBG.down, s6.m.get(KEY) === kept, typeof kept], [false, false, true, "string"]);
+      net = "up";
+      const f2 = open(s6, T0 + 31000, flip); await f2.B.dbgCheck(true);
+      ck("รีเฟรชตอนคำขอยิงอยู่แล้วยังล่ม: นับต่อจากเวลาเดิม", f2.B.DBG.since, T0);
+      const s7 = mkSS(); net = "off"; const f3 = open(s7, T0, flip); await f3.B.dbgCheck(true); net = "up";
+      ck("ยิงไม่ออกโดยที่ไม่ได้ล่มอยู่: ไม่สร้างค่าในเครื่อง", s7.m.size, 0);
+      const SBS = APP.slice(APP.indexOf("async function sb("), APP.indexOf("// === Production-grade helpers"));
+      const sbOf = (B, res = { ok: true, status: 200, text: async () => "[]" }) => new Function("fetch", "SUPA_URL", "SUPA_KEY", "nowMs", "dbhRecord", "DBH", "DBG", "dbgSet", "dbgCheck", "setTimeout", "clearTimeout", SBS + "\nreturn sb;")(async () => res, "u", "k", () => 0, () => {}, { HANG_MS: 8000, SLOW_MS: 3000 }, B.DBG, B.dbgSet, B.dbgCheck, () => 1, () => {});
+      net = "up";
+      const s9 = mkSS(), k1 = open(s9, T0, flip); await k1.B.dbgCheck(true);
+      net = "off"; k1.C.t = T0 + 30000; await k1.B.dbgCheck(true); net = "up";
+      const heldBefore = s9.m.size;
+      await sbOf(k1.B)("x");
+      k1.C.t = T0 + 35000; k1.B.dbgSet(true);
+      ck("เน็ตสะดุดแล้วฐานตอบได้จริง: ล้างตัวนับ · ล่มรอบใหม่เริ่มนับใหม่ (กลับมาแม้ครั้งเดียว = เริ่มนับใหม่)", [heldBefore, k1.B.DBG.since], [1, T0 + 35000]);
+      const r1 = open(mkSS(), T0); r1.B.dbgSet(true); await sbOf(r1.B)("x");
+      ck("sb() ตัวจริง: ตอบได้ระหว่างแถบแดงขึ้น = แถบหาย", [r1.B.DBG.down, r1.D.els.has(ID)], [false, false]);
+      let writes = 0; const quiet = { getItem: () => null, setItem() { writes++; }, removeItem() { writes++; } };
+      const n1 = open(quiet, T0); await sbOf(n1.B)("x");
+      ck("ทางปกติ (ไม่ได้ล่ม): sb() ไม่แตะที่เก็บค่า", writes, 0);
+      const e1 = mkSS(), e2 = open(e1, T0); e2.B.dbgSet(true);
+      for (const status of [402, 404, 503, 540]) await sbOf(e2.B, { ok: false, status, text: async () => "x" })("x").catch(() => {});
+      await sbOf(e2.B, { ok: false, status: 401, text: async () => '{"code":"42501","message":"permission denied for table tables"}' })("x").catch(() => {});
+      ck("ฐานตอบ error ระหว่างล่ม (402/404/503/540/ปฏิเสธสิทธิ์) ไม่นับว่ากลับมา: แถบอยู่ ตัวนับอยู่", [e2.B.DBG.down, e2.D.els.has(ID), e1.m.size, e2.B.DBG.since], [true, true, 1, T0]);
+      net = "up"; const r2s = mkSS(), r2a = open(r2s, T0, flip); await r2a.B.dbgCheck(true);
+      net = "off"; const r2b = open(r2s, T0 + 5000, flip); await r2b.B.dbgCheck(true); net = "up";
+      const heldAfterRefresh = r2s.m.size;
+      await sbOf(r2b.B)("x");
+      ck("รีเฟรชแล้วเน็ตสะดุด แล้วฐานตอบได้จริง: ล้างตัวนับ", [heldAfterRefresh, r2s.m.size], [1, 0]);
+      const bad = (raw) => { const s = mkSS(); s.m.set(KEY, raw); const x = open(s, T0); x.B.dbgSet(true); return [x.B.DBG.since, ms(x)]; };
+      ck("ค่าที่เก็บเสีย/ปลอม = เริ่มนับใหม่ ไม่พัง (ไม่ใช่ JSON · ตัวเลขผิด · เวลาอนาคต)",
+        [bad("xx"), bad('{"since":"a","seen":1}'), bad("null"), bad(JSON.stringify({ since: T0 + 5000, seen: T0 })), bad(JSON.stringify({ since: null, seen: T0 })), bad(JSON.stringify({ since: "a", seen: T0 })), bad(JSON.stringify({ since: T0 - 1000, seen: String(T0) }))],
+        [[T0, [120000]], [T0, [120000]], [T0, [120000]], [T0, [120000]], [T0, [120000]], [T0, [120000]], [T0, [120000]]]);
+      const boom = { getItem() { throw new Error("denied"); }, setItem() { throw new Error("denied"); }, removeItem() { throw new Error("denied"); } };
+      const z = open(boom, T0); z.B.dbgSet(true);
+      ck("เบราว์เซอร์ไม่ให้ใช้ sessionStorage: แถบยังขึ้นและนับปกติ", [head(z.D.els.get(ID)), ms(z)], [MSG, [120000]]);
+      z.C.t = T0 + 30000; z.B.dbgSet(true);
+      const s8 = mkSS(), y = open(s8, T0); y.B.dbgSet(true); y.C.t = T0 + 130000; y.B.dbgSet(true);
+      ck("ล่มอยู่แล้วถามซ้ำ: เวลาเริ่มไม่ขยับ ทั้งตอนเก็บค่าไม่ได้ และเว้นนานเกิน 2 นาทีบนหน้าเดิม", [z.B.DBG.since, y.B.DBG.since], [T0, T0]);
+    }
+    { // ของเดิมที่ต้องไม่เพี้ยน: ตำแหน่งแถบ · รอบถามทุก 30 วิ · แจ้งเฉพาะตอนสถานะเปลี่ยน
+      let hits = 0; const D = mkDom(), C = mkClock(), B = mkB(D.doc, C, { f: async () => { hits++; return { ok: true, status: 503 }; } });
+      let told = 0; B.DBG.listeners.add(() => { told++; });
+      B.dbgSet(true); B.dbgSet(true);
+      const toldDown = told;
+      ok_("แถบแดงอยู่บนสุดของจอเสมอ (fixed · z-index สูงสุด · สีแดง)", D.els.get(ID).style.cssText.includes("position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b91c1c"));
+      ck("ระหว่างล่มถามซ้ำทุก 30 วิ", C.iv.map((x) => x.ms), [30000]);
+      C.iv[0].f(); await new Promise((r) => setImmediate(r));
+      const h1 = hits;
+      C.iv[0].f(); await new Promise((r) => setImmediate(r));
+      ok_("รอบถามเรียกตัวเช็กจริง และถามทุกรอบ (ไม่ถูกตัดด้วยเกณฑ์เว้นระยะ 20 วิ)", h1 >= 1 && hits > h1);
+      B.dbgSet(false); B.dbgSet(false);
+      ck("แจ้งเฉพาะตอนสถานะเปลี่ยน (ล่มซ้ำ/กลับมาซ้ำไม่แจ้งซ้ำ) · กลับมาแล้วหยุดรอบถาม", [toldDown, told, C.cleared], [1, 2, 1]);
+      B.dbgSet(true);
+      ck("ล่มรอบใหม่บนหน้าเดิม: รอบถามทุก 30 วิเริ่มใหม่", C.iv.length, 2);
+      let h3 = 0; const C3 = mkClock(); mkB(mkDom().doc, C3, { f: async () => { h3++; return { ok: true, status: 200 }; } });
+      C3.ev.load(); const wait = [...C3.q.values()]; wait[0].f(); await new Promise((r) => setImmediate(r));
+      ck("เปิดหน้าแล้วเช็กจริง 0.8 วิหลังโหลด", [wait.map((x) => x.ms), h3], [[800], 2]);
     }
   }
   // ── 8 พ.ย. 69 เจ้าของตัดสิน: เลิกแถบนับถอยหลังค่าบริการ — วันที่พิมพ์มือไม่รู้ว่าตัดบัตรผ่านหรือไม่ และเคยเตือนผิดเมื่อรอบบิลย้าย ──
   ok_("เลิกนับถอยหลังค่าบริการแล้ว: ไม่มีไฟล์วันครบกำหนด · แอปไม่อ่าน/ไม่แสดงวันครบกำหนดจ่าย",
     !fs.existsSync(new URL("../public/billing.json", import.meta.url)) && !/billing\.json|fc-bill|useBillBarHere|\bbillDaysLeft\b|\bbillWarnings\b|\bbillLine\b|BILL_WARN_DAYS|ครบกำหนดจ่าย/.test(APP));
   ok_("ไม่มีข้อความสั่งพนักงานตามเจ้าของ และไม่บอกว่าฐานข้อมูลหมดอายุ", !/แจ้งบอสแม็ก|ฐานข้อมูลหมดอายุ/.test(APP));
+  // ── ข้อ 4: ข้อความในหน้าลูกค้าสแกนตามสถานะจริง — โค้ดจริงจากด่าน QR ──
+  {
+    const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
+    const c0 = APP.indexOf('console.error("scan gate",e);'), tail = 'setGateError(isNet?"net":"bad_token");', c1 = APP.indexOf(tail, c0) + tail.length;
+    const runGate = async (err, offline) => { const P = { calls: 0 }; await new AsyncFn("e", "console", "dbgCustOffline", "setGateOwnNet", "setGateError", APP.slice(c0, c1))(err, { error() {} }, async () => { P.calls++; return offline; }, (v) => { P.own = v; }, (v) => { P.gate = v; }); return P; };
+    const st = (status, m) => Object.assign(new Error(m), { status });
+    ck("ด่าน QR: ต่อไม่ได้ = net และถามว่าเน็ตลูกค้าเองหลุดไหม · ระบบล่มตอบ 402/540/5xx แม้เนื้อคำตอบไม่มีเลข = net (ไม่ใช่ QR หมดอายุ) · ลิงก์เสีย 400 / error อื่น = ไม่ถาม",
+      [await runGate(new TypeError("Failed to fetch"), true), await runGate(new TypeError("Failed to fetch"), false), await runGate(st(503, "Service Unavailable"), false), await runGate(st(402, "restricted"), false), await runGate(st(540, "paused"), false), await runGate(st(400, "nope"), true), await runGate(new Error("bad"), true), await runGate(st(406, "nope"), true), await runGate(st(410, "nope"), true)],
+      [{ calls: 1, own: true, gate: "net" }, { calls: 1, own: false, gate: "net" }, { calls: 1, own: false, gate: "net" }, { calls: 1, own: false, gate: "net" }, { calls: 1, own: false, gate: "net" }, { calls: 0, own: false, gate: "bad_token" }, { calls: 0, own: false, gate: "bad_token" }, { calls: 0, own: false, gate: "bad_token" }, { calls: 0, own: false, gate: "bad_token" }]);
+    {
+      const nets = await Promise.all([new TypeError("Load failed"), new TypeError("NetworkError when attempting to fetch resource."), new Error("timeout"), new Error("connect ECONNRESET"), new Error("The operation was aborted"), new Error("upstream 502 bad gateway"), undefined, st(500, "x"), st(502, "x"), st(504, "x"), st(599, "x"), new Error("Request Timeout"), new Error("ABORTED"), st(401, "x"), st(403, "x"), st(404, "x"), st(429, "x"), Object.assign(new Error("x"), { denied: true })].map(async (x) => (await runGate(x, false)).gate));
+      ck("ด่าน QR: ต่อไม่ได้ทุกแบบของทุกเบราว์เซอร์ (iPhone 'Load failed' · Firefox · หมดเวลา · ไม่มีข้อความ) และทุกรหัส 5xx = net ไม่ใช่ QR หมดอายุ", nets, Array(18).fill("net"));
+      // ── QR หมดอายุจริง: ฐานตอบสำเร็จแต่ไม่พบโต๊ะ — คนละสัญญาณกับระบบล่ม ไม่ผ่านส่วนจัดการ error เลย ──
+      const g0 = APP.indexOf("const bs=await api.getBranchPublic(branchId);"), g1 = APP.indexOf("const t=matches[0];", g0);
+      const runReal = async (branches, matches, token) => { const P = { gate: null, passed: false }; await new AsyncFn("api", "branchId", "tableId", "token", "setGateError", "setBranch", "setGateLoading", "PASS", APP.slice(g0, g1) + "\nPASS();")({ getBranchPublic: async () => branches, scanTable: async () => matches }, "5", "9", token, (v) => { P.gate = v; }, () => {}, () => {}, () => { P.passed = true; }); return P; };
+      const ROW = [{ id: 5, name: "x", active: true }];
+      ck("QR หมดอายุจริง (ฐานตอบสำเร็จแต่ไม่พบโต๊ะ) = bad_token · โต๊ะตรง = ผ่าน · ไม่มีสาขา = bad_token · สาขาปิด = branch_closed · ไม่มีรหัส = no_token",
+        [await runReal(ROW, [], "tk"), await runReal(ROW, [{ id: 9 }], "tk"), await runReal([], [], "tk"), await runReal([{ id: 5, active: false }], [], "tk"), await runReal(ROW, [], ""), await runReal(ROW, null, "tk")],
+        [{ gate: "bad_token", passed: false }, { gate: null, passed: true }, { gate: "bad_token", passed: false }, { gate: "branch_closed", passed: false }, { gate: "no_token", passed: false }, { gate: "bad_token", passed: false }]);
+    }
+    const m0 = APP.indexOf("const messages={\n      no_token:"), m1 = APP.indexOf("\n    return <div", m0);
+    const msgOf = (own) => { const r = new Function("gateError", "gateOwnNet", "branch", APP.slice(m0, m1) + "\nreturn messages;")("net", own, null); return [r.title, r.msg]; };
+    ck("ข้อความตามสถานะ: เน็ตลูกค้าเองหลุด = กดลองใหม่ (คงเดิม) · ระบบล่มหรือแยกไม่ได้ = เรียกพนักงาน ไม่บอกให้กดลองใหม่",
+      [msgOf(true), msgOf(false), /ลองใหม่/.test(msgOf(false).join(" ")), /เรียกพนักงาน/.test(msgOf(true).join(" "))],
+      [["เชื่อมต่อไม่ได้", "สัญญาณอินเทอร์เน็ตขัดข้องชั่วคราว — QR ของคุณยังใช้ได้ปกติ กดลองใหม่ได้เลย"], ["ระบบสั่งอาหารขัดข้องชั่วคราว", "กรุณาเรียกพนักงานเพื่อสั่งอาหาร — QR ของคุณยังใช้ได้ปกติ"], false, false]);
+    {
+      // ── end-to-end: คำตอบระดับ HTTP → sb() ตัวจริง → api ตัวจริง → ด่าน QR ตัวจริง → ข้อความตัวจริงที่ลูกค้าเห็น ──
+      // ความเชื่อมโยงระหว่าง sb() กับด่าน QR ขาดเมื่อไร (เอาป้าย denied ออก · แก้ถ้อยคำแล้วพึ่งถ้อยคำ · แก้ด่าน QR ผิด) ต้องล้มตรงนี้ ไม่ใช่เงียบ
+      const SB_SRC = APP.slice(APP.indexOf("async function sb("), APP.indexOf("// === Production-grade helpers"));
+      const apiSrc = (name) => APP.split("\n").find((x) => x.startsWith(`  ${name}: `)).trim().slice(name.length + 1).trim().replace(/,\s*$/, "");
+      const try0 = APP.indexOf("const bs=await api.getBranchPublic(branchId);"), try1 = APP.indexOf("const t=matches[0];", try0);
+      const mkSb2 = (fetchFake) => new Function("fetch", "SUPA_URL", "SUPA_KEY", "nowMs", "dbhRecord", "DBH", "DBG", "dbgSet", "dbgCheck", "setTimeout", "clearTimeout", SB_SRC + "\nreturn sb;")(fetchFake, "https://x.supabase.co", "k", () => 0, () => {}, { HANG_MS: 8000, SLOW_MS: 3000 }, { down: false, kept: false }, () => {}, async () => false, () => 1, () => {});
+      const screen = async (answer, offline = false) => {
+        const sb = mkSb2(async (url) => { const r = answer(String(url)); return { ok: r[0] < 300, status: r[0], text: async () => r[1] }; });
+        const api = { getBranchPublic: new Function("sb", "return (" + apiSrc("getBranchPublic") + ");")(sb), scanTable: new Function("sb", "return (" + apiSrc("scanTable") + ");")(sb) };
+        const P = { gate: null, own: false };
+        await new AsyncFn("api", "branchId", "tableId", "token", "console", "dbgCustOffline", "setGateOwnNet", "setGateError", "setBranch", "setGateLoading", "try{\n" + APP.slice(try0, try1) + "\n}catch(e){\n" + APP.slice(c0, c1) + "\n}")(api, "5", "9", "tk", { error() {} }, async () => offline, (v) => { P.own = v; }, (v) => { P.gate = v; }, () => {}, () => {});
+        const r = new Function("gateError", "gateOwnNet", "branch", APP.slice(m0, m1) + "\nreturn messages;")(P.gate, P.own, null);
+        return [r.title, r.msg];
+      };
+      const BR = JSON.stringify([{ id: 5, name: "x", active: true }]);
+      const onTables = (st, body) => (u) => (u.includes("/branches") ? [200, BR] : [st, body]), onAll = (st, body) => () => [st, body];
+      const STAFF = ["ระบบสั่งอาหารขัดข้องชั่วคราว", "กรุณาเรียกพนักงานเพื่อสั่งอาหาร — QR ของคุณยังใช้ได้ปกติ"];
+      const EXPIRED = ["QR หมดอายุแล้ว", "QR Code นี้ถูกยกเลิกการใช้งานแล้ว — กรุณาขอ QR ใหม่จากพนักงาน"];
+      const P42 = (message) => JSON.stringify({ code: "42501", details: null, hint: null, message });
+      const denials = ["permission denied for table tables", "permission denied for table app_users", "permission denied for sequence x_id_seq", "permission denied for function f", "permission denied for schema public", 'new row violates row-level security policy for table "tables"', "permission denied to set role"].map(P42);
+      const got = [];
+      for (const st of [401, 403]) for (const b of denials) { got.push(await screen(onTables(st, b))); got.push(await screen(onAll(st, b))); }
+      ck("end-to-end: ฐานปฏิเสธสิทธิ์ทุกแบบ (ลืม grant ตาราง/sequence/ฟังก์ชัน/schema · RLS · หาชื่อไม่เจอ) ที่ 401 และ 403 ทั้งตอนถามสาขาและถามโต๊ะ = ลูกค้าเห็นเรียกพนักงาน", [got.length, got], [28, Array(28).fill(STAFF)]);
+      ck("end-to-end: คีย์ผิด 401 · ห้าม 403 · ไม่มีตาราง 404 · ถูกจำกัด 429 · 402 · 540 · 503 (ข้อความไม่มีตัวเลข) = เรียกพนักงานข้อความเดียวกัน",
+        [await screen(onAll(401, '{"message":"Invalid API key"}')), await screen(onAll(403, '{"message":"Forbidden"}')), await screen(onAll(404, '{"code":"PGRST205","message":"Could not find the table"}')), await screen(onAll(429, '{"message":"Too many requests"}')), await screen(onAll(402, '{"message":"restricted"}')), await screen(onAll(540, '{"message":"paused"}')), await screen(onAll(503, '{"message":"unavailable"}'))],
+        Array(7).fill(STAFF));
+      ck("end-to-end: ลิงก์เสีย 400 และ QR หมดอายุจริง (ฐานตอบ 200 ไม่พบโต๊ะ) ยังเป็น QR หมดอายุ · เน็ตลูกค้าหลุด = ข้อความกดลองใหม่เดิม",
+        [await screen(onTables(400, '{"code":"22P02","message":"invalid input syntax"}')), await screen(onTables(200, "[]")), await screen(() => { throw new TypeError("Failed to fetch"); }, true)],
+        [EXPIRED, EXPIRED, ["เชื่อมต่อไม่ได้", "สัญญาณอินเทอร์เน็ตขัดข้องชั่วคราว — QR ของคุณยังใช้ได้ปกติ กดลองใหม่ได้เลย"]]);
+      {
+        const sys = [[401, '{"message":"Invalid API key"}'], [403, '{"message":"Forbidden"}'], [404, '{"code":"PGRST205","message":"Could not find the table"}'], [429, '{"message":"Too many requests"}'], [402, '{"message":"restricted"}'], [540, '{"message":"paused"}'], [503, '{"message":"unavailable"}']];
+        const onT = []; for (const [s, b] of sys) onT.push(await screen(onTables(s, b)));
+        ck("end-to-end: รหัสชุดเดียวกันตอนถามโต๊ะ (ผ่านสาขาแล้ว) = เรียกพนักงาน", onT, Array(7).fill(STAFF));
+        const marks = []; for (const s of [401, 403]) for (const b of denials) { const x = await mkSb2(async () => ({ ok: false, status: s, text: async () => b }))("x").catch((e) => e); marks.push([x.denied, x.status === undefined, x.name]); }
+        ck("ทุกจุดที่แปลงคำตอบเรื่องสิทธิ์: มีป้าย denied · ไม่แตะ status · ยังเป็น Error ธรรมดา (งานสต๊อกแยกผลจากช่องเหล่านี้)", marks, Array(14).fill([true, true, "Error"]));
+        const blk0 = SB_SRC.indexOf("if (/42501|row-level security/i.test(body)) {"), blk1 = SB_SRC.indexOf("throw Object.assign(new Error(body),{status:res.status});", blk0), blk = SB_SRC.slice(blk0, blk1);
+        const nThrow = (blk.match(/\bthrow\b/g) || []).length, nDenied = (blk.match(/throw denied\(/g) || []).length;
+        ck("ทุก throw ในบล็อกปฏิเสธสิทธิ์ของ sb() ผ่านตัวแนบป้าย (เพิ่มจุดแปลงใหม่แล้วลืมป้าย = ล้ม)", [blk0 > 0 && blk1 > blk0, nThrow === nDenied, nDenied >= 4], [true, true, true]);
+      }
+      const denyErr = await mkSb2(async () => ({ ok: false, status: 401, text: async () => P42("permission denied for table tables") }))("x").catch((e) => e);
+      ck("ป้าย denied ไม่แตะช่อง status (งานสต๊อกแยกผลจากช่องนั้น) · ข้อความเดิมที่บอกวิธีแก้ยังอยู่", [denyErr.denied, denyErr.status, denyErr.message.includes("grant all on table public.tables")], [true, undefined, true]);
+    }
+    {
+      const m = new Function("gateError", "gateOwnNet", "branch", APP.slice(m0, m1) + "\nreturn messages;")("bad_token", false, null);
+      ck("QR หมดอายุจริงยังขึ้นข้อความเดิม", [m.title, m.msg], ["QR หมดอายุแล้ว", "QR Code นี้ถูกยกเลิกการใช้งานแล้ว — กรุณาขอ QR ใหม่จากพนักงาน"]);
+    }
+    {
+      // ระบบกลับมาแล้วหน้าลูกค้าต้องไม่ค้าง "ขัดข้อง" — โค้ดจริงของ effect กับ DBG ปลอม
+      const CP0 = APP.indexOf("function CustomerPage("), line = APP.slice(CP0).split("\n").find((l) => l.includes("DBG.listeners.add") && l.includes('gateError!=="net"')) || "";
+      const tick = () => new Promise((r) => setImmediate(r));
+      const runFx = async (gateError, probe, leaveFirst) => {
+        const L = new Set(), P = { err: [], load: [], n: 0, asked: [] }; let cleanup = null, deps = null;
+        const api = { getBranchPublic: (b) => { P.asked.push(b); return probe(); } };
+        new Function("useEffect", "DBG", "gateError", "api", "branchId", "setGateError", "setGateLoading", "setGateTry", line)((fn, d) => { deps = d; cleanup = fn(); }, { listeners: L }, gateError, api, "5", (v) => P.err.push(v), (v) => P.load.push(v), (f) => { P.n = f(P.n); });
+        const added = L.size, tries = [];
+        for (const f of [...L]) { f(true); await tick(); tries.push(P.n); f(false); if (leaveFirst && cleanup) cleanup(); await tick(); tries.push(P.n); }
+        if (cleanup) cleanup();
+        return { added, tries, err: P.err, load: P.load, asked: P.asked, deps, left: L.size };
+      };
+      const answers = async () => [], fails = async () => { throw new Error("x"); }, hangs = () => new Promise(() => {});
+      const went = { added: 1, tries: [0, 1], err: [null], load: [true], asked: ["5"], deps: ["net", "5"], left: 0 };
+      const stayed = { added: 1, tries: [0, 0], err: [], load: [], asked: ["5"], deps: ["net", "5"], left: 0 };
+      const idle = (g) => ({ added: 0, tries: [], err: [], load: [], asked: [], deps: [g, "5"], left: 0 });
+      ck("ระบบกลับมา: ฐานตอบ/ล้ม = เข้าด่านใหม่เอง 1 ครั้ง · ฐานยังค้าง = คงจอเรียกพนักงาน (ไม่เหลือแต่วงหมุน) · กดลองใหม่ไปก่อน = ไม่เข้าซ้อน · หน้าอื่นไม่ฟัง",
+        [await runFx("net", answers), await runFx("net", fails), await runFx("net", hangs), await runFx("net", answers, true), await runFx("bad_token", answers), await runFx(null, answers)],
+        [went, went, stayed, stayed, idle("bad_token"), idle(null)]);
+      ok_("effect อยู่ใน CustomerPage ก่อนจุด return แรกของหน้า (ลำดับ hook ไม่เพี้ยน)", line && CP0 > 0 && APP.indexOf(line) > CP0 && APP.indexOf(line) < APP.indexOf("if(gateLoading)return <div"));
+    }
+    {
+      const live = APP.replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+      const b0 = live.indexOf('{gateError==="net"&&<button'), b1 = live.indexOf("</button>}", b0), btn = live.slice(b0, b1);
+      ok_("จอ error แสดงหัวข้อ/ข้อความจริง · ปุ่มลองใหม่ไม่ถูกซ่อนตามสถานะ · กดแล้วด่าน QR รันใหม่จริง · วงหมุนจบหลัง error",
+        live.includes("{messages.title}</h2>") && live.includes("{messages.msg}</p>") && b0 > 0 && btn.includes("🔄 ลองใหม่") && !/gateOwnNet|display:|visibility/.test(btn) && live.includes("},[branchId,tableId,token,gateTry]);") && /setGateError\(isNet\?"net":"bad_token"\);\s*\}\s*setGateLoading\(false\);/.test(live));
+    }
+    ok_("ค่าตั้งต้นของสถานะ = แยกไม่ได้ (เรียกพนักงาน) · ปุ่มลองใหม่ยังอยู่ทั้งสองสถานะ",
+      APP.split("\n").some((l) => l.trim().startsWith("const[gateOwnNet,setGateOwnNet]=useState(false);")) && APP.includes('{gateError==="net"&&<button onClick={()=>{setGateError(null);setGateLoading(true);setGateTry(t=>t+1);}}'));
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -10589,8 +10856,8 @@ section("ลด egress หน้าลูกค้าสแกน (24 ต.ค. 6
     for (const m of gate.matchAll(/\bb\.(\w+)/g)) need.add(m[1]);
     const sel = await aSafe(async () => { const [[bu]] = await callApi("getBranchPublic", 5); return qp(bu).sel.split(","); });
     ck("แถวสาขาของหน้าลูกค้า: ขอครบทุกช่องที่หน้านั้นอ่าน (ชื่อ/เปิดอยู่ไหม/id)", [need.has("name"), Array.isArray(sel) ? [...need].filter((k) => !sel.includes(k)) : sel], [true, []]);
-    ok_("ประตูหน้าลูกค้า: ใช้ getBranchPublic ที่เดียว (ไม่ขน branches ทั้งตาราง) · ตัดสินด้วยเงื่อนไขเดิม (หาไม่เจอ = QR ใช้ไม่ได้ · ปิด = ร้านปิด)",
-      gate.length > 0 && !CP.includes("api.getBranches(") && (CP.match(/api\.getBranchPublic\(/g) || []).length === 1 &&
+    ok_("ประตูหน้าลูกค้า: ใช้ getBranchPublic แถวเดียว ที่ด่าน + ตอนระบบกลับมา (ไม่ขน branches ทั้งตาราง) · ตัดสินด้วยเงื่อนไขเดิม (หาไม่เจอ = QR ใช้ไม่ได้ · ปิด = ร้านปิด)",
+      gate.length > 0 && !CP.includes("api.getBranches(") && (CP.match(/api\.getBranchPublic\(/g) || []).length === 2 && CP.includes("if(!down)api.getBranchPublic(branchId).catch(()=>{})") &&
       gate.includes("const b=bs.find(x=>x.id===+branchId);") && gate.includes('if(!b){setGateError("bad_token");') && gate.includes('if(b.active===false){setGateError("branch_closed");'));
     // ประตูต้องได้แถวโต๊ะเต็ม (หัวจอ "โต๊ะ {table_number} — {label}" · ข้อความยืนยันเรียกพนักงาน · เลขโต๊ะที่ส่งเข้าบิล)
     ok_("ประตูยังใช้ scanTable แถวเต็มที่เดียว (setTable) · จุดที่ดูแค่ความยาวผล 3 จุด (บิลรายรอบ/กดสั่ง/คิวออฟไลน์) ใช้ scanTableOk",
